@@ -98,6 +98,20 @@ func (s *MemStore) ClaimNext(_ context.Context, owner string, lease time.Duratio
 	return nil, nil
 }
 
+func (s *MemStore) RenewLease(_ context.Context, taskID uuid.UUID, owner string, lease time.Duration) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := s.tasks[taskID]
+	if t == nil || t.Status != StatusRunning || t.Owner == nil || *t.Owner != owner {
+		return false, nil
+	}
+	now := s.now()
+	exp := now.Add(lease)
+	t.LeaseExpiry = &exp
+	t.UpdatedAt = now
+	return true, nil
+}
+
 func (s *MemStore) Steps(_ context.Context, taskID uuid.UUID) ([]StepRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -115,9 +129,21 @@ func (s *MemStore) Steps(_ context.Context, taskID uuid.UUID) ([]StepRecord, err
 	return out, nil
 }
 
-func (s *MemStore) StartStep(_ context.Context, stepID uuid.UUID) error {
+// ownsLocked reports whether taskID exists and is currently owned by owner. The
+// step/task mutations use it to mirror PgStore's owner fence: a worker that has
+// lost the lease does not mutate a task another instance now owns. Caller holds
+// s.mu.
+func (s *MemStore) ownsLocked(taskID uuid.UUID, owner string) bool {
+	t := s.tasks[taskID]
+	return t != nil && t.Owner != nil && *t.Owner == owner
+}
+
+func (s *MemStore) StartStep(_ context.Context, taskID, stepID uuid.UUID, owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.ownsLocked(taskID, owner) {
+		return nil
+	}
 	if st := s.stepsByID[stepID]; st != nil {
 		st.Status = StatusRunning
 		st.UpdatedAt = s.now()
@@ -125,9 +151,12 @@ func (s *MemStore) StartStep(_ context.Context, stepID uuid.UUID) error {
 	return nil
 }
 
-func (s *MemStore) CompleteStep(_ context.Context, stepID uuid.UUID, result json.RawMessage) error {
+func (s *MemStore) CompleteStep(_ context.Context, taskID, stepID uuid.UUID, owner string, result json.RawMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.ownsLocked(taskID, owner) {
+		return nil
+	}
 	if st := s.stepsByID[stepID]; st != nil {
 		st.Status = StatusSucceeded
 		st.Result = result
@@ -137,9 +166,12 @@ func (s *MemStore) CompleteStep(_ context.Context, stepID uuid.UUID, result json
 	return nil
 }
 
-func (s *MemStore) FailStep(_ context.Context, taskID, stepID uuid.UUID, cause error) error {
+func (s *MemStore) FailStep(_ context.Context, taskID, stepID uuid.UUID, owner string, cause error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.ownsLocked(taskID, owner) {
+		return nil
+	}
 	msg := cause.Error()
 	if st := s.stepsByID[stepID]; st != nil {
 		st.Status = StatusFailed
@@ -154,9 +186,12 @@ func (s *MemStore) FailStep(_ context.Context, taskID, stepID uuid.UUID, cause e
 	return nil
 }
 
-func (s *MemStore) CompleteTask(_ context.Context, taskID uuid.UUID) error {
+func (s *MemStore) CompleteTask(_ context.Context, taskID uuid.UUID, owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.ownsLocked(taskID, owner) {
+		return nil
+	}
 	if t := s.tasks[taskID]; t != nil {
 		t.Status = StatusSucceeded
 		t.Error = nil

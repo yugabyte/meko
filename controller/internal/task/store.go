@@ -29,20 +29,34 @@ type Store interface {
 	// are reclaimable (§8.2).
 	ClaimNext(ctx context.Context, owner string, lease time.Duration) (*Task, error)
 
+	// RenewLease extends the lease of a task this owner is actively running,
+	// returning whether the lease is still held. It is owner- and status-fenced:
+	// it only touches a `running` task still owned by owner, so a task that was
+	// reclaimed by another instance (or already reached a terminal state) reports
+	// false without being modified. The worker calls it periodically so a step
+	// that outlives LeaseTTL is not reclaimed and run concurrently (§8.2).
+	RenewLease(ctx context.Context, taskID uuid.UUID, owner string, lease time.Duration) (bool, error)
+
 	// Steps returns a task's step records in execution order (task.step_ids).
 	Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, error)
 
-	// StartStep marks a step running.
-	StartStep(ctx context.Context, stepID uuid.UUID) error
+	// StartStep marks a step running. It is owner-fenced on the parent task: a
+	// worker that has lost the lease (the task is now owned by someone else) does
+	// not mutate it.
+	StartStep(ctx context.Context, taskID, stepID uuid.UUID, owner string) error
 
-	// CompleteStep marks a step succeeded and records its result.
-	CompleteStep(ctx context.Context, stepID uuid.UUID, result json.RawMessage) error
+	// CompleteStep marks a step succeeded and records its result. Owner-fenced on
+	// the parent task (see StartStep).
+	CompleteStep(ctx context.Context, taskID, stepID uuid.UUID, owner string, result json.RawMessage) error
 
-	// FailStep marks a step and its task failed, recording the cause.
-	FailStep(ctx context.Context, taskID, stepID uuid.UUID, cause error) error
+	// FailStep marks a step and its task failed, recording the cause. Owner-fenced
+	// so a worker that has lost the lease cannot durably fail a task another
+	// instance now owns.
+	FailStep(ctx context.Context, taskID, stepID uuid.UUID, owner string, cause error) error
 
-	// CompleteTask marks a task succeeded.
-	CompleteTask(ctx context.Context, taskID uuid.UUID) error
+	// CompleteTask marks a task succeeded. Owner-fenced so a worker that has lost
+	// the lease cannot overwrite the state of a task another instance now owns.
+	CompleteTask(ctx context.Context, taskID uuid.UUID, owner string) error
 
 	// Get returns a task by id, or nil if it does not exist.
 	Get(ctx context.Context, id uuid.UUID) (*Task, error)
@@ -155,6 +169,18 @@ func (s *PgStore) ClaimNext(ctx context.Context, owner string, lease time.Durati
 	return t, err
 }
 
+func (s *PgStore) RenewLease(ctx context.Context, taskID uuid.UUID, owner string, lease time.Duration) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE task
+		 SET lease_expiry = now() + make_interval(secs => $3), updated_at = now()
+		 WHERE id = $1::uuid AND owner = $2 AND status = 'running'`,
+		taskID.String(), owner, lease.Seconds())
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, error) {
 	// Order by each step's position in the task's step_ids list (execution order).
 	rows, err := s.pool.Query(ctx,
@@ -198,27 +224,29 @@ func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, er
 	return steps, rows.Err()
 }
 
-func (s *PgStore) StartStep(ctx context.Context, stepID uuid.UUID) error {
+func (s *PgStore) StartStep(ctx context.Context, taskID, stepID uuid.UUID, owner string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE task_step SET status = 'running', updated_at = now()
-		 WHERE id = $1::uuid`,
-		stepID.String())
+		 WHERE id = $1::uuid
+		   AND EXISTS (SELECT 1 FROM task WHERE id = $2::uuid AND owner = $3)`,
+		stepID.String(), taskID.String(), owner)
 	return err
 }
 
-func (s *PgStore) CompleteStep(ctx context.Context, stepID uuid.UUID, result json.RawMessage) error {
+func (s *PgStore) CompleteStep(ctx context.Context, taskID, stepID uuid.UUID, owner string, result json.RawMessage) error {
 	var arg any
 	if len(result) > 0 {
 		arg = []byte(result)
 	}
 	_, err := s.pool.Exec(ctx,
 		`UPDATE task_step SET status = 'succeeded', result = $2::jsonb, error = NULL, updated_at = now()
-		 WHERE id = $1::uuid`,
-		stepID.String(), arg)
+		 WHERE id = $1::uuid
+		   AND EXISTS (SELECT 1 FROM task WHERE id = $3::uuid AND owner = $4)`,
+		stepID.String(), arg, taskID.String(), owner)
 	return err
 }
 
-func (s *PgStore) FailStep(ctx context.Context, taskID, stepID uuid.UUID, cause error) error {
+func (s *PgStore) FailStep(ctx context.Context, taskID, stepID uuid.UUID, owner string, cause error) error {
 	msg := cause.Error()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -228,24 +256,25 @@ func (s *PgStore) FailStep(ctx context.Context, taskID, stepID uuid.UUID, cause 
 
 	if _, err := tx.Exec(ctx,
 		`UPDATE task_step SET status = 'failed', error = $2, updated_at = now()
-		 WHERE id = $1::uuid`,
-		stepID.String(), msg); err != nil {
+		 WHERE id = $1::uuid
+		   AND EXISTS (SELECT 1 FROM task WHERE id = $3::uuid AND owner = $4)`,
+		stepID.String(), msg, taskID.String(), owner); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE task SET status = 'failed', error = $2, updated_at = now()
-		 WHERE id = $1::uuid`,
-		taskID.String(), msg); err != nil {
+		 WHERE id = $1::uuid AND owner = $3`,
+		taskID.String(), msg, owner); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
 }
 
-func (s *PgStore) CompleteTask(ctx context.Context, taskID uuid.UUID) error {
+func (s *PgStore) CompleteTask(ctx context.Context, taskID uuid.UUID, owner string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE task SET status = 'succeeded', error = NULL, updated_at = now()
-		 WHERE id = $1::uuid`,
-		taskID.String())
+		 WHERE id = $1::uuid AND owner = $2`,
+		taskID.String(), owner)
 	return err
 }
 

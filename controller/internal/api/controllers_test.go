@@ -51,6 +51,7 @@ func drainTasks(t *testing.T, store *task.MemStore, backend core.Backend, prov a
 	cfg := config.TaskConfig{
 		PollInterval:  time.Millisecond,
 		LeaseTTL:      30 * time.Second,
+		RenewInterval: 10 * time.Second,
 		MaxConcurrent: 4,
 		ShutdownGrace: 2 * time.Second,
 	}

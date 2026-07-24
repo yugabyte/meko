@@ -18,8 +18,7 @@ world-changing operations (`createProject`, `createBranch`, `createEndpoint`,
 `deleteProject`, `deleteBranch`, `deleteEndpoint`) validate cheaply, plan a task,
 and return `202` + the `Task` + a `Location` header for the client to poll
 ([#113](https://github.com/yugabyte/amp/issues/113); the wire contract is in
-[`ac-apis.md`](ac-apis.md)). What this doc does **not** cover is HA-safe lease
-renewal during a long step, which is [#90](https://github.com/yugabyte/amp/issues/90).
+[`ac-apis.md`](ac-apis.md)).
 
 **Terminology.** The controller's user-facing ladder is **storage pool → project
 → branch → endpoint** ([#147](https://github.com/yugabyte/amp/issues/147)).
@@ -116,10 +115,29 @@ already-`succeeded` steps are skipped, so work resumes at the first unfinished
 step. Replaying the step that was in flight when the owner died is safe because
 **every step is idempotent**.
 
-> The lease does not yet auto-renew, so a step that runs longer than the lease TTL
-> can be reclaimed and run concurrently by a second instance. Idempotency keeps
-> that correct (it converges), but the redundant work is wasteful; renewal is
-> [#90](https://github.com/yugabyte/amp/issues/90).
+**Lease renewal.** While a task runs, the worker heartbeats its lease every
+`RenewInterval` (< `LeaseTTL`) via `Store.RenewLease` — an owner- and
+status-fenced `UPDATE` that only extends a `running` task still owned by this
+instance. So a step that legitimately outlives the lease TTL (a `create_endpoint`
+helm deploy waits minutes for the pod to become ready) is **not** reclaimed and
+run a second time in parallel. Without this, a reclaimed second execution races
+the first: for the shared deploy step the two `helm` runs uninstall each other's
+in-flight release (`Error: services "…" not found`), and their terminal writes
+(`FailStep` vs the unconditional `CompleteTask`) clobber, so the task's status
+flips (the flake behind #340). If renewal genuinely fails — the store reports the
+lease no longer held, i.e. another instance already reclaimed it after the lease
+lapsed (a paused worker, a long DB outage) — the worker cancels the in-flight
+step's context so it stops rather than racing the new owner; the task is left
+`running` and reclaimable. A crashed worker still stops heartbeating, so its lease
+expires and the task is reclaimed as before.
+
+As a belt-and-suspenders on that last case, every task/step mutation
+(`StartStep`, `CompleteStep`, `FailStep`, `CompleteTask`) is **owner-fenced** —
+each `UPDATE` carries `AND owner = $currentOwner` (steps check their parent
+task's owner). So a worker that has lost the lease cannot advance or finish a
+task another instance now owns even if it briefly keeps running: its writes are
+no-ops. `RenewLease` is fenced the same way. Together, renewal + fencing make the
+§8.2 reclaim safe for steps that outlive the lease ([#90](https://github.com/yugabyte/amp/issues/90)).
 
 ## 3. The step catalog
 
@@ -274,7 +292,10 @@ against it too rather than carrying their own task-store fake. The tests cover
   — it drains a backlog concurrently and never exceeds `MaxConcurrent` tasks in
   flight (a gated step asserts the cap), stops cleanly on cancel, recovers a
   panicking step into a task failure, logs a shutdown interruption as such (not as
-  an error), and returns within `ShutdownGrace` even if a step ignores cancel;
+  an error), returns within `ShutdownGrace` even if a step ignores cancel,
+  **renews the lease** of a long-running step so it is not reclaimed and re-run,
+  and **cancels** an in-flight step when the lease is lost (owner/status-fenced
+  `RenewLease`);
 - **every step** — its happy path, **idempotent replay** (run twice, converge),
   error propagation, the fork-vs-default-branch deploy spec, and the best-effort
   recipe clear;

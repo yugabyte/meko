@@ -33,6 +33,7 @@ func testWorkerMax(store Store, reg *Registry, maxConcurrent int) *Worker {
 	cfg := config.TaskConfig{
 		PollInterval:  time.Millisecond,
 		LeaseTTL:      30 * time.Second,
+		RenewInterval: 10 * time.Second,
 		MaxConcurrent: maxConcurrent,
 		ShutdownGrace: 5 * time.Second,
 	}
@@ -387,12 +388,181 @@ func TestWorkerRunRespectsMaxConcurrent(t *testing.T) {
 	}
 }
 
+func TestMemStoreRenewLeaseIsOwnerAndStatusFenced(t *testing.T) {
+	store := NewMemStore()
+	task, steps := pendingTask("k0")
+	store.Seed(task, steps)
+
+	claimed, err := store.ClaimNext(t.Context(), "owner-a", time.Second)
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimNext: %v (claimed=%v)", err, claimed)
+	}
+	before := *claimed.LeaseExpiry
+
+	// The holder renews: reported held, lease extended.
+	held, err := store.RenewLease(t.Context(), task.ID, "owner-a", 10*time.Second)
+	if err != nil || !held {
+		t.Fatalf("RenewLease by holder = (held=%v, err=%v), want (true, nil)", held, err)
+	}
+	got, _ := store.Get(t.Context(), task.ID)
+	if !got.LeaseExpiry.After(before) {
+		t.Errorf("lease_expiry not extended: before=%v after=%v", before, *got.LeaseExpiry)
+	}
+
+	// A different owner cannot renew (it does not hold the lease).
+	if held, _ := store.RenewLease(t.Context(), task.ID, "owner-b", 10*time.Second); held {
+		t.Error("RenewLease by a non-holder reported held=true, want false")
+	}
+
+	// A terminal task cannot be renewed (nothing to keep alive).
+	_ = store.CompleteTask(t.Context(), task.ID, "owner-a")
+	if held, _ := store.RenewLease(t.Context(), task.ID, "owner-a", 10*time.Second); held {
+		t.Error("RenewLease on a succeeded task reported held=true, want false")
+	}
+
+	// A missing task reports not-held rather than erroring.
+	if held, err := store.RenewLease(t.Context(), uuid.New(), "owner-a", time.Second); err != nil || held {
+		t.Errorf("RenewLease on a missing task = (held=%v, err=%v), want (false, nil)", held, err)
+	}
+}
+
+func TestMemStoreMutationsAreOwnerFenced(t *testing.T) {
+	store := NewMemStore()
+	task, steps := pendingTask("k0")
+	store.Seed(task, steps)
+	stepID := steps[0].ID
+
+	claimed, err := store.ClaimNext(t.Context(), "owner-a", time.Minute)
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimNext: %v (claimed=%v)", err, claimed)
+	}
+
+	// A worker that no longer owns the task (owner-b) must not advance or finish
+	// it — every mutation is a no-op, so a partitioned/stalled ex-owner cannot
+	// clobber the state of a task another instance now owns (#90).
+	_ = store.StartStep(t.Context(), task.ID, stepID, "owner-b")
+	_ = store.CompleteStep(t.Context(), task.ID, stepID, "owner-b", nil)
+	_ = store.CompleteTask(t.Context(), task.ID, "owner-b")
+	_ = store.FailStep(t.Context(), task.ID, stepID, "owner-b", errors.New("boom"))
+
+	got, _ := store.Get(t.Context(), task.ID)
+	if got.Status != StatusRunning {
+		t.Errorf("task status = %q after non-owner mutations, want unchanged (running)", got.Status)
+	}
+	stepRows, _ := store.Steps(t.Context(), task.ID)
+	if stepRows[0].Status != StatusPending {
+		t.Errorf("step status = %q after non-owner mutations, want unchanged (pending)", stepRows[0].Status)
+	}
+
+	// The real owner still advances it.
+	if err := store.CompleteTask(t.Context(), task.ID, "owner-a"); err != nil {
+		t.Fatalf("CompleteTask by owner: %v", err)
+	}
+	got, _ = store.Get(t.Context(), task.ID)
+	if got.Status != StatusSucceeded {
+		t.Errorf("task status = %q after owner CompleteTask, want succeeded", got.Status)
+	}
+}
+
+func TestWorkerRenewsLeaseSoLongStepIsNotReclaimed(t *testing.T) {
+	store := NewMemStore()
+	g := &gateStep{release: make(chan struct{})}
+	reg := NewRegistry()
+	reg.Register("gate", func(json.RawMessage, Deps) (Step, error) { return g, nil })
+
+	// A short lease with faster renewal, and free slots so a reclaim *could*
+	// happen if the lease lapsed. Renewal must keep the running task's lease
+	// alive so the claim loop never reclaims and re-runs it.
+	cfg := config.TaskConfig{PollInterval: 5 * time.Millisecond, LeaseTTL: 100 * time.Millisecond, RenewInterval: 25 * time.Millisecond, MaxConcurrent: 4, ShutdownGrace: time.Second}
+	w := NewWorker(store, reg, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	task, steps := pendingTask("gate")
+	store.Seed(task, steps)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	waitFor(t, 2*time.Second, func() bool { return g.cur() == 1 }) // claimed and running
+	// Hold the step across several lease periods. Without renewal the loop would
+	// reclaim the lease-expired running task and run it again (a second call).
+	time.Sleep(400 * time.Millisecond)
+	if c := g.callCount(); c != 1 {
+		t.Errorf("gate step ran %d time(s); want exactly 1 (renewal must prevent a lease-expiry reclaim)", c)
+	}
+	got, _ := store.Get(t.Context(), task.ID)
+	if got.LeaseExpiry == nil || !got.LeaseExpiry.After(time.Now()) {
+		t.Errorf("running task's lease not kept alive: lease_expiry=%v", got.LeaseExpiry)
+	}
+
+	close(g.release)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
+func TestWorkerCancelsExecutionWhenLeaseLost(t *testing.T) {
+	store := &leaseLostStore{MemStore: NewMemStore()}
+	step := &cancelAwareStep{started: make(chan struct{})}
+	reg := NewRegistry()
+	reg.Register("cancelaware", func(json.RawMessage, Deps) (Step, error) { return step, nil })
+
+	rec := &capturingHandler{}
+	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 100 * time.Millisecond, RenewInterval: 10 * time.Millisecond, MaxConcurrent: 1, ShutdownGrace: 2 * time.Second}
+	w := NewWorker(store, reg, cfg, slog.New(rec))
+
+	task, steps := pendingTask("cancelaware")
+	store.Seed(task, steps)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	<-step.started // the step is running and blocked on its context
+
+	// The store reports the lease as lost on the first renewal; the heartbeat must
+	// cancel the step's context (it returns Fail(ctx.Err())) rather than let it run
+	// concurrently with the (simulated) new owner. That is an interruption, not a
+	// durable failure: the task must be left reclaimable.
+	waitFor(t, 2*time.Second, func() bool { return rec.has(slog.LevelWarn, "lease lost") })
+	waitFor(t, 2*time.Second, func() bool {
+		got, _ := store.Get(t.Context(), task.ID)
+		return got != nil && got.Status != StatusFailed
+	})
+	if rec.has(slog.LevelError, "task failed") {
+		t.Error(`a task cancelled by lease loss was logged as ERROR "task failed"; want an interruption`)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// leaseLostStore is a MemStore that always reports a running task's lease as no
+// longer held, modeling another instance having reclaimed it — so the worker's
+// heartbeat exercises its lease-loss cancellation path.
+type leaseLostStore struct {
+	*MemStore
+}
+
+func (s *leaseLostStore) RenewLease(context.Context, uuid.UUID, string, time.Duration) (bool, error) {
+	return false, nil
+}
+
 // gateStep blocks in Execute until release is closed, tracking the peak number of
 // concurrent executions — so a test can assert the worker honors MaxConcurrent.
 type gateStep struct {
 	mu         sync.Mutex
 	running    int
 	maxRunning int
+	calls      int
 	release    chan struct{}
 }
 
@@ -401,6 +571,7 @@ func (*gateStep) Kind() string { return "gate" }
 func (g *gateStep) Execute(context.Context) StepResult {
 	g.mu.Lock()
 	g.running++
+	g.calls++
 	if g.running > g.maxRunning {
 		g.maxRunning = g.running
 	}
@@ -424,6 +595,12 @@ func (g *gateStep) peak() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.maxRunning
+}
+
+func (g *gateStep) callCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.calls
 }
 
 func TestWorkerRecoversFromStepPanic(t *testing.T) {
@@ -456,7 +633,7 @@ func TestWorkerLogsShutdownInterruptionNotFailure(t *testing.T) {
 	reg.Register("cancelaware", func(json.RawMessage, Deps) (Step, error) { return step, nil })
 
 	rec := &capturingHandler{}
-	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 30 * time.Second, MaxConcurrent: 1, ShutdownGrace: 2 * time.Second}
+	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 30 * time.Second, RenewInterval: 10 * time.Second, MaxConcurrent: 1, ShutdownGrace: 2 * time.Second}
 	w := NewWorker(store, reg, cfg, slog.New(rec))
 
 	task, steps := pendingTask("cancelaware")
@@ -479,8 +656,8 @@ func TestWorkerLogsShutdownInterruptionNotFailure(t *testing.T) {
 	if rec.has(slog.LevelError, "task failed") {
 		t.Error(`shutdown interruption was logged as ERROR "task failed", want a non-error interruption log`)
 	}
-	if !rec.has(slog.LevelInfo, "interrupted by shutdown") {
-		t.Error(`expected an info-level "interrupted by shutdown" log, got none`)
+	if !rec.has(slog.LevelInfo, "interrupted") {
+		t.Error(`expected an info-level "interrupted" log, got none`)
 	}
 }
 
@@ -489,7 +666,7 @@ func TestWorkerBoundedShutdown(t *testing.T) {
 	g := &gateStep{release: make(chan struct{})} // blocks forever; ignores ctx
 	reg := NewRegistry()
 	reg.Register("gate", func(json.RawMessage, Deps) (Step, error) { return g, nil })
-	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 30 * time.Second, MaxConcurrent: 1, ShutdownGrace: 50 * time.Millisecond}
+	cfg := config.TaskConfig{PollInterval: time.Millisecond, LeaseTTL: 30 * time.Second, RenewInterval: 10 * time.Second, MaxConcurrent: 1, ShutdownGrace: 50 * time.Millisecond}
 	w := NewWorker(store, reg, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	task, steps := pendingTask("gate")

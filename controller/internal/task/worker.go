@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/yugabyte/amp/controller/internal/config"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 )
@@ -185,10 +187,18 @@ func (w *Worker) backoff(ctx context.Context, attempt int) {
 
 // runTask drives one claimed task to completion, logging the outcome. A genuine
 // failure is already recorded in the store by execute; here it is only logged.
-// An interruption (the worker's context was cancelled mid-task by shutdown) is
-// not a failure: execute leaves the task reclaimable (§8.2), so it is logged as
-// such rather than as an error — otherwise a graceful shutdown would emit one
-// spurious "task failed" per in-flight task.
+// An interruption — the worker's context was cancelled by shutdown, or this
+// instance lost the lease (see heartbeat) — is not a failure: execute leaves the
+// task reclaimable (§8.2), so it is logged as such rather than as an error;
+// otherwise a graceful shutdown (or a reclaim) would emit one spurious "task
+// failed" per in-flight task.
+//
+// A per-task context carries a lease heartbeat that renews the lease while the
+// step loop runs, so a step that outlives LeaseTTL is not reclaimed and run
+// concurrently by a second goroutine (§8.2). If the lease is lost anyway (the
+// heartbeat can't renew, e.g. another instance already reclaimed it), the
+// heartbeat cancels this context so the in-flight step stops rather than racing
+// the new owner.
 func (w *Worker) runTask(ctx context.Context, t *Task) {
 	logger := w.logger.With(applog.KeyTaskID, t.ID.String(), "kind", t.Kind)
 	logger.Debug("task claimed")
@@ -210,16 +220,65 @@ func (w *Worker) runTask(ctx context.Context, t *Task) {
 		}
 	}()
 
-	switch err := w.execute(ctx, logger, t); {
+	taskCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var hb sync.WaitGroup
+	hb.Add(1)
+	go func() {
+		defer hb.Done()
+		w.heartbeat(taskCtx, logger, t.ID, cancel)
+	}()
+
+	err := w.execute(taskCtx, logger, t)
+	// Classify before cancelling the heartbeat: a cancelled taskCtx (shutdown or
+	// a lost lease) is an interruption, not a failure. Capture it here because
+	// our own cancel() below would otherwise make taskCtx.Err() always non-nil.
+	interrupted := taskCtx.Err() != nil
+	cancel()  // stop the heartbeat
+	hb.Wait() // and wait for it to exit before returning
+
+	switch {
 	case err == nil:
 		status = string(StatusSucceeded)
 		logger.Debug("task succeeded")
-	case ctx.Err() != nil:
+	case interrupted:
 		status = "interrupted"
-		logger.Info("task interrupted by shutdown; left reclaimable", "error", err)
+		logger.Info("task interrupted (shutdown or lost lease); left reclaimable", "error", err)
 	default:
 		status = string(StatusFailed)
 		logger.Error("task failed", "error", err)
+	}
+}
+
+// heartbeat renews the task's lease every RenewInterval until ctx is cancelled
+// (the task finished or the worker is shutting down). If the lease can no longer
+// be renewed — RenewLease reports it is no longer held, meaning another instance
+// reclaimed the task after its lease lapsed — it cancels the task via cancel so
+// the in-flight step stops instead of running concurrently with the new owner. A
+// transient renewal error is logged and retried on the next tick (the lease has
+// slack: RenewInterval < LeaseTTL), so a brief DB blip doesn't abandon the task.
+func (w *Worker) heartbeat(ctx context.Context, logger *slog.Logger, taskID uuid.UUID, cancel context.CancelFunc) {
+	ticker := time.NewTicker(w.cfg.RenewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			held, err := w.store.RenewLease(ctx, taskID, w.owner, w.cfg.LeaseTTL)
+			if ctx.Err() != nil {
+				return // finished/shutting down; a renewal racing that is not interesting
+			}
+			if err != nil {
+				logger.Warn("task lease renewal failed; will retry", "error", err)
+				continue
+			}
+			if !held {
+				logger.Warn("task lease lost (reclaimed by another owner); cancelling execution")
+				cancel()
+				return
+			}
+		}
 	}
 }
 
@@ -241,10 +300,10 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		// on it.
 		step, err := w.registry.Build(st.Kind, st.Args)
 		if err != nil {
-			_ = w.store.FailStep(ctx, t.ID, st.ID, err)
+			_ = w.store.FailStep(ctx, t.ID, st.ID, w.owner, err)
 			return fmt.Errorf("build step %d (%s): %w", i, st.Kind, err)
 		}
-		if err := w.store.StartStep(ctx, st.ID); err != nil {
+		if err := w.store.StartStep(ctx, t.ID, st.ID, w.owner); err != nil {
 			return fmt.Errorf("mark step running: %w", err)
 		}
 		// Stamp the step-scoped logger onto the context so steps log through
@@ -262,15 +321,15 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 			if ctx.Err() != nil {
 				return fmt.Errorf("step %d (%s) interrupted: %w", i, st.Kind, ctx.Err())
 			}
-			_ = w.store.FailStep(ctx, t.ID, st.ID, res.Err)
+			_ = w.store.FailStep(ctx, t.ID, st.ID, w.owner, res.Err)
 			return fmt.Errorf("step %d (%s): %w", i, st.Kind, res.Err)
 		}
-		if err := w.store.CompleteStep(ctx, st.ID, res.Output); err != nil {
+		if err := w.store.CompleteStep(ctx, t.ID, st.ID, w.owner, res.Output); err != nil {
 			return fmt.Errorf("mark step succeeded: %w", err)
 		}
 		stepLog.Debug("step succeeded")
 	}
-	return w.store.CompleteTask(ctx, t.ID)
+	return w.store.CompleteTask(ctx, t.ID, w.owner)
 }
 
 // runStep executes one step, converting a panic into a step failure so a single

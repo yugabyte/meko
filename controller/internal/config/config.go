@@ -29,6 +29,12 @@ type DBConfig struct {
 type TaskConfig struct {
 	PollInterval time.Duration
 	LeaseTTL     time.Duration
+	// RenewInterval is how often the worker extends the lease of a task it is
+	// actively running, so a step that runs longer than LeaseTTL (e.g. a helm
+	// deploy that waits minutes for a pod) is not reclaimed and run concurrently
+	// by a second goroutine. It must be shorter than LeaseTTL so the lease is
+	// refreshed before it lapses.
+	RenewInterval time.Duration
 	// MaxConcurrent caps how many tasks the worker executes at once; it only
 	// claims a task when a slot is free, so it never holds a lease on a task it
 	// can't run.
@@ -146,6 +152,7 @@ func Load(args []string) (*Config, error) {
 	fs.BoolVar(&c.Dev, "dev", envBool("AMP_DEV", false), "serve the storage-layer control surface (attach-hook, node/branch/endpoint registries) unauthenticated; for yb_amp_local and the integration harness")
 	fs.DurationVar(&c.Task.PollInterval, "task-poll-interval", envDuration("AMP_TASK_POLL_INTERVAL", 2*time.Second), "task worker poll interval")
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
+	fs.DurationVar(&c.Task.RenewInterval, "task-lease-renew-interval", envDuration("AMP_TASK_LEASE_RENEW_INTERVAL", 10*time.Second), "how often the worker renews the lease of a running task (must be < task-lease-ttl)")
 	fs.IntVar(&c.Task.MaxConcurrent, "task-max-concurrent", envInt("AMP_TASK_MAX_CONCURRENT", 50), "max tasks the worker executes concurrently")
 	fs.DurationVar(&c.Task.ShutdownGrace, "task-shutdown-grace", envDuration("AMP_TASK_SHUTDOWN_GRACE", 10*time.Second), "max time to wait for in-flight tasks to finish on shutdown")
 
@@ -202,6 +209,12 @@ func Load(args []string) (*Config, error) {
 	}
 	if c.Task.LeaseTTL <= 0 {
 		return nil, fmt.Errorf("task lease TTL must be positive")
+	}
+	if c.Task.RenewInterval <= 0 {
+		return nil, fmt.Errorf("task lease renew interval must be positive")
+	}
+	if c.Task.RenewInterval >= c.Task.LeaseTTL {
+		return nil, fmt.Errorf("task lease renew interval (%s) must be shorter than the lease TTL (%s)", c.Task.RenewInterval, c.Task.LeaseTTL)
 	}
 	if c.Task.MaxConcurrent < 1 {
 		return nil, fmt.Errorf("task max concurrent must be at least 1")
