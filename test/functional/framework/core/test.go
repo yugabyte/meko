@@ -44,7 +44,13 @@ type Test struct {
 	// constants, or empty for a non-product test (e.g. canary, presets).
 	OwningTeam string
 	Versions   VersionSpec
-	Timeout    time.Duration // 0 → category default
+	// Skip, when non-empty, holds the reason this test is not run: the behaviour
+	// it asserts is not implemented yet, so a failure would be expected noise in
+	// the regression suite. The test still reports — as skipped, carrying this
+	// reason — and is gated BEFORE provisioning, so it costs no environment.
+	// Delete the field to re-enable the test once the feature lands.
+	Skip    string
+	Timeout time.Duration // 0 → category default
 	// Description is a one-line human summary of what the test does, surfaced by
 	// `ampqa describe`/`collect`/`manifest` so both humans and agents can discover
 	// a test without reading its source.

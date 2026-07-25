@@ -168,6 +168,9 @@ func describeOne(c *cobra.Command, name string) error {
 	if t.Versions.MinYB != "" || t.Versions.MaxYB != "" {
 		fmt.Fprintf(atw, "  yb versions\t%s\n", versionRange(t.Versions.MinYB, t.Versions.MaxYB))
 	}
+	if t.Skip != "" {
+		fmt.Fprintf(atw, "  SKIPPED\t%s\n", t.Skip)
+	}
 	_ = atw.Flush()
 	fmt.Fprintln(out)
 
@@ -273,6 +276,7 @@ func toTestNode(t core.Test) testNode {
 		HasSetup:   t.Setup != nil,
 		MinYB:      t.Versions.MinYB,
 		MaxYB:      t.Versions.MaxYB,
+		Skip:       t.Skip,
 	}
 }
 
@@ -290,6 +294,9 @@ func attrLine(t core.Test) string {
 	}
 	if t.OwningTeam != "" {
 		line += "  team: " + t.OwningTeam
+	}
+	if t.Skip != "" {
+		line += "  SKIPPED: " + t.Skip
 	}
 	return line
 }

@@ -592,6 +592,14 @@ mechanics, copied from stress:
   pattern): when a test *runs* on all versions but one step only applies to
   some, a helper answers "is this feature available on this version" and the
   test branches or skips the step.
+- **Unimplemented behaviour is a registered skip, not a failure**: a test whose
+  assertions describe a feature the product does not have yet sets
+  `Test.Skip: "<why>"`. The lifecycle gates it *before* provisioning, so it
+  costs no environment, and it still reports (status `skipped`, the reason
+  carried into the result and shown by `ampqa describe`/`list`/`manifest`) —
+  so it stays visible instead of being quietly dropped from a tag. Delete the
+  field when the feature lands; never leave a known-unimplemented assertion
+  failing in the regression suite.
 - **Version checks inside apps**: apps handling API differences between
   versions compare the live version and **take the other route** — an endpoint
   that moved, a field that was renamed, an older flow for older builds — so

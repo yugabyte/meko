@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -94,6 +95,14 @@ func RunOne(ctx context.Context, test Test, opts RunOptions) *Result {
 	emitStarted(opts.Sink, test.Name, result)
 	defer finishResult(opts.Sink, test.Name, result, opts.Masker)
 
+	// Registered skip (unimplemented behaviour) — before provisioning, so a
+	// permanently-skipped test never costs an environment.
+	if reason := strings.TrimSpace(test.Skip); reason != "" {
+		result.Status = StatusSkipped
+		result.SkipReason = reason
+		return result
+	}
+
 	// Version gate — before provisioning (architecture §4.9).
 	if ok, reason := test.Versions.Qualifies(opts.DetectedVersions); !ok {
 		result.Status = StatusSkipped
@@ -149,6 +158,12 @@ func RunOneOnEnv(ctx context.Context, test Test, env Environment, opts RunOption
 	result, seed := newResult(test, opts)
 	emitStarted(opts.Sink, test.Name, result)
 	defer finishResult(opts.Sink, test.Name, result, opts.Masker)
+
+	if reason := strings.TrimSpace(test.Skip); reason != "" {
+		result.Status = StatusSkipped
+		result.SkipReason = reason
+		return result
+	}
 
 	gate := env.Versions()
 	if gate == (DetectedVersions{}) {

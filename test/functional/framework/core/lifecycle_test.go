@@ -162,3 +162,48 @@ func TestLifecycleParallelNoRaces(t *testing.T) {
 		t.Errorf("teardown ran %d times, want %d", p.TeardownCount(), n)
 	}
 }
+
+// A test registered with Skip must report skipped WITHOUT provisioning — the
+// point of the field is that unimplemented behaviour costs no environment.
+func TestLifecycleRegisteredSkipDoesNotProvision(t *testing.T) {
+	p := &fake.Provider{}
+	ran := false
+	test := core.Test{
+		Name: "features/not_implemented",
+		Skip: "feature X is not implemented",
+		Run: func(*core.T) error {
+			ran = true
+			return nil
+		},
+	}
+	r := runOne(t, test, p, core.DetectedVersions{})
+	if r.Status != core.StatusSkipped {
+		t.Fatalf("status = %s, want skipped", r.Status)
+	}
+	if r.SkipReason != "feature X is not implemented" {
+		t.Errorf("skip reason = %q, want the registered reason", r.SkipReason)
+	}
+	if p.ProvisionCount() != 0 {
+		t.Errorf("provisioned %d environment(s); a registered skip must be gated before provisioning", p.ProvisionCount())
+	}
+	if ran {
+		t.Error("the test body ran")
+	}
+}
+
+// The same gate applies to a co-tenant on a shared environment.
+func TestLifecycleRegisteredSkipOnSharedEnv(t *testing.T) {
+	p := &fake.Provider{}
+	env, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(1, true))
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	r := core.RunOneOnEnv(context.Background(), core.Test{
+		Name: "features/not_implemented",
+		Skip: "feature X is not implemented",
+		Run:  func(*core.T) error { return fmt.Errorf("body must not run") },
+	}, env, core.RunOptions{Config: core.NewConfig(), Seed: core.NewRunSeed(1, true)})
+	if r.Status != core.StatusSkipped {
+		t.Fatalf("status = %s, want skipped", r.Status)
+	}
+}

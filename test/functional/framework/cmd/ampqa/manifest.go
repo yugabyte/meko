@@ -41,6 +41,9 @@ type testNode struct {
 	HasSetup    bool     `json:"has_setup"` // true → exposes a Setup phase
 	MinYB       string   `json:"min_yb,omitempty"`
 	MaxYB       string   `json:"max_yb,omitempty"`
+	// Skip is the registered reason this test never runs (unimplemented
+	// behaviour). Present so a listing says why, instead of a test looking live.
+	Skip string `json:"skip,omitempty"`
 }
 
 // manifest is the full self-discovery surface: the command tree (how to invoke),
