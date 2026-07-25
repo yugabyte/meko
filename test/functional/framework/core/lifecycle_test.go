@@ -207,3 +207,68 @@ func TestLifecycleRegisteredSkipOnSharedEnv(t *testing.T) {
 		t.Fatalf("status = %s, want skipped", r.Status)
 	}
 }
+
+// recordingSink captures the whole event stream a run produces.
+type recordingSink struct {
+	started  int
+	finished int
+	summary  core.RunSummary
+	results  map[string]*core.Result
+}
+
+func (r *recordingSink) RunStarted(core.RunInfo) error { r.started++; return nil }
+func (r *recordingSink) ResultEvent(ev core.ResultEvent) error {
+	if ev.Result != nil && ev.Result.Status != "" {
+		if r.results == nil {
+			r.results = map[string]*core.Result{}
+		}
+		r.results[ev.TestName] = ev.Result
+	}
+	return nil
+}
+func (r *recordingSink) RunFinished(s core.RunSummary) error { r.finished++; r.summary = s; return nil }
+
+// An environment that never came up must NOT produce an empty run: every
+// selected test has to report env_failed with the reason, or the report hides
+// both which tests were blocked and why.
+func TestReportEnvFailedRunReportsEveryTest(t *testing.T) {
+	sink := &recordingSink{}
+	tests := []core.Test{
+		{Name: "features/a", Suite: "features"},
+		{Name: "features/b", Suite: "features"},
+		{Name: "perf/c", Suite: "perf"},
+	}
+	const reason = "environment prepare failed: controller deployment never became available"
+
+	summary, results := core.ReportEnvFailedRun(tests, core.RunOptions{Sink: sink}, reason)
+
+	if len(results) != len(tests) {
+		t.Fatalf("got %d results, want one per selected test (%d)", len(results), len(tests))
+	}
+	if summary.Total != len(tests) || summary.Counts[core.StatusEnvFailed] != len(tests) {
+		t.Errorf("summary = %+v, want %d env_failed", summary.Counts, len(tests))
+	}
+	for _, r := range results {
+		if r.Status != core.StatusEnvFailed {
+			t.Errorf("%s status = %q, want env_failed", r.TestName, r.Status)
+		}
+		if r.ErrorSummary != reason {
+			t.Errorf("%s error summary = %q, want the prepare reason", r.TestName, r.ErrorSummary)
+		}
+	}
+	// The sinks must see a COMPLETE run, not a truncated stream: the portal
+	// derives the run's own status from RunFinished.
+	if sink.started != 1 || sink.finished != 1 {
+		t.Errorf("run started/finished = %d/%d, want 1/1", sink.started, sink.finished)
+	}
+	for _, tc := range tests {
+		got, ok := sink.results[tc.Name]
+		if !ok {
+			t.Errorf("sink never saw a terminal result for %s", tc.Name)
+			continue
+		}
+		if got.Status != core.StatusEnvFailed || got.ErrorSummary != reason {
+			t.Errorf("sink result for %s = %q / %q", tc.Name, got.Status, got.ErrorSummary)
+		}
+	}
+}

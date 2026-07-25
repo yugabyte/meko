@@ -207,6 +207,56 @@ available), distinct from a genuine all-pass.`,
 			opts.Provider = provider
 			opts.ProviderUnavailableReason = unavailable
 
+			// The reporter is built BEFORE the environment is prepared: a failed
+			// bring-up still has to report, and it can only do that through these
+			// sinks. Wired into opts.Sink by the caller.
+			makeReporter := func() *report.Reporter {
+				// The result-persisting sinks (jsonfile, junit) are CRITICAL: a test's
+				// authoritative pass/fail record must never be dropped under
+				// backpressure, or an agent reading a "green" run could be misled when a
+				// failing result was silently lost. The live stdout progress sink is
+				// non-critical — cosmetic, safe to drop under load — and any such drop is
+				// surfaced via Reporter.Dropped() below.
+				var progress core.Sink
+				if !jsonOutput {
+					progress = stdout.New()
+				}
+				// The portal sink streams the run live to the amp report portal. It
+				// is non-critical by design: the portal being down must never fail
+				// or slow a run.
+				var liveSinks []core.Sink
+				if portalURL != "" {
+					liveSinks = append(liveSinks, portal.New(portalURL, portal.Meta{
+						RunID:       cfg.GetString("report.portal.run_id", ""),
+						Report:      reportName,
+						Branch:      cfg.GetString("report.portal.branch", ""),
+						CommitSHA:   cfg.GetString("report.portal.commit", ""),
+						BuildTag:    cfg.GetString("report.portal.build_tag", ""),
+						TriggerType: cfg.GetString("report.portal.trigger_type", ""),
+						TriggeredBy: cfg.GetString("report.portal.triggered_by", ""),
+					}))
+				}
+				var resultSinks []core.Sink
+				if outDir != "" {
+					resultSinks = append(resultSinks, jsonfile.New(outDir))
+				}
+				if junitPath != "" {
+					resultSinks = append(resultSinks, junit.New(junitPath))
+				}
+				// The HTML sink accumulates results in memory and renders a
+				// self-contained report once on RunFinished — the same output as
+				// `ampqa report --from`, produced on the spot during the run.
+				if htmlPath != "" {
+					resultSinks = append(resultSinks, html.New(htmlPath))
+				}
+				var reporter *report.Reporter
+				if progress != nil || len(liveSinks) > 0 || len(resultSinks) > 0 {
+					reporter = buildReporterWithLive(report.DefaultQueueSize, progress, liveSinks, resultSinks...)
+					opts.Sink = reporter
+				}
+				return reporter
+			}
+
 			// Self-building providers (sharedk8s deploy mode) stand their
 			// run-scoped control plane up ONCE here, before the scheduler starts —
 			// otherwise the first test's short provision deadline would have to
@@ -219,6 +269,20 @@ available), distinct from a genuine all-pass.`,
 					if closer, ok := provider.(interface{ Close() error }); ok {
 						_ = closer.Close()
 					}
+					// No environment means no test body can run — but the run must
+					// still say so per test. Every selected test reports env_failed
+					// with this reason, so the report shows WHICH tests were blocked
+					// and WHY instead of an empty run.
+					rep := makeReporter()
+					summary, results := core.ReportEnvFailedRun(tests, opts.RunOptions, "environment prepare failed: "+err.Error())
+					var dropped int64
+					if rep != nil {
+						rep.Close()
+						dropped = rep.Dropped()
+					}
+					if jsonOutput {
+						_ = printEnvelope(c.OutOrStdout(), "ampqa.run", "run", runData(runSeed.Value(), parallel, summary, results, dropped))
+					}
 					return &exitError{code: 1, err: fmt.Errorf("prepare environment: %w", err)}
 				}
 			}
@@ -229,49 +293,7 @@ available), distinct from a genuine all-pass.`,
 				return runSetupOnly(c, tests, provider, unavailable, opts.RunOptions, cfg, regPath, envName, envTTL, c.Flags().Changed("ttl"))
 			}
 
-			// The result-persisting sinks (jsonfile, junit) are CRITICAL: a test's
-			// authoritative pass/fail record must never be dropped under
-			// backpressure, or an agent reading a "green" run could be misled when a
-			// failing result was silently lost. The live stdout progress sink is
-			// non-critical — cosmetic, safe to drop under load — and any such drop is
-			// surfaced via Reporter.Dropped() below.
-			var progress core.Sink
-			if !jsonOutput {
-				progress = stdout.New()
-			}
-			// The portal sink streams the run live to the amp report portal. It
-			// is non-critical by design: the portal being down must never fail
-			// or slow a run.
-			var liveSinks []core.Sink
-			if portalURL != "" {
-				liveSinks = append(liveSinks, portal.New(portalURL, portal.Meta{
-					RunID:       cfg.GetString("report.portal.run_id", ""),
-					Report:      reportName,
-					Branch:      cfg.GetString("report.portal.branch", ""),
-					CommitSHA:   cfg.GetString("report.portal.commit", ""),
-					BuildTag:    cfg.GetString("report.portal.build_tag", ""),
-					TriggerType: cfg.GetString("report.portal.trigger_type", ""),
-					TriggeredBy: cfg.GetString("report.portal.triggered_by", ""),
-				}))
-			}
-			var resultSinks []core.Sink
-			if outDir != "" {
-				resultSinks = append(resultSinks, jsonfile.New(outDir))
-			}
-			if junitPath != "" {
-				resultSinks = append(resultSinks, junit.New(junitPath))
-			}
-			// The HTML sink accumulates results in memory and renders a
-			// self-contained report once on RunFinished — the same output as
-			// `ampqa report --from`, produced on the spot during the run.
-			if htmlPath != "" {
-				resultSinks = append(resultSinks, html.New(htmlPath))
-			}
-			var reporter *report.Reporter
-			if progress != nil || len(liveSinks) > 0 || len(resultSinks) > 0 {
-				reporter = buildReporterWithLive(report.DefaultQueueSize, progress, liveSinks, resultSinks...)
-				opts.Sink = reporter
-			}
+			reporter := makeReporter()
 
 			// c.Context() is the signal-cancelled root context: on SIGINT/SIGTERM
 			// the scheduler stops taking new work and in-flight tests run their

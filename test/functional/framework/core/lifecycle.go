@@ -85,6 +85,45 @@ func RunTests(ctx context.Context, tests []Test, opts RunOptions) (RunSummary, [
 	return summary, results
 }
 
+// ReportEnvFailedRun records a run whose environment never came up: no test body
+// can execute, so EVERY selected test reports env_failed carrying the reason.
+// Reporting nothing would be worse than useless — a run that lands with zero
+// results looks like a configuration mistake, hides which tests were supposed to
+// run, and leaves each test's history with no entry for the day it was blocked.
+// It emits the same RunStarted/results/RunFinished shape as a real run, so every
+// sink (portal, junit, jsonfile, html) sees a complete run.
+func ReportEnvFailedRun(tests []Test, opts RunOptions, reason string) (RunSummary, []*Result) {
+	if opts.Seed == nil {
+		opts.Seed = NewRunSeed(0, false)
+	}
+	started := time.Now()
+	if opts.Sink != nil {
+		_ = opts.Sink.RunStarted(RunInfo{
+			Seed:      opts.Seed.Value(),
+			Total:     len(tests),
+			Parallel:  1,
+			StartedAt: started,
+		})
+	}
+	results := make([]*Result, 0, len(tests))
+	for _, test := range tests {
+		results = append(results, ReportResult(test, opts, StatusEnvFailed, reason))
+	}
+	summary := RunSummary{
+		Counts:    map[Status]int{},
+		Total:     len(results),
+		StartedAt: started,
+		EndedAt:   time.Now(),
+	}
+	for _, r := range results {
+		summary.Counts[r.Status]++
+	}
+	if opts.Sink != nil {
+		_ = opts.Sink.RunFinished(summary)
+	}
+	return summary, results
+}
+
 // RunOne runs a test through the full per-test lifecycle, provisioning and
 // tearing down its own environment: version-gate → provision → run (watchdog) →
 // collect → teardown. Teardown always runs once provisioning succeeded, under
