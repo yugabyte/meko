@@ -1068,3 +1068,31 @@ func TestResolveYBImagePrecedence(t *testing.T) {
 		})
 	}
 }
+
+// A crash-looping controller must carry its OWN logs into the deploy error:
+// phase and restart counts prove the loop, only the log says why, and the
+// namespace is gone by the time anyone reads the build.
+func TestControllerWaitDiagnosticsCarriesCrashLogs(t *testing.T) {
+	rec := &recorder{}
+	rec.on("get pods -o name", exec.Result{Stdout: "pod/amp-controller-765fbbdc5c-mt65p\npod/yugabyted-0\n"})
+	rec.on("logs amp-controller-765fbbdc5c-mt65p --all-containers --prefix --previous",
+		exec.Result{Stdout: "apply migrations: boom\n"})
+	rec.on("logs amp-controller-765fbbdc5c-mt65p --all-containers --prefix",
+		exec.Result{Stdout: "starting controller\n"})
+	a := testApp(Config{ControllerName: "amp-controller"}, rec)
+
+	got := a.controllerWaitDiagnostics(context.Background())
+
+	if !strings.Contains(got, "apply migrations: boom") {
+		t.Errorf("diagnostics lack the previous instance's log:\n%s", got)
+	}
+	if !strings.Contains(got, "amp-controller-765fbbdc5c-mt65p logs (previous instance") {
+		t.Errorf("diagnostics do not label the crashed pod's log:\n%s", got)
+	}
+	if !strings.Contains(got, "starting controller") {
+		t.Errorf("diagnostics lack the current instance's log:\n%s", got)
+	}
+	if strings.Contains(got, "yugabyted-0 logs") {
+		t.Errorf("diagnostics pulled logs for a pod that is not the controller:\n%s", got)
+	}
+}

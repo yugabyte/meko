@@ -127,6 +127,11 @@ const (
 	ReachPortForward ControllerReachMode = "portforward"
 )
 
+// controllerCrashLogLines is how much of a crash-looping controller's log is
+// pulled into the deploy error. Enough for a startup failure (config, migration,
+// backing-store connection) without burying the error in a build log.
+const controllerCrashLogLines = 80
+
 // BackingMode selects where the amp control plane's YugabyteDB backing store
 // lives.
 type BackingMode string
@@ -701,7 +706,7 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 // short independent deadline so a cancelled/expired parent ctx still yields
 // evidence; returns "" (never an error) when nothing could be read.
 func (a *App) controllerWaitDiagnostics(ctx context.Context) string {
-	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 	defer cancel()
 	var b strings.Builder
 	if conds, err := a.kube.Get(dctx, "deployment", a.cfg.ControllerName,
@@ -714,6 +719,39 @@ func (a *App) controllerWaitDiagnostics(ctx context.Context) string {
 		`{range .items[*]}{.metadata.name} phase={.status.phase}{range .status.containerStatuses[*]} {.name}: ready={.ready} restarts={.restartCount} state={.state}{end}{"\n"}{end}`); err == nil {
 		if pods = strings.TrimSpace(pods); pods != "" {
 			b.WriteString("\ncontroller pods:\n" + pods)
+		}
+	}
+	b.WriteString(a.controllerCrashLogs(dctx))
+	return b.String()
+}
+
+// controllerCrashLogs appends what the controller actually said before it died.
+// Pod phase and restart counts prove a crash-loop but never explain it, and the
+// namespace is torn down with the run — so without the logs inline in this error
+// the failure is unexplainable after the fact. The previous instance's logs come
+// first (the crash that started the loop); the current instance follows for a
+// pod still on its first attempt.
+func (a *App) controllerCrashLogs(ctx context.Context) string {
+	pods, err := a.kube.ListPods(ctx)
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, pod := range pods {
+		if !strings.HasPrefix(pod, a.cfg.ControllerName+"-") {
+			continue
+		}
+		if prev, err := a.kube.LogsAllPrevious(ctx, pod, controllerCrashLogLines); err == nil {
+			if prev = strings.TrimSpace(prev); prev != "" {
+				fmt.Fprintf(&b, "\n%s logs (previous instance, last %d lines):\n%s\n",
+					pod, controllerCrashLogLines, prev)
+			}
+		}
+		if cur, err := a.kube.LogsAll(ctx, pod, controllerCrashLogLines); err == nil {
+			if cur = strings.TrimSpace(cur); cur != "" {
+				fmt.Fprintf(&b, "\n%s logs (current instance, last %d lines):\n%s\n",
+					pod, controllerCrashLogLines, cur)
+			}
 		}
 	}
 	return b.String()
