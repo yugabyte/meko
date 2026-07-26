@@ -191,6 +191,13 @@ func runComparisonSuite(t *core.T, spec comparisonSpec) error {
 // significant regression vs the reference.
 func emitComparison(t *core.T, spec comparisonSpec, results []variantResult) error {
 	cmp := compareVariants(results)
+	// Identity first: a live sink stamps it onto every datapoint it streams, so
+	// it must be recorded before the first t.Datapoint call.
+	t.SetPerfIdentity(core.PerfIdentity{
+		Variant:       fmt.Sprintf("comparison of %d variants (reference %q)", len(results), cmp.Reference),
+		Commit:        spec.commit,
+		LoadSignature: spec.loadSig,
+	})
 	for _, r := range results {
 		for _, dp := range variantDatapoints(r) {
 			t.Datapoint(dp)
@@ -200,11 +207,6 @@ func emitComparison(t *core.T, spec comparisonSpec, results []variantResult) err
 	for _, c := range comparisonCharts(results) {
 		t.Chart(c)
 	}
-	t.SetPerfIdentity(core.PerfIdentity{
-		Variant:       fmt.Sprintf("comparison of %d variants (reference %q)", len(results), cmp.Reference),
-		Commit:        spec.commit,
-		LoadSignature: spec.loadSig,
-	})
 	if spec.cmp.FailOnRegression {
 		if s := regressedVariants(cmp); s != "" {
 			return fmt.Errorf("perf regression vs reference %q: %s", cmp.Reference, s)

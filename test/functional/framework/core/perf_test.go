@@ -49,3 +49,33 @@ func TestDatapointRecordedAndEmitted(t *testing.T) {
 		t.Errorf("emitted %d EventDatapoint events, want 2", emitted)
 	}
 }
+
+// TestDatapointEventCarriesIdentity: once SetPerfIdentity has run, every emitted
+// EventDatapoint carries the identity so a live sink can store the datapoint
+// with its load signature. Datapoints emitted before it carry none.
+func TestDatapointEventCarriesIdentity(t *testing.T) {
+	res := &Result{}
+	cap := &captureEmitter{}
+	seed := NewRunSeed(1, true).ForTest("perf/ident")
+	tt := newT(context.Background(), nil, seed, nil, nil, res, cap)
+
+	tt.Datapoint(Datapoint{Name: "early", Value: 1})
+	tt.SetPerfIdentity(PerfIdentity{LoadSignature: "abc123", YBImage: "yb:tag"})
+	tt.Datapoint(Datapoint{Name: "late", Value: 2})
+
+	var got []ResultEvent
+	for _, ev := range cap.events {
+		if ev.Kind == EventDatapoint {
+			got = append(got, ev)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("emitted %d datapoint events, want 2", len(got))
+	}
+	if got[0].PerfIdentity != nil {
+		t.Errorf("datapoint emitted before SetPerfIdentity carried %+v, want nil", got[0].PerfIdentity)
+	}
+	if got[1].PerfIdentity == nil || got[1].PerfIdentity.LoadSignature != "abc123" {
+		t.Errorf("datapoint identity = %+v, want load_signature abc123", got[1].PerfIdentity)
+	}
+}

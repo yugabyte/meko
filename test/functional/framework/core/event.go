@@ -27,6 +27,12 @@ type ResultEvent struct {
 	Metric     *Metric
 	Datapoint  *Datapoint
 	Chart      *Chart
+	// PerfIdentity rides along with EventDatapoint: it is the load/image
+	// signature that makes the datapoint comparable to another run's, and a live
+	// sink needs it AT WRITE TIME (the result-level identity only reaches the
+	// portal with the finish patch, long after the datapoint row is stored). Nil
+	// when the test has not recorded an identity.
+	PerfIdentity *PerfIdentity
 	// Content carries an attachment's raw bytes for EventAttachment events
 	// emitted via T.AttachBytes, so a persisting sink (jsonfile) can write them
 	// to disk. It is transient: it is NEVER serialized into a recorded Result —

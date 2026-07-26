@@ -70,8 +70,9 @@ func (t *T) SetPerfIdentity(id PerfIdentity) {
 func (t *T) Datapoint(dp Datapoint) {
 	t.mu.Lock()
 	t.result.Perf = append(t.result.Perf, dp)
+	id := t.result.PerfIdentity
 	t.mu.Unlock()
 	if t.emit != nil {
-		t.emit.emit(ResultEvent{Kind: EventDatapoint, Datapoint: &dp})
+		t.emit.emit(ResultEvent{Kind: EventDatapoint, Datapoint: &dp, PerfIdentity: id})
 	}
 }

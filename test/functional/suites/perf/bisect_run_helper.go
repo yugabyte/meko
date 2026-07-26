@@ -153,6 +153,13 @@ func runBisectSuite(t *core.T, spec bisectSpec) error {
 // bar chart with the transition marked, and the shared load identity. It PASSES
 // — a bisect is diagnostic — reporting the localized first-regressed candidate.
 func emitBisect(t *core.T, spec bisectSpec, o bisectOutcome) error {
+	// Identity first: a live sink stamps it onto every datapoint it streams, so
+	// it must be recorded before the first t.Datapoint call.
+	t.SetPerfIdentity(core.PerfIdentity{
+		Variant:       fmt.Sprintf("bisect of %d candidates → first regressed %q", len(o.Candidates), firstBadLabel(o)),
+		Commit:        spec.commit,
+		LoadSignature: spec.loadSig,
+	})
 	for _, p := range o.Probed {
 		if p.Metric == 0 {
 			continue
@@ -168,11 +175,6 @@ func emitBisect(t *core.T, spec bisectSpec, o bisectOutcome) error {
 	if c, ok := bisectChart(o); ok {
 		t.Chart(c)
 	}
-	t.SetPerfIdentity(core.PerfIdentity{
-		Variant:       fmt.Sprintf("bisect of %d candidates → first regressed %q", len(o.Candidates), firstBadLabel(o)),
-		Commit:        spec.commit,
-		LoadSignature: spec.loadSig,
-	})
 	spec.logf("perf: bisect complete — %d candidates, %d probed, first regressed %q (see bisect.txt)",
 		len(o.Candidates), len(o.Probed), firstBadLabel(o))
 	return nil

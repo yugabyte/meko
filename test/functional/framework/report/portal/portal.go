@@ -279,9 +279,18 @@ func (s *Sink) datapoint(ev core.ResultEvent) {
 	if err != nil {
 		return
 	}
-	_ = s.call(http.MethodPost, "/api/v1/results/"+rid+"/perf", map[string]any{
-		"datapoints": []json.RawMessage{dp},
-	}, nil)
+	body := map[string]any{"datapoints": []json.RawMessage{dp}}
+	// The identity (load_signature + the images under test) is what makes a
+	// stored datapoint comparable to another run's. The write API folds it into
+	// each datapoint, so send it here — without it every live-streamed datapoint
+	// lands with no load signature and nothing downstream can tell whether two
+	// numbers measure the same load.
+	if ev.PerfIdentity != nil {
+		if id, err := json.Marshal(ev.PerfIdentity); err == nil {
+			body["identity"] = json.RawMessage(id)
+		}
+	}
+	_ = s.call(http.MethodPost, "/api/v1/results/"+rid+"/perf", body, nil)
 }
 
 func (s *Sink) chart(ev core.ResultEvent) {

@@ -215,3 +215,53 @@ func TestSinkAttachmentAfterTestFinished(t *testing.T) {
 	}
 	fp.has(t, "POST /api/v1/files/add")
 }
+
+// A streamed perf datapoint must carry the run's identity on the POST: without
+// it the stored row has no load signature and nothing downstream can tell
+// whether two numbers measure the same load.
+func TestSinkPerfDatapointSendsIdentity(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "perf/x", Result: &core.Result{}})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventDatapoint, TestName: "perf/x",
+		Datapoint:    &core.Datapoint{Name: "pgbench.tps", Value: 500, Unit: "tps", Direction: core.HigherIsBetter},
+		PerfIdentity: &core.PerfIdentity{LoadSignature: "sig123", YBImage: "yb:2025.2", Commit: "abc"},
+	})
+
+	var body struct {
+		Datapoints []json.RawMessage `json:"datapoints"`
+		Identity   *struct {
+			LoadSignature string `json:"load_signature"`
+			YBImage       string `json:"yb_image"`
+		} `json:"identity"`
+	}
+	if err := json.Unmarshal(fp.has(t, "POST /api/v1/results/res-1/perf"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Datapoints) != 1 {
+		t.Fatalf("posted %d datapoints, want 1", len(body.Datapoints))
+	}
+	if body.Identity == nil || body.Identity.LoadSignature != "sig123" || body.Identity.YBImage != "yb:2025.2" {
+		t.Errorf("perf POST identity = %+v, want load_signature sig123 / yb_image yb:2025.2", body.Identity)
+	}
+}
+
+// With no identity recorded the POST simply omits the field (the API treats it
+// as absent) — it must not send a null or an empty object.
+func TestSinkPerfDatapointWithoutIdentity(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "perf/x", Result: &core.Result{}})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventDatapoint, TestName: "perf/x",
+		Datapoint: &core.Datapoint{Name: "pgbench.tps", Value: 500}})
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(fp.has(t, "POST /api/v1/results/res-1/perf"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["identity"]; ok {
+		t.Errorf("perf POST carried an identity field with none recorded: %v", body)
+	}
+}
