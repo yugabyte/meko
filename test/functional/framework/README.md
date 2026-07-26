@@ -206,13 +206,15 @@ share at all — `exclusive` and `persistent` always get a dedicated env.
 Per the live `ampqa collect` output (34 tests: `canary` 6, `features` 19,
 `perf` 2, `presets` 5, `stress` 2).
 
-**Two tier tags, and only two** — and `nightly` is a **superset** of `regression`:
-`regression` (11 — the fast PR gate: basic functions + the main use case + "the PR
-didn't break anything important") and `nightly` (19 — re-runs the regression tests
-against real backings *plus* the extended Jenkins sweep across real
-k8s/GCP/YBA/yugabyted/raw-YB backings, chaos, and perf). Regression tests carry
-both tags; extended-only tests carry just `nightly`. `canary` and `presets` are
-untagged (selected by `--suite` / name). See `docs/testing-tiers.md`.
+**Four tier tags** — `nightly` is a **superset** of the other three:
+`regression` (the fast PR gate: basic functions + the main use case + "the PR
+didn't break anything important"), `stress` (the two `suites/stress` scenarios —
+sustained load and combined load under chaos), `perf` (the baseline-gated
+benchmarks in `suites/perf`), and `nightly` (re-runs regression against real
+backings *plus* the extended Jenkins sweep across real k8s/GCP/YBA/yugabyted/raw-YB
+backings, chaos, and perf). Every tagged test also carries `nightly`; the
+extended-only tests carry just `nightly`. `canary` and `presets` are untagged
+(selected by `--suite` / name). See `docs/testing-tiers.md`.
 
 | Suite | Purpose |
 |---|---|

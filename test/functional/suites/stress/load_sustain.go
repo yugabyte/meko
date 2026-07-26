@@ -33,7 +33,7 @@ func init() {
 		Suite:       "stress",
 		Category:    core.Stress,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SingleContainer},
-		Tags:        []string{"nightly"},
+		Tags:        []string{"stress", "nightly"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Sustain a seed-driven mixed insert/update/delete/select load via workloadgen and assert live-row accounting matches the database.",
 		Params:      []string{"stress.duration"},
