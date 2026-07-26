@@ -1066,6 +1066,40 @@ perf:
     #                re-run execute-only against it via skip_load.
     skip_load: false
     load_only: false
+    # SHAPE gates. The baseline gate compares an absolute median against a stored
+    # reference, so in a fresh CI workspace (baselines/ is gitignored, so there is
+    # no stored baseline) a perf run asserts NOTHING. These two gates instead
+    # threshold RATIOS computed INSIDE one run, from samples the harness already
+    # collects, so they assert on the very first run at no extra runtime. Both are
+    # expressed as a regression percent in the metric's own worse direction (a drop
+    # for throughput, a rise for latency): positive is worse, negative is
+    # improving, and 0 is flat. Emitted as `<metric>_iter_delta_pct` /
+    # `<metric>_decay_pct` datapoints (plus the previously discarded warmup as
+    # `<metric>_warmup` and `<metric>_warmup_delta_pct`, ungated — a cold warmup
+    # being SLOWER is normal). Set a limit to 0 to keep the datapoint but drop the
+    # assertion.
+    #
+    # Both defaults deliberately sit ABOVE the run-to-run spread a small
+    # co-located load already shows (see perf.warehouses: ~14% throughput and up
+    # to ~48% tail-latency spread at a 2-warehouse TPC-C) — they exist to catch
+    # MULTIPLES (a phase getting 5x slower), and a limit inside the noise band
+    # would fire on healthy runs. Tighten them once you drive a steadier load.
+
+    # max_iter_drift_pct gates the FIRST measured iteration against the LAST:
+    # state that accumulates across iterations (a statement that is permanently
+    # slower after the first pass) is invisible to the median headline. It
+    # compares two SINGLE iterations, with no median smoothing, so it is the
+    # noisier of the two and gets the looser limit.
+    max_iter_drift_pct: 50.0
+    # max_decay_pct gates the median of the FIRST THIRD of a measured run's
+    # progress readings against the median of the LAST THIRD (per iteration, then
+    # the median across iterations): throughput that degrades while the run
+    # proceeds is averaged away by a whole-run median. Each third is ~20 readings
+    # at the 1s sample_interval, materially steadier than a single-iteration
+    # comparison, so this limit is tighter. Needs a driver that reports periodic
+    # progress (pgbench -P, sysbench --report-interval); BenchBase does not, so
+    # perf/tpcc emits no decay datapoint.
+    max_decay_pct: 35.0
   # pgbench sub-tier (perf/pgbench): the same self-provisioned backing + client
   # pod as perf/tpcc, but the workload is pgbench (YugabyteDB ships its fork
   # `ysql_bench` in postgres/bin; perf/pgbench delivers it via the `pgbench`
@@ -1097,6 +1131,33 @@ perf:
     table_size: 100000
     # threads is sysbench --threads (concurrent client threads) for each run.
     threads: 8
+  # microbench is the phase-timed workload (perf/microbench): labelled DDL/bulk-DML
+  # statements, each one timed Exec, each a `microbench.<phase>` datapoint in ms.
+  # Unlike the rest of the tier it needs NO backing of its own and NO client pod —
+  # it measures the amp COMPUTE ENDPOINT the env provider serves (docker /
+  # sharedk8s / universe), which is the layer the tserver-connected workloads
+  # cannot see. Its gate is an intra-run RATIO, so it asserts on the first run
+  # with no stored baseline.
+  microbench:
+    # rows is the row count of every bulk statement (insert / update / delete).
+    # The gate is a dimensionless ratio between two phases of the SAME run, so it
+    # holds at any row count — this default is sized for what CI can afford, not
+    # for the shape being reproduced. 200k keeps the six bulk statements in the
+    # low minutes on a single-container env, well inside the 60m perf timeout,
+    # while staying large enough that per-statement fixed costs do not dominate.
+    # Set 1000000 to reproduce the originally reported 1M-row shape.
+    rows: 200000
+    # truncate_cycles is how many TRUNCATE + re-INSERT cycles follow the cold
+    # insert. Three is the minimum that shows a degradation is PERSISTENT rather
+    # than a one-off, and gives the gate a median instead of a single value.
+    truncate_cycles: 3
+    # max_phase_ratio is the gate: median(insert_after_truncate) / insert_cold.
+    # A re-insert into a truncated table costing twice the cold insert is already
+    # a finding, and the shape this was written for is ~5x. It compares two phases
+    # of the same run, so it needs no baseline — but it DOES need calibration
+    # against real hardware: treat the first runs as establishing what the healthy
+    # ratio is on your target. 0 disables the assertion, keeping the datapoint.
+    max_phase_ratio: 2.0
   # history is the HISTORICAL perf tracking store: distinct from the baseline
   # (which holds ONE reference value per test/metric to gate against), the
   # history APPENDS every run's aggregate so the report can render a TREND of

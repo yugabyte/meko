@@ -2,6 +2,7 @@ package perf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path"
@@ -95,6 +96,7 @@ func runTPCC(t *core.T) (err error) {
 		t:       t,
 		cfg:     cfg,
 		bc:      bc,
+		gates:   benchGatesFromConfig(t.Options),
 		hcfg:    historyConfigFromConfig(t.Options),
 		version: chartVersion(t.Options),
 		id:      identityFromConfig(t.Options, "", commit, loadSig),
@@ -138,6 +140,7 @@ type perfRun struct {
 	t       *core.T
 	cfg     perfConfig
 	bc      BenchConfig
+	gates   benchGates
 	hcfg    historyConfig
 	version string
 	id      Identity
@@ -336,12 +339,19 @@ func benchbaseSample(res benchbase.Result) Sample {
 // medians (throughput higher-is-better; p95/p99/median latency lower-is-better)
 // and the informational .cv noise signal per metric.
 func tpccDatapoints(res BenchResult) (gated, info []core.Datapoint) {
-	return splitDatapoints([]metricSpec{
-		{"tpcc.throughput", "req/s", core.HigherIsBetter, res.TPS},
-		{"tpcc.latency_p95", "ms", core.LowerIsBetter, res.LatencyP95},
-		{"tpcc.latency_p99", "ms", core.LowerIsBetter, res.LatencyP99},
-		{"tpcc.latency_median", "ms", core.LowerIsBetter, res.LatencyAvg},
-	})
+	return splitDatapoints(tpccMetricSpecs(res))
+}
+
+// tpccMetricSpecs is the metric set perf/tpcc reports, with the Sample accessors
+// the shape gates need. BenchBase reports no periodic progress, so no FromPoint
+// is set and the intra-run decay shape is skipped for TPC-C.
+func tpccMetricSpecs(res BenchResult) []metricSpec {
+	return []metricSpec{
+		{Name: "tpcc.throughput", Unit: "req/s", Dir: core.HigherIsBetter, Stats: res.TPS, FromSample: sampleTPS},
+		{Name: "tpcc.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95, FromSample: sampleLatencyP95},
+		{Name: "tpcc.latency_p99", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP99, FromSample: sampleLatencyP99},
+		{Name: "tpcc.latency_median", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg, FromSample: sampleLatencyAvg},
+	}
 }
 
 // gateBaseline emits the aggregate's datapoints — the medians gated against the
@@ -352,9 +362,10 @@ func tpccDatapoints(res BenchResult) (gated, info []core.Datapoint) {
 // before propagating any gate failure.
 func (r *perfRun) gateBaseline(_ context.Context) error {
 	gated, info := tpccDatapoints(r.benchResult)
-	gateErr := emitAndGate(r.t, r.cfg, r.version, testNameTPCC, gated, info, r.id, r.logf)
+	shape, shapeErr := benchShapeGate(r.benchResult, tpccMetricSpecs(r.benchResult), r.gates)
+	gateErr := emitAndGate(r.t, r.cfg, r.version, testNameTPCC, gated, append(info, shape...), r.id, r.logf)
 	emitHistoryTrend(r.t, r.hcfg, testNameTPCC, r.version, r.benchResult, r.id, r.logf)
-	return gateErr
+	return errors.Join(gateErr, shapeErr)
 }
 
 // gateOutcome is the pure result of the baseline gate: the datapoints (with

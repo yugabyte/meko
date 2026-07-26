@@ -319,6 +319,12 @@ type metricSpec struct {
 	Unit  string
 	Dir   core.Direction
 	Stats BenchStats
+	// FromSample / FromPoint project this metric out of one run's Sample and out
+	// of one periodic progress reading. The SHAPE gates use them for the warmup
+	// comparison and the intra-run decay; nil skips that shape for this metric
+	// (e.g. a driver that reports no periodic progress).
+	FromSample func(Sample) float64
+	FromPoint  func(SamplePoint) float64
 }
 
 // splitDatapoints turns the metric specs into two lists: the GATED headline

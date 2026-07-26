@@ -25,6 +25,7 @@ package perf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path"
@@ -150,6 +151,7 @@ func runPgbench(t *core.T) (err error) {
 		t:       t,
 		cfg:     cfg,
 		bc:      bc,
+		gates:   benchGatesFromConfig(t.Options),
 		hcfg:    historyConfigFromConfig(t.Options),
 		params:  params,
 		version: chartVersion(t.Options),
@@ -194,6 +196,7 @@ type pgbenchRun struct {
 	t       *core.T
 	cfg     perfConfig
 	bc      BenchConfig
+	gates   benchGates
 	hcfg    historyConfig
 	params  pgbenchParams
 	version string
@@ -296,9 +299,10 @@ func (r *pgbenchRun) runBenchmark(ctx context.Context) error {
 // chart(s), before propagating any gate failure.
 func (r *pgbenchRun) gateBaseline(_ context.Context) error {
 	gated, info := pgbenchDatapoints(r.benchResult)
-	gateErr := emitAndGate(r.t, r.cfg, r.version, testNamePgbench, gated, info, r.id, r.logf)
+	shape, shapeErr := benchShapeGate(r.benchResult, pgbenchMetricSpecs(r.benchResult), r.gates)
+	gateErr := emitAndGate(r.t, r.cfg, r.version, testNamePgbench, gated, append(info, shape...), r.id, r.logf)
 	emitHistoryTrend(r.t, r.hcfg, testNamePgbench, r.version, r.benchResult, r.id, r.logf)
-	return gateErr
+	return errors.Join(gateErr, shapeErr)
 }
 
 // pgbenchWorkload adapts the pgbench driver to the harness Workload: `pgbench
@@ -358,10 +362,18 @@ func parsePgbenchProgress(raw string) []SamplePoint {
 // medians (tps higher-is-better; average latency lower-is-better) and the
 // informational .cv noise signal per metric.
 func pgbenchDatapoints(res BenchResult) (gated, info []core.Datapoint) {
-	return splitDatapoints([]metricSpec{
-		{"pgbench.tps", "tps", core.HigherIsBetter, res.TPS},
-		{"pgbench.latency_avg", "ms", core.LowerIsBetter, res.LatencyAvg},
-	})
+	return splitDatapoints(pgbenchMetricSpecs(res))
+}
+
+// pgbenchMetricSpecs is the metric set perf/pgbench reports, with the accessors
+// the shape gates need (pgbench's -P progress carries tps and latency).
+func pgbenchMetricSpecs(res BenchResult) []metricSpec {
+	return []metricSpec{
+		{Name: "pgbench.tps", Unit: "tps", Dir: core.HigherIsBetter, Stats: res.TPS,
+			FromSample: sampleTPS, FromPoint: pointTPS},
+		{Name: "pgbench.latency_avg", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg,
+			FromSample: sampleLatencyAvg, FromPoint: pointLatency},
+	}
 }
 
 // --- shared pgbench glue (test + preset) ---

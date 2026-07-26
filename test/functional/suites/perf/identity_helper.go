@@ -51,6 +51,10 @@ type LoadFields struct {
 	Warehouses    int    `json:"warehouses"`
 	Tables        int    `json:"tables"`
 	Script        string `json:"script"`
+	// Rows / Cycles are the phase-workload shape (perf/microbench). omitempty
+	// keeps the signature of the workloads that leave them zero unchanged.
+	Rows   int `json:"rows,omitempty"`
+	Cycles int `json:"cycles,omitempty"`
 }
 
 // LoadSignature is a deterministic short hash of the load config. Encoding a

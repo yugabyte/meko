@@ -21,6 +21,7 @@ package perf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -128,6 +129,7 @@ func runSysbench(t *core.T) (err error) {
 		t:       t,
 		cfg:     cfg,
 		bc:      bc,
+		gates:   benchGatesFromConfig(t.Options),
 		hcfg:    historyConfigFromConfig(t.Options),
 		params:  params,
 		version: chartVersion(t.Options),
@@ -172,6 +174,7 @@ type sysbenchRun struct {
 	t       *core.T
 	cfg     perfConfig
 	bc      BenchConfig
+	gates   benchGates
 	hcfg    historyConfig
 	params  sysbenchParams
 	version string
@@ -256,9 +259,10 @@ func (r *sysbenchRun) runBenchmark(ctx context.Context) error {
 // chart(s), before propagating any gate failure.
 func (r *sysbenchRun) gateBaseline(_ context.Context) error {
 	gated, info := sysbenchDatapoints(r.benchResult)
-	gateErr := emitAndGate(r.t, r.cfg, r.version, testNameSysbench, gated, info, r.id, r.logf)
+	shape, shapeErr := benchShapeGate(r.benchResult, sysbenchMetricSpecs(r.benchResult), r.gates)
+	gateErr := emitAndGate(r.t, r.cfg, r.version, testNameSysbench, gated, append(info, shape...), r.id, r.logf)
 	emitHistoryTrend(r.t, r.hcfg, testNameSysbench, r.version, r.benchResult, r.id, r.logf)
-	return gateErr
+	return errors.Join(gateErr, shapeErr)
 }
 
 // sysbenchWorkload adapts the sysbench driver to the harness Workload:
@@ -337,11 +341,21 @@ func parseSysbenchProgress(raw string) []SamplePoint {
 // medians (tps higher-is-better; latencies lower-is-better) and the
 // informational .cv noise signal per metric.
 func sysbenchDatapoints(res BenchResult) (gated, info []core.Datapoint) {
-	return splitDatapoints([]metricSpec{
-		{"sysbench.tps", "tps", core.HigherIsBetter, res.TPS},
-		{"sysbench.latency_avg", "ms", core.LowerIsBetter, res.LatencyAvg},
-		{"sysbench.latency_p95", "ms", core.LowerIsBetter, res.LatencyP95},
-	})
+	return splitDatapoints(sysbenchMetricSpecs(res))
+}
+
+// sysbenchMetricSpecs is the metric set perf/sysbench reports, with the
+// accessors the shape gates need (sysbench --report-interval carries tps and
+// latency; its progress lines report no percentile, so p95 gets no FromPoint).
+func sysbenchMetricSpecs(res BenchResult) []metricSpec {
+	return []metricSpec{
+		{Name: "sysbench.tps", Unit: "tps", Dir: core.HigherIsBetter, Stats: res.TPS,
+			FromSample: sampleTPS, FromPoint: pointTPS},
+		{Name: "sysbench.latency_avg", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyAvg,
+			FromSample: sampleLatencyAvg, FromPoint: pointLatency},
+		{Name: "sysbench.latency_p95", Unit: "ms", Dir: core.LowerIsBetter, Stats: res.LatencyP95,
+			FromSample: sampleLatencyP95},
+	}
 }
 
 // loadFieldsSysbench is the perf/sysbench load: the shared bench cadence plus
