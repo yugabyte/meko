@@ -31,6 +31,10 @@ const (
 	computeUser            = "cloud_admin"
 	computeDB              = "postgres"
 	ybUser                 = "yugabyte"
+	// ybStorageDB is the database the endpoint's DEV_PROVISION_SCHEMA path
+	// creates and puts the `pageserver` schema in (supervisor.py's YB_DBNAME
+	// default). The provider passes no YB_DBNAME, so the image default holds.
+	ybStorageDB = "yb_storage"
 	// computeReadyTimeout bounds waiting for the endpoint's Postgres to serve
 	// again after a compute restart.
 	computeReadyTimeout = 3 * time.Minute
@@ -276,7 +280,13 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 			Product: product,
 			YB:      ybVersion,
 		},
-		pg:        computePG,
+		pg: computePG,
+		ybStorage: pg.ConnInfo{
+			Host:     p.cfg.Host,
+			Port:     a.ybPort,
+			User:     ybUser,
+			Database: ybStorageDB,
+		},
 		waitReady: pg.WaitReady,
 		handles: core.EnvHandles{
 			Endpoint:   a.endpointName,
@@ -420,6 +430,7 @@ type Env struct {
 	ybShared     bool
 	versions     core.DetectedVersions
 	pg           pg.ConnInfo
+	ybStorage    pg.ConnInfo
 	handles      core.EnvHandles
 
 	// waitReady blocks until the endpoint's Postgres accepts connections; it is
@@ -447,6 +458,26 @@ func (e *Env) Handles() core.EnvHandles        { return e.handles }
 func (e *Env) PGEndpoint() pg.ConnInfo         { return e.pg }
 func (e *Env) DockerHost() *dockerhost.Host    { return e.host }
 func (e *Env) EndpointContainer() string       { return e.endpointName }
+
+// YBStorage is connection info for the backing YugabyteDB's amp storage
+// database — the one holding the `pageserver` schema the data path writes.
+// Tests that assert on what actually landed in storage need this; the compute
+// endpoint's own Postgres (PGEndpoint) cannot see it.
+func (e *Env) YBStorage() pg.ConnInfo { return e.ybStorage }
+
+// ExecInEndpoint runs a shell command inside the endpoint container and returns
+// its stdout. The storage daemons' HTTP ports are container-local in this shape
+// and are not published, so reaching them needs an in-container hop.
+func (e *Env) ExecInEndpoint(ctx context.Context, script string) (string, error) {
+	res, err := e.host.Exec(ctx, e.endpointName, []string{"bash", "-c", script})
+	if err != nil {
+		return "", err
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("exec in endpoint %s exited %d: %s", e.endpointName, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return res.Stdout, nil
+}
 
 // RestartCompute restarts the endpoint container in place and blocks until its
 // Postgres serves again — the compute-restart capability the restart regression
