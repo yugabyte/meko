@@ -100,7 +100,7 @@ type Config struct {
 	Kubeconfig  string // "" → ambient KUBECONFIG / in-cluster config
 
 	NamespacePrefix string
-	ChartVersion    string // "" → versions.yugabytedb (resolved by FromConfig)
+	ChartVersion    string // "" → versions.yb / versions.yugabytedb (resolved by FromConfig)
 	ImageRegistry   string // chart Image.repository
 	ImageTag        string // chart Image.tag; "" → ChartVersion
 
@@ -146,14 +146,28 @@ type Getter interface {
 	GetDuration(key string, def time.Duration) time.Duration
 }
 
+// ChartVersion resolves the YB chart version a deploy will use: the explicit
+// chart_version, else versions.yb (the run-level override), else the pinned
+// versions.yugabytedb — the same precedence ampstack.resolveYBImage uses, so a
+// run that asks for one YB version gets it everywhere. Exported so a caller's own
+// gate reports "no YB version" for exactly the cases Deploy would reject, instead
+// of duplicating the chain and drifting from it.
+func ChartVersion(get Getter) string {
+	if v := get.GetString("apps.ybk8s.chart_version", ""); v != "" {
+		return v
+	}
+	if v := get.GetString("versions.yb", ""); v != "" {
+		return v
+	}
+	return get.GetString("versions.yugabytedb", "")
+}
+
 // FromConfig reads apps.ybk8s.* into a Config. ChartVersion falls back to
-// versions.yugabytedb when apps.ybk8s.chart_version is empty; ImageTag falls
+// whichever YB version the run already carries (see ChartVersion), so a
+// self-provisioning test needs no ybk8s-specific version key. ImageTag falls
 // back to the resolved ChartVersion.
 func FromConfig(get Getter) Config {
-	chartVersion := get.GetString("apps.ybk8s.chart_version", "")
-	if chartVersion == "" {
-		chartVersion = get.GetString("versions.yugabytedb", "")
-	}
+	chartVersion := ChartVersion(get)
 	imageTag := get.GetString("apps.ybk8s.image_tag", "")
 	if imageTag == "" {
 		imageTag = chartVersion
@@ -375,7 +389,7 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 		return Info{}, fmt.Errorf("ybk8s: run tag is required (it roots the namespace and reap)")
 	}
 	if d.cfg.ChartVersion == "" {
-		return Info{}, fmt.Errorf("ybk8s: chart version is required (apps.ybk8s.chart_version or versions.yugabytedb)")
+		return Info{}, fmt.Errorf("ybk8s: chart version is required (apps.ybk8s.chart_version, versions.yb or versions.yugabytedb)")
 	}
 
 	// 1. namespace (labelled so Teardown/reaper recognizes it).

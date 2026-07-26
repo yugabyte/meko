@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/baseline"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/env/universe"
@@ -98,23 +99,17 @@ func perfGate(c *core.Config, cfg perfConfig) (string, bool) {
 		return "perf needs a k8s cluster: set apps.ybk8s.kubecontext/kubeconfig (or env.sharedk8s.context / env.ampstack.context)", false
 	}
 	if chartVersion(c) == "" {
-		return "perf needs a YB version: set versions.yb / versions.yugabytedb or apps.ybk8s.chart_version", false
+		return "perf needs a YB version: set apps.ybk8s.chart_version, versions.yb or versions.yugabytedb", false
 	}
 	return "", true
 }
 
 // chartVersion resolves the YB version key the gate and baseline keying use:
 // the explicit chart_version, else whichever YB version the run already sets
-// (versions.yugabytedb or versions.yb) — no perf-specific parameter needed.
-func chartVersion(c *core.Config) string {
-	if v := c.GetString("apps.ybk8s.chart_version", ""); v != "" {
-		return v
-	}
-	if v := c.GetString("versions.yugabytedb", ""); v != "" {
-		return v
-	}
-	return c.GetString("versions.yb", "")
-}
+// (versions.yb, then versions.yugabytedb) — no perf-specific parameter needed.
+// It is the deploy's OWN resolution, so the gate can never pass a version the
+// deploy would then reject, and a baseline is keyed on what actually ran.
+func chartVersion(c *core.Config) string { return ybk8s.ChartVersion(c) }
 
 // modeReporter is implemented by env providers that expose their resolved
 // provisioning mode (env/universe.Env). Declared locally so the gate stays

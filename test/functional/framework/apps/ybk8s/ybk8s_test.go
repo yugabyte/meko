@@ -78,6 +78,38 @@ func TestFromConfigChartAndImageFallback(t *testing.T) {
 	if cfg2.ChartVersion != "2025.2.1.0-b141" || cfg2.ImageTag != "quay-tag-9" {
 		t.Errorf("explicit chart/image = %q/%q", cfg2.ChartVersion, cfg2.ImageTag)
 	}
+	// versions.yb — the run-level YB version a CI run sets — is honoured too, so a
+	// self-provisioning test needs no ybk8s-specific version key.
+	cfg3 := FromConfig(fakeGet{m: map[string]any{"versions.yb": "2026.1.0.0-b42"}})
+	if cfg3.ChartVersion != "2026.1.0.0-b42" || cfg3.ImageTag != "2026.1.0.0-b42" {
+		t.Errorf("versions.yb fallback = %q/%q", cfg3.ChartVersion, cfg3.ImageTag)
+	}
+	// versions.yb is the run-level OVERRIDE, so it beats the pinned
+	// versions.yugabytedb — the precedence ampstack's yb image already uses.
+	cfg4 := FromConfig(fakeGet{m: map[string]any{
+		"versions.yugabytedb": "2025.2.1.0",
+		"versions.yb":         "2026.1.0.0-b42",
+	}})
+	if cfg4.ChartVersion != "2026.1.0.0-b42" {
+		t.Errorf("versions.yb precedence over versions.yugabytedb = %q", cfg4.ChartVersion)
+	}
+}
+
+func TestFromConfigKubeContextFallsBackToRunContext(t *testing.T) {
+	// The context chain the combined-stress gate mirrors: the run's sharedk8s
+	// context is enough, no ybk8s-specific key needed.
+	if got := FromConfig(fakeGet{m: map[string]any{"env.sharedk8s.context": "gke-a"}}).KubeContext; got != "gke-a" {
+		t.Errorf("env.sharedk8s.context fallback = %q", got)
+	}
+	if got := FromConfig(fakeGet{m: map[string]any{"env.ampstack.context": "gke-b"}}).KubeContext; got != "gke-b" {
+		t.Errorf("env.ampstack.context fallback = %q", got)
+	}
+	if got := FromConfig(fakeGet{m: map[string]any{
+		"apps.ybk8s.kubecontext": "gke-explicit",
+		"env.sharedk8s.context":  "gke-a",
+	}}).KubeContext; got != "gke-explicit" {
+		t.Errorf("explicit kubecontext precedence = %q", got)
+	}
 }
 
 func TestApplyDefaultsClampsReplicasToRF(t *testing.T) {

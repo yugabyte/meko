@@ -591,12 +591,14 @@ apps:
   # fully-GCP CO-LOCATED mode (YB + amp in one GKE cluster). Powers
   # functional/amp_on_yb_k8s.
   ybk8s:
-    # kubecontext/kubeconfig as ybastack. For co-location the amp deploy must
-    # target the SAME cluster: set env.ampstack.context to match (or both empty).
+    # kubecontext empty → env.sharedk8s.context, then env.ampstack.context (the
+    # context the run already provides), then the ambient current context. For
+    # co-location the amp deploy must target the SAME cluster.
     kubecontext: ""
     kubeconfig: ""
     namespace_prefix: "ampqa-yb"
-    # chart_version empty → versions.yugabytedb. Chart tarball:
+    # chart_version empty → versions.yb (the run-level YB version a CI run
+    # sets), then the pinned versions.yugabytedb. Chart tarball:
     # s3://releases.yugabyte.com/<chart_version>/helm/yugabyte-<short>.tgz.
     chart_version: ""
     # image_registry is the chart Image.repository; image_tag empty → chart_version.

@@ -1,8 +1,8 @@
 // Package stress registers real stress tests. stress/load_sustain is the
 // first: it runs entirely through workloadgen against whatever env exposes a
-// PGEndpoint (single-container docker today), so it needs no client-pod
-// image yet. Env is Exclusive — a stress test never shares its environment
-// with co-tenants. Blank-imported by cmd/ampqa.
+// PGEndpoint — single-container docker, a sharedk8s project, or a universe all
+// do — so it needs no client-pod image yet. Env is Exclusive — a stress test
+// never shares its environment with co-tenants. Blank-imported by cmd/ampqa.
 package stress
 
 import (
@@ -15,8 +15,8 @@ import (
 )
 
 // pgEnv is the accessor a test needs to reach the endpoint's Postgres. The
-// docker env implements it; core stays untouched (same convention as
-// suites/functional).
+// docker, sharedk8s and universe envs all implement it; core stays untouched
+// (same convention as suites/functional).
 type pgEnv interface {
 	PGEndpoint() pg.ConnInfo
 }
@@ -49,7 +49,7 @@ func init() {
 func runLoadSustain(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env (PGEndpoint)")
+		t.Skip("requires an env that exposes a PGEndpoint (docker, sharedk8s or universe)")
 		return nil
 	}
 	ci := env.PGEndpoint()

@@ -815,17 +815,17 @@ func combinedGate(c *core.Config, cfg combinedConfig) (string, bool) {
 	if !cfg.Enabled {
 		return "stress.combined.enabled is not set (self-provisioning; needs a k8s cluster + the private sample-app jar)", false
 	}
+	// Both checks mirror what ybk8s.FromConfig actually accepts (its context
+	// chain also honours env.sharedk8s.context, the key a CI run already sets),
+	// so the gate never skips over config a deploy would have resolved.
 	if c.GetString("apps.ybk8s.kubecontext", "") == "" &&
 		c.GetString("apps.ybk8s.kubeconfig", "") == "" &&
+		c.GetString("env.sharedk8s.context", "") == "" &&
 		c.GetString("env.ampstack.context", "") == "" {
-		return "combined stress needs a k8s cluster: set apps.ybk8s.kubecontext or apps.ybk8s.kubeconfig (or env.ampstack.context)", false
+		return "combined stress needs a k8s cluster: set apps.ybk8s.kubecontext or apps.ybk8s.kubeconfig (or env.sharedk8s.context / env.ampstack.context)", false
 	}
-	chart := c.GetString("apps.ybk8s.chart_version", "")
-	if chart == "" {
-		chart = c.GetString("versions.yugabytedb", "")
-	}
-	if chart == "" {
-		return "combined stress needs a YB chart version: set apps.ybk8s.chart_version or versions.yugabytedb", false
+	if ybk8s.ChartVersion(c) == "" {
+		return "combined stress needs a YB chart version: set apps.ybk8s.chart_version, versions.yb or versions.yugabytedb", false
 	}
 	secrets, err := core.NewSecrets(c)
 	if err != nil {
