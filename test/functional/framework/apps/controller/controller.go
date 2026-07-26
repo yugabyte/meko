@@ -177,7 +177,35 @@ type Endpoint struct {
 	Role           string `json:"role"`
 	Address        string `json:"address"`
 	TailnetAddress string `json:"tailnet_address"`
+	// Resources is the endpoint's current compute reservation, read back from its
+	// persisted config. Nil on a controller predating in-place resize, which is
+	// how a caller detects the capability without probing the runtime.
+	Resources *EndpointResources `json:"resources"`
 }
+
+// EndpointResources is a compute reservation: cpu + memory as Kubernetes
+// quantities, applied as request == limit (Guaranteed QoS).
+type EndpointResources struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+}
+
+// ResizeEndpointRequest changes an existing endpoint's compute reservation. An
+// omitted dimension keeps its current value.
+type ResizeEndpointRequest struct {
+	Resources EndpointResources `json:"resources"`
+}
+
+// In-place resize outcomes a resize_endpoint task's final step reports. Only a
+// deployer error fails the task: pending/infeasible/unsupported are successful
+// terminal states in which the new size is persisted and converges on the next
+// redeploy.
+const (
+	ResizeCompleted   = "completed"
+	ResizePending     = "pending"
+	ResizeInfeasible  = "infeasible"
+	ResizeUnsupported = "unsupported"
+)
 
 // CreateEndpointRequest creates and deploys an endpoint on a branch.
 type CreateEndpointRequest struct {
@@ -199,6 +227,25 @@ type Task struct {
 	Status    string  `json:"status"`
 	ProjectID *string `json:"project_id"`
 	Error     *string `json:"error"`
+	// Result is the final step's opaque outcome JSON, absent until a step records
+	// one. For a resize_endpoint task it carries in_place_resize + in_place_message.
+	Result json.RawMessage `json:"result"`
+}
+
+// InPlaceResize decodes the in-place outcome a resize_endpoint task recorded.
+// Both values are empty when the task has no result yet or is another kind.
+func (t Task) InPlaceResize() (outcome, message string) {
+	if len(t.Result) == 0 {
+		return "", ""
+	}
+	var r struct {
+		Outcome string `json:"in_place_resize"`
+		Message string `json:"in_place_message"`
+	}
+	if json.Unmarshal(t.Result, &r) != nil {
+		return "", ""
+	}
+	return r.Outcome, r.Message
 }
 
 // TaskList is a page of tasks.
@@ -399,6 +446,13 @@ func (c *Client) DeleteEndpoint(ctx context.Context, poolID, projectID, branchID
 	return c.async(ctx, http.MethodDelete, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID, nil)
 }
 
+// ResizeEndpoint plans an async in-place compute resize (202). First-writer-wins:
+// while a resize of the same endpoint is non-terminal, this returns a 409
+// *APIError.
+func (c *Client) ResizeEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string, req ResizeEndpointRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID+"/resize", req)
+}
+
 // ListAllEndpoints pages through every endpoint bound to a branch.
 func (c *Client) ListAllEndpoints(ctx context.Context, poolID, projectID, branchID string) ([]Endpoint, error) {
 	const page = 100
@@ -572,6 +626,17 @@ func (c *Client) DeleteBranchAndWait(ctx context.Context, poolID, projectID, bra
 // CreateEndpointAndWait creates an endpoint and waits for success.
 func (c *Client) CreateEndpointAndWait(ctx context.Context, poolID, projectID, branchID string, req CreateEndpointRequest) (Task, error) {
 	task, loc, err := c.CreateEndpoint(ctx, poolID, projectID, branchID, req)
+	if err != nil {
+		return Task{}, err
+	}
+	return c.WaitTask(ctx, taskRef(task, loc))
+}
+
+// ResizeEndpointAndWait resizes an endpoint and waits for its task to reach a
+// terminal status. The Task is returned even when it failed (the caller reads its
+// error and result), alongside the failure error.
+func (c *Client) ResizeEndpointAndWait(ctx context.Context, poolID, projectID, branchID, endpointID string, req ResizeEndpointRequest) (Task, error) {
+	task, loc, err := c.ResizeEndpoint(ctx, poolID, projectID, branchID, endpointID, req)
 	if err != nil {
 		return Task{}, err
 	}

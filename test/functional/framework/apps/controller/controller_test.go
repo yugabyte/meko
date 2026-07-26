@@ -375,3 +375,96 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestResizeEndpointSendsResourcesAndReadsOutcome: the resize hits the endpoint's
+// /resize route with the requested dimensions, and the settled task's in-place
+// outcome is decoded off GET /tasks/{id}'s result.
+func TestResizeEndpointSendsResourcesAndReadsOutcome(t *testing.T) {
+	f := newFake()
+	defer f.close()
+	var body map[string]any
+	f.on("POST /api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1/resize", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Location", "/api/v1/tasks/t7")
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t7", "kind": "resize_endpoint", "status": "pending"})
+	})
+	f.on("GET /api/v1/tasks/t7", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": "t7", "kind": "resize_endpoint", "status": "succeeded",
+			"result": map[string]any{"in_place_resize": "completed", "in_place_message": "resized in place"},
+		})
+	})
+	task, err := f.client().ResizeEndpointAndWait(context.Background(), "p1", "pr1", "b1", "e1",
+		ResizeEndpointRequest{Resources: EndpointResources{CPU: "4", Memory: "8Gi"}})
+	if err != nil {
+		t.Fatalf("resize endpoint and wait: %v", err)
+	}
+	res, _ := body["resources"].(map[string]any)
+	if res["cpu"] != "4" || res["memory"] != "8Gi" {
+		t.Errorf("request body resources = %v, want cpu=4 memory=8Gi", body["resources"])
+	}
+	outcome, message := task.InPlaceResize()
+	if outcome != ResizeCompleted || message != "resized in place" {
+		t.Errorf("in-place outcome = %q (%q), want %q", outcome, message, ResizeCompleted)
+	}
+}
+
+// TestResizeEndpointOmitsUnsetDimension: an unset dimension must not be sent at
+// all — the controller keeps the endpoint's current value only for an ABSENT
+// field, so serializing an empty string would be a different request.
+func TestResizeEndpointOmitsUnsetDimension(t *testing.T) {
+	f := newFake()
+	defer f.close()
+	var body map[string]any
+	f.on("POST /api/v1/storage-pools/p/projects/pr/branches/b/endpoints/e/resize", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t1", "kind": "resize_endpoint", "status": "pending"})
+	})
+	if _, _, err := f.client().ResizeEndpoint(context.Background(), "p", "pr", "b", "e",
+		ResizeEndpointRequest{Resources: EndpointResources{CPU: "3"}}); err != nil {
+		t.Fatalf("resize endpoint: %v", err)
+	}
+	res, _ := body["resources"].(map[string]any)
+	if _, present := res["memory"]; present {
+		t.Errorf("request body resources = %v, want no memory key when memory is unset", res)
+	}
+}
+
+// TestResizeEndpointConflictSurfaced: a concurrent resize is rejected 409
+// (first-writer-wins), which the caller must be able to tell from any other error.
+func TestResizeEndpointConflictSurfaced(t *testing.T) {
+	f := newFake()
+	defer f.close()
+	f.on("POST /api/v1/storage-pools/p/projects/pr/branches/b/endpoints/e/resize", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": map[string]any{"code": "conflict", "message": "a resize is already in progress for this endpoint"},
+		})
+	})
+	_, _, err := f.client().ResizeEndpoint(context.Background(), "p", "pr", "b", "e",
+		ResizeEndpointRequest{Resources: EndpointResources{CPU: "3"}})
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("want *APIError, got %T: %v", err, err)
+	}
+	if apiErr.StatusCode != http.StatusConflict || apiErr.Code != "conflict" {
+		t.Errorf("api error = %+v, want 409 conflict", apiErr)
+	}
+}
+
+// TestEndpointResourcesAbsentOnOlderController: an endpoint response without
+// `resources` decodes to a nil pointer — the signal a build predates in-place
+// resize, which the resize tests gate on.
+func TestEndpointResourcesAbsentOnOlderController(t *testing.T) {
+	f := newFake()
+	defer f.close()
+	f.on("GET /api/v1/storage-pools/p/projects/pr/branches/b/endpoints/e", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"id": "e", "role": "read_write"})
+	})
+	ep, err := f.client().GetEndpoint(context.Background(), "p", "pr", "b", "e")
+	if err != nil {
+		t.Fatalf("get endpoint: %v", err)
+	}
+	if ep.Resources != nil {
+		t.Errorf("endpoint resources = %+v, want nil when the response carries no resources", ep.Resources)
+	}
+}
