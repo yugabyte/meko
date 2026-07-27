@@ -85,6 +85,10 @@ Code anchors:
   "push".
 - **Editing existing files is preferred over creating new ones.** Don't
   spin up a parallel module for a small change.
+- **Working in `amp_ui/`? Read [`amp_ui/AGENTS.md`](amp_ui/AGENTS.md) first.**
+  It covers the frontend conventions — keep pages thin and extract modular
+  components (one per file), compose from `src/components/ui/`, and centralize
+  user-facing copy in `src/lib/messages.ts`. Don't add new monolithic pages.
 - **No comments unless the *why* is non-obvious.** Identifiers should
   carry meaning. Don't reference the task/PR/issue in code comments —
   rot.

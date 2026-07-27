@@ -1,0 +1,150 @@
+// The Compute section under a branch card: lists provisioned compute instances
+// and the controls to provision a new read-write / read-only endpoint.
+
+import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useCreateEndpoint } from "@/hooks/useEndpoints";
+import type { Endpoint, EndpointRole } from "@/lib/api/types";
+import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY } from "@/lib/api/types";
+import { dataBranchingMessages as msg } from "@/lib/messages";
+import { ComputeInstance } from "./ComputeInstance";
+
+export function EndpointsSection({
+  poolId,
+  projectId,
+  branchId,
+  endpoints,
+  loading,
+  isDefaultBranch,
+}: {
+  poolId: string;
+  projectId: string;
+  branchId: string;
+  endpoints: Endpoint[];
+  loading: boolean;
+  isDefaultBranch: boolean;
+}) {
+  const [role, setRole] = useState<EndpointRole>("read_write");
+  // CPU + memory reserved for the compute pod, pre-filled with the controller's
+  // 2-core / 4Gi default. Sent as request == limit → Guaranteed QoS.
+  const [cpu, setCpu] = useState(DEFAULT_ENDPOINT_CPU);
+  const [memory, setMemory] = useState(DEFAULT_ENDPOINT_MEMORY);
+  const createEndpoint = useCreateEndpoint();
+
+  // A branch admits at most one read-write compute (multiple read-only are
+  // fine). Once a read-write exists, disable that option and force the
+  // provisioner to read-only. Same rule for the source branch and every fork,
+  // since each branch has its own EndpointsSection + endpoints list.
+  const hasReadWrite = endpoints.some((ep) => ep.role === "read_write");
+  useEffect(() => {
+    if (hasReadWrite && role === "read_write") setRole("read_only");
+  }, [hasReadWrite, role]);
+
+  function provision() {
+    createEndpoint.mutate(
+      {
+        poolId,
+        projectId,
+        branchId,
+        role,
+        cpu: cpu.trim() || DEFAULT_ENDPOINT_CPU,
+        memory: memory.trim() || DEFAULT_ENDPOINT_MEMORY,
+      },
+      {
+        onSuccess: (ep) =>
+          toast.success(msg.provisionSuccess(ep.role.replace("_", "-"))),
+        onError: (err) =>
+          toast.error(err instanceof Error ? err.message : msg.provisionError),
+      },
+    );
+  }
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Compute
+      </div>
+      {loading ? (
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Loading compute…
+        </p>
+      ) : endpoints.length ? (
+        <ul className="space-y-2">
+          {endpoints.map((ep) => (
+            <ComputeInstance
+              key={ep.id}
+              ep={ep}
+              poolId={poolId}
+              isDefaultBranch={isDefaultBranch}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-muted-foreground">{msg.noCompute}</p>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-end gap-2">
+        <Select value={role} onValueChange={(v) => setRole(v as EndpointRole)}>
+          <SelectTrigger className="h-8 w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="read_write" disabled={hasReadWrite}>
+              read-write
+            </SelectItem>
+            <SelectItem value="read_only">read-only</SelectItem>
+          </SelectContent>
+        </Select>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="ep-cpu" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            CPU
+          </Label>
+          <Input
+            id="ep-cpu"
+            value={cpu}
+            onChange={(e) => setCpu(e.target.value)}
+            placeholder={DEFAULT_ENDPOINT_CPU}
+            className="h-8 w-20 font-mono text-xs"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="ep-memory" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Memory
+          </Label>
+          <Input
+            id="ep-memory"
+            value={memory}
+            onChange={(e) => setMemory(e.target.value)}
+            placeholder={DEFAULT_ENDPOINT_MEMORY}
+            className="h-8 w-24 font-mono text-xs"
+          />
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={provision}
+          disabled={createEndpoint.isPending}
+        >
+          {createEndpoint.isPending ? "Provisioning…" : "Provision compute"}
+        </Button>
+      </div>
+      {hasReadWrite && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          This branch already has a read-write compute — additional compute must be read-only.
+        </p>
+      )}
+    </div>
+  );
+}
