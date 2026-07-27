@@ -55,6 +55,21 @@ On Kubernetes the image runs in its own pod via the
 (the `ui.*` values), which points `CONTROLLER_URL` at the in-cluster controller
 Service.
 
+## Conventions
+
+**User-facing copy lives in `src/lib/messages.ts`.** Don't inline toast / dialog
+/ tooltip / hint / empty-state strings in components — add them to the messages
+file (static strings as consts, dynamic ones as small functions) and reference
+them, so wording stays consistent and reviewable in one place. Currently scoped
+to the Data-branching (compute / branch / cluster) surfaces; extend it as other
+pages are centralized.
+
+**Build screens from the shared primitives in `src/components/ui/`** — `Button`,
+`Input`, `Label`, `Select` (dropdown), `Dialog` / `AlertDialog`, `Badge`,
+`Tooltip`, etc. — rather than raw `<button>` / `<input>` / `<select>` or ad-hoc
+styles, so behavior, theming, and accessibility stay consistent. Reusable
+app-level pieces (e.g. `ComputeResourceTag`) live in `src/components/`.
+
 ## Project structure
 
 ```
@@ -84,6 +99,7 @@ src/
 │   │                       queries.ts   — react-query hooks, keys, identity bootstrap
 │   ├── theme.ts          Light/dark theme toggle + persistence
 │   ├── format.ts         Date / id formatting helpers
+│   ├── messages.ts       Centralized user-facing copy (toasts, dialogs, hints)
 │   └── utils.ts          cn() Tailwind class-merge helper
 │
 └── pages/                Route pages — Welcome (Home), SharedPools, Fleet,

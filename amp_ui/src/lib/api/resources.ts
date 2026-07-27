@@ -273,3 +273,19 @@ export async function resizeEndpoint(
     message: result.in_place_message ?? "",
   };
 }
+
+// Async: DELETE records a delete_endpoint task (tears down the Helm release and
+// removes the endpoint record — i.e. unprovisions the compute); poll it to
+// completion so the caller only sees success once the instance is gone.
+export async function deleteEndpoint(
+  poolId: string,
+  projectId: string,
+  branchId: string,
+  endpointId: string,
+): Promise<void> {
+  const task = await apiRequest<Task>(
+    `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints/${endpointId}`,
+    { method: "DELETE" },
+  );
+  await pollTask(task.id);
+}

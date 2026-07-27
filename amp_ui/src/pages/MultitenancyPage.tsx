@@ -5,7 +5,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Check, Copy, Cpu, GitBranch, Loader2, Plus, Server } from "lucide-react";
+import { Check, Copy, Cpu, GitBranch, Loader2, Plus, Server, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -43,8 +43,19 @@ import {
 import {
   useBranchEndpoints,
   useCreateEndpoint,
+  useDeleteEndpoint,
   useResizeEndpoint,
 } from "@/hooks/useEndpoints";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import type {
   Branch,
   CreateBranchInput,
@@ -56,6 +67,7 @@ import {
   DEFAULT_ENDPOINT_MEMORY,
 } from "@/lib/api/types";
 import { formatDateTime, shortId } from "@/lib/format";
+import { dataBranchingMessages as msg } from "@/lib/messages";
 import { ComputeResourceTag } from "@/components/ResourceTag";
 
 export default function MultitenancyPage() {
@@ -184,7 +196,7 @@ export default function MultitenancyPage() {
           <div className="rounded-xl border bg-card p-5 text-card-foreground shadow">
             {!projectId ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
-                Select a pool and cluster to view its branch tree.
+                {msg.selectPoolAndCluster}
               </p>
             ) : branches.error ? (
               <ErrorState error={branches.error} />
@@ -235,7 +247,7 @@ function BranchTree({
   if (branches.length === 0) {
     return (
       <p className="py-6 text-center text-sm text-muted-foreground">
-        No branches found for this cluster.
+        {msg.noBranches}
       </p>
     );
   }
@@ -330,6 +342,7 @@ function BranchCard({
         branchId={branch.branch_id}
         endpoints={endpoints}
         loading={endpointsLoading}
+        isDefaultBranch={isRoot}
       />
     </div>
   );
@@ -341,12 +354,14 @@ function EndpointsSection({
   branchId,
   endpoints,
   loading,
+  isDefaultBranch,
 }: {
   poolId: string;
   projectId: string;
   branchId: string;
   endpoints: Endpoint[];
   loading: boolean;
+  isDefaultBranch: boolean;
 }) {
   const [role, setRole] = useState<EndpointRole>("read_write");
   // CPU + memory reserved for the compute pod, pre-filled with the controller's
@@ -376,11 +391,9 @@ function EndpointsSection({
       },
       {
         onSuccess: (ep) =>
-          toast.success(`Compute provisioned (${ep.role.replace("_", "-")})`),
+          toast.success(msg.provisionSuccess(ep.role.replace("_", "-"))),
         onError: (err) =>
-          toast.error(
-            err instanceof Error ? err.message : "Failed to provision compute",
-          ),
+          toast.error(err instanceof Error ? err.message : msg.provisionError),
       },
     );
   }
@@ -398,11 +411,16 @@ function EndpointsSection({
       ) : endpoints.length ? (
         <ul className="space-y-2">
           {endpoints.map((ep) => (
-            <ComputeInstance key={ep.id} ep={ep} poolId={poolId} />
+            <ComputeInstance
+              key={ep.id}
+              ep={ep}
+              poolId={poolId}
+              isDefaultBranch={isDefaultBranch}
+            />
           ))}
         </ul>
       ) : (
-        <p className="text-sm text-muted-foreground">No compute instances yet.</p>
+        <p className="text-sm text-muted-foreground">{msg.noCompute}</p>
       )}
 
       <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -462,7 +480,15 @@ function EndpointsSection({
 // One provisioned compute instance: its address, role, and a copyable psql
 // connect string. The controller returns `address` (host:port) once the
 // instance is deployed; it connects as user `cloud_admin`, cluster `postgres`.
-function ComputeInstance({ ep, poolId }: { ep: Endpoint; poolId: string }) {
+function ComputeInstance({
+  ep,
+  poolId,
+  isDefaultBranch,
+}: {
+  ep: Endpoint;
+  poolId: string;
+  isDefaultBranch: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const connStr = ep.address
     ? `postgresql://cloud_admin@${ep.address}/postgres`
@@ -479,6 +505,35 @@ function ComputeInstance({ ep, poolId }: { ep: Endpoint; poolId: string }) {
     ep.resources?.memory || DEFAULT_ENDPOINT_MEMORY,
   );
 
+  // Unprovision (delete) this compute instance. Confirmed via AlertDialog since
+  // it tears down the running pod — the branch/data are untouched, only the
+  // compute is removed and can be re-provisioned later.
+  const del = useDeleteEndpoint();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const roleLabel = ep.role.replace("_", "-");
+  const isReadWrite = ep.role === "read_write";
+
+  function unprovision() {
+    del.mutate(
+      {
+        poolId,
+        projectId: ep.project_id,
+        branchId: ep.branch_id,
+        endpointId: ep.id,
+      },
+      {
+        onSuccess: () => {
+          toast.success(msg.unprovisionSuccess(roleLabel));
+          setConfirmDelete(false);
+        },
+        onError: (err) =>
+          toast.error(
+            err instanceof Error ? err.message : msg.unprovisionError,
+          ),
+      },
+    );
+  }
+
   function applyResize() {
     resize.mutate(
       {
@@ -494,25 +549,23 @@ function ComputeInstance({ ep, poolId }: { ep: Endpoint; poolId: string }) {
           const size = `${res.endpoint.resources?.cpu ?? cpu} CPU / ${res.endpoint.resources?.memory ?? memory}`;
           switch (res.outcome) {
             case "completed":
-              toast.success(`Resized in place to ${size}`);
+              toast.success(msg.resizeCompleted(size));
               break;
             case "pending":
-              toast.success(`Resize to ${size} accepted — applying shortly`);
+              toast.success(msg.resizePending(size));
               break;
             case "infeasible":
-              toast.warning(
-                `Saved ${size}, but the node can't resize in place now; it applies on the next redeploy`,
-              );
+              toast.warning(msg.resizeInfeasible(size));
               break;
             case "unsupported":
-              toast.success(`Resized to ${size} (in-place n/a on this runtime)`);
+              toast.success(msg.resizeUnsupported(size));
               break;
           }
           setShowResize(false);
         },
         onError: (err) =>
           toast.error(
-            err instanceof Error ? err.message : "Failed to resize compute",
+            err instanceof Error ? err.message : msg.resizeError,
           ),
       },
     );
@@ -527,7 +580,7 @@ function ComputeInstance({ ep, poolId }: { ep: Endpoint; poolId: string }) {
         setTimeout(() => setCopied(false), 1500);
       })
       .catch((err) => {
-        toast.error("Couldn't copy to clipboard");
+        toast.error(msg.clipboardError);
         console.error("Clipboard copy failed:", err);
       });
   }
@@ -563,6 +616,20 @@ function ComputeInstance({ ep, poolId }: { ep: Endpoint; poolId: string }) {
           <Cpu className="h-3.5 w-3.5" />
           Resize
         </Button>
+        {/* Unprovision is offered on forked branches only — the source (default)
+            branch's compute can't be torn down from the UI for now. */}
+        {!isDefaultBranch && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirmDelete(true)}
+            disabled={del.isPending}
+            className="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {del.isPending ? "Unprovisioning…" : "Unprovision"}
+          </Button>
+        )}
       </div>
       {showResize && (
         <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-border bg-muted/30 p-2">
@@ -618,6 +685,34 @@ function ComputeInstance({ ep, poolId }: { ep: Endpoint; poolId: string }) {
           </Button>
         </div>
       )}
+
+      <AlertDialog
+        open={confirmDelete}
+        onOpenChange={(o) => !o && !del.isPending && setConfirmDelete(false)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{msg.unprovisionTitle(roleLabel)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {isReadWrite
+                ? msg.unprovisionConfirmReadWrite
+                : msg.unprovisionConfirmReadOnly}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={del.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={del.isPending}
+              onClick={(e) => {
+                e.preventDefault();
+                unprovision();
+              }}
+            >
+              Unprovision
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </li>
   );
 }
@@ -670,14 +765,14 @@ function CreateBranchDialog({
       { poolId, projectId, body },
       {
         onSuccess: (branch) => {
-          toast.success(`Branch "${branch.name}" created`);
+          toast.success(msg.branchCreated(branch.name));
           setName("");
           setForkLsn("");
           onOpenChange(false);
         },
         onError: (err) =>
           toast.error(
-            err instanceof Error ? err.message : "Failed to create branch",
+            err instanceof Error ? err.message : msg.branchCreateError,
           ),
       },
     );

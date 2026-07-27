@@ -6,6 +6,7 @@ import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/api/queries";
 import {
   createEndpoint,
+  deleteEndpoint,
   listEndpoints,
   resizeEndpoint,
   type ResizeResult,
@@ -55,6 +56,24 @@ export function useCreateEndpoint() {
           ? { resources: { cpu: input.cpu, memory: input.memory } }
           : {}),
       }),
+    onSuccess: (_data, input) => {
+      qc.invalidateQueries({
+        queryKey: qk.endpoints(input.poolId, input.projectId, input.branchId),
+      });
+    },
+  });
+}
+
+export function useDeleteEndpoint() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      poolId: string;
+      projectId: string;
+      branchId: string;
+      endpointId: string;
+    }): Promise<void> =>
+      deleteEndpoint(input.poolId, input.projectId, input.branchId, input.endpointId),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
         queryKey: qk.endpoints(input.poolId, input.projectId, input.branchId),
