@@ -899,10 +899,16 @@ pub(crate) type GcBlockIdent = (i64, i64, i64, i16, i64);
 /// key for per-fork trims.
 pub(crate) type GcForkIdent = (i64, i64, i64, i16);
 
+/// The full identity (PK) of one drop/shrink candidate — its block ident
+/// plus `due_lsn`.
+pub(crate) type GcDropShrinkCandidateId = (GcBlockIdent, Lsn);
+
 /// One GC candidate: "visit this key once the cutoff reaches
 /// `due_lsn`". `blknum` doubles as the kind: >= 0 trim,
 /// [`GC_KIND_DROP`] (-2), [`GC_KIND_SHRINK`] (-1) — ascending =
 /// the drain's action order, drop → shrink → trim.
+///
+/// `relsize`: shrink's truncation target; `None` for trim/drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingGcRow {
     pub spcnode: i64,
@@ -911,6 +917,7 @@ pub struct PendingGcRow {
     pub forknum: i16,
     pub blknum: i64,
     pub due_lsn: Lsn,
+    pub relsize: Option<i64>,
 }
 
 const PAGES_COLUMNS: &str =
@@ -2443,13 +2450,19 @@ impl PageStore {
 
     /// Insert GC candidates (the single insert path — `bucket_id` is
     /// computed here, input values ignored). Replayed duplicates dedup:
-    /// every stored column is in the PK and the connection runs upsert
-    /// mode, so a re-insert is a byte-identical overwrite.
-    pub async fn put_pending_gc(&self, branch_id: BranchId, rows: &[PendingGcRow]) -> Result<()> {
+    /// the candidate's identity is its PK and the connection runs upsert
+    /// mode, so a re-insert overwrites in place. The lone non-PK column
+    /// `relsize` is fixed by that identity (a shrink's size as of its
+    /// `due_lsn`), so the overwrite stays byte-identical.
+    pub async fn gc_enqueue_candidates(
+        &self,
+        branch_id: BranchId,
+        rows: &[PendingGcRow],
+    ) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
-        const COLS: usize = 8;
+        const COLS: usize = 9;
         let branch_s = branch_id.to_string();
         // Sequential by design: candidate volume is tiny (a buffered
         // flush is ~one ≤500-row chunk); only the GC action deletes
@@ -2460,7 +2473,7 @@ impl PageStore {
         for chunk in rows.chunks(ROWS_PER_INSERT) {
             let mut sql = format!(
                 "INSERT INTO \"{}\".pending_gc \
-                 (branch_id, bucket_id, spcnode, dbnode, relnode, forknum, blknum, due_lsn) \
+                 (branch_id, bucket_id, spcnode, dbnode, relnode, forknum, blknum, due_lsn, relsize) \
                  VALUES ",
                 self.schema
             );
@@ -2472,7 +2485,7 @@ impl PageStore {
                 }
                 let base = i * COLS + 1;
                 sql.push_str(&format!(
-                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
                     base,
                     base + 1,
                     base + 2,
@@ -2481,6 +2494,7 @@ impl PageStore {
                     base + 5,
                     base + 6,
                     base + 7,
+                    base + 8,
                 ));
                 let bucket = gc_bucket_id(
                     row.spcnode,
@@ -2497,6 +2511,7 @@ impl PageStore {
                 params.push(Box::new(row.forknum));
                 params.push(Box::new(row.blknum));
                 params.push(Box::new(row.due_lsn.0 as i64));
+                params.push(Box::new(row.relsize));
             }
             let chunk_rows = chunk.len();
             let ysql_client = Arc::clone(&self.ysql_client);
@@ -2509,7 +2524,7 @@ impl PageStore {
                     .execute(&sql, &params_ref)
                     .await
                     .with_context(|| {
-                        format!("put_pending_gc branch={branch_id} chunk_rows={chunk_rows}")
+                        format!("gc_enqueue_candidates branch={branch_id} chunk_rows={chunk_rows}")
                     })?;
                 Ok(())
             }));
@@ -2528,7 +2543,7 @@ impl PageStore {
     /// `floor` is the caller's drain progress — a seek hint that skips
     /// the tombstones of already-drained rows; `Lsn(0)` scans from the
     /// head.
-    pub async fn select_due_pending_gc(
+    pub async fn gc_select_due_candidates(
         &self,
         branch_id: BranchId,
         floor: Lsn,
@@ -2556,7 +2571,7 @@ impl PageStore {
                 }
                 write!(
                     s,
-                    "(SELECT spcnode, dbnode, relnode, forknum, blknum, due_lsn \
+                    "(SELECT spcnode, dbnode, relnode, forknum, blknum, due_lsn, relsize \
                       FROM \"{}\".pending_gc \
                       WHERE branch_id = $1 AND bucket_id = {bucket} \
                         AND due_lsn > $4 AND due_lsn <= $2 \
@@ -2573,7 +2588,7 @@ impl PageStore {
             .ysql_client
             .query(&sql, &[&branch_s, &cutoff_i, &limit_i, &floor_i])
             .await
-            .context("select_due_pending_gc")?;
+            .context("gc_select_due_candidates")?;
         rows.iter()
             .map(|r| {
                 Ok(PendingGcRow {
@@ -2583,6 +2598,7 @@ impl PageStore {
                     forknum: r.get(3),
                     blknum: r.get(4),
                     due_lsn: Lsn(r.get::<_, i64>(5) as u64),
+                    relsize: r.get(6),
                 })
             })
             .collect::<Result<Vec<_>>>()
@@ -2596,21 +2612,13 @@ impl PageStore {
     /// `PendingGcBuffer`). A busy-fork drop isn't passed here (acted, left
     /// queued). Returns rows removed.
     ///
-    /// Benign corner: the drop `-2` sentinel is per-fork, so two drops of
-    /// the same relfilenode in one `(floor, cutoff]` collapse into one
-    /// delete. If one wasn't acted this tick — still owing a
-    /// straggler-sweep re-act, or left unselected by the drain limit — its
-    /// row clears unacted and that image leaks. Requires a relfilenode
-    /// reused and re-dropped inside a single window: practically
-    /// impossible.
-    ///
-    /// And the materialiser's due_lsn clamp only holds against the cutoff
-    /// as the flush read it: a flush that read it before this tick raised
-    /// it can insert a block's image just after the trim acted, clamped
-    /// below the now higher cutoff, so the dequeue clears that candidate
-    /// unacted. Also vanishingly rare, and the block's next base re-covers
-    /// the garbage.
-    pub async fn dequeue_pending_gc(
+    /// Corner: the materialiser's due_lsn clamp only holds against the
+    /// cutoff as the flush read it: a flush that read it before this tick
+    /// raised it can insert a block's image just after the trim acted,
+    /// clamped below the now higher cutoff, so the dequeue clears that
+    /// candidate unacted. Vanishingly rare, and the block's next base
+    /// re-covers the garbage.
+    pub async fn gc_dequeue_trim_candidates(
         &self,
         branch_id: BranchId,
         blocks: &[GcBlockIdent],
@@ -2664,8 +2672,69 @@ impl PageStore {
                 .await
                 .with_context(|| {
                     format!(
-                        "dequeue_pending_gc branch={branch_id} bucket={bucket} n={}",
+                        "gc_dequeue_trim_candidates branch={branch_id} bucket={bucket} n={}",
                         blks.len()
+                    )
+                })?;
+        }
+        Ok(removed)
+    }
+
+    /// Dequeue the given drop/shrink candidates by their PK. Returns rows
+    /// removed.
+    pub async fn gc_dequeue_drop_shrink_candidates(
+        &self,
+        branch_id: BranchId,
+        candidates: &[GcDropShrinkCandidateId],
+    ) -> Result<u64> {
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+        let branch_s = branch_id.to_string();
+        let mut by_bucket: std::collections::HashMap<i32, Vec<GcDropShrinkCandidateId>> =
+            std::collections::HashMap::new();
+        for &c in candidates {
+            let (b, _) = c;
+            by_bucket
+                .entry(gc_bucket_id(b.0, b.1, b.2, b.3, b.4))
+                .or_default()
+                .push(c);
+        }
+        let sql = format!(
+            "DELETE FROM \"{}\".pending_gc \
+             WHERE branch_id = $1 AND bucket_id = $2 \
+               AND (spcnode, dbnode, relnode, forknum, blknum, due_lsn) IN ( \
+                   SELECT * FROM unnest($3::bigint[], $4::bigint[], $5::bigint[], \
+                                        $6::smallint[], $7::bigint[], $8::bigint[]))",
+            self.schema
+        );
+        let mut removed = 0u64;
+        for (bucket, cs) in by_bucket {
+            let mut spc = Vec::with_capacity(cs.len());
+            let mut db = Vec::with_capacity(cs.len());
+            let mut rel = Vec::with_capacity(cs.len());
+            let mut fork = Vec::with_capacity(cs.len());
+            let mut blk = Vec::with_capacity(cs.len());
+            let mut due = Vec::with_capacity(cs.len());
+            for &((s, d0, r0, f0, b0), lsn) in &cs {
+                spc.push(s);
+                db.push(d0);
+                rel.push(r0);
+                fork.push(f0);
+                blk.push(b0);
+                due.push(lsn.0 as i64);
+            }
+            removed += self
+                .ysql_client
+                .execute(
+                    &sql,
+                    &[&branch_s, &bucket, &spc, &db, &rel, &fork, &blk, &due],
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "gc_dequeue_drop_shrink_candidates branch={branch_id} bucket={bucket} n={}",
+                        cs.len()
                     )
                 })?;
         }
@@ -2693,7 +2762,7 @@ impl PageStore {
     /// TODO(gc_whole_fork_threshold): above a per-fork block count,
     /// switch to a whole-fork variant in blknum-range batches.
     #[allow(clippy::too_many_arguments)]
-    pub async fn gc_trim_blocks(
+    pub async fn gc_act_trim_blocks(
         &self,
         branch_id: BranchId,
         spcnode: i64,
@@ -2742,7 +2811,7 @@ impl PageStore {
             .await
             .with_context(|| {
                 format!(
-                    "gc_trim_blocks branch={branch_id} rel={relnode} fork={forknum} \
+                    "gc_act_trim_blocks branch={branch_id} rel={relnode} fork={forknum} \
                      blocks={}",
                     blknums.len()
                 )
@@ -2763,7 +2832,7 @@ impl PageStore {
     /// a parent's `Exists`) — deleting it could resurrect the rel in a
     /// child.
     #[allow(clippy::too_many_arguments)]
-    pub async fn gc_drop_fork(
+    pub async fn gc_act_drop_fork(
         &self,
         branch_id: BranchId,
         spcnode: i64,
@@ -2788,7 +2857,7 @@ impl PageStore {
             )
             .await
             .with_context(|| {
-                format!("gc_drop_fork pages branch={branch_id} rel={relnode} fork={forknum}")
+                format!("gc_act_drop_fork pages branch={branch_id} rel={relnode} fork={forknum}")
             })?;
 
         // The fork's own rel-size meta key (<= due_lsn).
@@ -2802,53 +2871,28 @@ impl PageStore {
             .execute(&meta_sql, &[&branch_s, &key_bytes, &due])
             .await
             .with_context(|| {
-                format!("gc_drop_fork meta branch={branch_id} rel={relnode} fork={forknum}")
+                format!("gc_act_drop_fork meta branch={branch_id} rel={relnode} fork={forknum}")
             })?;
         Ok(deleted)
     }
 
-    /// Shrink action ([`GC_KIND_SHRINK`]): reclaim the tail of a
-    /// truncated fork — delete `pages` rows with `blknum >= relsize AND
-    /// lsn <= cutoff`, where `relsize` is the fork's size AS OF the
-    /// cutoff (its rel-size `meta` value at `lsn <= cutoff`). Reading
-    /// the size at the cutoff rather than the truncation LSN makes this
-    /// re-extension-safe: a rel re-extended above the truncation keeps
-    /// its new tail. Returns `pages` rows deleted.
-    ///
-    /// Size-row scenarios:
-    /// - missing at the cutoff: the fork didn't exist then (e.g. an
-    ///   earlier drop reclaimed it) — no-op.
-    /// - malformed (< 4 LE bytes ⇒ corruption): skip + alarm via
-    ///   `correctness_errors_total`. Erroring would retry the corrupt
-    ///   row every tick and wedge the drain.
-    pub async fn gc_shrink_fork(
+    /// Shrink action ([`GC_KIND_SHRINK`]): delete `pages` with
+    /// `blknum >= relsize AND lsn <= due_lsn` (both from the candidate).
+    /// The `lsn <= due_lsn` bound keeps a re-extended block live — its new
+    /// base sits above `due_lsn`. Trap: candidates can't be merged per
+    /// fork (a wider `blknum` × higher `lsn` bound would delete a block
+    /// re-extended between two truncations). Returns rows deleted.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn gc_act_shrink_fork(
         &self,
         branch_id: BranchId,
         spcnode: i64,
         dbnode: i64,
         relnode: i64,
         forknum: i16,
-        cutoff: Lsn,
+        relsize: i64,
+        due_lsn: Lsn,
     ) -> Result<u64> {
-        let key_bytes = rel_size_key_bytes(spcnode, dbnode, relnode, forknum);
-        let Some(meta) = self.read_meta(branch_id, &key_bytes, cutoff).await? else {
-            return Ok(0);
-        };
-        let p = meta.payload.as_ref();
-        if p.len() < 4 {
-            tracing::error!(
-                relnode,
-                forknum,
-                len = p.len(),
-                "gc_shrink_fork: malformed rel-size payload; skipping the shrink \
-                 (corruption signal)"
-            );
-            crate::metrics::CORRECTNESS_ERRORS
-                .with_label_values(&["gc_shrink_relsize_malformed"])
-                .inc();
-            return Ok(0);
-        }
-        let relsize = u32::from_le_bytes([p[0], p[1], p[2], p[3]]) as i64;
         let sql = format!(
             "DELETE FROM \"{schema}\".pages \
              WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
@@ -2865,14 +2909,14 @@ impl PageStore {
                     &relnode,
                     &forknum,
                     &relsize,
-                    &(cutoff.0 as i64),
+                    &(due_lsn.0 as i64),
                 ],
             )
             .await
             .with_context(|| {
                 format!(
-                    "gc_shrink_fork branch={branch_id} rel={relnode} fork={forknum} \
-                     relsize={relsize}"
+                    "gc_act_shrink_fork branch={branch_id} rel={relnode} fork={forknum} \
+                     relsize={relsize} due_lsn={due_lsn}"
                 )
             })
     }
@@ -6086,11 +6130,12 @@ mod tests {
             forknum,
             blknum,
             due_lsn: Lsn(due),
+            relsize: None,
         }
     }
 
     /// The visited-block idents of a selected batch — what the drain
-    /// feeds [`PageStore::dequeue_pending_gc`].
+    /// feeds [`PageStore::gc_dequeue_trim_candidates`].
     fn blocks_of(rows: &[PendingGcRow]) -> Vec<GcBlockIdent> {
         rows.iter()
             .map(|r| (r.spcnode, r.dbnode, r.relnode, r.forknum, r.blknum))
@@ -6130,16 +6175,17 @@ mod tests {
     /// (Not `Lsn::MAX` — the cutoff crosses through i64 in SQL.)
     async fn all_pending(store: &PageStore, branch: BranchId) -> Vec<PendingGcRow> {
         store
-            .select_due_pending_gc(branch, Lsn(0), Lsn(i64::MAX as u64), 1_000_000)
+            .gc_select_due_candidates(branch, Lsn(0), Lsn(i64::MAX as u64), 1_000_000)
             .await
             .unwrap()
     }
 
     /// Scenario: the same candidates are inserted twice — as crash +
-    /// WAL replay does — and must dedup to one row each: every stored
-    /// column is in the PK and the writers run upsert-mode. (The
-    /// placement `bucket_id` is part of that PK; its stability and range
-    /// are covered by `gc_bucket_id_is_frozen_and_bounded`.)
+    /// WAL replay does — and must dedup to one row each: the candidate's
+    /// identity is its PK and the writers run upsert-mode, so a replay
+    /// overwrites in place (the lone non-PK column `relsize` is fixed by
+    /// that identity). (The placement `bucket_id` is part of that PK; its
+    /// stability and range are covered by `gc_bucket_id_is_frozen_and_bounded`.)
     #[tokio::test]
     async fn pending_gc_replay_dedups_on_pk() {
         let (store, _schema) = make_store("gc_dedup").await;
@@ -6150,9 +6196,9 @@ mod tests {
             gc_cand(16401, 0, 43, 100),
             gc_cand(16402, 1, 0, 200),
         ];
-        store.put_pending_gc(branch, &batch).await.unwrap();
+        store.gc_enqueue_candidates(branch, &batch).await.unwrap();
         // Replay: byte-identical re-insert.
-        store.put_pending_gc(branch, &batch).await.unwrap();
+        store.gc_enqueue_candidates(branch, &batch).await.unwrap();
 
         let rows = all_pending(&store, branch).await;
         assert_eq!(rows.len(), 3, "replayed inserts must dedup: {rows:?}");
@@ -6171,11 +6217,11 @@ mod tests {
         let batch: Vec<PendingGcRow> = (1..=20u64)
             .map(|i| gc_cand(16401, 0, i as i64, i))
             .collect();
-        store.put_pending_gc(branch, &batch).await.unwrap();
+        store.gc_enqueue_candidates(branch, &batch).await.unwrap();
 
         // Gate: only due_lsn ≤ 10.
         let due = store
-            .select_due_pending_gc(branch, Lsn(0), Lsn(10), 1000)
+            .gc_select_due_candidates(branch, Lsn(0), Lsn(10), 1000)
             .await
             .unwrap();
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
@@ -6183,7 +6229,7 @@ mod tests {
 
         // Limit keeps the oldest.
         let due = store
-            .select_due_pending_gc(branch, Lsn(0), Lsn(20), 5)
+            .gc_select_due_candidates(branch, Lsn(0), Lsn(20), 5)
             .await
             .unwrap();
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
@@ -6209,24 +6255,24 @@ mod tests {
             gc_cand(16401, 0, 4, 10),
             gc_cand(16401, 0, 5, 15),
         ];
-        store.put_pending_gc(branch, &batch).await.unwrap();
+        store.gc_enqueue_candidates(branch, &batch).await.unwrap();
 
         // A capped tick drains {5, 10} — splitting the tie group at 10.
         let due = store
-            .select_due_pending_gc(branch, Lsn(0), Lsn(20), 2)
+            .gc_select_due_candidates(branch, Lsn(0), Lsn(20), 2)
             .await
             .unwrap();
         assert_eq!(due.len(), 2);
         assert_eq!(due.last().unwrap().due_lsn, Lsn(10));
         store
-            .dequeue_pending_gc(branch, &blocks_of(&due), Lsn(0), Lsn(20))
+            .gc_dequeue_trim_candidates(branch, &blocks_of(&due), Lsn(0), Lsn(20))
             .await
             .unwrap();
 
         // floor = last due − 1 = 9: the tie group's survivors at 10 must
         // still be selectable (an exclusive floor at 10 would skip them).
         let due = store
-            .select_due_pending_gc(branch, Lsn(9), Lsn(20), 1000)
+            .gc_select_due_candidates(branch, Lsn(9), Lsn(20), 1000)
             .await
             .unwrap();
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
@@ -6234,7 +6280,7 @@ mod tests {
 
         // The floor gate itself is exclusive: floor = 10 skips the ties.
         let due = store
-            .select_due_pending_gc(branch, Lsn(10), Lsn(20), 1000)
+            .gc_select_due_candidates(branch, Lsn(10), Lsn(20), 1000)
             .await
             .unwrap();
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
@@ -6251,15 +6297,15 @@ mod tests {
         let batch: Vec<PendingGcRow> = (1..=6u64)
             .map(|i| gc_cand(16401, 0, i as i64, i * 10))
             .collect();
-        store.put_pending_gc(branch, &batch).await.unwrap();
+        store.gc_enqueue_candidates(branch, &batch).await.unwrap();
 
         let drained = store
-            .select_due_pending_gc(branch, Lsn(0), Lsn(30), 1000)
+            .gc_select_due_candidates(branch, Lsn(0), Lsn(30), 1000)
             .await
             .unwrap();
         assert_eq!(drained.len(), 3);
         store
-            .dequeue_pending_gc(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
+            .gc_dequeue_trim_candidates(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
             .await
             .unwrap();
 
@@ -6289,11 +6335,11 @@ mod tests {
             gc_cand(16401, 0, 8, 25),            // other block
             gc_cand(16401, 0, GC_KIND_DROP, 40), // drop sentinel, same fork
         ];
-        store.put_pending_gc(branch, &batch).await.unwrap();
+        store.gc_enqueue_candidates(branch, &batch).await.unwrap();
 
         let block_a: GcBlockIdent = (GC_SPC, GC_DB, 16401, 0, 7);
         store
-            .dequeue_pending_gc(branch, &[block_a], Lsn(0), Lsn(100))
+            .gc_dequeue_trim_candidates(branch, &[block_a], Lsn(0), Lsn(100))
             .await
             .unwrap();
 
@@ -6320,7 +6366,7 @@ mod tests {
         let branch = rand_branch();
 
         store
-            .put_pending_gc(
+            .gc_enqueue_candidates(
                 branch,
                 &[
                     gc_cand(16401, 0, 7, 10), // below floor — survives
@@ -6333,7 +6379,7 @@ mod tests {
 
         let block_a: GcBlockIdent = (GC_SPC, GC_DB, 16401, 0, 7);
         store
-            .dequeue_pending_gc(branch, &[block_a], Lsn(20), Lsn(100))
+            .gc_dequeue_trim_candidates(branch, &[block_a], Lsn(20), Lsn(100))
             .await
             .unwrap();
 
@@ -6362,7 +6408,7 @@ mod tests {
         let branch = rand_branch();
 
         store
-            .put_pending_gc(
+            .gc_enqueue_candidates(
                 branch,
                 &[
                     gc_cand(16401, 0, 7, 5),  // visited (selected)
@@ -6377,13 +6423,13 @@ mod tests {
 
         // limit 1: the tick only selects (5, blk 7) — capped.
         let drained = store
-            .select_due_pending_gc(branch, Lsn(0), Lsn(30), 1)
+            .gc_select_due_candidates(branch, Lsn(0), Lsn(30), 1)
             .await
             .unwrap();
         assert_eq!(drained.len(), 1);
         assert_eq!((drained[0].blknum, drained[0].due_lsn.0), (7, 5));
         store
-            .dequeue_pending_gc(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
+            .gc_dequeue_trim_candidates(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
             .await
             .unwrap();
 
@@ -6399,7 +6445,7 @@ mod tests {
         );
         // Only the unvisited block re-selects; block 7 is fully drained.
         let next = store
-            .select_due_pending_gc(branch, Lsn(0), Lsn(30), 1000)
+            .gc_select_due_candidates(branch, Lsn(0), Lsn(30), 1000)
             .await
             .unwrap();
         assert_eq!(next.len(), 1, "only the unvisited block remains due");
@@ -6420,12 +6466,12 @@ mod tests {
         let fanout: Vec<PendingGcRow> = (0..5)
             .map(|i| gc_cand(16401 + i, 0, GC_KIND_DROP, 10)) // one due_lsn
             .collect();
-        store.put_pending_gc(branch, &fanout).await.unwrap();
+        store.gc_enqueue_candidates(branch, &fanout).await.unwrap();
 
         let mut ticks_used = 0;
         for _tick in 0..5 {
             let batch = store
-                .select_due_pending_gc(branch, Lsn(0), Lsn(20), 2)
+                .gc_select_due_candidates(branch, Lsn(0), Lsn(20), 2)
                 .await
                 .unwrap();
             if batch.is_empty() {
@@ -6434,7 +6480,7 @@ mod tests {
             assert!(batch.len() <= 2, "select respects the cap");
             ticks_used += 1;
             store
-                .dequeue_pending_gc(branch, &blocks_of(&batch), Lsn(0), Lsn(20))
+                .gc_dequeue_trim_candidates(branch, &blocks_of(&batch), Lsn(0), Lsn(20))
                 .await
                 .unwrap();
         }
@@ -6446,41 +6492,46 @@ mod tests {
         );
     }
 
-    /// Scenario: one dequeue call covers every kind through the same
-    /// block-range delete. A fork has an acted drop (due 10), shrink
-    /// (due 20), and trim (due 15) plus a second drop event at due 300
-    /// (relnode reused and re-dropped later — not yet due, not acted).
-    /// The drop and its future re-drop share a block ident (both blknum
-    /// -2), so only the `due_lsn <= cutoff` bound separates them: the
-    /// re-drop at 300 is above the cutoff (the insert clamp keeps it
-    /// there) and survives, while the three acted rows go.
+    /// Scenario: drop/shrink dequeue by exact `(ident, due_lsn)`; trim by
+    /// range-sweep. A fork has an acted drop (due 10) and shrink (due 20),
+    /// plus a SECOND drop for the same fork at due 300 that is due
+    /// (`<= cutoff`) but NOT acted this tick (a drain-limit split). Exact-PK
+    /// dequeue clears only the two acted candidates and leaves drop@300
+    /// queued for its own tick — the old range-sweep would have clobbered
+    /// it (same fork ident, inside the window) and leaked its rows. The
+    /// trim row (block 7) dequeues via the range-sweep.
     #[tokio::test]
-    async fn pending_gc_dequeue_mixed_kinds_one_range_delete() {
-        let (store, _schema) = make_store("gc_drop_shrink_event_pk").await;
+    async fn pending_gc_dequeue_drop_shrink_exact_vs_trim_sweep() {
+        let (store, _schema) = make_store("gc_dequeue_exact").await;
         let branch = rand_branch();
 
         store
-            .put_pending_gc(
+            .gc_enqueue_candidates(
                 branch,
                 &[
-                    gc_cand(16401, 0, GC_KIND_DROP, 10),   // acted this tick
-                    gc_cand(16401, 0, GC_KIND_SHRINK, 20), // acted this tick
-                    gc_cand(16401, 0, GC_KIND_DROP, 300),  // future re-drop — must survive
-                    gc_cand(16401, 0, 7, 15),              // trim row, acted this tick
+                    gc_cand(16401, 0, GC_KIND_DROP, 10),   // acted
+                    gc_cand(16401, 0, GC_KIND_SHRINK, 20), // acted
+                    gc_cand(16401, 0, GC_KIND_DROP, 300),  // due, NOT acted — must survive
+                    gc_cand(16401, 0, 7, 15),              // trim, acted (range-swept)
                 ],
             )
             .await
             .unwrap();
 
-        // The drain dequeues every visited block — all kinds in one
-        // range delete.
-        let due = store
-            .select_due_pending_gc(branch, Lsn(0), Lsn(100), 1000)
+        // Drop/shrink: dequeue only the two acted candidates, by exact PK.
+        store
+            .gc_dequeue_drop_shrink_candidates(
+                branch,
+                &[
+                    ((GC_SPC, GC_DB, 16401, 0, GC_KIND_DROP), Lsn(10)),
+                    ((GC_SPC, GC_DB, 16401, 0, GC_KIND_SHRINK), Lsn(20)),
+                ],
+            )
             .await
             .unwrap();
-        assert_eq!(due.len(), 3);
+        // Trim: range-sweep block 7's candidates in (0, 100].
         store
-            .dequeue_pending_gc(branch, &blocks_of(&due), Lsn(0), Lsn(100))
+            .gc_dequeue_trim_candidates(branch, &[(GC_SPC, GC_DB, 16401, 0, 7)], Lsn(0), Lsn(100))
             .await
             .unwrap();
 
@@ -6492,7 +6543,7 @@ mod tests {
         assert_eq!(
             left,
             vec![(GC_KIND_DROP, 300)],
-            "the not-yet-due drop event must survive"
+            "the un-acted same-fork drop@300 survives exact-PK dequeue"
         );
     }
 
@@ -6613,7 +6664,7 @@ mod tests {
         store.put_pages(branch, &rows).await.unwrap();
 
         store
-            .gc_trim_blocks(
+            .gc_act_trim_blocks(
                 branch,
                 GC_SPC,
                 GC_DB,
@@ -6693,7 +6744,7 @@ mod tests {
         // A drain triggered by the (oldest) candidate at due=30 still
         // trims to the cutoff's anchor at 70.
         store
-            .gc_trim_blocks(
+            .gc_act_trim_blocks(
                 branch,
                 GC_SPC,
                 GC_DB,
@@ -6731,7 +6782,7 @@ mod tests {
     /// the drop LSN (relfilenode reused after the drop) and (b) an
     /// unrelated rel survive. Idempotent: a re-run deletes nothing.
     #[tokio::test]
-    async fn gc_drop_fork_scoped_to_due_lsn() {
+    async fn gc_act_drop_fork_scoped_to_due_lsn() {
         let (store, _schema) = make_store("gc_drop").await;
         let branch = rand_branch();
         let (rel, other) = (16420u32, 16421u32);
@@ -6768,7 +6819,7 @@ mod tests {
             .unwrap();
 
         store
-            .gc_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .gc_act_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
             .await
             .unwrap();
 
@@ -6806,21 +6857,20 @@ mod tests {
 
         // Idempotent.
         let again = store
-            .gc_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .gc_act_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
             .await
             .unwrap();
         assert_eq!(again, 0);
     }
 
-    /// Scenario: shrink deletes `blknum >= size-as-of-cutoff` at
-    /// `lsn <= cutoff` — the truncated tail — while (a) blocks under
-    /// the size, (b) tail rows ABOVE the cutoff (a later re-extension's
-    /// writes), and (c) a fork with no size row at the cutoff (already
-    /// dropped / never existed) are all left alone. Reading the size at
-    /// the CUTOFF (not the truncation LSN) is what makes a re-extension
-    /// under the cutoff keep its new tail.
+    /// Scenario: shrink deletes the truncated tail `blknum >= relsize`
+    /// at `lsn <= due_lsn` — both carried by the candidate, no meta read.
+    /// Blocks under the target size are left alone, and a tail block
+    /// re-extended ABOVE `due_lsn` (a later `will_init` base) survives:
+    /// the `lsn <= due_lsn` bound is exactly what keeps a re-extended
+    /// block live. A fork with no matching rows is a clean no-op.
     #[tokio::test]
-    async fn gc_shrink_fork_tail_as_of_cutoff() {
+    async fn gc_act_shrink_fork_tail_at_due_lsn() {
         let (store, _schema) = make_store("gc_shrink").await;
         let branch = rand_branch();
         let rel = 16430u32;
@@ -6836,23 +6886,19 @@ mod tests {
                     page_row(key(1), 30, false, false, b"d30"),
                     page_row(key(2), 10, true, true, b"i10"),
                     page_row(key(3), 10, true, true, b"i10"),
-                    // block 2 re-created ABOVE the cutoff: must survive.
-                    page_row(key(2), 120, true, true, b"i120"),
+                    // block 2 re-extended ABOVE due_lsn (50): must survive.
+                    page_row(key(2), 80, true, true, b"i80"),
                 ],
             )
             .await
             .unwrap();
-        // Size 4 at creation, truncated to 2 at lsn 50.
-        store
-            .put_meta(
-                branch,
-                &[rel_size_row(rel, 0, 10, 4), rel_size_row(rel, 0, 50, 2)],
-            )
-            .await
-            .unwrap();
 
+        // Truncated to 2 at lsn 50 ⇒ the candidate carries relsize=2,
+        // due_lsn=50. Deletes block 2@10 and block 3@10 (>= 2, <= 50);
+        // the surviving-row checks below pin the outcome (exact DELETE
+        // counts aren't retry-safe — see the module note).
         store
-            .gc_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .gc_act_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, 2, Lsn(50))
             .await
             .unwrap();
 
@@ -6869,8 +6915,8 @@ mod tests {
             .unwrap();
         assert_eq!(
             b2,
-            vec![(120, true, true)],
-            "above-cutoff re-extension row survives, lsn-10 tail row gone"
+            vec![(80, true, true)],
+            "re-extension above due_lsn survives, lsn-10 tail row gone"
         );
         let b3 = store
             .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 3)
@@ -6878,74 +6924,17 @@ mod tests {
             .unwrap();
         assert!(b3.is_empty(), "tail block fully reclaimed");
 
-        // Re-extension UNDER the cutoff: size back to 4 at lsn 80 —
-        // the as-of-cutoff size is 4, so nothing past it is deleted.
-        store
-            .put_meta(branch, &[rel_size_row(rel, 0, 80, 4)])
+        // Idempotent, and a fork with no matching rows is a clean no-op.
+        let again = store
+            .gc_act_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, 2, Lsn(50))
             .await
             .unwrap();
-        let deleted = store
-            .gc_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
-            .await
-            .unwrap();
-        assert_eq!(deleted, 0, "re-extended tail is live — nothing to shrink");
-
-        // No size row at the cutoff ⇒ no-op (e.g. fork already dropped).
+        assert_eq!(again, 0, "nothing left below the tail to delete");
         let none = store
-            .gc_shrink_fork(branch, GC_SPC, GC_DB, 16431, 0, Lsn(100))
+            .gc_act_shrink_fork(branch, GC_SPC, GC_DB, 16431, 0, 2, Lsn(50))
             .await
             .unwrap();
         assert_eq!(none, 0);
-    }
-
-    /// Scenario: a MALFORMED rel-size payload (corruption — every
-    /// writer stamps exactly 4 LE bytes) must skip-and-alarm, never
-    /// error: an Err here aborts the drain tick, and since the corrupt
-    /// value is persistent state, retrying forever wedges all GC on
-    /// the branch. Pins Ok(0) + the pages left untouched + the
-    /// `correctness_errors_total` corruption signal firing.
-    #[tokio::test]
-    async fn gc_shrink_fork_malformed_size_skips_and_alarms() {
-        let (store, _schema) = make_store("gc_shrink_bad").await;
-        let branch = rand_branch();
-        let rel = 16440u32;
-
-        let key = |blk: u32| page_key(GC_SPC as u32, GC_DB as u32, rel, 0, blk);
-        store
-            .put_pages(branch, &[page_row(key(0), 10, true, true, b"i10")])
-            .await
-            .unwrap();
-        // Corrupt rel-size row: 2 bytes instead of 4.
-        store
-            .put_meta(
-                branch,
-                &[MetaRow {
-                    key: Bytes::from(rel_size_key_bytes(GC_SPC, GC_DB, rel as i64, 0)),
-                    lsn: Lsn(10),
-                    payload: Bytes::from_static(&[0u8, 1u8]),
-                }],
-            )
-            .await
-            .unwrap();
-
-        let alarms = || {
-            crate::metrics::CORRECTNESS_ERRORS
-                .with_label_values(&["gc_shrink_relsize_malformed"])
-                .get()
-        };
-        let before = alarms();
-        let deleted = store
-            .gc_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
-            .await
-            .expect("malformed size must not error — an Err would wedge the drain");
-        assert_eq!(deleted, 0, "skip: nothing deleted on corrupt size");
-        assert_eq!(alarms(), before + 1, "corruption signal must fire");
-
-        let rows = store
-            .test_raw_block_versions(branch, GC_SPC, GC_DB, rel as i64, 0, 0)
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 1, "the fork's pages are left untouched");
     }
 
     /// Scenario: the persisted read floor is monotone (GREATEST — a
@@ -7118,7 +7107,7 @@ mod tests {
             let cutoff = Lsn(rng.random_range(0..=350u64));
             let blks: Vec<i64> = (0..nblocks as i64).collect();
             store
-                .gc_trim_blocks(branch, GC_SPC, GC_DB, rel as i64, 0, &blks, cutoff)
+                .gc_act_trim_blocks(branch, GC_SPC, GC_DB, rel as i64, 0, &blks, cutoff)
                 .await
                 .unwrap();
 

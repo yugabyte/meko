@@ -2084,7 +2084,7 @@ impl DatadirModification<'_> {
     /// modification and handed to the writer at commit; not sampled
     /// (drop/shrink are one-shot events, unlike per-base trims).
     /// No-op unless GC is on (`enable_gc`).
-    fn record_gc_drop_shrink_event(&mut self, rel: RelTag, kind: i64) {
+    fn record_gc_drop_shrink_event(&mut self, rel: RelTag, kind: i64, relsize: Option<i64>) {
         if !self.gc_enabled() {
             return;
         }
@@ -2096,6 +2096,7 @@ impl DatadirModification<'_> {
                 forknum: rel.forknum as i16,
                 blknum: kind,
                 due_lsn: self.lsn,
+                relsize,
             });
     }
 
@@ -2119,7 +2120,7 @@ impl DatadirModification<'_> {
                 .list_rels(spcnode, dbnode, Version::Modified(self), ctx)
                 .await?;
             for rel in rels {
-                self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_DROP);
+                self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_DROP, None);
             }
         }
 
@@ -2367,9 +2368,13 @@ impl DatadirModification<'_> {
             // Update logical database size.
             self.pending_nblocks -= old_size as i64 - nblocks as i64;
 
-            // GC shrink event: the tail past `nblocks` becomes
+            // GC shrink event: the tail at/past `nblocks` becomes
             // collectable once the cutoff passes this truncation.
-            self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_SHRINK);
+            self.record_gc_drop_shrink_event(
+                rel,
+                crate::page_store::GC_KIND_SHRINK,
+                Some(nblocks as i64),
+            );
         }
         Ok(())
     }
@@ -2537,7 +2542,7 @@ impl DatadirModification<'_> {
         // Queue GC drop events for the forks that actually existed (the
         // incoming map is speculative — every fork of every xnode).
         for rel in dropped_rels {
-            self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_DROP);
+            self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_DROP, None);
         }
         Ok(())
     }

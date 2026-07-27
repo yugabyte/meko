@@ -55,6 +55,7 @@ fn clamp_candidate_rows(
                 forknum,
                 blknum,
                 due_lsn: due_lsn.max(due_floor),
+                relsize: None,
             },
         )
         .collect()
@@ -233,7 +234,11 @@ impl GcTrimCandidateEmitter {
             return;
         }
         let t0 = std::time::Instant::now();
-        match self.page_store.put_pending_gc(self.branch_id, &rows).await {
+        match self
+            .page_store
+            .gc_enqueue_candidates(self.branch_id, &rows)
+            .await
+        {
             Ok(()) => {
                 info!(
                     tag = "pending_gc_flush",

@@ -1956,7 +1956,7 @@ impl PageWriter {
         }
         if !pending_gc_rows.is_empty() {
             self.fpu_page_store
-                .put_pending_gc(self.branch_id, pending_gc_rows)
+                .gc_enqueue_candidates(self.branch_id, pending_gc_rows)
                 .await?;
         }
         Ok(())
@@ -4882,7 +4882,7 @@ mod tests {
     async fn gc_candidates_every_n_bases() {
         let all_pending = |store: Arc<PageStore>, branch: BranchId| async move {
             let mut rows = store
-                .select_due_pending_gc(branch, Lsn(0), Lsn(i64::MAX as u64), 100_000)
+                .gc_select_due_candidates(branch, Lsn(0), Lsn(i64::MAX as u64), 100_000)
                 .await
                 .unwrap();
             rows.sort_by_key(|r| (r.blknum, r.due_lsn));

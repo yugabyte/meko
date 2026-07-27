@@ -143,6 +143,9 @@ CREATE TABLE IF NOT EXISTS pageserver.pending_gc (
     forknum    SMALLINT NOT NULL,
     blknum     BIGINT   NOT NULL,
     due_lsn    BIGINT   NOT NULL,
+    -- Rel size (blocks) as of a shrink. Set on shrink candidates only
+    -- (NULL for trim/drop).
+    relsize    BIGINT,
     PRIMARY KEY ((branch_id, bucket_id) HASH,
                  due_lsn, spcnode, dbnode, relnode, forknum, blknum)
 ) SPLIT INTO 3 TABLETS;

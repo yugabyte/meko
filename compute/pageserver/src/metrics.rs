@@ -427,9 +427,9 @@ pub(crate) static YB_STORE_WRITE_BACKPRESSURE: Lazy<IntCounter> = Lazy::new(|| {
 ///   periodic or shutdown tick; rows may not have made it to YB.
 /// - `tenant_task_panic` — a tenant background task ended via
 ///   panic (`JoinError::is_panic()`).
-/// - `gc_shrink_relsize_malformed` — a rel-size meta payload shorter
-///   than 4 bytes (every writer stamps exactly 4). The shrink skips
-///   the fork rather than wedging the drain on persistent state.
+/// - `gc_shrink_missing_relsize` — a `pending_gc` shrink candidate with
+///   no stored `relsize`. The shrink skips the candidate rather than
+///   wedging the drain.
 /// - `gc_unknown_candidate_kind` — a `pending_gc` row with an unknown
 ///   `blknum` kind. The drain skips it; it stays queued.
 pub(crate) static CORRECTNESS_ERRORS: Lazy<metrics::IntCounterVec> = Lazy::new(|| {
