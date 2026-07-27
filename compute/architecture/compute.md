@@ -108,7 +108,7 @@ which asks `compute_ctl` to download extension files on demand; a **DDL handler*
 that captures role/database updates for the control plane; and a **logical
 replication monitor**.
 
-## Storage manager hooks (`NEON_SMGR`)
+## Storage manager hooks (`YB_AMP_SMGR`)
 
 PostgreSQL routes all relation-file I/O through a pluggable storage manager
 (`smgr`). The header
@@ -116,7 +116,7 @@ PostgreSQL routes all relation-file I/O through a pluggable storage manager
 build-time marker
 
 ```c
-#define NEON_SMGR 1
+#define YB_AMP_SMGR 1
 ```
 
 which lets extensions and contrib modules detect that this storage-manager API
@@ -124,7 +124,7 @@ is in effect. The one place the marker gates in-tree code is
 [`read_stream.c`](../vendor/postgres-v18/src/backend/storage/aio/read_stream.c),
 where `ASSUME_KERNEL_READAHEAD` is set to `0`: pages served over the network get
 no benefit from OS readahead, so the read-stream machinery does not assume it.
-The contrib index AMs `pgvector` and `rum` also branch on `NEON_SMGR` (see their
+The contrib index AMs `pgvector` and `rum` also branch on `YB_AMP_SMGR` (see their
 patches under [`compute/image/patches`](../image/patches)).
 
 ### The `yb_amp` storage manager

@@ -48,8 +48,8 @@ subsystem has its own page.
 
 ```
                      +---------------------------+
-                     |  Compute (Postgres)    |   user-facing PG;
-                     |     NEON_SMGR + LFC       |   stateless
+                     |  Compute (Postgres)       |   user-facing PG;
+                     |     YB_AMP_SMGR + LFC     |   stateless
                      +---------------------------+
                         |               |
                    WAL  |               |  getpage
