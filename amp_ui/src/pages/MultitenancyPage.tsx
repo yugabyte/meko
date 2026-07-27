@@ -56,6 +56,7 @@ import {
   DEFAULT_ENDPOINT_MEMORY,
 } from "@/lib/api/types";
 import { formatDateTime, shortId } from "@/lib/format";
+import { ComputeResourceTag } from "@/components/ResourceTag";
 
 export default function MultitenancyPage() {
   const currentUser = useCurrentUser();
@@ -354,6 +355,15 @@ function EndpointsSection({
   const [memory, setMemory] = useState(DEFAULT_ENDPOINT_MEMORY);
   const createEndpoint = useCreateEndpoint();
 
+  // A branch admits at most one read-write compute (multiple read-only are
+  // fine). Once a read-write exists, disable that option and force the
+  // provisioner to read-only. Same rule for the source branch and every fork,
+  // since each branch has its own EndpointsSection + endpoints list.
+  const hasReadWrite = endpoints.some((ep) => ep.role === "read_write");
+  useEffect(() => {
+    if (hasReadWrite && role === "read_write") setRole("read_only");
+  }, [hasReadWrite, role]);
+
   function provision() {
     createEndpoint.mutate(
       {
@@ -401,7 +411,9 @@ function EndpointsSection({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="read_write">read-write</SelectItem>
+            <SelectItem value="read_write" disabled={hasReadWrite}>
+              read-write
+            </SelectItem>
             <SelectItem value="read_only">read-only</SelectItem>
           </SelectContent>
         </Select>
@@ -438,6 +450,11 @@ function EndpointsSection({
           {createEndpoint.isPending ? "Provisioning…" : "Provision compute"}
         </Button>
       </div>
+      {hasReadWrite && (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          This branch already has a read-write compute — additional compute must be read-only.
+        </p>
+      )}
     </div>
   );
 }
@@ -536,11 +553,7 @@ function ComputeInstance({ ep, poolId }: { ep: Endpoint; poolId: string }) {
         <Badge variant="secondary" className="font-mono text-[10px]">
           {ep.role.replace("_", "-")}
         </Badge>
-        {(ep.resources?.cpu || ep.resources?.memory) && (
-          <Badge variant="outline" className="font-mono text-[10px]">
-            {ep.resources?.cpu ?? "?"} CPU / {ep.resources?.memory ?? "?"}
-          </Badge>
-        )}
+        <ComputeResourceTag cpu={ep.resources?.cpu} memory={ep.resources?.memory} />
         <Button
           variant="ghost"
           size="sm"
