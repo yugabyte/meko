@@ -12,17 +12,25 @@ but adapts it to yb-amp's reality: the product is **itself a multi-tenant
 control plane**, so we lean on the product's own API to create test
 environments instead of provisioning cloud VMs over SSH.
 
-> **Implementation status** (`test/framework/`, as tracked in git): the engine,
-> env providers (fake, docker, shared/exclusive k8s, cloud VM, standalone
-> universe), the apps layer, the chaos engine, the perf tier, workload drivers
-> (sample-app/benchbase/pgbench/workloadgen), and a self-contained HTML report
-> sink are all built and exercised by real suites (`canary`, `functional`,
-> `perf`, `presets`, `stress` — see `ampqa collect`). The **report portal
-> (§7), MCP server, and CI pipelines (§8) described below remain roadmap** —
-> `ampqa run`/`setup`/`env` write only to a local file-backed registry today,
-> and there is no Azure support anywhere in the codebase (cloud backings are
-> AWS and GCP only). Where this document states a capability in the present
-> tense, check `ampqa --help` / `ampqa manifest` / the `test/framework` source
+> **Implementation status** (`test/functional/framework/`, as tracked in git):
+> the engine, env providers (fake, docker, shared/exclusive k8s, cloud VM,
+> standalone universe), the apps layer, the chaos engine, the perf tier
+> (benchmark harness + baselines + run-history), workload drivers
+> (sample-app/benchbase/pgbench/sysbench/workloadgen), failure-diagnostics
+> collection (a path-named log tree — see §4.3), and report sinks
+> (stdout / JSON / JUnit / **portal** / self-contained HTML) are all built and
+> exercised by real suites (`canary`, `features`, `perf`, `presets`, `stress` —
+> see `ampqa collect`). The **portal sink streams a run live to the amp report
+> portal** as it executes (`ampqa run --portal <url> --report <bucket>`), and
+> **CI is partly wired** (GitHub Actions: `pr-build`, `on-demand-checks`,
+> `control-plane-gke` — see §8; releases are minted by the Jenkins
+> `amp-build` pipeline, not a workflow). Still roadmap: the **MCP
+> server** and the *in-repo* portal service (§7 — the amp report portal is a
+> separately-deployed sibling, not `test/portal/` in this repo), plus the
+> scheduled long-running health-check cron and `ampqa check` (§8.1). There is
+> **no Azure support** anywhere in the codebase (cloud backings are AWS and GCP
+> only). Where this document states a capability in the present tense, check
+> `ampqa --help` / `ampqa manifest` / the `test/functional/framework` source
 > before assuming it is live — sections below were written as a proposal and
 > have not all been reconciled with what shipped.
 
@@ -247,9 +255,9 @@ Go, with an OpenAPI spec (`controller/internal/api/openapi_spec.yaml`) and an
 verbatim** to drive environments — no hand-rolled HTTP, and it stays in sync
 with the API by construction. Building a Go framework introduces nothing foreign.
 
-**Proposed repo layout (in `yb-amp`):**
-- **`test/framework/`** — the framework, the `ampqa` module/binary, mirroring the
-  stress layout (`src/main` / `src/apps` / `src/tasks` / `src/suites`):
+**Repo layout (in `yb-amp`, as shipped under `test/functional/`):**
+- **`test/functional/framework/`** — the framework, the `ampqa` module/binary,
+  mirroring the stress layout (`src/main` / `src/apps` / `src/tasks` / `src/suites`):
   - `core/` — Suite/Test/Task interfaces, lifecycle, options, seeds, results
   - `sched/` — packing scheduler, worker pool, Resource Lease Manager
   - `exec/` — remote-execution transports: SSH, kubectl/k8s, docker
@@ -272,10 +280,11 @@ with the API by construction. Building a Go framework introduces nothing foreign
     checks)
   - `task/` — task runner + tasks (provision, teardown, load-data, collect,
     reap, run-workload)
-  - `report/` — Reporter fan-out + sinks (stdout, JSON, JUnit, portal)
-- **`test/suites/`** — the actual tests, one package per feature area (`functional/`, `stress/`, `perf/`)
-- **`test/tasks/`** — runnable non-test units (provision an env, load a dataset, run a workload standalone, collect) built from the same Apps — the stress framework's `src/tasks/` equivalent
-- **`test/portal/`** — report service (see §7) — or a sibling repo; see §7 note
+  - `report/` — Reporter fan-out + sinks (stdout, JSON, JUnit, portal, self-contained HTML)
+  - `diag/` — failure-diagnostics collector (path-named log tree: amp / universe / YBA)
+  - `task/` and `task/tasks/` — task runner + the runnable non-test units (provision an env, load a dataset, run a workload standalone, collect) — the stress framework's `src/tasks/` equivalent lives inside the framework module, not a separate top-level tree
+- **`test/functional/suites/`** — the actual tests, one package per area (`canary/`, `features/`, `perf/`, `presets/`, `stress/`)
+- **`test/portal/`** — *roadmap*: an in-repo report service is not present; the amp report portal is a separately-deployed sibling today (see §7 note)
 
 The engine (`core`/`sched`/`exec`/`report`) stays agnostic — it doesn't know
 what an app talks to; kept that way by common sense and review, not by
@@ -347,17 +356,26 @@ Per-test lifecycle, in order:
 `acquire lease → provision env → setup → RUN (steps) → collect logs+metrics → teardown → release lease`.
 **Teardown and lease-release always run, even on failure or panic.**
 
-**`provision env` and `setup` are optional stages.** A test can attach to an
-already-provisioned environment (`--env <id>`) and skip data setup
-(`--skip-setup`), so one expensive env + dataset is built once and tests run
-against it **many times with slight config changes, without redeploying** —
-e.g. TPC-C: provision one environment with an 8-hour data load once, then
-re-run the 30-minute execute phase repeatedly against different configs or
-builds. When stages are skipped, teardown is skipped symmetrically (the
-standing env outlives the test and is reclaimed by its own TTL/teardown).
+**`provision env` and `setup` are optional stages, driven by `--env-mode`.** The
+lifecycle is selected per run: `build` (provision, run, tear down — the default),
+`keep` (provision, run, **record** the env, skip teardown), `keep-failed` (tear
+down when green, keep + record on any failure), and `attach` (attach to a
+standing env named by `--env <id>` from the registry, run, skip teardown).
+`--setup-only` stands each selected test's environment up and skips its body,
+leaving it recorded and running (folds the deprecated `ampqa setup`); `--ttl`
+auto-reaps a kept/setup-only env after a duration. So one expensive env + dataset
+is built once (`--setup-only` / `keep`) and tests re-run against it **many times
+with slight config changes, without redeploying** (`--env <id> --env-mode
+attach`) — e.g. TPC-C: provision one environment with an 8-hour data load once,
+then re-run the 30-minute execute phase repeatedly against different configs or
+builds. When teardown is skipped the standing env outlives the test and is
+reclaimed by its `--ttl` or an explicit `ampqa env rm`.
 - **collect** pulls component logs (pageserver/safekeeper/compute/controller),
   cores, and configs into the files service, and snapshots metrics into Victoria
-  Metrics — all keyed by the test result id.
+  Metrics — all keyed by the test result id. On a k8s failure the `diag` package
+  gathers the namespace's pod logs **before** teardown destroys them, as a
+  path-named tree the report frontend renders as folders — `Amp logs/<pod>/…`,
+  `Universe logs/<pod>/<role>/…`, `YBA logs/<pod>/…`.
 - **teardown** deletes the project/endpoint (or the whole dedicated stack); the
   lease is released only after teardown so capacity accounting stays honest.
 - On failure, an **optional keep-alive** flag leaves the env up for debugging
@@ -620,6 +638,18 @@ remote (a VM, a docker host, a cluster) — never the operator's machine.
 A test's **EnvSpec** (§4.2) picks one of these; **the choice is per test — not
 all tests use multitenancy**, only the ones that opt into `SHARED`.
 
+**Which YugabyteDB backs the control plane is a separate axis** (`env.yb_deploy`
+/ `YB_BACKING`), so the same k8s provider can sit on different storage layers:
+`external` (a cluster owned elsewhere), `yb_k8s`/`ybk8s` (a YugabyteDB deployed
+co-located into the same namespace), `yba_universe` (attach or create a universe
+through an existing YBA), or `yba_provisioned` (stand up an *owned* YBA + universe
+and tear it down at the end). The amp run pipeline defaults feature/regression
+runs to a **YBA-provisioned kubernetes universe** when the `quay` pull creds are
+present — currently **RF=1 while the path is validated** (`apps.yba.k8s.replication_factor`
+raises it); it falls back to the co-located `ybk8s` backing otherwise. A
+framework-wide `yba_provisioned` default is deliberately avoided so runs carrying
+no YBA creds don't attempt a doomed provision.
+
 ### 5.1 Shared environment — many co-tenant tests on one control plane (`SHARED`)
 **Only non-destructive, non-perf tests co-tenant.** Anything that kills
 components, simulates zone outages, or measures performance gets a dedicated
@@ -850,6 +880,17 @@ push metrics), streamlined:
   unit) — feeds the perf tab.
 - `PATCH /results/{id}` / `PATCH /runs/{id}` — final status + summary.
 
+The built portal sink (`report/portal`) streams a run live over this API — the
+run appears within seconds, each test/step/metric/perf point arrives as it is
+emitted, and a closing `PATCH` carries the normalized result so live-streamed and
+post-run-ingested runs store identically. The sink is strictly non-critical: a
+portal outage never fails a run. The run carries `tags`, `build_tag`,
+`trigger_type`, and `triggered_by` (set via `--portal`/`--report` flags and
+`report.portal.*` config keys — `run_id`, `branch`, `commit`, `build_tag`,
+`trigger_type`, `triggered_by`); the portal's status page associates runs to
+releases by `build_tag` and by tag (`regression`→functional, `stress`→stress,
+`perf`→perf).
+
 ### 7.2 Data model (Postgres) — proposed core tables
 Adapted from the stress portal's `stress_tests / steps / metrics / attachments /
 results` + `auto_runs / jobs`, generalized for branch/build comparison:
@@ -914,6 +955,27 @@ orchestration below is deliberately thin. Two CI lanes, split by weight:
   stress / perf / long-running — anything needing real k8s stacks, big quotas,
   and hours of wall-clock.
 
+**Wired today (GitHub Actions).** `pr-build.yml` builds/lints/unit-tests compute
+(Rust) and controller (Go) and publishes JUnit test reports; a **compute
+integration** job runs the custom harness `test/integration/compute/run.sh`
+against a YugabyteDB container (live-DB unit tests + the fast scenario suite,
+each scenario emitting a PASS/FAIL line), and helm-unittest guards the charts.
+The slow scenario suite is on-demand via `/ci integration_slow` (from the PR
+body) and also runs **daily** on `main` via `on-demand-checks.yml`'s `schedule`
+cron. `control-plane-gke.yml` exercises the control plane on GKE.
+
+**Releases are tag-driven and fully automatic** (no version workflow in this
+repo — the old `version-bump.yml` was removed): the Jenkins `amp-build`
+pipeline polls `main`, and when a merge touches product code it computes the
+next `MAJOR.YYMMDD.PATCH` version, builds and pushes
+`quay.io/yugabyte/amp-{controller,endpoint,pg}:<version>-<shortsha>`, then —
+only after all images are on quay — pushes the git tag `<version>`. Git tags
+are the single source of truth for released versions; the `VERSION` file is
+never bumped in git (the pipeline stamps it into the build workspace only).
+Docs/test-only merges do not release; ad-hoc builds are tagged
+`custom-<shortsha>`. Each fresh release also auto-triggers a `regression`
+run against its image via the report portal.
+
 **PR testing is not fixed to the smoke slice — the test set is change-aware.**
 A change can declare (or an **AI picks**) the set of tests it needs: most small
 changes run a small subset (~10% of tests); a change touching a perf-sensitive
@@ -943,11 +1005,13 @@ later.
    (b) ensure a shared control plane is up for the SHARED batch, and plan
    namespaces/quota for the EXCLUSIVE tests;
    (c) `POST /runs` to the portal → run id.
-3. **Run the framework** (one agent, or sharded across several) — roadmap
-   invocation shape once the portal sink and CI plumbing land:
-   `ampqa run --suite <regex> --tag <nightly|smoke|…> --parallel N --report <portal-url> --run-id <id> --branch <b> --commit <sha>`
-   (`--report`/`--run-id`/`--branch`/`--commit` are not implemented today —
-   see the real `ampqa run` flags in `QA_FRAMEWORK_IMPLEMENTATION.md` §4)
+3. **Run the framework** (one agent, or sharded across several):
+   `ampqa run --suite <regex> --tag <nightly|smoke|…> --parallel N --portal <portal-url> --report <bucket>`
+   — `--portal` (live-stream base URL) and `--report` (report bucket) are real
+   flags; the rest of the run identity travels as `report.portal.*` config keys
+   (`run_id` to adopt a pre-created trigger row, `branch`, `commit`, `build_tag`,
+   `trigger_type`, `triggered_by`), set from a config file or `-o`. See `ampqa
+   run --help` / `ampqa manifest` for the current flag set.
    - packing scheduler + lease manager (§4.4);
    - SHARED tests packed onto shared env(s); EXCLUSIVE tests each get their own;
    - each test: (lease/attach env) → provision project/stack → run → collect →
@@ -1014,6 +1078,18 @@ a run flags `is_regression` when a KPI crosses a configured threshold vs the
 branch baseline (or vs master). Historical comparison across builds is the perf
 tab's whole reason to exist.
 
+**As built, the perf tier is a benchmark harness:** each perf test runs a warmup
+plus N iterations, reports the **median** (TPS and latency p50/p95/p99) with a
+**variance guard** (coefficient of variation), and compares to a reference value
+in `baselines/perf.json` (per environment). Each run also **appends** its
+aggregate to a run-history store (`baselines/perf-history.json`, bounded to the
+most-recent runs) and the HTML report renders a **trend** chart from it. Two
+honest caveats today: the trend needs **≥2 history records** to draw a line
+(a first run shows none), and both the baseline and history files are
+**workspace-local and gitignored** — so a portal-triggered run on a fresh agent
+starts with an empty history and gets no trend line until the store is
+persisted/shared across runs.
+
 ---
 
 ## 10. Requirements
@@ -1024,10 +1100,11 @@ tab's whole reason to exist.
   collectors) usable in any context, and **Tasks** — runnable non-test units
   built from the same primitives (`ampqa task <name>`: provision, load data,
   run a workload, collect); tests = tasks + assertions.
-- Optional lifecycle stages: attach to a standing env (`--env`) and skip setup
-  (`--skip-setup`) to re-run tests against one expensive env/dataset many times
-  with config changes, without redeploy (e.g. TPC-C: 8-hour load once,
-  30-minute execute re-runs).
+- Optional lifecycle stages via `--env-mode` (`build`/`keep`/`keep-failed`/
+  `attach`) and `--setup-only`: stand an env up once and re-run tests against it
+  (`--env <id> --env-mode attach`) many times with config changes, without
+  redeploy (e.g. TPC-C: 8-hour load once, 30-minute execute re-runs); kept envs
+  are recorded in the registry and reaped by `--ttl` or `ampqa env rm`.
 - MCP parity: every UI/API surface has a corresponding MCP tool — trigger,
   analyze, and reporting.
 - Per-test `EnvSpec` (sharing policy + shape): `SHARED` co-tenant vs `EXCLUSIVE`
@@ -1153,7 +1230,7 @@ tab's whole reason to exist.
 
 ## 12. Suggested phasing
 
-- **Phase 0 — skeleton.** Go module `test/framework`, core interfaces (Test/Suite/
+- **Phase 0 — skeleton.** Go module `test/functional/framework`, core interfaces (Test/Suite/
   Step/Env/Reporter), controller-client wrapper, the single-container docker
   provider (cheapest env, local + CI), a stdout reporter, 2–3 `SHARED` co-tenant
   functional tests on a shared control plane. Prove per-project isolation +
