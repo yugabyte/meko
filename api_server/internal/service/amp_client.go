@@ -109,6 +109,25 @@ func (c *AMPClient) ListProjects(ctx context.Context, poolID string) ([]AMPProje
 	return list.Projects, err
 }
 
+// GetProject reads a single database (project) by id.
+func (c *AMPClient) GetProject(ctx context.Context, poolID, projectID string) (AMPProject, error) {
+	var p AMPProject
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID, nil, &p)
+	return p, err
+}
+
+// DeleteProject deletes a database, cascading to its branches and endpoints.
+// The controller returns a task; we poll it to completion (a delete that is
+// rejected synchronously — e.g. a 409 conflict — surfaces as an error here).
+func (c *AMPClient) DeleteProject(ctx context.Context, poolID, projectID string) error {
+	var task ampTask
+	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/projects/"+projectID, nil, &task); err != nil {
+		return err
+	}
+	_, err := c.pollTask(ctx, task.ID)
+	return err
+}
+
 // CreateProject creates a database in a pool. The controller returns a task; we
 // poll it to completion, then read the materialized project back.
 func (c *AMPClient) CreateProject(ctx context.Context, poolID, name string, pgVersion *int) (AMPProject, error) {
@@ -150,6 +169,25 @@ func (c *AMPClient) ListBranches(ctx context.Context, poolID, projectID string) 
 	var list ampBranchList
 	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches?limit=1000", nil, &list)
 	return list.Branches, err
+}
+
+// GetBranch reads a single branch by id.
+func (c *AMPClient) GetBranch(ctx context.Context, poolID, projectID, branchID string) (AMPBranch, error) {
+	var b AMPBranch
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID, nil, &b)
+	return b, err
+}
+
+// DeleteBranch deletes a branch, cascading to its endpoints (task-based: poll to
+// completion). A branch with child branches is rejected by the controller
+// (409), surfaced as an error here.
+func (c *AMPClient) DeleteBranch(ctx context.Context, poolID, projectID, branchID string) error {
+	var task ampTask
+	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID, nil, &task); err != nil {
+		return err
+	}
+	_, err := c.pollTask(ctx, task.ID)
+	return err
 }
 
 // CreateBranch forks a branch (task-based: poll, then read back via target_ref).
@@ -196,6 +234,23 @@ func (c *AMPClient) ListEndpoints(ctx context.Context, poolID, projectID, branch
 	var list ampEndpointList
 	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID+"/endpoints?limit=1000", nil, &list)
 	return list.Endpoints, err
+}
+
+// GetEndpoint reads a single compute instance (endpoint) by id.
+func (c *AMPClient) GetEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) (AMPEndpoint, error) {
+	var e AMPEndpoint
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID+"/endpoints/"+endpointID, nil, &e)
+	return e, err
+}
+
+// DeleteEndpoint retires a compute instance (task-based: poll to completion).
+func (c *AMPClient) DeleteEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) error {
+	var task ampTask
+	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID+"/endpoints/"+endpointID, nil, &task); err != nil {
+		return err
+	}
+	_, err := c.pollTask(ctx, task.ID)
+	return err
 }
 
 // CreateEndpoint provisions compute on a branch (task-based: poll, then read

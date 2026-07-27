@@ -78,6 +78,25 @@ func (h *AMPHandler) ListClusters(c echo.Context) error {
 	return ok(c, http.StatusOK, clusters)
 }
 
+// GetCluster handles GET /api/v1/datapacks/:datapack_id/clusters/:cluster_id.
+func (h *AMPHandler) GetCluster(c echo.Context) error {
+	cluster, err := h.svc.GetCluster(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"))
+	if err != nil {
+		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, cluster)
+}
+
+// DeleteCluster handles DELETE /api/v1/datapacks/:datapack_id/clusters/:cluster_id.
+// Cascades to the cluster's branches and compute; blocks until the AMP task
+// completes.
+func (h *AMPHandler) DeleteCluster(c echo.Context) error {
+	if err := h.svc.DeleteCluster(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id")); err != nil {
+		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, map[string]any{"id": c.Param("cluster_id"), "deleted": true})
+}
+
 // ListBranches handles GET .../clusters/:cluster_id/branches.
 func (h *AMPHandler) ListBranches(c echo.Context) error {
 	branches, err := h.svc.ListBranches(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"))
@@ -110,6 +129,24 @@ func (h *AMPHandler) CreateBranch(c echo.Context) error {
 	return ok(c, http.StatusCreated, branch)
 }
 
+// GetBranch handles GET .../clusters/:cluster_id/branches/:branch_id.
+func (h *AMPHandler) GetBranch(c echo.Context) error {
+	branch, err := h.svc.GetBranch(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"))
+	if err != nil {
+		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, branch)
+}
+
+// DeleteBranch handles DELETE .../clusters/:cluster_id/branches/:branch_id.
+// Cascades to the branch's compute; blocks until the AMP task completes.
+func (h *AMPHandler) DeleteBranch(c echo.Context) error {
+	if err := h.svc.DeleteBranch(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id")); err != nil {
+		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, map[string]any{"id": c.Param("branch_id"), "deleted": true})
+}
+
 // ListCompute handles GET .../branches/:branch_id/compute.
 func (h *AMPHandler) ListCompute(c echo.Context) error {
 	instances, err := h.svc.ListCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"))
@@ -117,6 +154,24 @@ func (h *AMPHandler) ListCompute(c echo.Context) error {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 	}
 	return ok(c, http.StatusOK, instances)
+}
+
+// GetCompute handles GET .../branches/:branch_id/compute/:compute_id.
+func (h *AMPHandler) GetCompute(c echo.Context) error {
+	instance, err := h.svc.GetCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), c.Param("compute_id"))
+	if err != nil {
+		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, instance)
+}
+
+// DeleteCompute handles DELETE .../branches/:branch_id/compute/:compute_id.
+// Blocks until the AMP task completes.
+func (h *AMPHandler) DeleteCompute(c echo.Context) error {
+	if err := h.svc.DeleteCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), c.Param("compute_id")); err != nil {
+		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, map[string]any{"id": c.Param("compute_id"), "deleted": true})
 }
 
 type createComputeRequest struct {

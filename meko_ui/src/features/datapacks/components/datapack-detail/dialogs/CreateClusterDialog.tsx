@@ -10,22 +10,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { createCluster } from "@/lib/api/ampApi";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 
-// Postgres major versions offered when creating a cluster. AMP's supported set
-// has been shifting (storage controller vs controller), so this is selectable
-// and defaults to the currently-supported 18 rather than hardcoding one value.
-const PG_VERSIONS = ["18", "17"] as const;
-const DEFAULT_PG_VERSION = "18";
+// Postgres 18 is the only version AMP supports today, so there's no version
+// choice: we omit pg_version on create and the controller applies its default
+// (18). If AMP supports multiple versions again, reintroduce a selector here.
 
 export type CreateClusterDialogProps = {
   open: boolean;
@@ -47,14 +38,12 @@ export function CreateClusterDialog({
   onCreated,
 }: CreateClusterDialogProps) {
   const [name, setName] = useState("");
-  const [pgVersion, setPgVersion] = useState<string>(DEFAULT_PG_VERSION);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setName("");
-      setPgVersion(DEFAULT_PG_VERSION);
       setError(null);
       setSubmitting(false);
     }
@@ -68,10 +57,7 @@ export function CreateClusterDialog({
     setSubmitting(true);
     setError(null);
     try {
-      const cluster = await createCluster(datapackId, {
-        name: trimmed,
-        pg_version: Number(pgVersion),
-      });
+      const cluster = await createCluster(datapackId, { name: trimmed });
       toast({ title: `Cluster "${cluster.name}" created` });
       onCreated();
       onOpenChange(false);
@@ -109,22 +95,6 @@ export function CreateClusterDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="amp-pg-version">Postgres version</Label>
-              <Select value={pgVersion} onValueChange={setPgVersion}>
-                <SelectTrigger id="amp-pg-version">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PG_VERSIONS.map((v) => (
-                    <SelectItem key={v} value={v}>
-                      Postgres {v}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
           </div>
 
