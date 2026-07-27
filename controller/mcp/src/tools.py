@@ -198,6 +198,31 @@ def delete_endpoint(
     )
 
 
+def resize_endpoint(
+    pool_id: str,
+    project_id: str,
+    branch_id: str,
+    endpoint_id: str,
+    cpu: Optional[str] = None,
+    memory: Optional[str] = None,
+) -> dict[str, Any]:
+    """Change an endpoint's compute reservation (vertical resize). ASYNCHRONOUS.
+
+    Works for either role (a branch's `read_write` endpoint or any `read_only`
+    one). `cpu` (e.g. "2", "1500m") and `memory` (e.g. "4Gi") are Kubernetes
+    quantities applied as request == limit (Guaranteed QoS); pass at least one
+    (an omitted field keeps its current value — sending neither is rejected with
+    400). The controller persists the new size, updates the Deployment, and
+    resizes the running pod in place where the node allows it. Returns a Task;
+    poll `get_task(task_id=<id>)` until `status` is `succeeded` or `failed` — the
+    task result carries `in_place_resize` (`completed` / `pending` / `infeasible`
+    / `unsupported`). Then call `get_endpoint` to read the new reservation.
+    """
+    return controller_client.resize_endpoint(
+        pool_id, project_id, branch_id, endpoint_id, cpu, memory
+    )
+
+
 def list_tasks(
     status: Optional[str] = None,
     kind: Optional[str] = None,

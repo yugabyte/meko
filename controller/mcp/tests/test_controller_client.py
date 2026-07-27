@@ -153,3 +153,24 @@ def test_list_tasks_filters():
     assert params["status"] == "failed"
     assert params["kind"] == "create_branch"
     assert params["project_id"] == "pr1"
+
+
+RESIZE_PATH = "/api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1/resize"
+
+
+def test_resize_endpoint_path_and_nested_resources():
+    task = {"id": "t9", "kind": "resize_endpoint", "status": "pending"}
+    handler = RecordingHandler({f"POST {RESIZE_PATH}": (202, task)})
+    client = make_client(handler)
+    result = client.resize_endpoint("p1", "pr1", "b1", "e1", cpu="4", memory="8Gi")
+    assert result == task
+    assert handler.last.method == "POST"
+    assert handler.last.url.path == RESIZE_PATH
+    assert handler.last_json() == {"resources": {"cpu": "4", "memory": "8Gi"}}
+
+
+def test_resize_endpoint_omits_unset_field():
+    handler = RecordingHandler({f"POST {RESIZE_PATH}": (202, {"id": "t9"})})
+    client = make_client(handler)
+    client.resize_endpoint("p1", "pr1", "b1", "e1", memory="8Gi")
+    assert handler.last_json() == {"resources": {"memory": "8Gi"}}

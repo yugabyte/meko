@@ -36,8 +36,9 @@ available to read a known user by id.
 
 ## Asynchronous operations — poll get_task
 
-All `create_*` and `delete_*` tools (projects, branches, endpoints) are \
-**asynchronous**. They return a **Task** object immediately, not the finished \
+All `create_*` and `delete_*` tools (projects, branches, endpoints) plus \
+`resize_endpoint` are **asynchronous**. They return a **Task** object \
+immediately, not the finished \
 resource. After calling one, take the Task's `id` and poll \
 `get_task(task_id=<id>)` until its `status` reaches a terminal value \
 (`succeeded` or `failed`). On success, read the resource (e.g. `get_project`, \

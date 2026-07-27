@@ -91,3 +91,31 @@ def test_create_branch_optional_fields(wired):
 )
 def test_get_task(wired):
     assert tools.get_task("t1")["status"] == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "wired",
+    [{"POST /api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1/resize": (202, {"id": "t9", "kind": "resize_endpoint", "status": "pending"})}],
+    indirect=True,
+)
+def test_resize_endpoint_returns_task_and_nests_resources(wired):
+    result = tools.resize_endpoint(
+        pool_id="p1", project_id="pr1", branch_id="b1", endpoint_id="e1",
+        cpu="4", memory="8Gi",
+    )
+    assert result["kind"] == "resize_endpoint"
+    assert wired.last.method == "POST"
+    assert wired.last.url.path.endswith("/endpoints/e1/resize")
+    assert wired.last_json() == {"resources": {"cpu": "4", "memory": "8Gi"}}
+
+
+@pytest.mark.parametrize(
+    "wired",
+    [{"POST /api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1/resize": (202, {"id": "t9"})}],
+    indirect=True,
+)
+def test_resize_endpoint_omits_unset_field(wired):
+    tools.resize_endpoint(
+        pool_id="p1", project_id="pr1", branch_id="b1", endpoint_id="e1", cpu="4",
+    )
+    assert wired.last_json() == {"resources": {"cpu": "4"}}

@@ -81,6 +81,9 @@ CASES = [
     ("delete_endpoint",
      {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1",
       "endpoint_id": "e1"}, "DELETE", E, (202, TASK)),
+    ("resize_endpoint",
+     {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1",
+      "endpoint_id": "e1", "cpu": "4"}, "POST", f"{E}/resize", (202, TASK)),
     ("list_tasks", {}, "GET", "/api/v1/tasks",
      {"tasks": [], "total": 0, "count": 0}),
     ("get_task", {"task_id": "t1"}, "GET", "/api/v1/tasks/t1",
@@ -88,8 +91,8 @@ CASES = [
 ]
 
 
-def test_cases_cover_all_eighteen_tools():
-    assert len({name for name, *_ in CASES}) == 18
+def test_cases_cover_all_tools():
+    assert len({name for name, *_ in CASES}) == 19
 
 
 @pytest.mark.parametrize("name,kwargs,method,path,spec", CASES, ids=[c[0] for c in CASES])
@@ -215,12 +218,25 @@ def test_create_storage_pool_is_synchronous(wire):
         ("delete_endpoint",
          {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1", "endpoint_id": "e1"},
          E, "DELETE"),
+        ("resize_endpoint",
+         {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1", "endpoint_id": "e1",
+          "cpu": "4"},
+         f"{E}/resize", "POST"),
     ],
 )
 def test_async_tools_return_task_body(wire, name, kwargs, path, method):
     handler = wire({f"{method} {path}": (202, TASK)})
     result = getattr(tools, name)(**kwargs)
     assert result == TASK
+
+
+def test_resize_endpoint_nests_cpu_and_memory_under_resources(wire):
+    handler = wire({f"POST {E}/resize": (202, TASK)})
+    tools.resize_endpoint(
+        pool_id="p1", project_id="pr1", branch_id="b1", endpoint_id="e1",
+        cpu="4", memory="8Gi",
+    )
+    assert handler.last_json() == {"resources": {"cpu": "4", "memory": "8Gi"}}
 
 
 # ---- Response pass-through (list envelopes) ----

@@ -288,6 +288,29 @@ class ControllerClient:
             f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}",
         )
 
+    def resize_endpoint(
+        self,
+        pool_id: str,
+        project_id: str,
+        branch_id: str,
+        endpoint_id: str,
+        cpu: Optional[str] = None,
+        memory: Optional[str] = None,
+    ) -> dict:
+        # The controller nests the new reservation under `resources` and requires
+        # a non-empty body; an omitted field keeps its current value. Same shape
+        # as create_endpoint's resources block.
+        resources: dict[str, Any] = {}
+        if cpu is not None:
+            resources["cpu"] = cpu
+        if memory is not None:
+            resources["memory"] = memory
+        return self._request(
+            "POST",
+            f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}/resize",
+            json={"resources": resources},
+        )
+
     # ---- Tasks ----
 
     def list_tasks(

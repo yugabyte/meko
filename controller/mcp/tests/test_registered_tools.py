@@ -21,6 +21,7 @@ EXPECTED_TOOLS = {
     "list_endpoints",
     "get_endpoint",
     "delete_endpoint",
+    "resize_endpoint",
     "list_tasks",
     "get_task",
 }
@@ -39,20 +40,20 @@ def test_excluded_user_tools_absent():
         assert forbidden not in tools_src
 
 
-def test_all_eighteen_tools_present_in_tools_module():
+def test_all_tools_present_in_tools_module():
     tools_src = _read(TOOLS_SRC)
     for name in EXPECTED_TOOLS:
         assert f"def {name}(" in tools_src, f"missing tool def: {name}"
-    assert len(EXPECTED_TOOLS) == 18
+    assert len(EXPECTED_TOOLS) == 19
 
 
-def test_all_eighteen_registered_in_server():
+def test_all_tools_registered_in_server():
     server_src = _read(SERVER_SRC)
     for name in EXPECTED_TOOLS:
         assert f"({name}," in server_src, f"{name} not registered in server.py"
 
 
-def test_runtime_registration_is_exactly_eighteen():
+def test_runtime_registration_matches_expected():
     import sys
 
     sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
