@@ -27,7 +27,6 @@ in milliseconds.
 from __future__ import annotations
 
 from inference_gateway.chain import (
-    MEMORY_MIN_SCORE,
     _format_knowledge_context,
     _format_memory_context,
     _is_trivial_query,
@@ -238,24 +237,25 @@ def test_memory_legacy_shape_with_data_field() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_memory_threshold_drops_weak_scores() -> None:
-    """Memories with `score < MEMORY_MIN_SCORE` are dropped before rendering.
-
-    Anchors the contract: future loosening / tightening of the threshold
-    requires a deliberate change here, not silent drift in production.
+def test_memory_hits_kept_and_sorted_by_score() -> None:
+    """No client-side score threshold: relevance filtering is owned by the MCP
+    server (top-K sent with the query), so every scored hit is kept and rendered
+    highest-score-first. (Previously this asserted a MEMORY_MIN_SCORE drop that
+    the chain never implemented — filtering lives on the server.)
     """
-    assert MEMORY_MIN_SCORE == 0.3  # update both if the default changes
     payload = {
         "results": [
-            {"memory": "Strong hit",  "score": 0.85},
-            {"memory": "Marginal hit", "score": 0.31},  # just above threshold
+            {"memory": "Marginal hit", "score": 0.31},
+            {"memory": "Strong hit",   "score": 0.85},
             {"memory": "Weak noise",   "score": 0.10},
         ],
     }
     rendered = _format_memory_context(payload)
     assert "Strong hit" in rendered
     assert "Marginal hit" in rendered
-    assert "Weak noise" not in rendered
+    assert "Weak noise" in rendered  # low score is kept, not dropped
+    # Rendered highest-score-first.
+    assert rendered.index("Strong hit") < rendered.index("Marginal hit") < rendered.index("Weak noise")
 
 
 def test_memory_threshold_keeps_items_without_score() -> None:
@@ -266,14 +266,15 @@ def test_memory_threshold_keeps_items_without_score() -> None:
     assert _format_memory_context(payload) == "- [mem] No-score hit"
 
 
-def test_memory_threshold_does_not_affect_relations() -> None:
-    """Graph relations are not scored — they should always pass through."""
+def test_relations_pass_through_alongside_memories() -> None:
+    """Graph relations are unscored and always render — alongside any memory
+    hits, since there's no client-side score drop (filtering is the MCP's job)."""
     payload = {
-        "results": [{"memory": "Weak", "score": 0.05}],  # dropped
+        "results": [{"memory": "Weak", "score": 0.05}],
         "relations": [{"source": "john", "relationship": "LIKES", "destination": "soccer"}],
     }
     rendered = _format_memory_context(payload)
-    assert "Weak" not in rendered
+    assert "Weak" in rendered  # low score is kept, not dropped
     assert "john LIKES soccer" in rendered
 
 

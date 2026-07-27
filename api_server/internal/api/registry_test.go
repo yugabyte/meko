@@ -13,10 +13,10 @@ func openRegistryTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("postgres", registryTestConnStr)
 	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
+		t.Skipf("test database unavailable: open: %v", err)
 	}
 	if err := db.Ping(); err != nil {
-		t.Fatalf("failed to ping test database: %v", err)
+		t.Skipf("test database unavailable: ping: %v", err)
 	}
 	return db
 }

@@ -1,0 +1,156 @@
+name: CI
+
+# Per-component PR validation, gated on which files actually changed:
+#   api-server — Go REST API: `go build` (fail fast), `go vet`, golangci-lint
+#                (non-blocking for now), then `go test ./...`. Tests are mocked;
+#                the few DB-backed tests self-skip when no YugabyteDB is present,
+#                so no database is needed in CI.
+#   inference  — inference_gateway (Python): install with the dev extra, run
+#                pytest. All upstream (LLM / MCP) calls are mocked — no creds.
+#   ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests (vitest),
+#                and the production build.
+#
+# Docs-only PRs (only *.md changed) skip the heavy jobs via the `code` filter.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      api_server: ${{ steps.filter.outputs.api_server }}
+      inference: ${{ steps.filter.outputs.inference }}
+      ui: ${{ steps.filter.outputs.ui }}
+      code: ${{ steps.code.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api_server:
+              - 'api_server/**'
+              - '.github/workflows/pr-build.yml'
+            inference:
+              - 'inference_gateway/**'
+              - '.github/workflows/pr-build.yml'
+            ui:
+              - 'meko_ui/**'
+              - '.github/workflows/pr-build.yml'
+      # A change counts as "code" if at least one changed file is not a markdown
+      # doc; the jobs gate on it so a docs-only PR skips build/test.
+      - uses: dorny/paths-filter@v3
+        id: code
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+
+  api-server:
+    name: API Server — build, vet & tests
+    needs: changes
+    if: needs.changes.outputs.api_server == 'true' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: api_server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: api_server/go.mod
+          cache-dependency-path: api_server/go.sum
+
+      # Build first so a compile break fails fast with a clear message before
+      # tests run.
+      - name: Build
+        run: go build ./...
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      # Non-blocking for now: this is the first time golangci-lint runs in CI,
+      # so surface findings without failing the PR. Flip to blocking once the
+      # baseline is clean.
+      - name: Lint (golangci-lint)
+        continue-on-error: true
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: api_server
+
+      # Unit tests are mocked; the few DB-backed tests self-skip when no
+      # YugabyteDB is reachable, so this runs without a database.
+      - name: Tests
+        run: go test ./...
+
+  inference:
+    name: Inference Gateway — tests
+    needs: changes
+    if: needs.changes.outputs.inference == 'true' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: inference_gateway
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install (with dev extra)
+        run: pip install -e ".[dev]"
+
+      # All upstream calls are mocked — no network / no creds needed.
+      - name: Tests
+        run: pytest -q
+
+  ui:
+    name: UI — typecheck, tests & build
+    needs: changes
+    if: needs.changes.outputs.ui == 'true' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: meko_ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: meko_ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run check
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
