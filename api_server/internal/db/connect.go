@@ -21,6 +21,13 @@ var systemMigrationsFS embed.FS
 //go:embed migrations/data/*.sql
 var dataMigrationsFS embed.FS
 
+// Control-plane mode needs only the fleet registry, so it gets its own set in
+// portable SQL rather than the system sequence, which reaches 000008 only after
+// applying YugabyteDB-only DDL. Lets a control plane run on a plain Postgres.
+//
+//go:embed migrations/controlplane/*.sql
+var controlPlaneMigrationsFS embed.FS
+
 // ConnectWithRetry opens a database connection, retrying on failure.
 func ConnectWithRetry(
 	connString string,
@@ -82,18 +89,26 @@ func ConnectWithRetry(
 type DBPurpose string
 
 const (
-	DBPurposeSystem DBPurpose = "system"
-	DBPurposeData   DBPurpose = "data"
+	DBPurposeSystem       DBPurpose = "system"
+	DBPurposeData         DBPurpose = "data"
+	DBPurposeControlPlane DBPurpose = "controlplane"
 )
 
 // MigrationScope selects which migration sets RunMigrations applies.
 type MigrationScope struct {
 	System bool
 	Data   bool
+	// ControlPlane applies the fleet-registry set against the system DB. Separate
+	// from System on purpose: it is the only set that runs on plain Postgres.
+	ControlPlane bool
 }
 
 // AllMigrations runs both the data-plane and meko_system migration sets.
 var AllMigrations = MigrationScope{System: true, Data: true}
+
+// ControlPlaneMigrations runs only the fleet registry — what --control-plane-mode
+// needs, and nothing that requires YugabyteDB.
+var ControlPlaneMigrations = MigrationScope{ControlPlane: true}
 
 func RunMigrations(systemDB, dataDB *sql.DB, scope MigrationScope) ([]string, error) {
 	var details []string
@@ -126,6 +141,20 @@ func RunMigrations(systemDB, dataDB *sql.DB, scope MigrationScope) ([]string, er
 		details = append(details, d)
 	}
 
+	if scope.ControlPlane {
+		cpM, err := getMigrator(systemDB, DBPurposeControlPlane, controlPlaneMigrationsFS, "migrations/controlplane")
+		if err != nil {
+			slog.Error("failed to get migrator", "purpose", DBPurposeControlPlane, "error", err)
+			return nil, err
+		}
+		defer cpM.Close()
+		d, err := applyMigrator(cpM, DBPurposeControlPlane)
+		if err != nil {
+			return nil, err
+		}
+		details = append(details, d)
+	}
+
 	return details, nil
 }
 
@@ -150,6 +179,13 @@ func getPostgresConfig(purpose DBPurpose) *postgres.Config {
 	case DBPurposeSystem:
 		return &postgres.Config{
 			MigrationsTable: fmt.Sprintf("%s_%s", postgres.DefaultMigrationsTable, "system"),
+		}
+	// Its own tracking table, so a database that already ran the system set can
+	// also run this one (every statement is IF NOT EXISTS) without either set
+	// seeing the other's version.
+	case DBPurposeControlPlane:
+		return &postgres.Config{
+			MigrationsTable: fmt.Sprintf("%s_%s", postgres.DefaultMigrationsTable, "controlplane"),
 		}
 	default:
 		return &postgres.Config{}

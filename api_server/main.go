@@ -68,6 +68,9 @@ func run() error {
 	// which runs all migrations. The two flags are mutually exclusive.
 	onlySystemMigrate := flag.Bool("only-system-migrate", false, "run only meko_system migrations (implies -migrate-only)")
 	onlyDataMigrate := flag.Bool("only-data-migrate", false, "run only data-plane migrations (implies -migrate-only)")
+	onlyControlPlaneMigrate := flag.Bool("only-controlplane-migrate", false,
+		"run only the YCP fleet-registry migrations against the system DB (implies -migrate-only). "+
+			"The only set that runs on plain Postgres; the system set needs YugabyteDB.")
 
 	// Cognito configuration
 	cognitoRegion := flag.String("cognito-region", "", "AWS region for Cognito User Pool")
@@ -274,19 +277,32 @@ func run() error {
 		}
 	}
 
-	if *onlySystemMigrate && *onlyDataMigrate {
-		return fmt.Errorf("-only-system-migrate and -only-data-migrate are mutually exclusive")
+	scopingFlags := 0
+	for _, f := range []bool{*onlySystemMigrate, *onlyDataMigrate, *onlyControlPlaneMigrate} {
+		if f {
+			scopingFlags++
+		}
+	}
+	if scopingFlags > 1 {
+		return fmt.Errorf("-only-system-migrate, -only-data-migrate and -only-controlplane-migrate are mutually exclusive")
 	}
 
-	if *migrateOnly || *onlySystemMigrate || *onlyDataMigrate {
-		// Either scoping flag selects a single migration set and implies a
-		// migrate-and-exit run. With neither set we run all migrations.
+	if *migrateOnly || scopingFlags > 0 {
+		// Any scoping flag selects a single migration set and implies a
+		// migrate-and-exit run.
 		migrationScope := db.AllMigrations
 		switch {
 		case *onlySystemMigrate:
 			migrationScope.Data = false
 		case *onlyDataMigrate:
 			migrationScope.System = false
+		case *onlyControlPlaneMigrate:
+			migrationScope = db.ControlPlaneMigrations
+		// A bare -migrate-only in control-plane mode means "migrate what this mode
+		// needs". Defaulting to AllMigrations here would fail on plain Postgres and
+		// pointlessly build the data-plane schema on YugabyteDB.
+		case *controlPlaneMode:
+			migrationScope = db.ControlPlaneMigrations
 		}
 		details, err := db.RunMigrations(systemConn, dataConn, migrationScope)
 		if err != nil {
