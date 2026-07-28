@@ -1,9 +1,6 @@
-pub mod detach_ancestor;
 pub mod partitioning;
-pub mod utilization;
 
 use core::ops::Range;
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::str::FromStr;
@@ -12,11 +9,10 @@ use std::time::{Duration, SystemTime};
 use postgres_versioninfo::PgMajorVersion;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::serde_as;
-pub use utilization::PageserverUtilization;
 
+use utils::completion;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
-use utils::{completion, serde_system_time};
 
 use crate::config::Ratio;
 use crate::key::{CompactKey, Key};
@@ -306,27 +302,6 @@ pub struct CompactInfoResponse {
     pub job_id: usize,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct TimelineCreateRequest {
-    pub new_branch_id: BranchId,
-    #[serde(flatten)]
-    pub mode: TimelineCreateRequestMode,
-}
-
-impl TimelineCreateRequest {
-    pub fn mode_tag(&self) -> &'static str {
-        match &self.mode {
-            TimelineCreateRequestMode::Branch { .. } => "branch",
-            TimelineCreateRequestMode::ImportPgdata { .. } => "import",
-            TimelineCreateRequestMode::Bootstrap { .. } => "bootstrap",
-        }
-    }
-
-    pub fn is_import(&self) -> bool {
-        matches!(self.mode, TimelineCreateRequestMode::ImportPgdata { .. })
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum BranchImportStatus {
     InProgress(Option<BranchImportProgress>),
@@ -366,68 +341,6 @@ impl BranchImportStatus {
 pub struct TimelineCreateResponseStorcon {
     #[serde(flatten)]
     pub timeline_info: TimelineInfo,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum TimelineCreateRequestMode {
-    Branch {
-        ancestor_branch_id: BranchId,
-        #[serde(default)]
-        ancestor_start_lsn: Option<Lsn>,
-        // TODO: cplane sets this, but, the branching code always
-        // inherits the ancestor's pg_version. Earlier code wasn't
-        // using a flattened enum, so, it was an accepted field, and
-        // we continue to accept it by having it here.
-        pg_version: Option<PgMajorVersion>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        read_only: bool,
-    },
-    ImportPgdata {
-        import_pgdata: TimelineCreateRequestModeImportPgdata,
-    },
-    // NB: Bootstrap is all-optional, and thus the serde(untagged) will cause serde to stop at Bootstrap.
-    // (serde picks the first matching enum variant, in declaration order).
-    Bootstrap {
-        #[serde(default)]
-        existing_initdb_branch_id: Option<BranchId>,
-        pg_version: Option<PgMajorVersion>,
-    },
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct TimelineCreateRequestModeImportPgdata {
-    pub location: ImportPgdataLocation,
-    pub idempotency_key: ImportPgdataIdempotencyKey,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum ImportPgdataLocation {
-    AwsS3 {
-        region: String,
-        bucket: String,
-        /// A better name for this would be `prefix`; changing requires coordination with cplane.
-        /// See <https://github.com/neondatabase/cloud/issues/20646>.
-        key: String,
-    },
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(transparent)]
-pub struct ImportPgdataIdempotencyKey(pub String);
-
-impl ImportPgdataIdempotencyKey {
-    pub fn random() -> Self {
-        use rand::Rng;
-        use rand::distr::Alphanumeric;
-        Self(
-            rand::rng()
-                .sample_iter(&Alphanumeric)
-                .take(20)
-                .map(char::from)
-                .collect(),
-        )
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -933,73 +846,8 @@ mod throttle_config_tests {
     }
 }
 
-/// Wire form of [`crate::tenant::LocationConf`]. yb-amp has no
-/// multi-mode attach state: `generation: Some(g)` requests attach in
-/// generation `g`; `generation: None` requests detach.
-///
-/// `tenant_conf` is intentionally *not* on the wire — the
-/// authoritative copy lives in `pageserver.tenant_config`
-/// (#8). controller writes the row before sending
-/// this PUT; the pageserver re-reads from YB on receipt.
-#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
-pub struct LocationConfig {
-    /// `Some(g)` → attach in this generation; `None` → detach.
-    #[serde(default)]
-    pub generation: Option<u32>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct LocationConfigListResponse {
-    pub branches: Vec<(BranchId, Option<LocationConfig>)>,
-}
-
 #[derive(Serialize)]
 pub struct StatusResponse {}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct BranchLocationConfigRequest {
-    #[serde(flatten)]
-    pub config: LocationConfig, // as we have a flattened field, we should reject all unknown fields in it
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct BranchConfigRequest {
-    pub branch_id: BranchId,
-    #[serde(flatten)]
-    pub config: BranchConfig, // as we have a flattened field, we should reject all unknown fields in it
-}
-
-impl std::ops::Deref for BranchConfigRequest {
-    type Target = BranchConfig;
-
-    fn deref(&self) -> &Self::Target {
-        &self.config
-    }
-}
-
-impl BranchConfigRequest {
-    pub fn new(branch_id: BranchId) -> BranchConfigRequest {
-        let config = BranchConfig::default();
-        BranchConfigRequest { branch_id, config }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct BranchConfigPatchRequest {
-    pub branch_id: BranchId,
-    #[serde(flatten)]
-    pub config: BranchConfigPatch, // as we have a flattened field, we should reject all unknown fields in it
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct BranchWaitLsnRequest {
-    #[serde(flatten)]
-    pub branches: HashMap<BranchId, Lsn>,
-    pub timeout: Duration,
-}
 
 /// See [`BranchState::attachment_status`] and the OpenAPI docs for context.
 #[derive(Serialize, Deserialize, Clone)]
@@ -1038,21 +886,10 @@ pub struct BranchDetails {
     pub branches: Vec<BranchId>,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Debug)]
-pub enum TimelineArchivalState {
-    Archived,
-    Unarchived,
-}
-
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub enum TimelineVisibilityState {
     Visible,
     Invisible,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
-pub struct TimelineArchivalConfigRequest {
-    pub state: TimelineArchivalState,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -1281,16 +1118,6 @@ impl HistoricLayerInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct IngestAuxFilesRequest {
-    pub aux_files: HashMap<String, String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ListAuxFilesRequest {
-    pub lsn: Lsn,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct TimelineGcRequest {
     pub gc_horizon: Option<u64>,
 }
@@ -1306,27 +1133,6 @@ pub struct WalRedoManagerStatus {
     /// One entry per live slot in the per-tenant walredo pool. Empty
     /// when no process has been spawned yet or the manager is shut down.
     pub processes: Vec<WalRedoManagerProcessStatus>,
-}
-
-/// The progress of a secondary tenant.
-///
-/// It is mostly useful when doing a long running download: e.g. initiating
-/// a download job, timing out while waiting for it to run, and then inspecting this status to understand
-/// what's happening.
-#[derive(Default, Debug, Serialize, Deserialize, Clone)]
-pub struct SecondaryProgress {
-    /// The remote storage LastModified time of the heatmap object we last downloaded.
-    pub heatmap_mtime: Option<serde_system_time::SystemTime>,
-
-    /// The number of layers currently on-disk
-    pub layers_downloaded: usize,
-    /// The number of layers in the most recently seen heatmap
-    pub layers_total: usize,
-
-    /// The number of layer bytes currently on-disk
-    pub bytes_downloaded: u64,
-    /// The number of layer bytes in the most recently seen heatmap
-    pub bytes_total: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1360,23 +1166,6 @@ impl Default for BranchSorting {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TopBranchesRequest {
-    // How would you like to sort the tenants?
-    pub order_by: BranchSorting,
-
-    // How many results?
-    pub limit: usize,
-
-    // Omit tenants with more than this many shards (e.g. if this is the max number of shards
-    // that the caller would ever split to)
-    pub where_shards_lt: Option<u8>,
-
-    // Omit tenants where the ordering metric is less than this (this is an optimization to
-    // let us quickly exclude numerous tiny shards)
-    pub where_gt: Option<u64>,
-}
-
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct TopBranchItem {
     pub id: BranchId,
@@ -1397,26 +1186,10 @@ pub struct TopBranchItem {
     pub max_logical_size_per_shard: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct TopBranchesResponse {
-    pub shards: Vec<TopBranchItem>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanDisposableKeysResponse {
     pub disposable_count: usize,
     pub not_disposable_count: usize,
-}
-
-// This is a cut-down version of BranchHistorySize from the pageserver crate, omitting fields
-// that require pageserver-internal types.  It is sufficient to get the total size.
-#[derive(Serialize, Deserialize, Debug)]
-pub struct BranchHistorySize {
-    pub id: BranchId,
-    /// Size is a mixture of WAL and logical size, so the unit is bytes.
-    ///
-    /// Will be none if `?inputs_only=true` was given.
-    pub size: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1508,20 +1281,6 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_unknown_field() {
-        let id = BranchId::generate();
-        let config_request = json!({
-            "branch_id": id.to_string(),
-            "unknown_field": "unknown_value".to_string(),
-        });
-        let err = serde_json::from_value::<BranchConfigRequest>(config_request).unwrap_err();
-        assert!(
-            err.to_string().contains("unknown field `unknown_field`"),
-            "expect unknown field `unknown_field` error, got: {err}"
-        );
-    }
-
-    #[test]
     fn tenantstatus_activating_serde() {
         let states = [BranchState::Activating(ActivatingFrom::Attaching)];
         let expected = "[{\"slug\":\"Activating\",\"data\":\"Attaching\"}]";
@@ -1608,25 +1367,20 @@ mod tests {
     }
 
     #[test]
-    fn test_tenant_config_patch_request_serde() {
-        let patch_request = BranchConfigPatchRequest {
-            branch_id: BranchId::from_str("17c6d121946a61e5ab0fe5a2fd4d8215").unwrap(),
-            config: BranchConfigPatch {
-                gc_horizon: FieldPatch::Remove,
-                pitr_interval: FieldPatch::Upsert("30 days".to_string()),
-                rel_size_v2_enabled: FieldPatch::Noop,
-                ..BranchConfigPatch::default()
-            },
+    fn test_branch_config_patch_serde_and_apply() {
+        let config = BranchConfigPatch {
+            gc_horizon: FieldPatch::Remove,
+            pitr_interval: FieldPatch::Upsert("30 days".to_string()),
+            rel_size_v2_enabled: FieldPatch::Noop,
+            ..BranchConfigPatch::default()
         };
 
-        let json = serde_json::to_string(&patch_request).unwrap();
-
-        let expected = r#"{"branch_id":"17c6d121946a61e5ab0fe5a2fd4d8215","gc_horizon":null,"pitr_interval":"30 days"}"#;
+        let json = serde_json::to_string(&config).unwrap();
+        let expected = r#"{"gc_horizon":null,"pitr_interval":"30 days"}"#;
         assert_eq!(json, expected);
 
-        let decoded: BranchConfigPatchRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.branch_id, patch_request.branch_id);
-        assert_eq!(decoded.config, patch_request.config);
+        let decoded: BranchConfigPatch = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, config);
 
         // Now apply the patch to a config to demonstrate semantics
         let base = BranchConfig {
@@ -1643,7 +1397,7 @@ mod tests {
             ..Default::default()
         };
 
-        let patched = base.apply_patch(decoded.config).unwrap();
+        let patched = base.apply_patch(decoded).unwrap();
         assert_eq!(patched, expected);
     }
 }

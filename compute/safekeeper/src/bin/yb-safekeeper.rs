@@ -2,7 +2,7 @@
 // Main entry point for the safekeeper executable
 //
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
@@ -88,9 +88,6 @@ struct Args {
     /// `safekeeper.toml`).
     #[arg(long)]
     init: bool,
-    /// Dump control file at path specified by this argument and exit.
-    #[arg(long)]
-    dump_control_file: Option<Utf8PathBuf>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -118,14 +115,6 @@ async fn main() -> anyhow::Result<()> {
             BACKGROUND_RUNTIME.handle().clone(),
         ),
     ]);
-
-    if let Some(addr) = args.dump_control_file {
-        anyhow::bail!(
-            "--dump-control-file is unsupported: local-FS control files were removed. \
-             Read the blob from remote storage at safekeeper-control/<branch_id> \
-             (input was {addr})"
-        );
-    }
 
     let workdir = args.datadir.canonicalize_utf8().with_context(|| {
         format!(
@@ -407,20 +396,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
         // wrap with task name for error reporting
         .map(|res| ("WAL service main".to_owned(), res));
     tasks_handles.push(Box::pin(wal_service_handle));
-
-    let global_timelines_ = global_timelines.clone();
-    let timeline_housekeeping_handle = current_thread_rt
-        .as_ref()
-        .unwrap_or_else(|| WAL_SERVICE_RUNTIME.handle())
-        .spawn(async move {
-            const TOMBSTONE_TTL: Duration = Duration::from_secs(3600 * 24);
-            loop {
-                tokio::time::sleep(TOMBSTONE_TTL).await;
-                global_timelines_.housekeeping(&TOMBSTONE_TTL);
-            }
-        })
-        .map(|res| ("Timeline map housekeeping".to_owned(), res));
-    tasks_handles.push(Box::pin(timeline_housekeeping_handle));
 
     // Spawn global disk usage watcher task, if a global disk usage limit is specified.
     let interval = conf.global_disk_check_interval;

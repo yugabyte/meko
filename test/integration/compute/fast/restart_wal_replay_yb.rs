@@ -79,12 +79,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let mut last_record_lsn = String::new();
     let ps_http = c.ps_http_port();
     while Instant::now() < deadline {
-        if let Some(br) = first_branch_id(&http, ps_http, branch).await {
-            if let Some(lsn) = last_record_lsn_of(&http, ps_http, &br).await {
-                if !lsn.is_empty() && lsn != "0/0" && lsn != ts_start_lsn {
-                    last_record_lsn = lsn;
-                    break;
-                }
+        if let Some(lsn) = last_record_lsn_of(&http, ps_http, branch).await {
+            if !lsn.is_empty() && lsn != "0/0" && lsn != ts_start_lsn {
+                last_record_lsn = lsn;
+                break;
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -128,13 +126,6 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     tee_println!("  pageserver log clean of corruption markers");
 
     Ok(())
-}
-
-/// First branch id from the PS `/v1/branch/<id>/timeline` list.
-async fn first_branch_id(http: &reqwest::Client, ps_http: u16, branch: &str) -> Option<String> {
-    let url = format!("http://127.0.0.1:{ps_http}/v1/branch/{branch}/timeline");
-    let v: serde_json::Value = http.get(&url).send().await.ok()?.json().await.ok()?;
-    v.get(0)?.get("branch_id")?.as_str().map(str::to_string)
 }
 
 /// `last_record_lsn` from the PS branch-detail endpoint.

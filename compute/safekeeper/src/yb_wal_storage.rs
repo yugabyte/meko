@@ -180,9 +180,8 @@ pub struct YbWalConn {
     /// rehydration ([`YbWalStorage::load_write_lsn`] /
     /// [`load_min_segno`]), the GC DELETE
     /// ([`YbWalStorage::remove_up_to`]), and the idempotent
-    /// control-file ops (`restore_new` SELECT, `persist` UPDATE,
-    /// `delete` DELETE, `list_all_branch_ids` SELECT). The non-idempotent
-    /// `create_new` INSERT runs on the FPU lane.
+    /// control-file ops (`restore_opt` SELECT, `persist` UPDATE). The
+    /// non-idempotent `create_new` INSERT runs on the FPU lane.
     pub system_client: Arc<YsqlClient>,
     /// Name of the YB table that backs the WAL mirror. Always
     /// [`WALS_TABLE`] (`safekeeper.wals`); the field stays so the SQL
@@ -241,7 +240,7 @@ impl YbWalConn {
         // `yb_enable_upsert_mode = true` — replayed same-offset chunk
         // INSERTs are idempotent by construction, so skipping YB's
         // read-before-write check is safe there. Reads and background
-        // writes (GC DELETE, control-file UPDATE/INSERT/DELETE) run
+        // writes (GC DELETE, control-file UPDATE/INSERT) run
         // without the GUC.
         // Three independent connections with lane-specific GUCs:
         // - FPU lane (`yb_enable_upsert_mode = true`): hot-path WAL
@@ -255,9 +254,9 @@ impl YbWalConn {
         //   downstream pageserver "relation already exists" panic.
         // - Read lane (no GUC): exclusively the segment reader.
         // - System lane (no GUC): startup SELECTs (`load_write_lsn` /
-        //   `load_min_segno` / `list_all_branch_ids`), the GC DELETE
-        //   (`remove_up_to`), and idempotent control-file ops
-        //   (`restore_new` SELECT, `persist` UPDATE, `delete` DELETE).
+        //   `load_min_segno`), the GC DELETE (`remove_up_to`), and
+        //   idempotent control-file ops (`restore_opt` SELECT,
+        //   `persist` UPDATE).
         let fpu_client = Arc::new(
             ysql_client::YsqlClient::from_yb_config(yb, "safekeeper:yb_wal_fpu", true)
                 .await
@@ -1117,10 +1116,6 @@ impl Storage for YbWalStorage {
             Ok(())
         }
         .boxed()
-    }
-
-    fn close(&mut self) {
-        self.inner.close();
     }
 
     fn get_metrics(&self) -> WalStorageMetrics {
@@ -2321,9 +2316,8 @@ async fn fetch_chunks_from_yb(
     Ok(out)
 }
 
-/// WAL storage used by the safekeeper. Kept as a type alias so existing
-/// `<WAL: wal_storage::Storage>` generics on `SafeKeeper` keep working
-/// after the local-FS variant was removed.
+/// WAL storage used by the safekeeper, named as a type alias so the
+/// `<WAL: wal_storage::Storage>` generics on `SafeKeeper` read uniformly.
 pub type WalStore = YbWalStorage;
 
 impl YbWalStorage {

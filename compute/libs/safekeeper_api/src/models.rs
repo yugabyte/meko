@@ -171,15 +171,3 @@ pub struct TimelineStatus {
     pub walsenders: Vec<WalSenderState>,
     pub walreceivers: Vec<WalReceiverState>,
 }
-
-#[derive(Clone, Copy, Serialize, Deserialize)]
-pub struct TimelineDeleteResult {
-    pub dir_existed: bool,
-}
-
-pub type TenantDeleteResult = std::collections::HashMap<String, TimelineDeleteResult>;
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SafekeeperUtilization {
-    pub timeline_count: u64,
-}

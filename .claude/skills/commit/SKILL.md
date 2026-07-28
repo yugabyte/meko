@@ -71,7 +71,7 @@ you must read the doc on the right and decide if it needs updating.
 | Code area (staged path matches) | Arch doc(s) to recheck |
 |---|---|
 | `compute/safekeeper/**`, `compute/libs/safekeeper_api/**`, `compute/libs/walproposer/**` | `compute/architecture/safekeeper.md`, `compute/architecture/safekeeper-lsns.md` |
-| `compute/pageserver/**` (excluding `compute/pageserver/pagebench/**`) | `compute/architecture/pageserver.md`, `compute/architecture/pageserver-lsns.md`, `compute/architecture/pageserver-gc.md` |
+| `compute/pageserver/**` | `compute/architecture/pageserver.md`, `compute/architecture/pageserver-lsns.md`, `compute/architecture/pageserver-gc.md` |
 | `controller/internal/registry/**`, `controller/internal/core/**` (generation authority + registries) | `controller/architecture/sc-integration.md` |
 | `compute/endpoint_storage/**` | `compute/architecture/remote-storage.md` (YbStore backend) |
 | `compute/libs/remote_storage/**` | `compute/architecture/remote-storage.md` |

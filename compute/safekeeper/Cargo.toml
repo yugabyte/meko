@@ -68,7 +68,6 @@ remote_storage.workspace = true
 ysql_client.workspace = true
 yb_tsclient.workspace = true
 safekeeper_api.workspace = true
-safekeeper_client.workspace = true
 sha2.workspace = true
 sd-notify.workspace = true
 tokio-stream.workspace = true

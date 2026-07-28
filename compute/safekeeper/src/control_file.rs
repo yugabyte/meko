@@ -3,12 +3,6 @@
 //! yb-amp persists the per-timeline `TimelinePersistentState` as a
 //! row in the YB table `safekeeper.timeline_state`, one BIGINT/INT
 //! column per scalar field.
-//!
-//! Prior history: upstream Neon used a local-FS blob, then yb-amp's
-//! Phase 2 reduction stored the same bincode blob in
-//! `GenericRemoteStorage` (the `YbStore` backend) at the key
-//! `safekeeper-control/<branch_id>`. Both representations are
-//! gone — see commit history and #10 for the migration.
 
 use std::future::Future;
 use std::ops::Deref;
@@ -60,22 +54,26 @@ const COLUMNS: &str = "timeline_start_lsn, local_start_lsn, remote_consistent_ls
                        pg_version, system_id, wal_seg_size, creation_ts";
 
 impl YbControlFileStorage {
-    /// Load the row for `branch_id`. Errors if no row exists — callers
-    /// distinguish "create new" from "load existing" via the
-    /// `create_new` constructor below.
-    pub async fn restore_new(
+    /// Load the row for `branch_id`, or `Ok(None)` if the branch has no
+    /// row yet. Absence is a normal outcome, not an error: on a fresh
+    /// branch the row is written by [`Self::create_new`] on the first
+    /// walproposer handshake, so startup has to tell "not created yet"
+    /// apart from a genuine read failure.
+    pub async fn restore_opt(
         client: Arc<YsqlClient>,
         branch_id: &BranchId,
-    ) -> Result<YbControlFileStorage> {
+    ) -> Result<Option<YbControlFileStorage>> {
         let sql = format!(
             "SELECT {COLUMNS} FROM safekeeper.timeline_state \
              WHERE branch_id = $1"
         );
-        let row = client
+        let Some(row) = client
             .query_opt(&sql, &[&branch_id.to_string()])
             .await
             .context("SELECT safekeeper.timeline_state")?
-            .with_context(|| format!("control file not found in YB for {branch_id}"))?;
+        else {
+            return Ok(None);
+        };
 
         let timeline_start_lsn = Lsn(row.try_get::<_, i64>(0)? as u64);
         let local_start_lsn = Lsn(row.try_get::<_, i64>(1)? as u64);
@@ -100,12 +98,12 @@ impl YbControlFileStorage {
             creation_ts,
         };
 
-        Ok(YbControlFileStorage {
+        Ok(Some(YbControlFileStorage {
             client,
             branch_id: *branch_id,
             state,
             last_persist_at: Instant::now(),
-        })
+        }))
     }
 
     /// Create + insert a fresh row.
@@ -122,38 +120,6 @@ impl YbControlFileStorage {
         };
         store.write_row(&state, /* insert= */ true).await?;
         Ok(store)
-    }
-
-    /// Enumerate every `branch_id` persisted in
-    /// `safekeeper.timeline_state`. Used by SK startup in YB-WAL mode
-    /// to re-discover branches after a restart — there's no on-disk
-    /// directory to scan and the controller doesn't re-issue
-    /// `POST /v1/branch` for existing branches.
-    pub async fn list_all_branch_ids(client: &YsqlClient) -> Result<Vec<BranchId>> {
-        let rows = client
-            .query("SELECT branch_id FROM safekeeper.timeline_state", &[])
-            .await
-            .context("SELECT safekeeper.timeline_state list")?;
-        let mut branch_ids = Vec::with_capacity(rows.len());
-        for row in rows {
-            let branch_id: String = row.try_get(0).context("read branch_id")?;
-            branch_ids.push(
-                branch_id
-                    .parse()
-                    .with_context(|| format!("parse branch_id {branch_id}"))?,
-            );
-        }
-        Ok(branch_ids)
-    }
-
-    /// Delete the row for `branch_id`. Used by the timeline-delete flow.
-    pub async fn delete(client: &YsqlClient, branch_id: &BranchId) -> Result<()> {
-        let sql = "DELETE FROM safekeeper.timeline_state WHERE branch_id = $1";
-        client
-            .execute(sql, &[&branch_id.to_string()])
-            .await
-            .context("DELETE safekeeper.timeline_state")?;
-        Ok(())
     }
 
     async fn write_row(&self, s: &TimelinePersistentState, insert: bool) -> Result<()> {

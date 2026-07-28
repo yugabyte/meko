@@ -10,7 +10,7 @@ use http_utils::endpoint::{
 use http_utils::error::ApiError;
 use http_utils::failpoints::failpoints_handler;
 use http_utils::json::{json_request, json_response};
-use http_utils::request::{ensure_no_body, parse_query_param, parse_request_param};
+use http_utils::request::{ensure_no_body, parse_request_param};
 use http_utils::{RequestExt, RouterBuilder};
 use hyper::{Body, Request, Response, StatusCode};
 use postgres_ffi::WAL_SEGMENT_SIZE;
@@ -22,13 +22,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::info_span;
 use utils::auth::SwappableJwtAuth;
 use utils::id::BranchId;
-use utils::lsn::Lsn;
 
-use crate::debug_dump::TimelineDigestRequest;
-use crate::disk_usage::{get_filesystem_capacity, get_filesystem_usage};
-use crate::timelines_global_map::DeleteOrExclude;
 use crate::{GlobalTimelines, SafeKeeperConf, debug_dump, patch_control_file};
-use serde_json::json;
 
 /// Healthcheck handler.
 async fn status_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
@@ -77,41 +72,6 @@ async fn timeline_create_handler(mut request: Request<Body>) -> Result<Response<
     json_response(StatusCode::OK, ())
 }
 
-async fn utilization_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-    let global_timelines = get_global_timelines(&request);
-    let utilization = global_timelines.get_timeline_counts();
-    json_response(StatusCode::OK, utilization)
-}
-
-/// Returns filesystem capacity and current utilization for the safekeeper data directory.
-async fn filesystem_usage_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-    let conf = get_conf(&request);
-    let path = conf.workdir.as_std_path();
-    let capacity = get_filesystem_capacity(path).map_err(ApiError::InternalServerError)?;
-    let usage = get_filesystem_usage(path);
-    let resp = json!({
-        "data_dir": path,
-        "capacity_bytes": capacity,
-        "usage_bytes": usage,
-    });
-    json_response(StatusCode::OK, resp)
-}
-
-/// List all (not deleted) timelines.
-/// Note: it is possible to do the same with debug_dump.
-async fn timeline_list_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-    let global_timelines = get_global_timelines(&request);
-    let res: Vec<BranchId> = global_timelines
-        .get_all()
-        .iter()
-        .map(|tli| tli.branch_id)
-        .collect();
-    json_response(StatusCode::OK, res)
-}
-
 /// Report info about timeline.
 async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
     let branch_id = parse_request_param(&request, "branch_id")?;
@@ -138,25 +98,6 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
         walreceivers: tli.get_walreceivers().get_all(),
     };
     json_response(StatusCode::OK, status)
-}
-
-/// Deactivates the timeline and removes its data directory.
-async fn timeline_delete_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let branch_id = parse_request_param(&request, "branch_id")?;
-    let only_local = parse_query_param(&request, "only_local")?.unwrap_or(false);
-    check_permission(&request, Some(branch_id))?;
-    ensure_no_body(&mut request).await?;
-    let global_timelines = get_global_timelines(&request);
-    let action = if only_local {
-        DeleteOrExclude::DeleteLocal
-    } else {
-        DeleteOrExclude::Delete
-    };
-    let resp = global_timelines
-        .delete_or_exclude(&branch_id, action)
-        .await
-        .map_err(ApiError::InternalServerError)?;
-    json_response(StatusCode::OK, resp)
 }
 
 async fn patch_control_file_handler(
@@ -195,52 +136,6 @@ async fn timeline_checkpoint_handler(request: Request<Body>) -> Result<Response<
     json_response(StatusCode::OK, ())
 }
 
-async fn timeline_digest_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let branch_id = parse_request_param(&request, "branch_id")?;
-    check_permission(&request, Some(branch_id))?;
-
-    let global_timelines = get_global_timelines(&request);
-    let from_lsn: Option<Lsn> = parse_query_param(&request, "from_lsn")?;
-    let until_lsn: Option<Lsn> = parse_query_param(&request, "until_lsn")?;
-
-    let request = TimelineDigestRequest {
-        from_lsn: from_lsn.ok_or(ApiError::BadRequest(anyhow::anyhow!(
-            "from_lsn is required"
-        )))?,
-        until_lsn: until_lsn.ok_or(ApiError::BadRequest(anyhow::anyhow!(
-            "until_lsn is required"
-        )))?,
-    };
-
-    let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
-    let tli = tli
-        .wal_residence_guard()
-        .await
-        .map_err(ApiError::InternalServerError)?;
-
-    let response = debug_dump::calculate_digest(&tli, request)
-        .await
-        .map_err(ApiError::InternalServerError)?;
-    json_response(StatusCode::OK, response)
-}
-
-/// Unevict timeline and remove uploaded partial segment(s) from the remote storage.
-/// Successfull response returns list of segments existed before the deletion.
-/// Aimed for one-off usage not normally needed.
-async fn timeline_backup_partial_reset(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    let branch_id = parse_request_param(&request, "branch_id")?;
-    check_permission(&request, Some(branch_id))?;
-
-    let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
-
-    let response = tli
-        .backup_partial_reset()
-        .await
-        .map_err(ApiError::InternalServerError)?;
-    json_response(StatusCode::OK, response)
-}
-
 fn parse_kv_str<E: fmt::Display, T: FromStr<Err = E>>(k: &str, v: &str) -> Result<T, ApiError> {
     v.parse()
         .map_err(|e| ApiError::BadRequest(anyhow::anyhow!("cannot parse {k}: {e}")))
@@ -254,8 +149,6 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
     let mut dump_all: Option<bool> = None;
     let mut dump_control_file: Option<bool> = None;
     let mut dump_memory: Option<bool> = None;
-    let mut dump_disk_content: Option<bool> = None;
-    let mut dump_wal_last_modified: Option<bool> = None;
     let mut branch_id: Option<BranchId> = None;
 
     let query = request.uri().query().unwrap_or("");
@@ -266,8 +159,6 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
             "dump_all" => dump_all = Some(parse_kv_str(&k, &v)?),
             "dump_control_file" => dump_control_file = Some(parse_kv_str(&k, &v)?),
             "dump_memory" => dump_memory = Some(parse_kv_str(&k, &v)?),
-            "dump_disk_content" => dump_disk_content = Some(parse_kv_str(&k, &v)?),
-            "dump_wal_last_modified" => dump_wal_last_modified = Some(parse_kv_str(&k, &v)?),
             "branch_id" => branch_id = Some(parse_kv_str(&k, &v)?),
             _ => Err(ApiError::BadRequest(anyhow::anyhow!(
                 "Unknown query parameter: {}",
@@ -279,8 +170,6 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
     let dump_all = dump_all.unwrap_or(false);
     let dump_control_file = dump_control_file.unwrap_or(dump_all);
     let dump_memory = dump_memory.unwrap_or(dump_all);
-    let dump_disk_content = dump_disk_content.unwrap_or(dump_all);
-    let dump_wal_last_modified = dump_wal_last_modified.unwrap_or(dump_all);
 
     let global_timelines = get_global_timelines(&request);
 
@@ -288,8 +177,6 @@ async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>
         dump_all,
         dump_control_file,
         dump_memory,
-        dump_disk_content,
-        dump_wal_last_modified,
         branch_id,
     };
 
@@ -392,30 +279,16 @@ pub fn make_router(
                 failpoints_handler(r, cancel).await
             })
         })
-        .get("/v1/utilization", |r| request_span(r, utilization_handler))
-        .get("/v1/debug/filesystem_usage", |r| {
-            request_span(r, filesystem_usage_handler)
-        })
         // Will be used in the future instead of implicit timeline creation
         .post("/v1/branch", |r| request_span(r, timeline_create_handler))
-        .get("/v1/branch", |r| request_span(r, timeline_list_handler))
         .get("/v1/branch/:branch_id", |r| {
             request_span(r, timeline_status_handler)
-        })
-        .delete("/v1/branch/:branch_id", |r| {
-            request_span(r, timeline_delete_handler)
         })
         .patch("/v1/branch/:branch_id/control_file", |r| {
             request_span(r, patch_control_file_handler)
         })
         .post("/v1/branch/:branch_id/checkpoint", |r| {
             request_span(r, timeline_checkpoint_handler)
-        })
-        .get("/v1/branch/:branch_id/digest", |r| {
-            request_span(r, timeline_digest_handler)
-        })
-        .post("/v1/branch/:branch_id/backup_partial_reset", |r| {
-            request_span(r, timeline_backup_partial_reset)
         })
         .get("/v1/debug_dump", |r| request_span(r, dump_debug_handler))
 }

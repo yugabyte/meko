@@ -1,9 +1,9 @@
 //! The safekeeper's on-disk configuration: `safekeeper.toml`, read once at
-//! startup. This mirrors `pageserver_api::config::ConfigToml` — neon_local
+//! startup. This mirrors `pageserver_api::config::ConfigToml` — the launcher
 //! writes the file into the safekeeper datadir and the process deserializes
 //! it. Only operational flags stay on the CLI (`-D`/`--datadir` to locate
-//! the file, `--init`, `--dump-control-file`); every real setting, including
-//! the node id, lives here.
+//! the file, and `--init`); every real setting, including the node id, lives
+//! here.
 //!
 //! All fields have defaults (`#[serde(default)]` + the `Default` impl below),
 //! so a partial `safekeeper.toml` is valid. Unknown keys are **rejected**

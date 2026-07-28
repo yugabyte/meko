@@ -77,9 +77,9 @@ Inbound page-service requests (libpq query string / gRPC metadata) are
 validated against the configured identity and rejected as misrouted on
 mismatch (`MISROUTED_PAGESTREAM_REQUESTS`).
 
-The management HTTP surface is small: status / metrics / profiling /
-utilization, the single branch's list + detail,
-`get_lsn_by_timestamp`, `get_timestamp_of_lsn`, `lsn_lease`, `do_gc`,
+The management HTTP surface is small: status / metrics / profiling,
+the single branch's detail, `get_lsn_by_timestamp`,
+`get_timestamp_of_lsn`, `lsn_lease`, `do_gc`,
 `flush` (`PUT /v1/branch/:branch_id/flush?lsn=` — waits for ingest to
 reach `lsn`, flushes pages to YB, then forces the durable
 `consistent_lsn` UPDATE through immediately, bypassing the per-`max_age`

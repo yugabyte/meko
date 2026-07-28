@@ -920,11 +920,16 @@ impl Collector for TimelineCollector {
     }
 }
 
+/// Per-timeline metrics are reported only for an *active* timeline (one doing
+/// useful work — see `Manager::set_broker_active`), so an idle branch doesn't
+/// keep publishing stale series.
 async fn collect_timeline_metrics(global_timelines: Arc<GlobalTimelines>) -> Vec<FullTimelineInfo> {
     let mut res = vec![];
-    let active_timelines = global_timelines.get_global_broker_active_set().get_all();
 
-    for tli in active_timelines {
+    for tli in global_timelines.get_all() {
+        if !tli.broker_active.load(std::sync::atomic::Ordering::Relaxed) {
+            continue;
+        }
         if let Some(info) = tli.info_for_metrics().await {
             res.push(info);
         }

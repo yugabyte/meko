@@ -134,7 +134,7 @@ All tiers publish results into **one report portal**.
 |---|---|---|
 | **Functional** | Small, deterministic, fast. Drives the control-plane API and SQL data path; asserts correctness. | project/branch/endpoint lifecycle; branch copy-on-write isolation; WAL replay after restart; GetPage correctness; extension sanity; DDL/DML round-trips; pg_regress against a live stack. |
 | **Stress** | Chaos + load + volume + soak. Kills components, partitions the network, degrades the backing store, drives sustained workloads, runs for hours. | pageserver/safekeeper/compute pod kills during load; controller crash mid-task; YB backing-store degradation; large-data ingest + compaction; many-branch fan-out; multi-hour soak with a nemesis loop. |
-| **Performance** | Latency / throughput / serverless-specific KPIs; compare to a baseline, flag regressions. | benchbase TPC-C tps + p50/p95; pgbench; pageserver GetPage latency (pagebench); **cold-start time** (endpoint create → first query); **branch-create time**; WAL ingest lag; LFC hit-rate. Historical trend across builds/branches. |
+| **Performance** | Latency / throughput / serverless-specific KPIs; compare to a baseline, flag regressions. | benchbase TPC-C tps + p50/p95; pgbench; pageserver GetPage latency; **cold-start time** (endpoint create → first query); **branch-create time**; WAL ingest lag; LFC hit-rate. Historical trend across builds/branches. |
 | **Long-running** | Hours-to-days duration. Either a single long soak, **or a detached environment that outlives the run** and is health-checked on a schedule. Reports continuously. | multi-day soak with huge data + a background nemesis loop; a persistent loaded environment left up for days while Jenkins re-invokes the framework hourly/daily to assert it's still healthy (no corruption, no leaks, data still consistent, WAL/GC/compaction still progressing). |
 
 ### Where tests run — three placement categories
@@ -781,8 +781,6 @@ Workload drivers (pluggable):
   client-pod image and a driver; reuse its warehouse configs and load/execute
   phases. This is the recommended perf load source.
 - **pgbench** — quick micro-latency / throughput.
-- **pagebench** — the in-repo Rust pageserver load generator, for storage-layer
-  perf.
 - **Custom SQL / data loaders** — a small **Go workload runner** for functional
   and stress data shapes (schema setup + data load, random ops, DDL churn),
   keeping the client side single-language and easy to extend. (The legacy Neon
@@ -1263,5 +1261,5 @@ persisted/shared across runs.
   oapi-codegen client), `deploy/up.sh` + Helm charts, `deploy/smoke-test.sh`,
   `controller/local/` `yb_amp_local`, `test/integration/`.
 - **Perf/benchbase:** yb-amp `benchmark/scripts/` (`tpcc-run.sh`, `_env.sh`,
-  `_metrics.sh`), `compute/pageserver/pagebench`.
+  `_metrics.sh`).
 - **Test taxonomy & quality dimensions:** YugabyteDB `coverage_process`.

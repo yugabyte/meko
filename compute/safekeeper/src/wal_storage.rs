@@ -49,13 +49,13 @@ pub trait Storage {
     /// Truncate WAL at specified LSN, which must be the end of WAL record.
     fn truncate_wal(&mut self, end_pos: Lsn) -> impl Future<Output = Result<()>> + Send;
 
-    /// Durably store WAL on disk, up to the last written WAL record.
+    /// Durably store WAL up to the last written WAL record.
     fn flush_wal(&mut self) -> impl Future<Output = Result<()>> + Send;
 
     /// Flush the consumer's queue, advancing the local inner watermark; the
     /// mode selects how far to go (see [`crate::yb_wal_storage::YbFlush`]).
-    /// Local-FS has no async durability, so the default delegates to the
-    /// synchronous [`Self::flush_wal`].
+    /// The default delegates to the synchronous [`Self::flush_wal`], for
+    /// bookkeeping that carries no async durability of its own.
     fn yb_flush(
         &mut self,
         mode: crate::yb_wal_storage::YbFlush,
@@ -65,8 +65,8 @@ pub trait Storage {
     }
 
     /// Watch receiver that fires as more WAL becomes durable in YugabyteDB,
-    /// so the acceptor can ack the moment durability advances. `None` for
-    /// local-FS (`flush_wal` is synchronous).
+    /// so the acceptor can ack the moment durability advances. `None` when
+    /// the implementation flushes synchronously and has nothing to watch.
     fn yb_durable_watch(
         &self,
     ) -> Option<tokio::sync::watch::Receiver<crate::yb_wal_storage::DurableState>> {
@@ -76,12 +76,6 @@ pub trait Storage {
     /// Remove all segments <= given segno. Returns function doing that as we
     /// want to perform it without timeline lock.
     fn remove_up_to(&self, segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>>;
-
-    /// Release resources associated with the storage -- technically, close FDs.
-    /// Currently we don't remove timelines until restart (#3146), so need to
-    /// spare descriptors. This would be useful for temporary tli detach as
-    /// well.
-    fn close(&mut self) {}
 
     /// Get metrics for this timeline.
     fn get_metrics(&self) -> WalStorageMetrics;
@@ -279,8 +273,6 @@ impl Storage for WalBookkeeping {
     fn remove_up_to(&self, _segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
         Box::pin(async move { Ok(()) })
     }
-
-    fn close(&mut self) {}
 
     fn get_metrics(&self) -> WalStorageMetrics {
         self.metrics.clone()

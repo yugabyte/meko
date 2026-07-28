@@ -1675,20 +1675,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hdrhistogram"
-version = "7.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "765c9198f173dd59ce26ff9f95ef0aafd0a0fe01fb9d72841bc5066a4c06511d"
-dependencies = [
- "base64 0.21.7",
- "byteorder",
- "crossbeam-channel",
- "flate2",
- "nom",
- "num-traits",
-]
-
-[[package]]
 name = "headers"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3071,38 +3057,6 @@ dependencies = [
  "elliptic-curve",
  "primeorder",
  "sha2 0.10.8",
-]
-
-[[package]]
-name = "pagebench"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "camino",
- "clap",
- "futures",
- "hdrhistogram",
- "humantime",
- "humantime-serde",
- "pageserver_api",
- "pageserver_client",
- "pageserver_client_grpc",
- "pageserver_page_api",
- "pprof",
- "rand 0.9.1",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tracing",
- "url",
- "utils",
- "workspace_hack",
 ]
 
 [[package]]
@@ -4580,7 +4534,6 @@ dependencies = [
  "reqwest",
  "rustls 0.23.29",
  "safekeeper_api",
- "safekeeper_client",
  "scopeguard",
  "sd-notify",
  "serde",
@@ -4625,19 +4578,6 @@ dependencies = [
  "tokio",
  "toml",
  "utils",
-]
-
-[[package]]
-name = "safekeeper_client"
-version = "0.1.0"
-dependencies = [
- "http-utils",
- "reqwest",
- "safekeeper_api",
- "serde",
- "thiserror 1.0.69",
- "utils",
- "workspace_hack",
 ]
 
 [[package]]

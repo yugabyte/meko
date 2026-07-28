@@ -364,44 +364,6 @@ impl MonotonicCounter<Lsn> for RecordLsn {
     }
 }
 
-/// Implements  [`rand::distr::uniform::UniformSampler`] so we can sample [`Lsn`]s.
-///
-/// This is used by the `pagebench` pageserver benchmarking tool.
-pub struct LsnSampler(<u64 as rand::distr::uniform::SampleUniform>::Sampler);
-
-impl rand::distr::uniform::SampleUniform for Lsn {
-    type Sampler = LsnSampler;
-}
-
-impl rand::distr::uniform::UniformSampler for LsnSampler {
-    type X = Lsn;
-
-    fn new<B1, B2>(low: B1, high: B2) -> Result<Self, rand::distr::uniform::Error>
-    where
-        B1: rand::distr::uniform::SampleBorrow<Self::X> + Sized,
-        B2: rand::distr::uniform::SampleBorrow<Self::X> + Sized,
-    {
-        <u64 as rand::distr::uniform::SampleUniform>::Sampler::new(low.borrow().0, high.borrow().0)
-            .map(Self)
-    }
-
-    fn new_inclusive<B1, B2>(low: B1, high: B2) -> Result<Self, rand::distr::uniform::Error>
-    where
-        B1: rand::distr::uniform::SampleBorrow<Self::X> + Sized,
-        B2: rand::distr::uniform::SampleBorrow<Self::X> + Sized,
-    {
-        <u64 as rand::distr::uniform::SampleUniform>::Sampler::new_inclusive(
-            low.borrow().0,
-            high.borrow().0,
-        )
-        .map(Self)
-    }
-
-    fn sample<R: rand::prelude::Rng + ?Sized>(&self, rng: &mut R) -> Self::X {
-        Lsn(self.0.sample(rng))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_assert::{Deserializer, Serializer, Token, Tokens};

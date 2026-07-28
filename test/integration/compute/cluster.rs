@@ -163,12 +163,6 @@ impl Cluster {
     pub fn sk_http_port(&self) -> u16 {
         self.port_base + 200
     }
-    /// The branch id of the shared `main` branch, as a hex string.
-    /// Public wrapper over the PS branch listing for scenarios that need
-    /// to address the branch directly (e.g. the gRPC page client).
-    pub async fn branch_id(&self) -> anyhow::Result<String> {
-        self.main_branch_id().await
-    }
     pub fn repo_dir(&self) -> &Path {
         &self.repo_dir
     }
@@ -857,25 +851,6 @@ impl Cluster {
             .status();
     }
 
-    /// Discover the branch id of the shared `main` branch from the
-    /// pageserver's branch listing.
-    async fn main_branch_id(&self) -> anyhow::Result<String> {
-        let url = format!(
-            "http://127.0.0.1:{}/v1/branch/{}/timeline",
-            self.ps_http_port(),
-            self.branch
-        );
-        let body: serde_json::Value = reqwest::get(&url).await?.json().await?;
-        body.as_array()
-            .and_then(|a| a.first())
-            .and_then(|t| t.get("branch_id"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                anyhow::anyhow!("no branch in pageserver listing for branch {}", self.branch)
-            })
-    }
-
     /// Before recycling, drive the pageserver to ingest + flush every WAL
     /// record the compute has produced, so its `consistent_lsn` reaches
     /// the tip. The post-recycle basebackup's `wait_lsn` then has ~no WAL
@@ -911,7 +886,7 @@ impl Cluster {
             "select pg_current_wal_flush_lsn()::text",
         )
         .await?;
-        let branch = self.main_branch_id().await?;
+        let branch = self.branch();
         // `flush?lsn=<tip>` waits for WAL ingest to reach `tip`, then
         // force_flushes — advancing `consistent_lsn` to the tip.
         let url = format!(

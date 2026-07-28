@@ -465,35 +465,38 @@ periodic flush ticks and the durability watch carry the acks.
 ## Timeline lifecycle
 
 `GlobalTimelines` (`compute/safekeeper/src/timelines_global_map.rs`) is the
-registry. Because one process serves one branch, it is a single
-`Option<(BranchId, slot)>` plus one tombstone slot — not a map. The external
-API keeps collection shapes (`get`, `get_all() -> Vec`, `timelines_count`)
-so call sites read uniformly.
+registry. One process serves one branch, so it holds a single `Option<slot>`.
+The slot carries no branch id: the identity is fixed by `conf.branch_id`, and
+one `is_ours` check rejects a request naming any other branch as not-found. The
+external API keeps collection shapes (`get`, `get_all() -> Vec`,
+`timelines_count`) so call sites read uniformly.
 
 - **Identity**: `branch_id` in `safekeeper.toml` bakes the process's single
   branch (`SafeKeeperConf::yb_branch_id()`, required whenever
   `yb_storage_conn` is set). It matters because `safekeeper.timeline_state`
   is shared by the whole cluster — without a baked identity the process
   could not tell its own branch from everyone else's. Consequences:
-  - `GlobalTimelines::init()` enumerates the table's branch ids and loads
-    **only** the baked branch's row (if it exists yet — a fresh bootstrap
-    creates it on demand), never the whole table.
+  - `GlobalTimelines::init()` does a single keyed load of **only** the baked
+    branch's row (if it exists yet — a fresh bootstrap creates it on demand).
+    It never enumerates the table: the branch id comes from the config, so
+    there is nothing to discover.
   - `SafekeeperPostgresHandler::process_query` rejects any replication-port
     connection whose `branch_id` differs from the baked identity before it
     can touch the registry, so a misrouted walproposer cannot create or
     mutate a foreign branch here.
 - **Creation**: either explicitly via `POST /v1/branch`, or implicitly by
   the first walproposer `START_WAL_PUSH` handshake
-  (`allow_timeline_creation`, default true). Creation writes the
-  `timeline_state` row (`create_new`, on the upsert lane) and loads the
-  timeline; the two-phase `CreationInProgress` marker in the registry keeps
-  concurrent creators out.
-- **Deletion** (`DELETE /v1/branch/:branch_id`): cancel + gate-close the
-  timeline, delete its (empty) local directory, and — unless `only_local` —
-  delete the `safekeeper.timeline_state` row in a background task. An
-  in-memory tombstone then blocks on-demand re-creation of the just-deleted
-  branch; tombstones expire after 24 h (`housekeeping`) and do not survive
-  restart.
+  (`allow_timeline_creation`, default true). Creation claims the slot with a
+  `CreationInProgress` marker, writes the `timeline_state` row (`create_new`,
+  on the upsert lane), then loads the timeline back from it. Claiming the slot
+  before the write keeps concurrent creators out; the marker is cleared on
+  every failure path.
+- **Teardown**: a branch's rows (`safekeeper.timeline_state`,
+  `safekeeper.wals`) are reclaimed by the deferred GC pass (#36), as are the
+  pageserver's. Tearing down a branch is therefore process teardown: the
+  launcher stops the safekeeper along with the endpoint it serves
+  (`deprovisionColocatedStorage`) and removes the data directory, which holds
+  only the config, log, and pidfile.
 - **Activity**: the per-timeline manager task
   (`compute/safekeeper/src/timeline_manager.rs`) recomputes `is_active`
   (live computes, or pageserver `remote_consistent_lsn` behind `flush_lsn`)
@@ -507,7 +510,8 @@ Startup rebuilds everything from YB; wiping the safekeeper's local directory
 loses nothing but logs.
 
 1. **Control file**: `SharedState::restore` loads the branch's
-   `timeline_state` row (`YbControlFileStorage::restore_new`).
+   `timeline_state` row (`YbControlFileStorage::restore_opt`, which returns
+   `None` when the branch has no row yet).
 2. **End-of-WAL rehydration** (`YbWalStorage::new`):
    - `load_write_lsn` reads the raw end of the byte stream with one
      **max-end probe per bucket** (metadata only, never `data`):
@@ -560,12 +564,12 @@ startup. The schema is `deny_unknown_fields`: a misspelled or stale key
 aborts startup instead of being silently ignored. The only CLI flags are:
 
 ```
-yb-safekeeper -D <datadir> [--init] [--dump-control-file <path>]
+yb-safekeeper -D <datadir> [--init]
 ```
 
-`--init` parses config, logs, and exits. `--dump-control-file` always exits
-with an error directing the operator to read the state from YB — there is no
-local control file to dump.
+`--init` parses config, logs, and exits. The control file is the branch's
+`safekeeper.timeline_state` row; read it from YB, or via
+`GET /v1/debug_dump?dump_control_file=true`.
 
 A representative `safekeeper.toml`:
 
@@ -612,9 +616,7 @@ What's on the local filesystem:
 <workdir>/
 ├── safekeeper.toml           (config, rewritten by the launcher on start)
 ├── safekeeper-N.log          (rolling log)
-├── safekeeper.pid            (running-process lock)
-├── tmp/                      (timeline-creation scratch)
-└── <branch_id>/              (empty — no control file, no segments)
+└── safekeeper.pid            (running-process lock)
 ```
 
 In the dev cluster the safekeeper is co-located under the endpoint that owns

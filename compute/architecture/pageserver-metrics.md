@@ -176,7 +176,6 @@ GC metrics live with the GC docs — see
 | `pageserver_current_logical_size` | UIntGaugeVec | `branch_id` | Current logical size. |
 | `pageserver_resident_physical_size` | UIntGaugeVec | `branch_id` | Bytes of layer files present on the local filesystem for attached locations. Typically 0 (no local layer files). |
 | `pageserver_resident_physical_size_global` | UIntGauge | — | Resident physical size, instance-wide. |
-| `pageserver_visible_physical_size` | UIntGaugeVec | `branch_id` | Bytes of layer files present on the local filesystem. |
 | `pageserver_pitr_history_size` | UIntGaugeVec | `branch_id` | Data written since the PITR cutoff on this branch. |
 | `pageserver_archive_size` | UIntGaugeVec | `branch_id` | Logical size if the branch is eligible for archival (outside the PITR window), else 0. |
 | `pageserver_standby_horizon` | IntGaugeVec | `branch_id` | Standby apply LSN for which GC is held off. |
@@ -228,7 +227,6 @@ GC metrics live with the GC docs — see
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `pageserver_live_connections_started` / `pageserver_live_connections_finished` | IntCounterPairVec | `pageserver_connection_kind` | Network connections started / finished. |
-| `pageserver_utilization_score` | UIntGauge | — | Utilization score reported to the controller for scheduling (0 empty, 1000000 full, above that overloaded). |
 | `pageserver_tokio_executor_thread_configured_count` | UIntGaugeVec | `setup` | Configured tokio executor threads. `setup` denotes single vs multiple runtimes. |
 | `pageserver_config_ignored_items` | UIntGaugeVec | `item` | On-disk config items ignored by the parser. Value is 1 per unknown item; the always-present `item=""` series is 0 so dashboards always have a series. |
 

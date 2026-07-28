@@ -389,10 +389,8 @@ pub(crate) enum CreateTimelineIdempotency {
     Bootstrap {
         pg_version: PgMajorVersion,
     },
-    /// NB: branches always have the same `pg_version` as their ancestor.
-    /// While [`pageserver_api::models::TimelineCreateRequestMode::Branch::pg_version`]
-    /// exists as a field, and is set by cplane, it has always been ignored by pageserver when
-    /// determining the child branch pg_version.
+    /// NB: branches always have the same `pg_version` as their ancestor, so
+    /// the child's pg_version is never taken from the branch request.
     Branch {
         ancestor_branch_id: BranchId,
         ancestor_start_lsn: Lsn,
@@ -1923,14 +1921,6 @@ impl PageServer {
         // still enforced by `TimelineCreateGuard::new` above.
 
         Ok(create_guard)
-    }
-
-    /// How much local disk space the timeline wants (initdb tarballs and
-    /// basebackup cache only in yb-amp — page data lives in YB).
-    pub(crate) fn local_storage_wanted(&self) -> u64 {
-        self.timeline()
-            .map(|t| t.metrics.visible_physical_size_gauge.get())
-            .unwrap_or(0)
     }
 }
 

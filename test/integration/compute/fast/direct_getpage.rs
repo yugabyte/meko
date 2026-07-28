@@ -124,7 +124,7 @@ async fn run_inner(c: &Cluster) -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     step("GetPage@LSN directly from the PS for every historical LSN; validate");
-    let branch_id = BranchId::from_str(&c.branch_id().await?).context("parse branch id")?;
+    let branch_id = BranchId::from_str(c.branch()).context("parse branch id")?;
     let url = format!("grpc://127.0.0.1:{}", c.ps_grpc_port());
     let client = PageserverClient::new(branch_id, url, None, None)
         .context("connect PS gRPC")?;

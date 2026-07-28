@@ -38,8 +38,8 @@ pub fn client_for_branch(c: &Cluster, branch_hex: &str) -> anyhow::Result<Pagese
 
 /// A gRPC `PageserverClient` for the cluster's main branch.
 pub async fn client(c: &Cluster) -> anyhow::Result<PageserverClient> {
-    let br = c.branch_id().await?;
-    client_for_branch(c, &br)
+    let br = c.branch();
+    client_for_branch(c, br)
 }
 
 /// Build a client for the pageserver behind a compute's

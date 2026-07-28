@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-use futures::channel::oneshot;
 use postgres_ffi::XLogSegNo;
 use safekeeper_api::models::PeerInfo;
 use serde::{Deserialize, Serialize};
@@ -28,7 +27,6 @@ use crate::send_wal::WalSenders;
 use crate::state::TimelineState;
 use crate::timeline::{ManagerTimeline, ReadGuardSharedState, StateSK, WalResidentTimeline};
 use crate::timeline_guard::{AccessService, GuardId, ResidenceGuard};
-use crate::timelines_set::{TimelineSetGuard, TimelinesSet};
 use crate::yb_wal_storage::YbWalConn;
 
 pub(crate) struct StateSnapshot {
@@ -80,8 +78,6 @@ pub enum ManagerCtlMessage {
     TryGuardRequest(tokio::sync::oneshot::Sender<Option<ResidenceGuard>>),
     /// Request to drop the guard.
     GuardDrop(GuardId),
-    /// Request to reset uploaded partial backup state.
-    BackupPartialReset(oneshot::Sender<anyhow::Result<Vec<String>>>),
 }
 
 impl std::fmt::Debug for ManagerCtlMessage {
@@ -90,7 +86,6 @@ impl std::fmt::Debug for ManagerCtlMessage {
             ManagerCtlMessage::GuardRequest(_) => write!(f, "GuardRequest"),
             ManagerCtlMessage::TryGuardRequest(_) => write!(f, "TryGuardRequest"),
             ManagerCtlMessage::GuardDrop(id) => write!(f, "GuardDrop({id:?})"),
-            ManagerCtlMessage::BackupPartialReset(_) => write!(f, "BackupPartialReset"),
         }
     }
 }
@@ -144,19 +139,6 @@ impl ManagerCtl {
             .map_err(|e| anyhow::anyhow!("response read fail: {:?}", e))
     }
 
-    /// Request timeline manager to reset uploaded partial segment state and
-    /// wait for the result.
-    pub async fn backup_partial_reset(&self) -> anyhow::Result<Vec<String>> {
-        let (tx, rx) = oneshot::channel();
-        self.manager_tx
-            .send(ManagerCtlMessage::BackupPartialReset(tx))
-            .expect("manager task is not running");
-        match rx.await {
-            Ok(res) => res,
-            Err(_) => anyhow::bail!("timeline manager is gone"),
-        }
-    }
-
     /// Must be called exactly once to bootstrap the manager.
     pub fn bootstrap_manager(
         &self,
@@ -187,7 +169,6 @@ pub(crate) struct Manager {
     // current state
     pub(crate) state_version_rx: tokio::sync::watch::Receiver<usize>,
     pub(crate) num_computes_rx: tokio::sync::watch::Receiver<usize>,
-    pub(crate) tli_broker_active: TimelineSetGuard,
     pub(crate) last_removed_segno: XLogSegNo,
 
     // background tasks
@@ -219,7 +200,6 @@ pub(crate) struct Manager {
 pub async fn main_task(
     tli: ManagerTimeline,
     conf: SafeKeeperConf,
-    broker_active_set: Arc<TimelinesSet>,
     manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
     mut manager_rx: tokio::sync::mpsc::UnboundedReceiver<ManagerCtlMessage>,
     yb_wal: Option<Arc<YbWalConn>>,
@@ -235,7 +215,7 @@ pub async fn main_task(
         }
     };
 
-    let mut mgr = Manager::new(tli, conf, broker_active_set, manager_tx, yb_wal).await;
+    let mut mgr = Manager::new(tli, conf, manager_tx, yb_wal).await;
 
     let _last_state = 'outer: loop {
         MANAGER_ITERATIONS_TOTAL.inc();
@@ -298,8 +278,8 @@ pub async fn main_task(
     };
     mgr.set_status(Status::Exiting);
 
-    // remove timeline from the broker active set sooner, before waiting for background tasks
-    mgr.tli_broker_active.set(false);
+    // mark the timeline inactive sooner, before waiting for background tasks
+    mgr.set_broker_active(false);
 
     if let Some(wal_removal_task) = &mut mgr.wal_removal_task {
         let res = wal_removal_task.await;
@@ -319,7 +299,6 @@ impl Manager {
     async fn new(
         tli: ManagerTimeline,
         conf: SafeKeeperConf,
-        broker_active_set: Arc<TimelinesSet>,
         manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
         yb_wal: Option<Arc<YbWalConn>>,
     ) -> Manager {
@@ -336,7 +315,6 @@ impl Manager {
             yb_wal,
             state_version_rx: tli.get_state_version_rx(),
             num_computes_rx: tli.get_walreceivers().get_num_rx(),
-            tli_broker_active: broker_active_set.guard(tli.clone()),
             last_removed_segno: 0,
             wal_removal_task: None,
             cfile_save_task: None,
@@ -403,8 +381,7 @@ impl Manager {
             || num_computes > 0
             || state.remote_consistent_lsn < state.flush_lsn;
 
-        // update the broker timeline set
-        if self.tli_broker_active.set(is_active) {
+        if self.set_broker_active(is_active) {
             // write log if state has changed
             info!(
                 "timeline active={} now, remote_consistent_lsn={}, flush_lsn={}",
@@ -413,11 +390,17 @@ impl Manager {
 
             MANAGER_ACTIVE_CHANGES.inc();
         }
+    }
 
-        // update the state in Arc<Timeline>
+    /// Set the timeline's activity flag, returning true if it changed. This is
+    /// the single record of "is this timeline doing useful work": it drives the
+    /// `safekeeper_active_timelines` gauge and which timelines report
+    /// per-timeline metrics.
+    fn set_broker_active(&self, active: bool) -> bool {
         self.tli
             .broker_active
-            .store(is_active, std::sync::atomic::Ordering::Relaxed);
+            .swap(active, std::sync::atomic::Ordering::Relaxed)
+            != active
     }
 
     /// Kick off the periodic control-file save if needed; sets `next_event`
@@ -598,12 +581,6 @@ impl Manager {
             }
             Some(ManagerCtlMessage::GuardDrop(guard_id)) => {
                 self.access_service.drop_guard(guard_id);
-            }
-            Some(ManagerCtlMessage::BackupPartialReset(tx)) => {
-                // Partial-backup S3 upload is gone in yb-amp; the
-                // reset operation is a no-op. Return an empty segment
-                // list so the HTTP route still returns a sensible 200.
-                let _ = tx.send(Ok(Vec::new()));
             }
             None => {
                 // can't happen, we're holding the sender

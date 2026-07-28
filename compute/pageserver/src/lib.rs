@@ -29,7 +29,6 @@ pub mod pgdatadir_mapping;
 pub mod span;
 pub mod task_mgr;
 pub mod unified_pages;
-pub mod utilization;
 pub mod virtual_file;
 pub mod walingest;
 pub mod walredo;

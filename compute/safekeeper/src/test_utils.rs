@@ -14,8 +14,7 @@ use crate::safekeeper::{
     SafeKeeper,
 };
 use crate::send_wal::EndWatch;
-use crate::timeline::{SharedState, StateSK, Timeline, get_timeline_dir};
-use crate::timelines_set::TimelinesSet;
+use crate::timeline::{SharedState, StateSK, Timeline};
 use crate::yb_wal_storage::YbWalConn;
 use crate::{SafeKeeperConf, control_file, receive_wal, yb_wal_storage};
 
@@ -56,8 +55,8 @@ impl Env {
     {
         let _ = branch_id;
         anyhow::bail!(
-            "test_utils::Env::make_safekeeper is unsupported in YB-only mode — \
-             the local-FS bench scaffolding has been removed"
+            "test_utils::Env::make_safekeeper is unsupported: a safekeeper \
+             needs a YB connection for its WAL and control file"
         )
     }
 
@@ -69,26 +68,14 @@ impl Env {
         start_lsn: Lsn,
     ) -> anyhow::Result<Arc<Timeline>> {
         let conf = Arc::new(self.make_conf());
-        let timeline_dir = get_timeline_dir(&conf, &branch_id);
 
         let safekeeper = self.make_safekeeper(branch_id, start_lsn).await?;
         let shared_state = SharedState::new(StateSK::Loaded(safekeeper));
 
         let yb_wal = YbWalConn::from_conf(&conf).await?;
 
-        let timeline = Timeline::new(
-            branch_id,
-            &timeline_dir,
-            shared_state,
-            conf.clone(),
-            yb_wal.clone(),
-        );
-        timeline.bootstrap(
-            &mut timeline.write_shared_state().await,
-            &conf,
-            Arc::new(TimelinesSet::default()), // ignored for now
-            yb_wal,
-        );
+        let timeline = Timeline::new(branch_id, shared_state, conf.clone(), yb_wal.clone());
+        timeline.bootstrap(&mut timeline.write_shared_state().await, &conf, yb_wal);
         Ok(timeline)
     }
 

@@ -29,7 +29,6 @@ pub mod state;
 pub mod timeline;
 pub mod timeline_guard;
 pub mod timeline_manager;
-pub mod timelines_set;
 pub mod wal_cache;
 pub mod wal_reader_stream;
 pub mod wal_service;
@@ -77,10 +76,9 @@ pub struct SafeKeeperConf {
     pub listen_https_addr: Option<String>,
     pub advertise_pg_addr: Option<String>,
     pub heartbeat_timeout: Duration,
-    /// Optional YB connection for mirroring live WAL writes. When `Some`,
-    /// every `write_wal` is INSERT'd into the (hardcoded) `safekeeper.wals`
-    /// table in addition to being written to the local-FS shadow. When
-    /// `None`, WAL only lives on local FS (default).
+    /// YB connection carrying live WAL writes: every `write_wal` is
+    /// INSERT'd into the (hardcoded) `safekeeper.wals` table, which is where
+    /// WAL durability comes from. Required in YB-WAL mode.
     pub yb_storage_conn: Option<ysql_client::YbConnConfig>,
     /// The single branch this process serves for its lifetime. Set from
     /// `--branch-id`; required in YB-WAL mode (see [`Self::yb_branch_id`]).

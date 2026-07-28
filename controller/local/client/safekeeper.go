@@ -7,8 +7,8 @@ import (
 )
 
 // Safekeeper is the launcher's client for a safekeeper's management HTTP API.
-// Base URL is http://<listen_addr>:<http_port>. It ports the subset of
-// safekeeper_client::mgmt_api used by control_plane/src/safekeeper.rs.
+// Base URL is http://<listen_addr>:<http_port>. It covers the subset of that
+// API the launcher needs: liveness, branch create, and branch status.
 type Safekeeper struct {
 	t transport
 }

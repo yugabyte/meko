@@ -3,7 +3,6 @@
 //!
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use http_utils::endpoint::{
@@ -44,7 +43,6 @@ pub struct State {
     allowlist_routes: &'static [&'static str],
     #[allow(dead_code)]
     remote_storage: GenericRemoteStorage,
-    latest_utilization: tokio::sync::Mutex<Option<(std::time::Instant, bytes::Bytes)>>,
 }
 
 impl State {
@@ -68,7 +66,6 @@ impl State {
             auth,
             allowlist_routes,
             remote_storage,
-            latest_utilization: Default::default(),
         })
     }
 }
@@ -292,52 +289,6 @@ async fn reload_auth_validation_keys_handler(
             )
         }
     }
-}
-
-async fn timeline_list_handler(
-    request: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    let branch_id: BranchId = parse_request_param(&request, "branch_id")?;
-    let include_non_incremental_logical_size: Option<bool> =
-        parse_query_param(&request, "include-non-incremental-logical-size")?;
-    let force_await_initial_logical_size: Option<bool> =
-        parse_query_param(&request, "force-await-initial-logical-size")?;
-    let include_image_consistent_lsn: Option<bool> =
-        parse_query_param(&request, "include-image-consistent-lsn")?;
-    check_permission(&request, Some(branch_id))?;
-
-    let state = get_state(&request);
-    let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
-
-    let response_data = async {
-        let tenant = state.tenant_manager.get_attached_tenant_shard(branch_id)?;
-
-        let timelines = tenant.list_timelines();
-
-        let mut response_data = Vec::with_capacity(timelines.len());
-        for timeline in timelines {
-            let timeline_info = build_timeline_info(
-                &timeline,
-                include_non_incremental_logical_size.unwrap_or(false),
-                force_await_initial_logical_size.unwrap_or(false),
-                include_image_consistent_lsn.unwrap_or(false),
-                &ctx,
-            )
-            .instrument(info_span!("build_timeline_info", branch_id = %timeline.branch_id))
-            .await
-            .context("Failed to build timeline info")
-            .map_err(ApiError::InternalServerError)?;
-
-            response_data.push(timeline_info);
-        }
-        Ok::<Vec<TimelineInfo>, ApiError>(response_data)
-    }
-    .instrument(info_span!("timeline_list",
-                branch_id = %branch_id))
-    .await?;
-
-    json_response(StatusCode::OK, response_data)
 }
 
 async fn timeline_detail_handler(
@@ -656,59 +607,6 @@ async fn post_tracing_event_handler(
     json_response(StatusCode::OK, ())
 }
 
-/// Polled by control plane.
-///
-/// See [`crate::utilization`].
-async fn get_utilization(
-    r: Request<Body>,
-    _cancel: CancellationToken,
-) -> Result<Response<Body>, ApiError> {
-    fail::fail_point!("get-utilization-http-handler", |_| {
-        Err(ApiError::ResourceUnavailable("failpoint".into()))
-    });
-
-    // this probably could be completely public, but lets make that change later.
-    check_permission(&r, None)?;
-
-    let state = get_state(&r);
-    let mut g = state.latest_utilization.lock().await;
-
-    let regenerate_every = Duration::from_secs(1);
-    let still_valid = g
-        .as_ref()
-        .is_some_and(|(captured_at, _)| captured_at.elapsed() < regenerate_every);
-
-    // avoid needless statvfs calls even though those should be non-blocking fast.
-    // regenerate at most 1Hz to allow polling at any rate.
-    if !still_valid {
-        let path = state.conf.branches_path();
-        let doc =
-            crate::utilization::regenerate(state.conf, path.as_std_path(), &state.tenant_manager)
-                .map_err(ApiError::InternalServerError)?;
-
-        let mut buf = Vec::new();
-        serde_json::to_writer(&mut buf, &doc)
-            .context("serialize")
-            .map_err(ApiError::InternalServerError)?;
-
-        let body = bytes::Bytes::from(buf);
-
-        *g = Some((std::time::Instant::now(), body));
-    }
-
-    // hyper 0.14 doesn't yet have Response::clone so this is a bit of extra legwork
-    let cached = g.as_ref().expect("just set").1.clone();
-
-    Response::builder()
-        .header(hyper::http::header::CONTENT_TYPE, "application/json")
-        // thought of using http date header, but that is second precision which does not give any
-        // debugging aid
-        .status(StatusCode::OK)
-        .body(hyper::Body::from(cached))
-        .context("build response")
-        .map_err(ApiError::InternalServerError)
-}
-
 /// Common functionality of all the HTTP API handlers.
 ///
 /// - Adds a tracing span to each request (by `request_span`)
@@ -871,9 +769,6 @@ pub fn make_router(
         .post("/v1/reload_auth_validation_keys", |r| {
             api_handler(r, reload_auth_validation_keys_handler)
         })
-        .get("/v1/branch/:branch_id/timeline", |r| {
-            api_handler(r, timeline_list_handler)
-        })
         .get("/v1/branch/:branch_id", |r| {
             api_handler(r, timeline_detail_handler)
         })
@@ -901,6 +796,5 @@ pub fn make_router(
         .post("/v1/tracing/event", |r| {
             testing_api_handler("emit a tracing event", r, post_tracing_event_handler)
         })
-        .get("/v1/utilization", |r| api_handler(r, get_utilization))
         .any(handler_404))
 }

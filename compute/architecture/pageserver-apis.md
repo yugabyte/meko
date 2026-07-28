@@ -66,8 +66,7 @@ Routes exempt from auth even when JWT is enabled
 | GET | `/v1/status` | Health check. Returns an empty `{}` (`StatusResponse`). Instance-wide scope. |
 | GET | `/metrics` | Prometheus text exposition (`prometheus_metrics_handler`). Honors `force_metric_collection_on_scrape`. See [`pageserver-metrics.md`](pageserver-metrics.md). |
 | GET | `/v1/doc` | Swagger UI HTML for the embedded OpenAPI spec. |
-| GET | `/swagger.yml` | Raw OpenAPI spec (`openapi_spec.yml`, embedded at compile time). |
-| GET | `/v1/utilization` | Node utilization document polled by the control plane (`crate::utilization::regenerate`). Cached and regenerated at most ~1 Hz (`latest_utilization`). Returns `application/json`. Instance-wide scope; has a `get-utilization-http-handler` failpoint. |
+| GET | `/swagger.yml` | Raw OpenAPI spec (`openapi_spec.yml`, embedded at compile time). **Not authoritative** — `make_router()` is the source of truth for the route set; the spec still lists paths the router does not serve. |
 
 ### Profiling / debug
 
@@ -98,7 +97,6 @@ resolves; any other id returns `404` (`GetTenantError::NotFound`).
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| GET | `/v1/branch/:branch_id/timeline` | List timelines for the branch as `TimelineInfo[]` (`timeline_list_handler`). Always a one-element list in practice. |
 | GET | `/v1/branch/:branch_id` | Detail for the branch as a single `TimelineInfo` (`timeline_detail_handler`). |
 | GET | `/v1/branch/:branch_id/get_lsn_by_timestamp` | Find the LSN for a timestamp (`get_lsn_by_timestamp_handler`). |
 | GET | `/v1/branch/:branch_id/get_timestamp_of_lsn` | Find the timestamp for an LSN (`get_timestamp_of_lsn_handler`). |

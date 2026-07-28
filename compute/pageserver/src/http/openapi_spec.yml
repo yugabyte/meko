@@ -501,85 +501,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/SecondaryProgress"
 
-  /v1/branch/{branch_id}/timeline:
-    parameters:
-      - name: branch_id
-        in: path
-        required: true
-        schema:
-          type: string
-    post:
-      description: |
-        Create a timeline. Returns new timeline id on success.
-        Recreating the same timeline will succeed if the parameters match the existing timeline.
-        If no pg_version is specified, assume DEFAULT_PG_VERSION hardcoded in the pageserver.
-
-        To ensure durability, the caller must retry the creation until success.
-        Just because the timeline is visible via other endpoints does not mean it is durable.
-        Future versions may stop showing timelines that are not yet durable.
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - new_branch_id
-              properties:
-                new_branch_id:
-                  type: string
-                  format: hex
-                ancestor_branch_id:
-                  type: string
-                  format: hex
-                ancestor_start_lsn:
-                  type: string
-                  format: hex
-                pg_version:
-                  type: integer
-                read_only:
-                  type: boolean
-                existing_initdb_branch_id:
-                  type: string
-                  format: hex
-                import_pgdata:
-                  $ref: "#/components/schemas/TimelineCreateRequestImportPgdata"
-      responses:
-        "201":
-          description: Timeline was created, or already existed with matching parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TimelineInfo"
-        "406":
-          description: Permanently unsatisfiable request, don't retry.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "409":
-          description: Timeline already exists, with different parameters.  Creation cannot proceed.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ConflictError"
-        "429":
-          description: A creation request was sent for the same Timeline Id while a creation was already in progress.  Back off and retry.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-    get:
-      description: Get branch info
-      responses:
-        "200":
-          description: TimelineInfo
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/TimelineInfo"
-
   /v1/branch/{branch_id}/detach_ancestor:
     parameters:
       - name: branch_id
@@ -787,19 +708,6 @@ paths:
       responses:
         "200":
           description: Success
-
-  /v1/utilization:
-    get:
-      description: |
-        Returns the pageservers current utilization and fitness score for new branches.
-
-      responses:
-        "200":
-            description: Pageserver utilization and fitness score
-            content:
-              application/json:
-                schema:
-                  $ref: "#/components/schemas/PageserverUtilization"
 
 components:
   securitySchemes:
