@@ -235,6 +235,107 @@ CREATE TABLE pageserver.timeline_state (
   yb-amp; the ancestry chain is derived from `ancestor_branch_id` /
   `ancestor_lsn`, never from this column.
 
+### Payload compression
+
+The `payload` column of `pages`, `slru_pages` and `meta` is stored
+compressed. The Rust layer owns this end to end — YSQL sees an opaque
+`BYTEA`.
+
+**Why here and not in YB.** YB stores values inline in DocDB rather
+than through TOAST, so a `BYTEA` the pageserver binds is what DocDB
+stores verbatim: nothing compresses it on the way in. Compressing
+before the bind shrinks the Raft log, the Raft replication RPCs (×RF),
+the memtable, and the byte volume every flush and compaction has to
+move. DocDB's own SST block compression only covers the last of those,
+and only *after* the bytes have already been through Raft — so the
+savings are largely not additive with it, and the win is concentrated
+on the write and replication path rather than on final SST size.
+
+8 KiB Postgres pages compress unusually well for their size: the zeroed
+free-space hole between `pd_lower`/`pd_upper`, the aligned line-pointer
+array, and tuple padding are all trivially compressible.
+
+**Envelope** (`utils::payload_codec`,
+`compute/libs/utils/src/payload_codec.rs`):
+
+```text
+byte 0    : codec tag  (0x00 = raw, 0x01 = LZ4, 0x02+ reserved)
+bytes 1.. : codec-defined body
+            raw → payload verbatim
+            LZ4 → 4-byte LE uncompressed size, then an LZ4 block
+```
+
+Overhead is 1 byte raw, 5 bytes compressed. The envelope is
+deliberately self-describing rather than deriving the decompressed
+length from out-of-band state: `pages` images are `BLCKSZ` today, for
+instance, but coupling the storage format to that would make a schema
+invariant load-bearing for decode correctness. An unrecognised tag is a
+hard error — a build that misread a future codec's body as page
+contents would surface as walredo corruption far from the cause.
+
+Two rows never pay for compression that cannot help: payloads under
+`MIN_COMPRESS_BYTES` (256) and payloads that fail to shrink are stored
+raw. That is what keeps the delta path free — a
+`ClearVisibilityMapFlags` record is one byte — while the 8 KiB image
+path keeps the whole benefit.
+
+**Writes are configured; reads are universal.** `yb_payload_compression`
+in `pageserver.toml` (`none` | `lz4`, default `lz4`) selects only what
+new rows are written with. The read path decodes whatever tag each row
+carries, unconditionally. So:
+
+- Restarting with a different setting needs no migration and no
+  dual-write window: new rows land in the new format, existing rows stay
+  readable, and a single page's delta chain may freely mix codecs.
+- Setting `none` is write-side only. It never rewrites or decompresses
+  what is already stored.
+- A binary without decode support cannot read `lz4` rows, so decode
+  capability and the `lz4` default ship together.
+
+**The boundary.** Compression lives strictly inside `page_store.rs`'s
+bind/decode edge. `PageRow`/`SlruPageRow`/`MetaRow` payloads are
+plaintext everywhere else, which is why nothing upstream needed to
+change: `PageWriter`'s delta tallies, the materialiser's chain-byte
+accounting (`image_chain_payload_bytes_limit` and friends therefore
+still count *logical* bytes), walredo, and GC's payload comparison all
+keep working on decoded bytes. Keep it that way — an encoded payload
+escaping above this boundary would silently reinterpret page bytes as
+record bytes.
+
+- Encode: one call at the top of each `put_pages` / `put_slru_pages` /
+  `put_meta`, ahead of the YSQL/thin-RPC lane split, so both lanes bind
+  identical bytes.
+- Decode: `decode_payload`, reached from `row_to_page` /
+  `row_to_slru_page` / `row_to_meta` (YSQL) and `assemble_page_chain` /
+  `assemble_slru_chain` / `decode_meta_row` (thin-RPC). The two scan
+  assemblers delegate to the chain assemblers.
+
+Because the flush-size thresholds (`flush_size_bytes`,
+`backpressure_bytes`) are measured on the plaintext buffer, a batch's
+actual wire footprint is now smaller than the threshold implies; the
+`pageserver_yb_payload_*` metrics below are the input for re-tuning
+them.
+
+**Metrics.** `pageserver_yb_payload_logical_bytes_total{table}` divided
+by `pageserver_yb_payload_stored_bytes_total{table}` is the realized
+compression ratio (measured, not assumed) — and it is worth measuring:
+it moves with payload-size mix, not with the codec. A delta-heavy
+workload burying most of its bytes in sub-`MIN_COMPRESS_BYTES` records
+lands near 1.2x, while one with half its rows above the threshold
+reaches ~1.9x.
+`pageserver_yb_payload_rows_total{table,outcome}` breaks rows down by
+`lz4` / `raw_configured` / `raw_too_small` / `raw_incompressible`. A
+high `raw_incompressible` share on the image path means the data is
+already compressed upstream (e.g. Postgres `wal_compression`) and the
+CPU is being spent for nothing.
+
+**Inspection.** `yb-dump-pages` decodes client-side and reports the
+codec tag, stored length, decoded length, and a hex head of the decoded
+payload; a row it cannot decode is printed as `<undecodable: …>` rather
+than aborting the dump. Server-side `octet_length(payload)` or
+`substring(payload, …)` in ad-hoc SQL now measures *stored* bytes and
+slices *envelope* bytes — decode in the client instead.
+
 ## Read path: image-anchored chain reads
 
 `Timeline::get_vectored_impl` queries the row store via `PageWriter`
@@ -911,9 +1012,11 @@ the global `scale_factor` (explicitly-set values are used verbatim):
 | `ingest_parallelism` | 4 | Workers for `put_serialized` batch apply; `1` = serial. Same key always lands on one worker |
 | `ingest_parallelism_min_batch` | 256 | Minimum batch size before the parallel apply engages; `1` forces it (tests) |
 
-Other relevant settings: `scale_factor` (global multiplier for pool
-sizes, worker counts, and the budgets above; 1.0 default, 0.25 fits a
-small dev box), `wait_lsn_timeout` (300 s), `wal_redo_timeout` (60 s),
+Other relevant settings: `yb_payload_compression` (`none` | `lz4`,
+default `lz4` — the codec for the `BYTEA` payload columns; write-side
+only, see "Payload compression"), `scale_factor` (global multiplier for
+pool sizes, worker counts, and the budgets above; 1.0 default, 0.25 fits
+a small dev box), `wait_lsn_timeout` (300 s), `wal_redo_timeout` (60 s),
 `safekeeper_pg_addr`, `listen_pg_addr` / `listen_http_addr` /
 `listen_https_addr` / `listen_grpc_addr`, `http_auth_type` /
 `pg_auth_type` / `grpc_auth_type`, and the `hot_path` /
@@ -990,6 +1093,8 @@ The compute opens libpq connections to the pageserver per backend
   config load, listeners, the two PageStore pools, synchronous open.
 - `compute/libs/pageserver_api/src/config.rs` — `ConfigToml`,
   `YbPageWriterConfig`, `TimelineInitConfig`, `scale_factor` helpers.
+- `compute/libs/utils/src/payload_codec.rs` — the tagged compression
+  envelope for the `BYTEA` payload columns (see "Payload compression").
 - `controller/migrations/0002_compute_storage.up.sql` — the
   authoritative DDL for the `pageserver.*` tables.
 - [`pageserver-apis.md`](pageserver-apis.md) — HTTP/gRPC/libpq

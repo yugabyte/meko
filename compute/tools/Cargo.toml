@@ -22,6 +22,7 @@ path = "src/bin/yb-reset-consistent-lsn.rs"
 
 [dependencies]
 anyhow.workspace = true
+bytes.workspace = true
 clap = { workspace = true, features = ["string"] }
 postgres_ffi.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }

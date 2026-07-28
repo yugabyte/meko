@@ -26,7 +26,7 @@ use utils::id::BranchId;
 use utils::logging::LogFormat;
 use utils::lsn::Lsn;
 
-use crate::models::{ImageCompressionAlgorithm, LsnLease};
+use crate::models::{ImageCompressionAlgorithm, LsnLease, PayloadCompression};
 
 /// Default value for the `scale_factor` config knob. 1.0 means "leave
 /// every scale-derived default at its historical value".
@@ -34,6 +34,10 @@ pub const DEFAULT_SCALE_FACTOR: f64 = 1.0;
 
 fn default_scale_factor() -> f64 {
     DEFAULT_SCALE_FACTOR
+}
+
+fn default_yb_payload_compression() -> PayloadCompression {
+    defaults::DEFAULT_YB_PAYLOAD_COMPRESSION
 }
 
 /// Multiply a count-like base default by `scale_factor`, rounded and
@@ -280,6 +284,15 @@ pub struct ConfigToml {
     /// `yb-pageserver`.
     #[serde(default)]
     pub yb_page_writer: YbPageWriterConfigToml,
+
+    /// Codec the yb-pageserver compresses `BYTEA` payload columns with
+    /// (`pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`).
+    /// Write-side only: the read path decodes whatever tag each row carries,
+    /// so changing this and restarting needs no migration — new rows use the
+    /// new codec, old rows stay readable. Default `lz4`; `none` disables
+    /// compression for subsequent writes without touching stored rows.
+    #[serde(default = "default_yb_payload_compression")]
+    pub yb_payload_compression: PayloadCompression,
 
     /// Global multiplier applied to scale-derived defaults across the
     /// pageserver: YSQL connection pool sizes, tokio worker threads,
@@ -810,7 +823,7 @@ impl MaxGetVectoredKeys {
 }
 
 pub mod defaults {
-    use crate::models::ImageCompressionAlgorithm;
+    use crate::models::{ImageCompressionAlgorithm, PayloadCompression};
 
     pub const DEFAULT_WAIT_LSN_TIMEOUT: &str = "300 s";
     pub const DEFAULT_WAL_REDO_TIMEOUT: &str = "60 s";
@@ -841,6 +854,11 @@ pub mod defaults {
 
     pub const DEFAULT_IMAGE_COMPRESSION: ImageCompressionAlgorithm =
         ImageCompressionAlgorithm::Zstd { level: Some(1) };
+
+    /// LZ4 by default: ~2-4x on 8 KiB Postgres pages for a few microseconds
+    /// of CPU, and decompression fast enough (GB/s) to be noise against the
+    /// DocDB round trip on the `getpage@lsn` read path.
+    pub const DEFAULT_YB_PAYLOAD_COMPRESSION: PayloadCompression = PayloadCompression::Lz4;
 
     pub const DEFAULT_EPHEMERAL_BYTES_PER_MEMORY_KB: usize = 0;
 
@@ -959,6 +977,7 @@ impl Default for ConfigToml {
             force_metric_collection_on_scrape: true,
             s3_upload_limit_bytes: 4_500_000_000,
             yb_page_writer: YbPageWriterConfigToml::default(),
+            yb_payload_compression: DEFAULT_YB_PAYLOAD_COMPRESSION,
             scale_factor: DEFAULT_SCALE_FACTOR,
         }
     }

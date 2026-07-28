@@ -58,6 +58,9 @@ pub mod serde_system_time;
 
 pub mod pageserver_feedback;
 
+// Tagged compression envelope for the BYTEA payload columns stored in YB.
+pub mod payload_codec;
+
 pub mod postgres_client;
 
 pub mod tracing_span_assert;

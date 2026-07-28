@@ -758,6 +758,52 @@ impl Display for ImageCompressionAlgorithm {
     }
 }
 
+/// Codec the yb-pageserver compresses `BYTEA` payload columns with before
+/// binding them — `pageserver.pages.payload`, `pageserver.slru_pages.payload`
+/// and `pageserver.meta.payload`.
+///
+/// This is a **write-side** selection only. The read path decodes every
+/// variant unconditionally (each stored value carries its own codec tag; see
+/// [`utils::payload_codec`]), so restarting with a different setting simply
+/// means newer rows land in the newer format while existing rows stay
+/// readable — including within a single page's delta chain. Nothing is
+/// rewritten, and there is no migration.
+///
+/// Distinct from [`ImageCompressionAlgorithm`], which governs blob
+/// compression inside on-disk image *layer files* and has no effect on the
+/// YB row payloads.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde_with::DeserializeFromStr, serde_with::SerializeDisplay,
+)]
+pub enum PayloadCompression {
+    /// Store payloads uncompressed (still tag-wrapped, so they remain
+    /// distinguishable from compressed rows on read).
+    None,
+    /// Compress with LZ4. Skipped per-row for payloads under
+    /// `utils::payload_codec::MIN_COMPRESS_BYTES` or that fail to shrink.
+    Lz4,
+}
+
+impl FromStr for PayloadCompression {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "none" => Ok(PayloadCompression::None),
+            "lz4" => Ok(PayloadCompression::Lz4),
+            other => anyhow::bail!("invalid payload compression '{other}' (expected none | lz4)"),
+        }
+    }
+}
+
+impl Display for PayloadCompression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PayloadCompression::None => write!(f, "none"),
+            PayloadCompression::Lz4 => write!(f, "lz4"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub enum L0FlushConfig {
@@ -1364,6 +1410,38 @@ mod tests {
                 "Display is the serde serialization"
             );
         }
+    }
+
+    #[test]
+    fn test_payload_compression_parsing() {
+        use PayloadCompression::*;
+        for (display, expected) in [("none", None), ("lz4", Lz4)] {
+            assert_eq!(
+                PayloadCompression::from_str(display).unwrap(),
+                expected,
+                "parsing works"
+            );
+            assert_eq!(format!("{expected}"), display, "Display FromStr roundtrip");
+
+            let ser = serde_json::to_string(&expected).expect("serialization");
+            assert_eq!(
+                serde_json::from_str::<PayloadCompression>(&ser).unwrap(),
+                expected,
+                "serde roundtrip"
+            );
+            assert_eq!(
+                serde_json::Value::String(display.to_string()),
+                serde_json::to_value(expected).unwrap(),
+                "Display is the serde serialization"
+            );
+        }
+
+        // Unknown settings must fail loudly at config load rather than
+        // silently degrading to a default: an operator who typos `lz4` wants
+        // a startup error, not uncompressed writes.
+        assert!(PayloadCompression::from_str("zstd").is_err());
+        assert!(PayloadCompression::from_str("LZ4").is_err());
+        assert!(PayloadCompression::from_str("").is_err());
     }
 
     #[test]

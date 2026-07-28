@@ -18,7 +18,7 @@ use pageserver_api::config::{
     DiskUsageEvictionTaskConfig, MaxGetVectoredKeys, MaxVectoredReadBytes,
     PageServicePipeliningConfig, PageServicePipeliningConfigPipelined,
 };
-use pageserver_api::models::ImageCompressionAlgorithm;
+use pageserver_api::models::{ImageCompressionAlgorithm, PayloadCompression};
 use pem::Pem;
 use postgres_backend::AuthType;
 use postgres_ffi::PgMajorVersion;
@@ -229,6 +229,11 @@ pub struct PageServerConf {
     /// yb-pageserver row-per-page writer tunables.
     pub yb_page_writer: pageserver_api::config::YbPageWriterConfig,
 
+    /// Codec used when writing the YB `BYTEA` payload columns. Write-side
+    /// only — reads always accept every codec. See
+    /// `pageserver_api::config::ConfigToml::yb_payload_compression`.
+    pub yb_payload_compression: PayloadCompression,
+
     /// See `pageserver_api::config::ConfigToml::scale_factor`. The
     /// resolved (post-toml-merge) value is stashed here so binary
     /// startup can multiply count-shaped constants — pool sizes,
@@ -379,6 +384,7 @@ impl PageServerConf {
             force_metric_collection_on_scrape,
             s3_upload_limit_bytes,
             yb_page_writer,
+            yb_payload_compression,
             scale_factor,
         } = config_toml;
 
@@ -454,6 +460,7 @@ impl PageServerConf {
             force_metric_collection_on_scrape,
             s3_upload_limit_bytes,
             yb_page_writer,
+            yb_payload_compression,
             scale_factor,
 
             // ------------------------------------------------------------

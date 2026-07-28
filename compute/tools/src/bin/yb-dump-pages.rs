@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
+use utils::payload_codec;
 use ysql_client::{YbConnArgs, YsqlClient};
 
 #[derive(Parser)]
@@ -76,12 +77,6 @@ fn fmt_lsn(v: u64) -> String {
     format!("{:X}/{:08X}", v >> 32, v & 0xFFFFFFFF)
 }
 
-fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len() / 2)
-        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap_or(0))
-        .collect()
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -113,10 +108,14 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
     };
     let lsn =
         "to_hex((lsn>>32)::int8) || '/' || lpad(to_hex((lsn & x'ffffffff'::bigint)::int8),8,'0')";
+    // Fetch `payload` as raw bytea and unwrap the compression envelope
+    // client-side. Server-side `octet_length` / `substring` would report the
+    // *stored* bytes — a length shrunk by compression and a hex head that is
+    // LZ4 framing rather than page contents.
     let payload = if a.no_payload {
         String::new()
     } else {
-        ", octet_length(payload)::text, encode(substring(payload,1,16),'hex')".to_string()
+        ", payload".to_string()
     };
     let fork = "CASE forknum WHEN 0 THEN 'main' WHEN 1 THEN 'fsm' WHEN 2 THEN 'vm' \
                 WHEN 3 THEN 'init' ELSE forknum::text END";
@@ -129,19 +128,52 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
         .query(&sql, &[])
         .await
         .context("query pageserver.pages")?;
+    /// Text columns the SQL always projects, ahead of the raw `payload`.
+    const SCALAR_COLS: usize = 5;
+
     let mut headers = vec!["blknum", "lsn", "fork", "is_image", "will_init"];
     if !a.no_payload {
+        // `stored` is what DocDB holds (envelope included); `bytes` is the
+        // decoded page. Their ratio is the compression actually achieved on
+        // this row.
+        headers.push("codec");
+        headers.push("stored");
         headers.push("bytes");
         headers.push("payload_head");
     }
-    let ncol = headers.len();
     let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
     let cells: Vec<Vec<String>> = rows
         .iter()
         .map(|r| {
-            (0..ncol)
+            let mut cells: Vec<String> = (0..SCALAR_COLS)
                 .map(|i| r.get::<usize, Option<String>>(i).unwrap_or_default())
-                .collect()
+                .collect();
+            if !a.no_payload {
+                let stored: Vec<u8> = r.get::<usize, Option<Vec<u8>>>(SCALAR_COLS).unwrap_or_default();
+                let stored = bytes::Bytes::from(stored);
+                cells.push(payload_codec::stored_codec_name(&stored).to_string());
+                cells.push(stored.len().to_string());
+                // A row this build cannot decode is still worth showing —
+                // print the failure in place of the payload instead of
+                // aborting the whole dump.
+                match payload_codec::decode(&stored) {
+                    Ok(plain) => {
+                        cells.push(plain.len().to_string());
+                        cells.push(
+                            plain
+                                .iter()
+                                .take(16)
+                                .map(|b| format!("{b:02x}"))
+                                .collect::<String>(),
+                        );
+                    }
+                    Err(e) => {
+                        cells.push("?".to_string());
+                        cells.push(format!("<undecodable: {e}>"));
+                    }
+                }
+            }
+            cells
         })
         .collect();
     for row in &cells {
@@ -272,8 +304,11 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
         .context("--decode needs a single --blknum (a chain is per-block)")?;
     let w = format!("{} AND blknum = {blk}", key_where(a));
     // LSN-ascending, image-first on ties (an image supersedes a same-LSN delta).
+    // `payload` comes back as raw bytea (not server-side hex): it carries a
+    // compression envelope that has to be unwrapped here before the image /
+    // delta decoders below can read page structure out of it.
     let sql = format!(
-        "SELECT to_hex(lsn), is_image::int::text, will_init::int::text, encode(payload,'hex') \
+        "SELECT to_hex(lsn), is_image::int::text, will_init::int::text, payload \
          FROM pageserver.pages WHERE {w} ORDER BY lsn, is_image DESC"
     );
     let rows = client
@@ -296,7 +331,20 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
         let lsn = u64::from_str_radix(&r.get::<usize, String>(0), 16).unwrap_or(0);
         let is_image = r.get::<usize, String>(1) == "1";
         let will_init = r.get::<usize, String>(2) == "1";
-        let payload = unhex(&r.get::<usize, String>(3));
+        let stored = bytes::Bytes::from(r.get::<usize, Vec<u8>>(3));
+        let payload = match payload_codec::decode(&stored) {
+            Ok(plain) => plain,
+            Err(e) => {
+                println!(
+                    "{:6} {}  !! undecodable payload (codec {}, {}B stored): {e}",
+                    if is_image { "IMAGE" } else { "DELTA" },
+                    fmt_lsn(lsn),
+                    payload_codec::stored_codec_name(&stored),
+                    stored.len(),
+                );
+                continue;
+            }
+        };
         if is_image {
             let (max_off, counts) = lp_state(&payload);
             running_max = running_max.max(max_off);
@@ -368,10 +416,11 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
 mod tests {
     use super::*;
 
+    // `unhex` used to be covered here too. It went away with the
+    // server-side `encode(payload,'hex')` projection: payloads now come back
+    // as raw bytea so the compression envelope can be unwrapped client-side.
     #[test]
-    fn unhex_and_fmt_lsn() {
-        assert_eq!(unhex("00ff10"), vec![0x00, 0xff, 0x10]);
-        assert_eq!(unhex(""), Vec::<u8>::new());
+    fn fmt_lsn_formats_lsn() {
         assert_eq!(fmt_lsn(0x22_9B61F090), "22/9B61F090");
         assert_eq!(fmt_lsn(0xD_E4B94BA8), "D/E4B94BA8");
     }

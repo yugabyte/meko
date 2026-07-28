@@ -45,3 +45,5 @@ docker-compose/docker-compose-parallel.yml
 /proxy/.subzero
 local_proxy.json
 .VSCodeCounter/
+/controller/target/
+/compute/tmp_check/

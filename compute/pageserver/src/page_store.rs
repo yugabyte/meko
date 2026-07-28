@@ -50,7 +50,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use futures::stream::{StreamExt, TryStreamExt};
 use pageserver_api::key::{KEY_SIZE, Key, rel_size_to_key};
-use pageserver_api::models::RelSizeMigration;
+use pageserver_api::models::{PayloadCompression, RelSizeMigration};
 use pageserver_api::reltag::{RelTag, SlruKind};
 
 use crate::page_server::metadata::Lineage;
@@ -63,6 +63,7 @@ use remote_storage::{YbConnConfig, YsqlClient};
 // replication path.
 use utils::id::BranchId;
 use utils::lsn::Lsn;
+use utils::payload_codec;
 use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
 
@@ -378,6 +379,10 @@ pub struct PageStoreConfig {
     /// (`put_pages` / `put_slru_pages` / `put_meta`). Plumbed through
     /// from `PageServerConf::scale_factor`; tests default to 1.0.
     pub scale_factor: f64,
+    /// Codec the `put_*` paths wrap payloads with. Write-side only —
+    /// reads decode whatever tag each row carries. Plumbed through from
+    /// `PageServerConf::yb_payload_compression`.
+    pub payload_compression: PayloadCompression,
 }
 
 impl PageStoreConfig {
@@ -386,11 +391,17 @@ impl PageStoreConfig {
             yb,
             schema: DEFAULT_SCHEMA.to_string(),
             scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
+            payload_compression: pageserver_api::config::defaults::DEFAULT_YB_PAYLOAD_COMPRESSION,
         }
     }
 
     pub fn with_scale_factor(mut self, scale_factor: f64) -> Self {
         self.scale_factor = scale_factor;
+        self
+    }
+
+    pub fn with_payload_compression(mut self, codec: PayloadCompression) -> Self {
+        self.payload_compression = codec;
         self
     }
 }
@@ -400,6 +411,11 @@ pub struct PageStore {
     ysql_client: Arc<YsqlClient>,
     schema: Arc<str>,
     scale_factor: f64,
+    /// Codec applied to `payload` on the way *out* to YB. Deliberately
+    /// not consulted on the read path: every stored value carries its own
+    /// codec tag, so a chain may freely mix rows written under different
+    /// settings and a config change needs no migration.
+    payload_codec: payload_codec::Codec,
     /// Full-chunk INSERT SQL with the `branch_id` baked in as a
     /// literal, memoized per `branch_id` on first flush and
     /// shared across clones. In production this holds exactly one entry
@@ -698,6 +714,110 @@ async fn fetch_chain_rows_thin(
     Ok(state.raw)
 }
 
+/// Per-`put_*` accumulation of what the codec did, held until the YB write
+/// succeeds.
+///
+/// The counters are deliberately NOT bumped at encode time. `PageWriter`
+/// leaves its buffer intact when a flush fails and re-submits the same rows
+/// on the next attempt, so encode-time accounting would count a row once per
+/// attempt — inflating the totals exactly during a YB incident, when the
+/// graphs matter most. It would also contradict the metrics' own help text
+/// ("bytes written to YB") and diverge from `YB_STORE_OP_SECONDS`, which is
+/// only observed on success.
+///
+/// The compression *ratio* is unaffected either way (logical and stored
+/// inflate together); it is the absolute volumes this protects.
+struct PayloadTally {
+    table: &'static str,
+    logical: usize,
+    stored: usize,
+    /// Row counts per `YB_PAYLOAD_ROWS` outcome label.
+    lz4: u64,
+    raw_configured: u64,
+    raw_too_small: u64,
+    raw_incompressible: u64,
+}
+
+impl PayloadTally {
+    fn new(table: &'static str) -> Self {
+        Self {
+            table,
+            logical: 0,
+            stored: 0,
+            lz4: 0,
+            raw_configured: 0,
+            raw_too_small: 0,
+            raw_incompressible: 0,
+        }
+    }
+
+    fn add(&mut self, logical: usize, stored: usize, outcome: payload_codec::Outcome) {
+        use payload_codec::{Codec, Outcome, RawReason};
+        self.logical += logical;
+        self.stored += stored;
+        match outcome {
+            Outcome::Compressed(Codec::Lz4) => self.lz4 += 1,
+            // `encode` cannot report Raw as a *compressed* outcome, but
+            // spelling the arm out keeps this exhaustive if a codec is
+            // added later.
+            Outcome::Compressed(Codec::Raw) | Outcome::Raw(RawReason::Configured) => {
+                self.raw_configured += 1
+            }
+            Outcome::Raw(RawReason::TooSmall) => self.raw_too_small += 1,
+            Outcome::Raw(RawReason::Incompressible) => self.raw_incompressible += 1,
+        }
+    }
+
+    /// Publish. Call only after the YB write has succeeded.
+    fn record(&self) {
+        crate::metrics::YB_PAYLOAD_LOGICAL_BYTES
+            .with_label_values(&[self.table])
+            .inc_by(self.logical as u64);
+        crate::metrics::YB_PAYLOAD_STORED_BYTES
+            .with_label_values(&[self.table])
+            .inc_by(self.stored as u64);
+        for (label, n) in [
+            ("lz4", self.lz4),
+            ("raw_configured", self.raw_configured),
+            ("raw_too_small", self.raw_too_small),
+            ("raw_incompressible", self.raw_incompressible),
+        ] {
+            if n > 0 {
+                crate::metrics::YB_PAYLOAD_ROWS
+                    .with_label_values(&[self.table, label])
+                    .inc_by(n);
+            }
+        }
+    }
+}
+
+/// Unwrap a stored `payload` envelope, naming the row in any error.
+///
+/// Every read path funnels through here, and it is deliberately
+/// independent of `PageStore::payload_codec`: the envelope's tag says how
+/// the row was written, so rows produced under different settings — even
+/// within one page's delta chain — all decode with one reader. That is what
+/// makes changing the write codec a restart rather than a migration.
+///
+/// `what` is a **closure**, not a string: a chain read decodes an image
+/// plus every delta above it, so an eagerly-built context string would
+/// allocate (and `Display` a `Key`'s six hex fields) once per row on the
+/// getpage path, for a message only ever read when decoding fails.
+fn decode_payload<C, F>(stored: &Bytes, what: F) -> Result<Bytes>
+where
+    F: FnOnce() -> C,
+    C: std::fmt::Display,
+{
+    payload_codec::decode(stored).with_context(|| {
+        format!(
+            "{}: decoding stored payload ({} bytes, codec {})",
+            what(),
+            stored.len(),
+            payload_codec::stored_codec_name(stored),
+        )
+    })
+}
+
 /// Decode the raw rows of a single-key chain fetch (targets
 /// `[.., lsn, is_image, will_init, payload]` starting at `off`) into
 /// [`PageRow`]s for `key`, normalize storage order into SQL result
@@ -711,12 +831,16 @@ fn assemble_page_chain<R: RowCells>(
     let rows = raw
         .into_iter()
         .map(|r| {
+            let lsn = Lsn(r.cell_i64(off)? as u64);
             Ok(PageRow {
                 key,
-                lsn: Lsn(r.cell_i64(off)? as u64),
+                lsn,
                 is_image: r.cell_bool(off + 1)?,
                 will_init: r.cell_bool(off + 2)?,
-                payload: r.cell_bytes(off + 3)?,
+                payload: decode_payload(
+                    &r.cell_bytes(off + 3)?,
+                    || format!("pages row key={key} lsn={lsn} ({where_})"),
+                )?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -740,14 +864,23 @@ fn assemble_slru_chain<R: RowCells>(
     let rows = raw
         .into_iter()
         .map(|r| {
+            let lsn = Lsn(r.cell_i64(off)? as u64);
             Ok(SlruPageRow {
                 kind,
                 segno,
                 blknum,
-                lsn: Lsn(r.cell_i64(off)? as u64),
+                lsn,
                 is_image: r.cell_bool(off + 1)?,
                 will_init: r.cell_bool(off + 2)?,
-                payload: r.cell_bytes(off + 3)?,
+                payload: decode_payload(
+                    &r.cell_bytes(off + 3)?,
+                    || {
+                        format!(
+                            "slru_pages row kind={kind:?} segno={segno} \
+                             blknum={blknum} lsn={lsn} ({where_})"
+                        )
+                    },
+                )?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -796,10 +929,14 @@ fn assemble_page_scan<R: RowCells>(
 /// Decode a `meta` row fetched with targets `[lsn, payload]` for `key`.
 /// Used by the tsclient lane.
 fn decode_meta_row<R: RowCells>(key: &[u8], r: &R) -> Result<MetaRow> {
+    let lsn = Lsn(r.cell_i64(0)? as u64);
     Ok(MetaRow {
         key: Bytes::copy_from_slice(key),
-        lsn: Lsn(r.cell_i64(0)? as u64),
-        payload: r.cell_bytes(1)?,
+        lsn,
+        payload: decode_payload(
+            &r.cell_bytes(1)?,
+            || format!("meta row key={} lsn={lsn}", hex::encode(key)),
+        )?,
     })
 }
 
@@ -1363,6 +1500,10 @@ impl PageStore {
             ysql_client,
             schema: Arc::from(config.schema),
             scale_factor: config.scale_factor,
+            payload_codec: match config.payload_compression {
+                PayloadCompression::None => payload_codec::Codec::Raw,
+                PayloadCompression::Lz4 => payload_codec::Codec::Lz4,
+            },
             baked: Arc::new(DashMap::new()),
             tsclient,
             thinclient,
@@ -1401,23 +1542,59 @@ impl PageStore {
         )
     }
 
+    // ------------------- payload compression --------------------------------
+
+    /// Wrap every payload in the [`payload_codec`] envelope, once, before
+    /// the `put_*` lane dispatch — so the YSQL and thin-RPC lanes bind
+    /// identical bytes and neither can drift from the other.
+    ///
+    /// This is the *only* place the pageserver produces encoded payloads.
+    /// Everything upstream of `PageStore` — `PageWriter`'s delta tallies,
+    /// the image materializer's chain-byte accounting, walredo, GC's
+    /// payload comparison — keeps working on plaintext, which is why
+    /// compression needed no changes there. Keep it that way: an encoded
+    /// payload escaping above this boundary would silently reinterpret
+    /// page bytes as record bytes.
+    fn encode_payloads<'a>(
+        &self,
+        table: &'static str,
+        payloads: impl ExactSizeIterator<Item = &'a Bytes>,
+    ) -> (Vec<Bytes>, PayloadTally) {
+        let mut out = Vec::with_capacity(payloads.len());
+        let mut tally = PayloadTally::new(table);
+        for plain in payloads {
+            let (encoded, outcome) = payload_codec::encode(plain, self.payload_codec);
+            tally.add(plain.len(), encoded.len(), outcome);
+            out.push(encoded);
+        }
+        (out, tally)
+    }
+
     // ------------------- pages ---------------------------------------------
 
     pub async fn put_pages(&self, branch_id: BranchId, rows: &[Arc<PageRow>]) -> Result<()> {
+        // Encode once, ahead of the lane split: EVERY lane binds these bytes.
+        // A lane that binds `row.payload` directly writes plaintext with no
+        // codec tag, which the read path then rejects — so a newly added lane
+        // must be threaded through here too.
+        let (encoded, tally) = self.encode_payloads("pages", rows.iter().map(|r| &r.payload));
+
         if let Some(p) = &self.tsclient {
             let started = std::time::Instant::now();
-            self.put_pages_tsclient(p, branch_id, rows).await?;
+            self.put_pages_tsclient(p, branch_id, rows, &encoded).await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_pages", "tsclient"])
                 .observe(started.elapsed().as_secs_f64());
+            tally.record();
             return Ok(());
         }
         if let Some(p) = &self.thinclient {
             let started = std::time::Instant::now();
-            self.put_pages_thin(p, branch_id, rows).await?;
+            self.put_pages_thin(p, branch_id, rows, &encoded).await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_pages", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
+            tally.record();
             return Ok(());
         }
 
@@ -1428,7 +1605,12 @@ impl PageStore {
         let pages_full = Arc::clone(&self.baked_sql(branch_id).pages_full);
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
-        for chunk in rows.chunks(ROWS_PER_INSERT) {
+        // `encoded` is 1:1 with `rows`, so the two chunk iterators stay
+        // aligned and `enc_chunk[i]` is `chunk[i]`'s payload.
+        for (chunk, enc_chunk) in rows
+            .chunks(ROWS_PER_INSERT)
+            .zip(encoded.chunks(ROWS_PER_INSERT))
+        {
             if chunk.is_empty() {
                 continue;
             }
@@ -1453,9 +1635,11 @@ impl PageStore {
                 blk.push(b);
                 lsn.push(row.lsn.0 as i64);
             }
-            // Cheap Arc-clone per row keeps its `payload` alive so we can
-            // bind `&[u8]` slices below without copying the page bytes.
+            // Cheap Arc-clone per row keeps the scalar columns alive; the
+            // encoded payloads are `Bytes`, so cloning them is a refcount
+            // bump and never copies page bytes.
             let arcs: Vec<Arc<PageRow>> = chunk.to_vec();
+            let enc: Vec<Bytes> = enc_chunk.to_vec();
             // Common full chunk reuses the memoized SQL; the rare short
             // final chunk rebuilds (one alloc, ids baked in).
             let sql: Arc<str> = if n == ROWS_PER_INSERT {
@@ -1486,7 +1670,7 @@ impl PageStore {
             let chunk_first = chunk.first().map(|r| (r.key, r.lsn));
             let chunk_last = chunk.last().map(|r| (r.key, r.lsn));
             futs.push(Box::pin(async move {
-                let payloads: Vec<&[u8]> = arcs.iter().map(|r| r.payload.as_ref()).collect();
+                let payloads: Vec<&[u8]> = enc.iter().map(|b| b.as_ref()).collect();
                 let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * PAGES_PER_ROW);
                 for i in 0..n {
                     params.push(&spc[i]);
@@ -1541,6 +1725,7 @@ impl PageStore {
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["put_pages", "ysql"])
             .observe(started.elapsed().as_secs_f64());
+        tally.record();
         Ok(())
     }
 
@@ -1556,11 +1741,15 @@ impl PageStore {
     /// application is possible on failure; consistent_lsn only advances
     /// after the whole flush succeeds, and the retried full-flush replay
     /// is byte-identical by the idempotency contract.
+    ///
+    /// `encoded` carries the [`payload_codec`]-wrapped payloads produced by
+    /// [`Self::put_pages`], 1:1 with `rows`.
     async fn put_pages_tsclient(
         &self,
         p: &TsClientTables,
         branch_id: BranchId,
         rows: &[Arc<PageRow>],
+        encoded: &[Bytes],
     ) -> Result<()> {
         use yb_tsclient::{BindValue, UpsertRow};
         let pages = &p.pages;
@@ -1574,7 +1763,10 @@ impl PageStore {
         let branch_s = branch_id.to_string();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
-        for chunk in rows.chunks(ROWS_PER_INSERT) {
+        for (chunk, enc_chunk) in rows
+            .chunks(ROWS_PER_INSERT)
+            .zip(encoded.chunks(ROWS_PER_INSERT))
+        {
             if chunk.is_empty() {
                 continue;
             }
@@ -1596,7 +1788,7 @@ impl PageStore {
                     ],
                     &[
                         ("will_init", BindValue::Bool(row.will_init)),
-                        ("payload", BindValue::Bytes(row.payload.clone())),
+                        ("payload", BindValue::Bytes(enc_chunk[i].clone())),
                     ],
                 )?);
             }
@@ -1633,11 +1825,14 @@ impl PageStore {
         Ok(())
     }
 
+    /// `encoded` carries the [`payload_codec`]-wrapped payloads produced by
+    /// [`Self::put_pages`], 1:1 with `rows`.
     async fn put_pages_thin(
         &self,
         p: &ThinClientTables,
         branch_id: BranchId,
         rows: &[Arc<PageRow>],
+        encoded: &[Bytes],
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let pages = &p.pages;
@@ -1651,7 +1846,10 @@ impl PageStore {
         let branch_s = branch_id.to_string();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
-        for chunk in rows.chunks(ROWS_PER_INSERT) {
+        for (chunk, enc_chunk) in rows
+            .chunks(ROWS_PER_INSERT)
+            .zip(encoded.chunks(ROWS_PER_INSERT))
+        {
             if chunk.is_empty() {
                 continue;
             }
@@ -1673,7 +1871,7 @@ impl PageStore {
                     ],
                     &[
                         ("will_init", BindValue::Bool(row.will_init)),
-                        ("payload", BindValue::Bytes(row.payload.clone())),
+                        ("payload", BindValue::Bytes(enc_chunk[i].clone())),
                     ],
                 )?);
             }
@@ -2175,20 +2373,26 @@ impl PageStore {
     // ------------------- slru_pages ---------------------------------------
 
     pub async fn put_slru_pages(&self, branch_id: BranchId, rows: &[SlruPageRow]) -> Result<()> {
+        let (encoded, tally) =
+            self.encode_payloads("slru_pages", rows.iter().map(|r| &r.payload));
+
         if let Some(p) = &self.tsclient {
             let started = std::time::Instant::now();
-            self.put_slru_pages_tsclient(p, branch_id, rows).await?;
+            self.put_slru_pages_tsclient(p, branch_id, rows, &encoded)
+                .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_slru_pages", "tsclient"])
                 .observe(started.elapsed().as_secs_f64());
+            tally.record();
             return Ok(());
         }
         if let Some(p) = &self.thinclient {
             let started = std::time::Instant::now();
-            self.put_slru_pages_thin(p, branch_id, rows).await?;
+            self.put_slru_pages_thin(p, branch_id, rows, &encoded).await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_slru_pages", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
+            tally.record();
             return Ok(());
         }
 
@@ -2197,7 +2401,10 @@ impl PageStore {
         let slru_full = Arc::clone(&self.baked_sql(branch_id).slru_full);
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
-        for chunk in rows.chunks(ROWS_PER_INSERT) {
+        for (chunk, enc_chunk) in rows
+            .chunks(ROWS_PER_INSERT)
+            .zip(encoded.chunks(ROWS_PER_INSERT))
+        {
             if chunk.is_empty() {
                 continue;
             }
@@ -2212,14 +2419,14 @@ impl PageStore {
             let mut lsn = Vec::with_capacity(n);
             let mut will_init = Vec::with_capacity(n);
             let mut payloads_owned: Vec<Bytes> = Vec::with_capacity(n);
-            for row in chunk {
+            for (row, enc) in chunk.iter().zip(enc_chunk) {
                 kind.push(slru_kind_to_i16(row.kind));
                 segno.push(row.segno as i64);
                 blknum.push(row.blknum as i64);
                 is_image.push(row.is_image);
                 lsn.push(row.lsn.0 as i64);
                 will_init.push(row.will_init);
-                payloads_owned.push(row.payload.clone());
+                payloads_owned.push(enc.clone());
             }
             let sql: Arc<str> = if n == ROWS_PER_INSERT {
                 Arc::clone(&slru_full)
@@ -2261,6 +2468,7 @@ impl PageStore {
         crate::metrics::YB_STORE_OP_SECONDS
             .with_label_values(&["put_slru_pages", "ysql"])
             .observe(started.elapsed().as_secs_f64());
+        tally.record();
         Ok(())
     }
 
@@ -2627,11 +2835,15 @@ impl PageStore {
     /// [`Self::put_pages_tsclient`] for the affected-rows story. One
     /// `(kind, segno)` hash bucket per row, so a chunk usually lands on
     /// one tablet.
+    ///
+    /// `encoded` carries the [`payload_codec`]-wrapped payloads produced by
+    /// [`Self::put_slru_pages`], 1:1 with `rows`.
     async fn put_slru_pages_tsclient(
         &self,
         p: &TsClientTables,
         branch_id: BranchId,
         rows: &[SlruPageRow],
+        encoded: &[Bytes],
     ) -> Result<()> {
         use yb_tsclient::{BindValue, UpsertRow};
         let slru = &p.slru_pages;
@@ -2642,12 +2854,15 @@ impl PageStore {
         let branch_s = branch_id.to_string();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
-        for chunk in rows.chunks(ROWS_PER_INSERT) {
+        for (chunk, enc_chunk) in rows
+            .chunks(ROWS_PER_INSERT)
+            .zip(encoded.chunks(ROWS_PER_INSERT))
+        {
             if chunk.is_empty() {
                 continue;
             }
             let mut batch = Vec::with_capacity(chunk.len());
-            for row in chunk {
+            for (row, enc) in chunk.iter().zip(enc_chunk) {
                 batch.push(UpsertRow::new(
                     slru,
                     vec![
@@ -2660,7 +2875,7 @@ impl PageStore {
                     ],
                     &[
                         ("will_init", BindValue::Bool(row.will_init)),
-                        ("payload", BindValue::Bytes(row.payload.clone())),
+                        ("payload", BindValue::Bytes(enc.clone())),
                     ],
                 )?);
             }
@@ -2684,11 +2899,14 @@ impl PageStore {
         Ok(())
     }
 
+    /// `encoded` carries the [`payload_codec`]-wrapped payloads produced by
+    /// [`Self::put_slru_pages`], 1:1 with `rows`.
     async fn put_slru_pages_thin(
         &self,
         p: &ThinClientTables,
         branch_id: BranchId,
         rows: &[SlruPageRow],
+        encoded: &[Bytes],
     ) -> Result<()> {
         use yb_thin_client::{BindValue, UpsertRow};
         let slru = &p.slru_pages;
@@ -2699,12 +2917,15 @@ impl PageStore {
         let branch_s = branch_id.to_string();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
-        for chunk in rows.chunks(ROWS_PER_INSERT) {
+        for (chunk, enc_chunk) in rows
+            .chunks(ROWS_PER_INSERT)
+            .zip(encoded.chunks(ROWS_PER_INSERT))
+        {
             if chunk.is_empty() {
                 continue;
             }
             let mut batch = Vec::with_capacity(chunk.len());
-            for row in chunk {
+            for (row, enc) in chunk.iter().zip(enc_chunk) {
                 batch.push(UpsertRow::new(
                     slru,
                     vec![
@@ -2717,7 +2938,7 @@ impl PageStore {
                     ],
                     &[
                         ("will_init", BindValue::Bool(row.will_init)),
-                        ("payload", BindValue::Bytes(row.payload.clone())),
+                        ("payload", BindValue::Bytes(enc.clone())),
                     ],
                 )?);
             }
@@ -2750,8 +2971,18 @@ impl PageStore {
         let parallelism = pageserver_api::config::scale_count(3, self.scale_factor);
         let branch_s = branch_id.to_string();
 
+        // Meta has no thin-RPC write lane (reads do; see
+        // `read_meta_tsclient`), so this is the only encode site for the
+        // table. Most meta payloads — rel-size sentinels are 4 bytes — fall
+        // under `MIN_COMPRESS_BYTES` and stay raw; directory listings and
+        // aux files are the ones that benefit.
+        let (encoded, tally) = self.encode_payloads("meta", rows.iter().map(|r| &r.payload));
+
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
-        for chunk in rows.chunks(ROWS_PER_INSERT) {
+        for (chunk, enc_chunk) in rows
+            .chunks(ROWS_PER_INSERT)
+            .zip(encoded.chunks(ROWS_PER_INSERT))
+        {
             if chunk.is_empty() {
                 continue;
             }
@@ -2782,7 +3013,7 @@ impl PageStore {
                 params.push(Box::new(branch_s.clone()));
                 params.push(Box::new(row.key.to_vec()));
                 params.push(Box::new(row.lsn.0 as i64));
-                params.push(Box::new(row.payload.to_vec()));
+                params.push(Box::new(enc_chunk[i].to_vec()));
             }
             let chunk_rows = chunk.len();
             let ysql_client = Arc::clone(&self.ysql_client);
@@ -2805,6 +3036,7 @@ impl PageStore {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>()
             .await?;
+        tally.record();
         Ok(())
     }
 
@@ -4592,6 +4824,167 @@ mod chain_order_tests {
     }
 }
 
+/// Boundary tests for the payload compression envelope. The codec itself is
+/// covered in `utils::payload_codec`; what matters here is that
+/// `PageStore`'s single decode funnel is the exact inverse of what the
+/// `put_*` paths encode, for every codec — including codecs this build is
+/// not configured to write.
+#[cfg(test)]
+mod payload_envelope_tests {
+    use super::*;
+    use utils::payload_codec::Codec;
+
+    /// Every write lane must bind the `encode_payloads` output, never a
+    /// row's plaintext `payload`.
+    ///
+    /// This is a source-level guard because the failure it catches is
+    /// invisible to the type system and to every other test here. When a new
+    /// client lane is added upstream, its `put_*` variant is *new code* — it
+    /// conflicts with nothing, compiles fine, and silently writes untagged
+    /// plaintext that the read path then rejects. That is exactly how the
+    /// `yb_thin_client` lane shipped broken: clean auto-merge, clippy clean,
+    /// every unit test green, and the cluster failed to start because
+    /// basebackup could not decode its own pages.
+    ///
+    /// Unit tests can't cover it because they exercise one lane at a time
+    /// against whichever client is configured; only an end-to-end run on the
+    /// *default* lane surfaces it. So: assert on the source.
+    #[test]
+    fn every_write_lane_binds_encoded_payloads() {
+        let src = include_str!("page_store.rs");
+
+        // Needles are assembled from fragments so this test's own source
+        // does not match them — otherwise the guard flags itself.
+        let bind_prefix = format!("(\"pay{}\", BindValue::Bytes(", "load");
+        let row_payload = format!("row.pay{}", "load");
+        let payload_clone = format!(".pay{}.clone()", "load");
+        let ysql_box = format!("params.push(Box::new(row.pay{}", "load");
+        let ysql_map = format!("map(|r| r.pay{}.as_ref())", "load");
+
+        // The thin/tsclient lanes bind through `BindValue::Bytes(..)`. Any
+        // occurrence naming a row's payload directly is a lane that skipped
+        // the codec.
+        let raw_binds: Vec<_> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.contains(&bind_prefix)
+                    && (l.contains(&row_payload) || l.contains(&payload_clone))
+            })
+            .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
+            .collect();
+        assert!(
+            raw_binds.is_empty(),
+            "these write lanes bind a row's PLAINTEXT payload instead of the \
+             encoded buffer from `encode_payloads` — pages written this way \
+             have no codec tag and `decode_payload` will reject them on \
+             read:\n{}",
+            raw_binds.join("\n")
+        );
+
+        // The YSQL lanes bind through positional params.
+        let raw_params: Vec<_> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains(&ysql_box) || l.contains(&ysql_map))
+            .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
+            .collect();
+        assert!(
+            raw_params.is_empty(),
+            "these YSQL write paths bind a row's PLAINTEXT payload:\n{}",
+            raw_params.join("\n")
+        );
+
+        // Sanity: the guard is only meaningful if it can see the binds it is
+        // policing. If the bind syntax is refactored, this fails loudly
+        // rather than silently passing on zero matches.
+        let encoded_binds = src.matches(&bind_prefix).count();
+        assert!(
+            encoded_binds >= 4,
+            "expected at least 4 tsclient/thin payload binds to police, saw \
+             {encoded_binds} — the bind syntax changed and this guard has \
+             gone blind"
+        );
+    }
+
+    fn pagelike() -> Bytes {
+        let mut p = vec![0u8; 8192];
+        for (i, b) in p[..64].iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        for (i, b) in p[6000..].iter_mut().enumerate() {
+            *b = (i % 17) as u8;
+        }
+        Bytes::from(p)
+    }
+
+    /// Whatever a writer emits, the read funnel returns the original bytes.
+    #[test]
+    fn decode_payload_inverts_every_codec() {
+        let plain = pagelike();
+        for codec in [Codec::Raw, Codec::Lz4] {
+            let (stored, _) = payload_codec::encode(&plain, codec);
+            let back = decode_payload(&stored, || "test row").expect("decode");
+            assert_eq!(back, plain, "roundtrip broken for {codec:?}");
+        }
+    }
+
+    /// The property that makes a codec change a restart rather than a
+    /// migration: one reader, rows written under different settings. A real
+    /// delta chain looks like this after the config is flipped.
+    #[test]
+    fn one_reader_handles_a_mixed_codec_chain() {
+        let plain = pagelike();
+        let chain: Vec<Bytes> = [Codec::Lz4, Codec::Raw, Codec::Lz4, Codec::Raw]
+            .into_iter()
+            .map(|c| payload_codec::encode(&plain, c).0)
+            .collect();
+        // The rows genuinely differ on the wire...
+        assert_ne!(chain[0], chain[1]);
+        // ...and all decode to the same page.
+        for (i, stored) in chain.iter().enumerate() {
+            assert_eq!(
+                decode_payload(stored, || "test row").expect("decode"),
+                plain,
+                "chain step {i}"
+            );
+        }
+    }
+
+    /// A tag this build does not know must fail loudly, with the row named
+    /// and the offending tag reported — never be reinterpreted as page
+    /// bytes, which would surface later as walredo corruption.
+    #[test]
+    fn decode_payload_rejects_unknown_codec_with_context() {
+        let err = decode_payload(&Bytes::from_static(&[0x42, 0x00]), || "pages row key=K lsn=L")
+            .expect_err("unknown tag must fail");
+        let chain = format!("{err:#}");
+        assert!(chain.contains("pages row key=K lsn=L"), "{chain}");
+        assert!(chain.contains("0x42"), "{chain}");
+    }
+
+    /// An empty `BYTEA` is not a valid envelope — every encode emits at
+    /// least a tag byte, so a zero-length value means the row was written by
+    /// something that bypassed the codec.
+    #[test]
+    fn decode_payload_rejects_empty_value() {
+        assert!(decode_payload(&Bytes::new(), || "pages row").is_err());
+    }
+
+    /// Deltas dominate the row count and are mostly a few bytes; they must
+    /// stay raw so the hot write path spends nothing on them.
+    #[test]
+    fn tiny_delta_payload_is_stored_raw() {
+        let (stored, outcome) = payload_codec::encode(&[0x01], Codec::Lz4);
+        assert_eq!(
+            outcome,
+            payload_codec::Outcome::Raw(payload_codec::RawReason::TooSmall)
+        );
+        assert_eq!(stored.len(), 2, "one tag byte + the payload");
+        assert_eq!(decode_payload(&stored, || "delta row").unwrap(), &[0x01][..]);
+    }
+}
+
 fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {
     let sp: i64 = r.try_get(0)?;
     let db: i64 = r.try_get(1)?;
@@ -4602,12 +4995,17 @@ fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {
     let is_image: bool = r.try_get(6)?;
     let will_init: bool = r.try_get(7)?;
     let payload: Vec<u8> = r.try_get(8)?;
+    let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
+    let lsn = Lsn(lsn as u64);
     Ok(PageRow {
-        key: Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk)),
-        lsn: Lsn(lsn as u64),
+        key,
+        lsn,
         is_image,
         will_init,
-        payload: Bytes::from(payload),
+        payload: decode_payload(
+            &Bytes::from(payload),
+            || format!("pages row key={key} lsn={lsn} (ysql)"),
+        )?,
     })
 }
 
@@ -4615,10 +5013,14 @@ fn row_to_meta(r: tokio_postgres::Row) -> Result<MetaRow> {
     let key: Vec<u8> = r.try_get(0)?;
     let lsn: i64 = r.try_get(1)?;
     let payload: Vec<u8> = r.try_get(2)?;
+    let lsn = Lsn(lsn as u64);
     Ok(MetaRow {
+        payload: decode_payload(
+            &Bytes::from(payload),
+            || format!("meta row key={} lsn={lsn} (ysql)", hex::encode(&key)),
+        )?,
         key: Bytes::from(key),
-        lsn: Lsn(lsn as u64),
-        payload: Bytes::from(payload),
+        lsn,
     })
 }
 
@@ -4630,14 +5032,21 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
     let is_image: bool = r.try_get(4)?;
     let will_init: bool = r.try_get(5)?;
     let payload: Vec<u8> = r.try_get(6)?;
+    let kind = slru_kind_from_i16(kind_i)?;
+    let lsn = Lsn(lsn as u64);
     Ok(SlruPageRow {
-        kind: slru_kind_from_i16(kind_i)?,
+        kind,
         segno: segno as u32,
         blknum: blknum as u32,
-        lsn: Lsn(lsn as u64),
+        lsn,
         is_image,
         will_init,
-        payload: Bytes::from(payload),
+        payload: decode_payload(
+            &Bytes::from(payload),
+            || format!(
+                "slru_pages row kind={kind:?} segno={segno} blknum={blknum} lsn={lsn} (ysql)"
+            ),
+        )?,
     })
 }
 
@@ -4766,6 +5175,8 @@ mod tests {
                     yb: test_yb_config(),
                     schema: PROD_SCHEMA.to_string(),
                     scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
+                    payload_compression:
+                        pageserver_api::config::defaults::DEFAULT_YB_PAYLOAD_COMPRESSION,
                 };
                 PageStore::connect(cfg, "page_store_test", true)
                     .await

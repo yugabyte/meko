@@ -120,6 +120,7 @@ lasso = "0.7"
 libc = "0.2"
 libloading = "0.8"
 lock_api = "0.4.13"
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 md5 = "0.7.0"
 measured = { version = "0.0.22", features=["lasso"] }
 measured-process = { version = "0.0.22" }

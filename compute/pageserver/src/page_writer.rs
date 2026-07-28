@@ -2640,6 +2640,8 @@ mod tests {
                     yb: test_yb_config(),
                     schema: PROD_SCHEMA.to_string(),
                     scale_factor: pageserver_api::config::DEFAULT_SCALE_FACTOR,
+                    payload_compression:
+                        pageserver_api::config::defaults::DEFAULT_YB_PAYLOAD_COMPRESSION,
                 };
                 let store = PageStore::connect(cfg, "pw_test", true)
                     .await

@@ -363,6 +363,51 @@ pub(crate) static YB_STORE_OP_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+/// Payload bytes as the pageserver sees them, *before* the
+/// `utils::payload_codec` envelope, by table (pages|slru_pages|meta).
+/// Divide this by [`YB_PAYLOAD_STORED_BYTES`] for the realized compression
+/// ratio actually being achieved in production (`logical / stored`, e.g.
+/// 1.9x); `1 - stored / logical` is the same thing as a space saving. The
+/// point of the pair is that the ratio is measured rather than assumed —
+/// it swings widely with payload-size mix, since everything below
+/// `MIN_COMPRESS_BYTES` is stored raw.
+pub(crate) static YB_PAYLOAD_LOGICAL_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "pageserver_yb_payload_logical_bytes_total",
+        "Uncompressed payload bytes handed to PageStore, by table",
+        &["table"]
+    )
+    .expect("failed to define a metric")
+});
+
+/// Payload bytes actually bound to the `BYTEA` column — envelope
+/// included, so this is what DocDB, the Raft log and every compaction
+/// move. Pairs with [`YB_PAYLOAD_LOGICAL_BYTES`].
+pub(crate) static YB_PAYLOAD_STORED_BYTES: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "pageserver_yb_payload_stored_bytes_total",
+        "Encoded payload bytes written to YB (compression envelope included), by table",
+        &["table"]
+    )
+    .expect("failed to define a metric")
+});
+
+/// One increment per encoded row, by what the codec decided:
+/// `lz4` (compressed) or `raw_configured` / `raw_too_small` /
+/// `raw_incompressible`. The three raw reasons have different meanings:
+/// `configured` is the operator's choice, `too_small` is the expected
+/// steady state for tiny deltas, and a high `incompressible` share on the
+/// image path suggests the data is already compressed upstream (e.g.
+/// Postgres `wal_compression`) and the CPU is being spent for nothing.
+pub(crate) static YB_PAYLOAD_ROWS: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "pageserver_yb_payload_rows_total",
+        "Payload rows encoded for YB, by table and codec outcome",
+        &["table", "outcome"]
+    )
+    .expect("failed to define a metric")
+});
+
 /// Thin-RPC (`hot_path = "tsclient"`) lane: successful `yb_tsclient`
 /// session recoveries (reconnect + fresh server session + table
 /// re-validation). Occasional after tserver restarts; a sustained rate

@@ -2523,6 +2523,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30bde2b3dc3671ae49d8e2e9f044c7c005836e7a023ee57cffa25ab82764bb9e"
 
 [[package]]
+name = "lz4_flex"
+version = "0.11.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+
+[[package]]
 name = "mappings"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5668,6 +5674,7 @@ name = "tools"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
  "postgres_ffi",
  "tokio",
@@ -6033,6 +6040,7 @@ dependencies = [
  "hex-literal",
  "humantime",
  "jsonwebtoken",
+ "lz4_flex",
  "metrics",
  "nix 0.30.1",
  "once_cell",

@@ -691,7 +691,8 @@ async fn create_page_store_with_app_name(
         .context("yb-pageserver requires `yb_storage_conn` configured")?;
     let RemoteStorageKind::YbStore(yb_cfg) = &rs_cfg.storage;
     let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg.clone())
-        .with_scale_factor(conf.scale_factor);
+        .with_scale_factor(conf.scale_factor)
+        .with_payload_compression(conf.yb_payload_compression);
     let store = pageserver::page_store::PageStore::connect_pooled(
         ps_cfg,
         application_name,

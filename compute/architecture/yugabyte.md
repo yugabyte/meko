@@ -288,6 +288,17 @@ CREATE TABLE pageserver.pages (
 );
 ```
 
+`payload` here — and in `slru_pages` and `meta` below — holds a
+compression envelope, not bare page bytes: a codec tag byte followed by
+(by default) an LZ4 block. The Rust layer encodes on write and decodes
+on read; YSQL only ever sees an opaque `BYTEA`. Consequently ad-hoc SQL
+against these columns measures *stored* bytes — `octet_length(payload)`
+is the compressed length and `substring(payload, 1, n)` slices envelope
+bytes — so use `yb-dump-pages`, which decodes client-side. See
+[`pageserver.md`](pageserver.md) "Payload compression" for the format,
+the `yb_payload_compression` knob, and why compressing above DocDB
+(which does not TOAST these values) pays.
+
 The chain read is image-anchored: a correlated subquery seeks the
 newest `is_image = TRUE` row at LSN ≤ target and bounds the scan from
 below, so the fast path is one anchor seek plus a small range scan
