@@ -78,7 +78,9 @@ async fn main() -> ExitCode {
                 }
             },
             None => {
-                eprintln!("unexpected argument: {arg:?}\nusage: integration_controller [-n <count>]");
+                eprintln!(
+                    "unexpected argument: {arg:?}\nusage: integration_controller [-n <count>]"
+                );
                 return ExitCode::from(2);
             }
         }
@@ -659,7 +661,9 @@ fn expect(ep: &BranchEndpoint, what: &str, got: i64, want: i64) -> Result<()> {
 pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
     let base = std::env::var("AMP_BASE_URL")
         .context("AMP_BASE_URL is not set — run via test/integration/controller/run-controller.sh, which starts the controller")?;
-    step(&format!("controller integration: driving the controller at {base}"));
+    step(&format!(
+        "controller integration: driving the controller at {base}"
+    ));
     let client = AmpClient::new(&base);
     client
         .wait_ready(Duration::from_secs(60))
@@ -668,7 +672,9 @@ pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
 
     step("controller integration: create user -> storage pool");
     let user = client.create_user(true).await?;
-    let pool = client.create_storage_pool(&user, "integration-pool").await?;
+    let pool = client
+        .create_storage_pool(&user, "integration-pool")
+        .await?;
 
     let mut passed = 0u64;
     let mut failed = 0u64;
@@ -693,7 +699,9 @@ pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
         }
     }
 
-    step(&format!("controller integration: {passed} passed, {failed} failed"));
+    step(&format!(
+        "controller integration: {passed} passed, {failed} failed"
+    ));
     if let Some(e) = fatal {
         return Err(e);
     }

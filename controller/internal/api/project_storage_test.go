@@ -2,9 +2,9 @@ package api_test
 
 import (
 	"context"
-	"fmt"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"

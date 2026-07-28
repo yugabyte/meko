@@ -1,9 +1,11 @@
 ---
 name: git-push
 description: >-
-  Push the current branch to `origin` in this repo. On a first push, set the
-  upstream. **Before pushing, verify no outgoing commit is co-authored by or
-  attributed to Claude or Cursor** (scrub any agent trailer first). **If a PR
+  Push the current branch to `origin` in this repo. On a first push, check the
+  branch name matches `<username>/<kebab-topic>` and set the upstream.
+  **Before pushing, verify the tree is formatted (`cargo fmt
+  --check` and `gofmt -l`) and that no outgoing commit is co-authored by or attributed to
+  Claude or Cursor** (fix formatting and scrub any agent trailer first). **If a PR
   already exists for the branch, refresh its title and summary from the
   branch's landed commits after pushing** so the PR always reflects what's
   actually on it. Use for `git push`, "push my changes",
@@ -28,7 +30,32 @@ git log --oneline origin/main..HEAD   # the commits this branch adds
 If there are uncommitted changes that belong in this push, commit them first
 (follow the `commit` skill). Don't push a half-finished tree.
 
-## Step 2 — verify no commit is agent-attributed (hard gate)
+## Step 2 — verify the tree is formatted (hard gate)
+
+Nothing gates formatting in CI, so push is the last place to catch it. Both
+checks print the offenders and stay silent when clean:
+
+```
+cargo fmt --check                 # Rust
+gofmt -l controller test/functional   # Go — `make fmt` does NOT cover this
+```
+
+If both are silent, move on. Otherwise **do not push** — fix and re-check:
+
+```
+make fmt                          # cargo fmt + ruff, in place
+gofmt -w <the files gofmt -l listed>
+git diff                          # review what it rewrote
+```
+
+Formatting can land as its own commit — `git commit -am "<area>: cargo fmt"` —
+since PRs merge squashed, so there's no need to amend or rebase it back into the
+commit that introduced the drift. Format only what you're landing: if the
+formatter rewrites files unrelated to your change, leave those out.
+
+Re-run both checks until they're silent, then continue.
+
+## Step 3 — verify no commit is agent-attributed (hard gate)
 
 Commits are authored by the user alone — both the **author/committer identity**
 and the **message** must be free of any agent/assistant attribution (a
@@ -77,7 +104,29 @@ just because a harness default set the author or added the trailer — a pushed
 commit carries the attribution permanently into history. (Cheapest to avoid
 entirely by getting authorship right at commit time — see the `commit` skill.)
 
-## Step 3 — push
+## Step 4 — push
+
+**First push only — check the branch name.** Branches here are
+`<username>/<kebab-topic>`, where `<username>` is the author's short handle
+(`hsunder/`, `kannan/`, `spilshchikov/`) and the topic is lowercase and
+hyphenated: `hsunder/sk-drop-table-branch-discovery`,
+`spilshchikov/release-workflow-fallback`. When the work tracks a GitHub issue,
+lead the topic with its number — `arpang/361-gc-trim-unify`.
+
+The prefix is **enforced by the remote**: the `branch-names-require-prefix`
+ruleset restricts creation on `refs/heads/*`, and GitHub's `*` doesn't span `/`,
+so a bare name (`fix-wal`) is rejected at push time. Convention, not enforced:
+don't use someone else's prefix, and keep the topic `kebab-case`, not
+`snake_case`.
+
+Check the name *before* the first push anyway — once it's public, renaming means
+deleting the remote branch and re-pushing, which breaks any open PR and anyone
+who fetched it:
+
+```
+git branch --show-current                      # does it match <username>/<kebab-topic>?
+git branch -m <username>/<kebab-topic>         # rename in place if not
+```
 
 If the branch has no upstream yet (first push):
 
@@ -96,7 +145,7 @@ branch blindly. Rebase or merge `origin/<branch>` first, resolve, then push. A
 `--force-with-lease` is acceptable only on a branch that's yours alone and only
 after you've reconciled with the remote.
 
-## Step 4 — if a PR exists, refresh its title and summary
+## Step 5 — if a PR exists, refresh its title and summary
 
 Check whether this branch already has an open PR:
 
@@ -141,9 +190,12 @@ user's. (See the `open-pr` skill for the same rule at creation time.)
 
 ## Anti-patterns
 
+- **Publishing an off-convention branch name on the first push.** Renaming after
+  the fact means deleting the remote branch and breaking any open PR — check the
+  name in Step 4 while it's still local-only.
 - **Force-pushing a shared branch to "fix" a rejected push.** Reconcile with the
   remote first; a blind force-push destroys others' commits.
 - **Pushing new commits but leaving a now-wrong PR summary.** The whole point of
-  Step 4 — a stale summary misleads every reviewer who trusts it.
+  Step 5 — a stale summary misleads every reviewer who trusts it.
 - **Rewriting the PR body on every trivial push.** Only refresh when the branch's
   actual content changed what the description should say.

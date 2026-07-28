@@ -96,13 +96,13 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	// The deploy spec speaks the storage layer's flat branch id: a branch's id is
 	// the storage branch id verbatim, rendered via hex32 (no enclosing tenant).
 	spec := deploy.EndpointSpec{
-		Name:                 EndpointDeployName(s.EndpointID),
-		BranchID:             hex32(s.BranchID),
-		PgVersion:            s.PgVersion,
-		YB:                   s.yb,
+		Name:          EndpointDeployName(s.EndpointID),
+		BranchID:      hex32(s.BranchID),
+		PgVersion:     s.PgVersion,
+		YB:            s.yb,
 		ControllerURL: s.scURL,
-		CPU:                  s.CPU,
-		Memory:               s.Memory,
+		CPU:           s.CPU,
+		Memory:        s.Memory,
 		// A fork clones from its ancestor; only a default branch initdb's.
 		Bootstrap: s.bootstrap && s.AncestorBranchID == nil,
 	}
