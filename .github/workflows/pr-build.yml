@@ -1,16 +1,16 @@
 name: CI
 
 # Per-component PR validation, gated on which files actually changed:
-#   api-server — Go REST API: `go build` (fail fast), `go vet`, golangci-lint
-#                (non-blocking for now), then `go test ./...`. Tests are mocked;
-#                the few DB-backed tests self-skip when no YugabyteDB is present,
-#                so no database is needed in CI.
-#   inference  — inference_gateway (Python): install with the dev extra, run
-#                pytest. All upstream (LLM / MCP) calls are mocked — no creds.
-#   ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests (vitest),
-#                and the production build.
+#   meko_api_server — Go REST API: `go build` (fail fast), `go vet`,
+#                     golangci-lint (non-blocking for now), then `go test ./...`.
+#                     Tests are mocked; the few DB-backed tests self-skip when no
+#                     YugabyteDB is present, so no database is needed in CI.
+#   meko_inference  — inference_gateway (Python): install with the dev extra, run
+#                     pytest. All upstream (LLM / MCP) calls are mocked — no creds.
+#   meko_ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests
+#                     (vitest), and the production build.
 #
-# Docs-only PRs (only *.md changed) skip the heavy jobs via the `code` filter.
+# Docs-only PRs (only *.md changed) skip the heavy jobs via the `docs` filter.
 on:
   pull_request:
     branches: [main]
@@ -31,40 +31,41 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      api_server: ${{ steps.filter.outputs.api_server }}
-      inference: ${{ steps.filter.outputs.inference }}
-      ui: ${{ steps.filter.outputs.ui }}
-      code: ${{ steps.code.outputs.code }}
+      meko_api_server: ${{ steps.filter.outputs.meko_api_server }}
+      meko_inference: ${{ steps.filter.outputs.meko_inference }}
+      meko_ui: ${{ steps.filter.outputs.meko_ui }}
+      meko_docs_only: ${{ steps.docs.outputs.meko_docs_only }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
-            api_server:
+            meko_api_server:
               - 'api_server/**'
               - '.github/workflows/pr-build.yml'
-            inference:
+            meko_inference:
               - 'inference_gateway/**'
               - '.github/workflows/pr-build.yml'
-            ui:
+            meko_ui:
               - 'meko_ui/**'
               - '.github/workflows/pr-build.yml'
-      # A change counts as "code" if at least one changed file is not a markdown
-      # doc; the jobs gate on it so a docs-only PR skips build/test.
+      # A PR is docs-only when *every* changed file is a markdown doc — hence
+      # `every` over a positive '**/*.md' pattern. The jobs gate on this being
+      # false, so a docs-only PR skips build/test while a PR that touches both
+      # code and docs still builds.
       - uses: dorny/paths-filter@v3
-        id: code
+        id: docs
         with:
           predicate-quantifier: 'every'
           filters: |
-            code:
-              - '**'
-              - '!**/*.md'
+            meko_docs_only:
+              - '**/*.md'
 
-  api-server:
-    name: API Server — build, vet & tests
+  meko_api_server:
+    name: Meko API Server — build, vet & tests
     needs: changes
-    if: needs.changes.outputs.api_server == 'true' && needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.meko_api_server == 'true' && needs.changes.outputs.meko_docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -101,10 +102,10 @@ jobs:
       - name: Tests
         run: go test ./...
 
-  inference:
-    name: Inference Gateway — tests
+  meko_inference:
+    name: Meko Inference Gateway — tests
     needs: changes
-    if: needs.changes.outputs.inference == 'true' && needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.meko_inference == 'true' && needs.changes.outputs.meko_docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -125,10 +126,10 @@ jobs:
       - name: Tests
         run: pytest -q
 
-  ui:
-    name: UI — typecheck, tests & build
+  meko_ui:
+    name: Meko UI — typecheck, tests & build
     needs: changes
-    if: needs.changes.outputs.ui == 'true' && needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.meko_ui == 'true' && needs.changes.outputs.meko_docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:

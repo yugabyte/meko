@@ -9,7 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  meko_release:
+    name: Meko Release CLI
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

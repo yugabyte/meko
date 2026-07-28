@@ -5,8 +5,8 @@ on:
   pull_request:
 
 jobs:
-  lint:
-    name: Run on Ubuntu
+  meko_provisioner_lint:
+    name: Meko Provisioner Lint
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code
