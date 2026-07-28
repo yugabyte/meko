@@ -1,0 +1,5 @@
+{
+  "name": "amp-agent-skills-claude-desktop",
+  "version": "0.1.0",
+  "description": "amp controller MCP tools skill for Claude Desktop — storage pools, projects, branches, endpoints, and tasks."
+}

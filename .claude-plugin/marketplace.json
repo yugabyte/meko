@@ -1,0 +1,22 @@
+{
+  "name": "amp-agent-skills",
+  "owner": {
+    "name": "amp",
+    "email": "info@yugabyte.com"
+  },
+  "metadata": {
+    "description": "Agent skills for the amp controller MCP server",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "amp-agent-skills",
+      "description": "amp controller MCP tools: storage pools, projects (databases), branches, endpoints (compute), and tasks.",
+      "source": "./controller/mcp/skills",
+      "strict": false,
+      "skills": [
+        "./amp-mcp-tools"
+      ]
+    }
+  ]
+}
