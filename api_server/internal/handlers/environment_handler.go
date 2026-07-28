@@ -11,7 +11,7 @@ import (
 	"meko/api_server/internal/service"
 )
 
-// EnvironmentHandler serves the MCCP fleet-registry API (control-plane mode):
+// EnvironmentHandler serves the YCP fleet-registry API (control-plane mode):
 // console/admin routes plus the agent enroll/status/desired-state surface.
 type EnvironmentHandler struct {
 	svc *service.EnvironmentService
@@ -62,7 +62,7 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
-	hint := "helm install meko-agent meko/meko-agent --set mccp.url=$MCCP --set enrollmentToken=" + token
+	hint := "helm install meko-agent meko/meko-agent --set ycp.url=$YCP --set enrollmentToken=" + token
 	return ok(c, http.StatusCreated, map[string]any{"environment": e, "enrollment_token": token, "install_hint": hint})
 }
 

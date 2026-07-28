@@ -124,7 +124,7 @@ type ServerConfig struct {
 	// it at runtime (meko_system.amp_registration, via POST /amp/registration).
 	ShowPGAMP bool
 
-	// ControlPlaneMode gates the MCCP fleet registry + agent API (BYOC control
+	// ControlPlaneMode gates the YCP fleet registry + agent API (BYOC control
 	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*
 	// are registered against meko_system.environments.
 	ControlPlaneMode bool

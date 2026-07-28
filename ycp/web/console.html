@@ -1,0 +1,481 @@
+<title>Yugabyte Control Plane — Console</title>
+<style>
+  :root {
+    color-scheme: light;
+    --ground: #f4f6f9; --surface: #ffffff; --surface-2: #eef1f6; --rail: #0f1620;
+    --rail-ink: #c3ccd8; --rail-ink-dim: #7f8b9a; --rail-active: #1c2735;
+    --ink: #0f1620; --ink-soft: #45505f; --ink-faint: #6b7686;
+    --border: #dde2ea; --border-strong: #c6cdd8;
+    --control: #2f5fe0; --control-soft: #e5ecfd; --control-ink: #1c4bc0;
+    --data: #0e9d6b; --data-soft: #dcf3e8;
+    --warn: #b9770c; --warn-soft: #fbf0d8;
+    --crit: #cf3b46; --crit-soft: #fbe0e2;
+    --aeon: #7c3aed; --aeon-soft: #ede9fe;
+    --shadow: 0 1px 2px rgba(15,22,32,.05), 0 4px 16px rgba(15,22,32,.05);
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --ground: #0b0f14; --surface: #141b24; --surface-2: #1b2531; --rail: #0a0e13;
+      --rail-ink: #aab6c4; --rail-ink-dim: #69747f; --rail-active: #1a2431;
+      --ink: #e8edf4; --ink-soft: #aab6c4; --ink-faint: #7d8a99;
+      --border: #26303d; --border-strong: #33404f;
+      --control: #7aa0ff; --control-soft: #1b2740; --control-ink: #9db8ff;
+      --data: #45c795; --data-soft: #123027;
+      --warn: #e0ad4f; --warn-soft: #33290f;
+      --crit: #f0757e; --crit-soft: #331519;
+      --aeon: #b79bf5; --aeon-soft: #241a3a;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground:#0b0f14; --surface:#141b24; --surface-2:#1b2531; --rail:#0a0e13;
+    --rail-ink:#aab6c4; --rail-ink-dim:#69747f; --rail-active:#1a2431;
+    --ink:#e8edf4; --ink-soft:#aab6c4; --ink-faint:#7d8a99;
+    --border:#26303d; --border-strong:#33404f;
+    --control:#7aa0ff; --control-soft:#1b2740; --control-ink:#9db8ff;
+    --data:#45c795; --data-soft:#123027; --warn:#e0ad4f; --warn-soft:#33290f;
+    --crit:#f0757e; --crit-soft:#331519; --aeon:#b79bf5; --aeon-soft:#241a3a;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); line-height: 1.45; -webkit-font-smoothing: antialiased; }
+  .mono { font-family: var(--mono); }
+  button { font-family: inherit; cursor: pointer; }
+  h1,h2,h3,h4 { margin: 0; }
+
+  /* ---- topbar ---- */
+  .topbar { display: flex; align-items: center; gap: 14px; padding: 10px 18px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 30; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .glyph { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(150deg, var(--control), var(--aeon)); display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 13px; letter-spacing: -.5px; }
+  .brand h1 { font-size: 14px; font-weight: 660; letter-spacing: -.1px; }
+  .brand .sub { font-size: 11px; color: var(--ink-faint); }
+  .search { margin-left: 18px; flex: 1; max-width: 380px; display: flex; align-items: center; gap: 8px; background: var(--ground); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; color: var(--ink-faint); font-size: 12.5px; }
+  .search input { border: 0; background: transparent; outline: none; color: var(--ink); font-family: inherit; font-size: 12.5px; width: 100%; }
+  .top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .aeon-chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--aeon); background: var(--aeon-soft); border: 1px solid color-mix(in srgb, var(--aeon) 28%, transparent); padding: 4px 9px; border-radius: 999px; }
+  .user { display: flex; align-items: center; gap: 8px; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--control-soft); color: var(--control-ink); display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+  .user .nm { font-size: 12px; font-weight: 600; } .user .rl { font-size: 10.5px; color: var(--ink-faint); }
+
+  /* ---- shell ---- */
+  .shell { display: grid; grid-template-columns: 216px 1fr; min-height: calc(100vh - 51px); }
+  .rail { background: var(--rail); padding: 14px 12px; display: flex; flex-direction: column; gap: 3px; }
+  .rail .grp { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--rail-ink-dim); padding: 12px 10px 5px; }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--rail-ink); font-size: 13px; border: 0; background: transparent; width: 100%; text-align: left; }
+  .nav:hover { background: var(--rail-active); color: #fff; }
+  .nav.active { background: var(--rail-active); color: #fff; font-weight: 600; }
+  .nav .ic { width: 16px; height: 16px; flex: none; opacity: .85; }
+  .nav .badge { margin-left: auto; font-family: var(--mono); font-size: 10px; background: rgba(255,255,255,.09); color: var(--rail-ink); padding: 1px 6px; border-radius: 999px; }
+  .rail .foot { margin-top: auto; font-family: var(--mono); font-size: 10px; color: var(--rail-ink-dim); padding: 10px; }
+
+  .main { padding: 22px 26px 60px; min-width: 0; }
+  [data-view][hidden] { display: none; }
+
+  /* ---- page head ---- */
+  .phead { display: flex; align-items: flex-end; gap: 14px; margin-bottom: 18px; }
+  .phead h2 { font-size: 20px; font-weight: 680; letter-spacing: -.02em; }
+  .phead .desc { font-size: 12.5px; color: var(--ink-faint); margin-top: 2px; }
+  .btn { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); }
+  .btn:hover { border-color: var(--ink-faint); }
+  .btn.primary { background: var(--control); border-color: var(--control); color: #fff; box-shadow: var(--shadow); }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--ink-soft); }
+  .btn.sm { padding: 5px 10px; font-size: 12px; }
+  .btn.danger { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 35%, transparent); }
+  .spacer { margin-left: auto; }
+
+  /* ---- kpi strip ---- */
+  .kstrip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+  .kcard { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 13px 15px; box-shadow: var(--shadow); }
+  .kcard .l { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); }
+  .kcard .v { font-size: 26px; font-weight: 660; letter-spacing: -.02em; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .kcard .v small { font-size: 13px; color: var(--ink-soft); font-weight: 600; }
+  .kcard .d { font-family: var(--mono); font-size: 11px; margin-top: 3px; color: var(--data); }
+
+  /* ---- toolbar ---- */
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .fchip { font-size: 12px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--ink-soft); }
+  .fchip.active { background: var(--control-soft); border-color: color-mix(in srgb, var(--control) 32%, transparent); color: var(--control-ink); font-weight: 600; }
+
+  /* ---- layout: table + detail ---- */
+  .fleet-grid { display: grid; grid-template-columns: 1fr 340px; gap: 16px; align-items: start; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  thead th { text-align: left; font-family: var(--mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-faint); font-weight: 600; padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--surface-2); }
+  tbody tr.sel { background: var(--control-soft); }
+  td .env { font-family: var(--mono); font-weight: 600; font-size: 12.5px; }
+  td .num { font-variant-numeric: tabular-nums; }
+  .place { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-soft); }
+  .pdot { width: 7px; height: 7px; border-radius: 2px; }
+  .pdot.cloud { background: var(--control); } .pdot.onprem { background: var(--aeon); }
+
+  /* state chips */
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 6px; white-space: nowrap; letter-spacing: .02em; }
+  .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .chip.ready { color: var(--data); background: var(--data-soft); }
+  .chip.degraded { color: var(--warn); background: var(--warn-soft); }
+  .chip.suspended { color: var(--crit); background: var(--crit-soft); }
+  .chip.prov { color: var(--control-ink); background: var(--control-soft); }
+
+  /* capacity bar */
+  .cap { display: flex; align-items: center; gap: 8px; }
+  .cap .track { width: 62px; height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .cap .fill { height: 100%; background: var(--control); border-radius: 999px; }
+  .cap .fill.hot { background: var(--warn); }
+  .cap span { font-variant-numeric: tabular-nums; font-size: 11.5px; color: var(--ink-soft); width: 30px; }
+
+  /* ---- detail panel ---- */
+  .detail { padding: 16px; position: sticky; top: 66px; }
+  .detail .dh { display: flex; align-items: center; gap: 9px; margin-bottom: 3px; }
+  .detail .dh .en { font-family: var(--mono); font-size: 14px; font-weight: 700; }
+  .detail .dmeta { font-size: 11.5px; color: var(--ink-faint); margin-bottom: 14px; }
+  .sect-l { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); margin: 16px 0 8px; }
+
+  /* stepper */
+  .steps { display: flex; flex-direction: column; gap: 0; }
+  .step { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 3px 0; position: relative; }
+  .step .mk { width: 16px; height: 16px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 9px; font-weight: 800; border: 2px solid var(--border-strong); color: transparent; background: var(--surface); z-index: 1; }
+  .step:not(:last-child)::after { content: ""; position: absolute; left: 7px; top: 18px; width: 2px; height: 14px; background: var(--border-strong); }
+  .step.done .mk { background: var(--data); border-color: var(--data); color: #fff; }
+  .step.done:not(:last-child)::after { background: var(--data); }
+  .step.cur .mk { border-color: var(--control); background: var(--control); color: #fff; box-shadow: 0 0 0 3px var(--control-soft); }
+  .step.done .lb { color: var(--ink-soft); }
+  .step.cur .lb { color: var(--ink); font-weight: 600; }
+  .step .lb { color: var(--ink-faint); }
+
+  /* component health rows */
+  .comp { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 0; }
+  .comp .cn { font-family: var(--mono); font-size: 11.5px; }
+  .comp .cc { margin-left: auto; font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--data); background: var(--data-soft); padding: 1px 7px; border-radius: 5px; }
+  .comp .cc.warn { color: var(--warn); background: var(--warn-soft); }
+  .comp .sd { width: 7px; height: 7px; border-radius: 50%; background: var(--data); }
+  .comp .sd.warn { background: var(--warn); }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 11.5px; }
+  .kv dt { color: var(--ink-faint); font-family: var(--mono); font-size: 10.5px; }
+  .kv dd { margin: 0; font-family: var(--mono); font-size: 11px; text-align: right; overflow: hidden; text-overflow: ellipsis; }
+  .dactions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+
+  /* ---- onboard wizard ---- */
+  .wiz { max-width: 720px; }
+  .wsteps { display: flex; gap: 8px; margin-bottom: 22px; }
+  .wstep { flex: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 12px; color: var(--ink-faint); }
+  .wstep b { display: block; font-family: var(--mono); font-size: 10px; color: var(--ink-faint); margin-bottom: 2px; }
+  .wstep.on { border-color: var(--control); background: var(--control-soft); color: var(--control-ink); }
+  .wstep.on b { color: var(--control-ink); }
+  .fgroup { margin-bottom: 16px; }
+  .fgroup label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+  .fgroup input, .fgroup select { width: 100%; padding: 9px 11px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--ink); font-family: inherit; font-size: 13px; }
+  .frow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .mode { border: 1px solid var(--border-strong); border-radius: 11px; padding: 14px; background: var(--surface); }
+  .mode.sel { border-color: var(--control); box-shadow: 0 0 0 3px var(--control-soft); }
+  .mode h4 { font-size: 13px; margin-bottom: 4px; }
+  .mode p { margin: 0; font-size: 11.5px; color: var(--ink-faint); }
+  .mode .tag { font-family: var(--mono); font-size: 10px; color: var(--control-ink); background: var(--control-soft); padding: 2px 7px; border-radius: 5px; float: right; }
+  .code { font-family: var(--mono); font-size: 12px; background: var(--rail); color: #d7e0ec; border-radius: 10px; padding: 14px 16px; overflow-x: auto; white-space: pre; line-height: 1.7; }
+  .code .cm { color: #6b7686; } .code .tok { color: #f0b86e; } .code .fl { color: #8bd5a0; }
+  .note { font-size: 12px; color: var(--ink-soft); background: var(--aeon-soft); border: 1px solid color-mix(in srgb, var(--aeon) 24%, transparent); border-radius: 9px; padding: 10px 12px; margin-top: 12px; }
+  .note b { color: var(--aeon); }
+
+  .stub { display: grid; place-items: center; min-height: 300px; text-align: center; color: var(--ink-faint); }
+  .stub .big { font-size: 15px; font-weight: 600; color: var(--ink-soft); margin-bottom: 4px; }
+
+  @media (max-width: 960px) { .fleet-grid { grid-template-columns: 1fr; } .detail { position: static; } .kstrip { grid-template-columns: repeat(2,1fr); } .rail { display: none; } .shell { grid-template-columns: 1fr; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="glyph">M</div>
+    <div><h1>Yugabyte Control Plane</h1><div class="sub">Fleet management · YCP</div></div>
+  </div>
+  <div class="search"><span>⌕</span><input placeholder="Search environments, datapacks, accounts…" aria-label="Search" /></div>
+  <div class="top-right">
+    <span class="aeon-chip">● YBM Aeon · us-east-1</span>
+    <div class="user"><div class="avatar">AN</div><div><div class="nm">A. Nijhawan</div><div class="rl">via YBM Aeon OIDC</div></div></div>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="rail">
+    <div class="grp">Operate</div>
+    <button class="nav active" data-nav="fleet"><span class="ic">▦</span> Fleet <span class="badge" id="navFleetCount"></span></button>
+    <button class="nav" data-nav="datapacks"><span class="ic">◈</span> Datapacks <span class="badge" id="navDpCount"></span></button>
+    <button class="nav" data-nav="onboard"><span class="ic">＋</span> Register</button>
+    <div class="foot">YCP · control plane<br/>state in Postgres</div>
+  </nav>
+
+  <main class="main">
+
+    <!-- ============ FLEET ============ -->
+    <section data-view="fleet">
+      <div class="phead">
+        <div><h2>Fleet</h2><div class="desc">Every registered Meko environment across cloud and on-prem.</div></div>
+        <button class="btn primary spacer" data-nav="onboard">＋ Register environment</button>
+      </div>
+
+      <div class="kstrip" style="grid-template-columns:repeat(3,1fr)">
+        <div class="kcard"><div class="l">Environments</div><div class="v" id="kEnvs">—</div></div>
+        <div class="kcard"><div class="l">Ready</div><div class="v" id="kReady">—</div></div>
+        <div class="kcard"><div class="l">Datapacks (reported)</div><div class="v" id="kDatapacks">—</div></div>
+      </div>
+
+      <div class="toolbar" id="filters">
+        <button class="fchip active" data-f="all">All</button>
+        <button class="fchip" data-f="READY">Ready</button>
+        <button class="fchip" data-f="DEGRADED">Degraded</button>
+        <button class="fchip" data-f="PROVISIONING">Provisioning</button>
+        <button class="fchip" data-f="SUSPENDED">Suspended</button>
+      </div>
+
+      <div class="fleet-grid">
+        <div class="panel tablewrap">
+          <table>
+            <thead><tr><th>Environment</th><th>Region</th><th>Placement</th><th>State</th><th>Datapacks</th><th>Agent</th><th>Heartbeat</th><th>Capacity</th></tr></thead>
+            <tbody id="envRows"></tbody>
+          </table>
+        </div>
+        <div class="panel detail" id="detail"><!-- rendered --></div>
+      </div>
+    </section>
+
+    <!-- ============ REGISTER ============ -->
+    <section data-view="onboard" hidden>
+      <div class="phead"><div><h2>Register environment</h2><div class="desc">Creates a real environment (state PENDING) and mints a short-TTL enrollment token. Run the printed command in your cluster to bring the agent online.</div></div></div>
+      <div class="wiz">
+        <div class="frow">
+          <div class="fgroup"><label>Environment name</label><input id="obName" value="acme-prod" /></div>
+          <div class="fgroup"><label>Account</label><input id="obAccount" value="acme-corp" /></div>
+        </div>
+        <div class="frow">
+          <div class="fgroup"><label>Region</label><input id="obRegion" value="us-east-1" /></div>
+          <div class="fgroup"><label>Placement</label><select id="obPlacement"><option value="cloud">cloud</option><option value="onprem">on-prem</option></select></div>
+        </div>
+
+        <div class="sect-l">Onboarding mode</div>
+        <div class="modes" id="modes">
+          <div class="mode sel" data-mode="attach"><span class="tag">PENDING → ENROLLING</span><h4>Attach existing cluster</h4><p>You already run a Kubernetes cluster; the installer drops the agent + operator into it.</p></div>
+          <div class="mode" data-mode="provision"><span class="tag">+ CLUSTER_PROVISIONING</span><h4>Provision new cluster</h4><p><code>meko bootstrap</code> stands up a fresh cluster in your cloud, then installs.</p></div>
+        </div>
+
+        <div class="dactions">
+          <button class="btn primary" id="registerBtn">Register environment</button>
+        </div>
+
+        <div id="registerResult" hidden>
+          <div class="sect-l">Enrollment token <span style="font-weight:400;color:var(--ink-faint)">— shown once, ~30&nbsp;min TTL, reusable within window</span></div>
+          <div class="code" id="installCode"></div>
+          <div class="note"><b>Credentials stay with you —</b> the token only lets the agent dial out to YCP. Your kubeconfig and cloud credentials never leave your cloud. The new environment now appears in <b>Fleet</b> as <span class="chip prov" style="font-size:10px">PENDING</span>.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ DATAPACKS (real) ============ -->
+    <section data-view="datapacks" hidden>
+      <div class="phead"><div><h2>Datapacks</h2><div class="desc">Reported by agents on each status tick. Metadata only — data lives in each customer cloud.</div></div></div>
+      <div class="panel tablewrap">
+        <table>
+          <thead><tr><th>Datapack</th><th>Environment</th><th>Database</th><th>Endpoint</th><th>Phase</th></tr></thead>
+          <tbody id="dpRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // ================= LIVE console — every value comes from the YCP API =================
+  let ENVS = [];
+  let DPS = [];
+  let currentFilter = "all";
+  let selectedId = null;
+  const STATE_CLASS = { READY:"ready", DEGRADED:"degraded", SUSPENDED:"suspended", DRAINING:"suspended", DEREGISTERED:"suspended", PROVISIONING:"prov", CLUSTER_PROVISIONING:"prov", ENROLLING:"prov", ATTESTING:"prov", VALIDATING:"prov", PENDING:"prov" };
+  const LIFECYCLE = ["PENDING","CLUSTER_PROVISIONING","ENROLLING","ATTESTING","PROVISIONING","VALIDATING","READY"];
+  const TERMINAL = new Set(["READY","DEGRADED","SUSPENDED","DRAINING","DEREGISTERED"]);
+  const chip = s => `<span class="chip ${STATE_CLASS[s]||"prov"}">${s}</span>`;
+  const rowsEl = document.getElementById("envRows");
+  const el = id => document.getElementById(id);
+
+  function rel(ts) {
+    if (!ts) return "—";
+    const s = Math.max(0, (Date.now() - new Date(ts).getTime())/1000);
+    if (s < 90) return Math.round(s)+"s";
+    if (s < 3600) return Math.round(s/60)+"m";
+    return Math.round(s/3600)+"h";
+  }
+  function mapEnv(a) {
+    const cap = a.max_datapacks ? Math.round((a.datapacks/a.max_datapacks)*100) : 0;
+    return { id:a.id, region:a.region||"—", place:a.placement, state:a.state, dp:a.datapacks||0,
+      agent:a.agent_version||"—", hb:rel(a.last_heartbeat_at), stale:a.last_heartbeat_at && (Date.now()-new Date(a.last_heartbeat_at).getTime())>90000,
+      cap, live:a.live, components:a.components||null, mcp:a.mcp_base_url||"—", cert:a.cert_fingerprint||"—",
+      k8s:a.k8s_version, nodes:a.node_count, provider:a.provider };
+  }
+  async function refresh() {
+    try {
+      const [er, dr] = await Promise.all([fetch("/api/v1/environments"), fetch("/api/v1/datapacks")]);
+      ENVS = ((await er.json()).items || []).map(mapEnv);
+      DPS = (await dr.json()) || [];
+    } catch (e) { return; /* keep last view */ }
+    renderRows(currentFilter);
+    renderDatapacks();
+    updateKpis();
+  }
+  function updateKpis() {
+    const ready = ENVS.filter(e => e.state==="READY").length;
+    el("kEnvs").textContent = ENVS.length;
+    el("kReady").textContent = ready;
+    el("kDatapacks").textContent = DPS.length;
+    el("navFleetCount").textContent = ENVS.length || "";
+    el("navDpCount").textContent = DPS.length || "";
+  }
+
+  function renderRows(filter) {
+    const list = ENVS.filter(e => !filter || filter==="all" || (filter==="PROVISIONING" ? String(e.state).includes("PROVISIONING") : e.state===filter));
+    if (!list.length) {
+      rowsEl.innerHTML = `<tr><td colspan="8" style="color:var(--ink-faint);padding:20px">No environments yet — enroll an agent, or use <b>Register</b>.</td></tr>`;
+      el("detail").innerHTML = '<div style="color:var(--ink-faint);font-size:13px">Select an environment.</div>';
+      return;
+    }
+    rowsEl.innerHTML = list.map(e => `<tr data-id="${e.id}">
+        <td><span class="env">${e.id}</span>${e.live?' <span class="chip ready" style="font-size:9px;padding:1px 5px">LIVE</span>':''}</td>
+        <td>${e.region}</td>
+        <td><span class="place"><span class="pdot ${e.place}"></span>${e.place==="cloud"?"Cloud":"On-prem"}</span></td>
+        <td>${chip(e.state)}</td>
+        <td class="num">${e.dp||"—"}</td>
+        <td class="mono" style="font-size:11.5px">${e.agent}</td>
+        <td class="mono" style="font-size:11.5px;color:${e.stale?"var(--warn)":"var(--ink-soft)"}">${e.hb}</td>
+        <td>${e.cap?`<span class="cap"><span class="track"><span class="fill ${e.cap>75?"hot":""}" style="width:${Math.min(100,e.cap)}%"></span></span><span>${e.cap}%</span></span>`:"—"}</td>
+      </tr>`).join("");
+    rowsEl.querySelectorAll("tr").forEach(tr => tr.onclick = () => selectEnv(tr.dataset.id));
+    let pick = selectedId && list.some(e=>e.id===selectedId) ? selectedId : list[0].id;
+    selectEnv(pick);
+  }
+  function compRows(e) {
+    if (e.components && e.components.length) {
+      return e.components.map(c => {
+        const bad = c.healthy < c.total || c.total===0;
+        return `<div class="comp"><span class="sd ${bad?"warn":""}"></span><span class="cn">${c.name}</span><span class="cc ${bad?"warn":""}">${c.healthy}/${c.total} up</span></div>`;
+      }).join("");
+    }
+    return `<div style="color:var(--ink-faint);font-size:12px">No components reported yet.</div>`;
+  }
+  function selectEnv(id) {
+    selectedId = id;
+    rowsEl.querySelectorAll("tr").forEach(tr => tr.classList.toggle("sel", tr.dataset.id===id));
+    const e = ENVS.find(x => x.id===id); if (!e) return;
+    const curIdx = LIFECYCLE.indexOf(TERMINAL.has(e.state) ? "READY" : e.state);
+    const stepsHtml = LIFECYCLE.map((s,i) => {
+      const cls = i<curIdx ? "done" : i===curIdx ? (TERMINAL.has(e.state)?"done":"cur") : "";
+      return `<div class="step ${cls}"><span class="mk">✓</span><span class="lb">${s}</span></div>`;
+    }).join("");
+    const banner = e.stale ? `<div class="chip degraded" style="margin-bottom:10px">heartbeat stale</div>`
+                 : e.state==="SUSPENDED" ? `<div class="chip suspended" style="margin-bottom:10px">suspended</div>` : "";
+    const factLine = e.live ? `<div class="dmeta" style="color:var(--data)">● live agent · ${e.provider||""} · k8s ${e.k8s||"?"} · ${e.nodes||0} nodes</div>` : "";
+    el("detail").innerHTML = `
+      <div class="dh"><span class="en">${e.id}</span>${chip(e.state)}</div>
+      <div class="dmeta">${e.region} · ${e.place==="cloud"?"cloud":"on-prem"} · ${e.dp} datapacks</div>
+      ${factLine}${banner}
+      <div class="sect-l">Lifecycle state</div>
+      <div class="steps">${stepsHtml}</div>
+      <div class="sect-l">Components</div>
+      ${compRows(e)}
+      <div class="sect-l">Metadata</div>
+      <dl class="kv">
+        <dt>agent</dt><dd>${e.agent}</dd>
+        <dt>heartbeat</dt><dd>${e.hb} ago</dd>
+        <dt>mcp base</dt><dd>${e.mcp}</dd>
+        <dt>cert</dt><dd>${e.cert}</dd>
+      </dl>
+      <div class="dactions">
+        <button class="btn sm primary" onclick="provisionDP()">Set datapacks</button>
+        <button class="btn sm" onclick="act('suspend')">Suspend</button>
+        <button class="btn sm" onclick="act('resume')">Resume</button>
+        <button class="btn sm" onclick="act('drain')">Drain</button>
+        <button class="btn sm danger" onclick="dereg()">Deregister</button>
+      </div>`;
+  }
+  async function act(a) { if (!selectedId) return; await fetch(`/api/v1/environments/${selectedId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:a})}); refresh(); }
+  async function dereg() { if (!selectedId) return; if(!confirm("Deregister "+selectedId+"?")) return; await fetch(`/api/v1/environments/${selectedId}`,{method:"DELETE"}); refresh(); }
+  async function provisionDP() {
+    if (!selectedId) return;
+    const s = prompt("Desired datapacks for "+selectedId+" (comma-separated). The agent reconciles each into a namespace:", "alpha,beta");
+    if (s === null) return;
+    const names = s.split(",").map(x=>x.trim()).filter(Boolean);
+    await fetch(`/api/v1/environments/${selectedId}/datapacks`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({names})});
+    refresh();
+  }
+
+  // ---- datapacks view ----
+  function renderDatapacks() {
+    const t = el("dpRows");
+    if (!t) return;
+    if (!DPS.length) { t.innerHTML = `<tr><td colspan="5" style="color:var(--ink-faint);padding:20px">No datapacks yet — select an environment and use <b>Set datapacks</b>.</td></tr>`; return; }
+    t.innerHTML = DPS.map(d => {
+      const ph = d.phase || "Active";
+      const cls = ph==="Active"?"ready":ph==="Error"?"suspended":"prov";
+      return `<tr>
+      <td class="mono">${d.name}</td>
+      <td class="mono" style="font-size:11.5px">${d.environment_id}</td>
+      <td class="mono" style="font-size:11.5px">${d.db||"—"}</td>
+      <td class="mono" style="font-size:10.5px;color:var(--ink-faint)">${d.endpoint||"—"}</td>
+      <td><span class="chip ${cls}">${ph}</span>${d.error?` <span style="color:var(--crit);font-size:11px">${d.error}</span>`:""}</td>
+    </tr>`; }).join("");
+  }
+
+  document.querySelectorAll("#filters .fchip").forEach(b => b.onclick = () => {
+    document.querySelectorAll("#filters .fchip").forEach(x => x.classList.remove("active"));
+    b.classList.add("active"); currentFilter = b.dataset.f; renderRows(currentFilter);
+  });
+
+  // ---- nav ----
+  function go(view) {
+    document.querySelectorAll("[data-view]").forEach(s => s.hidden = s.dataset.view !== view);
+    document.querySelectorAll(".rail .nav").forEach(n => n.classList.toggle("active", n.dataset.nav===view));
+    window.scrollTo(0,0);
+  }
+  document.querySelectorAll("[data-nav]").forEach(elm => elm.onclick = () => go(elm.dataset.nav));
+
+  // ---- register (real: POST /api/v1/environments) ----
+  let mode = "attach";
+  document.querySelectorAll("#modes .mode").forEach(m => m.onclick = () => {
+    document.querySelectorAll("#modes .mode").forEach(x => x.classList.remove("sel"));
+    m.classList.add("sel"); mode = m.dataset.mode;
+  });
+  function installSnippet(token) {
+    if (mode === "attach") {
+      return `<span class="cm"># attach the agent + operator to your existing cluster</span>\nhelm install meko-agent <span class="tok">meko/meko-agent</span> \\\n  <span class="fl">--set</span> ycp.url=$YCP \\\n  <span class="fl">--set</span> enrollmentToken=<span class="tok">${token}</span>`;
+    }
+    return `<span class="cm"># provision a fresh cluster, then install</span>\nmeko bootstrap provision \\\n  <span class="fl">--cloud</span> aws <span class="fl">--region</span> ${el("obRegion").value||"us-east-1"} <span class="fl">--nodes</span> 3 \\\n  <span class="fl">--enrollment-token</span> <span class="tok">${token}</span>`;
+  }
+  el("registerBtn").onclick = async () => {
+    const name = el("obName").value.trim();
+    if (!name) { alert("Environment name is required"); return; }
+    const body = {
+      name, account_id: el("obAccount").value.trim(), region: el("obRegion").value.trim(),
+      placement: el("obPlacement").value,
+      cluster_spec: mode==="provision" ? {provider:"aws", region: el("obRegion").value.trim()||"us-east-1", node_count:3} : null,
+    };
+    const r = await fetch("/api/v1/environments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if (!r.ok) { alert("Register failed ("+r.status+")"); return; }
+    const j = await r.json();
+    el("installCode").innerHTML = installSnippet(j.enrollment_token || "mko_enr_…");
+    el("registerResult").hidden = false;
+    refresh();
+  };
+
+  // init + poll
+  refresh();
+  setInterval(refresh, 4000);
+</script>

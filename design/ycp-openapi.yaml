@@ -1,0 +1,463 @@
+openapi: 3.1.0
+info:
+  title: Yugabyte Control Plane (YCP) API
+  version: 0.1.0-draft
+  description: |
+    Control-plane API for the Meko BYOC architecture. YCP runs inside the YBM Aeon VPC,
+    owns the fleet registry and desired state, and federates identity + entitlements from
+    YBM Aeon. It holds **no customer data and no customer cloud credentials**.
+
+    Three auth surfaces (see `securitySchemes`):
+      * **Human / console** — OIDC relying party of YBM Aeon (`aeonOIDC`).
+      * **Agent** — `meko-agent` in the customer cluster, mutual TLS (`agentMTLS`).
+        Outbound-only; YCP never dials into the customer cloud.
+      * **Internal** — MCP server → api_server, shared secret header (`internalSecret`).
+
+    This is a design stub: shapes are illustrative and not yet frozen.
+  contact: { name: Meko Platform }
+
+servers:
+  - url: https://ycp.mekodata.ai
+    description: Cloud YCP (inside the YBM Aeon VPC)
+  - url: https://ycp.{customer}.internal
+    description: On-prem YCP (alongside self-managed Aeon)
+    variables:
+      customer: { default: acme }
+
+tags:
+  - name: environments
+    description: Fleet of customer data-plane environments (console / OIDC).
+  - name: datapacks
+    description: Datapack metadata + placement (console / OIDC). Data itself lives in the customer cloud.
+  - name: entitlements
+    description: Read-only plan/caps, sourced upstream from YBM Aeon.
+  - name: agent
+    description: Pull-agent surface (mutual TLS). Enroll, reconcile desired state, report status.
+  - name: internal
+    description: MCP server → api_server calls (shared secret).
+
+paths:
+  # ------------------------------------------------------------------ environments
+  /api/v1/environments:
+    get:
+      tags: [environments]
+      summary: List environments
+      operationId: listEnvironments
+      security: [{ aeonOIDC: ['fleet:read'] }]
+      parameters:
+        - { name: state, in: query, schema: { $ref: '#/components/schemas/EnvState' } }
+        - { name: placement, in: query, schema: { type: string, enum: [cloud, onprem] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Page of environments.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Environment' } }
+                  next_cursor: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [environments]
+      summary: Register an environment (optionally requesting a new cluster)
+      operationId: createEnvironment
+      security: [{ aeonOIDC: ['fleet:write'] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EnvironmentCreate' }
+      responses:
+        '201':
+          description: |
+            Environment registered in state `PENDING`. Response carries a short-TTL, reusable
+            enrollment token and the `meko bootstrap` install hint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvironmentCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: Aeon entitlement does not permit another environment.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /api/v1/environments/{envId}:
+    parameters: [{ $ref: '#/components/parameters/EnvId' }]
+    get:
+      tags: [environments]
+      summary: Get one environment (state, health, components, endpoints)
+      operationId: getEnvironment
+      security: [{ aeonOIDC: ['fleet:read'] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Environment' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [environments]
+      summary: Lifecycle action — suspend, resume, or drain
+      operationId: updateEnvironment
+      description: Requests a target lifecycle state. The agent reconciles toward it (§7 state machine).
+      security: [{ aeonOIDC: ['fleet:write'] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [suspend, resume, drain] }
+                reason: { type: string }
+      responses:
+        '202': { description: Accepted; transition queued as desired state. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [environments]
+      summary: Deregister an environment
+      operationId: deregisterEnvironment
+      description: Moves the environment to `DRAINING` then `DEREGISTERED`; revokes the agent's mTLS identity.
+      security: [{ aeonOIDC: ['fleet:write'] }]
+      responses:
+        '202': { description: Deregistration started. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------------ datapacks
+  /api/v1/datapacks:
+    get:
+      tags: [datapacks]
+      summary: List datapack metadata
+      operationId: listDatapacks
+      security: [{ aeonOIDC: ['datapacks:read'] }]
+      parameters:
+        - { name: envId, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Datapack' } } } }
+    post:
+      tags: [datapacks]
+      summary: Create a datapack (metadata + placement only)
+      operationId: createDatapack
+      description: Writes metadata and emits desired state. Does NOT touch Kubernetes — the agent reconciles.
+      security: [{ aeonOIDC: ['datapacks:write'] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 3, maxLength: 60 }
+                envId: { type: string, description: Target environment; omit to auto-place. }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Datapack' } } } }
+        '402': { description: Free-tier cap reached (per Aeon entitlement). }
+
+  /api/v1/datapacks/{datapackId}:
+    parameters: [{ name: datapackId, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [datapacks]
+      summary: Get datapack metadata
+      operationId: getDatapack
+      security: [{ aeonOIDC: ['datapacks:read'] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Datapack' } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [datapacks]
+      summary: Mark a datapack for teardown
+      operationId: deleteDatapack
+      security: [{ aeonOIDC: ['datapacks:write'] }]
+      responses:
+        '202': { description: Teardown queued; agent reconciles. }
+
+  # ------------------------------------------------------------------ entitlements
+  /api/v1/entitlements:
+    get:
+      tags: [entitlements]
+      summary: Read the caller's plan and caps (from YBM Aeon)
+      operationId: getEntitlements
+      description: YCP runs no billing; this reflects the plan resolved from YBM Aeon upstream.
+      security: [{ aeonOIDC: ['fleet:read'] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Entitlement' } } } }
+
+  # ------------------------------------------------------------------ agent (mTLS)
+  /api/v1/agent/enroll:
+    post:
+      tags: [agent]
+      summary: Exchange a one-time enrollment token for an mTLS identity
+      operationId: agentEnroll
+      security: []  # bootstrap: token in body, no client cert yet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enrollment_token, csr]
+              properties:
+                enrollment_token: { type: string, examples: [mko_enr_9f2c...a71] }
+                csr: { type: string, description: PEM-encoded certificate signing request. }
+                cluster_facts: { $ref: '#/components/schemas/ClusterFacts' }
+      responses:
+        '200':
+          description: Signed client certificate + YCP endpoints.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  client_cert: { type: string, description: PEM-encoded signed cert. }
+                  ca_bundle: { type: string }
+                  environment_id: { type: string }
+        '401': { description: Invalid or expired enrollment token. }
+
+  /api/v1/agent/bootstrap-progress:
+    post:
+      tags: [agent]
+      summary: Pre-agent installer reports cluster-provisioning / install steps
+      operationId: agentBootstrapProgress
+      description: Token-authed; used before the long-running agent's mTLS identity exists (§7.1).
+      security: [{ enrollmentToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phase]
+              properties:
+                phase: { $ref: '#/components/schemas/EnvState' }
+                step: { type: string, examples: [creating-eks-cluster] }
+                message: { type: string }
+                error: { type: string, nullable: true }
+      responses:
+        '204': { description: Recorded. }
+
+  /api/v1/agent/desired-state:
+    get:
+      tags: [agent]
+      summary: Long-poll the desired state for this environment
+      operationId: agentDesiredState
+      description: |
+        Returns the components, datapack specs, and target versions the agent should reconcile
+        toward. Supports long-poll via `wait`. Datapack specs reference secret *names* only —
+        never secret values.
+      security: [{ agentMTLS: [] }]
+      parameters:
+        - { name: since, in: query, description: Last revision the agent has applied., schema: { type: integer } }
+        - { name: wait, in: query, description: Long-poll seconds., schema: { type: integer, default: 30, maximum: 90 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DesiredState' } } } }
+        '304': { description: No change since `since`. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/agent/status:
+    post:
+      tags: [agent]
+      summary: Heartbeat + component/datapack phases
+      operationId: agentStatus
+      description: |
+        Drives the fleet registry and the §7 state machine. Bulk time-series metrics do NOT
+        travel here — in-cluster Prometheus remote-writes those to Thanos (§9).
+      security: [{ agentMTLS: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/StatusReport' } } }
+      responses:
+        '204': { description: Recorded. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ------------------------------------------------------------------ internal
+  /api/v1/internal/meko-tokens/validate:
+    post:
+      tags: [internal]
+      summary: Validate an inbound MCP PAT
+      operationId: validateMcpToken
+      security: [{ internalSecret: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [token], properties: { token: { type: string, examples: [mko_tkn_...] } } }
+      responses:
+        '200':
+          description: Validation result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  datapack_id: { type: string, nullable: true }
+                  scopes: { type: array, items: { type: string } }
+        '503': { description: Internal secret not configured. }
+
+components:
+  parameters:
+    EnvId:
+      name: envId
+      in: path
+      required: true
+      schema: { type: string, examples: [acme-prod] }
+
+  securitySchemes:
+    aeonOIDC:
+      type: openIdConnect
+      openIdConnectUrl: https://auth.aeon.yugabyte.com/.well-known/openid-configuration
+      description: Human identity federated from YBM Aeon (cloud or on-prem issuer).
+    agentMTLS:
+      type: mutualTLS
+      description: meko-agent client certificate issued at enrollment. Outbound-only.
+    enrollmentToken:
+      type: http
+      scheme: bearer
+      description: Short-TTL bootstrap token (kubeadm-style) — reusable within its window (default 30m) so agent restarts can re-enroll; the agent then holds a longer-lived env-scoped credential.
+    internalSecret:
+      type: apiKey
+      in: header
+      name: X-Meko-Internal-Secret
+      description: Shared secret for MCP server → api_server internal calls.
+
+  responses:
+    Unauthorized: { description: Missing or invalid credentials., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Not found., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    BadRequest: { description: Invalid request., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: Conflicting state., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  schemas:
+    EnvState:
+      type: string
+      description: Bootstrapping / lifecycle state (§7 state machine).
+      enum: [PENDING, CLUSTER_PROVISIONING, ENROLLING, ATTESTING, PROVISIONING, VALIDATING, READY, DEGRADED, SUSPENDED, DRAINING, DEREGISTERED]
+
+    Environment:
+      type: object
+      properties:
+        id: { type: string, examples: [acme-prod] }
+        account_id: { type: string }
+        placement: { type: string, enum: [cloud, onprem] }
+        region: { type: string, examples: [us-east-1] }
+        state: { $ref: '#/components/schemas/EnvState' }
+        k8s_version: { type: string, examples: ['1.30'] }
+        capacity: { type: object, properties: { datapacks: { type: integer }, max_datapacks: { type: integer } } }
+        agent_version: { type: string, examples: [v1.4.2] }
+        last_heartbeat_at: { type: string, format: date-time }
+        mcp_base_url: { type: string, examples: ['https://acme.mcp.customer-domain'] }
+        cert_fingerprint: { type: string }
+        components: { type: array, items: { $ref: '#/components/schemas/Component' } }
+      required: [id, state, placement, region]
+
+    Component:
+      type: object
+      properties:
+        name: { type: string, examples: [mcp-server] }
+        healthy: { type: integer }
+        total: { type: integer }
+        version: { type: string }
+
+    EnvironmentCreate:
+      type: object
+      required: [name, placement, region]
+      properties:
+        name: { type: string, examples: [acme-prod] }
+        account_id: { type: string }
+        placement: { type: string, enum: [cloud, onprem] }
+        region: { type: string }
+        cluster_spec:
+          $ref: '#/components/schemas/ClusterSpec'
+          description: Present ⇒ provision-new-cluster mode; absent ⇒ attach-existing-cluster.
+
+    ClusterSpec:
+      type: object
+      description: Requested new cluster (provision mode, §7.1).
+      required: [provider, region]
+      properties:
+        provider: { type: string, enum: [aws, gcp, azure, aeon] }
+        region: { type: string }
+        node_count: { type: integer, default: 3, minimum: 1 }
+        node_size: { type: string, examples: [m6i.2xlarge] }
+
+    EnvironmentCreated:
+      allOf:
+        - $ref: '#/components/schemas/Environment'
+        - type: object
+          properties:
+            enrollment_token: { type: string, examples: [mko_enr_9f2c...a71] }
+            enrollment_expires_at: { type: string, format: date-time }
+            install_hint: { type: string, examples: ['helm install meko-agent meko/meko-agent --set enrollmentToken=...'] }
+
+    ClusterFacts:
+      type: object
+      properties:
+        k8s_version: { type: string }
+        region: { type: string }
+        node_count: { type: integer }
+
+    Datapack:
+      type: object
+      description: Metadata + placement only — the data lives in the customer cloud.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        account_id: { type: string }
+        environment_id: { type: string }
+        desired_versions: { type: object, properties: { mcp: { type: string }, rag: { type: string } } }
+        phase: { type: string, examples: [Active] }
+      required: [id, name, environment_id]
+
+    DesiredState:
+      type: object
+      description: |
+        Generic, resource-typed desired state the agent reconciles toward. The protocol
+        is transport-agnostic (currently HTTP/JSON long-poll); adding a new resource type
+        needs only a new agent-side reconciler for that Kind, not a schema change.
+      properties:
+        revision: { type: integer }
+        target_versions: { type: object, properties: { agent: { type: string }, mcp: { type: string }, rag: { type: string } } }
+        resources:
+          type: array
+          items: { $ref: '#/components/schemas/DesiredResource' }
+
+    DesiredResource:
+      type: object
+      required: [kind, name]
+      properties:
+        kind: { type: string, examples: [datapack], description: Resource type; dispatched to a reconciler. }
+        name: { type: string, examples: [alpha] }
+        # spec references secret NAMES only — never secret values
+        spec: { type: object, additionalProperties: true, examples: [{ yugabytedb_secret_ref: meko-shared-credentials }] }
+
+    StatusReport:
+      type: object
+      required: [environment_state]
+      properties:
+        environment_state: { $ref: '#/components/schemas/EnvState' }
+        agent_version: { type: string }
+        applied_revision: { type: integer }
+        components: { type: array, items: { $ref: '#/components/schemas/Component' } }
+        datapack_phases:
+          type: array
+          items: { type: object, properties: { id: { type: string }, phase: { type: string } } }
+
+    Entitlement:
+      type: object
+      description: Plan and caps resolved from YBM Aeon (read-only in YCP).
+      properties:
+        plan: { type: string, enum: [free, pro, enterprise] }
+        source: { type: string, const: ybm-aeon }
+        max_environments: { type: integer, nullable: true }
+        max_datapacks: { type: integer, nullable: true }
+
+    Error:
+      type: object
+      properties:
+        code: { type: string, examples: [not_found] }
+        message: { type: string }
+      required: [code, message]

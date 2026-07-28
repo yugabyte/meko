@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Environment is one registered customer data-plane environment (MCCP fleet
+// Environment is one registered customer data-plane environment (YCP fleet
 // registry, control-plane mode). Metadata only -- never customer data.
 type Environment struct {
 	CreatedAt       time.Time       `json:"created_at"`

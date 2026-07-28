@@ -1,0 +1,159 @@
+# YCP on meko-dev-eks, namespace `ycp`. Console exposed on the tailnet via the
+# cluster's Tailscale operator (annotations on the ClusterIP Service).
+# Pods run a stock alpine image that waits for a binary injected via `kubectl cp`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ycp
+  labels:
+    app.kubernetes.io/part-of: ycp
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: meko-agent
+  namespace: ycp
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ycp-tokens
+  namespace: ycp
+type: Opaque
+stringData:
+  enroll-token: "mko_enr_mekodev_5f3c9a"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ycp-agent-reader-mekodev
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "secrets"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ycp-agent-reader-mekodev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ycp-agent-reader-mekodev
+subjects:
+  - kind: ServiceAccount
+    name: meko-agent
+    namespace: ycp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ycp
+  namespace: ycp
+  labels: { app: ycp }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ycp } }
+  template:
+    metadata:
+      labels: { app: ycp }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: ycp
+          image: alpine:3.20
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - 'echo "waiting for /app/ycp"; while true; do if [ -x /app/ycp ]; then echo starting; /app/ycp -addr :8080; echo "ycp exited rc=$?"; fi; sleep 3; done'
+          env:
+            - { name: YCP_SEED_ENV_NAME, value: "meko-dev" }
+            - name: YCP_SEED_ENV_TOKEN
+              valueFrom: { secretKeyRef: { name: ycp-tokens, key: enroll-token } }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: app, mountPath: /app }
+      volumes:
+        - { name: app, emptyDir: {} }
+---
+# Console exposed on the tailnet. The Tailscale operator watches this annotation
+# and creates a proxy so the service is reachable at ycp-dev.<tailnet>.ts.net.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ycp
+  namespace: ycp
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: "ycp-dev"
+    tailscale.com/tags: "tag:k8s-meko"
+spec:
+  type: ClusterIP
+  selector: { app: ycp }
+  ports:
+    - { name: http, port: 80, targetPort: 8080 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-agent
+  namespace: ycp
+  labels: { app: meko-agent }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: meko-agent } }
+  template:
+    metadata:
+      labels: { app: meko-agent }
+    spec:
+      serviceAccountName: meko-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: meko-agent
+          image: alpine:3.20
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - 'echo "waiting for /app/agent"; while true; do if [ -x /app/agent ]; then echo starting; /app/agent; echo "agent exited rc=$?"; fi; sleep 3; done'
+          env:
+            - { name: YCP_URL, value: "http://ycp.ycp.svc.cluster.local:80" }
+            - { name: ENV_NAME, value: "meko-dev" }
+            - { name: ENV_PLACEMENT, value: "cloud" }
+            - { name: ENV_PROVIDER, value: "aws" }
+            - { name: ENV_REGION, value: "us-east-2" }
+            - name: ENROLLMENT_TOKEN
+              valueFrom: { secretKeyRef: { name: ycp-tokens, key: enroll-token } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: app, mountPath: /app }
+      volumes:
+        - { name: app, emptyDir: {} }

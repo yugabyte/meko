@@ -1,5 +1,5 @@
 /*
- * MCCP fleet registry (control-plane mode).
+ * YCP fleet registry (control-plane mode).
  *
  * One row per registered customer data-plane environment. Populated by the
  * agent enrollment handshake and status reports; read by the console/fleet API.

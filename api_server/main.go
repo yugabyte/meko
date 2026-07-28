@@ -109,8 +109,8 @@ func run() error {
 	// POST /api/v1/amp/registration (stored in meko_system.amp_registration).
 	showPGAMP := flag.Bool("show-pg-amp", envBoolOrDefault("SHOW_PG_AMP", false), "enable the AMP (Postgres databases) feature")
 
-	// MCCP control-plane mode (BYOC). Gates the fleet registry + agent API.
-	controlPlaneMode := flag.Bool("control-plane-mode", envBoolOrDefault("CONTROL_PLANE_MODE", false), "enable MCCP fleet registry + agent API (control plane)")
+	// YCP control-plane mode (BYOC). Gates the fleet registry + agent API.
+	controlPlaneMode := flag.Bool("control-plane-mode", envBoolOrDefault("CONTROL_PLANE_MODE", false), "enable YCP fleet registry + agent API (control plane)")
 
 	// MCP internal validation endpoint shared secret. When empty, the
 	// /api/v1/internal/meko-tokens/validate endpoint returns 503.

@@ -21,7 +21,7 @@ var ErrValidation = errors.New("validation error")
 // within this window (kubeadm-style bootstrap token) so agent restarts can re-enroll.
 const enrollTokenTTL = 30 * time.Minute
 
-// EnvironmentService owns the MCCP fleet-registry logic: enrollment-token
+// EnvironmentService owns the YCP fleet-registry logic: enrollment-token
 // handshake, status ingestion, and generic desired-state. Control-plane mode only.
 type EnvironmentService struct {
 	repo *repository.EnvironmentRepo

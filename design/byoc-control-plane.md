@@ -1,4 +1,4 @@
-# Meko BYOC Control Plane — Design
+# Yugabyte BYOC Control Plane — Design
 
 **Status:** Draft · **Owner:** Platform · **Last updated:** 2026-07-16
 
@@ -13,7 +13,7 @@ holds *all* customer memory, RAG, and conversation data.
 **BYOC (Bring Your Own Cloud)** splits the product into two named halves so that
 all customer data stays in the customer's own cloud account:
 
-- **MCCP — Meko Cloud Control Plane** (the control plane). Meko-operated. Owns
+- **YCP — Yugabyte Control Plane** (the control plane). Meko-operated. Owns
   the fleet registry and the *desired state* of every customer environment, and
   federates identity + entitlements from YBM Aeon (§4). Holds **no customer data
   and no customer cloud credentials**, and runs **no billing of its own** —
@@ -23,7 +23,7 @@ all customer data stays in the customer's own cloud account:
   `meko-provisioner` operator, and the customer-owned YugabyteDB (a YBM Aeon
   cluster, cloud or self-managed).
 
-Throughout this doc, **MCCP** means the cloud control plane and **Meko** means
+Throughout this doc, **YCP** means the cloud control plane and **Meko** means
 the customer-side deployment. The two are connected by a **pull agent**
 (`meko-agent`) that runs in the customer cluster alongside Meko. It only ever *dials out* to the control plane — there is no
 inbound network path into the customer's cloud. This is the same model used for
@@ -46,7 +46,7 @@ the Amp BYOC control plane.
 ```mermaid
 flowchart TB
     subgraph AEON["🟪 YBM AEON VPC (cloud or on-prem)"]
-      subgraph CP["🟦 MCCP — Meko Cloud Control Plane"]
+      subgraph CP["🟦 YCP — Yugabyte Control Plane"]
           direction TB
           API["api_server<br/>(control-plane mode)"]
           CDB[("Control DB<br/>meko_system.*<br/>+ fleet registry")]
@@ -105,22 +105,22 @@ flowchart TB
 connection. Customer memory/RAG data, YugabyteDB, and all data-plane secrets
 never leave the customer's cloud.
 
-### 2.1 Functional split — MCCP vs Meko (data plane)
+### 2.1 Functional split — YCP vs Meko (data plane)
 
 The split is deliberately narrow. **Meko (the data plane) keeps 100% of today's
 Meko functionality** — every runtime feature the product ships now runs in the
 customer's cluster, unchanged. BYOC only *lifts the control functions up* to
-MCCP (identity, entitlements, fleet, desired state) and moves CR authoring into the
-agent. **Nothing is removed from the data plane; no new dependency on MCCP sits
-in the request path** — datapacks keep serving even if MCCP is unreachable
+YCP (identity, entitlements, fleet, desired state) and moves CR authoring into the
+agent. **Nothing is removed from the data plane; no new dependency on YCP sits
+in the request path** — datapacks keep serving even if YCP is unreachable
 (§7, `DEGRADED`).
 
-**Control functions → MCCP (cloud):**
+**Control functions → YCP (cloud):**
 
 | Function | Notes |
 |---|---|
 | Human identity / login | OIDC relying party of YBM Aeon (§4) |
-| Entitlements / plan / free-tier caps | **Read from YBM Aeon upstream** — billing itself lives in Aeon; MCCP consumes the plan (via OIDC claims / Aeon billing API), it does not run Stripe |
+| Entitlements / plan / free-tier caps | **Read from YBM Aeon upstream** — billing itself lives in Aeon; YCP consumes the plan (via OIDC claims / Aeon billing API), it does not run Stripe |
 | Fleet registry + environment lifecycle | The §7 state machine |
 | Desired state (which datapacks/versions exist where) | The contract agents reconcile toward |
 | Datapack **metadata** (name, owner, placement) | Not the data — just the pointer |
@@ -143,7 +143,7 @@ in the request path** — datapacks keep serving even if MCCP is unreachable
 
 So a customer's agents, CLI, and `inference_gateway` talk to Meko in the customer
 cloud exactly as they do today; only the *management plane* (onboarding, entitlements,
-fleet health, cross-customer dashboards) is what MCCP adds on top.
+fleet health, cross-customer dashboards) is what YCP adds on top.
 
 ---
 
@@ -151,17 +151,17 @@ fleet health, cross-customer dashboards) is what MCCP adds on top.
 
 This is the entire point of BYOC, so it is stated explicitly.
 
-**Stays in the customer cloud with Meko (never transmitted to MCCP):**
+**Stays in the customer cloud with Meko (never transmitted to YCP):**
 
 - YugabyteDB and all its contents — `datapacks.*`, `dist_rag.*` (memories,
   embeddings, conversations, RAG artifacts).
 - The customer's YugabyteDB credentials.
 - OpenAI / Bedrock / AWS keys used by MCP and RAG workloads.
 - Langfuse entirely — the instance, its Postgres, provisioning (org/project/keys
-  created by the agent), and all traces. MCCP holds no Langfuse admin key.
+  created by the agent), and all traces. YCP holds no Langfuse admin key.
 - The `meko-shared-credentials` secret and all per-tenant secrets.
 
-**Held by MCCP:**
+**Held by YCP:**
 
 - Identity: users, accounts, Cognito subs, entitlements.
 - Fleet metadata: environments, health, versions, capacity.
@@ -174,29 +174,29 @@ This is the entire point of BYOC, so it is stated explicitly.
 
 ## 4. Authentication & identity — OIDC via YBM Aeon
 
-MCCP runs **inside the YBM Aeon VPC** and authenticates humans as an **OIDC
+YCP runs **inside the YBM Aeon VPC** and authenticates humans as an **OIDC
 client (relying party) of YBM Aeon's identity provider**. Aeon owns the login;
-MCCP federates the identity and layers its own session + entitlements on top.
+YCP federates the identity and layers its own session + entitlements on top.
 There is no bespoke Meko login for BYOC.
 
-Because it is standard OIDC discovery, the *same* MCCP code works for both
+Because it is standard OIDC discovery, the *same* YCP code works for both
 deployment topologies — only the issuer URL and client credentials differ:
 
-| Topology | Where MCCP runs | OIDC issuer |
+| Topology | Where YCP runs | OIDC issuer |
 |---|---|---|
-| **Cloud MCCP** | Inside the YBM Aeon (cloud) VPC | YBM Aeon cloud |
-| **On-prem MCCP** | Alongside a self-managed / on-prem Aeon | That on-prem Aeon |
+| **Cloud YCP** | Inside the YBM Aeon (cloud) VPC | YBM Aeon cloud |
+| **On-prem YCP** | Alongside a self-managed / on-prem Aeon | That on-prem Aeon |
 
 There are three distinct auth channels — do not conflate them:
 
 | Channel | Principal | Mechanism |
 |---|---|---|
-| Human → MCCP | Meko operators, customer admins | **OIDC** (relying party of YBM Aeon) → MCCP session |
-| Agent → MCCP | `meko-agent` | **mTLS** environment identity (issued at enrollment, §7) |
+| Human → YCP | Meko operators, customer admins | **OIDC** (relying party of YBM Aeon) → YCP session |
+| Agent → YCP | `meko-agent` | **mTLS** environment identity (issued at enrollment, §7) |
 | Agent / inference → datapack MCP | customer agents, `inference_gateway` | **PAT** (`mko_tkn_…`) |
 
 **Cognito becomes legacy.** The existing `-cognito-*` flags and
-`internal/auth/cognito.go` path are retired for MCCP; YBM Aeon OIDC
+`internal/auth/cognito.go` path are retired for YCP; YBM Aeon OIDC
 is the default (and only) human IdP. PAT auth for MCP (`internal/auth/pat.go`)
 and the internal-secret path for MCP→api_server are unchanged.
 
@@ -206,9 +206,9 @@ and the internal-secret path for MCP→api_server are unchanged.
 Cognito `sub` as the account `user_id`, so downstream account plumbing is
 unchanged.
 
-## 5. MCCP — the minimal layer & its API surface
+## 5. YCP — the minimal layer & its API surface
 
-MCCP is `api_server` run with `-control-plane-mode`, deployed inside the YBM Aeon
+YCP is `api_server` run with `-control-plane-mode`, deployed inside the YBM Aeon
 VPC, plus its control DB. We build it **minimally** — it is only four things:
 
 1. **Control DB** — `meko_system.*` plus the new `environments` fleet registry
@@ -216,7 +216,7 @@ VPC, plus its control DB. We build it **minimally** — it is only four things:
 2. **Identity** — OIDC relying party of YBM Aeon (§4).
 3. **Desired-state store** — the authoritative set of environments, datapacks,
    and target versions that agents reconcile toward.
-4. **HTTP API surface** — below. MCCP is stateless and scales horizontally
+4. **HTTP API surface** — below. YCP is stateless and scales horizontally
    behind the Aeon VPC load balancer.
 
 Nothing else from today's `api_server` is needed for the MVP: no per-datapack DB
@@ -235,7 +235,7 @@ and the cloud console:
 | `DELETE /api/v1/datapacks/{id}` | Mark a datapack for teardown (agent reconciles). |
 | `POST /api/v1/environments` | Register an environment — optionally with a **new-cluster spec** (provider / region / node size); mint a one-time enrollment token. |
 | `GET /api/v1/environments` · `GET /api/v1/environments/{id}` | Fleet view + health + state (§7). |
-| entitlement (read-only) | Plan/caps read from YBM Aeon upstream — no billing endpoints in MCCP. Observe is a deep-link to the in-cloud UI, not an MCCP-brokered session. |
+| entitlement (read-only) | Plan/caps read from YBM Aeon upstream — no billing endpoints in YCP. Observe is a deep-link to the in-cloud UI, not an YCP-brokered session. |
 
 **B. Agent API** — mTLS environment identity (§4); called by `meko-agent`
 (detailed in §8.1):
@@ -252,11 +252,11 @@ MCP→api_server PAT validation under `/api/v1/internal/*`.
 
 ### 5.2 Minimal build order
 
-Stand up MCCP with the control DB + OIDC + the `environments` registry + the
+Stand up YCP with the control DB + OIDC + the `environments` registry + the
 agent API behind `-control-plane-mode`, pointed at a **Meko-owned test
 environment**. That is the smallest thing that exercises the full pull loop
 end-to-end without a customer. The **desired-state payload is the contract**
-between MCCP and Meko — version it from day one.
+between YCP and Meko — version it from day one.
 
 ## 6. The pull agent (`meko-agent`)
 
@@ -344,7 +344,7 @@ stateDiagram-v2
 **Transition guarantees:**
 
 - Every transition is triggered by an *agent-reported* fact or an *admin*
-  action — never by MCCP reaching into the cluster.
+  action — never by YCP reaching into the cluster.
 - `PROVISIONING`/`VALIDATING` are idempotent and retried with backoff; a partial
   install re-converges rather than requiring a manual reset.
 - Revocation (`DEREGISTERED`) invalidates the environment's mTLS identity so a
@@ -355,7 +355,7 @@ stateDiagram-v2
 The customer chooses one when registering the environment. Both are driven by the
 **`meko bootstrap`** installer (a wizard / one-command CLI shipped in the
 `meko-devops` chart); both keep the customer's cloud credentials on the
-customer's side — MCCP never receives them.
+customer's side — YCP never receives them.
 
 | Mode | Starting point | What `meko bootstrap` does |
 |---|---|---|
@@ -363,7 +363,7 @@ customer's side — MCCP never receives them.
 | **Provision new cluster** | Customer has a cloud account but no cluster | Provisions a fresh cluster in the customer's cloud (via YBM Aeon's cluster API, or `eksctl`/`gke`/Terraform using the operator's local creds), then installs the chart; `PENDING → CLUSTER_PROVISIONING → ENROLLING`. |
 
 The installer holds a short-lived **enrollment token** and reports each step
-*outbound* to MCCP (`POST /api/v1/agent/bootstrap-progress`) so the fleet view
+*outbound* to YCP (`POST /api/v1/agent/bootstrap-progress`) so the fleet view
 shows live progress before the long-running agent exists. Once the agent is up
 and attested, it takes over all outbound reporting. The new-cluster path is the
 natural pairing with a customer-owned **YBM Aeon** cluster: provision the Aeon
@@ -373,9 +373,9 @@ data cluster and the Meko K8s cluster in the same wizard, in the same cloud/regi
 
 ## 8. Changes by component
 
-### 8.1 `api_server` — becomes MCCP in control-plane mode
+### 8.1 `api_server` — becomes YCP in control-plane mode
 
-`api_server` run with `-control-plane-mode` **is** MCCP; the same binary without
+`api_server` run with `-control-plane-mode` **is** YCP; the same binary without
 that flag, plus the operator and workloads in the customer cluster, **is** Meko.
 
 - **New fleet domain.** Add an `environments` registry table to `meko_system`:
@@ -408,10 +408,10 @@ that flag, plus the operator and workloads in the customer cluster, **is** Meko.
   spec that *references* secret names; the agent injects real values from the
   customer secret store. The control plane never sees them.
 
-- **Entitlements from Aeon.** MCCP does not run billing. The free-tier /
+- **Entitlements from Aeon.** YCP does not run billing. The free-tier /
   plan / cap logic (today's `FreeTierUsageRepo` gate and Stripe integration)
   reads the customer's plan from YBM Aeon upstream — via OIDC claims or the Aeon
-  billing API — and enforces caps against that. No money moves through MCCP.
+  billing API — and enforces caps against that. No money moves through YCP.
 
 - **New flags:** `-control-plane-mode`, `-agent-ca-cert`, `-agent-ca-key`,
   `-enrollment-token-key`, plus the OIDC flags from §4 (`-oidc-issuer-url`,
@@ -419,11 +419,11 @@ that flag, plus the operator and workloads in the customer cluster, **is** Meko.
   `-cognito-*`, `-stripe-*`, and `-crd-namespace` flags are removed — human auth
   and billing move to Aeon, CR authoring moves to the agent.
 
-- **Langfuse moves fully into the data plane.** MCCP does **not** provision
+- **Langfuse moves fully into the data plane.** YCP does **not** provision
   Langfuse and holds no Langfuse admin key. The instance, its Postgres, and
   provisioning (org/project/keys) all run in the customer cloud, created by the
-  agent as ordinary desired state — it has local network access; MCCP does not.
-  MCCP keeps only an optional project-id so the console can deep-link to the
+  agent as ordinary desired state — it has local network access; YCP does not.
+  YCP keeps only an optional project-id so the console can deep-link to the
   in-cloud Observe UI. Central Langfuse is a **fallback only**, for customers who
   explicitly accept trace data leaving their cloud (a per-environment setting).
 
@@ -475,7 +475,7 @@ Observability flows **outbound only**, like everything else, and lands in
 - **Time-series metrics → Thanos.** An **in-cluster Prometheus** scrapes the
   MCP servers, RAG workers, operator, and nodes, then **remote-writes** them
   *outbound* over mTLS to a **Thanos Receive** endpoint in the cloud. Thanos
-  Receive lands them in object storage; **Thanos Query** gives MCCP a single
+  Receive lands them in object storage; **Thanos Query** gives YCP a single
   global view across every environment. The customer's own Prometheus keeps a
   local copy for their own dashboards — same data, two readers.
 - **Control signals → agent status API.** Heartbeat freshness, environment
@@ -499,16 +499,16 @@ datapack id, region, workload — nothing high-cardinality or user-derived).
 **Reuse.** `meko_admin` already serves a usage-metrics dashboard through
 `api_server`. In BYOC it queries **Thanos** for the fleet aggregate instead of
 reading tenant databases directly (which now live in the customer cloud and are
-unreachable from MCCP).
+unreachable from YCP).
 
 ## 10. Executive dashboard — observability in the cloud
 
-The metrics from §9 surface in MCCP as a **true executive dashboard**: one cloud
+The metrics from §9 surface in YCP as a **true executive dashboard**: one cloud
 view across the entire fleet, aimed at leadership and account owners rather than
 on-call engineers. It answers *"how is Meko doing across every customer, right
 now and over time?"* — without anyone touching a customer cluster.
 
-**Where it lives.** Served by MCCP (`api_server` in control-plane mode), rendered
+**Where it lives.** Served by YCP (`api_server` in control-plane mode), rendered
 in `meko_ui` / `meko_admin`, behind Aeon OIDC (§4). It queries **Thanos** (§9)
 for the fleet aggregate and the fleet registry for state — never raw customer
 data. Trace-level drill-down (individual Langfuse traces, memory contents) stays
@@ -561,13 +561,13 @@ per-environment panel.
 | Dimension | SaaS today | BYOC |
 |---|---|---|
 | Human authentication | Cognito | OIDC relying party of YBM Aeon (cloud or on-prem) |
-| Cloud footprint | Single Meko cloud deploy | MCCP inside the YBM Aeon VPC |
+| Cloud footprint | Single Meko cloud deploy | YCP inside the YBM Aeon VPC |
 | Where customer data lives | Meko-owned shared YugabyteDB universes | Customer-owned YugabyteDB (YBM Aeon) |
 | Who runs MCP/RAG workloads | Meko | Customer cluster |
 | Who drives the operator | Nobody — `api_server` CR client is dormant | The agent, in the customer cluster |
 | Cross-plane connection | n/a (single plane) | Agent, outbound-only, mTLS |
 | Secrets custody | Meko | Customer |
-| Billing | Stripe in api_server | Upstream in YBM Aeon; MCCP reads entitlements |
+| Billing | Stripe in api_server | Upstream in YBM Aeon; YCP reads entitlements |
 | Observability | Direct DB / Langfuse reads | Prometheus → Thanos (cloud); Langfuse in-cloud |
 | `MekoUserAccount` CRs authored by | (Was intended for api_server; unused) | `meko-agent` |
 | Onboarding | Instant (row insert) | Enrollment state machine (§7) |
@@ -597,7 +597,7 @@ Meko-owned, keeping one code path.
 7. **Customer secret custody** — stop shipping `YugabyteDBPassword` in specs;
    agent injects from customer secret store.
 8. **Langfuse in the data plane** — agent provisions org/project/keys against
-   the in-cloud Langfuse locally; MCCP drops all Langfuse admin access.
+   the in-cloud Langfuse locally; YCP drops all Langfuse admin access.
 9. **GA** — first external customer environment reaches `READY`.
 
 ---
@@ -608,7 +608,7 @@ Meko-owned, keeping one code path.
   maintenance windows? Enterprise customers usually want the latter.
 - **Central-Langfuse fallback:** is it worth supporting at all, or is in-cloud
   Langfuse a hard requirement for BYOC? Supporting the fallback reintroduces an
-  MCCP→Langfuse path for those tenants and complicates the residency story (§3).
+  YCP→Langfuse path for those tenants and complicates the residency story (§3).
 - **Break-glass:** if an environment is `DEGRADED` and the customer needs help,
   what read-only diagnostic path exists without violating "no inbound access"?
   (Likely: agent-collected diagnostics pushed out on request.)

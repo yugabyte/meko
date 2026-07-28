@@ -68,7 +68,7 @@ type serviceRegistry struct {
 	ampRegistrationRepo *repository.AMPRegistrationRepo
 
 	// envSvc is nil unless control-plane mode is enabled (--control-plane-mode);
-	// the MCCP fleet + agent routes are registered only when it is non-nil.
+	// the YCP fleet + agent routes are registered only when it is non-nil.
 	envSvc *service.EnvironmentService
 }
 
@@ -206,11 +206,11 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Warn("amp routes disabled (set --show-pg-amp to enable)")
 	}
 
-	// MCCP fleet registry (BYOC control plane). Enabled only in control-plane mode.
+	// YCP fleet registry (BYOC control plane). Enabled only in control-plane mode.
 	var envSvc *service.EnvironmentService
 	if cfg.ControlPlaneMode {
 		envSvc = service.NewEnvironmentService(repository.NewEnvironmentRepo(cfg.SystemDB))
-		slog.Info("control-plane mode enabled (MCCP fleet + agent routes)")
+		slog.Info("control-plane mode enabled (YCP fleet + agent routes)")
 	}
 
 	artifactRepo := repository.NewArtifactRepo(cfg.DB)
@@ -308,7 +308,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	adminGroup.PATCH("/amp-registration", ampRegH.Patch)
 	adminGroup.DELETE("/amp-registration", ampRegH.Delete)
 
-	// MCCP fleet registry + agent API (control-plane mode). Console/fleet routes
+	// YCP fleet registry + agent API (control-plane mode). Console/fleet routes
 	// are gated by the admin shared secret; agent routes authenticate with the
 	// enrollment token (enroll) and env-scoped status token (status/desired-state).
 	if reg.envSvc != nil {

@@ -9,7 +9,7 @@ import (
 	"meko/api_server/internal/models"
 )
 
-// EnvironmentRepo persists the MCCP fleet registry (meko_system.environments and
+// EnvironmentRepo persists the YCP fleet registry (meko_system.environments and
 // meko_system.environment_desired_resources). Control-plane mode only.
 type EnvironmentRepo struct {
 	db *sql.DB
