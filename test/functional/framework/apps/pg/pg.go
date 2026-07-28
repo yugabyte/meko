@@ -178,7 +178,7 @@ func WaitReady(ctx context.Context, ci ConnInfo, timeout time.Duration) error {
 		select {
 		case <-wctx.Done():
 			if last != nil {
-				return fmt.Errorf("postgres not ready at %s:%d: %w (last: %v)", ci.Host, ci.port(), wctx.Err(), last)
+				return fmt.Errorf("postgres not ready at %s:%d: %w (last: %w)", ci.Host, ci.port(), wctx.Err(), last)
 			}
 			return fmt.Errorf("postgres not ready at %s:%d: %w", ci.Host, ci.port(), wctx.Err())
 		default:

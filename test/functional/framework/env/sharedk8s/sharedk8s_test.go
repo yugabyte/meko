@@ -3,6 +3,7 @@ package sharedk8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -971,5 +972,21 @@ func TestTransientControllerPredicate(t *testing.T) {
 	}
 	if !isAlreadyExists(fmt.Errorf("controller 409: conflict")) {
 		t.Error("409 conflict must be already-exists")
+	}
+}
+
+// A LIVE port-forward must never be re-established: if the plumbing is up, a
+// Postgres failure through it belongs to the endpoint, and recovering here
+// would convert a product outage into a passing test. Same for an env with no
+// forward at all (direct/tailnet address) — there is nothing to repair.
+func TestRefreshPGEndpointRefusesWhenForwardIsAlive(t *testing.T) {
+	live := &Env{pfs: []*k8s.PortForward{{}}} // zero value == not dead == alive
+	if _, err := live.RefreshPGEndpoint(context.Background()); !errors.Is(err, ErrPGForwardAlive) {
+		t.Errorf("live forward: err = %v, want ErrPGForwardAlive", err)
+	}
+
+	direct := &Env{}
+	if _, err := direct.RefreshPGEndpoint(context.Background()); !errors.Is(err, ErrPGForwardAlive) {
+		t.Errorf("no forward: err = %v, want ErrPGForwardAlive", err)
 	}
 }

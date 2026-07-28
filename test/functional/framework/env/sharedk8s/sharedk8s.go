@@ -1096,6 +1096,47 @@ func (e *Env) computePodName(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("no pod found for endpoint %s (selector %q)", e.endpointID, sel)
 }
 
+// ErrPGForwardAlive says the endpoint's port-forward is up, so a Postgres
+// failure through it is the endpoint's, not the harness's. Callers that retry a
+// dead forward MUST stop on this and report the original error — recovering
+// here would turn a product outage into a passing test.
+var ErrPGForwardAlive = errors.New("pg port-forward is alive")
+
+// RefreshPGEndpoint re-establishes the endpoint's port-forward when THIS
+// process's kubectl forward has died — the local port then refuses connections
+// and every dial fails for reasons that have nothing to do with the endpoint
+// (observed 2026-07-28: features/workloadgen_verify burned its whole readiness
+// budget on `dial 127.0.0.1: connection refused` while the endpoint itself was
+// serving its co-tenant fine).
+//
+// It is deliberately NOT a retry helper: liveness is read from the forward
+// handle, not guessed from the dial error, and a live forward returns
+// ErrPGForwardAlive so the caller keeps the real failure. It re-resolves and
+// swaps the forward but does not wait for Postgres — the caller owns that, so
+// an endpoint that is genuinely down still fails on its own terms.
+func (e *Env) RefreshPGEndpoint(ctx context.Context) (pg.ConnInfo, error) {
+	// "Nothing to repair" is decided FIRST, so a live forward (or a direct
+	// tailnet/in-cluster address, which has no forward at all) can never be
+	// mistaken for a recoverable failure.
+	if len(e.pfs) == 0 {
+		return pg.ConnInfo{}, ErrPGForwardAlive
+	}
+	for _, pf := range e.pfs {
+		if pf != nil && pf.Alive() {
+			return pg.ConnInfo{}, ErrPGForwardAlive
+		}
+	}
+	if e.prov == nil {
+		return pg.ConnInfo{}, fmt.Errorf("sharedk8s: no provider to re-resolve the endpoint")
+	}
+	ci, pf, err := e.prov.resolvePG(ctx, controller.Endpoint{ID: e.endpointID, Address: e.endpointAddr})
+	if err != nil {
+		return pg.ConnInfo{}, fmt.Errorf("re-resolve endpoint %s after a dead port-forward: %w", e.endpointID, err)
+	}
+	e.swapPG(ci, pf)
+	return ci, nil
+}
+
 // swapPG repoints the Env at a freshly-resolved connection + port-forward and
 // closes the superseded forward(s).
 func (e *Env) swapPG(ci pg.ConnInfo, pf *k8s.PortForward) {
