@@ -90,6 +90,11 @@ pub struct SafeKeeperConf {
     /// mode. See [`crate::wal_cache`]. Ignored when
     /// [`Self::yb_storage_conn`] is `None`. Set to 0 to disable the cache.
     pub wal_cache_size_mib: usize,
+    /// Codec applied to `safekeeper.wals.data` on the way out to YB.
+    /// Write-side only: every stored value carries its own codec tag, so the
+    /// read path decodes rows written under any setting and a config change
+    /// is a restart rather than a migration.
+    pub yb_wal_compression: safekeeper_api::config::WalCompression,
     pub max_timeline_disk_usage_bytes: u64,
     /// How often to check the working directory's filesystem for total disk usage.
     pub global_disk_check_interval: Duration,
@@ -148,6 +153,7 @@ impl SafeKeeperConf {
             yb_storage_conn: None,
             branch_id: None,
             wal_cache_size_mib: defaults::DEFAULT_WAL_CACHE_SIZE_MIB,
+            yb_wal_compression: safekeeper_api::config::WalCompression::default(),
             pg_auth: None,
             pg_tenant_only_auth: None,
             http_auth: None,

@@ -15,6 +15,7 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
+use utils::payload_codec;
 use ysql_client::{YbConnArgs, YsqlClient};
 
 #[derive(Parser)]
@@ -142,10 +143,13 @@ async fn main() -> Result<()> {
         )
     } else {
         let start_lsn = lsn_expr(seg, "chunk_offset");
+        // Fetch `data` as raw bytea and unwrap the compression envelope
+        // client-side. Server-side `octet_length` / `substring` would report
+        // the STORED length and slice envelope bytes rather than WAL bytes.
         let data_cols = if args.no_data {
             String::new()
         } else {
-            ", octet_length(data)::text, encode(substring(data,1,16),'hex')".to_string()
+            ", data".to_string()
         };
         let lim = if args.limit > 0 {
             format!("LIMIT {}", args.limit)
@@ -161,6 +165,10 @@ async fn main() -> Result<()> {
             "modified_at",
         ];
         if !args.no_data {
+            // `stored` is what DocDB holds (envelope included); `bytes` is
+            // the decoded WAL length, which is what `chunk_size` tracks.
+            h.push("codec");
+            h.push("stored");
             h.push("bytes");
             h.push("data_head");
         }
@@ -178,24 +186,58 @@ async fn main() -> Result<()> {
         .query(&sql, &[])
         .await
         .context("query safekeeper.wals")?;
-    print_table(&headers, &rows);
+
+    // The `data` column, when selected, comes back as raw bytea in the last
+    // projected position and expands into four text cells.
+    let payload_col = (!args.summary && !args.no_data).then(|| headers.len() - 4);
+    let cells: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| match payload_col {
+            None => (0..headers.len())
+                .map(|i| r.get::<usize, Option<String>>(i).unwrap_or_default())
+                .collect(),
+            Some(p) => {
+                let mut c: Vec<String> = (0..p)
+                    .map(|i| r.get::<usize, Option<String>>(i).unwrap_or_default())
+                    .collect();
+                let stored: Vec<u8> = r.get::<usize, Option<Vec<u8>>>(p).unwrap_or_default();
+                let stored = bytes::Bytes::from(stored);
+                c.push(payload_codec::stored_codec_name(&stored).to_string());
+                c.push(stored.len().to_string());
+                // A chunk this build cannot decode is still worth showing —
+                // report the failure in place rather than aborting the dump.
+                match payload_codec::decode(&stored) {
+                    Ok(plain) => {
+                        c.push(plain.len().to_string());
+                        c.push(
+                            plain
+                                .iter()
+                                .take(16)
+                                .map(|b| format!("{b:02x}"))
+                                .collect::<String>(),
+                        );
+                    }
+                    Err(e) => {
+                        c.push("?".to_string());
+                        c.push(format!("<undecodable: {e}>"));
+                    }
+                }
+                c
+            }
+        })
+        .collect();
+    print_cells(&headers, &cells);
     Ok(())
 }
 
-/// Print rows as an aligned table. Every selected column is cast to text
-/// in SQL, so each cell reads back as `Option<String>`.
-fn print_table(headers: &[&str], rows: &[ysql_client::tokio_postgres::Row]) {
-    let ncol = headers.len();
+/// Width-align and print pre-rendered text cells.
+///
+/// Callers render cells themselves: most columns are cast to text in SQL,
+/// but `data` comes back as raw bytea so the compression envelope can be
+/// unwrapped client-side before display.
+fn print_cells(headers: &[&str], cells: &[Vec<String>]) {
     let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
-    let cells: Vec<Vec<String>> = rows
-        .iter()
-        .map(|r| {
-            (0..ncol)
-                .map(|i| r.get::<usize, Option<String>>(i).unwrap_or_default())
-                .collect()
-        })
-        .collect();
-    for row in &cells {
+    for row in cells {
         for (i, c) in row.iter().enumerate() {
             widths[i] = widths[i].max(c.len());
         }
@@ -211,10 +253,10 @@ fn print_table(headers: &[&str], rows: &[ysql_client::tokio_postgres::Row]) {
         "{}",
         line(&headers.iter().map(|h| h.to_string()).collect::<Vec<_>>())
     );
-    for row in &cells {
+    for row in cells {
         println!("{}", line(row));
     }
-    println!("({} rows)", rows.len());
+    println!("({} rows)", cells.len());
 }
 
 #[cfg(test)]

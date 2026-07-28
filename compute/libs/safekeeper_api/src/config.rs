@@ -14,6 +14,39 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use utils::id::BranchId;
+use utils::payload_codec;
+
+/// Codec the safekeeper compresses `safekeeper.wals.data` with before binding
+/// it.
+///
+/// **Write-side only.** The read path decodes whatever codec tag each row
+/// carries (see [`utils::payload_codec`]), so changing this and restarting
+/// needs no migration: newer rows use the new codec while existing rows stay
+/// readable. Nothing is rewritten.
+///
+/// Deliberately separate from the pageserver's `yb_payload_compression`: the
+/// two components store different shapes of data (coalesced WAL runs vs. 8 KiB
+/// pages) and are tuned independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WalCompression {
+    /// Store WAL chunks uncompressed (still tag-wrapped, so they stay
+    /// distinguishable from compressed rows on read).
+    None,
+    /// Compress with LZ4. Skipped per-row for runs under
+    /// [`payload_codec::MIN_COMPRESS_BYTES`] or that fail to shrink.
+    #[default]
+    Lz4,
+}
+
+impl From<WalCompression> for payload_codec::Codec {
+    fn from(c: WalCompression) -> Self {
+        match c {
+            WalCompression::None => payload_codec::Codec::Raw,
+            WalCompression::Lz4 => payload_codec::Codec::Lz4,
+        }
+    }
+}
 
 pub mod defaults {
     pub use crate::{DEFAULT_HTTP_LISTEN_ADDR, DEFAULT_PG_LISTEN_ADDR};
@@ -77,6 +110,11 @@ pub struct SafekeeperConfigToml {
     /// `DEFAULT_WAL_CACHE_SIZE_MIB * scale_factor`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wal_cache_size_mib: Option<usize>,
+    /// Codec used when writing `safekeeper.wals.data` (`none` | `lz4`).
+    /// Write-side only — reads accept every codec, so changing this and
+    /// restarting needs no migration. See [`WalCompression`].
+    #[serde(default)]
+    pub yb_wal_compression: WalCompression,
     pub scale_factor: f64,
 
     pub max_timeline_disk_usage_bytes: u64,
@@ -130,6 +168,7 @@ impl Default for SafekeeperConfigToml {
             heartbeat_timeout: Duration::from_millis(5000),
             yb_storage_conn: None,
             wal_cache_size_mib: None,
+            yb_wal_compression: WalCompression::default(),
             scale_factor: DEFAULT_SCALE_FACTOR,
             max_timeline_disk_usage_bytes: DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES,
             global_disk_check_interval: Duration::from_secs(60),

@@ -251,6 +251,7 @@ async fn main() -> anyhow::Result<()> {
                 cfg.scale_factor,
             )
         }),
+        yb_wal_compression: cfg.yb_wal_compression,
         max_timeline_disk_usage_bytes: cfg.max_timeline_disk_usage_bytes,
         pg_auth,
         pg_tenant_only_auth,

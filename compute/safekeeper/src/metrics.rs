@@ -66,6 +66,63 @@ pub static PROPOSER_ACCEPTOR_MESSAGES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| 
     )
     .expect("Failed to register safekeeper_proposer_acceptor_messages_total counter")
 });
+/// WAL bytes as the safekeeper sees them, *before* the
+/// `utils::payload_codec` envelope. Divide this by
+/// [`WAL_PAYLOAD_STORED_BYTES`] for the realized compression ratio
+/// (`logical / stored`, e.g. 3.0x).
+pub static WAL_PAYLOAD_LOGICAL_BYTES: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_yb_wal_payload_logical_bytes_total",
+        "Uncompressed WAL run bytes handed to the safekeeper.wals writer",
+    )
+    .expect("Failed to register safekeeper_yb_wal_payload_logical_bytes_total counter")
+});
+
+/// WAL bytes actually written to `safekeeper.wals.data`, envelope
+/// included — what DocDB, the Raft log and every compaction move.
+pub static WAL_PAYLOAD_STORED_BYTES: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_yb_wal_payload_stored_bytes_total",
+        "Encoded WAL run bytes written to safekeeper.wals (compression envelope included)",
+    )
+    .expect("Failed to register safekeeper_yb_wal_payload_stored_bytes_total counter")
+});
+
+/// One increment per encoded run, by codec outcome: `lz4` or
+/// `raw_configured` / `raw_too_small` / `raw_incompressible`. Runs are
+/// coalesced before encoding, so `raw_too_small` should be rare here —
+/// unlike the pageserver's delta path, a WAL run is usually well above
+/// `MIN_COMPRESS_BYTES`. A rising `raw_incompressible` share means the WAL
+/// arrives pre-compressed.
+pub static WAL_PAYLOAD_RUNS: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "safekeeper_yb_wal_payload_runs_total",
+        "WAL runs encoded for safekeeper.wals, by codec outcome",
+        &["outcome"]
+    )
+    .expect("Failed to register safekeeper_yb_wal_payload_runs_total counter")
+});
+
+/// Record one encoded WAL run against the three payload metrics above.
+pub fn record_wal_payload(
+    logical: usize,
+    stored: usize,
+    outcome: utils::payload_codec::Outcome,
+) {
+    use utils::payload_codec::{Codec, Outcome, RawReason};
+    WAL_PAYLOAD_LOGICAL_BYTES.inc_by(logical as u64);
+    WAL_PAYLOAD_STORED_BYTES.inc_by(stored as u64);
+    let label = match outcome {
+        Outcome::Compressed(Codec::Lz4) => "lz4",
+        // `encode` never reports Raw as compressed; spelled out so this
+        // stays exhaustive if a codec is added later.
+        Outcome::Compressed(Codec::Raw) | Outcome::Raw(RawReason::Configured) => "raw_configured",
+        Outcome::Raw(RawReason::TooSmall) => "raw_too_small",
+        Outcome::Raw(RawReason::Incompressible) => "raw_incompressible",
+    };
+    WAL_PAYLOAD_RUNS.with_label_values(&[label]).inc();
+}
+
 pub static WAL_DISK_IO_ERRORS: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_wal_disk_io_errors",

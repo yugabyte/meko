@@ -106,6 +106,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, watch};
 use utils::id::BranchId;
 use utils::lsn::Lsn;
+use utils::payload_codec;
 use yb_tokio_postgres::types::ToSql;
 
 use crate::metrics::WalStorageMetrics;
@@ -205,6 +206,11 @@ pub struct YbWalConn {
     /// through the `libyb_thin_client` C++ shim. `None` unless the thin
     /// client hot path is selected. Parallel to [`Self::yb_tsclient`].
     pub yb_thinclient: Option<Arc<YbThinClient>>,
+    /// Codec applied to the `data` column on the way out to YB, from
+    /// `yb_wal_compression`. Write-side only — the read path decodes
+    /// whatever tag each stored row carries, so rows written under
+    /// different settings coexist and a codec change needs no migration.
+    pub codec: payload_codec::Codec,
 }
 
 /// See [`YbWalConn::yb_tsclient`] and `compute/architecture/safekeeper.md`.
@@ -314,6 +320,7 @@ impl YbWalConn {
             cache,
             yb_tsclient,
             yb_thinclient,
+            codec: conf.yb_wal_compression.into(),
         })))
     }
 
@@ -722,6 +729,7 @@ impl YbWalStorage {
             flush_notify.clone(),
             durable_lsn.clone(),
             cache.clone(),
+            yb_wal.codec,
         ));
 
         // Seed the DELETE lower bound from YB so post-restart removals
@@ -1232,7 +1240,13 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
             .context("end-of-WAL scan: reading wals")?
             .with_context(|| format!("WAL hole at {lsn}: no covering chunk in wals"))?;
         let chunk_offset = row.get::<_, i64>(0) as u64;
-        let data: Vec<u8> = row.get::<_, Vec<u8>>(1);
+        let stored: Vec<u8> = row.get::<_, Vec<u8>>(1);
+        // Decode before any length arithmetic below — the coverage check
+        // and the returned buffer are both in logical WAL bytes.
+        let data = decode_chunk_data(
+            &stored,
+            &format!("end-of-WAL scan: chunk segno={segno} offset={chunk_offset}"),
+        )?;
         let chunk_start = segno as u64 * self.seg + chunk_offset;
         if lsn.0 >= chunk_start + data.len() as u64 {
             anyhow::bail!(
@@ -1296,18 +1310,60 @@ fn coalesce_runs(chunks: &[PendingChunk]) -> Vec<std::ops::Range<usize>> {
     runs
 }
 
+/// Unwrap a stored `wals.data` envelope, naming the chunk in any error.
+///
+/// Every read path funnels through here, and it is deliberately independent
+/// of the writer's configured codec: the envelope's tag says how the row was
+/// written, so rows produced under different `yb_wal_compression` settings
+/// all decode with one reader. That is what makes changing the codec a
+/// restart rather than a migration.
+///
+/// The decoded bytes are the WAL stream itself — everything above this point
+/// (the `WalCache`, the segment reader's byte-range slicing, record
+/// decoding) works on plaintext and needed no change.
+fn decode_chunk_data(stored: &[u8], what: &str) -> Result<Vec<u8>> {
+    let stored = bytes::Bytes::copy_from_slice(stored);
+    payload_codec::decode(&stored)
+        .map(|b| b.to_vec())
+        .with_context(|| {
+            format!(
+                "{what}: decoding stored WAL chunk ({} bytes, codec {})",
+                stored.len(),
+                payload_codec::stored_codec_name(&stored),
+            )
+        })
+}
+
 /// Discard all WAL strictly beyond `end_pos`: drop chunks that start at
 /// or after it, and truncate the chunk straddling it down to `end_pos`.
 /// After this, `max(chunk_offset + chunk_size)` for the timeline is
 /// exactly `end_pos` — the YB equivalent of truncating a local WAL
 /// segment file. Used to discard a torn tail on safekeeper restart and to
-/// honor a walproposer truncation on ProposerElected. Both statements are
-/// idempotent (keyed DELETE; absolute-`SET` UPDATE whose predicate stops
-/// matching once the chunk has been truncated).
+/// honor a walproposer truncation on ProposerElected. Both steps are
+/// idempotent (keyed DELETE; the trim's predicate stops matching once the
+/// chunk has been truncated).
 ///
-/// The bucket list completes the hash key for all buckets, so both
+/// The bucket list completes the hash key for all buckets, so the
 /// statements hash-route to the buckets' tablets rather than scatter-scanning
 /// the branch; the cut still spans every bucket.
+///
+/// # Why the trim is read-modify-write
+///
+/// This used to be one `UPDATE ... SET data = substring(data FROM 1 FOR n)`.
+/// With the [`payload_codec`] envelope that is wrong twice over: it would
+/// slice a compressed LZ4 stream in half, and even for an uncompressed row
+/// it would cut from the tag byte rather than the payload. YSQL cannot
+/// decompress — Postgres exposes no SQL-callable LZ4/pglz decompressor and
+/// YB ships no extension for it — so the row has to come back to Rust.
+///
+/// The rewritten chunk is stored **raw**, never re-compressed. Truncation is
+/// rare (torn tail on restart, or a walproposer ProposerElected cut), and
+/// leaving one chunk uncompressed until GC drops it is not worth a second
+/// code path.
+///
+/// At most one chunk can straddle `end_pos` — chunks tile LSN space without
+/// overlap — but the loop below handles whatever the predicate returns
+/// rather than assuming exactly one.
 async fn truncate_wals_above(
     client: &YsqlClient,
     table: &str,
@@ -1332,19 +1388,104 @@ async fn truncate_wals_above(
         .context("truncate_wals_above: delete chunks past end_pos")?;
 
     // The chunk straddling end_pos keeps its bytes up to end_pos; trim the
-    // torn remainder so its end aligns exactly with end_pos.
-    let upd = format!(
-        "UPDATE {table} SET \
-           data = substring(data FROM 1 FOR ($2 - (segno * {seg} + chunk_offset))::int), \
-           chunk_size = ($2 - (segno * {seg} + chunk_offset))::int \
+    // torn remainder so its end aligns exactly with end_pos. The predicate
+    // reads only `chunk_size`, which is LOGICAL length, so it needs no
+    // adjustment for compression — only the byte-slicing moves to Rust.
+    let sel = format!(
+        "SELECT bucket_id, segno, chunk_offset, data \
+         FROM {table} \
          WHERE branch_id = $1 AND {buckets} \
            AND segno * {seg} + chunk_offset < $2 \
            AND segno * {seg} + chunk_offset + chunk_size > $2"
     );
-    client
-        .execute(&upd, &params)
+    let straddling = client
+        .query(&sel, &params)
         .await
-        .context("truncate_wals_above: trim straddling chunk")?;
+        .context("truncate_wals_above: select straddling chunk")?;
+
+    for row in straddling {
+        let bucket_id: i16 = row.get(0);
+        let segno: i64 = row.get(1);
+        let chunk_offset: i64 = row.get(2);
+        let stored: Vec<u8> = row.get(3);
+        let stored = bytes::Bytes::from(stored);
+
+        let keep = end - (segno * seg + chunk_offset);
+        // The predicate guarantees 0 < keep < chunk_size; a violation means
+        // the row disagrees with the arithmetic that selected it.
+        anyhow::ensure!(
+            keep > 0,
+            "truncate_wals_above: straddling chunk segno={segno} \
+             offset={chunk_offset} computed non-positive keep={keep}"
+        );
+        let keep = keep as usize;
+
+        let plain = payload_codec::decode(&stored).with_context(|| {
+            format!(
+                "truncate_wals_above: decode straddling chunk segno={segno} \
+                 offset={chunk_offset} ({} stored bytes, codec {})",
+                stored.len(),
+                payload_codec::stored_codec_name(&stored),
+            )
+        })?;
+        anyhow::ensure!(
+            keep <= plain.len(),
+            "truncate_wals_above: straddling chunk segno={segno} \
+             offset={chunk_offset} decoded to {} bytes, need {keep}",
+            plain.len()
+        );
+
+        // Store the trimmed remainder raw — see the fn doc.
+        let (trimmed, _) = payload_codec::encode(&plain[..keep], payload_codec::Codec::Raw);
+
+        // Compare-and-swap on `data`: `truncate_wal` drains the consumer and
+        // holds `&mut self` before calling us, so nothing should be writing
+        // this row — the guard makes that assumption checkable instead of
+        // load-bearing, and would catch a future refactor that drops the
+        // drain.
+        //
+        // The predicate matches EITHER the pre-image ($7) or the exact
+        // post-image we are about to write ($5/$6). The second arm is what
+        // keeps the statement idempotent under `YsqlClient::run_with_retries`,
+        // which blindly replays a statement whose ack was lost to a
+        // connection drop (see its "Idempotency assumption" doc). On such a
+        // replay the row is already trimmed, so the pre-image no longer
+        // matches; without the second arm the affected-count check below
+        // would turn an already-durable trim into a hard error. A row
+        // matching neither arm genuinely changed underneath us — which is
+        // the case the guard exists for.
+        let upd = format!(
+            "UPDATE {table} SET data = $5, chunk_size = $6 \
+             WHERE branch_id = $1 AND bucket_id = $2 AND segno = $3 \
+               AND chunk_offset = $4 \
+               AND (data = $7 OR (data = $5 AND chunk_size = $6))"
+        );
+        let keep_i32 = keep as i32;
+        let new_data = trimmed.as_ref();
+        let old_data = stored.as_ref();
+        let affected = client
+            .execute(
+                &upd,
+                &[
+                    &branch_id,
+                    &bucket_id,
+                    &segno,
+                    &chunk_offset,
+                    &new_data,
+                    &keep_i32,
+                    &old_data,
+                ],
+            )
+            .await
+            .context("truncate_wals_above: trim straddling chunk")?;
+        anyhow::ensure!(
+            affected == 1,
+            "truncate_wals_above: trim of segno={segno} offset={chunk_offset} \
+             affected {affected} rows (expected 1) — the chunk is neither at \
+             its pre-trim bytes nor at the trimmed state we computed, so it \
+             changed between the read and the write"
+        );
+    }
     Ok(())
 }
 
@@ -1388,6 +1529,7 @@ async fn consumer_main(
     flush_notify: Arc<tokio::sync::Notify>,
     durable_lsn: Arc<AtomicU64>,
     cache: Option<Arc<std::sync::Mutex<crate::wal_cache::WalCache>>>,
+    codec: payload_codec::Codec,
 ) {
     // Placement-bucket rotation, one bucket per BATCH. Restart resets the
     // phase to 0 — the bucket is placement only, not identity, so the
@@ -1461,6 +1603,7 @@ async fn consumer_main(
             &table_name,
             &branch_id,
             &batch,
+            codec,
         )
         .await
         {
@@ -1524,61 +1667,71 @@ async fn flush_batch(
     table_name: &str,
     branch_id: &str,
     batch: &[PendingChunk],
+    codec: payload_codec::Codec,
 ) -> Result<()> {
     if batch.is_empty() {
         return Ok(());
     }
     let runs = coalesce_runs(batch);
+    // Encode once, ahead of the lane split, so EVERY lane binds
+    // identical bytes by construction rather than by convention.
+    let encoded: Vec<bytes::Bytes> = runs
+        .iter()
+        .map(|r| encode_run(&batch[r.clone()], codec))
+        .collect();
     if let Some(tc) = yb_tsclient {
-        flush_batch_tsclient(tc, branch_id, batch, &runs).await
+        flush_batch_tsclient(tc, branch_id, batch, &runs, &encoded).await
     } else if let Some(thin) = yb_thinclient {
-        flush_batch_thin(thin, branch_id, batch, &runs).await
+        flush_batch_thin(thin, branch_id, batch, &runs, &encoded).await
     } else {
-        flush_batch_ysql(ysql_fpu_client, table_name, branch_id, batch, &runs).await
+        flush_batch_ysql(ysql_fpu_client, table_name, branch_id, batch, &runs, &encoded)
+            .await
     }
 }
 
-/// `data` is `Arc<Vec<u8>>` (shared with WalCache); this adapter lets
-/// `Bytes::from_owner` borrow it without copying the chunk payload.
-struct SharedChunk(Arc<Vec<u8>>);
-
-impl AsRef<[u8]> for SharedChunk {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_slice()
-    }
-}
-
-/// Concatenate a run's chunk payloads into the single contiguous buffer
-/// the tsclient RPC lane binds for the run's `data` column.
+/// Concatenate a run's chunk payloads and wrap them in the
+/// [`payload_codec`] envelope — the exact bytes bound to the run's `data`
+/// column, on either lane.
 ///
-/// A single-chunk run (no coalescing) stays zero-copy via the shared
-/// Arc. A multi-chunk run is concatenated into one scratch Vec: the
-/// tsclient lane takes a single contiguous buffer per bind value, so this
-/// one memcpy per run (typically one per batch) is the price of the
-/// single-row write.
+/// Both lanes bind this same buffer, so they are byte-identical by
+/// construction; `tsclient_and_ysql_lanes_serialize_identical_rows` (test)
+/// keeps pinning that.
 ///
-/// The YSQL lane streams the same run through [`RunData`]'s `to_sql`
-/// (bare byte-append into the wire buffer); the two serializations stay
-/// byte-identical so a timeline reads back the same rows regardless of
-/// which lane wrote them — `tsclient_and_ysql_lanes_serialize_identical_rows`
-/// (test) pins them together.
-fn run_data_bytes(chunks: &[PendingChunk]) -> bytes::Bytes {
-    if chunks.len() == 1 {
-        bytes::Bytes::from_owner(SharedChunk(chunks[0].data.clone()))
+/// This is where the WAL path gives up a zero-copy write. Previously a
+/// single-chunk run bound the shared `Arc` directly and the YSQL lane
+/// streamed multi-chunk runs straight into the wire buffer with no
+/// intermediate allocation. LZ4 needs one contiguous input, and even an
+/// uncompressed row now carries a leading tag byte, so a run has to be
+/// materialised either way. The compressed buffer that goes on the wire is
+/// smaller than what it replaced, which is the trade.
+///
+/// Coalescing before compressing is deliberate: with
+/// `full_page_writes = off` the WAL is a stream of small records that
+/// barely compress alone, but a run of hundreds of structurally similar
+/// records has ample cross-record redundancy. The bigger the window, the
+/// better the ratio.
+fn encode_run(chunks: &[PendingChunk], codec: payload_codec::Codec) -> bytes::Bytes {
+    let plain: std::borrow::Cow<'_, [u8]> = if chunks.len() == 1 {
+        std::borrow::Cow::Borrowed(chunks[0].data.as_slice())
     } else {
         let total: usize = chunks.iter().map(|p| p.chunk_size as usize).sum();
         let mut buf = Vec::with_capacity(total);
         for pc in chunks {
             buf.extend_from_slice(&pc.data);
         }
-        bytes::Bytes::from(buf)
-    }
+        std::borrow::Cow::Owned(buf)
+    };
+    let (encoded, outcome) = payload_codec::encode(&plain, codec);
+    crate::metrics::record_wal_payload(plain.len(), encoded.len(), outcome);
+    encoded
 }
 
 /// Thin-RPC (`yb_tsclient`) variant of the batched write: one Perform
 /// with one `PGSQL_UPSERT` op per coalesced run, each run keyed by its
-/// first chunk and valued as the concatenation of the run's chunks
-/// ([`run_data_bytes`]). The whole batch carries ONE bucket, so all ops
+/// first chunk and valued as the run's [`payload_codec`]-encoded buffer
+/// — the concatenated chunk bytes wrapped in a codec tag and, when LZ4 is
+/// selected and the run clears `MIN_COMPRESS_BYTES`, compressed
+/// ([`encode_run`]). The whole batch carries ONE bucket, so all ops
 /// land on one tablet and the tserver session applies them as one write
 /// batch (atomic; verified live in `yb_tsclient`'s
 /// `single_tablet_batch_atomicity`) — a crash mid-flush cannot leave a
@@ -1589,6 +1742,7 @@ async fn flush_batch_tsclient(
     branch_id: &str,
     batch: &[PendingChunk],
     runs: &[std::ops::Range<usize>],
+    encoded: &[bytes::Bytes],
 ) -> Result<()> {
     // Test-only failpoint (build with `--features testing`, configure via
     // `fail::cfg("sk-wal-direct-flush-fail", "return(())")`): inject a
@@ -1606,9 +1760,14 @@ async fn flush_batch_tsclient(
         .unwrap_or(0);
     let rows = runs
         .iter()
-        .map(|r| {
+        .zip(encoded)
+        .map(|(r, data)| {
             let chunks = &batch[r.clone()];
             let first = &chunks[0];
+            // `chunk_size` stays the run's UNCOMPRESSED length: the read
+            // path and `truncate_wals_above` both do LSN arithmetic with
+            // `chunk_offset + chunk_size`, so it is logical-space, not a
+            // description of the stored bytes.
             let total: usize = chunks.iter().map(|p| p.chunk_size as usize).sum();
             UpsertRow::new(
                 &yb_tsclient.wals,
@@ -1620,7 +1779,7 @@ async fn flush_batch_tsclient(
                 ],
                 &[
                     ("chunk_size", BindValue::I32(total as i32)),
-                    ("data", BindValue::Bytes(run_data_bytes(chunks))),
+                    ("data", BindValue::Bytes(data.clone())),
                     ("last_modified_us", BindValue::I64(now_us)),
                 ],
             )
@@ -1651,15 +1810,19 @@ async fn flush_batch_tsclient(
 /// Thin-client (`yb_thin_client`) variant of the batched write: one Perform
 /// with one `PGSQL_UPSERT` op per coalesced run, each run keyed by its
 /// first chunk and valued as the concatenation of the run's chunks
-/// ([`run_data_bytes`]). The whole batch carries ONE bucket, so all ops
+/// ([`encode_run`]). The whole batch carries ONE bucket, so all ops
 /// land on one tablet and the tserver session applies them as one write
 /// batch (atomic) — a crash mid-flush cannot leave a hole (the invariant
 /// `load_write_lsn`'s simple max-end rehydration relies on).
+///
+/// `encoded` carries the [`payload_codec`]-wrapped run buffers produced by
+/// [`flush_batch`], 1:1 with `runs`.
 async fn flush_batch_thin(
     yb_thinclient: &YbThinClient,
     branch_id: &str,
     batch: &[PendingChunk],
     runs: &[std::ops::Range<usize>],
+    encoded: &[bytes::Bytes],
 ) -> Result<()> {
     // Test-only failpoint (build with `--features testing`, configure via
     // `fail::cfg("sk-wal-direct-flush-fail", "return(())")`): inject a
@@ -1680,9 +1843,13 @@ async fn flush_batch_thin(
         .unwrap_or(0);
     let rows = runs
         .iter()
-        .map(|r| {
+        .zip(encoded)
+        .map(|(r, data)| {
             let chunks = &batch[r.clone()];
             let first = &chunks[0];
+            // `chunk_size` stays the run's UNCOMPRESSED length — the read
+            // path and `truncate_wals_above` do LSN arithmetic with
+            // `chunk_offset + chunk_size`.
             let total: usize = chunks.iter().map(|p| p.chunk_size as usize).sum();
             UpsertRow::new(
                 &yb_thinclient.wals,
@@ -1694,7 +1861,7 @@ async fn flush_batch_thin(
                 ],
                 &[
                     ("chunk_size", BindValue::I32(total as i32)),
-                    ("data", BindValue::Bytes(run_data_bytes(chunks))),
+                    ("data", BindValue::Bytes(data.clone())),
                     ("last_modified_us", BindValue::I64(now_us)),
                 ],
             )
@@ -1718,63 +1885,20 @@ async fn flush_batch_thin(
     Ok(())
 }
 
-/// Zero-copy BYTEA bind for one coalesced run. Holds the run's original
-/// `&[PendingChunk]` slice (each chunk's `data` an `Arc<Vec<u8>>` shared
-/// with the WalCache) instead of pre-concatenating into a scratch Vec:
-/// `to_sql` appends each chunk's bytes into the wire buffer
-/// sequentially, which is byte-identical to binding one concatenated
-/// bytea — the binary BYTEA encoding is just the raw bytes (the
-/// upstream `impl ToSql for &[u8]` delegates to
-/// `postgres_protocol::types::bytea_to_sql`, a bare `put_slice`; the
-/// length header is derived by the caller from the buffer growth). This
-/// keeps the single wire-buffer copy a plain `&[u8]` bind already pays,
-/// with no intermediate allocation.
-struct RunData<'a>(&'a [PendingChunk]);
-
-impl std::fmt::Debug for RunData<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "RunData({} chunks, {} bytes)",
-            self.0.len(),
-            self.0.iter().map(|p| p.data.len()).sum::<usize>()
-        )
-    }
-}
-
-impl ToSql for RunData<'_> {
-    fn to_sql(
-        &self,
-        _ty: &yb_tokio_postgres::types::Type,
-        out: &mut bytes::BytesMut,
-    ) -> std::result::Result<
-        yb_tokio_postgres::types::IsNull,
-        Box<dyn std::error::Error + Sync + Send>,
-    > {
-        for pc in self.0 {
-            out.extend_from_slice(&pc.data);
-        }
-        Ok(yb_tokio_postgres::types::IsNull::No)
-    }
-
-    fn accepts(ty: &yb_tokio_postgres::types::Type) -> bool {
-        *ty == yb_tokio_postgres::types::Type::BYTEA
-    }
-
-    yb_tokio_postgres::types::to_sql_checked!();
-}
-
 /// Build and execute one multi-row `INSERT ... VALUES (...), (...)`
 /// with one row per coalesced run. Returns the error chain on failure
 /// (the statement is atomic — all rows commit or none; and since the
 /// batch carries one bucket, all rows hash to one tablet, so the
 /// statement takes the single-shard transaction fast path).
+/// `encoded` carries the [`payload_codec`]-wrapped run buffers produced by
+/// [`flush_batch`], 1:1 with `runs`.
 async fn flush_batch_ysql(
     ysql_fpu_client: &YsqlClient,
     table_name: &str,
     branch_id: &str,
     batch: &[PendingChunk],
     runs: &[std::ops::Range<usize>],
+    encoded: &[bytes::Bytes],
 ) -> Result<()> {
     if batch.is_empty() {
         return Ok(());
@@ -1813,8 +1937,9 @@ async fn flush_batch_ysql(
     }
 
     // One row per run, keyed by the run's first chunk. `data` binds the
-    // run's chunk slice through `RunData` — the bytes are concatenated
-    // straight into the wire buffer, never into an intermediate Vec.
+    // pre-encoded run buffer — the same `Bytes` the tsclient lane binds.
+    // `chunk_size` stays the run's UNCOMPRESSED length (LSN-space
+    // arithmetic depends on `chunk_offset + chunk_size`).
     let bucket_is: Vec<i16> = runs.iter().map(|r| batch[r.start].bucket_id).collect();
     let segno_is: Vec<i64> = runs.iter().map(|r| batch[r.start].segno as i64).collect();
     let offset_is: Vec<i64> = runs.iter().map(|r| batch[r.start].chunk_offset).collect();
@@ -1822,7 +1947,7 @@ async fn flush_batch_ysql(
         .iter()
         .map(|r| batch[r.clone()].iter().map(|p| p.chunk_size).sum())
         .collect();
-    let datas: Vec<RunData<'_>> = runs.iter().map(|r| RunData(&batch[r.clone()])).collect();
+    let datas: Vec<&[u8]> = encoded.iter().map(|b| b.as_ref()).collect();
 
     let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * 6);
     for i in 0..n {
@@ -2269,7 +2394,10 @@ fn merge_fetched_rows<'a>(
         out.push(CurrentChunk {
             chunk_offset: start,
             end_offset: end,
-            data: Arc::new(row[2].as_bytes()?.to_vec()),
+            data: Arc::new(decode_chunk_data(
+                row[2].as_bytes()?,
+                &format!("WAL chunk fetch (tsclient): offset={start}"),
+            )?),
         });
     }
     out.sort_by_key(|c| c.chunk_offset);
@@ -2313,7 +2441,15 @@ fn merge_fetched_rows_thin<'a>(
         out.push(CurrentChunk {
             chunk_offset: start,
             end_offset: end,
-            data: Arc::new(row[2].as_bytes()?.to_vec()),
+            // MUST decode: `chunk_offset`/`end_offset` are LSN-space, and the
+            // segment reader slices `data` with those offsets. Handing it a
+            // still-encoded buffer panics with an out-of-range slice as soon
+            // as compression makes the stored bytes shorter than the logical
+            // span.
+            data: Arc::new(decode_chunk_data(
+                row[2].as_bytes()?,
+                &format!("WAL chunk fetch (thin): offset={start}"),
+            )?),
         });
     }
     out.sort_by_key(|c| c.chunk_offset);
@@ -2572,7 +2708,11 @@ async fn fetch_chunks_from_yb(
     for row in rows {
         let chunk_offset: i64 = row.get("chunk_offset");
         let chunk_size: i32 = row.get("chunk_size");
-        let data: Vec<u8> = row.get("data");
+        let stored: Vec<u8> = row.get("data");
+        let data = decode_chunk_data(
+            &stored,
+            &format!("WAL chunk fetch (ysql): offset={chunk_offset}"),
+        )?;
         let start = chunk_offset as u64;
         let end = start + chunk_size as u64;
         // The covering arm (`chunk_offset < byte_offset`) is only useful when
@@ -2731,6 +2871,20 @@ mod tests {
     /// a rerun reuses — and `make_wals_table`'s DROP-IF-EXISTS heals —
     /// the same table instead of leaking a fresh one per run, while
     /// parallel tests still get distinct names.
+    /// Wrap logical WAL bytes the way the writer does, for fixtures that
+    /// `INSERT` into `wals` directly instead of going through
+    /// [`flush_batch`]. Without this the read path rejects the row: an
+    /// un-enveloped blob's first byte is data, not a codec tag.
+    ///
+    /// `chunk_size` in those fixtures stays the LOGICAL length (the length
+    /// of what is passed here), which is the invariant the LSN arithmetic
+    /// depends on.
+    fn enc(plain: &[u8]) -> Vec<u8> {
+        payload_codec::encode(plain, payload_codec::Codec::Lz4)
+            .0
+            .to_vec()
+    }
+
     fn scratch_table(prefix: &str) -> String {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2857,6 +3011,7 @@ mod tests {
             cache: None,
             yb_tsclient: None,
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
         let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
             .await
@@ -2896,6 +3051,7 @@ mod tests {
             )))),
             yb_tsclient: None,
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
         let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
             .await
@@ -3123,7 +3279,7 @@ mod tests {
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     quote_relation(&table)
                 ),
-                &[&branch_s, &bucket, segno, offset, size, &blob, &now_us],
+                &[&branch_s, &bucket, segno, offset, size, &enc(blob), &now_us],
             )
             .await
             .expect("INSERT via fpu");
@@ -3175,7 +3331,7 @@ mod tests {
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     quote_relation(&table)
                 ),
-                &[&branch_s, &bucket, segno, offset, size, &blob, &0i64],
+                &[&branch_s, &bucket, segno, offset, size, &enc(&blob), &0i64],
             )
             .await
             .expect("insert chunk");
@@ -3212,10 +3368,12 @@ mod tests {
         assert_eq!(count, 2, "the chunk entirely past the cut must be deleted");
 
         // The straddling chunk is trimmed to 10000 - 8192 = 1808 bytes.
+        // `octet_length(data)` would measure the STORED bytes (envelope
+        // included), so fetch the column and unwrap it here instead.
         let row = system
             .query_opt(
                 &format!(
-                    "SELECT chunk_size, octet_length(data) FROM {} \
+                    "SELECT chunk_size, data FROM {} \
                      WHERE branch_id=$1 AND chunk_offset=8192",
                     quote_relation(&table)
                 ),
@@ -3225,7 +3383,16 @@ mod tests {
             .expect("straddling chunk")
             .expect("straddling chunk exists");
         assert_eq!(row.get::<_, i32>(0), 1808, "chunk_size trimmed to the cut");
-        assert_eq!(row.get::<_, i32>(1), 1808, "data trimmed to the cut");
+        let stored: Vec<u8> = row.get(1);
+        let trimmed = decode_chunk_data(&stored, "trimmed straddling chunk").expect("decode");
+        assert_eq!(trimmed.len(), 1808, "data trimmed to the cut");
+        // `truncate_wals_above` rewrites the trimmed remainder raw rather
+        // than re-compressing it (see its doc comment).
+        assert_eq!(
+            payload_codec::stored_codec_name(&stored),
+            "raw",
+            "the trimmed chunk is stored raw"
+        );
 
         // Idempotent: a second call is a no-op.
         truncate_wals_above(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(10000))
@@ -3236,6 +3403,88 @@ mod tests {
                 .await
                 .expect("load_write_lsn after re-run");
         assert_eq!(lsn2, Lsn(10000), "re-run must not change the end of WAL");
+
+        // Idempotent under BLIND REPLAY of the trim statement itself, which
+        // is a different case from the re-run above: `run_with_retries`
+        // re-issues a statement verbatim when its ack is lost to a connection
+        // drop, so the replayed UPDATE still carries the stale pre-image in
+        // its predicate. The re-run above never reaches the UPDATE (nothing
+        // straddles any more), so only this exercises the CAS.
+        //
+        // Replay the exact statement with the ORIGINAL pre-trim bytes as the
+        // CAS operand; it must still report one affected row via the
+        // post-image arm, or `truncate_wals_above` would report an
+        // already-durable trim as a hard error.
+        let (replay_data, replay_size): (Vec<u8>, i32) = (stored.clone(), 1808);
+        let pre_image = enc(&vec![0x5au8; 8192]);
+        let bucket_of_straddler: i16 = system
+            .query_opt(
+                &format!(
+                    "SELECT bucket_id FROM {} WHERE branch_id=$1 AND chunk_offset=8192",
+                    quote_relation(&table)
+                ),
+                &[&branch_s],
+            )
+            .await
+            .expect("bucket lookup")
+            .expect("straddling chunk exists")
+            .get(0);
+        // First pin why the post-image arm is needed at all: the pre-image
+        // arm ALONE — the predicate this code shipped with before — matches
+        // nothing once the row is trimmed. That zero is what used to trip the
+        // `affected == 1` check on a replay.
+        let pre_image_only = system
+            .execute(
+                &format!(
+                    "UPDATE {} SET data = $5, chunk_size = $6 \
+                     WHERE branch_id = $1 AND bucket_id = $2 AND segno = $3 \
+                       AND chunk_offset = $4 AND data = $7",
+                    quote_relation(&table)
+                ),
+                &[
+                    &branch_s,
+                    &bucket_of_straddler,
+                    &0i64,
+                    &8192i64,
+                    &replay_data.as_slice(),
+                    &replay_size,
+                    &pre_image.as_slice(),
+                ],
+            )
+            .await
+            .expect("pre-image-only trim UPDATE");
+        assert_eq!(
+            pre_image_only, 0,
+            "sanity: the pre-image no longer matches a trimmed row — this is \
+             the zero that made the old CAS fail on a blind replay"
+        );
+
+        let replayed = system
+            .execute(
+                &format!(
+                    "UPDATE {} SET data = $5, chunk_size = $6 \
+                     WHERE branch_id = $1 AND bucket_id = $2 AND segno = $3 \
+                       AND chunk_offset = $4 \
+                       AND (data = $7 OR (data = $5 AND chunk_size = $6))",
+                    quote_relation(&table)
+                ),
+                &[
+                    &branch_s,
+                    &bucket_of_straddler,
+                    &0i64,
+                    &8192i64,
+                    &replay_data.as_slice(),
+                    &replay_size,
+                    &pre_image.as_slice(),
+                ],
+            )
+            .await
+            .expect("replayed trim UPDATE");
+        assert_eq!(
+            replayed, 1,
+            "a blindly replayed trim must still match one row (post-image arm); \
+             otherwise a lost ack turns a durable trim into a hard error"
+        );
 
         drop_wals_table(&fpu, &table).await;
     }
@@ -3278,7 +3527,7 @@ mod tests {
                     quote_relation(&table)
                 ),
                 &[
-                    &branch_s, &bucket, &segno_i, &offset_i, &size_i, &data, &now_us,
+                    &branch_s, &bucket, &segno_i, &offset_i, &size_i, &enc(data), &now_us,
                 ],
             )
             .await
@@ -3296,6 +3545,7 @@ mod tests {
             cache: None,
             yb_tsclient: None,
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
         let mut reader = YbSegmentReader::new(
             yb_wal,
@@ -3343,7 +3593,7 @@ mod tests {
                  VALUES ($1, 0, 0, 0, 2048, $2, 0)",
                 quote_relation(&table)
             ),
-            &[&branch_s, &chunk.as_slice()],
+            &[&branch_s, &enc(chunk.as_slice())],
         )
         .await
         .expect("INSERT chunk");
@@ -3356,6 +3606,7 @@ mod tests {
             cache: None,
             yb_tsclient: None,
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
         // Start the reader at byte offset 1024 — partway into the chunk.
         let mut reader = YbSegmentReader::new(
@@ -3437,7 +3688,7 @@ mod tests {
             let slice = bytes.as_slice();
             fpu.execute(
                 &insert_sql,
-                &[&branch_s, &bucket, &seg, &off, &size, &slice],
+                &[&branch_s, &bucket, &seg, &off, &size, &enc(slice)],
             )
             .await
             .expect("INSERT chunk");
@@ -3453,6 +3704,7 @@ mod tests {
             cache: Some(cache.clone()),
             yb_tsclient: None,
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
 
         // flush = 1024: [0,1024) committed, [1024,4096) not yet.
@@ -3503,7 +3755,7 @@ mod tests {
                 &seg,
                 &1024i64,
                 &tail_size,
-                &tail_new_slice,
+                &enc(tail_new_slice),
             ],
         )
         .await
@@ -3560,7 +3812,7 @@ mod tests {
         let head_size = head_bytes.len() as i32;
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &0i64, &head_size, &head_slice],
+            &[&branch_s, &0i16, &seg, &0i64, &head_size, &enc(head_slice)],
         )
         .await
         .expect("INSERT head chunk");
@@ -3573,6 +3825,7 @@ mod tests {
             cache: None,
             yb_tsclient: None,
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
 
         // Committed frontier is in the NEXT segment: the gap is switch padding.
@@ -3673,7 +3926,7 @@ mod tests {
         let old_slice = old.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &off, &size, &old_slice],
+            &[&branch_s, &0i16, &seg, &off, &size, &enc(old_slice)],
         )
         .await
         .expect("INSERT old chunk");
@@ -3686,6 +3939,7 @@ mod tests {
             cache: None,
             yb_tsclient: None,
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
 
         // Live flush frontier, as the streaming reader would publish it.
@@ -3716,7 +3970,7 @@ mod tests {
         let new_slice = new.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &off, &size, &new_slice],
+            &[&branch_s, &0i16, &seg, &off, &size, &enc(new_slice)],
         )
         .await
         .expect("INSERT rewritten chunk");
@@ -3784,7 +4038,7 @@ mod tests {
         let old_slice = old.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &off, &size, &old_slice],
+            &[&branch_s, &0i16, &seg, &off, &size, &enc(old_slice)],
         )
         .await
         .expect("INSERT old chunk");
@@ -3797,6 +4051,7 @@ mod tests {
             cache: None,
             yb_tsclient: None,
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
 
         // Flush frontier is ABSOLUTE: committed up to offset 1024 in segment 1.
@@ -3823,7 +4078,7 @@ mod tests {
         let new_slice = new.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &off, &size, &new_slice],
+            &[&branch_s, &0i16, &seg, &off, &size, &enc(new_slice)],
         )
         .await
         .expect("INSERT rewritten chunk");
@@ -3923,11 +4178,16 @@ mod tests {
             let segno: i64 = row.get("segno");
             let off: i64 = row.get("chunk_offset");
             let size: i32 = row.get("chunk_size");
-            let data: Vec<u8> = row.get("data");
+            let stored: Vec<u8> = row.get("data");
+            // `chunk_size` is LOGICAL length: it must match the payload
+            // AFTER the compression envelope is unwrapped, not the stored
+            // byte count. The LSN arithmetic in the read path and in
+            // `truncate_wals_above` depends on this.
+            let data = decode_chunk_data(&stored, "round-trip test row").expect("decode");
             assert_eq!(
                 data.len(),
                 size as usize,
-                "chunk_size must equal length(data)"
+                "chunk_size must equal the DECODED length of data"
             );
             let abs = segno as u64 * SEG_SIZE + off as u64;
             assert_eq!(
@@ -4088,7 +4348,7 @@ mod tests {
         for (bucket, segno, off, size) in rows {
             let blob = vec![0x77u8; *size as usize];
             let slice = blob.as_slice();
-            fpu.execute(&insert_sql, &[&branch_s, bucket, segno, off, size, &slice])
+            fpu.execute(&insert_sql, &[&branch_s, bucket, segno, off, size, &enc(slice)])
                 .await
                 .expect("insert adversarial row");
         }
@@ -4122,14 +4382,110 @@ mod tests {
     /// Cross-lane row identity — the shared-runs contract. `hot_path` can
     /// switch a timeline between the tsclient and YSQL lanes, so both must
     /// write byte-identical rows or a later read sees inconsistent bytes.
-    /// Standing up a real `YbTsClient` needs a live tserver RPC
-    /// endpoint, so this test pins the contract at the next best seam: from
-    /// ONE `coalesce_runs` grouping, both lanes must serialize IDENTICAL
-    /// (bucket, segno, chunk_offset, chunk_size, bytes) row tuples — the
-    /// tsclient lane's payload via [`run_data_bytes`] (the exact buffer it
-    /// binds), the YSQL lane's via [`RunData`]'s `to_sql` wire encoding.
+    ///
+    /// Both lanes now bind the SAME [`encode_run`] buffer, so byte identity
+    /// holds by construction rather than by two serializers agreeing. What
+    /// still needs pinning — and is what this test asserts — is that the
+    /// envelope is lossless and that `chunk_size` stays LOGICAL: it must
+    /// equal the decoded length, not the stored length, because the read
+    /// path and `truncate_wals_above` do LSN arithmetic with
+    /// `chunk_offset + chunk_size`.
+    /// Every WAL write lane must bind the [`encode_run`] output, never a
+    /// run's plaintext bytes.
+    ///
+    /// A source-level guard, because the failure it catches is invisible to
+    /// the type system and to every other test here. When a new client lane
+    /// lands upstream, its `flush_batch_*` variant is *new code* — it
+    /// conflicts with nothing, compiles fine, and silently writes untagged
+    /// plaintext that the read path then rejects. That is exactly how the
+    /// `yb_thin_client` lane reached the pageserver's `put_pages_thin`:
+    /// clean auto-merge, clippy clean, every unit test green, and the
+    /// cluster could not start because it failed to decode its own pages.
+    ///
+    /// Unit tests can't catch it — they exercise whichever lane is
+    /// configured, and the break only shows on the *default* one.
     #[test]
-    fn tsclient_and_ysql_lanes_serialize_identical_rows() {
+    fn every_wal_write_lane_binds_encoded_runs() {
+        let src = include_str!("yb_wal_storage.rs");
+
+        // Needles assembled from fragments so this test's own source does
+        // not match them — otherwise the guard flags itself.
+        let bind_prefix = format!("(\"da{}\", BindValue::Bytes(", "ta");
+        let raw_concat = format!("run_data_by{}(", "tes");
+        let raw_chunk = format!("pc.da{}", "ta");
+
+        let raw_binds: Vec<_> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.contains(&bind_prefix) && (l.contains(&raw_concat) || l.contains(&raw_chunk))
+            })
+            .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
+            .collect();
+        assert!(
+            raw_binds.is_empty(),
+            "these WAL write lanes bind PLAINTEXT run bytes instead of the \
+             encoded buffer from `encode_run` — chunks written this way have \
+             no codec tag and `decode_chunk_data` will reject them on \
+             read:\n{}",
+            raw_binds.join("\n")
+        );
+
+        // Sanity: the guard only means something if it can see the binds it
+        // polices. Three lanes bind `data` (tsclient, thin, ysql — the last
+        // via a positional param, so two literal matches here).
+        let seen = src.matches(&bind_prefix).count();
+        assert!(
+            seen >= 2,
+            "expected at least 2 `data` BindValue sites to police, saw \
+             {seen} — the bind syntax changed and this guard has gone blind"
+        );
+
+        // The READ side needs the same guard, and for a nastier reason:
+        // `CurrentChunk`'s offsets are LSN-space and the segment reader
+        // slices `data` with them, so an undecoded buffer does not merely
+        // return wrong bytes — it panics the WAL sender with an
+        // out-of-range slice the moment compression shortens the stored
+        // span. Every construction site must decode.
+        // Flag the bug's actual signature: a chunk buffer wrapped straight
+        // from an indexed DB row cell, with no decode in the expression. A
+        // correct site wraps the decoder's output, or copies a local that was
+        // decoded first.
+        //
+        // An earlier version of this check looked for a decoder call
+        // "somewhere near" the constructor, and passed even with the decode
+        // deleted — proximity is not the invariant, the field expression is.
+        // The needle is built from fragments so these lines cannot match it.
+        let raw_row = format!("Arc::new(ro{}[", "w");
+        let lines: Vec<&str> = src.lines().collect();
+        let raw_chunks: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.contains(&raw_row))
+            .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
+            .collect();
+        assert!(
+            raw_chunks.is_empty(),
+            "these sites build a WAL chunk buffer from RAW row bytes without \
+             `decode_chunk_data` — `CurrentChunk`'s offsets are LSN-space and \
+             the segment reader slices `data` with them, so an encoded buffer \
+             panics the WAL sender with an out-of-range slice as soon as \
+             compression shortens the stored span:\n{}",
+            raw_chunks.join("\n")
+        );
+
+        // Sanity: the decode funnel must actually be in use on the read side.
+        let decoder = format!("decode_chunk_da{}(", "ta");
+        let decodes = src.matches(&decoder).count();
+        assert!(
+            decodes >= 3,
+            "expected at least 3 `decode_chunk_data` call sites (one per read \
+             lane), saw {decodes} — a read path has lost its decode"
+        );
+    }
+
+    #[test]
+    fn encoded_runs_round_trip_and_keep_chunk_size_logical() {
         fn pc(segno: u64, off: i64, fill: u8, len: usize) -> PendingChunk {
             PendingChunk {
                 segno,
@@ -4162,57 +4518,51 @@ mod tests {
             "batch must produce a multi-chunk run, a singleton, and a cross-segment break"
         );
 
-        type RowTuple = (i16, i64, i64, i32, Vec<u8>);
-        let mut tsclient_rows: Vec<RowTuple> = Vec::new();
-        let mut ysql_rows: Vec<RowTuple> = Vec::new();
-        let mut expected_rows: Vec<RowTuple> = Vec::new();
-        for r in &runs {
-            let chunks = &batch[r.clone()];
-            // tsclient lane (flush_batch_tsclient): keyed by the run's first
-            // chunk, sized as the run total, payload = run_data_bytes.
-            let first = &chunks[0];
-            let total: i32 = chunks.iter().map(|p| p.chunk_size).sum();
-            tsclient_rows.push((
-                first.bucket_id,
-                first.segno as i64,
-                first.chunk_offset,
-                total,
-                run_data_bytes(chunks).to_vec(),
-            ));
-            // YSQL lane (flush_batch_ysql): same key/size expressions;
-            // payload is what RunData::to_sql streams onto the wire.
-            let mut wire = bytes::BytesMut::new();
-            RunData(chunks)
-                .to_sql(&yb_tokio_postgres::types::Type::BYTEA, &mut wire)
-                .expect("RunData::to_sql");
-            ysql_rows.push((
-                batch[r.start].bucket_id,
-                batch[r.start].segno as i64,
-                batch[r.start].chunk_offset,
-                chunks.iter().map(|p| p.chunk_size).sum(),
-                wire.to_vec(),
-            ));
-            // Ground truth: concatenation of the submitted chunk bytes.
-            let mut bytes = Vec::new();
-            for c in chunks {
-                bytes.extend_from_slice(&c.data);
+        // Exercise both codecs: rows written under either must decode with
+        // one reader, which is what makes `yb_wal_compression` a restart
+        // rather than a migration.
+        for codec in [payload_codec::Codec::Lz4, payload_codec::Codec::Raw] {
+            for r in &runs {
+                let chunks = &batch[r.clone()];
+                let first = &chunks[0];
+
+                // Ground truth: concatenation of the submitted chunk bytes.
+                let mut plain = Vec::new();
+                for c in chunks {
+                    plain.extend_from_slice(&c.data);
+                }
+
+                // The buffer BOTH lanes bind for this run.
+                let stored = encode_run(chunks, codec);
+                let decoded =
+                    payload_codec::decode(&stored).expect("stored run must decode");
+                assert_eq!(
+                    &decoded[..],
+                    &plain[..],
+                    "run at segno={} off={} must survive the {codec:?} envelope intact",
+                    first.segno,
+                    first.chunk_offset,
+                );
+
+                // The invariant the LSN arithmetic depends on.
+                let chunk_size: i32 = chunks.iter().map(|p| p.chunk_size).sum();
+                assert_eq!(
+                    chunk_size as usize,
+                    decoded.len(),
+                    "chunk_size must be the DECODED length, not the stored length"
+                );
             }
-            expected_rows.push((
-                4,
-                first.segno as i64,
-                first.chunk_offset,
-                bytes.len() as i32,
-                bytes,
-            ));
         }
+
+        // The all-same-byte fills above compress hard; make sure the
+        // threshold path is covered too — a run under MIN_COMPRESS_BYTES
+        // stays raw and still round-trips.
+        let tiny = vec![pc(3, 0, 0x77, 8)];
+        let stored = encode_run(&tiny, payload_codec::Codec::Lz4);
+        assert_eq!(stored.len(), 9, "one tag byte + the 8 payload bytes");
         assert_eq!(
-            tsclient_rows, ysql_rows,
-            "both lanes must serialize a batch to IDENTICAL row tuples so a \
-             timeline reads back the same rows regardless of which lane wrote it"
-        );
-        assert_eq!(
-            tsclient_rows, expected_rows,
-            "row tuples must be the exact per-run concatenation of the submitted chunks"
+            &payload_codec::decode(&stored).expect("tiny run decodes")[..],
+            &[0x77u8; 8][..]
         );
     }
 
@@ -4275,6 +4625,7 @@ mod tests {
             cache: None,
             yb_tsclient: Some(yb_tsclient),
             yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
         });
         let mut storage = YbWalStorage::new(&branch_id, &state, yb_wal.clone())
             .await

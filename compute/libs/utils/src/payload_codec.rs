@@ -192,7 +192,8 @@ pub fn decode(stored: &Bytes) -> Result<Bytes> {
         other => bail!(
             "unknown payload codec tag 0x{other:02x} \
              (this build supports 0x{TAG_RAW:02x}=raw, 0x{TAG_LZ4:02x}=lz4); \
-             the row was written by a newer pageserver"
+             the row was written by a newer build, or by one that bypassed \
+             the codec entirely"
         ),
     }
 }

@@ -449,6 +449,16 @@ CREATE TABLE safekeeper.wals (
 ) SPLIT INTO 10 TABLETS;
 ```
 
+`data` holds a compression envelope, not bare WAL bytes — a codec tag
+byte followed by (by default) an LZ4 block, encoded and decoded by the
+Rust layer. `chunk_size` stays the **logical** (decoded) length, because
+`chunk_offset + chunk_size` is LSN-space arithmetic; so
+`octet_length(data)` is *not* `chunk_size`, and `substring(data, …)`
+slices envelope bytes. Use `yb-dump-wals`, which decodes client-side.
+See [`safekeeper.md`](safekeeper.md) "`data` is compressed" for the
+`yb_wal_compression` knob and why the whole coalesced run is compressed
+rather than each chunk.
+
 Each row is one coalesced run of a consumer batch: contiguous chunks of
 a segment are concatenated before the write, so the typical batch is
 one row. The writer never produces overlapping rows (`truncate_wal`

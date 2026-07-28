@@ -35,6 +35,9 @@ one branch, so this is one series per metric per process.
 | `safekeeper_misc_operation_seconds` | HistogramVec | `operation` | Miscellaneous timings. Observed operations: `handle_elected`, `state_snapshot`, `wal_residence_guard`, `try_wal_residence_guard`. |
 | `safekeeper_persist_control_file_seconds` | Histogram | — | Latency of persisting the control file: full-row `UPDATE`s (`Storage::persist`) and the advisory `remote_consistent_lsn` UPDATE (`AdvisoryPersist`), both against `safekeeper.timeline_state`. |
 | `safekeeper_wal_storage_limit_errors` | IntCounter | — | Appends rejected because the timeline's retained-WAL estimate exceeds `max_timeline_disk_usage_bytes`. |
+| `safekeeper_yb_wal_payload_logical_bytes_total` | IntCounter | — | Uncompressed WAL run bytes handed to the `safekeeper.wals` writer. Numerator of the compression ratio. |
+| `safekeeper_yb_wal_payload_stored_bytes_total` | IntCounter | — | Encoded WAL run bytes written to `safekeeper.wals` (compression envelope included) — what DocDB, the Raft log and every compaction move. `logical / stored` is the realized compression ratio (e.g. 3.0x); `1 - stored / logical` the equivalent space saving. Measured rather than assumed. |
+| `safekeeper_yb_wal_payload_runs_total` | IntCounterVec | `outcome` | WAL runs encoded, by codec outcome: `lz4` or `raw_configured` / `raw_too_small` / `raw_incompressible`. Runs are coalesced before encoding, so `raw_too_small` should be rare — unlike the pageserver's delta path, a WAL run is usually well above `MIN_COMPRESS_BYTES`. A rising `raw_incompressible` share means the WAL arrives pre-compressed. |
 
 ## YB WAL mirror: writes into `safekeeper.wals` (global)
 

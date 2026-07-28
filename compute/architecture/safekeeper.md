@@ -132,6 +132,50 @@ independent of the connection's `search_path`).
   carry a `bucket_id IN (0..9)` hash-key list, which YSQL executes as
   batched per-bucket index probes rather than a scan.
 
+#### `data` is compressed
+
+`data` holds a compression envelope, not bare WAL bytes. The Rust layer
+encodes on write and decodes on read; YSQL only ever sees an opaque
+`BYTEA`. Format, tag values and rationale are shared with the pageserver's
+payload columns — see `utils::payload_codec`
+(`compute/libs/utils/src/payload_codec.rs`) and the "Payload compression"
+section of [`pageserver.md`](pageserver.md).
+
+Two things are specific to the WAL path:
+
+- **`chunk_size` stays the LOGICAL length** — the size of the decoded WAL
+  bytes, not of the stored column. The read path and
+  `truncate_wals_above` both do LSN arithmetic with
+  `chunk_offset + chunk_size`, so it is LSN-space, not a description of
+  what DocDB holds. `octet_length(data)` in ad-hoc SQL is therefore *not*
+  `chunk_size`; use `yb-dump-wals`, which decodes client-side and reports
+  codec / stored / decoded length separately.
+- **The whole coalesced run is compressed, not each chunk.** With
+  `full_page_writes = off` the WAL carries no full-page images, so it is a
+  stream of small records that barely compress in isolation — but a run of
+  hundreds of structurally similar records has ample cross-record
+  redundancy. Compressing after `coalesce_runs` is what makes the ratio
+  worth having.
+
+`yb_wal_compression` in `safekeeper.toml` (`none` | `lz4`, default `lz4`)
+selects only what *new* rows are written with; the read path decodes
+whatever tag each row carries. Changing it and restarting needs no
+migration — new rows use the new codec, existing rows stay readable. It is
+deliberately separate from the pageserver's `yb_payload_compression`: the
+two store different shapes of data and are tuned independently.
+
+This is why `truncate_wals_above` trims the straddling chunk with a
+read-modify-write in Rust rather than the `UPDATE ... SET data =
+substring(data ...)` it used to. YSQL cannot decompress — Postgres exposes
+no SQL-callable LZ4/pglz decompressor and YB ships no extension for it — and
+slicing a compressed stream would corrupt it silently. The trimmed chunk is
+rewritten **raw** rather than re-compressed: truncation is rare (torn tail
+on restart, or a walproposer `ProposerElected` cut) and one uncompressed
+chunk until GC drops it does not justify a second code path. The `UPDATE`
+carries a compare-and-swap on the old `data` value; `truncate_wal` already
+drains the consumer and holds `&mut self`, so the guard is defence in depth
+against a future refactor rather than a live race.
+
 ## YB connections: `YbWalConn`
 
 `YbWalConn::from_conf` opens three independent YSQL connections at boot
@@ -601,9 +645,13 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
 - `branch_id` bakes the single-branch identity (see
   [Timeline lifecycle](#timeline-lifecycle)); yb_amp_local stamps it at
   provision time (`allocate_safekeeper_conf`).
+- `yb_wal_compression` (`none` | `lz4`) is the codec for
+  `safekeeper.wals.data`. Write-side only — see
+  [`data` is compressed](#data-is-compressed). Only the safekeeper restart
+  is needed to change it; nothing is rewritten.
 - Defaults: `listen_pg` 127.0.0.1:5454, `listen_http` 127.0.0.1:7676,
   `control_file_save_interval` 300 s, `wal_cache_size_mib` 256 scaled by
-  `scale_factor`, `heartbeat_timeout` 5 s.
+  `scale_factor`, `heartbeat_timeout` 5 s, `yb_wal_compression` `lz4`.
 
 The process runs three additional tokio runtimes (`WAL_SERVICE_RUNTIME`,
 `HTTP_RUNTIME`, `BACKGROUND_RUNTIME`); `SIGUSR2` dumps suspended tasks from
