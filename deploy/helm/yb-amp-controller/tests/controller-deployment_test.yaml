@@ -95,7 +95,7 @@ tests:
             name: AMP_DEPLOY_PULL_SECRET
             value: pull-secret
 
-  - it: probes /readyz and /healthz on the api port
+  - it: probes readiness only — a liveness probe would kill a slow migration (#398)
     asserts:
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.httpGet.path
@@ -103,9 +103,5 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].readinessProbe.httpGet.port
           value: api
-      - equal:
-          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
-          value: /healthz
-      - equal:
-          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
-          value: api
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe

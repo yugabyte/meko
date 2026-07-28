@@ -102,11 +102,9 @@ controller:
 
   # -- Compute resources for the controller container.
   resources: {}
-  # -- Liveness probe (HTTP /healthz on the api port).
-  livenessProbe:
-    initialDelaySeconds: 15
-    periodSeconds: 10
-  # -- Readiness probe (HTTP /readyz on the api port).
+  # -- Readiness probe (HTTP /readyz on the api port). The controller has NO
+  # liveness probe: startup migrations run before anything answers /healthz,
+  # and a liveness kill mid-migration leaves the schema dirty (#398).
   readinessProbe:
     initialDelaySeconds: 5
     periodSeconds: 5

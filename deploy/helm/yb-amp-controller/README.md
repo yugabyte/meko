@@ -32,7 +32,9 @@ image pull secret — those are prerequisites.
 - **Controller Deployment** `amp-controller` — one pod, container port `api`
   (8080: REST API + UI + `/healthz`/`/readyz` + the storage-layer control surface
   `/control/v1`+`/debug/v1`). Carries the full `AMP_*` env block; readiness
-  `/readyz` and liveness `/healthz` on the api port.
+  `/readyz` on the api port — deliberately **no liveness probe**: startup
+  migrations run before anything answers `/healthz`, and a liveness kill
+  mid-migration leaves the schema dirty (#398).
 - **Controller Service** `amp-controller` — always-on ClusterIP exposing `api`.
   This is the DNS endpoints register against (the control-surface URL handed to them).
 - **Controller external Service** — per `controller.service.type`: a NodePort

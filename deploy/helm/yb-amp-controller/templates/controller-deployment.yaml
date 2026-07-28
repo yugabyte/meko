@@ -94,12 +94,12 @@ spec:
               port: api
             initialDelaySeconds: {{ .Values.controller.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.controller.readinessProbe.periodSeconds }}
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: api
-            initialDelaySeconds: {{ .Values.controller.livenessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.controller.livenessProbe.periodSeconds }}
+          # No liveness probe, deliberately (#398). The controller migrates its
+          # schema BEFORE serving, so nothing answers /healthz during a slow
+          # migration (an index backfill on an RF=3 backing runs for minutes) —
+          # a liveness probe kills that work mid-DDL and leaves schema_migrations
+          # dirty, wedging every later start. Readiness alone degrades safely: a
+          # not-ready pod is out of traffic but never killed.
           {{- with .Values.controller.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
