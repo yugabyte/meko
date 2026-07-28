@@ -3,7 +3,7 @@
 //! Requires the REAL shim (not the stub) and a reachable tserver:
 //!
 //! ```sh
-//! YB_THIN_CLIENT_LIB_DIR=<dir with libyb_thin_client.so> \
+//! LD_LIBRARY_PATH=<dir with libyb_thin_client.so> \
 //!   cargo test -p yb_thin_client --test live -- --ignored --nocapture
 //! ```
 //!
@@ -81,7 +81,7 @@ async fn table_oids(ysql: &YsqlClient, table: &str) -> (u32, u32) {
 }
 
 #[tokio::test]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn smoke_connect_open_upsert_read() {
     const TABLE: &str = "thin_smoke";
     let ysql = ysql().await;
@@ -208,7 +208,7 @@ async fn smoke_connect_open_upsert_read() {
 /// table reads as "does not exist". If the shim's forward scan ignores the
 /// column's DESC modifier and returns the LOWEST lsn, this fails.
 #[tokio::test]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_desc_pk_limit1_newest() {
     use yb_thin_client::RangeRead;
     const TABLE: &str = "descpk_repro";
@@ -277,7 +277,7 @@ async fn repro_desc_pk_limit1_newest() {
 /// `get_checkpoint` can get another meta key's (older) row. Each of N keys has
 /// a unique payload; concurrent reads must each return their OWN key's row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_concurrent_multikey_reads() {
     use std::sync::Arc;
     use yb_thin_client::{CondOp, RangeRead};
@@ -374,7 +374,7 @@ async fn repro_concurrent_multikey_reads() {
 /// spanning the cap — capped at the branch point. Must return the newest row
 /// AT OR BELOW the cap. In production this returned the OLDEST.
 #[tokio::test]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_real_ckpt_read() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "realck_repro";
@@ -473,7 +473,7 @@ async fn repro_real_ckpt_read() {
 /// OLDEST matching row when the cap excludes the top, a branch reads the
 /// ancestor's initial checkpoint (nextXid=0) → ancestor tuples invisible.
 #[tokio::test]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_desc_pk_capped_limit1() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "cappk_repro";
@@ -543,7 +543,7 @@ async fn repro_desc_pk_capped_limit1() {
 /// committed writes, a branch reads a stale ancestor checkpoint (`nextXid`) and
 /// every ancestor tuple reads "in the future" → "does not exist".
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_cross_client_visibility() {
     use yb_thin_client::{CondOp, RangeRead, UpsertRow};
     const TABLE: &str = "xclient_repro";
@@ -638,7 +638,7 @@ async fn repro_cross_client_visibility() {
 /// branch reads a stale checkpoint → stale `nextXid` → ancestor tuples appear
 /// "in the future" → every user table reads "does not exist".
 #[tokio::test]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_meta_bytea_limit1_newest() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "meta_repro";
@@ -715,7 +715,7 @@ async fn repro_meta_bytea_limit1_newest() {
 /// and the integration logs show the flush task silently frozen. If the shim
 /// deadlocks under concurrent read+write on one client, this hangs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_concurrent_read_write() {
     use std::sync::Arc;
     use yb_thin_client::{CondOp, RangeRead};
@@ -816,7 +816,7 @@ async fn repro_concurrent_read_write() {
 /// descending limit-1 read returns the MAX offset below the cutoff (not the
 /// min), both standalone and inside a multi-op batch.
 #[tokio::test]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_wals_covering_read() {
     use yb_thin_client::{CondOp, RangeRead, ReadOp};
     const TABLE: &str = "wals_repro";
@@ -991,7 +991,7 @@ async fn repro_wals_covering_read() {
 /// isn't pinned across pages and the scan can miss rows. `N` rows read with a
 /// small `limit` forces several pages; we assert every row comes back.
 #[tokio::test]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_pages_multipage_scan() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "pages_repro";
@@ -1192,7 +1192,7 @@ async fn repro_pages_multipage_scan() {
 /// write is immediately visible to a fresh cross-session read; if the clamp
 /// makes reads trail writes, we measure and report the staleness window.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so (YB_THIN_CLIENT_LIB_DIR)"]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_read_after_write_visibility() {
     use std::time::Instant;
     use yb_thin_client::RangeRead;

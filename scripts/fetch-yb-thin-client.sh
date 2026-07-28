@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 #
-# Fetch the prebuilt `libyb_thin_client` C++ shim tarball and print the
-# extracted `lib/` directory (the value to set as `YB_THIN_CLIENT_LIB_DIR`
-# for `cargo build`). The shim is a YugabyteDB build target published as a
-# public, versioned, per-arch tarball on downloads.yugabyte.com — no
-# credentials required, so CI and the Docker builds fetch it with plain
-# `curl`.
+# Ensure the prebuilt `libyb_thin_client` C++ shim is in the repo's shim cache
+# and print the `lib/` directory holding it. The shim is a YugabyteDB build
+# target published as a public, versioned, per-arch tarball on
+# downloads.yugabyte.com — no credentials required, so CI and the Docker builds
+# fetch it with plain `curl`.
+#
+# `yb_thin_client`'s build.rs resolves the shim through this same cache and runs
+# this script only on a cache miss, so a build needs no environment setup at
+# all. Callers that need the *runtime* path (LD_LIBRARY_PATH for the daemons)
+# use this script's stdout.
 #
 # The version + commit are pinned in the crate so the fetched shim always
 # matches the vendored ABI header:
@@ -13,14 +17,21 @@
 #   compute/libs/yb_thin_client/shim/COMMIT
 # (`build.rs` re-checks version.txt against the pinned version.)
 #
+# Idempotent by design: an already-extracted shim is reused as-is, with no
+# download and no re-extraction, so repeated calls cost a couple of stats. Only
+# a genuine cache miss touches the network. The cache is keyed by
+# version+commit+arch, so bumping the pin fetches alongside the old entry
+# rather than overwriting it.
+#
 # Usage:
-#   export YB_THIN_CLIENT_LIB_DIR="$(scripts/fetch-yb-thin-client.sh)"
-#   # or, in GitHub Actions:
-#   echo "YB_THIN_CLIENT_LIB_DIR=$(scripts/fetch-yb-thin-client.sh)" >> "$GITHUB_ENV"
+#   scripts/fetch-yb-thin-client.sh                       # prints the lib dir
+#   export LD_LIBRARY_PATH="$(scripts/fetch-yb-thin-client.sh)"
 #
 # Env overrides:
-#   YB_THIN_CLIENT_DOWNLOAD_BASE  base URL (default: the public S3 path)
-#   YB_THIN_CLIENT_CACHE_DIR      where to download/extract (default: $TMPDIR/yb_thin_client)
+#   YB_THIN_CLIENT_DOWNLOAD_BASE  base URL (default: the public S3 path).
+#                                 For a mirror / air-gapped host. It cannot
+#                                 select a different shim: the version and
+#                                 commit always come from the pinned files.
 #
 # All diagnostics go to stderr; the ONLY thing printed to stdout is the lib dir.
 set -euo pipefail
@@ -38,23 +49,41 @@ esac
 
 base=${YB_THIN_CLIENT_DOWNLOAD_BASE:-https://s3.us-west-2.amazonaws.com/downloads.yugabyte.com/yb_thin_client}
 tarball="yb_thin_client-${ver}-${commit}-release-linux-${arch}.tar.gz"
-cache=${YB_THIN_CLIENT_CACHE_DIR:-"${TMPDIR:-/tmp}/yb_thin_client"}
-mkdir -p "$cache"
+# Fixed, in-repo cache (gitignored). Deliberately NOT configurable: build.rs
+# derives the same path, and a second knob is a second way for the two to
+# disagree and link a shim that isn't the pinned one.
+cache="$repo_root/.shim-cache"
+extract="$cache/${tarball%.tar.gz}"
 
+# Locate the .so by searching, so we don't depend on the tarball's top-level
+# directory name. `|| true` because a cold cache means `$extract` does not exist
+# and find exits non-zero, which `set -e` would otherwise treat as fatal.
+find_so() { find "$extract" -name libyb_thin_client.so -print -quit 2>/dev/null || true; }
+
+so=$(find_so)
+if [ -n "$so" ]; then
+  # Already populated — reuse it untouched.
+  dirname "$so"
+  exit 0
+fi
+
+mkdir -p "$cache"
 if [ ! -s "$cache/$tarball" ]; then
   echo "fetch-yb-thin-client: downloading $base/$tarball" >&2
   curl -fSL --retry 3 --retry-delay 2 -o "$cache/$tarball.part" "$base/$tarball" >&2
   mv "$cache/$tarball.part" "$cache/$tarball"
 fi
 
-extract="$cache/${tarball%.tar.gz}"
+# Extract into a temp sibling and rename, so a killed run can't leave a
+# half-unpacked tree that the reuse check above would then accept.
+staging="$extract.unpack.$$"
+rm -rf "$staging"
+mkdir -p "$staging"
+tar xzf "$cache/$tarball" -C "$staging"
 rm -rf "$extract"
-mkdir -p "$extract"
-tar xzf "$cache/$tarball" -C "$extract"
+mv "$staging" "$extract"
 
-# Locate the lib dir by finding the .so, so we don't depend on the tarball's
-# top-level directory name.
-so=$(find "$extract" -name libyb_thin_client.so -print -quit)
+so=$(find_so)
 if [ -z "$so" ]; then
   echo "fetch-yb-thin-client: libyb_thin_client.so not found in $tarball" >&2
   exit 1

@@ -1,4 +1,5 @@
 /artifact_cache
+/.shim-cache
 /build
 /pg_install
 /target

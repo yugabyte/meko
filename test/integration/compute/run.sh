@@ -126,6 +126,17 @@ EOF
     exit 1
 fi
 
+# The pageserver and safekeeper link against the prebuilt `libyb_thin_client.so`
+# C++ shim, and resolve it at RUNTIME via LD_LIBRARY_PATH: build.rs emits an
+# rpath, but cargo scopes link args to the emitting crate, so they never reach a
+# dependent's binaries. Without this the daemons die at exec with "cannot open
+# shared object file", which the launcher can only report as "safekeeper did not
+# start+pass status checks within 30s" — six port-block retries and no mention of
+# the real cause. Build-time resolution needs nothing here: build.rs fetches and
+# caches the pinned shim itself, so this call is a cache hit that only prints
+# where it landed.
+export LD_LIBRARY_PATH="$("$REPO/scripts/fetch-yb-thin-client.sh")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 # Ensure the installed PostgreSQL matches the checked-out submodule commit
 # before cargo runs — postgres_ffi's bindings and the compute's extension .so
 # both link against it, so a stale pg_install (after a submodule bump or a PG

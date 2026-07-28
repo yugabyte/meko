@@ -100,11 +100,25 @@ The exact build is pinned so the linked shim always matches the vendored ABI:
 - `shim/yb_thin_client.h` — the ABI header, vendored verbatim; `src/ffi.rs`
   mirrors it.
 
-`scripts/fetch-yb-thin-client.sh` downloads + extracts the pinned tarball
-(plain `curl`, no credentials) and prints the `lib/` dir; CI (`pr-build.yml`,
-`on-demand-checks.yml`) and both storage Dockerfiles run it and set
-`YB_THIN_CLIENT_LIB_DIR` so `build.rs` links `-lyb_thin_client`. **There is no
-stub fallback** — a build that can't find the `.so` fails loudly.
+`build.rs` resolves the shim in two steps:
+
+1. **`YB_THIN_CLIENT_LIB_DIR`**, when set — an explicit directory holding
+   `libyb_thin_client.so`. CI (`pr-build.yml`, `on-demand-checks.yml`) and both
+   storage Dockerfiles set it, the latter to the `/opt/yb_thin_client/lib` they
+   stage the shim into, so image builds never fetch from `build.rs`. Set but
+   missing the `.so` is a hard error, not a fall-through — you asked for *that*
+   shim.
+2. **Otherwise the pinned shim in the repo's gitignored `.shim-cache/`**, keyed
+   by version + commit + arch. Already populated ⇒ reused untouched; a miss runs
+   `scripts/fetch-yb-thin-client.sh` (plain `curl`, no credentials) exactly once.
+   So a plain `cargo build` needs no setup.
+
+Nothing else is consulted. The old chain also tried `YB_BUILD_ROOT`,
+`YB_SOURCE_ROOT/build/latest/lib` and a hardcoded `$HOME/code/...` YB build dir
+— which link a *developer's* shim, not the pinned one, and since a raw build tree
+ships no `version.txt` the ABI guard silently downgraded to a warning. A missing
+`version.txt` is now fatal. **There is no stub fallback** — a build that can't
+find the `.so` fails loudly.
 
 The linked binaries carry a `DT_NEEDED` for `libyb_thin_client.so` but **no
 rpath** (a dependency's `build.rs` can't set link args for the downstream
@@ -135,6 +149,9 @@ safekeeper's multi-segment WAL fetch rides one `read(&ops)` Perform. Cold paths
 real shim (connect → open_table → a cross-key write batch → a 2-op read batch):
 
 ```sh
-YB_THIN_CLIENT_LIB_DIR="$(scripts/fetch-yb-thin-client.sh)" \
+LD_LIBRARY_PATH="$(scripts/fetch-yb-thin-client.sh)" \
   cargo test -p yb_thin_client --test live -- --ignored --nocapture
 ```
+
+(The build finds the shim on its own; `LD_LIBRARY_PATH` is only so the test
+binary can *load* it — it carries no rpath.)
