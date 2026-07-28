@@ -1,0 +1,8 @@
+# Base: the ycp-demo manifest as-is (`kubectl apply -k ycp/deploy` == `apply -f
+# ycp/deploy/ycp-demo.yaml`). It exists so the e2e overlay in ../test/e2e can patch the
+# real manifest instead of keeping a second copy of it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ycp-demo.yaml

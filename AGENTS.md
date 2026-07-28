@@ -14,6 +14,7 @@ Meko is a polyglot monorepo. Each top-level directory is an independently-built 
 | `meko-provisioner/` | Go (Kubebuilder operator) | K8s operator that reconciles `MekoUserAccount` CRs into per-tenant namespaces (MCP server, RAG worker, Langfuse). See `meko-provisioner/AGENTS.md` for kubebuilder rules. |
 | `meko_ui/` | TypeScript (React 19 + Vite + Tailwind + Drizzle) + Node Express server | Web UI; Express server in `meko_ui/server/` proxies to `api_server`. |
 | `system_agent/` | Python (LangChain + mem0 + Streamlit) | Standalone agent + Streamlit playground; uses pgvector + BM25 over YugabyteDB. |
+| `ycp/` | Go (net/http, own `go.mod`) | YCP — Yugabyte Control Plane: the BYOC control plane (`cmd/ycp`), its pull agent (`cmd/agent`), and the per-datapack MCP server (`cmd/dpmcp`). Images publish to the platform ECR registry. See `ycp/ARCHITECTURE.md` and `ycp/DEPLOY.md`. |
 | `docs/` | Hugo | Public documentation site. |
 
 The CLI talks to `api_server`, which provisions tenant infra via `meko-provisioner` and writes Langfuse audit data. The UI's Playground talks to `inference_gateway`, which forwards memory/conversation calls through MCP. Everything ultimately lands in YugabyteDB (default `localhost:5433`).
@@ -69,6 +70,12 @@ Per-component dev loops:
 
 # meko-provisioner — uses envtest (bundles its own apiserver + etcd)
 (cd meko-provisioner && make test)
+
+# ycp — unit tests need nothing running
+(cd ycp && go test ./...)
+# build + deploy end-to-end: builds the three images, deploys them to a throwaway
+# kind cluster, asserts /healthz + the agent enrollment handshake. Needs docker + kind.
+(cd ycp && ./test/e2e/run.sh)
 
 # UI typecheck
 (cd meko_ui && npm run check)

@@ -66,7 +66,10 @@ func TestMCPProtocol(t *testing.T) {
 func TestMCPUnknownMethod(t *testing.T) {
 	ts := httptest.NewServer(mcp.Handler(mcp.NewMemStore()))
 	defer ts.Close()
-	resp, _ := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"bogus"}`))
+	resp, err := http.Post(ts.URL+"/mcp", "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"bogus"}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
 	defer resp.Body.Close()
 	var out map[string]any
 	json.NewDecoder(resp.Body).Decode(&out)

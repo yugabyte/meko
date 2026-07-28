@@ -9,6 +9,13 @@ name: CI
 #                     pytest. All upstream (LLM / MCP) calls are mocked — no creds.
 #   meko_ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests
 #                     (vitest), and the production build.
+#   meko_ycp        — ycp (BYOC control plane): gofmt, `go build`, `go vet`,
+#                     `go test ./...`.
+#   meko_ycp_e2e    — ycp build + deploy smoke test: builds the three images and
+#                     deploys them to a throwaway kind cluster, asserting the
+#                     control plane serves /healthz and the agent enrolls.
+#                     Publishing those images to ECR is a separate workflow
+#                     (ycp-images.yml) that runs only on merge to main.
 #
 # Docs-only PRs (only *.md changed) skip the heavy jobs via the `meko_code` filter.
 on:
@@ -34,6 +41,7 @@ jobs:
       meko_api_server: ${{ steps.filter.outputs.meko_api_server }}
       meko_inference: ${{ steps.filter.outputs.meko_inference }}
       meko_ui: ${{ steps.filter.outputs.meko_ui }}
+      meko_ycp: ${{ steps.filter.outputs.meko_ycp }}
       meko_code: ${{ steps.code.outputs.meko_code }}
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +57,9 @@ jobs:
               - '.github/workflows/pr-build.yml'
             meko_ui:
               - 'meko_ui/**'
+              - '.github/workflows/pr-build.yml'
+            meko_ycp:
+              - 'ycp/**'
               - '.github/workflows/pr-build.yml'
       # A change counts as "code" if at least one changed file is not a markdown
       # doc; the jobs gate on it so a docs-only PR skips build/test while a PR
@@ -163,3 +174,65 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  meko_ycp:
+    name: Meko YCP — build, vet & tests
+    needs: changes
+    if: needs.changes.outputs.meko_ycp == 'true' && needs.changes.outputs.meko_code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ycp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ycp/go.mod
+          cache-dependency-path: ycp/go.sum
+
+      # Blocking from the start: this module is formatted and vet-clean as of the
+      # commit that added this job, so there is no baseline to grandfather in.
+      - name: Format (gofmt)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      - name: Tests
+        run: go test ./...
+
+  meko_ycp_e2e:
+    name: Meko YCP — build & deploy (kind)
+    needs: changes
+    if: needs.changes.outputs.meko_ycp == 'true' && needs.changes.outputs.meko_code == 'true'
+    runs-on: ubuntu-latest
+    # Image builds + a kind cluster + Postgres reaching ready is the slow part.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: ycp-e2e
+          # The script creates and tears down its own cluster; this action is here
+          # to install the kind binary and nothing else.
+          install_only: true
+
+      # Builds the ycp / meko-agent / dpmcp images, loads them into a throwaway
+      # kind cluster, applies deploy/ycp-demo.yaml through the e2e overlay, then
+      # asserts /healthz, the agent enrollment handshake, and the fleet API.
+      # Dumps pod state, logs and events on failure.
+      - name: Build & deploy smoke test
+        run: ./test/e2e/run.sh
+        working-directory: ycp

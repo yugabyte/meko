@@ -15,6 +15,7 @@ cluster. For the component/architecture overview see
 - Go 1.25+ (to build the binaries).
 - `kubectl` with access to the target cluster (for the k8s deploy).
 - Optionally a Postgres DSN for durable control-plane state.
+- For the build-and-deploy test only: `docker`, `kind` and `curl`.
 
 ## 1. Run locally
 
@@ -48,6 +49,36 @@ go run ./cmd/dpmcp -addr :3000          # POST /mcp (JSON-RPC), GET /healthz
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/ycp-linux-amd64  ./cmd/ycp
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/agent-linux-amd64 ./cmd/agent
 ```
+
+## Container images
+
+Three images, one per binary. They are built and pushed to
+the platform ECR registry on every merge to `main` by
+[`.github/workflows/ycp-images.yml`](../.github/workflows/ycp-images.yml), tagged
+with both the commit SHA (pin this in a deployment) and `latest`. PRs build them
+but never push.
+
+| Dockerfile | Binary | Image |
+|------------|--------|-------|
+| `Dockerfile` | `cmd/ycp` (control plane) | `161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/ycp` |
+| `Dockerfile.agent` | `cmd/agent` (BYOC pull agent) | `161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/meko-agent` |
+| `Dockerfile.dpmcp` | `cmd/dpmcp` (per-datapack MCP) | `161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/dpmcp` |
+
+All three are `gcr.io/distroless/static:nonroot` at runtime — no shell, no
+package manager, so `kubectl exec` into them will not give you a prompt.
+
+To build locally:
+
+```bash
+docker build -f Dockerfile       -t ycp:dev        .
+docker build -f Dockerfile.agent -t meko-agent:dev .
+docker build -f Dockerfile.dpmcp -t dpmcp:dev      .
+```
+
+The `deploy/*.yaml` manifests deliberately do **not** use these images — they use
+the registry-free `alpine` + `kubectl cp` shim described above. To deploy the real
+images instead, apply the manifest through an overlay that swaps them in, the way
+[`test/e2e/kustomization.yaml`](./test/e2e/kustomization.yaml) does.
 
 ## 3. Deploy to a cluster
 
@@ -150,6 +181,36 @@ kubectl --context $CTX -n ycp cp dist/agent-linux-amd64 $AGENT_POD:/app/agent
 The operator provisions a proxy (`ts-ycp-*` in the `tailscale` namespace) and the
 console becomes reachable at `ycp-dev.<tailnet>.ts.net` — tailnet-only, not the
 public internet. The agent enrolls the meko-dev cluster, so its row goes live.
+
+## Tests
+
+Unit tests need nothing running:
+
+```bash
+go test ./...
+```
+
+The build-and-deploy test is the end-to-end one. It builds all three images from
+source, loads them into a throwaway `kind` cluster, applies
+`deploy/ycp-demo.yaml` through the `test/e2e` overlay, and asserts that every
+workload rolls out, `/healthz` returns `ok`, the agent completes the real
+enrollment handshake, and the environment shows up on `GET /api/v1/environments`:
+
+```bash
+./test/e2e/run.sh                  # create, test, tear down
+YCP_E2E_KEEP=1 ./test/e2e/run.sh   # leave the cluster up to poke at
+```
+
+It creates and deletes its own cluster (`kind-ycp-e2e`) and pins every `kubectl`
+call to that context, refusing to run if the context does not resolve to the kind
+node it just created — so it cannot touch whatever cluster your kubeconfig
+happens to point at. On failure it dumps pod state, container logs and events.
+
+Knobs: `YCP_E2E_CLUSTER`, `YCP_E2E_TAG`, `YCP_E2E_PORT`, `YCP_E2E_TIMEOUT`,
+`YCP_E2E_KEEP`.
+
+Both run in CI on any PR touching `ycp/` — see the `meko_ycp` and `meko_ycp_e2e`
+jobs in [`pr-build.yml`](../.github/workflows/pr-build.yml).
 
 ## Configuration reference
 

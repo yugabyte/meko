@@ -4,6 +4,7 @@
 //   - pulls desired state (bearer-authed),
 //   - reconciles desired datapacks into labeled namespaces,
 //   - reports status (real facts + discovered + managed datapacks).
+//
 // All traffic is outbound: agent -> k8s API, agent -> YCP.
 package main
 
@@ -161,9 +162,9 @@ func (k *k8s) ensureNamespace(name, datapack string) (created bool, err error) {
 		"metadata": map[string]any{
 			"name": name,
 			"labels": map[string]string{
-				"app.kubernetes.io/managed-by":         "meko-agent",
-				managedLabel:                           datapack,
-				"pod-security.kubernetes.io/enforce":   "baseline",
+				"app.kubernetes.io/managed-by":       "meko-agent",
+				managedLabel:                         datapack,
+				"pod-security.kubernetes.io/enforce": "baseline",
 			},
 		},
 	})
@@ -263,9 +264,9 @@ func (k *k8s) applyDatapackWorkload(ns, dbURI, image string) error {
 // ---- YCP client ----
 
 type ycp struct {
-	base    string
-	http    *http.Client
-	token   string // env-scoped status token (set after enroll)
+	base  string
+	http  *http.Client
+	token string // env-scoped status token (set after enroll)
 }
 
 func (m *ycp) req(method, path string, body, out any) (int, error) {

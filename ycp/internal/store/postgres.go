@@ -40,6 +40,44 @@ CREATE TABLE IF NOT EXISTS environments (
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS enroll_token_hash       text NOT NULL DEFAULT '';
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS enroll_token_expires_at timestamptz;
 ALTER TABLE environments ADD COLUMN IF NOT EXISTS status_token_hash       text NOT NULL DEFAULT '';
+-- Every column below is scanned into a non-nullable Go field (string / int), so a
+-- NULL is not "empty", it is a scan error that surfaces as a 500. SeedEnrollment
+-- inserts a partial row (it only knows the id, placement and token), which left
+-- the rest NULL and made the very first agent enroll against a fresh database
+-- fail. Defaults make any partial insert safe; only last_heartbeat_at (*time.Time)
+-- and components ([]byte) may legitimately be NULL.
+ALTER TABLE environments
+	ALTER COLUMN account_id       SET DEFAULT '',
+	ALTER COLUMN placement        SET DEFAULT '',
+	ALTER COLUMN region           SET DEFAULT '',
+	ALTER COLUMN state            SET DEFAULT '',
+	ALTER COLUMN k8s_version      SET DEFAULT '',
+	ALTER COLUMN node_count       SET DEFAULT 0,
+	ALTER COLUMN provider         SET DEFAULT '',
+	ALTER COLUMN datapacks        SET DEFAULT 0,
+	ALTER COLUMN max_datapacks    SET DEFAULT 0,
+	ALTER COLUMN agent_version    SET DEFAULT '',
+	ALTER COLUMN mcp_base_url     SET DEFAULT '',
+	ALTER COLUMN cert_fingerprint SET DEFAULT '';
+-- Backfill rows written before those defaults existed; without this an already
+-- deployed control plane keeps failing enroll on its seeded row. Idempotent.
+UPDATE environments SET
+	account_id       = COALESCE(account_id, ''),
+	placement        = COALESCE(placement, ''),
+	region           = COALESCE(region, ''),
+	state            = COALESCE(state, ''),
+	k8s_version      = COALESCE(k8s_version, ''),
+	node_count       = COALESCE(node_count, 0),
+	provider         = COALESCE(provider, ''),
+	datapacks        = COALESCE(datapacks, 0),
+	max_datapacks    = COALESCE(max_datapacks, 0),
+	agent_version    = COALESCE(agent_version, ''),
+	mcp_base_url     = COALESCE(mcp_base_url, ''),
+	cert_fingerprint = COALESCE(cert_fingerprint, '')
+WHERE account_id IS NULL OR placement IS NULL OR region IS NULL OR state IS NULL
+	OR k8s_version IS NULL OR node_count IS NULL OR provider IS NULL OR datapacks IS NULL
+	OR max_datapacks IS NULL OR agent_version IS NULL OR mcp_base_url IS NULL
+	OR cert_fingerprint IS NULL;
 CREATE TABLE IF NOT EXISTS datapacks (
 	env_id text NOT NULL,
 	id     text NOT NULL,

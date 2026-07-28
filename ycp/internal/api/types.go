@@ -42,23 +42,23 @@ type ClusterFacts struct {
 
 // Environment is one registered customer data plane.
 type Environment struct {
-	ID              string       `json:"id"`
-	AccountID       string       `json:"account_id,omitempty"`
-	Placement       string       `json:"placement"` // cloud | onprem
-	Region          string       `json:"region"`
-	State           EnvState     `json:"state"`
-	K8sVersion      string       `json:"k8s_version,omitempty"`
-	NodeCount       int          `json:"node_count,omitempty"`
-	Provider        string       `json:"provider,omitempty"`
-	Datapacks       int          `json:"datapacks"`
-	MaxDatapacks    int          `json:"max_datapacks,omitempty"`
-	AgentVersion    string       `json:"agent_version,omitempty"`
-	LastHeartbeatAt *time.Time   `json:"last_heartbeat_at,omitempty"`
-	MCPBaseURL      string       `json:"mcp_base_url,omitempty"`
-	CertFingerprint string       `json:"cert_fingerprint,omitempty"`
-	Components      []Component  `json:"components,omitempty"`
-	Live            bool         `json:"live"` // true = driven by a real agent
-	CreatedAt       time.Time    `json:"created_at"`
+	ID              string      `json:"id"`
+	AccountID       string      `json:"account_id,omitempty"`
+	Placement       string      `json:"placement"` // cloud | onprem
+	Region          string      `json:"region"`
+	State           EnvState    `json:"state"`
+	K8sVersion      string      `json:"k8s_version,omitempty"`
+	NodeCount       int         `json:"node_count,omitempty"`
+	Provider        string      `json:"provider,omitempty"`
+	Datapacks       int         `json:"datapacks"`
+	MaxDatapacks    int         `json:"max_datapacks,omitempty"`
+	AgentVersion    string      `json:"agent_version,omitempty"`
+	LastHeartbeatAt *time.Time  `json:"last_heartbeat_at,omitempty"`
+	MCPBaseURL      string      `json:"mcp_base_url,omitempty"`
+	CertFingerprint string      `json:"cert_fingerprint,omitempty"`
+	Components      []Component `json:"components,omitempty"`
+	Live            bool        `json:"live"` // true = driven by a real agent
+	CreatedAt       time.Time   `json:"created_at"`
 
 	// EnrollmentToken is set only on the create response (returned once, never persisted).
 	EnrollmentToken string `json:"enrollment_token,omitempty"`

@@ -1,4 +1,5 @@
 # Build the meko-agent (BYOC pull agent) image.
+# Built and pushed as 161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/meko-agent.
 # Referenced by the meko chart's `agent` component (agent.image.repository).
 FROM golang:1.25-alpine AS build
 WORKDIR /src

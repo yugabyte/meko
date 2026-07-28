@@ -206,6 +206,9 @@ func Handler(s store.Store) http.Handler {
 		}
 		e, statusToken, ok, err := s.EnrollWithToken(req.EnrollmentToken, placement, req.ClusterFacts)
 		if err != nil {
+			// Log server-side too: the agent only reports the status code, so without
+			// this an enroll failure is a bare "enroll -> 500" with no cause anywhere.
+			log.Printf("enroll failed: %v", err)
 			writeErr(w, 500, "internal", err.Error())
 			return
 		}

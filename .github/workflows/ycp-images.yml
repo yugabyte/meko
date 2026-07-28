@@ -1,0 +1,154 @@
+name: YCP Images
+
+# Publishes the three YCP images to the same ECR registry as the rest of the
+# platform (161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/*, alongside
+# meko-mcp-server, rag-agent, meko-provisioner and inference-gateway):
+#   meko/ycp         — the control plane (Dockerfile)
+#   meko/meko-agent  — the BYOC pull agent (Dockerfile.agent)
+#   meko/dpmcp       — the per-datapack MCP server (Dockerfile.dpmcp)
+#
+# This is the first workflow in the repo that pushes a container image; the other
+# four are still built and pushed by hand.
+#
+# PRs do NOT push. They build the same three images and deploy them to a
+# throwaway kind cluster in the `meko_ycp_e2e` job of pr-build.yml, so image
+# breakage is caught before merge without writing to a shared registry.
+#
+# Auth is OIDC: the workflow assumes DEFAULT_AWS_ROLE_ARN below, which trusts
+# GitHub's OIDC provider for this repo's main branch only. No GitHub secret or
+# variable is involved, deliberately — both need repo admin to set, which the
+# component owners do not have. A role ARN is not sensitive, and this one grants
+# nothing beyond pushing these three image repos.
+#
+#   - Override with the AWS_ROLE_ARN Actions variable if one is ever configured.
+#   - Or set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY secrets to use static keys.
+#   - If credentials cannot be obtained at all (e.g. the role does not exist yet)
+#     the images still build and the push is skipped with a warning, so main
+#     cannot go red waiting on AWS setup.
+#
+# ECR does not create repositories on push. Before the first run:
+#   aws ecr create-repository --region us-east-2 --repository-name meko/ycp
+#   aws ecr create-repository --region us-east-2 --repository-name meko/meko-agent
+#   aws ecr create-repository --region us-east-2 --repository-name meko/dpmcp
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ycp/**'
+      - '.github/workflows/ycp-images.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required for the OIDC path; harmless when using static keys
+
+env:
+  AWS_REGION: us-east-2
+  REGISTRY: 161908593886.dkr.ecr.us-east-2.amazonaws.com
+  PREFIX: meko
+  # Assumed via OIDC. Safe to keep in the clear: the account ID is already
+  # committed elsewhere in this repo, the role is assumable only by
+  # repo:yugabyte/meko:ref:refs/heads/main, and its only permission is pushing
+  # the three meko/{ycp,meko-agent,dpmcp} repos.
+  DEFAULT_AWS_ROLE_ARN: arn:aws:iam::161908593886:role/meko-github-actions-ecr-push
+
+jobs:
+  images:
+    name: Build & push YCP images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ycp
+            dockerfile: Dockerfile
+          - image: meko-agent
+            dockerfile: Dockerfile.agent
+          - image: dpmcp
+            dockerfile: Dockerfile.dpmcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Read credentials through env rather than interpolating them into the
+      # script body, and expose only which mode to use to later steps.
+      - name: Resolve AWS credentials
+        id: auth
+        env:
+          ROLE_ARN: ${{ vars.AWS_ROLE_ARN || env.DEFAULT_AWS_ROLE_ARN }}
+          KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$KEY_ID" ]; then
+            echo "mode=keys" >> "$GITHUB_OUTPUT"
+          elif [ -n "$ROLE_ARN" ]; then
+            echo "mode=oidc" >> "$GITHUB_OUTPUT"
+            echo "role_arn=$ROLE_ARN" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      # continue-on-error on both: until the IAM role exists, assuming it fails.
+      # That must degrade to build-only, not redden main.
+      - name: Configure AWS credentials (OIDC)
+        id: oidc
+        if: steps.auth.outputs.mode == 'oidc'
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.auth.outputs.role_arn }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials (static keys)
+        id: keys
+        if: steps.auth.outputs.mode == 'keys'
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        if: steps.oidc.outcome == 'success' || steps.keys.outcome == 'success'
+        continue-on-error: true
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Decide whether to push
+        id: gate
+        run: |
+          if [ "${{ steps.ecr.outcome }}" = "success" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not authenticate to ${{ env.REGISTRY }} (auth mode: ${{ steps.auth.outputs.mode }}) — building ${{ matrix.image }} but skipping the push. If the IAM role is not created yet, this is expected."
+          fi
+
+      # Tagged with the commit SHA (immutable, what a deployment should pin) and
+      # `latest` for convenience. linux/amd64 only — the demo clusters are amd64.
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ycp
+          file: ycp/${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: ${{ steps.gate.outputs.push == 'true' }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.PREFIX }}/${{ matrix.image }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.PREFIX }}/${{ matrix.image }}:latest
+          cache-from: type=gha,scope=ycp-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=ycp-${{ matrix.image }}
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.gate.outputs.push }}" = "true" ]; then
+            echo "pushed \`${{ env.REGISTRY }}/${{ env.PREFIX }}/${{ matrix.image }}:${{ github.sha }}\` (auth: ${{ steps.auth.outputs.mode }})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "built ${{ matrix.image }} — push skipped, could not authenticate to ECR" >> "$GITHUB_STEP_SUMMARY"
+          fi
