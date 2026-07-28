@@ -2,6 +2,12 @@
 name = "yb_thin_client"
 version = "0.1.0"
 edition = "2024"
+# Declares that this package links the native `libyb_thin_client`. Two
+# effects, both wanted: cargo rejects a build graph that links it twice, and
+# `cargo:lib-dir=…` from build.rs reaches every direct dependent's build
+# script as `DEP_YB_THIN_CLIENT_LIB_DIR` — which is how the daemon crates
+# learn where to point their own rpath.
+links = "yb_thin_client"
 
 # A thin, safe Rust wrapper over the `libyb_thin_client` C ABI (see
 # `shim/yb_thin_client.h` and `README.md`). The shim speaks

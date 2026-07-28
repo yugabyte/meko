@@ -219,11 +219,25 @@ fn main() {
     }
 
     let d = dir.display();
-    // Link the shim. Note the rpath is scoped to THIS crate's own link
-    // products (its tests/examples) — cargo does not propagate link args to a
-    // dependent's binaries, so the daemons resolve the .so via
-    // LD_LIBRARY_PATH (set by run.sh, the deploy images, and CI).
+    // Link the shim. `rustc-link-arg` is scoped to THIS crate's own link
+    // products — cargo does not propagate link args to a dependent's
+    // binaries.
     println!("cargo:rustc-link-search=native={d}");
     println!("cargo:rustc-link-lib=dylib=yb_thin_client");
+    println!("cargo:rustc-link-arg=-Wl,--enable-new-dtags");
     println!("cargo:rustc-link-arg=-Wl,-rpath,{d}");
+
+    // Publish the resolved directory as build metadata so dependents can set
+    // their OWN rpath. Requires `links = "yb_thin_client"` in Cargo.toml;
+    // cargo then exposes this to every direct dependent's build script as
+    // `DEP_YB_THIN_CLIENT_LIB_DIR`. The daemon crates read it and emit their
+    // own `-Wl,-rpath`, so `yb-pageserver` / `yb-safekeeper` and their test
+    // binaries resolve the shim unaided — no `LD_LIBRARY_PATH` needed for a
+    // bare `cargo test` or a hand-launched `yb_amp_local`.
+    //
+    // `LD_LIBRARY_PATH` still wins where it is set (run.sh, the deploy
+    // images, CI): the linker emits DT_RUNPATH, which the loader consults
+    // AFTER LD_LIBRARY_PATH. So a stale baked-in developer path can never
+    // shadow a deliberately configured one.
+    println!("cargo:lib-dir={d}");
 }

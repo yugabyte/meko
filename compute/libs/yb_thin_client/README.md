@@ -120,12 +120,25 @@ ships no `version.txt` the ABI guard silently downgraded to a warning. A missing
 `version.txt` is now fatal. **There is no stub fallback** — a build that can't
 find the `.so` fails loudly.
 
-The linked binaries carry a `DT_NEEDED` for `libyb_thin_client.so` but **no
-rpath** (a dependency's `build.rs` can't set link args for the downstream
-binary), so the `.so` must be on the loader path at **runtime**: CI and the
-integration daemons use `LD_LIBRARY_PATH`, and the deploy images ship it at
-`/opt/yb_thin_client/lib` on `LD_LIBRARY_PATH`. Running the storage binaries
-directly elsewhere needs `LD_LIBRARY_PATH=$(scripts/fetch-yb-thin-client.sh)`.
+The linked binaries carry a `DT_NEEDED` for `libyb_thin_client.so` **and a
+`DT_RUNPATH` to the pinned shim**, so they load it unaided — a bare
+`cargo test -p safekeeper`, or a hand-launched `yb_amp_local`, needs no
+environment setup.
+
+A dependency's `build.rs` genuinely cannot set link args for a downstream
+binary, so the rpath is not inherited: instead this crate declares
+`links = "yb_thin_client"` and publishes its resolved directory as
+`cargo:lib-dir=…`. Cargo forwards that to each direct dependent's build script
+as `DEP_YB_THIN_CLIENT_LIB_DIR`, and `compute/pageserver/build.rs` and
+`compute/safekeeper/build.rs` each emit their own
+`-Wl,--enable-new-dtags -Wl,-rpath,<dir>`. Adding another crate that links the
+shim means adding the same three-line `build.rs`.
+
+`--enable-new-dtags` matters: the default `DT_RPATH` is searched *before*
+`LD_LIBRARY_PATH`, which would let a developer's baked-in path shadow a
+deploy image's. `DT_RUNPATH` is searched *after*, so an explicitly set
+`LD_LIBRARY_PATH` always wins — which is how the deploy images (shim at
+`/opt/yb_thin_client/lib`), CI, and `run.sh` keep control.
 
 To move to a newer shim: rebuild + publish the tarball, bump `shim/COMMIT`
 (and `shim/VERSION` if it changed), and re-vendor `shim/yb_thin_client.h`.
@@ -149,9 +162,8 @@ rides one `read(&ops)` Perform. Cold paths
 real shim (connect → open_table → a cross-key write batch → a 2-op read batch):
 
 ```sh
-LD_LIBRARY_PATH="$(scripts/fetch-yb-thin-client.sh)" \
-  cargo test -p yb_thin_client --test live -- --ignored --nocapture
+cargo test -p yb_thin_client --test live -- --ignored --nocapture
 ```
 
-(The build finds the shim on its own; `LD_LIBRARY_PATH` is only so the test
-binary can *load* it — it carries no rpath.)
+(No environment setup: the build finds the shim on its own, and this crate's
+own test targets get the rpath directly from its `build.rs`.)
