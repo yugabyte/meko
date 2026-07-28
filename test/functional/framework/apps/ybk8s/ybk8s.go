@@ -687,8 +687,27 @@ const (
 // apps/ampstack.dockerConfigJSONB64). registry is the "auths" key. This is the
 // shape the stress framework pulls quay.io/yugabyte/yugabyte-itest images with.
 func dockerConfigJSONB64(registry, token string) (string, error) {
-	if strings.TrimSpace(token) == "" {
+	token = strings.TrimSpace(token)
+	if token == "" {
 		return "", fmt.Errorf("image-pull token is empty")
+	}
+	// The secret may already BE a dockerconfigjson: the CI path declares
+	// quay_images as the raw {"auths":{...}} document because the ybastack
+	// consumer wants that shape. Wrapping such a value as if it were a
+	// user:pass token produces a syntactically valid but useless pull secret
+	// — every pull fails auth and the backing sits at 0/N until the helm
+	// timeout. Pass a ready dockerconfigjson through untouched instead.
+	if strings.HasPrefix(token, "{") {
+		var doc struct {
+			Auths map[string]any `json:"auths"`
+		}
+		if err := json.Unmarshal([]byte(token), &doc); err == nil && len(doc.Auths) > 0 {
+			return base64.StdEncoding.EncodeToString([]byte(token)), nil
+		}
+		return "", fmt.Errorf("image-pull token looks like JSON but is not a dockerconfigjson (no auths)")
+	}
+	if !strings.Contains(token, ":") {
+		return "", fmt.Errorf("image-pull token is neither user:pass nor a dockerconfigjson")
 	}
 	if registry == "" {
 		registry = DefaultImagePullRegistry

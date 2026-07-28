@@ -613,3 +613,29 @@ func makeChartTGZ(t *testing.T) string {
 	}
 	return path
 }
+
+// A quay_images value on the CI path is a READY dockerconfigjson (the ybastack
+// consumer's shape). Wrapping it as a user:pass token built a valid-looking but
+// useless pull secret — every pull failed auth and the backing sat 0/N to the
+// helm timeout. It must pass through byte-identical.
+func TestDockerConfigJSONPassthrough(t *testing.T) {
+	dcj := `{"auths":{"quay.io":{"auth":"cHJvajp0b2s=","email":""}}}`
+	b64, err := dockerConfigJSONB64("quay.io", dcj)
+	if err != nil {
+		t.Fatalf("dockerConfigJSONB64: %v", err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if string(raw) != dcj {
+		t.Errorf("dockerconfigjson was rewrapped instead of passed through:\n%s", raw)
+	}
+
+	if _, err := dockerConfigJSONB64("quay.io", `{"not":"a dockerconfig"}`); err == nil {
+		t.Error("JSON without auths must be rejected, not silently wrapped")
+	}
+	if _, err := dockerConfigJSONB64("quay.io", "no-colon-token"); err == nil {
+		t.Error("a value that is neither user:pass nor a dockerconfigjson must be rejected")
+	}
+}
