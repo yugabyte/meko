@@ -646,16 +646,12 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 		}
 	}
 
-	// 5. controller (helm-template + filter + apply, or a raw manifest).
+	// 5. controller (helm-template + filter + shim-inject + ONE apply, or a raw
+	// manifest). The shim is folded into the rendered Deployment before the
+	// apply: patching afterwards created a second ReplicaSet, and its pod raced
+	// the first one's startup migrations against the fresh database.
 	if err := a.deployController(ctx); err != nil {
 		return StackInfo{}, err
-	}
-
-	// 6. helm shim (until a controller image without --create-namespace ships).
-	if a.cfg.HelmShim {
-		if err := a.installShim(ctx); err != nil {
-			return StackInfo{}, err
-		}
 	}
 
 	// 7. wait controller Available.
@@ -954,6 +950,14 @@ func (a *App) deployController(ctx context.Context) error {
 	if strings.TrimSpace(manifest) == "" {
 		return nil
 	}
+	if a.cfg.HelmShim {
+		if err := a.kube.Apply(ctx, shimConfigMapManifest(a.cfg.Namespace)); err != nil {
+			return fmt.Errorf("apply helm shim configmap: %w", err)
+		}
+		if manifest, err = injectShim(manifest, a.cfg.ControllerName, a.cfg.ControllerContainer); err != nil {
+			return err
+		}
+	}
 	if err := a.kube.Apply(ctx, manifest); err != nil {
 		return fmt.Errorf("apply controller manifest: %w", err)
 	}
@@ -1114,18 +1118,6 @@ func (a *App) ensureExternalStorageDB(ctx context.Context) error {
 	}
 	if err := a.ensureDB(ctx, ci, a.storageDBName()); err != nil {
 		return fmt.Errorf("ensure %s on external backing %s: %w", a.storageDBName(), a.cfg.Backing.HostPorts, err)
-	}
-	return nil
-}
-
-// installShim applies the shim ConfigMap and patches the controller deployment
-// to mount it and prepend its dir to PATH.
-func (a *App) installShim(ctx context.Context) error {
-	if err := a.kube.Apply(ctx, shimConfigMapManifest(a.cfg.Namespace)); err != nil {
-		return fmt.Errorf("apply helm shim configmap: %w", err)
-	}
-	if err := a.kube.Patch(ctx, "deployment", a.cfg.ControllerName, "strategic", shimDeploymentPatch(a.cfg.ControllerContainer)); err != nil {
-		return fmt.Errorf("patch controller with helm shim: %w", err)
 	}
 	return nil
 }

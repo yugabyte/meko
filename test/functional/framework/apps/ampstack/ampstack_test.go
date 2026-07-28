@@ -40,6 +40,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: amp-controller
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller
+          image: amp/controller:test
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -536,13 +542,29 @@ func TestDeployInstallsHelmShimWhenEnabled(t *testing.T) {
 	if !anyContains(appliedManifests(calls), shimConfigMapName) {
 		t.Error("helm_shim=true must apply the shim ConfigMap")
 	}
-	if !hasCall(calls, "patch deployment amp-controller") {
-		t.Error("helm_shim=true must patch the controller deployment")
+	// The shim rides INSIDE the applied Deployment — one apply, one ReplicaSet,
+	// one migrator. A post-apply patch would spawn a second pod that races the
+	// first one's startup migrations.
+	if hasCall(calls, "patch deployment") {
+		t.Error("the shim must be injected pre-apply, not patched afterwards")
+	}
+	var deployDoc string
+	for _, c := range appliedManifests(calls) {
+		if strings.Contains(c, "kind: Deployment") && strings.Contains(c, "amp-controller") {
+			deployDoc = c
+		}
+	}
+	for _, want := range []string{shimConfigMapName, shimMountPath, shimPATH} {
+		if !strings.Contains(deployDoc, want) {
+			t.Errorf("applied Deployment lacks shim marker %q", want)
+		}
 	}
 	// The shim strips --create-namespace and delegates to the real helm.
 	var shim string
 	for _, c := range appliedManifests(calls) {
-		if strings.Contains(c, shimConfigMapName) {
+		// The Deployment now references the shim by name too — the ConfigMap is
+		// the doc that actually carries the script.
+		if strings.Contains(c, "kind: ConfigMap") && strings.Contains(c, shimConfigMapName) {
 			shim = c
 		}
 	}
@@ -561,8 +583,8 @@ func TestDeploySkipsHelmShimWhenDisabled(t *testing.T) {
 	if anyContains(appliedManifests(calls), shimConfigMapName) {
 		t.Error("helm_shim=false must not apply the shim ConfigMap")
 	}
-	if hasCall(calls, "patch deployment") {
-		t.Error("helm_shim=false must not patch the controller deployment")
+	if anyContains(appliedManifests(calls), shimMountPath) {
+		t.Error("helm_shim=false must not inject the shim into the Deployment")
 	}
 }
 

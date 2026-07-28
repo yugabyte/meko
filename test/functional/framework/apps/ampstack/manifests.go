@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Object/label names ampstack owns in a namespace.
@@ -232,29 +234,88 @@ data:
 	return b.String()
 }
 
-// shimDeploymentPatch is the strategic-merge patch that mounts the shim
-// ConfigMap into the controller container (mode 0755) and prepends its dir to
-// PATH, so the controller's bare `helm` resolves to the wrapper. Strategic
-// merge keys volumes/volumeMounts/env by name, so it merges cleanly onto the
-// chart-rendered pod spec. container is the controller container name.
-func shimDeploymentPatch(container string) string {
-	return fmt.Sprintf(`spec:
-  template:
-    spec:
-      volumes:
-        - name: %[1]s
-          configMap:
-            name: %[1]s
-            defaultMode: 0755
-      containers:
-        - name: %[2]s
-          volumeMounts:
-            - name: %[1]s
-              mountPath: %[3]s
-          env:
-            - name: PATH
-              value: %[4]s
-`, shimConfigMapName, container, shimMountPath, shimPATH)
+// injectShim rewrites the controller Deployment inside a rendered multi-doc
+// manifest so its pod spec carries the helm-shim volume/mount and the PATH
+// override BEFORE the manifest is applied. It replaces the old apply-then-patch
+// flow: patching after apply produced a second ReplicaSet one second after the
+// first, so two controllers raced their startup migrations against one fresh
+// database (observed as CREATE SCHEMA failing with a duplicate-key 23505 on
+// pg_namespace, #398 follow-up). One rendered manifest, one apply, one pod.
+func injectShim(manifest, deployment, container string) (string, error) {
+	docs := strings.Split(manifest, "\n---")
+	found := false
+	for i, doc := range docs {
+		var obj map[string]any
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil || obj == nil {
+			continue
+		}
+		if kind, _ := obj["kind"].(string); kind != "Deployment" {
+			continue
+		}
+		meta, _ := obj["metadata"].(map[string]any)
+		if meta == nil || meta["name"] != deployment {
+			continue
+		}
+		spec, err := dig(obj, "spec", "template", "spec")
+		if err != nil {
+			return "", fmt.Errorf("inject shim: %w", err)
+		}
+		spec["volumes"] = append(asSlice(spec["volumes"]), map[string]any{
+			"name": shimConfigMapName,
+			"configMap": map[string]any{
+				"name":        shimConfigMapName,
+				"defaultMode": 0o755,
+			},
+		})
+		containers := asSlice(spec["containers"])
+		patched := false
+		for _, c := range containers {
+			cm, _ := c.(map[string]any)
+			if cm == nil || cm["name"] != container {
+				continue
+			}
+			cm["volumeMounts"] = append(asSlice(cm["volumeMounts"]), map[string]any{
+				"name":      shimConfigMapName,
+				"mountPath": shimMountPath,
+			})
+			cm["env"] = append(asSlice(cm["env"]), map[string]any{
+				"name":  "PATH",
+				"value": shimPATH,
+			})
+			patched = true
+		}
+		if !patched {
+			return "", fmt.Errorf("inject shim: deployment %q has no container %q", deployment, container)
+		}
+		out, err := yaml.Marshal(obj)
+		if err != nil {
+			return "", fmt.Errorf("inject shim: %w", err)
+		}
+		docs[i] = "\n" + string(out)
+		found = true
+	}
+	if !found {
+		return "", fmt.Errorf("inject shim: no Deployment %q in the rendered manifest", deployment)
+	}
+	return strings.Join(docs, "\n---"), nil
+}
+
+// dig walks nested map keys, erroring on the first missing/mistyped hop.
+func dig(m map[string]any, keys ...string) (map[string]any, error) {
+	cur := m
+	for _, k := range keys {
+		next, ok := cur[k].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("missing %q in object", k)
+		}
+		cur = next
+	}
+	return cur, nil
+}
+
+func asSlice(v any) []any {
+	s, _ := v.([]any)
+	return s
 }
 
 // namespaceLabels returns the labels ampstack stamps on a namespace it creates,
