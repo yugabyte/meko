@@ -10,7 +10,7 @@ name: CI
 #   meko_ui         — meko_ui: `npm ci`, `npm run check` (tsc), unit tests
 #                     (vitest), and the production build.
 #
-# Docs-only PRs (only *.md changed) skip the heavy jobs via the `docs` filter.
+# Docs-only PRs (only *.md changed) skip the heavy jobs via the `meko_code` filter.
 on:
   pull_request:
     branches: [main]
@@ -34,7 +34,7 @@ jobs:
       meko_api_server: ${{ steps.filter.outputs.meko_api_server }}
       meko_inference: ${{ steps.filter.outputs.meko_inference }}
       meko_ui: ${{ steps.filter.outputs.meko_ui }}
-      meko_docs_only: ${{ steps.docs.outputs.meko_docs_only }}
+      meko_code: ${{ steps.code.outputs.meko_code }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -50,22 +50,30 @@ jobs:
             meko_ui:
               - 'meko_ui/**'
               - '.github/workflows/pr-build.yml'
-      # A PR is docs-only when *every* changed file is a markdown doc — hence
-      # `every` over a positive '**/*.md' pattern. The jobs gate on this being
-      # false, so a docs-only PR skips build/test while a PR that touches both
-      # code and docs still builds.
+      # A change counts as "code" if at least one changed file is not a markdown
+      # doc; the jobs gate on it so a docs-only PR skips build/test while a PR
+      # touching both code and docs still builds.
+      #
+      # `predicate-quantifier: every` combines the patterns *within this rule*
+      # for a single file: a file matches only if it is under '**' AND is not
+      # '**/*.md'. It does NOT mean "every changed file must match" — the filter
+      # output is still true when any one file matches. That distinction is why
+      # this must stay a negated pattern: a bare positive '**/*.md' rule is true
+      # whenever a PR touches even one markdown file, which silently skipped CI
+      # on every mixed code+docs PR.
       - uses: dorny/paths-filter@v3
-        id: docs
+        id: code
         with:
           predicate-quantifier: 'every'
           filters: |
-            meko_docs_only:
-              - '**/*.md'
+            meko_code:
+              - '**'
+              - '!**/*.md'
 
   meko_api_server:
     name: Meko API Server — build, vet & tests
     needs: changes
-    if: needs.changes.outputs.meko_api_server == 'true' && needs.changes.outputs.meko_docs_only != 'true'
+    if: needs.changes.outputs.meko_api_server == 'true' && needs.changes.outputs.meko_code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -105,7 +113,7 @@ jobs:
   meko_inference:
     name: Meko Inference Gateway — tests
     needs: changes
-    if: needs.changes.outputs.meko_inference == 'true' && needs.changes.outputs.meko_docs_only != 'true'
+    if: needs.changes.outputs.meko_inference == 'true' && needs.changes.outputs.meko_code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -129,7 +137,7 @@ jobs:
   meko_ui:
     name: Meko UI — typecheck, tests & build
     needs: changes
-    if: needs.changes.outputs.meko_ui == 'true' && needs.changes.outputs.meko_docs_only != 'true'
+    if: needs.changes.outputs.meko_ui == 'true' && needs.changes.outputs.meko_code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
