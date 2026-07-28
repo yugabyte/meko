@@ -66,6 +66,10 @@ type serviceRegistry struct {
 	// by meko_admin). Always present — registration is what enables AMP, so it
 	// must be manageable independent of the --show-pg-amp datapack routes.
 	ampRegistrationRepo *repository.AMPRegistrationRepo
+
+	// envSvc is nil unless control-plane mode is enabled (--control-plane-mode);
+	// the MCCP fleet + agent routes are registered only when it is non-nil.
+	envSvc *service.EnvironmentService
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -202,6 +206,13 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		slog.Warn("amp routes disabled (set --show-pg-amp to enable)")
 	}
 
+	// MCCP fleet registry (BYOC control plane). Enabled only in control-plane mode.
+	var envSvc *service.EnvironmentService
+	if cfg.ControlPlaneMode {
+		envSvc = service.NewEnvironmentService(repository.NewEnvironmentRepo(cfg.SystemDB))
+		slog.Info("control-plane mode enabled (MCCP fleet + agent routes)")
+	}
+
 	artifactRepo := repository.NewArtifactRepo(cfg.DB)
 	artifactSvc := service.NewArtifactService(artifactRepo, s3Svc)
 
@@ -241,6 +252,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		tokenSavingsSvc:     tokenSavingsSvc,
 		ampSvc:              ampSvc,
 		ampRegistrationRepo: ampRegistrationRepo,
+		envSvc:              envSvc,
 	}
 }
 
@@ -295,6 +307,22 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	adminGroup.POST("/amp-registration", ampRegH.Register)
 	adminGroup.PATCH("/amp-registration", ampRegH.Patch)
 	adminGroup.DELETE("/amp-registration", ampRegH.Delete)
+
+	// MCCP fleet registry + agent API (control-plane mode). Console/fleet routes
+	// are gated by the admin shared secret; agent routes authenticate with the
+	// enrollment token (enroll) and env-scoped status token (status/desired-state).
+	if reg.envSvc != nil {
+		envH := handlers.NewEnvironmentHandler(reg.envSvc)
+		fleet := v1.Group("", auth.RequireAdminSecret(cfg.AdminAPIKey))
+		fleet.GET("/environments", envH.List)
+		fleet.POST("/environments", envH.Register)
+		fleet.GET("/environments/:id", envH.Get)
+		fleet.POST("/environments/:id/desired", envH.SetDesired)
+		agentGroup := v1.Group("/agent")
+		agentGroup.POST("/enroll", envH.AgentEnroll)
+		agentGroup.GET("/desired-state", envH.AgentDesiredState)
+		agentGroup.POST("/status", envH.AgentStatus)
+	}
 
 	authEnabled := cfg.CognitoRegion != "" &&
 		cfg.CognitoPoolID != "" &&

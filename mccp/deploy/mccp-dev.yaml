@@ -1,0 +1,159 @@
+# MCCP on meko-dev-eks, namespace `mccp`. Console exposed on the tailnet via the
+# cluster's Tailscale operator (annotations on the ClusterIP Service).
+# Pods run a stock alpine image that waits for a binary injected via `kubectl cp`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mccp
+  labels:
+    app.kubernetes.io/part-of: mccp
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: meko-agent
+  namespace: mccp
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mccp-tokens
+  namespace: mccp
+type: Opaque
+stringData:
+  enroll-token: "mko_enr_mekodev_5f3c9a"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mccp-agent-reader-mekodev
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "secrets"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mccp-agent-reader-mekodev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mccp-agent-reader-mekodev
+subjects:
+  - kind: ServiceAccount
+    name: meko-agent
+    namespace: mccp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mccp
+  namespace: mccp
+  labels: { app: mccp }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mccp } }
+  template:
+    metadata:
+      labels: { app: mccp }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mccp
+          image: alpine:3.20
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - 'echo "waiting for /app/mccp"; while true; do if [ -x /app/mccp ]; then echo starting; /app/mccp -addr :8080; echo "mccp exited rc=$?"; fi; sleep 3; done'
+          env:
+            - { name: MCCP_SEED_ENV_NAME, value: "meko-dev" }
+            - name: MCCP_SEED_ENV_TOKEN
+              valueFrom: { secretKeyRef: { name: mccp-tokens, key: enroll-token } }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 60
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: app, mountPath: /app }
+      volumes:
+        - { name: app, emptyDir: {} }
+---
+# Console exposed on the tailnet. The Tailscale operator watches this annotation
+# and creates a proxy so the service is reachable at mccp-dev.<tailnet>.ts.net.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mccp
+  namespace: mccp
+  annotations:
+    tailscale.com/expose: "true"
+    tailscale.com/hostname: "mccp-dev"
+    tailscale.com/tags: "tag:k8s-meko"
+spec:
+  type: ClusterIP
+  selector: { app: mccp }
+  ports:
+    - { name: http, port: 80, targetPort: 8080 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-agent
+  namespace: mccp
+  labels: { app: meko-agent }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: meko-agent } }
+  template:
+    metadata:
+      labels: { app: meko-agent }
+    spec:
+      serviceAccountName: meko-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: meko-agent
+          image: alpine:3.20
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - 'echo "waiting for /app/agent"; while true; do if [ -x /app/agent ]; then echo starting; /app/agent; echo "agent exited rc=$?"; fi; sleep 3; done'
+          env:
+            - { name: MCCP_URL, value: "http://mccp.mccp.svc.cluster.local:80" }
+            - { name: ENV_NAME, value: "meko-dev" }
+            - { name: ENV_PLACEMENT, value: "cloud" }
+            - { name: ENV_PROVIDER, value: "aws" }
+            - { name: ENV_REGION, value: "us-east-2" }
+            - name: ENROLLMENT_TOKEN
+              valueFrom: { secretKeyRef: { name: mccp-tokens, key: enroll-token } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: app, mountPath: /app }
+      volumes:
+        - { name: app, emptyDir: {} }

@@ -1,0 +1,1108 @@
+<title>Meko BYOC Control Plane — Design</title>
+<style>
+  :root {
+    --ground: #f4f6f9;
+    --surface: #ffffff;
+    --surface-2: #eef1f6;
+    --ink: #0f1620;
+    --ink-soft: #45505f;
+    --ink-faint: #6b7686;
+    --border: #dde2ea;
+    --border-strong: #c6cdd8;
+    --control: #2f5fe0;
+    --control-soft: #e5ecfd;
+    --data: #0e9d6b;
+    --data-soft: #dcf3e8;
+    --warn: #c47f10;
+    --warn-soft: #fbf0d8;
+    --crit: #cf3b46;
+    --crit-soft: #fbe0e2;
+    --diagram-bg: #ffffff;
+    --diagram-border: #dde2ea;
+    --radius: 10px;
+    --measure: 62rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0d1117;
+      --surface: #151c26;
+      --surface-2: #1c2531;
+      --ink: #e8edf4;
+      --ink-soft: #aab6c4;
+      --ink-faint: #7d8a99;
+      --border: #26303d;
+      --border-strong: #33404f;
+      --control: #7aa0ff;
+      --control-soft: #1b2740;
+      --data: #45c795;
+      --data-soft: #123027;
+      --warn: #e0ad4f;
+      --warn-soft: #33290f;
+      --crit: #f0757e;
+      --crit-soft: #331519;
+      --diagram-bg: #f7f9fc;
+      --diagram-border: #d3dae4;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #f4f6f9; --surface: #ffffff; --surface-2: #eef1f6; --ink: #0f1620;
+    --ink-soft: #45505f; --ink-faint: #6b7686; --border: #dde2ea; --border-strong: #c6cdd8;
+    --control: #2f5fe0; --control-soft: #e5ecfd; --data: #0e9d6b; --data-soft: #dcf3e8;
+    --warn: #c47f10; --warn-soft: #fbf0d8; --crit: #cf3b46; --crit-soft: #fbe0e2;
+    --diagram-bg: #ffffff; --diagram-border: #dde2ea;
+  }
+  :root[data-theme="dark"] {
+    --ground: #0d1117; --surface: #151c26; --surface-2: #1c2531; --ink: #e8edf4;
+    --ink-soft: #aab6c4; --ink-faint: #7d8a99; --border: #26303d; --border-strong: #33404f;
+    --control: #7aa0ff; --control-soft: #1b2740; --data: #45c795; --data-soft: #123027;
+    --warn: #e0ad4f; --warn-soft: #33290f; --crit: #f0757e; --crit-soft: #331519;
+    --diagram-bg: #f7f9fc; --diagram-border: #d3dae4;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.65;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+  }
+
+  .wrap { max-width: var(--measure); margin: 0 auto; padding: 0 1.5rem 6rem; }
+
+  /* ---------- header ---------- */
+  header {
+    max-width: var(--measure); margin: 0 auto; padding: 4rem 1.5rem 2.5rem;
+  }
+  .eyebrow {
+    font-family: ui-monospace, monospace; font-size: 0.72rem; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--ink-faint); margin: 0 0 1rem;
+  }
+  h1 {
+    font-size: clamp(2.1rem, 5vw, 3.1rem); line-height: 1.05; letter-spacing: -0.02em;
+    margin: 0 0 1rem; text-wrap: balance; font-weight: 680;
+  }
+  .lede { font-size: 1.15rem; color: var(--ink-soft); max-width: 46rem; margin: 0 0 1.75rem; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 0.5rem 0.6rem; font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+  }
+  .meta span {
+    padding: 0.28rem 0.65rem; border: 1px solid var(--border-strong); border-radius: 999px;
+    color: var(--ink-soft); background: var(--surface);
+  }
+  .planebar { display: flex; height: 6px; border-radius: 999px; overflow: hidden; margin-top: 2rem; }
+  .planebar i { flex: 1; }
+  .planebar .c { background: var(--control); }
+  .planebar .d { background: var(--data); }
+
+  /* ---------- sections ---------- */
+  section { scroll-margin-top: 1rem; }
+  h2 {
+    font-size: 1.5rem; letter-spacing: -0.01em; margin: 3.5rem 0 0.4rem; font-weight: 640;
+    display: flex; align-items: baseline; gap: 0.7rem; text-wrap: balance;
+  }
+  h2 .num {
+    font-family: ui-monospace, monospace; font-size: 0.9rem; color: var(--ink-faint);
+    font-weight: 500;
+  }
+  h3 { font-size: 1.08rem; margin: 2rem 0 0.5rem; font-weight: 620; letter-spacing: -0.005em; }
+  p { margin: 0.7rem 0; }
+  a { color: var(--control); }
+  .rule { height: 1px; background: var(--border); border: 0; margin: 0.6rem 0 0; }
+
+  /* plane accent legends */
+  .planekey { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 1.25rem 0; }
+  .planekey div { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: var(--ink-soft); }
+  .dot { width: 0.8rem; height: 0.8rem; border-radius: 3px; flex: none; }
+  .dot.c { background: var(--control); }
+  .dot.d { background: var(--data); }
+
+  .callout {
+    border-left: 3px solid var(--control); background: var(--surface);
+    border-radius: 0 var(--radius) var(--radius) 0; padding: 1rem 1.25rem; margin: 1.5rem 0;
+    box-shadow: 0 1px 2px rgba(15,22,32,0.04);
+  }
+  .callout.data { border-left-color: var(--data); }
+  .callout strong { color: var(--ink); }
+
+  /* ---------- diagram cards ---------- */
+  figure {
+    margin: 1.75rem 0; background: var(--diagram-bg); border: 1px solid var(--diagram-border);
+    border-radius: var(--radius); padding: 1.25rem; overflow-x: auto;
+  }
+  figure .mermaid { display: flex; justify-content: center; min-width: max-content; margin: 0 auto; }
+  figcaption {
+    font-family: ui-monospace, monospace; font-size: 0.72rem; letter-spacing: 0.06em;
+    text-transform: uppercase; color: #6b7686; margin-top: 0.9rem; text-align: center;
+  }
+
+  /* ---------- tables ---------- */
+  .tablewrap { overflow-x: auto; margin: 1.5rem 0; border: 1px solid var(--border); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; min-width: 34rem; }
+  th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  thead th {
+    background: var(--surface-2); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink-soft); font-weight: 600; position: sticky; top: 0;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:nth-child(even) { background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
+  td.mono, th.mono { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  .yes { color: var(--data); font-weight: 600; }
+  .no { color: var(--crit); font-weight: 600; }
+
+  /* state chips */
+  .chip {
+    display: inline-block; font-family: ui-monospace, monospace; font-size: 0.72rem;
+    padding: 0.15rem 0.5rem; border-radius: 5px; letter-spacing: 0.03em; white-space: nowrap;
+  }
+  .chip.ok    { background: var(--data-soft); color: var(--data); }
+  .chip.warn  { background: var(--warn-soft); color: var(--warn); }
+  .chip.crit  { background: var(--crit-soft); color: var(--crit); }
+  .chip.info  { background: var(--control-soft); color: var(--control); }
+  .chip.mute  { background: var(--surface-2); color: var(--ink-faint); }
+
+  ul, ol { padding-left: 1.25rem; }
+  li { margin: 0.35rem 0; }
+  code {
+    font-family: ui-monospace, monospace; font-size: 0.83em; background: var(--surface-2);
+    padding: 0.1rem 0.35rem; border-radius: 4px; color: var(--ink);
+  }
+
+  /* endpoint list */
+  .endpoints { list-style: none; padding: 0; margin: 1.25rem 0; display: grid; gap: 0.6rem; }
+  .endpoints li {
+    display: grid; grid-template-columns: auto 1fr; gap: 0.75rem 1rem; align-items: baseline;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 0.7rem 0.9rem;
+  }
+  .endpoints .verb {
+    font-family: ui-monospace, monospace; font-size: 0.75rem; font-weight: 700; color: var(--control);
+    background: var(--control-soft); padding: 0.15rem 0.5rem; border-radius: 5px; align-self: start;
+  }
+  .endpoints .path { font-family: ui-monospace, monospace; font-size: 0.85rem; font-weight: 600; }
+  .endpoints .desc { grid-column: 2; color: var(--ink-soft); font-size: 0.88rem; }
+
+  /* ---------- executive dashboard mock ---------- */
+  .dash {
+    margin: 1.75rem 0 1rem; border: 1px solid var(--border-strong); border-radius: 12px;
+    background: var(--surface); overflow: hidden; box-shadow: 0 8px 30px rgba(15,22,32,0.10);
+  }
+  .dash-chrome {
+    display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.9rem;
+    background: var(--surface-2); border-bottom: 1px solid var(--border);
+  }
+  .dash-chrome .dots { display: flex; gap: 0.35rem; }
+  .dash-chrome .dots i { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--border-strong); }
+  .dash-chrome .addr {
+    font-family: ui-monospace, monospace; font-size: 0.72rem; color: var(--ink-faint);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.15rem 0.6rem; margin-left: 0.4rem;
+  }
+  .dash-body { padding: 1.1rem; display: flex; flex-direction: column; gap: 1rem; }
+  .dash-h {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+  }
+  .dash-h strong { font-size: 1.05rem; letter-spacing: -0.01em; }
+  .dash-h span { font-family: ui-monospace, monospace; font-size: 0.7rem; color: var(--ink-faint); }
+
+  .kpi-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.6rem; }
+  .kpi {
+    border: 1px solid var(--border); border-radius: 9px; padding: 0.7rem 0.75rem; background: var(--surface);
+    display: flex; flex-direction: column; gap: 0.25rem; min-width: 0;
+  }
+  .kpi .k-label {
+    font-family: ui-monospace, monospace; font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .kpi .k-val { font-size: 1.5rem; font-weight: 660; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .kpi .k-val small { font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); }
+  .kpi .k-delta { font-family: ui-monospace, monospace; font-size: 0.68rem; }
+  .k-delta.up { color: var(--data); }
+  .k-delta.flat { color: var(--ink-faint); }
+
+  .dash-2 { display: grid; grid-template-columns: 1.6fr 1fr; gap: 0.9rem; }
+  .panel { border: 1px solid var(--border); border-radius: 9px; padding: 0.85rem; background: var(--surface); }
+  .panel .p-title {
+    font-family: ui-monospace, monospace; font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 0.6rem; display: flex; justify-content: space-between;
+  }
+  .panel .p-title b { color: var(--ink-soft); font-weight: 600; }
+  .chart { width: 100%; height: auto; display: block; }
+  .grid-line { stroke: var(--border); stroke-width: 1; }
+  .area-line { fill: none; stroke: var(--control); stroke-width: 2; }
+  .area-end { fill: var(--control); stroke: var(--surface); stroke-width: 2; }
+  .x-lab { fill: var(--ink-faint); font-family: ui-monospace, monospace; font-size: 9px; }
+
+  .statebars { display: flex; flex-direction: column; gap: 0.55rem; }
+  .statebar { display: grid; grid-template-columns: 5.5rem 1fr auto; align-items: center; gap: 0.5rem; }
+  .statebar .s-name { font-family: ui-monospace, monospace; font-size: 0.68rem; color: var(--ink-soft); }
+  .statebar .track { height: 0.55rem; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .statebar .fill { height: 100%; border-radius: 999px; }
+  .statebar .s-num { font-variant-numeric: tabular-nums; font-size: 0.8rem; font-weight: 600; }
+  .fill.ok { background: var(--data); } .fill.warn { background: var(--warn); } .fill.crit { background: var(--crit); } .fill.mute { background: var(--border-strong); }
+
+  .util { display: inline-flex; align-items: center; gap: 0.45rem; }
+  .util .track { width: 4.5rem; height: 0.45rem; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .util .fill { height: 100%; background: var(--control); border-radius: 999px; }
+  .util span { font-variant-numeric: tabular-nums; font-size: 0.78rem; color: var(--ink-soft); }
+
+  @media (max-width: 640px) {
+    .kpi-row { grid-template-columns: repeat(2, 1fr); }
+    .dash-2 { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- amp-style per-cluster ops panel ---------- */
+  .amp {
+    margin: 1.25rem 0 0.5rem; border: 1px solid var(--border-strong); border-radius: 12px;
+    background: var(--ground); overflow: hidden; box-shadow: 0 8px 30px rgba(15,22,32,0.10);
+  }
+  .amp-top {
+    display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;
+    padding: 0.8rem 1rem; background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .amp-glyph {
+    width: 30px; height: 30px; border-radius: 8px; flex: none;
+    background: linear-gradient(150deg, var(--control), #1c5cab);
+    display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px;
+  }
+  .amp-title { font-weight: 650; font-size: 0.9rem; letter-spacing: -0.01em; line-height: 1.2; }
+  .amp-title small { display: block; font-weight: 400; font-size: 0.68rem; color: var(--ink-faint); }
+  .amp-status {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem;
+    font-size: 0.72rem; font-weight: 600; color: var(--data); background: var(--data-soft);
+    border: 1px solid color-mix(in srgb, var(--data) 30%, transparent); padding: 0.24rem 0.6rem; border-radius: 999px;
+  }
+  .amp-status .d { width: 7px; height: 7px; border-radius: 50%; background: var(--data); flex: none; }
+  .amp-chip {
+    font-family: ui-monospace, monospace; font-size: 0.66rem; color: var(--ink-soft);
+    background: var(--ground); border: 1px solid var(--border); padding: 0.22rem 0.5rem; border-radius: 6px; white-space: nowrap;
+  }
+  .amp-chip b { color: var(--ink); font-weight: 600; }
+  .amp-body { padding: 1rem; display: flex; flex-direction: column; gap: 0.55rem; }
+  .amp-sh { display: flex; align-items: center; gap: 0.6rem; margin: 0.55rem 0 0.1rem; }
+  .amp-sh h4 { margin: 0; font-size: 0.74rem; font-weight: 650; letter-spacing: 0.01em; }
+  .amp-sh .r { height: 1px; background: var(--border); flex: 1; }
+  .amp-sh .n { font-family: ui-monospace, monospace; font-size: 0.64rem; color: var(--ink-faint); }
+
+  .amp-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; }
+  .amp-tile {
+    position: relative; overflow: hidden; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 11px; padding: 0.75rem 0.8rem; min-height: 90px; display: flex; flex-direction: column; gap: 0.1rem;
+  }
+  .amp-tile.good::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--data); }
+  .amp-tile .l { font-family: ui-monospace, monospace; font-size: 0.6rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-faint); }
+  .amp-tile .v { font-size: 1.65rem; font-weight: 640; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
+  .amp-tile .v .u { font-size: 0.8rem; font-weight: 550; color: var(--ink-soft); margin-left: 0.2rem; }
+  .amp-tile .f { margin-top: auto; font-size: 0.7rem; color: var(--ink-soft); display: flex; align-items: center; gap: 0.4rem; z-index: 1; }
+  .amp-tile .dl { font-family: ui-monospace, monospace; font-size: 0.63rem; font-weight: 600; padding: 0.05rem 0.35rem; border-radius: 5px; color: var(--data); background: var(--data-soft); }
+  .amp-tile .gd { width: 7px; height: 7px; border-radius: 50%; background: var(--data); flex: none; }
+  .amp-tile .sp { position: absolute; right: 0; bottom: 0; width: 44%; height: 32px; opacity: 0.5; }
+
+  .amp-fleet {
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 11px; overflow: hidden;
+  }
+  .amp-svc { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.8rem; border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent); min-width: 0; }
+  .amp-svc:nth-child(-n+2) { border-top: none; }
+  .amp-svc:nth-child(odd) { border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+  .amp-svc .sd { width: 8px; height: 8px; border-radius: 50%; background: var(--data); flex: none; }
+  .amp-svc .g { margin-right: auto; min-width: 0; }
+  .amp-svc .nm { font-family: ui-monospace, monospace; font-size: 0.72rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .amp-svc .ro { font-size: 0.66rem; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .amp-svc .ct { font-family: ui-monospace, monospace; font-size: 0.66rem; font-weight: 600; color: var(--data); background: var(--data-soft); padding: 0.12rem 0.4rem; border-radius: 6px; white-space: nowrap; }
+
+  .amp-charts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.6rem; }
+  .amp-card { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; padding: 0.7rem 0.8rem 0.5rem; }
+  .amp-card .ch { display: flex; align-items: baseline; gap: 0.5rem; }
+  .amp-card .ch .t { font-size: 0.72rem; font-weight: 600; }
+  .amp-card .ch .now { margin-left: auto; font-family: ui-monospace, monospace; font-size: 0.72rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .amp-card .ch .now .u { color: var(--ink-faint); font-weight: 500; font-size: 0.62rem; }
+  .amp-card .cap { font-family: ui-monospace, monospace; font-size: 0.6rem; color: var(--ink-faint); letter-spacing: 0.03em; margin-top: 0.1rem; }
+  .amp-card svg.plot { display: block; width: 100%; height: auto; margin-top: 0.4rem; }
+  .amp-xax { display: flex; justify-content: space-between; font-family: ui-monospace, monospace; font-size: 0.58rem; color: var(--ink-faint); margin-top: 0.15rem; }
+
+  .amp-rel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; }
+  .amp-relc { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.65rem 0.7rem; display: flex; flex-direction: column; gap: 0.2rem; }
+  .amp-relc .rl { font-family: ui-monospace, monospace; font-size: 0.58rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-faint); }
+  .amp-relc .rv { font-size: 1.15rem; font-weight: 640; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .amp-relc .rok { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.66rem; color: var(--data); font-weight: 600; }
+  .amp-relc .rok .gd { width: 6px; height: 6px; border-radius: 50%; background: var(--data); }
+
+  @media (max-width: 640px) {
+    .amp-kpis { grid-template-columns: repeat(2, 1fr); }
+    .amp-charts { grid-template-columns: 1fr; }
+    .amp-rel { grid-template-columns: repeat(2, 1fr); }
+    .amp-fleet { grid-template-columns: 1fr; }
+    .amp-svc:nth-child(2) { border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+    .amp-svc:nth-child(odd) { border-right: none; }
+  }
+
+  footer {
+    max-width: var(--measure); margin: 0 auto; padding: 2rem 1.5rem 4rem; color: var(--ink-faint);
+    font-size: 0.82rem; border-top: 1px solid var(--border);
+  }
+</style>
+
+<header>
+  <p class="eyebrow">Platform Design · Draft</p>
+  <h1>Meko BYOC Control Plane</h1>
+  <p class="lede">
+    Split Meko into a Meko-operated <strong>control plane</strong> and a customer-operated
+    <strong>data plane</strong>, connected by a single outbound pull agent — so every byte of
+    customer memory, RAG, and conversation data stays in the customer's own cloud. The control
+    plane runs inside the YBM Aeon VPC and federates identity from Aeon over OIDC.
+  </p>
+  <div class="meta">
+    <span>Owner: Platform</span>
+    <span>Updated: 2026-07-16</span>
+    <span>Model: agent pull</span>
+    <span>Auth: YBM Aeon OIDC</span>
+    <span>Status: Draft</span>
+  </div>
+  <div class="planebar" aria-hidden="true"><i class="c"></i><i class="d"></i></div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <h2><span class="num">01</span> Summary</h2>
+    <hr class="rule" />
+    <p>
+      Today Meko runs as a single-tenant-per-row SaaS: one set of Meko-operated infrastructure
+      (<code>api_server</code> + shared YugabyteDB universes + a shared MCP server) holds
+      <em>all</em> customer data.
+    </p>
+    <p><strong>BYOC (Bring Your Own Cloud)</strong> splits that into two planes:</p>
+    <div class="planekey">
+      <div><span class="dot c"></span><strong>Control plane (MCCP)</strong> — Meko-operated, running inside the YBM Aeon VPC. Fleet registry + desired state; federates identity + entitlements from Aeon. Holds no customer data, no customer cloud credentials, and runs no billing of its own (billing is upstream in Aeon).</div>
+      <div><span class="dot d"></span><strong>Data plane</strong> — customer-operated. Datapack workloads, the operator, and customer-owned YugabyteDB (a YBM Aeon cluster), in the customer's own Kubernetes cluster.</div>
+    </div>
+    <p>
+      The planes are joined by a lightweight <strong>pull agent</strong> (<code>meko-agent</code>)
+      running in the customer cluster. It only ever <em>dials out</em> to the control plane — there
+      is no inbound network path into the customer's cloud. This mirrors the Amp BYOC control plane.
+    </p>
+
+    <h3>Why the pull model</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Property</th><th>Push (control plane holds kubeconfig)</th><th>Pull — chosen</th></tr></thead>
+        <tbody>
+          <tr><td>Inbound access to customer cloud</td><td class="no">Required</td><td class="yes">None</td></tr>
+          <tr><td>Customer cloud credentials at rest in control plane</td><td class="no">Yes</td><td class="yes">No</td></tr>
+          <tr><td>Works behind customer NAT / private cluster</td><td>Hard</td><td class="yes">Yes</td></tr>
+          <tr><td>Blast radius if control plane is breached</td><td class="no">Customer clusters</td><td class="yes">Desired state only</td></tr>
+          <tr><td>Customer audit story</td><td>Weak</td><td class="yes">All actions originate in-cluster</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> Architecture</h2>
+    <hr class="rule" />
+    <figure>
+      <pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, monospace","fontSize":"13px","primaryColor":"#eef1f6","primaryBorderColor":"#c6cdd8","lineColor":"#8a94a2","primaryTextColor":"#0f1620"},"flowchart":{"padding":10}}}%%
+flowchart TB
+    subgraph AEON["YBM AEON VPC — cloud or on-prem"]
+      subgraph CP["MCCP — Meko Cloud Control Plane"]
+          direction TB
+          API["api_server<br/>(control-plane mode)"]
+          CDB[("Control DB<br/>meko_system.* + fleet registry")]
+          API --- CDB
+      end
+      AEONSVC["YBM Aeon platform<br/>identity (OIDC) + billing / entitlements"]
+      THANOS["Thanos<br/>Receive + Query + object store"]
+      API -->|OIDC + entitlements| AEONSVC
+      API -->|queries metrics| THANOS
+    end
+
+    subgraph DP["MEKO (data plane) — Customer cloud / Kubernetes"]
+        direction TB
+        AGENT["meko-agent<br/>(pull agent)"]
+        OP["meko-provisioner<br/>(operator)"]
+        subgraph TEN["per-datapack namespaces (tenant-id)"]
+            MCP["mcp-server"]
+            RAG["rag-worker"]
+        end
+        PROM["Prometheus<br/>(in-cluster)"]
+        PROXY["MCP ingress proxy<br/>*.mcp.customer-domain"]
+        YB[("Customer YugabyteDB<br/>datapacks.* / dist_rag.*")]
+        CSEC["Customer secret store"]
+        AGENT -->|applies CRs| OP
+        OP -->|creates| TEN
+        OP -.->|reads| CSEC
+        MCP --- YB
+        RAG --- YB
+        PROXY --> MCP
+        PROM -.->|scrapes| TEN
+    end
+
+    CLI["meko CLI / cloud console"] --> API
+    AGENT ==>|"1 enroll · 2 poll desired-state · 3 report status  (OUTBOUND, mTLS)"| API
+    PROM ==>|"remote-write (OUTBOUND, mTLS)"| THANOS
+    APPS["Customer agents / inference_gateway"] -->|MCP + PAT| PROXY
+      </pre>
+      <figcaption>Two planes · the agent's outbound connection is the only cross-plane channel</figcaption>
+    </figure>
+
+    <div class="callout">
+      <strong>Key invariant.</strong> The only cross-plane channel is the agent's outbound connection.
+      Customer memory/RAG data, YugabyteDB, and all data-plane secrets never leave the customer's cloud.
+    </div>
+
+    <h3>Functional split — MCCP vs Meko (data plane)</h3>
+    <div class="callout data">
+      <strong>Meko (the data plane) keeps 100% of today's functionality.</strong> Every runtime feature the
+      product ships now runs in the customer's cluster, unchanged. BYOC only lifts the <em>control functions</em>
+      up to MCCP (identity, entitlements, fleet, desired state) and moves CR authoring into the agent. Nothing is
+      removed from the data plane, and <strong>no MCCP dependency sits in the request path</strong> — datapacks
+      keep serving even if MCCP is unreachable (§7, <span class="chip warn">DEGRADED</span>).
+    </div>
+    <div class="planekey">
+      <div><span class="dot c"></span><strong>Control functions → MCCP (cloud)</strong></div>
+      <div><span class="dot d"></span><strong>Full Meko functionality → data plane (unchanged)</strong></div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th><span class="dot c" style="display:inline-block;vertical-align:middle;margin-right:0.4rem;"></span>MCCP (cloud) owns</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Human identity / login</td><td>OIDC relying party of YBM Aeon (§4)</td></tr>
+          <tr><td>Entitlements / plan / free-tier caps</td><td><strong>Read from YBM Aeon upstream</strong> — billing lives in Aeon; MCCP consumes the plan (OIDC claims / Aeon billing API), it does not run Stripe</td></tr>
+          <tr><td>Fleet registry + environment lifecycle</td><td>The §7 state machine</td></tr>
+          <tr><td>Desired state (what exists where)</td><td>The contract agents reconcile toward</td></tr>
+          <tr><td>Datapack <em>metadata</em> (name, owner, placement)</td><td>Not the data — just the pointer</td></tr>
+          <tr><td>Executive dashboard / fleet observability</td><td>Aggregated metrics only (§10)</td></tr>
+          <tr><td>Langfuse project-mapping <em>metadata</em> (optional)</td><td>Only a project id, to deep-link the console to the in-cloud Observe UI — no Langfuse API calls, no admin key</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th><span class="dot d" style="display:inline-block;vertical-align:middle;margin-right:0.4rem;"></span>Meko data plane runs (unchanged from today)</th><th>Where in today's code</th></tr></thead>
+        <tbody>
+          <tr><td>MCP servers (memory, conversations, RAG tools over the MCP contract)</td><td>per-datapack <code>mcp-server</code></td></tr>
+          <tr><td>Memory + conversation storage &amp; retrieval</td><td>YugabyteDB <code>datapacks.*</code></td></tr>
+          <tr><td>RAG indexing / embeddings / retrieval</td><td><code>rag-worker</code>, <code>dist_rag.*</code></td></tr>
+          <tr><td>Datapack databases (one per datapack)</td><td>customer-owned YugabyteDB (YBM Aeon)</td></tr>
+          <tr><td>Langfuse instance + <em>provisioning</em> (org/project/keys) + <em>traces</em></td><td>in-cloud Langfuse, created by the agent locally</td></tr>
+          <tr><td>MCP ingress + per-datapack routing</td><td>wildcard nginx proxy, customer domain</td></tr>
+          <tr><td>PAT issuance/validation for agents hitting MCP</td><td><code>internal/auth/pat.go</code></td></tr>
+          <tr><td>KB uploads / artifacts (S3)</td><td>customer-owned bucket</td></tr>
+          <tr><td><code>meko-provisioner</code> operator + tenant reconcile</td><td>runs in-cluster</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      A customer's agents, CLI, and <code>inference_gateway</code> talk to Meko in the customer cloud exactly as
+      they do today; only the <em>management plane</em> (onboarding, entitlements, fleet health, cross-customer
+      dashboards) is what MCCP adds on top.
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> Data residency</h2>
+    <hr class="rule" />
+    <p>This is the entire point of BYOC, so it is stated explicitly.</p>
+    <div class="planekey" style="flex-direction:column; gap:1rem;">
+      <div style="align-items:flex-start;">
+        <span class="dot d" style="margin-top:0.35rem;"></span>
+        <span><strong>Stays in the customer cloud with Meko</strong> (never transmitted to MCCP): YugabyteDB and all its contents (<code>datapacks.*</code>, <code>dist_rag.*</code>); the customer's YugabyteDB credentials; OpenAI / Bedrock / AWS keys; Langfuse entirely — instance, Postgres, provisioning (agent-created org/project/keys), and traces; the <code>meko-shared-credentials</code> secret and all per-tenant secrets.</span>
+      </div>
+      <div style="align-items:flex-start;">
+        <span class="dot c" style="margin-top:0.35rem;"></span>
+        <span><strong>Held by MCCP:</strong> identity (users, accounts, Aeon OIDC subs, entitlements); fleet metadata (environments, health, versions, capacity); datapack <em>metadata</em> (id, name, owner, placement, desired versions, phase — but not its data); enrollment-token secrets and each environment's public identity. Never the customer's cloud credentials.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span> Authentication &amp; identity</h2>
+    <hr class="rule" />
+    <p>
+      MCCP runs <strong>inside the YBM Aeon VPC</strong> and authenticates humans as an
+      <strong>OIDC client (relying party) of YBM Aeon's identity provider</strong>. Aeon owns the login;
+      MCCP federates the identity and layers its own session + entitlements on top. There is no bespoke
+      Meko login for BYOC.
+    </p>
+    <p>
+      Because it is standard OIDC discovery, the <em>same</em> MCCP code serves both deployment
+      topologies — only the issuer URL and client credentials differ:
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Topology</th><th>Where MCCP runs</th><th>OIDC issuer</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Cloud MCCP</strong></td><td>Inside the YBM Aeon (cloud) VPC</td><td>YBM Aeon cloud</td></tr>
+          <tr><td><strong>On-prem MCCP</strong></td><td>Alongside a self-managed / on-prem Aeon</td><td>That on-prem Aeon</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Three distinct auth channels — do not conflate them:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Channel</th><th>Principal</th><th>Mechanism</th></tr></thead>
+        <tbody>
+          <tr><td>Human → MCCP</td><td>Meko operators, customer admins</td><td><span class="chip info">OIDC</span> relying party of YBM Aeon → MCCP session</td></tr>
+          <tr><td>Agent → MCCP</td><td><code>meko-agent</code></td><td><span class="chip ok">mTLS</span> environment identity (issued at enrollment)</td></tr>
+          <tr><td>Agent / inference → datapack MCP</td><td>customer agents, <code>inference_gateway</code></td><td><span class="chip warn">PAT</span> <span class="mono">mko_tkn_…</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <strong>Cognito becomes legacy.</strong> The existing <code>-cognito-*</code> path is retired for
+      MCCP; YBM Aeon OIDC is the default (and only) human IdP. New flags: <code>-oidc-issuer-url</code>,
+      <code>-oidc-client-id</code>, <code>-oidc-client-secret</code>, <code>-oidc-redirect-url</code>. The Aeon
+      <code>sub</code> claim replaces the Cognito <code>sub</code> as the account <code>user_id</code>, so
+      downstream account plumbing is unchanged.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span> MCCP — the minimal layer &amp; its API surface</h2>
+    <hr class="rule" />
+    <p>
+      MCCP is <code>api_server</code> run with <code>-control-plane-mode</code>, deployed inside the YBM Aeon
+      VPC, plus its control DB. We build it <strong>minimally</strong> — it is only four things:
+    </p>
+    <ol>
+      <li><strong>Control DB</strong> — <code>meko_system.*</code> plus the new <code>environments</code> fleet registry (§8). Metadata only; no tenant data ever lands here.</li>
+      <li><strong>Identity</strong> — OIDC relying party of YBM Aeon (§4).</li>
+      <li><strong>Desired-state store</strong> — the authoritative set of environments, datapacks, and target versions that agents reconcile toward.</li>
+      <li><strong>HTTP API surface</strong> — below. MCCP is stateless and scales horizontally behind the Aeon VPC load balancer.</li>
+    </ol>
+    <p>
+      Nothing else from today's <code>api_server</code> is needed for the MVP: no per-datapack DB provisioning,
+      no in-cluster k8s client (that moves to the agent), no direct MCP serving.
+    </p>
+
+    <h3>API surface — three groups</h3>
+    <p><strong>A · Human / console API</strong> — OIDC-authenticated (§4); called by the <code>meko</code> CLI and the cloud console:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th class="mono">Method + path</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">POST /api/v1/datapacks</td><td>Create a datapack — writes metadata + placement, emits desired state; does <strong>not</strong> touch k8s.</td></tr>
+          <tr><td class="mono">GET /api/v1/datapacks · /{id}</td><td>List / read datapack metadata.</td></tr>
+          <tr><td class="mono">DELETE /api/v1/datapacks/{id}</td><td>Mark a datapack for teardown (agent reconciles).</td></tr>
+          <tr><td class="mono">POST /api/v1/environments</td><td>Register an environment — optionally with a <strong>new-cluster spec</strong> (provider / region / node size); mint a one-time enrollment token.</td></tr>
+          <tr><td class="mono">GET /api/v1/environments · /{id}</td><td>Fleet view + health + state (§7).</td></tr>
+          <tr><td class="mono">entitlement (read-only)</td><td>Plan/caps read from YBM Aeon upstream — no billing endpoints in MCCP. Observe is a deep-link to the in-cloud UI, not an MCCP-brokered session.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>B · Agent API</strong> — mTLS environment identity (§4); called by <code>meko-agent</code> (detailed in §8). The pre-agent installer uses a token-authed <code>bootstrap-progress</code> endpoint for the same channel:</p>
+    <ul class="endpoints">
+      <li><span class="verb">POST</span><span class="path">/api/v1/agent/bootstrap-progress</span><span class="desc">Pre-agent installer reports cluster-provisioning + install steps (§7.1).</span></li>
+      <li><span class="verb">POST</span><span class="path">/api/v1/agent/enroll</span><span class="desc">Exchange enrollment token → mTLS identity.</span></li>
+      <li><span class="verb">GET</span><span class="path">/api/v1/agent/desired-state</span><span class="desc">Long-poll the resources assigned to this environment.</span></li>
+      <li><span class="verb">POST</span><span class="path">/api/v1/agent/status</span><span class="desc">Heartbeat + component/datapack phases + metrics (§9).</span></li>
+    </ul>
+    <p><strong>C · Internal API</strong> — shared-secret (<span class="mono">X-Meko-Internal-Secret</span>); unchanged MCP→api_server PAT validation under <code>/api/v1/internal/*</code>.</p>
+
+    <div class="callout">
+      <strong>Minimal build order.</strong> Stand up MCCP with the control DB + OIDC + the <code>environments</code>
+      registry + the agent API behind <code>-control-plane-mode</code>, pointed at a <em>Meko-owned test
+      environment</em>. That is the smallest thing that exercises the full pull loop end-to-end without a
+      customer. The desired-state payload is the contract between MCCP and Meko — version it from day one.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span> The pull agent</h2>
+    <hr class="rule" />
+    <p>
+      A new lightweight Go binary in the monorepo — <code>meko-agent</code> — reusing the today-dormant
+      k8s CR client from <code>api_server/internal/k8s/client.go</code>. It runs as a Deployment in the
+      customer cluster and owns three outbound flows:
+    </p>
+    <ol>
+      <li><strong>Enroll.</strong> On first start it presents a one-time enrollment token, is attested by the control plane, and exchanges the token for a long-lived environment identity (mTLS client cert). It reports cluster facts (Kubernetes version, region, node capacity).</li>
+      <li><strong>Poll desired state.</strong> It long-polls for the resources assigned to this environment: which bootstrap components to run, which <code>MekoUserAccount</code>/datapack specs should exist, and target image versions.</li>
+      <li><strong>Report status.</strong> Heartbeats plus per-component and per-datapack phase and version, keeping the control-plane fleet view accurate.</li>
+    </ol>
+    <div class="callout data">
+      The agent is the <strong>only</strong> writer of <code>MekoUserAccount</code> CRs. This relocates
+      CR-authoring out of the control plane (where it is currently dead code) into the customer cluster,
+      driven by desired state.
+    </div>
+    <figure>
+      <pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, monospace","fontSize":"13px","primaryColor":"#e5ecfd","primaryBorderColor":"#2f5fe0","lineColor":"#8a94a2","primaryTextColor":"#0f1620","actorBkg":"#eef1f6","actorBorder":"#c6cdd8"}}}%%
+sequenceDiagram
+    autonumber
+    participant A as meko-agent (customer)
+    participant C as Control Plane
+    participant O as meko-provisioner (customer)
+    loop reconcile
+        A->>C: GET /agent/desired-state (long-poll, mTLS)
+        C-->>A: components, datapacks[], target-versions
+        A->>O: apply/update MekoUserAccount CRs
+        O-->>A: CR status (Phase, conditions)
+        A->>C: POST /agent/status (heartbeat + phases)
+    end
+      </pre>
+      <figcaption>Reconcile loop — every write originates inside the customer cluster</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2><span class="num">07</span> Bootstrapping state machine</h2>
+    <hr class="rule" />
+    <p>
+      The lifecycle of onboarding one customer environment, tracked as
+      <code>environment.status</code> in the control-plane fleet registry.
+    </p>
+    <figure>
+      <pre class="mermaid">
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"ui-monospace, monospace","fontSize":"12px","primaryColor":"#eef1f6","primaryBorderColor":"#c6cdd8","lineColor":"#8a94a2","primaryTextColor":"#0f1620"}}}%%
+stateDiagram-v2
+    [*] --> PENDING: admin creates env, issues token
+    PENDING --> CLUSTER_PROVISIONING: "new cluster" - installer provisions K8s
+    PENDING --> ENROLLING: "attach" - installer runs in existing cluster
+    CLUSTER_PROVISIONING --> ENROLLING: cluster ready, agent installed
+    CLUSTER_PROVISIONING --> FAILED: cluster provisioning error
+    ENROLLING --> ATTESTING: agent presents token
+    ATTESTING --> PENDING: token invalid (re-issue)
+    ATTESTING --> PROVISIONING: token valid, agent gets mTLS identity
+    PROVISIONING --> VALIDATING: CRD + operator + ingress installed
+    PROVISIONING --> FAILED: install error (retry)
+    VALIDATING --> READY: smoke checks pass
+    VALIDATING --> FAILED: smoke check fails
+    FAILED --> PROVISIONING: operator retries
+    READY --> DEGRADED: heartbeat missed / unhealthy
+    DEGRADED --> READY: recovered
+    READY --> SUSPENDED: Aeon billing lapse / admin hold
+    SUSPENDED --> READY: hold cleared
+    READY --> DRAINING: offboard requested
+    DEGRADED --> DRAINING: offboard requested
+    SUSPENDED --> DRAINING: offboard requested
+    DRAINING --> DEREGISTERED: workloads deleted, creds revoked
+    DEREGISTERED --> [*]
+      </pre>
+      <figcaption>Environment lifecycle — every transition is agent-reported or admin-driven</figcaption>
+    </figure>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>State</th><th>Meaning</th><th>Datapacks servable?</th><th>New placements?</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip mute">PENDING</span></td><td>Env record exists; token issued, agent not yet seen.</td><td class="no">No</td><td class="no">No</td></tr>
+          <tr><td><span class="chip info">CLUSTER_PROVISIONING</span></td><td>New-cluster path: installer is standing up a fresh K8s cluster in the customer's cloud.</td><td class="no">No</td><td class="no">No</td></tr>
+          <tr><td><span class="chip info">ENROLLING</span></td><td>Installer running; agent starting.</td><td class="no">No</td><td class="no">No</td></tr>
+          <tr><td><span class="chip info">ATTESTING</span></td><td>Control plane validating the enrollment token.</td><td class="no">No</td><td class="no">No</td></tr>
+          <tr><td><span class="chip info">PROVISIONING</span></td><td>Agent installing CRD, operator, ingress, secret scaffold.</td><td class="no">No</td><td class="no">No</td></tr>
+          <tr><td><span class="chip info">VALIDATING</span></td><td>Smoke checks: operator healthy, YugabyteDB reachable, canary datapack up + down.</td><td class="no">No</td><td class="no">No</td></tr>
+          <tr><td><span class="chip ok">READY</span></td><td>Healthy and schedulable.</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+          <tr><td><span class="chip warn">DEGRADED</span></td><td>Heartbeat missed or a component unhealthy. Existing datapacks keep serving.</td><td class="yes">Yes</td><td class="no">No</td></tr>
+          <tr><td><span class="chip warn">SUSPENDED</span></td><td>Aeon billing lapse or admin hold. Agent stops accepting new work.</td><td>Read</td><td class="no">No</td></tr>
+          <tr><td><span class="chip crit">DRAINING</span></td><td>Offboarding: datapacks migrated/deleted, workloads removed.</td><td>Winding down</td><td class="no">No</td></tr>
+          <tr><td><span class="chip crit">DEREGISTERED</span></td><td>Environment removed; agent identity revoked.</td><td class="no">No</td><td class="no">No</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Transition guarantees</h3>
+    <ul>
+      <li>Every transition is triggered by an <em>agent-reported</em> fact or an <em>admin</em> action — never by MCCP reaching into the cluster.</li>
+      <li><code>PROVISIONING</code>/<code>VALIDATING</code> are idempotent and retried with backoff; a partial install re-converges rather than requiring a manual reset.</li>
+      <li>Revocation (<code>DEREGISTERED</code>) invalidates the environment's mTLS identity so a leaked agent credential cannot resume pulling desired state.</li>
+    </ul>
+
+    <h3>7.1 Two onboarding modes — attach or provision</h3>
+    <p>
+      The customer chooses one when registering the environment. Both are driven by the <strong><code>meko bootstrap</code></strong>
+      installer (a wizard / one-command CLI shipped in the <code>meko-devops</code> chart); both keep the customer's cloud
+      credentials on the customer's side — MCCP never receives them.
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Mode</th><th>Starting point</th><th>What <code>meko bootstrap</code> does</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Attach existing cluster</strong></td><td>Customer already has a K8s cluster + kubeconfig</td><td>Installs the Helm chart (agent + CRD + operator); <span class="mono">PENDING → ENROLLING</span>.</td></tr>
+          <tr><td><strong>Provision new cluster</strong></td><td>Customer has a cloud account but no cluster</td><td>Provisions a fresh cluster (YBM Aeon cluster API, or <code>eksctl</code>/<code>gke</code>/Terraform with local creds), then installs the chart; <span class="mono">PENDING → CLUSTER_PROVISIONING → ENROLLING</span>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      The installer holds a short-lived enrollment token and reports each step <em>outbound</em> to MCCP
+      (<code>POST /api/v1/agent/bootstrap-progress</code>) so the fleet view shows live progress before the
+      long-running agent exists. Once the agent is up and attested, it takes over all outbound reporting. The
+      new-cluster path pairs naturally with a customer-owned <strong>YBM Aeon</strong> cluster — provision the Aeon
+      data cluster and the Meko K8s cluster in the same wizard, same cloud/region.
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="num">08</span> Changes by component</h2>
+    <hr class="rule" />
+
+    <h3><span class="dot c" style="display:inline-block;vertical-align:middle;margin-right:0.4rem;"></span><code>api_server</code> — becomes MCCP in control-plane mode</h3>
+    <p><code>api_server</code> run with <code>-control-plane-mode</code> <strong>is</strong> MCCP; the operator + workloads in the customer cluster <strong>are</strong> Meko.</p>
+    <p><strong>New fleet domain.</strong> Add an <code>environments</code> registry table to <code>meko_system</code>:</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th class="mono">Column</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">id</td><td>environment id (per customer cloud)</td></tr>
+          <tr><td class="mono">account_id</td><td>owning account</td></tr>
+          <tr><td class="mono">status</td><td>the state-machine value in §7</td></tr>
+          <tr><td class="mono">region, k8s_version, capacity</td><td>reported cluster facts</td></tr>
+          <tr><td class="mono">agent_version, last_heartbeat_at</td><td>health</td></tr>
+          <tr><td class="mono">mcp_base_url</td><td>customer's MCP ingress domain</td></tr>
+          <tr><td class="mono">cert_fingerprint</td><td>agent mTLS identity</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>New agent-facing API</strong> (mTLS + environment identity, separate from the human OIDC and PAT channels in §4):</p>
+    <ul class="endpoints">
+      <li><span class="verb">POST</span><span class="path">/api/v1/agent/enroll</span><span class="desc">Exchange enrollment token → mTLS identity.</span></li>
+      <li><span class="verb">GET</span><span class="path">/api/v1/agent/desired-state</span><span class="desc">Long-poll; returns bootstrap components + datapack specs + target versions for the calling environment.</span></li>
+      <li><span class="verb">POST</span><span class="path">/api/v1/agent/status</span><span class="desc">Heartbeat + component/datapack phases.</span></li>
+    </ul>
+    <ul>
+      <li><strong>Placement.</strong> <code>AssignUniverse</code> (<code>internal/service/yba_service.go</code>) generalizes to <code>AssignEnvironment</code>: a datapack is placed onto a customer environment whose registered YugabyteDB becomes its "universe". Free-tier accounts stay on a Meko-hosted default environment.</li>
+      <li><strong>Stop shipping data-plane secrets.</strong> Today the CR spec carries <code>YugabyteDBPassword</code> from api_server. In BYOC the control plane emits a spec that <em>references</em> secret names; the agent injects real values from the customer secret store.</li>
+      <li><strong>Entitlements from Aeon.</strong> MCCP does not run billing. The free-tier / plan / cap logic (today's <code>FreeTierUsageRepo</code> gate + Stripe) reads the customer's plan from YBM Aeon upstream — via OIDC claims or the Aeon billing API — and enforces caps against that. No money moves through MCCP.</li>
+      <li><strong>New flags:</strong> <code>-control-plane-mode</code>, <code>-agent-ca-cert</code>, <code>-agent-ca-key</code>, <code>-enrollment-token-key</code>, plus the OIDC flags from §4. The <code>-cognito-*</code>, <code>-stripe-*</code>, and <code>-crd-namespace</code> flags are removed — human auth and billing move to Aeon, CR authoring moves to the agent.</li>
+      <li><strong>Langfuse moves fully into the data plane.</strong> MCCP does <strong>not</strong> provision Langfuse and holds no admin key. Instance, Postgres, and provisioning (org/project/keys) all run in the customer cloud, created by the agent as ordinary desired state — it has local network access; MCCP does not. MCCP keeps only an optional project-id for console deep-links. Central Langfuse is a <strong>fallback only</strong>, for customers who explicitly accept traces leaving their cloud.</li>
+    </ul>
+
+    <h3><span class="dot d" style="display:inline-block;vertical-align:middle;margin-right:0.4rem;"></span><code>meko-provisioner</code> — runs in the customer cluster</h3>
+    <ul>
+      <li>Reconcile logic is largely unchanged: it already creates per-tenant namespaces with <code>mcp-server</code> + <code>rag-worker</code> + config/secret + Service — exactly the data-plane unit.</li>
+      <li>Now installed <em>by the agent in the customer cluster</em>, not centrally.</li>
+      <li>The CR's <code>YugabyteDBHost/Port/User/Password/Name</code> already point at an arbitrary DB — in BYOC they point at the customer's own. Minimal change.</li>
+      <li>Add richer status conditions so the agent can relay accurate per-datapack phase back.</li>
+      <li>Add desired-version handling to drive rolling operator/image upgrades.</li>
+    </ul>
+
+    <h3><span class="dot d" style="display:inline-block;vertical-align:middle;margin-right:0.4rem;"></span>New: <code>meko-agent</code> binary + install chart</h3>
+    <ul>
+      <li>New Go binary in the monorepo; reuses the dynamic k8s client already written in <code>api_server/internal/k8s/client.go</code>.</li>
+      <li>Ships as a <strong>Helm chart in the <code>meko-devops</code> repo</strong> (where the existing deployment charts live), plus a single-command install script. The chart bundles the agent, the CRD, and the operator so a customer installs one thing.</li>
+      <li>Does: enroll, poll desired state, apply manifests (CRD, operator, ingress, secret scaffold), author <code>MekoUserAccount</code> CRs, report status, self-update.</li>
+    </ul>
+
+    <h3>Networking &amp; secrets</h3>
+    <ul>
+      <li><strong>All cross-plane traffic is customer→control-plane, outbound, over mTLS.</strong> The customer's egress allowlist needs only the control-plane FQDN.</li>
+      <li><strong>MCP ingress stays in the customer cluster</strong> — the existing wildcard nginx proxy (<code>meko-provisioner/config/proxy/</code>) routes <code>*.mcp.&lt;customer-domain&gt;</code> to <code>mcp-server.tenant-&lt;id&gt;</code>. The control plane stores each environment's <code>mcp_base_url</code>.</li>
+      <li><strong>Data-plane secrets are customer-owned.</strong> <code>meko-shared-credentials</code> and per-tenant secrets are populated from the customer's secret manager (installer prompts, External Secrets Operator, Vault, Sealed Secrets) — never shipped from the control plane.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">09</span> Metrics &amp; observability — Thanos</h2>
+    <hr class="rule" />
+    <p>
+      Observability flows <strong>outbound only</strong>, like everything else, and lands in <strong>Thanos</strong>
+      on the cloud side. The split is clean:
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Path</th><th>How it travels</th><th>Where it lands</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="chip ok">Time-series metrics</span></td>
+            <td>In-cluster <strong>Prometheus</strong> scrapes MCP / RAG / operator / nodes → <strong>remote-write</strong>, outbound, mTLS</td>
+            <td><strong>Thanos Receive</strong> → object store → <strong>Thanos Query</strong> gives MCCP one global view. Customer's own Prometheus keeps a local copy.</td>
+          </tr>
+          <tr>
+            <td><span class="chip info">Control signals</span></td>
+            <td><code>POST /agent/status</code> (§5)</td>
+            <td>Fleet registry — heartbeat freshness, env state, reconcile lag, enrollment outcomes. Drives the §7 state machine.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout data">
+      <strong>Privacy line.</strong> Only counts, rates, latencies, and resource utilization leave the customer
+      cloud — never memory text, embeddings, query contents, or PII. A metric <strong>label allowlist</strong> is
+      enforced at the Prometheus remote-write egress (env id, datapack id, region, workload — nothing
+      high-cardinality or user-derived).
+    </div>
+    <p><strong>What Thanos holds</strong> (per datapack / environment): MCP request rate, p50/p95 latency, error rate; RAG indexing throughput &amp; queue depth; YugabyteDB connection health &amp; slot utilization; workload CPU/mem vs. limits; token burn.</p>
+    <ul>
+      <li><strong>Reuse.</strong> <code>meko_admin</code> already serves a usage-metrics dashboard and a <em>Token Burn efficiency</em> tile through <code>api_server</code>. In BYOC it queries <strong>Thanos</strong> for the fleet aggregate instead of reading tenant databases directly (which now live in the customer cloud, unreachable from MCCP).</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">10</span> Executive dashboard — observability in the cloud</h2>
+    <hr class="rule" />
+    <p>
+      The metrics from §9 surface in MCCP as a <strong>true executive dashboard</strong>: one cloud view across
+      the entire fleet, aimed at leadership and account owners rather than on-call engineers. It answers
+      <em>"how is Meko doing across every customer, right now and over time?"</em> — without anyone touching a
+      customer cluster.
+    </p>
+    <ul>
+      <li><strong>Where it lives.</strong> Served by MCCP, rendered in <code>meko_ui</code> / <code>meko_admin</code>, behind Aeon OIDC (§4). Queries <strong>Thanos</strong> (§9) for the fleet aggregate and the fleet registry for state — never raw customer data.</li>
+      <li><strong>Drill-down boundary.</strong> Trace-level detail (individual Langfuse traces, memory contents) stays in the customer cloud; the dashboard shows aggregates and links out to the in-cloud Observe UI.</li>
+      <li><strong>Design.</strong> Summary tiles first, then trends; state encoded as color <strong>and</strong> label; every figure fleet-aggregated and privacy-safe.</li>
+    </ul>
+
+    <div class="dash" role="img" aria-label="Mock of the MCCP executive dashboard: KPI tiles, MCP request trend, environments by state, and a fleet table.">
+      <div class="dash-chrome">
+        <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="addr">cloud.mekodata.ai / fleet</span>
+      </div>
+      <div class="dash-body">
+        <div class="dash-h"><strong>Fleet overview</strong><span>47 environments · last 30 days</span></div>
+
+        <div class="kpi-row">
+          <div class="kpi"><span class="k-label">Active environments</span><span class="k-val">44<small> / 47</small></span><span class="k-delta up">+3 this month</span></div>
+          <div class="kpi"><span class="k-label">Datapacks</span><span class="k-val">1,208</span><span class="k-delta up">▲ 9.4%</span></div>
+          <div class="kpi"><span class="k-label">MCP requests / day</span><span class="k-val">262<small>k</small></span><span class="k-delta up">▲ 12%</span></div>
+          <div class="kpi"><span class="k-label">Token burn / day</span><span class="k-val">$1,940</span><span class="k-delta flat">≈ flat</span></div>
+          <div class="kpi"><span class="k-label">Fleet uptime</span><span class="k-val">99.95<small>%</small></span><span class="k-delta up">SLO 99.9%</span></div>
+        </div>
+
+        <div class="dash-2">
+          <div class="panel">
+            <div class="p-title"><span>MCP requests / day</span><b>262k peak</b></div>
+            <svg class="chart" viewBox="0 0 520 160" preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#3a6df0" stop-opacity="0.24"/>
+                  <stop offset="100%" stop-color="#3a6df0" stop-opacity="0.02"/>
+                </linearGradient>
+              </defs>
+              <line class="grid-line" x1="20" y1="20"  x2="500" y2="20"/>
+              <line class="grid-line" x1="20" y1="80"  x2="500" y2="80"/>
+              <line class="grid-line" x1="20" y1="140" x2="500" y2="140"/>
+              <path fill="url(#areaFill)" d="M20,140 L56.9,127.3 L93.8,133.2 L130.8,114.6 L167.7,104.5 L204.6,107.9 L241.5,93.5 L278.5,80.9 L315.4,85.1 L352.3,68.2 L389.2,55.5 L426.2,59.7 L463.1,38.6 L500,20 L500,140 L20,140 Z"/>
+              <path class="area-line" d="M20,140 L56.9,127.3 L93.8,133.2 L130.8,114.6 L167.7,104.5 L204.6,107.9 L241.5,93.5 L278.5,80.9 L315.4,85.1 L352.3,68.2 L389.2,55.5 L426.2,59.7 L463.1,38.6 L500,20"/>
+              <circle class="area-end" cx="500" cy="20" r="4.5"/>
+              <text class="x-lab" x="20" y="155">30d ago</text>
+              <text class="x-lab" x="470" y="155">today</text>
+            </svg>
+          </div>
+          <div class="panel">
+            <div class="p-title"><span>Environments by state</span><b>§7</b></div>
+            <div class="statebars">
+              <div class="statebar"><span class="s-name">READY</span><span class="track"><span class="fill ok" style="width:87%"></span></span><span class="s-num">41</span></div>
+              <div class="statebar"><span class="s-name">DEGRADED</span><span class="track"><span class="fill warn" style="width:14%"></span></span><span class="s-num">3</span></div>
+              <div class="statebar"><span class="s-name">PROVISIONING</span><span class="track"><span class="fill mute" style="width:9%"></span></span><span class="s-num">2</span></div>
+              <div class="statebar"><span class="s-name">SUSPENDED</span><span class="track"><span class="fill crit" style="width:5%"></span></span><span class="s-num">1</span></div>
+            </div>
+            <div class="p-title" style="margin-top:1rem;"><span>Residency posture</span></div>
+            <div class="statebars">
+              <div class="statebar"><span class="s-name">Cloud (Aeon)</span><span class="track"><span class="fill ok" style="width:70%"></span></span><span class="s-num">33</span></div>
+              <div class="statebar"><span class="s-name">On-prem</span><span class="track"><span class="fill ok" style="width:30%"></span></span><span class="s-num">14</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="p-title"><span>Environments</span><b>drill-down → in-cloud Observe</b></div>
+          <div class="tablewrap" style="margin:0;border:0;">
+            <table>
+              <thead><tr><th>Environment</th><th>Region</th><th>State</th><th>Datapacks</th><th>Capacity</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">acme-prod</td><td>us-east-1</td><td><span class="chip ok">READY</span></td><td style="font-variant-numeric:tabular-nums;">312</td><td><span class="util"><span class="track"><span class="fill" style="width:78%"></span></span><span>78%</span></span></td></tr>
+                <tr><td class="mono">globex-eu</td><td>eu-west-1</td><td><span class="chip ok">READY</span></td><td style="font-variant-numeric:tabular-nums;">204</td><td><span class="util"><span class="track"><span class="fill" style="width:61%"></span></span><span>61%</span></span></td></tr>
+                <tr><td class="mono">initech-onprem</td><td>on-prem / dc-1</td><td><span class="chip warn">DEGRADED</span></td><td style="font-variant-numeric:tabular-nums;">88</td><td><span class="util"><span class="track"><span class="fill" style="width:44%"></span></span><span>44%</span></span></td></tr>
+                <tr><td class="mono">umbrella-dev</td><td>us-west-2</td><td><span class="chip info">PROVISIONING</span></td><td style="font-variant-numeric:tabular-nums;">—</td><td><span class="util"><span class="track"><span class="fill" style="width:6%"></span></span><span>—</span></span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption style="font-family:ui-monospace,monospace;font-size:0.72rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-faint);text-align:center;">Fleet rollup · illustrative mock · figures are placeholders</figcaption>
+
+    <h3 style="margin-top:2.25rem;">Per-environment view — Platform Operations</h3>
+    <p>
+      Drilling into any environment opens a <strong>Platform Operations</strong> panel — one per registered
+      cluster, in the amp control-plane style. It renders that cluster's own telemetry: the same
+      Prometheus → Thanos pipeline (§9) runs inside the customer cluster and streams outbound; MCCP renders one
+      of these panels per environment from its Thanos series. Headline metrics roll the pipeline up to the few
+      numbers an operator tracks — is it up, how much is it carrying, is it healthy.
+    </p>
+
+    <div class="amp" role="img" aria-label="Mock of the per-environment Platform Operations panel: status header, headline KPI tiles, Meko service fleet, trend charts, and reliability signals for one cluster.">
+      <div class="amp-top">
+        <div class="amp-glyph">M</div>
+        <div class="amp-title">Meko · Platform Operations<small>environment: acme-prod — data-plane view</small></div>
+        <span class="amp-status"><span class="d"></span>Operational · 99.98%</span>
+        <span class="amp-chip">env <b>acme-prod</b> · EKS · us-east-1</span>
+        <span class="amp-chip">src <b>Thanos</b> · trailing 24h</span>
+      </div>
+      <div class="amp-body">
+
+        <div class="amp-sh"><h4>Headline metrics</h4><span class="r"></span><span class="n">trailing 24h</span></div>
+        <div class="amp-kpis">
+          <div class="amp-tile good">
+            <div class="l">Availability · 24h</div>
+            <div class="v">99.98<span class="u">%</span></div>
+            <div class="f"><span class="gd"></span>no downtime across 312 datapacks</div>
+          </div>
+          <div class="amp-tile">
+            <div class="l">MCP requests / sec</div>
+            <div class="v">3,048</div>
+            <div class="f"><span class="dl">+11% / 24h</span></div>
+            <svg class="sp" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,34 L40,30 L80,32 L120,20 L160,12 L200,6" fill="none" stroke="#3a6df0" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="amp-tile good">
+            <div class="l">Core services healthy</div>
+            <div class="v">7<span class="u">/ 7</span></div>
+            <div class="f"><span class="gd"></span>agent, operator, MCP, RAG, YB, Langfuse</div>
+          </div>
+          <div class="amp-tile">
+            <div class="l">Active MCP servers</div>
+            <div class="v">312</div>
+            <div class="f"><span class="dl">+4 / 24h</span>per-datapack</div>
+            <svg class="sp" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,36 L50,30 L100,24 L150,16 L200,8" fill="none" stroke="#3a6df0" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="amp-tile">
+            <div class="l">Managed datapacks</div>
+            <div class="v">312</div>
+            <div class="f"><span class="dl">+9 / 24h</span></div>
+            <svg class="sp" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,34 L50,31 L100,26 L150,20 L200,12" fill="none" stroke="#3a6df0" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="amp-tile">
+            <div class="l">Memory under mgmt</div>
+            <div class="v">1.24<span class="u">TB</span></div>
+            <div class="f"><span class="dl">+38 GB / 24h</span></div>
+            <svg class="sp" viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M0,30 L40,28 L80,25 L120,22 L160,18 L200,14" fill="none" stroke="#3a6df0" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>
+          </div>
+        </div>
+
+        <div class="amp-sh"><h4>Service fleet</h4><span class="r"></span><span class="n">54 / 54 targets healthy</span></div>
+        <div class="amp-fleet">
+          <div class="amp-svc"><span class="sd"></span><div class="g"><div class="nm">meko-agent</div><div class="ro">Pull agent · desired-state + status</div></div><span class="ct">1/1 up</span></div>
+          <div class="amp-svc"><span class="sd"></span><div class="g"><div class="nm">meko-provisioner</div><div class="ro">Operator · tenant reconcile</div></div><span class="ct">1/1 up</span></div>
+          <div class="amp-svc"><span class="sd"></span><div class="g"><div class="nm">mcp-server</div><div class="ro">Per-datapack MCP endpoints</div></div><span class="ct">312/312 up</span></div>
+          <div class="amp-svc"><span class="sd"></span><div class="g"><div class="nm">rag-worker</div><div class="ro">RAG indexing / embeddings</div></div><span class="ct">24/24 up</span></div>
+          <div class="amp-svc"><span class="sd"></span><div class="g"><div class="nm">yb-tserver</div><div class="ro">YugabyteDB storage (Aeon)</div></div><span class="ct">6/6 up</span></div>
+          <div class="amp-svc"><span class="sd"></span><div class="g"><div class="nm">yb-master</div><div class="ro">YugabyteDB coordination</div></div><span class="ct">3/3 up</span></div>
+          <div class="amp-svc"><span class="sd"></span><div class="g"><div class="nm">langfuse</div><div class="ro">In-cloud observability</div></div><span class="ct">2/2 up</span></div>
+          <div class="amp-svc"><span class="sd"></span><div class="g"><div class="nm">prometheus</div><div class="ro">Telemetry → Thanos remote-write</div></div><span class="ct">1/1 up</span></div>
+        </div>
+
+        <div class="amp-sh"><h4>Trends</h4><span class="r"></span><span class="n">24h · 10-min resolution</span></div>
+        <div class="amp-charts">
+          <div class="amp-card">
+            <div class="ch"><span class="t">MCP requests / sec</span><span class="now">3,048<span class="u"> rps</span></span></div>
+            <div class="cap">tool calls across all datapacks</div>
+            <svg class="plot" viewBox="0 0 680 172" preserveAspectRatio="none">
+              <line class="grid-line" x1="0" y1="40" x2="680" y2="40"/><line class="grid-line" x1="0" y1="101" x2="680" y2="101"/><line class="grid-line" x1="0" y1="162" x2="680" y2="162"/>
+              <path fill="url(#areaFill)" d="M2,150 L63.5,150 L125,148 L186.4,120 L247.8,118 L309.3,70 L370.7,45 L432.2,42 L493.6,44 L555.1,41 L616.5,43 L678,40 L678,162 L2,162 Z"/>
+              <path class="area-line" d="M2,150 L63.5,150 L125,148 L186.4,120 L247.8,118 L309.3,70 L370.7,45 L432.2,42 L493.6,44 L555.1,41 L616.5,43 L678,40"/>
+            </svg>
+            <div class="amp-xax"><span>24h ago</span><span>12h</span><span>now</span></div>
+          </div>
+          <div class="amp-card">
+            <div class="ch"><span class="t">Active datapacks</span><span class="now">312</span></div>
+            <div class="cap">provisioned + serving</div>
+            <svg class="plot" viewBox="0 0 680 172" preserveAspectRatio="none">
+              <line class="grid-line" x1="0" y1="40" x2="680" y2="40"/><line class="grid-line" x1="0" y1="101" x2="680" y2="101"/><line class="grid-line" x1="0" y1="162" x2="680" y2="162"/>
+              <path fill="url(#areaFill)" d="M2,150 L125,150 L125,130 L309,130 L309,90 L493,90 L493,60 L678,60 L678,162 L2,162 Z"/>
+              <path class="area-line" d="M2,150 L125,150 L125,130 L309,130 L309,90 L493,90 L493,60 L678,60"/>
+            </svg>
+            <div class="amp-xax"><span>24h ago</span><span>12h</span><span>now</span></div>
+          </div>
+          <div class="amp-card">
+            <div class="ch"><span class="t">RAG indexing throughput</span><span class="now">1,860<span class="u"> chunks/s</span></span></div>
+            <div class="cap">embeddings written to dist_rag</div>
+            <svg class="plot" viewBox="0 0 680 172" preserveAspectRatio="none">
+              <line class="grid-line" x1="0" y1="40" x2="680" y2="40"/><line class="grid-line" x1="0" y1="101" x2="680" y2="101"/><line class="grid-line" x1="0" y1="162" x2="680" y2="162"/>
+              <path fill="url(#areaFill)" d="M2,100 L63.5,78 L125,92 L186.4,66 L247.8,84 L309.3,60 L370.7,80 L432.2,64 L493.6,86 L555.1,68 L616.5,82 L678,72 L678,162 L2,162 Z"/>
+              <path class="area-line" d="M2,100 L63.5,78 L125,92 L186.4,66 L247.8,84 L309.3,60 L370.7,80 L432.2,64 L493.6,86 L555.1,68 L616.5,82 L678,72"/>
+            </svg>
+            <div class="amp-xax"><span>24h ago</span><span>12h</span><span>now</span></div>
+          </div>
+          <div class="amp-card">
+            <div class="ch"><span class="t">Token burn</span><span class="now">$1,940<span class="u"> / day</span></span></div>
+            <div class="cap">LLM + embedding spend, this cluster</div>
+            <svg class="plot" viewBox="0 0 680 172" preserveAspectRatio="none">
+              <line class="grid-line" x1="0" y1="40" x2="680" y2="40"/><line class="grid-line" x1="0" y1="101" x2="680" y2="101"/><line class="grid-line" x1="0" y1="162" x2="680" y2="162"/>
+              <path fill="url(#areaFill)" d="M2,140 L63.5,133 L125,129 L186.4,121 L247.8,116 L309.3,109 L370.7,101 L432.2,97 L493.6,89 L555.1,83 L616.5,79 L678,71 L678,162 L2,162 Z"/>
+              <path class="area-line" d="M2,140 L63.5,133 L125,129 L186.4,121 L247.8,116 L309.3,109 L370.7,101 L432.2,97 L493.6,89 L555.1,83 L616.5,79 L678,71"/>
+            </svg>
+            <div class="amp-xax"><span>24h ago</span><span>12h</span><span>now</span></div>
+          </div>
+        </div>
+
+        <div class="amp-sh"><h4>Reliability signals</h4><span class="r"></span><span class="n">all nominal</span></div>
+        <div class="amp-rel">
+          <div class="amp-relc"><span class="rl">Reconcile lag</span><span class="rv">1.2s</span><span class="rok"><span class="gd"></span>desired → applied</span></div>
+          <div class="amp-relc"><span class="rl">Heartbeat</span><span class="rv">8s ago</span><span class="rok"><span class="gd"></span>fresh</span></div>
+          <div class="amp-relc"><span class="rl">MCP p95 latency</span><span class="rv">42ms</span><span class="rok"><span class="gd"></span>under SLO</span></div>
+          <div class="amp-relc"><span class="rl">Error rate</span><span class="rv">0.02%</span><span class="rok"><span class="gd"></span>nominal</span></div>
+        </div>
+
+      </div>
+    </div>
+    <figcaption style="font-family:ui-monospace,monospace;font-size:0.72rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-faint);text-align:center;">Per-environment drill-down · amp-style · illustrative mock</figcaption>
+  </section>
+
+  <section>
+    <h2><span class="num">11</span> SaaS today vs BYOC</h2>
+    <hr class="rule" />
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Dimension</th><th>SaaS today</th><th>BYOC</th></tr></thead>
+        <tbody>
+          <tr><td>Human authentication</td><td>Cognito</td><td>OIDC relying party of YBM Aeon (cloud or on-prem)</td></tr>
+          <tr><td>Cloud footprint</td><td>Single Meko cloud deploy</td><td>MCCP inside the YBM Aeon VPC</td></tr>
+          <tr><td>Where customer data lives</td><td>Meko-owned shared YugabyteDB universes</td><td>Customer-owned YugabyteDB (YBM Aeon)</td></tr>
+          <tr><td>Who runs MCP/RAG workloads</td><td>Meko</td><td>Customer cluster</td></tr>
+          <tr><td>Who drives the operator</td><td>Nobody — <code>api_server</code> CR client is dormant</td><td>The agent, in the customer cluster</td></tr>
+          <tr><td>Cross-plane connection</td><td>n/a (single plane)</td><td>Agent, outbound-only, mTLS</td></tr>
+          <tr><td>Secrets custody</td><td>Meko</td><td>Customer</td></tr>
+          <tr><td>Billing</td><td>Stripe in api_server</td><td>Upstream in YBM Aeon; MCCP reads entitlements</td></tr>
+          <tr><td>Observability</td><td>Direct DB / Langfuse reads</td><td>Prometheus → Thanos (cloud); Langfuse in-cloud</td></tr>
+          <tr><td><code>MekoUserAccount</code> CRs authored by</td><td>(Intended for api_server; unused)</td><td><code>meko-agent</code></td></tr>
+          <tr><td>Onboarding</td><td>Instant (row insert)</td><td>Enrollment state machine (§7)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      SaaS is modeled as the degenerate BYOC case where the environment is Meko-owned — keeping one code path.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">12</span> Rollout phases</h2>
+    <hr class="rule" />
+    <ol>
+      <li><strong>Aeon OIDC auth</strong> — make the control plane an OIDC relying party of YBM Aeon; retire Cognito. Verify against both cloud and on-prem Aeon issuers.</li>
+      <li><strong>Fleet registry + agent API</strong> — add <code>environments</code> table and the three agent endpoints behind <code>-control-plane-mode</code>; no behavior change for SaaS.</li>
+      <li><strong>meko-agent MVP</strong> — enroll + poll + author CRs against a <em>Meko-owned</em> test cluster; package the install chart in <code>meko-devops</code>.</li>
+      <li><strong>Bootstrapping — attach mode</strong> — installer chart, attestation, smoke-check validation, health/heartbeat against an existing customer cluster.</li>
+      <li><strong>Bootstrapping — provision mode</strong> — <code>meko bootstrap</code> stands up a <em>new</em> K8s cluster (Aeon cluster API / <code>eksctl</code> / Terraform) then installs; live progress via <code>bootstrap-progress</code>.</li>
+      <li><strong>Observability + executive dashboard</strong> — in-cluster Prometheus remote-writes to a cloud Thanos; build the executive dashboard (§10) on Thanos Query; repoint <code>meko_admin</code> off tenant DBs.</li>
+      <li><strong>Customer secret custody</strong> — stop shipping <code>YugabyteDBPassword</code> in specs; agent injects from customer secret store.</li>
+      <li><strong>Langfuse in the data plane</strong> — agent provisions org/project/keys against the in-cloud Langfuse locally; MCCP drops all Langfuse admin access.</li>
+      <li><strong>GA</strong> — first external customer environment reaches <span class="chip ok">READY</span>.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2><span class="num">13</span> Open questions</h2>
+    <hr class="rule" />
+    <ul>
+      <li><strong>Upgrades:</strong> control-plane-driven (desired version) vs customer-approved maintenance windows? Enterprise customers usually want the latter.</li>
+      <li><strong>Central-Langfuse fallback:</strong> is it worth supporting at all, or is in-cloud Langfuse a hard requirement for BYOC? The fallback reintroduces an MCCP→Langfuse path for those tenants and complicates the residency story (§3).</li>
+      <li><strong>Break-glass:</strong> if an environment is <span class="chip warn">DEGRADED</span> and the customer needs help, what read-only diagnostic path exists without violating "no inbound access"? (Likely: agent-collected diagnostics pushed out on request.)</li>
+      <li><strong>Multi-region / multi-cluster</strong> per account: one environment per cluster, or can one account span several <span class="chip ok">READY</span> environments with datapacks placed across them?</li>
+    </ul>
+  </section>
+
+</div>
+
+<footer>
+  Meko BYOC Control Plane · design draft · grounded in the current repo
+  (<span class="mono">meko-provisioner</span>, <span class="mono">api_server</span>).
+  Companion markdown: <span class="mono">design/byoc-control-plane.md</span>.
+</footer>

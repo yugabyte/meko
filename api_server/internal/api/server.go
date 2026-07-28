@@ -123,6 +123,11 @@ type ServerConfig struct {
 	// controller endpoint itself is NOT configured here — an admin registers
 	// it at runtime (meko_system.amp_registration, via POST /amp/registration).
 	ShowPGAMP bool
+
+	// ControlPlaneMode gates the MCCP fleet registry + agent API (BYOC control
+	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*
+	// are registered against meko_system.environments.
+	ControlPlaneMode bool
 }
 
 // defaultMCPPATFlushInterval is the fallback flush cadence used when
