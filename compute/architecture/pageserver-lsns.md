@@ -9,7 +9,7 @@ and the controller schema
 **System framing.** Durability and resilience come from YugabyteDB, the
 underlying store. The pageserver holds page data in an in-RAM buffer until a
 flush lands it in the YB tables `amp_storage.pages` / `amp_storage.slru_pages` /
-`amp_storage.meta`; the per-branch `amp_storage.pageserver_branch_state` row records how
+`amp_storage.meta`; the per-branch `amp_storage.branch_state` row records how
 far that durable state extends. Local process memory is never a durability
 claim.
 
@@ -124,7 +124,7 @@ re-streamed and re-ingested idempotently.
 - In memory: `RecordLsn.prev` inside `last_record_lsn`, and the
   `PageWriter.record_lsn_history` map (`BTreeMap<Lsn, Lsn>` of
   `last → prev`).
-- Persisted: `amp_storage.pageserver_branch_state.prev_record_lsn` (nullable column).
+- Persisted: `amp_storage.branch_state.prev_record_lsn` (nullable column).
 
 **Advances:** Each `finish_write` inserts the `(last → prev)` pair via
 `note_record_lsn`. At flush time, `take_prev_at_or_below(flushed_lsn)` pulls
@@ -145,7 +145,7 @@ continuity from the stream.
 ### `consistent_lsn` — durable, gap-free
 
 **Where:**
-- Source of truth: `amp_storage.pageserver_branch_state.consistent_lsn` (YB column,
+- Source of truth: `amp_storage.branch_state.consistent_lsn` (YB column,
   NOT NULL).
 - In-memory slot: `Timeline.remote_state.consistent_lsn: Arc<AtomicLsn>`
   (`compute/pageserver/src/page_server/timeline/remote_state.rs`).
@@ -580,6 +580,6 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 - `compute/safekeeper/src/send_wal.rs` — feedback intake,
   `update_remote_consistent_lsn`.
 - `controller/migrations/0002_compute_storage.up.sql` —
-  `amp_storage.pageserver_branch_state` schema.
+  `amp_storage.branch_state` schema.
 - [`safekeeper-lsns.md`](safekeeper-lsns.md) — the safekeeper side of the
   replication link.

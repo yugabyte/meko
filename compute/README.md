@@ -104,7 +104,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   (`min/max LSN, total_bytes, gap_bytes`) — the fastest way to spot a WAL
   hole during an incident.
 - [`yb-reset-consistent-lsn`](tools/src/bin/yb-reset-consistent-lsn.rs)
-  — find (and optionally rewind) `amp_storage.pageserver_branch_state.consistent_lsn`
+  — find (and optionally rewind) `amp_storage.branch_state.consistent_lsn`
   to a real WAL record boundary. Given `--tenant --timeline --target-lsn
   X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder
   over `amp_storage.wals`, and reports the largest record boundary `<= target`

@@ -1,9 +1,8 @@
 -- 0002 down: drop the compute-facing (data-plane) schema of `yb_storage`.
 
 DROP TABLE IF EXISTS amp_storage.wals;
-DROP TABLE IF EXISTS amp_storage.safekeeper_branch_state;
 DROP TABLE IF EXISTS amp_storage.pending_gc;
-DROP TABLE IF EXISTS amp_storage.pageserver_branch_state;
+DROP TABLE IF EXISTS amp_storage.branch_state;
 DROP TABLE IF EXISTS amp_storage.meta;
 DROP TABLE IF EXISTS amp_storage.slru_pages;
 DROP TABLE IF EXISTS amp_storage.pages;

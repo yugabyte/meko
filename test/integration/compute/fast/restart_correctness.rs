@@ -1,6 +1,6 @@
 //! prev_record_lsn restart fix: write data, gracefully stop the
 //! endpoint then the pageserver, confirm `prev_record_lsn` was persisted
-//! (non-NULL) in `amp_storage.pageserver_branch_state`, restart, and verify the
+//! (non-NULL) in `amp_storage.branch_state`, restart, and verify the
 //! data reads back intact. Without the fix the column stays NULL forever
 //! (or is read and discarded), leaving the walreceiver to guess `prev`
 //! on restart — historically a corruption-class incident.
@@ -37,7 +37,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let prev = db::query_text_opt(
         &yb,
         &format!(
-            "SELECT prev_record_lsn::text FROM amp_storage.pageserver_branch_state WHERE branch_id = '{branch}'"
+            "SELECT prev_record_lsn::text FROM amp_storage.branch_state WHERE branch_id = '{branch}'"
         ),
     )
     .await?;

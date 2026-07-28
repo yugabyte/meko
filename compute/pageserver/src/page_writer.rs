@@ -264,7 +264,7 @@ pub struct PageWriter {
     /// [`GcTrimCandidateEmitter`].
     gc_trim_candidate_emitter: Option<Arc<GcTrimCandidateEmitter>>,
     /// Highest LSN successfully reported as durable to
-    /// `amp_storage.pageserver_branch_state.consistent_lsn`. Advances only
+    /// `amp_storage.branch_state.consistent_lsn`. Advances only
     /// after `try_write_rows` succeeds AND the subsequent
     /// `advance_consistent_lsn` succeeds. Initialised to 0 at
     /// construction; attach seeds it from the persisted row.
@@ -546,7 +546,7 @@ impl PageWriter {
 
     /// Bump the safekeeper-truncation slot. Called from the gen-gated
     /// flush success path; the value is already durable in YB
-    /// (`amp_storage.pageserver_branch_state.consistent_lsn`) so the
+    /// (`amp_storage.branch_state.consistent_lsn`) so the
     /// advertise can't lie. No-op if the slot hasn't been installed
     /// yet (init race / smoke tests).
     fn publish_consistent_lsn(&self, lsn: utils::lsn::Lsn) {
@@ -1834,7 +1834,7 @@ impl PageWriter {
             self.flush_completed.notify_waiters();
 
             // Outside the writer lock: persist the dc_lsn advance to
-            // `amp_storage.pageserver_branch_state` if (a) it actually moved AND
+            // `amp_storage.branch_state` if (a) it actually moved AND
             // (b) at least `policy.max_age` has elapsed since the last
             // upsert. The throttle decouples the YB UPDATE rate from
             // the page-data flush rate — a burst of size-triggered
@@ -3898,7 +3898,7 @@ mod tests {
     async fn watermarks_capped_at_ingest_frontier() {
         let (store, schema) = make_store("frontier_cap").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t).await;
+        seed_branch_state_row(&store, t).await;
 
         let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
         w.set_consistent_lsn_slot(slot.clone());
@@ -4037,20 +4037,28 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// Helper: insert a `pageserver_branch_state` row with `current_generation = 1`
+    /// Helper: populate a `branch_state` row with `current_generation = 1`
     /// matching the generation used by the `writer` helper. Required
     /// for any test that wants `PageWriter::flush` to land its
     /// generation-gated `advance_consistent_lsn` UPDATE.
-    async fn seed_timeline_row(store: &PageStore, branch: BranchId) {
+    async fn seed_branch_state_row(store: &PageStore, branch: BranchId) {
+        // The controller provisions the row at branch create; tests stand in
+        // for it before the pageserver fills in its own column group. That
+        // provisioning is what sets `pg_version` — the row below carries it
+        // only to match, since the pageserver never writes that column.
         store
-            .insert_timeline_at_creation(&crate::page_store::TimelineRow {
+            .provision_branch_row_for_test(branch, 180_002)
+            .await
+            .unwrap();
+        store
+            .update_branch_initial_state(&crate::page_store::BranchStateRow {
                 branch_id: branch,
                 consistent_lsn: Lsn(0),
                 applied_gc_cutoff_lsn: Lsn(0),
                 ancestor_branch_id: None,
                 ancestor_lsn: None,
                 current_generation: 1,
-                pg_version: 18,
+                pg_version: 180_002,
                 initdb_lsn: None,
                 prev_record_lsn: None,
                 archived_at: None,
@@ -4067,7 +4075,7 @@ mod tests {
     /// number of `put()` calls. It only advances inside the flush
     /// success path, AFTER `try_write_rows` has landed the rows in YB
     /// AND the gen-fenced `advance_consistent_lsn` UPSERT has updated
-    /// `pageserver_branch_state`. Wiring a buffer-write to the slot would
+    /// `timeline_state`. Wiring a buffer-write to the slot would
     /// reintroduce the 2026-06 gap-on-crash bug: SK feedback /
     /// restart-resume would see an LSN whose rows aren't actually in
     /// `amp_storage.pages`.
@@ -4075,7 +4083,7 @@ mod tests {
     async fn put_alone_does_not_advance_consistent_lsn_slot() {
         let (store, schema) = make_store("clsn_slot_no_advance_on_put").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t).await;
+        seed_branch_state_row(&store, t).await;
 
         let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
         w.set_consistent_lsn_slot(slot.clone());
@@ -4119,7 +4127,7 @@ mod tests {
     async fn flush_publishes_remote_consistent_lsn() {
         let (store, schema) = make_store("rclsn_publish").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t).await;
+        seed_branch_state_row(&store, t).await;
 
         let slot = Arc::new(utils::lsn::AtomicLsn::new(0));
         w.set_consistent_lsn_slot(slot.clone());
@@ -4224,14 +4232,14 @@ mod tests {
 
     /// End-to-end: walreceiver-style flow notes record_lsn after a
     /// put + flush, the throttled `advance_consistent_lsn` runs,
-    /// and the persisted `pageserver_branch_state.prev_record_lsn` reflects
+    /// and the persisted `timeline_state.prev_record_lsn` reflects
     /// the noted prev. Restart correctness depends on this column
     /// being non-NULL; the previous shape never wrote it.
     #[tokio::test]
     async fn flush_persists_prev_record_lsn_when_noted() {
         let (store, schema) = make_store("flush_persists_prev").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t).await;
+        seed_branch_state_row(&store, t).await;
 
         // Simulate `Timeline::finish_write(Lsn(42))` for the record
         // whose pages we're about to flush.
@@ -4240,7 +4248,7 @@ mod tests {
         w.put(&[(k(1), Lsn(42), image())]).await.unwrap();
         w.flush().await.unwrap();
 
-        let row = store.get_timeline(t).await.unwrap().unwrap();
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
         assert_eq!(row.consistent_lsn, Lsn(42));
         assert_eq!(
             row.prev_record_lsn,
@@ -4261,14 +4269,14 @@ mod tests {
     async fn flush_without_noted_record_does_not_advance_consistent_lsn() {
         let (store, schema) = make_store("flush_null_prev").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t).await;
-        let seeded = store.get_timeline(t).await.unwrap().unwrap();
+        seed_branch_state_row(&store, t).await;
+        let seeded = store.get_branch_state(t).await.unwrap().unwrap();
 
         // Deliberately skip note_record_lsn.
         w.put(&[(k(1), Lsn(42), image())]).await.unwrap();
         w.flush().await.unwrap();
 
-        let row = store.get_timeline(t).await.unwrap().unwrap();
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
         assert_eq!(
             row.consistent_lsn, seeded.consistent_lsn,
             "no noted record => no frontier => checkpoint must not move"
@@ -4288,14 +4296,14 @@ mod tests {
         use utils::generation::Generation;
         let (store, schema) = make_store("flush_preserve_prev").await;
         let (_w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t).await;
+        seed_branch_state_row(&store, t).await;
 
         // First advance with a real prev.
         store
             .advance_consistent_lsn(t, Generation::new(1), Lsn(0x200), Some(Lsn(0x180)))
             .await
             .unwrap();
-        let row = store.get_timeline(t).await.unwrap().unwrap();
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
         assert_eq!(row.prev_record_lsn, Some(Lsn(0x180)));
 
         // Second advance with no pairing (None). dc_lsn moves forward
@@ -4304,7 +4312,7 @@ mod tests {
             .advance_consistent_lsn(t, Generation::new(1), Lsn(0x300), None)
             .await
             .unwrap();
-        let row = store.get_timeline(t).await.unwrap().unwrap();
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
         assert_eq!(row.consistent_lsn, Lsn(0x300));
         assert_eq!(
             row.prev_record_lsn,
@@ -4326,7 +4334,7 @@ mod tests {
 
         let (store, schema) = make_store("stale_gen_shutdown").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t).await;
+        seed_branch_state_row(&store, t).await;
         // Bump the persisted generation past the writer's gen=1.
         store.bump_generation(t).await.unwrap(); // now 2
         store.bump_generation(t).await.unwrap(); // now 3
@@ -4370,7 +4378,7 @@ mod tests {
     /// Documents the contract the `pgdatadir_mapping::put_rel_creation`
     /// idempotency check leans on: within a `policy.max_age` window
     /// of back-to-back flushes, `amp_storage.pages` rows are durable
-    /// at LSN X while `amp_storage.pageserver_branch_state.consistent_lsn`
+    /// at LSN X while `amp_storage.branch_state.consistent_lsn`
     /// still reads X' < X. This lag is intentional — the throttle
     /// keeps a single hot table row from absorbing one UPSERT per
     /// flush — but it means a `kill -9` mid-window leaves the next
@@ -4387,17 +4395,17 @@ mod tests {
 
         let (store, schema) = make_store("clsn_lag_expected").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_timeline_row(&store, t).await;
+        seed_branch_state_row(&store, t).await;
 
         // First flush: the first upsert always goes through.
         w.put(&[(k(1), Lsn(0x100), image())]).await.unwrap();
         w.note_record_lsn(Lsn(0x100), Lsn(0x80));
         w.flush().await.unwrap();
-        let row = store.get_timeline(t).await.unwrap().unwrap();
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
         assert_eq!(row.consistent_lsn, Lsn(0x100));
 
         // Second flush within `policy.max_age`: pages durable, the
-        // pageserver_branch_state UPDATE is throttled.
+        // timeline_state UPDATE is throttled.
         w.put(&[(k(2), Lsn(0x200), image())]).await.unwrap();
         w.note_record_lsn(Lsn(0x200), Lsn(0x100));
         w.flush().await.unwrap();
@@ -4422,7 +4430,7 @@ mod tests {
         // design. The replay window between this LSN and the actual
         // max durable LSN is what `put_rel_creation`'s idempotency
         // check protects against.
-        let row = store.get_timeline(t).await.unwrap().unwrap();
+        let row = store.get_branch_state(t).await.unwrap().unwrap();
         assert_eq!(
             row.consistent_lsn,
             Lsn(0x100),

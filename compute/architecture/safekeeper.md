@@ -42,10 +42,10 @@ All per-branch durable state lives in two tables of the shared `yb_storage`
 database, provisioned by
 `controller/migrations/0002_compute_storage.up.sql`:
 
-### Control file: `amp_storage.safekeeper_branch_state`
+### Control file: `amp_storage.branch_state`
 
 ```sql
-CREATE TABLE amp_storage.safekeeper_branch_state (
+CREATE TABLE amp_storage.branch_state (
     branch_id              TEXT        NOT NULL,
     timeline_start_lsn     BIGINT      NOT NULL,
     local_start_lsn        BIGINT      NOT NULL,
@@ -523,7 +523,7 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
 
 - **Identity**: `branch_id` in `safekeeper.toml` bakes the process's single
   branch (`SafeKeeperConf::yb_branch_id()`, required whenever
-  `yb_storage_conn` is set). It matters because `amp_storage.safekeeper_branch_state`
+  `yb_storage_conn` is set). It matters because `amp_storage.branch_state`
   is shared by the whole cluster — without a baked identity the process
   could not tell its own branch from everyone else's. Consequences:
   - `GlobalTimelines::init()` does a single keyed load of **only** the baked
@@ -541,7 +541,7 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
   on the upsert lane), then loads the timeline back from it. Claiming the slot
   before the write keeps concurrent creators out; the marker is cleared on
   every failure path.
-- **Teardown**: a branch's rows (`amp_storage.safekeeper_branch_state`,
+- **Teardown**: a branch's rows (`amp_storage.branch_state`,
   `amp_storage.wals`) are reclaimed by the deferred GC pass (#36), as are the
   pageserver's. Tearing down a branch is therefore process teardown: the
   launcher stops the safekeeper along with the endpoint it serves
@@ -619,7 +619,7 @@ yb-safekeeper -D <datadir> [--init]
 ```
 
 `--init` parses config, logs, and exits. The control file is the branch's
-`amp_storage.safekeeper_branch_state` row; read it from YB, or via
+`amp_storage.branch_state` row; read it from YB, or via
 `GET /v1/debug_dump?dump_control_file=true`.
 
 A representative `safekeeper.toml`:
@@ -635,7 +635,7 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
 
 - `yb_storage_conn` is the single YB connection block (a string-encoded
   inline TOML table, the same `[*.yb]` shape the pageserver and
-  endpoint_storage consume) used for both `amp_storage.safekeeper_branch_state` and
+  endpoint_storage consume) used for both `amp_storage.branch_state` and
   `amp_storage.wals` — same DB, two tables; the WAL table name is not
   configurable. Setting it is what puts the safekeeper in YB-WAL mode
   (`SafeKeeperConf::is_yb_wal_mode`); the deployment always sets it.

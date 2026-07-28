@@ -33,14 +33,14 @@ before moving on — a silent half-failure here surfaces as a confusing error th
    `pageserver.toml` carries `branch_id`/`generation`. On a fresh repo this is
    normal: `yb_amp_local start` prints `Skipping pageserver …: no timeline identity yet` and
    `branch create` bakes the identity in, bumps the generation via the SC attach-hook, and starts
-   the pageserver itself. Manual deployments must write the identity (and `[timeline_init]` for a
-   first boot) before spawning. Checkpoint once started:
+   the pageserver itself. Manual deployments must write the identity before spawning; how to
+   create the branch comes from the controller-seeded `amp_storage.branch_state` row, not the toml. Checkpoint once started:
    `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
 5. **Register SK with the SC** (see "Manual registration"). PS registration is launcher-driven
    (`node_register` + attach-hook happen inside every `yb_amp_local pageserver start`).
-6. **Create the branch** (via `yb_amp_local branch create`; the pageserver bootstraps the branch from its
-   `[timeline_init]` config — the SC only observes via `timeline_detail` and then creates the
-   branch on the safekeeper).
+6. **Create the branch** (via `yb_amp_local branch create`; that seeds
+   `amp_storage.branch_state`, and the pageserver bootstraps from it — a NULL ancestor means
+   initdb + import, a set one means branch off it — then the branch is created on the safekeeper).
 7. **Create + start the compute endpoint** → checkpoint: `psql … 'SELECT 1'`.
 
 ---
@@ -53,8 +53,8 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SK: `unexpected argument '--<flag>'` | flag removed/renamed in this build | **C** |
 | endpoint_storage / PS: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
-| PS exits at startup: `pageserver.toml must set branch_id/generation` | single-branch identity missing — launcher hasn't assigned one (run `branch create`, or write the identity + `[timeline_init]` into pageserver.toml) | — |
-| PS exits at startup: `timeline … has no timeline_state row and no [timeline_init]` | row missing and no creation mode configured (wiped YB DB, or toml written without `[timeline_init]`) | — |
+| PS exits at startup: `pageserver.toml must set branch_id/generation` | single-branch identity missing — launcher hasn't assigned one (run `branch create`, or write the identity into pageserver.toml) | — |
+| PS exits at startup: `timeline … has no branch_state row` | the controller never provisioned the branch (wiped YB DB, or the pageserver started without `branch create`) | — |
 | SK exits at startup: `YB-WAL mode requires --branch-id (single-branch-per-process)` | single-branch identity missing from `safekeeper.toml` — the SK serves one branch and scopes its load to it. Provisioned SKs get `branch_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set it alongside `yb_storage_conn` | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
@@ -175,7 +175,7 @@ controller, and the `yb_amp_local` on-disk config): a config item that is wrong 
 refused at startup rather than logged and ignored. The classes that abort start-up:
 
 - **Unknown / misspelled / stale key** — e.g. `unknown configuration item(s) in pageserver.toml:
-  timeline_init.scale_factor`, or serde `unknown field \`foo\``. The pageserver names the offending
+  yb_page_writer.scale_factor`, or serde `unknown field \`foo\``. The pageserver names the offending
   paths; the safekeeper / endpoint_storage / `--yb-config` (`YbConnConfig`) report the serde field.
 - **Wrong type / out-of-range value / duplicate key** — already failed at deserialize; unchanged.
 
@@ -225,9 +225,9 @@ Then restart everything (or just don't `yb_amp_local start` until the patch is i
 ## N. `pageserver.toml` top-level knob placed after a `[section]` header
 TOML sections are open-ended: once a `[section]` header appears, every subsequent key belongs to that
 section until the next header. So a top-level knob (e.g. `scale_factor`, `page_cache_size`) appended
-**after** `[timeline_init]` becomes `timeline_init.scale_factor` — an unknown key in the wrong table.
+**after** `[yb_page_writer]` becomes `yb_page_writer.scale_factor` — an unknown key in the wrong table.
 The PS then **refuses to start** with
-`unknown configuration item(s) in pageserver.toml: timeline_init.scale_factor` (see **K**).
+`unknown configuration item(s) in pageserver.toml: yb_page_writer.scale_factor` (see **K**).
 
 Fix: place top-level keys **before** any `[…]` section, e.g.
 ```toml
@@ -235,9 +235,7 @@ Fix: place top-level keys **before** any `[…]` section, e.g.
 scale_factor    = 6.0
 page_cache_size = 8192
 
-[timeline_init]   # section keys after here
-mode = "bootstrap"
-pg_version = 17
+[yb_page_writer]   # section keys after here
 ```
 Then `yb_amp_local pageserver restart --id 1` and confirm the PS starts clean (no `unknown
 configuration item` rejection, no `ignoring unknown` warning). See throughput Step 3a for the

@@ -63,10 +63,9 @@ pub struct PageServerConf {
     /// required and startup fails without it.
     pub timeline_identity: Option<TimelineIdentity>,
 
-    /// How to create the timeline when its `amp_storage.pageserver_branch_state`
+    /// How to create the timeline when its `amp_storage.branch_state`
     /// row is absent at startup. See
     /// [`pageserver_api::config::TimelineInitConfig`].
-    pub timeline_init: Option<pageserver_api::config::TimelineInitConfig>,
 
     /// Example (default): 127.0.0.1:64000
     pub listen_pg_addr: String,
@@ -325,7 +324,6 @@ impl PageServerConf {
         let pageserver_api::config::ConfigToml {
             branch_id,
             generation,
-            timeline_init,
             listen_pg_addr,
             listen_http_addr,
             listen_https_addr,
@@ -401,9 +399,6 @@ impl PageServerConf {
                 generation.is_some(),
             ),
         };
-        if timeline_init.is_some() && timeline_identity.is_none() {
-            anyhow::bail!("[timeline_init] requires branch_id/generation to be set");
-        }
 
         let yb_page_writer = yb_page_writer.resolve(scale_factor);
         let walredo_pool_size =
@@ -415,7 +410,6 @@ impl PageServerConf {
             // fields that are already fully validated by the ConfigToml Deserialize impl
             // ------------------------------------------------------------
             timeline_identity,
-            timeline_init,
             listen_pg_addr,
             listen_http_addr,
             listen_https_addr,
@@ -589,7 +583,6 @@ impl PageServerConf {
 #[cfg(test)]
 mod tests {
 
-    use std::str::FromStr;
     use std::time::Duration;
 
     use camino::Utf8PathBuf;
@@ -619,10 +612,6 @@ mod tests {
             control_plane_api = "http://localhost:6666"
             branch_id   = "77ffde89f43d4ca08ef0a0ed1f089eaa"
             generation  = 7
-
-            [timeline_init]
-            mode       = "bootstrap"
-            pg_version = 18
         "#;
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("identity config is valid");
@@ -635,12 +624,6 @@ mod tests {
             "77ffde89f43d4ca08ef0a0ed1f089eaa"
         );
         assert_eq!(ident.generation, utils::generation::Generation::new(7));
-        assert!(matches!(
-            conf.timeline_init,
-            Some(pageserver_api::config::TimelineInitConfig::Bootstrap { pg_version })
-                if pg_version.major_version_num() == 18
-        ));
-
         // serialize → reparse → same identity fields survive the round trip
         let serialized = toml_edit::ser::to_string_pretty(&config_toml).expect("serializes");
         let reparsed = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(&serialized)
@@ -648,42 +631,6 @@ mod tests {
         let conf2 = PageServerConf::parse_and_validate(reparsed, &workdir)
             .expect("parse_and_validate round trip");
         assert_eq!(conf2.timeline_identity, conf.timeline_identity);
-        assert_eq!(conf2.timeline_init, conf.timeline_init);
-    }
-
-    #[test]
-    fn test_timeline_init_branch_parses_lsn() {
-        let input = r#"
-            control_plane_api = "http://localhost:6666"
-            branch_id   = "11ffde89f43d4ca08ef0a0ed1f089eaa"
-            generation  = 1
-
-            [timeline_init]
-            mode                 = "branch"
-            ancestor_branch_id = "77ffde89f43d4ca08ef0a0ed1f089eaa"
-            ancestor_lsn         = "0/169AD58"
-        "#;
-        let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
-            .expect("branch config is valid");
-        let workdir = Utf8PathBuf::from("/nonexistent");
-        let conf =
-            PageServerConf::parse_and_validate(config_toml, &workdir).expect("parse_and_validate");
-        match conf.timeline_init {
-            Some(pageserver_api::config::TimelineInitConfig::Branch {
-                ancestor_branch_id,
-                ancestor_lsn,
-            }) => {
-                assert_eq!(
-                    ancestor_branch_id.to_string(),
-                    "77ffde89f43d4ca08ef0a0ed1f089eaa"
-                );
-                assert_eq!(
-                    ancestor_lsn,
-                    utils::lsn::Lsn::from_str("0/169AD58").unwrap()
-                );
-            }
-            other => panic!("expected branch init, got {other:?}"),
-        }
     }
 
     #[test]
@@ -698,19 +645,6 @@ mod tests {
         let workdir = Utf8PathBuf::from("/nonexistent");
         PageServerConf::parse_and_validate(config_toml, &workdir)
             .expect_err("partial identity must be rejected");
-
-        // [timeline_init] without identity must fail validation
-        let input = r#"
-            control_plane_api = "http://localhost:6666"
-
-            [timeline_init]
-            mode       = "bootstrap"
-            pg_version = 18
-        "#;
-        let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
-            .expect("fields parse");
-        PageServerConf::parse_and_validate(config_toml, &workdir)
-            .expect_err("timeline_init without identity must be rejected");
     }
 
     #[test]

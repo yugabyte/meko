@@ -1,7 +1,7 @@
 //! Safekeeper control-file storage.
 //!
 //! yb-amp persists the per-timeline `TimelinePersistentState` as a
-//! row in the YB table `amp_storage.safekeeper_branch_state`, one BIGINT/INT
+//! row in the YB table `amp_storage.branch_state`, one BIGINT/INT
 //! column per scalar field.
 
 use std::future::Future;
@@ -32,7 +32,7 @@ pub trait Storage: Deref<Target = TimelinePersistentState> {
 }
 
 /// Control-file storage backed by a YB row in
-/// `amp_storage.safekeeper_branch_state`. One instance per timeline; holds a
+/// `amp_storage.branch_state`. One instance per timeline; holds a
 /// shared `YsqlClient` plus the in-memory `TimelinePersistentState`
 /// it last wrote.
 pub struct YbControlFileStorage {
@@ -54,23 +54,28 @@ const COLUMNS: &str = "timeline_start_lsn, local_start_lsn, remote_consistent_ls
                        pg_version, system_id, wal_seg_size, creation_ts";
 
 impl YbControlFileStorage {
-    /// Load the row for `branch_id`, or `Ok(None)` if the branch has no
-    /// row yet. Absence is a normal outcome, not an error: on a fresh
-    /// branch the row is written by [`Self::create_new`] on the first
-    /// walproposer handshake, so startup has to tell "not created yet"
-    /// apart from a genuine read failure.
+    /// Load our control file from the branch's `amp_storage.branch_state`
+    /// row, or `Ok(None)` if we haven't written it yet.
+    ///
+    /// The row is provisioned by the controller at branch-create time and the
+    /// pageserver owns a separate group of columns on it, so **row presence is
+    /// not the signal**: `timeline_start_lsn IS NOT NULL` is what says our own
+    /// group is populated. Absence is a normal outcome, not an error — on a
+    /// fresh branch the group is filled by [`Self::write_initial_state`] on the first
+    /// walproposer handshake, so startup has to tell "not written yet" apart
+    /// from a genuine read failure.
     pub async fn restore_opt(
         client: Arc<YsqlClient>,
         branch_id: &BranchId,
     ) -> Result<Option<YbControlFileStorage>> {
         let sql = format!(
-            "SELECT {COLUMNS} FROM amp_storage.safekeeper_branch_state \
-             WHERE branch_id = $1"
+            "SELECT {COLUMNS} FROM amp_storage.branch_state \
+             WHERE branch_id = $1 AND timeline_start_lsn IS NOT NULL"
         );
         let Some(row) = client
             .query_opt(&sql, &[&branch_id.to_string()])
             .await
-            .context("SELECT amp_storage.safekeeper_branch_state")?
+            .context("SELECT amp_storage.branch_state")?
         else {
             return Ok(None);
         };
@@ -106,8 +111,13 @@ impl YbControlFileStorage {
         }))
     }
 
-    /// Create + insert a fresh row.
-    pub async fn create_new(
+    /// Populate the safekeeper's column group on the branch's
+    /// `amp_storage.branch_state` row.
+    ///
+    /// The controller provisions the row at branch-create time, before any
+    /// safekeeper or pageserver starts, so this only ever UPDATEs — it never
+    /// creates the row, and it leaves the pageserver's columns alone.
+    pub async fn write_initial_state(
         client: Arc<YsqlClient>,
         branch_id: &BranchId,
         state: TimelinePersistentState,
@@ -118,54 +128,73 @@ impl YbControlFileStorage {
             state: state.clone(),
             last_persist_at: Instant::now(),
         };
-        store.write_row(&state, /* insert= */ true).await?;
+        store.write_row(&state, /* create= */ true).await?;
         Ok(store)
     }
 
-    async fn write_row(&self, s: &TimelinePersistentState, insert: bool) -> Result<()> {
-        let pg_version_i32: i32 = s.server.pg_version.as_u32() as i32;
+    /// UPDATE our column group. `create` adds `timeline_start_lsn IS NULL` so
+    /// the first write fills the group exactly once; a later `persist` rewrites
+    /// it unconditionally. Either way the row must already exist — if the
+    /// UPDATE matches nothing on create, we distinguish "already populated"
+    /// (fine) from "no row" (the controller never provisioned this branch).
+    async fn write_row(&self, s: &TimelinePersistentState, create: bool) -> Result<()> {
         let creation_ts: DateTime<Utc> = s.creation_ts.into();
 
         let branch_id = self.branch_id.to_string();
-        let params: [&(dyn ToSql + Sync); 8] = [
+        let params: [&(dyn ToSql + Sync); 7] = [
             &branch_id,
             &(s.timeline_start_lsn.0 as i64),
             &(s.local_start_lsn.0 as i64),
             &(s.remote_consistent_lsn.0 as i64),
-            &pg_version_i32,
             &(s.server.system_id as i64),
             &(s.server.wal_seg_size as i32),
             &creation_ts,
         ];
 
-        let sql = if insert {
-            "INSERT INTO amp_storage.safekeeper_branch_state (\
-                 branch_id, timeline_start_lsn, local_start_lsn, \
-                 remote_consistent_lsn, pg_version, system_id, \
-                 wal_seg_size, creation_ts) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
-                .to_string()
-        } else {
-            "UPDATE amp_storage.safekeeper_branch_state SET \
+        // `pg_version` is deliberately not written here. The controller seeds it
+        // with the full `PgVersionId` at branch create and is its only writer;
+        // we read it back in `restore_opt`, and `handle_greeting` compares
+        // *major* versions only, so there is nothing for us to refine.
+        let set_clause = "UPDATE amp_storage.branch_state SET \
                  timeline_start_lsn    = $2, \
                  local_start_lsn       = $3, \
                  remote_consistent_lsn = $4, \
-                 pg_version            = $5, \
-                 system_id             = $6, \
-                 wal_seg_size          = $7, \
-                 creation_ts           = $8 \
-             WHERE branch_id           = $1"
-                .to_string()
+                 system_id             = $5, \
+                 wal_seg_size          = $6, \
+                 creation_ts           = $7 \
+             WHERE branch_id           = $1";
+        let sql = if create {
+            format!("{set_clause} AND timeline_start_lsn IS NULL")
+        } else {
+            set_clause.to_string()
         };
 
-        self.client
+        let n = self
+            .client
             .execute(&sql, &params)
             .await
-            .context(if insert {
-                "INSERT amp_storage.safekeeper_branch_state"
-            } else {
-                "UPDATE amp_storage.safekeeper_branch_state"
-            })?;
+            .context("UPDATE amp_storage.branch_state")?;
+        if create && n == 0 {
+            // Either our group is already populated (a concurrent/replayed
+            // create — harmless) or the row was never provisioned, which is a
+            // wiring bug worth failing on.
+            let found = self
+                .client
+                .query_opt(
+                    "SELECT 1 FROM amp_storage.branch_state WHERE branch_id = $1",
+                    &[&branch_id],
+                )
+                .await
+                .context("branch_state existence probe")?;
+            if found.is_none() {
+                anyhow::bail!(
+                    "no branch_state row for {} — the controller provisions it at \
+                     branch create, so the safekeeper started against an \
+                     unprovisioned branch",
+                    self.branch_id
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -194,13 +223,13 @@ impl AdvisoryPersist {
         let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
         self.client
             .execute(
-                "UPDATE amp_storage.safekeeper_branch_state \
+                "UPDATE amp_storage.branch_state \
                  SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2) \
                  WHERE branch_id = $1",
                 &[&self.branch_id.to_string(), &(lsn.0 as i64)],
             )
             .await
-            .context("UPDATE amp_storage.safekeeper_branch_state (advisory)")?;
+            .context("UPDATE amp_storage.branch_state (advisory)")?;
         Ok(())
     }
 }
@@ -234,7 +263,7 @@ impl Deref for YbControlFileStorage {
 impl Storage for YbControlFileStorage {
     async fn persist(&mut self, s: &TimelinePersistentState) -> Result<()> {
         let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
-        self.write_row(s, /* insert= */ false).await?;
+        self.write_row(s, /* create= */ false).await?;
         self.state = s.clone();
         // Reset the save-interval clock: without this the manager
         // re-persisted every loop iteration (300ms) once the first

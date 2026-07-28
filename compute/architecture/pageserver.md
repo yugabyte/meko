@@ -11,7 +11,7 @@ pageserver and the safekeeper both write to YugabyteDB, and it is
 YugabyteDB — Raft-replicated DocDB tablets — that provides durability
 and resilience. If a pageserver process dies, everything it needs to
 resume is in YB: the page rows, the SLRU rows, the metadata rows, and a
-single `amp_storage.pageserver_branch_state` row per branch. Local disk is
+single `amp_storage.branch_state` row per branch. Local disk is
 scratch space only (initdb tarball, basebackup cache, pid file) and is
 never authoritative.
 
@@ -28,15 +28,16 @@ launcher before spawn:
 ```toml
 branch_id   = "77ffde89..."   # required
 generation  = 7               # required; launcher bumps on EVERY spawn
-
-[timeline_init]               # consulted only when the timeline_state row is absent
-mode       = "bootstrap"      # or "branch" + ancestor_branch_id + ancestor_lsn
-pg_version = 18
 ```
 
+How to *create* the timeline is not configured here. It comes from the
+controller-seeded part of the branch's `amp_storage.branch_state` row: a NULL
+`ancestor_branch_id` means bootstrap (initdb + import at the row's
+`pg_version`), a set one means branch off that ancestor at `ancestor_lsn`. The
+controller writes that seed at branch create, before any pageserver starts.
+
 `PageServerConf::parse_and_validate` (`compute/pageserver/src/config.rs`)
-rejects `branch_id` without `generation` (and vice versa), and rejects a
-`[timeline_init]` block without an identity. `main()` also refuses to
+rejects `branch_id` without `generation` (and vice versa). `main()` also refuses to
 start on any unknown key in `pageserver.toml` — the config is
 launcher-generated against the same build, so a misspelled key is an
 operator mistake worth failing loudly on.
@@ -49,10 +50,10 @@ still opening; the compute's reconnect loop covers it) or talks to a
 fully-active branch. There is no branch state machine and no
 in-protocol wait-for-active. Failure to open is fatal to the process.
 
-- Row exists in `amp_storage.pageserver_branch_state` → open it (restarts are
-  trivially idempotent; `[timeline_init]` is ignored). A row with
+- The pageserver's column group is populated in `amp_storage.branch_state` →
+  open it (restarts are trivially idempotent; the seed is ignored). A row with
   `deleted_at` set refuses to open.
-- Row absent + `mode = "bootstrap"` → run initdb + import, then insert
+- Group absent + seed has no ancestor → run initdb + import, then fill in
   the row (`UninitializedTimeline::finish_creation`). If the initdb tar
   for this branch already exists in remote storage it is REUSED —
   initdb output is not bit-deterministic, and a crash-retry must
@@ -69,7 +70,7 @@ in-protocol wait-for-active. Failure to open is fatal to the process.
   `consistent_lsn` by up to one flush interval. No in-process ancestor
   object exists; reads reach ancestor data through the lineage walk
   (below).
-- Row absent + no `[timeline_init]` → fatal.
+- No `branch_state` row at all → fatal: the controller never provisioned the branch.
 
 Attach also pushes the launcher-issued generation into YB via
 `PageStore::cas_bump_generation_on_attach` (see "Generation fencing").
@@ -180,13 +181,13 @@ files, replication origins, SLRU segment-size sentinels. `key` is the
 **Full-overwrite semantics**: a read returns the single latest row at
 LSN ≤ target — no chains, no walredo.
 
-### `amp_storage.pageserver_branch_state`
+### `amp_storage.branch_state`
 
 One row per branch carries every load-bearing piece of per-branch
 state:
 
 ```sql
-CREATE TABLE amp_storage.pageserver_branch_state (
+CREATE TABLE amp_storage.branch_state (
     branch_id              TEXT      NOT NULL,
     consistent_lsn         BIGINT    NOT NULL,
     applied_gc_cutoff_lsn  BIGINT    NOT NULL,
@@ -823,7 +824,7 @@ Exercised by the `torn_wal_write` integration scenario.
 
 ## Generation fencing
 
-`current_generation` on the `amp_storage.pageserver_branch_state` row is the
+`current_generation` on the `amp_storage.branch_state` row is the
 fence. The launcher bumps the generation on every spawn and bakes it
 into `pageserver.toml`; the YB-side sequence is:
 
@@ -837,7 +838,7 @@ into `pageserver.toml`; the YB-side sequence is:
    fence is the **subsequent standalone UPDATE** in
    `PageStore::advance_consistent_lsn`:
    ```sql
-   UPDATE amp_storage.pageserver_branch_state
+   UPDATE amp_storage.branch_state
    SET consistent_lsn = $2,
        prev_record_lsn = COALESCE($4, prev_record_lsn)
    WHERE branch_id = $1 AND current_generation = $3

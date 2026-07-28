@@ -44,7 +44,7 @@ func registerAndAttach(ctx context.Context, env *config.LocalEnv, conf *config.P
 		return fmt.Errorf("attach_hook did not return a generation")
 	}
 	tomlPath := filepath.Join(conf.DataDir, "pageserver.toml")
-	if err := cfg.SetPageserverIdentity(tomlPath, *conf.BranchID, *resp.Generation, nil); err != nil {
+	if err := cfg.SetPageserverIdentity(tomlPath, *conf.BranchID, *resp.Generation); err != nil {
 		return err
 	}
 	fmt.Printf("pageserver serves %s at generation %d\n", *conf.BranchID, *resp.Generation)

@@ -410,7 +410,7 @@ impl Manager {
     /// This loop is the sole servicer of residence-guard requests, and
     /// WAL appends need the shared_state write lock — the previous
     /// in-loop, under-lock `flush()` meant one slow
-    /// `amp_storage.safekeeper_branch_state` UPDATE froze commits and timed out
+    /// `amp_storage.branch_state` UPDATE froze commits and timed out
     /// every new WAL receiver (2026-07 TPC-C wedge, manager status
     /// `UpdateControlFile`). Only `remote_consistent_lsn` needs this
     /// periodic persist; it goes through a monotonic single-column

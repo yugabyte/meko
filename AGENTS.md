@@ -75,7 +75,7 @@ Code anchors:
   `controller/local/cmd/yb_amp_local` — the CLI assembly.
 - `compute/pageserver/src/page_store.rs` — `PageStore` row store for the
   row-per-page YB layout (`amp_storage.pages` +
-  `amp_storage.pageserver_branch_state`).
+  `amp_storage.branch_state`).
 - `compute/pageserver/src/image_materializer.rs` — the background image
   materialiser; `image_chain_limit` (default 20 deltas, or 4 KiB of
   payload) bounds the read-chain length.

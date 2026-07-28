@@ -257,8 +257,60 @@ impl LineageSegment {
     }
 }
 
+/// The controller-seeded part of a branch's `branch_state` row — what the
+/// controller records at branch create, before any daemon has written its own
+/// state. Attach reads this to decide how to create the timeline: a NULL
+/// ancestor means bootstrap (initdb + import at `pg_version`), a set one means
+/// branch off that ancestor at `ancestor_lsn`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimelineRow {
+pub struct BranchSeed {
+    /// Full `PgVersionId` (e.g. 180002); divide by 10000 for the major version.
+    pub pg_version: u32,
+    pub ancestor_branch_id: Option<BranchId>,
+    pub ancestor_lsn: Option<Lsn>,
+}
+
+/// How attach should create a branch's timeline, derived from its
+/// [`BranchSeed`]. The two ancestor columns are written together by the
+/// controller, so this collapses them into the one decision attach makes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchInitMode {
+    /// No ancestor: run initdb and import at this major version.
+    Bootstrap { pg_major: u32 },
+    /// Branch off `ancestor_branch_id` at `ancestor_lsn`.
+    Branch {
+        ancestor_branch_id: BranchId,
+        ancestor_lsn: Lsn,
+    },
+}
+
+impl BranchSeed {
+    /// PG major version, from the full `PgVersionId` the column holds.
+    pub fn pg_major(&self) -> u32 {
+        self.pg_version / 10000
+    }
+
+    /// Decide how to create the timeline. Errors only if the controller wrote a
+    /// half-populated ancestry, which it never does — the two columns are set in
+    /// the same INSERT.
+    pub fn init_mode(&self) -> Result<BranchInitMode> {
+        match (self.ancestor_branch_id, self.ancestor_lsn) {
+            (None, _) => Ok(BranchInitMode::Bootstrap {
+                pg_major: self.pg_major(),
+            }),
+            (Some(ancestor_branch_id), Some(ancestor_lsn)) => Ok(BranchInitMode::Branch {
+                ancestor_branch_id,
+                ancestor_lsn,
+            }),
+            (Some(_), None) => {
+                anyhow::bail!("branch_state seed has an ancestor_branch_id but no ancestor_lsn")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchStateRow {
     pub branch_id: BranchId,
     /// Highest LSN durably present in `amp_storage.pages`/`slru_pages`/`meta`.
     /// Advances on every successful `PageWriter::flush`. Drives both
@@ -269,6 +321,12 @@ pub struct TimelineRow {
     pub ancestor_branch_id: Option<BranchId>,
     pub ancestor_lsn: Option<Lsn>,
     pub current_generation: i32,
+    /// Full `PgVersionId` (e.g. 180002), not a major version — divide by 10000
+    /// for the PG major version.
+    ///
+    /// Read-only for both daemons: the controller seeds this column at branch
+    /// create and is its only writer, so [`PageStore::update_branch_initial_state`]
+    /// ignores whatever this field holds.
     pub pg_version: u32,
 
     // Fields that used to live in `index_part.json` and now ride on
@@ -328,7 +386,7 @@ pub enum AdvanceConsistentLsnOutcome {
 pub enum UpdateBranchStateOutcome {
     /// Row was found at our generation; UPDATE landed.
     Updated,
-    /// Either the row is missing (wiring bug — `insert_timeline_at_creation`
+    /// Either the row is missing (wiring bug — `update_branch_initial_state`
     /// is supposed to have run) or the live generation is no longer
     /// ours. In practice the latter dominates; we can't disambiguate
     /// without a follow-up SELECT, and the caller doesn't need to —
@@ -3080,10 +3138,10 @@ impl PageStore {
 
     /// Minimum branch point over live children of `branch_id` — the
     /// child pin folded into the GC cutoff. Seq scan over
-    /// `pageserver_branch_state` (one row per branch; small by construction).
+    /// `branch_state` (one row per branch; small by construction).
     pub async fn min_children_fork_lsn(&self, branch_id: BranchId) -> Result<Option<Lsn>> {
         let sql = format!(
-            "SELECT min(ancestor_lsn) FROM \"{}\".pageserver_branch_state \
+            "SELECT min(ancestor_lsn) FROM \"{}\".branch_state \
              WHERE ancestor_branch_id = $1 AND deleted_at IS NULL",
             self.schema
         );
@@ -3110,7 +3168,7 @@ impl PageStore {
         cutoff: Lsn,
     ) -> Result<PublishGcCutoffOutcome> {
         let sql = format!(
-            "UPDATE \"{}\".pageserver_branch_state \
+            "UPDATE \"{}\".branch_state \
              SET applied_gc_cutoff_lsn = GREATEST(applied_gc_cutoff_lsn, $2) \
              WHERE branch_id = $1 \
                AND current_generation = $3 \
@@ -3137,8 +3195,8 @@ impl PageStore {
                 // between the UPDATE and this SELECT, so the reported
                 // value is informational, not authoritative.
                 let probe_sql = format!(
-                    "SELECT current_generation FROM \"{}\".pageserver_branch_state \
-                     WHERE branch_id = $1",
+                    "SELECT current_generation FROM \"{}\".branch_state \
+                     WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
                     self.schema
                 );
                 let row = self
@@ -3424,34 +3482,55 @@ impl PageStore {
 
     // ------------------- timelines ----------------------------------------
 
-    /// One-shot INSERT used at timeline creation by Phase 5b's
-    /// `Timeline::write_timeline_row_to_yb`. Tries to create the row;
-    /// if a row at the same `branch_id` already exists this
-    /// is a no-op (the existing state is the source of truth — a
-    /// just-created timeline raced with an attach-time replay or
-    /// similar; either way we shouldn't clobber the live row).
+    /// Fill in the pageserver's initial column group on the branch's
+    /// `branch_state` row, at timeline creation (Phase 5b's
+    /// `Timeline::write_timeline_row_to_yb`).
+    ///
+    /// The row itself is provisioned by the controller at branch-create time
+    /// (`RecordPendingInit`), before any pageserver or safekeeper starts, and
+    /// the safekeeper owns a separate group of columns on it. So this only ever
+    /// UPDATEs — it never creates the row, and it must not disturb the
+    /// safekeeper's columns.
+    ///
+    /// `WHERE consistent_lsn IS NULL` makes it fill the group in exactly once.
+    /// If it matches nothing, a probe distinguishes the two reasons:
+    /// - our group is already populated → no-op, the live state is the source
+    ///   of truth (a just-created timeline raced with an attach-time replay or
+    ///   similar; either way we shouldn't clobber it).
+    /// - no row at all → the branch was never provisioned; that's a wiring bug
+    ///   (a daemon started before the controller recorded the branch), so bail
+    ///   loudly rather than silently losing the state.
     ///
     /// **Not for incremental updates.** Per-flush UPDATEs of
     /// `consistent_lsn` go through [`Self::advance_consistent_lsn`];
     /// per-`UploadMetadata` UPDATEs from RTC go through
-    /// [`Self::update_branch_state`]. Both of those are gen-fenced;
-    /// this one isn't, because at creation the row by definition
-    /// doesn't exist yet (or — race — exists in a state we shouldn't
-    /// touch).
-    pub async fn insert_timeline_at_creation(&self, row: &TimelineRow) -> Result<()> {
+    /// [`Self::update_branch_state`]. Both of those are gen-fenced; this one
+    /// isn't, because at creation our group by definition isn't populated yet
+    /// (or — race — is populated in a state we shouldn't touch).
+    pub async fn update_branch_initial_state(&self, row: &BranchStateRow) -> Result<()> {
         let sql = format!(
-            "INSERT INTO \"{}\".pageserver_branch_state \
-             (branch_id, consistent_lsn, \
-              applied_gc_cutoff_lsn, ancestor_branch_id, ancestor_lsn, \
-              current_generation, pg_version, initdb_lsn, prev_record_lsn, \
-              archived_at, deleted_at, rel_size_migration, \
-              rel_size_migrated_at, lineage) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
-             ON CONFLICT (branch_id) DO NOTHING",
+            // `pg_version` is deliberately absent: the controller seeds it at
+            // branch create and is its only writer. `row.pg_version` is read
+            // back from that seed, so writing it here would be a no-op at best.
+            "UPDATE \"{}\".branch_state SET \
+                 consistent_lsn        = $2, \
+                 applied_gc_cutoff_lsn = $3, \
+                 ancestor_branch_id    = $4, \
+                 ancestor_lsn          = $5, \
+                 current_generation    = $6, \
+                 initdb_lsn            = $7, \
+                 prev_record_lsn       = $8, \
+                 archived_at           = $9, \
+                 deleted_at            = $10, \
+                 rel_size_migration    = $11, \
+                 rel_size_migrated_at  = $12, \
+                 lineage               = $13 \
+             WHERE branch_id = $1 AND consistent_lsn IS NULL",
             self.schema
         );
         let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
-        self.ysql_client
+        let n = self
+            .ysql_client
             .execute(
                 &sql,
                 &[
@@ -3461,7 +3540,6 @@ impl PageStore {
                     &row.ancestor_branch_id.map(|id| id.to_string()),
                     &row.ancestor_lsn.map(|l| l.0 as i64),
                     &row.current_generation,
-                    &(row.pg_version as i32),
                     &row.initdb_lsn.map(|l| l.0 as i64),
                     &row.prev_record_lsn.map(|l| l.0 as i64),
                     &row.archived_at,
@@ -3472,7 +3550,89 @@ impl PageStore {
                 ],
             )
             .await
-            .context("insert_timeline_at_creation")?;
+            .context("update_branch_initial_state")?;
+        if n == 0 {
+            self.assert_branch_state_row_exists(row.branch_id).await?;
+        }
+        Ok(())
+    }
+
+    /// Test-only: provision the branch's `branch_state` row the way the
+    /// controller does at branch create (`Store.RecordPendingInit`). Production
+    /// code never creates this row — the tests need it because they run against
+    /// the production schema with random branch ids and no controller.
+    #[cfg(test)]
+    pub(crate) async fn provision_branch_row_for_test(
+        &self,
+        branch_id: BranchId,
+        pg_version: u32,
+    ) -> Result<()> {
+        let sql = format!(
+            "INSERT INTO \"{}\".branch_state (branch_id, pg_version) VALUES ($1, $2) \
+             ON CONFLICT (branch_id) DO NOTHING",
+            self.schema
+        );
+        self.ysql_client
+            .execute(&sql, &[&branch_id.to_string(), &(pg_version as i32)])
+            .await
+            .context("provision_branch_row_for_test")?;
+        Ok(())
+    }
+
+    /// Read the controller-seeded fields of the branch's row. Unlike
+    /// [`Self::get_branch_state`] this does **not** require the pageserver's own
+    /// column group to be populated — it is what attach consults *before*
+    /// creating the timeline. `None` means the controller never provisioned the
+    /// branch.
+    pub async fn get_branch_seed(&self, branch_id: BranchId) -> Result<Option<BranchSeed>> {
+        let sql = format!(
+            "SELECT pg_version, ancestor_branch_id, ancestor_lsn \
+             FROM \"{}\".branch_state WHERE branch_id = $1",
+            self.schema
+        );
+        let Some(r) = self
+            .ysql_client
+            .query_opt(&sql, &[&branch_id.to_string()])
+            .await
+            .context("get_branch_seed")?
+        else {
+            return Ok(None);
+        };
+        let pg_version = r.try_get::<_, i32>(0)? as u32;
+        let ancestor_branch_id: Option<String> = r.try_get(1)?;
+        let ancestor_branch_id = ancestor_branch_id
+            .as_deref()
+            .map(str::parse::<BranchId>)
+            .transpose()
+            .context("get_branch_seed: parse ancestor_branch_id")?;
+        let ancestor_lsn: Option<i64> = r.try_get(2)?;
+        Ok(Some(BranchSeed {
+            pg_version,
+            ancestor_branch_id,
+            ancestor_lsn: ancestor_lsn.map(|l| Lsn(l as u64)),
+        }))
+    }
+
+    /// Confirm the branch's `branch_state` row exists — used when a
+    /// pageserver-group UPDATE matched nothing, to tell "already populated"
+    /// (fine) from "never provisioned" (a wiring bug).
+    async fn assert_branch_state_row_exists(&self, branch_id: BranchId) -> Result<()> {
+        let sql = format!(
+            "SELECT 1 FROM \"{}\".branch_state WHERE branch_id = $1",
+            self.schema
+        );
+        let found = self
+            .ysql_client
+            .query_opt(&sql, &[&branch_id.to_string()])
+            .await
+            .context("branch_state existence probe")?;
+        if found.is_none() {
+            anyhow::bail!(
+                "no branch_state row for {branch_id} — the controller provisions \
+                 it at branch create, so the pageserver started against an \
+                 unprovisioned branch"
+            );
+        }
         Ok(())
     }
 
@@ -3496,12 +3656,12 @@ impl PageStore {
     /// the caller's row.
     pub async fn update_branch_state(
         &self,
-        row: &TimelineRow,
+        row: &BranchStateRow,
         generation: utils::generation::Generation,
     ) -> Result<UpdateBranchStateOutcome> {
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let sql = format!(
-            "UPDATE \"{}\".pageserver_branch_state SET \
+            "UPDATE \"{}\".branch_state SET \
                 consistent_lsn   = $2, \
                 applied_gc_cutoff_lsn = $3, \
                 ancestor_branch_id    = $4, \
@@ -3547,23 +3707,28 @@ impl PageStore {
         }
     }
 
-    pub async fn get_timeline(&self, branch_id: BranchId) -> Result<Option<TimelineRow>> {
+    pub async fn get_branch_state(&self, branch_id: BranchId) -> Result<Option<BranchStateRow>> {
         let sql = format!(
-            "SELECT {} FROM \"{}\".pageserver_branch_state \
-             WHERE branch_id = $1",
-            TIMELINE_ROW_COLUMNS, self.schema
+            // `consistent_lsn IS NOT NULL` is the pageserver's presence
+            // predicate: the row is shared with the safekeeper, so a row that
+            // exists with our group still NULL means *our* state doesn't yet
+            // exist. Callers (preload / attach) key bootstrap-vs-load off this
+            // `None`, so it has to mean "no pageserver state", not "no row".
+            "SELECT {} FROM \"{}\".branch_state \
+             WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
+            BRANCH_STATE_COLUMNS, self.schema
         );
         let row = self
             .ysql_client
             .query_opt(&sql, &[&branch_id.to_string()])
             .await
-            .context("get_timeline")?;
-        row.map(row_to_timeline).transpose()
+            .context("get_branch_state")?;
+        row.map(row_to_branch_state).transpose()
     }
 
     /// Build the ordered lineage for `branch_id` by walking
     /// `ancestor_branch_id` / `ancestor_lsn` links in
-    /// `pageserver_branch_state`. Segment 0 is the timeline itself at
+    /// `branch_state`. Segment 0 is the timeline itself at
     /// `Lsn::MAX`; each ancestor's cap is the running `min` of the
     /// `ancestor_lsn`s on the path (non-increasing by the branch
     /// validation invariant — the `min` is belt-and-braces).
@@ -3575,8 +3740,8 @@ impl PageStore {
         const MAX_DEPTH: usize = 64;
         let mut segments = LineageSegment::single(branch_id);
         let mut seen: std::collections::HashSet<BranchId> = std::iter::once(branch_id).collect();
-        let mut row = self.get_timeline(branch_id).await?.with_context(|| {
-            format!("load_lineage: timeline {branch_id} has no pageserver_branch_state row")
+        let mut row = self.get_branch_state(branch_id).await?.with_context(|| {
+            format!("load_lineage: timeline {branch_id} has no branch_state row")
         })?;
         let mut cap = Lsn::MAX;
         while let Some(anc_id) = row.ancestor_branch_id {
@@ -3598,14 +3763,14 @@ impl PageStore {
                 cap_lsn: cap,
             });
             row = self
-                .get_timeline(anc_id)
+                .get_branch_state(anc_id)
                 .await?
                 .with_context(|| format!("load_lineage: ancestor {anc_id} row missing"))?;
         }
         Ok(segments)
     }
 
-    /// Create the `pageserver_branch_state` row for a branch of `ancestor` at
+    /// Create the `branch_state` row for a branch of `ancestor` at
     /// `ancestor_lsn`, validating against the ancestor's persisted row
     /// only — no in-process ancestor Timeline required. This is the
     /// cross-process distillation of the old `branch_timeline_impl`:
@@ -3621,16 +3786,16 @@ impl PageStore {
     /// The new row's `consistent_lsn` is set to `ancestor_lsn` — the
     /// walreceiver resume point. It must never be 0 (a 0 would make
     /// the safekeeper stream from segment 1). Idempotent on crash-retry
-    /// via the `ON CONFLICT DO NOTHING` insert.
+    /// via the column-scoped UPDATE in [`Self::update_branch_initial_state`].
     pub async fn create_branch_row(
         &self,
         new_branch: BranchId,
         ancestor: BranchId,
         ancestor_lsn: Lsn,
         generation: i32,
-    ) -> Result<TimelineRow> {
-        let anc = self.get_timeline(ancestor).await?.with_context(|| {
-            format!("create_branch_row: ancestor {ancestor} has no pageserver_branch_state row")
+    ) -> Result<BranchStateRow> {
+        let anc = self.get_branch_state(ancestor).await?.with_context(|| {
+            format!("create_branch_row: ancestor {ancestor} has no branch_state row")
         })?;
         if anc.deleted_at.is_some() {
             bail!("create_branch_row: ancestor {ancestor} is deleted");
@@ -3669,7 +3834,7 @@ impl PageStore {
         } else {
             None
         };
-        let row = TimelineRow {
+        let row = BranchStateRow {
             branch_id: new_branch,
             consistent_lsn: ancestor_lsn,
             applied_gc_cutoff_lsn: anc.applied_gc_cutoff_lsn,
@@ -3687,7 +3852,7 @@ impl PageStore {
             rel_size_migrated_at: anc.rel_size_migrated_at,
             lineage: Lineage::default(),
         };
-        self.insert_timeline_at_creation(&row).await?;
+        self.update_branch_initial_state(&row).await?;
         Ok(row)
     }
 
@@ -3731,7 +3896,7 @@ impl PageStore {
     ) -> Result<CasBumpOutcome> {
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let sql = format!(
-            "UPDATE \"{}\".pageserver_branch_state \
+            "UPDATE \"{}\".branch_state \
              SET current_generation = $2 \
              WHERE branch_id = $1 \
                AND current_generation < $2",
@@ -3747,8 +3912,8 @@ impl PageStore {
         }
         // n == 0 — probe.
         let probe_sql = format!(
-            "SELECT current_generation FROM \"{}\".pageserver_branch_state \
-             WHERE branch_id = $1",
+            "SELECT current_generation FROM \"{}\".branch_state \
+             WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
             self.schema
         );
         let row = self
@@ -3811,7 +3976,7 @@ impl PageStore {
         // COALESCE we'd overwrite a previously-good value with
         // NULL on every throttled flush window.
         let sql = format!(
-            "UPDATE \"{}\".pageserver_branch_state \
+            "UPDATE \"{}\".branch_state \
              SET consistent_lsn = $2, \
                  prev_record_lsn      = COALESCE($4, prev_record_lsn) \
              WHERE branch_id = $1 \
@@ -3838,8 +4003,8 @@ impl PageStore {
             // "generation moved on" (we got fenced). One extra single-row
             // SELECT to disambiguate. Only runs on the unhappy path.
             let probe_sql = format!(
-                "SELECT current_generation FROM \"{}\".pageserver_branch_state \
-                 WHERE branch_id = $1",
+                "SELECT current_generation FROM \"{}\".branch_state \
+                 WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
                 self.schema
             );
             let row = self
@@ -3866,9 +4031,13 @@ impl PageStore {
 
     pub async fn bump_generation(&self, branch_id: BranchId) -> Result<i32> {
         let sql = format!(
-            "UPDATE \"{}\".pageserver_branch_state \
+            // Scoped to rows where our group exists: `current_generation + 1`
+            // over a NULL yields NULL, so without this predicate a
+            // safekeeper-created row would match and have its generation
+            // blanked instead of reporting "no pageserver state".
+            "UPDATE \"{}\".branch_state \
              SET current_generation = current_generation + 1 \
-             WHERE branch_id = $1 \
+             WHERE branch_id = $1 AND consistent_lsn IS NOT NULL \
              RETURNING current_generation",
             self.schema
         );
@@ -3883,8 +4052,8 @@ impl PageStore {
 
     pub async fn read_generation(&self, branch_id: BranchId) -> Result<Option<i32>> {
         let sql = format!(
-            "SELECT current_generation FROM \"{}\".pageserver_branch_state \
-             WHERE branch_id = $1",
+            "SELECT current_generation FROM \"{}\".branch_state \
+             WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
             self.schema
         );
         let row = self
@@ -4425,23 +4594,23 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
     })
 }
 
-/// Column list shared by every `SELECT … FROM timeline_state` so the
-/// query layout stays in sync with `row_to_timeline`'s positional
+/// Column list shared by every `SELECT … FROM branch_state` so the
+/// query layout stays in sync with `row_to_branch_state`'s positional
 /// `try_get` indices.
-const TIMELINE_ROW_COLUMNS: &str = "branch_id, consistent_lsn, \
+const BRANCH_STATE_COLUMNS: &str = "branch_id, consistent_lsn, \
      applied_gc_cutoff_lsn, ancestor_branch_id, ancestor_lsn, \
      current_generation, pg_version, initdb_lsn, prev_record_lsn, \
      archived_at, deleted_at, rel_size_migration, \
      rel_size_migrated_at, lineage";
 
-/// Convert the two awkwardly-typed `TimelineRow` fields (the
+/// Convert the two awkwardly-typed `BranchStateRow` fields (the
 /// `RelSizeMigration` enum, persisted as serde-JSON text to match
 /// the upstream `index_part.json` wire shape; and `lineage`,
 /// persisted as a JSONB blob for forward-compat) into the values
 /// the `tokio_postgres::Client::execute` parameter list expects.
-/// Shared by `insert_timeline_at_creation` and
+/// Shared by `update_branch_initial_state` and
 /// `update_branch_state` so the serialisation stays in lockstep.
-fn serialize_row_aux(row: &TimelineRow) -> Result<(Option<String>, serde_json::Value)> {
+fn serialize_row_aux(row: &BranchStateRow) -> Result<(Option<String>, serde_json::Value)> {
     let rel_size_migration_text = row
         .rel_size_migration
         .as_ref()
@@ -4452,7 +4621,7 @@ fn serialize_row_aux(row: &TimelineRow) -> Result<(Option<String>, serde_json::V
     Ok((rel_size_migration_text, lineage_json))
 }
 
-fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
+fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
     let branch_s: String = r.try_get(0)?;
     let consistent_lsn: i64 = r.try_get(1)?;
     let applied_gc_cutoff_lsn: i64 = r.try_get(2)?;
@@ -4479,7 +4648,7 @@ fn row_to_timeline(r: tokio_postgres::Row) -> Result<TimelineRow> {
         .context("parsing lineage")?
         .unwrap_or_default();
 
-    Ok(TimelineRow {
+    Ok(BranchStateRow {
         branch_id: branch_s.parse().context("parsing branch_id")?,
         consistent_lsn: Lsn(consistent_lsn as u64),
         applied_gc_cutoff_lsn: Lsn(applied_gc_cutoff_lsn as u64),
@@ -4542,6 +4711,18 @@ mod tests {
     // execution's count (undercounts under load — seen in CI). Assert
     // the surviving rows instead; `== 0` counts are retry-safe.
     const PROD_SCHEMA: &str = "amp_storage";
+
+    /// Create a timeline the way production does: the controller provisions the
+    /// row, then the pageserver fills in its own column group.
+    async fn create_branch_state_row(
+        store: &PageStore,
+        row: &BranchStateRow,
+    ) -> anyhow::Result<()> {
+        store
+            .provision_branch_row_for_test(row.branch_id, row.pg_version)
+            .await?;
+        store.update_branch_initial_state(row).await
+    }
 
     async fn make_store(_suffix: &str) -> (PageStore, String) {
         let store = SHARED_STORE
@@ -5205,15 +5386,15 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    fn sample_timeline_row(branch: BranchId) -> TimelineRow {
-        TimelineRow {
+    fn sample_branch_state_row(branch: BranchId) -> BranchStateRow {
+        BranchStateRow {
             branch_id: branch,
             consistent_lsn: Lsn(90),
             applied_gc_cutoff_lsn: Lsn(50),
             ancestor_branch_id: None,
             ancestor_lsn: None,
             current_generation: 1,
-            pg_version: 18,
+            pg_version: 180_002,
             initdb_lsn: None,
             prev_record_lsn: None,
             archived_at: None,
@@ -5225,12 +5406,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_and_get_timeline_round_trip() {
+    async fn update_branch_initial_state_requires_a_provisioned_row() {
+        // The controller provisions `branch_state` at branch create; the
+        // pageserver only ever fills in its own column group. If the row is
+        // missing, that is a wiring bug (a daemon started against a branch the
+        // controller never recorded) and must fail loudly rather than silently
+        // dropping the state — this is the contract the whole shared-row design
+        // rests on, so pin it.
+        let (store, schema) = make_store("unprovisioned").await;
+        let row = sample_branch_state_row(rand_branch());
+        // Deliberately skip provision_branch_row_for_test.
+        let err = store.update_branch_initial_state(&row).await.unwrap_err();
+        assert!(
+            err.to_string().contains("no branch_state row"),
+            "expected the unprovisioned-branch bail, got: {err}"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn update_branch_initial_state_is_idempotent_once_populated() {
+        // Re-running creation must not clobber live state: the UPDATE is scoped
+        // to `consistent_lsn IS NULL`, so a second call is a no-op rather than a
+        // rewrite, and it must not be mistaken for the missing-row case above.
+        let (store, schema) = make_store("recreate").await;
+        let branch = rand_branch();
+        let row = sample_branch_state_row(branch);
+        create_branch_state_row(&store, &row).await.unwrap();
+
+        let mut second = row.clone();
+        second.consistent_lsn = Lsn(row.consistent_lsn.0 + 1000);
+        store.update_branch_initial_state(&second).await.unwrap();
+
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
+        assert_eq!(got, row, "existing state is the source of truth");
+        drop_schema(&store, &schema).await;
+    }
+
+    #[tokio::test]
+    async fn write_and_read_branch_state_round_trip() {
         let (store, schema) = make_store("tl_rt").await;
         let branch = rand_branch();
-        let row = sample_timeline_row(branch);
-        store.insert_timeline_at_creation(&row).await.unwrap();
-        let got = store.get_timeline(branch).await.unwrap().unwrap();
+        let row = sample_branch_state_row(branch);
+        create_branch_state_row(&store, &row).await.unwrap();
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got, row);
         drop_schema(&store, &schema).await;
     }
@@ -5249,10 +5468,10 @@ mod tests {
 
         let (store, schema) = make_store("gen_cas").await;
         let branch = rand_branch();
-        let mut row = sample_timeline_row(branch);
+        let mut row = sample_branch_state_row(branch);
         row.current_generation = 1;
         row.consistent_lsn = Lsn(0x1000);
-        store.insert_timeline_at_creation(&row).await.unwrap();
+        create_branch_state_row(&store, &row).await.unwrap();
 
         // Bumped: stored gen=1, attach at gen=2 → succeeds, YB now 2.
         //
@@ -5276,7 +5495,7 @@ mod tests {
             ),
             "expected Bumped (or AlreadyAtOurGen under a post-commit retry), got: {res:?}"
         );
-        let got = store.get_timeline(branch).await.unwrap().unwrap();
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 2);
 
         // AlreadyAtOurGen: stored gen=2, attach at gen=2 → no-op.
@@ -5285,7 +5504,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res, CasBumpOutcome::AlreadyAtOurGen);
-        let got = store.get_timeline(branch).await.unwrap().unwrap();
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 2);
 
         // Bumped again: stored gen=2, attach at gen=5 → succeeds, YB now 5.
@@ -5305,7 +5524,7 @@ mod tests {
             ),
             "expected Bumped (or AlreadyAtOurGen under a post-commit retry), got: {res:?}"
         );
-        let got = store.get_timeline(branch).await.unwrap().unwrap();
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 5);
 
         // StaleGeneration: stored gen=5, attach at gen=4 → another
@@ -5315,7 +5534,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res, CasBumpOutcome::StaleGeneration { live_generation: 5 });
-        let got = store.get_timeline(branch).await.unwrap().unwrap();
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got.current_generation, 5, "stale CAS must not regress");
 
         // Row missing: attach against a branch that
@@ -5340,10 +5559,10 @@ mod tests {
 
         let (store, schema) = make_store("dc_gate").await;
         let branch = rand_branch();
-        let mut row = sample_timeline_row(branch);
+        let mut row = sample_branch_state_row(branch);
         row.current_generation = 5;
         row.consistent_lsn = Lsn(0x1000);
-        store.insert_timeline_at_creation(&row).await.unwrap();
+        create_branch_state_row(&store, &row).await.unwrap();
 
         // Matching generation → Updated, persisted value advances.
         let res = store
@@ -5351,7 +5570,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res, AdvanceConsistentLsnOutcome::Updated);
-        let got = store.get_timeline(branch).await.unwrap().unwrap();
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got.consistent_lsn, Lsn(0x2000));
         assert_eq!(got.prev_record_lsn, Some(Lsn(0x1F00)));
 
@@ -5364,7 +5583,7 @@ mod tests {
             res,
             AdvanceConsistentLsnOutcome::StaleGeneration { live_generation: 5 }
         );
-        let got = store.get_timeline(branch).await.unwrap().unwrap();
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(
             got.consistent_lsn,
             Lsn(0x2000),
@@ -5382,7 +5601,7 @@ mod tests {
             res,
             AdvanceConsistentLsnOutcome::StaleGeneration { live_generation: 5 }
         );
-        let got = store.get_timeline(branch).await.unwrap().unwrap();
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got.consistent_lsn, Lsn(0x2000));
 
         drop_schema(&store, &schema).await;
@@ -5392,8 +5611,7 @@ mod tests {
     async fn bump_generation_is_monotonic() {
         let (store, schema) = make_store("gen").await;
         let branch = rand_branch();
-        store
-            .insert_timeline_at_creation(&sample_timeline_row(branch))
+        create_branch_state_row(&store, &sample_branch_state_row(branch))
             .await
             .unwrap();
         for expected in 2..=5 {
@@ -6029,9 +6247,9 @@ mod tests {
         let (store, schema) = make_store("branch_row").await;
         let anc = rand_branch();
         // Ancestor: consistent 90, gc cutoff 50, prev_record 85.
-        let mut anc_row = sample_timeline_row(anc);
+        let mut anc_row = sample_branch_state_row(anc);
         anc_row.prev_record_lsn = Some(Lsn(85));
-        store.insert_timeline_at_creation(&anc_row).await.unwrap();
+        create_branch_state_row(&store, &anc_row).await.unwrap();
 
         // Branch point above the durable head → rejected.
         let err = store
@@ -6052,13 +6270,14 @@ mod tests {
             .create_branch_row(rand_branch(), rand_branch(), Lsn(70), 1)
             .await
             .unwrap_err();
-        assert!(
-            err.to_string().contains("no pageserver_branch_state row"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("no branch_state row"), "{err}");
 
         // Happy path mid-history: prev_record_lsn unknown → None.
         let child = rand_branch();
+        store
+            .provision_branch_row_for_test(child, anc_row.pg_version)
+            .await
+            .unwrap();
         let row = store
             .create_branch_row(child, anc, Lsn(70), 3)
             .await
@@ -6069,11 +6288,15 @@ mod tests {
         assert_eq!(row.current_generation, 3);
         assert_eq!(row.pg_version, anc_row.pg_version);
         assert_eq!(row.prev_record_lsn, None);
-        let persisted = store.get_timeline(child).await.unwrap().unwrap();
+        let persisted = store.get_branch_state(child).await.unwrap().unwrap();
         assert_eq!(persisted, row);
 
         // Happy path at the durable head: prev_record_lsn inherited.
         let child2 = rand_branch();
+        store
+            .provision_branch_row_for_test(child2, anc_row.pg_version)
+            .await
+            .unwrap();
         let row = store
             .create_branch_row(child2, anc, Lsn(90), 1)
             .await
@@ -6090,9 +6313,9 @@ mod tests {
 
         // Deleted ancestor → rejected.
         let dead = rand_branch();
-        let mut dead_row = sample_timeline_row(dead);
+        let mut dead_row = sample_branch_state_row(dead);
         dead_row.deleted_at = Some(chrono::Utc::now().naive_utc());
-        store.insert_timeline_at_creation(&dead_row).await.unwrap();
+        create_branch_state_row(&store, &dead_row).await.unwrap();
         let err = store
             .create_branch_row(rand_branch(), dead, Lsn(70), 1)
             .await
@@ -6366,21 +6589,17 @@ mod tests {
         let parent = rand_branch();
         let child = rand_branch();
 
-        store
-            .insert_timeline_at_creation(&sample_timeline_row(grandparent))
+        create_branch_state_row(&store, &sample_branch_state_row(grandparent))
             .await
             .unwrap();
-        let mut parent_row = sample_timeline_row(parent);
+        let mut parent_row = sample_branch_state_row(parent);
         parent_row.ancestor_branch_id = Some(grandparent);
         parent_row.ancestor_lsn = Some(Lsn(50));
-        store
-            .insert_timeline_at_creation(&parent_row)
-            .await
-            .unwrap();
-        let mut child_row = sample_timeline_row(child);
+        create_branch_state_row(&store, &parent_row).await.unwrap();
+        let mut child_row = sample_branch_state_row(child);
         child_row.ancestor_branch_id = Some(parent);
         child_row.ancestor_lsn = Some(Lsn(70));
-        store.insert_timeline_at_creation(&child_row).await.unwrap();
+        create_branch_state_row(&store, &child_row).await.unwrap();
 
         let lineage = store.load_lineage(child).await.unwrap();
         assert_eq!(
@@ -6407,10 +6626,7 @@ mod tests {
 
         // Missing row → error, not an empty lineage.
         let err = store.load_lineage(rand_branch()).await.unwrap_err();
-        assert!(
-            err.to_string().contains("no pageserver_branch_state row"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("no branch_state row"), "{err}");
 
         drop_schema(&store, &schema).await;
     }
@@ -7288,10 +7504,10 @@ mod tests {
 
         let (store, _schema) = make_store("gc_publish").await;
         let branch = rand_branch();
-        let mut row = sample_timeline_row(branch);
+        let mut row = sample_branch_state_row(branch);
         row.current_generation = 5;
         row.applied_gc_cutoff_lsn = Lsn(50);
-        store.insert_timeline_at_creation(&row).await.unwrap();
+        create_branch_state_row(&store, &row).await.unwrap();
 
         // Advance.
         let out = store
@@ -7316,7 +7532,7 @@ mod tests {
             out,
             PublishGcCutoffOutcome::StaleGeneration { live_generation: 5 }
         );
-        let reread = store.get_timeline(branch).await.unwrap().unwrap();
+        let reread = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(reread.applied_gc_cutoff_lsn, Lsn(80));
 
         // Missing row → hard error (wiring bug, not a fence).
@@ -7338,22 +7554,21 @@ mod tests {
 
         assert_eq!(store.min_children_fork_lsn(parent).await.unwrap(), None);
 
-        let mut child_hi = sample_timeline_row(rand_branch());
+        let mut child_hi = sample_branch_state_row(rand_branch());
         child_hi.ancestor_branch_id = Some(parent);
         child_hi.ancestor_lsn = Some(Lsn(150));
-        store.insert_timeline_at_creation(&child_hi).await.unwrap();
+        create_branch_state_row(&store, &child_hi).await.unwrap();
 
-        let mut child_lo = sample_timeline_row(rand_branch());
+        let mut child_lo = sample_branch_state_row(rand_branch());
         child_lo.ancestor_branch_id = Some(parent);
         child_lo.ancestor_lsn = Some(Lsn(110));
-        store.insert_timeline_at_creation(&child_lo).await.unwrap();
+        create_branch_state_row(&store, &child_lo).await.unwrap();
 
-        let mut child_deleted = sample_timeline_row(rand_branch());
+        let mut child_deleted = sample_branch_state_row(rand_branch());
         child_deleted.ancestor_branch_id = Some(parent);
         child_deleted.ancestor_lsn = Some(Lsn(90));
         child_deleted.deleted_at = Some(chrono::Utc::now().naive_utc());
-        store
-            .insert_timeline_at_creation(&child_deleted)
+        create_branch_state_row(&store, &child_deleted)
             .await
             .unwrap();
 

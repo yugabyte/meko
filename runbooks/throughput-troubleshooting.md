@@ -158,8 +158,8 @@ is ~1–2 ms (the gap is queue wait inside PS).
 
 **Fix — bump `scale_factor` in `pageserver.toml`:**
 ```toml
-# In pageserver.toml — MUST be at the top level, NOT inside [timeline_init]
-# (otherwise PS logs "ignoring unknown configuration item path=timeline_init.scale_factor")
+# In pageserver.toml — MUST be at the top level
+# (otherwise PS logs "ignoring unknown configuration item path=yb_page_writer.scale_factor")
 scale_factor    = 6.0
 page_cache_size = 8192    # explicit override so it isn't scaled along with everything else
 ```

@@ -400,7 +400,7 @@ control file as a 388B bincode blob stored at `yb_storage.blobs` under
 `ControlFileStorage::{File, Yb}` dispatch enum, selected by
 `--control-file-backend file|remote-storage`. By the time anyone read it, none
 of that was true: #10 (`840e56aae`) had moved the control file to typed
-columns in `amp_storage.safekeeper_branch_state`, deleted the enum, deleted
+columns in `amp_storage.branch_state`, deleted the enum, deleted
 `control_file_upgrade.rs`, and removed both CLI flags. The commit that did the
 move did not touch the architecture doc — so for weeks the canonical description
 of the safekeeper was a fabrication. The same rot hits a `yb-dump-*` tool that

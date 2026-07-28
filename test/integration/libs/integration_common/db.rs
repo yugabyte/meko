@@ -19,7 +19,7 @@ pub fn compute_conn(port: u16) -> String {
 
 /// Connection string for the YugabyteDB metadata database (the storage
 /// backend), used by the restart scenarios to read
-/// `amp_storage.pageserver_branch_state` and the `wals` table directly.
+/// `amp_storage.branch_state` and the `wals` table directly.
 pub fn yb_conn(host: &str, port: u16, dbname: &str) -> String {
     format!("host={host} port={port} user=yugabyte password=yugabyte dbname={dbname}")
 }

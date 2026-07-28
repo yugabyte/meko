@@ -45,7 +45,7 @@ impl GlobalTimelinesState {
     }
 
     /// Whether `branch_id` is the branch this process serves. Requests naming
-    /// any other branch are treated as not-found: `amp_storage.safekeeper_branch_state`
+    /// any other branch are treated as not-found: `amp_storage.branch_state`
     /// is shared cluster-wide, so a misrouted request must not reach our slot.
     fn is_ours(&self, branch_id: &BranchId) -> bool {
         self.conf.branch_id.as_ref() == Some(branch_id)
@@ -86,7 +86,7 @@ impl GlobalTimelines {
 
     /// Inject dependencies needed for the timeline constructors and load this
     /// process's single branch into memory.
-    /// yb-amp's safekeeper persists state in `amp_storage.safekeeper_branch_state`,
+    /// yb-amp's safekeeper persists state in `amp_storage.branch_state`,
     /// so the on-disk workdir holds only the config, log, and pidfile —
     /// there is nothing on disk to scan.
     pub async fn init(&self) -> Result<()> {
@@ -99,13 +99,13 @@ impl GlobalTimelines {
         anyhow::ensure!(has_yb_wal, "safekeeper init requires yb_storage_conn");
 
         // We serve exactly one branch, and its id comes from our own config —
-        // never from `amp_storage.safekeeper_branch_state`, which is shared across the
+        // never from `amp_storage.branch_state`, which is shared across the
         // whole cluster. So this is a single keyed load of our own row, and
         // absence is normal: on a fresh bootstrap the row is written on the
         // first walproposer handshake.
         self.load_one_timeline(branch_id).await;
         info!(
-            "loaded {} timelines from amp_storage.safekeeper_branch_state",
+            "loaded {} timelines from amp_storage.branch_state",
             self.state.lock().unwrap().timeline.is_some() as usize
         );
         Ok(())
@@ -209,8 +209,8 @@ impl GlobalTimelines {
         let yb_wal_conn = yb_wal
             .clone()
             .context("control-file create requires yb_storage_conn")?;
-        control_file::ControlFileStorage::create_new(
-            yb_wal_conn.fpu_client.clone(),
+        control_file::ControlFileStorage::write_initial_state(
+            yb_wal_conn.system_client.clone(),
             &branch_id,
             state,
         )

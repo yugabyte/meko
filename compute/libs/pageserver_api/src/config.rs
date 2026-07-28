@@ -19,12 +19,10 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use postgres_backend::AuthType;
-use postgres_versioninfo::PgMajorVersion;
 use remote_storage::RemoteStorageConfig;
 use serde_with::serde_as;
 use utils::id::BranchId;
 use utils::logging::LogFormat;
-use utils::lsn::Lsn;
 
 use crate::models::{ImageCompressionAlgorithm, LsnLease, PayloadCompression};
 
@@ -173,19 +171,11 @@ pub struct ConfigToml {
     /// Generation number for this attachment. The launcher bumps the
     /// generation in `amp_registry.branches` on every spawn and
     /// writes the fresh value here; the pageserver CAS-installs it on
-    /// the `amp_storage.pageserver_branch_state` row at startup
+    /// the `amp_storage.branch_state` row at startup
     /// (`cas_bump_generation_on_attach`), which fences out any stale
     /// process still holding an older generation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<u32>,
-    /// How to create the timeline if its `amp_storage.pageserver_branch_state`
-    /// row does not exist yet. Consulted ONLY when the row is absent;
-    /// an existing row is always opened as-is (which makes restarts
-    /// trivially idempotent). Absent row + absent `[timeline_init]`
-    /// is a fatal startup error.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeline_init: Option<TimelineInitConfig>,
-
     // types mapped 1:1 into the runtime PageServerConfig type
     pub listen_pg_addr: String,
     pub listen_http_addr: String,
@@ -303,39 +293,6 @@ pub struct ConfigToml {
     /// scaled default.
     #[serde(default = "default_scale_factor")]
     pub scale_factor: f64,
-}
-
-/// On-disk shape of `[timeline_init]` in `pageserver.toml`: how to
-/// create the configured timeline when its `amp_storage.pageserver_branch_state`
-/// row does not exist yet. See [`ConfigToml::timeline_init`].
-///
-/// ```toml
-/// [timeline_init]
-/// mode       = "bootstrap"
-/// pg_version = 18
-/// ```
-/// or
-/// ```toml
-/// [timeline_init]
-/// mode                 = "branch"
-/// ancestor_branch_id = "77ffde89f43d4ca08ef0a0ed1f089eaa"
-/// ancestor_lsn         = "0/169AD58"
-/// ```
-#[serde_as]
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-pub enum TimelineInitConfig {
-    /// Run initdb and import the resulting pgdata as the timeline's
-    /// initial page set.
-    Bootstrap { pg_version: PgMajorVersion },
-    /// Create a branch: write a `pageserver_branch_state` row pointing at the
-    /// ancestor at `ancestor_lsn`. Pre-branch pages stay under the
-    /// ancestor's branch_id and are reached via lineage-aware reads.
-    Branch {
-        ancestor_branch_id: BranchId,
-        #[serde_as(as = "serde_with::DisplayFromStr")]
-        ancestor_lsn: Lsn,
-    },
 }
 
 /// On-disk shape of `[yb_page_writer]` in `pageserver.toml`. Every
@@ -880,7 +837,6 @@ impl Default for ConfigToml {
         Self {
             branch_id: None,
             generation: None,
-            timeline_init: None,
             listen_pg_addr: (DEFAULT_PG_LISTEN_ADDR.to_string()),
             listen_http_addr: (DEFAULT_HTTP_LISTEN_ADDR.to_string()),
             listen_https_addr: (None),

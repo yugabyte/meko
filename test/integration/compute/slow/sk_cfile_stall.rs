@@ -2,7 +2,7 @@
 //! wedge: the timeline manager persisted the control file to YB while
 //! holding the timeline shared_state write lock, inside the same loop
 //! that services WalResidentTimeline guard requests. A slow
-//! `amp_storage.safekeeper_branch_state` UPDATE therefore froze WAL appends
+//! `amp_storage.branch_state` UPDATE therefore froze WAL appends
 //! (appends need that lock) AND starved guard issuance (30s guard
 //! timeout, manager status stuck at `UpdateControlFile`), wedging every
 //! commit until the write returned.

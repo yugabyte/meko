@@ -153,26 +153,20 @@ fn bucket_in_list() -> String {
 /// Three independent connections, each with its own `application_name`
 /// for attribution in YB's `pg_stat_activity`:
 /// - [`Self::fpu_client`] — the only one with `yb_enable_upsert_mode =
-///   true`. Carries the hot-path WAL chunk INSERTs and the
-///   `control_file::create_new` INSERT (the latter needs the GUC so
-///   the YsqlClient retry loop replays cleanly under
-///   transient/connection-drop errors; without it, the integration
-///   `restart_wal_replay` scenario regresses with a PS-side "relation
-///   already exists" panic at WAL ingest).
+///   true`. Carries the hot-path WAL chunk INSERTs, whose replayed
+///   same-offset rows are idempotent by construction.
 /// - [`Self::read_client`] — hot-path chunk SELECTs for the WAL sender
 ///   ([`YbSegmentReader`]) and nothing else. Keeping streaming reads
 ///   off the system lane means a long control-file write or GC DELETE
 ///   can't stall the read-back path that walproposer commits depend
 ///   on.
 /// - [`Self::system_client`] — everything else: startup rehydration
-///   SELECTs, WAL GC DELETEs, idempotent control-file ops (restore /
-///   persist / delete / list). No upsert GUC.
+///   SELECTs, WAL GC DELETEs, and the control-file ops (restore /
+///   create / persist). No upsert GUC.
 pub struct YbWalConn {
     /// Fast Path Upsert lane (`yb_enable_upsert_mode = true`). Used by
     /// the per-timeline consumer task in [`consumer_main`] for
-    /// batched chunk INSERTs into `amp_storage.wals` and by
-    /// `control_file::create_new` for the one-shot
-    /// `amp_storage.safekeeper_branch_state` INSERT.
+    /// batched chunk INSERTs into `amp_storage.wals`.
     pub fpu_client: Arc<YsqlClient>,
     /// Hot-read lane. Used exclusively by [`YbSegmentReader`] for
     /// chunk fetches that feed the WAL sender. No upsert GUC.
@@ -181,8 +175,10 @@ pub struct YbWalConn {
     /// rehydration ([`YbWalStorage::load_write_lsn`] /
     /// [`load_min_segno`]), the GC DELETE
     /// ([`YbWalStorage::remove_up_to`]), and the idempotent
-    /// control-file ops (`restore_opt` SELECT, `persist` UPDATE). The
-    /// non-idempotent `create_new` INSERT runs on the FPU lane.
+    /// control-file ops (`restore_opt` SELECT, `write_initial_state` and `persist`
+    /// UPDATEs — the control file's row is provisioned by the controller, so
+    /// the safekeeper only ever UPDATEs its own columns and every write here is
+    /// naturally idempotent).
     pub system_client: Arc<YsqlClient>,
     /// Name of the YB table that backs the WAL mirror. Always
     /// [`WALS_TABLE`] (`amp_storage.wals`); the field stays so the SQL
@@ -230,23 +226,17 @@ impl YbWalConn {
         // `yb_enable_upsert_mode = true` — replayed same-offset chunk
         // INSERTs are idempotent by construction, so skipping YB's
         // read-before-write check is safe there. Reads and background
-        // writes (GC DELETE, control-file UPDATE/INSERT) run
-        // without the GUC.
+        // writes (GC DELETE, control-file UPDATEs) run without the GUC.
         // Three independent connections with lane-specific GUCs:
         // - FPU lane (`yb_enable_upsert_mode = true`): hot-path WAL
-        //   chunk INSERTs and `control_file::create_new` INSERT.
-        //   `create_new` runs here because it's the only INSERT
-        //   reaching `amp_storage.safekeeper_branch_state`; without the GUC the
-        //   YsqlClient retry-on-transient/connection-drop loop can't
-        //   prove the in-flight write didn't already commit, and a
-        //   blind replay fails with duplicate-key — empirically this
-        //   breaks the `restart_wal_replay` integration scenario with a
-        //   downstream pageserver "relation already exists" panic.
+        //   chunk INSERTs. Nothing else needs it: the control-file
+        //   writes are UPDATEs against a row the controller provisioned
+        //   at branch create, so a blind retry can't hit duplicate-key.
         // - Read lane (no GUC): exclusively the segment reader.
         // - System lane (no GUC): startup SELECTs (`load_write_lsn` /
         //   `load_min_segno`), the GC DELETE (`remove_up_to`), and
-        //   idempotent control-file ops (`restore_opt` SELECT,
-        //   `persist` UPDATE).
+        //   the control-file ops (`restore_opt` SELECT, `write_initial_state`
+        //   and `persist` UPDATEs).
         let fpu_client = Arc::new(
             ysql_client::YsqlClient::from_yb_config(yb, "safekeeper:yb_wal_fpu", true)
                 .await
@@ -4391,5 +4381,41 @@ mod tests {
         );
 
         drop_wals_table(&client, &table).await;
+    }
+    /// The safekeeper never creates its `branch_state` row — the controller
+    /// provisions it at branch create, before any daemon starts. If the row is
+    /// missing, that is a wiring bug (started against a branch the controller
+    /// never recorded), and the create path must say so rather than silently
+    /// dropping the control file.
+    ///
+    /// Uses a fresh random branch id, so the UPDATE matches nothing and the
+    /// existence probe comes back empty. Nothing is written, so nothing needs
+    /// cleaning up.
+    #[tokio::test]
+    async fn control_file_create_requires_a_provisioned_row() {
+        use crate::control_file::ControlFileStorage;
+        use postgres_versioninfo::PgVersionId;
+        use safekeeper_api::ServerInfo;
+
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), false)
+                .await
+                .expect("connect"),
+        );
+        let branch_id = BranchId::generate();
+        let server = ServerInfo {
+            pg_version: PgVersionId::from_full_pg_version(180_002),
+            system_id: 0,
+            wal_seg_size: 16 * 1024 * 1024,
+        };
+        let state = TimelinePersistentState::new(&branch_id, server, Lsn(0x1000)).unwrap();
+
+        let err = ControlFileStorage::write_initial_state(client, &branch_id, state)
+            .await
+            .expect_err("an unprovisioned branch must not create its own row");
+        assert!(
+            err.to_string().contains("no branch_state row"),
+            "expected the unprovisioned-branch bail, got: {err}"
+        );
     }
 }

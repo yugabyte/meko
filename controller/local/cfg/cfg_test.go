@@ -101,10 +101,9 @@ func TestPageserverTomlGolden(t *testing.T) {
 	if err := WritePageserverToml(path, goldPageserverParams()); err != nil {
 		t.Fatalf("WritePageserverToml: %v", err)
 	}
-	// Bake the identity (branch_id / generation=2 / [timeline_init] bootstrap),
-	// matching the init -> set_timeline_identity -> attach sequence.
-	init := BootstrapInit(config.DefaultPgVersion)
-	if err := SetPageserverIdentity(path, goldBranchID, goldGeneration, &init); err != nil {
+	// Bake the identity (branch_id / generation=2), matching the
+	// init -> set_timeline_identity -> attach sequence.
+	if err := SetPageserverIdentity(path, goldBranchID, goldGeneration); err != nil {
 		t.Fatalf("SetPageserverIdentity: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -122,16 +121,6 @@ func TestPageserverTomlRequiresYbStorageConn(t *testing.T) {
 	}
 }
 
-func TestTimelineInitBranchShape(t *testing.T) {
-	// The Branch variant carries ancestor_branch_id + ancestor_lsn only.
-	m, err := BranchInit("aaaa", "0/169AD58").toMap()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]any{"mode": "branch", "ancestor_branch_id": "aaaa", "ancestor_lsn": "0/169AD58"}
-	assertEqualTree(t, "branch timeline_init", m, want)
-}
-
 func TestSetPageserverIdentityPreservesKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pageserver.toml")
@@ -139,8 +128,7 @@ func TestSetPageserverIdentityPreservesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := decodeTOML(t, readGolden(t, "pageserver.toml"))
-	init := BootstrapInit(18)
-	if err := SetPageserverIdentity(path, goldBranchID, 2, &init); err != nil {
+	if err := SetPageserverIdentity(path, goldBranchID, 2); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(path)

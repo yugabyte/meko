@@ -48,7 +48,7 @@ type PageserverParams struct {
 // (pg_distrib_dir / safekeeper_pg_addr / control_plane_api / optional JWT +
 // TLS keys / verbatim yb_storage_conn) plus the serialized init conf with
 // `yb_storage_conn` removed. The single-branch identity
-// (branch_id / generation / [timeline_init]) is baked in afterwards by
+// (branch_id / generation) is baked in afterwards by
 // SetPageserverIdentity, matching the Rust two-step (init then
 // set_timeline_identity).
 //
@@ -138,67 +138,14 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 	return m, nil
 }
 
-// TimelineInit is the on-disk `[timeline_init]` block of pageserver.toml:
-// how to create the configured branch's timeline when its
-// `amp_storage.pageserver_branch_state` row does not exist yet. Mirrors Rust
-// `pageserver_api::config::TimelineInitConfig` (serde tag = "mode",
-// rename_all = "snake_case").
-//
-// NOTE: the Branch variant carries ancestor_branch_id + ancestor_lsn ONLY
-// (no pg_version); ancestor_lsn serializes as its "X/Y" string.
-type TimelineInit struct {
-	// Mode is "bootstrap" or "branch".
-	Mode string
-	// PgVersion is set for Mode=="bootstrap" (serialized as a bare integer).
-	PgVersion int
-	// AncestorBranchID / AncestorLsn are set for Mode=="branch".
-	AncestorBranchID string
-	AncestorLsn      config.Lsn
-}
-
-const (
-	timelineInitBootstrap = "bootstrap"
-	timelineInitBranch    = "branch"
-)
-
-// BootstrapInit builds the Bootstrap timeline-init recipe (run initdb and
-// import the resulting pgdata).
-func BootstrapInit(pgVersion int) TimelineInit {
-	return TimelineInit{Mode: timelineInitBootstrap, PgVersion: pgVersion}
-}
-
-// BranchInit builds the Branch timeline-init recipe (point at an ancestor
-// branch at ancestorLsn).
-func BranchInit(ancestorBranchID config.BranchID, ancestorLsn config.Lsn) TimelineInit {
-	return TimelineInit{
-		Mode:             timelineInitBranch,
-		AncestorBranchID: ancestorBranchID,
-		AncestorLsn:      ancestorLsn,
-	}
-}
-
-// toMap renders the TimelineInit as the `[timeline_init]` table.
-func (t TimelineInit) toMap() (map[string]any, error) {
-	switch t.Mode {
-	case timelineInitBootstrap:
-		return map[string]any{"mode": timelineInitBootstrap, "pg_version": int64(t.PgVersion)}, nil
-	case timelineInitBranch:
-		return map[string]any{
-			"mode":               timelineInitBranch,
-			"ancestor_branch_id": t.AncestorBranchID,
-			"ancestor_lsn":       t.AncestorLsn,
-		}, nil
-	default:
-		return nil, fmt.Errorf("unknown timeline_init mode %q", t.Mode)
-	}
-}
-
 // SetPageserverIdentity bakes the single-branch identity into an existing
-// pageserver.toml (read-modify-write), injecting/overwriting `branch_id`,
-// `generation` and — when init is non-nil — the `[timeline_init]` table.
-// Any other keys already in the file are preserved. Mirrors Rust
-// `PageServerNode::set_timeline_identity` + `merge_config_fragment`.
-func SetPageserverIdentity(path string, branchID config.BranchID, generation uint32, init *TimelineInit) error {
+// pageserver.toml (read-modify-write), injecting/overwriting `branch_id` and
+// `generation`. Any other keys already in the file are preserved.
+//
+// How to create the branch's timeline is NOT configured here: the pageserver
+// reads it from the controller-seeded `amp_storage.branch_state` row (a NULL
+// ancestor means bootstrap, a set one means branch off it).
+func SetPageserverIdentity(path string, branchID config.BranchID, generation uint32) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %q: %w", path, err)
@@ -209,13 +156,6 @@ func SetPageserverIdentity(path string, branchID config.BranchID, generation uin
 	}
 	doc["branch_id"] = branchID
 	doc["generation"] = int64(generation)
-	if init != nil {
-		initMap, err := init.toMap()
-		if err != nil {
-			return err
-		}
-		doc["timeline_init"] = initMap
-	}
 	out, err := encodeTOML(doc)
 	if err != nil {
 		return fmt.Errorf("serialize %q: %w", path, err)

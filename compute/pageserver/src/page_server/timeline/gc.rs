@@ -45,7 +45,7 @@ impl Timeline {
     }
 
     /// This drain's target cutoff: the min over the retention floor,
-    /// live leases, child fork points (from pageserver_branch_state — children
+    /// live leases, child fork points (from timeline_state — children
     /// are other processes), and consistent_lsn (post-crash replay
     /// reads below it; the cutoff must never pass it), then floored at
     /// our own fork point.

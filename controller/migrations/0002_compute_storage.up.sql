@@ -1,6 +1,7 @@
--- 0002: provision the compute-facing (data-plane) schemas of the shared
--- `yb_storage` database: `amp_storage.blobs` + its enum, the `pageserver.*` page-store
--- tables, and the `safekeeper.*` WAL/control tables.
+-- 0002: provision the compute-facing (data-plane) schema of the shared
+-- `yb_storage` database: `amp_storage`, holding the blobs table + its enum, the
+-- page-store tables, the WAL mirror, and the per-branch state row shared by the
+-- pageserver and the safekeeper.
 --
 -- These schema/table names are HARDCODED by the pageserver/safekeeper/
 -- endpoint_storage daemons (e.g. compute/pageserver/src/page_store.rs
@@ -9,18 +10,19 @@
 -- their own schema. So this migration must run before those daemons start.
 --
 -- The controller's own registry (generation authority + node/branch/endpoint
--- records) lives in the `amp_registry` schema, provisioned by 0003. Every statement
--- is IF-NOT-EXISTS so the migration is idempotent. Objects are schema-qualified
--- (the migrator's search_path is `controller`).
+-- records) lives in the `amp_registry` schema, provisioned by 0003. Every
+-- statement is IF-NOT-EXISTS so the migration is idempotent. Objects are
+-- schema-qualified (the migrator's search_path is `controller`).
 
 CREATE SCHEMA IF NOT EXISTS amp_storage;
 
 -- =====================================================================
--- public.* — blob namespace + blobs storage table.
+-- Blob namespace + blobs storage table.
 --
 -- Shared by pageserver and safekeeper. The `blob_namespace` ENUM
--- discriminates between which service a row belongs to. (Live WAL
--- chunks live in `amp_storage.wals`, defined in the safekeeper section.)
+-- discriminates between which service a row belongs to; its values name
+-- the writing service, not a schema. (Live WAL chunks live in
+-- `amp_storage.wals`, defined below.)
 -- =====================================================================
 
 -- CREATE TYPE has no IF NOT EXISTS; guard against a pre-existing type.
@@ -30,15 +32,15 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 CREATE TABLE IF NOT EXISTS amp_storage.blobs (
-    branch_id        TEXT                  NOT NULL,
+    branch_id        TEXT                       NOT NULL,
     namespace        amp_storage.blob_namespace NOT NULL,
-    key              TEXT                  NOT NULL,
+    key              TEXT                       NOT NULL,
     generation       INT,
-    chunk_idx        INT                   NOT NULL,
-    data             BYTEA                 NOT NULL,
-    size_bytes       BIGINT                NOT NULL,
-    etag             TEXT                  NOT NULL,
-    last_modified_us BIGINT                NOT NULL,
+    chunk_idx        INT                        NOT NULL,
+    data             BYTEA                      NOT NULL,
+    size_bytes       BIGINT                     NOT NULL,
+    etag             TEXT                       NOT NULL,
+    last_modified_us BIGINT                     NOT NULL,
     metadata_json    TEXT,
     PRIMARY KEY ((branch_id, key) HASH, namespace, chunk_idx)
 );
@@ -100,18 +102,59 @@ CREATE TABLE IF NOT EXISTS amp_storage.meta (
     PRIMARY KEY ((branch_id, key) HASH, lsn DESC)
 );
 
--- Per-branch pageserver state — one durable row in YB carrying every load-bearing
--- field from the page-store index: consistent/gc/initdb LSNs, generation,
--- archive/delete flags, rel-size schema-migration state, plus a JSON `lineage`
--- column for future ancestor-detach support (always `Default` in yb-mode today).
-CREATE TABLE IF NOT EXISTS amp_storage.pageserver_branch_state (
-    branch_id              TEXT      NOT NULL,
-    consistent_lsn         BIGINT    NOT NULL,
-    applied_gc_cutoff_lsn  BIGINT    NOT NULL,
+-- =====================================================================
+-- Per-branch state — one row per branch, shared by both daemons.
+-- =====================================================================
+
+-- The pageserver and the safekeeper each own a group of columns here and write
+-- only their own group. The other group is NULL until its owner fills it in, so
+-- **row presence is not a signal**: what tells a daemon whether its own state
+-- exists is whether its group is populated.
+--
+--   pageserver present  <=>  consistent_lsn     IS NOT NULL
+--   safekeeper present  <=>  timeline_start_lsn IS NOT NULL
+--
+-- Those two predicates are load-bearing. The pageserver decides bootstrap
+-- (initdb + import) vs load from its predicate, and the safekeeper decides
+-- restore-control-file vs create-on-first-handshake from its own.
+--
+-- The row itself is created by the CONTROLLER at branch-create time
+-- (Store.RecordPendingInit), before any pageserver, safekeeper, or endpoint
+-- supervisor for the branch starts. Neither daemon creates it: each fills its
+-- own group with `UPDATE ... WHERE <own discriminator> IS NULL`, so the write
+-- lands exactly once and a retry is idempotent. A daemon that finds no row
+-- fails loudly rather than inventing one.
+--
+-- `pg_version` is the one shared column, and it holds a full `PgVersionId`
+-- (e.g. 180002), not a major version. What makes a single shared column safe is
+-- that it has exactly one writer: the CONTROLLER seeds it at branch create with
+-- the full id of the PostgreSQL amp ships (registry.FullPgVersionID; 180002 for
+-- PG 18), and nothing writes it again.
+--
+-- Both daemons only read it. The pageserver derives the major it needs by
+-- integer division by 10000. The safekeeper loads it into ServerInfo and checks
+-- it against every walproposer greeting — a check on the *major* version only,
+-- so the seeded value needs no later refinement.
+--
+-- The pageserver group carries every load-bearing field from the page-store
+-- index: consistent/gc/initdb LSNs, generation, archive/delete flags, rel-size
+-- schema-migration state, plus a JSON `lineage` column for future
+-- ancestor-detach support (always `Default` in yb-mode today). The safekeeper
+-- group is its control file: hot-update LSN scalars get their own BIGINT
+-- columns so a control-file save is a column-scoped UPDATE rather than a
+-- full-row rewrite. yb-amp runs a single safekeeper per branch with WAL
+-- durability provided by YugabyteDB, so consensus state (term / term_history)
+-- and membership (mconf) are absent.
+CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
+    branch_id              TEXT        NOT NULL,
+    pg_version             INT         NOT NULL,
+
+    -- pageserver-owned group; NULL until the pageserver creates its state.
+    consistent_lsn         BIGINT,
+    applied_gc_cutoff_lsn  BIGINT,
     ancestor_branch_id     TEXT,
     ancestor_lsn           BIGINT,
-    current_generation     INT       NOT NULL,
-    pg_version             INT       NOT NULL,
+    current_generation     INT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
     archived_at            TIMESTAMP,
@@ -119,6 +162,15 @@ CREATE TABLE IF NOT EXISTS amp_storage.pageserver_branch_state (
     rel_size_migration     TEXT,
     rel_size_migrated_at   BIGINT,
     lineage                JSONB,
+
+    -- safekeeper-owned group; NULL until the safekeeper creates its control file.
+    timeline_start_lsn     BIGINT,
+    local_start_lsn        BIGINT,
+    remote_consistent_lsn  BIGINT,
+    system_id              BIGINT,
+    wal_seg_size           INT,
+    creation_ts            TIMESTAMPTZ,
+
     PRIMARY KEY ((branch_id) HASH)
 );
 
@@ -150,26 +202,8 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
 ) SPLIT INTO 3 TABLETS;
 
 -- =====================================================================
--- yb-safekeeper persistent state.
+-- WAL mirror — written and read by yb-safekeeper.
 -- =====================================================================
-
--- Per-branch safekeeper control-file row. One row per branch, hash-partitioned
--- on `branch_id` so the row lives on a single tablet. Hot-update LSN scalars get
--- their own BIGINT columns so a control-file save is a column-scoped UPDATE
--- rather than a full-row rewrite. yb-amp runs a single safekeeper per branch with
--- WAL durability provided by YugabyteDB, so consensus state (term / term_history)
--- and membership (mconf) are absent.
-CREATE TABLE IF NOT EXISTS amp_storage.safekeeper_branch_state (
-    branch_id              TEXT        NOT NULL,
-    timeline_start_lsn     BIGINT      NOT NULL,
-    local_start_lsn        BIGINT      NOT NULL,
-    remote_consistent_lsn  BIGINT      NOT NULL,
-    pg_version             INT         NOT NULL,
-    system_id              BIGINT      NOT NULL,
-    wal_seg_size           INT         NOT NULL,
-    creation_ts            TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY ((branch_id) HASH)
-);
 
 -- Live WAL chunks the safekeeper mirrors into YB — the durable copy of the WAL
 -- stream. Partitioned into buckets to spread the load across multiple DocDB

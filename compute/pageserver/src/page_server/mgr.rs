@@ -186,7 +186,7 @@ async fn purge_stale_tenant_dirs(
 }
 
 /// Open the configured tenant synchronously: preload + attach
-/// (open-existing or create-if-missing per `[timeline_init]`) + activate.
+/// (open-existing or create-if-missing per the branch_state seed) + activate.
 /// Returns the fully-active manager; failure is fatal to startup.
 pub async fn init_tenant_mgr(
     conf: &'static PageServerConf,

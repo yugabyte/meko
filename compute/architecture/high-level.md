@@ -38,7 +38,7 @@ flowchart LR
     subgraph yb["YugabyteDB cluster (stateful)"]
         direction LR
         tblPages[("amp_storage.pages<br/>amp_storage.slru_pages<br/>amp_storage.meta")]
-        tblState[("amp_storage.pageserver_branch_state<br/>amp_storage.safekeeper_branch_state")]
+        tblState[("amp_storage.branch_state<br/>amp_storage.branch_state")]
         tblWal[("amp_storage.wals")]
         tblBlob[("amp_storage.blobs<br/>initdb archives, LFC scratch")]
         tblSc[("registry + controller schemas")]
@@ -149,7 +149,7 @@ durability watermark.
 In parallel, the pageserver's walreceiver streams interpreted WAL from
 the safekeeper (`START_REPLICATION`) and writes page rows into
 `amp_storage.pages` / `slru_pages` / `meta`; its flushes advance
-`amp_storage.pageserver_branch_state.consistent_lsn` under a generation fence.
+`amp_storage.branch_state.consistent_lsn` under a generation fence.
 
 ## Read path (a page miss in the compute)
 
@@ -188,8 +188,8 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Relation pages | YB `amp_storage.pages` | one row per (block, LSN); images + deltas |
 | SLRU blocks | YB `amp_storage.slru_pages` | one row per (block, LSN) |
 | Metadata blobs (relsizes, dir listings, aux files, …) | YB `amp_storage.meta` | latest row ≤ LSN wins |
-| Per-branch pageserver state (LSNs, generation, ancestry) | YB `amp_storage.pageserver_branch_state` | one generation-fenced row per branch |
-| Safekeeper control file | YB `amp_storage.safekeeper_branch_state` | one row per branch, typed columns |
+| Per-branch pageserver state (LSNs, generation, ancestry) | YB `amp_storage.branch_state` | one generation-fenced row per branch |
+| Safekeeper control file | YB `amp_storage.branch_state` | one row per branch, typed columns |
 | Live WAL | YB `amp_storage.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
 | initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
 | Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | written via endpoint_storage's HTTP API |
@@ -229,8 +229,8 @@ yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RP
   +-- db `yb_storage`
         +-- schema `amp_storage`  blobs (chunked BYTEA) + blob_namespace ENUM
         |                         pages, slru_pages, meta, pending_gc
-        |                         pageserver_branch_state
-        |                         safekeeper_branch_state (control-file rows)
+        |                         branch_state (one row per branch, shared by
+        |                           the pageserver and the safekeeper)
         |                         wals (WAL chunks, 10 tablets)
         +-- schema `amp_registry` branches, timelines,
         |                         pending_timeline_inits, endpoints

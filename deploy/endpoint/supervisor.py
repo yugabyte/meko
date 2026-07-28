@@ -220,13 +220,17 @@ def psql(dbname, sql=None, file=None, ignore_errors=False):
 # ---------------------------------------------------------------------------
 # Config file rendering
 # ---------------------------------------------------------------------------
-# NOTE: pageserver.toml's `timeline_init` Bootstrap serialization and the
-# exact compute spec shape are verified against `yb_amp_local`-generated
+# NOTE: the exact compute spec shape is verified against `yb_amp_local`-generated
 # configs during bring-up testing.
 
-def write_pageserver_config(datadir, bootstrap, ancestor_branch_id=None, ancestor_lsn=None):
+def write_pageserver_config(datadir):
     datadir.mkdir(parents=True, exist_ok=True)
 
+    # How to create the branch's timeline is not configured here: the controller
+    # seeds the branch's `amp_storage.branch_state` row at branch-create time,
+    # and the pageserver reads its init mode off that row (a NULL
+    # `ancestor_branch_id` means initdb + import, a set one means fork that
+    # ancestor at `ancestor_lsn`).
     lines = [
         f"pg_distrib_dir='{PG_DISTRIB_DIR}'",
         f"listen_pg_addr='{BIND_HOST}:{PAGESERVER_PG_PORT}'",
@@ -240,19 +244,6 @@ def write_pageserver_config(datadir, bootstrap, ancestor_branch_id=None, ancesto
         f"branch_id='{BRANCH_ID}'",
         f"generation={GENERATION}",
     ]
-    # TimelineInitConfig is internally tagged (`tag = "mode"`, rename_all =
-    # snake_case); PgMajorVersion serializes as its integer.
-    if ancestor_branch_id:
-        # Fork: fork the ancestor at ancestor_lsn instead of initdb. The
-        # pageserver writes a branch_state row pointing at the ancestor;
-        # pre-fork pages stay under the ancestor's branch_id and are reached
-        # via lineage-aware reads from shared storage (nothing is copied).
-        lines += ["", "[timeline_init]", 'mode = "branch"',
-                  f'ancestor_branch_id = "{ancestor_branch_id}"',
-                  f'ancestor_lsn = "{ancestor_lsn}"']
-    elif bootstrap:
-        # Tell the pageserver to run initdb + import for a fresh timeline.
-        lines += ["", "[timeline_init]", 'mode = "bootstrap"', f"pg_version = {int(PG_VERSION)}"]
     (datadir / "pageserver.toml").write_text("\n".join(lines) + "\n")
 
 
@@ -495,32 +486,11 @@ def main():
     signal.signal(signal.SIGTERM, sup.shutdown)
     signal.signal(signal.SIGINT, sup.shutdown)
 
-    # BOOTSTRAP=true forces a fresh initdb of the *supplied* branch, for when a
-    # control plane (the controller) allocated the id but the branch has not
-    # been materialized yet. Default keeps the original behaviour: bootstrap only
-    # when no id is supplied, otherwise attach to an existing branch.
-    force_bootstrap = env("BOOTSTRAP", "false").lower() in ("1", "true", "yes")
-    # Branch ancestry (set by the controller for a forked branch): fork the
-    # ancestor at ANCESTOR_LSN instead of initdb'ing a fresh, empty branch.
-    ancestor_branch_id = env("ANCESTOR_BRANCH_ID", "").strip() or None
-    ancestor_lsn = env("ANCESTOR_LSN", "").strip() or None
     if BRANCH_ID is None:
         BRANCH_ID = os.urandom(16).hex()
-        bootstrap = True
-        log(f"no BRANCH_ID supplied; bootstrapping fresh branch {BRANCH_ID}")
-    elif ancestor_branch_id:
-        if not ancestor_lsn:
-            raise SystemExit("ANCESTOR_BRANCH_ID set but ANCESTOR_LSN missing")
-        # A fork clones from its ancestor; it must not initdb.
-        bootstrap = False
-        log(f"fork: forking ancestor {ancestor_branch_id} at {ancestor_lsn} "
-            f"into branch {BRANCH_ID}")
+        log(f"no BRANCH_ID supplied; using fresh branch {BRANCH_ID}")
     else:
-        bootstrap = force_bootstrap
-        if bootstrap:
-            log(f"BOOTSTRAP=true; initializing supplied branch {BRANCH_ID}")
-        else:
-            log(f"serving branch {BRANCH_ID}")
+        log(f"serving branch {BRANCH_ID}")
 
     if DEV_PROVISION_SCHEMA:
         provision_schema()
@@ -560,7 +530,7 @@ def main():
 
     # 3. pageserver (runs initdb for a Bootstrap recipe, or forks the ancestor
     #    for a Branch recipe, on first start)
-    write_pageserver_config(ps_dir, bootstrap, ancestor_branch_id, ancestor_lsn)
+    write_pageserver_config(ps_dir)
     ps = Service(
         "yb-pageserver",
         [BIN_DIR / "yb-pageserver", "-D", ps_dir],

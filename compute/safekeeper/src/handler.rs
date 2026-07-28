@@ -252,7 +252,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin + Send> postgres_backend::Handler<IO>
 
             // This process serves a single branch (single-branch-per-
             // process). Reject a connection for any other branch before it
-            // can touch the registry — `amp_storage.safekeeper_branch_state` is shared
+            // can touch the registry — `amp_storage.branch_state` is shared
             // across the cluster, so a misrouted walproposer must not create
             // or mutate a foreign branch here.
             if let Some(baked) = self.conf.branch_id {

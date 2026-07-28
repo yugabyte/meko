@@ -47,7 +47,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("confirm the branch's timeline_state row exists");
     let row = db::query_text(
         &yb,
-        &format!("SELECT branch_id FROM amp_storage.pageserver_branch_state WHERE branch_id='{branch}' LIMIT 1"),
+        &format!("SELECT branch_id FROM amp_storage.branch_state WHERE branch_id='{branch}' LIMIT 1"),
     )
     .await?;
     if row.is_empty() {
@@ -116,7 +116,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &yb,
         &format!(
             "SELECT to_hex((consistent_lsn>>32)::int8)||'/'||to_hex((consistent_lsn & x'ffffffff'::bigint)::int8) \
-             FROM amp_storage.pageserver_branch_state WHERE branch_id='{branch}'"
+             FROM amp_storage.branch_state WHERE branch_id='{branch}'"
         ),
     )
     .await?;

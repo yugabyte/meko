@@ -11,7 +11,3 @@ grpc_auth_type = "Trust"
 no_sync = true
 branch_id = "9a57cdcafd663c91ab83654f21378725"
 generation = 2
-
-[timeline_init]
-mode = "bootstrap"
-pg_version = 18

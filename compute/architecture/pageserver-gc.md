@@ -282,7 +282,7 @@ cause.
 **Direct probes.**
 - `SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '…'` —
   queue depth.
-- `applied_gc_cutoff_lsn` in `amp_storage.pageserver_branch_state` — the current
+- `applied_gc_cutoff_lsn` in `amp_storage.branch_state` — the current
   cutoff.
 - The drain log line `gc drain complete … candidates_dequeued=…
   pages_rows_deleted=…`.

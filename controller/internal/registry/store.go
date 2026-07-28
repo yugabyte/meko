@@ -49,6 +49,27 @@ func (s *Store) RegistryCounts(ctx context.Context) (branches int64, err error) 
 
 // --- generation authority -------------------------------------------------
 
+// pgVersionNumPG18 is `PG_VERSION_NUM` of the PostgreSQL 18 build amp ships
+// (18.2 → 180002; see pg_install/v18 pg_config.h). It is the seed value the
+// controller records for a new branch's `pg_version`.
+const pgVersionNumPG18 = 180002
+
+// FullPgVersionID maps a PG major version to the full PgVersionId to record for
+// a branch.
+//
+// PG 18 is the only major amp ships, and this is the sole writer of
+// `amp_storage.branch_state.pg_version`, so anything else is a caller bug rather
+// than a version to guess at. Synthesising `major*10000` would write a version
+// no build in the tree can serve and defer the failure to the safekeeper's
+// greeting check on a branch that is already provisioned; refuse it here, where
+// the branch has not been created yet.
+func FullPgVersionID(major int) (int, error) {
+	if major != 18 {
+		return 0, fmt.Errorf("unsupported PG major version %d: amp ships PG 18 only", major)
+	}
+	return pgVersionNumPG18, nil
+}
+
 // AttachHook issues a branch's next generation. On attach it increments and
 // returns the generation, creating the branch row on first attach; on detach it
 // clears the attachment and returns nil. The generation is a monotonic per-branch
@@ -82,7 +103,10 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 	}
 	defer tx.Rollback(ctx)
 
-	// Create the branch on first attach; a concurrent creator is a no-op.
+	// The branch row is normally created at branch-create time (see
+	// RecordPendingInit), before any pageserver/safekeeper starts. This insert
+	// is a safety net for a branch that reaches attach without a recipe; a
+	// concurrent creator is a no-op.
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.branches
 		   (branch_id, generation, placement_policy, config, scheduling_policy)
@@ -94,8 +118,11 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 
 	var gen *int32
 	err = tx.QueryRow(ctx,
+		// COALESCE: a branch created by RecordPendingInit starts with
+		// generation NULL ("never attached"), and NULL + 1 would stay NULL.
+		// First attach therefore issues generation 1, as it always has.
 		`UPDATE amp_registry.branches
-		    SET generation = generation + 1, placement_policy = '{"Attached":0}'
+		    SET generation = COALESCE(generation, 0) + 1, placement_policy = '{"Attached":0}'
 		  WHERE branch_id = $1
 		  RETURNING generation`,
 		req.BranchID).Scan(&gen)
@@ -230,14 +257,77 @@ func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 // --- pending-init recipe registry -----------------------------------------
 
 // RecordPendingInit stores a branch's init recipe. Idempotent on branch_id.
+// RecordPendingInit is where a branch id first reaches the database, and it is
+// reached by every branch-creation path (the launcher's `branch create` and the
+// controller's record_branch_recipe step). So it provisions all three of the
+// branch's rows in one transaction, before any pageserver, safekeeper, or
+// endpoint supervisor for the branch is started:
+//
+//   - amp_registry.pending_timeline_inits — the init recipe, dropped once the
+//     branch materializes.
+//   - amp_registry.branches — the generation authority. generation stays NULL
+//     ("never attached") until the first attach-hook bumps it to 1.
+//   - amp_storage.branch_state — the per-branch state row the pageserver and
+//     safekeeper share. Both daemons only ever validate that it exists and
+//     UPDATE their own column group; neither creates it, so it has to be here
+//     before either starts.
+//
+// Every insert is ON CONFLICT DO NOTHING, so re-recording a recipe is a no-op
+// and the call stays idempotent.
 func (s *Store) RecordPendingInit(ctx context.Context, branchID string, req PendingBranchInitRequest) error {
-	if _, err := s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin record pending init: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.pending_timeline_inits
 		   (branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn)
 		 VALUES ($1, $2, $3, $4, $5::pg_lsn)
 		 ON CONFLICT (branch_id) DO NOTHING`,
 		branchID, req.BranchName, req.PgVersion, req.AncestorBranchID, req.StartLSN); err != nil {
 		return fmt.Errorf("record pending init: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO amp_registry.branches
+		   (branch_id, generation, placement_policy, config, scheduling_policy)
+		 VALUES ($1, NULL, '"Detached"', '{}'::jsonb, '"Active"')
+		 ON CONFLICT (branch_id) DO NOTHING`,
+		branchID); err != nil {
+		return fmt.Errorf("record branch: %w", err)
+	}
+
+	// The seed the pageserver reads at attach to decide how to create the
+	// timeline: a NULL ancestor means bootstrap (initdb + import at pg_version),
+	// a set one means branch off that ancestor at ancestor_lsn. This is why the
+	// row has to exist before any pageserver starts.
+	//
+	// `pg_version` holds a full PgVersionId; the recipe carries only the major
+	// version, so map it to the full id of the PostgreSQL we ship. This is the
+	// column's only writer — both daemons just read it — so a major we can't map
+	// has to fail here, before the branch exists, rather than seed a version no
+	// build can serve.
+	pgVersion, err := FullPgVersionID(req.PgVersion)
+	if err != nil {
+		return fmt.Errorf("record branch state: %w", err)
+	}
+	var ancestorLSN *string
+	if req.AncestorBranchID != nil {
+		ancestorLSN = &req.StartLSN
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO amp_storage.branch_state
+		   (branch_id, pg_version, ancestor_branch_id, ancestor_lsn)
+		 VALUES ($1, $2, $3, ($4::pg_lsn - '0/0'::pg_lsn)::bigint)
+		 ON CONFLICT (branch_id) DO NOTHING`,
+		branchID, pgVersion, req.AncestorBranchID, ancestorLSN); err != nil {
+		return fmt.Errorf("record branch state: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit record pending init: %w", err)
 	}
 	return nil
 }

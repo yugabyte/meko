@@ -1,7 +1,7 @@
 //! Find — and optionally set — the maximum valid `consistent_lsn` at or
 //! below a target LSN, for a single branch in `yb_storage`.
 //!
-//! `amp_storage.pageserver_branch_state.consistent_lsn` must point at a *real WAL
+//! `amp_storage.branch_state.consistent_lsn` must point at a *real WAL
 //! record boundary*: the byte just after a complete record (= the start
 //! of the next record). The pageserver's WAL reader does not scan
 //! forward to the next boundary — it starts decoding at exactly
@@ -20,7 +20,7 @@
 //! just before it is reported as the matching `prev_record_lsn`.
 //!
 //! By default it only prints. `--set` writes the pair back to
-//! `amp_storage.pageserver_branch_state` (stop the pageserver for this timeline
+//! `amp_storage.branch_state` (stop the pageserver for this timeline
 //! first — a running one will overwrite this on its next flush, and may
 //! be generation-fenced against this write).
 
@@ -46,7 +46,7 @@ struct Args {
     #[arg(long, value_name = "X/Y")]
     target_lsn: Lsn,
 
-    /// Write the computed pair back to `amp_storage.pageserver_branch_state`.
+    /// Write the computed pair back to `amp_storage.branch_state`.
     /// Without this the tool only prints (dry run).
     #[arg(long)]
     set: bool,
@@ -64,7 +64,7 @@ struct Args {
     conn: ysql_client::YbConnArgs,
 }
 
-/// The subset of `amp_storage.pageserver_branch_state` this tool reads.
+/// The subset of `amp_storage.branch_state` this tool reads.
 struct TimelineState {
     consistent_lsn: Lsn,
     prev_record_lsn: Option<Lsn>,
@@ -86,9 +86,14 @@ async fn main() -> anyhow::Result<()> {
     let branch = args.branch.to_string();
 
     let state = read_timeline_state(&client, &branch).await?;
-    let pg_version = match state.pg_version {
+    // `branch_state.pg_version` holds a full PgVersionId (e.g. 180002); the
+    // major version is the leading component.
+    let pg_version = match state.pg_version / 10000 {
         18 => PgMajorVersion::PG18,
-        v => bail!("pageserver_branch_state.pg_version is {v}, not a supported PG major version"),
+        v => bail!(
+            "branch_state.pg_version is {} (major {v}), not a supported PG major version",
+            state.pg_version
+        ),
     };
 
     println!("branch   {branch}");
@@ -158,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
 
     if !args.set {
         println!();
-        println!("dry run: pass --set to write this to amp_storage.pageserver_branch_state");
+        println!("dry run: pass --set to write this to amp_storage.branch_state");
         return Ok(());
     }
 
@@ -194,20 +199,27 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     println!();
-    println!("done: updated {affected} row(s) in amp_storage.pageserver_branch_state");
+    println!("done: updated {affected} row(s) in amp_storage.branch_state");
     Ok(())
 }
 
 async fn read_timeline_state(client: &YsqlClient, branch: &str) -> anyhow::Result<TimelineState> {
+    // `consistent_lsn IS NOT NULL` scopes the read to a row whose
+    // pageserver-owned columns are populated. The row is shared with the
+    // safekeeper, so without this a branch that has WAL but no page-store
+    // state yet would return a row of NULLs and panic on the gets below.
     let sql = "SELECT consistent_lsn, prev_record_lsn, applied_gc_cutoff_lsn, pg_version, \
                current_generation \
-               FROM amp_storage.pageserver_branch_state WHERE branch_id = $1";
+               FROM amp_storage.branch_state \
+               WHERE branch_id = $1 AND consistent_lsn IS NOT NULL";
     let params: [&(dyn ToSql + Sync); 1] = [&branch];
     let row = client
         .query_opt(sql, &params)
         .await
-        .context("reading amp_storage.pageserver_branch_state")?
-        .with_context(|| format!("no pageserver_branch_state row for branch={branch}"))?;
+        .context("reading amp_storage.branch_state")?
+        .with_context(|| {
+            format!("no branch_state row with pageserver state for branch={branch}")
+        })?;
     let consistent_lsn = Lsn(row.get::<_, i64>(0) as u64);
     let prev_record_lsn = row.get::<_, Option<i64>>(1).map(|v| Lsn(v as u64));
     let applied_gc_cutoff_lsn = Lsn(row.get::<_, i64>(2) as u64);
@@ -232,7 +244,7 @@ async fn write_timeline_state(
     let consistent_i = consistent.0 as i64;
     let prev_i = prev.map(|l| l.0 as i64);
     if let Some(generation) = expect_generation {
-        let sql = "UPDATE amp_storage.pageserver_branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
+        let sql = "UPDATE amp_storage.branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
                    WHERE branch_id = $1 AND current_generation = $4";
         let params: [&(dyn ToSql + Sync); 4] = [&branch, &consistent_i, &prev_i, &generation];
         client
@@ -240,7 +252,7 @@ async fn write_timeline_state(
             .await
             .context("UPDATE timeline_state")
     } else {
-        let sql = "UPDATE amp_storage.pageserver_branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
+        let sql = "UPDATE amp_storage.branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
                    WHERE branch_id = $1";
         let params: [&(dyn ToSql + Sync); 3] = [&branch, &consistent_i, &prev_i];
         client

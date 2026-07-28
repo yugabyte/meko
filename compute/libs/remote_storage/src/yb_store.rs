@@ -1104,7 +1104,7 @@ fn quote_ident(ident: &str) -> String {
 
 /// Quote a (possibly schema-qualified) relation name. A `schema.table` input is
 /// split on the first `.` and each part quoted independently
-/// (`"schema"."table"`), so the name resolves regardless of the connection's
+/// (`"schema"."table"`), so the name is independent of the connection's
 /// `search_path`; an unqualified name is quoted as a single identifier.
 fn quote_relation(rel: &str) -> String {
     match rel.split_once('.') {

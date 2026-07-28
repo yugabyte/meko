@@ -10,7 +10,7 @@ Grounded in the Rust sources (`compute/safekeeper/`, `compute/libs/utils`,
 **System framing.** Durability and resilience come from YugabyteDB, the
 underlying store. The safekeeper mirrors every WAL byte into the YB table
 `amp_storage.wals` and persists its per-branch control state in
-`amp_storage.safekeeper_branch_state`; it keeps no durable local state. Throughout
+`amp_storage.branch_state`; it keeps no durable local state. Throughout
 this doc, "flushed" means **persisted to YB** — `flush_lsn` is the frontier
 of WAL confirmed durable in `amp_storage.wals`, and a commit is acked to the
 compute only once its bytes are there.
@@ -67,7 +67,7 @@ append path; truncation happens only via `ProposerElected`.
 
 ---
 
-## Timeline control LSNs (`amp_storage.safekeeper_branch_state`)
+## Timeline control LSNs (`amp_storage.branch_state`)
 
 Persisted in YB via `control_file::YbControlFileStorage`. Loaded at
 timeline attach; written by `TimelineState::finish_change` (full row) and
@@ -97,7 +97,7 @@ copy lags until the manager's periodic advisory save.
 `AdvisoryPersist::persist_remote_consistent_lsn`:
 
 ```sql
-UPDATE amp_storage.safekeeper_branch_state
+UPDATE amp_storage.branch_state
 SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2)
 WHERE branch_id = $1
 ```
@@ -345,7 +345,7 @@ both sides by the last-removed segno for a tight index range).
 
 **Why each term is in the min:**
 - *Persisted* `remote_consistent_lsn`, not the in-memory copy: a feedback
-  bump that hasn't reached `amp_storage.safekeeper_branch_state` yet must not license
+  bump that hasn't reached `amp_storage.branch_state` yet must not license
   deletion — after a safekeeper restart the horizon recomputes from the
   persisted row, and WAL deleted on the strength of a lost in-memory value
   would be gone while the row still claims it is needed.
@@ -400,7 +400,7 @@ truncate_wal end_pos ≤ durable_lsn    (refused otherwise)
 
 ## Cross-link: pageserver restart → stream → feedback loop
 
-1. Pageserver loads `consistent_lsn` from `amp_storage.pageserver_branch_state` and
+1. Pageserver loads `consistent_lsn` from `amp_storage.branch_state` and
    seeds both its eager applied frontier and its durable slot from it.
 2. Pageserver sends `START_REPLICATION PHYSICAL {startpoint}` with
    `startpoint` derived from `get_consistent_lsn()`.
@@ -422,7 +422,7 @@ UPSERTs; a lagging safekeeper column means segments are trimmed later.
 
 ## Persistence cheat sheet
 
-| Field | YB `amp_storage.safekeeper_branch_state` | YB `amp_storage.wals` | In memory only |
+| Field | YB `amp_storage.branch_state` | YB `amp_storage.wals` | In memory only |
 |-------|-------------------------------|----------------------|----------------|
 | `timeline_start_lsn` | Yes | — | — |
 | `local_start_lsn` | Yes | — | — |
@@ -470,6 +470,6 @@ UPSERTs; a lagging safekeeper column means segments are trimmed later.
   feedback shared-memory relay.
 - `compute/libs/utils/src/pageserver_feedback.rs` — feedback wire format.
 - `controller/migrations/0002_compute_storage.up.sql` —
-  `amp_storage.safekeeper_branch_state` + `amp_storage.wals` schemas.
+  `amp_storage.branch_state` + `amp_storage.wals` schemas.
 - [`pageserver-lsns.md`](pageserver-lsns.md) — the pageserver side of the
   link.

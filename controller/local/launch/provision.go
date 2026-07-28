@@ -213,14 +213,19 @@ func createTimelineOnSafekeeper(ctx context.Context, env *config.LocalEnv, conf 
 	if conf.ListenAddr != nil {
 		listenAddr = *conf.ListenAddr
 	}
+	// The safekeeper's pg_version is a PgVersionId — the *full* PostgreSQL
+	// version (e.g. 180002), not the major (18). Sending the bare major makes
+	// the safekeeper panic (from_full_pg_version rejects it) and drop the
+	// connection (EOF). Shares the controller's mapping so this and the
+	// branch_state seed cannot drift apart.
+	fullPgVersion, err := registry.FullPgVersionID(pgVersion)
+	if err != nil {
+		return fmt.Errorf("create timeline on safekeeper: %w", err)
+	}
 	c := client.NewSafekeeper(fmt.Sprintf("%s:%d", listenAddr, conf.HTTPPort), httpClient())
 	return c.CreateTimeline(ctx, client.SafekeeperTimelineCreateRequest{
-		BranchID: branchID,
-		// The safekeeper's pg_version is a PgVersionId — the *full* PostgreSQL
-		// version (major * 10000, e.g. 180000), not the major (18). Sending the
-		// bare major makes the safekeeper panic (from_full_pg_version rejects it)
-		// and drop the connection (EOF). Matches Rust PgVersionId::from(major).
-		PgVersion: uint32(pgVersion) * 10000,
+		BranchID:  branchID,
+		PgVersion: uint32(fullPgVersion),
 		StartLSN:  startLSN,
 	})
 }
@@ -331,11 +336,11 @@ func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID st
 	if err := writePageserverFiles(env, &psConf, &skConf); err != nil {
 		return err
 	}
-	// Bake the Bootstrap identity, then start (register + spawn).
-	init := cfg.BootstrapInit(pgVersion)
+	// Bake the identity, then start (register + spawn). How to create the
+	// timeline comes from the controller-seeded branch_state row, not from here.
 	branchIDCopy := branchID
 	psConf.BranchID = &branchIDCopy
-	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID, 0, &init); err != nil {
+	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID, 0); err != nil {
 		return err
 	}
 	if err := startPageserver(ctx, env, &psConf, 60*time.Second); err != nil {
@@ -415,10 +420,9 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 	if err := clonePageserverFromTemplate(env, &psConf, ancestorConf, fmt.Sprintf("127.0.0.1:%d", skConf.PgPort)); err != nil {
 		return err
 	}
-	init := cfg.BranchInit(ancestorBranchID, startLSN)
 	branchIDCopy := branchID
 	psConf.BranchID = &branchIDCopy
-	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID, 0, &init); err != nil {
+	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID, 0); err != nil {
 		return err
 	}
 
@@ -543,7 +547,6 @@ func clonePageserverFromTemplate(env *config.LocalEnv, psConf, ancestorConf *con
 	// Strip any inherited identity: this node serves its own branch.
 	delete(doc, "branch_id")
 	delete(doc, "generation")
-	delete(doc, "timeline_init")
 
 	out, err := marshalTOMLMap(doc)
 	if err != nil {

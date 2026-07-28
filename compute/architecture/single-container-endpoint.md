@@ -78,7 +78,7 @@ The supervisor materializes the branch itself:
   `pageserver.toml` the supervisor renders. The init mode is chosen
   from the environment:
   - `BRANCH_ID` unset → generate a fresh 32-hex id and bake
-    `[timeline_init] mode = "bootstrap"` (the pageserver runs `initdb`
+    the controller-seeded `branch_state` row with a NULL ancestor (the pageserver runs `initdb`
     and imports the initial page set on start).
   - `BRANCH_ID` set (the production case, supplied by the controller) →
     attach the existing branch; `BOOTSTRAP=true` forces `initdb` of the

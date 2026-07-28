@@ -16,9 +16,9 @@ All subsystems share **one** database, `yb_storage`. Within it:
 
 | Schema | Tables | Provisioned by |
 |---|---|---|
-| `amp_storage` | the data plane: `pages`, `slru_pages`, `meta`, `pending_gc`, `pageserver_branch_state`, `safekeeper_branch_state`, `wals`, `blobs` (+ the `blob_namespace` ENUM) | migration `0002_compute_storage` |
+| `amp_storage` | the data plane: `pages`, `slru_pages`, `meta`, `pending_gc`, `wals`, `blobs` (+ the `blob_namespace` ENUM), and `branch_state` — the per-branch row the pageserver and safekeeper share | migration `0002_compute_storage` |
 | `controller` | the controller's product model: `app_user`, `storage_pool`, `project`, `user_pool_grant`, `user_project_grant`, `branch`, `endpoint`, `task`, `task_step` (plus the `grant_role`, `endpoint_role`, `task_status`, `step_status` ENUMs) | migration `0001_init` |
-| `amp_registry` | the controller's storage-layer registry: `branches`, `nodes`, `timelines`, `pending_timeline_inits`, `endpoints` | migration `0003_registry` |
+| `amp_registry` | the controller's storage-layer registry: `branches`, `timelines`, `pending_timeline_inits`, `endpoints` | migration `0003_registry` |
 
 ### Provisioning — controller migrations on startup
 
@@ -187,7 +187,7 @@ The column split is populated at write time by `YbStore::parse_key`
 
 - **`namespace`** — `safekeeper` if the key contains `safekeeper`, else
   `pageserver`. The `safekeeper` variant is reserved; safekeeper state
-  lives in typed rows (`amp_storage.safekeeper_branch_state`, `amp_storage.wals`),
+  lives in typed rows (`amp_storage.branch_state`, `amp_storage.wals`),
   so current safekeeper builds write no blobs.
 - **`branch_id`** — the branch-id-shaped token in the path (32 hex
   chars, optionally with a `-<count>-<num>` shard suffix). Empty string
@@ -249,7 +249,7 @@ ORDER BY max(size_bytes) DESC
 LIMIT 10;
 ```
 
-## `amp_storage` schema — page store
+## `amp_storage` schema
 
 The pageserver's row-per-version page store; see
 [`pageserver.md`](pageserver.md) for the full design.
@@ -366,28 +366,67 @@ CREATE TABLE amp_storage.meta (
 );
 ```
 
-### `amp_storage.pageserver_branch_state`
+### `amp_storage.branch_state`
 
-One row per branch — the page store's durable index record, carrying
-every load-bearing per-branch field in a single transactionally-updatable
-row: consistent / GC-cutoff / initdb LSNs, ancestry, generation,
-archive/delete timestamps, and rel-size migration state.
-`current_generation` is the gate that fences a stale pageserver: every
-flush runs in a transaction that conditionally updates this row
-(`... WHERE current_generation = $expected`), so a pageserver holding
-an old generation cannot clobber state owned by a newer attachment. The
-`lineage` JSONB column is a forward-looking slot for ancestor-detach
-state (always `Default` today).
+One row per branch, **shared by the pageserver and the safekeeper**. Each
+daemon owns a group of columns and writes only its own group; the other group
+is NULL until its owner fills it in.
+
+The row is created by the **controller**, at branch-create time
+(`Store.RecordPendingInit`), before any pageserver, safekeeper, or endpoint
+supervisor for the branch starts. Neither daemon ever creates it: both validate
+that it exists and UPDATE their own columns. A daemon that finds no row fails
+loudly — it means it started against a branch the controller never provisioned.
+
+Because the row is shared, **its presence is not a per-daemon signal**. What
+tells a daemon whether *its own* state exists is whether its group is
+populated:
+
+| Daemon | Presence predicate | Decides |
+|---|---|---|
+| pageserver | `consistent_lsn IS NOT NULL` | bootstrap (initdb + import) vs load |
+| safekeeper | `timeline_start_lsn IS NOT NULL` | create control file vs restore it |
+
+Both first writes are `UPDATE ... WHERE <own discriminator> IS NULL`, so each
+group is filled exactly once and a retry is idempotent.
+
+The pageserver group is the page store's durable index record: consistent /
+GC-cutoff / initdb LSNs, ancestry, generation, archive/delete timestamps, and
+rel-size migration state. `current_generation` is the gate that fences a stale
+pageserver: every flush runs in a transaction that conditionally updates this
+row (`... WHERE current_generation = $expected`), so a pageserver holding an old
+generation cannot clobber state owned by a newer attachment. The `lineage`
+JSONB column is a forward-looking slot for ancestor-detach state (always
+`Default` today).
+
+The safekeeper group is its control file. Hot-update LSN scalars get their own
+BIGINT columns so a control-file save is a column-scoped UPDATE rather than a
+full-row rewrite. yb-amp runs a single safekeeper per branch with WAL durability
+provided by YB itself, so there is no consensus state (term / term history) and
+no membership configuration to persist.
+
+`pg_version` is the one shared column, and it holds a full `PgVersionId`
+(e.g. 180002) rather than a major version. What makes a single shared column
+safe is that it has exactly one writer: the controller seeds it at branch create
+with the full id of the PostgreSQL amp ships (180002 for PG 18; the init recipe
+carries only the major version), and nothing writes it again.
+
+Both daemons only read it. The pageserver divides by 10000 for the major version
+it needs. The safekeeper loads it into `ServerInfo` and checks it against every
+walproposer greeting — a check on the *major* version only, so the seeded value
+needs no later refinement.
 
 ```sql
-CREATE TABLE amp_storage.pageserver_branch_state (
-    branch_id              TEXT      NOT NULL,
-    consistent_lsn         BIGINT    NOT NULL,
-    applied_gc_cutoff_lsn  BIGINT    NOT NULL,
+CREATE TABLE amp_storage.branch_state (
+    branch_id              TEXT        NOT NULL,
+    pg_version             INT         NOT NULL,
+
+    -- pageserver-owned; NULL until the pageserver creates its state
+    consistent_lsn         BIGINT,
+    applied_gc_cutoff_lsn  BIGINT,
     ancestor_branch_id     TEXT,
     ancestor_lsn           BIGINT,
-    current_generation     INT       NOT NULL,
-    pg_version             INT       NOT NULL,
+    current_generation     INT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
     archived_at            TIMESTAMP,
@@ -395,32 +434,15 @@ CREATE TABLE amp_storage.pageserver_branch_state (
     rel_size_migration     TEXT,
     rel_size_migrated_at   BIGINT,
     lineage                JSONB,
-    PRIMARY KEY ((branch_id) HASH)
-);
-```
 
-## `amp_storage` schema — safekeeper state
+    -- safekeeper-owned; NULL until the safekeeper creates its control file
+    timeline_start_lsn     BIGINT,
+    local_start_lsn        BIGINT,
+    remote_consistent_lsn  BIGINT,
+    system_id              BIGINT,
+    wal_seg_size           INT,
+    creation_ts            TIMESTAMPTZ,
 
-### `amp_storage.safekeeper_branch_state`
-
-The per-branch safekeeper control file as a typed row — one row per
-branch, hash-partitioned on `branch_id` so it lives on a single tablet.
-Hot-update LSN scalars get their own BIGINT columns so a control-file
-save is a column-scoped UPDATE rather than a full-row rewrite. yb-amp
-runs a single safekeeper per branch with WAL durability provided by
-YB itself, so there is no consensus state (term / term history) and no
-membership configuration to persist.
-
-```sql
-CREATE TABLE amp_storage.safekeeper_branch_state (
-    branch_id              TEXT        NOT NULL,
-    timeline_start_lsn     BIGINT      NOT NULL,
-    local_start_lsn        BIGINT      NOT NULL,
-    remote_consistent_lsn  BIGINT      NOT NULL,
-    pg_version             INT         NOT NULL,
-    system_id              BIGINT      NOT NULL,
-    wal_seg_size           INT         NOT NULL,
-    creation_ts            TIMESTAMPTZ NOT NULL,
     PRIMARY KEY ((branch_id) HASH)
 );
 ```
@@ -672,7 +694,7 @@ Every YB-talking call site in this codebase satisfies that contract:
   [`yb_enable_upsert_mode = true`](#yb_enable_upsert_mode) (same
   semantics — the conflict path is a no-op upsert; this covers the
   `pages` / `slru_pages` / `meta` / `wals` / `blobs` write paths); or
-  generation-fenced `UPDATE amp_storage.pageserver_branch_state SET ... WHERE
+  generation-fenced `UPDATE amp_storage.branch_state SET ... WHERE
   current_generation = $expected` (a replay sees the same generation
   and applies the same row state).
 - **DELETEs** are key-scoped (`DELETE FROM ... WHERE id = $1`); replay
