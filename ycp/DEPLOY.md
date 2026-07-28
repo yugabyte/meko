@@ -155,10 +155,11 @@ the namespace and all demo workloads.
 
 ## Variant: meko-dev-eks, exposed on the tailnet
 
-`deploy/ycp-dev.yaml` is the same demo (control plane + agent, binaries injected
-via `kubectl cp`) targeted at the `meko-dev-eks` cluster in a fresh `ycp`
-namespace, but instead of a cloud LoadBalancer the console is published on the
-**tailnet** via the cluster's Tailscale operator — the `ycp` Service carries:
+`deploy/ycp-dev.yaml` runs the control plane + agent on the `meko-dev-eks` cluster
+in the `ycp` namespace. Unlike the demo above it uses the **real ECR images**, so
+there is no `kubectl cp` step — `apply` is the whole deploy. Instead of a cloud
+LoadBalancer the console is published on the **tailnet** via the cluster's
+Tailscale operator — the `ycp` Service carries:
 
 ```yaml
 annotations:
@@ -170,17 +171,27 @@ annotations:
 ```bash
 CTX=meko-dev-eks
 kubectl --context $CTX apply -f deploy/ycp-dev.yaml
-
-# inject the linux/amd64 binaries (same wait-then-exec pattern)
-YCP_POD=$(kubectl --context $CTX -n ycp get pod -l app=ycp -o jsonpath='{.items[0].metadata.name}')
-AGENT_POD=$(kubectl --context $CTX -n ycp get pod -l app=meko-agent -o jsonpath='{.items[0].metadata.name}')
-kubectl --context $CTX -n ycp cp dist/ycp-linux-amd64  $YCP_POD:/app/ycp
-kubectl --context $CTX -n ycp cp dist/agent-linux-amd64 $AGENT_POD:/app/agent
+kubectl --context $CTX -n ycp rollout status deploy/ycp deploy/meko-agent
 ```
 
 The operator provisions a proxy (`ts-ycp-*` in the `tailscale` namespace) and the
 console becomes reachable at `ycp-dev.<tailnet>.ts.net` — tailnet-only, not the
-public internet. The agent enrolls the meko-dev cluster, so its row goes live.
+public internet. The agent enrolls the meko-dev cluster, so its row goes live:
+
+```bash
+kubectl --context $CTX -n ycp logs deploy/ycp | grep "agent enrolled"
+# agent enrolled: env=meko-dev provider=aws k8s=v1.33.13-eks-8f14419 nodes=17
+
+kubectl --context $CTX -n ycp port-forward svc/ycp 8080:80   # or use the tailnet host
+curl -s localhost:8080/api/v1/environments | jq '.items[] | {id, state, live}'
+```
+
+The images are `:latest` with `imagePullPolicy: Always`, so a restart picks up
+whatever `ycp-images.yml` last pushed. Pin the SHA tag in the manifest for
+anything that has to be reproducible.
+
+Nothing here touches `meko-system` — the dev data plane (its own `meko-api-server`,
+`meko-ui`, `inference-gateway`) lives there and is deployed separately.
 
 ## Tests
 

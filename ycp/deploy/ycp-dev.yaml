@@ -1,6 +1,14 @@
 # YCP on meko-dev-eks, namespace `ycp`. Console exposed on the tailnet via the
 # cluster's Tailscale operator (annotations on the ClusterIP Service).
-# Pods run a stock alpine image that waits for a binary injected via `kubectl cp`.
+#
+# Runs the real images from ECR, so `kubectl apply -f` is the whole deploy — no
+# `kubectl cp` binary injection (that is still how deploy/ycp-demo.yaml works, on
+# purpose: it stays runnable without a registry). EKS node IAM authorizes the ECR
+# pull, so no imagePullSecrets are needed here.
+#
+# State is IN-MEMORY: no YCP_DATABASE_URL is set, so the fleet registry resets if
+# the pod restarts and the agent re-enrolls against the re-armed seed token. Copy
+# the postgres wiring from deploy/ycp-demo.yaml if this needs to be durable.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -75,11 +83,12 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: ycp
-          image: alpine:3.20
-          imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c"]
-          args:
-            - 'echo "waiting for /app/ycp"; while true; do if [ -x /app/ycp ]; then echo starting; /app/ycp -addr :8080; echo "ycp exited rc=$?"; fi; sleep 3; done'
+          image: 161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/ycp:latest
+          # `latest` + Always so a fresh push rolls out on restart. Pin the SHA tag
+          # for anything you need to reproduce:
+          #   aws ecr describe-images --region us-east-2 --repository-name meko/ycp \
+          #     --query 'reverse(sort_by(imageDetails,&imagePushedAt))[0].imageTags'
+          imagePullPolicy: Always
           env:
             - { name: YCP_SEED_ENV_NAME, value: "meko-dev" }
             - name: YCP_SEED_ENV_TOKEN
@@ -94,10 +103,6 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
-          volumeMounts:
-            - { name: app, mountPath: /app }
-      volumes:
-        - { name: app, emptyDir: {} }
 ---
 # Console exposed on the tailnet. The Tailscale operator watches this annotation
 # and creates a proxy so the service is reachable at ycp-dev.<tailnet>.ts.net.
@@ -137,11 +142,8 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: meko-agent
-          image: alpine:3.20
-          imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c"]
-          args:
-            - 'echo "waiting for /app/agent"; while true; do if [ -x /app/agent ]; then echo starting; /app/agent; echo "agent exited rc=$?"; fi; sleep 3; done'
+          image: 161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/meko-agent:latest
+          imagePullPolicy: Always
           env:
             - { name: YCP_URL, value: "http://ycp.ycp.svc.cluster.local:80" }
             - { name: ENV_NAME, value: "meko-dev" }
@@ -153,7 +155,3 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
-          volumeMounts:
-            - { name: app, mountPath: /app }
-      volumes:
-        - { name: app, emptyDir: {} }
