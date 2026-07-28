@@ -53,7 +53,7 @@ type InitArgs struct {
 	YbDbname       string
 	YbHost         string
 	YbPort         uint16
-	YbHotPath      string // "yb_thin_client" (default) | "tsclient" | "ysql"
+	YbHotPath      string // "yb_thin_client" (default) | "ysql"
 	PortBase       *uint16
 	NumPageservers uint16 // default 1; only the single-PS path is supported
 	Force          InitForceMode
@@ -82,8 +82,8 @@ const zeroBranchID = "00000000000000000000000000000000"
 // `HotPath::default()` is `yb_thin_client`, so omitting the key already selects
 // the thin client and spelling it out would be redundant noise in every
 // generated config. Omitting *every other* lane too, though, made
-// `--yb-hot-path tsclient` a silent no-op — the flag's own default value —
-// leaving no way to select the tsclient lane or fall back to it.
+// `--yb-hot-path ysql` a silent no-op, leaving no way to select the YSQL
+// lane or fall back to it.
 //
 // Mirrors Rust `YbConnConfig::to_inline_toml`, which likewise renders only the
 // non-default lanes.

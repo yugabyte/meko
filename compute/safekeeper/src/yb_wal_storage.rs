@@ -20,7 +20,7 @@
 //! spreads across [`WALS_BUCKETS`] tablets. `bucket_id` is assigned per
 //! consumer BATCH by [`consumer_main`], rotating through the buckets one
 //! batch at a time. One bucket per batch means every batch targets ONE
-//! tablet: the tsclient lane applies it as one atomic write batch, and the
+//! tablet: the direct lane applies it as one atomic write batch, and the
 //! YSQL lane's multi-VALUES INSERT hits the single-shard transaction fast
 //! path (no distributed txn), while write load rotates across all tablets.
 //! Readers can't derive a chunk's bucket, so index-tight reads add a
@@ -52,7 +52,7 @@
 //! channel greedily into a batch — up to [`FLUSH_ROWS_THRESHOLD`] chunks
 //! or [`FLUSH_BYTES_THRESHOLD`] bytes — stamps the whole batch with one
 //! placement bucket, coalesces contiguous chunks into single rows
-//! ([`coalesce_runs`]), writes it (tsclient lane or one multi-row
+//! ([`coalesce_runs`]), writes it (direct lane or one multi-row
 //! `INSERT ... VALUES (...), (...)` through [`YsqlClient`]), and
 //! publishes the highest end_lsn of each successful batch onto a
 //! `tokio::sync::watch` watermark. This lets the producer keep pushing
@@ -194,17 +194,12 @@ pub struct YbWalConn {
     /// `--wal-cache-size-mib 0` to disable the cache entirely (every
     /// WAL read then hits YB).
     pub cache: Option<Arc<std::sync::Mutex<WalCache>>>,
-    /// Thin-RPC lane (`hot_path = "tsclient"`): pure-Rust
-    /// `yb_tsclient` handle for `safekeeper.wals`, speaking the pggate
-    /// RPC protocol to a tserver's RPC port. `None` on the default YSQL
-    /// path. Opened and health-checked at startup; carries the hot-path
-    /// WAL write/read dispatch. Control file,
-    /// GC, and rehydration stay on the YSQL lanes regardless.
-    pub yb_tsclient: Option<Arc<YbTsClient>>,
-    /// Thin-client lane (`hot_path = "yb_thin_client"`): `yb_thin_client`
-    /// handle for `safekeeper.wals`, speaking `Perform` to a tserver
-    /// through the `libyb_thin_client` C++ shim. `None` unless the thin
-    /// client hot path is selected. Parallel to [`Self::yb_tsclient`].
+    /// Direct-RPC lane (`hot_path = "yb_thin_client"`, the default):
+    /// `yb_thin_client` handle for `safekeeper.wals`, speaking `Perform` to a
+    /// tserver through the `libyb_thin_client` C++ shim. `None` on the YSQL
+    /// path. Opened and health-checked at startup; carries the hot-path WAL
+    /// write/read dispatch. Control file, GC, and rehydration stay on the
+    /// YSQL lanes regardless.
     pub yb_thinclient: Option<Arc<YbThinClient>>,
     /// Codec applied to the `data` column on the way out to YB, from
     /// `yb_wal_compression`. Write-side only — the read path decodes
@@ -213,32 +208,10 @@ pub struct YbWalConn {
     pub codec: payload_codec::Codec,
 }
 
-/// See [`YbWalConn::yb_tsclient`] and `compute/architecture/safekeeper.md`.
-pub struct YbTsClient {
-    pub client: Arc<yb_tsclient::TsClient>,
-    pub wals: Arc<yb_tsclient::TableHandle>,
-}
-
 /// See [`YbWalConn::yb_thinclient`]. The `yb_thin_client` (shim) lane.
 pub struct YbThinClient {
     pub client: Arc<yb_thin_client::TsClient>,
     pub wals: Arc<yb_thin_client::TableHandle>,
-}
-
-/// Exports `yb_tsclient` health events (which its internal retries
-/// would otherwise absorb invisibly) into this daemon's metrics.
-struct TsClientLaneObserver;
-
-impl yb_tsclient::ClientObserver for TsClientLaneObserver {
-    fn on_session_recovery(&self) {
-        crate::metrics::YB_WAL_SESSION_RECOVERIES.inc();
-    }
-    fn on_call_timeout(&self) {
-        crate::metrics::YB_WAL_CALL_TIMEOUTS.inc();
-    }
-    fn on_write_backpressure(&self) {
-        crate::metrics::YB_WAL_WRITE_BACKPRESSURE.inc();
-    }
 }
 
 impl YbWalConn {
@@ -296,14 +269,6 @@ impl YbWalConn {
         } else {
             None
         };
-        let yb_tsclient = match yb.hot_path {
-            ysql_client::HotPath::TsClient => Some(
-                Self::connect_tsclient(yb, &system_client)
-                    .await
-                    .context("thin-RPC hot path init (hot_path = \"tsclient\")")?,
-            ),
-            _ => None,
-        };
         let yb_thinclient = match yb.hot_path {
             ysql_client::HotPath::ThinClient => Some(
                 Self::connect_thin(yb, &system_client)
@@ -318,13 +283,12 @@ impl YbWalConn {
             system_client,
             table: WALS_TABLE.to_string(),
             cache,
-            yb_tsclient,
             yb_thinclient,
             codec: conf.yb_wal_compression.into(),
         })))
     }
 
-    /// One-time catalog lookup for the tsclient hot-path lane: the
+    /// One-time catalog lookup for the direct-RPC hot-path lane: the
     /// database OID and `safekeeper.wals`'s pg_class OID.
     async fn lookup_wals_oids(
         system_client: &ysql_client::YsqlClient,
@@ -340,47 +304,6 @@ impl YbWalConn {
             .get(relname)
             .ok_or_else(|| anyhow::anyhow!("wals table {relname} missing from OID lookup"))?;
         Ok((db_oid, wals_oid))
-    }
-
-    /// Connects the thin-RPC (`yb_tsclient`) lane and opens
-    /// `safekeeper.wals`, validating tserver-RPC connectivity and table
-    /// layout in one shot. Fail-fast at startup.
-    async fn connect_tsclient(
-        yb: &ysql_client::YbConnConfig,
-        system_client: &Arc<ysql_client::YsqlClient>,
-    ) -> anyhow::Result<Arc<YbTsClient>> {
-        use anyhow::Context;
-        let (db_oid, wals_oid) = Self::lookup_wals_oids(system_client).await?;
-        // WAL lane: one read + one write session by default (low-concurrency —
-        // one-batch-at-a-time flush + segment reads), round-robin across the
-        // configured tservers. `yb_storage_conn` can pin both counts.
-        let read_sessions = yb.tsclient_read_sessions.unwrap_or(1);
-        let write_sessions = yb.tsclient_write_sessions.unwrap_or(1);
-        let sessions_per_conn = yb.tsclient_sessions_per_conn.unwrap_or(4);
-        let tserver_addrs = yb.effective_tserver_rpc_addrs();
-        let tserver_count = tserver_addrs.len();
-        let client = yb_tsclient::TsClient::connect(yb_tsclient::TsClientConfig {
-            tserver_addrs,
-            read_sessions,
-            write_sessions,
-            sessions_per_conn,
-            ..Default::default()
-        })
-        .await
-        .context("connecting the thin-RPC (tsclient) client")?;
-        client.set_observer(Arc::new(TsClientLaneObserver));
-        let wals = client
-            .open_table(db_oid, wals_oid)
-            .await
-            .with_context(|| format!("opening {WALS_TABLE} via the tsclient lane"))?;
-        tracing::info!(
-            "thin-RPC (tsclient) hot path ready: {WALS_TABLE} opened (table_id {}) on {} \
-             ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
-             connection, across {tserver_count} configured tserver(s))",
-            wals.table_id,
-            client.connected_addr(),
-        );
-        Ok(Arc::new(YbTsClient { client, wals }))
     }
 
     /// Connects the thin-client (`yb_thin_client`) lane and opens
@@ -442,7 +365,7 @@ struct PendingChunk {
     /// Placement bucket. The producer leaves this at 0 (placeholder);
     /// [`consumer_main`] stamps every chunk of an assembled batch with
     /// ONE bucket before any write attempt, so the whole batch lands on
-    /// one tablet. Placement only, not identity: tsclient-lane retries
+    /// one tablet. Placement only, not identity: direct-lane retries
     /// replay the same stamped chunks, so a chunk keeps its bucket across
     /// retried flushes.
     bucket_id: i16,
@@ -721,7 +644,6 @@ impl YbWalStorage {
         let consumer_handle = tokio::spawn(consumer_main(
             rx,
             fpu_client,
-            yb_wal.yb_tsclient.clone(),
             yb_wal.yb_thinclient.clone(),
             table_name.clone(),
             branch_id_str.clone(),
@@ -782,7 +704,7 @@ impl YbWalStorage {
     /// Why a simple max is safe (no hole detection): every consumer
     /// batch is stamped with ONE bucket, so a batch targets one tablet
     /// and lands atomically on both write lanes — one atomic write batch
-    /// on the tsclient lane, a single-statement
+    /// on the direct lane, a single-statement
     /// (single-shard) INSERT on YSQL — and the consumer writes batches
     /// sequentially, one at a time. Batch-atomic + sequential batches ⇒
     /// the durable row set is always a contiguous prefix of the WAL
@@ -1501,7 +1423,7 @@ async fn truncate_wals_above(
 ///      a local rotating counter (one bucket per batch → one tablet per
 ///      batch; see the stamping comment in the body).
 ///   5. Writing the batch via [`flush_batch`] (contiguous chunks
-///      coalesced into single rows; tsclient or YSQL lane per hot_path).
+///      coalesced into single rows; direct or YSQL lane per hot_path).
 ///   6. Publishing the highest `end_lsn` of the batch onto `watermark_tx`
 ///      as `DurableState::Healthy`.
 ///
@@ -1521,7 +1443,6 @@ async fn truncate_wals_above(
 async fn consumer_main(
     mut rx: mpsc::Receiver<PendingChunk>,
     ysql_fpu_client: Arc<YsqlClient>,
-    yb_tsclient: Option<Arc<YbTsClient>>,
     yb_thinclient: Option<Arc<YbThinClient>>,
     table_name: String,
     branch_id: String,
@@ -1582,10 +1503,10 @@ async fn consumer_main(
 
         // Stamp the assembled batch with its placement bucket — the ONE
         // stamping site, after assembly and before any write attempt, so
-        // tsclient-lane retries (which replay this same Vec) inherit the
+        // direct-lane retries (which replay this same Vec) inherit the
         // same bucket and produce identical rows.
         // One bucket per batch means the batch targets one tablet: a
-        // single atomic write batch on the tsclient lane (a crash
+        // single atomic write batch on the direct lane (a crash
         // mid-flush can no longer leave a hole) and the single-shard
         // transaction fast path on YSQL (no distributed txn).
         let bucket = next_batch_bucket;
@@ -1598,7 +1519,6 @@ async fn consumer_main(
 
         match flush_batch(
             &ysql_fpu_client,
-            yb_tsclient.as_deref(),
             yb_thinclient.as_deref(),
             &table_name,
             &branch_id,
@@ -1651,7 +1571,7 @@ async fn consumer_main(
 }
 
 /// Persist one batch of chunks into `safekeeper.wals` over the configured
-/// transport: the thin-RPC (`yb_tsclient`) lane when `hot_path = "tsclient"`,
+/// transport: the direct-RPC (`yb_thin_client`) lane when selected,
 /// otherwise the YSQL lane. The whole batch carries ONE bucket (stamped by
 /// `consumer_main` before the write), so it writes as one atomic write to a
 /// single tablet.
@@ -1662,7 +1582,6 @@ async fn consumer_main(
 /// within one segment) is a single run — one row.
 async fn flush_batch(
     ysql_fpu_client: &YsqlClient,
-    yb_tsclient: Option<&YbTsClient>,
     yb_thinclient: Option<&YbThinClient>,
     table_name: &str,
     branch_id: &str,
@@ -1679,9 +1598,7 @@ async fn flush_batch(
         .iter()
         .map(|r| encode_run(&batch[r.clone()], codec))
         .collect();
-    if let Some(tc) = yb_tsclient {
-        flush_batch_tsclient(tc, branch_id, batch, &runs, &encoded).await
-    } else if let Some(thin) = yb_thinclient {
+    if let Some(thin) = yb_thinclient {
         flush_batch_thin(thin, branch_id, batch, &runs, &encoded).await
     } else {
         flush_batch_ysql(ysql_fpu_client, table_name, branch_id, batch, &runs, &encoded)
@@ -1694,7 +1611,7 @@ async fn flush_batch(
 /// column, on either lane.
 ///
 /// Both lanes bind this same buffer, so they are byte-identical by
-/// construction; `tsclient_and_ysql_lanes_serialize_identical_rows` (test)
+/// construction; `every_wal_write_lane_binds_encoded_runs` (test)
 /// keeps pinning that.
 ///
 /// This is where the WAL path gives up a zero-copy write. Previously a
@@ -1726,87 +1643,6 @@ fn encode_run(chunks: &[PendingChunk], codec: payload_codec::Codec) -> bytes::By
     encoded
 }
 
-/// Thin-RPC (`yb_tsclient`) variant of the batched write: one Perform
-/// with one `PGSQL_UPSERT` op per coalesced run, each run keyed by its
-/// first chunk and valued as the run's [`payload_codec`]-encoded buffer
-/// — the concatenated chunk bytes wrapped in a codec tag and, when LZ4 is
-/// selected and the run clears `MIN_COMPRESS_BYTES`, compressed
-/// ([`encode_run`]). The whole batch carries ONE bucket, so all ops
-/// land on one tablet and the tserver session applies them as one write
-/// batch (atomic; verified live in `yb_tsclient`'s
-/// `single_tablet_batch_atomicity`) — a crash mid-flush cannot leave a
-/// hole (the invariant `load_write_lsn`'s simple max-end rehydration
-/// relies on).
-async fn flush_batch_tsclient(
-    yb_tsclient: &YbTsClient,
-    branch_id: &str,
-    batch: &[PendingChunk],
-    runs: &[std::ops::Range<usize>],
-    encoded: &[bytes::Bytes],
-) -> Result<()> {
-    // Test-only failpoint (build with `--features testing`, configure via
-    // `fail::cfg("sk-wal-direct-flush-fail", "return(())")`): inject a
-    // tsclient-lane WAL flush failure before any write reaches YB.
-    fail::fail_point!("sk-wal-direct-flush-fail", |_| {
-        Err(anyhow::anyhow!(
-            "failpoint sk-wal-direct-flush-fail: injected tsclient-lane WAL flush failure"
-        ))
-    });
-    use yb_tsclient::{BindValue, UpsertRow};
-    let n = runs.len();
-    let now_us: i64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_micros() as i64)
-        .unwrap_or(0);
-    let rows = runs
-        .iter()
-        .zip(encoded)
-        .map(|(r, data)| {
-            let chunks = &batch[r.clone()];
-            let first = &chunks[0];
-            // `chunk_size` stays the run's UNCOMPRESSED length: the read
-            // path and `truncate_wals_above` both do LSN arithmetic with
-            // `chunk_offset + chunk_size`, so it is logical-space, not a
-            // description of the stored bytes.
-            let total: usize = chunks.iter().map(|p| p.chunk_size as usize).sum();
-            UpsertRow::new(
-                &yb_tsclient.wals,
-                vec![
-                    BindValue::Text(branch_id.to_string()),
-                    BindValue::I16(first.bucket_id),
-                    BindValue::I64(first.segno as i64),
-                    BindValue::I64(first.chunk_offset),
-                ],
-                &[
-                    ("chunk_size", BindValue::I32(total as i32)),
-                    ("data", BindValue::Bytes(data.clone())),
-                    ("last_modified_us", BindValue::I64(now_us)),
-                ],
-            )
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
-    let batch_bytes: usize = batch.iter().map(|p| p.chunk_size as usize).sum();
-    let started = std::time::Instant::now();
-    // Full retry budget: this lane has no YSQL fallback, so it must ride
-    // out transient failures itself. Each attempt round-robins to the next
-    // tserver session (one per endpoint), so a single stalled/failed node
-    // costs ~one attempt before the next lands on a healthy one — the
-    // rotation is what keeps the full budget from pinning the timeline lock
-    // on one bad node.
-    let res = yb_tsclient
-        .client
-        .upsert_batch(&yb_tsclient.wals, &rows)
-        .await;
-    crate::metrics::YB_WAL_INSERT_SECONDS
-        .with_label_values(&["tsclient"])
-        .observe(started.elapsed().as_secs_f64());
-    crate::metrics::YB_WAL_BATCH_ROWS.observe(n as f64);
-    crate::metrics::YB_WAL_BATCH_BYTES.observe(batch_bytes as f64);
-    res.with_context(|| format!("YB WAL tsclient upsert batch ({n} rows)"))?;
-    Ok(())
-}
-
 /// Thin-client (`yb_thin_client`) variant of the batched write: one Perform
 /// with one `PGSQL_UPSERT` op per coalesced run, each run keyed by its
 /// first chunk and valued as the concatenation of the run's chunks
@@ -1826,10 +1662,7 @@ async fn flush_batch_thin(
 ) -> Result<()> {
     // Test-only failpoint (build with `--features testing`, configure via
     // `fail::cfg("sk-wal-direct-flush-fail", "return(())")`): inject a
-    // thin-client-lane WAL flush failure before any write reaches YB. Both
-    // direct lanes share the failpoint name (only one is active at a time);
-    // the message names this lane so an injection test's failure is not
-    // misread as coming from the tsclient path.
+    // thin-client-lane WAL flush failure before any write reaches YB.
     fail::fail_point!("sk-wal-direct-flush-fail", |_| {
         Err(anyhow::anyhow!(
             "failpoint sk-wal-direct-flush-fail: injected thin-client-lane WAL flush failure"
@@ -1872,9 +1705,9 @@ async fn flush_batch_thin(
     let started = std::time::Instant::now();
     // Full retry budget (inside `upsert`): this lane has no YSQL fallback, so
     // it must ride out transient failures itself — a hard error here fails the
-    // consumer's flush and stalls WAL durability. Unlike the tsclient lane
-    // there is no per-attempt session rotation: the shim owns the session pool
-    // and the tserver does the routing.
+    // consumer's flush and stalls WAL durability. There is no per-attempt
+    // session rotation: the shim owns the session pool and the tserver does
+    // the routing.
     let res = yb_thinclient.client.upsert(&rows).await;
     crate::metrics::YB_WAL_INSERT_SECONDS
         .with_label_values(&["yb_thin_client"])
@@ -1937,7 +1770,7 @@ async fn flush_batch_ysql(
     }
 
     // One row per run, keyed by the run's first chunk. `data` binds the
-    // pre-encoded run buffer — the same `Bytes` the tsclient lane binds.
+    // pre-encoded run buffer — the same `Bytes` the thin lane binds.
     // `chunk_size` stays the run's UNCOMPRESSED length (LSN-space
     // arithmetic depends on `chunk_offset + chunk_size`).
     let bucket_is: Vec<i16> = runs.iter().map(|r| batch[r.start].bucket_id).collect();
@@ -2004,11 +1837,8 @@ pub struct YbSegmentReader {
     cache: Option<Arc<std::sync::Mutex<WalCache>>>,
     /// Dedicated read lane (no upsert GUC). See [`YbWalConn::read_client`].
     read_client: Arc<YsqlClient>,
-    /// Thin-RPC lane (`hot_path = "tsclient"`); when set, fetches use it.
-    /// `None` on the YSQL read path.
-    yb_tsclient: Option<Arc<YbTsClient>>,
-    /// Thin-client lane (`hot_path = "yb_thin_client"`); when set, fetches use
-    /// it. `None` unless the thin-client hot path is selected.
+    /// Thin-client lane (`hot_path = "yb_thin_client"`); when set, fetches
+    /// use it. `None` unless the thin-client hot path is selected.
     yb_thinclient: Option<Arc<YbThinClient>>,
     table: String,
     branch_id: String,
@@ -2066,7 +1896,6 @@ impl YbSegmentReader {
             pos: start_xlogoff as u64,
             cache: yb_wal.cache.clone(),
             read_client: yb_wal.read_client.clone(),
-            yb_tsclient: yb_wal.yb_tsclient.clone(),
             yb_thinclient: yb_wal.yb_thinclient.clone(),
             table: yb_wal.table.clone(),
             branch_id: branch_id.to_string(),
@@ -2096,13 +1925,11 @@ impl YbSegmentReader {
         // the same (absolute) frame as `issued_flush` for the cache-warm gate.
         let seg_base = self.segno * self.wal_seg_size;
         let cache = self.cache.clone();
-        let yb_tsclient = self.yb_tsclient.clone();
         let yb_thinclient = self.yb_thinclient.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let res = fetch_chunks(
                 &client,
-                yb_tsclient.as_deref(),
                 yb_thinclient.as_deref(),
                 &table,
                 &branch_id,
@@ -2341,72 +2168,22 @@ const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
 /// One YB round trip per ~`FETCH_FORWARD_CHUNKS` chunks instead of the
 /// previous one-round-trip-per-chunk.
 /// Fetch the covering + forward chunks for `byte_offset` over the
-/// configured transport: the thin-RPC (`yb_tsclient`) lane when
-/// `hot_path = "tsclient"`, otherwise the YSQL read lane. Both return one
+/// configured transport: the direct-RPC (`yb_thin_client`) lane when
+/// selected, otherwise the YSQL read lane. Both return one
 /// consistent snapshot (see each for how).
 async fn fetch_chunks(
     client: &YsqlClient,
-    yb_tsclient: Option<&YbTsClient>,
     yb_thinclient: Option<&YbThinClient>,
     table: &str,
     branch_id: &str,
     segno: u64,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
-    if let Some(tc) = yb_tsclient {
-        fetch_chunks_tsclient(tc, branch_id, segno, byte_offset).await
-    } else if let Some(thin) = yb_thinclient {
+    if let Some(thin) = yb_thinclient {
         fetch_chunks_thin(thin, branch_id, segno, byte_offset).await
     } else {
         fetch_chunks_from_yb(client, table, branch_id, segno, byte_offset).await
     }
-}
-
-/// Client-side merge for the tsclient fetch fan-out (the row decoder now
-/// lives in `yb_tsclient`, so the result rows are `yb_tsclient::Row`).
-/// Preserves the SQL path's semantics:
-/// covering = the max-offset row with `chunk_offset < pos` across all
-/// buckets that spans `pos` (a "covering" row that ends at or before
-/// the position is a real hole, not a cover — same filter as the SQL
-/// path); forward = ascending merge capped at [`FETCH_FORWARD_CHUNKS`]
-/// total (per-bucket limits alone would allow WALS_BUCKETS× that). At
-/// most one covering chunk survives the filter (chunks are disjoint, so
-/// only one can span `byte_offset`); it sorts first and doesn't count
-/// toward the cap.
-fn merge_fetched_rows<'a>(
-    rows: impl Iterator<Item = &'a yb_tsclient::Row>,
-    byte_offset: u64,
-) -> anyhow::Result<Vec<CurrentChunk>> {
-    let mut out: Vec<CurrentChunk> = Vec::new();
-    for row in rows {
-        let start: u64 = row[0]
-            .as_i64()?
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("negative chunk_offset"))?;
-        let size: u64 = row[1]
-            .as_i32()?
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("negative chunk_size"))?;
-        let end = start + size;
-        if start < byte_offset && end <= byte_offset {
-            continue;
-        }
-        out.push(CurrentChunk {
-            chunk_offset: start,
-            end_offset: end,
-            data: Arc::new(decode_chunk_data(
-                row[2].as_bytes()?,
-                &format!("WAL chunk fetch (tsclient): offset={start}"),
-            )?),
-        });
-    }
-    out.sort_by_key(|c| c.chunk_offset);
-    let n_covering = out
-        .iter()
-        .take_while(|c| c.chunk_offset < byte_offset)
-        .count();
-    out.truncate(n_covering + FETCH_FORWARD_CHUNKS);
-    Ok(out)
 }
 
 /// Client-side merge for the thin-client fetch fan-out (the row decoder
@@ -2420,7 +2197,7 @@ fn merge_fetched_rows<'a>(
 /// most one covering chunk survives the filter (chunks are disjoint, so
 /// only one can span `byte_offset`); it sorts first and doesn't count
 /// toward the cap.
-fn merge_fetched_rows_thin<'a>(
+fn merge_fetched_rows<'a>(
     rows: impl Iterator<Item = &'a yb_thin_client::Row>,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
@@ -2461,101 +2238,6 @@ fn merge_fetched_rows_thin<'a>(
     Ok(out)
 }
 
-/// Thin-RPC (`yb_tsclient`) two-arm fetch. The SQL version keeps both
-/// arms in ONE statement for a single read snapshot; here a chunk's
-/// bucket can't be derived, so every (arm, bucket) pair is its own
-/// single-tablet read op — covering arm per bucket (`chunk_offset <
-/// pos`, descending, limit 1) and forward arm per bucket (`[pos, pos +
-/// FETCH_FORWARD_BYTES)`, ascending, limit [`FETCH_FORWARD_CHUNKS`]) —
-/// and ALL `2×WALS_BUCKETS` of them are issued as ops of ONE Perform
-/// ([`yb_tsclient::TsClient::read_pages`]): the proxy picks one read
-/// point at setup and every op shares it, so the fetch is a single
-/// snapshot BY CONSTRUCTION (#139; see `libs/yb_tsclient/DESIGN.md`).
-/// Results merge client-side through [`merge_fetched_rows`], preserving
-/// the SQL path's semantics: covering = the max-offset row with
-/// `chunk_offset < pos` across all buckets that spans `pos`; forward =
-/// ascending merge capped at `FETCH_FORWARD_CHUNKS`. The reader's
-/// flush-bound gating stays as defense in depth regardless.
-async fn fetch_chunks_tsclient(
-    yb_tsclient: &YbTsClient,
-    branch_id: &str,
-    segno: u64,
-    byte_offset: u64,
-) -> anyhow::Result<Vec<CurrentChunk>> {
-    use yb_tsclient::{BindValue, CondOp, RangeRead};
-    let started_at = std::time::Instant::now();
-    let wals = &yb_tsclient.wals;
-    let targets = ["chunk_offset", "chunk_size", "data"];
-    let segno_i = segno as i64;
-
-    // Covering arm for one bucket: its highest chunk starting below
-    // byte_offset; the cross-bucket max resolves in the merge.
-    let covering_read = |bucket: i16| -> anyhow::Result<RangeRead> {
-        Ok(RangeRead::new(
-            wals,
-            vec![
-                BindValue::Text(branch_id.to_string()),
-                BindValue::I16(bucket),
-            ],
-        )?
-        .cond(wals, "segno", CondOp::Eq, BindValue::I64(segno_i))?
-        .cond(
-            wals,
-            "chunk_offset",
-            CondOp::Lt,
-            BindValue::I64(byte_offset as i64),
-        )?
-        .targets(wals, &targets)?
-        .descending()
-        .limit(1))
-    };
-    // Forward arm for one bucket: ascending chunks in
-    // [byte_offset, byte_offset + FETCH_FORWARD_BYTES).
-    let forward_read = |bucket: i16| -> anyhow::Result<RangeRead> {
-        Ok(RangeRead::new(
-            wals,
-            vec![
-                BindValue::Text(branch_id.to_string()),
-                BindValue::I16(bucket),
-            ],
-        )?
-        .cond(wals, "segno", CondOp::Eq, BindValue::I64(segno_i))?
-        .cond(
-            wals,
-            "chunk_offset",
-            CondOp::Ge,
-            BindValue::I64(byte_offset as i64),
-        )?
-        .cond(
-            wals,
-            "chunk_offset",
-            CondOp::Lt,
-            BindValue::I64(byte_offset.saturating_add(FETCH_FORWARD_BYTES) as i64),
-        )?
-        .targets(wals, &targets)?
-        .limit(FETCH_FORWARD_CHUNKS as u64))
-    };
-
-    let mut reads: Vec<RangeRead> = Vec::with_capacity(2 * WALS_BUCKETS as usize);
-    for bucket in 0..WALS_BUCKETS {
-        reads.push(covering_read(bucket)?);
-    }
-    for bucket in 0..WALS_BUCKETS {
-        reads.push(forward_read(bucket)?);
-    }
-    let pages = yb_tsclient.client.read_pages(wals, &reads).await?;
-
-    let out = merge_fetched_rows(pages.iter().flat_map(|p| p.rows.iter()), byte_offset)?;
-    let total_bytes: u64 = out.iter().map(|c| c.end_offset - c.chunk_offset).sum();
-
-    crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
-        .with_label_values(&["tsclient"])
-        .observe(started_at.elapsed().as_secs_f64());
-    crate::metrics::WAL_CACHE_YB_FETCH_CHUNKS.observe(out.len() as f64);
-    crate::metrics::WAL_CACHE_YB_FETCH_BYTES.observe(total_bytes as f64);
-    Ok(out)
-}
-
 /// Thin-client (`yb_thin_client`) two-arm fetch. The SQL version keeps both
 /// arms in ONE statement for a single read snapshot; here a chunk's
 /// bucket can't be derived, so every (arm, bucket) pair is its own
@@ -2565,7 +2247,7 @@ async fn fetch_chunks_tsclient(
 /// and ALL `2×WALS_BUCKETS` of them are issued as ops of ONE Perform: the
 /// proxy picks one read point at setup and every op shares it, so the
 /// fetch is a single snapshot BY CONSTRUCTION (#139).
-/// Results merge client-side through [`merge_fetched_rows_thin`], preserving
+/// Results merge client-side through [`merge_fetched_rows`], preserving
 /// the SQL path's semantics: covering = the max-offset row with
 /// `chunk_offset < pos` across all buckets that spans `pos`; forward =
 /// ascending merge capped at `FETCH_FORWARD_CHUNKS`. The reader's
@@ -2646,7 +2328,7 @@ async fn fetch_chunks_thin(
         })
         .collect();
     let batch = yb_thinclient.client.read(&ops, 0).await?;
-    let out = merge_fetched_rows_thin(batch.ops.iter().flat_map(|op| op.rows.iter()), byte_offset)?;
+    let out = merge_fetched_rows(batch.ops.iter().flat_map(|op| op.rows.iter()), byte_offset)?;
     let total_bytes: u64 = out.iter().map(|c| c.end_offset - c.chunk_offset).sum();
 
     crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
@@ -3009,7 +2691,6 @@ mod tests {
             system_client: client,
             table: table.to_string(),
             cache: None,
-            yb_tsclient: None,
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
@@ -3049,7 +2730,6 @@ mod tests {
             cache: Some(Arc::new(std::sync::Mutex::new(WalCache::new(
                 64 * 1024 * 1024,
             )))),
-            yb_tsclient: None,
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
@@ -3543,7 +3223,6 @@ mod tests {
             system_client: fpu.clone(),
             table: table.clone(),
             cache: None,
-            yb_tsclient: None,
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
@@ -3604,7 +3283,6 @@ mod tests {
             system_client: fpu.clone(),
             table: table.clone(),
             cache: None,
-            yb_tsclient: None,
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
@@ -3702,7 +3380,6 @@ mod tests {
             system_client: fpu.clone(),
             table: table.clone(),
             cache: Some(cache.clone()),
-            yb_tsclient: None,
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
@@ -3823,7 +3500,6 @@ mod tests {
             system_client: fpu.clone(),
             table: table.clone(),
             cache: None,
-            yb_tsclient: None,
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
@@ -3937,7 +3613,6 @@ mod tests {
             system_client: fpu.clone(),
             table: table.clone(),
             cache: None,
-            yb_tsclient: None,
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
@@ -4049,7 +3724,6 @@ mod tests {
             system_client: fpu.clone(),
             table: table.clone(),
             cache: None,
-            yb_tsclient: None,
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
@@ -4379,17 +4053,6 @@ mod tests {
         drop_wals_table(&fpu, &table).await;
     }
 
-    /// Cross-lane row identity — the shared-runs contract. `hot_path` can
-    /// switch a timeline between the tsclient and YSQL lanes, so both must
-    /// write byte-identical rows or a later read sees inconsistent bytes.
-    ///
-    /// Both lanes now bind the SAME [`encode_run`] buffer, so byte identity
-    /// holds by construction rather than by two serializers agreeing. What
-    /// still needs pinning — and is what this test asserts — is that the
-    /// envelope is lossless and that `chunk_size` stays LOGICAL: it must
-    /// equal the decoded length, not the stored length, because the read
-    /// path and `truncate_wals_above` do LSN arithmetic with
-    /// `chunk_offset + chunk_size`.
     /// Every WAL write lane must bind the [`encode_run`] output, never a
     /// run's plaintext bytes.
     ///
@@ -4432,12 +4095,14 @@ mod tests {
         );
 
         // Sanity: the guard only means something if it can see the binds it
-        // polices. Three lanes bind `data` (tsclient, thin, ysql — the last
-        // via a positional param, so two literal matches here).
+        // polices. One literal match — the thin lane. (It was two while the
+        // retired direct lane had its own `flush_batch_*`.) YSQL binds `data`
+        // through a positional param, so it never matches here; the separate
+        // `raw_params`-style check above is what covers it.
         let seen = src.matches(&bind_prefix).count();
         assert!(
-            seen >= 2,
-            "expected at least 2 `data` BindValue sites to police, saw \
+            seen >= 1,
+            "expected at least 1 `data` BindValue site to police, saw \
              {seen} — the bind syntax changed and this guard has gone blind"
         );
 
@@ -4566,47 +4231,40 @@ mod tests {
         );
     }
 
-    /// Connect the thin-RPC (`yb_tsclient`) lane against dev YB for a
-    /// scratch table (unqualified → `public` schema). Mirrors
-    /// `YbWalConn::connect_tsclient`, which is bound to the production
-    /// `safekeeper.wals` name.
-    async fn tsclient_lane_for(client: &YsqlClient, table: &str) -> Arc<YbTsClient> {
-        let (db_oid, oids) = ysql_client::lookup_table_oids(client, "public", &[table])
-            .await
-            .expect("lookup scratch table OIDs");
-        let tserver =
-            std::env::var("YB_TEST_TSERVER_RPC").unwrap_or_else(|_| "127.0.0.1:9100".into());
-        let pg = yb_tsclient::TsClient::connect(yb_tsclient::TsClientConfig {
-            tserver_addrs: vec![tserver],
-            ..Default::default()
-        })
-        .await
-        .expect("connect tsclient lane to dev YB; set YB_TEST_TSERVER_RPC to override");
-        let wals = pg
-            .open_table(db_oid, oids[table])
-            .await
-            .expect("open scratch table via tsclient");
-        Arc::new(YbTsClient { client: pg, wals })
-    }
-
-    /// Live tsclient-lane round trip (`hot_path = "tsclient"`): flush
-    /// through the real producer/consumer with the thin-RPC lane
+    /// Live direct-lane round trip (`hot_path = "yb_thin_client"`): flush
+    /// through the real producer/consumer with the thin-client lane
     /// attached, then fetch through `YbSegmentReader` with no cache, so
-    /// both hot paths run on the tsclient lane. With no YSQL fallback, a
+    /// both hot paths run on the direct lane. With no YSQL fallback, a
     /// broken lane surfaces as an error here rather than silently
     /// round-tripping the bytes.
     #[tokio::test]
-    async fn tsclient_lane_flush_and_fetch_round_trip() {
+    async fn thin_lane_flush_and_fetch_round_trip() {
         use tokio::io::AsyncReadExt;
 
-        let table = scratch_table("wals_test_tsclient");
+        let table = scratch_table("wals_test_thin");
         let client = Arc::new(
             YsqlClient::connect_no_tls(pgcfg(), true)
                 .await
                 .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
         );
         make_wals_table(&client, &table).await;
-        let yb_tsclient = tsclient_lane_for(&client, &table).await;
+
+        // Attach the direct lane to the scratch table. `make_wals_table`
+        // creates it unqualified, so it lands in `public` — the production
+        // path looks up `safekeeper.wals` instead (`lookup_wals_oids`).
+        let (db_oid, oids) = ysql_client::lookup_table_oids(&client, "public", &[table.as_str()])
+            .await
+            .expect("look up scratch wals table OIDs");
+        let tserver =
+            std::env::var("YB_TEST_TSERVER_RPC").unwrap_or_else(|_| "127.0.0.1:9100".into());
+        let thin_client = yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
+            tserver_addrs: vec![tserver],
+            ..Default::default()
+        })
+        .expect("connect thin lane to dev YB; set YB_TEST_TSERVER_RPC to override");
+        let wals = thin_client
+            .open_table(db_oid, oids[table.as_str()])
+            .expect("open scratch wals table via the thin lane");
 
         let branch_id = BranchId::generate();
         let start = Lsn(SEG_SIZE); // segno 1, offset 0
@@ -4623,8 +4281,10 @@ mod tests {
             system_client: client.clone(),
             table: table.clone(),
             cache: None,
-            yb_tsclient: Some(yb_tsclient),
-            yb_thinclient: None,
+            yb_thinclient: Some(Arc::new(YbThinClient {
+                client: thin_client,
+                wals,
+            })),
             codec: payload_codec::Codec::Lz4,
         });
         let mut storage = YbWalStorage::new(&branch_id, &state, yb_wal.clone())
@@ -4646,33 +4306,30 @@ mod tests {
             pos = Lsn(pos.0 + len as u64);
             stream.extend_from_slice(&buf);
         }
-        // Baselines to prove each hot path actually ran on the tsclient
+        // Baselines to prove each hot path actually ran on the direct
         // lane: its path-labeled metric advances only on the lane's arm,
         // so a dispatch bug routing to YSQL would leave these flat while
         // the cross-checks below still passed.
         let insert_before = crate::metrics::YB_WAL_INSERT_SECONDS
-            .with_label_values(&["tsclient"])
+            .with_label_values(&["yb_thin_client"])
             .get_sample_count();
         let fetch_before = crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
-            .with_label_values(&["tsclient"])
+            .with_label_values(&["yb_thin_client"])
             .get_sample_count();
 
-        // Durability barrier: the consumer flushes through the tsclient
+        // Durability barrier: the consumer flushes through the direct
         // lane (one Perform per coalesced batch).
-        storage
-            .flush_wal()
-            .await
-            .expect("flush_wal (tsclient lane)");
+        storage.flush_wal().await.expect("flush_wal (thin lane)");
         assert!(
             crate::metrics::YB_WAL_INSERT_SECONDS
-                .with_label_values(&["tsclient"])
+                .with_label_values(&["yb_thin_client"])
                 .get_sample_count()
                 > insert_before,
-            "flush did not run on the tsclient lane"
+            "flush did not run on the thin lane"
         );
 
         // Cross-transport visibility: plain-YSQL rehydration sees the
-        // tsclient-written rows and lands exactly at the stream end.
+        // thin-lane-written rows and lands exactly at the stream end.
         let lsn = YbWalStorage::load_write_lsn(
             &client,
             &table,
@@ -4687,7 +4344,7 @@ mod tests {
             "rehydrated end must equal the submitted stream end"
         );
 
-        // Fetch with no cache: every read goes through the tsclient
+        // Fetch with no cache: every read goes through the thin lane's
         // two-arm fan-out (2×WALS_BUCKETS read ops, ONE Perform, one
         // snapshot by construction).
         let mut reader = YbSegmentReader::new(
@@ -4702,17 +4359,17 @@ mod tests {
         reader
             .read_exact(&mut got)
             .await
-            .expect("read_exact via tsclient lane");
+            .expect("read_exact via thin lane");
         assert_eq!(
             got, stream,
-            "tsclient fetch must round-trip the flushed bytes"
+            "thin-lane fetch must round-trip the flushed bytes"
         );
         assert!(
             crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
-                .with_label_values(&["tsclient"])
+                .with_label_values(&["yb_thin_client"])
                 .get_sample_count()
                 > fetch_before,
-            "fetch did not run on the tsclient lane"
+            "fetch did not run on the thin lane"
         );
 
         drop_wals_table(&client, &table).await;

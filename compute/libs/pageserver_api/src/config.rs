@@ -1019,9 +1019,8 @@ pub struct BranchConfigToml {
     /// millions of txns) grows clog/multixact to hundreds of thousands
     /// of pages — eagerly packing all of them into every basebackup
     /// made compute startup read the entire SLRU one page per RPC,
-    /// overrunning the 180s Init timeout (acute on the serial tsclient
-    /// read lane). Lazy download keeps basebackup small regardless of
-    /// SLRU size.
+    /// overrunning the 180s Init timeout. Lazy download keeps basebackup
+    /// small regardless of SLRU size.
     pub lazy_slru_download: bool,
     /// Per-tenant pagestream getpage throttle config.
     pub timeline_get_throttle: crate::models::ThrottleConfig,

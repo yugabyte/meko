@@ -111,11 +111,11 @@ type YbConnConfig struct {
 	Sslrootcert *string `toml:"sslrootcert,omitempty"`
 	// DisableTransactionalWrites toggles the fast-path-upsert GUC.
 	DisableTransactionalWrites bool `toml:"disable_transactional_writes,omitempty"`
-	// HotPath is the hot-path transport: "tsclient" (default, omitted on
-	// the wire) or "ysql". Modeled as a pointer so the default stays
-	// omitted, matching Rust's `skip_serializing_if = HotPath::is_default`.
+	// HotPath is the hot-path transport: "yb_thin_client" (default, omitted
+	// on the wire) or "ysql". Modeled as a pointer so the default stays
+	// omitted, matching the Rust `to_inline_toml` renderer.
 	HotPath *string `toml:"hot_path,omitempty"`
-	// TserverRPCAddrs overrides the tsclient RPC endpoints (CSV).
+	// TserverRPCAddrs overrides the direct-RPC tserver endpoints (CSV).
 	TserverRPCAddrs *string `toml:"tserver_rpc_addrs,omitempty"`
 }
 

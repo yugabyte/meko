@@ -60,7 +60,7 @@ subsystem has its own page.
               +----------------+   +----------------+
                         \                 |
                          \                |  YsqlClient (cold paths)
-                          \               |  yb_tsclient (hot paths, :9100)
+                          \               |  yb_thin_client (hot paths, :9100)
                            \              |
                             v             v
               +---------------------------------------------------+

@@ -264,8 +264,8 @@ wrong pageserver — re-check branch placement (Step E/F) before anything else.
 
 `pthread_create` returned EAGAIN — the box hit the per-user process/thread
 limit (`ulimit -u`, and/or the user slice's cgroup `pids.max`), so tokio (or
-the tsclient RPC reactors) couldn't spawn a worker. Seen when many endpoint
-PS+SK pairs run on one host: with `hot_path = "tsclient"` each daemon also
+the direct-RPC reactors) couldn't spawn a worker. Seen when many endpoint
+PS+SK pairs run on one host: with `hot_path = "yb_thin_client"` each daemon also
 opens pggate RPC connections to the tserver RPC port, adding worker/reactor
 threads per daemon (daemons sharing a process share one client). The pool
 packs `tsclient_sessions_per_conn` server sessions (default 4) onto each TCP
@@ -275,7 +275,7 @@ the connection/thread cost scales with the session counts / packing density
 — NOT one-per-session. To cut connections without losing much concurrency,
 raise `tsclient_sessions_per_conn`; to cut them harder, lower
 `tsclient_read_sessions` / `tsclient_write_sessions`. Each daemon logs the
-effective counts in its `thin-RPC (tsclient) hot path ready …` line.
+effective counts in its `thin-client hot path ready …` line.
 
 Check and raise:
 ```sh
@@ -284,5 +284,5 @@ ps -eLf | grep -c $USER                     # live thread count for the user
 ps -eo pid,nlwp,comm --sort=-nlwp | head    # top per-process consumers
 ```
 Raise via `/etc/security/limits.d/` (`<user> soft nproc 8192`) or the systemd
-user slice (`TasksMax=`). Rule of thumb per tsclient-mode endpoint pair:
+user slice (`TasksMax=`). Rule of thumb per direct-RPC-mode endpoint pair:
 ~90 threads (PS ~55, SK ~36) plus the compute's postgres processes.

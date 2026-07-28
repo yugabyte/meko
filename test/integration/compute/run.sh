@@ -24,7 +24,7 @@ Usage: test/integration/compute/run.sh [options] [selection]
 Selection (default: unit then fast):
   unit            only the live-DB tests — the pageserver/safekeeper
                   modules (page_store, page_writer, yb_wal_storage) plus
-                  the yb_tsclient live suite (tests/live.rs) — pointed at
+                  the yb_thin_client live suite (tests/live.rs) — pointed at
                   this run's cluster; no developer-managed cluster on
                   5433/yb_storage needed
   fast            only the fast suite

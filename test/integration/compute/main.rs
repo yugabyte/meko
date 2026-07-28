@@ -324,11 +324,9 @@ fn push_category<'a>(c: &'a Cluster, cat: Category, items: &mut Vec<(String, Ite
 /// 1. The pageserver/safekeeper module tests (`page_store::tests`,
 ///    `page_writer::tests`, `yb_wal_storage::tests`) — assert against the
 ///    production `pageserver.*`/`safekeeper.*` schema over YSQL.
-/// 2. The `yb_tsclient` live integration suite (`tests/live.rs`, all
-///    `#[ignore]` "requires a live YugabyteDB") — exercises the tserver-RPC
-///    client (PgClientService on port 9100) and creates its own tables.
-/// 3. The `yb_thin_client` live integration suite (`tests/live.rs`, same
-///    `#[ignore]` convention) — the default hot-path client; its
+/// 2. The `yb_thin_client` live integration suite (`tests/live.rs`, all
+///    `#[ignore]` "requires a live YugabyteDB") — the hot-path client
+///    (PgClientService on port 9100), which creates its own tables; its
 ///    `repro_pages_multipage_scan` guards the paged `read_scan` loop that a
 ///    branch's cold reads (and any many-version page) depend on.
 async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
@@ -359,23 +357,12 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
         .env("YB_TEST_DB", c.db_name());
     run_cargo_test(ps_sk, "pageserver/safekeeper unit tests").await?;
 
-    // yb_tsclient live integration suite (tserver RPC on :9100; creates its
-    // own tables via YSQL in this run's ephemeral db). `--ignored` runs the
-    // otherwise-skipped live tests; the 3-endpoint spread test self-skips
-    // against a single-node cluster.
-    let mut tsclient = cargo_test_cmd();
-    tsclient.args(["-p", "yb_tsclient", "--test", "live", "--", "--ignored"]);
-    tsclient
-        .env("YB_LIVE_TSERVERS", format!("{}:9100", c.yb_host()))
-        .env("YB_LIVE_YSQL", format!("{}:{}", c.yb_host(), c.yb_port()))
-        .env("YB_LIVE_DB", c.db_name());
-    run_cargo_test(tsclient, "yb_tsclient live tests").await?;
-
-    // yb_thin_client live integration suite — the default hot-path client.
-    // Same tserver-RPC + YSQL wiring as tsclient; the process already carries
-    // the shim's LD_LIBRARY_PATH from run.sh. Guards the read_scan pagination
-    // loop (repro_pages_multipage_scan) plus the meta/checkpoint version
-    // selection a branch's basebackup depends on.
+    // yb_thin_client live integration suite — the hot-path client (tserver
+    // RPC on :9100; creates its own tables via YSQL in this run's ephemeral
+    // db). `--ignored` runs the otherwise-skipped live tests; the process
+    // already carries the shim's LD_LIBRARY_PATH from run.sh. Guards the
+    // read_scan pagination loop (repro_pages_multipage_scan) plus the
+    // meta/checkpoint version selection a branch's basebackup depends on.
     let mut thinclient = cargo_test_cmd();
     thinclient.args(["-p", "yb_thin_client", "--test", "live", "--", "--ignored"]);
     thinclient

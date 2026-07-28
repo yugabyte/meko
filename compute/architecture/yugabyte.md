@@ -76,13 +76,6 @@ There are two ways yb-amp code reaches YB:
   "..." , ... }`) every daemon deserializes; it carries connection
   identity only — no table or schema names, each component hardcodes
   the tables it owns.
-- **`yb_tsclient`** ([`compute/libs/yb_tsclient/`](../libs/yb_tsclient/))
-  — a pure-Rust thin RPC client speaking the pggate RPC protocol
-  (`yb.tserver.PgClientService`) directly to a tserver's RPC port
-  (9100), skipping the PG backend entirely (wire framing, parse/plan,
-  pggate). It implements exactly what the hot tables need — hash-eq +
-  range-bound clustered scans with paging and snapshot pinning, and
-  batched `PGSQL_UPSERT` writes — and nothing else.
 - **`yb_thin_client`** ([`compute/libs/yb_thin_client/`](../libs/yb_thin_client/))
   — the same idea over a thin C ABI to a `libyb_thin_client.so` C++ shim
   (a YugabyteDB build target linking YB's own proxy/partitioning/codec),
@@ -90,10 +83,15 @@ There are two ways yb-amp code reaches YB:
   YB's own code rather than being re-implemented in Rust. Its one read
   primitive is a **batch of ops = one `Perform`** (one RPC, one snapshot),
   so multi-op reads collapse to a single round trip; writes are the same
-  shape. Selected by `hot_path = "yb_thin_client"`; slated to replace
-  `yb_tsclient` as the single hot-path client.
+  shape. Selected by `hot_path = "yb_thin_client"` (**the default**) — the
+  single hot-path client. It speaks the pggate RPC protocol
+  (`yb.tserver.PgClientService`) directly to a tserver's RPC port (9100),
+  skipping the PG backend entirely (wire framing, parse/plan, pggate), and
+  implements exactly what the hot tables need — hash-eq + range-bound
+  clustered scans with paging and snapshot pinning, and batched
+  `PGSQL_UPSERT` writes — and nothing else.
 
-### Direct-to-tserver hot path (`hot_path = "tsclient"` / `"yb_thin_client"`)
+### Direct-to-tserver hot path (`hot_path = "yb_thin_client"`)
 
 The shared `yb_storage_conn` block accepts several optional keys:
 
@@ -103,9 +101,7 @@ yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsc
 
 - `hot_path` — `"yb_thin_client"` (**the default**) runs the hot paths over
   the `yb_thin_client` shim client (batch-first: a call = a batch of ops =
-  one Perform); `"tsclient"` runs them over the predecessor pure-Rust
-  `yb_tsclient` (same RPC port + session knobs below); `"ysql"` is the
-  Postgres-wire escape hatch. The
+  one Perform); `"ysql"` is the Postgres-wire escape hatch. The
   safekeeper honors it for the WAL write/read path on `safekeeper.wals`
   (see [`safekeeper.md`](safekeeper.md) §"Direct-to-tserver hot path")
   and the pageserver for the page read/write hot path on
@@ -116,20 +112,22 @@ yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsc
   always use YSQL. A binary that does not know these keys fails to
   parse a config that sets them (`deny_unknown_fields`) — intentional,
   not silently ignored.
-- `tserver_rpc_addrs` — yb-tserver RPC endpoints for the `tsclient`
+- `tserver_rpc_addrs` — yb-tserver RPC endpoints for the direct-RPC
   transport. When unset, the `host_ports` hosts on port 9100; set it
   explicitly to reach every tserver when `host_ports` is only a subset
   (e.g. a single YSQL VIP, or a K8s service that load-balances across
   the tserver pods).
 - `tsclient_read_sessions` / `tsclient_write_sessions` — server-*session*
-  counts for the `tsclient` pool. They set request *concurrency* (each
+  counts for the direct-RPC pool. (The `tsclient_` prefix is historical: it
+  predates `yb_thin_client` replacing `yb_tsclient`; the keys are kept so
+  existing configs parse.) They set request *concurrency* (each
   server session is a serial Perform queue). Used verbatim when set (no
   scale-factor multiplication). When unset, each daemon applies its own
   default: the **pageserver** `scale_count(4, scale_factor)` for both
   (getpage + put_pages fan-out); the **safekeeper** a fixed **1 read / 1
   write** (the WAL lane is low-concurrency — one-batch-at-a-time flush +
   segment reads).
-- `tsclient_sessions_per_conn` — how many `tsclient` sessions ride each
+- `tsclient_sessions_per_conn` — how many hot-path sessions ride each
   TCP connection (default **4**). The pool opens
   `ceil((read_sessions + write_sessions) / sessions_per_conn)`
   connections and packs the sessions across them (reads and writes
@@ -139,7 +137,7 @@ yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsc
   connection dials the one VIP and the VIP lands each on a (possibly
   different) tserver, so more connections = more nodes carrying traffic.
   Each daemon logs the effective counts in its
-  `thin-RPC (tsclient) hot path ready …` line at startup.
+  `thin-client hot path ready …` line at startup.
 
 At startup each daemon resolves its hot tables' DocDB ids via a one-time
 catalog lookup over YSQL (`lookup_table_oids`), failing hard if any
@@ -471,7 +469,7 @@ same bytes.
 `(branch_id, bucket_id)` hash key spreads a branch's WAL across all
 `WALS_BUCKETS = 10` tablets. The consumer stamps each write **batch**
 with one bucket, rotating through the buckets one batch at a time —
-each batch lands on ONE tablet (the tsclient lane applies it as one
+each batch lands on ONE tablet (the direct-RPC lane applies it as one
 atomic write batch; the YSQL lane's multi-VALUES INSERT hits the
 single-shard transaction fast path), while sustained load rotates
 across all tablets. Readers cannot derive a chunk's bucket, so
@@ -730,7 +728,7 @@ what the client can absorb.
 
 - YB master RPC: `127.0.0.1:7100`
 - YB tserver YSQL: `127.0.0.1:5433` (cold paths, DDL, controller)
-- YB tserver RPC: `127.0.0.1:9100` (the `tsclient` hot path)
+- YB tserver RPC: `127.0.0.1:9100` (the `yb_thin_client` hot path)
 - YB tserver web UI: `127.0.0.1:9000`
 - `yugabyted-ui`: `127.0.0.1:15433`
 

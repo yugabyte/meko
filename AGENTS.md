@@ -56,11 +56,6 @@ Code anchors:
   tserver does the tablet routing; the shim is fetched per-arch at build
   time (`scripts/fetch-yb-thin-client.sh`, pinned by `shim/VERSION` +
   `shim/COMMIT`), never vendored. See `compute/libs/yb_thin_client/README.md`.
-- `compute/libs/yb_tsclient` — the predecessor pure-Rust direct-to-tserver
-  client (`hot_path = "tsclient"`): speaks the pggate RPC protocol to a
-  tserver's RPC port, no native library. Retained during the migration and
-  slated for removal; see `compute/architecture/yugabyte.md`
-  §"Direct-to-tserver hot path".
 - `compute/libs/remote_storage/src/config.rs` — `YbStoreConfig` (host, port,
   user, `password_env`, `sslmode`, etc.).
 - `compute/safekeeper/src/control_file.rs` — `ControlFileStorage` enum.
@@ -151,8 +146,7 @@ Code anchors:
 
 - Unit/workspace tests: `cargo test`. Several live-DB tests
   (`pageserver::page_store::tests`, `pageserver::page_writer::tests`,
-  `safekeeper::yb_wal_storage::tests`, and the two direct-lane live suites
-  `compute/libs/yb_tsclient/tests/live.rs` and
+  `safekeeper::yb_wal_storage::tests`, and the direct-lane live suite
   `compute/libs/yb_thin_client/tests/live.rs`) need a live YB with the
   production schema migrated — they default to a developer cluster on
   `5433`/`yb_storage`; without one, run them via

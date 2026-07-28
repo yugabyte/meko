@@ -75,7 +75,7 @@ A yb-amp install is:
     materialiser writes. Image materialisation runs as a background
     task that compacts long delta chains into walredo-applied images so
     subsequent reads don't re-walk the chain.
-  With `hot_path = "tsclient"` (the default) the page read/write hot
+  With `hot_path = "yb_thin_client"` (the default) the page read/write hot
   paths run over the direct-to-tserver RPC client instead of YSQL; the
   YSQL pools carry the cold paths.
 - **Safekeeper (`yb-safekeeper`)**: stateless WAL ingress. Receives
@@ -286,7 +286,7 @@ default/fallback.
 
 ### The hot path needs direct tserver RPC access
 
-With `hot_path = "tsclient"` (the default), the safekeeper (WAL
+With `hot_path = "yb_thin_client"` (the default), the safekeeper (WAL
 write/read on `safekeeper.wals`) and the pageserver (page read/write on
 `pages`/`slru_pages`/`meta`) speak YB's native pggate RPC **straight to
 the yb-tserver RPC port** (9100), not through the YSQL frontend (5433).
@@ -298,7 +298,7 @@ when that is unset. (Tablet routing is server-side, so the client needs
 only those configured endpoints, not every tserver.) A firewall /
 security group / network policy that opens only 5433 (YSQL) and 7100
 (master) lets the control plane and cold paths keep working while
-breaking the hot path — it surfaces as `hot_path = "tsclient"` startup
+breaking the hot path — it surfaces as `hot_path = "yb_thin_client"` startup
 health-check failures (each daemon opens its table handles at boot) or
 terminal getpage/WAL errors. Keep 9100 (and any ports named in
 `tserver_rpc_addrs`) reachable from every SK/PS host. See

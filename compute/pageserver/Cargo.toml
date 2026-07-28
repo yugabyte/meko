@@ -76,7 +76,6 @@ regex.workspace = true
 remote_storage.workspace = true
 initdb_storage.workspace = true
 ysql_client = { workspace = true, features = ["cli"] }
-yb_tsclient.workspace = true
 yb_thin_client.workspace = true
 reqwest.workspace = true
 rpds.workspace = true

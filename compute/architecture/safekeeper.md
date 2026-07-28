@@ -196,10 +196,11 @@ against a future refactor rather than a live race.
   startup rehydration SELECTs, the GC DELETE, and the idempotent
   control-file ops (restore / persist / delete / list).
 
-With `hot_path = "tsclient"` in `yb_storage_conn` (see
-[`yugabyte.md`](yugabyte.md) §"Direct-to-tserver hot path"), `YbWalConn`
-additionally opens a pure-Rust thin-RPC client (`compute/libs/yb_tsclient`,
-pggate RPC to a tserver's RPC port) to `safekeeper.wals` — fail-fast
+With `hot_path = "yb_thin_client"` in `yb_storage_conn` — the default (see
+[`yugabyte.md`](yugabyte.md) §"Direct-to-tserver hot path") — `YbWalConn`
+additionally opens the direct-RPC client (`compute/libs/yb_thin_client`,
+`Perform` to a tserver's RPC port over the `libyb_thin_client` C++ shim) to
+`safekeeper.wals` — fail-fast
 health-checked at startup. The hot-path WAL write batch then runs as ONE
 Perform per batch (a single-tablet atomic write batch — a crash mid-flush
 cannot leave a hole), and the WAL sender's fetch issues all
@@ -252,7 +253,7 @@ return                              │
                                 │
                                 │   flush_batch: one multi-row
                                 │   INSERT (ysql) or one Perform
-                                │   (tsclient)                 ───►  atomic
+                                │   (yb_thin_client)           ───►  atomic
                                 │                                    batch
                                 │   populate WalCache
                                 │   durable_lsn.store(highest)
@@ -388,7 +389,7 @@ comes from memory or YB. For a read at position `pos` the chain is:
       forward prefetch window (`FETCH_FORWARD_CHUNKS = 64` /
       `FETCH_FORWARD_BYTES = 4 MiB`) in a single snapshot: on YSQL, one
       `UNION ALL` statement (covering arm: highest `chunk_offset < pos`,
-      `LIMIT 1`; forward arm: ascending from `pos`); on tsclient, all
+      `LIMIT 1`; forward arm: ascending from `pos`); on the direct lane, all
       (arm, bucket) ops in one Perform at one read point. A single snapshot
       is load-bearing — two separate autocommit SELECTs would let a
       truncate+rewrite commit between them and splice old-term and new-term
@@ -568,8 +569,9 @@ loses nothing but logs.
      chunk_offset DESC LIMIT 1` per bucket; the global max across buckets is
      the end of WAL. Within a segno the top-offset row necessarily has the
      highest end because rows never overlap. No hole detection is needed:
-     every consumer batch carries one bucket and lands atomically (one write
-     batch on tsclient, one single-shard statement on YSQL), and batches are
+     every consumer batch carries one bucket and lands atomically (one
+     single-tablet Perform on the direct-RPC lane, one single-shard statement
+     on YSQL), and batches are
      written sequentially — so the durable row set is always a contiguous
      prefix of the WAL stream. If either property is ever relaxed (batches
      spanning tablets, or concurrent in-flight batches), hole detection must

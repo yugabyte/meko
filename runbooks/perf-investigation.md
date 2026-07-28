@@ -90,10 +90,10 @@ If commits stall (`IPC/SyncRep`) the limiter is safekeeper→YB durability laten
 See Step 2 of `throughput-troubleshooting.md` (WAL-rate check + `synchronous_commit=off` load-only
 lever). Confirm the safekeeper is low-CPU before blaming it.
 
-Which transport serves the WAL writes: `safekeeper_yb_wal_insert_seconds{path=...}` — `tsclient`
-(pure-Rust pggate RPC, the default; `hot_path = "tsclient"` in `yb_storage_conn`) vs `ysql` (the
+Which transport serves the WAL writes: `safekeeper_yb_wal_insert_seconds{path=...}` — `yb_thin_client`
+(direct RPC over the C++ shim, the default; `hot_path = "yb_thin_client"` in `yb_storage_conn`) vs `ysql` (the
 Postgres-wire escape hatch); see `compute/architecture/yugabyte.md` §"Direct-to-tserver hot path". The
-tsclient lane has no YSQL fallback — it retries across tservers, and a terminal failure surfaces
+direct-RPC lane has no YSQL fallback — it retries internally, and a terminal failure surfaces
 as `YB WAL consumer batch failed` in the safekeeper log (the timeline's WAL writer stops).
 
 ## 6. Restart / replay behavior

@@ -46,7 +46,7 @@ The **`unit`** selection (part of the default and of `all`) runs the
 live-DB tests via `cargo test`, pointed at this run's cluster: the
 pageserver/safekeeper modules (`pageserver::page_store::tests`,
 `pageserver::page_writer::tests`, `safekeeper::yb_wal_storage::tests`,
-with `YB_TEST_HOST/PORT/DB`) and the `yb_tsclient` live suite
+with `YB_TEST_HOST/PORT/DB`) and the `yb_thin_client` live suite
 (`tests/live.rs`, with `YB_LIVE_TSERVERS`/`YB_LIVE_YSQL`/`YB_LIVE_DB` —
 its tserver RPC endpoint lives on `:9100`). These need a real YB with the
 production schema migrated; out of the box they assume a developer-managed

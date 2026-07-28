@@ -3171,7 +3171,6 @@ dependencies = [
  "workspace_hack",
  "yb-tokio-postgres",
  "yb_thin_client",
- "yb_tsclient",
  "ysql_client",
 ]
 
@@ -4566,7 +4565,6 @@ dependencies = [
  "workspace_hack",
  "yb-tokio-postgres",
  "yb_thin_client",
- "yb_tsclient",
  "ysql_client",
 ]
 
@@ -6740,23 +6738,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "ysql_client",
-]
-
-[[package]]
-name = "yb_tsclient"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "futures",
- "prost 0.13.5",
- "prost-build 0.13.3",
- "protoc-bin-vendored",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-subscriber",
  "ysql_client",
 ]
 

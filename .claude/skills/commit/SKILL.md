@@ -148,7 +148,7 @@ Inspection / diagnostic tooling has to keep working against what you changed:
 - `yb-dump-pages`, `yb-dump-wals`, `yb-reset-consistent-lsn` (the `tools`
   crate, `compute/tools/src/bin/`) — read/repair the YB-backed page store / WAL directly.
 - `scripts/` — operational helpers (e.g. `yb-local.sh`,
-  `vendor-yb-protos.py`). The top-level `build.sh`
+  `fetch-yb-thin-client.sh`). The top-level `build.sh`
   (build wrapper / release tarball) is in the same family.
 
 Check a tool when your change touches **what it reads or renders**:

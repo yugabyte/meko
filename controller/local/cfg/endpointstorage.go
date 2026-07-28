@@ -7,6 +7,12 @@ import (
 	"github.com/yugabyte/amp/controller/local/config"
 )
 
+// defaultHotPath mirrors the Rust `HotPath::default()` (and
+// `launch.DefaultYbHotPath`): the lane an absent `hot_path` key selects, so it
+// is never rendered. Duplicated rather than imported because `launch` already
+// imports this package.
+const defaultHotPath = "yb_thin_client"
+
 // EndpointStorageParams is the input to WriteEndpointStorageJSON. Mirrors
 // the fields Rust `EndpointStorage::from_conf` + `init` use
 // (control_plane/src/endpoint_storage.rs).
@@ -80,7 +86,11 @@ func ybConnToStoreJSON(c *config.YbConnConfig) map[string]any {
 	if c.DisableTransactionalWrites {
 		obj["disable_transactional_writes"] = true
 	}
-	if c.HotPath != nil && *c.HotPath != "tsclient" {
+	// Only a non-default lane is emitted, mirroring
+	// `launch.ybInlineTOML`. (endpoint_storage's YbStore backend talks YSQL
+	// regardless — it holds no hot-path client — but the key stays in the
+	// shared connection block, so keep the two renderers consistent.)
+	if c.HotPath != nil && *c.HotPath != defaultHotPath {
 		obj["hot_path"] = *c.HotPath
 	}
 	if c.TserverRPCAddrs != nil {

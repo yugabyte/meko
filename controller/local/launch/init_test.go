@@ -24,7 +24,7 @@ func TestInitRoundTrip(t *testing.T) {
 		YbDbname:       "ephemeral_db",
 		YbHost:         "10.0.0.1",
 		YbPort:         5433,
-		YbHotPath:      "tsclient",
+		YbHotPath:      "ysql",
 		NumPageservers: 1,
 		PortBase:       &base,
 		Force:          ForceMustNotExist,
@@ -110,10 +110,10 @@ func TestInitRoundTrip(t *testing.T) {
 //
 // Regression: the renderer used to emit `hot_path` only for `"ysql"`. Once the
 // Rust `HotPath::default()` became `yb_thin_client`, every other value —
-// including `--yb-hot-path tsclient`, the flag's own documented default —
-// silently fell through to the thin client, so the tsclient lane could not be
-// selected or fallen back to. The default lane must still be OMITTED, though:
-// endpoint_storage does not link yb_thin_client and must never be handed it.
+// including the flag's own documented default — silently fell through to the
+// thin client, so no other lane could be selected or fallen back to. The
+// default lane must still be OMITTED: it is what an absent key already means,
+// so spelling it out is redundant in every generated config.
 func TestYbInlineTOMLEmitsSelectableHotPath(t *testing.T) {
 	base := config.YbConnConfig{HostPorts: "127.0.0.1:5433", User: "yugabyte", Dbname: "yb_storage"}
 
@@ -124,7 +124,6 @@ func TestYbInlineTOMLEmitsSelectableHotPath(t *testing.T) {
 	}{
 		{"unset", nil, ""},
 		{"default lane is omitted", strPtr(DefaultYbHotPath), ""},
-		{"tsclient is selectable", strPtr("tsclient"), `hot_path = "tsclient"`},
 		{"ysql is selectable", strPtr("ysql"), `hot_path = "ysql"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

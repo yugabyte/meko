@@ -112,12 +112,8 @@ default** (`YbConnConfig::hot_path`, `HotPath::ThinClient`) — `PageStore`
 additionally opens direct-RPC table handles over `libs/yb_thin_client`
 (`PageStore::thinclient`, the batch-first client over the
 `libyb_thin_client` C++ shim — routing stays server-side) to
-`pages`/`slru_pages`/`meta` at startup with a fail-fast health check.
-`hot_path = "tsclient"` opens the equivalent handles over the predecessor
-pure-Rust `libs/yb_tsclient` instead (`PageStore::tsclient`); the
-`*_thin` helpers mirror the `*_tsclient` ones and share the row-decoding
-via the `RowCells` trait. Set `hot_path = "ysql"` to run everything over
-the Postgres wire.
+`pages`/`slru_pages`/`meta` at startup with a fail-fast health check. Set
+`hot_path = "ysql"` to run everything over the Postgres wire instead.
 
 ## Schema
 
@@ -399,14 +395,14 @@ individually. The cross-forknum variant keys the LATERAL on the full
 (spcnode, dbnode, relnode, forknum, blknum) tuple; it scatters across
 hash tablets and is rare in practice.
 
-On the direct-RPC lanes (`yb_thin_client` — the default — and `tsclient`),
-the single-key readers —
+On the direct-RPC lane (`yb_thin_client`, the default), the single-key
+readers —
 `read_chain`, `read_slru_chain`, `read_meta` — run as paged clustered
 scans from the target LSN downward that stop at the anchor client-side
 (`ChainFetchState`); `normalize_chain` re-orders equal-LSN image/delta
 ties into the SQL result order (the PK's trailing `is_image` clusters
-ASC on the storage side, the SQL readers order it DESC). Both lanes rely
-on the same `lsn DESC` clustering, so a forward scan surfaces the newest
+ASC on the storage side, the SQL readers order it DESC). It relies
+on the `lsn DESC` clustering, so a forward scan surfaces the newest
 version first — `read_meta` takes just `limit(1)`, and the chain readers
 truncate at the first `will_init` anchor. One-forknum multi-block scans
 run as a single clustered range scan with per-block anchor-stop
@@ -415,7 +411,7 @@ continuation to the first page's snapshot (`read_time_ht`), and paging
 must run until a reader signals stop or the range is exhausted — a scan
 cut short mid-chain drops the base image and reconstructs a partial page
 (the `yb_thin_client` `read_scan` loop stops iff its `on_page` callback
-returns `true`, matching the tsclient envelope). Cross-forknum
+returns `true`). Cross-forknum
 `scan_range` and multi-key `scan_meta_range` always stay on YSQL — they
 scatter across hash buckets and are not hot. Per-op latency is split by
 lane in `pageserver_yb_store_op_seconds{op,path}`.
@@ -524,7 +520,7 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    bind-parameter budget with `branch_id` baked as a literal) and 2000
    for meta, dispatched in parallel via
    `stream::iter(...).buffer_unordered(N)` with base N = 4/2/3
-   (× `scale_factor`). On the tsclient lane the page/SLRU writes run as
+   (× `scale_factor`). On the direct-RPC lane the page/SLRU writes run as
    PGSQL_UPSERT batches with per-row response verification (a dropped
    row surfaces as a batch error, not a short count); `put_meta` always
    stays on YSQL. Because every connection runs in upsert mode, a retry
@@ -1072,7 +1068,7 @@ The compute opens libpq connections to the pageserver per backend
 
 - `compute/pageserver/src/page_store.rs` — `PageStore`: the four-table
   row store, image-anchored read SQL, lineage walks, timeline-state
-  CRUD, generation CAS + fenced UPDATEs, tsclient lane.
+  CRUD, generation CAS + fenced UPDATEs, direct-RPC lane.
 - `compute/pageserver/src/page_writer.rs` — `PageWriter`: buffered
   write path, flush + `consistent_lsn` advance, backpressure,
   materialise triggers, blended reads.
@@ -1100,7 +1096,7 @@ The compute opens libpq connections to the pageserver per backend
 - [`pageserver-apis.md`](pageserver-apis.md) — HTTP/gRPC/libpq
   API inventory; [`pageserver-metrics.md`](pageserver-metrics.md)
   — metrics; [`yugabyte.md`](yugabyte.md) — full `yb_storage` DDL and
-  the tsclient lane details; [`pageserver-lsns.md`](pageserver-lsns.md)
+  the direct-RPC lane details; [`pageserver-lsns.md`](pageserver-lsns.md)
   — LSN vocabulary.
 
 ## Testing

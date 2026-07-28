@@ -15,7 +15,7 @@ extension, and their supporting Rust libraries. The control plane lives in
 | [`compute_tools/`](compute_tools/) | `yb-compute-ctl` — compute supervisor (config, start/stop, catalog migrations) |
 | [`endpoint_storage/`](endpoint_storage/) | `yb-endpoint-storage` — per-endpoint scratch-blob service (LFC prewarm state) |
 | [`pgxn/`](pgxn/) | Postgres extensions, including the `yb_amp` smgr extension and its walredo/rmgr/test helpers |
-| [`libs/`](libs/) | shared Rust crates (`ysql_client`, `yb_tsclient`, `remote_storage`, `pageserver_api`, `safekeeper_api`, …) |
+| [`libs/`](libs/) | shared Rust crates (`ysql_client`, `yb_thin_client`, `remote_storage`, `pageserver_api`, `safekeeper_api`, …) |
 | [`image/`](image/) | compute image build — Dockerfile, patches, vm-image specs |
 | [`vendor/`](vendor/) | vendored patched PostgreSQL (`postgres` submodule) |
 | [`architecture/`](architecture/) | design docs |

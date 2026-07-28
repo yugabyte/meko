@@ -271,11 +271,11 @@ jobs:
 
       # Start YB first so it initializes while the toolchain installs.
       # Use host networking + advertise 127.0.0.1 so YB advertises an address
-      # the host-side clients (safekeeper, yb_tsclient) can actually reach —
+      # the host-side clients (safekeeper, yb_thin_client) can actually reach —
       # without --advertise_address it hands back the container hostname and
       # cluster bring-up fails ("could not find a server to connect to"). This
       # mirrors the developer setup. Host networking also exposes YSQL (5433)
-      # and the tserver RPC (9100, for the yb_tsclient live tests) directly.
+      # and the tserver RPC (9100, for the yb_thin_client live tests) directly.
       # The harness defaults to 127.0.0.1:5433 (see test/integration/compute/
       # cluster.rs) and creates its own ephemeral database per run.
       - name: Start YugabyteDB

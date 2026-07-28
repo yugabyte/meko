@@ -395,16 +395,16 @@ fn cond_op(op: CondOp) -> ffi::YbCondOp {
     }
 }
 
-/// Attempts a single `Perform` gets before its error is surfaced. Matches
-/// `yb_tsclient::MAX_ATTEMPTS`: this lane has no YSQL fallback, so it must ride
-/// out transient failures (tablet-leader moves, `TRY_AGAIN`, network blips)
-/// itself — a hard failure here stalls the WAL consumer or a getpage.
+/// Attempts a single `Perform` gets before its error is surfaced. This lane has
+/// no YSQL fallback, so it must ride out transient failures (tablet-leader
+/// moves, `TRY_AGAIN`, network blips) itself — a hard failure here stalls the
+/// WAL consumer or a getpage.
 const MAX_ATTEMPTS: usize = 10;
 /// First inter-attempt sleep; doubles per attempt up to [`BACKOFF_MAX`].
 const BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_millis(50);
 const BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(2);
 /// Whole-scan restarts [`TsClient::read_scan`] gets on a read-restart it can't
-/// heal in place. Matches `yb_tsclient::MAX_SCAN_RESTARTS`.
+/// heal in place.
 const MAX_SCAN_RESTARTS: usize = 5;
 
 /// Run `f` until it succeeds, its error is non-retryable, `give_up` claims it,
@@ -775,9 +775,9 @@ impl TsClient {
                     .ops
                     .pop()
                     .ok_or_else(|| YbError::Other("read batch returned no op result".into()))?;
-                // `on_page` returns `true` to STOP early (e.g. a chain reached its
-                // `will_init` anchor, or a `limit(1)` point read found its row) —
-                // matching `yb_tsclient::TsClient::read_scan`.
+                // `on_page` returns `true` to STOP early (e.g. a chain reached
+                // its `will_init` anchor, or a `limit(1)` point read found its
+                // row).
                 let requested_stop = on_page(&mut acc, op.rows)?;
                 match next_scan_page(requested_stop, op.paging_state) {
                     Some(ps) => paging_state = Some(ps),

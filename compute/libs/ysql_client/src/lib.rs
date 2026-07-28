@@ -167,9 +167,8 @@ pub struct YbConnConfig {
     /// safekeeper WAL reads/writes) use. `"yb_thin_client"` (default): the
     /// `yb_thin_client` crate over the `libyb_thin_client` C++ shim, sending
     /// `Perform` to a tserver's RPC port (routing stays server-side).
-    /// `"tsclient"`: the predecessor pure-Rust `yb_tsclient` crate (same RPC
-    /// port, no native library). `"ysql"`: Postgres wire via this crate only.
-    /// Cold paths (DDL, GC, rehydration, control file) always use YSQL.
+    /// `"ysql"`: Postgres wire via this crate only. Cold paths (DDL, GC,
+    /// rehydration, control file) always use YSQL.
     /// NOTE: an old binary reading a config that sets this fails to parse
     /// (`deny_unknown_fields`) — intentional, not silently ignored.
     ///
@@ -186,13 +185,16 @@ pub struct YbConnConfig {
     /// this round trip.
     #[serde(default)]
     pub hot_path: HotPath,
-    /// yb-tserver RPC endpoints for the `tsclient` hot path, CSV. When
+    /// yb-tserver RPC endpoints for the direct-RPC hot path, CSV. When
     /// unset, the `host_ports` hosts on port 9100; set explicitly to reach
     /// every tserver when `host_ports` is only a subset (e.g. a single YSQL
     /// VIP, or a K8s service that load-balances across the tserver pods).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tserver_rpc_addrs: Option<HostPorts>,
-    /// Read-*session* count for the `tsclient` hot-path pool. Sets read
+    /// Read-*session* count for the direct-RPC hot-path pool. (The
+    /// `tsclient_` prefix is historical — it predates `yb_thin_client`
+    /// replacing `yb_tsclient`; the key is kept so existing configs parse.)
+    /// Sets read
     /// concurrency (each session is a serial Perform queue); the sessions are
     /// packed onto shared connections (see [`Self::tsclient_sessions_per_conn`]),
     /// so this sets concurrency, not the connection count. Used verbatim (no
@@ -201,13 +203,13 @@ pub struct YbConnConfig {
     /// WAL lane a fixed 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tsclient_read_sessions: Option<usize>,
-    /// Dedicated write-*session* count for the `tsclient` hot-path pool
+    /// Dedicated write-*session* count for the direct-RPC hot-path pool
     /// (server sessions, packed onto shared connections). Used verbatim when
     /// set. When unset: the pageserver `scale_count(4, scale_factor)`, the
     /// safekeeper WAL lane a fixed 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tsclient_write_sessions: Option<usize>,
-    /// How many `tsclient` sessions ride each TCP connection. The pool opens
+    /// How many hot-path sessions ride each TCP connection. The pool opens
     /// `ceil((read_sessions + write_sessions) / sessions_per_conn)`
     /// connections and packs the sessions across them (reads and writes
     /// sharing connections); the connection count is what spreads load
@@ -223,14 +225,9 @@ pub struct YbConnConfig {
 #[serde(rename_all = "lowercase")]
 pub enum HotPath {
     Ysql,
-    /// Pure-Rust thin RPC client (`yb_tsclient`) against the tserver
-    /// RPC port; serde wire form `"tsclient"`. The predecessor of
-    /// [`HotPath::ThinClient`], kept during the migration.
-    TsClient,
     /// Thin `Perform`-based tserver client over the `libyb_thin_client`
     /// C++ shim (`yb_thin_client`); serde wire form `"yb_thin_client"`.
-    /// Batches reads/writes into one Perform per call. **The default** — it
-    /// replaces [`HotPath::TsClient`] as the hot-path client.
+    /// Batches reads/writes into one Perform per call. **The default.**
     #[default]
     #[serde(rename = "yb_thin_client")]
     ThinClient,
@@ -241,7 +238,7 @@ pub enum HotPath {
 pub const DEFAULT_YB_TSERVER_RPC_PORT: u16 = 9100;
 
 impl YbConnConfig {
-    /// yb-tserver RPC endpoints the `tsclient` hot path connects to:
+    /// yb-tserver RPC endpoints the direct-RPC hot path connects to:
     /// `tserver_rpc_addrs` if set, else the `host_ports` hosts on
     /// [`DEFAULT_YB_TSERVER_RPC_PORT`].
     pub fn effective_tserver_rpc_addrs(&self) -> Vec<String> {
@@ -325,7 +322,6 @@ impl YbConnConfig {
         match self.hot_path {
             HotPath::ThinClient => {} // default → omitted
             HotPath::Ysql => parts.push("hot_path = \"ysql\"".to_string()),
-            HotPath::TsClient => parts.push("hot_path = \"tsclient\"".to_string()),
         }
         if let Some(t) = &self.tserver_rpc_addrs {
             parts.push(format!("tserver_rpc_addrs = {}", q(&t.to_string())));
@@ -353,9 +349,9 @@ fn rpc_addrs_from_hosts(hosts: impl IntoIterator<Item = String>) -> Vec<String> 
     addrs
 }
 
-/// One-time catalog lookup for the `tsclient` hot path: the database OID
+/// One-time catalog lookup for the direct-RPC hot path: the database OID
 /// plus the pg_class OID of each named table in `schema`. The
-/// `yb_tsclient` crate derives DocDB table ids from these. Errors if any
+/// `yb_thin_client` crate derives DocDB table ids from these. Errors if any
 /// requested table is missing — callers fail hard at startup rather than
 /// run with a partially-enabled direct path.
 pub async fn lookup_table_oids(
@@ -660,11 +656,7 @@ mod database_url_tests {
     /// failed with "unknown configuration item(s): yb_storage_conn.hot_path".
     #[test]
     fn hot_path_survives_serde_round_trip_for_every_lane() {
-        for lane in [
-            super::HotPath::Ysql,
-            super::HotPath::TsClient,
-            super::HotPath::ThinClient,
-        ] {
+        for lane in [super::HotPath::Ysql, super::HotPath::ThinClient] {
             let mut c = cfg("127.0.0.1:5433");
             c.hot_path = lane;
             let ser = toml::to_string(&c).expect("serialize");
@@ -679,19 +671,14 @@ mod database_url_tests {
     }
 
     #[test]
-    fn hot_path_tsclient_round_trips() {
-        // tsclient is no longer the default (yb_thin_client is), so it is
-        // EMITTED explicitly and round-trips — both with and without the
-        // tserver_rpc_addrs override.
+    fn tserver_rpc_addrs_round_trips() {
+        // The default lane (yb_thin_client) is omitted from the wire form, so
+        // a config carrying only the RPC-endpoint override renders just that
+        // key — and the override survives the round trip and drives
+        // `effective_tserver_rpc_addrs`.
         let mut c = cfg("h1:5433,h2:5433");
-        c.hot_path = super::HotPath::TsClient;
         let t = c.to_inline_toml();
-        assert!(t.contains("hot_path = \"tsclient\""));
-        let back: YbConnConfig = toml::from_str(&format!("v = {t}"))
-            .map(|v: std::collections::HashMap<String, YbConnConfig>| v["v"].clone())
-            .unwrap();
-        assert_eq!(back, c);
-        assert_eq!(back.hot_path, super::HotPath::TsClient);
+        assert!(!t.contains("hot_path"));
 
         c.tserver_rpc_addrs = Some("t1:9100,t2:9101".parse().unwrap());
         let t = c.to_inline_toml();
