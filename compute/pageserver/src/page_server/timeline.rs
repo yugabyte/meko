@@ -81,7 +81,7 @@ pub struct TimelineResources {
     /// `TenantSharedResources::gc_page_store`).
     pub gc_page_store: Arc<crate::page_store::PageStore>,
     /// Ancestry lineage for lineage-aware PageStore reads, built by
-    /// `PageStore::load_lineage` from the timeline_state row chain.
+    /// `PageStore::load_lineage` from the pageserver_branch_state row chain.
     /// `None` → the trivial single-segment lineage (fresh bootstrap,
     /// where the row doesn't exist yet; bootstraps have no ancestor).
     pub lineage: Option<Vec<crate::page_store::LineageSegment>>,
@@ -316,7 +316,7 @@ pub(crate) struct GcInfo {
     ///
     /// TODO(cleanup): vestigial in yb-amp — child fork points are
     /// protected by the drain's `min_children_fork_lsn` (from YB
-    /// `timeline_state`); `refresh_gc_info` zeroes this and the cutoff
+    /// `pageserver_branch_state`); `refresh_gc_info` zeroes this and the cutoff
     /// (`min_cutoff`) never reads it. The `insert_child` /
     /// `remove_child_not_offloaded` machinery can go once no other
     /// consumer remains.
@@ -921,9 +921,9 @@ impl Timeline {
         // yb-pageserver read path: every range goes through the row
         // store. Inside `get_vectored_via_page_writer` we classify each
         // range by its start key:
-        //   - rel-page  → pageserver.pages    (chain + walredo)
-        //   - slru-block → pageserver.slru_pages (chain + walredo)
-        //   - else      → pageserver.meta     (single payload, no walredo)
+        //   - rel-page  → amp_storage.pages    (chain + walredo)
+        //   - slru-block → amp_storage.slru_pages (chain + walredo)
+        //   - else      → amp_storage.meta     (single payload, no walredo)
         //
         // Production yb-pageserver always has `page_writer = Some(_)`;
         // the legacy LayerMap traversal that used to fall through here
@@ -943,7 +943,7 @@ impl Timeline {
     /// yb-pageserver row-per-page read path. Replaces the LayerMap
     /// traversal: per requested key at its target LSN, read the chain
     /// from `PageWriter::scan_range` (which blends in-RAM buffered
-    /// rows with `pageserver.pages`), decode into walredo's
+    /// rows with `amp_storage.pages`), decode into walredo's
     /// `ValueReconstructState` shape, drive `reconstruct_value` to
     /// produce the final 8 KiB page.
     ///
@@ -1157,7 +1157,7 @@ impl Timeline {
     /// Durable, gap-free consistency watermark. Advances only after a
     /// successful gen-fenced `advance_consistent_lsn` UPSERT in
     /// `page_writer::flush` — i.e., every record with LSN ≤ this is in
-    /// `pageserver.pages` AND the `timeline_state` row has been
+    /// `amp_storage.pages` AND the `pageserver_branch_state` row has been
     /// updated. Use this for SK feedback, restart resume position, and
     /// the HTTP API `disk_consistent_lsn` field.
     pub(crate) fn get_consistent_lsn(&self) -> Lsn {
@@ -1232,7 +1232,7 @@ impl Timeline {
         Ok(())
     }
 
-    /// Phase 5b: write the full timeline row into `pageserver.timeline_state`
+    /// Phase 5b: write the full timeline row into `amp_storage.pageserver_branch_state`
     /// once at creation time, so the per-flush `advance_consistent_lsn`
     /// UPDATE has a row to target. Also seeds `PageWriter`'s in-memory
     /// `consistent_lsn_watermark` from the just-written `consistent_lsn` —
@@ -1293,7 +1293,7 @@ impl Timeline {
     }
 
     /// Eager attach-time push of our controller-issued generation
-    /// into `pageserver.timeline_state.current_generation`. The flush
+    /// into `amp_storage.pageserver_branch_state.current_generation`. The flush
     /// path's `WHERE current_generation = $our_gen` predicate is
     /// strict, so the invariant "YB column == our_gen at all times
     /// after attach" must hold from the first flush onwards. The
@@ -2230,7 +2230,7 @@ impl Timeline {
                 image_materializer_task: std::sync::Mutex::new(image_materializer_task),
 
                 // initialize the eager in-memory 'last_record_lsn' from the
-                // durable 'consistent_lsn' seed loaded from `timeline_state`.
+                // durable 'consistent_lsn' seed loaded from `pageserver_branch_state`.
                 last_record_lsn: SeqWait::new(RecordLsn {
                     last: disk_consistent_lsn,
                     prev: metadata.prev_record_lsn().unwrap_or(Lsn(0)),
@@ -2915,7 +2915,7 @@ impl Timeline {
         self.metrics.last_record_lsn_gauge.set(new_lsn.0 as i64);
         // Snapshot the current `last` before advancing — that's the
         // record's `prev_record_lsn`. PageWriter will pair it with
-        // `disk_consistent_lsn` when persisting `timeline_state`, so
+        // `disk_consistent_lsn` when persisting `pageserver_branch_state`, so
         // a restart can hand the safekeeper the correct `xl_prev`.
         let prev_for_new = self.last_record_lsn.load().last;
         self.last_record_lsn.advance(new_lsn);
@@ -3289,7 +3289,7 @@ impl TimelineWriter<'_> {
         // yb-amp: deletions of relations / SLRU segments are not
         // expressed as tombstone keys in the row store; the WAL
         // record itself (TRUNCATE / DROP RELATION) drives the
-        // appropriate INSERTs into pageserver.pages via PageWriter.
+        // appropriate INSERTs into amp_storage.pages via PageWriter.
         // The layer-file tombstone path that this hook fed into is
         // gone (Phase 4d).
         Ok(())

@@ -452,18 +452,18 @@ class Supervisor:
 def provision_schema():
     log("DEV_PROVISION_SCHEMA: ensuring database + schema in YugabyteDB")
     psql("yugabyte", sql=f'CREATE DATABASE "{YB_DBNAME}"', ignore_errors=True)
-    # Already provisioned? (pageserver.pages is created by the migration.)
+    # Already provisioned? (amp_storage.pages is created by the migration.)
     check = psql(
         YB_DBNAME,
         sql="SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema='pageserver' AND table_name='pages'",
+            "WHERE table_schema='amp_storage' AND table_name='pages'",
         ignore_errors=True,
     )
     if check.returncode == 0 and "1 row" in (check.stdout or ""):
         log("schema already present; skipping migrations")
         return
-    # The pageserver/safekeeper/public schemas the daemons bind are provisioned
-    # by the single schema-qualified provisioning migration.
+    # The amp_storage schema the daemons bind is provisioned by the single
+    # schema-qualified provisioning migration.
     for mig in sorted(MIGRATIONS_DIR.glob("*_compute_storage.up.sql")):
         log(f"applying migration {mig.name}")
         psql(YB_DBNAME, file=mig)

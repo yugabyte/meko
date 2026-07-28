@@ -25,9 +25,9 @@ variables, starts the services in order, and monitors/restarts them:
 
 ```
  tini ─ supervisor.py
-          ├─ endpoint_storage      (HTTP; LFC scratch blobs → public.blobs)
-          ├─ safekeeper            (WAL → safekeeper.wals)
-          ├─ yb-pageserver         (page service → pageserver.* ; initdb on bootstrap)
+          ├─ endpoint_storage      (HTTP; LFC scratch blobs → amp_storage.blobs)
+          ├─ safekeeper            (WAL → amp_storage.wals)
+          ├─ yb-pageserver         (page service → amp_storage.* ; initdb on bootstrap)
           └─ compute_ctl ─ postgres + yb_amp extension   (the compute)
 ```
 
@@ -47,7 +47,7 @@ for durability).
 
 The controller is a **shared, cluster-level control plane**: it owns
 generation/attach fencing and the endpoint registry in YugabyteDB's
-`registry` schema. One controller per endpoint pod would mean N
+`amp_registry` schema. One controller per endpoint pod would mean N
 uncoordinated controllers racing on that shared state, so the controller
 runs once, in the AMP layer (the `yb-amp-controller` chart). The pod
 itself talks only to YugabyteDB — plus, optionally, to that external
@@ -57,8 +57,8 @@ Two consequences follow.
 
 ### Schema provisioning is external
 
-Every yb-amp schema (`controller.*`, `registry.*`, `pageserver.*`,
-`safekeeper.*`, `public.blobs`, the `blob_namespace` ENUM) is created
+Every yb-amp schema (`controller.*`, `amp_registry.*`, `amp_storage.*`
+including `amp_storage.blobs` and the `blob_namespace` ENUM) is created
 by the controller's migrations on controller startup
 ([`controller/migrations/`](../../controller/migrations/), applied by
 `db.Migrate`). No service self-creates its tables — the daemons bind
@@ -66,7 +66,7 @@ hardcoded schema/table names at startup. So the `yb_storage` database +
 schemas must exist before the pod starts; in production the controller
 provisions them. For standalone testing the supervisor can do it itself:
 `DEV_PROVISION_SCHEMA=true` makes it `CREATE DATABASE`, check whether
-`pageserver.pages` already exists, and if not apply the bundled
+`amp_storage.pages` already exists, and if not apply the bundled
 `*_provision_yb_storage.up.sql` migration with `psql`.
 
 ### Bootstrap/attach run in the pod

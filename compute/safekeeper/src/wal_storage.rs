@@ -1,7 +1,7 @@
 //! WAL bookkeeping + reader.
 //!
 //! Historically this module wrote WAL to a local pg_wal-style directory.
-//! yb-amp keeps WAL only in YB (`safekeeper.wals`); `WalBookkeeping` is
+//! yb-amp keeps WAL only in YB (`amp_storage.wals`); `WalBookkeeping` is
 //! now a pure bookkeeping helper used by `YbWalStorage` to track LSN
 //! watermarks and feed the `WalStreamDecoder`. `WalReader` continues to
 //! serve WAL bytes to the WAL sender — locally from the in-memory
@@ -113,7 +113,7 @@ pub struct WalBookkeeping {
 
 impl WalBookkeeping {
     /// Build the bookkeeping helper. `write_lsn` is supplied by the caller
-    /// (`YbWalStorage` rehydrates it from `safekeeper.wals`); all watermarks
+    /// (`YbWalStorage` rehydrates it from `amp_storage.wals`); all watermarks
     /// start there.
     pub fn new(
         branch_id: &BranchId,
@@ -187,7 +187,7 @@ impl Storage for WalBookkeeping {
     }
 
     /// Advance bookkeeping for `buf` bytes starting at `startpos`. Durability is
-    /// the caller's responsibility (`YbWalStorage` INSERTs into `safekeeper.wals`).
+    /// the caller's responsibility (`YbWalStorage` INSERTs into `amp_storage.wals`).
     async fn write_wal(&mut self, startpos: Lsn, buf: &[u8]) -> Result<()> {
         if self.write_lsn > startpos {
             bail!(
@@ -285,7 +285,7 @@ pub struct WalReader {
     pos: Lsn,
     wal_segment: Option<Pin<Box<dyn AsyncRead + Send + Sync>>>,
 
-    // WAL is read from YB (`safekeeper.wals`); yb-amp writes no local files.
+    // WAL is read from YB (`amp_storage.wals`); yb-amp writes no local files.
     yb_wal: Option<Arc<YbWalConn>>,
 
     // Live flush (committed) frontier, handed to every `YbSegmentReader` this
@@ -428,7 +428,7 @@ impl WalReader {
 
     /// Open WAL segment at the current position of the reader.
     ///
-    /// WAL lives only in YB (`safekeeper.wals`) — yb-amp writes no local
+    /// WAL lives only in YB (`amp_storage.wals`) — yb-amp writes no local
     /// segment files. `YbSegmentReader` serves the segment lazily, hitting
     /// the in-memory `WalCache` first and falling through to YB on a miss.
     async fn open_segment(&self) -> Result<Pin<Box<dyn AsyncRead + Send + Sync>>> {

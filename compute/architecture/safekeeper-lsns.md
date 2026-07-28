@@ -9,10 +9,10 @@ Grounded in the Rust sources (`compute/safekeeper/`, `compute/libs/utils`,
 
 **System framing.** Durability and resilience come from YugabyteDB, the
 underlying store. The safekeeper mirrors every WAL byte into the YB table
-`safekeeper.wals` and persists its per-branch control state in
-`safekeeper.timeline_state`; it keeps no durable local state. Throughout
+`amp_storage.wals` and persists its per-branch control state in
+`amp_storage.safekeeper_branch_state`; it keeps no durable local state. Throughout
 this doc, "flushed" means **persisted to YB** — `flush_lsn` is the frontier
-of WAL confirmed durable in `safekeeper.wals`, and a commit is acked to the
+of WAL confirmed durable in `amp_storage.wals`, and a commit is acked to the
 compute only once its bytes are there.
 
 See [`pageserver-lsns.md`](pageserver-lsns.md) for the pageserver side of
@@ -25,7 +25,7 @@ the replication link (how the `START_REPLICATION` position is chosen, what
 flowchart LR
     COMP[Compute / walproposer] -->|AppendRequest| SK_ING[WAL acceptor ingest]
     SK_ING -->|write_wal producer| CHAN[chunk channel]
-    CHAN -->|consumer batches| YB_WAL[(safekeeper.wals)]
+    CHAN -->|consumer batches| YB_WAL[(amp_storage.wals)]
     YB_WAL -->|DurableState watch| DUR[durable_lsn]
     DUR -->|caps| FL["flush_lsn = min(flush_record_lsn, durable_lsn)"]
     FL -->|AppendResponse.flush_lsn| COMP
@@ -67,7 +67,7 @@ append path; truncation happens only via `ProposerElected`.
 
 ---
 
-## Timeline control LSNs (`safekeeper.timeline_state`)
+## Timeline control LSNs (`amp_storage.safekeeper_branch_state`)
 
 Persisted in YB via `control_file::YbControlFileStorage`. Loaded at
 timeline attach; written by `TimelineState::finish_change` (full row) and
@@ -97,7 +97,7 @@ copy lags until the manager's periodic advisory save.
 `AdvisoryPersist::persist_remote_consistent_lsn`:
 
 ```sql
-UPDATE safekeeper.timeline_state
+UPDATE amp_storage.safekeeper_branch_state
 SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2)
 WHERE branch_id = $1
 ```
@@ -141,7 +141,7 @@ pointer requires a `ProposerElected` truncation first.
 `PendingChunk`s (each stamped with its `end_lsn`) and pushes them onto a
 bounded channel without waiting for YB. A background **consumer** task
 drains the channel into batches, coalesces contiguous chunks into single
-rows, INSERTs them into `safekeeper.wals`, and publishes the batch's
+rows, INSERTs them into `amp_storage.wals`, and publishes the batch's
 highest `end_lsn` onto a `watch` channel as
 `DurableState::Healthy(lsn)` — or `DurableState::Failed(msg)` on a
 non-recoverable error, which fails both durability paths and terminates
@@ -149,7 +149,7 @@ the connection instead of freezing the watermark.
 
 | LSN | Where | Meaning |
 |-----|-------|---------|
-| `durable_lsn` | `Arc<AtomicU64>` mirrored from the watch | Highest `end_lsn` confirmed durable in `safekeeper.wals`. |
+| `durable_lsn` | `Arc<AtomicU64>` mirrored from the watch | Highest `end_lsn` confirmed durable in `amp_storage.wals`. |
 | `submitted_max_lsn` | field | Highest `end_lsn` handed to the consumer; the target a blocking flush waits for. |
 
 **The externally reported flush frontier is durability-capped:**
@@ -203,7 +203,7 @@ timeline starts at a nonzero LSN.
 
 ### Restart rehydration (`YbWalStorage::new`)
 
-1. `load_write_lsn` scans `safekeeper.wals` for
+1. `load_write_lsn` scans `amp_storage.wals` for
    `max(segno_base + chunk_offset + chunk_size)` across all buckets;
    falls back to `timeline_start_lsn` when the table has no rows. Because
    `write_wal` is gap-free and `truncate_wal` deletes above the cut, the
@@ -340,19 +340,19 @@ The manager (`update_wal_removal`) computes
 `removal_horizon_segno = horizon.segment_number() - 1` (saturating) and,
 when it exceeds `last_removed_segno`, spawns
 `YbWalStorage::remove_up_to(segno)` — dropping cached chunks first, then
-DELETEing all `safekeeper.wals` rows with `segno < segno_up_to` (bounded on
+DELETEing all `amp_storage.wals` rows with `segno < segno_up_to` (bounded on
 both sides by the last-removed segno for a tight index range).
 
 **Why each term is in the min:**
 - *Persisted* `remote_consistent_lsn`, not the in-memory copy: a feedback
-  bump that hasn't reached `safekeeper.timeline_state` yet must not license
+  bump that hasn't reached `amp_storage.safekeeper_branch_state` yet must not license
   deletion — after a safekeeper restart the horizon recomputes from the
   persisted row, and WAL deleted on the strength of a lost in-memory value
   would be gone while the row still claims it is needed.
 - `flush_lsn`: a stale or corrupt `remote_consistent_lsn` past end-of-WAL
   must not trim beyond durability.
 - Laggard clamp (`WalSenders::laggard_lsn`, min of pageserver walsenders'
-  `last_received_lsn`): WAL lives only in `safekeeper.wals` rows — there is
+  `last_received_lsn`): WAL lives only in `amp_storage.wals` rows — there is
   no secondary copy for an active pageserver connection to re-fetch from,
   so deleting bytes a walsender still needs is one-way data loss.
 
@@ -400,7 +400,7 @@ truncate_wal end_pos ≤ durable_lsn    (refused otherwise)
 
 ## Cross-link: pageserver restart → stream → feedback loop
 
-1. Pageserver loads `consistent_lsn` from `pageserver.timeline_state` and
+1. Pageserver loads `consistent_lsn` from `amp_storage.pageserver_branch_state` and
    seeds both its eager applied frontier and its durable slot from it.
 2. Pageserver sends `START_REPLICATION PHYSICAL {startpoint}` with
    `startpoint` derived from `get_consistent_lsn()`.
@@ -422,7 +422,7 @@ UPSERTs; a lagging safekeeper column means segments are trimmed later.
 
 ## Persistence cheat sheet
 
-| Field | YB `safekeeper.timeline_state` | YB `safekeeper.wals` | In memory only |
+| Field | YB `amp_storage.safekeeper_branch_state` | YB `amp_storage.wals` | In memory only |
 |-------|-------------------------------|----------------------|----------------|
 | `timeline_start_lsn` | Yes | — | — |
 | `local_start_lsn` | Yes | — | — |
@@ -470,6 +470,6 @@ UPSERTs; a lagging safekeeper column means segments are trimmed later.
   feedback shared-memory relay.
 - `compute/libs/utils/src/pageserver_feedback.rs` — feedback wire format.
 - `controller/migrations/0002_compute_storage.up.sql` —
-  `safekeeper.timeline_state` + `safekeeper.wals` schemas.
+  `amp_storage.safekeeper_branch_state` + `amp_storage.wals` schemas.
 - [`pageserver-lsns.md`](pageserver-lsns.md) — the pageserver side of the
   link.

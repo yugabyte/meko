@@ -56,7 +56,7 @@ use ysql_client::YbConnConfig;
 /// The YB table the endpoint_storage blob store lives in. Hardcoded — the
 /// connection config carries no table name (every yb-amp component owns
 /// a fixed table).
-const BLOBS_TABLE: &str = "blobs";
+const BLOBS_TABLE: &str = "amp_storage.blobs";
 use crate::error::{Cancelled, TimeoutOrCancel};
 use crate::metrics::RequestKind;
 use crate::{
@@ -468,7 +468,7 @@ impl RemoteStorage for YbStore {
                 .is_some_and(|seg| seg.contains('.'));
 
         let mut where_clauses: Vec<String> =
-            vec!["namespace = $1::text::blob_namespace".to_string()];
+            vec!["namespace = $1::text::amp_storage.blob_namespace".to_string()];
         let mut bind_params: Vec<Box<dyn ToSql + Sync + Send>> = vec![Box::new(namespace)];
         if !branch_id.is_empty() {
             where_clauses.push(format!("branch_id = ${}", bind_params.len() + 1));
@@ -498,7 +498,7 @@ impl RemoteStorage for YbStore {
             "SELECT branch_id, key, generation, size_bytes, last_modified_us \
              FROM {} WHERE {} \
              ORDER BY branch_id, key, generation",
-            quote_ident(&self.table_name),
+            quote_relation(&self.table_name),
             where_clauses.join(" AND "),
         );
         if let Some(mk) = max_keys {
@@ -640,9 +640,9 @@ impl RemoteStorage for YbStore {
         let sql = format!(
             "SELECT size_bytes, last_modified_us FROM {} \
              WHERE branch_id = $1 \
-               AND namespace = $2::text::blob_namespace AND key = $3 \
+               AND namespace = $2::text::amp_storage.blob_namespace AND key = $3 \
                AND generation IS NOT DISTINCT FROM $4 AND chunk_idx = 0",
-            quote_ident(&self.table_name)
+            quote_relation(&self.table_name)
         );
         let params: [&(dyn ToSql + Sync); 4] = [&branch_id, &namespace, &key_body, &requested_gen];
         let row_opt = self
@@ -698,7 +698,7 @@ impl RemoteStorage for YbStore {
         // Delete any prior rows for this key first — this handles overwrite +
         // chunk-count shrinking (the upsert GUC handles same-PK conflict but
         // wouldn't remove rows for keys that no longer exist in the new write).
-        let table = quote_ident(&self.table_name);
+        let table = quote_relation(&self.table_name);
         let (namespace, branch_id, raw_key_body) = self.parse_key(&db_key);
         // Strip the `-<8hex>` generation suffix from the key body — it's
         // stored as a dedicated column on the row, not as part of the
@@ -708,7 +708,7 @@ impl RemoteStorage for YbStore {
         let delete_sql = format!(
             "DELETE FROM {table} \
              WHERE branch_id = $1 \
-               AND namespace = $2::text::blob_namespace AND key = $3"
+               AND namespace = $2::text::amp_storage.blob_namespace AND key = $3"
         );
         {
             let params: [&(dyn ToSql + Sync); 3] = [&branch_id, &namespace, &key_body];
@@ -734,7 +734,7 @@ impl RemoteStorage for YbStore {
             "INSERT INTO {table} \
              (branch_id, namespace, key, generation, chunk_idx, data, \
               size_bytes, etag, last_modified_us, metadata_json) \
-             VALUES ($1, $2::text::blob_namespace, $3, $4, $5, $6, $7, $8, $9, $10)"
+             VALUES ($1, $2::text::amp_storage.blob_namespace, $3, $4, $5, $6, $7, $8, $9, $10)"
         );
 
         // Materialize all chunk rows up front so each pipelined future can own
@@ -801,9 +801,9 @@ impl RemoteStorage for YbStore {
         let head_sql = format!(
             "SELECT size_bytes, etag, last_modified_us, metadata_json \
              FROM {} WHERE branch_id = $1 \
-               AND namespace = $2::text::blob_namespace AND key = $3 \
+               AND namespace = $2::text::amp_storage.blob_namespace AND key = $3 \
                AND generation IS NOT DISTINCT FROM $4 AND chunk_idx = 0",
-            quote_ident(&self.table_name)
+            quote_relation(&self.table_name)
         );
         let head_params: [&(dyn ToSql + Sync); 4] =
             [&branch_id, &namespace, &key_body, &requested_gen];
@@ -877,11 +877,11 @@ impl RemoteStorage for YbStore {
         let stream_sql = format!(
             "SELECT chunk_idx, data FROM {} \
              WHERE branch_id = $1 \
-               AND namespace = $2::text::blob_namespace AND key = $3 \
+               AND namespace = $2::text::amp_storage.blob_namespace AND key = $3 \
                AND generation IS NOT DISTINCT FROM $4 \
                AND chunk_idx >= $5 AND chunk_idx <= $6 \
              ORDER BY chunk_idx",
-            quote_ident(&table)
+            quote_relation(&table)
         );
         let timeout = self.timeout;
         let stream_branch = branch_id.clone();
@@ -951,9 +951,9 @@ impl RemoteStorage for YbStore {
         let sql = format!(
             "DELETE FROM {} \
              WHERE branch_id = $1 \
-               AND namespace = $2::text::blob_namespace AND key = $3 \
+               AND namespace = $2::text::amp_storage.blob_namespace AND key = $3 \
                AND generation IS NOT DISTINCT FROM $4",
-            quote_ident(&self.table_name)
+            quote_relation(&self.table_name)
         );
         let params: [&(dyn ToSql + Sync); 4] = [&branch_id, &namespace, &key_body, &requested_gen];
         self.with_timeout(self.ysql_fpu_client.execute(&sql, &params), cancel)
@@ -974,9 +974,9 @@ impl RemoteStorage for YbStore {
         let sql = format!(
             "DELETE FROM {} \
              WHERE branch_id = $1 \
-               AND namespace = $2::text::blob_namespace AND key = $3 \
+               AND namespace = $2::text::amp_storage.blob_namespace AND key = $3 \
                AND generation IS NOT DISTINCT FROM $4",
-            quote_ident(&self.table_name)
+            quote_relation(&self.table_name)
         );
 
         // Each key has its own (namespace, branch, key_body) tuple, so we
@@ -1031,7 +1031,7 @@ impl RemoteStorage for YbStore {
         let (to_ns, to_branch, to_raw_body) = self.parse_key(&to_key);
         let (from_body, from_gen) = Self::split_key_generation(&from_raw_body);
         let (to_body, to_gen) = Self::split_key_generation(&to_raw_body);
-        let table = quote_ident(&self.table_name);
+        let table = quote_relation(&self.table_name);
         // Wipe the destination first so a copy that shrinks chunk count is
         // clean, then copy all source chunk rows over. Generation matches
         // are explicit; a copy at a different gen leaves the existing
@@ -1039,7 +1039,7 @@ impl RemoteStorage for YbStore {
         let delete_dst = format!(
             "DELETE FROM {table} \
              WHERE branch_id = $1 \
-               AND namespace = $2::text::blob_namespace AND key = $3 \
+               AND namespace = $2::text::amp_storage.blob_namespace AND key = $3 \
                AND generation IS NOT DISTINCT FROM $4"
         );
         {
@@ -1055,12 +1055,12 @@ impl RemoteStorage for YbStore {
             "INSERT INTO {table} \
              (branch_id, namespace, key, generation, chunk_idx, data, \
               size_bytes, etag, last_modified_us, metadata_json) \
-             SELECT $5, $6::text::blob_namespace, $7, $8, chunk_idx, data, \
+             SELECT $5, $6::text::amp_storage.blob_namespace, $7, $8, chunk_idx, data, \
                     size_bytes, etag, \
                     (extract(epoch from now()) * 1000000)::bigint, metadata_json \
              FROM {table} \
              WHERE branch_id = $1 \
-               AND namespace = $2::text::blob_namespace AND key = $3 \
+               AND namespace = $2::text::amp_storage.blob_namespace AND key = $3 \
                AND generation IS NOT DISTINCT FROM $4"
         );
         let params: [&(dyn ToSql + Sync); 8] = [
@@ -1100,6 +1100,17 @@ impl RemoteStorage for YbStore {
 fn quote_ident(ident: &str) -> String {
     let escaped = ident.replace('"', "\"\"");
     format!("\"{escaped}\"")
+}
+
+/// Quote a (possibly schema-qualified) relation name. A `schema.table` input is
+/// split on the first `.` and each part quoted independently
+/// (`"schema"."table"`), so the name resolves regardless of the connection's
+/// `search_path`; an unqualified name is quoted as a single identifier.
+fn quote_relation(rel: &str) -> String {
+    match rel.split_once('.') {
+        Some((schema, table)) => format!("{}.{}", quote_ident(schema), quote_ident(table)),
+        None => quote_ident(rel),
+    }
 }
 
 /// Escape `_` and `%` in a LIKE-pattern literal so that callers' raw key

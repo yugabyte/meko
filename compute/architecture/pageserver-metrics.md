@@ -108,7 +108,7 @@ per-branch variants add `branch_id`.
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `pageserver_yb_pagewriter_backpressure_waits_total` | IntCounterVec | `kind` | `PageWriter::put` calls that awaited downstream drain. `flush` = the in-RAM buffer hit `FlushPolicy::backpressure_bytes`; `materializer` = the image-materialiser channel was full; `materializer_inflight_bytes` = the materialiser paused redo because `materializer_inflight_bytes` reached `materialize_inflight_bytes_limit`. Sustained non-zero rate means PageWriter is the slow side. |
-| `pageserver_yb_pagewriter_unflushed_bytes` | UIntGauge | — | Bytes in PageWriter awaiting INSERT into `pageserver.pages` / `slru_pages` / `meta`. Spikes well above the size-based flush trigger indicate YB is the bottleneck. |
+| `pageserver_yb_pagewriter_unflushed_bytes` | UIntGauge | — | Bytes in PageWriter awaiting INSERT into `amp_storage.pages` / `slru_pages` / `meta`. Spikes well above the size-based flush trigger indicate YB is the bottleneck. |
 | `pageserver_yb_pagewriter_delta_counts_entries` | UIntGauge | — | Entries in PageWriter's per-key `delta_counts` map. Sustained growth above the working-set ceiling means the materialiser is not keeping up with chain accumulation. |
 | `pageserver_yb_pagewriter_delta_counts_approx_bytes` | UIntGauge | — | Approximate bytes held by `delta_counts` (entries × 80). Use against process RSS to attribute memory. |
 | `pageserver_yb_materializer_queue_depth` | UIntGauge | — | Image-materialiser jobs currently queued. Approaching `materialize_queue_capacity` means walreceiver is about to backpressure on `materializer`. |

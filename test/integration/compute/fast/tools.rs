@@ -32,7 +32,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.yb(&["endpoint", "start", ENDPOINT_ID])?;
 
     let compute = db::compute_conn(tools_port);
-    step("seed a table so pageserver.pages + safekeeper.wals have data");
+    step("seed a table so amp_storage.pages + amp_storage.wals have data");
     db::batch(
         &compute,
         "DROP TABLE IF EXISTS tools_probe;\n\
@@ -47,7 +47,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     step("confirm the branch's timeline_state row exists");
     let row = db::query_text(
         &yb,
-        &format!("SELECT branch_id FROM pageserver.timeline_state WHERE branch_id='{branch}' LIMIT 1"),
+        &format!("SELECT branch_id FROM amp_storage.pageserver_branch_state WHERE branch_id='{branch}' LIMIT 1"),
     )
     .await?;
     if row.is_empty() {
@@ -60,13 +60,13 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         bail!("yb-dump-wals --summary missing 'segno' header:\n{wals}");
     }
 
-    step("pick an existing (rel, fork, blk) from pageserver.pages");
-    // `pageserver.pages` is populated by the asynchronous pageserver→YB
+    step("pick an existing (rel, fork, blk) from amp_storage.pages");
+    // `amp_storage.pages` is populated by the asynchronous pageserver→YB
     // flush, which lags the CHECKPOINT above, so the row may not be there
     // the instant we look. Poll until it lands rather than one-shot query.
     let key_sql = format!(
         "SELECT spcnode||' '||dbnode||' '||relnode||' '||forknum||' '||blknum \
-         FROM pageserver.pages WHERE branch_id='{branch}' LIMIT 1"
+         FROM amp_storage.pages WHERE branch_id='{branch}' LIMIT 1"
     );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let key = loop {
@@ -75,7 +75,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         }
         if std::time::Instant::now() > deadline {
             bail!(
-                "no rows in pageserver.pages for branch {branch} \
+                "no rows in amp_storage.pages for branch {branch} \
                  within 30s — the flush never landed"
             );
         }
@@ -83,7 +83,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     };
     let f: Vec<&str> = key.split_whitespace().collect();
     if f.len() != 5 {
-        bail!("expected 5 key columns from pageserver.pages, got {key:?}");
+        bail!("expected 5 key columns from amp_storage.pages, got {key:?}");
     }
     let (spc, dbn, rel, fork, blk) = (f[0], f[1], f[2], f[3], f[4]);
 
@@ -116,7 +116,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &yb,
         &format!(
             "SELECT to_hex((consistent_lsn>>32)::int8)||'/'||to_hex((consistent_lsn & x'ffffffff'::bigint)::int8) \
-             FROM pageserver.timeline_state WHERE branch_id='{branch}'"
+             FROM amp_storage.pageserver_branch_state WHERE branch_id='{branch}'"
         ),
     )
     .await?;

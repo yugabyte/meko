@@ -1,26 +1,26 @@
 //! Find — and optionally set — the maximum valid `consistent_lsn` at or
 //! below a target LSN, for a single branch in `yb_storage`.
 //!
-//! `pageserver.timeline_state.consistent_lsn` must point at a *real WAL
+//! `amp_storage.pageserver_branch_state.consistent_lsn` must point at a *real WAL
 //! record boundary*: the byte just after a complete record (= the start
 //! of the next record). The pageserver's WAL reader does not scan
 //! forward to the next boundary — it starts decoding at exactly
 //! `consistent_lsn` and fails (looping forever) if that byte is mid-record
 //! or in a WAL hole:
 //!
-//!   - `YB WAL hole at segno N offset O` — no `safekeeper.wals` chunk covers it.
+//!   - `YB WAL hole at segno N offset O` — no `amp_storage.wals` chunk covers it.
 //!   - `invalid xlog page header: xlp_rem_len=X, expected Y` — chunk exists
 //!     but the LSN is in the middle of a multi-page record.
 //!
 //! So you cannot just pick a segment- or page-aligned LSN to rewind to.
 //! This tool derives a guaranteed-good boundary the only reliable way: it
 //! anchors on a nearby WAL page that starts a fresh record, replays the
-//! real `WalStreamDecoder` forward across the `safekeeper.wals` bytes, and
+//! real `WalStreamDecoder` forward across the `amp_storage.wals` bytes, and
 //! reports the largest record boundary that is `<= target`. The boundary
 //! just before it is reported as the matching `prev_record_lsn`.
 //!
 //! By default it only prints. `--set` writes the pair back to
-//! `pageserver.timeline_state` (stop the pageserver for this timeline
+//! `amp_storage.pageserver_branch_state` (stop the pageserver for this timeline
 //! first — a running one will overwrite this on its next flush, and may
 //! be generation-fenced against this write).
 
@@ -46,7 +46,7 @@ struct Args {
     #[arg(long, value_name = "X/Y")]
     target_lsn: Lsn,
 
-    /// Write the computed pair back to `pageserver.timeline_state`.
+    /// Write the computed pair back to `amp_storage.pageserver_branch_state`.
     /// Without this the tool only prints (dry run).
     #[arg(long)]
     set: bool,
@@ -64,7 +64,7 @@ struct Args {
     conn: ysql_client::YbConnArgs,
 }
 
-/// The subset of `pageserver.timeline_state` this tool reads.
+/// The subset of `amp_storage.pageserver_branch_state` this tool reads.
 struct TimelineState {
     consistent_lsn: Lsn,
     prev_record_lsn: Option<Lsn>,
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
     let state = read_timeline_state(&client, &branch).await?;
     let pg_version = match state.pg_version {
         18 => PgMajorVersion::PG18,
-        v => bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
+        v => bail!("pageserver_branch_state.pg_version is {v}, not a supported PG major version"),
     };
 
     println!("branch   {branch}");
@@ -158,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
 
     if !args.set {
         println!();
-        println!("dry run: pass --set to write this to pageserver.timeline_state");
+        println!("dry run: pass --set to write this to amp_storage.pageserver_branch_state");
         return Ok(());
     }
 
@@ -194,20 +194,20 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     println!();
-    println!("done: updated {affected} row(s) in pageserver.timeline_state");
+    println!("done: updated {affected} row(s) in amp_storage.pageserver_branch_state");
     Ok(())
 }
 
 async fn read_timeline_state(client: &YsqlClient, branch: &str) -> anyhow::Result<TimelineState> {
     let sql = "SELECT consistent_lsn, prev_record_lsn, applied_gc_cutoff_lsn, pg_version, \
                current_generation \
-               FROM pageserver.timeline_state WHERE branch_id = $1";
+               FROM amp_storage.pageserver_branch_state WHERE branch_id = $1";
     let params: [&(dyn ToSql + Sync); 1] = [&branch];
     let row = client
         .query_opt(sql, &params)
         .await
-        .context("reading pageserver.timeline_state")?
-        .with_context(|| format!("no timeline_state row for branch={branch}"))?;
+        .context("reading amp_storage.pageserver_branch_state")?
+        .with_context(|| format!("no pageserver_branch_state row for branch={branch}"))?;
     let consistent_lsn = Lsn(row.get::<_, i64>(0) as u64);
     let prev_record_lsn = row.get::<_, Option<i64>>(1).map(|v| Lsn(v as u64));
     let applied_gc_cutoff_lsn = Lsn(row.get::<_, i64>(2) as u64);
@@ -232,7 +232,7 @@ async fn write_timeline_state(
     let consistent_i = consistent.0 as i64;
     let prev_i = prev.map(|l| l.0 as i64);
     if let Some(generation) = expect_generation {
-        let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $2, prev_record_lsn = $3 \
+        let sql = "UPDATE amp_storage.pageserver_branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
                    WHERE branch_id = $1 AND current_generation = $4";
         let params: [&(dyn ToSql + Sync); 4] = [&branch, &consistent_i, &prev_i, &generation];
         client
@@ -240,7 +240,7 @@ async fn write_timeline_state(
             .await
             .context("UPDATE timeline_state")
     } else {
-        let sql = "UPDATE pageserver.timeline_state SET consistent_lsn = $2, prev_record_lsn = $3 \
+        let sql = "UPDATE amp_storage.pageserver_branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
                    WHERE branch_id = $1";
         let params: [&(dyn ToSql + Sync); 3] = [&branch, &consistent_i, &prev_i];
         client
@@ -250,7 +250,7 @@ async fn write_timeline_state(
     }
 }
 
-/// Reads raw WAL bytes by LSN from `safekeeper.wals`, mapping each LSN to
+/// Reads raw WAL bytes by LSN from `amp_storage.wals`, mapping each LSN to
 /// `(segno, chunk_offset)` and resolving the chunk that covers it.
 struct WalReader<'a> {
     client: &'a YsqlClient,
@@ -270,7 +270,7 @@ impl WalSource for WalReader<'_> {
         // bucket via the hash-key IN-list (0..WALS_BUCKETS in
         // safekeeper/src/yb_wal_storage.rs) — batched index probes, and
         // this decoder walk issues one lookup per chunk.
-        let sql = "SELECT chunk_offset, data FROM safekeeper.wals \
+        let sql = "SELECT chunk_offset, data FROM amp_storage.wals \
                    WHERE branch_id = $1 AND bucket_id IN (0,1,2,3,4,5,6,7,8,9) \
                      AND segno = $2 AND chunk_offset <= $3 \
                    ORDER BY chunk_offset DESC LIMIT 1";
@@ -279,9 +279,9 @@ impl WalSource for WalReader<'_> {
             .client
             .query_opt(sql, &params)
             .await
-            .context("reading safekeeper.wals")?
+            .context("reading amp_storage.wals")?
             .with_context(|| {
-                format!("WAL hole at {lsn} (segno {segno} offset {off}): no covering chunk in safekeeper.wals")
+                format!("WAL hole at {lsn} (segno {segno} offset {off}): no covering chunk in amp_storage.wals")
             })?;
         let chunk_offset = row.get::<_, i64>(0) as u64;
         let data: Vec<u8> = row.get::<_, Vec<u8>>(1);

@@ -86,7 +86,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let dropped = db::query_i64(
         &yb,
         &format!(
-            "SELECT count(*) FROM registry.timelines \
+            "SELECT count(*) FROM amp_registry.timelines \
              WHERE branch_id = '{BRANCH_ID}' AND deleted_at IS NOT NULL"
         ),
     )
@@ -109,7 +109,7 @@ async fn live_branch_rows(yb: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
-            "SELECT count(*) FROM registry.timelines \
+            "SELECT count(*) FROM amp_registry.timelines \
              WHERE branch_id = '{BRANCH_ID}' AND deleted_at IS NULL"
         ),
     )
@@ -121,7 +121,7 @@ async fn endpoint_rows(yb: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
-            "SELECT count(*) FROM registry.endpoints WHERE branch_id = '{BRANCH_ID}'"
+            "SELECT count(*) FROM amp_registry.endpoints WHERE branch_id = '{BRANCH_ID}'"
         ),
     )
     .await

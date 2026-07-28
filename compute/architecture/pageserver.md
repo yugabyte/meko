@@ -2,7 +2,7 @@
 
 The pageserver materialises the WAL stream into pages and serves them
 to compute Postgres. Its storage model is **one YugabyteDB row per page
-version**: every page write becomes a row in `pageserver.pages` (or its
+version**: every page write becomes a row in `amp_storage.pages` (or its
 SLRU / metadata siblings) inside the shared `yb_storage` database.
 
 **YugabyteDB is the system's durable store.** The pageserver holds only
@@ -11,7 +11,7 @@ pageserver and the safekeeper both write to YugabyteDB, and it is
 YugabyteDB — Raft-replicated DocDB tablets — that provides durability
 and resilience. If a pageserver process dies, everything it needs to
 resume is in YB: the page rows, the SLRU rows, the metadata rows, and a
-single `pageserver.timeline_state` row per branch. Local disk is
+single `amp_storage.pageserver_branch_state` row per branch. Local disk is
 scratch space only (initdb tarball, basebackup cache, pid file) and is
 never authoritative.
 
@@ -49,7 +49,7 @@ still opening; the compute's reconnect loop covers it) or talks to a
 fully-active branch. There is no branch state machine and no
 in-protocol wait-for-active. Failure to open is fatal to the process.
 
-- Row exists in `pageserver.timeline_state` → open it (restarts are
+- Row exists in `amp_storage.pageserver_branch_state` → open it (restarts are
   trivially idempotent; `[timeline_init]` is ignored). A row with
   `deleted_at` set refuses to open.
 - Row absent + `mode = "bootstrap"` → run initdb + import, then insert
@@ -117,7 +117,7 @@ additionally opens direct-RPC table handles over `libs/yb_thin_client`
 
 ## Schema
 
-Four tables live in the `pageserver` schema inside `yb_storage`:
+The page store's tables live in the `amp_storage` schema inside `yb_storage`:
 `pages` (relation pages), `slru_pages` (SLRU blocks), `meta`
 (everything else), and `timeline_state` (one state row per branch).
 DDL is owned by the migration
@@ -126,7 +126,7 @@ never create their own schema. Per-branch tuning is NOT in YB: the
 effective config comes from `pageserver.toml`. See
 [`yugabyte.md`](yugabyte.md) for the full DDL.
 
-### `pageserver.pages`
+### `amp_storage.pages`
 
 One row per (Key, LSN). The PK hash-partitions on the **(branch_id,
 spcnode, dbnode, relnode, forknum)** identity (a relation forknum's
@@ -137,7 +137,7 @@ the chain-read `ORDER BY lsn DESC, is_image DESC` (image before delta
 at a tie).
 
 ```sql
-CREATE TABLE pageserver.pages (
+CREATE TABLE amp_storage.pages (
     branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
@@ -162,7 +162,7 @@ true for every image and for records that fully initialise the page
 (e.g. `XLOG_HEAP_INIT_PAGE`); it is the read side's chain-anchor
 marker.
 
-### `pageserver.slru_pages`
+### `amp_storage.slru_pages`
 
 SLRU blocks (pg_xact, pg_multixact offsets/members). `kind` is 0=Clog,
 1=MultiXactMembers, 2=MultiXactOffsets (`slru_kind_to_i16`,
@@ -170,7 +170,7 @@ SLRU blocks (pg_xact, pg_multixact offsets/members). `kind` is 0=Clog,
 lsn DESC, is_image DESC)` — a whole SLRU segment lives on one tablet.
 Same image/delta chain semantics as `pages`.
 
-### `pageserver.meta`
+### `amp_storage.meta`
 
 Everything that is neither a relation page nor an SLRU block: rel-size
 sentinels, directory listings, aux files (`yb_amp.signal`,
@@ -180,13 +180,13 @@ files, replication origins, SLRU segment-size sentinels. `key` is the
 **Full-overwrite semantics**: a read returns the single latest row at
 LSN ≤ target — no chains, no walredo.
 
-### `pageserver.timeline_state`
+### `amp_storage.pageserver_branch_state`
 
 One row per branch carries every load-bearing piece of per-branch
 state:
 
 ```sql
-CREATE TABLE pageserver.timeline_state (
+CREATE TABLE amp_storage.pageserver_branch_state (
     branch_id              TEXT      NOT NULL,
     consistent_lsn         BIGINT    NOT NULL,
     applied_gc_cutoff_lsn  BIGINT    NOT NULL,
@@ -206,7 +206,7 @@ CREATE TABLE pageserver.timeline_state (
 ```
 
 - `consistent_lsn` — the durability *frontier*: every row at lsn ≤ this
-  is durably present in `pageserver.pages`/`slru_pages`/`meta`. It
+  is durably present in `amp_storage.pages`/`slru_pages`/`meta`. It
   advances on successful `PageWriter::flush` to the **ingest
   frontier** — the highest record `finish_write` had noted *before* the
   flush snapshot was taken (a noted record's rows are all buffered by
@@ -366,11 +366,11 @@ range push into a single DocDB scan:
 ```sql
 SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum,
        p.lsn, p.is_image, p.will_init, p.payload
-FROM pageserver.pages p
+FROM amp_storage.pages p
 WHERE <key_filter>
   AND p.lsn <= $target
   AND p.lsn >= COALESCE((
-        SELECT a.lsn FROM pageserver.pages a
+        SELECT a.lsn FROM amp_storage.pages a
         WHERE <key_filter>
           AND a.is_image = TRUE AND a.lsn <= $target
         ORDER BY a.lsn DESC LIMIT 1), 0)
@@ -515,7 +515,7 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    unflushed prefix of `UnifiedPages` (an `Arc` bump per row, no data
    copy — rows stay visible to concurrent reads during the YB round
    trip) plus the SLRU/meta buffers, then dispatch chunked multi-row
-   INSERTs against `pageserver.pages` / `slru_pages` / `meta` on the
+   INSERTs against `amp_storage.pages` / `slru_pages` / `meta` on the
    fpu store. Chunks are 500 rows for pages/SLRU (`ROWS_PER_INSERT`;
    bind-parameter budget with `branch_id` baked as a literal) and 2000
    for meta, dispatched in parallel via
@@ -823,7 +823,7 @@ Exercised by the `torn_wal_write` integration scenario.
 
 ## Generation fencing
 
-`current_generation` on the `pageserver.timeline_state` row is the
+`current_generation` on the `amp_storage.pageserver_branch_state` row is the
 fence. The launcher bumps the generation on every spawn and bakes it
 into `pageserver.toml`; the YB-side sequence is:
 
@@ -837,7 +837,7 @@ into `pageserver.toml`; the YB-side sequence is:
    fence is the **subsequent standalone UPDATE** in
    `PageStore::advance_consistent_lsn`:
    ```sql
-   UPDATE pageserver.timeline_state
+   UPDATE amp_storage.pageserver_branch_state
    SET consistent_lsn = $2,
        prev_record_lsn = COALESCE($4, prev_record_lsn)
    WHERE branch_id = $1 AND current_generation = $3
@@ -1004,7 +1004,7 @@ the global `scale_factor` (explicitly-set values are used verbatim):
 | `materialize_inflight_bytes_limit` | 512 MiB | Hard ceiling on redone-but-not-INSERTed materialiser image bytes (`pageserver_yb_materializer_inflight_bytes`); the worker drains outstanding INSERTs before redoing more, backpressuring the walreceiver. **Not scaled** (memory ceiling); `0` disables |
 | `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes` (scaled); whole cold keys are evicted LRU-order, keys with unflushed rows pinned |
 | `backpressure_bytes` | 50 MiB | Hard ceiling on the pre-flush buffer (scaled); `PageWriter::put` blocks above it; `0` disables |
-| `meta_cache_entries` | 8192 | In-process LRU for `pageserver.meta` point reads; `0` disables |
+| `meta_cache_entries` | 8192 | In-process LRU for `amp_storage.meta` point reads; `0` disables |
 | `ingest_parallelism` | 4 | Workers for `put_serialized` batch apply; `1` = serial. Same key always lands on one worker |
 | `ingest_parallelism_min_batch` | 256 | Minimum batch size before the parallel apply engages; `1` forces it (tests) |
 
@@ -1092,7 +1092,7 @@ The compute opens libpq connections to the pageserver per backend
 - `compute/libs/utils/src/payload_codec.rs` — the tagged compression
   envelope for the `BYTEA` payload columns (see "Payload compression").
 - `controller/migrations/0002_compute_storage.up.sql` — the
-  authoritative DDL for the `pageserver.*` tables.
+  authoritative DDL for the `amp_storage.*` tables.
 - [`pageserver-apis.md`](pageserver-apis.md) — HTTP/gRPC/libpq
   API inventory; [`pageserver-metrics.md`](pageserver-metrics.md)
   — metrics; [`yugabyte.md`](yugabyte.md) — full `yb_storage` DDL and

@@ -52,7 +52,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Tail pages past the new size drain to zero");
     let tail_pages = format!(
-        "SELECT count(*) FROM pageserver.pages \
+        "SELECT count(*) FROM amp_storage.pages \
          WHERE branch_id = '{b}' AND relnode = {relnode} AND blknum >= {new_blocks}"
     );
     let mut tail = i64::MAX;

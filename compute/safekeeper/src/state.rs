@@ -17,7 +17,7 @@ use crate::safekeeper::UNKNOWN_SERVER_VERSION;
 use crate::timeline::TimelineError;
 
 /// Persistent information stored on safekeeper node about timeline.
-/// Serialised to `safekeeper.timeline_state` columns (see
+/// Serialised to `amp_storage.safekeeper_branch_state` columns (see
 /// `crate::control_file::YbControlFileStorage`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelinePersistentState {

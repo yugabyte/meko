@@ -4,8 +4,8 @@
 //! # Why
 //!
 //! The pageserver writes 8 KiB Postgres pages (and WAL-record deltas) into
-//! `pageserver.pages.payload`, and equivalent blobs into
-//! `pageserver.slru_pages.payload` and `pageserver.meta.payload`. None of them
+//! `amp_storage.pages.payload`, and equivalent blobs into
+//! `amp_storage.slru_pages.payload` and `amp_storage.meta.payload`. None of them
 //! is compressed by YSQL: YB stores values inline in DocDB rather than through
 //! TOAST, so what the Rust layer binds is what DocDB stores verbatim.
 //! Compressing here shrinks the Raft log, the Raft replication RPCs (×RF), the
@@ -28,7 +28,7 @@
 //! ```
 //!
 //! The envelope is deliberately self-describing rather than deriving the
-//! decompressed length from out-of-band state. `pageserver.pages` images are
+//! decompressed length from out-of-band state. `amp_storage.pages` images are
 //! `BLCKSZ` today, for instance, but coupling the storage format to that would
 //! make a schema invariant load-bearing for decode correctness. Five bytes on
 //! compressed rows is cheaper than that coupling.
@@ -308,8 +308,14 @@ mod tests {
 
     #[test]
     fn empty_payload_roundtrips() {
-        assert_eq!(roundtrip(&[], Codec::Lz4), Outcome::Raw(RawReason::TooSmall));
-        assert_eq!(roundtrip(&[], Codec::Raw), Outcome::Raw(RawReason::Configured));
+        assert_eq!(
+            roundtrip(&[], Codec::Lz4),
+            Outcome::Raw(RawReason::TooSmall)
+        );
+        assert_eq!(
+            roundtrip(&[], Codec::Raw),
+            Outcome::Raw(RawReason::Configured)
+        );
     }
 
     /// The point of the tag: rows written under one codec stay readable

@@ -20,7 +20,7 @@ var (
 )
 
 // Store persists the storage-layer control state (generation authority + the
-// branch/endpoint/pending-init registries) in the `registry` schema of the
+// branch/endpoint/pending-init registries) in the `amp_registry` schema of the
 // shared yb_storage database. All statements are schema-qualified so they resolve
 // regardless of the pool's search_path (`controller`).
 type Store struct {
@@ -41,7 +41,7 @@ func (s *Store) Ready(ctx context.Context) error {
 // as a gauge: the number of branches known to the registry. Queried on each
 // scrape, so it must stay cheap (count(*) over one small table).
 func (s *Store) RegistryCounts(ctx context.Context) (branches int64, err error) {
-	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM registry.branches`).Scan(&branches); err != nil {
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM amp_registry.branches`).Scan(&branches); err != nil {
 		return 0, fmt.Errorf("count branches: %w", err)
 	}
 	return branches, nil
@@ -59,7 +59,7 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 		// must stay monotonic across the branch's lifecycle so a later reattach
 		// fences any stale pageserver from a prior generation.
 		if _, err := s.pool.Exec(ctx,
-			`UPDATE registry.branches
+			`UPDATE amp_registry.branches
 			   SET placement_policy = '"Detached"'
 			 WHERE branch_id = $1`, req.BranchID); err != nil {
 			return nil, fmt.Errorf("detach branch: %w", err)
@@ -84,7 +84,7 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 
 	// Create the branch on first attach; a concurrent creator is a no-op.
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO registry.branches
+		`INSERT INTO amp_registry.branches
 		   (branch_id, generation, placement_policy, config, scheduling_policy)
 		 VALUES ($1, $2, '{"Attached":0}', $3::jsonb, '"Active"')
 		 ON CONFLICT (branch_id) DO NOTHING`,
@@ -94,7 +94,7 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 
 	var gen *int32
 	err = tx.QueryRow(ctx,
-		`UPDATE registry.branches
+		`UPDATE amp_registry.branches
 		    SET generation = generation + 1, placement_policy = '{"Attached":0}'
 		  WHERE branch_id = $1
 		  RETURNING generation`,
@@ -121,7 +121,7 @@ func (s *Store) Inspect(ctx context.Context, branchID string) (*uint32, error) {
 	var gen *int32
 	var policy string
 	err := s.pool.QueryRow(ctx,
-		`SELECT generation, placement_policy FROM registry.branches WHERE branch_id = $1`,
+		`SELECT generation, placement_policy FROM amp_registry.branches WHERE branch_id = $1`,
 		branchID).Scan(&gen, &policy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -159,7 +159,7 @@ func (s *Store) BranchImport(ctx context.Context, branchID string) (BranchCreate
 // untouched.
 func (s *Store) BranchRegister(ctx context.Context, branchID string, req BranchRegisterRequest) error {
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO registry.timelines (branch_id, start_lsn, generation, branch_name)
+		`INSERT INTO amp_registry.timelines (branch_id, start_lsn, generation, branch_name)
 		 VALUES ($1, $2::pg_lsn, 1, $3)
 		 ON CONFLICT (branch_id) DO NOTHING`,
 		branchID, req.StartLSN, req.BranchName); err != nil {
@@ -171,7 +171,7 @@ func (s *Store) BranchRegister(ctx context.Context, branchID string, req BranchR
 // SetBranchName sets or clears a branch's name alias.
 func (s *Store) SetBranchName(ctx context.Context, branchID string, req SetBranchNameRequest) error {
 	if _, err := s.pool.Exec(ctx,
-		`UPDATE registry.timelines SET branch_name = $2 WHERE branch_id = $1`,
+		`UPDATE amp_registry.timelines SET branch_name = $2 WHERE branch_id = $1`,
 		branchID, req.BranchName); err != nil {
 		return fmt.Errorf("set branch name: %w", err)
 	}
@@ -182,7 +182,7 @@ func (s *Store) SetBranchName(ctx context.Context, branchID string, req SetBranc
 // are non-unique labels.
 func (s *Store) ListBranchNames(ctx context.Context) ([]BranchNameEntry, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT branch_id, branch_name FROM registry.timelines
+		`SELECT branch_id, branch_name FROM amp_registry.timelines
 		  WHERE branch_name IS NOT NULL AND deleted_at IS NULL ORDER BY branch_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list branch names: %w", err)
@@ -210,12 +210,12 @@ func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 	defer tx.Rollback(ctx)
 
 	for _, stmt := range []string{
-		`DELETE FROM registry.endpoints WHERE branch_id = $1`,
-		`DELETE FROM registry.pending_timeline_inits WHERE branch_id = $1`,
+		`DELETE FROM amp_registry.endpoints WHERE branch_id = $1`,
+		`DELETE FROM amp_registry.pending_timeline_inits WHERE branch_id = $1`,
 		// A dropped branch is terminal (its id is never reused and its pageserver
 		// is stopped), so its generation record can go too — no fencing concern.
-		`DELETE FROM registry.branches WHERE branch_id = $1`,
-		`UPDATE registry.timelines SET deleted_at = now() WHERE branch_id = $1`,
+		`DELETE FROM amp_registry.branches WHERE branch_id = $1`,
+		`UPDATE amp_registry.timelines SET deleted_at = now() WHERE branch_id = $1`,
 	} {
 		if _, err := tx.Exec(ctx, stmt, branchID); err != nil {
 			return fmt.Errorf("drop branch: %w", err)
@@ -232,7 +232,7 @@ func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 // RecordPendingInit stores a branch's init recipe. Idempotent on branch_id.
 func (s *Store) RecordPendingInit(ctx context.Context, branchID string, req PendingBranchInitRequest) error {
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO registry.pending_timeline_inits
+		`INSERT INTO amp_registry.pending_timeline_inits
 		   (branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn)
 		 VALUES ($1, $2, $3, $4, $5::pg_lsn)
 		 ON CONFLICT (branch_id) DO NOTHING`,
@@ -246,7 +246,7 @@ func (s *Store) RecordPendingInit(ctx context.Context, branchID string, req Pend
 func (s *Store) ListPendingInits(ctx context.Context) ([]PendingBranchInit, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn::text
-		   FROM registry.pending_timeline_inits ORDER BY branch_id`)
+		   FROM amp_registry.pending_timeline_inits ORDER BY branch_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list pending inits: %w", err)
 	}
@@ -267,7 +267,7 @@ func (s *Store) ListPendingInits(ctx context.Context) ([]PendingBranchInit, erro
 // is a no-op.
 func (s *Store) DeletePendingInit(ctx context.Context, branchID string) error {
 	if _, err := s.pool.Exec(ctx,
-		`DELETE FROM registry.pending_timeline_inits WHERE branch_id = $1`, branchID); err != nil {
+		`DELETE FROM amp_registry.pending_timeline_inits WHERE branch_id = $1`, branchID); err != nil {
 		return fmt.Errorf("delete pending init: %w", err)
 	}
 	return nil
@@ -278,7 +278,7 @@ func (s *Store) DeletePendingInit(ctx context.Context, branchID string) error {
 // EndpointCreate persists (or replaces) a compute-endpoint record.
 func (s *Store) EndpointCreate(ctx context.Context, ep ComputeEndpoint) error {
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO registry.endpoints (endpoint_id, branch_id, spec)
+		`INSERT INTO amp_registry.endpoints (endpoint_id, branch_id, spec)
 		 VALUES ($1, $2, $3::jsonb)
 		 ON CONFLICT (endpoint_id) DO UPDATE SET branch_id = EXCLUDED.branch_id, spec = EXCLUDED.spec`,
 		ep.EndpointID, ep.BranchID, []byte(ep.Spec)); err != nil {
@@ -290,7 +290,7 @@ func (s *Store) EndpointCreate(ctx context.Context, ep ComputeEndpoint) error {
 // EndpointList returns every persisted compute-endpoint record.
 func (s *Store) EndpointList(ctx context.Context) ([]ComputeEndpoint, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT endpoint_id, branch_id, spec FROM registry.endpoints ORDER BY endpoint_id`)
+		`SELECT endpoint_id, branch_id, spec FROM amp_registry.endpoints ORDER BY endpoint_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list endpoints: %w", err)
 	}
@@ -312,7 +312,7 @@ func (s *Store) EndpointList(ctx context.Context) ([]ComputeEndpoint, error) {
 // EndpointDelete removes a compute-endpoint record. Idempotent.
 func (s *Store) EndpointDelete(ctx context.Context, endpointID string) error {
 	if _, err := s.pool.Exec(ctx,
-		`DELETE FROM registry.endpoints WHERE endpoint_id = $1`, endpointID); err != nil {
+		`DELETE FROM amp_registry.endpoints WHERE endpoint_id = $1`, endpointID); err != nil {
 		return fmt.Errorf("delete endpoint: %w", err)
 	}
 	return nil

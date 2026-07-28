@@ -40,10 +40,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await?;
     let db_pages = format!(
-        "SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}' AND dbnode = {dbnode}"
+        "SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}' AND dbnode = {dbnode}"
     );
     let db_queue = format!(
-        "SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b}' AND dbnode = {dbnode}"
+        "SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b}' AND dbnode = {dbnode}"
     );
     let mut stored = 0;
     for _ in 0..30 {

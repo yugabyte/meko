@@ -77,12 +77,12 @@ pub struct SafeKeeperConf {
     pub advertise_pg_addr: Option<String>,
     pub heartbeat_timeout: Duration,
     /// YB connection carrying live WAL writes: every `write_wal` is
-    /// INSERT'd into the (hardcoded) `safekeeper.wals` table, which is where
+    /// INSERT'd into the (hardcoded) `amp_storage.wals` table, which is where
     /// WAL durability comes from. Required in YB-WAL mode.
     pub yb_storage_conn: Option<ysql_client::YbConnConfig>,
     /// The single branch this process serves for its lifetime. Set from
     /// `--branch-id`; required in YB-WAL mode (see [`Self::yb_branch_id`]).
-    /// `safekeeper.timeline_state` is shared across the cluster, so this
+    /// `amp_storage.safekeeper_branch_state` is shared across the cluster, so this
     /// baked identity scopes the startup load and gates connections to a
     /// single branch.
     pub branch_id: Option<BranchId>,
@@ -90,7 +90,7 @@ pub struct SafeKeeperConf {
     /// mode. See [`crate::wal_cache`]. Ignored when
     /// [`Self::yb_storage_conn`] is `None`. Set to 0 to disable the cache.
     pub wal_cache_size_mib: usize,
-    /// Codec applied to `safekeeper.wals.data` on the way out to YB.
+    /// Codec applied to `amp_storage.wals.data` on the way out to YB.
     /// Write-side only: every stored value carries its own codec tag, so the
     /// read path decodes rows written under any setting and a config change
     /// is a restart rather than a migration.
@@ -130,7 +130,7 @@ impl SafeKeeperConf {
     }
 
     /// The single branch this process is dedicated to. Required in
-    /// YB-WAL mode — `safekeeper.timeline_state` is cluster-shared, so a
+    /// YB-WAL mode — `amp_storage.safekeeper_branch_state` is cluster-shared, so a
     /// process with no baked identity couldn't tell its own branch from
     /// the others. Errors if `--branch-id` wasn't given.
     pub fn yb_branch_id(&self) -> anyhow::Result<BranchId> {

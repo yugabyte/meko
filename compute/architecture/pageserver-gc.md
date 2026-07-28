@@ -1,7 +1,7 @@
 # Pageserver GC
 
 The pageserver stores each page version as its own row in
-`pageserver.pages` (schema: [`yugabyte.md`](yugabyte.md)). GC reclaims the
+`amp_storage.pages` (schema: [`yugabyte.md`](yugabyte.md)). GC reclaims the
 rows no read can reach any more — superseded page versions, blocks past a
 truncation, and the pages of a dropped relfilenode — by `DELETE`ing them.
 It is pure space reclamation: it never changes what a correct read
@@ -23,7 +23,7 @@ GC is **default off**; a branch turns it on with `enable_gc` — see
 
 Finding garbage after the fact is expensive, so instead the write path
 **records each garbage-producing event** as it happens — a base write, a
-truncation, a relfilenode drop — as a row in `pageserver.pending_gc` (a
+truncation, a relfilenode drop — as a row in `amp_storage.pending_gc` (a
 sibling queue table), tagged with the LSN at which that event's garbage
 becomes collectable. A periodic **drain** then acts on each record once
 the GC cutoff has advanced past that LSN. A queue row's `blknum` column
@@ -229,7 +229,7 @@ one doc.)
 | `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted, by producer path. For trim this counts sampler firings: one per `gc_candidate_every_n_bases` bases per block — but if a block fires more than once within one emitter flush window, those firings fold into a single `pending_gc` row, so inserted rows ≤ emitted. Drop/shrink events unsampled, one row each. `rate()` = emission rate, an upper bound on the insert rate. |
 | `pageserver_yb_gc_candidates_read_total` | IntCounter | — | Rows the drain's `pending_gc` select returned per tick (pre-routing). `== gc_drain_limit` ⇒ capped; `≫ removed` ⇒ read but not cleared. |
 | `pageserver_yb_gc_candidates_dequeued_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue: trim range-sweeps a visited block's whole `(floor, cutoff]` set (collapses duplicates), drop/shrink clear exactly the acted candidates. ≈ `read` at steady state. `rate(emitted) − rate(dequeued)` = queue growth. |
-| `pageserver_yb_gc_pages_rows_deleted_total` | IntCounter | — | `pageserver.pages` rows deleted by the drain (trim / drop / shrink). `rate()` = reclamation throughput. |
+| `pageserver_yb_gc_pages_rows_deleted_total` | IntCounter | — | `amp_storage.pages` rows deleted by the drain (trim / drop / shrink). `rate()` = reclamation throughput. |
 | `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence. |
 
 ## Troubleshooting
@@ -280,9 +280,9 @@ GC never touched them — look at ingest / walredo. Any
 cause.
 
 **Direct probes.**
-- `SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '…'` —
+- `SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '…'` —
   queue depth.
-- `applied_gc_cutoff_lsn` in `pageserver.timeline_state` — the current
+- `applied_gc_cutoff_lsn` in `amp_storage.pageserver_branch_state` — the current
   cutoff.
 - The drain log line `gc drain complete … candidates_dequeued=…
   pages_rows_deleted=…`.

@@ -63,7 +63,7 @@ pub struct PageServerConf {
     /// required and startup fails without it.
     pub timeline_identity: Option<TimelineIdentity>,
 
-    /// How to create the timeline when its `pageserver.timeline_state`
+    /// How to create the timeline when its `amp_storage.pageserver_branch_state`
     /// row is absent at startup. See
     /// [`pageserver_api::config::TimelineInitConfig`].
     pub timeline_init: Option<pageserver_api::config::TimelineInitConfig>,

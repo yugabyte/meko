@@ -1,7 +1,7 @@
 //! Safekeeper control-file storage.
 //!
 //! yb-amp persists the per-timeline `TimelinePersistentState` as a
-//! row in the YB table `safekeeper.timeline_state`, one BIGINT/INT
+//! row in the YB table `amp_storage.safekeeper_branch_state`, one BIGINT/INT
 //! column per scalar field.
 
 use std::future::Future;
@@ -32,7 +32,7 @@ pub trait Storage: Deref<Target = TimelinePersistentState> {
 }
 
 /// Control-file storage backed by a YB row in
-/// `safekeeper.timeline_state`. One instance per timeline; holds a
+/// `amp_storage.safekeeper_branch_state`. One instance per timeline; holds a
 /// shared `YsqlClient` plus the in-memory `TimelinePersistentState`
 /// it last wrote.
 pub struct YbControlFileStorage {
@@ -64,13 +64,13 @@ impl YbControlFileStorage {
         branch_id: &BranchId,
     ) -> Result<Option<YbControlFileStorage>> {
         let sql = format!(
-            "SELECT {COLUMNS} FROM safekeeper.timeline_state \
+            "SELECT {COLUMNS} FROM amp_storage.safekeeper_branch_state \
              WHERE branch_id = $1"
         );
         let Some(row) = client
             .query_opt(&sql, &[&branch_id.to_string()])
             .await
-            .context("SELECT safekeeper.timeline_state")?
+            .context("SELECT amp_storage.safekeeper_branch_state")?
         else {
             return Ok(None);
         };
@@ -139,14 +139,14 @@ impl YbControlFileStorage {
         ];
 
         let sql = if insert {
-            "INSERT INTO safekeeper.timeline_state (\
+            "INSERT INTO amp_storage.safekeeper_branch_state (\
                  branch_id, timeline_start_lsn, local_start_lsn, \
                  remote_consistent_lsn, pg_version, system_id, \
                  wal_seg_size, creation_ts) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
                 .to_string()
         } else {
-            "UPDATE safekeeper.timeline_state SET \
+            "UPDATE amp_storage.safekeeper_branch_state SET \
                  timeline_start_lsn    = $2, \
                  local_start_lsn       = $3, \
                  remote_consistent_lsn = $4, \
@@ -162,9 +162,9 @@ impl YbControlFileStorage {
             .execute(&sql, &params)
             .await
             .context(if insert {
-                "INSERT safekeeper.timeline_state"
+                "INSERT amp_storage.safekeeper_branch_state"
             } else {
-                "UPDATE safekeeper.timeline_state"
+                "UPDATE amp_storage.safekeeper_branch_state"
             })?;
         Ok(())
     }
@@ -194,13 +194,13 @@ impl AdvisoryPersist {
         let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
         self.client
             .execute(
-                "UPDATE safekeeper.timeline_state \
+                "UPDATE amp_storage.safekeeper_branch_state \
                  SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2) \
                  WHERE branch_id = $1",
                 &[&self.branch_id.to_string(), &(lsn.0 as i64)],
             )
             .await
-            .context("UPDATE safekeeper.timeline_state (advisory)")?;
+            .context("UPDATE amp_storage.safekeeper_branch_state (advisory)")?;
         Ok(())
     }
 }

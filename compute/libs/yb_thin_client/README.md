@@ -136,7 +136,7 @@ Selected per connection via `hot_path = "yb_thin_client"` in the
 `yb_storage_conn` block (`ysql_client::HotPath::ThinClient`) — the default, and
 the only direct lane; the alternative is plain `ysql`. The pageserver opens
 `PageStore::thinclient` (`pages`/`slru_pages`/`meta`) and the safekeeper opens
-`YbThinClient` (`safekeeper.wals`), and the safekeeper's multi-segment WAL fetch
+`YbThinClient` (`amp_storage.wals`), and the safekeeper's multi-segment WAL fetch
 rides one `read(&ops)` Perform. Cold paths
 (DDL, GC, rehydration, control file) always use YSQL. See
 [`../../architecture/yugabyte.md`](../../architecture/yugabyte.md),

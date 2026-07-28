@@ -6,11 +6,11 @@
 //! `field6 != 0xffffffff`). Non-page keys (SLRUs, metadata, dir
 //! listings, aux files, replication origins, rel-size sentinels)
 //! continue to flow through the existing layer-file path in
-//! `public.blobs`.
+//! `amp_storage.blobs`.
 //!
 //! Schema:
 //! ```sql
-//! CREATE TABLE pageserver.pages (
+//! CREATE TABLE amp_storage.pages (
 //!     branch_id   TEXT     NOT NULL,
 //!     spcnode     BIGINT   NOT NULL,
 //!     dbnode      BIGINT   NOT NULL,
@@ -67,7 +67,7 @@ use utils::payload_codec;
 use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
 
-/// One row in `pageserver.pages`. `key` is the relation-page
+/// One row in `amp_storage.pages`. `key` is the relation-page
 /// `pageserver_api::key::Key`; it must satisfy `Key::is_rel_block_key()`
 /// or `put_pages` returns an error. Held as the fixed-size `Key` (not a
 /// `Bytes` encoding) so the page cache keys on a `Copy` value — no
@@ -81,7 +81,7 @@ pub struct PageRow {
     pub payload: Bytes,
 }
 
-/// One row in `pageserver.meta`. The key is the 18-byte BYTEA encoding
+/// One row in `amp_storage.meta`. The key is the 18-byte BYTEA encoding
 /// of any `Key` that isn't a relation-page or SLRU-block (those have
 /// their own tables). Full-overwrite semantics: read = latest row at
 /// LSN ≤ target.
@@ -92,7 +92,7 @@ pub struct MetaRow {
     pub payload: Bytes,
 }
 
-/// One row in `pageserver.slru_pages`.
+/// One row in `amp_storage.slru_pages`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlruPageRow {
     pub kind: SlruKind,
@@ -260,7 +260,7 @@ impl LineageSegment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineRow {
     pub branch_id: BranchId,
-    /// Highest LSN durably present in `pageserver.pages`/`slru_pages`/`meta`.
+    /// Highest LSN durably present in `amp_storage.pages`/`slru_pages`/`meta`.
     /// Advances on every successful `PageWriter::flush`. Drives both
     /// safekeeper WAL truncation (SK keeps WAL ≥ this) and ingest
     /// resume on restart (walreceiver replays from this LSN forward).
@@ -305,7 +305,7 @@ pub struct TimelineRow {
     pub lineage: Lineage,
 }
 
-pub const DEFAULT_SCHEMA: &str = "pageserver";
+pub const DEFAULT_SCHEMA: &str = "amp_storage";
 
 /// Result of `PageStore::advance_consistent_lsn`. Distinguishes a
 /// successful UPDATE from generation-fence failure, the latter being
@@ -318,14 +318,14 @@ pub enum AdvanceConsistentLsnOutcome {
     StaleGeneration { live_generation: u32 },
 }
 
-/// Result of [`PageStore::update_timeline_state`]. The UPDATE's WHERE
+/// Result of [`PageStore::update_branch_state`]. The UPDATE's WHERE
 /// clause enforces `current_generation = $caller_gen`, so a stale
 /// pageserver — one whose generation has been bumped past since
 /// attach — gets `StaleGeneration`. The caller logs the skip; the
 /// next flush's `advance_consistent_lsn` is what actually trips
 /// the shutdown-for-stale-generation path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateTimelineStateOutcome {
+pub enum UpdateBranchStateOutcome {
     /// Row was found at our generation; UPDATE landed.
     Updated,
     /// Either the row is missing (wiring bug — `insert_timeline_at_creation`
@@ -755,10 +755,9 @@ fn assemble_page_chain<R: RowCells>(
                 lsn,
                 is_image: r.cell_bool(off + 1)?,
                 will_init: r.cell_bool(off + 2)?,
-                payload: decode_payload(
-                    &r.cell_bytes(off + 3)?,
-                    || format!("pages row key={key} lsn={lsn} ({where_})"),
-                )?,
+                payload: decode_payload(&r.cell_bytes(off + 3)?, || {
+                    format!("pages row key={key} lsn={lsn} ({where_})")
+                })?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -790,15 +789,12 @@ fn assemble_slru_chain<R: RowCells>(
                 lsn,
                 is_image: r.cell_bool(off + 1)?,
                 will_init: r.cell_bool(off + 2)?,
-                payload: decode_payload(
-                    &r.cell_bytes(off + 3)?,
-                    || {
-                        format!(
-                            "slru_pages row kind={kind:?} segno={segno} \
+                payload: decode_payload(&r.cell_bytes(off + 3)?, || {
+                    format!(
+                        "slru_pages row kind={kind:?} segno={segno} \
                              blknum={blknum} lsn={lsn} ({where_})"
-                        )
-                    },
-                )?,
+                    )
+                })?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -851,10 +847,9 @@ fn decode_meta_row<R: RowCells>(key: &[u8], r: &R) -> Result<MetaRow> {
     Ok(MetaRow {
         key: Bytes::copy_from_slice(key),
         lsn,
-        payload: decode_payload(
-            &r.cell_bytes(1)?,
-            || format!("meta row key={} lsn={lsn}", hex::encode(key)),
-        )?,
+        payload: decode_payload(&r.cell_bytes(1)?, || {
+            format!("meta row key={} lsn={lsn}", hex::encode(key))
+        })?,
     })
 }
 
@@ -927,7 +922,7 @@ fn key_columns(key: &Key) -> Result<(i64, i64, i64, i16, i64)> {
     if !key.is_rel_block_key() {
         bail!(
             "PageStore: key {key} is not a relation block (field1=0x{:02x}, field4={}, field6=0x{:x}); \
-             non-page keys belong in the layer-file path, not pageserver.pages",
+             non-page keys belong in the layer-file path, not amp_storage.pages",
             key.field1,
             key.field4,
             key.field6
@@ -964,7 +959,7 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
 /// shared connection so YB absorbs them concurrently.
 const ROWS_PER_INSERT: usize = 500;
 
-/// Placement buckets in `pageserver.pending_gc`'s hash key; must match
+/// Placement buckets in `amp_storage.pending_gc`'s hash key; must match
 /// the drain's per-bucket fan-out.
 pub const GC_BUCKETS: i32 = 10;
 
@@ -1995,11 +1990,11 @@ impl PageStore {
     // ------------------- slru_pages ---------------------------------------
 
     pub async fn put_slru_pages(&self, branch_id: BranchId, rows: &[SlruPageRow]) -> Result<()> {
-        let (encoded, tally) =
-            self.encode_payloads("slru_pages", rows.iter().map(|r| &r.payload));
+        let (encoded, tally) = self.encode_payloads("slru_pages", rows.iter().map(|r| &r.payload));
         if let Some(p) = &self.thinclient {
             let started = std::time::Instant::now();
-            self.put_slru_pages_thin(p, branch_id, rows, &encoded).await?;
+            self.put_slru_pages_thin(p, branch_id, rows, &encoded)
+                .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_slru_pages", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
@@ -3085,10 +3080,10 @@ impl PageStore {
 
     /// Minimum branch point over live children of `branch_id` — the
     /// child pin folded into the GC cutoff. Seq scan over
-    /// `timeline_state` (one row per branch; small by construction).
+    /// `pageserver_branch_state` (one row per branch; small by construction).
     pub async fn min_children_fork_lsn(&self, branch_id: BranchId) -> Result<Option<Lsn>> {
         let sql = format!(
-            "SELECT min(ancestor_lsn) FROM \"{}\".timeline_state \
+            "SELECT min(ancestor_lsn) FROM \"{}\".pageserver_branch_state \
              WHERE ancestor_branch_id = $1 AND deleted_at IS NULL",
             self.schema
         );
@@ -3115,7 +3110,7 @@ impl PageStore {
         cutoff: Lsn,
     ) -> Result<PublishGcCutoffOutcome> {
         let sql = format!(
-            "UPDATE \"{}\".timeline_state \
+            "UPDATE \"{}\".pageserver_branch_state \
              SET applied_gc_cutoff_lsn = GREATEST(applied_gc_cutoff_lsn, $2) \
              WHERE branch_id = $1 \
                AND current_generation = $3 \
@@ -3142,7 +3137,7 @@ impl PageStore {
                 // between the UPDATE and this SELECT, so the reported
                 // value is informational, not authoritative.
                 let probe_sql = format!(
-                    "SELECT current_generation FROM \"{}\".timeline_state \
+                    "SELECT current_generation FROM \"{}\".pageserver_branch_state \
                      WHERE branch_id = $1",
                     self.schema
                 );
@@ -3439,13 +3434,13 @@ impl PageStore {
     /// **Not for incremental updates.** Per-flush UPDATEs of
     /// `consistent_lsn` go through [`Self::advance_consistent_lsn`];
     /// per-`UploadMetadata` UPDATEs from RTC go through
-    /// [`Self::update_timeline_state`]. Both of those are gen-fenced;
+    /// [`Self::update_branch_state`]. Both of those are gen-fenced;
     /// this one isn't, because at creation the row by definition
     /// doesn't exist yet (or — race — exists in a state we shouldn't
     /// touch).
     pub async fn insert_timeline_at_creation(&self, row: &TimelineRow) -> Result<()> {
         let sql = format!(
-            "INSERT INTO \"{}\".timeline_state \
+            "INSERT INTO \"{}\".pageserver_branch_state \
              (branch_id, consistent_lsn, \
               applied_gc_cutoff_lsn, ancestor_branch_id, ancestor_lsn, \
               current_generation, pg_version, initdb_lsn, prev_record_lsn, \
@@ -3489,7 +3484,7 @@ impl PageStore {
     /// The WHERE clause requires `current_generation = $caller_gen`:
     /// stale pageservers — those whose generation no longer matches
     /// the live row — get 0 rows updated, returning
-    /// [`UpdateTimelineStateOutcome::StaleGeneration`]. Caller should
+    /// [`UpdateBranchStateOutcome::StaleGeneration`]. Caller should
     /// log and proceed (matching the pattern in
     /// [`Self::advance_consistent_lsn`]); the eventual
     /// `task_mgr::shutdown_for_stale_generation` path on the next
@@ -3499,14 +3494,14 @@ impl PageStore {
     /// (owned by `cas_bump_generation_on_attach`), or `pg_version`
     /// (immutable per timeline). Other fields are full-overwrite from
     /// the caller's row.
-    pub async fn update_timeline_state(
+    pub async fn update_branch_state(
         &self,
         row: &TimelineRow,
         generation: utils::generation::Generation,
-    ) -> Result<UpdateTimelineStateOutcome> {
+    ) -> Result<UpdateBranchStateOutcome> {
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let sql = format!(
-            "UPDATE \"{}\".timeline_state SET \
+            "UPDATE \"{}\".pageserver_branch_state SET \
                 consistent_lsn   = $2, \
                 applied_gc_cutoff_lsn = $3, \
                 ancestor_branch_id    = $4, \
@@ -3544,17 +3539,17 @@ impl PageStore {
                 ],
             )
             .await
-            .context("update_timeline_state")?;
+            .context("update_branch_state")?;
         if n == 0 {
-            Ok(UpdateTimelineStateOutcome::StaleGeneration)
+            Ok(UpdateBranchStateOutcome::StaleGeneration)
         } else {
-            Ok(UpdateTimelineStateOutcome::Updated)
+            Ok(UpdateBranchStateOutcome::Updated)
         }
     }
 
     pub async fn get_timeline(&self, branch_id: BranchId) -> Result<Option<TimelineRow>> {
         let sql = format!(
-            "SELECT {} FROM \"{}\".timeline_state \
+            "SELECT {} FROM \"{}\".pageserver_branch_state \
              WHERE branch_id = $1",
             TIMELINE_ROW_COLUMNS, self.schema
         );
@@ -3568,7 +3563,7 @@ impl PageStore {
 
     /// Build the ordered lineage for `branch_id` by walking
     /// `ancestor_branch_id` / `ancestor_lsn` links in
-    /// `timeline_state`. Segment 0 is the timeline itself at
+    /// `pageserver_branch_state`. Segment 0 is the timeline itself at
     /// `Lsn::MAX`; each ancestor's cap is the running `min` of the
     /// `ancestor_lsn`s on the path (non-increasing by the branch
     /// validation invariant — the `min` is belt-and-braces).
@@ -3581,7 +3576,7 @@ impl PageStore {
         let mut segments = LineageSegment::single(branch_id);
         let mut seen: std::collections::HashSet<BranchId> = std::iter::once(branch_id).collect();
         let mut row = self.get_timeline(branch_id).await?.with_context(|| {
-            format!("load_lineage: timeline {branch_id} has no timeline_state row")
+            format!("load_lineage: timeline {branch_id} has no pageserver_branch_state row")
         })?;
         let mut cap = Lsn::MAX;
         while let Some(anc_id) = row.ancestor_branch_id {
@@ -3610,7 +3605,7 @@ impl PageStore {
         Ok(segments)
     }
 
-    /// Create the `timeline_state` row for a branch of `ancestor` at
+    /// Create the `pageserver_branch_state` row for a branch of `ancestor` at
     /// `ancestor_lsn`, validating against the ancestor's persisted row
     /// only — no in-process ancestor Timeline required. This is the
     /// cross-process distillation of the old `branch_timeline_impl`:
@@ -3635,7 +3630,7 @@ impl PageStore {
         generation: i32,
     ) -> Result<TimelineRow> {
         let anc = self.get_timeline(ancestor).await?.with_context(|| {
-            format!("create_branch_row: ancestor {ancestor} has no timeline_state row")
+            format!("create_branch_row: ancestor {ancestor} has no pageserver_branch_state row")
         })?;
         if anc.deleted_at.is_some() {
             bail!("create_branch_row: ancestor {ancestor} is deleted");
@@ -3736,7 +3731,7 @@ impl PageStore {
     ) -> Result<CasBumpOutcome> {
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let sql = format!(
-            "UPDATE \"{}\".timeline_state \
+            "UPDATE \"{}\".pageserver_branch_state \
              SET current_generation = $2 \
              WHERE branch_id = $1 \
                AND current_generation < $2",
@@ -3752,7 +3747,7 @@ impl PageStore {
         }
         // n == 0 — probe.
         let probe_sql = format!(
-            "SELECT current_generation FROM \"{}\".timeline_state \
+            "SELECT current_generation FROM \"{}\".pageserver_branch_state \
              WHERE branch_id = $1",
             self.schema
         );
@@ -3816,7 +3811,7 @@ impl PageStore {
         // COALESCE we'd overwrite a previously-good value with
         // NULL on every throttled flush window.
         let sql = format!(
-            "UPDATE \"{}\".timeline_state \
+            "UPDATE \"{}\".pageserver_branch_state \
              SET consistent_lsn = $2, \
                  prev_record_lsn      = COALESCE($4, prev_record_lsn) \
              WHERE branch_id = $1 \
@@ -3843,7 +3838,7 @@ impl PageStore {
             // "generation moved on" (we got fenced). One extra single-row
             // SELECT to disambiguate. Only runs on the unhappy path.
             let probe_sql = format!(
-                "SELECT current_generation FROM \"{}\".timeline_state \
+                "SELECT current_generation FROM \"{}\".pageserver_branch_state \
                  WHERE branch_id = $1",
                 self.schema
             );
@@ -3871,7 +3866,7 @@ impl PageStore {
 
     pub async fn bump_generation(&self, branch_id: BranchId) -> Result<i32> {
         let sql = format!(
-            "UPDATE \"{}\".timeline_state \
+            "UPDATE \"{}\".pageserver_branch_state \
              SET current_generation = current_generation + 1 \
              WHERE branch_id = $1 \
              RETURNING current_generation",
@@ -3888,7 +3883,7 @@ impl PageStore {
 
     pub async fn read_generation(&self, branch_id: BranchId) -> Result<Option<i32>> {
         let sql = format!(
-            "SELECT current_generation FROM \"{}\".timeline_state \
+            "SELECT current_generation FROM \"{}\".pageserver_branch_state \
              WHERE branch_id = $1",
             self.schema
         );
@@ -4245,8 +4240,7 @@ mod payload_envelope_tests {
             .lines()
             .enumerate()
             .filter(|(_, l)| {
-                l.contains(&bind_prefix)
-                    && (l.contains(&row_payload) || l.contains(&payload_clone))
+                l.contains(&bind_prefix) && (l.contains(&row_payload) || l.contains(&payload_clone))
             })
             .map(|(i, l)| format!("  line {}: {}", i + 1, l.trim()))
             .collect();
@@ -4336,8 +4330,11 @@ mod payload_envelope_tests {
     /// bytes, which would surface later as walredo corruption.
     #[test]
     fn decode_payload_rejects_unknown_codec_with_context() {
-        let err = decode_payload(&Bytes::from_static(&[0x42, 0x00]), || "pages row key=K lsn=L")
-            .expect_err("unknown tag must fail");
+        let err = decode_payload(
+            &Bytes::from_static(&[0x42, 0x00]),
+            || "pages row key=K lsn=L",
+        )
+        .expect_err("unknown tag must fail");
         let chain = format!("{err:#}");
         assert!(chain.contains("pages row key=K lsn=L"), "{chain}");
         assert!(chain.contains("0x42"), "{chain}");
@@ -4361,7 +4358,10 @@ mod payload_envelope_tests {
             payload_codec::Outcome::Raw(payload_codec::RawReason::TooSmall)
         );
         assert_eq!(stored.len(), 2, "one tag byte + the payload");
-        assert_eq!(decode_payload(&stored, || "delta row").unwrap(), &[0x01][..]);
+        assert_eq!(
+            decode_payload(&stored, || "delta row").unwrap(),
+            &[0x01][..]
+        );
     }
 }
 
@@ -4382,10 +4382,9 @@ fn row_to_page(r: tokio_postgres::Row) -> Result<PageRow> {
         lsn,
         is_image,
         will_init,
-        payload: decode_payload(
-            &Bytes::from(payload),
-            || format!("pages row key={key} lsn={lsn} (ysql)"),
-        )?,
+        payload: decode_payload(&Bytes::from(payload), || {
+            format!("pages row key={key} lsn={lsn} (ysql)")
+        })?,
     })
 }
 
@@ -4395,10 +4394,9 @@ fn row_to_meta(r: tokio_postgres::Row) -> Result<MetaRow> {
     let payload: Vec<u8> = r.try_get(2)?;
     let lsn = Lsn(lsn as u64);
     Ok(MetaRow {
-        payload: decode_payload(
-            &Bytes::from(payload),
-            || format!("meta row key={} lsn={lsn} (ysql)", hex::encode(&key)),
-        )?,
+        payload: decode_payload(&Bytes::from(payload), || {
+            format!("meta row key={} lsn={lsn} (ysql)", hex::encode(&key))
+        })?,
         key: Bytes::from(key),
         lsn,
     })
@@ -4421,12 +4419,9 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
         lsn,
         is_image,
         will_init,
-        payload: decode_payload(
-            &Bytes::from(payload),
-            || format!(
-                "slru_pages row kind={kind:?} segno={segno} blknum={blknum} lsn={lsn} (ysql)"
-            ),
-        )?,
+        payload: decode_payload(&Bytes::from(payload), || {
+            format!("slru_pages row kind={kind:?} segno={segno} blknum={blknum} lsn={lsn} (ysql)")
+        })?,
     })
 }
 
@@ -4445,7 +4440,7 @@ const TIMELINE_ROW_COLUMNS: &str = "branch_id, consistent_lsn, \
 /// persisted as a JSONB blob for forward-compat) into the values
 /// the `tokio_postgres::Client::execute` parameter list expects.
 /// Shared by `insert_timeline_at_creation` and
-/// `update_timeline_state` so the serialisation stays in lockstep.
+/// `update_branch_state` so the serialisation stays in lockstep.
 fn serialize_row_aux(row: &TimelineRow) -> Result<(Option<String>, serde_json::Value)> {
     let rel_size_migration_text = row
         .rel_size_migration
@@ -4528,7 +4523,7 @@ mod tests {
         }
     }
 
-    /// All tests run against the production `pageserver.*` schema
+    /// All tests run against the production `amp_storage` schema
     /// (created by the controller's migration on a
     /// real `yb_amp_local`-style cluster). Per-test isolation comes
     /// from `rand_branch()` — every test writes
@@ -4546,7 +4541,7 @@ mod tests {
     // committed-but-unacked first attempt reports the SECOND
     // execution's count (undercounts under load — seen in CI). Assert
     // the surviving rows instead; `== 0` counts are retry-safe.
-    const PROD_SCHEMA: &str = "pageserver";
+    const PROD_SCHEMA: &str = "amp_storage";
 
     async fn make_store(_suffix: &str) -> (PageStore, String) {
         let store = SHARED_STORE
@@ -4588,7 +4583,7 @@ mod tests {
 
         // pages: 9 per-row params; 2 rows → $1..$18, id baked per row.
         let pages = build_insert_sql(
-            "pageserver",
+            "amp_storage",
             "pages",
             PAGES_COLUMNS,
             branch,
@@ -4596,7 +4591,7 @@ mod tests {
             2,
         );
         let expected_pages = format!(
-            "INSERT INTO \"pageserver\".pages ({PAGES_COLUMNS}) VALUES \
+            "INSERT INTO \"amp_storage\".pages ({PAGES_COLUMNS}) VALUES \
              ({id},$1,$2,$3,$4,$5,$6,$7,$8,$9),\
              ({id},$10,$11,$12,$13,$14,$15,$16,$17,$18)"
         );
@@ -4604,7 +4599,7 @@ mod tests {
 
         // slru: 7 per-row params; 1 row → $1..$7.
         let slru = build_insert_sql(
-            "pageserver",
+            "amp_storage",
             "slru_pages",
             SLRU_COLUMNS,
             branch,
@@ -4612,7 +4607,7 @@ mod tests {
             1,
         );
         let expected_slru = format!(
-            "INSERT INTO \"pageserver\".slru_pages ({SLRU_COLUMNS}) VALUES \
+            "INSERT INTO \"amp_storage\".slru_pages ({SLRU_COLUMNS}) VALUES \
              ({id},$1,$2,$3,$4,$5,$6,$7)"
         );
         assert_eq!(slru, expected_slru);
@@ -6057,7 +6052,10 @@ mod tests {
             .create_branch_row(rand_branch(), rand_branch(), Lsn(70), 1)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("no timeline_state row"), "{err}");
+        assert!(
+            err.to_string().contains("no pageserver_branch_state row"),
+            "{err}"
+        );
 
         // Happy path mid-history: prev_record_lsn unknown → None.
         let child = rand_branch();
@@ -6409,7 +6407,10 @@ mod tests {
 
         // Missing row → error, not an empty lineage.
         let err = store.load_lineage(rand_branch()).await.unwrap_err();
-        assert!(err.to_string().contains("no timeline_state row"), "{err}");
+        assert!(
+            err.to_string().contains("no pageserver_branch_state row"),
+            "{err}"
+        );
 
         drop_schema(&store, &schema).await;
     }

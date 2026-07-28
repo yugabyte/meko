@@ -69,9 +69,9 @@ log "A. load done: $ROWCOUNT rows, total relation $HEAP, ${LOAD_SECS}s"
 log "B. checkpoint + measure YB page store"
 pq "$DBNAME" -c "CHECKPOINT;" >/dev/null 2>&1 || true
 sleep 5
-PAGES=$(ybq "SELECT count(*) FROM pageserver.pages;")
-SLRU=$(ybq "SELECT count(*) FROM pageserver.slru_pages;")
-PAGE_LOGICAL=$(ybq "SELECT pg_size_pretty(count(*)::bigint*8192) FROM pageserver.pages;")
+PAGES=$(ybq "SELECT count(*) FROM amp_storage.pages;")
+SLRU=$(ybq "SELECT count(*) FROM amp_storage.slru_pages;")
+PAGE_LOGICAL=$(ybq "SELECT pg_size_pretty(count(*)::bigint*8192) FROM amp_storage.pages;")
 J=$(curl -s --max-time 10 "http://127.0.0.1:9988/v1/tenant/$TENANT/timeline/$TIMELINE" 2>/dev/null) || J=""
 LAST=$(echo "$J" | python3 -c "import sys,json;print(json.load(sys.stdin).get('last_record_lsn','n/a'))" 2>/dev/null || echo n/a)
 log "B. pages=$PAGES slru=$SLRU logical=$PAGE_LOGICAL last_record_lsn=$LAST"

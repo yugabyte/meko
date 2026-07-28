@@ -1,4 +1,4 @@
-//! Dump or decode `pageserver.pages` rows.
+//! Dump or decode `amp_storage.pages` rows.
 //!
 //! Shares the connection flags with the other yb_storage tools via
 //! [`ysql_client::YbConnArgs`] (works against local no-TLS and `--sslmode
@@ -21,7 +21,7 @@ use utils::payload_codec;
 use ysql_client::{YbConnArgs, YsqlClient};
 
 #[derive(Parser)]
-#[command(about = "Dump or decode pageserver.pages rows for one (rel, fork) tuple")]
+#[command(about = "Dump or decode amp_storage.pages rows for one (rel, fork) tuple")]
 struct Args {
     #[arg(long)]
     branch: BranchId,
@@ -121,13 +121,13 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
                 WHEN 3 THEN 'init' ELSE forknum::text END";
     let sql = format!(
         "SELECT blknum::text, {lsn}, {fork}, is_image::text, will_init::text{payload} \
-         FROM pageserver.pages WHERE {w} \
+         FROM amp_storage.pages WHERE {w} \
          ORDER BY blknum ASC, lsn DESC, is_image DESC {lim}"
     );
     let rows = client
         .query(&sql, &[])
         .await
-        .context("query pageserver.pages")?;
+        .context("query amp_storage.pages")?;
     /// Text columns the SQL always projects, ahead of the raw `payload`.
     const SCALAR_COLS: usize = 5;
 
@@ -149,7 +149,9 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
                 .map(|i| r.get::<usize, Option<String>>(i).unwrap_or_default())
                 .collect();
             if !a.no_payload {
-                let stored: Vec<u8> = r.get::<usize, Option<Vec<u8>>>(SCALAR_COLS).unwrap_or_default();
+                let stored: Vec<u8> = r
+                    .get::<usize, Option<Vec<u8>>>(SCALAR_COLS)
+                    .unwrap_or_default();
                 let stored = bytes::Bytes::from(stored);
                 cells.push(payload_codec::stored_codec_name(&stored).to_string());
                 cells.push(stored.len().to_string());
@@ -309,12 +311,12 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
     // delta decoders below can read page structure out of it.
     let sql = format!(
         "SELECT to_hex(lsn), is_image::int::text, will_init::int::text, payload \
-         FROM pageserver.pages WHERE {w} ORDER BY lsn, is_image DESC"
+         FROM amp_storage.pages WHERE {w} ORDER BY lsn, is_image DESC"
     );
     let rows = client
         .query(&sql, &[])
         .await
-        .context("query pageserver.pages")?;
+        .context("query amp_storage.pages")?;
     let lo = a
         .lsn_from
         .map(|l| format!(" from {}", fmt_lsn(l.0)))

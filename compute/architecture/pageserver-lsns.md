@@ -8,8 +8,8 @@ and the controller schema
 
 **System framing.** Durability and resilience come from YugabyteDB, the
 underlying store. The pageserver holds page data in an in-RAM buffer until a
-flush lands it in the YB tables `pageserver.pages` / `pageserver.slru_pages` /
-`pageserver.meta`; the per-branch `pageserver.timeline_state` row records how
+flush lands it in the YB tables `amp_storage.pages` / `amp_storage.slru_pages` /
+`amp_storage.meta`; the per-branch `amp_storage.pageserver_branch_state` row records how
 far that durable state extends. Local process memory is never a durability
 claim.
 
@@ -27,7 +27,7 @@ They answer different questions and must never be substituted for each other:
 of the in-RAM `PageWriter` buffer. Advertising `applied_lsn` to the
 safekeeper would let it delete WAL whose page rows are still only buffered —
 a crash then loses those records permanently, because the WAL is gone from
-`safekeeper.wals` and the pages never reached YB. That is why every
+`amp_storage.wals` and the pages never reached YB. That is why every
 externally visible durability value routes through
 `Timeline::get_consistent_lsn()`.
 
@@ -124,7 +124,7 @@ re-streamed and re-ingested idempotently.
 - In memory: `RecordLsn.prev` inside `last_record_lsn`, and the
   `PageWriter.record_lsn_history` map (`BTreeMap<Lsn, Lsn>` of
   `last → prev`).
-- Persisted: `pageserver.timeline_state.prev_record_lsn` (nullable column).
+- Persisted: `amp_storage.pageserver_branch_state.prev_record_lsn` (nullable column).
 
 **Advances:** Each `finish_write` inserts the `(last → prev)` pair via
 `note_record_lsn`. At flush time, `take_prev_at_or_below(flushed_lsn)` pulls
@@ -145,7 +145,7 @@ continuity from the stream.
 ### `consistent_lsn` — durable, gap-free
 
 **Where:**
-- Source of truth: `pageserver.timeline_state.consistent_lsn` (YB column,
+- Source of truth: `amp_storage.pageserver_branch_state.consistent_lsn` (YB column,
   NOT NULL).
 - In-memory slot: `Timeline.remote_state.consistent_lsn: Arc<AtomicLsn>`
   (`compute/pageserver/src/page_server/timeline/remote_state.rs`).
@@ -157,7 +157,7 @@ continuity from the stream.
   distinguish them).
 
 **Meaning:** Every record with LSN ≤ this is **durably in YB** — its rows
-are in `pageserver.pages` / `slru_pages` / `meta` AND the `timeline_state`
+are in `amp_storage.pages` / `slru_pages` / `meta` AND the `timeline_state`
 row claims it. "Durable" here means committed to YugabyteDB; the pageserver
 keeps no durable local state.
 
@@ -339,7 +339,7 @@ lifetime; detaching a branch from its ancestor is unsupported.
 ## Per-row LSNs (YB + buffer)
 
 `PageRow.lsn`, `SlruPageRow.lsn`, `MetaRow.lsn` — one row per version in
-`pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`. Each
+`amp_storage.pages`, `amp_storage.slru_pages`, `amp_storage.meta`. Each
 WAL-derived write is stamped with the **end-LSN of the record** that
 produced it. The tables' primary keys order by `lsn DESC` (with `is_image
 DESC` breaking ties so an image sorts before a same-LSN delta).
@@ -580,6 +580,6 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 - `compute/safekeeper/src/send_wal.rs` — feedback intake,
   `update_remote_consistent_lsn`.
 - `controller/migrations/0002_compute_storage.up.sql` —
-  `pageserver.timeline_state` schema.
+  `amp_storage.pageserver_branch_state` schema.
 - [`safekeeper-lsns.md`](safekeeper-lsns.md) — the safekeeper side of the
   replication link.

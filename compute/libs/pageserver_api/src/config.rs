@@ -171,14 +171,14 @@ pub struct ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_id: Option<BranchId>,
     /// Generation number for this attachment. The launcher bumps the
-    /// generation in `registry.branches` on every spawn and
+    /// generation in `amp_registry.branches` on every spawn and
     /// writes the fresh value here; the pageserver CAS-installs it on
-    /// the `pageserver.timeline_state` row at startup
+    /// the `amp_storage.pageserver_branch_state` row at startup
     /// (`cas_bump_generation_on_attach`), which fences out any stale
     /// process still holding an older generation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<u32>,
-    /// How to create the timeline if its `pageserver.timeline_state`
+    /// How to create the timeline if its `amp_storage.pageserver_branch_state`
     /// row does not exist yet. Consulted ONLY when the row is absent;
     /// an existing row is always opened as-is (which makes restarts
     /// trivially idempotent). Absent row + absent `[timeline_init]`
@@ -286,7 +286,7 @@ pub struct ConfigToml {
     pub yb_page_writer: YbPageWriterConfigToml,
 
     /// Codec the yb-pageserver compresses `BYTEA` payload columns with
-    /// (`pageserver.pages`, `pageserver.slru_pages`, `pageserver.meta`).
+    /// (`amp_storage.pages`, `amp_storage.slru_pages`, `amp_storage.meta`).
     /// Write-side only: the read path decodes whatever tag each row carries,
     /// so changing this and restarting needs no migration — new rows use the
     /// new codec, old rows stay readable. Default `lz4`; `none` disables
@@ -306,7 +306,7 @@ pub struct ConfigToml {
 }
 
 /// On-disk shape of `[timeline_init]` in `pageserver.toml`: how to
-/// create the configured timeline when its `pageserver.timeline_state`
+/// create the configured timeline when its `amp_storage.pageserver_branch_state`
 /// row does not exist yet. See [`ConfigToml::timeline_init`].
 ///
 /// ```toml
@@ -328,7 +328,7 @@ pub enum TimelineInitConfig {
     /// Run initdb and import the resulting pgdata as the timeline's
     /// initial page set.
     Bootstrap { pg_version: PgMajorVersion },
-    /// Create a branch: write a `timeline_state` row pointing at the
+    /// Create a branch: write a `pageserver_branch_state` row pointing at the
     /// ancestor at `ancestor_lsn`. Pre-branch pages stay under the
     /// ancestor's branch_id and are reached via lineage-aware reads.
     Branch {
@@ -372,7 +372,7 @@ pub struct YbPageWriterConfigToml {
     pub read_cache_bytes: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backpressure_bytes: Option<usize>,
-    /// Maximum entries in the in-process LRU cache for `pageserver.meta`
+    /// Maximum entries in the in-process LRU cache for `amp_storage.meta`
     /// point reads. 0 disables the cache. Default 8192.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_cache_entries: Option<usize>,
@@ -384,7 +384,7 @@ pub struct YbPageWriterConfigToml {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct YbPageWriterConfig {
-    /// Flush the in-RAM buffer to `pageserver.pages` after this much
+    /// Flush the in-RAM buffer to `amp_storage.pages` after this much
     /// wall-clock time since the buffer opened, even if it hasn't hit
     /// the size threshold. Default 5 seconds.
     #[serde(with = "humantime_serde")]
@@ -489,7 +489,7 @@ pub struct YbPageWriterConfig {
     /// Default 50 MiB.
     pub backpressure_bytes: usize,
 
-    /// Maximum entries in the in-process LRU cache for `pageserver.meta`
+    /// Maximum entries in the in-process LRU cache for `amp_storage.meta`
     /// point reads. Writes populate the cache (write-through) so a read
     /// at any LSN ≥ the write LSN hits the cache without a YB round-trip.
     /// 0 disables the cache. Default 8192.

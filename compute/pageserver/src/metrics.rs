@@ -184,7 +184,7 @@ pub(crate) static CONCURRENT_INITDBS: Lazy<UIntGauge> = Lazy::new(|| {
 ///
 /// - `flush` — the in-RAM buffer reached `FlushPolicy::backpressure_bytes`
 ///   and `put` awaited the next successful flush. Bounds heap growth
-///   when YB INSERTs (own `pageserver.pages`) can't keep up with the
+///   when YB INSERTs (own `amp_storage.pages`) can't keep up with the
 ///   walreceiver's ingest rate.
 /// - `materializer` — the image-materialiser channel was full
 ///   (`materialize_queue_capacity` jobs in flight) and `put` had to
@@ -211,7 +211,7 @@ pub(crate) static PAGEWRITER_BACKPRESSURE_WAITS: Lazy<IntCounterVec> = Lazy::new
 pub(crate) static PAGEWRITER_UNFLUSHED_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
         "pageserver_yb_pagewriter_unflushed_bytes",
-        "Bytes in PageWriter awaiting INSERT into pageserver.pages / slru_pages / meta",
+        "Bytes in PageWriter awaiting INSERT into amp_storage.pages / slru_pages / meta",
     )
     .expect("failed to define a metric")
 });
@@ -305,7 +305,7 @@ pub(crate) static GC_CANDIDATES_DEQUEUED: Lazy<IntCounter> = Lazy::new(|| {
 pub(crate) static GC_PAGES_ROWS_DELETED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "pageserver_yb_gc_pages_rows_deleted_total",
-        "pageserver.pages rows deleted by the GC drain",
+        "amp_storage.pages rows deleted by the GC drain",
     )
     .expect("failed to define a metric")
 });

@@ -32,10 +32,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     .await?;
     let relnode = db::query_i64(&conn, "SELECT pg_relation_filenode('gc_dt')::bigint").await?;
     let rel_pages = format!(
-        "SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}' AND relnode = {relnode}"
+        "SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}' AND relnode = {relnode}"
     );
     let rel_queue = format!(
-        "SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b}' AND relnode = {relnode}"
+        "SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b}' AND relnode = {relnode}"
     );
     // Wait for the seed writes to actually flush to YB before dropping.
     let mut stored = 0;

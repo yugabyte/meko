@@ -1,4 +1,4 @@
-//! Dump `safekeeper.wals` rows (the safekeeper's WAL-in-YB chunks) in a
+//! Dump `amp_storage.wals` rows (the safekeeper's WAL-in-YB chunks) in a
 //! human-readable form.
 //!
 //! Shares the connection flags (`--host/--port/--user/--db-name/
@@ -19,7 +19,7 @@ use utils::payload_codec;
 use ysql_client::{YbConnArgs, YsqlClient};
 
 #[derive(Parser)]
-#[command(about = "Dump safekeeper.wals (safekeeper WAL-in-YB chunks)")]
+#[command(about = "Dump amp_storage.wals (safekeeper WAL-in-YB chunks)")]
 struct Args {
     /// Branch id (32 hex chars).
     #[arg(long)]
@@ -128,7 +128,7 @@ async fn main() -> Result<()> {
                         max(chunk_offset + chunk_size)::text, {min_lsn}, {max_lsn}, \
                         sum(chunk_size)::text, \
                         (max(chunk_offset + chunk_size) - min(chunk_offset) - sum(chunk_size))::text \
-                 FROM safekeeper.wals {w} GROUP BY segno ORDER BY segno"
+                 FROM amp_storage.wals {w} GROUP BY segno ORDER BY segno"
             ),
             vec![
                 "segno",
@@ -176,7 +176,7 @@ async fn main() -> Result<()> {
             format!(
                 "SELECT segno::text, bucket_id::text, chunk_offset::text, chunk_size::text, {start_lsn}, \
                         to_char(to_timestamp(last_modified_us/1000000.0),'YYYY-MM-DD HH24:MI:SS'){data_cols} \
-                 FROM safekeeper.wals {w} ORDER BY segno ASC, chunk_offset ASC {lim}"
+                 FROM amp_storage.wals {w} ORDER BY segno ASC, chunk_offset ASC {lim}"
             ),
             h,
         )
@@ -185,7 +185,7 @@ async fn main() -> Result<()> {
     let rows = client
         .query(&sql, &[])
         .await
-        .context("query safekeeper.wals")?;
+        .context("query amp_storage.wals")?;
 
     // The `data` column, when selected, comes back as raw bytea in the last
     // projected position and expands into four text cells.

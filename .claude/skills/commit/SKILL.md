@@ -175,7 +175,7 @@ metric names, and step-by-step troubleshooting flows.
 
 Update a runbook when your change makes one of those wrong:
 - Where state lives or how to inspect it changed (e.g. "scan
-  `.yb_amp/endpoints/`" → "query `registry.endpoints`"). A runbook
+  `.yb_amp/endpoints/`" → "query `amp_registry.endpoints`"). A runbook
   step that tells an operator to look in the wrong place is actively harmful
   during an incident.
 - A CLI command, flag, port, or env var the runbook hardcodes changed.
@@ -400,7 +400,7 @@ control file as a 388B bincode blob stored at `yb_storage.blobs` under
 `ControlFileStorage::{File, Yb}` dispatch enum, selected by
 `--control-file-backend file|remote-storage`. By the time anyone read it, none
 of that was true: #10 (`840e56aae`) had moved the control file to typed
-columns in `safekeeper.timeline_state`, deleted the enum, deleted
+columns in `amp_storage.safekeeper_branch_state`, deleted the enum, deleted
 `control_file_upgrade.rs`, and removed both CLI flags. The commit that did the
 move did not touch the architecture doc — so for weeks the canonical description
 of the safekeeper was a fabrication. The same rot hits a `yb-dump-*` tool that

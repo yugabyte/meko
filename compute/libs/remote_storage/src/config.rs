@@ -32,7 +32,7 @@ impl RemoteStorageKind {
         match self {
             // The blob store's table is hardcoded (see yb_store::BLOBS_TABLE);
             // the connection config carries no table name.
-            RemoteStorageKind::YbStore(_) => Some("blobs"),
+            RemoteStorageKind::YbStore(_) => Some("amp_storage.blobs"),
         }
     }
 }

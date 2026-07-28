@@ -40,13 +40,13 @@ Per-component deep dives:
   `UnifiedPages` buffer, image materialiser semantics, and write batching.
 - [`architecture/safekeeper.md`](architecture/safekeeper.md) — the
   single-safekeeper WAL design: ingest, batching into
-  `safekeeper.wals`, the control file, and the durability ack model.
+  `amp_storage.wals`, the control file, and the durability ack model.
 - [`../controller/architecture/sc-integration.md`](../controller/architecture/sc-integration.md)
   — cluster control in the controller: generation authority (attach-hook), the
   node/branch/endpoint registries, and `yb_storage` provisioning.
 - [`architecture/remote-storage.md`](architecture/remote-storage.md)
   — the `RemoteStorage` abstraction and its `YbStore` backend
-  (chunked blobs in `public.blobs`: initdb archives, endpoint scratch).
+  (chunked blobs in `amp_storage.blobs`: initdb archives, endpoint scratch).
 - [`architecture/yugabyte.md`](architecture/yugabyte.md) — what the
   YB cluster looks like from AMP's perspective: the `yb_storage`
   database, every schema and table, connection paths, the idempotency
@@ -83,7 +83,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
 `${BUNDLE}/tools/` so they ship to deploy hosts alongside the daemons.
 
 - [`yb-dump-pages`](tools/src/bin/yb-dump-pages.rs) — dump or decode
-  `pageserver.pages` rows for one (rel, fork) tuple. Renders the LSN as
+  `amp_storage.pages` rows for one (rel, fork) tuple. Renders the LSN as
   `H/L` hex and forknum as `main`/`fsm`/`vm`/`init`. Required hash columns:
   `--tenant --timeline --spc --db --rel --fork`. Range filters: `--blknum`
   (or `--blknum-from/--blknum-to`), `--lsn-from`/`--lsn-to` (PG `X/Y` hex).
@@ -94,7 +94,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   `offnum`, and flags a GAP when a delta's `offnum` exceeds the running
   max+1 — the signature of a chain walredo can't fold and of a base image
   too small for the deltas above it (see issue #22).
-- [`yb-dump-wals`](tools/src/bin/yb-dump-wals.rs) — dump `safekeeper.wals`
+- [`yb-dump-wals`](tools/src/bin/yb-dump-wals.rs) — dump `amp_storage.wals`
   rows (the safekeeper's WAL chunks in YB). Required hash columns:
   `--tenant --timeline`. Range filters: `--segno` (or
   `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
@@ -104,10 +104,10 @@ against both a local no-TLS cluster (default) and a TLS-required one
   (`min/max LSN, total_bytes, gap_bytes`) — the fastest way to spot a WAL
   hole during an incident.
 - [`yb-reset-consistent-lsn`](tools/src/bin/yb-reset-consistent-lsn.rs)
-  — find (and optionally rewind) `pageserver.timeline_state.consistent_lsn`
+  — find (and optionally rewind) `amp_storage.pageserver_branch_state.consistent_lsn`
   to a real WAL record boundary. Given `--tenant --timeline --target-lsn
   X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder
-  over `safekeeper.wals`, and reports the largest record boundary `<= target`
+  over `amp_storage.wals`, and reports the largest record boundary `<= target`
   plus its matching `prev_record_lsn`. Defaults to a dry run; `--set`
   writes the pair back (`--expect-generation N` to generation-fence the
   write, `--null-prev` to let the walreceiver re-derive prev). Use it to

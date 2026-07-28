@@ -2,7 +2,7 @@
 //!
 //! Companion to `fast/sk_wal` (hot only). The safekeeper serves WAL from an
 //! in-memory `WalCache` (hot) falling through to durable rows in YB's
-//! `safekeeper.wals` (cold). This reads a fixed range `[start, target)`
+//! `amp_storage.wals` (cold). This reads a fixed range `[start, target)`
 //! over replication twice — once hot (right after writing), then once after
 //! **restarting the safekeeper** (which drops the in-memory cache, so the
 //! same range is re-read from YB) — and asserts both catch up to the target

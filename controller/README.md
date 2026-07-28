@@ -112,7 +112,7 @@ The controller owns cluster control for the storage layer: **generation authorit
 schemas) on startup. It serves these as an HTTP surface (`/control/v1/...`,
 `/debug/v1/attach-hook`, `/ready`) on the same listener as the versioned `/api/v1`
 product API; the endpoint pods and the `yb_amp_local` dev harness drive it. State
-lives in the `registry` schema of `yb_storage`. See
+lives in the `amp_registry` schema of `yb_storage`. See
 [`architecture/sc-integration.md`](architecture/sc-integration.md) for the design.
 
 `make controller-bundle` builds the (Go-only) `controller` binary into

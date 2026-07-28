@@ -1,38 +1,37 @@
 -- 0002: provision the compute-facing (data-plane) schemas of the shared
--- `yb_storage` database: `public.blobs` + its enum, the `pageserver.*` page-store
+-- `yb_storage` database: `amp_storage.blobs` + its enum, the `pageserver.*` page-store
 -- tables, and the `safekeeper.*` WAL/control tables.
 --
 -- These schema/table names are HARDCODED by the pageserver/safekeeper/
 -- endpoint_storage daemons (e.g. compute/pageserver/src/page_store.rs
--- DEFAULT_SCHEMA="pageserver", compute/safekeeper/src/yb_wal_storage.rs
--- "safekeeper.wals") and bound immediately at daemon startup — they never create
+-- DEFAULT_SCHEMA="amp_storage", compute/safekeeper/src/yb_wal_storage.rs
+-- "amp_storage.wals") and bound immediately at daemon startup — they never create
 -- their own schema. So this migration must run before those daemons start.
 --
 -- The controller's own registry (generation authority + node/branch/endpoint
--- records) lives in the `registry` schema, provisioned by 0003. Every statement
+-- records) lives in the `amp_registry` schema, provisioned by 0003. Every statement
 -- is IF-NOT-EXISTS so the migration is idempotent. Objects are schema-qualified
 -- (the migrator's search_path is `controller`).
 
-CREATE SCHEMA IF NOT EXISTS pageserver;
-CREATE SCHEMA IF NOT EXISTS safekeeper;
+CREATE SCHEMA IF NOT EXISTS amp_storage;
 
 -- =====================================================================
 -- public.* — blob namespace + blobs storage table.
 --
 -- Shared by pageserver and safekeeper. The `blob_namespace` ENUM
 -- discriminates between which service a row belongs to. (Live WAL
--- chunks live in `safekeeper.wals`, defined in the safekeeper section.)
+-- chunks live in `amp_storage.wals`, defined in the safekeeper section.)
 -- =====================================================================
 
 -- CREATE TYPE has no IF NOT EXISTS; guard against a pre-existing type.
 DO $$ BEGIN
-    CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
+    CREATE TYPE amp_storage.blob_namespace AS ENUM ('pageserver', 'safekeeper');
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
-CREATE TABLE IF NOT EXISTS public.blobs (
+CREATE TABLE IF NOT EXISTS amp_storage.blobs (
     branch_id        TEXT                  NOT NULL,
-    namespace        public.blob_namespace NOT NULL,
+    namespace        amp_storage.blob_namespace NOT NULL,
     key              TEXT                  NOT NULL,
     generation       INT,
     chunk_idx        INT                   NOT NULL,
@@ -45,7 +44,7 @@ CREATE TABLE IF NOT EXISTS public.blobs (
 );
 
 -- =====================================================================
--- pageserver.* — yb-pageserver page-store tables.
+-- Page-store tables — written and read by yb-pageserver.
 -- =====================================================================
 
 -- Relation pages only: keys where `Key::is_rel_block_key()` holds
@@ -55,7 +54,7 @@ CREATE TABLE IF NOT EXISTS public.blobs (
 -- relfork are tablet-local. The trailing `is_image` breaks `lsn`
 -- ties; it is DESC so the stored order matches the read-path
 -- `ORDER BY lsn DESC, is_image DESC` (image before delta at a tie).
-CREATE TABLE IF NOT EXISTS pageserver.pages (
+CREATE TABLE IF NOT EXISTS amp_storage.pages (
     branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
@@ -74,7 +73,7 @@ CREATE TABLE IF NOT EXISTS pageserver.pages (
 -- `kind` matches `Key::field2` byte ordering: 0=Clog,
 -- 1=MultiXactMembers, 2=MultiXactOffsets. Hash partition keeps a
 -- whole SLRU segment on one tablet.
-CREATE TABLE IF NOT EXISTS pageserver.slru_pages (
+CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
     branch_id    TEXT     NOT NULL,
     kind         SMALLINT NOT NULL,
     segno        BIGINT   NOT NULL,
@@ -93,7 +92,7 @@ CREATE TABLE IF NOT EXISTS pageserver.slru_pages (
 -- replication-slot state), two-phase commit files, replication
 -- origins, SLRU segment-size sentinels. Full-overwrite semantics:
 -- read = latest row ≤ target_lsn. No walredo, no chains.
-CREATE TABLE IF NOT EXISTS pageserver.meta (
+CREATE TABLE IF NOT EXISTS amp_storage.meta (
     branch_id    TEXT     NOT NULL,
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
@@ -101,11 +100,11 @@ CREATE TABLE IF NOT EXISTS pageserver.meta (
     PRIMARY KEY ((branch_id, key) HASH, lsn DESC)
 );
 
--- Per-branch state row — one durable row in YB carrying every load-bearing
+-- Per-branch pageserver state — one durable row in YB carrying every load-bearing
 -- field from the page-store index: consistent/gc/initdb LSNs, generation,
 -- archive/delete flags, rel-size schema-migration state, plus a JSON `lineage`
 -- column for future ancestor-detach support (always `Default` in yb-mode today).
-CREATE TABLE IF NOT EXISTS pageserver.timeline_state (
+CREATE TABLE IF NOT EXISTS amp_storage.pageserver_branch_state (
     branch_id              TEXT      NOT NULL,
     consistent_lsn         BIGINT    NOT NULL,
     applied_gc_cutoff_lsn  BIGINT    NOT NULL,
@@ -134,7 +133,7 @@ CREATE TABLE IF NOT EXISTS pageserver.timeline_state (
 -- Explicit SPLIT into 3 tablets: this queue is expected to stay small
 -- (it is continuously drained), so 3 tablets is sufficient. tablets (3)
 -- < buckets (10) bounds a statement's distributed-txn fan-out.
-CREATE TABLE IF NOT EXISTS pageserver.pending_gc (
+CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     branch_id  TEXT     NOT NULL,
     bucket_id  INT      NOT NULL,
     spcnode    BIGINT   NOT NULL,
@@ -151,7 +150,7 @@ CREATE TABLE IF NOT EXISTS pageserver.pending_gc (
 ) SPLIT INTO 3 TABLETS;
 
 -- =====================================================================
--- safekeeper.* — yb-safekeeper persistent state.
+-- yb-safekeeper persistent state.
 -- =====================================================================
 
 -- Per-branch safekeeper control-file row. One row per branch, hash-partitioned
@@ -160,7 +159,7 @@ CREATE TABLE IF NOT EXISTS pageserver.pending_gc (
 -- rather than a full-row rewrite. yb-amp runs a single safekeeper per branch with
 -- WAL durability provided by YugabyteDB, so consensus state (term / term_history)
 -- and membership (mconf) are absent.
-CREATE TABLE IF NOT EXISTS safekeeper.timeline_state (
+CREATE TABLE IF NOT EXISTS amp_storage.safekeeper_branch_state (
     branch_id              TEXT        NOT NULL,
     timeline_start_lsn     BIGINT      NOT NULL,
     local_start_lsn        BIGINT      NOT NULL,
@@ -175,7 +174,7 @@ CREATE TABLE IF NOT EXISTS safekeeper.timeline_state (
 -- Live WAL chunks the safekeeper mirrors into YB — the durable copy of the WAL
 -- stream. Partitioned into buckets to spread the load across multiple DocDB
 -- tablets.
-CREATE TABLE IF NOT EXISTS safekeeper.wals (
+CREATE TABLE IF NOT EXISTS amp_storage.wals (
     branch_id        TEXT     NOT NULL,
     bucket_id        SMALLINT NOT NULL,
     segno            BIGINT   NOT NULL,

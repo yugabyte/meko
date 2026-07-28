@@ -32,7 +32,7 @@ const (
 	computeDB              = "postgres"
 	ybUser                 = "yugabyte"
 	// ybStorageDB is the database the endpoint's DEV_PROVISION_SCHEMA path
-	// creates and puts the `pageserver` schema in (supervisor.py's YB_DBNAME
+	// creates and puts the `amp_storage` schema in (supervisor.py's YB_DBNAME
 	// default). The provider passes no YB_DBNAME, so the image default holds.
 	ybStorageDB = "yb_storage"
 	// computeReadyTimeout bounds waiting for the endpoint's Postgres to serve
@@ -460,7 +460,7 @@ func (e *Env) DockerHost() *dockerhost.Host    { return e.host }
 func (e *Env) EndpointContainer() string       { return e.endpointName }
 
 // YBStorage is connection info for the backing YugabyteDB's amp storage
-// database — the one holding the `pageserver` schema the data path writes.
+// database — the one holding the `amp_storage` schema the data path writes.
 // Tests that assert on what actually landed in storage need this; the compute
 // endpoint's own Postgres (PGEndpoint) cannot see it.
 func (e *Env) YBStorage() pg.ConnInfo { return e.ybStorage }

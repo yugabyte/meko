@@ -216,7 +216,7 @@ async fn repro_desc_pk_limit1_newest() {
     ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
-    // Mirrors pageserver.meta: hash key + a single `lsn DESC` clustering col.
+    // Mirrors amp_storage.meta: hash key + a single `lsn DESC` clustering col.
     ysql.execute(
         &format!(
             "CREATE TABLE {TABLE} (
@@ -369,7 +369,7 @@ async fn repro_concurrent_multikey_reads() {
     );
 }
 
-/// Reproduce the EXACT failing read: `read_meta` on the real `pageserver.meta`
+/// Reproduce the EXACT failing read: `read_meta` on the real `amp_storage.meta`
 /// shape — 18-byte CHECKPOINT_KEY (`03 00..00 01`), real-magnitude lsns
 /// spanning the cap — capped at the branch point. Must return the newest row
 /// AT OR BELOW the cap. In production this returned the OLDEST.
@@ -629,7 +629,7 @@ async fn repro_cross_client_visibility() {
 }
 
 /// Repro for `PageStore::read_meta` fetching a STALE checkpoint (the
-/// `branch_ancestor` root cause). `read_meta` mirrors the `pageserver.meta`
+/// `branch_ancestor` root cause). `read_meta` mirrors the `amp_storage.meta`
 /// table: PK `((branch_id, key) HASH, lsn DESC)`, a BYTEA key, and MANY lsn
 /// versions of one key (the checkpoint's `nextXid` is rewritten on every
 /// xid-advancing WAL record). It relies on a forward `limit(1)` returning the
@@ -646,7 +646,7 @@ async fn repro_meta_bytea_limit1_newest() {
     ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
-    // Exactly pageserver.meta's shape.
+    // Exactly amp_storage.meta's shape.
     ysql.execute(
         &format!(
             "CREATE TABLE {TABLE} (

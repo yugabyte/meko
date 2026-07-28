@@ -48,7 +48,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let b = c.branch_create_named("gc_race", "main")?;
     c.endpoint_create_on_branch("ep_gc_race", "gc_race", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
-    let read_pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}'");
+    let read_pages = format!("SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}'");
 
     step("Seed race_read + stack deep version chains, capture the stable checksum");
     db::batch(

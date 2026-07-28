@@ -342,7 +342,7 @@ impl InterpretedWalReader {
                 // A WAL *decode* error here is, in yb-amp, almost always a
                 // TRANSIENT torn read rather than durable corruption: the WAL
                 // read path blends the in-memory `WalCache` with YB
-                // `safekeeper.wals` under concurrent writes, so a record can
+                // `amp_storage.wals` under concurrent writes, so a record can
                 // briefly span bytes from two write epochs across a WAL
                 // rewrite/truncation window (manifesting as an "invalid xlog
                 // page header" at a page boundary). Upstream Neon reads

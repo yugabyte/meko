@@ -16,11 +16,9 @@ All subsystems share **one** database, `yb_storage`. Within it:
 
 | Schema | Tables | Provisioned by |
 |---|---|---|
-| `public` | `blobs` table + `blob_namespace` ENUM | migration `0002_compute_storage` |
-| `pageserver` | `pages`, `slru_pages`, `meta`, `timeline_state` | migration `0002_compute_storage` |
-| `safekeeper` | `timeline_state`, `wals` | migration `0002_compute_storage` |
+| `amp_storage` | the data plane: `pages`, `slru_pages`, `meta`, `pending_gc`, `pageserver_branch_state`, `safekeeper_branch_state`, `wals`, `blobs` (+ the `blob_namespace` ENUM) | migration `0002_compute_storage` |
 | `controller` | the controller's product model: `app_user`, `storage_pool`, `project`, `user_pool_grant`, `user_project_grant`, `branch`, `endpoint`, `task`, `task_step` (plus the `grant_role`, `endpoint_role`, `task_status`, `step_status` ENUMs) | migration `0001_init` |
-| `registry` | the controller's storage-layer registry: `branches`, `nodes`, `timelines`, `pending_timeline_inits`, `endpoints` | migration `0003_registry` |
+| `amp_registry` | the controller's storage-layer registry: `branches`, `nodes`, `timelines`, `pending_timeline_inits`, `endpoints` | migration `0003_registry` |
 
 ### Provisioning — controller migrations on startup
 
@@ -38,7 +36,7 @@ issues `CREATE SCHEMA IF NOT EXISTS controller` before the migrate driver
 initialises — the bookkeeping table lives in that schema, so the schema
 must exist before the very first migration runs. Unqualified DDL in the
 migrations therefore lands in `controller`; every object outside it
-(`public.*`, `pageserver.*`, `safekeeper.*`, `registry.*`) is written
+(`amp_storage.*`, `amp_registry.*`) is written
 schema-qualified. Every statement in `0002_compute_storage` and
 `0003_registry` is IF-NOT-EXISTS-guarded, so those migrations are
 idempotent at the SQL level too.
@@ -48,7 +46,7 @@ The data-plane migration —
 — is the authoritative definition of every compute-facing schema and
 table. The schema/table names are **hardcoded** by the daemons
 (`compute/pageserver/src/page_store.rs` `DEFAULT_SCHEMA = "pageserver"`,
-`compute/safekeeper/src/yb_wal_storage.rs` `safekeeper.wals`,
+`compute/safekeeper/src/yb_wal_storage.rs` `amp_storage.wals`,
 `compute/libs/remote_storage/src/yb_store.rs` `blobs`) and bound at
 daemon startup — no service creates its own tables, so the controller
 must have run before the pageserver/safekeeper/endpoint_storage start.
@@ -102,7 +100,7 @@ yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsc
 - `hot_path` — `"yb_thin_client"` (**the default**) runs the hot paths over
   the `yb_thin_client` shim client (batch-first: a call = a batch of ops =
   one Perform); `"ysql"` is the Postgres-wire escape hatch. The
-  safekeeper honors it for the WAL write/read path on `safekeeper.wals`
+  safekeeper honors it for the WAL write/read path on `amp_storage.wals`
   (see [`safekeeper.md`](safekeeper.md) §"Direct-to-tserver hot path")
   and the pageserver for the page read/write hot path on
   `pages`/`slru_pages`/`meta` (see
@@ -148,7 +146,7 @@ be able to reach the tserver RPC port (9100, or whatever
 [`high-level.md`](high-level.md) §"The hot path needs direct tserver
 RPC access".
 
-## `public.blobs`
+## `amp_storage.blobs`
 
 Generic chunked blob store, shared by everything that needs
 object-shaped storage:
@@ -167,11 +165,11 @@ Subsystems are segregated by the **`namespace` column** (a typed ENUM,
 derived from the blob's key), not by separate tables:
 
 ```sql
-CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
+CREATE TYPE amp_storage.blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
-CREATE TABLE public.blobs (
+CREATE TABLE amp_storage.blobs (
     branch_id        TEXT                  NOT NULL,    -- branch id, or "" if not extractable
-    namespace        public.blob_namespace NOT NULL,    -- 'pageserver' or 'safekeeper'
+    namespace        amp_storage.blob_namespace NOT NULL,    -- 'pageserver' or 'safekeeper'
     key              TEXT                  NOT NULL,    -- discriminating filename, generation suffix stripped
     generation       INT,                               -- pageserver attach gen; NULL for genless files
     chunk_idx        INT                   NOT NULL,
@@ -189,7 +187,7 @@ The column split is populated at write time by `YbStore::parse_key`
 
 - **`namespace`** — `safekeeper` if the key contains `safekeeper`, else
   `pageserver`. The `safekeeper` variant is reserved; safekeeper state
-  lives in typed rows (`safekeeper.timeline_state`, `safekeeper.wals`),
+  lives in typed rows (`amp_storage.safekeeper_branch_state`, `amp_storage.wals`),
   so current safekeeper builds write no blobs.
 - **`branch_id`** — the branch-id-shaped token in the path (32 hex
   chars, optionally with a `-<count>-<num>` shard suffix). Empty string
@@ -251,12 +249,12 @@ ORDER BY max(size_bytes) DESC
 LIMIT 10;
 ```
 
-## `pageserver` schema
+## `amp_storage` schema — page store
 
 The pageserver's row-per-version page store; see
 [`pageserver.md`](pageserver.md) for the full design.
 
-### `pageserver.pages`
+### `amp_storage.pages`
 
 One row per `(block, LSN)`. Holds **relation pages only** — keys where
 `Key::is_rel_block_key()` holds (`field1 == 0x00`, `field4 != 0`,
@@ -270,7 +268,7 @@ chain-read `ORDER BY lsn DESC, is_image DESC` (image before delta at an
 LSN tie).
 
 ```sql
-CREATE TABLE pageserver.pages (
+CREATE TABLE amp_storage.pages (
     branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
@@ -304,13 +302,13 @@ above it (the anchor is a pushable lower bound on the DocDB scan):
 
 ```sql
 SELECT p.lsn, p.is_image, p.will_init, p.payload
-FROM pageserver.pages p
+FROM amp_storage.pages p
 WHERE p.branch_id=$1
   AND p.spcnode=$2 AND p.dbnode=$3 AND p.relnode=$4
   AND p.forknum=$5 AND p.blknum=$6
   AND p.lsn <= $7
   AND p.lsn >= COALESCE((
-        SELECT a.lsn FROM pageserver.pages a
+        SELECT a.lsn FROM amp_storage.pages a
         WHERE a.branch_id=$1
           AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4
           AND a.forknum=$5 AND a.blknum=$6
@@ -326,7 +324,7 @@ background image materialiser (see
 [`pageserver.md`](pageserver.md)) compacts long delta chains into
 walredo-applied images to keep it rare.
 
-### `pageserver.slru_pages`
+### `amp_storage.slru_pages`
 
 SLRU blocks — `pg_xact`, `pg_multixact_offsets`,
 `pg_multixact_members`. `kind` matches the key encoding's `field2`
@@ -335,7 +333,7 @@ image/delta shape as `pages`; the hash partition keeps a whole SLRU
 segment on one tablet.
 
 ```sql
-CREATE TABLE pageserver.slru_pages (
+CREATE TABLE amp_storage.slru_pages (
     branch_id    TEXT     NOT NULL,
     kind         SMALLINT NOT NULL,
     segno        BIGINT   NOT NULL,
@@ -349,7 +347,7 @@ CREATE TABLE pageserver.slru_pages (
 );
 ```
 
-### `pageserver.meta`
+### `amp_storage.meta`
 
 Metadata blobs — everything that is neither a relation page nor an SLRU
 block: relsize sentinels, directory listings (TenantDir / DbDir /
@@ -359,7 +357,7 @@ SLRU segment-size sentinels. Full-overwrite semantics: a read is the
 latest row at LSN ≤ target — no walredo, no chains.
 
 ```sql
-CREATE TABLE pageserver.meta (
+CREATE TABLE amp_storage.meta (
     branch_id    TEXT     NOT NULL,
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
@@ -368,7 +366,7 @@ CREATE TABLE pageserver.meta (
 );
 ```
 
-### `pageserver.timeline_state`
+### `amp_storage.pageserver_branch_state`
 
 One row per branch — the page store's durable index record, carrying
 every load-bearing per-branch field in a single transactionally-updatable
@@ -382,7 +380,7 @@ an old generation cannot clobber state owned by a newer attachment. The
 state (always `Default` today).
 
 ```sql
-CREATE TABLE pageserver.timeline_state (
+CREATE TABLE amp_storage.pageserver_branch_state (
     branch_id              TEXT      NOT NULL,
     consistent_lsn         BIGINT    NOT NULL,
     applied_gc_cutoff_lsn  BIGINT    NOT NULL,
@@ -401,9 +399,9 @@ CREATE TABLE pageserver.timeline_state (
 );
 ```
 
-## `safekeeper` schema
+## `amp_storage` schema — safekeeper state
 
-### `safekeeper.timeline_state`
+### `amp_storage.safekeeper_branch_state`
 
 The per-branch safekeeper control file as a typed row — one row per
 branch, hash-partitioned on `branch_id` so it lives on a single tablet.
@@ -414,7 +412,7 @@ YB itself, so there is no consensus state (term / term history) and no
 membership configuration to persist.
 
 ```sql
-CREATE TABLE safekeeper.timeline_state (
+CREATE TABLE amp_storage.safekeeper_branch_state (
     branch_id              TEXT        NOT NULL,
     timeline_start_lsn     BIGINT      NOT NULL,
     local_start_lsn        BIGINT      NOT NULL,
@@ -427,7 +425,7 @@ CREATE TABLE safekeeper.timeline_state (
 );
 ```
 
-### `safekeeper.wals`
+### `amp_storage.wals`
 
 The durable copy of the WAL stream. The safekeeper keeps no WAL on
 local disk: every WAL write lands here, and reads are served from here
@@ -435,7 +433,7 @@ local disk: every WAL write lands here, and reads are served from here
 to the compute only once its bytes are in this table.
 
 ```sql
-CREATE TABLE safekeeper.wals (
+CREATE TABLE amp_storage.wals (
     branch_id        TEXT     NOT NULL,
     bucket_id        SMALLINT NOT NULL,  -- per-batch placement bucket, 0..9
     segno            BIGINT   NOT NULL,
@@ -487,7 +485,7 @@ Schema and batching documented in detail in
 SELECT segno, count(*) AS chunks,
        max(chunk_offset + chunk_size) AS end_offset,
        pg_size_pretty(sum(chunk_size)::bigint) AS bytes
-FROM safekeeper.wals
+FROM amp_storage.wals
 WHERE branch_id = '...'
 GROUP BY segno
 ORDER BY segno;
@@ -496,7 +494,7 @@ ORDER BY segno;
 (`yb-dump-wals --summary` renders the same view with gap detection —
 see [`../README.md`](../README.md) §"Operator tools".)
 
-### `pageserver.pending_gc`
+### `amp_storage.pending_gc`
 
 GC candidate queue (pageserver.md §GC): one row per
 garbage-producing event, inserted when the event is applied, drained
@@ -508,7 +506,7 @@ retry) is a byte-identical upsert — no `ON CONFLICT` needed under
 `yb_enable_upsert_mode`.
 
 ```sql
-CREATE TABLE pageserver.pending_gc (
+CREATE TABLE amp_storage.pending_gc (
     branch_id  TEXT     NOT NULL,
     bucket_id  INT      NOT NULL,  -- writer-computed: page_store::gc_bucket_id(identity) % GC_BUCKETS
     spcnode    BIGINT   NOT NULL,
@@ -543,7 +541,7 @@ insert's distributed-txn fan-out is bounded by tablets touched, while
 because size-based auto-splitting never triggers on a small,
 write-hot, continuously-drained queue.
 
-## `registry` schema
+## `amp_registry` schema
 
 The controller's storage-layer bookkeeping: generation authority (the
 fencing counter) plus the node / branch / endpoint / pending-init
@@ -553,15 +551,15 @@ own schema so the flat storage model (32-hex `branch_id` VARCHAR) stays
 separate from the controller's product model (project / branch /
 endpoint by UUID in the `controller` schema). The controller's
 connection pool pins `search_path` to `controller`; the registry store
-schema-qualifies every reference (`registry.*`), so both coexist on one
+schema-qualifies every reference (`amp_registry.*`), so both coexist on one
 pool.
 
 | Table | Purpose |
 |---|---|
-| `registry.branches` | Per-branch placement + generation record. Keyed by `branch_id` alone — branches are not sharded across pageservers (YB tablet-shards the keyspace itself). The `generation` counter, bumped by the attach-hook, is the fencing primitive; monotonic across the branch's lifecycle, NULL until first attach. |
-| `registry.timelines` | Per-branch WAL start LSN + generation tracking. The branch's single co-located safekeeper is owned by the launcher, not tracked here. |
-| `registry.pending_timeline_inits` | Init recipe for a branch whose id + name were allocated at `branch create` but whose pageserver + safekeeper are not provisioned yet; `endpoint create` reads it back to materialize the branch, then deletes the row. NULL `ancestor_branch_id` = Bootstrap recipe (initdb + import on first start); non-NULL = fork off that ancestor at `start_lsn`. |
-| `registry.endpoints` | Durable registry of compute endpoints, keyed by endpoint id. `spec` is opaque JSONB the controller never interprets (it round-trips through `yb_amp_local`'s serde model). |
+| `amp_registry.branches` | Per-branch placement + generation record. Keyed by `branch_id` alone — branches are not sharded across pageservers (YB tablet-shards the keyspace itself). The `generation` counter, bumped by the attach-hook, is the fencing primitive; monotonic across the branch's lifecycle, NULL until first attach. |
+| `amp_registry.timelines` | Per-branch WAL start LSN + generation tracking. The branch's single co-located safekeeper is owned by the launcher, not tracked here. |
+| `amp_registry.pending_timeline_inits` | Init recipe for a branch whose id + name were allocated at `branch create` but whose pageserver + safekeeper are not provisioned yet; `endpoint create` reads it back to materialize the branch, then deletes the row. NULL `ancestor_branch_id` = Bootstrap recipe (initdb + import on first start); non-NULL = fork off that ancestor at `start_lsn`. |
+| `amp_registry.endpoints` | Durable registry of compute endpoints, keyed by endpoint id. `spec` is opaque JSONB the controller never interprets (it round-trips through `yb_amp_local`'s serde model). |
 
 Registry semantics are documented in
 [`../../controller/architecture/sc-integration.md`](../../controller/architecture/sc-integration.md).
@@ -624,7 +622,7 @@ transaction semantics.
 **Off by default**, because of a WAL-durability incident under a
 500-connection workload: with the GUC on, batch INSERTs reported as
 success appeared to lose individual rows under tablet rebalancing / RPC
-retries, leaving holes in `safekeeper.wals` that wedge pageserver
+retries, leaving holes in `amp_storage.wals` that wedge pageserver
 restart. With the GUC off those INSERTs take the standard transactional
 path — slower, but atomic. Operators can opt back in per component via
 the config field.
@@ -674,7 +672,7 @@ Every YB-talking call site in this codebase satisfies that contract:
   [`yb_enable_upsert_mode = true`](#yb_enable_upsert_mode) (same
   semantics — the conflict path is a no-op upsert; this covers the
   `pages` / `slru_pages` / `meta` / `wals` / `blobs` write paths); or
-  generation-fenced `UPDATE pageserver.timeline_state SET ... WHERE
+  generation-fenced `UPDATE amp_storage.pageserver_branch_state SET ... WHERE
   current_generation = $expected` (a replay sees the same generation
   and applies the same row state).
 - **DELETEs** are key-scoped (`DELETE FROM ... WHERE id = $1`); replay

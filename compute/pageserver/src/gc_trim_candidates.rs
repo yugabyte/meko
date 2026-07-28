@@ -5,7 +5,7 @@
 //! materialiser's `commit_phase` — record their base writes with one
 //! [`GcTrimCandidateEmitter`], owned by the `PageWriter`: it samples them
 //! through the shared per-block counter, buffers the survivors, and
-//! flushes to `pageserver.pending_gc` on its own loop. Best-effort by
+//! flushes to `amp_storage.pending_gc` on its own loop. Best-effort by
 //! design: trims self-heal (the block's next base re-covers a lost
 //! span), so no candidate here needs the window-durable path.
 //! Drop/shrink events do — they stay on the `PageWriter`'s window

@@ -42,10 +42,10 @@ All per-branch durable state lives in two tables of the shared `yb_storage`
 database, provisioned by
 `controller/migrations/0002_compute_storage.up.sql`:
 
-### Control file: `safekeeper.timeline_state`
+### Control file: `amp_storage.safekeeper_branch_state`
 
 ```sql
-CREATE TABLE safekeeper.timeline_state (
+CREATE TABLE amp_storage.safekeeper_branch_state (
     branch_id              TEXT        NOT NULL,
     timeline_start_lsn     BIGINT      NOT NULL,
     local_start_lsn        BIGINT      NOT NULL,
@@ -97,10 +97,10 @@ Persistence paths:
   both the persisted clock and the last-attempt clock, so a YB outage does
   not turn into a 300 ms retry storm).
 
-### WAL: `safekeeper.wals`
+### WAL: `amp_storage.wals`
 
 ```sql
-CREATE TABLE safekeeper.wals (
+CREATE TABLE amp_storage.wals (
     branch_id        TEXT     NOT NULL,
     bucket_id        SMALLINT NOT NULL,
     segno            BIGINT   NOT NULL,
@@ -113,7 +113,7 @@ CREATE TABLE safekeeper.wals (
 ```
 
 `compute/safekeeper/src/yb_wal_storage.rs` owns this table. The table name is
-hardcoded (`WALS_TABLE = "safekeeper.wals"`, always schema-qualified so it is
+hardcoded (`WALS_TABLE = "amp_storage.wals"`, always schema-qualified so it is
 independent of the connection's `search_path`).
 
 - **Chunk identity** is `(segno, chunk_offset)`. The writer never produces
@@ -200,7 +200,7 @@ With `hot_path = "yb_thin_client"` in `yb_storage_conn` — the default (see
 [`yugabyte.md`](yugabyte.md) §"Direct-to-tserver hot path") — `YbWalConn`
 additionally opens the direct-RPC client (`compute/libs/yb_thin_client`,
 `Perform` to a tserver's RPC port over the `libyb_thin_client` C++ shim) to
-`safekeeper.wals` — fail-fast
+`amp_storage.wals` — fail-fast
 health-checked at startup. The hot-path WAL write batch then runs as ONE
 Perform per batch (a single-tablet atomic write batch — a crash mid-flush
 cannot leave a hole), and the WAL sender's fetch issues all
@@ -223,7 +223,7 @@ lane.
 (`compute/safekeeper/src/wal_storage.rs`) and is the only WAL storage
 (`pub type WalStore = YbWalStorage;`). It wraps a `WalBookkeeping` — a pure
 in-memory tracker with **no filesystem I/O** — and drives a
-producer/consumer pipeline into `safekeeper.wals`:
+producer/consumer pipeline into `amp_storage.wals`:
 
 ```
 write_wal()                     consumer task                     YB
@@ -523,7 +523,7 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
 
 - **Identity**: `branch_id` in `safekeeper.toml` bakes the process's single
   branch (`SafeKeeperConf::yb_branch_id()`, required whenever
-  `yb_storage_conn` is set). It matters because `safekeeper.timeline_state`
+  `yb_storage_conn` is set). It matters because `amp_storage.safekeeper_branch_state`
   is shared by the whole cluster — without a baked identity the process
   could not tell its own branch from everyone else's. Consequences:
   - `GlobalTimelines::init()` does a single keyed load of **only** the baked
@@ -541,8 +541,8 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
   on the upsert lane), then loads the timeline back from it. Claiming the slot
   before the write keeps concurrent creators out; the marker is cleared on
   every failure path.
-- **Teardown**: a branch's rows (`safekeeper.timeline_state`,
-  `safekeeper.wals`) are reclaimed by the deferred GC pass (#36), as are the
+- **Teardown**: a branch's rows (`amp_storage.safekeeper_branch_state`,
+  `amp_storage.wals`) are reclaimed by the deferred GC pass (#36), as are the
   pageserver's. Tearing down a branch is therefore process teardown: the
   launcher stops the safekeeper along with the endpoint it serves
   (`deprovisionColocatedStorage`) and removes the data directory, which holds
@@ -619,7 +619,7 @@ yb-safekeeper -D <datadir> [--init]
 ```
 
 `--init` parses config, logs, and exits. The control file is the branch's
-`safekeeper.timeline_state` row; read it from YB, or via
+`amp_storage.safekeeper_branch_state` row; read it from YB, or via
 `GET /v1/debug_dump?dump_control_file=true`.
 
 A representative `safekeeper.toml`:
@@ -635,8 +635,8 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
 
 - `yb_storage_conn` is the single YB connection block (a string-encoded
   inline TOML table, the same `[*.yb]` shape the pageserver and
-  endpoint_storage consume) used for both `safekeeper.timeline_state` and
-  `safekeeper.wals` — same DB, two tables; the WAL table name is not
+  endpoint_storage consume) used for both `amp_storage.safekeeper_branch_state` and
+  `amp_storage.wals` — same DB, two tables; the WAL table name is not
   configurable. Setting it is what puts the safekeeper in YB-WAL mode
   (`SafeKeeperConf::is_yb_wal_mode`); the deployment always sets it.
 - `sslmode` / `sslrootcert` in that block select TLS for the YB connections:
@@ -648,7 +648,7 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
   [Timeline lifecycle](#timeline-lifecycle)); yb_amp_local stamps it at
   provision time (`allocate_safekeeper_conf`).
 - `yb_wal_compression` (`none` | `lz4`) is the codec for
-  `safekeeper.wals.data`. Write-side only — see
+  `amp_storage.wals.data`. Write-side only — see
   [`data` is compressed](#data-is-compressed). Only the safekeeper restart
   is needed to change it; nothing is rewritten.
 - Defaults: `listen_pg` 127.0.0.1:5454, `listen_http` 127.0.0.1:7676,

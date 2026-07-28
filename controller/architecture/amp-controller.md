@@ -231,7 +231,7 @@ Exactly one of each runs per placement group (§1):
   pageserver (it issues generations via the attach-hook the launcher calls; the
   safekeeper is endpoint-owned and not registered with it) plus the branch/
   endpoint registries. amp-controller owns this **in-process** (§11.1) in a dedicated
-  `registry` schema — never amp-controller's product state store, never exposed to
+  `amp_registry` schema — never amp-controller's product state store, never exposed to
   users. See [`sc-integration.md`](sc-integration.md).
 - **endpoint_storage** — YB Amp's small standalone store for endpoint-scoped scratch
   data (LFC prewarm/offload state today). Also a managed service (§11.5); its contents
@@ -738,11 +738,11 @@ The storage-layer control functions live directly in amp-controller (Go), not in
 a separate binary: generation authority (the attach-hook fencing counter), the
 pageserver-node / branch / endpoint / pending-init registries, and provisioning
 of the whole `yb_storage` DB (its `public`, `pageserver`, `safekeeper`, and
-`registry` schemas) via the controller's golang-migrate migrations.
+`amp_registry` schemas) via the controller's golang-migrate migrations.
 
 **Decision: own the storage-layer registry in-process — never
 amp-controller's product state store, and never exposed to users.** The registry
-state lives in a dedicated `registry` schema, separate from the product model in
+state lives in a dedicated `amp_registry` schema, separate from the product model in
 the `controller` schema (§10).
 
 **How it is served.** amp-controller serves the pod-facing surface —
@@ -750,7 +750,7 @@ the `controller` schema (§10).
 `/debug/v1/attach-hook` + `/debug/v1/inspect` (generation authority), and
 `/ready` — on its API listener, alongside the versioned `/api/v1` product API.
 The implementation is `controller/internal/registry` (the store over the
-`registry` schema + the HTTP handlers). Endpoint pods and the `yb_amp_local`
+`amp_registry` schema + the HTTP handlers). Endpoint pods and the `yb_amp_local`
 dev harness drive it; the controller's own task framework records pending-init
 recipes through the same in-process store, not over HTTP. There is no separate
 control-plane binary and no subprocess supervision.
@@ -785,7 +785,7 @@ the upstream multi-tenant machinery is dropped.
   scheduler/placement loop (both dropped).
 - **Product records stay in the `controller` schema.** Tenancy, PG clusters,
   endpoints, and tasks live in amp-controller's own `controller` schema (§10). The
-  `registry` schema holds only storage-layer bookkeeping: generations, node rows,
+  `amp_registry` schema holds only storage-layer bookkeeping: generations, node rows,
   branch rows.
 
 Generations remain load-bearing in our topology: replacement is the recovery

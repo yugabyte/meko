@@ -2209,7 +2209,7 @@ impl DatadirModification<'_> {
         // Add the new relation to the rel directory entry, and write
         // it back. Idempotent replay: if the rel is already in the
         // directory (because a prior PS lifetime's flush landed in YB
-        // before `pageserver.timeline_state.consistent_lsn` was
+        // before `amp_storage.pageserver_branch_state.consistent_lsn` was
         // advanced past this LSN — throttle is by design), `insert`
         // is a no-op and we still rewrite the same image. Subsequent
         // page/size records in the replay window re-apply too; once

@@ -151,12 +151,12 @@ struct TimelinePreload {
 }
 
 pub(crate) struct TenantPreload {
-    /// The timeline's preload, or `None` if no `pageserver.timeline_state`
+    /// The timeline's preload, or `None` if no `amp_storage.pageserver_branch_state`
     /// row exists yet (attach then runs the create-if-missing path).
     timeline: Option<(BranchId, TimelinePreload)>,
 }
 
-/// Build a `TimelineMetadata` from a `pageserver.timeline_state` row.
+/// Build a `TimelineMetadata` from a `amp_storage.pageserver_branch_state` row.
 /// In yb-amp the row *is* the timeline metadata; everything that
 /// used to ride on `index_part.json` either lives in the row or is
 /// dead weight.
@@ -165,7 +165,9 @@ fn synth_timeline_metadata_from_row(
 ) -> anyhow::Result<TimelineMetadata> {
     let pg_major = match row.pg_version {
         18 => PgMajorVersion::PG18,
-        v => anyhow::bail!("timeline_state.pg_version is {v}, not a supported PG major version"),
+        v => anyhow::bail!(
+            "pageserver_branch_state.pg_version is {v}, not a supported PG major version"
+        ),
     };
     Ok(TimelineMetadata::new(
         row.consistent_lsn,
@@ -520,7 +522,7 @@ impl PageServer {
         };
 
         // Build the ancestry lineage for lineage-aware reads. This is
-        // the open-existing path, so the timeline_state row (and its
+        // the open-existing path, so the pageserver_branch_state row (and its
         // ancestor chain) is guaranteed to exist.
         let mut resources = resources;
         resources.lineage = Some(
@@ -583,7 +585,7 @@ impl PageServer {
             });
         timeline.maybe_spawn_flush_loop();
 
-        // yb-pageserver: page data lives in pageserver.pages /
+        // yb-pageserver: page data lives in amp_storage.pages /
         // slru_pages / meta, never in layer files. A timeline with
         // no ancestor and no layer files is the normal post-restart
         // state.
@@ -592,7 +594,7 @@ impl PageServer {
     }
 
     /// Open the configured (tenant, timeline) synchronously: preload the
-    /// timeline_state row, attach (open-existing or create-if-missing per
+    /// pageserver_branch_state row, attach (open-existing or create-if-missing per
     /// `[timeline_init]`), and activate. Called from startup BEFORE any
     /// listener accepts traffic; failure is fatal to the process.
     pub(crate) async fn open(
@@ -670,7 +672,7 @@ impl PageServer {
 
         // Single-timeline pageserver: load ONLY the configured
         // timeline's row. The tenant may have other rows in
-        // `pageserver.timeline_state` (ancestors and branches served
+        // `amp_storage.pageserver_branch_state` (ancestors and branches served
         // by other pageserver processes) — those are reached through
         // lineage-aware PageStore reads, never hosted here.
         let branch_id = self.id;
@@ -704,7 +706,7 @@ impl PageServer {
                     applied_gc_cutoff_lsn = %row.applied_gc_cutoff_lsn,
                     ancestor_lsn = ?row.ancestor_lsn,
                     initdb_lsn = ?row.initdb_lsn,
-                    "preload: timeline LSNs read from pageserver.timeline_state"
+                    "preload: timeline LSNs read from amp_storage.pageserver_branch_state"
                 );
                 let metadata = synth_timeline_metadata_from_row(&row)?;
                 Some((
@@ -719,7 +721,7 @@ impl PageServer {
                 // create-if-missing path (bootstrap or branch).
                 info!(
                     branch_id = %identity.branch_id,
-                    "preload: no timeline_state row yet; will create at attach if configured"
+                    "preload: no pageserver_branch_state row yet; will create at attach if configured"
                 );
                 None
             }
@@ -752,7 +754,7 @@ impl PageServer {
         let mut timeline_ancestors = None;
         if let Some((branch_id, preload)) = preload.timeline {
             // `preload.metadata` is synthesised from
-            // `pageserver.timeline_state` in `Tenant::preload`, so it's
+            // `amp_storage.pageserver_branch_state` in `Tenant::preload`, so it's
             // always `Ok(_)` — no remote blob download path remains in yb-amp.
             let metadata = preload
                 .metadata
@@ -761,7 +763,7 @@ impl PageServer {
         }
 
         // Create-if-missing: the configured timeline has no
-        // `pageserver.timeline_state` row yet. Create it per the
+        // `amp_storage.pageserver_branch_state` row yet. Create it per the
         // `[timeline_init]` block of pageserver.toml — bootstrap runs
         // initdb + import (and inserts the row via finish_creation);
         // branch only writes a row pointing at the ancestor (the data
@@ -775,7 +777,7 @@ impl PageServer {
             use pageserver_api::config::TimelineInitConfig;
             match &self.conf.timeline_init {
                 None => anyhow::bail!(
-                    "timeline {} has no timeline_state row and no [timeline_init] is \
+                    "timeline {} has no pageserver_branch_state row and no [timeline_init] is \
                      configured in pageserver.toml",
                     identity.branch_id,
                 ),
@@ -828,7 +830,7 @@ impl PageServer {
                         .await
                         .map_err(|e| anyhow::anyhow!("bootstrap configured timeline: {e}"))?;
                     // finish_creation inserted the timeline into
-                    // self.timelines and wrote the timeline_state row;
+                    // self.timelines and wrote the pageserver_branch_state row;
                     // activation happens in PageServer::activate.
                     let (CreateTimelineResult::Created(t) | CreateTimelineResult::Idempotent(t)) =
                         result;

@@ -114,7 +114,7 @@ pub(crate) async fn acquire_concurrency_permit(
 /// yb-pageserver does not run compaction. The 10-delta image rule was
 /// a write-time invariant; with the image-anchored read path it's gone,
 /// and image-layer / L0→L1 work has nothing to do against
-/// `pageserver.pages`. A background image materialiser (Phase 3e) will
+/// `amp_storage.pages`. A background image materialiser (Phase 3e) will
 /// replace this loop once we need it.
 pub fn start_background_loops(tenant: &Arc<PageServer>) {
     let branch_id = tenant.id;

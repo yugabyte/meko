@@ -37,10 +37,10 @@ flowchart LR
 
     subgraph yb["YugabyteDB cluster (stateful)"]
         direction LR
-        tblPages[("pageserver.pages<br/>pageserver.slru_pages<br/>pageserver.meta")]
-        tblState[("pageserver.timeline_state<br/>safekeeper.timeline_state")]
-        tblWal[("safekeeper.wals")]
-        tblBlob[("public.blobs<br/>initdb archives, LFC scratch")]
+        tblPages[("amp_storage.pages<br/>amp_storage.slru_pages<br/>amp_storage.meta")]
+        tblState[("amp_storage.pageserver_branch_state<br/>amp_storage.safekeeper_branch_state")]
+        tblWal[("amp_storage.wals")]
+        tblBlob[("amp_storage.blobs<br/>initdb archives, LFC scratch")]
         tblSc[("registry + controller schemas")]
     end
 
@@ -69,8 +69,8 @@ A yb-amp install is:
 - **Pageserver (`yb-pageserver`)**: the row-store gateway. Two YSQL
   connection pools:
   - `compute_page_store`: serves compute reads, running image-anchored
-    LSN-chain reconstruction over `pageserver.pages` /
-    `pageserver.slru_pages` / `pageserver.meta`.
+    LSN-chain reconstruction over `amp_storage.pages` /
+    `amp_storage.slru_pages` / `amp_storage.meta`.
   - `fpu_page_store`: the walreceiver ingestion path + image
     materialiser writes. Image materialisation runs as a background
     task that compacts long delta chains into walredo-applied images so
@@ -80,7 +80,7 @@ A yb-amp install is:
   YSQL pools carry the cold paths.
 - **Safekeeper (`yb-safekeeper`)**: stateless WAL ingress. Receives
   the WAL stream from the compute, batches it into
-  `safekeeper.wals` rows, and ACKs a commit only once its bytes are
+  `amp_storage.wals` rows, and ACKs a commit only once its bytes are
   durable in YB. No local WAL, no quorum, no leader election —
   **exactly one safekeeper per branch**. YB's own replication provides
   the quorum durability, so stacking a second consensus protocol on
@@ -90,12 +90,12 @@ A yb-amp install is:
 - **Controller** (`controller`, Go): the control plane — generation
   authority (attach-hook fencing), the node/branch/endpoint
   registries, endpoint provisioning, and the product API. Its state
-  lives in the same YB database (`registry` + `controller` schemas),
+  lives in the same YB database (`amp_registry` + `controller` schemas),
   and it applies all schema migrations on startup. Documented under
   [`../../controller/architecture/`](../../controller/architecture/).
 - **Endpoint storage (`yb-endpoint-storage`)**: a small per-endpoint
   HTTP service for endpoint-scoped scratch blobs (LFC prewarm state),
-  backed by `public.blobs`.
+  backed by `amp_storage.blobs`.
 - **YugabyteDB cluster**: the durable storage tier for everything
   above.
 
@@ -114,8 +114,8 @@ A yb-amp install is:
 |---|---|---|
 | Compute | User-facing Postgres backend. Speaks the Postgres wire protocol to clients. | `pg_install/v18/bin/postgres` (with smgr patches) |
 | `compute_ctl` | Supervisor for the compute: applies the spec, starts/stops PG, runs catalog migrations. | `target/debug/yb-compute-ctl` |
-| Safekeeper | WAL durability gateway: receives WAL from the compute, persists it to `safekeeper.wals`, streams interpreted WAL to the pageserver. **One instance per branch** — YB provides the replication. | `target/debug/yb-safekeeper` |
-| Pageserver | Materializes pages from WAL into `pageserver.*` rows and serves them to the compute on demand. | `target/debug/yb-pageserver` |
+| Safekeeper | WAL durability gateway: receives WAL from the compute, persists it to `amp_storage.wals`, streams interpreted WAL to the pageserver. **One instance per branch** — YB provides the replication. | `target/debug/yb-safekeeper` |
+| Pageserver | Materializes pages from WAL into `amp_storage.*` rows and serves them to the compute on demand. | `target/debug/yb-pageserver` |
 | Controller | Control plane: generation fencing, node/branch/endpoint registries, endpoint provisioning, schema migrations. | `controller` (Go, `controller/cmd/controller`) |
 | Endpoint storage | Per-endpoint scratch-blob service (LFC prewarm state). One instance **per endpoint**. | `target/debug/yb-endpoint-storage` |
 | YugabyteDB | Durable storage backend for everything yb-amp-internal. | external (`yugabyted`) |
@@ -131,7 +131,7 @@ Compute (PG backend)
   v
 walproposer  ────────────►  the branch's Safekeeper
                               |  write_wal()  → chunks onto the consumer queue
-                              |  consumer     → batched INSERT into safekeeper.wals
+                              |  consumer     → batched INSERT into amp_storage.wals
                               |                 (≤ 50 chunks / 4 MiB per batch,
                               |                  one placement bucket per batch)
                               |  durable watermark advances when the batch lands
@@ -148,8 +148,8 @@ durability watermark.
 
 In parallel, the pageserver's walreceiver streams interpreted WAL from
 the safekeeper (`START_REPLICATION`) and writes page rows into
-`pageserver.pages` / `slru_pages` / `meta`; its flushes advance
-`pageserver.timeline_state.consistent_lsn` under a generation fence.
+`amp_storage.pages` / `slru_pages` / `meta`; its flushes advance
+`amp_storage.pageserver_branch_state.consistent_lsn` under a generation fence.
 
 ## Read path (a page miss in the compute)
 
@@ -164,7 +164,7 @@ Compute backend --(miss)--> shared_buffers --(miss)--> LFC --(miss)-->
                                                           Pageserver
                                                                 |
                                                   image-anchored chain read on
-                                                  pageserver.pages (one anchor
+                                                  amp_storage.pages (one anchor
                                                   seek + range scan above it)
                                                                 |
                                           one image row?  ──yes──►  return page bytes
@@ -185,15 +185,15 @@ walredo). See [`pageserver.md`](pageserver.md).
 
 | State | Where | Key / shape |
 |---|---|---|
-| Relation pages | YB `pageserver.pages` | one row per (block, LSN); images + deltas |
-| SLRU blocks | YB `pageserver.slru_pages` | one row per (block, LSN) |
-| Metadata blobs (relsizes, dir listings, aux files, …) | YB `pageserver.meta` | latest row ≤ LSN wins |
-| Per-branch pageserver state (LSNs, generation, ancestry) | YB `pageserver.timeline_state` | one generation-fenced row per branch |
-| Safekeeper control file | YB `safekeeper.timeline_state` | one row per branch, typed columns |
-| Live WAL | YB `safekeeper.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
-| initdb archives | YB `public.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
-| Endpoint scratch (LFC prewarm) | YB `public.blobs` | written via endpoint_storage's HTTP API |
-| Controller registries | YB `registry` schema | branches, timelines, pending inits, endpoints |
+| Relation pages | YB `amp_storage.pages` | one row per (block, LSN); images + deltas |
+| SLRU blocks | YB `amp_storage.slru_pages` | one row per (block, LSN) |
+| Metadata blobs (relsizes, dir listings, aux files, …) | YB `amp_storage.meta` | latest row ≤ LSN wins |
+| Per-branch pageserver state (LSNs, generation, ancestry) | YB `amp_storage.pageserver_branch_state` | one generation-fenced row per branch |
+| Safekeeper control file | YB `amp_storage.safekeeper_branch_state` | one row per branch, typed columns |
+| Live WAL | YB `amp_storage.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
+| initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
+| Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | written via endpoint_storage's HTTP API |
+| Controller registries | YB `amp_registry` schema | branches, timelines, pending inits, endpoints |
 | Controller product model | YB `controller` schema | users, pools, projects, grants, branches, endpoints, tasks |
 | Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on `endpoint create`, removed on destroy |
 | Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
@@ -218,7 +218,7 @@ endpoint that owns the branch, plus one endpoint_storage **per
 endpoint**. The PS+SK pair is provisioned at `endpoint create` —
 `branch create` only records the branch's init recipe (branch id,
 branch name, pg version, optional ancestor + start LSN) in the
-controller's `registry.pending_timeline_inits` table; the pair comes up
+controller's `amp_registry.pending_timeline_inits` table; the pair comes up
 under `endpoints/<endpoint>/{pageserver,safekeeper}` when the first
 endpoint for that branch is created, which reads the recipe back and
 deletes the pending row. Sibling endpoints on the same branch share the
@@ -227,12 +227,13 @@ PS+SK pair but each gets its own endpoint_storage.
 ```
 yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RPC)
   +-- db `yb_storage`
-        +-- schema `public`      blobs (chunked BYTEA) + blob_namespace ENUM
-        +-- schema `pageserver`  pages, slru_pages, meta, timeline_state
-        +-- schema `safekeeper`  timeline_state (control-file rows)
-        |                        + wals (WAL chunks, 10 tablets)
-        +-- schema `registry`    branches, nodes, timelines,
-        |                        pending_timeline_inits, endpoints
+        +-- schema `amp_storage`  blobs (chunked BYTEA) + blob_namespace ENUM
+        |                         pages, slru_pages, meta, pending_gc
+        |                         pageserver_branch_state
+        |                         safekeeper_branch_state (control-file rows)
+        |                         wals (WAL chunks, 10 tablets)
+        +-- schema `amp_registry` branches, timelines,
+        |                         pending_timeline_inits, endpoints
         +-- schema `controller`  product model + task framework
 
 yb-amp processes
@@ -287,7 +288,7 @@ default/fallback.
 ### The hot path needs direct tserver RPC access
 
 With `hot_path = "yb_thin_client"` (the default), the safekeeper (WAL
-write/read on `safekeeper.wals`) and the pageserver (page read/write on
+write/read on `amp_storage.wals`) and the pageserver (page read/write on
 `pages`/`slru_pages`/`meta`) speak YB's native pggate RPC **straight to
 the yb-tserver RPC port** (9100), not through the YSQL frontend (5433).
 

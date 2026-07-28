@@ -98,11 +98,11 @@ compute-facing schema is created by controller migration
 which the column names in `yb_store.rs` are hardcoded against:
 
 ```sql
-CREATE TYPE public.blob_namespace AS ENUM ('pageserver', 'safekeeper');
+CREATE TYPE amp_storage.blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
-CREATE TABLE public.blobs (
+CREATE TABLE amp_storage.blobs (
     branch_id        TEXT                  NOT NULL,  -- 32-hex branch id, "" when none
-    namespace        public.blob_namespace NOT NULL,  -- 'pageserver' or 'safekeeper'
+    namespace        amp_storage.blob_namespace NOT NULL,  -- 'pageserver' or 'safekeeper'
     key              TEXT                  NOT NULL,  -- discriminating filename, generation stripped
     generation       INT,                             -- attach generation; NULL for genless files
     chunk_idx        INT                   NOT NULL,

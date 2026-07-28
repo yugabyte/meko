@@ -33,25 +33,25 @@ one branch, so this is one series per metric per process.
 | `safekeeper_proposer_acceptor_messages_total` | IntCounterVec | `outcome` (`success` \| `error`) | ProposerAcceptorMessages processed by the acceptor. |
 | `safekeeper_wal_storage_operation_seconds` | HistogramVec | `operation` | WAL-storage operation timings. Observed operations: `initialize_first_segment`, `truncate_wal`. |
 | `safekeeper_misc_operation_seconds` | HistogramVec | `operation` | Miscellaneous timings. Observed operations: `handle_elected`, `state_snapshot`, `wal_residence_guard`, `try_wal_residence_guard`. |
-| `safekeeper_persist_control_file_seconds` | Histogram | — | Latency of persisting the control file: full-row `UPDATE`s (`Storage::persist`) and the advisory `remote_consistent_lsn` UPDATE (`AdvisoryPersist`), both against `safekeeper.timeline_state`. |
+| `safekeeper_persist_control_file_seconds` | Histogram | — | Latency of persisting the control file: full-row `UPDATE`s (`Storage::persist`) and the advisory `remote_consistent_lsn` UPDATE (`AdvisoryPersist`), both against `amp_storage.safekeeper_branch_state`. |
 | `safekeeper_wal_storage_limit_errors` | IntCounter | — | Appends rejected because the timeline's retained-WAL estimate exceeds `max_timeline_disk_usage_bytes`. |
-| `safekeeper_yb_wal_payload_logical_bytes_total` | IntCounter | — | Uncompressed WAL run bytes handed to the `safekeeper.wals` writer. Numerator of the compression ratio. |
-| `safekeeper_yb_wal_payload_stored_bytes_total` | IntCounter | — | Encoded WAL run bytes written to `safekeeper.wals` (compression envelope included) — what DocDB, the Raft log and every compaction move. `logical / stored` is the realized compression ratio (e.g. 3.0x); `1 - stored / logical` the equivalent space saving. Measured rather than assumed. |
+| `safekeeper_yb_wal_payload_logical_bytes_total` | IntCounter | — | Uncompressed WAL run bytes handed to the `amp_storage.wals` writer. Numerator of the compression ratio. |
+| `safekeeper_yb_wal_payload_stored_bytes_total` | IntCounter | — | Encoded WAL run bytes written to `amp_storage.wals` (compression envelope included) — what DocDB, the Raft log and every compaction move. `logical / stored` is the realized compression ratio (e.g. 3.0x); `1 - stored / logical` the equivalent space saving. Measured rather than assumed. |
 | `safekeeper_yb_wal_payload_runs_total` | IntCounterVec | `outcome` | WAL runs encoded, by codec outcome: `lz4` or `raw_configured` / `raw_too_small` / `raw_incompressible`. Runs are coalesced before encoding, so `raw_too_small` should be rare — unlike the pageserver's delta path, a WAL run is usually well above `MIN_COMPRESS_BYTES`. A rising `raw_incompressible` share means the WAL arrives pre-compressed. |
 
-## YB WAL mirror: writes into `safekeeper.wals` (global)
+## YB WAL mirror: writes into `amp_storage.wals` (global)
 
 Emitted by the consumer task's `flush_batch` (`yb_wal_storage.rs`).
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `safekeeper_yb_wal_insert_seconds` | HistogramVec | `path` (`ysql` \| `yb_thin_client`) | Latency of the batched write into `safekeeper.wals`: safekeeper→YB hop + DocDB write + Raft commit. `ysql` = multi-row INSERT over the Postgres wire; `yb_thin_client` = direct-RPC upsert batch over the shim (`hot_path = "yb_thin_client"`). |
+| `safekeeper_yb_wal_insert_seconds` | HistogramVec | `path` (`ysql` \| `yb_thin_client`) | Latency of the batched write into `amp_storage.wals`: safekeeper→YB hop + DocDB write + Raft commit. `ysql` = multi-row INSERT over the Postgres wire; `yb_thin_client` = direct-RPC upsert batch over the shim (`hot_path = "yb_thin_client"`). |
 | `safekeeper_yb_wal_batch_rows` | Histogram | — | Coalesced rows per write (~1 = sequential WAL coalescing into single rows or no batching; near 50 = `FLUSH_ROWS_THRESHOLD` saturating). |
 | `safekeeper_yb_wal_batch_bytes` | Histogram | — | Payload bytes per write (pre-coalescing chunk bytes). |
 
 ## WAL cache / YB reads (global)
 
-The `WalCache` fronts `safekeeper.wals` on the read path; misses fall
+The `WalCache` fronts `amp_storage.wals` on the read path; misses fall
 through to YB via `YbSegmentReader`.
 
 | Metric | Type | Labels | Meaning |
@@ -60,7 +60,7 @@ through to YB via `YbSegmentReader`.
 | `safekeeper_wal_cache_misses_total` | IntCounter | — | Lookups that fell through to YB. |
 | `safekeeper_wal_cache_evictions_total` | IntCounter | — | Chunks evicted by the FIFO over-capacity policy. |
 | `safekeeper_wal_cache_bytes` | IntGauge | — | Current cache occupancy in bytes (sum across cache instances). |
-| `safekeeper_wal_cache_yb_fetch_seconds` | HistogramVec | `path` (`ysql` \| `yb_thin_client`) | Latency per `safekeeper.wals` fetch round trip (covering chunk + forward prefetch window). |
+| `safekeeper_wal_cache_yb_fetch_seconds` | HistogramVec | `path` (`ysql` \| `yb_thin_client`) | Latency per `amp_storage.wals` fetch round trip (covering chunk + forward prefetch window). |
 | `safekeeper_wal_cache_yb_fetch_chunks` | Histogram | — | Chunks returned per fetch (pegged at 1 = no prefetch amortization; >1 = the range fetch is amortizing round trips). |
 | `safekeeper_wal_cache_yb_fetch_bytes` | Histogram | — | Bytes returned per fetch. |
 
@@ -101,7 +101,7 @@ reset each scrape.
 | Metric | Type | Meaning |
 | --- | --- | --- |
 | `safekeeper_commit_lsn` | GaugeVec | Commit LSN. Set to the same value as `safekeeper_flush_lsn`: with a single safekeeper per branch, every YB-durable flush is committed. |
-| `safekeeper_flush_lsn` | GaugeVec | Durable end-of-WAL (capped at what has landed in `safekeeper.wals`). |
+| `safekeeper_flush_lsn` | GaugeVec | Durable end-of-WAL (capped at what has landed in `amp_storage.wals`). |
 | `safekeeper_remote_consistent_lsn` | GaugeVec | In-memory pageserver durable-ingest frontier (from feedback). |
 | `safekeeper_ps_last_received_lsn` | GaugeVec | Last LSN the pageserver acknowledged in feedback. |
 | `safekeeper_feedback_last_time_seconds` | GaugeVec | Unix timestamp of the last pageserver feedback. |
@@ -109,7 +109,7 @@ reset each scrape.
 | `safekeeper_ps_corruption_detected` | IntGaugeVec | 1 if any pageserver feedback reported corruption, else 0. Latched for the process lifetime. |
 | `safekeeper_timeline_active` | GaugeVec | 1 for active timelines (live computes, or pageserver behind `flush_lsn`), 0 otherwise. |
 | `safekeeper_connected_computes` | IntGaugeVec | Active compute connections. |
-| `safekeeper_disk_usage_bytes` | GaugeVec | Retained-WAL estimate: `(flush segno − last removed segno) × wal_seg_size`. Emitted only once GC has removed at least one segment. Measures the WAL span retained in `safekeeper.wals`, not local disk (the safekeeper stores no WAL locally). |
+| `safekeeper_disk_usage_bytes` | GaugeVec | Retained-WAL estimate: `(flush segno − last removed segno) × wal_seg_size`. Emitted only once GC has removed at least one segment. Measures the WAL span retained in `amp_storage.wals`, not local disk (the safekeeper stores no WAL locally). |
 | `safekeeper_written_wal_bytes_total` | GaugeVec | Cumulative WAL bytes accepted by `write_wal` for this timeline. |
 | `safekeeper_written_wal_seconds_total` | GaugeVec | Always 0 — the per-timeline accumulator exists but no code path adds to it (WAL writes are an in-memory enqueue; the YB write cost is on `safekeeper_yb_wal_insert_seconds`). |
 | `safekeeper_flushed_wal_seconds_total` | GaugeVec | Always 0 — same as above; there is no local fsync to time. |

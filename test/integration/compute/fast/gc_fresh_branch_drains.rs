@@ -20,8 +20,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.endpoint_create_on_branch("ep_gc_fresh", "gc_fresh", branch_pg_port)?;
     let bconn = db::compute_conn(branch_pg_port);
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
-    let pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b1}'");
-    let queue = format!("SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b1}'");
+    let pages = format!("SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b1}'");
+    let queue = format!("SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b1}'");
 
     step("Write + churn a table that lives only on the branch");
     db::batch(

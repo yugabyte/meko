@@ -86,7 +86,7 @@ Fix by adding each missing key and re-running init. After a successful init, the
 that's expected, not a failure.
 
 ## B. SC migration: "no schema has been selected to create in"
-A freshly created backing DB has no `registry` schema, and the SC's `search_path` points
+A freshly created backing DB has no `amp_registry` schema, and the controller's `search_path` points
 at it. Create it before starting the SC:
 ```bash
 PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
@@ -94,7 +94,7 @@ PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
   -c "CREATE SCHEMA IF NOT EXISTS controller;"
 ```
 (The SC's `--database-url` typically pins `options=-csearch_path%3Dcontroller`.) Same idea
-if a `pageserver` schema is expected and missing.
+if an `amp_storage` schema is expected and missing.
 
 ## C. Safekeeper: "unexpected argument '--<flag>'"
 Build drift removes/renames flags. The safekeeper's whole config surface now lives in

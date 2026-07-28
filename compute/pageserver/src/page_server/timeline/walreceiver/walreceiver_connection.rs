@@ -245,7 +245,7 @@ pub(super) async fn handle_walreceiver_connection(
     // there and then crashed before flushing the buffer, those records
     // would be lost: on restart durable `consistent_lsn` is the smaller
     // value, but we already advertised the larger one to SK and `disk_consistent_lsn`
-    // in `pageserver.pages` is missing the gap rows. Resuming from the
+    // in `amp_storage.pages` is missing the gap rows. Resuming from the
     // durable watermark makes a crash-restart loop self-healing —
     // walreceiver re-streams from there and UPSERTs fill any gap.
     //
@@ -560,7 +560,7 @@ pub(super) async fn handle_walreceiver_connection(
             // protocol compat, but semantically this is `consistent_lsn`
             // (durable, gap-free). Do NOT report `applied_lsn` here —
             // SK / restart logic must see a value that's actually in
-            // `pageserver.pages`. In yb-amp this is the same value as
+            // `amp_storage.pages`. In yb-amp this is the same value as
             // `remote_consistent_lsn` below; both fields are kept for
             // wire compat. TODO: drop one in a future protocol bump.
             let disk_consistent_lsn = timeline.get_consistent_lsn();

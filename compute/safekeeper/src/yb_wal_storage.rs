@@ -1,7 +1,7 @@
 //! YugabyteDB-mirrored WAL storage.
 //!
 //! The safekeeper keeps no WAL on the local filesystem. Every WAL write is
-//! persisted to a YB table (`safekeeper.wals`) — the durable copy — and reads
+//! persisted to a YB table (`amp_storage.wals`) — the durable copy — and reads
 //! are served from YB (`WalReader` opens a [`YbSegmentReader`]) fronted by an
 //! in-memory hot cache for recent WAL. Durability is the WAL landing in YB: a
 //! commit is acked only once its bytes are INSERT'd (see the ack model under
@@ -10,7 +10,7 @@
 //! [`YbWalStorage`] wraps a [`WalBookkeeping`] — an in-memory tracker of the
 //! WAL LSN watermarks and record boundaries, with no filesystem interaction.
 //!
-//! The table (`safekeeper.wals`, defined in the controller
+//! The table (`amp_storage.wals`, defined in the controller
 //! migration) holds one row per coalesced run of a consumer batch:
 //! contiguous chunks of a segment are concatenated into a single row
 //! before the INSERT, so the typical batch is ONE row; runs break at
@@ -121,12 +121,12 @@ pub use ysql_client::YsqlClient;
 
 /// The single YB table the safekeeper mirrors WAL into. Hardcoded —
 /// the connection config carries only host/port/credentials, never a
-/// table name. Schema-qualified (`safekeeper.wals`); every query
+/// table name. Schema-qualified (`amp_storage.wals`); every query
 /// references it fully so it doesn't depend on the connection's
 /// `search_path`.
-const WALS_TABLE: &str = "safekeeper.wals";
+const WALS_TABLE: &str = "amp_storage.wals";
 
-/// Number of placement buckets in `safekeeper.wals`. `bucket_id` is the
+/// Number of placement buckets in `amp_storage.wals`. `bucket_id` is the
 /// second hash-key column; the consumer stamps each BATCH with one
 /// bucket, rotating `(counter + 1) % WALS_BUCKETS` per batch, so a
 /// branch's write load spreads across tablets instead of funneling into
@@ -144,7 +144,7 @@ fn bucket_in_list() -> String {
 }
 
 /// Handles to the YB connections that mirror live WAL into
-/// `safekeeper.wals`. Constructed at safekeeper boot via
+/// `amp_storage.wals`. Constructed at safekeeper boot via
 /// [`YbWalConn::from_conf`] and shared across timelines via
 /// `Arc<YbWalConn>`. Used by the WAL writer ([`YbWalStorage::new`]),
 /// the WAL reader ([`YbSegmentReader::new`]), and the control-file
@@ -170,9 +170,9 @@ fn bucket_in_list() -> String {
 pub struct YbWalConn {
     /// Fast Path Upsert lane (`yb_enable_upsert_mode = true`). Used by
     /// the per-timeline consumer task in [`consumer_main`] for
-    /// batched chunk INSERTs into `safekeeper.wals` and by
+    /// batched chunk INSERTs into `amp_storage.wals` and by
     /// `control_file::create_new` for the one-shot
-    /// `safekeeper.timeline_state` INSERT.
+    /// `amp_storage.safekeeper_branch_state` INSERT.
     pub fpu_client: Arc<YsqlClient>,
     /// Hot-read lane. Used exclusively by [`YbSegmentReader`] for
     /// chunk fetches that feed the WAL sender. No upsert GUC.
@@ -185,7 +185,7 @@ pub struct YbWalConn {
     /// non-idempotent `create_new` INSERT runs on the FPU lane.
     pub system_client: Arc<YsqlClient>,
     /// Name of the YB table that backs the WAL mirror. Always
-    /// [`WALS_TABLE`] (`safekeeper.wals`); the field stays so the SQL
+    /// [`WALS_TABLE`] (`amp_storage.wals`); the field stays so the SQL
     /// builders below can interpolate it.
     pub table: String,
     /// In-memory cache of recent WAL chunks, shared between the
@@ -195,7 +195,7 @@ pub struct YbWalConn {
     /// WAL read then hits YB).
     pub cache: Option<Arc<std::sync::Mutex<WalCache>>>,
     /// Direct-RPC lane (`hot_path = "yb_thin_client"`, the default):
-    /// `yb_thin_client` handle for `safekeeper.wals`, speaking `Perform` to a
+    /// `yb_thin_client` handle for `amp_storage.wals`, speaking `Perform` to a
     /// tserver through the `libyb_thin_client` C++ shim. `None` on the YSQL
     /// path. Opened and health-checked at startup; carries the hot-path WAL
     /// write/read dispatch. Control file, GC, and rehydration stay on the
@@ -236,7 +236,7 @@ impl YbWalConn {
         // - FPU lane (`yb_enable_upsert_mode = true`): hot-path WAL
         //   chunk INSERTs and `control_file::create_new` INSERT.
         //   `create_new` runs here because it's the only INSERT
-        //   reaching `safekeeper.timeline_state`; without the GUC the
+        //   reaching `amp_storage.safekeeper_branch_state`; without the GUC the
         //   YsqlClient retry-on-transient/connection-drop loop can't
         //   prove the in-flight write didn't already commit, and a
         //   blind replay fails with duplicate-key — empirically this
@@ -289,7 +289,7 @@ impl YbWalConn {
     }
 
     /// One-time catalog lookup for the direct-RPC hot-path lane: the
-    /// database OID and `safekeeper.wals`'s pg_class OID.
+    /// database OID and `amp_storage.wals`'s pg_class OID.
     async fn lookup_wals_oids(
         system_client: &ysql_client::YsqlClient,
     ) -> anyhow::Result<(u32, u32)> {
@@ -307,7 +307,7 @@ impl YbWalConn {
     }
 
     /// Connects the thin-client (`yb_thin_client`) lane and opens
-    /// `safekeeper.wals`, validating tserver connectivity and table
+    /// `amp_storage.wals`, validating tserver connectivity and table
     /// layout in one shot. Fail-fast at startup.
     async fn connect_thin(
         yb: &ysql_client::YbConnConfig,
@@ -417,7 +417,7 @@ pub enum DurableState {
 /// How far a YB flush should go — the arg to [`crate::wal_storage::Storage::yb_flush`].
 #[derive(Clone, Copy, Debug)]
 pub enum YbFlush {
-    /// Wake the consumer, wait for the batch to be durable in `safekeeper.wals`,
+    /// Wake the consumer, wait for the batch to be durable in `amp_storage.wals`,
     /// then advance the local watermark. The synchronous durable-commit
     /// boundary used by `handle_elected` / sync-safekeepers.
     NotifyAndWait,
@@ -625,7 +625,7 @@ impl YbWalStorage {
             %write_lsn,
             cfile_local_start_lsn = %state.local_start_lsn,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
-            "YbWalStorage::new — rehydrated write_lsn from safekeeper.wals \
+            "YbWalStorage::new — rehydrated write_lsn from amp_storage.wals \
              (last valid record boundary; falls back to timeline_start_lsn on empty)",
         );
 
@@ -805,7 +805,7 @@ impl YbWalStorage {
             // NB: do NOT populate the read-side cache here. The cache
             // is durability-aware now: it's only populated by
             // `consumer_main` *after* the chunk has been successfully
-            // INSERT'd into `safekeeper.wals`. Populating it here
+            // INSERT'd into `amp_storage.wals`. Populating it here
             // pre-INSERT (the previous behaviour) let the WAL sender
             // stream chunks to the pageserver that the safekeeper had
             // not yet flushed to YB — and on safekeeper crash before
@@ -1064,7 +1064,7 @@ impl Storage for YbWalStorage {
         let delete_lower_bound = self.delete_lower_bound.clone();
         async move {
             // Drop cached chunks for segnos that are about to be DELETE'd
-            // out of `safekeeper.wals`. Done before the DB delete so a
+            // out of `amp_storage.wals`. Done before the DB delete so a
             // concurrent reader can't pick up a cached chunk that is no
             // longer durable. Reads that beat us here race against the
             // existing chunks just as they always would.
@@ -1208,7 +1208,7 @@ fn bake_branch_id(sql: &str, branch_id: &str) -> String {
 /// production (= arrival = byte) order; output is index ranges into that
 /// slice, where each range is one maximal run of chunks that share a segno
 /// AND are byte-contiguous (`prev.chunk_offset + prev.chunk_size ==
-/// next.chunk_offset`). Each run becomes ONE `safekeeper.wals` row —
+/// next.chunk_offset`). Each run becomes ONE `amp_storage.wals` row —
 /// `write_wal` splits at segment boundaries and streams sequentially, so
 /// the typical batch is a single run. Runs break at segment boundaries
 /// (different segno) and at any byte discontinuity (e.g. after a
@@ -1533,7 +1533,7 @@ async fn consumer_main(
                 // WAL sender's fast path; we only insert chunks here
                 // (after a successful INSERT) so the cache never
                 // serves bytes that aren't durable in
-                // `safekeeper.wals` — the invariant that pre-INSERT
+                // `amp_storage.wals` — the invariant that pre-INSERT
                 // cache population violated (the 2026-06 PS-restart
                 // WAL replay bug). Deliberately the ORIGINAL chunks,
                 // not the coalesced rows `flush_batch` wrote:
@@ -1570,7 +1570,7 @@ async fn consumer_main(
     }
 }
 
-/// Persist one batch of chunks into `safekeeper.wals` over the configured
+/// Persist one batch of chunks into `amp_storage.wals` over the configured
 /// transport: the direct-RPC (`yb_thin_client`) lane when selected,
 /// otherwise the YSQL lane. The whole batch carries ONE bucket (stamped by
 /// `consumer_main` before the write), so it writes as one atomic write to a
@@ -1601,8 +1601,15 @@ async fn flush_batch(
     if let Some(thin) = yb_thinclient {
         flush_batch_thin(thin, branch_id, batch, &runs, &encoded).await
     } else {
-        flush_batch_ysql(ysql_fpu_client, table_name, branch_id, batch, &runs, &encoded)
-            .await
+        flush_batch_ysql(
+            ysql_fpu_client,
+            table_name,
+            branch_id,
+            batch,
+            &runs,
+            &encoded,
+        )
+        .await
     }
 }
 
@@ -1807,7 +1814,7 @@ async fn flush_batch_ysql(
     Ok(())
 }
 
-/// Lazy chunk-streaming reader over `safekeeper.wals`, replacing the old
+/// Lazy chunk-streaming reader over `amp_storage.wals`, replacing the old
 /// snapshot-at-open `VecAsyncRead`.
 ///
 /// The previous design reassembled the entire 16 MiB segment from a single
@@ -2144,7 +2151,7 @@ const FETCH_FORWARD_CHUNKS: usize = 64;
 const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Fetch the chunk covering `(segno, byte_offset)` plus a forward
-/// prefetch window from `safekeeper.wals`.
+/// prefetch window from `amp_storage.wals`.
 ///
 /// The common case is `byte_offset` exactly equal to an existing
 /// `chunk_offset`: the WAL sender consumes whole chunks and re-enters
@@ -2455,9 +2462,12 @@ mod tests {
     fn quote_relation_splits_schema_qualified_names() {
         // Production uses the schema-qualified `WALS_TABLE`; each part
         // must be quoted independently so it resolves regardless of the
-        // connection's search_path (a bare `"safekeeper.wals"` would be
+        // connection's search_path (a bare `"amp_storage.wals"` would be
         // a single — nonexistent — identifier).
-        assert_eq!(quote_relation("safekeeper.wals"), "\"safekeeper\".\"wals\"");
+        assert_eq!(
+            quote_relation("amp_storage.wals"),
+            "\"amp_storage\".\"wals\""
+        );
         // Per-test scratch tables are unqualified → one quoted ident.
         assert_eq!(quote_relation("wals_test_abc"), "\"wals_test_abc\"");
         // Embedded quotes are doubled in every segment.
@@ -2482,7 +2492,7 @@ mod tests {
     }
 
     /// `coalesce_runs` backs the consumer's chunk→row coalescing: each
-    /// returned range becomes ONE `safekeeper.wals` row, so runs must
+    /// returned range becomes ONE `amp_storage.wals` row, so runs must
     /// break at every segment boundary and byte discontinuity — and
     /// nowhere else.
     /// A `PendingChunk` with only the fields `coalesce_runs` reads set;
@@ -2629,7 +2639,7 @@ mod tests {
     /// `wait_for_durable` caller sits inside `process_msg`, holding the
     /// timeline shared_state WRITE lock. When the durability target can
     /// outrun what the consumer will ever publish (YB stalled by a
-    /// splitting `safekeeper.wals` tablet, walproposer churn re-entering
+    /// splitting `amp_storage.wals` tablet, walproposer churn re-entering
     /// the reconnect/elected handshake), an unbounded wait froze the lock forever:
     /// the manager blocked in `state_snapshot`, every WAL receiver died
     /// on residence-guard timeouts, `flush_lsn` froze, and all commits
@@ -3207,7 +3217,13 @@ mod tests {
                     quote_relation(&table)
                 ),
                 &[
-                    &branch_s, &bucket, &segno_i, &offset_i, &size_i, &enc(data), &now_us,
+                    &branch_s,
+                    &bucket,
+                    &segno_i,
+                    &offset_i,
+                    &size_i,
+                    &enc(data),
+                    &now_us,
                 ],
             )
             .await
@@ -3775,7 +3791,7 @@ mod tests {
 
     /// Multi-chunk batch coalescing, end to end through the real
     /// producer/consumer: many small contiguous `upsert_writes` must land
-    /// as FEWER `safekeeper.wals` rows (contiguous runs concatenated by
+    /// as FEWER `amp_storage.wals` rows (contiguous runs concatenated by
     /// [`coalesce_runs`]) whose concatenation is byte-identical to the
     /// submitted stream.
     ///
@@ -4022,9 +4038,12 @@ mod tests {
         for (bucket, segno, off, size) in rows {
             let blob = vec![0x77u8; *size as usize];
             let slice = blob.as_slice();
-            fpu.execute(&insert_sql, &[&branch_s, bucket, segno, off, size, &enc(slice)])
-                .await
-                .expect("insert adversarial row");
+            fpu.execute(
+                &insert_sql,
+                &[&branch_s, bucket, segno, off, size, &enc(slice)],
+            )
+            .await
+            .expect("insert adversarial row");
         }
 
         let got =
@@ -4199,8 +4218,7 @@ mod tests {
 
                 // The buffer BOTH lanes bind for this run.
                 let stored = encode_run(chunks, codec);
-                let decoded =
-                    payload_codec::decode(&stored).expect("stored run must decode");
+                let decoded = payload_codec::decode(&stored).expect("stored run must decode");
                 assert_eq!(
                     &decoded[..],
                     &plain[..],
@@ -4251,7 +4269,7 @@ mod tests {
 
         // Attach the direct lane to the scratch table. `make_wals_table`
         // creates it unqualified, so it lands in `public` — the production
-        // path looks up `safekeeper.wals` instead (`lookup_wals_oids`).
+        // path looks up `amp_storage.wals` instead (`lookup_wals_oids`).
         let (db_oid, oids) = ysql_client::lookup_table_oids(&client, "public", &[table.as_str()])
             .await
             .expect("look up scratch wals table OIDs");

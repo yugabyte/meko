@@ -1,4 +1,4 @@
-//! Background image materialiser for `pageserver.pages`.
+//! Background image materialiser for `amp_storage.pages`.
 //!
 //! When `PageWriter::put` observes a key crossing
 //! `YbPageWriterConfig::image_chain_limit` consecutive non-image,

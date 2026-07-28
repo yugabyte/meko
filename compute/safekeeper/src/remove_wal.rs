@@ -4,7 +4,7 @@ use crate::timeline_manager::StateSnapshot;
 
 /// Oldest LSN we still need to keep.
 ///
-/// yb-amp: WAL is durably mirrored into `safekeeper.wals` on every
+/// yb-amp: WAL is durably mirrored into `amp_storage.wals` on every
 /// `flush_wal()`, so the only horizon constraints are:
 ///   1. `remote_consistent_lsn` — pageserver hasn't ingested past this yet.
 ///   2. `flush_lsn` — local end-of-WAL; we can't trim past durability.

@@ -20,7 +20,7 @@ import (
 )
 
 // storageEnv is the capability the storage-side assertions depend on: reach the
-// backing YugabyteDB's amp storage database (where the `pageserver` schema
+// backing YugabyteDB's amp storage database (where the `amp_storage` schema
 // lives) and run a command inside the container hosting the pageserver, whose
 // management HTTP port is never published. The compute endpoint's own Postgres
 // cannot see either.
@@ -35,7 +35,7 @@ const (
 	// pageserver stores anything shorter verbatim whatever the configured codec.
 	minCompressBytes = 256
 	// blckSz is the Postgres page size, hence the logical length of every
-	// `pageserver.pages` row with is_image = true.
+	// `amp_storage.pages` row with is_image = true.
 	blckSz = 8192
 	// rawImageStored is what a raw-stored image occupies: tag byte + page.
 	rawImageStored = blckSz + 1
@@ -69,7 +69,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Shared, Shape: core.SingleContainer},
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Inspect this branch's own rows in pageserver.pages and assert the compression envelope: only known codec tags, LZ4 only above the 256-byte threshold, LZ4 only when it shrinks the row, and 8192-byte images either compressed or stored at exactly 8193 bytes.",
+		Description: "Inspect this branch's own rows in amp_storage.pages and assert the compression envelope: only known codec tags, LZ4 only above the 256-byte threshold, LZ4 only when it shrinks the row, and 8192-byte images either compressed or stored at exactly 8193 bytes.",
 		Run:         runPayloadCompressionEnvelope,
 	})
 
@@ -308,7 +308,7 @@ func verifyPayloads(t *core.T, client *pg.Client, table string, values []payload
 }
 
 // envelopeStats is the per-relation shape of the compression envelope as stored,
-// read straight out of pageserver.pages.
+// read straight out of amp_storage.pages.
 type envelopeStats struct {
 	rows            int64
 	unknownTag      int64
@@ -335,7 +335,7 @@ WITH p AS (
                 THEN get_byte(payload, 1) + get_byte(payload, 2) * 256
                      + get_byte(payload, 3) * 65536 + get_byte(payload, 4) * 16777216
            END AS declared
-      FROM pageserver.pages
+      FROM amp_storage.pages
      WHERE branch_id = $1 AND dbnode = $2 AND relnode = $3 AND forknum = 0
 )
 SELECT count(*),
@@ -362,7 +362,7 @@ SELECT count(*),
 // stored row, whatever the payload happened to be.
 func checkEnvelope(st envelopeStats, rel string) error {
 	if st.unknownTag != 0 {
-		return fmt.Errorf("%s: %d of %d rows in pageserver.pages carry a codec tag other than 0 (raw) or 1 (lz4) — this build cannot decode them",
+		return fmt.Errorf("%s: %d of %d rows in amp_storage.pages carry a codec tag other than 0 (raw) or 1 (lz4) — this build cannot decode them",
 			rel, st.unknownTag, st.rows)
 	}
 	if st.lz4Rows > 0 && st.minLz4Logical < minCompressBytes {
@@ -470,14 +470,14 @@ func runPayloadCompressionEnvelope(t *core.T) error {
 			s.Set(rel.table+"_raw_rows", st.rawRows)
 			s.Set(rel.table+"_image_rows", st.imageRows)
 			if st.rows == 0 {
-				return fmt.Errorf("%s: pageserver.pages holds no rows for relnode %d on branch %s after a forced flush — the write never reached storage",
+				return fmt.Errorf("%s: amp_storage.pages holds no rows for relnode %d on branch %s after a forced flush — the write never reached storage",
 					rel.label, relnode, branchID)
 			}
 			if err := checkEnvelope(st, rel.label); err != nil {
 				return err
 			}
 			if rel.wantLZ4Rows && st.lz4Rows == 0 {
-				return fmt.Errorf("%s: all %d rows in pageserver.pages are stored raw, want at least one LZ4 row — compression never engaged", rel.label, st.rows)
+				return fmt.Errorf("%s: all %d rows in amp_storage.pages are stored raw, want at least one LZ4 row — compression never engaged", rel.label, st.rows)
 			}
 		}
 		return nil

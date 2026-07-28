@@ -8,7 +8,7 @@
 # page_cache (matching the 8k build's 8GiB read cache) plus a bounded
 # disk_usage_based_eviction (min_avail_bytes set to cap LOCAL layers at ~1GiB,
 # period 60s, LRU). The engine evicts cold layers on its own, so the cold path
-# (full-scan, 5GB working set) must re-download layers from YB public.blobs,
+# (full-scan, 5GB working set) must re-download layers from YB amp_storage.blobs,
 # while the small warm micro-battery working set stays resident across the run.
 # No manual eviction here (a continuous manual evictor death-spiralled against
 # reads); the engine self-manages the bounded cache.
@@ -71,7 +71,7 @@ pq postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1
 pq postgres -c "CREATE DATABASE $DBNAME"
 pq "$DBNAME" -f "$HERE/sql/big-load-schema.sql"
 
-BLOBS0=$(ybq "SELECT count(*) FROM public.blobs WHERE tenant_id='$TENANT';")
+BLOBS0=$(ybq "SELECT count(*) FROM amp_storage.blobs WHERE tenant_id='$TENANT';")
 log "A. YB blobs baseline (pre-load, this tenant): $BLOBS0"
 
 log "A. load $ROWS rows (chunk=$CHUNK)"
@@ -118,10 +118,10 @@ done
 log "B. engine self-managed eviction (~1GiB cap); settle 30s then measure"
 sleep 30
 
-BLOBS=$(ybq "SELECT count(*) FROM public.blobs WHERE tenant_id='$TENANT';")
+BLOBS=$(ybq "SELECT count(*) FROM amp_storage.blobs WHERE tenant_id='$TENANT';")
 BLOBS_DELTA=$(( BLOBS - BLOBS0 ))
-BLOB_BYTES=$(ybq "SELECT coalesce(sum(size_bytes),0) FROM public.blobs WHERE tenant_id='$TENANT';")
-BLOB_PRETTY=$(ybq "SELECT pg_size_pretty(coalesce(sum(size_bytes),0)) FROM public.blobs WHERE tenant_id='$TENANT';")
+BLOB_BYTES=$(ybq "SELECT coalesce(sum(size_bytes),0) FROM amp_storage.blobs WHERE tenant_id='$TENANT';")
+BLOB_PRETTY=$(ybq "SELECT pg_size_pretty(coalesce(sum(size_bytes),0)) FROM amp_storage.blobs WHERE tenant_id='$TENANT';")
 PHYS=$(ps_field current_physical_size)
 LOCAL_AFTER=$(local_layer_bytes)
 LAST=$(ps_field last_record_lsn)
@@ -197,7 +197,7 @@ log "E. writing $SUMMARY"
   echo
   echo "- Topology: compute on ybAmp 172.151.29.184 (2 vCPU, SB=100MB, LFC off); LAYERED pageserver OFF-BOX on 172.151.20.28 (16 vCPU), node id 2."
   echo "- Apples-to-apples peer of the FIXED 8k-direct off-box run: same 5M-row dataset, G1-G6 micro-battery, 8GB RAM page cache."
-  echo "- Small self-managed local cache: disk_usage_based_eviction min_avail_bytes caps LOCAL layers at ~1GiB (period 60s, LRU). The engine evicts cold layers itself, so the cold full-scan (5GB working set) must re-download layers from YB public.blobs, while the small warm micro-battery working set stays resident. No manual eviction (a continuous manual evictor death-spiralled against reads)."
+  echo "- Small self-managed local cache: disk_usage_based_eviction min_avail_bytes caps LOCAL layers at ~1GiB (period 60s, LRU). The engine evicts cold layers itself, so the cold full-scan (5GB working set) must re-download layers from YB amp_storage.blobs, while the small warm micro-battery working set stays resident. No manual eviction (a continuous manual evictor death-spiralled against reads)."
   echo "- Tenant $TENANT / timeline $TIMELINE."
   echo "- Dataset: $ROWCOUNT rows, total relation $HEAP."
   echo

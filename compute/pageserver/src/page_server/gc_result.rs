@@ -22,7 +22,7 @@ pub struct GcResult {
     /// delete also clears a visited block's duplicate/straggler rows.
     pub candidates_dequeued: u64,
     /// yb-amp PageServer GC: superseded version rows deleted from
-    /// `pageserver.pages` by the trim.
+    /// `amp_storage.pages` by the trim.
     pub pages_rows_deleted: u64,
 
     #[serde(serialize_with = "serialize_duration_as_millis")]

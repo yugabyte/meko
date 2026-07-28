@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use utils::id::BranchId;
 use utils::payload_codec;
 
-/// Codec the safekeeper compresses `safekeeper.wals.data` with before binding
+/// Codec the safekeeper compresses `amp_storage.wals.data` with before binding
 /// it.
 ///
 /// **Write-side only.** The read path decodes whatever codec tag each row
@@ -110,7 +110,7 @@ pub struct SafekeeperConfigToml {
     /// `DEFAULT_WAL_CACHE_SIZE_MIB * scale_factor`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wal_cache_size_mib: Option<usize>,
-    /// Codec used when writing `safekeeper.wals.data` (`none` | `lz4`).
+    /// Codec used when writing `amp_storage.wals.data` (`none` | `lz4`).
     /// Write-side only — reads accept every codec, so changing this and
     /// restarting needs no migration. See [`WalCompression`].
     #[serde(default)]

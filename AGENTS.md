@@ -22,8 +22,8 @@ Read in this order:
 1. `compute/architecture/high-level.md` — component diagram, what lives where, the
    topology of a dev cluster.
 2. `compute/architecture/yugabyte.md` — the single YB database (`yb_storage`)
-   and its schemas (`public`, `pageserver`, `safekeeper`,
-   `registry`), the `blobs` and `wals` tables, the
+   and its schemas (`amp_storage`, `amp_registry`), the
+   `blobs` and `wals` tables, the
    `blob_namespace` ENUM, the `rpc_max_message_size` chunking story.
 3. `compute/architecture/remote-storage.md` — `YbStore` design, `parse_key` /
    `reconstruct_key`, the round-trip-lossless path mapping.
@@ -74,8 +74,8 @@ Code anchors:
   (pageserver.toml / safekeeper.toml / compute config.json);
   `controller/local/cmd/yb_amp_local` — the CLI assembly.
 - `compute/pageserver/src/page_store.rs` — `PageStore` row store for the
-  row-per-page YB layout (`pageserver.pages` +
-  `pageserver.timeline_state`).
+  row-per-page YB layout (`amp_storage.pages` +
+  `amp_storage.pageserver_branch_state`).
 - `compute/pageserver/src/image_materializer.rs` — the background image
   materialiser; `image_chain_limit` (default 20 deltas, or 4 KiB of
   payload) bounds the read-chain length.

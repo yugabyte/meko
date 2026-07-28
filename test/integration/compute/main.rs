@@ -323,7 +323,7 @@ fn push_category<'a>(c: &'a Cluster, cat: Category, items: &mut Vec<(String, Ite
 ///
 /// 1. The pageserver/safekeeper module tests (`page_store::tests`,
 ///    `page_writer::tests`, `yb_wal_storage::tests`) — assert against the
-///    production `pageserver.*`/`safekeeper.*` schema over YSQL.
+///    production `amp_storage` schema over YSQL.
 /// 2. The `yb_thin_client` live integration suite (`tests/live.rs`, all
 ///    `#[ignore]` "requires a live YugabyteDB") — the hot-path client
 ///    (PgClientService on port 9100), which creates its own tables; its

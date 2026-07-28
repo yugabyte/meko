@@ -188,7 +188,7 @@ never depends on that cooperation.
 
 **No second layer in storage today.** The safekeeper's term check only
 serializes proposers *within one safekeeper process*, and each endpoint runs its **own**
-safekeeper; WAL lands in a shared store (`safekeeper.wals`) with no term guard on the
+safekeeper; WAL lands in a shared store (`amp_storage.wals`) with no term guard on the
 write. So a stale writer on its own safekeeper is refused by nothing in storage —
 single-writer rests entirely on kill-before-create. This method is not a guarantee under a
 network partition: an isolated but live node can have its pod object deleted from the API

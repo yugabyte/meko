@@ -4,12 +4,12 @@
 //! to stream WAL to the pageserver) hits YB. Worse, the previous
 //! implementation reassembled the entire 16 MiB segment from a single SQL
 //! query *at open_segment time*, then served from that frozen snapshot — so
-//! chunks INSERT'd into `safekeeper.wals` *after* the snapshot were never
+//! chunks INSERT'd into `amp_storage.wals` *after* the snapshot were never
 //! seen by the WAL sender, manifesting as `xlp_magic=0` / `xl_tot_len=0`
 //! decode errors a few hundred KB into the segment.
 //!
 //! This cache is populated by `consumer_main` *after* the chunk has been
-//! successfully INSERT'd into `safekeeper.wals` (NOT by the producer
+//! successfully INSERT'd into `amp_storage.wals` (NOT by the producer
 //! before the INSERT — see the durability discussion in the
 //! `yb_wal_storage` module docs), and by [`YbSegmentReader`] reads — but a
 //! read caches only chunks lying fully below the flush frontier live when it
@@ -48,7 +48,7 @@
 //!
 //! - [`WalCache::new`] – construct with a byte capacity (e.g. 256 MiB).
 //! - [`WalCache::insert`] – called by `consumer_main` once a batch of
-//!   chunks has been successfully INSERT'd into `safekeeper.wals`.
+//!   chunks has been successfully INSERT'd into `amp_storage.wals`.
 //! - [`WalCache::lookup`] – called by `YbSegmentReader` to find the chunk
 //!   covering a given `(segno, byte_offset)`. Returns the chunk's range
 //!   and a clone of its `Arc<Vec<u8>>`.
@@ -61,7 +61,7 @@ use std::sync::Arc;
 
 use crate::metrics::{WAL_CACHE_BYTES, WAL_CACHE_EVICTIONS, WAL_CACHE_HITS, WAL_CACHE_MISSES};
 
-/// One cached chunk, mirroring a row in `safekeeper.wals` but without
+/// One cached chunk, mirroring a row in `amp_storage.wals` but without
 /// the (tenant_id, timeline_id) prefix (those are captured at the
 /// containing `WalCache`'s scope — one cache per `YbWalStorage`).
 #[derive(Clone)]

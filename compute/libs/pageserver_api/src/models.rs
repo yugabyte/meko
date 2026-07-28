@@ -759,8 +759,8 @@ impl Display for ImageCompressionAlgorithm {
 }
 
 /// Codec the yb-pageserver compresses `BYTEA` payload columns with before
-/// binding them — `pageserver.pages.payload`, `pageserver.slru_pages.payload`
-/// and `pageserver.meta.payload`.
+/// binding them — `amp_storage.pages.payload`, `amp_storage.slru_pages.payload`
+/// and `amp_storage.meta.payload`.
 ///
 /// This is a **write-side** selection only. The read path decodes every
 /// variant unconditionally (each stored value carries its own codec tag; see

@@ -21,8 +21,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let b = c.branch_create_named("gc_backlog", "main")?;
     c.endpoint_create_on_branch("ep_gc_backlog", "gc_backlog", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
-    let pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}'");
-    let queue = format!("SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b}'");
+    let pages = format!("SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}'");
+    let queue = format!("SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b}'");
 
     step("Build a deep backlog: many blocks, many versions each");
     db::batch(

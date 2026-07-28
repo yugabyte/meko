@@ -73,17 +73,17 @@ pub static PROPOSER_ACCEPTOR_MESSAGES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| 
 pub static WAL_PAYLOAD_LOGICAL_BYTES: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_yb_wal_payload_logical_bytes_total",
-        "Uncompressed WAL run bytes handed to the safekeeper.wals writer",
+        "Uncompressed WAL run bytes handed to the amp_storage.wals writer",
     )
     .expect("Failed to register safekeeper_yb_wal_payload_logical_bytes_total counter")
 });
 
-/// WAL bytes actually written to `safekeeper.wals.data`, envelope
+/// WAL bytes actually written to `amp_storage.wals.data`, envelope
 /// included — what DocDB, the Raft log and every compaction move.
 pub static WAL_PAYLOAD_STORED_BYTES: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "safekeeper_yb_wal_payload_stored_bytes_total",
-        "Encoded WAL run bytes written to safekeeper.wals (compression envelope included)",
+        "Encoded WAL run bytes written to amp_storage.wals (compression envelope included)",
     )
     .expect("Failed to register safekeeper_yb_wal_payload_stored_bytes_total counter")
 });
@@ -97,18 +97,14 @@ pub static WAL_PAYLOAD_STORED_BYTES: Lazy<IntCounter> = Lazy::new(|| {
 pub static WAL_PAYLOAD_RUNS: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "safekeeper_yb_wal_payload_runs_total",
-        "WAL runs encoded for safekeeper.wals, by codec outcome",
+        "WAL runs encoded for amp_storage.wals, by codec outcome",
         &["outcome"]
     )
     .expect("Failed to register safekeeper_yb_wal_payload_runs_total counter")
 });
 
 /// Record one encoded WAL run against the three payload metrics above.
-pub fn record_wal_payload(
-    logical: usize,
-    stored: usize,
-    outcome: utils::payload_codec::Outcome,
-) {
+pub fn record_wal_payload(logical: usize, stored: usize, outcome: utils::payload_codec::Outcome) {
     use utils::payload_codec::{Codec, Outcome, RawReason};
     WAL_PAYLOAD_LOGICAL_BYTES.inc_by(logical as u64);
     WAL_PAYLOAD_STORED_BYTES.inc_by(stored as u64);
@@ -252,7 +248,7 @@ pub static WAL_CACHE_BYTES: Lazy<IntGauge> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_wal_cache_bytes gauge")
 });
-/// Per-fetch latency to `safekeeper.wals`. One observation per round
+/// Per-fetch latency to `amp_storage.wals`. One observation per round
 /// trip the `YbSegmentReader` makes when the cache misses — covers
 /// both single-chunk and batched (range) fetches. Combined with
 /// `WAL_CACHE_YB_FETCH_CHUNKS` it tells you whether the catch-up is
@@ -264,44 +260,44 @@ pub static WAL_CACHE_BYTES: Lazy<IntGauge> = Lazy::new(|| {
 pub static WAL_CACHE_YB_FETCH_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "safekeeper_wal_cache_yb_fetch_seconds",
-        "Latency of YbSegmentReader fetches that fell through to safekeeper.wals, seconds",
+        "Latency of YbSegmentReader fetches that fell through to amp_storage.wals, seconds",
         &["path"],
         metrics::exponential_buckets(0.0005, 2.0, 16)
             .expect("safekeeper_wal_cache_yb_fetch_seconds bucket spec")
     )
     .expect("Failed to register safekeeper_wal_cache_yb_fetch_seconds histogram")
 });
-/// Number of chunks returned by each `safekeeper.wals` fetch. Pegs
+/// Number of chunks returned by each `amp_storage.wals` fetch. Pegs
 /// at 1 means we're still doing a `LIMIT 1` per chunk; >1 means the
 /// range-fetch is amortising round trips.
 pub static WAL_CACHE_YB_FETCH_CHUNKS: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "safekeeper_wal_cache_yb_fetch_chunks",
-        "Chunks returned per safekeeper.wals fetch",
+        "Chunks returned per amp_storage.wals fetch",
         vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]
     )
     .expect("Failed to register safekeeper_wal_cache_yb_fetch_chunks histogram")
 });
-/// Bytes returned by each `safekeeper.wals` fetch (sum of `chunk_size`
+/// Bytes returned by each `amp_storage.wals` fetch (sum of `chunk_size`
 /// across the round trip's rows).
 pub static WAL_CACHE_YB_FETCH_BYTES: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "safekeeper_wal_cache_yb_fetch_bytes",
-        "Bytes returned per safekeeper.wals fetch",
+        "Bytes returned per amp_storage.wals fetch",
         metrics::exponential_buckets(1024.0, 2.0, 16)
             .expect("safekeeper_wal_cache_yb_fetch_bytes bucket spec")
     )
     .expect("Failed to register safekeeper_wal_cache_yb_fetch_bytes histogram")
 });
 // --- YB-WAL commit-path observability (issue #172) ---
-/// Latency of the batched write into safekeeper.wals (the consumer's
+/// Latency of the batched write into amp_storage.wals (the consumer's
 /// `flush_batch`): SK->YB hop + DocDB write + Raft commit. `path` is
 /// which transport served it: `ysql` (multi-row INSERT over the Postgres
 /// wire) or `yb_thin_client` (direct-RPC upsert batch over the shim).
 pub static YB_WAL_INSERT_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "safekeeper_yb_wal_insert_seconds",
-        "Latency of the batched write into safekeeper.wals, seconds",
+        "Latency of the batched write into amp_storage.wals, seconds",
         &["path"],
         metrics::exponential_buckets(0.0005, 2.0, 16)
             .expect("safekeeper_yb_wal_insert_seconds bucket spec")
@@ -315,7 +311,7 @@ pub static YB_WAL_INSERT_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
 pub static YB_WAL_BATCH_ROWS: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "safekeeper_yb_wal_batch_rows",
-        "Rows (coalesced runs) per safekeeper.wals INSERT",
+        "Rows (coalesced runs) per amp_storage.wals INSERT",
         vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 50.0]
     )
     .expect("Failed to register safekeeper_yb_wal_batch_rows histogram")
@@ -324,7 +320,7 @@ pub static YB_WAL_BATCH_ROWS: Lazy<Histogram> = Lazy::new(|| {
 pub static YB_WAL_BATCH_BYTES: Lazy<Histogram> = Lazy::new(|| {
     register_histogram!(
         "safekeeper_yb_wal_batch_bytes",
-        "Bytes per safekeeper.wals INSERT",
+        "Bytes per amp_storage.wals INSERT",
         metrics::exponential_buckets(1024.0, 2.0, 16)
             .expect("safekeeper_yb_wal_batch_bytes bucket spec")
     )

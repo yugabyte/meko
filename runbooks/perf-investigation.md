@@ -100,7 +100,7 @@ as `YB WAL consumer batch failed` in the safekeeper log (the timeline's WAL writ
 After a PS restart, watch whether it replays a large WAL backlog before serving:
 - The 8k-direct PS historically **never flushed yb-amp layers**, so OLD builds re-replayed **all** WAL
   on restart (long unavailability). **Fixed in `93f755767`+**: resumes from the persisted
-  `pageserver.timeline_state.consistent_lsn`.
+  `amp_storage.pageserver_branch_state.consistent_lsn`.
 - If a restarted PS is slow to become ready, check its log for full-history replay and confirm the
   build is `93f755767` or newer.
 

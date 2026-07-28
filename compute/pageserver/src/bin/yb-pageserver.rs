@@ -727,7 +727,7 @@ async fn create_compute_page_store(
         create_page_store_with_app_name(conf, "yb-pageserver:compute_reads", pool_size, false)
             .await?;
     // No schema bootstrap here — the controller's
-    // migrations are the single source of truth for `pageserver.*`
+    // migrations are the single source of truth for `amp_storage.*`
     // tables. Tests still call `store.ensure_schema()` directly.
     info!(pool_size, "Compute-reads PageStore connected");
     Ok(store)

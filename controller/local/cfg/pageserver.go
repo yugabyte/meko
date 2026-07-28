@@ -140,7 +140,7 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 
 // TimelineInit is the on-disk `[timeline_init]` block of pageserver.toml:
 // how to create the configured branch's timeline when its
-// `pageserver.timeline_state` row does not exist yet. Mirrors Rust
+// `amp_storage.pageserver_branch_state` row does not exist yet. Mirrors Rust
 // `pageserver_api::config::TimelineInitConfig` (serde tag = "mode",
 // rename_all = "snake_case").
 //

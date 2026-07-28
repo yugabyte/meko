@@ -1,7 +1,7 @@
 // Package registry serves the storage-layer control API that yb_amp_local and
 // the integration harness drive: generation authority (attach-hook) plus the
 // branch / endpoint / pending-init registries, backed by the
-// `registry` schema in the shared yb_storage database. The wire types
+// `amp_registry` schema in the shared yb_storage database. The wire types
 // here are JSON-compatible with the launcher's client.
 package registry
 

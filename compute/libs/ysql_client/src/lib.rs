@@ -128,8 +128,8 @@ impl<'de> serde::Deserialize<'de> for HostPorts {
 /// diagnostic tools build from their CLI flags. Connection only: which
 /// YB to talk to, as whom, over what TLS. It deliberately carries NO
 /// table/schema — each component hardcodes the table(s) it owns
-/// (pageserver → pageserver.pages/slru_pages/meta, safekeeper →
-/// safekeeper.wals, endpoint_storage → public.blobs).
+/// (pageserver → amp_storage.pages/slru_pages/meta, safekeeper →
+/// amp_storage.wals, endpoint_storage → amp_storage.blobs).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct YbConnConfig {
@@ -1503,7 +1503,7 @@ fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_p
 /// default. It is disabled by default because of a 500-conn-workload
 /// WAL-durability incident: under tablet rebalancing / RPC retries,
 /// batch INSERTs reported as success appeared to lose individual rows,
-/// leaving holes in `safekeeper.wals` that wedge pageserver restart.
+/// leaving holes in `amp_storage.wals` that wedge pageserver restart.
 /// With the GUC off, INSERTs go through the standard transactional path
 /// on this connection — slower, atomic. Operators can opt back in via
 /// the TOML connection block once the incident is resolved.

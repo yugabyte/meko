@@ -56,8 +56,8 @@ pq postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DBNAME'" | grep -q 1
 pq postgres -c "CREATE DATABASE $DBNAME"
 pq "$DBNAME" -f "$HERE/sql/big-load-schema.sql"
 
-PAGES0=$(ybq "SELECT count(*) FROM pageserver.pages;")
-log "A. YB pageserver.pages baseline (pre-load, all tenants): $PAGES0"
+PAGES0=$(ybq "SELECT count(*) FROM amp_storage.pages;")
+log "A. YB amp_storage.pages baseline (pre-load, all tenants): $PAGES0"
 
 log "A. load $ROWS rows (chunk=$CHUNK)"
 load_start=$(date +%s)
@@ -84,9 +84,9 @@ log "A. off-box PS peak RSS during load: ${PS_RSS_LOAD}MB"
 log "B. checkpoint + measure YB page store"
 pq "$DBNAME" -c "CHECKPOINT;" >/dev/null 2>&1 || true
 sleep 5
-PAGES=$(ybq "SELECT count(*) FROM pageserver.pages;")
+PAGES=$(ybq "SELECT count(*) FROM amp_storage.pages;")
 PAGES_DELTA=$(( PAGES - PAGES0 ))
-SLRU=$(ybq "SELECT count(*) FROM pageserver.slru_pages;")
+SLRU=$(ybq "SELECT count(*) FROM amp_storage.slru_pages;")
 PAGE_LOGICAL=$(ybq "SELECT pg_size_pretty(${PAGES_DELTA}::bigint*8192);")
 J=$(curl -s --max-time 10 "http://$PS_HTTP/v1/tenant/$TENANT/timeline/$TIMELINE" 2>/dev/null) || J=""
 LAST=$(echo "$J" | python3 -c "import sys,json;print(json.load(sys.stdin).get('last_record_lsn','n/a'))" 2>/dev/null || echo n/a)
@@ -153,7 +153,7 @@ log "E. writing $SUMMARY"
   echo "- Apples-to-apples peer of the prior off-box BLK battery (same topology, 5M-row dataset, G1-G6 micro-battery)."
   echo "- Tenant $TENANT / timeline $TIMELINE."
   echo "- Dataset: $ROWCOUNT rows, total relation $HEAP."
-  echo "- YB page store (8k-direct): +$PAGES_DELTA pages this load ($PAGE_LOGICAL logical); $SLRU slru pages; pageserver.pages baseline was $PAGES0 (stale pages from prior 8k runs share the table)."
+  echo "- YB page store (8k-direct): +$PAGES_DELTA pages this load ($PAGE_LOGICAL logical); $SLRU slru pages; amp_storage.pages baseline was $PAGES0 (stale pages from prior 8k runs share the table)."
   echo
   echo "## Load + storage"
   echo "| metric | value |"

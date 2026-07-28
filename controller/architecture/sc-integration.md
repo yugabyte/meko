@@ -7,7 +7,7 @@ schema it uses, and the HTTP surface it serves.
 ## What it owns
 
 - **Generation authority** — the per-branch fencing counter. `attach-hook` bumps
-  it (`UPDATE registry.branches SET generation = generation + 1
+  it (`UPDATE amp_registry.branches SET generation = generation + 1
   RETURNING generation`) and hands the value to the
   attaching pageserver; the value is baked into `pageserver.toml`. It is monotonic
   across a branch's lifecycle (preserved on detach) so a stale pageserver from a
@@ -16,13 +16,14 @@ schema it uses, and the HTTP surface it serves.
   recipe (a branch declared but not yet materialized), and the compute **endpoint**
   registry (`yb_amp_local`'s durable endpoint records).
 - **Provisioning** — the whole `yb_storage` database. The controller's
-  golang-migrate migrations create `public.blobs`+enum, all `pageserver.*` and
-  `safekeeper.*` tables (the schemas the compute daemons bind at startup — they
-  create no schema of their own), and the `registry` schema below.
+  golang-migrate migrations create the whole `amp_storage` schema — blobs+enum,
+  the page-store tables, the WAL mirror, and both per-branch state tables (the
+  schema the compute daemons bind at startup — they create none of their own) —
+  plus the `amp_registry` schema below.
 
 ## Schema
 
-State lives in the **`registry` schema** of the shared `yb_storage` DB, provisioned
+State lives in the **`amp_registry` schema** of the shared `yb_storage` DB, provisioned
 by `controller/migrations/0003_registry.up.sql`. Four branch-keyed tables:
 `branches` (generation authority + placement), `timelines` (start_lsn +
 branch_name), `pending_timeline_inits`, `endpoints`. It is kept separate from the

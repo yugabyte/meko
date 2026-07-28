@@ -1,7 +1,7 @@
 //! Reproducer / regression guard for the 2026-07 TPC-C safekeeper
 //! wedge.
 //!
-//! Under sustained write load, `safekeeper.wals` tablet splits ("Tablet
+//! Under sustained write load, `amp_storage.wals` tablet splits ("Tablet
 //! not running (CREATING)") plus walproposer reconnect churn wedged the
 //! safekeeper permanently: the timeline manager stuck in
 //! `state_snapshot` on the shared_state RwLock, residence-guard
@@ -182,7 +182,7 @@ fn newest_log(dir: &std::path::Path) -> Option<PathBuf> {
     logs.pop().map(|(_, p)| p)
 }
 
-/// Best-effort yb-admin driver for splitting the run's `safekeeper.wals`
+/// Best-effort yb-admin driver for splitting the run's `amp_storage.wals`
 /// tablets.
 struct YbAdmin {
     bin: PathBuf,
@@ -202,7 +202,7 @@ impl YbAdmin {
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| format!("{}:7100", c.yb_host()));
 
-        // DocDB table id of this run's safekeeper.wals (GetPgsqlTableId
+        // DocDB table id of this run's amp_storage.wals (GetPgsqlTableId
         // encoding, plain 32-hex — yb-admin's `tableid.` selector).
         let yb_conn = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
         let db_oid = db::query_i64(
@@ -215,7 +215,7 @@ impl YbAdmin {
             &yb_conn,
             "SELECT c.oid::bigint FROM pg_class c \
              JOIN pg_namespace n ON n.oid = c.relnamespace \
-             WHERE n.nspname = 'safekeeper' AND c.relname = 'wals'",
+             WHERE n.nspname = 'amp_storage' AND c.relname = 'wals'",
         )
         .await
         .ok()?;
@@ -248,7 +248,7 @@ impl YbAdmin {
                 kicked += 1;
             }
         }
-        tee_println!("kicked {kicked} tablet split(s) on safekeeper.wals");
+        tee_println!("kicked {kicked} tablet split(s) on amp_storage.wals");
     }
 
     fn admin(&self, args: &[&str]) -> Option<String> {

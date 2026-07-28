@@ -1,21 +1,21 @@
 //! `PageWriter` — buffered write path between `walingest` and `PageStore`.
 //!
 //! Pure passthrough: every relation-page entry from walingest becomes
-//! one row in `pageserver.pages`, untouched. WAL records flow in as
+//! one row in `amp_storage.pages`, untouched. WAL records flow in as
 //! `is_image=FALSE`; FPI records flow in as `is_image=TRUE`. The
 //! `will_init` flag comes straight off the `Value` — we don't synthesise
 //! anchors at write time.
 //!
 //! Chain length is not a write-time invariant any more — a background
 //! image materialiser (separate module) periodically scans
-//! `pageserver.pages` for keys whose delta chain has grown long and
+//! `amp_storage.pages` for keys whose delta chain has grown long and
 //! drops a fresh image row at the latest LSN. Reads stay correct without
 //! it (`PageStore::read_chain` walks back to the latest will_init delta
 //! when no image exists); the background task is pure optimisation that
 //! keeps reads fast.
 //!
 //! Buffering: rows accumulate in RAM until a flush trigger (age or
-//! bytes) fires, then drain to `pageserver.pages` in one INSERT.
+//! bytes) fires, then drain to `amp_storage.pages` in one INSERT.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -264,12 +264,12 @@ pub struct PageWriter {
     /// [`GcTrimCandidateEmitter`].
     gc_trim_candidate_emitter: Option<Arc<GcTrimCandidateEmitter>>,
     /// Highest LSN successfully reported as durable to
-    /// `pageserver.timeline_state.consistent_lsn`. Advances only
+    /// `amp_storage.pageserver_branch_state.consistent_lsn`. Advances only
     /// after `try_write_rows` succeeds AND the subsequent
     /// `advance_consistent_lsn` succeeds. Initialised to 0 at
     /// construction; attach seeds it from the persisted row.
     consistent_lsn_watermark: std::sync::atomic::AtomicU64,
-    /// Highest LSN actually durabilised in `pageserver.pages` /
+    /// Highest LSN actually durabilised in `amp_storage.pages` /
     /// `slru_pages` / `meta`. Advances on every successful flush,
     /// even when the throttle skips the YB UPDATE on
     /// `disk_consistent_lsn`. Used by `force_upsert_consistent_lsn_if_advanced`
@@ -362,7 +362,7 @@ pub struct PageWriter {
     /// flushes. `put()` never takes it, so ingest is not serialized
     /// against flush.
     flush_serialize: tokio::sync::Mutex<()>,
-    /// In-process LRU cache for `pageserver.meta` point reads, keyed by
+    /// In-process LRU cache for `amp_storage.meta` point reads, keyed by
     /// raw key bytes. `None` when disabled.
     ///
     /// Invariant: when an entry is present, it holds the highest-LSN
@@ -546,7 +546,7 @@ impl PageWriter {
 
     /// Bump the safekeeper-truncation slot. Called from the gen-gated
     /// flush success path; the value is already durable in YB
-    /// (`pageserver.timeline_state.consistent_lsn`) so the
+    /// (`amp_storage.pageserver_branch_state.consistent_lsn`) so the
     /// advertise can't lie. No-op if the slot hasn't been installed
     /// yet (init race / smoke tests).
     fn publish_consistent_lsn(&self, lsn: utils::lsn::Lsn) {
@@ -699,9 +699,9 @@ impl PageWriter {
 
     /// Append a batch of entries to the in-RAM buffer. Does not flush.
     /// Routes every entry into one of the three row-store tables:
-    /// - relation-page keys → `pageserver.pages`
-    /// - SLRU block keys   → `pageserver.slru_pages`
-    /// - everything else   → `pageserver.meta` (full-overwrite)
+    /// - relation-page keys → `amp_storage.pages`
+    /// - SLRU block keys   → `amp_storage.slru_pages`
+    /// - everything else   → `amp_storage.meta` (full-overwrite)
     ///
     /// Meta entries must arrive as `Value::Image` — they're
     /// full-overwrite by convention. A `Value::WalRecord` here would
@@ -1834,7 +1834,7 @@ impl PageWriter {
             self.flush_completed.notify_waiters();
 
             // Outside the writer lock: persist the dc_lsn advance to
-            // `pageserver.timeline_state` if (a) it actually moved AND
+            // `amp_storage.pageserver_branch_state` if (a) it actually moved AND
             // (b) at least `policy.max_age` has elapsed since the last
             // upsert. The throttle decouples the YB UPDATE rate from
             // the page-data flush rate — a burst of size-triggered
@@ -2631,7 +2631,7 @@ mod tests {
     /// Per-test schema DDL was costing 5–10 s of YB tablet
     /// coordination apiece; sharing amortizes that to once per binary.
     static SHARED_STORE: tokio::sync::OnceCell<Arc<PageStore>> = tokio::sync::OnceCell::const_new();
-    const PROD_SCHEMA: &str = "pageserver";
+    const PROD_SCHEMA: &str = "amp_storage";
 
     async fn make_store(_suffix: &str) -> (Arc<PageStore>, String) {
         let store = SHARED_STORE
@@ -4037,7 +4037,7 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// Helper: insert a `timeline_state` row with `current_generation = 1`
+    /// Helper: insert a `pageserver_branch_state` row with `current_generation = 1`
     /// matching the generation used by the `writer` helper. Required
     /// for any test that wants `PageWriter::flush` to land its
     /// generation-gated `advance_consistent_lsn` UPDATE.
@@ -4067,10 +4067,10 @@ mod tests {
     /// number of `put()` calls. It only advances inside the flush
     /// success path, AFTER `try_write_rows` has landed the rows in YB
     /// AND the gen-fenced `advance_consistent_lsn` UPSERT has updated
-    /// `timeline_state`. Wiring a buffer-write to the slot would
+    /// `pageserver_branch_state`. Wiring a buffer-write to the slot would
     /// reintroduce the 2026-06 gap-on-crash bug: SK feedback /
     /// restart-resume would see an LSN whose rows aren't actually in
-    /// `pageserver.pages`.
+    /// `amp_storage.pages`.
     #[tokio::test]
     async fn put_alone_does_not_advance_consistent_lsn_slot() {
         let (store, schema) = make_store("clsn_slot_no_advance_on_put").await;
@@ -4224,7 +4224,7 @@ mod tests {
 
     /// End-to-end: walreceiver-style flow notes record_lsn after a
     /// put + flush, the throttled `advance_consistent_lsn` runs,
-    /// and the persisted `timeline_state.prev_record_lsn` reflects
+    /// and the persisted `pageserver_branch_state.prev_record_lsn` reflects
     /// the noted prev. Restart correctness depends on this column
     /// being non-NULL; the previous shape never wrote it.
     #[tokio::test]
@@ -4369,8 +4369,8 @@ mod tests {
 
     /// Documents the contract the `pgdatadir_mapping::put_rel_creation`
     /// idempotency check leans on: within a `policy.max_age` window
-    /// of back-to-back flushes, `pageserver.pages` rows are durable
-    /// at LSN X while `pageserver.timeline_state.consistent_lsn`
+    /// of back-to-back flushes, `amp_storage.pages` rows are durable
+    /// at LSN X while `amp_storage.pageserver_branch_state.consistent_lsn`
     /// still reads X' < X. This lag is intentional — the throttle
     /// keeps a single hot table row from absorbing one UPSERT per
     /// flush — but it means a `kill -9` mid-window leaves the next
@@ -4397,7 +4397,7 @@ mod tests {
         assert_eq!(row.consistent_lsn, Lsn(0x100));
 
         // Second flush within `policy.max_age`: pages durable, the
-        // timeline_state UPDATE is throttled.
+        // pageserver_branch_state UPDATE is throttled.
         w.put(&[(k(2), Lsn(0x200), image())]).await.unwrap();
         w.note_record_lsn(Lsn(0x200), Lsn(0x100));
         w.flush().await.unwrap();
@@ -4411,7 +4411,7 @@ mod tests {
         assert_eq!(
             max_page_lsn,
             Lsn(0x200),
-            "page row at 0x200 is durable in pageserver.pages"
+            "page row at 0x200 is durable in amp_storage.pages"
         );
 
         // In-memory tracker knows the true LSN.
@@ -4427,7 +4427,7 @@ mod tests {
             row.consistent_lsn,
             Lsn(0x100),
             "throttle keeps consistent_lsn at the prior upsert; \
-             pageserver.pages can be ahead within the window"
+             amp_storage.pages can be ahead within the window"
         );
 
         drop_schema(&store, &schema).await;

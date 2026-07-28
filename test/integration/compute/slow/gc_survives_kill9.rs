@@ -22,8 +22,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     c.endpoint_create_on_branch("ep_gc_kill", "gc_kill", branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let ps_pid = "endpoints/ep_gc_kill/pageserver/pageserver.pid";
-    let pages = format!("SELECT count(*) FROM pageserver.pages WHERE branch_id = '{b}'");
-    let queue = format!("SELECT count(*) FROM pageserver.pending_gc WHERE branch_id = '{b}'");
+    let pages = format!("SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}'");
+    let queue = format!("SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b}'");
 
     step("Seed + churn to queue a backlog, capture the pre-crash checksum");
     db::batch(

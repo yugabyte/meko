@@ -104,10 +104,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let shadowing = db::query_i64(
         &yb,
         &format!(
-            "SELECT count(*) FROM pageserver.pages p
+            "SELECT count(*) FROM amp_storage.pages p
              WHERE p.branch_id = '{branch}' AND p.is_image
                AND p.payload = decode(repeat('00', 8192), 'hex')
-               AND p.lsn > (SELECT min(q.lsn) FROM pageserver.pages q
+               AND p.lsn > (SELECT min(q.lsn) FROM amp_storage.pages q
                             WHERE q.branch_id = p.branch_id
                               AND q.spcnode = p.spcnode
                               AND q.dbnode = p.dbnode
@@ -122,7 +122,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &format!(
             "SELECT count(*) FROM (
                  SELECT spcnode, dbnode, relnode, forknum, blknum
-                 FROM pageserver.pages
+                 FROM amp_storage.pages
                  WHERE branch_id = '{branch}' AND is_image
                    AND payload = decode(repeat('00', 8192), 'hex')
                  GROUP BY 1, 2, 3, 4, 5 HAVING count(*) > 1
