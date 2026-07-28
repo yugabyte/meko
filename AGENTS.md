@@ -124,6 +124,50 @@ you're touching:
 - `api_server/AGENTS.md` — Go REST API (handler → service → repository layering).
 - `meko-provisioner/AGENTS.md` — kubebuilder operator.
 
+## Branch naming
+
+Branches are **`<username>/<kebab-topic>`** — `<username>` is your short handle
+(`hsunder`, `anijhawan`, `rajmaddy`) — or **`feature/<kebab-topic>`**. Lead the
+topic with a ticket / issue number when the work tracks one:
+
+```
+hsunder/174-ingest-perf-hardening
+feature/270-free-tier-quota
+anijhawan/app-no-cognito
+```
+
+Conventional-commit type prefixes are **not** branch prefixes: `fix/`, `feat/`,
+`bug/`, `chore/`, `docs/`, `test/`, `refactor/`, `release/` are all rejected, as
+are bare names with no prefix at all (`change-qs`). Branches on the remote that
+predate this rule don't set precedent.
+
+Enforcement comes from two places, and they cover different halves of the rule:
+
+- **The remote.** The `branch-names-require-prefix` ruleset restricts creation on
+  `refs/heads/*`; GitHub's `*` doesn't span `/`, so a bare name (`fix-wal`) is
+  rejected at push time while `hsunder/topic` is not. This only requires *a*
+  prefix — it can't tell `fix/` from a username.
+- **Locally.** `.claude/hooks/check-branch-name.sh` blocks a non-conforming
+  `git push` before it runs, and is what enforces the part the ruleset can't:
+  the prefix must be a username or `feature`.
+
+Check the name before the *first* push: renaming a published branch means
+deleting the remote branch and re-pushing, which breaks any open PR.
+
+## Agent skills (`.claude/`)
+
+`.claude/skills/` holds the git workflow skills agents follow in this repo —
+`commit`, `git-push`, `open-pr`, `merge-pr`. They encode the conventions in this
+file (subject format, PR sections, no AI attribution, branch naming) as
+step-by-step gates, so read the relevant one before a commit, push, PR, or merge
+rather than improvising. `.claude/settings.json` wires the branch-name hook.
+
+The hook has a test suite — run it after touching the parser:
+
+```bash
+bash .claude/hooks/check-branch-name.test.sh
+```
+
 ## Pull requests
 
 **Title** must carry the tracking ticket / JIRA number so the change is traceable

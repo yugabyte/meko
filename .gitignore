@@ -34,6 +34,6 @@ tests/
 # User journey UI standalone
 user-journey-ui-standalone/
 
-.claude/
+.claude/worktrees/
 
 api_server/api_server
