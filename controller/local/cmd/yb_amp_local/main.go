@@ -106,7 +106,8 @@ func initCmd() *cobra.Command {
 	f.StringVar(&args.YbDbname, "yb-dbname", "", "YugabyteDB database name")
 	f.StringVar(&args.YbHost, "yb-host", "", "YugabyteDB host")
 	f.Uint16Var(&args.YbPort, "yb-port", 0, "YugabyteDB port")
-	f.StringVar(&args.YbHotPath, "yb-hot-path", "tsclient", "hot-path transport: tsclient or ysql")
+	f.StringVar(&args.YbHotPath, "yb-hot-path", launch.DefaultYbHotPath,
+		"hot-path transport: yb_thin_client (default) | tsclient | ysql")
 	f.Uint16Var(&args.NumPageservers, "num-pageservers", 1, "how many pageservers to create")
 	f.StringVar(&force, "force", string(launch.ForceMustNotExist), "force mode: must-not-exist | empty-dir-ok | remove-all-contents")
 	f.Uint16Var(&portBase, "port-base", 0, "relocate the cluster into a free port block starting at this base")

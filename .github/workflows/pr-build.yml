@@ -192,6 +192,17 @@ jobs:
           path: pg_install
           key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
 
+      # The storage crates link the prebuilt yb_thin_client C++ shim (a public
+      # per-arch download pinned to the vendored ABI); fetch it and point
+      # build.rs at it. No stub fallback — the build hard-requires the .so.
+      - name: Fetch yb_thin_client shim
+        run: |
+          DIR="$(scripts/fetch-yb-thin-client.sh)"
+          echo "YB_THIN_CLIENT_LIB_DIR=$DIR" >> "$GITHUB_ENV"
+          # The storage binaries link the .so but carry no rpath, so make it
+          # findable at runtime for the tests + the daemons they spawn.
+          echo "LD_LIBRARY_PATH=$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
       - name: Build (PostgreSQL + Rust workspace + compute extensions)
         run: ./build.sh
 
@@ -314,6 +325,15 @@ jobs:
       # on-demand via `/ci integration_slow` (see on-demand-checks.yml). On
       # failure the harness stops the cluster but keeps the run's *.log files
       # (see clean.sh's INTEGRATION_KEEP_LOGS mode), collected by Upload below.
+      # See the build job — the storage crates need the prebuilt shim to link.
+      - name: Fetch yb_thin_client shim
+        run: |
+          DIR="$(scripts/fetch-yb-thin-client.sh)"
+          echo "YB_THIN_CLIENT_LIB_DIR=$DIR" >> "$GITHUB_ENV"
+          # The storage binaries link the .so but carry no rpath, so make it
+          # findable at runtime for the tests + the daemons they spawn.
+          echo "LD_LIBRARY_PATH=$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
       - name: Integration tests (live-DB unit + fast scenarios)
         run: test/integration/compute/run.sh
 

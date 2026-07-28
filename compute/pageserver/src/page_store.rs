@@ -413,6 +413,11 @@ pub struct PageStore {
     /// path; when set, per-op dispatch tries this lane first and falls
     /// back to YSQL. Populated and health-checked at startup.
     pub tsclient: Option<Arc<TsClientTables>>,
+    /// Thin-client lane (`hot_path = "yb_thin_client"`): `yb_thin_client`
+    /// handles over the `libyb_thin_client` C++ shim, batching reads/writes
+    /// into one Perform per call. `None` unless selected; parallels
+    /// [`Self::tsclient`] during the migration that will retire it.
+    pub thinclient: Option<Arc<ThinClientTables>>,
 }
 
 /// Opened thin-RPC (`yb_tsclient`) table handles. See
@@ -422,6 +427,15 @@ pub struct TsClientTables {
     pub pages: Arc<yb_tsclient::TableHandle>,
     pub slru_pages: Arc<yb_tsclient::TableHandle>,
     pub meta: Arc<yb_tsclient::TableHandle>,
+}
+
+/// Opened `yb_thin_client` table handles (the batch-first Perform client).
+/// See [`PageStore::thinclient`].
+pub struct ThinClientTables {
+    pub client: Arc<yb_thin_client::TsClient>,
+    pub pages: Arc<yb_thin_client::TableHandle>,
+    pub slru_pages: Arc<yb_thin_client::TableHandle>,
+    pub meta: Arc<yb_thin_client::TableHandle>,
 }
 
 /// Exports `yb_tsclient` health events (which its internal retries
@@ -485,6 +499,40 @@ impl<T> BlockChainCollector<T> {
 /// Rows per fetched page on tsclient multi-block range scans.
 const DIRECT_SCAN_PAGE_ROWS: u64 = 128;
 
+/// Read-side cell access shared by both hot-path clients' row types
+/// (`yb_tsclient::Row` and `yb_thin_client::Row`) so the chain/scan decode
+/// helpers below stay generic over the client. Both clients' `Value`
+/// accessors return their crate's `YbError`, which folds into `anyhow`.
+trait RowCells {
+    fn cell_i64(&self, i: usize) -> Result<i64>;
+    fn cell_bool(&self, i: usize) -> Result<bool>;
+    fn cell_bytes(&self, i: usize) -> Result<Bytes>;
+}
+
+impl RowCells for yb_tsclient::Row {
+    fn cell_i64(&self, i: usize) -> Result<i64> {
+        Ok(self[i].as_i64()?)
+    }
+    fn cell_bool(&self, i: usize) -> Result<bool> {
+        Ok(self[i].as_bool()?)
+    }
+    fn cell_bytes(&self, i: usize) -> Result<Bytes> {
+        Ok(self[i].as_bytes()?.clone())
+    }
+}
+
+impl RowCells for yb_thin_client::Row {
+    fn cell_i64(&self, i: usize) -> Result<i64> {
+        Ok(self[i].as_i64()?)
+    }
+    fn cell_bool(&self, i: usize) -> Result<bool> {
+        Ok(self[i].as_bool()?)
+    }
+    fn cell_bytes(&self, i: usize) -> Result<Bytes> {
+        Ok(self[i].as_bytes()?.clone())
+    }
+}
+
 /// Coerce an integer bind to the DocDB column's width so the tsclient
 /// lane sends the exact type DocDB stores (SMALLINT vs INT vs BIGINT).
 fn int_bind_pg(col: &yb_tsclient::ColumnMeta, v: i64) -> yb_tsclient::BindValue {
@@ -492,6 +540,15 @@ fn int_bind_pg(col: &yb_tsclient::ColumnMeta, v: i64) -> yb_tsclient::BindValue 
         yb_tsclient::ValueType::I16 => yb_tsclient::BindValue::I16(v as i16),
         yb_tsclient::ValueType::I32 => yb_tsclient::BindValue::I32(v as i32),
         _ => yb_tsclient::BindValue::I64(v),
+    }
+}
+
+/// [`int_bind_pg`] for the `yb_thin_client` lane.
+fn int_bind_thin(col: &yb_thin_client::Column, v: i64) -> yb_thin_client::BindValue {
+    match col.value_type {
+        yb_thin_client::ValueType::I16 => yb_thin_client::BindValue::I16(v as i16),
+        yb_thin_client::ValueType::I32 => yb_thin_client::BindValue::I32(v as i32),
+        _ => yb_thin_client::BindValue::I64(v),
     }
 }
 
@@ -549,14 +606,14 @@ const DIRECT_SLRU_CHAIN_PAGE_ROWS: u64 = 1024;
 /// (a row with a lower LSN, or range exhaustion, proves the group
 /// complete); rows below the anchor within the last page are discarded
 /// later by [`normalize_chain`].
-struct ChainFetchState {
-    raw: Vec<yb_tsclient::Row>,
+struct ChainFetchState<R> {
+    raw: Vec<R>,
     anchor_lsn: Option<i64>,
     lsn_idx: usize,
     will_init_idx: usize,
 }
 
-impl ChainFetchState {
+impl<R: RowCells> ChainFetchState<R> {
     fn new(lsn_idx: usize, will_init_idx: usize) -> Self {
         ChainFetchState {
             raw: Vec::new(),
@@ -569,14 +626,14 @@ impl ChainFetchState {
     /// Push one row; returns `true` when the chain is complete and the
     /// fetch can stop (the pushed row itself is below the anchor and
     /// dropped).
-    fn push(&mut self, row: yb_tsclient::Row) -> Result<bool> {
-        let lsn = row[self.lsn_idx].as_i64()?;
+    fn push(&mut self, row: R) -> Result<bool> {
+        let lsn = row.cell_i64(self.lsn_idx)?;
         if let Some(anchor) = self.anchor_lsn {
             if lsn < anchor {
                 return Ok(true);
             }
         }
-        if self.anchor_lsn.is_none() && row[self.will_init_idx].as_bool()? {
+        if self.anchor_lsn.is_none() && row.cell_bool(self.will_init_idx)? {
             self.anchor_lsn = Some(lsn);
         }
         self.raw.push(row);
@@ -615,13 +672,39 @@ async fn fetch_chain_rows_tsclient(
     Ok(state.raw)
 }
 
+/// Thin-client twin of [`fetch_chain_rows_tsclient`].
+async fn fetch_chain_rows_thin(
+    client: &yb_thin_client::TsClient,
+    table: &Arc<yb_thin_client::TableHandle>,
+    read: yb_thin_client::RangeRead,
+    lsn_idx: usize,
+    will_init_idx: usize,
+) -> Result<Vec<yb_thin_client::Row>> {
+    let state = client
+        .read_scan(
+            table,
+            &read,
+            || ChainFetchState::new(lsn_idx, will_init_idx),
+            |state, rows| -> anyhow::Result<bool> {
+                for row in rows {
+                    if state.push(row)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            },
+        )
+        .await?;
+    Ok(state.raw)
+}
+
 /// Decode the raw rows of a single-key chain fetch (targets
 /// `[.., lsn, is_image, will_init, payload]` starting at `off`) into
 /// [`PageRow`]s for `key`, normalize storage order into SQL result
 /// order, and trim at the anchor. Used by the tsclient lane.
-fn assemble_page_chain(
+fn assemble_page_chain<R: RowCells>(
     key: Key,
-    raw: Vec<yb_tsclient::Row>,
+    raw: Vec<R>,
     off: usize,
     where_: &str,
 ) -> Result<Vec<Arc<PageRow>>> {
@@ -630,10 +713,10 @@ fn assemble_page_chain(
         .map(|r| {
             Ok(PageRow {
                 key,
-                lsn: Lsn(r[off].as_i64()? as u64),
-                is_image: r[off + 1].as_bool()?,
-                will_init: r[off + 2].as_bool()?,
-                payload: r[off + 3].as_bytes()?.clone(),
+                lsn: Lsn(r.cell_i64(off)? as u64),
+                is_image: r.cell_bool(off + 1)?,
+                will_init: r.cell_bool(off + 2)?,
+                payload: r.cell_bytes(off + 3)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -646,11 +729,11 @@ fn assemble_page_chain(
 }
 
 /// [`assemble_page_chain`] for SLRU rows.
-fn assemble_slru_chain(
+fn assemble_slru_chain<R: RowCells>(
     kind: SlruKind,
     segno: u32,
     blknum: u32,
-    raw: Vec<yb_tsclient::Row>,
+    raw: Vec<R>,
     off: usize,
     where_: &str,
 ) -> Result<Vec<SlruPageRow>> {
@@ -661,10 +744,10 @@ fn assemble_slru_chain(
                 kind,
                 segno,
                 blknum,
-                lsn: Lsn(r[off].as_i64()? as u64),
-                is_image: r[off + 1].as_bool()?,
-                will_init: r[off + 2].as_bool()?,
-                payload: r[off + 3].as_bytes()?.clone(),
+                lsn: Lsn(r.cell_i64(off)? as u64),
+                is_image: r.cell_bool(off + 1)?,
+                will_init: r.cell_bool(off + 2)?,
+                payload: r.cell_bytes(off + 3)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -678,14 +761,11 @@ fn assemble_slru_chain(
 /// Feed one fetched page of a multi-block scan (targets
 /// `[blknum, lsn, is_image, will_init, payload]`) into the per-block
 /// collector. Used by the tsclient scan loops.
-fn feed_scan_rows(
-    collector: &mut BlockChainCollector<yb_tsclient::Row>,
-    rows: Vec<yb_tsclient::Row>,
-) -> Result<()> {
+fn feed_scan_rows<R: RowCells>(collector: &mut BlockChainCollector<R>, rows: Vec<R>) -> Result<()> {
     for row in rows {
-        let blk = row[0].as_i64()?;
-        let lsn = row[1].as_i64()?;
-        let will_init = row[3].as_bool()?;
+        let blk = row.cell_i64(0)?;
+        let lsn = row.cell_i64(1)?;
+        let will_init = row.cell_bool(3)?;
         collector.push(blk, lsn, will_init, row);
     }
     Ok(())
@@ -694,12 +774,12 @@ fn feed_scan_rows(
 /// Assemble a one-fork multi-block scan's collected per-block chains
 /// into the keyed map [`PageStore::scan_range`] returns. Used by the
 /// tsclient lane.
-fn assemble_page_scan(
+fn assemble_page_scan<R: RowCells>(
     sp: i64,
     db: i64,
     rel: i64,
     fork: i16,
-    collector: BlockChainCollector<yb_tsclient::Row>,
+    collector: BlockChainCollector<R>,
     where_: &str,
 ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
     let mut by_key = HashMap::with_capacity(collector.chains.len());
@@ -715,19 +795,19 @@ fn assemble_page_scan(
 
 /// Decode a `meta` row fetched with targets `[lsn, payload]` for `key`.
 /// Used by the tsclient lane.
-fn decode_meta_row(key: &[u8], r: &yb_tsclient::Row) -> Result<MetaRow> {
+fn decode_meta_row<R: RowCells>(key: &[u8], r: &R) -> Result<MetaRow> {
     Ok(MetaRow {
         key: Bytes::copy_from_slice(key),
-        lsn: Lsn(r[0].as_i64()? as u64),
-        payload: r[1].as_bytes()?.clone(),
+        lsn: Lsn(r.cell_i64(0)? as u64),
+        payload: r.cell_bytes(1)?,
     })
 }
 
 /// [`assemble_page_scan`] for SLRU rows, keyed by blknum.
-fn assemble_slru_scan(
+fn assemble_slru_scan<R: RowCells>(
     kind: SlruKind,
     segno: u32,
-    collector: BlockChainCollector<yb_tsclient::Row>,
+    collector: BlockChainCollector<R>,
     where_: &str,
 ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
     let mut by_block = HashMap::with_capacity(collector.chains.len());
@@ -786,6 +866,51 @@ impl TsClientTables {
              {sessions_per_conn} per connection, across {tserver_count} configured tserver(s))",
             tables.pages.table_id,
             tables.client.connected_addr(),
+        );
+        Ok(tables)
+    }
+}
+
+impl ThinClientTables {
+    /// Connects the `yb_thin_client` (shim) client and opens the store's
+    /// tables — the startup healthcheck for `hot_path = "yb_thin_client"`.
+    /// `connect`/`open_table` are synchronous (a one-shot startup RPC).
+    async fn connect(
+        yb: &YbConnConfig,
+        schema: &str,
+        ysql_client: &Arc<YsqlClient>,
+        read_sessions: usize,
+        write_sessions: usize,
+        sessions_per_conn: usize,
+    ) -> Result<Arc<ThinClientTables>> {
+        let (db_oid, oids) =
+            ysql_client::lookup_table_oids(ysql_client, schema, &["pages", "slru_pages", "meta"])
+                .await?;
+        let tserver_addrs = yb.effective_tserver_rpc_addrs();
+        let tserver_count = tserver_addrs.len();
+        let client = yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
+            tserver_addrs,
+            read_sessions: read_sessions as u32,
+            write_sessions: write_sessions as u32,
+            sessions_per_conn: sessions_per_conn as u32,
+            ..Default::default()
+        })
+        .context("connecting the yb_thin_client")?;
+        let open = |table: &str| {
+            client
+                .open_table(db_oid, oids[table])
+                .with_context(|| format!("opening {schema}.{table} via the thin-client lane"))
+        };
+        let tables = Arc::new(ThinClientTables {
+            pages: open("pages")?,
+            slru_pages: open("slru_pages")?,
+            meta: open("meta")?,
+            client,
+        });
+        tracing::info!(
+            "yb_thin_client hot path ready: {schema}.pages/slru_pages/meta opened \
+             ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
+             connection, across {tserver_count} configured tserver(s))",
         );
         Ok(tables)
     }
@@ -1190,29 +1315,49 @@ impl PageStore {
             .await
             .context("opening PageStore connection")?,
         );
+        // Read/write session (connection) counts cap the getpage +
+        // put_pages lane fan-out across the discovered tservers. The
+        // `yb_storage_conn` config can pin them; otherwise both default to
+        // `scale_count(4, scale_factor)`. The two client lanes share these
+        // knobs (only one is ever selected).
+        let read_sessions = config
+            .yb
+            .tsclient_read_sessions
+            .unwrap_or_else(|| pageserver_api::config::scale_count(4, config.scale_factor));
+        let write_sessions = config
+            .yb
+            .tsclient_write_sessions
+            .unwrap_or_else(|| pageserver_api::config::scale_count(4, config.scale_factor));
+        let sessions_per_conn = config.yb.tsclient_sessions_per_conn.unwrap_or(4);
         let tsclient = match config.yb.hot_path {
-            ysql_client::HotPath::Ysql => None,
             ysql_client::HotPath::TsClient => Some(
-                // Read/write session (connection) counts cap the getpage +
-                // put_pages lane fan-out across the discovered tservers. The
-                // `yb_storage_conn` config can pin them; otherwise both
-                // default to `scale_count(4, scale_factor)` (see
-                // `TsClientConfig::{read,write}_sessions`).
                 TsClientTables::connect(
                     &config.yb,
                     &config.schema,
                     &ysql_client,
-                    config.yb.tsclient_read_sessions.unwrap_or_else(|| {
-                        pageserver_api::config::scale_count(4, config.scale_factor)
-                    }),
-                    config.yb.tsclient_write_sessions.unwrap_or_else(|| {
-                        pageserver_api::config::scale_count(4, config.scale_factor)
-                    }),
-                    config.yb.tsclient_sessions_per_conn.unwrap_or(4),
+                    read_sessions,
+                    write_sessions,
+                    sessions_per_conn,
                 )
                 .await
                 .context("thin-RPC hot path init (hot_path = \"tsclient\")")?,
             ),
+            _ => None,
+        };
+        let thinclient = match config.yb.hot_path {
+            ysql_client::HotPath::ThinClient => Some(
+                ThinClientTables::connect(
+                    &config.yb,
+                    &config.schema,
+                    &ysql_client,
+                    read_sessions,
+                    write_sessions,
+                    sessions_per_conn,
+                )
+                .await
+                .context("thin-client hot path init (hot_path = \"yb_thin_client\")")?,
+            ),
+            _ => None,
         };
         Ok(Self {
             ysql_client,
@@ -1220,6 +1365,7 @@ impl PageStore {
             scale_factor: config.scale_factor,
             baked: Arc::new(DashMap::new()),
             tsclient,
+            thinclient,
         })
     }
 
@@ -1263,6 +1409,14 @@ impl PageStore {
             self.put_pages_tsclient(p, branch_id, rows).await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_pages", "tsclient"])
+                .observe(started.elapsed().as_secs_f64());
+            return Ok(());
+        }
+        if let Some(p) = &self.thinclient {
+            let started = std::time::Instant::now();
+            self.put_pages_thin(p, branch_id, rows).await?;
+            crate::metrics::YB_STORE_OP_SECONDS
+                .with_label_values(&["put_pages", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
             return Ok(());
         }
@@ -1479,6 +1633,83 @@ impl PageStore {
         Ok(())
     }
 
+    async fn put_pages_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_id: BranchId,
+        rows: &[Arc<PageRow>],
+    ) -> Result<()> {
+        use yb_thin_client::{BindValue, UpsertRow};
+        let pages = &p.pages;
+        // Column metadata is constant for the whole flush — resolve once
+        // instead of per row (ROWS_PER_INSERT * chunks lookups otherwise).
+        let col_spc = pages.col("spcnode")?;
+        let col_db = pages.col("dbnode")?;
+        let col_rel = pages.col("relnode")?;
+        let col_fork = pages.col("forknum")?;
+        let parallelism = pageserver_api::config::scale_count(4, self.scale_factor);
+        let branch_s = branch_id.to_string();
+
+        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        for chunk in rows.chunks(ROWS_PER_INSERT) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let mut batch = Vec::with_capacity(chunk.len());
+            for (i, row) in chunk.iter().enumerate() {
+                let (sp, db, rel, fork, blk) =
+                    key_columns(&row.key).with_context(|| format!("put_pages row {i}: bad key"))?;
+                batch.push(UpsertRow::new(
+                    pages,
+                    vec![
+                        BindValue::Text(branch_s.clone()),
+                        int_bind_thin(col_spc, sp),
+                        int_bind_thin(col_db, db),
+                        int_bind_thin(col_rel, rel),
+                        int_bind_thin(col_fork, fork as i64),
+                        BindValue::I64(blk),
+                        BindValue::I64(row.lsn.0 as i64),
+                        BindValue::Bool(row.is_image),
+                    ],
+                    &[
+                        ("will_init", BindValue::Bool(row.will_init)),
+                        ("payload", BindValue::Bytes(row.payload.clone())),
+                    ],
+                )?);
+            }
+            let traced_in_chunk: Vec<(Key, Lsn)> = chunk
+                .iter()
+                .filter(|row| pageserver_api::write_trace::is_traced(&row.key))
+                .map(|row| (row.key, row.lsn))
+                .collect();
+            for (k, l) in &traced_in_chunk {
+                pageserver_api::write_trace::trace_stage("put_pages_in", k, *l);
+            }
+            let client = Arc::clone(&p.client);
+            let chunk_rows = batch.len();
+            futs.push(Box::pin(async move {
+                // Full retry budget (inside `upsert`): this lane has no YSQL
+                // fallback, so it rides out transient failures itself. Unlike
+                // the tsclient lane there is no per-attempt session rotation —
+                // the shim owns the session pool and the tserver does the
+                // routing. A terminal failure fails the flush.
+                client.upsert(&batch).await.with_context(|| {
+                    format!("put_pages(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}")
+                })?;
+                for (k, l) in &traced_in_chunk {
+                    pageserver_api::write_trace::trace_stage("put_pages_ok", k, *l);
+                }
+                Ok(())
+            }));
+        }
+
+        futures::stream::iter(futs)
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(())
+    }
+
     /// Per-key chain read. `key` must be a valid relation-page Key.
     ///
     /// Fast path: a CTE seeks the latest `is_image=TRUE` row at LSN ≤
@@ -1520,6 +1751,16 @@ impl PageStore {
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["read_chain", "tsclient"])
+                .observe(started.elapsed().as_secs_f64());
+            return Ok(chain);
+        }
+        if let Some(p) = &self.thinclient {
+            let started = std::time::Instant::now();
+            let chain = self
+                .read_chain_thin(p, &branch_s, sp, db, rel, fork, blk, target)
+                .await?;
+            crate::metrics::YB_STORE_OP_SECONDS
+                .with_label_values(&["read_chain", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
             return Ok(chain);
         }
@@ -1591,6 +1832,40 @@ impl PageStore {
         assemble_page_chain(key, raw, 0, "read_chain_tsclient")
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn read_chain_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_s: &str,
+        sp: i64,
+        db: i64,
+        rel: i64,
+        fork: i16,
+        blk: i64,
+        target: i64,
+    ) -> Result<Vec<Arc<PageRow>>> {
+        use yb_thin_client::{BindValue, CondOp, RangeRead};
+        let pages = &p.pages;
+        let read = RangeRead::new(
+            pages,
+            vec![
+                BindValue::Text(branch_s.to_string()),
+                int_bind_thin(pages.col("spcnode")?, sp),
+                int_bind_thin(pages.col("dbnode")?, db),
+                int_bind_thin(pages.col("relnode")?, rel),
+                int_bind_thin(pages.col("forknum")?, fork as i64),
+            ],
+        )?
+        .cond(pages, "blknum", CondOp::Eq, BindValue::I64(blk))?
+        .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
+        .targets(pages, &["lsn", "is_image", "will_init", "payload"])?
+        .limit(DIRECT_CHAIN_PAGE_ROWS);
+        let raw = fetch_chain_rows_thin(&p.client, pages, read, 0, 2).await?;
+
+        let key = Key::from_slice(&columns_to_key_bytes(sp, db, rel, fork, blk));
+        assemble_page_chain(key, raw, 0, "read_chain_thin")
+    }
+
     /// Thin-RPC variant of the one-fork multi-block scan: ONE clustered
     /// range scan over `blknum ∈ [lo, hi), lsn ≤ target` in PK order,
     /// with per-block anchor-stop collection client-side
@@ -1647,6 +1922,56 @@ impl PageStore {
             .await?;
 
         assemble_page_scan(sp, db, rel, fork, collector, "scan_range_tsclient")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn scan_one_fork_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_s: &str,
+        sp: i64,
+        db: i64,
+        rel: i64,
+        fork: i16,
+        blk_lo: i64,
+        blk_hi: i64,
+        target: i64,
+    ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
+        use yb_thin_client::{BindValue, CondOp, RangeRead};
+        let pages = &p.pages;
+        let read = RangeRead::new(
+            pages,
+            vec![
+                BindValue::Text(branch_s.to_string()),
+                int_bind_thin(pages.col("spcnode")?, sp),
+                int_bind_thin(pages.col("dbnode")?, db),
+                int_bind_thin(pages.col("relnode")?, rel),
+                int_bind_thin(pages.col("forknum")?, fork as i64),
+            ],
+        )?
+        .cond(pages, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
+        .cond(pages, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
+        .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
+        .targets(
+            pages,
+            &["blknum", "lsn", "is_image", "will_init", "payload"],
+        )?
+        .limit(DIRECT_SCAN_PAGE_ROWS);
+
+        let collector = p
+            .client
+            .read_scan(
+                pages,
+                &read,
+                BlockChainCollector::new,
+                |collector, rows| -> anyhow::Result<bool> {
+                    feed_scan_rows(collector, rows)?;
+                    Ok(false)
+                },
+            )
+            .await?;
+
+        assemble_page_scan(sp, db, rel, fork, collector, "scan_range_thin")
     }
 
     /// Range scan: return all chains for relation-page keys in `range`
@@ -1734,6 +2059,16 @@ impl PageStore {
                     .await?;
                 crate::metrics::YB_STORE_OP_SECONDS
                     .with_label_values(&["scan_range", "tsclient"])
+                    .observe(started.elapsed().as_secs_f64());
+                return Ok(by_key);
+            }
+            if let Some(p) = &self.thinclient {
+                let started = std::time::Instant::now();
+                let by_key = self
+                    .scan_one_fork_thin(p, &branch_s, sp, db, rel, fork, blk_lo, blk_hi, target)
+                    .await?;
+                crate::metrics::YB_STORE_OP_SECONDS
+                    .with_label_values(&["scan_range", "yb_thin_client"])
                     .observe(started.elapsed().as_secs_f64());
                 return Ok(by_key);
             }
@@ -1848,6 +2183,14 @@ impl PageStore {
                 .observe(started.elapsed().as_secs_f64());
             return Ok(());
         }
+        if let Some(p) = &self.thinclient {
+            let started = std::time::Instant::now();
+            self.put_slru_pages_thin(p, branch_id, rows).await?;
+            crate::metrics::YB_STORE_OP_SECONDS
+                .with_label_values(&["put_slru_pages", "yb_thin_client"])
+                .observe(started.elapsed().as_secs_f64());
+            return Ok(());
+        }
 
         let started = std::time::Instant::now();
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
@@ -1947,6 +2290,16 @@ impl PageStore {
                 .observe(started.elapsed().as_secs_f64());
             return Ok(chain);
         }
+        if let Some(p) = &self.thinclient {
+            let started = std::time::Instant::now();
+            let chain = self
+                .read_slru_chain_thin(p, &branch_s, kind, kind_i, segno_i, blk_i, target)
+                .await?;
+            crate::metrics::YB_STORE_OP_SECONDS
+                .with_label_values(&["read_slru_chain", "yb_thin_client"])
+                .observe(started.elapsed().as_secs_f64());
+            return Ok(chain);
+        }
 
         // Scalar-subquery anchor + COALESCE(..., 0) lower bound so
         // both ends of the lsn range are pushed into the DocDB scan
@@ -2032,6 +2385,44 @@ impl PageStore {
         )
     }
 
+    // Wide signature: the caller already decomposed the key columns.
+    #[allow(clippy::too_many_arguments)]
+    async fn read_slru_chain_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_s: &str,
+        kind: SlruKind,
+        kind_i: i16,
+        segno_i: i64,
+        blk_i: i64,
+        target: i64,
+    ) -> Result<Vec<SlruPageRow>> {
+        use yb_thin_client::{BindValue, CondOp, RangeRead};
+        let slru = &p.slru_pages;
+        let read = RangeRead::new(
+            slru,
+            vec![
+                BindValue::Text(branch_s.to_string()),
+                int_bind_thin(slru.col("kind")?, kind_i as i64),
+                int_bind_thin(slru.col("segno")?, segno_i),
+            ],
+        )?
+        .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk_i))?
+        .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
+        .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
+        .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS);
+        let raw = fetch_chain_rows_thin(&p.client, slru, read, 0, 2).await?;
+
+        assemble_slru_chain(
+            kind,
+            segno_i as u32,
+            blk_i as u32,
+            raw,
+            0,
+            "read_slru_chain_thin",
+        )
+    }
+
     /// Thin-RPC variant of the multi-block SLRU scan; same shape as
     /// [`Self::scan_one_fork_tsclient`] on the `(branch, kind, segno)`
     /// hash bucket, snapshot held by the paging envelope.
@@ -2079,6 +2470,50 @@ impl PageStore {
         assemble_slru_scan(kind, segno_i as u32, collector, "scan_slru_range_tsclient")
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn scan_slru_range_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_s: &str,
+        kind: SlruKind,
+        kind_i: i16,
+        segno_i: i64,
+        blk_lo: i64,
+        blk_hi: i64,
+        target: i64,
+    ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
+        use yb_thin_client::{BindValue, CondOp, RangeRead};
+        let slru = &p.slru_pages;
+        let read = RangeRead::new(
+            slru,
+            vec![
+                BindValue::Text(branch_s.to_string()),
+                int_bind_thin(slru.col("kind")?, kind_i as i64),
+                int_bind_thin(slru.col("segno")?, segno_i),
+            ],
+        )?
+        .cond(slru, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
+        .cond(slru, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
+        .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
+        .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
+        .limit(DIRECT_SCAN_PAGE_ROWS);
+
+        let collector = p
+            .client
+            .read_scan(
+                slru,
+                &read,
+                BlockChainCollector::new,
+                |collector, rows| -> anyhow::Result<bool> {
+                    feed_scan_rows(collector, rows)?;
+                    Ok(false)
+                },
+            )
+            .await?;
+
+        assemble_slru_scan(kind, segno_i as u32, collector, "scan_slru_range_thin")
+    }
+
     /// Range scan over SLRU blocks in `range`. `range` must stay inside
     /// one `(kind, segno)` segment — that's how SLRU vectored reads are
     /// shaped today. Returns one entry per blknum, each chain
@@ -2120,6 +2555,16 @@ impl PageStore {
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["scan_slru_range", "tsclient"])
+                .observe(started.elapsed().as_secs_f64());
+            return Ok(by_block);
+        }
+        if let Some(p) = &self.thinclient {
+            let started = std::time::Instant::now();
+            let by_block = self
+                .scan_slru_range_thin(p, &branch_s, kind, kind_i, segno_i, blk_lo, blk_hi, target)
+                .await?;
+            crate::metrics::YB_STORE_OP_SECONDS
+                .with_label_values(&["scan_slru_range", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
             return Ok(by_block);
         }
@@ -2239,6 +2684,64 @@ impl PageStore {
         Ok(())
     }
 
+    async fn put_slru_pages_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_id: BranchId,
+        rows: &[SlruPageRow],
+    ) -> Result<()> {
+        use yb_thin_client::{BindValue, UpsertRow};
+        let slru = &p.slru_pages;
+        // Column metadata is constant for the whole flush — resolve once.
+        let col_kind = slru.col("kind")?;
+        let col_segno = slru.col("segno")?;
+        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
+        let branch_s = branch_id.to_string();
+
+        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        for chunk in rows.chunks(ROWS_PER_INSERT) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let mut batch = Vec::with_capacity(chunk.len());
+            for row in chunk {
+                batch.push(UpsertRow::new(
+                    slru,
+                    vec![
+                        BindValue::Text(branch_s.clone()),
+                        int_bind_thin(col_kind, slru_kind_to_i16(row.kind) as i64),
+                        int_bind_thin(col_segno, row.segno as i64),
+                        BindValue::I64(row.blknum as i64),
+                        BindValue::I64(row.lsn.0 as i64),
+                        BindValue::Bool(row.is_image),
+                    ],
+                    &[
+                        ("will_init", BindValue::Bool(row.will_init)),
+                        ("payload", BindValue::Bytes(row.payload.clone())),
+                    ],
+                )?);
+            }
+            let client = Arc::clone(&p.client);
+            let chunk_rows = batch.len();
+            futs.push(Box::pin(async move {
+                // Full retry budget inside `upsert`, no session rotation
+                // (see put_pages' thin lane).
+                client.upsert(&batch).await.with_context(|| {
+                    format!(
+                        "put_slru_pages(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}"
+                    )
+                })?;
+                Ok(())
+            }));
+        }
+
+        futures::stream::iter(futs)
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>()
+            .await?;
+        Ok(())
+    }
+
     // ------------------- meta ---------------------------------------------
 
     pub async fn put_meta(&self, branch_id: BranchId, rows: &[MetaRow]) -> Result<()> {
@@ -2326,6 +2829,14 @@ impl PageStore {
                 .observe(started.elapsed().as_secs_f64());
             return Ok(row);
         }
+        if let Some(p) = &self.thinclient {
+            let started = std::time::Instant::now();
+            let row = self.read_meta_thin(p, branch_id, key, target_lsn).await?;
+            crate::metrics::YB_STORE_OP_SECONDS
+                .with_label_values(&["read_meta", "yb_thin_client"])
+                .observe(started.elapsed().as_secs_f64());
+            return Ok(row);
+        }
 
         let started = std::time::Instant::now();
         let sql = format!(
@@ -2379,6 +2890,47 @@ impl PageStore {
                 &read,
                 || None::<yb_tsclient::Row>,
                 |found: &mut Option<yb_tsclient::Row>, rows| -> anyhow::Result<bool> {
+                    if let Some(row) = rows.into_iter().next() {
+                        *found = Some(row);
+                        return Ok(true);
+                    }
+                    Ok(false)
+                },
+            )
+            .await?;
+        row.map(|r| decode_meta_row(key, &r)).transpose()
+    }
+
+    async fn read_meta_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_id: BranchId,
+        key: &[u8],
+        target_lsn: Lsn,
+    ) -> Result<Option<MetaRow>> {
+        use yb_thin_client::{BindValue, CondOp, RangeRead};
+        let meta = &p.meta;
+        let read = RangeRead::new(
+            meta,
+            vec![
+                BindValue::Text(branch_id.to_string()),
+                BindValue::Bytes(Bytes::copy_from_slice(key)),
+            ],
+        )?
+        .cond(meta, "lsn", CondOp::Le, BindValue::I64(target_lsn.0 as i64))?
+        .targets(meta, &["lsn", "payload"])?
+        .limit(1);
+        // The meta PK clusters `lsn DESC`, so the forward scan's first row is the
+        // newest version at or below the target — exactly what we want. `on_page`
+        // returns `true` to stop as soon as that row is in hand; `read_scan`
+        // still follows an empty deadline-paging continuation to reach it.
+        let row = p
+            .client
+            .read_scan(
+                meta,
+                &read,
+                || None::<yb_thin_client::Row>,
+                |found: &mut Option<yb_thin_client::Row>, rows| -> anyhow::Result<bool> {
                     if let Some(row) = rows.into_iter().next() {
                         *found = Some(row);
                         return Ok(true);

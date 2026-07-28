@@ -1,5 +1,11 @@
 disallowed-methods = [
-    "tokio::task::block_in_place",
+    # allow-invalid because the function only exists when tokio's
+    # `rt-multi-thread` feature is on, and crates that enable a smaller tokio
+    # (e.g. ysql_client, `features = ["sync"]`) can't resolve the path. Without
+    # it every such crate warns "does not refer to an existing function" —
+    # noise that hides real lints, on a ban that still applies wherever the
+    # path does resolve.
+    { path = "tokio::task::block_in_place", allow-invalid = true },
 
     # Allow this for now, to deny it later once we stop using Handle::block_on completely
     # "tokio::runtime::Handle::block_on",

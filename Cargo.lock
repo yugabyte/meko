@@ -3164,6 +3164,7 @@ dependencies = [
  "walkdir",
  "workspace_hack",
  "yb-tokio-postgres",
+ "yb_thin_client",
  "yb_tsclient",
  "ysql_client",
 ]
@@ -4558,6 +4559,7 @@ dependencies = [
  "wal_decoder",
  "workspace_hack",
  "yb-tokio-postgres",
+ "yb_thin_client",
  "yb_tsclient",
  "ysql_client",
 ]
@@ -6719,6 +6721,18 @@ dependencies = [
  "tokio",
  "tokio-util",
  "whoami",
+]
+
+[[package]]
+name = "yb_thin_client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "ysql_client",
 ]
 
 [[package]]

@@ -37,6 +37,23 @@ ENV BUILD_TYPE=release
 RUN set -e \
     && mold -run make -j "$(nproc)" -s postgres
 
+# Prebuilt yb_thin_client C++ shim (public, versioned per-arch download,
+# pinned to the vendored ABI). Staged at a fixed path; the final image puts
+# that path on LD_LIBRARY_PATH so the loader finds it (the binaries carry no
+# rpath for it).
+FROM $REPOSITORY/$IMAGE:$TAG AS yb-thin-client
+WORKDIR /home/nonroot
+COPY --chown=nonroot scripts/fetch-yb-thin-client.sh scripts/fetch-yb-thin-client.sh
+COPY --chown=nonroot compute/libs/yb_thin_client/shim/VERSION compute/libs/yb_thin_client/shim/VERSION
+COPY --chown=nonroot compute/libs/yb_thin_client/shim/COMMIT compute/libs/yb_thin_client/shim/COMMIT
+# Stage under $HOME (the build-tools image runs as nonroot, which can't write
+# /opt); the downstream COPY --from runs as root and places it at /opt.
+RUN set -eux \
+    && src="$(bash scripts/fetch-yb-thin-client.sh)" \
+    && mkdir -p /home/nonroot/yb_thin_client/lib \
+    && cp "$src/libyb_thin_client.so" /home/nonroot/yb_thin_client/lib/ \
+    && cp "$src/../version.txt" /home/nonroot/yb_thin_client/version.txt
+
 # 2. Build the Rust binaries + the `yb_amp` Postgres extension.
 FROM $REPOSITORY/$IMAGE:$TAG AS build
 WORKDIR /home/nonroot
@@ -46,6 +63,12 @@ ARG BUILD_TAG
 # Reuse the Postgres build artifacts from the pg-build stage.
 COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install/ pg_install
 COPY --chown=nonroot . .
+
+# The storage binaries link the yb_thin_client shim; stage it and point
+# build.rs at it (no stub fallback). Runtime resolution is handled in the
+# final image via LD_LIBRARY_PATH.
+COPY --from=yb-thin-client /home/nonroot/yb_thin_client /opt/yb_thin_client
+ENV YB_THIN_CLIENT_LIB_DIR=/opt/yb_thin_client/lib
 
 # `io-align-512` is the default pageserver feature, so a plain release
 # build is correct. We only need the endpoint's own services plus the
@@ -119,6 +142,11 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl    
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-dump-pages          /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-dump-wals           /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-reset-consistent-lsn /usr/local/bin/
+# The storage binaries link libyb_thin_client.so (a DT_NEEDED) but carry no
+# rpath for it, so ship it at a fixed path and put that on the loader search
+# path via LD_LIBRARY_PATH (distro-agnostic — the base's default lib dir
+# varies, e.g. /usr/lib vs /usr/lib64).
+COPY --from=yb-thin-client /home/nonroot/yb_thin_client/lib/libyb_thin_client.so /opt/yb_thin_client/lib/libyb_thin_client.so
 
 # Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
@@ -130,9 +158,14 @@ COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/controller/migrations 
 COPY --chown=yugabyte:yugabyte deploy/endpoint/supervisor.py /usr/local/bin/yb-endpoint-supervisor
 RUN chmod +x /usr/local/bin/yb-endpoint-supervisor
 
+# NB: LD_LIBRARY_PATH carries BOTH the Postgres v18 libs and the
+# yb_thin_client shim dir (copied above). `ENV` assigns rather than appends, so
+# both must be named here — a second `ENV LD_LIBRARY_PATH=...` elsewhere in this
+# stage would silently drop whichever path it omits, and the storage binaries
+# (DT_NEEDED on libyb_thin_client.so, no rpath) would fail to exec.
 ENV PG_DISTRIB_DIR=/usr/local \
     YB_AMP_MIGRATIONS_DIR=/usr/local/share/yb-amp/migrations \
-    LD_LIBRARY_PATH=/usr/local/v18/lib \
+    LD_LIBRARY_PATH=/usr/local/v18/lib:/opt/yb_thin_client/lib \
     PATH=/usr/local/bin:/usr/local/v18/bin:$PATH
 
 USER yugabyte

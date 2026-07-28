@@ -107,13 +107,17 @@ behind internal writes:
   (`YsqlClient`, `compute/libs/ysql_client/`), so a chunk retried after
   a partial-flush failure upserts instead of PK-conflicting.
 
-With `hot_path = "tsclient"` in the shared connection block — **the
-default** (`YbConnConfig::hot_path`, `HotPath::TsClient`) — `PageStore`
-additionally opens pure-Rust thin-RPC table handles
-(`PageStore::tsclient`, `libs/yb_tsclient` — pggate RPC to a tserver's
-RPC port, no native library, routing stays server-side) to
+With `hot_path = "yb_thin_client"` in the shared connection block — **the
+default** (`YbConnConfig::hot_path`, `HotPath::ThinClient`) — `PageStore`
+additionally opens direct-RPC table handles over `libs/yb_thin_client`
+(`PageStore::thinclient`, the batch-first client over the
+`libyb_thin_client` C++ shim — routing stays server-side) to
 `pages`/`slru_pages`/`meta` at startup with a fail-fast health check.
-Set `hot_path = "ysql"` to run everything over the Postgres wire.
+`hot_path = "tsclient"` opens the equivalent handles over the predecessor
+pure-Rust `libs/yb_tsclient` instead (`PageStore::tsclient`); the
+`*_thin` helpers mirror the `*_tsclient` ones and share the row-decoding
+via the `RowCells` trait. Set `hot_path = "ysql"` to run everything over
+the Postgres wire.
 
 ## Schema
 
@@ -294,18 +298,26 @@ individually. The cross-forknum variant keys the LATERAL on the full
 (spcnode, dbnode, relnode, forknum, blknum) tuple; it scatters across
 hash tablets and is rare in practice.
 
-On the tsclient lane (the default), the single-key readers —
+On the direct-RPC lanes (`yb_thin_client` — the default — and `tsclient`),
+the single-key readers —
 `read_chain`, `read_slru_chain`, `read_meta` — run as paged clustered
 scans from the target LSN downward that stop at the anchor client-side
 (`ChainFetchState`); `normalize_chain` re-orders equal-LSN image/delta
 ties into the SQL result order (the PK's trailing `is_image` clusters
-ASC on the storage side, the SQL readers order it DESC). One-forknum
-multi-block scans run as a single clustered range scan with per-block
-anchor-stop collection (`BlockChainCollector`); the tsclient paging
-envelope pins every continuation to the first page's snapshot.
-Cross-forknum `scan_range` and multi-key `scan_meta_range` always stay
-on YSQL — they scatter across hash buckets and are not hot. Per-op
-latency is split by lane in `pageserver_yb_store_op_seconds{op,path}`.
+ASC on the storage side, the SQL readers order it DESC). Both lanes rely
+on the same `lsn DESC` clustering, so a forward scan surfaces the newest
+version first — `read_meta` takes just `limit(1)`, and the chain readers
+truncate at the first `will_init` anchor. One-forknum multi-block scans
+run as a single clustered range scan with per-block anchor-stop
+collection (`BlockChainCollector`); the paging envelope pins every
+continuation to the first page's snapshot (`read_time_ht`), and paging
+must run until a reader signals stop or the range is exhausted — a scan
+cut short mid-chain drops the base image and reconstructs a partial page
+(the `yb_thin_client` `read_scan` loop stops iff its `on_page` callback
+returns `true`, matching the tsclient envelope). Cross-forknum
+`scan_range` and multi-key `scan_meta_range` always stay on YSQL — they
+scatter across hash buckets and are not hot. Per-op latency is split by
+lane in `pageserver_yb_store_op_seconds{op,path}`.
 
 ### Chain invariants
 

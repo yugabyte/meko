@@ -160,8 +160,13 @@ health-checked at startup. The hot-path WAL write batch then runs as ONE
 Perform per batch (a single-tablet atomic write batch — a crash mid-flush
 cannot leave a hole), and the WAL sender's fetch issues all
 2×`WALS_BUCKETS` (arm, bucket) read ops as ops of ONE Perform served at a
-single read time — one snapshot by construction. The tsclient lane retries
-across tservers round-robin with no YSQL fallback. Control file,
+single read time — one snapshot by construction. `hot_path =
+"yb_thin_client"` runs the identical lane over `compute/libs/yb_thin_client`
+(the batch-first shim client) instead — the `flush_batch_thin` write and the
+`fetch_chunks_thin` multi-op fetch keep the same one-Perform-per-batch and
+one-snapshot semantics (the `read_pages` fan-out becomes one `read(&ops)`
+batch). The direct lane retries across tservers round-robin with no YSQL
+fallback. Control file,
 `timeline_state`, GC, truncation, and rehydration always stay on the YSQL
 lanes. `PGSQL_UPSERT` write ops carry skip-read-before-write semantics
 natively, so the `yb_enable_upsert_mode` GUC has no counterpart on this

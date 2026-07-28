@@ -1,21 +1,21 @@
-//! Prove the page + WAL hot path actually rides the thin-RPC (`tsclient`)
-//! lane on BOTH the safekeeper and the pageserver — not a silent fallback
-//! to the YSQL lane.
+//! Prove the page + WAL hot path actually rides the thin-RPC
+//! (`yb_thin_client`) lane on BOTH the safekeeper and the pageserver — not a
+//! silent fallback to the YSQL lane.
 //!
 //! Both components expose a `path`-labeled latency histogram whose series
 //! only materializes once that lane serves an op:
 //! `safekeeper_yb_wal_insert_seconds{path}` (the consumer's WAL flush to
 //! YB) and `pageserver_yb_store_op_seconds{op,path}` (every PageStore
 //! round trip — `put_pages` on the materialize flush, `read_chain` on
-//! getpage). We snapshot the `tsclient` lane's op count on each, then:
+//! getpage). We snapshot the `yb_thin_client` lane's op count on each, then:
 //!   1. seed a table + `CHECKPOINT` — flushes WAL to the safekeeper and
 //!      drives the pageserver to materialize + flush pages to YB;
 //!   2. restart the endpoint to drop the compute buffer cache, then read
 //!      the table back — a cold read that forces getpage (`read_chain`).
 //!
 //! Finally we require both lanes' counts to advance. If the traffic
-//! silently ran on the YSQL lane, the `tsclient` count stays flat and this
-//! fails — the corruption gate can't catch that, since both lanes return
+//! silently ran on the YSQL lane, the `yb_thin_client` count stays flat and
+//! this fails — the corruption gate can't catch that, since both lanes return
 //! identical bytes.
 
 use std::time::{Duration, Instant};
@@ -25,10 +25,10 @@ use anyhow::{Context, bail};
 use crate::cluster::{Cluster, step};
 use crate::{db, tee_println};
 
-/// The hot-path transport under test. `tsclient` is the thin-RPC lane the
-/// page + WAL hot path is meant to ride (the daemon default); its
+/// The hot-path transport under test. `yb_thin_client` is the thin-RPC lane
+/// the page + WAL hot path is meant to ride (the daemon default); its
 /// path-labeled metrics only appear once it serves an op.
-const LANE: &str = "tsclient";
+const LANE: &str = "yb_thin_client";
 const PS_METRIC: &str = "pageserver_yb_store_op_seconds";
 const SK_METRIC: &str = "safekeeper_yb_wal_insert_seconds";
 

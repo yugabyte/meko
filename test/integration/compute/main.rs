@@ -327,6 +327,10 @@ fn push_category<'a>(c: &'a Cluster, cat: Category, items: &mut Vec<(String, Ite
 /// 2. The `yb_tsclient` live integration suite (`tests/live.rs`, all
 ///    `#[ignore]` "requires a live YugabyteDB") — exercises the tserver-RPC
 ///    client (PgClientService on port 9100) and creates its own tables.
+/// 3. The `yb_thin_client` live integration suite (`tests/live.rs`, same
+///    `#[ignore]` convention) — the default hot-path client; its
+///    `repro_pages_multipage_scan` guards the paged `read_scan` loop that a
+///    branch's cold reads (and any many-version page) depend on.
 async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
     // pageserver/safekeeper live-DB module tests (YSQL, migrated schema).
     // `pageserver/testing` matches the feature set run.sh built the cluster
@@ -365,7 +369,20 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
         .env("YB_LIVE_TSERVERS", format!("{}:9100", c.yb_host()))
         .env("YB_LIVE_YSQL", format!("{}:{}", c.yb_host(), c.yb_port()))
         .env("YB_LIVE_DB", c.db_name());
-    run_cargo_test(tsclient, "yb_tsclient live tests").await
+    run_cargo_test(tsclient, "yb_tsclient live tests").await?;
+
+    // yb_thin_client live integration suite — the default hot-path client.
+    // Same tserver-RPC + YSQL wiring as tsclient; the process already carries
+    // the shim's LD_LIBRARY_PATH from run.sh. Guards the read_scan pagination
+    // loop (repro_pages_multipage_scan) plus the meta/checkpoint version
+    // selection a branch's basebackup depends on.
+    let mut thinclient = cargo_test_cmd();
+    thinclient.args(["-p", "yb_thin_client", "--test", "live", "--", "--ignored"]);
+    thinclient
+        .env("YB_LIVE_TSERVERS", format!("{}:9100", c.yb_host()))
+        .env("YB_LIVE_YSQL", format!("{}:{}", c.yb_host(), c.yb_port()))
+        .env("YB_LIVE_DB", c.db_name());
+    run_cargo_test(thinclient, "yb_thin_client live tests").await
 }
 
 /// A `cargo test` command matching this harness's own build profile, so the

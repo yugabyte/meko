@@ -64,6 +64,23 @@ COPY --chown=nonroot . .
 RUN set -e \
     && cargo chef prepare --recipe-path recipe.json
 
+# Prebuilt yb_thin_client C++ shim (public, versioned per-arch download,
+# pinned to the vendored ABI). Staged at a fixed path; the final image puts
+# that path on LD_LIBRARY_PATH so the loader finds it (the binaries carry no
+# rpath for it).
+FROM $REPOSITORY/$IMAGE:$TAG AS yb-thin-client
+WORKDIR /home/nonroot
+COPY --chown=nonroot scripts/fetch-yb-thin-client.sh scripts/fetch-yb-thin-client.sh
+COPY --chown=nonroot compute/libs/yb_thin_client/shim/VERSION compute/libs/yb_thin_client/shim/VERSION
+COPY --chown=nonroot compute/libs/yb_thin_client/shim/COMMIT compute/libs/yb_thin_client/shim/COMMIT
+# Stage under $HOME (the build-tools image runs as nonroot, which can't write
+# /opt); the downstream COPY --from runs as root and places it at /opt.
+RUN set -eux \
+    && src="$(bash scripts/fetch-yb-thin-client.sh)" \
+    && mkdir -p /home/nonroot/yb_thin_client/lib \
+    && cp "$src/libyb_thin_client.so" /home/nonroot/yb_thin_client/lib/ \
+    && cp "$src/../version.txt" /home/nonroot/yb_thin_client/version.txt
+
 # Main build image
 FROM $REPOSITORY/$IMAGE:$TAG AS build
 WORKDIR /home/nonroot
@@ -72,6 +89,13 @@ ARG BUILD_TAG
 ARG ADDITIONAL_RUSTFLAGS=""
 ARG IO_ALIGNMENT=512
 ENV CARGO_FEATURES="default"
+
+# The storage binaries link the yb_thin_client shim; stage it before cargo
+# runs so both `cargo chef cook` and the main build find it (its build.rs
+# reads YB_THIN_CLIENT_LIB_DIR and links -lyb_thin_client). Runtime resolution
+# is handled in the final image via LD_LIBRARY_PATH.
+COPY --from=yb-thin-client /home/nonroot/yb_thin_client /opt/yb_thin_client
+ENV YB_THIN_CLIENT_LIB_DIR=/opt/yb_thin_client/lib
 
 # 3. Build cargo dependencies. Note that this step doesn't depend on anything else than
 # `recipe.json`, so the layer can be reused as long as none of the dependencies change.
@@ -139,6 +163,12 @@ COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-endpoint
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-dump-pages          /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-dump-wals           /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-reset-consistent-lsn /usr/local/bin
+# The storage binaries link libyb_thin_client.so (a DT_NEEDED) but carry no
+# rpath for it, so ship it at a fixed path and put that on the loader search
+# path via LD_LIBRARY_PATH (distro-agnostic — the base's default lib dir
+# varies, e.g. /usr/lib vs /usr/lib64).
+COPY --from=yb-thin-client /home/nonroot/yb_thin_client/lib/libyb_thin_client.so /opt/yb_thin_client/lib/libyb_thin_client.so
+ENV LD_LIBRARY_PATH=/opt/yb_thin_client/lib
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # Deprecated: Old deployment scripts use this tarball which contains all the Postgres binaries.

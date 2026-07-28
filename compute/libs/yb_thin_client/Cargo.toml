@@ -1,0 +1,23 @@
+[package]
+name = "yb_thin_client"
+version = "0.1.0"
+edition = "2024"
+
+# A thin, safe Rust wrapper over the `libyb_thin_client` C ABI (see
+# `shim/yb_thin_client.h` and `README.md`). The shim speaks
+# `yb.tserver.PgClientService.Perform` directly to a tserver — the tserver
+# does the tablet routing, so there is no metacache / batcher / tablet
+# invoker on this side. All the YugabyteDB C++ lives behind the C boundary.
+[lib]
+doctest = false
+
+[dependencies]
+bytes.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
+ysql_client = { path = "../ysql_client" }
+anyhow.workspace = true

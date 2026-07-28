@@ -209,6 +209,15 @@ jobs:
           docker logs yb
           exit 1
 
+      # The storage crates link the prebuilt yb_thin_client shim; fetch it and
+      # make it findable at build (YB_THIN_CLIENT_LIB_DIR) and at runtime for
+      # the daemons the tests spawn (LD_LIBRARY_PATH). No stub fallback.
+      - name: Fetch yb_thin_client shim
+        run: |
+          DIR="$(scripts/fetch-yb-thin-client.sh)"
+          echo "YB_THIN_CLIENT_LIB_DIR=$DIR" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
       - name: Integration tests (slow suite)
         run: test/integration/compute/run.sh slow
 

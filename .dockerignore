@@ -11,6 +11,7 @@
 !postgres.mk
 !rust-toolchain.toml
 !scripts/ninstall.sh
+!scripts/fetch-yb-thin-client.sh
 !docker-compose/run-tests.sh
 
 # Directories

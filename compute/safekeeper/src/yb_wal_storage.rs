@@ -200,12 +200,23 @@ pub struct YbWalConn {
     /// WAL write/read dispatch. Control file,
     /// GC, and rehydration stay on the YSQL lanes regardless.
     pub yb_tsclient: Option<Arc<YbTsClient>>,
+    /// Thin-client lane (`hot_path = "yb_thin_client"`): `yb_thin_client`
+    /// handle for `safekeeper.wals`, speaking `Perform` to a tserver
+    /// through the `libyb_thin_client` C++ shim. `None` unless the thin
+    /// client hot path is selected. Parallel to [`Self::yb_tsclient`].
+    pub yb_thinclient: Option<Arc<YbThinClient>>,
 }
 
 /// See [`YbWalConn::yb_tsclient`] and `compute/architecture/safekeeper.md`.
 pub struct YbTsClient {
     pub client: Arc<yb_tsclient::TsClient>,
     pub wals: Arc<yb_tsclient::TableHandle>,
+}
+
+/// See [`YbWalConn::yb_thinclient`]. The `yb_thin_client` (shim) lane.
+pub struct YbThinClient {
+    pub client: Arc<yb_thin_client::TsClient>,
+    pub wals: Arc<yb_thin_client::TableHandle>,
 }
 
 /// Exports `yb_tsclient` health events (which its internal retries
@@ -280,12 +291,20 @@ impl YbWalConn {
             None
         };
         let yb_tsclient = match yb.hot_path {
-            ysql_client::HotPath::Ysql => None,
             ysql_client::HotPath::TsClient => Some(
                 Self::connect_tsclient(yb, &system_client)
                     .await
                     .context("thin-RPC hot path init (hot_path = \"tsclient\")")?,
             ),
+            _ => None,
+        };
+        let yb_thinclient = match yb.hot_path {
+            ysql_client::HotPath::ThinClient => Some(
+                Self::connect_thin(yb, &system_client)
+                    .await
+                    .context("thin-client hot path init (hot_path = \"yb_thin_client\")")?,
+            ),
+            _ => None,
         };
         Ok(Some(Arc::new(YbWalConn {
             fpu_client,
@@ -294,6 +313,7 @@ impl YbWalConn {
             table: WALS_TABLE.to_string(),
             cache,
             yb_tsclient,
+            yb_thinclient,
         })))
     }
 
@@ -354,6 +374,42 @@ impl YbWalConn {
             client.connected_addr(),
         );
         Ok(Arc::new(YbTsClient { client, wals }))
+    }
+
+    /// Connects the thin-client (`yb_thin_client`) lane and opens
+    /// `safekeeper.wals`, validating tserver connectivity and table
+    /// layout in one shot. Fail-fast at startup.
+    async fn connect_thin(
+        yb: &ysql_client::YbConnConfig,
+        system_client: &Arc<ysql_client::YsqlClient>,
+    ) -> anyhow::Result<Arc<YbThinClient>> {
+        use anyhow::Context;
+        let (db_oid, wals_oid) = Self::lookup_wals_oids(system_client).await?;
+        // WAL lane: one read + one write session by default (low-concurrency —
+        // one-batch-at-a-time flush + segment reads), round-robin across the
+        // configured tservers. `yb_storage_conn` can pin both counts.
+        let read_sessions = yb.tsclient_read_sessions.unwrap_or(1);
+        let write_sessions = yb.tsclient_write_sessions.unwrap_or(1);
+        let sessions_per_conn = yb.tsclient_sessions_per_conn.unwrap_or(4);
+        let tserver_addrs = yb.effective_tserver_rpc_addrs();
+        let tserver_count = tserver_addrs.len();
+        let client = yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
+            tserver_addrs,
+            read_sessions: read_sessions as u32,
+            write_sessions: write_sessions as u32,
+            sessions_per_conn: sessions_per_conn as u32,
+            ..Default::default()
+        })
+        .context("connecting the thin-client (yb_thin_client) client")?;
+        let wals = client
+            .open_table(db_oid, wals_oid)
+            .with_context(|| format!("opening {WALS_TABLE} via the yb_thin_client lane"))?;
+        tracing::info!(
+            "thin-client (yb_thin_client) hot path ready: {WALS_TABLE} opened \
+             ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
+             connection, across {tserver_count} configured tserver(s))",
+        );
+        Ok(Arc::new(YbThinClient { client, wals }))
     }
 }
 
@@ -659,6 +715,7 @@ impl YbWalStorage {
             rx,
             fpu_client,
             yb_wal.yb_tsclient.clone(),
+            yb_wal.yb_thinclient.clone(),
             table_name.clone(),
             branch_id_str.clone(),
             watermark_tx,
@@ -1324,6 +1381,7 @@ async fn consumer_main(
     mut rx: mpsc::Receiver<PendingChunk>,
     ysql_fpu_client: Arc<YsqlClient>,
     yb_tsclient: Option<Arc<YbTsClient>>,
+    yb_thinclient: Option<Arc<YbThinClient>>,
     table_name: String,
     branch_id: String,
     watermark_tx: watch::Sender<DurableState>,
@@ -1399,6 +1457,7 @@ async fn consumer_main(
         match flush_batch(
             &ysql_fpu_client,
             yb_tsclient.as_deref(),
+            yb_thinclient.as_deref(),
             &table_name,
             &branch_id,
             &batch,
@@ -1461,6 +1520,7 @@ async fn consumer_main(
 async fn flush_batch(
     ysql_fpu_client: &YsqlClient,
     yb_tsclient: Option<&YbTsClient>,
+    yb_thinclient: Option<&YbThinClient>,
     table_name: &str,
     branch_id: &str,
     batch: &[PendingChunk],
@@ -1469,9 +1529,12 @@ async fn flush_batch(
         return Ok(());
     }
     let runs = coalesce_runs(batch);
-    match yb_tsclient {
-        Some(yb_tsclient) => flush_batch_tsclient(yb_tsclient, branch_id, batch, &runs).await,
-        None => flush_batch_ysql(ysql_fpu_client, table_name, branch_id, batch, &runs).await,
+    if let Some(tc) = yb_tsclient {
+        flush_batch_tsclient(tc, branch_id, batch, &runs).await
+    } else if let Some(thin) = yb_thinclient {
+        flush_batch_thin(thin, branch_id, batch, &runs).await
+    } else {
+        flush_batch_ysql(ysql_fpu_client, table_name, branch_id, batch, &runs).await
     }
 }
 
@@ -1582,6 +1645,76 @@ async fn flush_batch_tsclient(
     crate::metrics::YB_WAL_BATCH_ROWS.observe(n as f64);
     crate::metrics::YB_WAL_BATCH_BYTES.observe(batch_bytes as f64);
     res.with_context(|| format!("YB WAL tsclient upsert batch ({n} rows)"))?;
+    Ok(())
+}
+
+/// Thin-client (`yb_thin_client`) variant of the batched write: one Perform
+/// with one `PGSQL_UPSERT` op per coalesced run, each run keyed by its
+/// first chunk and valued as the concatenation of the run's chunks
+/// ([`run_data_bytes`]). The whole batch carries ONE bucket, so all ops
+/// land on one tablet and the tserver session applies them as one write
+/// batch (atomic) — a crash mid-flush cannot leave a hole (the invariant
+/// `load_write_lsn`'s simple max-end rehydration relies on).
+async fn flush_batch_thin(
+    yb_thinclient: &YbThinClient,
+    branch_id: &str,
+    batch: &[PendingChunk],
+    runs: &[std::ops::Range<usize>],
+) -> Result<()> {
+    // Test-only failpoint (build with `--features testing`, configure via
+    // `fail::cfg("sk-wal-direct-flush-fail", "return(())")`): inject a
+    // thin-client-lane WAL flush failure before any write reaches YB. Both
+    // direct lanes share the failpoint name (only one is active at a time);
+    // the message names this lane so an injection test's failure is not
+    // misread as coming from the tsclient path.
+    fail::fail_point!("sk-wal-direct-flush-fail", |_| {
+        Err(anyhow::anyhow!(
+            "failpoint sk-wal-direct-flush-fail: injected thin-client-lane WAL flush failure"
+        ))
+    });
+    use yb_thin_client::{BindValue, UpsertRow};
+    let n = runs.len();
+    let now_us: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_micros() as i64)
+        .unwrap_or(0);
+    let rows = runs
+        .iter()
+        .map(|r| {
+            let chunks = &batch[r.clone()];
+            let first = &chunks[0];
+            let total: usize = chunks.iter().map(|p| p.chunk_size as usize).sum();
+            UpsertRow::new(
+                &yb_thinclient.wals,
+                vec![
+                    BindValue::Text(branch_id.to_string()),
+                    BindValue::I16(first.bucket_id),
+                    BindValue::I64(first.segno as i64),
+                    BindValue::I64(first.chunk_offset),
+                ],
+                &[
+                    ("chunk_size", BindValue::I32(total as i32)),
+                    ("data", BindValue::Bytes(run_data_bytes(chunks))),
+                    ("last_modified_us", BindValue::I64(now_us)),
+                ],
+            )
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let batch_bytes: usize = batch.iter().map(|p| p.chunk_size as usize).sum();
+    let started = std::time::Instant::now();
+    // Full retry budget (inside `upsert`): this lane has no YSQL fallback, so
+    // it must ride out transient failures itself — a hard error here fails the
+    // consumer's flush and stalls WAL durability. Unlike the tsclient lane
+    // there is no per-attempt session rotation: the shim owns the session pool
+    // and the tserver does the routing.
+    let res = yb_thinclient.client.upsert(&rows).await;
+    crate::metrics::YB_WAL_INSERT_SECONDS
+        .with_label_values(&["yb_thin_client"])
+        .observe(started.elapsed().as_secs_f64());
+    crate::metrics::YB_WAL_BATCH_ROWS.observe(n as f64);
+    crate::metrics::YB_WAL_BATCH_BYTES.observe(batch_bytes as f64);
+    res.with_context(|| format!("YB WAL yb_thin_client upsert batch ({n} rows)"))?;
     Ok(())
 }
 
@@ -1749,6 +1882,9 @@ pub struct YbSegmentReader {
     /// Thin-RPC lane (`hot_path = "tsclient"`); when set, fetches use it.
     /// `None` on the YSQL read path.
     yb_tsclient: Option<Arc<YbTsClient>>,
+    /// Thin-client lane (`hot_path = "yb_thin_client"`); when set, fetches use
+    /// it. `None` unless the thin-client hot path is selected.
+    yb_thinclient: Option<Arc<YbThinClient>>,
     table: String,
     branch_id: String,
 
@@ -1806,6 +1942,7 @@ impl YbSegmentReader {
             cache: yb_wal.cache.clone(),
             read_client: yb_wal.read_client.clone(),
             yb_tsclient: yb_wal.yb_tsclient.clone(),
+            yb_thinclient: yb_wal.yb_thinclient.clone(),
             table: yb_wal.table.clone(),
             branch_id: branch_id.to_string(),
             current: None,
@@ -1835,11 +1972,13 @@ impl YbSegmentReader {
         let seg_base = self.segno * self.wal_seg_size;
         let cache = self.cache.clone();
         let yb_tsclient = self.yb_tsclient.clone();
+        let yb_thinclient = self.yb_thinclient.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let res = fetch_chunks(
                 &client,
                 yb_tsclient.as_deref(),
+                yb_thinclient.as_deref(),
                 &table,
                 &branch_id,
                 segno,
@@ -2083,16 +2222,18 @@ const FETCH_FORWARD_BYTES: u64 = 4 * 1024 * 1024;
 async fn fetch_chunks(
     client: &YsqlClient,
     yb_tsclient: Option<&YbTsClient>,
+    yb_thinclient: Option<&YbThinClient>,
     table: &str,
     branch_id: &str,
     segno: u64,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
-    match yb_tsclient {
-        Some(yb_tsclient) => {
-            fetch_chunks_tsclient(yb_tsclient, branch_id, segno, byte_offset).await
-        }
-        None => fetch_chunks_from_yb(client, table, branch_id, segno, byte_offset).await,
+    if let Some(tc) = yb_tsclient {
+        fetch_chunks_tsclient(tc, branch_id, segno, byte_offset).await
+    } else if let Some(thin) = yb_thinclient {
+        fetch_chunks_thin(thin, branch_id, segno, byte_offset).await
+    } else {
+        fetch_chunks_from_yb(client, table, branch_id, segno, byte_offset).await
     }
 }
 
@@ -2109,6 +2250,50 @@ async fn fetch_chunks(
 /// toward the cap.
 fn merge_fetched_rows<'a>(
     rows: impl Iterator<Item = &'a yb_tsclient::Row>,
+    byte_offset: u64,
+) -> anyhow::Result<Vec<CurrentChunk>> {
+    let mut out: Vec<CurrentChunk> = Vec::new();
+    for row in rows {
+        let start: u64 = row[0]
+            .as_i64()?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("negative chunk_offset"))?;
+        let size: u64 = row[1]
+            .as_i32()?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("negative chunk_size"))?;
+        let end = start + size;
+        if start < byte_offset && end <= byte_offset {
+            continue;
+        }
+        out.push(CurrentChunk {
+            chunk_offset: start,
+            end_offset: end,
+            data: Arc::new(row[2].as_bytes()?.to_vec()),
+        });
+    }
+    out.sort_by_key(|c| c.chunk_offset);
+    let n_covering = out
+        .iter()
+        .take_while(|c| c.chunk_offset < byte_offset)
+        .count();
+    out.truncate(n_covering + FETCH_FORWARD_CHUNKS);
+    Ok(out)
+}
+
+/// Client-side merge for the thin-client fetch fan-out (the row decoder
+/// lives in `yb_thin_client`, so the result rows are `yb_thin_client::Row`).
+/// Preserves the SQL path's semantics:
+/// covering = the max-offset row with `chunk_offset < pos` across all
+/// buckets that spans `pos` (a "covering" row that ends at or before
+/// the position is a real hole, not a cover — same filter as the SQL
+/// path); forward = ascending merge capped at [`FETCH_FORWARD_CHUNKS`]
+/// total (per-bucket limits alone would allow WALS_BUCKETS× that). At
+/// most one covering chunk survives the filter (chunks are disjoint, so
+/// only one can span `byte_offset`); it sorts first and doesn't count
+/// toward the cap.
+fn merge_fetched_rows_thin<'a>(
+    rows: impl Iterator<Item = &'a yb_thin_client::Row>,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
     let mut out: Vec<CurrentChunk> = Vec::new();
@@ -2229,6 +2414,107 @@ async fn fetch_chunks_tsclient(
 
     crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
         .with_label_values(&["tsclient"])
+        .observe(started_at.elapsed().as_secs_f64());
+    crate::metrics::WAL_CACHE_YB_FETCH_CHUNKS.observe(out.len() as f64);
+    crate::metrics::WAL_CACHE_YB_FETCH_BYTES.observe(total_bytes as f64);
+    Ok(out)
+}
+
+/// Thin-client (`yb_thin_client`) two-arm fetch. The SQL version keeps both
+/// arms in ONE statement for a single read snapshot; here a chunk's
+/// bucket can't be derived, so every (arm, bucket) pair is its own
+/// single-tablet read op — covering arm per bucket (`chunk_offset <
+/// pos`, descending, limit 1) and forward arm per bucket (`[pos, pos +
+/// FETCH_FORWARD_BYTES)`, ascending, limit [`FETCH_FORWARD_CHUNKS`]) —
+/// and ALL `2×WALS_BUCKETS` of them are issued as ops of ONE Perform: the
+/// proxy picks one read point at setup and every op shares it, so the
+/// fetch is a single snapshot BY CONSTRUCTION (#139).
+/// Results merge client-side through [`merge_fetched_rows_thin`], preserving
+/// the SQL path's semantics: covering = the max-offset row with
+/// `chunk_offset < pos` across all buckets that spans `pos`; forward =
+/// ascending merge capped at `FETCH_FORWARD_CHUNKS`. The reader's
+/// flush-bound gating stays as defense in depth regardless.
+async fn fetch_chunks_thin(
+    yb_thinclient: &YbThinClient,
+    branch_id: &str,
+    segno: u64,
+    byte_offset: u64,
+) -> anyhow::Result<Vec<CurrentChunk>> {
+    use yb_thin_client::{BindValue, CondOp, RangeRead};
+    let started_at = std::time::Instant::now();
+    let wals = &yb_thinclient.wals;
+    let targets = ["chunk_offset", "chunk_size", "data"];
+    let segno_i = segno as i64;
+
+    // Covering arm for one bucket: its highest chunk starting below
+    // byte_offset; the cross-bucket max resolves in the merge.
+    let covering_read = |bucket: i16| -> anyhow::Result<RangeRead> {
+        Ok(RangeRead::new(
+            wals,
+            vec![
+                BindValue::Text(branch_id.to_string()),
+                BindValue::I16(bucket),
+            ],
+        )?
+        .cond(wals, "segno", CondOp::Eq, BindValue::I64(segno_i))?
+        .cond(
+            wals,
+            "chunk_offset",
+            CondOp::Lt,
+            BindValue::I64(byte_offset as i64),
+        )?
+        .targets(wals, &targets)?
+        .descending()
+        .limit(1))
+    };
+    // Forward arm for one bucket: ascending chunks in
+    // [byte_offset, byte_offset + FETCH_FORWARD_BYTES).
+    let forward_read = |bucket: i16| -> anyhow::Result<RangeRead> {
+        Ok(RangeRead::new(
+            wals,
+            vec![
+                BindValue::Text(branch_id.to_string()),
+                BindValue::I16(bucket),
+            ],
+        )?
+        .cond(wals, "segno", CondOp::Eq, BindValue::I64(segno_i))?
+        .cond(
+            wals,
+            "chunk_offset",
+            CondOp::Ge,
+            BindValue::I64(byte_offset as i64),
+        )?
+        .cond(
+            wals,
+            "chunk_offset",
+            CondOp::Lt,
+            BindValue::I64(byte_offset.saturating_add(FETCH_FORWARD_BYTES) as i64),
+        )?
+        .targets(wals, &targets)?
+        .limit(FETCH_FORWARD_CHUNKS as u64))
+    };
+
+    let mut reads: Vec<RangeRead> = Vec::with_capacity(2 * WALS_BUCKETS as usize);
+    for bucket in 0..WALS_BUCKETS {
+        reads.push(covering_read(bucket)?);
+    }
+    for bucket in 0..WALS_BUCKETS {
+        reads.push(forward_read(bucket)?);
+    }
+    let ops: Vec<yb_thin_client::ReadOp> = reads
+        .iter()
+        .map(|r| yb_thin_client::ReadOp {
+            table: wals.as_ref(),
+            read: r,
+            paging_state: None,
+        })
+        .collect();
+    let batch = yb_thinclient.client.read(&ops, 0).await?;
+    let out = merge_fetched_rows_thin(batch.ops.iter().flat_map(|op| op.rows.iter()), byte_offset)?;
+    let total_bytes: u64 = out.iter().map(|c| c.end_offset - c.chunk_offset).sum();
+
+    crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
+        .with_label_values(&["yb_thin_client"])
         .observe(started_at.elapsed().as_secs_f64());
     crate::metrics::WAL_CACHE_YB_FETCH_CHUNKS.observe(out.len() as f64);
     crate::metrics::WAL_CACHE_YB_FETCH_BYTES.observe(total_bytes as f64);
@@ -2570,6 +2856,7 @@ mod tests {
             table: table.to_string(),
             cache: None,
             yb_tsclient: None,
+            yb_thinclient: None,
         });
         let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
             .await
@@ -2608,6 +2895,7 @@ mod tests {
                 64 * 1024 * 1024,
             )))),
             yb_tsclient: None,
+            yb_thinclient: None,
         });
         let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
             .await
@@ -3007,6 +3295,7 @@ mod tests {
             table: table.clone(),
             cache: None,
             yb_tsclient: None,
+            yb_thinclient: None,
         });
         let mut reader = YbSegmentReader::new(
             yb_wal,
@@ -3066,6 +3355,7 @@ mod tests {
             table: table.clone(),
             cache: None,
             yb_tsclient: None,
+            yb_thinclient: None,
         });
         // Start the reader at byte offset 1024 — partway into the chunk.
         let mut reader = YbSegmentReader::new(
@@ -3162,6 +3452,7 @@ mod tests {
             table: table.clone(),
             cache: Some(cache.clone()),
             yb_tsclient: None,
+            yb_thinclient: None,
         });
 
         // flush = 1024: [0,1024) committed, [1024,4096) not yet.
@@ -3281,6 +3572,7 @@ mod tests {
             table: table.clone(),
             cache: None,
             yb_tsclient: None,
+            yb_thinclient: None,
         });
 
         // Committed frontier is in the NEXT segment: the gap is switch padding.
@@ -3393,6 +3685,7 @@ mod tests {
             table: table.clone(),
             cache: None,
             yb_tsclient: None,
+            yb_thinclient: None,
         });
 
         // Live flush frontier, as the streaming reader would publish it.
@@ -3503,6 +3796,7 @@ mod tests {
             table: table.clone(),
             cache: None,
             yb_tsclient: None,
+            yb_thinclient: None,
         });
 
         // Flush frontier is ABSOLUTE: committed up to offset 1024 in segment 1.
@@ -3980,6 +4274,7 @@ mod tests {
             table: table.clone(),
             cache: None,
             yb_tsclient: Some(yb_tsclient),
+            yb_thinclient: None,
         });
         let mut storage = YbWalStorage::new(&branch_id, &state, yb_wal.clone())
             .await

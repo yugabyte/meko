@@ -83,23 +83,35 @@ There are two ways yb-amp code reaches YB:
   pggate). It implements exactly what the hot tables need — hash-eq +
   range-bound clustered scans with paging and snapshot pinning, and
   batched `PGSQL_UPSERT` writes — and nothing else.
+- **`yb_thin_client`** ([`compute/libs/yb_thin_client/`](../libs/yb_thin_client/))
+  — the same idea over a thin C ABI to a `libyb_thin_client.so` C++ shim
+  (a YugabyteDB build target linking YB's own proxy/partitioning/codec),
+  so routing, partition hashing, and `pg_doc_data` row decoding come from
+  YB's own code rather than being re-implemented in Rust. Its one read
+  primitive is a **batch of ops = one `Perform`** (one RPC, one snapshot),
+  so multi-op reads collapse to a single round trip; writes are the same
+  shape. Selected by `hot_path = "yb_thin_client"`; slated to replace
+  `yb_tsclient` as the single hot-path client.
 
-### Direct-to-tserver hot path (`hot_path = "tsclient"`)
+### Direct-to-tserver hot path (`hot_path = "tsclient"` / `"yb_thin_client"`)
 
 The shared `yb_storage_conn` block accepts several optional keys:
 
 ```toml
-yb_storage_conn = { host_ports = "...", hot_path = "tsclient", tserver_rpc_addrs = "host:9100,...", tsclient_read_sessions = 4, tsclient_write_sessions = 4 }
+yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsclient_read_sessions = 4, tsclient_write_sessions = 4 }
 ```
 
-- `hot_path` — `"tsclient"` (the default) runs the hot paths over
-  `yb_tsclient`; `"ysql"` is the Postgres-wire escape hatch. The
+- `hot_path` — `"yb_thin_client"` (**the default**) runs the hot paths over
+  the `yb_thin_client` shim client (batch-first: a call = a batch of ops =
+  one Perform); `"tsclient"` runs them over the predecessor pure-Rust
+  `yb_tsclient` (same RPC port + session knobs below); `"ysql"` is the
+  Postgres-wire escape hatch. The
   safekeeper honors it for the WAL write/read path on `safekeeper.wals`
   (see [`safekeeper.md`](safekeeper.md) §"Direct-to-tserver hot path")
   and the pageserver for the page read/write hot path on
   `pages`/`slru_pages`/`meta` (see
   [`pageserver.md`](pageserver.md) §"Direct-to-tserver hot
-  path"). The tsclient lane keeps per-op fallback to YSQL at runtime;
+  path"). The direct lanes keep per-op fallback to YSQL at runtime;
   cold paths (DDL, GC, rehydration, control file, `timeline_state`)
   always use YSQL. A binary that does not know these keys fails to
   parse a config that sets them (`deny_unknown_fields`) — intentional,

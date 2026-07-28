@@ -32,6 +32,7 @@ members = [
     "compute/libs/postgres_initdb",
     "compute/libs/initdb_storage",
     "compute/libs/yb_tsclient",
+    "compute/libs/yb_thin_client",
     "compute/libs/proxy/json",
     "compute/libs/proxy/postgres-protocol2",
     "compute/libs/proxy/postgres-types2",
@@ -279,6 +280,7 @@ vm_monitor = { version = "0.1", path = "./compute/libs/vm_monitor/" }
 wal_decoder = { version = "0.1", path = "./compute/libs/wal_decoder" }
 ysql_client = { version = "0.1", path = "./compute/libs/ysql_client/" }
 yb_tsclient = { version = "0.1", path = "./compute/libs/yb_tsclient/" }
+yb_thin_client = { version = "0.1", path = "./compute/libs/yb_thin_client/" }
 
 ## Common library dependency
 workspace_hack = { version = "0.1", path = "./workspace_hack/" }

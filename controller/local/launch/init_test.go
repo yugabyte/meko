@@ -3,6 +3,7 @@ package launch
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yugabyte/amp/controller/local/config"
@@ -103,3 +104,44 @@ func TestInitRoundTrip(t *testing.T) {
 		t.Error("re-init with must-not-exist should fail on an existing repo")
 	}
 }
+
+// TestYbInlineTOMLEmitsSelectableHotPath pins which lanes reach the rendered
+// `[*.yb]` block.
+//
+// Regression: the renderer used to emit `hot_path` only for `"ysql"`. Once the
+// Rust `HotPath::default()` became `yb_thin_client`, every other value —
+// including `--yb-hot-path tsclient`, the flag's own documented default —
+// silently fell through to the thin client, so the tsclient lane could not be
+// selected or fallen back to. The default lane must still be OMITTED, though:
+// endpoint_storage does not link yb_thin_client and must never be handed it.
+func TestYbInlineTOMLEmitsSelectableHotPath(t *testing.T) {
+	base := config.YbConnConfig{HostPorts: "127.0.0.1:5433", User: "yugabyte", Dbname: "yb_storage"}
+
+	for _, tc := range []struct {
+		name    string
+		hotPath *string
+		want    string // substring that must appear, "" = nothing emitted
+	}{
+		{"unset", nil, ""},
+		{"default lane is omitted", strPtr(DefaultYbHotPath), ""},
+		{"tsclient is selectable", strPtr("tsclient"), `hot_path = "tsclient"`},
+		{"ysql is selectable", strPtr("ysql"), `hot_path = "ysql"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base
+			c.HotPath = tc.hotPath
+			got := ybInlineTOML(&c)
+			if tc.want == "" {
+				if strings.Contains(got, "hot_path") {
+					t.Fatalf("expected no hot_path in %q", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("expected %q in %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }

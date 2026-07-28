@@ -164,15 +164,27 @@ pub struct YbConnConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disable_transactional_writes: bool,
     /// Which transport the hot paths (pageserver page reads/writes,
-    /// safekeeper WAL reads/writes) use. `"tsclient"` (default): the
-    /// pure-Rust `yb_tsclient` crate speaking the pggate RPC protocol
-    /// to a tserver's RPC port (no native library; routing stays
-    /// server-side). `"ysql"`: Postgres wire via this crate only. The
-    /// tsclient path keeps per-op fallback to YSQL at runtime; cold paths
-    /// (DDL, GC, rehydration, control file) always use YSQL. NOTE: an
-    /// old binary reading a config that sets this fails to parse
+    /// safekeeper WAL reads/writes) use. `"yb_thin_client"` (default): the
+    /// `yb_thin_client` crate over the `libyb_thin_client` C++ shim, sending
+    /// `Perform` to a tserver's RPC port (routing stays server-side).
+    /// `"tsclient"`: the predecessor pure-Rust `yb_tsclient` crate (same RPC
+    /// port, no native library). `"ysql"`: Postgres wire via this crate only.
+    /// Cold paths (DDL, GC, rehydration, control file) always use YSQL.
+    /// NOTE: an old binary reading a config that sets this fails to parse
     /// (`deny_unknown_fields`) — intentional, not silently ignored.
-    #[serde(default, skip_serializing_if = "HotPath::is_default")]
+    ///
+    /// Serialized unconditionally — deliberately NOT
+    /// `skip_serializing_if = "HotPath::is_default"`. The pageserver's
+    /// unknown-key check (`config::ignored_fields::find`) diffs the operator's
+    /// TOML against the RE-SERIALIZED config and flags anything missing from
+    /// the round trip. Skipping the default dropped it on the way out, so a
+    /// config that spelled the default explicitly
+    /// (`hot_path = "yb_thin_client"`) aborted startup with "unknown
+    /// configuration item(s): yb_storage_conn.hot_path" — blaming the operator
+    /// for a misspelling when key and value were both valid. `to_inline_toml`
+    /// still omits the default; that renderer is hand-rolled and not part of
+    /// this round trip.
+    #[serde(default)]
     pub hot_path: HotPath,
     /// yb-tserver RPC endpoints for the `tsclient` hot path, CSV. When
     /// unset, the `host_ports` hosts on port 9100; set explicitly to reach
@@ -212,15 +224,16 @@ pub struct YbConnConfig {
 pub enum HotPath {
     Ysql,
     /// Pure-Rust thin RPC client (`yb_tsclient`) against the tserver
-    /// RPC port; serde wire form `"tsclient"`.
-    #[default]
+    /// RPC port; serde wire form `"tsclient"`. The predecessor of
+    /// [`HotPath::ThinClient`], kept during the migration.
     TsClient,
-}
-
-impl HotPath {
-    fn is_default(&self) -> bool {
-        *self == HotPath::TsClient
-    }
+    /// Thin `Perform`-based tserver client over the `libyb_thin_client`
+    /// C++ shim (`yb_thin_client`); serde wire form `"yb_thin_client"`.
+    /// Batches reads/writes into one Perform per call. **The default** — it
+    /// replaces [`HotPath::TsClient`] as the hot-path client.
+    #[default]
+    #[serde(rename = "yb_thin_client")]
+    ThinClient,
 }
 
 /// Default yb-tserver RPC port, used when `tserver_rpc_addrs` is derived
@@ -310,8 +323,9 @@ impl YbConnConfig {
             parts.push("disable_transactional_writes = true".to_string());
         }
         match self.hot_path {
-            HotPath::TsClient => {} // default → omitted
+            HotPath::ThinClient => {} // default → omitted
             HotPath::Ysql => parts.push("hot_path = \"ysql\"".to_string()),
+            HotPath::TsClient => parts.push("hot_path = \"tsclient\"".to_string()),
         }
         if let Some(t) = &self.tserver_rpc_addrs {
             parts.push(format!("tserver_rpc_addrs = {}", q(&t.to_string())));
@@ -619,8 +633,10 @@ mod database_url_tests {
 
     #[test]
     fn hot_path_round_trips_and_defaults_off_the_wire() {
-        // Default (tsclient) → omitted from the wire form.
-        let t = cfg("127.0.0.1:5433").to_inline_toml();
+        // Default (yb_thin_client) → omitted from the wire form.
+        let c0 = cfg("127.0.0.1:5433");
+        assert_eq!(c0.hot_path, super::HotPath::ThinClient);
+        let t = c0.to_inline_toml();
         assert!(!t.contains("hot_path"));
 
         // Explicit ysql (the escape hatch) is emitted and round-trips.
@@ -634,17 +650,43 @@ mod database_url_tests {
         assert_eq!(back, c);
     }
 
+    /// Every `hot_path` value — INCLUDING the default — must survive a serde
+    /// round trip. The pageserver's unknown-key check
+    /// (`config::ignored_fields::find`) diffs the operator's TOML against the
+    /// re-serialized config, so a value that vanishes on serialization is
+    /// reported as an unknown key and aborts startup. A
+    /// `skip_serializing_if = "is_default"` on `hot_path` did exactly that:
+    /// `hot_path = "yb_thin_client"` (the documented default, spelled out)
+    /// failed with "unknown configuration item(s): yb_storage_conn.hot_path".
+    #[test]
+    fn hot_path_survives_serde_round_trip_for_every_lane() {
+        for lane in [
+            super::HotPath::Ysql,
+            super::HotPath::TsClient,
+            super::HotPath::ThinClient,
+        ] {
+            let mut c = cfg("127.0.0.1:5433");
+            c.hot_path = lane;
+            let ser = toml::to_string(&c).expect("serialize");
+            assert!(
+                ser.contains("hot_path"),
+                "{lane:?} vanished on serialization: {ser}\n\
+                 the pageserver would reject it as an unknown key"
+            );
+            let back: YbConnConfig = toml::from_str(&ser).expect("deserialize");
+            assert_eq!(back.hot_path, lane);
+        }
+    }
+
     #[test]
     fn hot_path_tsclient_round_trips() {
-        // tsclient is the default transport, so it is OMITTED from the
-        // wire form and round-trips through `#[serde(default)]` back to
-        // `TsClient` — both with and without the tserver_rpc_addrs
-        // override.
+        // tsclient is no longer the default (yb_thin_client is), so it is
+        // EMITTED explicitly and round-trips — both with and without the
+        // tserver_rpc_addrs override.
         let mut c = cfg("h1:5433,h2:5433");
         c.hot_path = super::HotPath::TsClient;
         let t = c.to_inline_toml();
-        assert!(!t.contains("hot_path"));
-        assert!(!t.contains("tserver_rpc_addrs"));
+        assert!(t.contains("hot_path = \"tsclient\""));
         let back: YbConnConfig = toml::from_str(&format!("v = {t}"))
             .map(|v: std::collections::HashMap<String, YbConnConfig>| v["v"].clone())
             .unwrap();
