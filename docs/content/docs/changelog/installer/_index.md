@@ -12,6 +12,12 @@ Release notes for [`@yugabytedb/meko-mcp`](https://www.npmjs.com/package/@yugaby
 
 {{< card-group >}}
   {{< card
+    href="changelog/installer/v2.1.0/"
+    title="v2.1.0 — July 28, 2026"
+    desc="Breaking: tool-level scope retired. Reliable installs, a 23-tool MCP surface, and corrected cross-agent reads."
+    cta="View release notes &rarr;"
+  >}}
+  {{< card
     href="changelog/installer/v2.0.0/"
     title="v2.0.0 — July 17, 2026"
     desc="Implicit memory extraction, datapack-aware automatic capture, artifact storage, installer hardening."

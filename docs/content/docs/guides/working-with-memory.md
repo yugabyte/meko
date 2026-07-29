@@ -6,7 +6,7 @@ weight: 4300
 ---
 Meko's memory system gives agents persistent recall across sessions.
 
-This guide covers per-agent memory operations you drive from a coding agent over MCP: add a memory, search for relevant memories, and list everything stored for a user or agent.
+This guide covers memory operations you drive from a coding agent over MCP: add a memory, search for relevant memories, and list everything stored for the current user in a datapack.
 
 Meko can also move memories into shared, institutional knowledge through a separate review flow (learnings, collective memory, and shared knowledge). That lifecycle, including how candidates are identified and promoted from **Learnings** in the Meko UI, is described in [Learnings](../../architecture/core-concepts/learnings/). For how extraction and dual storage (vectors + graph) work under the hood, see [Memory](../../architecture/core-concepts/memory/).
 
@@ -62,6 +62,12 @@ What coding standards have I set?
 
 The MCP server performs a semantic similarity search across your memories and returns the most relevant results with relevance scores.
 
+`memory_search` spans the current user's agent namespaces in the selected datapack. For example, a search from Claude Code can find a relevant memory written from Cursor or Claude Desktop. The `agent_id` sent with the search is used for trace attribution; it doesn't filter the results. Agents should make one search rather than repeating it for every known agent ID.
+
+> [!WARNING] Retrieval size and LLM context
+>
+> Retrieving all memories or running a broad memory search can add substantial content to your LLM context. Set `memory_search.limit` to return fewer search results when appropriate. See the [MCP memory tools reference](../../reference/mcp-server/#memory-tools) for details.
+
 <!-- 
 ### Via CLI
 
@@ -81,17 +87,30 @@ Results from both strategies are combined and ranked, allowing a memory to be re
 
 ## View all memories
 
-To see every memory Meko has stored for a user or agent, ask your coding agent in plain language. For example:
+To see every memory Meko has stored for you in a datapack, ask your coding agent in plain language. For example:
 
 ```text
 List every memory Meko has for me in my default datapack.
 ```
 
 ```text
-Show all stored memories for my cursor agent — I want the complete list, not just the top matches.
+Show all memories stored for me in this datapack — I want the complete list, not just the top matches.
 ```
 
-You should see the agent use the [MCP tool](../../reference/mcp-server/#memory-tools) `memory_get_all` to return the full list (not ranked like search), which is useful for auditing or building a memory dashboard.
+You should see the agent use the [MCP tool](../../reference/mcp-server/#memory-tools) `memory_get_all` to return the full list across your agent namespaces (not ranked like search), which is useful for auditing or building a memory dashboard.
+
+## Promote memories to shared knowledge
+
+Datapack owners and maintainers can use `memory_promote` to move private memories into the datapack's shared knowledge base and Collective Memory. Promotion removes the selected records from private memory and can't be reversed through the MCP tool.
+
+Before promoting, your agent should:
+
+1. Retrieve and show the exact memories it will promote.
+1. Explain that datapack members will be able to find the promoted knowledge and that the private records will be removed.
+1. Ask for explicit confirmation.
+1. Call `memory_promote` only after you confirm.
+
+For the complete shared-knowledge lifecycle, see [Learnings](../../architecture/core-concepts/learnings/).
 
 <!-- These are CLI actions not exposed for now
 ## Clear memories

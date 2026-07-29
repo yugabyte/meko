@@ -22,7 +22,13 @@ When a quota is exceeded, further calls are blocked until you upgrade. Datapack 
 
 ## Tools
 
-The Meko MCP Server provides the following tools.
+The Meko MCP Server provides 23 tools by default. Experimental conversation-search tools are hidden unless a deployment explicitly enables them.
+
+Authorization comes from the authenticated user and their datapack grants.
+
+> [!WARNING] Breaking change in v2.1.0
+>
+> Tool-level `scope` arguments (`"read"`, `"write"`, `"admin"`) were retired. Don't send them on MCP tool calls. New clients no longer see `scope` in tool schemas. A temporary compatibility shim currently strips the obsolete argument from older clients and will be removed in a future release. Rerun the installer or install the current plugin from [`yugabyte/meko-skills`](https://github.com/yugabyte/meko-skills) so hooks and skills stop sending it. Installer flags such as `--scope user|project` are unrelated and remain supported.
 
 | Use | For |
 | :--- | :--- |
@@ -40,41 +46,32 @@ The Meko MCP Server provides the following tools.
 
 | Tool | Description |
 | :--- | :---------- |
-| `conversation_create` | Create a stored conversation container for all conversations in a datapack.<br>Use this to save a chat/thread, not just a fact or document.<br>Typical inputs: `agent_id, session_id, datapack_id, title, run_id, metadata` |
-| `conversation_add_message` | Add a user/assistant turn to a stored conversation.<br>Use this to preserve full exchanges rather than storing long-term facts.<br>Typical inputs: `seed, datapack_id, conversation_id, agent_id, input, output, reasoning, metadata` |
-| `conversation_get` | Fetch a stored conversation, optionally with messages.<br>Use this to review or replay a past conversation.<br>Typical inputs: `datapack_id, agent_id, conversation_id, include_messages, limit, offset` |
-| `conversation_list` | List stored conversations.<br>Use this to browse saved chat history.<br>Typical inputs: `datapack_id, agent_id, limit, offset` |
-| `conversation_update` | Update a conversation title or metadata.<br>Use this when organizing or relabeling stored conversations.<br>Typical inputs: `datapack_id, conversation_id, agent_id, title, metadata` |
-| `conversation_delete` | Permanently delete a stored conversation.<br>Use this to remove saved conversation history.<br>Typical inputs: `datapack_id, conversation_id, agent_id` |
-| `conversation_search`<sup>*</sup> | Search the conversation history cache for a near-duplicate past turn and, on a hit, return its full thread.<br>Use this to check whether a query has effectively already been answered before falling back to `memory_search` or `knowledgebase_search`.<br>Typical inputs: `query, conversation_id, agent_id, datapack_id, limit` |
-| `contextual_prominence_search`<sup>‡</sup> | One retrieval call across the conversation cache, memory, and the knowledge base. Picks the cheapest source sufficient to answer the query and tags each result with its source.<br>Use this instead of calling `conversation_search`, `memory_search`, and `knowledgebase_search` separately.<br>Typical inputs: `query, conversation_id, agent_id, datapack_id, limit` |
+| `conversation_create` | Create a stored conversation container.<br>Use this to save a chat/thread, not just a fact or document.<br>Typical inputs: `agent_id, session_id, datapack_id, title, run_id, metadata` |
+| `conversation_add_message` | Add a user/assistant turn to a stored conversation. The optional `plan` is an array of action strings.<br>Use this to preserve full exchanges; Meko asynchronously extracts durable facts from the saved user turn.<br>Typical inputs: `conversation_id, input, output, agent_id, reasoning, plan, metadata, seed, datapack_id` |
+| `conversation_get` | Fetch an agent-owned conversation, optionally with messages.<br>The supplied `agent_id` must own the conversation. Use this to review or replay a past conversation.<br>Typical inputs: `conversation_id, agent_id, include_messages, limit, offset, datapack_id` |
+| `conversation_list` | List conversations for a datapack across the current user's agent namespaces.<br>`agent_id` is used for trace attribution, not result filtering.<br>Typical inputs: `datapack_id, conversation_id, agent_id, limit, offset` |
+| `conversation_update` | Update an agent-owned conversation's title or metadata.<br>Use this when organizing or relabeling stored conversations.<br>Typical inputs: `conversation_id, agent_id, title, metadata, datapack_id` |
+| `conversation_delete` | Permanently delete an agent-owned conversation and all its messages.<br>Use this to remove saved conversation history.<br>Typical inputs: `conversation_id, agent_id, datapack_id` |
 | `track_token_usage` | Record a token-usage observation against a conversation trace, so that LLM, embedding, or extraction spend is attributed for free-tier accounting and dashboards.<br>Use this to pair a billable model call with a recorded usage entry.<br>Typical inputs: `conversation_id, name, input_tokens, output_tokens, total_tokens, model, message_id, datapack_id` |
-
-<sup>*</sup> Not available by default; may not be enabled on every Meko deployment.
-
-<sup>†</sup> Kept for one release for backward compatibility; will be removed in a future release. Use `conversation_add_message` (or automatic capture) instead.
-
-<sup>‡</sup> Currently disabled on Meko Cloud — an authenticated call returns `feature_disabled`. It's listed here for forward reference; don't depend on it yet. Use `conversation_search`, `memory_search`, and `knowledgebase_search` individually in the meantime.
 
 ### Memory tools
 
 | Tool | Description |
 | :--- | :---------- |
-| `memory_add` | Store durable facts, preferences, decisions, or useful outcomes for a better context.<br>Use this to add long-term reusable memory across threads.<br>Typical inputs: `datapack_id, agent_id, conversation_id, text, messages, run_id, metadata` |
-| `memory_search` | Search stored memories semantically and return related graph relations.<br>Use this to recall prior facts, preferences, or decisions.<br>Typical inputs: `datapack_id, agent_id, conversation_id, query, limit`|
-| `memory_get_all` | List all memories for an agent or user scope.<br>Use this to audit or inspect what's been remembered.<br>Typical inputs: `datapack_id, agent_id, conversation_id, run_id` |
-| `memory_get_by_id` | Retrieve a single memory by ID.<br>Use this to inspect a memory.<br>Typical inputs: `datapack_id, agent_id, conversation_id, memory_id` |
-| `memory_update` | Replace the text of an existing memory.<br>Use this to correct a remembered fact.<br>Typical inputs: `datapack_id, agent_id, conversation_id, memory_id, text` |
-| `memory_delete_by_id` | Delete one memory.<br>Use this to remove a specific stored memory.<br>Typical inputs: `datapack_id, agent_id, conversation_id, memory_id` |
-| `memory_delete_all` | Delete all memories in a scope.<br>Use this for a full reset or broad cleanup.<br>Typical inputs: `datapack_id, agent_id, conversation_id, run_id` |
-| `flush_pending_memory_candidates`<sup>†</sup> | **Deprecated.** Returns a directive payload pointing agents at `conversation_add_message` instead. Saving a conversation turn now triggers the same fact-capture automatically on the server, so agents no longer need to proactively scan for memory candidates.<br>Typical inputs: `datapack_id, agent_id, conversation_id` |
-| `memory_promote` | Promote memories into the datapack's shared knowledge base and Collective Memory; this also removes them from the agent's private store.<br>Use this to programmatically promote memories via MCP, rather than via the **Learnings** tab in the Meko portal. Only datapack owners and maintainers may promote. See [Learnings](../../architecture/core-concepts/learnings/).<br>Typical inputs: `datapack_id, agent_id, conversation_id, memory_ids` |
+| `memory_add` | Store durable facts, preferences, decisions, or useful outcomes.<br>Use this for direct "remember this" requests, facts found only in assistant/tool output, and corrections. Saved conversation turns are extracted automatically.<br>Typical inputs: `text, conversation_id, agent_id, run_id, metadata, messages, datapack_id` |
+| `memory_search` | Search the current user's memories across agent namespaces and return related graph relations.<br>`agent_id` is used for trace attribution, not result filtering; don't fan out one search per agent.<br>`limit` sets the maximum number of returned results (default: `10`); set a smaller value when you need fewer results to reduce response size and LLM context use.<br>Typical inputs: `query, conversation_id, agent_id, limit, datapack_id, run_id`|
+| `memory_get_all` | List the current user's memories across agent namespaces in a datapack.<br>`agent_id` is used for trace attribution, not result filtering.<br>Typical inputs: `conversation_id, agent_id, datapack_id, promoted` |
+| `memory_get_by_id` | Retrieve a single memory by ID.<br>Use this to inspect a memory.<br>Typical inputs: `memory_id, conversation_id, agent_id, datapack_id` |
+| `memory_update` | Replace the text of an existing memory.<br>Use this to correct a remembered fact; `agent_id` must match the writer.<br>Typical inputs: `memory_id, text, conversation_id, agent_id, datapack_id` |
+| `memory_delete_by_id` | Delete one memory.<br>Use this to remove a specific stored memory; `agent_id` must match the writer.<br>Typical inputs: `memory_id, conversation_id, agent_id, datapack_id` |
+| `memory_delete_all` | Delete memories for an agent, optionally narrowed by run ID.<br>Use this for a full reset or broad cleanup.<br>Typical inputs: `conversation_id, agent_id, run_id, datapack_id` |
+| `memory_promote` | Move memories into the datapack's shared knowledge base and Collective Memory, removing them from the agent's private store.<br>Before this one-way action, preview the exact memories, explain team visibility and private-memory removal, and get explicit confirmation. Only datapack owners and maintainers may promote. See [Learnings](../../architecture/core-concepts/learnings/).<br>Typical inputs: `conversation_id, memory_ids, agent_id, datapack_id` |
 
 ### Knowledgebase tools
 
 | Tool | Description |
 | :--- | :---------- |
-| `knowledgebase_search` | Perform a similarity search based on the user query.<br>Use this when you want to search the knowledge base for your queries.<br>Typical inputs: `datapack_id, agent_id, conversation_id` |
+| `knowledgebase_search` | Perform hybrid semantic and keyword search over a datapack's knowledge base.<br>Use this to search uploaded and shared documents.<br>Typical inputs: `query, conversation_id, datapack_id, agent_id, limit` |
 
 <!--
 ### Database tools
@@ -90,16 +87,16 @@ The Meko MCP Server provides the following tools.
 
 | Tool | Description |
 | :--- | :---------- |
-| `datapack_create` | Provision a new datapack with database and MCP details.<br>Use this to set up a new isolated Meko environment.<br>Typical inputs: `conversation_id, datapack_id, name` |
-| `datapack_describe` | Return datapack details and optional status.<br>Use this to inspect an existing datapack.<br>Typical inputs: `conversation_id, datapack_id, name, include_status` |
-| `datapack_list` | List available datapacks.<br>Use this to see all workspaces/environments.<br>Typical inputs: `conversation_id, datapack_id, name` |
-| `datapack_update` | Rename a datapack and/or update its description. Both `name` and `description` are optional; pass at least one. Returns `nothing_to_update` if neither is provided.<br>Typical inputs: `conversation_id, datapack_id, name, description` |
-| `datapack_delete` | Permanently delete a datapack.<br>Use this to completely delete an environment.<br>Typical inputs: `conversation_id, datapack_id, name` |
+| `datapack_create` | Provision a new datapack.<br>Use this to set up a new isolated Meko environment.<br>Typical inputs: `name, conversation_id, datapack_id` |
+| `datapack_describe` | Return datapack details and optional status.<br>Use this to inspect an existing datapack.<br>Typical inputs: `datapack_id, include_status, conversation_id` |
+| `datapack_list` | List datapacks visible to the current user.<br>Use this to see all workspaces/environments.<br>Typical inputs: `conversation_id, datapack_id` |
+| `datapack_update` | Update a datapack's name and/or description.<br>At least one of `name` or `description` must be provided; clearing a description with an empty string isn't supported.<br>Typical inputs: `datapack_id, name, description, conversation_id` |
+| `datapack_delete` | Permanently delete a datapack.<br>This operation is irreversible and requires an explicit `datapack_id`.<br>Typical inputs: `datapack_id, conversation_id` |
 
 ### Artifact tools
 
 | Tool | Description |
 | :--- | :---------- |
 | `artifact_put` | Upload a file artifact (report, CSV, PDF, code output, and so on) to a datapack for later retrieval or cross-agent sharing.<br>Use this when an agent has generated a file it wants to persist. Uploading the same bytes twice is idempotent and returns the same content hash, which is the lookup key for `artifact_get`.<br>Typical inputs: `filename, content_base64, content_type, conversation_id, datapack_id, agent_id` |
-| `artifact_get` | Retrieve a previously uploaded artifact by its content hash.<br>Use this when an agent needs to read back a file it, or another agent, previously stored using `artifact_put`.<br>Typical inputs: `content_hash, conversation_id, datapack_id, agent_id` |
+| `artifact_get` | Retrieve a previously uploaded artifact by its content hash.<br>Use this when an agent needs to read back a file it, or another agent, previously stored using `artifact_put`. Files smaller than 1 MB are returned inline; larger files are written to the client's local artifact directory and returned by path.<br>Typical inputs: `content_hash, conversation_id, datapack_id, agent_id` |
 

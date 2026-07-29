@@ -44,7 +44,7 @@ The same extraction runs automatically whenever a conversation turn is saved (se
 
 ### Search memories
 
-Find relevant memories using semantic similarity search. Returns the top matches with relevance scores.
+Find relevant memories using semantic similarity search. A single search spans the authenticated user's agent namespaces in the selected datapack and returns the top matches with relevance scores. The calling `agent_id` is retained for trace attribution; it doesn't filter the results.
 
 ```text
 "What are my vacation preferences?"
@@ -54,11 +54,11 @@ This searches both the vector store (pgvector) and the graph store (Meko AGE), c
 
 ### Get memories
 
-Retrieve memories stored for a given user or agent. Useful for debugging or displaying a memory dashboard.
+Retrieve all memories stored for the authenticated user in a datapack, across the clients that wrote them. This is useful for auditing or displaying a memory dashboard.
 
 ### Clear memories
 
-Remove memories for a user or agent. This is a destructive operation - cleared memories cannot be recovered.
+Remove memories written under an agent ID, optionally narrowed by run ID. This is a destructive operation - cleared memories cannot be recovered.
 
 ## Memory vs. conversation history
 

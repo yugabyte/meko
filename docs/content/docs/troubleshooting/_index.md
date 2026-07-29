@@ -36,6 +36,36 @@ If you have problems with your setup, check the following common issues:
 
     You can always work around this by explicitly asking your agent to save ("save this conversation to Meko") or remember ("remember this") — those requests are never best-effort.
 
+- Cursor or Codex misses conversations during automatic capture.
+
+    In v2.1.0, Cursor's ordinary archive and new-chat workflows don't reliably emit the lifecycle events the capture hooks expect. Codex hooks run, but the capture worker doesn't yet parse Codex `response_item` transcript records. Explicitly ask Meko to save important conversations or remember critical facts; don't rely on complete automatic capture in these clients.
+
+- Claude Code still uses old Meko skill behavior after an upgrade.
+
+    Re-run the installer with an explicit current version or the `@latest` tag so `npx` doesn't reuse a stale cached package:
+
+    ```sh
+    npx @yugabytedb/meko-mcp@latest
+    ```
+
+    To refresh the skills inside an active Claude Code session without restarting, run:
+
+    ```text
+    /plugin marketplace update meko-agent-skills
+    /reload-plugins
+    /doctor
+    ```
+
+    The installer now uses the public HTTPS marketplace at `https://github.com/yugabyte/meko-skills.git`; GitHub SSH credentials aren't required.
+
+- Tool calls still send a `scope` argument after upgrading to v2.1.0.
+
+    Tool-level `scope` (`"read"`, `"write"`, `"admin"`) was retired. Stop sending it in custom integrations, and rerun the installer or refresh the skills plugin so hooks and skills stop sending it too. A temporary compatibility shim currently strips the argument from older clients, but that shim will be removed in a future release. This is unrelated to installer flags such as `--scope user|project`.
+
+- SessionStart reports a persistent capture failure.
+
+    Quota failures and HTTP `402`/`403` responses deliberately keep the capture watermark in place so no transcript range is silently marked as saved. Resolve the quota, billing, permission, or authentication problem and retry; a successful capture clears the warning.
+
 ## Report an issue
 
 The fastest way to get help and report bugs is the Meko Discord. Join the community, post in the relevant channel, and the team or other community members will respond.

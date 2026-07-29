@@ -65,7 +65,7 @@ To share your datapack with colleagues:
 
 Each datapack is fully isolated:
 
-- **Data isolation**. Logical isolation within a shared YugabyteDB universe. One agent cannot access another's data.
+- **Data isolation**. Logical isolation within a shared YugabyteDB universe. An authenticated user's clients can search that user's memories across agent namespaces, but can't read another datapack member's private memories.
 - **Credential isolation**. User API keys and database credentials are scoped to your account; datapack data is separated in storage.
 - **MCP isolation**. Tool calls include a `datapack_id` so the shared MCP server only reads and writes that datapack's data.
 
@@ -79,26 +79,17 @@ You can also configure clients by manually adding this configuration to your cod
 
 ## Automatic capture and datapack pinning
 
-For on-demand tool calls, your agent chooses the datapack per call — for example, by naming it in your prompt ("save this to my `research` datapack"). Automatic capture (the background behavior installed by the [Automated install](../../../quick-start/#connect-your-ai-client) flow, such as Claude Code and Codex session hooks) works differently, because there's no per-call prompt to read a datapack name from: it needs a datapack to write to by default.
+When you have multiple datapacks, you designate one as your **active pin** - the default datapack where Meko saves conversations and memories. If you only have one datapack, Meko uses it automatically.
 
-That default is your **pinned datapack**. If you haven't pinned one, automatic capture falls back to your account's default datapack (`meko_default_datapack`).
+### How to change your pin
 
-For Claude Code and Claude Desktop, the Automated install provides two selector skills:
-
-- **`meko-select-datapack`** for Claude Code, through the `meko-agent-skills` plugin.
-- **`meko-select-datapack-desktop`** for Claude Desktop, which has no session hooks. The Desktop installer produces both `meko-mcp-tools-desktop.skill` and `meko-select-datapack-desktop.skill`; import both files into Claude Desktop.
-
-> [!NOTE] Cursor and Codex
->
-> Their Automated install includes capture hooks and the core `meko-mcp-tools` skill, but not the guided datapack selector. You can still name a datapack in an on-demand prompt without changing your automatic-capture pin.
-
-Ask your agent in plain language to list, inspect, switch, or clear the active datapack:
+**Ask your agent in plain language:**
 
 ```text
 Switch my Meko datapack to research
 ```
 
-You can also invoke the skill directly:
+**Or invoke the selector skill directly:**
 
 ```text
 # Claude Code
@@ -108,37 +99,38 @@ You can also invoke the skill directly:
 /meko-select-datapack-desktop
 ```
 
-The selector can:
+The interactive selector will:
 
-- List the datapacks you can access, sorted newest first, and mark the current pin.
-- Show up to 10 datapacks at a time; reply with `next` or `prev` to move between pages.
-- Pin by replying with a row number or by entering part of a datapack name. If a search has several matches, the selector asks you to choose rather than guessing.
-- Automatically select the datapack when your account has only one.
-- Offer to set a pin before the first Meko write when you have several datapacks and no pin.
-- Report the current pin when you ask "which datapack am I on?"
-- Leave the current pin unchanged with `cancel`, or remove it with `clear`, `none`, or `unpin`.
+- List your accessible datapacks with your access role (such as, `owner`, `maintainer`)
+- Let you pick by row number or datapack name (partial names work)
+- Show your current pin with a checkmark
+- Navigate multiple pages if you have many datapacks
 
-The pin is a default, not a lock. You can target another datapack for one tool call without changing the pin; later calls continue using the pinned datapack.
+To clear your pin and return to your account default, reply with `clear` or `none`.
 
-### How the pin persists
+### Pins apply to new conversations only
 
-In **Claude Code**, the pin is scoped to the current project using the session's `agent_id` (for example, `claude_code:meko-mcp-server`). The selector stores it in the local Meko capture state, and the SessionStart hook injects it into new sessions and routes conversation creation, memory preload, and automatic checkpoints to that datapack. The pin survives `/clear`, `/compact`, restarting Claude Code, and opening another Claude Code window in the same repository. Projects with different `agent_id` values can have different pins.
+**When you switch pins:** Your current conversation stays in its original datapack. The new pin takes effect only when you start a new chat. Existing conversations never move between datapacks.
 
-In **Claude Desktop**, the pin is stored as a tagged Meko memory under `agent_id="claude_desktop"`. Before a Meko-using turn, the Desktop skill recalls that pin and passes its `datapack_id` to Meko calls. The pin therefore survives across Desktop conversations until you switch or clear it, without relying on local files or hooks.
+| Scenario | Result |
+|----------|--------|
+| Pin a datapack, then start a new chat | New chat uses the pinned datapack |
+| Pin a datapack while chatting | Current conversation stays in its original datapack; next chat uses the new pin |
+| Switch pins on Claude Desktop | Ask the agent to "start a new Meko conversation" to apply the pin immediately |
 
-The Claude Code selector shows your actual access role for each datapack, such as `owner` or `maintainer`.
+**Example:** You're chatting in the "research" datapack. You say "Switch my pin to personal-projects." Meko updates the pin, but the current conversation keeps writing to "research." Your next chat will use "personal-projects."
 
-> [!NOTE] Claude Desktop role display
+### How the pin persists across sessions
+
+**Claude Code**: The pin is stored per project and survives restarting Claude Code, clearing your transcript, and opening another window in the same repository. Different projects can have different pins.
+
+**Claude Desktop**: The pin is stored in Meko memory and survives across all Desktop conversations until you change or clear it.
+
+If your pinned datapack is deleted or you lose access, Meko fails gracefully rather than silently writing elsewhere. Run the selector to pick an accessible datapack, or clear the pin.
+
+> [!NOTE] Cursor and Codex in v2.1.0
 >
-> The Desktop selector currently labels every listed datapack as **Owner**, even when your actual shared-datapack grant is different, such as **Maintainer**. This is a display limitation only; Meko continues to enforce your actual permissions.
-
-If a pinned datapack is later deleted or you lose access to it, calls using the stale pin fail rather than silently writing to another datapack. Run the selector again to choose an accessible datapack, or clear the pin to return to the account default.
-
-### When a switch takes effect
-
-A saved conversation can't move between datapacks after it's created. The selector stores a new pin immediately, and agent-driven calls that aren't tied to the current saved conversation can use it immediately. Automatic capture for the conversation already in progress keeps writing to the datapack where that conversation was created.
-
-Start a **new session or chat** to route automatic capture to the newly pinned datapack. Clearing the pin follows the same rule: the current conversation remains where it started, while new sessions fall back to `meko_default_datapack`. On Claude Desktop, the agent can instead start a new Meko conversation immediately if you ask the switch or clear to take effect in the current chat.
+> These clients don't have a guided datapack selector. You can still name a datapack directly in a prompt without changing your pin (for example, "save this conversation to the research datapack"). To set or change your default pin, use Claude Code or Desktop's selector.
 
 ## Manage datapacks
 

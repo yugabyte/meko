@@ -1,15 +1,15 @@
 ---
 title: Learnings
 linkTitle: Learnings
-description: How per-agent memory becomes institutional knowledge through review and promotion
+description: How private user memory becomes institutional knowledge through review and promotion
 weight: 25
 ---
 
-A _learning_ is a candidate piece of per-agent memory that has been surfaced for human review and possible promotion to the institutional zone of a datapack. Learnings are the bridge between what an individual agent has learned in its own conversations and what every agent in the datapack can read.
+A _learning_ is a candidate piece of private memory that has been surfaced for human review and possible promotion to the institutional zone of a datapack. Learnings are the bridge between what a user's agents have learned in their conversations and what every datapack member's agents can read.
 
 ## The promotion flow
 
-Meko separates what an agent learns from itself from what the wider system trusts. Memory starts private and per-agent. Promoted content becomes available to every agent in the datapack.
+Meko separates what a user's agents learn from what the wider team trusts. Memory starts private to the authenticated user, with the writing agent recorded for attribution. Promoted content becomes available to every member of the datapack.
 
 ![Memory promotion flow: Conversations to Memories to Learnings to Collective Memory and Shared Knowledge](/images/promotion-flow.svg)
 
@@ -17,7 +17,7 @@ The pipeline has three stages.
 
 ### 1. Extraction
 
-As an agent has conversations, Meko extracts entities, relationships, and facts and stores them as [memories](../memory/) scoped to that agent. The agent owns this memory; no other agent in the datapack can read it.
+As an agent has conversations, Meko extracts entities, relationships, and facts and stores them as [memories](../memory/) tagged with the writing agent. The authenticated user's other clients can retrieve those memories with `memory_search` and `memory_get_all`; other datapack members can't read them until they are promoted.
 
 ### 2. Learning identification
 
@@ -36,13 +36,13 @@ Both destinations sit inside the same datapack, so promoted content is bounded b
 
 Typically, reviewers manually promote learnings via the **Learnings** tab, but an agent with owner or maintainer access can also promote memories directly using the [memory_promote](../../../reference/mcp-server/#memory-tools) MCP tool. This is useful when the reviewing agent already knows which memories are worth sharing.
 
-## Per-agent versus institutional
+## Private versus institutional
 
 | Zone | Stages | Who can read it |
 | :--- | :----- | :-------------- |
-| Per-agent | Conversations, Memories | Only the originating agent |
+| Private | Conversations, Memories | The authenticated user's agents; individual conversation fetches remain tied to the originating agent |
 | Review | Learnings | Surfaced to human reviewers in the Meko UI |
-| Institutional | Collective Memory, Shared Knowledge | Every agent in the datapack |
+| Institutional | Collective Memory, Shared Knowledge | Every member's agents in the datapack |
 
 This separation is what makes Meko's collective memory model auditable. Every promotion is an explicit decision by a reviewer, captured in the [trace](../traces/) for that datapack.
 
@@ -59,4 +59,4 @@ Reviewers choose the destination at promotion time. A learning can be promoted t
 
 - [Memory](../memory/) &mdash; how per-agent memory is extracted and stored
 - [Knowledge bases](../knowledgebase/) &mdash; how Shared Knowledge is indexed and queried
-- [Work with memory](../../../guides/working-with-memory/) &mdash; add, search, and list per-agent memories over MCP; use the **Learnings** flow in the Meko UI for identification and promotion
+- [Work with memory](../../../guides/working-with-memory/) &mdash; add, search, list, and promote memories over MCP

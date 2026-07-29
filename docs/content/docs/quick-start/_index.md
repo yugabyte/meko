@@ -49,7 +49,11 @@ There are three ways to connect. Pick the one that fits your workflow.
 
 _Recommended for Cursor, Claude Code, Claude Desktop, and Codex._
 
-The portal gives you a one-line `npx` command per client. It registers the Meko MCP server _and_ installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically, saving conversations, capturing memories, and searching knowledge without you having to ask each time. In harnesses that support it (such as Claude Code and Codex), the skill also hooks into session lifecycle events to capture context at session start and end.
+The portal gives you a one-line `npx` command per client. It registers the Meko MCP server _and_ installs an agent behavioral skill that teaches your agent _when_ to use Meko tools automatically, saving conversations, capturing memories, and searching knowledge without you having to ask each time. In clients that support them, the installer also configures session lifecycle hooks.
+
+> [!NOTE] Automatic capture in v2.1.0
+>
+> Claude Code provides the reliable hook-driven capture path. Cursor lifecycle events don't fire reliably for ordinary archive and new-chat workflows, and Codex's transcript format isn't parsed by the 2.1.0 capture worker. In Cursor and Codex, explicitly ask Meko to save a conversation or remember an important fact rather than relying on complete automatic capture.
 
 Automatic capture writes to your **pinned datapack** by default (falling back to your account's default datapack if you haven't pinned one). See [Automatic capture and datapack pinning](../architecture/core-concepts/datapacks/#automatic-capture-and-datapack-pinning) to change it.
 
@@ -62,6 +66,8 @@ Automatic capture writes to your **pinned datapack** by default (falling back to
     ```
 
     Replace `<client>` with `claude-code`, `claude-desktop`, `cursor`, or `codex`.
+
+    On a fresh install, `--url` is optional: the installer defaults to the production endpoint shown above. Existing consistent custom or development endpoints are preserved; pass `--url` explicitly to override them or resolve conflicting client configurations.
 
 4. Restart your client if the new MCP server doesn't show up automatically.
 
