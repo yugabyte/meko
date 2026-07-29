@@ -135,6 +135,8 @@ pub struct YbReadSpec {
     pub n_targets: usize,
     pub limit: u64,
     pub is_forward_scan: c_int,
+    pub range_values: *const YbBind,
+    pub n_range: usize,
 }
 
 /// A decoded read cell (mirrors [`YbBind`], the write side). `Null` is a

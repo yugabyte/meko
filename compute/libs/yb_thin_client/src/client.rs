@@ -670,6 +670,8 @@ impl TsClient {
                     n_targets: op.read.target_ids.len(),
                     limit: op.read.limit,
                     is_forward_scan: op.read.forward as std::os::raw::c_int,
+                    range_values: std::ptr::null(),
+                    n_range: 0,
                 },
                 paging_state_in: op.paging_state.map_or(std::ptr::null(), |p| p.as_ptr()),
                 paging_state_in_len: op.paging_state.map_or(0, |p| p.len()),
