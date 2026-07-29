@@ -71,54 +71,44 @@ func TestControllerAttachHook(t *testing.T) {
 	}
 }
 
-func TestControllerPendingInit(t *testing.T) {
+func TestControllerRecordAndListBranches(t *testing.T) {
 	var cap capture
 
 	// Record.
 	rec := recordingServer(t, &cap, http.StatusOK, `null`)
 	c := NewController(rec.URL, nil)
-	err := c.RecordPendingInit(context.Background(), "branch-xyz", registry.PendingBranchInitRequest{
+	err := c.RecordBranch(context.Background(), "branch-xyz", registry.BranchCreateRecord{
 		BranchName: "main",
 		PgVersion:  180000,
 		StartLSN:   "0/0",
 	})
 	if err != nil {
-		t.Fatalf("RecordPendingInit: %v", err)
+		t.Fatalf("RecordBranch: %v", err)
 	}
-	if cap.method != http.MethodPost || cap.path != "/control/v1/branch/branch-xyz/pending_init" {
+	if cap.method != http.MethodPost || cap.path != "/control/v1/branch/branch-xyz/record" {
 		t.Fatalf("record hit %s %s", cap.method, cap.path)
 	}
-	var sent registry.PendingBranchInitRequest
+	var sent registry.BranchCreateRecord
 	if err := json.Unmarshal(cap.body, &sent); err != nil {
-		t.Fatalf("bad pending body: %v", err)
+		t.Fatalf("bad record body: %v", err)
 	}
 	if sent.BranchName != "main" || sent.PgVersion != 180000 || sent.StartLSN != "0/0" {
-		t.Fatalf("unexpected pending body: %+v", sent)
+		t.Fatalf("unexpected record body: %+v", sent)
 	}
 
 	// List.
 	lst := recordingServer(t, &cap, http.StatusOK,
 		`[{"branch_id":"branch-xyz","branch_name":"main","pg_version":180000,"ancestor_branch_id":null,"start_lsn":"0/0"}]`)
 	c2 := NewController(lst.URL, nil)
-	inits, err := c2.ListPendingInits(context.Background())
+	branches, err := c2.ListBranches(context.Background())
 	if err != nil {
-		t.Fatalf("ListPendingInits: %v", err)
+		t.Fatalf("ListBranches: %v", err)
 	}
-	if cap.method != http.MethodGet || cap.path != "/control/v1/pending_timeline_inits" {
+	if cap.method != http.MethodGet || cap.path != "/control/v1/branches" {
 		t.Fatalf("list hit %s %s", cap.method, cap.path)
 	}
-	if len(inits) != 1 || inits[0].BranchID != "branch-xyz" || inits[0].PgVersion != 180000 {
-		t.Fatalf("unexpected inits: %+v", inits)
-	}
-
-	// Delete.
-	del := recordingServer(t, &cap, http.StatusOK, `null`)
-	c3 := NewController(del.URL, nil)
-	if err := c3.DeletePendingInit(context.Background(), "branch-xyz"); err != nil {
-		t.Fatalf("DeletePendingInit: %v", err)
-	}
-	if cap.method != http.MethodDelete || cap.path != "/control/v1/branch/branch-xyz/pending_init" {
-		t.Fatalf("delete hit %s %s", cap.method, cap.path)
+	if len(branches) != 1 || branches[0].BranchID != "branch-xyz" || branches[0].PgVersion != 180000 {
+		t.Fatalf("unexpected branches: %+v", branches)
 	}
 }
 
@@ -170,20 +160,8 @@ func TestControllerEndpointCreateAndList(t *testing.T) {
 	}
 }
 
-func TestControllerBranchRegisterAndNames(t *testing.T) {
+func TestControllerListBranchNames(t *testing.T) {
 	var cap capture
-	rec := recordingServer(t, &cap, http.StatusOK, `null`)
-	c := NewController(rec.URL, nil)
-	if err := c.BranchRegister(context.Background(), "b1", registry.BranchRegisterRequest{
-		StartLSN:   "0/16B3E10",
-		BranchName: ptrStr("main"),
-	}); err != nil {
-		t.Fatalf("BranchRegister: %v", err)
-	}
-	if cap.method != http.MethodPost || cap.path != "/control/v1/branch/b1/register" {
-		t.Fatalf("register hit %s %s", cap.method, cap.path)
-	}
-
 	names := recordingServer(t, &cap, http.StatusOK, `[{"branch_id":"b1","branch_name":"main"}]`)
 	c2 := NewController(names.URL, nil)
 	got, err := c2.ListBranchNames(context.Background())

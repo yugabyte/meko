@@ -112,17 +112,14 @@ type BranchRecipe struct {
 	StartLSN         string
 }
 
-// RecipeStore records and clears the controller's pending-init recipes
+// RecipeStore records a branch's creation record in the storage-layer registry
 // (controller-project-create.md). branchID is 32 lowercase hex digits (the
 // storage-layer BranchId the controller maps to — the storage layer is flat, so
-// the recipe is keyed by branch_id alone). It may be unavailable (no managed
-// controller), in which case the steps no-op with a warning — the
-// recipe then lives only in the control DB's branch row.
+// the record is keyed by branch_id alone). It may be unavailable (no managed
+// controller), in which case the step no-ops with a warning — the branch then
+// lives only in the control DB's branch row.
 type RecipeStore interface {
 	RecordBranchRecipe(ctx context.Context, branchID string, r BranchRecipe) error
-	// ClearBranchRecipe drops the recipe once the branch is materialized. It is
-	// idempotent: a missing recipe is treated as success.
-	ClearBranchRecipe(ctx context.Context, branchID string) error
 }
 
 // Deps bundles the collaborators the production steps need. The Registry holds
@@ -137,7 +134,6 @@ type Deps struct {
 	Deployer      deploy.Deployer
 	EndpointYB    deploy.YBConn
 	ControllerURL string // controller URL a launched endpoint uses to reach the controller
-	Bootstrap     bool   // initdb the recorded branch on a (non-fork) endpoint's first deploy
 }
 
 // hex32 renders a UUID as the storage layer's 32-lowercase-hex BranchId (no

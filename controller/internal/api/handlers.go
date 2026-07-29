@@ -29,8 +29,7 @@ import (
 // with no deployer the endpoint mutation routes refuse with 501, and with no SC
 // create-project records the control-plane rows only. ControllerURL is the
 // controller URL as a *launched endpoint* reaches it (e.g. over the shared
-// network); empty means the endpoint runs controller-free. Bootstrap forces initdb of
-// the recorded branch on the first endpoint's deploy.
+// network); empty means the endpoint runs controller-free.
 type Provisioning struct {
 	Deployer deploy.Deployer
 	// Node reads LSNs from an endpoint's co-located safekeeper to resolve a
@@ -40,8 +39,7 @@ type Provisioning struct {
 	Node          *node.Client
 	EndpointYB    deploy.YBConn
 	ControllerURL string
-	Bootstrap     bool
-	// Recipes records/clears a branch's pending-init recipe (the task framework's
+	// Recipes records a branch's creation record (the task framework's
 	// RecipeStore port). Production wires the in-process store; tests inject a fake.
 	Recipes task.RecipeStore
 }
@@ -669,18 +667,14 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// Plan the work as an async task and return 202 + the Task. The endpoint row,
 	// its deploy, and the address record are all created by the worker's
 	// create_endpoint step; the single-writer rule (a duplicate read_write
-	// endpoint) now surfaces as a failed task rather than a synchronous 409. A fork
-	// carries its ancestry so the step clones from the ancestor at the fork LSN
-	// rather than initdb'ing a fresh branch.
+	// endpoint) now surfaces as a failed task rather than a synchronous 409.
 	t, err := c.tasks.CreateEndpoint(ctx, task.CreateEndpointInput{
-		ProjectID:        br.ProjectID,
-		BranchID:         br.BranchID,
-		Role:             role,
-		PgVersion:        br.PgVersion,
-		AncestorBranchID: br.ParentBranchID,
-		AncestorLSN:      br.ForkLSN,
-		CPU:              cpu,
-		Memory:           memory,
+		ProjectID: br.ProjectID,
+		BranchID:  br.BranchID,
+		Role:      role,
+		PgVersion: br.PgVersion,
+		CPU:       cpu,
+		Memory:    memory,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)

@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.meta (
 -- restore-control-file vs create-on-first-handshake from its own.
 --
 -- The row itself is created by the CONTROLLER at branch-create time
--- (Store.RecordPendingInit), before any pageserver, safekeeper, or endpoint
+-- (Store.RecordBranch), before any pageserver, safekeeper, or endpoint
 -- supervisor for the branch starts. Neither daemon creates it: each fills its
 -- own group with `UPDATE ... WHERE <own discriminator> IS NULL`, so the write
 -- lands exactly once and a retry is idempotent. A daemon that finds no row

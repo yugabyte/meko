@@ -50,17 +50,6 @@ endpoint:
   sharedPreloadLibraries: "yb_amp"
   # -- Extra Postgres GUCs, as a name: value map.
   extraSettings: {}
-  # -- initdb the supplied branch on first start, instead of attaching an
-  # existing one. Used with controller.url for the controller-
-  # coordinated flow (the controller allocates the id; the endpoint materializes
-  # it). Off => attach an existing (already-materialized) branch.
-  bootstrap: false
-  # -- Branch ancestry. When ancestorBranchId is set, the endpoint forks that
-  # ancestor branch at ancestorLsn (the pageserver writes a branch init recipe;
-  # lineage reads serve the pre-fork pages) instead of running initdb. Empty for
-  # a root (main) branch. ancestorLsn is the storage layer's "X/Y" LSN form.
-  ancestorBranchId: ""
-  ancestorLsn: ""
   # -- Compute reserved for the endpoint container. Each value is a Kubernetes
   # resource quantity and is rendered as BOTH a request and a limit, so the pod
   # is scheduled with the Guaranteed QoS class. Defaults to 2 cores / 4Gi.

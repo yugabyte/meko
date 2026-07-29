@@ -1,7 +1,7 @@
 -- 0003: the `amp_registry` schema — the controller's storage-layer bookkeeping:
--- generation authority (the fencing counter) plus the branch / endpoint /
--- pending-init registries behind the HTTP surface the controller serves to
--- yb_amp_local and the integration harness.
+-- generation authority (the fencing counter) plus the branch and endpoint
+-- registries behind the HTTP surface the controller serves to yb_amp_local and
+-- the integration harness.
 --
 -- Kept in its own `amp_registry` schema so the flat-storage model (32-hex branch_id
 -- VARCHAR) stays separate from the controller product model (project/branch/
@@ -11,43 +11,52 @@
 
 CREATE SCHEMA IF NOT EXISTS amp_registry;
 
--- Per-branch placement + generation record. yb-mode doesn't shard branches
--- across pageservers (YB tablet-shards the keyspace itself), so this is keyed
--- only by `branch_id`. The generation counter (bumped by attach-hook) is the
--- fencing primitive; it is monotonic across the branch's lifecycle (preserved on
--- detach) and NULL only until the branch's first attach.
+-- One row per branch: everything the controller and the launcher need to know
+-- about a branch, from the moment its id is allocated.
+--
+-- yb-mode doesn't shard branches across pageservers (YB tablet-shards the
+-- keyspace itself), so this is keyed only by `branch_id`.
+--
+-- Two groups of columns, with different writers:
+--
+--   * The FENCING group — `generation` + `placement_policy` — is owned by the
+--     attach-hook. The generation counter is the fencing primitive: monotonic
+--     across the branch's lifecycle (deliberately PRESERVED on detach, so a
+--     later reattach still fences a pageserver from a prior generation) and
+--     NULL only until the branch's first attach. Because detach keeps the
+--     counter, `placement_policy` is what actually distinguishes detached from
+--     attached; `Inspect` reads the pair.
+--
+--   * The CREATION group — `branch_name`, `pg_version`, `ancestor_branch_id`,
+--     `start_lsn` — is written once by RecordBranch at branch-create time and
+--     is what the launcher reads back to materialize the branch's pageserver +
+--     safekeeper (a NULL `ancestor_branch_id` means bootstrap, a set one means
+--     fork that ancestor at `start_lsn`).
+--
+-- The creation group is nullable because the attach-hook keeps a safety-net
+-- INSERT for a branch that somehow reaches attach without having been created,
+-- and that path has only a branch id to go on. `pg_version IS NOT NULL` is
+-- therefore the predicate for "this branch was properly created", the same
+-- shape as the presence predicates on `amp_storage.branch_state`.
+--
+-- A dropped branch is TOMBSTONED, not deleted: `dropped_at` is stamped and the
+-- row stays. A branch id is never reused, so keeping the row keeps the
+-- generation counter (and so the fencing history) intact, and leaves a record of
+-- what the id was. Every reader that answers "is this branch live?" —
+-- `Inspect`, `ListBranches`, `ListBranchNames` — filters `dropped_at IS NULL`.
+--
+-- The branch's data-plane state (consistent LSN, WAL start, the daemons' own
+-- column groups) lives in `amp_storage.branch_state`, keyed by the same id.
 CREATE TABLE IF NOT EXISTS amp_registry.branches (
     branch_id              VARCHAR NOT NULL,
+    branch_name            VARCHAR,
+    pg_version             INTEGER,
+    ancestor_branch_id     VARCHAR,
+    start_lsn              pg_lsn,
     generation             INTEGER,
     placement_policy       VARCHAR NOT NULL,
-    config                 JSONB NOT NULL,
-    scheduling_policy      VARCHAR NOT NULL DEFAULT '"Active"',
-    PRIMARY KEY (branch_id)
-);
-
--- Per-branch WAL start LSN + generation tracking. (The branch's single
--- co-located safekeeper is owned by the launcher, not tracked here.)
-CREATE TABLE IF NOT EXISTS amp_registry.timelines (
-    branch_id                   VARCHAR NOT NULL,
-    start_lsn                   pg_lsn NOT NULL,
-    generation                  INTEGER NOT NULL,
-    deleted_at                  TIMESTAMPTZ,
-    branch_name                 VARCHAR,
-    PRIMARY KEY (branch_id)
-);
-
--- Init recipe for a branch whose id + branch name are allocated (at
--- `branch create`) but whose pageserver + safekeeper aren't provisioned
--- yet. `endpoint create` reads it back to materialize the branch, then
--- deletes the row. A NULL ancestor_branch_id marks a Bootstrap recipe
--- (initdb + import on first start); a non-NULL one marks a Branch off
--- that ancestor at start_lsn.
-CREATE TABLE IF NOT EXISTS amp_registry.pending_timeline_inits (
-    branch_id                   VARCHAR NOT NULL,
-    branch_name                 VARCHAR NOT NULL,
-    pg_version                  INTEGER NOT NULL,
-    ancestor_branch_id          VARCHAR,
-    start_lsn                   pg_lsn NOT NULL,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    dropped_at             TIMESTAMPTZ,
     PRIMARY KEY (branch_id)
 );
 

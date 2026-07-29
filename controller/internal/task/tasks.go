@@ -164,28 +164,23 @@ func (s *Service) Branch(ctx context.Context, in BranchInput) (*Task, error) {
 	}
 	if in.WithWriter {
 		steps = append(steps, stepSpec(StepCreateEndpoint, CreateEndpointArgs{
-			EndpointID:       uuid.New(),
-			ProjectID:        in.ProjectID,
-			BranchID:         branchID,
-			Role:             roleReadWrite,
-			PgVersion:        in.PgVersion,
-			AncestorBranchID: &parent,
-			AncestorLSN:      in.ForkLSN,
+			EndpointID: uuid.New(),
+			ProjectID:  in.ProjectID,
+			BranchID:   branchID,
+			Role:       roleReadWrite,
+			PgVersion:  in.PgVersion,
 		}))
 	}
 	return s.create(ctx, KindBranch, in, in.ProjectID, branchID.String(), steps)
 }
 
 // CreateEndpointInput is the request for a create_endpoint (scale-up) task on an
-// existing branch. When the target branch is a fork, AncestorBranchID /
-// AncestorLSN carry its fork point so the endpoint clones from the ancestor.
+// existing branch.
 type CreateEndpointInput struct {
-	ProjectID        uuid.UUID  `json:"project_id"`
-	BranchID         uuid.UUID  `json:"branch_id"`
-	Role             string     `json:"role"`
-	PgVersion        int        `json:"pg_version"`
-	AncestorBranchID *uuid.UUID `json:"ancestor_branch_id,omitempty"`
-	AncestorLSN      string     `json:"ancestor_lsn,omitempty"`
+	ProjectID uuid.UUID `json:"project_id"`
+	BranchID  uuid.UUID `json:"branch_id"`
+	Role      string    `json:"role"`
+	PgVersion int       `json:"pg_version"`
 	// CPU and Memory are the pod's compute reservation (Kubernetes quantities),
 	// applied as request == limit for Guaranteed QoS. Empty falls back to the
 	// deployer/chart default (2 cores / 4Gi).
@@ -203,15 +198,13 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 	endpointID := uuid.New()
 	steps := []StepSpec{
 		stepSpec(StepCreateEndpoint, CreateEndpointArgs{
-			EndpointID:       endpointID,
-			ProjectID:        in.ProjectID,
-			BranchID:         in.BranchID,
-			Role:             role,
-			PgVersion:        in.PgVersion,
-			AncestorBranchID: in.AncestorBranchID,
-			AncestorLSN:      in.AncestorLSN,
-			CPU:              in.CPU,
-			Memory:           in.Memory,
+			EndpointID: endpointID,
+			ProjectID:  in.ProjectID,
+			BranchID:   in.BranchID,
+			Role:       role,
+			PgVersion:  in.PgVersion,
+			CPU:        in.CPU,
+			Memory:     in.Memory,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, endpointID.String(), steps)

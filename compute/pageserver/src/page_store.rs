@@ -3487,7 +3487,7 @@ impl PageStore {
     /// `Timeline::write_timeline_row_to_yb`).
     ///
     /// The row itself is provisioned by the controller at branch-create time
-    /// (`RecordPendingInit`), before any pageserver or safekeeper starts, and
+    /// (`RecordBranch`), before any pageserver or safekeeper starts, and
     /// the safekeeper owns a separate group of columns on it. So this only ever
     /// UPDATEs — it never creates the row, and it must not disturb the
     /// safekeeper's columns.
@@ -3558,7 +3558,7 @@ impl PageStore {
     }
 
     /// Test-only: provision the branch's `branch_state` row the way the
-    /// controller does at branch create (`Store.RecordPendingInit`). Production
+    /// controller does at branch create (`Store.RecordBranch`). Production
     /// code never creates this row — the tests need it because they run against
     /// the production schema with random branch ids and no controller.
     #[cfg(test)]

@@ -10,12 +10,11 @@ import "encoding/json"
 // AttachHookRequest bumps (attach) or clears (detach) a branch's generation.
 // attach = true increments the generation; false detaches (the generation
 // counter is preserved, staying monotonic across the branch's lifecycle).
-// generation_override / config apply only when the branch row is first created.
+// generation_override applies only when the branch row is first created.
 type AttachHookRequest struct {
-	BranchID           string          `json:"branch_id"`
-	Attach             bool            `json:"attach"`
-	GenerationOverride *int32          `json:"generation_override"`
-	Config             json.RawMessage `json:"config"`
+	BranchID           string `json:"branch_id"`
+	Attach             bool   `json:"attach"`
+	GenerationOverride *int32 `json:"generation_override"`
 }
 
 // AttachHookResponse carries the newly issued generation (null on detach). The
@@ -35,13 +34,6 @@ type InspectResponse struct {
 	Generation *uint32 `json:"generation"`
 }
 
-// BranchRegisterRequest records a launcher-created branch's start LSN, and
-// optionally sets its branch-name alias in the same write.
-type BranchRegisterRequest struct {
-	StartLSN   string  `json:"start_lsn"`
-	BranchName *string `json:"branch_name"`
-}
-
 // SetBranchNameRequest sets (or clears) a branch's name alias.
 type SetBranchNameRequest struct {
 	BranchName *string `json:"branch_name"`
@@ -53,18 +45,17 @@ type BranchNameEntry struct {
 	BranchName string `json:"branch_name"`
 }
 
-// PendingBranchInitRequest records the recipe for a branch whose id + name are
+// BranchCreateRecord records how to materialize a branch whose id + name are
 // allocated but whose pageserver/safekeeper don't exist yet.
-type PendingBranchInitRequest struct {
+type BranchCreateRecord struct {
 	BranchName       string  `json:"branch_name"`
 	PgVersion        int     `json:"pg_version"`
 	AncestorBranchID *string `json:"ancestor_branch_id"`
 	StartLSN         string  `json:"start_lsn"`
 }
 
-// PendingBranchInit is one entry in the pending-init list, carrying its
-// branch id.
-type PendingBranchInit struct {
+// BranchRecord is one entry in the branch list, carrying its branch id.
+type BranchRecord struct {
 	BranchID         string  `json:"branch_id"`
 	BranchName       string  `json:"branch_name"`
 	PgVersion        int     `json:"pg_version"`

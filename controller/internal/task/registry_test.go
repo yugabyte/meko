@@ -57,7 +57,6 @@ func TestProductionRegistryHasFullCatalog(t *testing.T) {
 			HostPorts: "yb:5433", User: "yugabyte", DBName: "yb_storage",
 		},
 		ControllerURL: "http://sc:50051",
-		Bootstrap:     true,
 	}
 	r := ProductionRegistry(deps)
 
@@ -87,11 +86,11 @@ func TestProductionRegistryHasFullCatalog(t *testing.T) {
 	if !ok {
 		t.Fatalf("create_endpoint builds %T, want *createEndpointStep", step)
 	}
-	if ce.deployer == nil || ce.recipes == nil || ce.state == nil {
+	if ce.deployer == nil || ce.state == nil {
 		t.Error("create_endpoint step is missing wired dependencies")
 	}
-	if !ce.bootstrap || ce.scURL != "http://sc:50051" {
-		t.Errorf("create_endpoint config = {bootstrap:%v scurl:%q}, want {true http://sc:50051}", ce.bootstrap, ce.scURL)
+	if ce.scURL != "http://sc:50051" {
+		t.Errorf("create_endpoint scurl = %q, want http://sc:50051", ce.scURL)
 	}
 }
 

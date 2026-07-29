@@ -119,7 +119,6 @@ docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     -e AMP_DEPLOY_NETWORK="$NET" \
     -e AMP_DEPLOY_ENDPOINT_IMAGE="$ENDPOINT_IMAGE" \
     -e AMP_DEPLOY_EXTERNAL_HOST=127.0.0.1 \
-    -e AMP_DEPLOY_BOOTSTRAP=true \
     -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 \
     -e AMP_DEPLOY_YB_DBNAME="$DB" \
     -e AMP_DEPLOY_SUPERVISOR_PATH="$REPO/deploy/endpoint/supervisor.py" \

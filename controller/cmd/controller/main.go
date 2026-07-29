@@ -57,7 +57,7 @@ func main() {
 
 // recipeStore adapts the in-process storage-layer store to the task framework's
 // task.RecipeStore port, converting the framework's decoupled BranchRecipe into
-// a pending-init record. It keeps the task package independent of the store type.
+// a branch creation record. It keeps the task package independent of the store type.
 type recipeStore struct{ s *registry.Store }
 
 // branchID is the 32-hex BranchId the controller maps a branch to (the storage
@@ -67,16 +67,12 @@ func (a recipeStore) RecordBranchRecipe(ctx context.Context, branchID string, r 
 	if r.AncestorBranchID != "" {
 		ancestor = &r.AncestorBranchID
 	}
-	return a.s.RecordPendingInit(ctx, branchID, registry.PendingBranchInitRequest{
+	return a.s.RecordBranch(ctx, branchID, registry.BranchCreateRecord{
 		BranchName:       r.BranchName,
 		PgVersion:        r.PgVersion,
 		AncestorBranchID: ancestor,
 		StartLSN:         r.StartLSN,
 	})
-}
-
-func (a recipeStore) ClearBranchRecipe(ctx context.Context, branchID string) error {
-	return a.s.DeletePendingInit(ctx, branchID)
 }
 
 // buildProvisioning assembles the create-branch / create-endpoint workflow's
@@ -171,7 +167,6 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 			Password:  cfg.Deploy.BackingYBPassword,
 			DBName:    cfg.Deploy.BackingYBDBName,
 		}
-		prov.Bootstrap = cfg.Deploy.Bootstrap
 	}
 	return prov, nil
 }
@@ -244,7 +239,6 @@ func runServe(args []string) error {
 		Deployer:      prov.Deployer,
 		EndpointYB:    prov.EndpointYB,
 		ControllerURL: prov.ControllerURL,
-		Bootstrap:     prov.Bootstrap,
 		Recipes:       prov.Recipes,
 	}
 	// Prometheus instrumentation: one registry, shared by the worker (task

@@ -193,7 +193,7 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Live WAL | YB `amp_storage.wals` | `((branch_id, bucket_id) HASH, segno, chunk_offset)` |
 | initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
 | Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | written via endpoint_storage's HTTP API |
-| Controller registries | YB `amp_registry` schema | branches, timelines, pending inits, endpoints |
+| Controller registries | YB `amp_registry` schema | branches, endpoints |
 | Controller product model | YB `controller` schema | users, pools, projects, grants, branches, endpoints, tasks |
 | Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on `endpoint create`, removed on destroy |
 | Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
@@ -218,7 +218,7 @@ endpoint that owns the branch, plus one endpoint_storage **per
 endpoint**. The PS+SK pair is provisioned at `endpoint create` —
 `branch create` only records the branch's init recipe (branch id,
 branch name, pg version, optional ancestor + start LSN) in the
-controller's `amp_registry.pending_timeline_inits` table; the pair comes up
+controller's `amp_registry.branches` row; the pair comes up
 under `endpoints/<endpoint>/{pageserver,safekeeper}` when the first
 endpoint for that branch is created, which reads the recipe back and
 deletes the pending row. Sibling endpoints on the same branch share the
@@ -232,8 +232,7 @@ yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RP
         |                         branch_state (one row per branch, shared by
         |                           the pageserver and the safekeeper)
         |                         wals (WAL chunks, 10 tablets)
-        +-- schema `amp_registry` branches, timelines,
-        |                         pending_timeline_inits, endpoints
+        +-- schema `amp_registry` branches, endpoints
         +-- schema `controller`  product model + task framework
 
 yb-amp processes

@@ -114,8 +114,7 @@ compute **endpoint** through its Docker `deploy.Deployer` (amp-controller.md
 [endpoint image](../endpoint), waits for it to come up, and returns the connection
 address. For that, the container needs the **Docker daemon socket** mounted, and
 controller + the endpoints it launches share a **user-defined network**. The bundled
-`docker` CLI talks to the socket. `AMP_DEPLOY_BOOTSTRAP=true` initdb's the recorded
-tenant/timeline on first start (there is no create-database flow yet).
+`docker` CLI talks to the socket.
 
 ```sh
 docker run -d --name controller --hostname controller --network ybamp \
@@ -123,7 +122,6 @@ docker run -d --name controller --hostname controller --network ybamp \
   --add-host host.docker.internal:host-gateway -p 8080:8080 \
   -e AMP_DATABASE_URL=postgres://yugabyte@host.docker.internal:5433/amp_controller \
   -e AMP_DEPLOY=true -e AMP_DEPLOY_DRIVER=docker -e AMP_DEPLOY_NETWORK=ybamp \
-  -e AMP_DEPLOY_BOOTSTRAP=true \
   -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 -e AMP_DEPLOY_YB_DBNAME=yb_storage \
   yb-amp/controller:dev
 ```
@@ -146,7 +144,6 @@ the knobs the image cares about:
 | `AMP_DEPLOY_NETWORK` | _(empty)_ | docker: shared network for controller + the endpoints it launches |
 | `AMP_DEPLOY_ENDPOINT_IMAGE` | `yb-amp/neon-endpoint:dev` | docker: endpoint image to launch |
 | `AMP_DEPLOY_EXTERNAL_HOST` | `127.0.0.1` | docker: host a client uses to reach a published compute port |
-| `AMP_DEPLOY_BOOTSTRAP` | _(unset → false)_ | docker: dev/integration — initdb the recorded tenant/timeline on deploy (no create-database flow yet) |
 | `AMP_DEPLOY_YB_HOST_PORTS` | _(required if `AMP_DEPLOY`)_ | how an endpoint reaches the backing YB storage universe |
 | `AMP_DEPLOY_YB_DBNAME` | `yb_storage` | the storage database the endpoints use |
 | `AMP_DEPLOY_STORAGE_CLASS` | _(empty)_ | k8s: storage class for the endpoint `/data` PVC (EBS/PD); empty ⇒ ephemeral `emptyDir` |

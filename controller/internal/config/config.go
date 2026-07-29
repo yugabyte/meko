@@ -91,12 +91,6 @@ type DeployConfig struct {
 	// endpoint runs controller-free with a pinned generation.
 	ControllerURL string
 
-	// Bootstrap initdb's the (already-recorded) tenant/timeline when an endpoint
-	// is deployed (the recipe model), instead of attaching an existing one. The
-	// first endpoint for a timeline materializes its storage this way; there is
-	// no separate create-database flow yet. Honored by both drivers. Off by default.
-	Bootstrap bool
-
 	// The universe the deployed endpoints use as their durable backend. This is
 	// the address the pods/containers reach (which may differ from the
 	// controller's own --database-url network path to the same YugabyteDB).
@@ -187,7 +181,6 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.Network, "deploy-network", env("AMP_DEPLOY_NETWORK", ""), "docker: shared network for the controller + its endpoints (so they reach each other by name)")
 	fs.StringVar(&d.ExternalHost, "deploy-external-host", env("AMP_DEPLOY_EXTERNAL_HOST", "127.0.0.1"), "docker: host a client uses to reach a published compute port")
 	fs.StringVar(&d.SupervisorPath, "deploy-supervisor-path", env("AMP_DEPLOY_SUPERVISOR_PATH", ""), "docker: dev-only host path to supervisor.py to bind-mount into endpoints (empty = bundled)")
-	fs.BoolVar(&d.Bootstrap, "deploy-bootstrap", envBool("AMP_DEPLOY_BOOTSTRAP", false), "dev/integration — initdb the recorded tenant/timeline on endpoint deploy instead of attaching an existing one (the recipe model; no separate create-database flow yet); honored by both drivers")
 	fs.StringVar(&d.ControllerURL, "deploy-controller-url", env("AMP_DEPLOY_CONTROLLER_URL", ""), "URL deployed endpoints use to reach the controller; empty = endpoint runs controller-free (Kubernetes: typically the controller's in-cluster Service URL, e.g. http://amp-controller.<ns>.svc.cluster.local:8080)")
 
 	if err := fs.Parse(args); err != nil {

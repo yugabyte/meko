@@ -31,7 +31,6 @@ type fakeRecipeStore struct {
 	recordHit      bool
 	recordedBranch string
 	recordedReq    task.BranchRecipe
-	deleteHit      bool
 	failRecord     bool
 }
 
@@ -44,13 +43,6 @@ func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, branchID string,
 	f.recordHit = true
 	f.recordedBranch = branchID
 	f.recordedReq = r
-	return nil
-}
-
-func (f *fakeRecipeStore) ClearBranchRecipe(_ context.Context, _ string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.deleteHit = true
 	return nil
 }
 
@@ -148,12 +140,12 @@ func acceptedProjectTask(t *testing.T, resp api.CreateProjectResponseObject) (ta
 	return body.Id, *body.ProjectId
 }
 
-// TestCreateProjectRecordsPendingInit: with a controller wired,
+// TestCreateProjectRecordsBranch: with a controller wired,
 // create-project plans a task that, once driven, records the pending-init recipe
 // for the default branch (no ancestor, start LSN 0/0, pg_version 17) keyed by the
 // 32-hex branch id, and does NOT delete it (deletion is deferred to
 // create-endpoint). The recipe is now recorded by the record_branch_recipe step.
-func TestCreateProjectRecordsPendingInit(t *testing.T) {
+func TestCreateProjectRecordsBranch(t *testing.T) {
 	recipes := &fakeRecipeStore{}
 	prov := api.Provisioning{Recipes: recipes}
 	c, backend, store := newProjectControllersProv(t, prov)
@@ -178,7 +170,7 @@ func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	def := getDefaultBranch(t, c, poolID, projectID)
 
 	if !recipes.recordHit {
-		t.Fatal("RecordPendingTimelineInit was not called")
+		t.Fatal("RecordBranch was not called")
 	}
 	if want := hex.EncodeToString(def.BranchId[:]); recipes.recordedBranch != want {
 		t.Errorf("recorded branch = %q, want %q", recipes.recordedBranch, want)
@@ -194,9 +186,6 @@ func TestCreateProjectRecordsPendingInit(t *testing.T) {
 	}
 	if recipes.recordedReq.StartLSN != "0/0" {
 		t.Errorf("start_lsn = %q, want 0/0", recipes.recordedReq.StartLSN)
-	}
-	if recipes.deleteHit {
-		t.Error("DeletePendingTimelineInit was called during create-project; it belongs to create-endpoint")
 	}
 }
 
@@ -386,7 +375,7 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	}
 
 	if !recipes.recordHit {
-		t.Fatal("RecordPendingTimelineInit was not called for the branch")
+		t.Fatal("RecordBranch was not called for the branch")
 	}
 	if want := hex.EncodeToString(br.BranchId[:]); recipes.recordedBranch != want {
 		t.Errorf("recorded branch = %q, want the branch %q", recipes.recordedBranch, want)
@@ -501,83 +490,6 @@ func TestCreateBranchDuplicateName(t *testing.T) {
 	got := soleTaskWithKind(t, store, "branch")
 	if got.Status != task.StatusFailed || got.Error == nil {
 		t.Fatalf("duplicate-name branch task = {status:%q err:%v}, want failed (name conflict)", got.Status, got.Error)
-	}
-}
-
-// TestCreateEndpointOnBranchPassesAncestor: deploying an endpoint on a non-default
-// branch relays the ancestor + fork LSN to the deployer and forces bootstrap
-// off, so the endpoint forks the ancestor instead of initdb'ing an empty
-// timeline (the bug where branch endpoints came up with no data).
-func TestCreateEndpointOnBranchPassesAncestor(t *testing.T) {
-	dep := &fakeDeployer{}
-	prov := api.Provisioning{Deployer: dep}
-	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
-	ctx := context.Background()
-	u := mustCreateUser(t, client, false)
-	pool := mustCreatePool(t, client, u.Id, "pool")
-
-	projectID := uuid.New()
-	parentID := uuid.New()
-	branchID := uuid.New()
-	// A default branch and a branch off it, in the same project.
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: parentID, Name: "main", PgVersion: 18, IsDefault: true})
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "feature", PgVersion: 18, ParentBranchID: &parentID, ForkLSN: "0/236A730"})
-
-	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
-	if err != nil {
-		t.Fatalf("CreateEndpoint: %v", err)
-	}
-	if created.StatusCode() != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202; body = %s", created.StatusCode(), created.Body)
-	}
-	// The deploy spec is built by the create_endpoint step, so drive the task first.
-	drainTasks(t, store, backend, prov)
-	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
-		t.Fatalf("create_endpoint task status = %q, want succeeded; error = %v", got.Status, got.Error)
-	}
-	if len(dep.created) != 1 {
-		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
-	}
-	spec := dep.created[0]
-	if want := hex.EncodeToString(parentID[:]); spec.AncestorBranchID != want {
-		t.Errorf("AncestorBranchID = %q, want the parent %q", spec.AncestorBranchID, want)
-	}
-	if spec.AncestorLSN != "0/236A730" {
-		t.Errorf("AncestorLSN = %q, want 0/236A730", spec.AncestorLSN)
-	}
-	if spec.Bootstrap {
-		t.Error("Bootstrap = true on a branch endpoint, want false (branches clone, never initdb)")
-	}
-}
-
-// TestCreateEndpointOnDefaultHasNoAncestor: a default branch's endpoint carries
-// no ancestor (so it bootstraps as before).
-func TestCreateEndpointOnDefaultHasNoAncestor(t *testing.T) {
-	dep := &fakeDeployer{}
-	prov := api.Provisioning{Deployer: dep}
-	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
-	ctx := context.Background()
-	u := mustCreateUser(t, client, false)
-	pool := mustCreatePool(t, client, u.Id, "pool")
-
-	projectID := uuid.New()
-	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
-
-	rw := api.CreateEndpointRequestRoleReadWrite
-	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
-		t.Fatalf("CreateEndpoint: %v", err)
-	}
-	drainTasks(t, store, backend, prov)
-	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
-		t.Fatalf("create_endpoint task status = %q, want succeeded; error = %v", got.Status, got.Error)
-	}
-	if len(dep.created) != 1 {
-		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
-	}
-	if spec := dep.created[0]; spec.AncestorBranchID != "" || spec.AncestorLSN != "" {
-		t.Errorf("default-branch endpoint carried ancestry %q@%q, want none", spec.AncestorBranchID, spec.AncestorLSN)
 	}
 }
 

@@ -25,8 +25,8 @@ schema it uses, and the HTTP surface it serves.
 
 State lives in the **`amp_registry` schema** of the shared `yb_storage` DB, provisioned
 by `controller/migrations/0003_registry.up.sql`. Four branch-keyed tables:
-`branches` (generation authority + placement), `timelines` (start_lsn +
-branch_name), `pending_timeline_inits`, `endpoints`. It is kept separate from the
+`branches` (the branch's identity, creation record, and generation authority),
+`endpoints`. It is kept separate from the
 controller **product** model (`project`/`branch`/`endpoint` by UUID, in the
 `controller` schema) — the registry keys on the flat 32-hex `branch_id`.
 
@@ -45,9 +45,9 @@ versioned `/api/v1` product API, implemented in
 | `GET /ready` | readiness (DB reachable + migrations applied) |
 | `POST /debug/v1/attach-hook`, `POST /debug/v1/inspect` | generation authority |
 | `POST /debug/v1/branch/{id}/import` | attach an existing branch |
-| `POST /control/v1/branch/{id}/register`, `PUT .../branch_name`, `PUT .../drop` | branch bookkeeping |
+| `PUT /control/v1/branch/{id}/branch_name`, `PUT .../drop` | branch bookkeeping |
 | `GET /control/v1/timeline_branch_names` | branch-name listing |
-| `POST/DELETE /control/v1/branch/{id}/pending_init`, `GET /control/v1/pending_timeline_inits` | pending-init recipes |
+| `POST /control/v1/branch/{id}/record`, `GET /control/v1/branches` | branch creation records |
 | `POST/GET /control/v1/endpoint`, `DELETE /control/v1/endpoint/{id}` | endpoint registry |
 
 The wire shapes match the launcher client DTOs in `controller/local/client`. In

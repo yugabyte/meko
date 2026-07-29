@@ -36,15 +36,6 @@ type EndpointSpec struct {
 	// pageserver + safekeeper with that controller and take its generation from
 	// the controller's attach-hook. Empty => controller-free self-bootstrap.
 	ControllerURL string
-	// Bootstrap forces initdb of the (supplied) branch on first start. Ignored
-	// for a branch fork (AncestorBranchID set): a fork clones from its ancestor.
-	Bootstrap bool
-	// AncestorBranchID, when non-empty, makes this a fork: the endpoint's
-	// pageserver creates the branch as a fork of the ancestor at AncestorLSN
-	// (lineage reads serve the pre-fork pages) instead of running initdb. The id
-	// is 32 lowercase hex digits; AncestorLSN is the storage layer's "X/Y" form.
-	AncestorBranchID string
-	AncestorLSN      string
 	// CPU and Memory are the compute reserved for the endpoint pod, as Kubernetes
 	// resource quantities (e.g. "2", "4Gi"). Each is applied as BOTH the request
 	// and the limit on the endpoint container, so the pod gets Guaranteed QoS.

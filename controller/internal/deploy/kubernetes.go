@@ -721,11 +721,6 @@ type endpointValues struct {
 	PgVersion   string `json:"pgVersion"`
 	ComputePort int    `json:"computePort"`
 	BranchId    string `json:"branchId"`
-	Bootstrap   bool   `json:"bootstrap"`
-	// Branch ancestry: empty for a root branch. When set, the endpoint forks
-	// the ancestor at AncestorLsn instead of running initdb.
-	AncestorBranchId string `json:"ancestorBranchId,omitempty"`
-	AncestorLsn      string `json:"ancestorLsn,omitempty"`
 	// Resources is the pod's CPU + memory reservation. The chart renders each
 	// value as both a request and a limit, so the pod gets Guaranteed QoS.
 	Resources resourceValues `json:"resources"`
@@ -771,13 +766,10 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Dbname:    spec.YB.DBName,
 		},
 		Endpoint: endpointValues{
-			PgVersion:        strconv.Itoa(pgVersion),
-			ComputePort:      k.cfg.ComputePort,
-			BranchId:         spec.BranchID,
-			Bootstrap:        spec.Bootstrap,
-			AncestorBranchId: spec.AncestorBranchID,
-			AncestorLsn:      spec.AncestorLSN,
-			Resources:        resourceValues{CPU: cpu, Memory: memory},
+			PgVersion:   strconv.Itoa(pgVersion),
+			ComputePort: k.cfg.ComputePort,
+			BranchId:    spec.BranchID,
+			Resources:   resourceValues{CPU: cpu, Memory: memory},
 		},
 		Controller: controllerValues{URL: spec.ControllerURL},
 		Service:    serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},

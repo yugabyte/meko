@@ -82,12 +82,6 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		"YB_DBNAME":           spec.YB.DBName,
 		"BRANCH_ID":           spec.BranchID,
 		"ENDPOINT_PG_VERSION": strconv.Itoa(spec.PgVersion),
-		"BOOTSTRAP":           strconv.FormatBool(spec.Bootstrap),
-	}
-	// Fork: relay the ancestor so the endpoint forks it instead of initdb'ing.
-	if spec.AncestorBranchID != "" {
-		env["ANCESTOR_BRANCH_ID"] = spec.AncestorBranchID
-		env["ANCESTOR_LSN"] = spec.AncestorLSN
 	}
 	if spec.ControllerURL != "" {
 		// SC-coordinated: the controller reaches this endpoint's services by its

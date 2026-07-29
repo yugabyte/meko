@@ -20,14 +20,12 @@ func Register(e *echo.Echo, store *Store) {
 	e.POST("/debug/v1/inspect", h.inspect)
 	e.POST("/debug/v1/branch/:branch_id/import", h.branchImport)
 
-	e.POST("/control/v1/branch/:branch_id/register", h.branchRegister)
 	e.PUT("/control/v1/branch/:branch_id/branch_name", h.setBranchName)
 	e.GET("/control/v1/timeline_branch_names", h.listBranchNames)
 	e.PUT("/control/v1/branch/:branch_id/drop", h.branchDrop)
 
-	e.POST("/control/v1/branch/:branch_id/pending_init", h.recordPendingInit)
-	e.DELETE("/control/v1/branch/:branch_id/pending_init", h.deletePendingInit)
-	e.GET("/control/v1/pending_timeline_inits", h.listPendingInits)
+	e.POST("/control/v1/branch/:branch_id/record", h.recordBranch)
+	e.GET("/control/v1/branches", h.listBranches)
 
 	e.POST("/control/v1/endpoint", h.endpointCreate)
 	e.GET("/control/v1/endpoint", h.endpointList)
@@ -77,17 +75,6 @@ func (h *handlers) branchImport(c echo.Context) error {
 	return c.JSON(http.StatusOK, resp)
 }
 
-func (h *handlers) branchRegister(c echo.Context) error {
-	var req BranchRegisterRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	if err := h.store.BranchRegister(c.Request().Context(), c.Param("branch_id"), req); err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, nil)
-}
-
 func (h *handlers) setBranchName(c echo.Context) error {
 	var req SetBranchNameRequest
 	if err := c.Bind(&req); err != nil {
@@ -114,30 +101,23 @@ func (h *handlers) branchDrop(c echo.Context) error {
 	return c.JSON(http.StatusOK, nil)
 }
 
-func (h *handlers) recordPendingInit(c echo.Context) error {
-	var req PendingBranchInitRequest
+func (h *handlers) recordBranch(c echo.Context) error {
+	var req BranchCreateRecord
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	if err := h.store.RecordPendingInit(c.Request().Context(), c.Param("branch_id"), req); err != nil {
+	if err := h.store.RecordBranch(c.Request().Context(), c.Param("branch_id"), req); err != nil {
 		return mapErr(err)
 	}
 	return c.JSON(http.StatusOK, nil)
 }
 
-func (h *handlers) deletePendingInit(c echo.Context) error {
-	if err := h.store.DeletePendingInit(c.Request().Context(), c.Param("branch_id")); err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, nil)
-}
-
-func (h *handlers) listPendingInits(c echo.Context) error {
-	inits, err := h.store.ListPendingInits(c.Request().Context())
+func (h *handlers) listBranches(c echo.Context) error {
+	branches, err := h.store.ListBranches(c.Request().Context())
 	if err != nil {
 		return mapErr(err)
 	}
-	return c.JSON(http.StatusOK, inits)
+	return c.JSON(http.StatusOK, branches)
 }
 
 func (h *handlers) endpointCreate(c echo.Context) error {

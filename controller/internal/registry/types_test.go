@@ -53,14 +53,14 @@ func TestBranchCreateResponseWire(t *testing.T) {
 	}
 }
 
-func TestPendingBranchInitWire(t *testing.T) {
+func TestBranchRecordWire(t *testing.T) {
 	anc := "parent"
-	got := mustMarshal(t, PendingBranchInit{
+	got := mustMarshal(t, BranchRecord{
 		BranchID: "b", BranchName: "main", PgVersion: 18, AncestorBranchID: &anc, StartLSN: "0/0",
 	})
 	want := `{"branch_id":"b","branch_name":"main","pg_version":18,"ancestor_branch_id":"parent","start_lsn":"0/0"}`
 	if got != want {
-		t.Fatalf("pending-init = %s, want %s", got, want)
+		t.Fatalf("branch record = %s, want %s", got, want)
 	}
 }
 

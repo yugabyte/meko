@@ -129,9 +129,6 @@ func TestServiceCreateProjectWithWriter(t *testing.T) {
 	if ep.EndpointID == uuid.Nil {
 		t.Error("endpoint id was not generated")
 	}
-	if ep.AncestorBranchID != nil {
-		t.Error("a default-branch endpoint has an ancestor, want nil")
-	}
 }
 
 func TestServiceBranch(t *testing.T) {
@@ -180,15 +177,12 @@ func TestServiceBranch(t *testing.T) {
 	if ep.BranchID != br.BranchID {
 		t.Errorf("endpoint targets %s, want the branch %s", ep.BranchID, br.BranchID)
 	}
-	if ep.AncestorBranchID == nil || *ep.AncestorBranchID != parentID || ep.AncestorLSN != "0/16ABCD0" {
-		t.Errorf("branch endpoint ancestor = (%v, %q), want (parent %s, fork lsn)", ep.AncestorBranchID, ep.AncestorLSN, parentID)
-	}
 }
 
-func TestServiceCreateEndpointDefaultsRoleAndPassesAncestor(t *testing.T) {
+func TestServiceCreateEndpointDefaultsRole(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
-	projectID, branchID, ancestor := uuid.New(), uuid.New(), uuid.New()
+	projectID, branchID := uuid.New(), uuid.New()
 
 	// Role unset defaults to read_write.
 	tk, err := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, PgVersion: 18})
@@ -205,16 +199,12 @@ func TestServiceCreateEndpointDefaultsRoleAndPassesAncestor(t *testing.T) {
 		t.Errorf("default role = %q, want read_write", ep.Role)
 	}
 
-	// A fork target passes the ancestor through.
-	tk2, _ := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, Role: "read_only", PgVersion: 18, AncestorBranchID: &ancestor, AncestorLSN: "0/9"})
+	tk2, _ := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, Role: "read_only", PgVersion: 18})
 	steps2, _ := store.Steps(t.Context(), tk2.ID)
 	var ep2 CreateEndpointArgs
 	decodeArgs(t, steps2[0], &ep2)
 	if ep2.Role != "read_only" {
 		t.Errorf("role = %q, want read_only", ep2.Role)
-	}
-	if ep2.AncestorBranchID == nil || *ep2.AncestorBranchID != ancestor || ep2.AncestorLSN != "0/9" {
-		t.Errorf("ancestor = (%v,%q), want (%s, 0/9)", ep2.AncestorBranchID, ep2.AncestorLSN, ancestor)
 	}
 }
 

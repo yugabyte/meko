@@ -274,12 +274,9 @@ type recordedRecipe struct {
 }
 
 type fakeRecipeStore struct {
-	mu            sync.Mutex
-	recorded      []recordedRecipe
-	cleared       []string // branchIDs cleared successfully
-	clearAttempts int      // clears tried, incremented even when errClear is injected
-	errRecord     error
-	errClear      error
+	mu        sync.Mutex
+	recorded  []recordedRecipe
+	errRecord error
 }
 
 func newFakeRecipeStore() *fakeRecipeStore { return &fakeRecipeStore{} }
@@ -291,17 +288,6 @@ func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, branchID string,
 		return f.errRecord
 	}
 	f.recorded = append(f.recorded, recordedRecipe{branchID: branchID, recipe: r})
-	return nil
-}
-
-func (f *fakeRecipeStore) ClearBranchRecipe(_ context.Context, branchID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.clearAttempts++ // record the attempt before any injected failure
-	if f.errClear != nil {
-		return f.errClear
-	}
-	f.cleared = append(f.cleared, branchID)
 	return nil
 }
 

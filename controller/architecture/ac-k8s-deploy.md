@@ -64,8 +64,8 @@ POST …/storage-pools/{pool}/projects/{proj}/branches/{br}/endpoints
    │  (handlers.go: CreateEndpoint)
    ├─ core.Backend.CreateEndpoint              → inserts the endpoint row (address empty)
    ├─ deploy.KubernetesDeployer.CreateEndpoint → helm upgrade --install --wait
-   ├─ core.Backend.SetEndpointAddress(<LB IP / pod IP / Service DNS>:<port>)
-   └─ registry.DeletePendingInit(...)  (consume the recipe)   → 201 {endpoint}
+   └─ core.Backend.SetEndpointAddress(<LB IP / pod IP / Service DNS>:<port>)
+                                                              → 201 {endpoint}
 ```
 
 The deploy is **synchronous**: `helm upgrade --install --wait` blocks until the
@@ -79,22 +79,23 @@ Retire is the mirror (`DELETE …/endpoints/{id}`): `helm uninstall
 kill-before-create retire (ac-highlvl.md §4); `--wait` blocks until the
 resources are gone.
 
-## Materializing a branch: the recipe + bootstrap
+## Materializing a branch: the creation record
 
-Project/branch creation and endpoint creation are **separate** steps, joined by a
-**recipe** (full detail in [controller-project-create.md](controller-project-create.md)):
+Project/branch creation and endpoint creation are **separate** steps, joined by
+the branch's **creation record** (full detail in
+[controller-project-create.md](controller-project-create.md)):
 
 - **create-project** (and **create-branch**) records the branch in the
-  control-plane DB (`branch`) **and** a `pending_init` *recipe* in the storage
+  control-plane DB (`branch`) **and** a creation record in the storage
   controller, keyed by the flat `branch_id`. It does **not** deploy anything or
   eagerly materialize the branch's storage.
-- **create-endpoint** deploys the endpoint with `BOOTSTRAP=true`. On first
-  materialization the pod's supervisor runs `initdb` for the recipe's
-  `branch_id`, registers +
-  attaches to the controller (below), and registers the branch; the
-  controller then **consumes** the recipe (`DeletePendingTimelineInit`). There is
-  no separate create-database call — the first endpoint is what turns the declared
-  branch into real storage.
+- **create-endpoint** deploys the endpoint. On first materialization the pod's
+  pageserver reads its init mode off the branch's `amp_storage.branch_state` row
+  — a NULL `ancestor_branch_id` means `initdb` + import, a set one means fork
+  that ancestor — then registers + attaches to the controller (below). The
+  creation record is not consumed: it stays as the branch's durable record. There
+  is no separate create-database call — the first endpoint is what turns the
+  declared branch into real storage.
 
 The storage layer identifies a branch by 32 lowercase hex chars; the
 control plane stores the same 16 bytes (the `branch_id`) as a SQL `uuid` and
@@ -251,8 +252,8 @@ Deploy/retire converge on retry rather than duplicating or wedging:
 - `SetEndpointAddress` is an absolute `UPDATE … WHERE id = $1`.
 - `helm uninstall --ignore-not-found` tolerates an already-gone release (helm ≥ 3.13).
 - `DeleteEndpoint` is `DELETE … WHERE id = $1` (absent row = no-op).
-- `RecordPendingTimelineInit` / `DeletePendingTimelineInit` are upsert/idempotent
-  (a missing recipe on delete is tolerated).
+- `RecordBranch` is idempotent: it fills a branch's creation group once and
+  leaves an existing record untouched.
 
 ## Configuration (§9)
 
@@ -260,7 +261,7 @@ The `--deploy*` block (env `AMP_DEPLOY*`), validated only when `--deploy` is set
 
 Common to both drivers: `--deploy`, `--deploy-driver`, `--deploy-yb-host-ports` /
 `-yb-user` / `-yb-dbname` / `-yb-password` (or `--deploy-yb-existing-secret`),
-`--deploy-bootstrap`, `--deploy-controller-url`, `--deploy-timeout`.
+`--deploy-controller-url`, `--deploy-timeout`.
 
 Kubernetes driver:
 
@@ -311,8 +312,8 @@ The deploy is **demo-grade**. What it currently takes for granted:
   node id derived from the branch id** (a 31-bit hash). Collision-resistant, not
   collision-proof. One `read_write` endpoint per branch (single-writer).
 - **Bootstrap-on-first-endpoint.** Branches are materialized by the first
-  endpoint's `initdb` (`BOOTSTRAP=true`), driven by the recipe — there is no
-  standalone create-project/branch flow yet.
+  endpoint's `initdb`, driven by the branch's seeded `branch_state` row — there
+  is no standalone create-project/branch flow yet.
 - **Synchronous, non-atomic provisioning.** create-project / create-endpoint run
   inline on the request (no executing write-ahead task framework —
   [#84](https://github.com/yugabyte/amp/issues/84) /

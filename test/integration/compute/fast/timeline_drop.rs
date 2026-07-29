@@ -2,7 +2,7 @@
 //! `main`, brings up an endpoint on the branch, then drops the branch and
 //! verifies the durable cleanup: the endpoint's compute is gone (local dir
 //! removed), its record is deleted from the controller, and the
-//! branch is marked dropped (`deleted_at` set) so it no longer counts as a
+//! branch is marked dropped (`dropped_at` set) so it no longer counts as a
 //! live branch and isn't brought back on restart. The underlying branch
 //! data is intentionally left for a later GC pass (see #36).
 
@@ -78,21 +78,21 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         bail!("post-drop endpoint rows = {eps}, want 0");
     }
 
-    step("Post-drop: the branch is marked dropped, not live");
+    step("Post-drop: the branch is tombstoned, not live");
     let live = live_branch_rows(&yb).await?;
     if live != 0 {
-        bail!("post-drop live branch rows = {live}, want 0 (branch should be marked dropped)");
+        bail!("post-drop live branch rows = {live}, want 0 (branch should be tombstoned)");
     }
     let dropped = db::query_i64(
         &yb,
         &format!(
-            "SELECT count(*) FROM amp_registry.timelines \
-             WHERE branch_id = '{BRANCH_ID}' AND deleted_at IS NOT NULL"
+            "SELECT count(*) FROM amp_registry.branches \
+             WHERE branch_id = '{BRANCH_ID}' AND dropped_at IS NOT NULL"
         ),
     )
     .await?;
     if dropped != 1 {
-        bail!("post-drop dropped branch rows = {dropped}, want 1");
+        bail!("post-drop tombstoned branch rows = {dropped}, want 1");
     }
 
     step("Post-drop: main is unaffected");
@@ -104,13 +104,13 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Count of *live* (not-dropped) `timelines` rows for our branch.
+/// Count of *live* (not-tombstoned) `amp_registry.branches` rows for our branch.
 async fn live_branch_rows(yb: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
-            "SELECT count(*) FROM amp_registry.timelines \
-             WHERE branch_id = '{BRANCH_ID}' AND deleted_at IS NULL"
+            "SELECT count(*) FROM amp_registry.branches \
+             WHERE branch_id = '{BRANCH_ID}' AND dropped_at IS NULL"
         ),
     )
     .await

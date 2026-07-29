@@ -956,7 +956,7 @@ func TestEnsurePoolConcurrentCreateTolerated(t *testing.T) {
 
 func TestTransientControllerPredicate(t *testing.T) {
 	transient := []string{
-		"create project x: task 1 failed: pending_init: status 500: deadlock detected",
+		"create project x: task 1 failed: record: status 500: deadlock detected",
 		"create endpoint: helm: Error: services \"yb-ep-abc\" not found",
 		"status 503: unavailable",
 	}

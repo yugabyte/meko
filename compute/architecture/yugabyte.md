@@ -18,7 +18,7 @@ All subsystems share **one** database, `yb_storage`. Within it:
 |---|---|---|
 | `amp_storage` | the data plane: `pages`, `slru_pages`, `meta`, `pending_gc`, `wals`, `blobs` (+ the `blob_namespace` ENUM), and `branch_state` — the per-branch row the pageserver and safekeeper share | migration `0002_compute_storage` |
 | `controller` | the controller's product model: `app_user`, `storage_pool`, `project`, `user_pool_grant`, `user_project_grant`, `branch`, `endpoint`, `task`, `task_step` (plus the `grant_role`, `endpoint_role`, `task_status`, `step_status` ENUMs) | migration `0001_init` |
-| `amp_registry` | the controller's storage-layer registry: `branches`, `timelines`, `pending_timeline_inits`, `endpoints` | migration `0003_registry` |
+| `amp_registry` | the controller's storage-layer registry: `branches`, `endpoints` | migration `0003_registry` |
 
 ### Provisioning — controller migrations on startup
 
@@ -373,7 +373,7 @@ daemon owns a group of columns and writes only its own group; the other group
 is NULL until its owner fills it in.
 
 The row is created by the **controller**, at branch-create time
-(`Store.RecordPendingInit`), before any pageserver, safekeeper, or endpoint
+(`Store.RecordBranch`), before any pageserver, safekeeper, or endpoint
 supervisor for the branch starts. Neither daemon ever creates it: both validate
 that it exists and UPDATE their own columns. A daemon that finds no row fails
 loudly — it means it started against a branch the controller never provisioned.
@@ -578,9 +578,7 @@ pool.
 
 | Table | Purpose |
 |---|---|
-| `amp_registry.branches` | Per-branch placement + generation record. Keyed by `branch_id` alone — branches are not sharded across pageservers (YB tablet-shards the keyspace itself). The `generation` counter, bumped by the attach-hook, is the fencing primitive; monotonic across the branch's lifecycle, NULL until first attach. |
-| `amp_registry.timelines` | Per-branch WAL start LSN + generation tracking. The branch's single co-located safekeeper is owned by the launcher, not tracked here. |
-| `amp_registry.pending_timeline_inits` | Init recipe for a branch whose id + name were allocated at `branch create` but whose pageserver + safekeeper are not provisioned yet; `endpoint create` reads it back to materialize the branch, then deletes the row. NULL `ancestor_branch_id` = Bootstrap recipe (initdb + import on first start); non-NULL = fork off that ancestor at `start_lsn`. |
+| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — branches are not sharded across pageservers (YB tablet-shards the keyspace itself). Carries the branch's *creation record* (`branch_name`, `pg_version`, `ancestor_branch_id`, `start_lsn`), written once at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL `ancestor_branch_id` = bootstrap, non-NULL = fork that ancestor at `start_lsn`); and the *fencing* pair (`generation` + `placement_policy`). The `generation` counter, bumped by the attach-hook, is the fencing primitive; monotonic across the branch's lifecycle (preserved on detach), NULL until first attach. A dropped branch is tombstoned via `dropped_at`, never deleted. |
 | `amp_registry.endpoints` | Durable registry of compute endpoints, keyed by endpoint id. `spec` is opaque JSONB the controller never interprets (it round-trips through `yb_amp_local`'s serde model). |
 
 Registry semantics are documented in

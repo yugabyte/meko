@@ -88,10 +88,6 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 		return nil, nil
 	}
 
-	config := req.Config
-	if len(config) == 0 {
-		config = json.RawMessage("{}")
-	}
 	initialGen := int32(0)
 	if req.GenerationOverride != nil {
 		initialGen = *req.GenerationOverride
@@ -104,26 +100,28 @@ func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32,
 	defer tx.Rollback(ctx)
 
 	// The branch row is normally created at branch-create time (see
-	// RecordPendingInit), before any pageserver/safekeeper starts. This insert
-	// is a safety net for a branch that reaches attach without a recipe; a
-	// concurrent creator is a no-op.
+	// RecordBranch), before any pageserver/safekeeper starts. This insert is a
+	// safety net for a branch that reaches attach without having been created;
+	// a concurrent creator is a no-op. It fills only the fencing group — this
+	// path has nothing but a branch id to go on, so the creation group stays
+	// NULL and the branch reads as "not properly created".
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.branches
-		   (branch_id, generation, placement_policy, config, scheduling_policy)
-		 VALUES ($1, $2, '{"Attached":0}', $3::jsonb, '"Active"')
+		   (branch_id, generation, placement_policy)
+		 VALUES ($1, $2, '{"Attached":0}')
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		req.BranchID, initialGen, []byte(config)); err != nil {
+		req.BranchID, initialGen); err != nil {
 		return nil, fmt.Errorf("insert branch: %w", err)
 	}
 
 	var gen *int32
 	err = tx.QueryRow(ctx,
-		// COALESCE: a branch created by RecordPendingInit starts with
+		// COALESCE: a branch created by RecordBranch starts with
 		// generation NULL ("never attached"), and NULL + 1 would stay NULL.
 		// First attach therefore issues generation 1, as it always has.
 		`UPDATE amp_registry.branches
 		    SET generation = COALESCE(generation, 0) + 1, placement_policy = '{"Attached":0}'
-		  WHERE branch_id = $1
+		  WHERE branch_id = $1 AND dropped_at IS NULL
 		  RETURNING generation`,
 		req.BranchID).Scan(&gen)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -148,7 +146,8 @@ func (s *Store) Inspect(ctx context.Context, branchID string) (*uint32, error) {
 	var gen *int32
 	var policy string
 	err := s.pool.QueryRow(ctx,
-		`SELECT generation, placement_policy FROM amp_registry.branches WHERE branch_id = $1`,
+		`SELECT generation, placement_policy FROM amp_registry.branches
+		  WHERE branch_id = $1 AND dropped_at IS NULL`,
 		branchID).Scan(&gen, &policy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -181,24 +180,10 @@ func (s *Store) BranchImport(ctx context.Context, branchID string) (BranchCreate
 
 // --- timeline / branch-name registry --------------------------------------
 
-// BranchRegister records a launcher-created branch's start LSN (and optional
-// name alias) in the timelines registry. Idempotent: an existing row is left
-// untouched.
-func (s *Store) BranchRegister(ctx context.Context, branchID string, req BranchRegisterRequest) error {
-	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO amp_registry.timelines (branch_id, start_lsn, generation, branch_name)
-		 VALUES ($1, $2::pg_lsn, 1, $3)
-		 ON CONFLICT (branch_id) DO NOTHING`,
-		branchID, req.StartLSN, req.BranchName); err != nil {
-		return fmt.Errorf("register timeline: %w", err)
-	}
-	return nil
-}
-
 // SetBranchName sets or clears a branch's name alias.
 func (s *Store) SetBranchName(ctx context.Context, branchID string, req SetBranchNameRequest) error {
 	if _, err := s.pool.Exec(ctx,
-		`UPDATE amp_registry.timelines SET branch_name = $2 WHERE branch_id = $1`,
+		`UPDATE amp_registry.branches SET branch_name = $2 WHERE branch_id = $1`,
 		branchID, req.BranchName); err != nil {
 		return fmt.Errorf("set branch name: %w", err)
 	}
@@ -209,8 +194,8 @@ func (s *Store) SetBranchName(ctx context.Context, branchID string, req SetBranc
 // are non-unique labels.
 func (s *Store) ListBranchNames(ctx context.Context) ([]BranchNameEntry, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT branch_id, branch_name FROM amp_registry.timelines
-		  WHERE branch_name IS NOT NULL AND deleted_at IS NULL ORDER BY branch_id`)
+		`SELECT branch_id, branch_name FROM amp_registry.branches
+		  WHERE branch_name IS NOT NULL AND dropped_at IS NULL ORDER BY branch_id`)
 	if err != nil {
 		return nil, fmt.Errorf("list branch names: %w", err)
 	}
@@ -227,8 +212,13 @@ func (s *Store) ListBranchNames(ctx context.Context) ([]BranchNameEntry, error) 
 	return out, rows.Err()
 }
 
-// BranchDrop drops a branch: retire its endpoint records, discard any pending
-// init recipe, and mark the timeline row deleted. Idempotent.
+// BranchDrop drops a branch: retire its endpoint records and tombstone the
+// branch row. Idempotent.
+//
+// The row is kept with `dropped_at` stamped rather than deleted: a branch id is
+// never reused, so keeping it preserves the generation counter (and the fencing
+// history) and leaves a record of the branch. Every "is this live?" reader
+// filters `dropped_at IS NULL`, so the name stops resolving either way.
 func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -238,11 +228,9 @@ func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 
 	for _, stmt := range []string{
 		`DELETE FROM amp_registry.endpoints WHERE branch_id = $1`,
-		`DELETE FROM amp_registry.pending_timeline_inits WHERE branch_id = $1`,
-		// A dropped branch is terminal (its id is never reused and its pageserver
-		// is stopped), so its generation record can go too — no fencing concern.
-		`DELETE FROM amp_registry.branches WHERE branch_id = $1`,
-		`UPDATE amp_registry.timelines SET deleted_at = now() WHERE branch_id = $1`,
+		`UPDATE amp_registry.branches
+		    SET dropped_at = now(), placement_policy = '"Detached"'
+		  WHERE branch_id = $1 AND dropped_at IS NULL`,
 	} {
 		if _, err := tx.Exec(ctx, stmt, branchID); err != nil {
 			return fmt.Errorf("drop branch: %w", err)
@@ -254,48 +242,50 @@ func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 	return nil
 }
 
-// --- pending-init recipe registry -----------------------------------------
+// --- branch creation -------------------------------------------------------
 
-// RecordPendingInit stores a branch's init recipe. Idempotent on branch_id.
-// RecordPendingInit is where a branch id first reaches the database, and it is
+// RecordBranch stores a branch's creation record. Idempotent on branch_id.
+// RecordBranch is where a branch id first reaches the database, and it is
 // reached by every branch-creation path (the launcher's `branch create` and the
-// controller's record_branch_recipe step). So it provisions all three of the
+// controller's record_branch_recipe step). So it provisions both of the
 // branch's rows in one transaction, before any pageserver, safekeeper, or
 // endpoint supervisor for the branch is started:
 //
-//   - amp_registry.pending_timeline_inits — the init recipe, dropped once the
-//     branch materializes.
-//   - amp_registry.branches — the generation authority. generation stays NULL
-//     ("never attached") until the first attach-hook bumps it to 1.
+//   - amp_registry.branches — the branch's identity (name + how to create it)
+//     and the generation authority. generation stays NULL ("never attached")
+//     until the first attach-hook bumps it to 1.
 //   - amp_storage.branch_state — the per-branch state row the pageserver and
 //     safekeeper share. Both daemons only ever validate that it exists and
 //     UPDATE their own column group; neither creates it, so it has to be here
 //     before either starts.
 //
-// Every insert is ON CONFLICT DO NOTHING, so re-recording a recipe is a no-op
-// and the call stays idempotent.
-func (s *Store) RecordPendingInit(ctx context.Context, branchID string, req PendingBranchInitRequest) error {
+// Re-recording is idempotent. The branches upsert deliberately fills the
+// creation group ON CONFLICT rather than doing nothing: a row can already exist
+// without ever having carried a creation record — the attach-hook's safety-net
+// insert creates a bare row — and a plain DO NOTHING
+// would leave that row's creation group NULL forever while reporting success,
+// making the branch invisible to ListBranches. The `pg_version IS NULL` guard
+// keeps a genuine re-record a no-op, so an existing record is never rewritten.
+func (s *Store) RecordBranch(ctx context.Context, branchID string, req BranchCreateRecord) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin record pending init: %w", err)
+		return fmt.Errorf("begin record branch: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.pending_timeline_inits
-		   (branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn)
-		 VALUES ($1, $2, $3, $4, $5::pg_lsn)
-		 ON CONFLICT (branch_id) DO NOTHING`,
-		branchID, req.BranchName, req.PgVersion, req.AncestorBranchID, req.StartLSN); err != nil {
-		return fmt.Errorf("record pending init: %w", err)
-	}
-
-	if _, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.branches
-		   (branch_id, generation, placement_policy, config, scheduling_policy)
-		 VALUES ($1, NULL, '"Detached"', '{}'::jsonb, '"Active"')
-		 ON CONFLICT (branch_id) DO NOTHING`,
-		branchID); err != nil {
+		   (branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn,
+		    generation, placement_policy)
+		 VALUES ($1, $2, $3, $4, $5::pg_lsn, NULL, '"Detached"')
+		 ON CONFLICT (branch_id) DO UPDATE
+		    SET branch_name        = EXCLUDED.branch_name,
+		        pg_version         = EXCLUDED.pg_version,
+		        ancestor_branch_id = EXCLUDED.ancestor_branch_id,
+		        start_lsn          = EXCLUDED.start_lsn
+		  WHERE amp_registry.branches.pg_version IS NULL
+		    AND amp_registry.branches.dropped_at IS NULL`,
+		branchID, req.BranchName, req.PgVersion, req.AncestorBranchID, req.StartLSN); err != nil {
 		return fmt.Errorf("record branch: %w", err)
 	}
 
@@ -304,8 +294,8 @@ func (s *Store) RecordPendingInit(ctx context.Context, branchID string, req Pend
 	// a set one means branch off that ancestor at ancestor_lsn. This is why the
 	// row has to exist before any pageserver starts.
 	//
-	// `pg_version` holds a full PgVersionId; the recipe carries only the major
-	// version, so map it to the full id of the PostgreSQL we ship. This is the
+	// `pg_version` holds a full PgVersionId; the creation record carries only the
+	// major version, so map it to the full id of the PostgreSQL we ship. This is the
 	// column's only writer — both daemons just read it — so a major we can't map
 	// has to fail here, before the branch exists, rather than seed a version no
 	// build can serve.
@@ -327,40 +317,34 @@ func (s *Store) RecordPendingInit(ctx context.Context, branchID string, req Pend
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit record pending init: %w", err)
+		return fmt.Errorf("commit record branch: %w", err)
 	}
 	return nil
 }
 
-// ListPendingInits returns every recorded init recipe.
-func (s *Store) ListPendingInits(ctx context.Context) ([]PendingBranchInit, error) {
+// ListBranches returns every live, properly created branch — the ones the
+// launcher can materialize. A row whose `pg_version` is NULL was created by the
+// attach-hook's safety net and carries no creation record, so it is skipped, as
+// is a tombstoned (dropped) branch.
+func (s *Store) ListBranches(ctx context.Context) ([]BranchRecord, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn::text
-		   FROM amp_registry.pending_timeline_inits ORDER BY branch_id`)
+		   FROM amp_registry.branches
+		  WHERE pg_version IS NOT NULL AND dropped_at IS NULL ORDER BY branch_id`)
 	if err != nil {
-		return nil, fmt.Errorf("list pending inits: %w", err)
+		return nil, fmt.Errorf("list branches: %w", err)
 	}
 	defer rows.Close()
 
-	out := []PendingBranchInit{}
+	out := []BranchRecord{}
 	for rows.Next() {
-		var p PendingBranchInit
+		var p BranchRecord
 		if err := rows.Scan(&p.BranchID, &p.BranchName, &p.PgVersion, &p.AncestorBranchID, &p.StartLSN); err != nil {
-			return nil, fmt.Errorf("scan pending init: %w", err)
+			return nil, fmt.Errorf("scan branch: %w", err)
 		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
-}
-
-// DeletePendingInit drops a branch's init recipe. Idempotent: an absent recipe
-// is a no-op.
-func (s *Store) DeletePendingInit(ctx context.Context, branchID string) error {
-	if _, err := s.pool.Exec(ctx,
-		`DELETE FROM amp_registry.pending_timeline_inits WHERE branch_id = $1`, branchID); err != nil {
-		return fmt.Errorf("delete pending init: %w", err)
-	}
-	return nil
 }
 
 // --- endpoint registry ----------------------------------------------------

@@ -255,9 +255,9 @@ func waitTimelineActive(ctx context.Context, conf *config.PageServerConf, branch
 }
 
 // provisionTimelineForEndpoint provisions the pageserver + safekeeper pair
-// serving branchID, co-located under endpointID, consuming the pending init
-// recorded at `branch create`. No-op when a pageserver already serves the
-// branch. Mirrors Rust `provision_timeline_for_endpoint`.
+// serving branchID, co-located under endpointID, from the branch's creation
+// record. No-op when a pageserver already serves the branch. Mirrors Rust
+// `provision_timeline_for_endpoint`.
 func provisionTimelineForEndpoint(ctx context.Context, env *config.LocalEnv, endpointID string, branchID config.BranchID) error {
 	if env.PageserverConfForBranch(branchID) != nil {
 		return nil
@@ -267,42 +267,35 @@ func provisionTimelineForEndpoint(ctx context.Context, env *config.LocalEnv, end
 		return err
 	}
 	ctrl := client.NewController(base, httpClient())
-	pending, err := ctrl.ListPendingInits(ctx)
+	branches, err := ctrl.ListBranches(ctx)
 	if err != nil {
 		return err
 	}
-	var recipe *registry.PendingBranchInit
-	for i := range pending {
-		if pending[i].BranchID == branchID {
-			recipe = &pending[i]
+	var branch *registry.BranchRecord
+	for i := range branches {
+		if branches[i].BranchID == branchID {
+			branch = &branches[i]
 			break
 		}
 	}
-	if recipe == nil {
+	if branch == nil {
 		return fmt.Errorf(
-			"branch %s has no provisioned pageserver and no pending init; run `branch create` first", branchID)
+			"branch %s has no provisioned pageserver and no creation record; run `branch create` first", branchID)
 	}
 
-	branchName := recipe.BranchName
-	if recipe.AncestorBranchID == nil {
-		if err := provisionBootstrap(ctx, env, endpointID, branchID, recipe.PgVersion, branchName); err != nil {
-			return err
-		}
-	} else {
-		if err := provisionBranch(ctx, env, endpointID, branchID, *recipe.AncestorBranchID, recipe.StartLSN, recipe.PgVersion, branchName); err != nil {
-			return err
-		}
+	// A NULL ancestor means bootstrap (initdb + import); a set one means fork
+	// that ancestor at its start LSN.
+	if branch.AncestorBranchID == nil {
+		return provisionBootstrap(ctx, env, endpointID, branchID, branch.PgVersion)
 	}
-
-	// The pair is materialized; drop the pending recipe.
-	return ctrl.DeletePendingInit(ctx, branchID)
+	return provisionBranch(ctx, env, endpointID, branchID, *branch.AncestorBranchID, branch.StartLSN, branch.PgVersion)
 }
 
 // provisionBootstrap brings up the main branch's pair: start the safekeeper,
 // start the pageserver (runs initdb + import), wait Active, create the
 // timeline on the safekeeper at the bootstrap LSN, and register the branch.
 // Mirrors Rust `provision_bootstrap`.
-func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID string, branchID config.BranchID, pgVersion int, branchName string) error {
+func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID string, branchID config.BranchID, pgVersion int) error {
 	psConf, err := allocatePageserverConf(env, endpointID)
 	if err != nil {
 		return err
@@ -356,18 +349,6 @@ func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID st
 		return fmt.Errorf("create bootstrap timeline on safekeeper: %w", err)
 	}
 
-	base, err := controllerBase(env)
-	if err != nil {
-		return err
-	}
-	bn := branchName
-	if err := client.NewController(base, httpClient()).BranchRegister(ctx, branchID, registry.BranchRegisterRequest{
-		StartLSN:   startLSN,
-		BranchName: &bn,
-	}); err != nil {
-		return fmt.Errorf("register bootstrap branch with controller: %w", err)
-	}
-
 	env.Pageservers = append(env.Pageservers, psConf)
 	success = true
 	return nil
@@ -376,7 +357,7 @@ func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID st
 // provisionBranch brings up a fork's pair: create the safekeeper at the branch
 // LSN, start the pageserver cloned from the ancestor with a Branch identity,
 // wait Active, and register the branch. Mirrors Rust `provision_branch`.
-func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID string, branchID, ancestorBranchID config.BranchID, startLSN config.Lsn, pgVersion int, branchName string) error {
+func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID string, branchID, ancestorBranchID config.BranchID, startLSN config.Lsn, pgVersion int) error {
 	ancestorConf := env.PageserverConfForBranch(ancestorBranchID)
 	if ancestorConf == nil {
 		return fmt.Errorf("no pageserver serves ancestor branch %s", ancestorBranchID)
@@ -438,18 +419,6 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 	}
 	if _, err := waitTimelineActive(ctx, &psConf, branchID, 120*time.Second); err != nil {
 		return err
-	}
-
-	base, err := controllerBase(env)
-	if err != nil {
-		return err
-	}
-	bn := branchName
-	if err := client.NewController(base, httpClient()).BranchRegister(ctx, branchID, registry.BranchRegisterRequest{
-		StartLSN:   startLSN,
-		BranchName: &bn,
-	}); err != nil {
-		return fmt.Errorf("register branch with controller: %w", err)
 	}
 
 	env.Pageservers = append(env.Pageservers, psConf)

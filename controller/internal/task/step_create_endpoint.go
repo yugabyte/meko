@@ -17,16 +17,13 @@ const StepCreateEndpoint = "create_endpoint"
 // CreateEndpointArgs are the inputs to the create_endpoint step — the shared step
 // that create-project, branch, and scale-up all use (§8). It records the
 // endpoint, deploys the compute, records the address, and clears the branch
-// recipe. AncestorBranchID/AncestorLSN are set when the target branch is a fork,
-// so the endpoint clones from its ancestor instead of initdb'ing.
+// recipe.
 type CreateEndpointArgs struct {
-	EndpointID       uuid.UUID  `json:"endpoint_id"`
-	ProjectID        uuid.UUID  `json:"project_id"`
-	BranchID         uuid.UUID  `json:"branch_id"`
-	Role             string     `json:"role"`
-	PgVersion        int        `json:"pg_version"`
-	AncestorBranchID *uuid.UUID `json:"ancestor_branch_id,omitempty"`
-	AncestorLSN      string     `json:"ancestor_lsn,omitempty"`
+	EndpointID uuid.UUID `json:"endpoint_id"`
+	ProjectID  uuid.UUID `json:"project_id"`
+	BranchID   uuid.UUID `json:"branch_id"`
+	Role       string    `json:"role"`
+	PgVersion  int       `json:"pg_version"`
 	// CPU and Memory are the pod's compute reservation (Kubernetes quantities,
 	// e.g. "2" / "4Gi"), applied as request == limit for Guaranteed QoS. Carried
 	// in the args so a reclaim/replay deploys the same size. Empty falls back to
@@ -35,22 +32,18 @@ type CreateEndpointArgs struct {
 	Memory string `json:"memory,omitempty"`
 }
 
-// createEndpointStep records the endpoint, provisions the compute, records the
-// resulting address, and clears the branch's pending-init recipe (the endpoint
-// materializes the branch). All four effects are idempotent, so the step
+// createEndpointStep records the endpoint, provisions the compute, and records
+// the resulting address. All three effects are idempotent, so the step
 // converges when replayed: the record insert is id-keyed ON CONFLICT DO NOTHING,
-// the deploy is keyed by the endpoint's stable name (deployer idempotency), the
-// address write is an absolute UPDATE, and the recipe clear tolerates an
-// already-absent recipe. Its deploy collaborators are bound at construction
-// (deployer is required); only the embedded args are serialized.
+// the deploy is keyed by the endpoint's stable name (deployer idempotency), and
+// the address write is an absolute UPDATE. Its deploy collaborators are bound at
+// construction (deployer is required); only the embedded args are serialized.
 type createEndpointStep struct {
 	CreateEndpointArgs
-	state     StateStore
-	recipes   RecipeStore
-	deployer  deploy.Deployer
-	yb        deploy.YBConn
-	scURL     string
-	bootstrap bool
+	state    StateStore
+	deployer deploy.Deployer
+	yb       deploy.YBConn
+	scURL    string
 }
 
 // NewCreateEndpointStep binds create_endpoint args + its deps into an executable step.
@@ -58,11 +51,9 @@ func NewCreateEndpointStep(args CreateEndpointArgs, deps Deps) Step {
 	return &createEndpointStep{
 		CreateEndpointArgs: args,
 		state:              deps.State,
-		recipes:            deps.Recipes,
 		deployer:           deps.Deployer,
 		yb:                 deps.EndpointYB,
 		scURL:              deps.ControllerURL,
-		bootstrap:          deps.Bootstrap,
 	}
 }
 
@@ -103,13 +94,6 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		ControllerURL: s.scURL,
 		CPU:           s.CPU,
 		Memory:        s.Memory,
-		// A fork clones from its ancestor; only a default branch initdb's.
-		Bootstrap: s.bootstrap && s.AncestorBranchID == nil,
-	}
-	if s.AncestorBranchID != nil {
-		spec.AncestorBranchID = hex32(*s.AncestorBranchID)
-		spec.AncestorLSN = s.AncestorLSN
-		spec.Bootstrap = false
 	}
 
 	deployed, err := s.deployer.CreateEndpoint(ctx, spec)
@@ -118,16 +102,6 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	}
 	if err := s.state.SetEndpointAddress(ctx, s.EndpointID, deployed.Address, deployed.TailnetAddress); err != nil {
 		return Fail(fmt.Errorf("record endpoint address: %w", err))
-	}
-
-	// The endpoint materialized the branch, so drop the pending-init recipe.
-	// Best-effort and idempotent: a lingering recipe is harmless (nothing reads
-	// it), so a clear failure does not fail the task.
-	if s.recipes != nil {
-		if err := s.recipes.ClearBranchRecipe(ctx, hex32(s.BranchID)); err != nil {
-			logger.Warn("failed to clear branch recipe (continuing)",
-				applog.KeyProjectID, s.ProjectID.String(), applog.KeyBranchID, s.BranchID.String(), "error", err.Error())
-		}
 	}
 
 	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress)

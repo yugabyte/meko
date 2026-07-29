@@ -40,30 +40,17 @@ func (c *Controller) AttachHook(ctx context.Context, req registry.AttachHookRequ
 	return resp, err
 }
 
-// BranchRegister records a launcher-created branch via POST
-// /control/v1/branch/{branchID}/register.
-func (c *Controller) BranchRegister(ctx context.Context, branchID string, req registry.BranchRegisterRequest) error {
-	return c.t.do(ctx, http.MethodPost, "/control/v1/branch/"+url.PathEscape(branchID)+"/register", req, nil)
+// RecordBranch records a branch's creation record via POST
+// /control/v1/branch/{branchID}/record.
+func (c *Controller) RecordBranch(ctx context.Context, branchID string, req registry.BranchCreateRecord) error {
+	return c.t.do(ctx, http.MethodPost, "/control/v1/branch/"+url.PathEscape(branchID)+"/record", req, nil)
 }
 
-// RecordPendingInit records a pending timeline-init recipe via POST
-// /control/v1/branch/{branchID}/pending_init.
-func (c *Controller) RecordPendingInit(ctx context.Context, branchID string, req registry.PendingBranchInitRequest) error {
-	return c.t.do(ctx, http.MethodPost, "/control/v1/branch/"+url.PathEscape(branchID)+"/pending_init", req, nil)
-}
-
-// ListPendingInits returns all pending timeline inits via GET
-// /control/v1/pending_timeline_inits.
-func (c *Controller) ListPendingInits(ctx context.Context) ([]registry.PendingBranchInit, error) {
-	var out []registry.PendingBranchInit
-	err := c.t.do(ctx, http.MethodGet, "/control/v1/pending_timeline_inits", nil, &out)
+// ListBranches returns every created branch via GET /control/v1/branches.
+func (c *Controller) ListBranches(ctx context.Context) ([]registry.BranchRecord, error) {
+	var out []registry.BranchRecord
+	err := c.t.do(ctx, http.MethodGet, "/control/v1/branches", nil, &out)
 	return out, err
-}
-
-// DeletePendingInit discards a materialized init recipe via DELETE
-// /control/v1/branch/{branchID}/pending_init.
-func (c *Controller) DeletePendingInit(ctx context.Context, branchID string) error {
-	return c.t.do(ctx, http.MethodDelete, "/control/v1/branch/"+url.PathEscape(branchID)+"/pending_init", nil, nil)
 }
 
 // SetBranchName sets (or clears) a branch's name alias via PUT

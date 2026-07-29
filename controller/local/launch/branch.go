@@ -75,7 +75,7 @@ func branchCreateRoot(ctx context.Context, env *config.LocalEnv, args BranchCrea
 		return err
 	}
 	ctrl := client.NewController(base, httpClient())
-	if err := ctrl.RecordPendingInit(ctx, branchID, registry.PendingBranchInitRequest{
+	if err := ctrl.RecordBranch(ctx, branchID, registry.BranchCreateRecord{
 		BranchName: DefaultBranchName,
 		PgVersion:  pgVersion,
 		StartLSN:   "0/0",
@@ -145,7 +145,7 @@ func branchCreateFork(ctx context.Context, env *config.LocalEnv, args BranchCrea
 	}
 
 	anc := ancestorBranchID
-	if err := ctrl.RecordPendingInit(ctx, branchID, registry.PendingBranchInitRequest{
+	if err := ctrl.RecordBranch(ctx, branchID, registry.BranchCreateRecord{
 		BranchName:       args.BranchName,
 		PgVersion:        pgVersion,
 		AncestorBranchID: &anc,

@@ -95,7 +95,6 @@ a 200 confirms the MCP app is actually serving, not just that the port is bound.
 | `controller.endpoint.image.repository` / `.tag` | `amp/endpoint` / chart appVersion | `AMP_ENDPOINT_IMAGE_REPO` / `AMP_ENDPOINT_IMAGE_TAG` |
 | `controller.endpoint.ybHostPorts` | `yb-tserver:5433` | `AMP_DEPLOY_YB_HOST_PORTS` |
 | `controller.endpoint.ybUser` / `.ybDbname` | `yugabyte` / `yb_storage` | `AMP_DEPLOY_YB_USER` / `AMP_DEPLOY_YB_DBNAME` |
-| `controller.endpoint.bootstrap` | `true` | `AMP_DEPLOY_BOOTSTRAP` |
 | `controller.endpoint.storageClass` | _(empty)_ | `AMP_DEPLOY_STORAGE_CLASS` (empty ⇒ emptyDir) |
 | `controller.endpoint.diskSize` | `10Gi` | `AMP_DEPLOY_DISK_SIZE` |
 | `controller.endpoint.service.type` | `ClusterIP` | `AMP_DEPLOY_SERVICE_TYPE` (ClusterIP \| NodePort \| LoadBalancer) |

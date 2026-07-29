@@ -43,15 +43,14 @@ the result — it does not run `initdb` itself.
    `parent_branch_id = NULL` for the default branch). The default branch is always
    named `main`, independent of the project name; forks off it choose their own
    names (unique within the project).
-3. Records the same recipe in the controller, keyed by the storage-layer
-   `branch_id` (`POST /control/v1/branch/{branch_id}/pending_init` with
+3. Records the same creation record in the controller, keyed by the storage-layer
+   `branch_id` (`POST /control/v1/branch/{branch_id}/record` with
    `{ branch_name, pg_version, ancestor_branch_id = NULL, start_lsn = 0 }`).
 4. Returns the project, with its embedded `default_branch`.
 
-Nothing is materialized, no `initdb` runs, and no compute is started. The recipe
+Nothing is materialized, no `initdb` runs, and no compute is started. The record
 now lives in **both** cAmp's database (`branch`) and the controller (its
-`pending_timeline_inits` table, listed flat via
-`GET /control/v1/pending_timeline_inits`).
+`amp_registry.branches` row, listed flat via `GET /control/v1/branches`).
 
 ## Step 2 — Materialize at the first endpoint
 
@@ -69,20 +68,22 @@ endpoint materializes the branch, and cAmp finalizes.
 1. Runs the attach-hook; the controller attaches the branch and grants
    its **generation**. (Neither the pageserver node nor the safekeeper is
    registered with the controller — the endpoint owns them.)
-2. Runs **`initdb`** (`BOOTSTRAP=true`) — the pageserver bootstraps the branch.
-3. Once the branch is `Active`, reads its `start_lsn`, creates the branch on
-   its safekeeper (single-member membership, generation 1), and **registers it
-   with the controller** (`POST /control/v1/branch/{branch_id}/register`:
-   `start_lsn`, optional `branch_name` — the controller just records the branch
-   row).
+2. Runs **`initdb`** — the pageserver bootstraps the branch, taking its init
+   mode from the branch's seeded `amp_storage.branch_state` row.
+3. Once the branch is `Active`, reads its `start_lsn` and creates the branch on
+   its safekeeper (single-member membership, generation 1). Nothing is reported
+   back to the controller: the branch's row was written at branch create and
+   needs no update.
 4. Starts compute (Postgres).
 
 **cAmp finalizes**, once the endpoint is ready:
 - Reads the endpoint's address from the provisioner, records it on the
   `endpoint` row, and returns it to the caller.
-- Clears the recipe: deletes the controller's pending init
-  (`DELETE /control/v1/branch/{branch_id}/pending_init`) and marks the branch
-  materialized.
+- Marks the branch materialized. The controller's `branches` row is not
+  consumed: it is the branch's durable record for as long as the branch exists
+  (and, once dropped, is tombstoned via `dropped_at` rather than deleted), and
+  `amp_storage.branch_state.consistent_lsn` is what says the pageserver has
+  materialized it.
 
 ## What actually creates the branch's storage
 
@@ -131,13 +132,13 @@ writes are synchronous today and move onto the task framework under #113.
 
 | `yb_amp_local` | Amp Controller (cAmp) |
 |---|---|
-| `record_pending_timeline_init` (per branch) | `create-project` → `project` + default `branch` (cAmp DB) **and** the controller's pending init, keyed by `branch_id` (`POST /control/v1/branch/{branch_id}/pending_init`). There is no separate tenant-create step anymore — a root branch is just a pending `Bootstrap` init. |
+| `record_branch` (per branch) | `create-project` → `project` + default `branch` (cAmp DB) **and** the controller's branch record, keyed by `branch_id` (`POST /control/v1/branch/{branch_id}/record`). There is no separate tenant-create step anymore — a root branch is just a record with a NULL ancestor. |
 | control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |
 | control plane inits PS + `register_and_attach` | the **endpoint** registers its pageserver + runs the attach-hook (generation) |
-| PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb` (`BOOTSTRAP=true`) |
-| SK branch create + SC `timeline_register` | the **endpoint** creates the branch on its safekeeper, then calls the branch `register` route (`POST /control/v1/branch/{branch_id}/register`) |
+| PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb`, driven by the seeded `branch_state` row |
+| SK branch create + SC `timeline_register` | the **endpoint** creates the branch on its safekeeper; there is no register call back to the controller |
 | `endpoint.start` after provisioning | the endpoint starts compute once the branch is `Active` |
-| `delete_pending_timeline_init` | **cAmp** deletes the pending init and marks the branch materialized |
+| `delete_pending_timeline_init` | **cAmp** marks the branch materialized; the controller's branch row is not consumed |
 
 ## Notes
 
@@ -148,11 +149,10 @@ writes are synchronous today and move onto the task framework under #113.
   pageserver/safekeeper directly.
 - **Generation** is granted by the controller's attach-hook when the
   endpoint attaches; it is never pinned.
-- **Controller calls used:** record / delete pending init, keyed by
-  `branch_id` (`POST`/`DELETE /control/v1/branch/{branch_id}/pending_init`, by
-  cAmp); attach-hook and the branch `register` route
-  (`POST /control/v1/branch/{branch_id}/register`, by the endpoint). (No node or
-  safekeeper register — both are endpoint-owned; see #171.)
+- **Controller calls used:** record a branch, keyed by `branch_id`
+  (`POST /control/v1/branch/{branch_id}/record`, by cAmp); and the attach-hook,
+  by the endpoint. (No node or safekeeper register — both are endpoint-owned;
+  see #171.)
 - **Direction (planned).** The SC is being integrated into amp-controller and the
   create flow is moving to *create-then-configure*: endpoints created unassigned
   and bound to a branch on demand (a pre-warm pool, for faster turnaround). amp

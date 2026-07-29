@@ -81,13 +81,12 @@ The supervisor materializes the branch itself:
     the controller-seeded `branch_state` row with a NULL ancestor (the pageserver runs `initdb`
     and imports the initial page set on start).
   - `BRANCH_ID` set (the production case, supplied by the controller) →
-    attach the existing branch; `BOOTSTRAP=true` forces `initdb` of the
-    supplied id (for a controller-allocated id that has not been
-    materialized yet).
-  - `ANCESTOR_BRANCH_ID` + `ANCESTOR_LSN` set → `mode = "branch"`: fork
-    the ancestor at that LSN instead of `initdb`. Pre-fork pages stay
-    under the ancestor's branch id and are reached via lineage-aware
-    reads from shared storage; nothing is copied.
+    serve that branch. How its timeline is created is not a supervisor
+    concern: the pageserver reads it off the controller-seeded
+    `branch_state` row. A NULL `ancestor_branch_id` means `initdb` +
+    import; a set one means fork that ancestor at `ancestor_lsn`, where
+    pre-fork pages stay under the ancestor's branch id and are reached
+    via lineage-aware reads from shared storage (nothing is copied).
 - **Safekeeper timeline.** After the pageserver's branch reaches
   `Active`, the supervisor creates the timeline on the safekeeper's
   HTTP API (`POST /v1/branch`) at the pageserver's `last_record_lsn`,

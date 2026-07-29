@@ -150,7 +150,7 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 	ctrl := client.NewController(base, httpClient())
 
 	// Resolve the branch id: explicit --branch-id wins; else by registered
-	// name; else by a pending-init recipe's name.
+	// name; else by a created branch's name.
 	branchID := args.BranchID
 	if branchID == "" {
 		id, err := getBranchTimelineID(ctx, env, ctrl, branchName)
@@ -158,13 +158,13 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 			return err
 		}
 		if id == "" {
-			pending, err := ctrl.ListPendingInits(ctx)
+			branches, err := ctrl.ListBranches(ctx)
 			if err != nil {
 				return err
 			}
-			for _, p := range pending {
-				if p.BranchName == branchName {
-					id = p.BranchID
+			for _, b := range branches {
+				if b.BranchName == branchName {
+					id = b.BranchID
 					break
 				}
 			}

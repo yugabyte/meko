@@ -46,7 +46,6 @@ func drainTasks(t *testing.T, store *task.MemStore, backend core.Backend, prov a
 		Deployer:      prov.Deployer,
 		EndpointYB:    prov.EndpointYB,
 		ControllerURL: prov.ControllerURL,
-		Bootstrap:     prov.Bootstrap,
 		Recipes:       prov.Recipes,
 	}
 	cfg := config.TaskConfig{

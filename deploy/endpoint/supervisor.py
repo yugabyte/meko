@@ -569,35 +569,6 @@ def main():
         if e.code not in (409,):
             log(f"safekeeper create_branch returned {e.code}: {e.read()[:200]}")
 
-    # Under controller coordination, record the branch in the controller
-    # for cluster bookkeeping (its start LSN + branch name). Mirrors control_plane's
-    # timeline_register (control_plane/src/controller.rs). Since #171 the
-    # controller no longer tracks safekeeper placement — it just persists the branch
-    # row. Reuse the exact start LSN already given to the safekeeper create above;
-    # the pageserver API returns it as the controller's `Lsn` "hi/lo" string, so pass
-    # it through (only convert if we somehow hold it as an integer).
-    if USE_CONTROLLER:
-        sc_start_lsn = start_lsn
-        if isinstance(sc_start_lsn, int):
-            sc_start_lsn = f"{sc_start_lsn >> 32:X}/{sc_start_lsn & 0xFFFFFFFF:X}"
-        base = CONTROLLER_URL.rstrip("/")
-        try:
-            http_request(
-                "POST",
-                f"{base}/control/v1/branch/{BRANCH_ID}/register",
-                body={"start_lsn": sc_start_lsn},
-            )
-            log("registered branch with controller")
-        except urllib.error.HTTPError as e:
-            # 409/already-registered is fine on restart.
-            if e.code not in (409,):
-                log(f"controller branch register returned {e.code}: {e.read()[:200]}")
-        except Exception as e:  # noqa: BLE001 - registry update is best-effort, never fatal
-            # The safekeeper already has the branch (created above) and serves the
-            # compute; registering it with the controller is bookkeeping, so a
-            # transient connection error must not crash the pod.
-            log(f"WARNING: controller branch register failed (continuing): {e}")
-
     # 4. compute_ctl + postgres
     spec = render_compute_spec(RUN_DIR / "compute_spec.json")
     compute = Service(
