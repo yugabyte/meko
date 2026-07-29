@@ -135,6 +135,9 @@ pub struct YbReadSpec {
     pub n_targets: usize,
     pub limit: u64,
     pub is_forward_scan: c_int,
+    /// Range key columns in schema order, for a RANGE-sharded table: a full
+    /// key targets one row, a prefix that prefix's range, null/0 the whole
+    /// table. Mixing these with `hash_values` returns `YBTHIN_INVALID`.
     pub range_values: *const YbBind,
     pub n_range: usize,
 }

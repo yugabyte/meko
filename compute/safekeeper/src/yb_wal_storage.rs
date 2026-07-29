@@ -2238,12 +2238,15 @@ fn merge_fetched_rows<'a>(
 /// Thin-client (`yb_thin_client`) two-arm fetch. The SQL version keeps both
 /// arms in ONE statement for a single read snapshot; here a chunk's
 /// bucket can't be derived, so every (arm, bucket) pair is its own
-/// single-tablet read op — covering arm per bucket (`chunk_offset <
-/// pos`, descending, limit 1) and forward arm per bucket (`[pos, pos +
+/// read op — covering arm per bucket (`chunk_offset < pos`, descending,
+/// limit 1) and forward arm per bucket (`[pos, pos +
 /// FETCH_FORWARD_BYTES)`, ascending, limit [`FETCH_FORWARD_CHUNKS`]) —
 /// and ALL `2×WALS_BUCKETS` of them are issued as ops of ONE Perform: the
 /// proxy picks one read point at setup and every op shares it, so the
-/// fetch is a single snapshot BY CONSTRUCTION (#139).
+/// fetch is a single snapshot BY CONSTRUCTION (#139). Ops that come back
+/// with a continuation are re-issued, pinned to that same read point,
+/// until each has the rows it wants — see the paging loop for why one
+/// page is not enough once `wals` is range-sharded.
 /// Results merge client-side through [`merge_fetched_rows`], preserving
 /// the SQL path's semantics: covering = the max-offset row with
 /// `chunk_offset < pos` across all buckets that spans `pos`; forward =
@@ -2261,52 +2264,67 @@ async fn fetch_chunks_thin(
     let targets = ["chunk_offset", "chunk_size", "data"];
     let segno_i = segno as i64;
 
+    // Both arms scan one `(branch_id, bucket_id, segno)`'s chunk range and
+    // differ only in their `chunk_offset` bound, so they share a base read.
+    //
+    // How that key prefix is bound depends on how `wals` is partitioned, and
+    // the shim rejects a spec carrying both kinds: hash-sharded takes the
+    // hash key `(branch_id, bucket_id)` plus a `segno` equality cond;
+    // range-sharded has no hash columns, so all three go in as a range key
+    // prefix. Keyed off the schema the shim reports rather than a build-time
+    // assumption, so the same binary works either side of the partitioning
+    // change. The hash form pins the scan to ONE tablet; the range form only
+    // to a contiguous key span, which is why the caller must page.
+    let range_sharded = wals.num_hash_columns() == 0;
+    let base_read = |bucket: i16| -> anyhow::Result<RangeRead> {
+        let branch = BindValue::Text(branch_id.to_string());
+        Ok(if range_sharded {
+            RangeRead::new_range(
+                wals,
+                vec![branch, BindValue::I16(bucket), BindValue::I64(segno_i)],
+            )?
+        } else {
+            RangeRead::new(wals, vec![branch, BindValue::I16(bucket)])?.cond(
+                wals,
+                "segno",
+                CondOp::Eq,
+                BindValue::I64(segno_i),
+            )?
+        })
+    };
+
     // Covering arm for one bucket: its highest chunk starting below
     // byte_offset; the cross-bucket max resolves in the merge.
     let covering_read = |bucket: i16| -> anyhow::Result<RangeRead> {
-        Ok(RangeRead::new(
-            wals,
-            vec![
-                BindValue::Text(branch_id.to_string()),
-                BindValue::I16(bucket),
-            ],
-        )?
-        .cond(wals, "segno", CondOp::Eq, BindValue::I64(segno_i))?
-        .cond(
-            wals,
-            "chunk_offset",
-            CondOp::Lt,
-            BindValue::I64(byte_offset as i64),
-        )?
-        .targets(wals, &targets)?
-        .descending()
-        .limit(1))
+        Ok(base_read(bucket)?
+            .cond(
+                wals,
+                "chunk_offset",
+                CondOp::Lt,
+                BindValue::I64(byte_offset as i64),
+            )?
+            .targets(wals, &targets)?
+            .descending()
+            .limit(1))
     };
     // Forward arm for one bucket: ascending chunks in
     // [byte_offset, byte_offset + FETCH_FORWARD_BYTES).
     let forward_read = |bucket: i16| -> anyhow::Result<RangeRead> {
-        Ok(RangeRead::new(
-            wals,
-            vec![
-                BindValue::Text(branch_id.to_string()),
-                BindValue::I16(bucket),
-            ],
-        )?
-        .cond(wals, "segno", CondOp::Eq, BindValue::I64(segno_i))?
-        .cond(
-            wals,
-            "chunk_offset",
-            CondOp::Ge,
-            BindValue::I64(byte_offset as i64),
-        )?
-        .cond(
-            wals,
-            "chunk_offset",
-            CondOp::Lt,
-            BindValue::I64(byte_offset.saturating_add(FETCH_FORWARD_BYTES) as i64),
-        )?
-        .targets(wals, &targets)?
-        .limit(FETCH_FORWARD_CHUNKS as u64))
+        Ok(base_read(bucket)?
+            .cond(
+                wals,
+                "chunk_offset",
+                CondOp::Ge,
+                BindValue::I64(byte_offset as i64),
+            )?
+            .cond(
+                wals,
+                "chunk_offset",
+                CondOp::Lt,
+                BindValue::I64(byte_offset.saturating_add(FETCH_FORWARD_BYTES) as i64),
+            )?
+            .targets(wals, &targets)?
+            .limit(FETCH_FORWARD_CHUNKS as u64))
     };
 
     let mut reads: Vec<RangeRead> = Vec::with_capacity(2 * WALS_BUCKETS as usize);
@@ -2316,16 +2334,109 @@ async fn fetch_chunks_thin(
     for bucket in 0..WALS_BUCKETS {
         reads.push(forward_read(bucket)?);
     }
-    let ops: Vec<yb_thin_client::ReadOp> = reads
-        .iter()
-        .map(|r| yb_thin_client::ReadOp {
-            table: wals.as_ref(),
-            read: r,
-            paging_state: None,
-        })
-        .collect();
-    let batch = yb_thinclient.client.read(&ops, 0).await?;
-    let out = merge_fetched_rows(batch.ops.iter().flat_map(|op| op.rows.iter()), byte_offset)?;
+    // How many rows each arm still wants. The covering arm is `limit(1)` and
+    // is finished the moment it yields its row; the forward arm wants up to
+    // FETCH_FORWARD_CHUNKS (the merge caps the cross-bucket total again).
+    let wanted = |op_idx: usize| -> usize {
+        if op_idx < WALS_BUCKETS as usize {
+            1
+        } else {
+            FETCH_FORWARD_CHUNKS
+        }
+    };
+
+    // Page each op until it has what it wants or its scan is exhausted.
+    //
+    // A single page is NOT enough once `wals` is range-sharded. An op's scan
+    // then spans tablets, and a tablet that holds no matching row yields an
+    // EMPTY page plus a continuation — "this tablet had no match", not "the
+    // scan is done". The covering arm is where that bites: it scans backwards
+    // from `byte_offset`, so it opens in the highest tablet in range, whose
+    // rows may all start at or after `byte_offset` and be filtered out. Taking
+    // only that first page reads as "no covering chunk" and surfaces as a
+    // bogus `WAL hole at {lsn}` for a perfectly healthy segment.
+    //
+    // Under today's hash-sharded `wals` a full hash prefix pins every op to
+    // one tablet, so this converges in a single round and costs nothing; it
+    // also picks up forward rows that a size-capped page used to drop.
+    // Reads are rare relative to writes, so the extra round trips are cheap
+    // insurance — and nothing here touches the write path.
+    // Rounds within one attempt; attempts of the whole fetch on a read-restart.
+    //
+    // The restart budget is not optional. `TsClient::read` heals a read-restart
+    // internally only for an UNPINNED batch: it classifies a batch as pinned
+    // when `read_time_ht != 0` or any op carries a `paging_state`, and gives up
+    // immediately in that case because every retry would replay the same read
+    // point. An op only reaches round 2 by having returned a continuation, so
+    // every round after the first is pinned by construction, and a restart
+    // there — a routine hybrid-time uncertainty window from a concurrent write,
+    // not a failure — would propagate out as a hard "YB WAL fetch failed" IO
+    // error and likely drop the WAL sender connection. `TsClient::read` says as
+    // much: it surfaces the restart "so the scan driver restarts the whole
+    // scan." This loop is that driver, so it owns the restart, discarding the
+    // half-built rows and starting over from an unpinned round 1 the way
+    // `read_scan` does.
+    const MAX_FETCH_ROUNDS: usize = 32;
+    const MAX_FETCH_RESTARTS: usize = 5;
+    let mut fetched: Option<Vec<Vec<yb_thin_client::Row>>> = None;
+    for attempt in 1..=MAX_FETCH_RESTARTS {
+        let mut rows: Vec<Vec<yb_thin_client::Row>> = vec![Vec::new(); reads.len()];
+        let mut paging: Vec<Option<bytes::Bytes>> = vec![None; reads.len()];
+        let mut active: Vec<usize> = (0..reads.len()).collect();
+        let mut read_time_ht = 0u64;
+        let mut round = 0usize;
+        let mut restart = false;
+        while !active.is_empty() {
+            round += 1;
+            anyhow::ensure!(
+                round <= MAX_FETCH_ROUNDS,
+                "WAL chunk fetch for segno {segno} offset {byte_offset} did not settle in \
+                 {MAX_FETCH_ROUNDS} paging rounds ({} op(s) still continuing) — the \
+                 continuation token is not advancing",
+                active.len()
+            );
+            let ops: Vec<yb_thin_client::ReadOp> = active
+                .iter()
+                .map(|&i| yb_thin_client::ReadOp {
+                    table: wals.as_ref(),
+                    read: &reads[i],
+                    paging_state: paging[i].as_deref(),
+                })
+                .collect();
+            let batch = match yb_thinclient.client.read(&ops, read_time_ht).await {
+                Ok(batch) => batch,
+                Err(e) if e.is_read_restart() && attempt < MAX_FETCH_RESTARTS => {
+                    tracing::warn!(
+                        "thin-lane WAL fetch read-restart on round {round} \
+                         (attempt {attempt}/{MAX_FETCH_RESTARTS}), restarting the fetch: {e}"
+                    );
+                    restart = true;
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            // Pin every continuation to the snapshot round 1 ran at, so the
+            // whole fan-out still resolves at ONE read point (#139).
+            read_time_ht = batch.used_read_time_ht;
+            let mut next: Vec<usize> = Vec::new();
+            for (slot, res) in batch.ops.into_iter().enumerate() {
+                let Some(&i) = active.get(slot) else { continue };
+                rows[i].extend(res.rows);
+                if rows[i].len() < wanted(i) && res.paging_state.is_some() {
+                    paging[i] = res.paging_state;
+                    next.push(i);
+                }
+            }
+            active = next;
+        }
+        if !restart {
+            fetched = Some(rows);
+            break;
+        }
+    }
+    // The final attempt either converges or propagates its error above.
+    let rows = fetched.expect("the final fetch attempt returns or propagates");
+    let out = merge_fetched_rows(rows.iter().flatten(), byte_offset)?;
     let total_bytes: u64 = out.iter().map(|c| c.end_offset - c.chunk_offset).sum();
 
     crate::metrics::WAL_CACHE_YB_FETCH_SECONDS
@@ -4237,6 +4348,131 @@ mod tests {
             &payload_codec::decode(&stored).expect("tiny run decodes")[..],
             &[0x77u8; 8][..]
         );
+    }
+
+    /// A RANGE-sharded `wals` breaks the one-page-per-op assumption, and the
+    /// covering arm is where it bites.
+    ///
+    /// That arm scans BACKWARDS from `byte_offset` for the newest chunk
+    /// starting below it. Range-sharded, its key span can cross a tablet
+    /// boundary, so it opens in the HIGHEST tablet in range — whose rows may
+    /// all start at or after `byte_offset` and be filtered out server-side.
+    /// The result is an EMPTY first page plus a continuation: "this tablet
+    /// had no match", not "the scan is done". Read as one page it looks like
+    /// there is no covering chunk, and a healthy segment surfaces as
+    /// `WAL hole at {lsn}: no covering chunk in wals`.
+    ///
+    /// The split here lands INSIDE one segno's chunk_offset range, at 2000,
+    /// with the fetch position at 1500: chunks 2000/3000 sit in the upper
+    /// tablet and are all filtered out, so the covering chunk at 1000 is only
+    /// reachable on the second page.
+    #[tokio::test]
+    async fn thin_lane_range_sharded_covering_read_pages_past_an_empty_tablet() {
+        let table = scratch_table("wals_test_thin_range");
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), true)
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        );
+        let branch_id = BranchId::generate();
+        let q = quote_relation(&table);
+        client
+            .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
+            .await
+            .expect("drop scratch wals table");
+        // The post-migration shape: all-range PK, no hash columns. The split
+        // point deliberately cuts one segno's chunk range in half.
+        client
+            .execute(
+                &format!(
+                    "CREATE TABLE {q} (\
+                       branch_id        TEXT     NOT NULL,\
+                       bucket_id        SMALLINT NOT NULL,\
+                       segno            BIGINT   NOT NULL,\
+                       chunk_offset     BIGINT   NOT NULL,\
+                       chunk_size       INT      NOT NULL,\
+                       data             BYTEA    NOT NULL,\
+                       last_modified_us BIGINT   NOT NULL,\
+                       PRIMARY KEY (branch_id ASC, bucket_id ASC, segno ASC, chunk_offset ASC)\
+                     ) SPLIT AT VALUES (('{branch_id}', 0, 1, 2000))"
+                ),
+                &[],
+            )
+            .await
+            .expect("create range-sharded scratch wals table");
+
+        // Chunks at 0, 1000, 2000, 3000 — each 1000 bytes, so the one at 1000
+        // spans the fetch position 1500 and is the true covering chunk.
+        for offset in [0i64, 1000, 2000, 3000] {
+            let payload = vec![(offset / 1000) as u8 + 1; 1000];
+            let stored = encode_run(
+                &[PendingChunk {
+                    segno: 1,
+                    bucket_id: 0,
+                    chunk_offset: offset,
+                    chunk_size: 1000,
+                    data: Arc::new(payload),
+                    end_lsn: Lsn(0),
+                }],
+                payload_codec::Codec::Lz4,
+            );
+            client
+                .execute(
+                    &format!(
+                        "INSERT INTO {q} (branch_id, bucket_id, segno, chunk_offset, \
+                           chunk_size, data, last_modified_us) \
+                         VALUES ($1, 0, 1, $2, 1000, $3, 0)"
+                    ),
+                    &[&branch_id.to_string(), &offset, &stored.as_ref()],
+                )
+                .await
+                .expect("insert chunk");
+        }
+
+        let (db_oid, oids) = ysql_client::lookup_table_oids(&client, "public", &[table.as_str()])
+            .await
+            .expect("look up scratch wals table OIDs");
+        let tserver =
+            std::env::var("YB_TEST_TSERVER_RPC").unwrap_or_else(|_| "127.0.0.1:9100".into());
+        let thin_client = yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
+            tserver_addrs: vec![tserver],
+            ..Default::default()
+        })
+        .expect("connect thin lane to dev YB; set YB_TEST_TSERVER_RPC to override");
+        let wals = thin_client
+            .open_table(db_oid, oids[table.as_str()])
+            .expect("open scratch wals table via the thin lane");
+        assert_eq!(
+            wals.num_hash_columns(),
+            0,
+            "scratch table should be range-sharded"
+        );
+        let thin = YbThinClient {
+            client: thin_client,
+            wals,
+        };
+
+        let got = fetch_chunks_thin(&thin, &branch_id.to_string(), 1, 1500)
+            .await
+            .expect("fetch_chunks_thin against a range-sharded wals");
+        let offsets: Vec<u64> = got.iter().map(|c| c.chunk_offset).collect();
+        println!("thin range-sharded fetch at 1500: chunks {offsets:?} (want [1000, 2000, 3000])");
+        assert_eq!(
+            offsets,
+            vec![1000, 2000, 3000],
+            "covering chunk at 1000 was lost — the reverse scan's first page came back \
+             empty from the upper tablet and was taken as the end of the scan, which is \
+             exactly the bogus `WAL hole` failure"
+        );
+        assert_eq!(
+            got[0].end_offset, 2000,
+            "the covering chunk must actually span the fetch position"
+        );
+
+        client
+            .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
+            .await
+            .expect("drop scratch table");
     }
 
     /// Live direct-lane round trip (`hot_path = "yb_thin_client"`): flush

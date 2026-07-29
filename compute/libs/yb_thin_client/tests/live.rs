@@ -1312,3 +1312,322 @@ async fn repro_read_after_write_visibility() {
          (worst lag {max_lag:?} at lsn={worst}) — read-after-write staleness in the thin lane"
     );
 }
+
+/// Repro for a RANGE-sharded `wals`: the table is about to move from
+/// `PRIMARY KEY ((branch_id, bucket_id) HASH, …)` to an all-range PK split
+/// with `SPLIT AT VALUES`, and nothing in this suite has ever sent the shim a
+/// read spec with `n_hash = 0`. Every other test binds a full hash prefix, so
+/// every other read is single-tablet by construction and the key range is
+/// pinned by the hash key rather than by the conds.
+///
+/// Range sharding changes four things at once, all of them untested:
+///   1. `n_hash = 0` in `ybthin_read_spec` — a code path with no coverage.
+///   2. Filtering is entirely by cond. A read that ignored the `branch_id`
+///      bound would silently return other branches' rows instead of erroring,
+///      so the fixture brackets branch `'b'` with branches `'a'` and `'c'`
+///      that must never appear.
+///   3. One scan can cross tablet boundaries. `repro_pages_multipage_scan`
+///      pages within a single tablet; paging across a split point is new.
+///   4. A reverse scan must start from the LAST tablet in range. If it starts
+///      at the first, `descending().limit(1)` — the safekeeper's covering-chunk
+///      arm — returns the oldest chunk instead of the newest.
+///
+/// Split points put segno 1 in tablet 1, segno 2..3 in tablet 2, segno 4..5 in
+/// tablet 3, so the assertions below straddle boundaries rather than sitting
+/// inside one tablet.
+#[tokio::test]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
+async fn repro_wals_range_sharded() {
+    use yb_thin_client::{ColKind, CondOp, YbError};
+    const TABLE: &str = "wals_range_repro";
+    let ysql = ysql().await;
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
+        .await
+        .unwrap();
+    // The wals schema with an all-range PK. Split on the (branch_id, bucket_id,
+    // segno) prefix — a split point shorter than the full key is legal, the
+    // remaining columns read as -Inf.
+    ysql.execute(
+        &format!(
+            "CREATE TABLE {TABLE} (
+                 branch_id TEXT NOT NULL, bucket_id SMALLINT NOT NULL, segno BIGINT NOT NULL,
+                 chunk_offset BIGINT NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
+                 PRIMARY KEY (branch_id ASC, bucket_id ASC, segno ASC, chunk_offset ASC))
+             SPLIT AT VALUES (('b', 0, 2), ('b', 0, 4))"
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    // Branch 'b': segno 1..5 × chunk_offset 0,100,200,300 = 20 rows, spread
+    // over all three tablets.
+    ysql.execute(
+        &format!(
+            "INSERT INTO {TABLE} SELECT 'b', 0, s, o*100, 100, '\\x02'::bytea \
+             FROM generate_series(1, 5) s, generate_series(0, 3) o"
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    // Bracket rows in the first and last tablet ('a' < 'b' < 'c'). A read that
+    // drops the branch_id cond, or a reverse scan that starts past the branch's
+    // upper bound, picks these up.
+    ysql.execute(
+        &format!(
+            "INSERT INTO {TABLE} VALUES \
+             ('a', 0, 9, 0, 100, '\\x0a'::bytea), ('c', 0, 9, 0, 100, '\\x0c'::bytea)"
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
+    let client = TsClient::connect(&TsClientConfig {
+        tserver_addrs: tserver_addrs(),
+        ..Default::default()
+    })
+    .expect("connect");
+    let table = client.open_table(db_oid, table_oid).expect("open_table");
+
+    // The shim must report every key column as RANGE and none as HASH —
+    // `RangeRead::new` sizes its hash prefix off this, and `cond` refuses any
+    // column it doesn't see as ColKind::Range.
+    let n_hash = table.num_hash_columns();
+    let kinds: Vec<(&str, ColKind)> = table
+        .columns
+        .iter()
+        .map(|c| (c.name.as_str(), c.kind))
+        .collect();
+    println!("repro wals range: num_hash_columns={n_hash} (want 0); schema kinds={kinds:?}");
+    assert_eq!(
+        n_hash, 0,
+        "range-sharded table reported hash columns; open_table schema is wrong: {kinds:?}"
+    );
+    assert_eq!(
+        table.num_key_columns(),
+        4,
+        "expected 4 range key columns: {kinds:?}"
+    );
+    for want in ["branch_id", "bucket_id", "segno", "chunk_offset"] {
+        assert_eq!(
+            table.col(want).unwrap().kind,
+            ColKind::Range,
+            "key column {want} is not ColKind::Range: {kinds:?}"
+        );
+    }
+
+    // Every read below binds a range key PREFIX (branch_id, bucket_id) rather
+    // than a hash prefix — the range-sharded analogue, and the thing the
+    // 2026.1.1.0-b0 shim added `range_values` for. Columns past the prefix
+    // (segno, chunk_offset) are still bounded with cond().
+    let branch_b = || {
+        RangeRead::new_range(&table, vec![BindValue::Text("b".into()), BindValue::I16(0)]).unwrap()
+    };
+
+    // Single-page reads first: they are the cheapest signal, and a failure
+    // here reports a wrong row rather than making the paged scan below chase
+    // a broken cursor.
+    //
+    // (1) Reverse scan over the whole branch: must start in the LAST tablet in
+    // range and stop at the branch's upper bound, not run on into branch 'c'.
+    let newest = branch_b()
+        .targets(&table, &["segno", "chunk_offset"])
+        .unwrap()
+        .descending()
+        .limit(1);
+    let newest = client
+        .read_page(&table, &newest, None)
+        .await
+        .expect("descending newest");
+    let newest_key = newest
+        .rows
+        .first()
+        .map(|r| (r[0].as_i64().unwrap(), r[1].as_i64().unwrap()));
+
+    // (2) Reverse scan whose upper bound sits exactly on the tablet-2/3 split
+    // point ('b', 0, 4): the newest key strictly below it is the last row of
+    // tablet 2.
+    //
+    // This one MUST be paged, not read as a single page. The scan opens in
+    // tablet 3 (segno 4, 5), where nothing satisfies `segno < 4`, so the first
+    // page comes back EMPTY with a continuation — an empty page is "this
+    // tablet had no match", not "the scan is done". Reading only the first
+    // page here reports no covering row and looks exactly like a shim bug.
+    // `read_scan` pages until a row appears; `limit(1)` still caps each page,
+    // and returning `true` from the callback stops at the first hit.
+    let below_split_read = branch_b()
+        .cond(&table, "segno", CondOp::Lt, BindValue::I64(4))
+        .unwrap()
+        .targets(&table, &["segno", "chunk_offset"])
+        .unwrap()
+        .descending()
+        .limit(1);
+    let below_split_key: Option<(i64, i64)> = client
+        .read_scan(
+            &table,
+            &below_split_read,
+            || None,
+            |acc: &mut Option<(i64, i64)>, rows| {
+                if let Some(r) = rows.first() {
+                    *acc = Some((r[0].as_i64().unwrap(), r[1].as_i64().unwrap()));
+                }
+                Ok::<bool, YbError>(acc.is_some())
+            },
+        )
+        .await
+        .expect("descending below split");
+
+    // (3) The safekeeper's covering-chunk arm verbatim — highest chunk_offset
+    // below a cutoff within one segno — now with no hash prefix to pin it.
+    let covering = branch_b()
+        .cond(&table, "segno", CondOp::Eq, BindValue::I64(3))
+        .unwrap()
+        .cond(&table, "chunk_offset", CondOp::Lt, BindValue::I64(250))
+        .unwrap()
+        .targets(&table, &["segno", "chunk_offset"])
+        .unwrap()
+        .descending()
+        .limit(1);
+    let covering = client
+        .read_page(&table, &covering, None)
+        .await
+        .expect("covering");
+    let covering_key = covering
+        .rows
+        .first()
+        .map(|r| (r[0].as_i64().unwrap(), r[1].as_i64().unwrap()));
+
+    println!(
+        "repro wals range: newest={newest_key:?} (want Some((5, 300))); \
+         newest below split point ('b',0,4)={below_split_key:?} (want Some((3, 300))); \
+         covering segno=3 offset<250 => {covering_key:?} (want Some((3, 200)))"
+    );
+    // Asserted after the paged scan below, so one run reports every broken
+    // read rather than stopping at the first.
+
+    // (4) Multi-tablet forward scan, paged small so it must cross both splits.
+    // `read_scan` pins pages 2+ to the first page's snapshot; if a continuation
+    // can't carry across a tablet boundary this loses rows — or, if the shim
+    // hands back a token that never advances, loops forever. Cap the page count
+    // and stop the scan at the cap so that case fails with a diagnostic instead
+    // of hanging the suite; 20 rows at 3 per page needs 7 pages.
+    const MAX_PAGES: usize = 32;
+    let scan = branch_b()
+        .targets(&table, &["segno", "chunk_offset"])
+        .unwrap()
+        .limit(3);
+    let mut pages = 0usize;
+    let scanned: Vec<(i64, i64)> = client
+        .read_scan(
+            &table,
+            &scan,
+            Vec::new,
+            |acc: &mut Vec<(i64, i64)>, rows| {
+                pages += 1;
+                for r in rows {
+                    acc.push((r[0].as_i64().unwrap(), r[1].as_i64().unwrap()));
+                }
+                Ok::<bool, YbError>(pages >= MAX_PAGES)
+            },
+        )
+        .await
+        .expect("multi-tablet scan");
+    let want: Vec<(i64, i64)> = (1..=5)
+        .flat_map(|s| (0..4).map(move |o| (s, o * 100)))
+        .collect();
+    let stray: Vec<&(i64, i64)> = scanned.iter().filter(|(s, _)| *s == 9).collect();
+    println!(
+        "repro wals range: paged scan took {pages} page(s) (limit 3/page), returned {} rows \
+         (want {}), strays from branch a/c: {stray:?}",
+        scanned.len(),
+        want.len()
+    );
+    assert!(
+        pages < MAX_PAGES,
+        "paged scan hit the {MAX_PAGES}-page cap after {} rows — the continuation token is \
+         not advancing across tablet boundaries (an uncapped scan here spins forever)",
+        scanned.len()
+    );
+    assert!(
+        stray.is_empty(),
+        "read with no hash prefix returned rows outside branch 'b' — the branch_id \
+         cond is not bounding the scan: {stray:?}"
+    );
+    assert_eq!(
+        scanned, want,
+        "paged scan across 3 tablets lost or reordered rows"
+    );
+    assert_eq!(
+        newest_key,
+        Some((5, 300)),
+        "descending limit-1 did not start from the last tablet in range"
+    );
+    assert_eq!(
+        below_split_key,
+        Some((3, 300)),
+        "descending limit-1 with the bound on a tablet split point returned the wrong row"
+    );
+    assert_eq!(
+        covering_key,
+        Some((3, 200)),
+        "covering read (descending limit 1) returned wrong offset"
+    );
+
+    // (5) Writes with no hash prefix, one row per tablet in ONE Perform — the
+    // shim has to route each row to a different tablet off its range key alone.
+    let rows: Vec<UpsertRow> = [1i64, 3, 5]
+        .iter()
+        .map(|&segno| {
+            UpsertRow::new(
+                &table,
+                vec![
+                    BindValue::Text("b".into()),
+                    BindValue::I16(0),
+                    BindValue::I64(segno),
+                    BindValue::I64(400),
+                ],
+                &[
+                    ("chunk_size", BindValue::I32(64)),
+                    ("data", BindValue::Bytes(Bytes::from_static(b"range-write"))),
+                ],
+            )
+            .expect("build upsert row")
+        })
+        .collect();
+    client.upsert(&rows).await.expect("cross-tablet upsert");
+    let written = ysql
+        .query(
+            &format!(
+                "SELECT segno, chunk_size, encode(data, 'escape') FROM {TABLE} \
+                 WHERE branch_id = 'b' AND bucket_id = 0 AND chunk_offset = 400 ORDER BY segno"
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    let written: Vec<(i64, i32, String)> = written
+        .iter()
+        .map(|r| {
+            (
+                r.get::<_, i64>(0),
+                r.get::<_, i32>(1),
+                r.get::<_, String>(2),
+            )
+        })
+        .collect();
+    println!("repro wals range: cross-tablet upsert landed {written:?} (want segno 1, 3, 5)");
+    assert_eq!(
+        written,
+        vec![
+            (1, 64, "range-write".to_string()),
+            (3, 64, "range-write".to_string()),
+            (5, 64, "range-write".to_string()),
+        ],
+        "one-Perform upsert did not land one row in each of the three tablets"
+    );
+
+    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+        .await
+        .unwrap();
+}

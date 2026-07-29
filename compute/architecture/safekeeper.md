@@ -205,12 +205,18 @@ health-checked at startup. The hot-path WAL write batch then runs as ONE
 Perform per batch (a single-tablet atomic write batch — a crash mid-flush
 cannot leave a hole), and the WAL sender's fetch issues all
 2×`WALS_BUCKETS` (arm, bucket) read ops as ops of ONE Perform served at a
-single read time — one snapshot by construction. `hot_path =
+single read time — one snapshot by construction. An op that comes back with a
+continuation is re-issued, pinned to that same read time, until it has the
+rows it wants: while `wals` is hash-sharded a full hash prefix keeps every op
+on one tablet and the fetch settles in that single Perform, but once it is
+range-sharded an op's scan can span tablets and the fetch may page across
+several. The single-snapshot guarantee holds either way — that, not the
+round-trip count, is what #139 needs. `hot_path =
 "yb_thin_client"` runs the identical lane over `compute/libs/yb_thin_client`
 (the batch-first shim client) instead — the `flush_batch_thin` write and the
-`fetch_chunks_thin` multi-op fetch keep the same one-Perform-per-batch and
-one-snapshot semantics (the `read_pages` fan-out becomes one `read(&ops)`
-batch). The direct lane retries across tservers round-robin with no YSQL
+`fetch_chunks_thin` multi-op fetch keep the same one-batch-per-Perform write
+and one-snapshot read semantics (the `read_pages` fan-out becomes one
+`read(&ops)` batch). The direct lane retries across tservers round-robin with no YSQL
 fallback. Control file,
 `timeline_state`, GC, truncation, and rehydration always stay on the YSQL
 lanes. `PGSQL_UPSERT` write ops carry skip-read-before-write semantics
@@ -385,12 +391,15 @@ comes from memory or YB. For a read at position `pos` the chain is:
       `remove_segnos_below`). A single `std::sync::Mutex` suffices: writes
       touch high offsets, reads low offsets, and the lock covers only
       O(log n) metadata operations.
-   3. **YB fetch** — one round trip fetching the covering chunk **and** a
+   3. **YB fetch** — fetching the covering chunk **and** a
       forward prefetch window (`FETCH_FORWARD_CHUNKS = 64` /
       `FETCH_FORWARD_BYTES = 4 MiB`) in a single snapshot: on YSQL, one
       `UNION ALL` statement (covering arm: highest `chunk_offset < pos`,
       `LIMIT 1`; forward arm: ascending from `pos`); on the direct lane, all
-      (arm, bucket) ops in one Perform at one read point. A single snapshot
+      (arm, bucket) ops in one Perform at one read point. One round trip
+      against a hash-sharded `wals`; range-sharded, ops carrying a
+      continuation are re-issued at that same pinned read point, so the fetch
+      may take several. A single snapshot
       is load-bearing — two separate autocommit SELECTs would let a
       truncate+rewrite commit between them and splice old-term and new-term
       bytes (#139). Fetched committed chunks warm the cache; the fetch runs

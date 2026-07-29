@@ -150,14 +150,19 @@ pub type Row = Vec<Value>;
 
 // ---- read requests -----------------------------------------------------
 
-/// A single-tablet clustered range read: equality on all hash columns,
-/// bound conditions on range columns, returning `targets` in order.
+/// A clustered range read: equality on all hash columns, bound conditions on
+/// range columns, returning `targets` in order. On a hash-sharded table a
+/// full hash prefix pins the read to one tablet; on a range-sharded one
+/// (no hash columns) the conds alone bound the scan and it may span tablets,
+/// which the tserver pages through transparently.
+///
 /// Column names are resolved to ids against the [`TableHandle`] at build
 /// time (RPC-free); the read snapshot is a property of the *batch*, not the
 /// read (see [`TsClient::read`]).
 #[derive(Clone, Debug)]
 pub struct RangeRead {
     hash_values: Vec<BindValue>,
+    range_values: Vec<BindValue>,
     conds: Vec<(i32, CondOp, BindValue)>,
     target_ids: Vec<i32>,
     forward: bool,
@@ -165,8 +170,10 @@ pub struct RangeRead {
 }
 
 impl RangeRead {
-    /// `hash_values` must cover every hash column in schema order; empty =
-    /// full scan across tablets.
+    /// `hash_values` must cover every hash column in schema order. Empty
+    /// means no hash prefix: on a hash-sharded table that is a full scan
+    /// across tablets, and on a range-sharded table it is the only legal
+    /// value — bound the scan with [`Self::cond`] instead.
     pub fn new(table: &TableHandle, hash_values: Vec<BindValue>) -> Result<Self, YbError> {
         let n_hash = table.num_hash_columns();
         if !hash_values.is_empty() && hash_values.len() != n_hash {
@@ -177,6 +184,43 @@ impl RangeRead {
         }
         Ok(RangeRead {
             hash_values,
+            range_values: Vec::new(),
+            conds: Vec::new(),
+            target_ids: Vec::new(),
+            forward: true,
+            limit: 0,
+        })
+    }
+
+    /// A read on a RANGE-sharded table (one with no hash columns), where the
+    /// range key plays the part `hash_values` plays for a hash-sharded one.
+    ///
+    /// `range_values` binds a leading prefix of the range key in schema
+    /// order: the full key targets a single row, a shorter prefix that
+    /// prefix's range, and empty the whole table. Bound the columns *past*
+    /// the prefix with [`Self::cond`].
+    ///
+    /// Separate from [`Self::new`] because the shim rejects a spec carrying
+    /// both hash and range values — keeping them in different constructors
+    /// makes that unrepresentable rather than a runtime `Invalid`.
+    pub fn new_range(table: &TableHandle, range_values: Vec<BindValue>) -> Result<Self, YbError> {
+        let n_hash = table.num_hash_columns();
+        if n_hash != 0 {
+            return Err(YbError::Invalid(format!(
+                "new_range is for range-sharded tables, but this one has {n_hash} hash \
+                 columns; use RangeRead::new with a hash prefix"
+            )));
+        }
+        let n_range = table.num_key_columns();
+        if range_values.len() > n_range {
+            return Err(YbError::Invalid(format!(
+                "table has {n_range} range key columns, got {} values",
+                range_values.len()
+            )));
+        }
+        Ok(RangeRead {
+            hash_values: Vec::new(),
+            range_values,
             conds: Vec::new(),
             target_ids: Vec::new(),
             forward: true,
@@ -642,6 +686,10 @@ impl TsClient {
             .iter()
             .map(|op| op.read.hash_values.iter().map(to_bind).collect())
             .collect();
+        let ranges: Vec<Vec<ffi::YbBind>> = ops
+            .iter()
+            .map(|op| op.read.range_values.iter().map(to_bind).collect())
+            .collect();
         let conds: Vec<Vec<ffi::YbCond>> = ops
             .iter()
             .map(|op| {
@@ -670,8 +718,8 @@ impl TsClient {
                     n_targets: op.read.target_ids.len(),
                     limit: op.read.limit,
                     is_forward_scan: op.read.forward as std::os::raw::c_int,
-                    range_values: std::ptr::null(),
-                    n_range: 0,
+                    range_values: ranges[i].as_ptr(),
+                    n_range: ranges[i].len(),
                 },
                 paging_state_in: op.paging_state.map_or(std::ptr::null(), |p| p.as_ptr()),
                 paging_state_in_len: op.paging_state.map_or(0, |p| p.len()),
