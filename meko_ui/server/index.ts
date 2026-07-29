@@ -145,6 +145,12 @@ app.use((req, res, next) => {
     // the same name so the tiles only show where contextual prominence search
     // (which produces the token-savings data) is enabled. Default off.
     "MEKO_ENABLE_CONTEXTUAL_PROMINENCE_SEARCH",
+    // Gates the conversations viewer's "Index conversation" (backfill) button.
+    // Mirrors the BE/MCP flag of the same name: api_server folds it into
+    // can_index and meko-mcp-server registers the conversation_index_history
+    // tool behind it, so one env var turns the feature off end to end.
+    // Default off.
+    "MEKO_ENABLE_CONVERSATION_SEARCH",
     // Gates the in-app Admin console (Data Plane / Metrics / Executive / Users /
     // AMP) and its left-nav tab. Off by default. When on, the server also
     // injects the admin secret on /api/v1/admin/* (see adminProxyEnabled above),

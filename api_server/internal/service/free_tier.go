@@ -27,6 +27,14 @@ var (
 	// so server-side enforcement is FE-only today.
 	FreeTierMaxConversations = envInt64("MEKO_FREE_TIER_CONVERSATIONS", 1_000)
 	FreeTierMaxTokenBurn     = envInt64("MEKO_FREE_TIER_TOKEN_BURN", 10_000_000)
+
+	// Conversation-cache embedding cap: one unit per turn embedded into
+	// datapacks.conversation_history_search (live index_for_search=True
+	// or conversation_index_history backfill), per account across
+	// datapacks. Enforced by meko-mcp-server against
+	// meko_system.free_tier_usage (metric conversation_search_embedding);
+	// this copy exists so api_server/UI read the same env name.
+	FreeTierMaxConversationEmbeddings = envInt64("MEKO_FREE_TIER_CONVERSATION_EMBEDDINGS", 2_000)
 )
 
 // Sentinel errors. Handlers translate to HTTP 402 + a FREE_TIER_* code.

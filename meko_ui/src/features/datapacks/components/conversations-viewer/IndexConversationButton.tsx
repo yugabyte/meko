@@ -32,8 +32,10 @@ export function IndexConversationButton({ datapackId, conversationId, onIndexed 
         user_token: token,
       });
       toast({
-        title: "Conversation indexed successfully",
-        description: res.indexed > 0 ? `${res.indexed} turn${res.indexed === 1 ? "" : "s"} added to the cache.` : undefined,
+        title: res.quota_exceeded ? "Conversation partially indexed" : "Conversation indexed successfully",
+        description: res.quota_exceeded
+          ? `${res.indexed} turn${res.indexed === 1 ? "" : "s"} added before your plan's embedding limit was reached; the remaining turns were not embedded.`
+          : res.indexed > 0 ? `${res.indexed} turn${res.indexed === 1 ? "" : "s"} added to the cache.` : undefined,
       });
       onIndexed?.();
     } catch (err) {

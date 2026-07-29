@@ -16,11 +16,7 @@ import { ROUTES } from "@/app/routes/paths";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { Chip } from "./Chip";
 import { IndexConversationButton } from "./IndexConversationButton";
-
-// Gates the "Index conversation" (backfill) button. Need to address the 
-// gaps in backfilling conversations embedding in case of agentic chats
-// needs more discussion
-const ENABLE_CONVERSATION_INDEXING = false;
+import { isConversationSearchEnabled } from "@/lib/inferenceGateway";
 
 type Props = {
   detail: DatapackConversationDetail;
@@ -116,8 +112,12 @@ export function ConversationThreadHeader({
               <span>Observe</span>
             </a>
           ) : null}
-          {/* TODO: Set to true or remove this gate when the conversation cache feature ships to prod */}
-          {ENABLE_CONVERSATION_INDEXING && detail.can_index && datapackId ? (
+          {/* Triple-gated on MEKO_ENABLE_CONVERSATION_SEARCH: the UI reads it
+              from runtime config (isConversationSearchEnabled), api_server
+              folds it into can_index (which is also false once the
+              conversation is already embedded), and meko-mcp-server registers
+              the backfill tool behind it — one env var, off end to end. */}
+          {isConversationSearchEnabled() && detail.can_index && datapackId ? (
             <IndexConversationButton
               datapackId={datapackId}
               conversationId={conversationId}

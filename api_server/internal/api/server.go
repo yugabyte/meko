@@ -124,10 +124,20 @@ type ServerConfig struct {
 	// it at runtime (meko_system.amp_registration, via POST /amp/registration).
 	ShowPGAMP bool
 
+	// EnableConversationSearch gates the conversation-search /
+	// conversation-embedding feature (folded into the conversation detail's
+	// can_index, which drives the UI's Index-conversation button). Off by
+	// default; mirrors MEKO_ENABLE_CONVERSATION_SEARCH, the same env var that
+	// registers the conversation_index_history MCP tool in meko-mcp-server
+	// and feeds the UI runtime-config key of the same name.
+	EnableConversationSearch bool
+ 
+
 	// ControlPlaneMode gates the YCP fleet registry + agent API (BYOC control
 	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*
 	// are registered against meko_system.environments.
 	ControlPlaneMode bool
+
 }
 
 // defaultMCPPATFlushInterval is the fallback flush cadence used when

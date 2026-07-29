@@ -10,6 +10,8 @@
 
 import axios from "axios";
 
+import { readRuntimeEnv } from "@/lib/runtimeEnv";
+
 const BASE_URL = (
   import.meta.env.VITE_INFERENCE_GATEWAY_URL || "http://localhost:8088"
 ).replace(/\/$/, "");
@@ -176,7 +178,21 @@ export type IndexConversationResponse = {
   indexed: number;
   can_index: boolean;
   reason: string;
+  /** True when the plan's embedding quota ran out mid-backfill: `indexed`
+   *  turns were embedded, the remaining turns were not. */
+  quota_exceeded?: boolean;
 };
+
+/** Whether the conversation-search / conversation-embedding feature is on for
+ *  this deployment (MEKO_ENABLE_CONVERSATION_SEARCH via runtime config — the
+ *  same env var api_server folds into `can_index` and meko-mcp-server uses to
+ *  register the backfill tool). Client-side mirror so feature-off deployments
+ *  never render the entry point at all; truthy parsing matches the BE/MCP
+ *  servers ("1" | "true" | "yes", case-insensitive). */
+export function isConversationSearchEnabled(): boolean {
+  const v = (readRuntimeEnv("MEKO_ENABLE_CONVERSATION_SEARCH") ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
 
 export async function indexConversation(
   body: IndexConversationRequest,

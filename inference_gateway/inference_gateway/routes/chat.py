@@ -212,6 +212,9 @@ class IndexConversationResponse(BaseModel):
     indexed: int = 0
     can_index: bool = True
     reason: str = ""
+    # True when the account's conversation_search_embedding quota ran out
+    # mid-backfill: `indexed` turns were embedded, the remainder were not.
+    quota_exceeded: bool = False
 
 
 @router.post("/index-conversation", response_model=IndexConversationResponse)
@@ -243,10 +246,24 @@ async def index_conversation(req: IndexConversationRequest, request: Request) ->
         raise HTTPException(status_code=502, detail=f"index failed: {exc}") from exc
 
     payload = raw if isinstance(raw, dict) else (json.loads(raw) if isinstance(raw, str) and raw.strip() else {})
-    if payload.get("error"):
-        raise HTTPException(status_code=502, detail=str(payload.get("detail") or payload["error"]))
+    err = payload.get("error")
+    if err == "already_indexed":
+        # Conversation-level guard on the MCP side: re-indexing would only
+        # re-burn embedding quota. Not a server fault — surface as a conflict.
+        raise HTTPException(
+            status_code=409,
+            detail=str(payload.get("detail") or "This conversation is already embedded."),
+        )
+    if err == "free_tier_limit_reached":
+        raise HTTPException(
+            status_code=429,
+            detail=str(payload.get("detail") or "Conversation embedding limit reached for your plan."),
+        )
+    if err:
+        raise HTTPException(status_code=502, detail=str(payload.get("detail") or err))
     return IndexConversationResponse(
         indexed=int(payload.get("indexed") or 0),
         can_index=bool(payload.get("can_index", True)),
         reason=str(payload.get("reason") or ""),
+        quota_exceeded=bool(payload.get("quota_exceeded", False)),
     )

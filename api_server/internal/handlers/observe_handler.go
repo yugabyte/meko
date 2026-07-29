@@ -30,10 +30,15 @@ const (
 // ObserveHandler handles lightweight Observe bootstrap.
 type ObserveHandler struct {
 	langfuse *service.LangfuseService
+	// conversationSearchEnabled mirrors -enable-conversation-search /
+	// MEKO_ENABLE_CONVERSATION_SEARCH (see api.Config); folded into
+	// can_index so the UI never offers the Index-conversation button on
+	// deployments where the backfill MCP tool isn't registered.
+	conversationSearchEnabled bool
 }
 
-func NewObserveHandler(langfuse *service.LangfuseService) *ObserveHandler {
-	return &ObserveHandler{langfuse: langfuse}
+func NewObserveHandler(langfuse *service.LangfuseService, conversationSearchEnabled bool) *ObserveHandler {
+	return &ObserveHandler{langfuse: langfuse, conversationSearchEnabled: conversationSearchEnabled}
 }
 
 // BootstrapSession handles POST /api/v1/observe/session/bootstrap.
@@ -263,7 +268,10 @@ func (h *ObserveHandler) ConversationDetail(c echo.Context) error {
 				slog.Warn("conversation detail: indexed check failed",
 					"datapack_id", dp.ID, "conversation_id", conversationID, "err", idxErr)
 			}
-			detail.CanIndex = !indexed
+			// Feature-gated on the same env var that registers the
+			// conversation_index_history MCP tool — flag off means the
+			// tool isn't listed, so offering the button would 502.
+			detail.CanIndex = !indexed && h.conversationSearchEnabled
 		}
 	}
 

@@ -370,7 +370,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 
 	e.GET("/success", handlers.SuccessHandler(successCfg))
 
-	registerDatapackRoutes(datapackGroup, dpDirect, reg, cfg.MaxArtifactSizeBytes)
+	registerDatapackRoutes(datapackGroup, dpDirect, reg, cfg.MaxArtifactSizeBytes, cfg.EnableConversationSearch)
 	registerBillingRoutes(v1, datapackGroup, reg)
 
 	return e, reg, nil
@@ -616,9 +616,9 @@ func buildProvisioner(_ ServerConfig, reg *serviceRegistry) service.Provisioner 
 // also has the per-PAT rate limiter attached. Each PAT-bearing
 // route is additionally guarded by auth.RequireScope so a token
 // minted with scopes={"read"} can't issue mutations.
-func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxArtifactSizeBytes int64) {
+func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxArtifactSizeBytes int64, enableConversationSearch bool) {
 	dpH := handlers.NewDatapackHandler(reg.dpSvc, reg.langfuseSvc, reg.memoriesSvc, reg.kbSvc)
-	observeH := handlers.NewObserveHandler(reg.langfuseSvc)
+	observeH := handlers.NewObserveHandler(reg.langfuseSvc, enableConversationSearch)
 	agentH := handlers.NewAgentHandler(reg.agentSvc)
 
 	dpDirect.POST("/datapacks", dpH.Create, auth.RequireScope(auth.ScopeWrite))
