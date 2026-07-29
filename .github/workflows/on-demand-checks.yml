@@ -75,7 +75,7 @@ jobs:
       integration_slow: ${{ steps.p.outputs.integration_slow }}
       generate_image: ${{ steps.p.outputs.generate_image }}
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         id: p
         with:
           script: |

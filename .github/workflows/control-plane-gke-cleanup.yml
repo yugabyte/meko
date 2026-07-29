@@ -23,7 +23,7 @@ jobs:
     env:
       CI_NS_MAX_AGE_HOURS: ${{ github.event.inputs.max_age_hours || '6' }}
     steps:
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.18.6
 
