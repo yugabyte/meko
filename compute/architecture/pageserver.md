@@ -665,7 +665,7 @@ two-phase pipeline:
    (8 × `scale_factor`) concurrent `redo_one` futures. Each reads its
    chain from **durable sources only** — `read_chain_durable` for
    relation keys (durable cache rows + YB via the fpu store, pre-flush
-   rows excluded), `read_slru_chain` for SLRU keys — then `parse_chain`
+   rows excluded), `read_slru_chain_durable` for SLRU keys — then `parse_chain`
    splits `(base_img, records)` and
    `WalRedoManager::request_redo(key, actual_lsn, base_img, records,
    pg_version, RedoAttemptType::LegacyCompaction)` produces the 8 KiB
@@ -676,9 +676,24 @@ two-phase pipeline:
    fatally aborts the process** — the chain does not legally produce a
    page, and continuing risks persisting a bad image. A merged durable
    chain with no `will_init` anchor is refused with
-   `correctness_errors{materialize_unanchored_chain}` rather than
-   letting walredo fold deltas onto a zero page and making that
-   corruption durable.
+   `correctness_errors{materialize_unanchored_chain}` (SLRU:
+   `…_unanchored_slru_chain`) rather than letting walredo fold deltas onto
+   a zero page and making that corruption durable.
+
+   Both reads are **lineage-aware**, and for SLRU that is load-bearing
+   rather than an optimisation. A relation page written on a branch
+   carries its own `will_init` FPI, so a branch-local read finds a base.
+   A clog page does not: a branch only ever stamps `SETBIT` deltas onto
+   the page that was active at the fork, whose `ZEROPAGE` anchor sits
+   under the **ancestor's** `branch_id`. Reading own-timeline-only
+   returned a base-less chain, walredo rejected it for having no base
+   image, and the walredo-error arm above aborted the pageserver — a
+   crash loop on any branch committing past `image_chain_limit_slru`
+   (#420, regression test `gc_slru_trim_reclaims`). The fold writes its
+   image to the branch's own `branch_id`, which shadows the ancestor for
+   later lineage reads (so the walk converges back to one tablet), and
+   GC trim is `branch_id`-scoped, so collapsing ancestor deltas into a
+   descendant's image never reclaims the ancestor's rows.
 2. `commit_phase` — spawned onto a separate task (bounded by
    `BASE_MAX_INFLIGHT_INSERTS` = 4 × `scale_factor`, matching the fpu
    pool so concurrent batches land on distinct YB backends), so batch

@@ -1508,19 +1508,67 @@ impl PageWriter {
             // Refuse loudly rather than fabricate a zero-based page: a
             // hard error stops the materialiser job (logged + skipped by
             // `redo_one`) instead of silently amplifying the loss.
-            crate::metrics::CORRECTNESS_ERRORS
-                .with_label_values(&["materialize_unanchored_chain"])
-                .inc();
-            let lo = merged.last().map(|r| r.lsn);
-            let hi = merged.first().map(|r| r.lsn);
-            anyhow::bail!(
-                "read_chain_durable: no will_init anchor in chain ≤ target_lsn={target_lsn} \
-                 (chain_len={}, lsn lo={lo:?} hi={hi:?}, key={key_bytes:?}) — the page's \
-                 init record is missing; refusing to materialise a zero-based page",
+            return Err(unanchored_chain_error(
+                "materialize_unanchored_chain",
+                "read_chain_durable",
+                target_lsn,
                 merged.len(),
-            );
+                merged.last().map(|r| r.lsn),
+                merged.first().map(|r| r.lsn),
+                format_args!("key={key_bytes:?}"),
+            ));
         }
         Ok(merged)
+    }
+
+    /// SLRU twin of [`Self::read_chain_durable`]: the durable chain for one
+    /// `(kind, segno, blknum)` block at `target_lsn`. For the materialiser.
+    ///
+    /// Lineage-aware because it must be. A branch only ever stamps SETBIT
+    /// deltas onto the clog page active at its fork, whose `will_init` anchor
+    /// sits under the ancestor's `branch_id`; an own-timeline read returns
+    /// that chain anchorless, walredo rejects it for having no base image,
+    /// and the materialiser's `Err` arm fatal-aborts the process (#420).
+    ///
+    /// Durable-only: no `aux.slru_buffer` blend (those are exactly the
+    /// unflushed rows) and no cache blend (SLRU has no `self.pages`
+    /// counterpart), so the store alone is the durable view.
+    pub async fn read_slru_chain_durable(
+        &self,
+        kind: SlruKind,
+        segno: u32,
+        blknum: u32,
+        target_lsn: Lsn,
+    ) -> Result<Vec<SlruPageRow>> {
+        // Always `yb_blend` — no SLRU cache means no `fast_cache` counterpart.
+        // Own `source` so these don't dilute the rel cache-hit ratio.
+        crate::metrics::PAGE_READS
+            .with_label_values(&["materializer_slru", "yb_blend"])
+            .inc();
+        let chain = self
+            .fpu_page_store
+            .read_slru_chain_lineage(&self.lineage, kind, segno, blknum, target_lsn)
+            .await?;
+        // Both halves matter: an empty chain is a legitimate no-op, and the
+        // anchor scan is the only check that the walk reached one —
+        // `read_slru_chain_lineage` truncates at the anchor only when
+        // `lineage.len() > 1`.
+        if !chain.is_empty() && !chain.iter().any(|r| r.will_init) {
+            return Err(unanchored_chain_error(
+                "materialize_unanchored_slru_chain",
+                "read_slru_chain_durable",
+                target_lsn,
+                chain.len(),
+                chain.last().map(|r| r.lsn),
+                chain.first().map(|r| r.lsn),
+                format_args!(
+                    "kind={kind:?} segno={segno} blknum={blknum} \
+                     lineage_segments={}",
+                    self.lineage.len()
+                ),
+            ));
+        }
+        Ok(chain)
     }
 
     /// Install a freshly-materialised image into the cache. Call AFTER
@@ -2399,6 +2447,31 @@ fn key_to_bytes(key: Key) -> Bytes {
     Bytes::from(buf)
 }
 
+/// Bump `correctness_errors{metric_label}` and build the anchorless-chain
+/// error. Shared by `read_chain_durable` and `read_slru_chain_durable` so the
+/// two refusals can't drift; each call site documents why it refuses.
+/// `subject` carries the caller's key-identifying fields.
+// Every argument is a distinct diagnostic field.
+#[allow(clippy::too_many_arguments)]
+fn unanchored_chain_error(
+    metric_label: &str,
+    op: &str,
+    target_lsn: Lsn,
+    chain_len: usize,
+    lo: Option<Lsn>,
+    hi: Option<Lsn>,
+    subject: std::fmt::Arguments<'_>,
+) -> anyhow::Error {
+    crate::metrics::CORRECTNESS_ERRORS
+        .with_label_values(&[metric_label])
+        .inc();
+    anyhow::anyhow!(
+        "{op}: no will_init anchor in durable chain ≤ target_lsn={target_lsn} \
+         ({subject}, chain_len={chain_len}, lsn lo={lo:?} hi={hi:?}) — the page's \
+         init record is missing; refusing to materialise a base-less page"
+    )
+}
+
 /// Write-side round-trip check on every freshly-serialised
 /// `NeonWalRecord`. Off by default; flip the env var
 /// `YB_PS_VERIFY_WAL_ROUNDTRIP=1` to enable.
@@ -2957,6 +3030,132 @@ mod tests {
              the page); got Ok with {} rows",
             res.map(|c| c.len()).unwrap_or(0),
         );
+        drop_schema(&store, &schema).await;
+    }
+
+    fn clog_row(lsn: u64, is_image: bool, will_init: bool, payload: &[u8]) -> SlruPageRow {
+        SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: 0,
+            blknum: 7,
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::copy_from_slice(payload),
+        }
+    }
+
+    /// #420: the materialiser's SLRU read must resolve a base that lives on
+    /// the ANCESTOR. A branch only ever stamps `SETBIT` deltas onto the clog
+    /// page that was active at the fork — that page's `will_init` ZEROPAGE
+    /// anchor predates the branch and sits under the ancestor's `branch_id`.
+    /// The pre-fix code read branch-locally, got an anchorless chain, and
+    /// walredo's "no base image" error hit the materialiser's Err arm, which
+    /// fatal-aborts the pageserver.
+    #[tokio::test]
+    async fn read_slru_chain_durable_resolves_ancestor_base() {
+        let (store, schema) = make_store("slru_lineage").await;
+        let (mut w, child) = writer(store.clone(), FlushPolicy::default());
+        let anc = BranchId::generate();
+
+        // Ancestor holds the anchor (the ZEROPAGE-derived base image); the
+        // branch holds deltas only, which is the whole shape of the bug.
+        store
+            .put_slru_pages(anc, &[clog_row(10, true, true, b"anc-base")])
+            .await
+            .unwrap();
+        store
+            .put_slru_pages(
+                child,
+                &[
+                    clog_row(30, false, false, b"d30"),
+                    clog_row(40, false, false, b"d40"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // Precondition: read branch-locally — exactly what the old code did —
+        // and confirm it is genuinely anchorless. If this ever starts finding
+        // an anchor, the test below has stopped covering #420.
+        let local = store
+            .read_slru_chain(child, SlruKind::Clog, 0, 7, Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(local.len(), 2, "branch-local read sees only its own deltas");
+        assert!(
+            !local.iter().any(|r| r.will_init),
+            "precondition: the branch-local chain has no anchor (that IS #420)"
+        );
+
+        w.set_lineage(vec![
+            LineageSegment {
+                branch_id: child,
+                cap_lsn: Lsn::MAX,
+            },
+            LineageSegment {
+                branch_id: anc,
+                cap_lsn: Lsn(25),
+            },
+        ]);
+
+        let chain = w
+            .read_slru_chain_durable(SlruKind::Clog, 0, 7, Lsn(100))
+            .await
+            .expect("lineage walk must find the ancestor's anchor, not refuse");
+        assert_eq!(
+            chain.iter().map(|r| r.lsn.0).collect::<Vec<_>>(),
+            vec![40, 30, 10],
+            "LSN-descending, ancestor anchor stitched in at the tail"
+        );
+        let anchor = chain.last().unwrap();
+        assert!(
+            anchor.will_init && anchor.is_image,
+            "the chain must terminate on the ancestor's base image so walredo has a base"
+        );
+        drop_schema(&store, &schema).await;
+    }
+
+    /// The SLRU twin of `read_chain_durable_refuses_anchorless_chain`: when
+    /// the anchor is missing from the branch AND every ancestor, refuse rather
+    /// than let walredo fold `SETBIT` deltas onto a zero clog page (which
+    /// would read back as "every transaction aborted"). Refusing here means
+    /// `redo_one` logs and skips this one page; reaching walredo instead would
+    /// kill the process.
+    #[tokio::test]
+    async fn read_slru_chain_durable_refuses_anchorless_chain() {
+        let (store, schema) = make_store("slru_anchorless").await;
+        let (w, child) = writer(store.clone(), FlushPolicy::default());
+        store
+            .put_slru_pages(
+                child,
+                &[
+                    clog_row(30, false, false, b"d30"),
+                    clog_row(40, false, false, b"d40"),
+                ],
+            )
+            .await
+            .unwrap();
+
+        // Default single-segment lineage: no ancestor to rescue this chain.
+        let res = w
+            .read_slru_chain_durable(SlruKind::Clog, 0, 7, Lsn(100))
+            .await;
+        assert!(
+            res.is_err(),
+            "must error on an anchorless SLRU chain (would zero-base the clog page); \
+             got Ok with {} rows",
+            res.map(|c| c.len()).unwrap_or(0),
+        );
+
+        // An empty chain is a legitimate no-op, NOT an error — `redo_one`
+        // maps it to "nothing to materialise yet". Guards the `!is_empty()`
+        // half of the refusal condition.
+        let empty = w
+            .read_slru_chain_durable(SlruKind::Clog, 0, 999, Lsn(100))
+            .await
+            .expect("a block with no rows at all must not be treated as corruption");
+        assert!(empty.is_empty());
         drop_schema(&store, &schema).await;
     }
 

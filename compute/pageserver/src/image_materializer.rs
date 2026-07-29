@@ -623,9 +623,11 @@ impl ImageMaterializer {
         let chain = if job.key.is_slru_block_key() {
             // SLRU (clog/multixact): the chain lives in `slru_pages`, not
             // the rel `pages` table, so read it via the SLRU path and map
-            // into the uniform PageRow shape walredo + commit expect. Own
-            // timeline only — materialise never collapses ancestor deltas,
-            // and the deltas we're folding were written to this timeline.
+            // into the uniform PageRow shape walredo + commit expect.
+            //
+            // Folding ancestor deltas is safe: `commit_phase_inner` writes
+            // the image under our own `branch_id`, and GC trim is
+            // `branch_id`-scoped, so it never reclaims the ancestor's rows.
             let (kind, segno, blknum) = match job.key.to_slru_block() {
                 Ok(t) => t,
                 Err(e) => {
@@ -634,8 +636,8 @@ impl ImageMaterializer {
                 }
             };
             match self
-                .fpu_page_store
-                .read_slru_chain(self.branch_id, kind, segno, blknum, job.target_lsn)
+                .page_writer
+                .read_slru_chain_durable(kind, segno, blknum, job.target_lsn)
                 .await
             {
                 Ok(rows) => rows
@@ -655,7 +657,7 @@ impl ImageMaterializer {
                         branch_id = %self.branch_id,
                         target_lsn = %job.target_lsn,
                         key = %job.key,
-                        "read_slru_chain failed; skipping materialise of this page: {e:#}"
+                        "read_slru_chain_durable failed; skipping materialise of this page: {e:#}"
                     );
                     return Ok(None);
                 }
