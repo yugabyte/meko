@@ -106,7 +106,7 @@ func TestServiceCreateProjectNoWriter(t *testing.T) {
 func TestServiceCreateProjectWithWriter(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
-	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: uuid.New(), Name: "shop", PgVersion: 18, WithWriter: true})
+	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: uuid.New(), Name: "shop", PgVersion: 18, WithWriter: true, CPU: "4", Memory: "8Gi"})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -128,6 +128,11 @@ func TestServiceCreateProjectWithWriter(t *testing.T) {
 	}
 	if ep.EndpointID == uuid.Nil {
 		t.Error("endpoint id was not generated")
+	}
+	// The requested compute size must be threaded into the writer step (rather
+	// than dropped, which would silently fall back to the deployer default).
+	if ep.CPU != "4" || ep.Memory != "8Gi" {
+		t.Errorf("writer size = %q/%q, want 4/8Gi", ep.CPU, ep.Memory)
 	}
 }
 

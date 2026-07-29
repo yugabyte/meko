@@ -198,17 +198,18 @@ export default function TasksPage() {
   );
 }
 
-/** Human labels for controller task kinds. Creating or deleting a cluster spans
- *  a project task and an endpoint task, so both surface as "Create"/"Delete
- *  cluster". Unknown kinds fall back to a prettified form. */
+/** Human labels for controller task kinds. Each kind is shown distinctly so the
+ *  Tasks view can tell a cluster (project) operation apart from a compute
+ *  (endpoint) one — a create-cluster flow spans a `create_project` task and a
+ *  separate `create_endpoint` task. Unknown kinds fall back to a prettified form. */
 const TASK_KIND_LABELS: Record<string, string> = {
   create_project: "Create cluster",
   branch: "Branch",
-  create_endpoint: "Create cluster",
+  create_endpoint: "Provision compute",
   resize_endpoint: "Resize compute",
   delete_project: "Delete cluster",
   delete_branch: "Delete branch",
-  delete_endpoint: "Delete cluster",
+  delete_endpoint: "Unprovision compute",
 };
 
 function taskKindLabel(kind: string): string {

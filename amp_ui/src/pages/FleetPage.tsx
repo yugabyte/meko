@@ -6,26 +6,8 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Database, Plus } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -40,15 +22,9 @@ import {
   PageContainer,
   PageHeader,
 } from "@/components/data/Page";
-import {
-  useCreateProject,
-  useCurrentUser,
-  useFleet,
-  useStoragePools,
-} from "@/lib/api/queries";
-import { useCreateEndpoint } from "@/hooks/useEndpoints";
-import { DEFAULT_ENDPOINT_CPU, type StoragePool } from "@/lib/api/types";
+import { useCurrentUser, useFleet, useStoragePools } from "@/lib/api/queries";
 import { formatDateTime, shortId } from "@/lib/format";
+import { CreateClusterWizard } from "@/components/CreateClusterWizard";
 
 export default function FleetPage() {
   const currentUser = useCurrentUser();
@@ -162,6 +138,7 @@ export default function FleetPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Cluster</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead>Shared pool</TableHead>
                     <TableHead>PG version</TableHead>
                     <TableHead>Default branch</TableHead>
@@ -195,6 +172,12 @@ export default function FleetPage() {
                         </div>
                       </TableCell>
                       <TableCell>
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                          Available
+                        </span>
+                      </TableCell>
+                      <TableCell>
                         <span className="text-teal-600 dark:text-teal-400">
                           {pool.name}
                         </span>
@@ -219,7 +202,7 @@ export default function FleetPage() {
         </>
       )}
 
-      <CreateClusterDialog
+      <CreateClusterWizard
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         pools={myPools}
@@ -239,145 +222,3 @@ function StatCard({ label, value }: { label: string; value: number }) {
   );
 }
 
-function CreateClusterDialog({
-  open,
-  onOpenChange,
-  pools,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  pools: StoragePool[];
-}) {
-  const [name, setName] = useState("");
-  const [poolId, setPoolId] = useState<string>("");
-  const [vcores, setVcores] = useState(DEFAULT_ENDPOINT_CPU);
-  const createProject = useCreateProject();
-  const createEndpoint = useCreateEndpoint();
-  const pending = createProject.isPending || createEndpoint.isPending;
-
-  function reset() {
-    setName("");
-    setPoolId("");
-    setVcores(DEFAULT_ENDPOINT_CPU);
-  }
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = name.trim();
-    const cpu = vcores.trim();
-    if (!trimmed || !poolId || !cpu) return;
-    // Create the cluster (a project + its default `main` branch), then a
-    // read_write (write) endpoint on that branch sized to the requested vCores.
-    createProject.mutate(
-      { poolId, name: trimmed },
-      {
-        onSuccess: (project) => {
-          createEndpoint.mutate(
-            {
-              poolId,
-              projectId: project.id,
-              branchId: project.default_branch.branch_id,
-              role: "read_write",
-              cpu,
-            },
-            {
-              onSuccess: () => {
-                toast.success(
-                  `Cluster "${project.name}" created with a ${cpu}-vCore write endpoint`,
-                );
-                reset();
-                onOpenChange(false);
-              },
-              onError: (err) => {
-                toast.error(
-                  `Cluster "${project.name}" created, but its write endpoint failed: ${
-                    err instanceof Error ? err.message : "unknown error"
-                  }`,
-                );
-                reset();
-                onOpenChange(false);
-              },
-            },
-          );
-        },
-        onError: (err) =>
-          toast.error(
-            err instanceof Error ? err.message : "Failed to create cluster",
-          ),
-      },
-    );
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <form onSubmit={submit}>
-          <DialogHeader>
-            <DialogTitle>New cluster</DialogTitle>
-            <DialogDescription>
-              Creates a cluster inside a shared pool, with a default{" "}
-              <code>main</code> branch and a write endpoint.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="my-4 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="db-pool">Shared pool</Label>
-              <Select value={poolId} onValueChange={setPoolId}>
-                <SelectTrigger id="db-pool">
-                  <SelectValue placeholder="Select a pool" />
-                </SelectTrigger>
-                <SelectContent>
-                  {pools.map((pool) => (
-                    <SelectItem key={pool.id} value={pool.id}>
-                      {pool.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="db-name">Cluster name</Label>
-              <Input
-                id="db-name"
-                placeholder="e.g. orders"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="cluster-vcores">vCores</Label>
-              <Input
-                id="cluster-vcores"
-                type="number"
-                min={1}
-                step={1}
-                placeholder={DEFAULT_ENDPOINT_CPU}
-                value={vcores}
-                onChange={(e) => setVcores(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                vCores for the cluster's write endpoint.
-              </p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={!name.trim() || !poolId || !vcores.trim() || pending}
-              variant="brand"
-            >
-              {pending ? "Creating…" : "Create cluster"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}

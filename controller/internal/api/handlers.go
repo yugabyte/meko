@@ -238,16 +238,30 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 		}
 	}
 
+	// Optionally provision the default branch's write endpoint in the same task
+	// ("create cluster" = project + writer), sized by resources. When with_writer
+	// is false (default), no endpoint is created — compute is a separate resource.
+	// resources is only honored alongside with_writer.
+	withWriter := request.Body.WithWriter != nil && *request.Body.WithWriter
+	var cpu, memory string
+	if withWriter {
+		var errMsg string
+		if cpu, memory, errMsg = parseResourceOverrides(request.Body.Resources); errMsg != "" {
+			return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
+		}
+	}
+
 	// Plan the work as an async task and return 202 + the Task. The project +
-	// default branch rows, the pending-init recipe, and (later) any endpoint are
-	// all created by the worker; a duplicate project name now surfaces as a failed
-	// task rather than a synchronous 409. WithWriter:false preserves "create
-	// project does not deploy an endpoint" — compute is a separate resource.
+	// default branch rows, the pending-init recipe, and (when with_writer) the
+	// write endpoint are all created by the worker; a duplicate project name now
+	// surfaces as a failed task rather than a synchronous 409.
 	t, err := c.tasks.CreateProject(ctx, task.CreateProjectInput{
 		PoolID:     request.PoolId,
 		Name:       name,
 		PgVersion:  pgVersion,
-		WithWriter: false,
+		WithWriter: withWriter,
+		CPU:        cpu,
+		Memory:     memory,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create project task: %w", err)
@@ -606,6 +620,33 @@ var (
 	memoryQuantityRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?((Ki|Mi|Gi|Ti|Pi|Ei)|[kKMGTPE]|m|[eE][0-9]+)?$`)
 )
 
+// parseResourceOverrides validates an optional resources object and returns the
+// trimmed cpu/memory overrides ("" when unset — the caller applies its default).
+// errMsg is non-empty on an invalid quantity; callers wrap it in their own
+// operation's 400 response type (the generated response types differ per route).
+func parseResourceOverrides(r *EndpointResources) (cpu, memory, errMsg string) {
+	if r == nil {
+		return "", "", ""
+	}
+	if r.Cpu != nil {
+		if v := strings.TrimSpace(*r.Cpu); v != "" {
+			if !cpuQuantityRE.MatchString(v) {
+				return "", "", `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`
+			}
+			cpu = v
+		}
+	}
+	if r.Memory != nil {
+		if v := strings.TrimSpace(*r.Memory); v != "" {
+			if !memoryQuantityRE.MatchString(v) {
+				return "", "", `resources.memory must be a valid Kubernetes memory quantity (e.g. "4Gi", "512Mi")`
+			}
+			memory = v
+		}
+	}
+	return cpu, memory, ""
+}
+
 func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpointRequestObject) (CreateEndpointResponseObject, error) {
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
@@ -624,22 +665,16 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// (whitespace-only) override falls back to the default rather than emitting an
 	// invalid empty quantity.
 	cpu, memory := defaultEndpointCPU, defaultEndpointMemory
-	if request.Body != nil && request.Body.Resources != nil {
-		if request.Body.Resources.Cpu != nil {
-			if v := strings.TrimSpace(*request.Body.Resources.Cpu); v != "" {
-				if !cpuQuantityRE.MatchString(v) {
-					return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", `resources.cpu must be a valid Kubernetes CPU quantity (e.g. "2", "500m")`))}, nil
-				}
-				cpu = v
-			}
+	if request.Body != nil {
+		oCPU, oMem, errMsg := parseResourceOverrides(request.Body.Resources)
+		if errMsg != "" {
+			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
 		}
-		if request.Body.Resources.Memory != nil {
-			if v := strings.TrimSpace(*request.Body.Resources.Memory); v != "" {
-				if !memoryQuantityRE.MatchString(v) {
-					return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", `resources.memory must be a valid Kubernetes memory quantity (e.g. "4Gi", "512Mi")`))}, nil
-				}
-				memory = v
-			}
+		if oCPU != "" {
+			cpu = oCPU
+		}
+		if oMem != "" {
+			memory = oMem
 		}
 	}
 

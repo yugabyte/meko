@@ -154,6 +154,22 @@ export default function MultitenancyPage() {
             Zero-copy thin clones · copy-on-write · fork at an LSN
           </div>
 
+          {projectId && branches.data?.length ? (
+            <div className="mb-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-4">
+              {[
+                { k: "Cluster", v: dbName },
+                { k: "Engine", v: `PostgreSQL ${branches.data[0]?.pg_version ?? 18}` },
+                { k: "Shared pool", v: poolName },
+                { k: "Branches", v: String(branches.data.length) },
+              ].map(({ k, v }) => (
+                <div key={k} className="bg-card p-3">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{k}</div>
+                  <div className="mt-1 truncate text-sm font-medium text-foreground">{v}</div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="rounded-xl border bg-card p-5 text-card-foreground shadow">
             {!projectId ? (
               <p className="py-8 text-center text-sm text-muted-foreground">

@@ -864,6 +864,11 @@ components:
         pg_version:
           type: integer
           description: Postgres major version for the project's default branch. Defaults to 18.
+        with_writer:
+          type: boolean
+          description: When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = project + writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
+        resources:
+          $ref: '#/components/schemas/EndpointResources'
 
     Project:
       type: object

@@ -136,6 +136,16 @@ type CreateProjectRequest struct {
 
 	// PgVersion Postgres major version for the project's default branch. Defaults to 18.
 	PgVersion *int `json:"pg_version,omitempty"`
+
+	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
+	// Kubernetes resource quantity and is applied as BOTH the request and the
+	// limit on the endpoint container, so the pod is scheduled with the
+	// **Guaranteed** QoS class. Omit the object (or either field) to take the
+	// defaults of 2 CPU cores and 4Gi of memory.
+	Resources *EndpointResources `json:"resources,omitempty"`
+
+	// WithWriter When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = project + writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
+	WithWriter *bool `json:"with_writer,omitempty"`
 }
 
 // CreateStoragePoolRequest defines model for CreateStoragePoolRequest.

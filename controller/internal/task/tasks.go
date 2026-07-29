@@ -81,6 +81,11 @@ type CreateProjectInput struct {
 	// WithWriter also creates and deploys the default branch's first (read_write)
 	// endpoint as part of the same task.
 	WithWriter bool `json:"with_writer"`
+	// CPU and Memory size the WithWriter endpoint (Kubernetes quantities, e.g.
+	// "2" / "4Gi"). Empty falls back to the deployer default (2 cores / 4Gi).
+	// Ignored when WithWriter is false.
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
 }
 
 // CreateProject records a create_project task: create the project + its default
@@ -114,6 +119,8 @@ func (s *Service) CreateProject(ctx context.Context, in CreateProjectInput) (*Ta
 			BranchID:   branchID,
 			Role:       roleReadWrite,
 			PgVersion:  in.PgVersion,
+			CPU:        in.CPU,
+			Memory:     in.Memory,
 		}))
 	}
 	// TargetRef is the new default branch: the UI pre-selects it once the task

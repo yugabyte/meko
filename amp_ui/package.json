@@ -11,7 +11,9 @@
     "dev": "vite dev --port 3020",
     "build": "vite build",
     "preview": "vite preview --port 3020",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -66,12 +68,15 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.14",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20.19.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.4",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.14",
     "typescript": "5.6.3",
-    "vite": "^7.1.9"
+    "vite": "^7.1.9",
+    "vitest": "^4.1.10"
   }
 }

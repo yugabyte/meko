@@ -12,6 +12,7 @@ import {
 import {
   createBranch,
   createProject,
+  createClusterWithWriter,
   createStoragePool,
   createUser,
   getVersion,
@@ -164,6 +165,25 @@ export function useCreateProject() {
     mutationFn: (input: { poolId: string; name: string }) =>
       createProject(input.poolId, { name: input.name }),
     onSuccess: (_data, input) => {
+      qc.invalidateQueries({ queryKey: qk.projects(input.poolId) });
+    },
+  });
+}
+
+// Composite "create cluster": fires ONE create_project(with_writer) task that
+// creates the project + its main-branch write endpoint in the background, and
+// returns the Task immediately (no polling). The caller toasts + deeplinks to
+// Tasks; the fleet refetches when the task lands.
+export function useCreateCluster() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { poolId: string; name: string; cpu?: string; memory?: string }) =>
+      createClusterWithWriter(input.poolId, {
+        name: input.name,
+        cpu: input.cpu,
+        memory: input.memory,
+      }),
+    onSuccess: (_task, input) => {
       qc.invalidateQueries({ queryKey: qk.projects(input.poolId) });
     },
   });

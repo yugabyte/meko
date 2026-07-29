@@ -34,23 +34,30 @@ function AppFooter() {
   const { data } = useVersion();
   const commit =
     data?.git_commit && data.git_commit !== "unknown" ? data.git_commit : "";
-  const title = data
-    ? [
-        `version ${data.version}`,
-        commit ? `commit ${commit}` : "",
-        data.build_date && data.build_date !== "unknown"
-          ? `built ${data.build_date}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : undefined;
+  // Only surface a real release version; hide placeholder builds ("dev" /
+  // "unknown") so the footer never reads "amp vdev" in local/dev.
+  const version =
+    data?.version && data.version !== "dev" && data.version !== "unknown"
+      ? data.version
+      : "";
+  // Nothing meaningful to show (typical in dev) -> no footer at all.
+  if (!version && !commit) return null;
+  const title =
+    [
+      version ? `version ${version}` : "",
+      commit ? `commit ${commit}` : "",
+      data?.build_date && data.build_date !== "unknown"
+        ? `built ${data.build_date}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · ") || undefined;
   return (
     <footer
       title={title}
       className="border-t px-4 py-1.5 text-center font-mono text-[11px] text-muted-foreground"
     >
-      amp{data?.version ? ` v${data.version}` : ""}
+      amp{version ? ` v${version}` : ""}
       {commit ? ` · ${commit}` : ""}
     </footer>
   );

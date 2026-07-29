@@ -121,10 +121,10 @@ export function createStoragePool(
 
 /* ---- Projects (clusters) ---- */
 
-// include_failed defaults to true server-side (failed-creation orphans are listed
-// so they can be seen and deleted); pass includeFailed:false — e.g. from a cluster
-// picker — to hide them on read. undefined is dropped by apiRequest, keeping the
-// server default.
+// include_failed defaults to false server-side (the list is scoped to usable
+// clusters — what a picker or count wants); pass includeFailed:true — e.g. from
+// an operator's fleet view — to also surface failed-creation orphans so they can
+// be seen and deleted. undefined is dropped by apiRequest, keeping the server default.
 export function listProjects(
   poolId: string,
   opts?: { includeFailed?: boolean },
@@ -153,6 +153,26 @@ export async function createProject(
     throw new ApiError("create_project task reported no project id", 500);
   }
   return getProject(poolId, done.project_id);
+}
+
+// Async, fire-and-forget: records a create_project task with `with_writer` so the
+// controller creates the cluster AND its `main`-branch read_write endpoint in ONE
+// background task. Returns the Task immediately (no polling): the caller shows a
+// toast + deeplinks to Tasks, and the worker runs the whole thing independently
+// of this client (so it survives navigating away / refresh). `cpu`/`memory` size
+// the writer; empty takes the controller default (2 cores / 4Gi).
+export function createClusterWithWriter(
+  poolId: string,
+  input: { name: string; cpu?: string; memory?: string },
+): Promise<Task> {
+  const body: Record<string, unknown> = { name: input.name, with_writer: true };
+  if (input.cpu || input.memory) {
+    body.resources = { cpu: input.cpu || undefined, memory: input.memory || undefined };
+  }
+  return apiRequest<Task>(`/storage-pools/${poolId}/projects`, {
+    method: "POST",
+    body,
+  });
 }
 
 /* ---- Branches (timelines / forks) ---- */

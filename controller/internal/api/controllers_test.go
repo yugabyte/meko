@@ -411,6 +411,63 @@ func TestCreateProject(t *testing.T) {
 	}
 }
 
+// TestCreateProjectWithWriter covers the composite "create cluster": with_writer
+// makes the single create_project task also deploy the default branch's
+// read_write endpoint, sized to resources. Guards that the writer is (a) created
+// and (b) sized to the request — and that a bad resource quantity is rejected
+// synchronously with 400.
+func TestCreateProjectWithWriter(t *testing.T) {
+	client, backend, tasks := newTestServer(t)
+	ctx := context.Background()
+	u := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, u.Id, "pool")
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+
+	withWriter := true
+	cpu, mem := "4", "8Gi"
+	cp, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{
+		Name:       "shop",
+		WithWriter: &withWriter,
+		Resources:  &api.EndpointResources{Cpu: &cpu, Memory: &mem},
+	})
+	if err != nil {
+		t.Fatalf("CreateProject(with_writer): %v", err)
+	}
+	if cp.StatusCode() != http.StatusAccepted {
+		t.Fatalf("CreateProject(with_writer) status = %d, want 202, body = %s", cp.StatusCode(), cp.Body)
+	}
+
+	// One task (create_project) with an appended create_endpoint step; drive it.
+	drainTasks(t, tasks, backend, prov)
+	if got := soleTask(t, tasks); got.Status != task.StatusSucceeded {
+		t.Fatalf("create_project(with_writer) task status = %q, want succeeded; error = %v", got.Status, got.Error)
+	}
+
+	// Exactly one endpoint (the writer) must have been deployed, sized to the
+	// requested resources (not the deployer default).
+	if len(dep.created) != 1 {
+		t.Fatalf("deployed endpoints = %d, want 1 (the writer)", len(dep.created))
+	}
+	if dep.created[0].CPU != cpu || dep.created[0].Memory != mem {
+		t.Errorf("writer deploy resources = (%q, %q), want (%q, %q)", dep.created[0].CPU, dep.created[0].Memory, cpu, mem)
+	}
+
+	// with_writer + an invalid cpu quantity -> synchronous 400 (before planning).
+	badCPU := "not-a-quantity"
+	bad, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{
+		Name:       "shop2",
+		WithWriter: &withWriter,
+		Resources:  &api.EndpointResources{Cpu: &badCPU},
+	})
+	if err != nil {
+		t.Fatalf("CreateProject(bad resources): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("CreateProject(bad resources) status = %d, want 400, body = %s", bad.StatusCode(), bad.Body)
+	}
+}
+
 // fakeDeployer is a deploy.Deployer that records calls and returns a derived
 // address, so the synchronous endpoint deploy/retire wiring can be tested
 // without a real runtime. createErr, when set, makes CreateEndpoint fail (to
