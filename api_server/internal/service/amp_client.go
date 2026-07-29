@@ -76,6 +76,10 @@ type ampTask struct {
 	ProjectID *string `json:"project_id"`
 	TargetRef *string `json:"target_ref"`
 	Error     *string `json:"error"`
+	// Result is the task's final step result as opaque JSON. For a
+	// resize_endpoint task it carries the in-place outcome
+	// ({"in_place_resize":..., "in_place_message":...}); nil otherwise.
+	Result json.RawMessage `json:"result,omitempty"`
 }
 
 const (
@@ -211,6 +215,13 @@ func (c *AMPClient) CreateBranch(ctx context.Context, poolID, projectID string, 
 
 /* ---- endpoints (compute) ---- */
 
+// AMPResources is the compute sizing (Kubernetes quantities) reserved for an
+// endpoint's pod: cpu e.g. "2"/"1500m", memory e.g. "4Gi".
+type AMPResources struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+}
+
 // AMPEndpoint is a compute instance bound to a branch. address is host:port,
 // empty until deployed.
 type AMPEndpoint struct {
@@ -222,7 +233,11 @@ type AMPEndpoint struct {
 	// TailnetAddress is AMP's Tailscale (host:port) address, empty unless the
 	// endpoint Service is tailnet-exposed. Part of AMP's Endpoint contract.
 	TailnetAddress string `json:"tailnet_address"`
-	CreatedAt      string `json:"created_at"`
+	// Resources is the endpoint's current compute reservation, surfaced so the
+	// UI can show cpu/memory and pre-fill a resize. Nil if the controller omits
+	// it.
+	Resources *AMPResources `json:"resources,omitempty"`
+	CreatedAt string        `json:"created_at"`
 }
 
 type ampEndpointList struct {
@@ -285,6 +300,59 @@ func (c *AMPClient) CreateEndpoint(ctx context.Context, poolID, projectID, branc
 	var e AMPEndpoint
 	err = c.do(ctx, http.MethodGet, base+"/"+*done.TargetRef, nil, &e)
 	return e, err
+}
+
+// ResizeResult is the outcome of an in-place resize: the endpoint at its new
+// size, plus whether the live pod resize applied. Outcome is one of
+// "completed" | "pending" | "infeasible" | "unsupported" (defaults to
+// "completed" when the controller reports none); Message is the controller's
+// human note, if any.
+type ResizeResult struct {
+	Endpoint AMPEndpoint `json:"endpoint"`
+	Outcome  string      `json:"outcome"`
+	Message  string      `json:"message,omitempty"`
+}
+
+// ResizeEndpoint changes a compute instance's cpu/memory in place. The
+// controller records a resize_endpoint task (resize the running pod, or fall
+// back to a rollout); we poll it to completion, read the in-place outcome from
+// the task result, then read the endpoint back at its new size. Send only the
+// fields we have so AMP leaves the rest unchanged.
+func (c *AMPClient) ResizeEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID, cpu, memory string) (ResizeResult, error) {
+	base := "/storage-pools/" + poolID + "/projects/" + projectID + "/branches/" + branchID + "/endpoints/" + endpointID
+	res := map[string]any{}
+	if cpu != "" {
+		res["cpu"] = cpu
+	}
+	if memory != "" {
+		res["memory"] = memory
+	}
+	var task ampTask
+	if err := c.do(ctx, http.MethodPost, base+"/resize", map[string]any{"resources": res}, &task); err != nil {
+		return ResizeResult{}, err
+	}
+	done, err := c.pollTask(ctx, task.ID)
+	if err != nil {
+		return ResizeResult{}, err
+	}
+	outcome, message := "completed", ""
+	if len(done.Result) > 0 {
+		var r struct {
+			InPlaceResize  string `json:"in_place_resize"`
+			InPlaceMessage string `json:"in_place_message"`
+		}
+		if json.Unmarshal(done.Result, &r) == nil {
+			if r.InPlaceResize != "" {
+				outcome = r.InPlaceResize
+			}
+			message = r.InPlaceMessage
+		}
+	}
+	var e AMPEndpoint
+	if err := c.do(ctx, http.MethodGet, base, nil, &e); err != nil {
+		return ResizeResult{}, err
+	}
+	return ResizeResult{Endpoint: e, Outcome: outcome, Message: message}, nil
 }
 
 // pollTask polls a task to a terminal state. Transient read errors (network

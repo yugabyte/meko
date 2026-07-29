@@ -650,6 +650,7 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		dpDirect.GET("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute", ampH.ListCompute, read, dpAccess)
 		dpDirect.POST("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute", ampH.CreateCompute, write, dpOwner)
 		dpDirect.GET("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute/:compute_id", ampH.GetCompute, read, dpAccess)
+		dpDirect.POST("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute/:compute_id/resize", ampH.ResizeCompute, write, dpOwner)
 		dpDirect.DELETE("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute/:compute_id", ampH.DeleteCompute, write, dpOwner)
 	}
 

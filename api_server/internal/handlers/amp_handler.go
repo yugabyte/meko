@@ -198,3 +198,29 @@ func (h *AMPHandler) CreateCompute(c echo.Context) error {
 	}
 	return ok(c, http.StatusCreated, instance)
 }
+
+type resizeComputeRequest struct {
+	// CPU / Memory are optional Kubernetes quantities (e.g. "4", "8Gi"). At least
+	// one must be set; empty fields are left unchanged.
+	CPU    string `json:"cpu"`
+	Memory string `json:"memory"`
+}
+
+// ResizeCompute handles POST .../branches/:branch_id/compute/:compute_id/resize.
+// Blocks until the AMP task completes; returns the endpoint at its new size plus
+// the in-place resize outcome.
+func (h *AMPHandler) ResizeCompute(c echo.Context) error {
+	var req resizeComputeRequest
+	if err := c.Bind(&req); err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
+	}
+	cpu, memory := strings.TrimSpace(req.CPU), strings.TrimSpace(req.Memory)
+	if cpu == "" && memory == "" {
+		return apiError(c, http.StatusBadRequest, "INVALID_REQUEST", "at least one of cpu or memory is required")
+	}
+	result, err := h.svc.ResizeCompute(c.Request().Context(), c.Param("datapack_id"), c.Param("cluster_id"), c.Param("branch_id"), c.Param("compute_id"), cpu, memory)
+	if err != nil {
+		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, result)
+}

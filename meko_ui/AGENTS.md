@@ -52,6 +52,12 @@ meko_admin, the Fleet pool filter).
   the tree (what the file is / does).
 - Keep components **presentational + reusable**; lift shared bits into
   `components/ui` or a small local helper rather than duplicating.
+- **Keep pages/panels thin — one component per file.** When a screen or panel
+  grows past its own top-level JSX, extract each sub-piece into its own file in a
+  subfolder under the feature's `components/` (e.g.
+  `datapack-detail/datapack-clusters/`) and let the top-level file just compose
+  them. Don't let one file accumulate many inline components — that monolith is
+  hard to reuse, review, and test.
 - **Centralize repeated string literals** — any string used in 2+ files becomes
   an exported const, not an inline duplicate.
 - **Styling is Tailwind + the CSS-variable token system in `src/index.css`.** Use

@@ -10,9 +10,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { createCluster } from "@/lib/api/ampApi";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
+import { useCreateCluster } from "@/features/datapacks/hooks/useAmpClusters";
 
 // Postgres 18 is the only version AMP supports today, so there's no version
 // choice: we omit pg_version on create and the controller applies its default
@@ -22,8 +22,6 @@ export type CreateClusterDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   datapackId: string;
-  /** Called after a cluster is created so the caller can refresh its list. */
-  onCreated: () => void;
 };
 
 /**
@@ -35,17 +33,17 @@ export function CreateClusterDialog({
   open,
   onOpenChange,
   datapackId,
-  onCreated,
 }: CreateClusterDialogProps) {
   const [name, setName] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Mutation invalidates the clusters query on success, so every list surface
+  // (panel + tile) refreshes without a manual reload.
+  const createMut = useCreateCluster(datapackId);
 
   useEffect(() => {
     if (open) {
       setName("");
       setError(null);
-      setSubmitting(false);
     }
   }, [open]);
 
@@ -53,18 +51,14 @@ export function CreateClusterDialog({
     const trimmed = name.trim();
     // Guard against double-submit (e.g. repeated Enter) while a request is in
     // flight — belt-and-suspenders with the disabled submit button.
-    if (!trimmed || submitting) return;
-    setSubmitting(true);
+    if (!trimmed || createMut.isPending) return;
     setError(null);
     try {
-      const cluster = await createCluster(datapackId, { name: trimmed });
+      const cluster = await createMut.mutateAsync({ name: trimmed });
       toast({ title: `Cluster "${cluster.name}" created` });
-      onCreated();
       onOpenChange(false);
     } catch (e) {
       setError(getApiErrorMessage(e, "Could not create the cluster."));
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -112,12 +106,12 @@ export function CreateClusterDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              disabled={submitting}
+              disabled={createMut.isPending}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={submitting || !name.trim()}>
-              {submitting ? "Creating…" : "Create cluster"}
+            <Button type="submit" disabled={createMut.isPending || !name.trim()}>
+              {createMut.isPending ? "Creating…" : "Create cluster"}
             </Button>
           </DialogFooter>
         </form>

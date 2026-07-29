@@ -1,10 +1,8 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Database } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { datapackClustersPath } from "@/app/routes/paths";
-import { getApiErrorMessage } from "@/lib/api/mekoApi";
-import { listClusters, type AmpCluster } from "@/lib/api/ampApi";
+import { useClusters } from "@/features/datapacks/hooks/useAmpClusters";
 
 // Preview cap; the rest is reached via the "View all" footer. Matches the
 // Members/Knowledge tiles so the tiles read consistently.
@@ -12,36 +10,19 @@ const PREVIEW_LIMIT = 3;
 
 type Props = {
   datapackId: string;
-  /** Bump to force a refetch (e.g. after "Create cluster" elsewhere). */
-  reloadToken?: number;
   className?: string;
 };
 
 /**
  * Compact tile listing the datapack's AMP clusters (names only). No search
  * here — the "View all" footer opens the full clusters page. Gated by
- * SHOW_PG_AMP at the call site.
+ * SHOW_PG_AMP at the call site. Shares the clusters query cache with the panel,
+ * so creating a cluster elsewhere refreshes this tile automatically.
  */
-export function DatapackDetailClustersTile({ datapackId, reloadToken = 0, className }: Props) {
-  const [clusters, setClusters] = useState<AmpCluster[]>([]);
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-
-  useEffect(() => {
-    let cancelled = false;
-    setStatus("loading");
-    listClusters(datapackId)
-      .then((rows) => {
-        if (cancelled) return;
-        setClusters(rows);
-        setStatus("ready");
-      })
-      .catch(() => {
-        if (!cancelled) setStatus("error");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [datapackId, reloadToken]);
+export function DatapackDetailClustersTile({ datapackId, className }: Props) {
+  const clustersQuery = useClusters(datapackId);
+  const clusters = clustersQuery.data ?? [];
+  const status = clustersQuery.isLoading ? "loading" : clustersQuery.error ? "error" : "ready";
 
   const preview = clusters.slice(0, PREVIEW_LIMIT);
   const count = status === "loading" ? "…" : String(clusters.length);

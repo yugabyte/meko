@@ -272,3 +272,17 @@ func (s *AMPService) CreateCompute(ctx context.Context, datapackID, projectID, b
 	}
 	return c.CreateEndpoint(ctx, poolID, projectID, branchID, role, cpu, memory)
 }
+
+// ResizeCompute changes a compute instance's cpu/memory in place, returning the
+// endpoint at its new size and the in-place outcome.
+func (s *AMPService) ResizeCompute(ctx context.Context, datapackID, projectID, branchID, computeID, cpu, memory string) (ResizeResult, error) {
+	poolID, err := s.poolID(ctx, datapackID)
+	if err != nil {
+		return ResizeResult{}, err
+	}
+	c, err := s.client(ctx)
+	if err != nil {
+		return ResizeResult{}, err
+	}
+	return c.ResizeEndpoint(ctx, poolID, projectID, branchID, computeID, cpu, memory)
+}

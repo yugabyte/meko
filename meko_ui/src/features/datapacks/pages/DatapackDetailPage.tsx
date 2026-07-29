@@ -154,7 +154,6 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isCreateClusterOpen, setIsCreateClusterOpen] = useState(false);
-  const [clustersReloadToken, setClustersReloadToken] = useState(0);
 
   // const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeBaseDocument[]>([]);
@@ -473,7 +472,6 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                   open={isCreateClusterOpen}
                   onOpenChange={setIsCreateClusterOpen}
                   datapackId={routeDatapackId}
-                  onCreated={() => setClustersReloadToken((t) => t + 1)}
                 />
               ) : null}
               {showDatapackActionsDropdown ? (
@@ -595,10 +593,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
             onOpenConnect={() => setIsConnectOpen(true)}
           />
           {isAmpEnabled() ? (
-            <DatapackDetailClustersTile
-              datapackId={routeDatapackId}
-              reloadToken={clustersReloadToken}
-            />
+            <DatapackDetailClustersTile datapackId={routeDatapackId} />
           ) : null}
         </div>
       </main>
