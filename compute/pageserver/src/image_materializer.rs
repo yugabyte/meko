@@ -556,6 +556,10 @@ impl ImageMaterializer {
                 .put_slru_pages(self.branch_id, &slru_rows)
                 .await
                 .context("put_slru_pages")?;
+            // GC trim candidates for the SLRU images, after the INSERT
+            // lands — same durable-first contract as the rel path above.
+            self.page_writer
+                .record_gc_trim_bases(&slru_rows, "materialiser");
         }
         let t_insert = t_insert_start.elapsed();
 

@@ -1,6 +1,6 @@
 //! Truncation (shrink) reclamation: VACUUM's tail truncation emits an
 //! `XLOG_SMGR_TRUNCATE` record, which queues a shrink event
-//! (`pending_gc.blknum = -1`); the drain then deletes the stored pages
+//! (`pending_gc.gc_kind = 3`, ShrinkPages); the drain then deletes the stored pages
 //! past the post-truncation size once the cutoff passes it. Asserts
 //! the tail's `pages` rows reach zero while the kept prefix survives
 //! and still reads back correctly. Dedicated branch so the signal is

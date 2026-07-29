@@ -55,8 +55,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let rel_pages = format!(
         "SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}' AND relnode = {relnode}"
     );
+    // pending_gc keys the rel by its encoded Key; field4 (bytes 10-13,
+    // 1-indexed) holds the relnode — match it as a 4-byte big-endian slice.
     let rel_queue = format!(
-        "SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b}' AND relnode = {relnode}"
+        "SELECT count(*) FROM amp_storage.pending_gc \
+         WHERE branch_id = '{b}' AND substring(key FROM 10 FOR 4) = '\\x{relnode:08x}'::bytea"
     );
     // Wait past a flush period so the job is dispatched (and held).
     sleep(Duration::from_secs(8)).await;

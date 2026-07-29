@@ -42,8 +42,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let db_pages = format!(
         "SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}' AND dbnode = {dbnode}"
     );
+    // pending_gc keys candidates by their encoded Key; every one of a
+    // dropped db's keys (per-rel drops + reldir/relmap/sparse-reldir)
+    // carries the dbnode in field3 (bytes 6-9, 1-indexed).
     let db_queue = format!(
-        "SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b}' AND dbnode = {dbnode}"
+        "SELECT count(*) FROM amp_storage.pending_gc \
+         WHERE branch_id = '{b}' AND substring(key FROM 6 FOR 4) = '\\x{dbnode:08x}'::bytea"
     );
     let mut stored = 0;
     for _ in 0..30 {

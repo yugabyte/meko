@@ -175,30 +175,31 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
 );
 
 -- GC candidate queue: one row per garbage-producing event, drained once
--- the branch's cutoff passes `due_lsn`. `blknum` doubles as the kind:
--- >= 0 trim, -2 drop, -1 shrink. Every column is in the PK (replayed
--- duplicates dedup via upsert-mode INSERTs). `bucket_id` is placement
--- only, WRITER-computed (page_store::gc_bucket_id, frozen hash, modulus
--- = GC_BUCKETS) — deliberately not a generated column (the yb-client
--- write path bypasses the YSQL layer). NB: queries must bind bucket_id
--- as a VALUE; without bucket_id equality a query seq-scans.
--- Explicit SPLIT into 3 tablets: this queue is expected to stay small
--- (it is continuously drained), so 3 tablets is sufficient. tablets (3)
--- < buckets (10) bounds a statement's distributed-txn fan-out.
+-- the branch's cutoff passes `due_lsn`. A candidate names its garbage by
+-- the encoded `Key` (`key`, the same 18-byte layout `meta` uses) plus a
+-- `gc_kind` that names both the operation and its target table
+-- (0=trim_pages, 1=trim_slru, 2=trim_meta, 3=shrink_pages, 4=drop_pages,
+-- 5=drop_slru, 6=drop_meta); the drain dispatches on gc_kind alone. One
+-- keying convention covers rel blocks, SLRU blocks, and meta keys alike.
+-- Replayed duplicates dedup: the
+-- candidate's identity is its PK and writers run upsert-mode, so a replay
+-- overwrites in place. `bucket_id` is placement only, WRITER-computed
+-- (page_store::gc_bucket_id, frozen hash of `key`, modulus = GC_BUCKETS) —
+-- deliberately not a generated column (the yb-client write path bypasses
+-- the YSQL layer). NB: queries must bind bucket_id as a VALUE; without
+-- bucket_id equality a query seq-scans. Explicit SPLIT into 3 tablets: the
+-- queue stays small (continuously drained); tablets (3) < buckets (10)
+-- bounds a statement's distributed-txn fan-out.
 CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     branch_id  TEXT     NOT NULL,
     bucket_id  INT      NOT NULL,
-    spcnode    BIGINT   NOT NULL,
-    dbnode     BIGINT   NOT NULL,
-    relnode    BIGINT   NOT NULL,
-    forknum    SMALLINT NOT NULL,
-    blknum     BIGINT   NOT NULL,
     due_lsn    BIGINT   NOT NULL,
+    key        BYTEA    NOT NULL,   -- encoded Key: block (trim) or object (drop/shrink)
+    gc_kind    SMALLINT NOT NULL,   -- 0=trim_pages 1=trim_slru 2=trim_meta 3=shrink_pages 4=drop_pages 5=drop_slru 6=drop_meta
     -- Rel size (blocks) as of a shrink. Set on shrink candidates only
-    -- (NULL for trim/drop).
+    -- (NULL for trim/drop; shrink is rel-only).
     relsize    BIGINT,
-    PRIMARY KEY ((branch_id, bucket_id) HASH,
-                 due_lsn, spcnode, dbnode, relnode, forknum, blknum)
+    PRIMARY KEY ((branch_id, bucket_id) HASH, due_lsn, key, gc_kind)
 ) SPLIT INTO 3 TABLETS;
 
 -- =====================================================================
@@ -225,3 +226,45 @@ CREATE TABLE IF NOT EXISTS amp_storage.wals (
     -- original bucket).
     PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)
 ) SPLIT INTO 10 TABLETS;
+
+-- =====================================================================
+-- Functions.
+-- =====================================================================
+
+-- Inspection helper: decode a `pending_gc.key` (or any `meta.key`) by
+-- unpacking the fixed 18-byte Key and formatting by field1. Mirrors the
+-- Rust Key codec (compute/libs/pageserver_api/src/key.rs); the
+-- `gc_key_decode_matches_key_codec` test cross-checks the two, so keep them
+-- in sync if the layout changes. Handy in psql:
+--   SELECT gc_kind, amp_storage.gc_key_decode(key), due_lsn FROM amp_storage.pending_gc ...
+CREATE OR REPLACE FUNCTION amp_storage.gc_key_decode(k BYTEA) RETURNS TEXT AS $$
+DECLARE
+    f1 INT;
+    f2 BIGINT; f3 BIGINT; f4 BIGINT; f6 BIGINT;
+    f5 INT;
+BEGIN
+    IF k IS NULL OR octet_length(k) <> 18 THEN
+        RETURN format('raw(%s bytes)', COALESCE(octet_length(k), 0));
+    END IF;
+    f1 := get_byte(k, 0);
+    f2 := (get_byte(k,1)::bigint<<24)|(get_byte(k,2)::bigint<<16)|(get_byte(k,3)::bigint<<8)|get_byte(k,4)::bigint;
+    f3 := (get_byte(k,5)::bigint<<24)|(get_byte(k,6)::bigint<<16)|(get_byte(k,7)::bigint<<8)|get_byte(k,8)::bigint;
+    f4 := (get_byte(k,9)::bigint<<24)|(get_byte(k,10)::bigint<<16)|(get_byte(k,11)::bigint<<8)|get_byte(k,12)::bigint;
+    f5 := get_byte(k, 13);
+    f6 := (get_byte(k,14)::bigint<<24)|(get_byte(k,15)::bigint<<16)|(get_byte(k,16)::bigint<<8)|get_byte(k,17)::bigint;
+    IF f1 = 0 THEN            -- rel keyspace
+        IF f6 = 4294967295 THEN
+            RETURN format('rel_size spc=%s db=%s rel=%s fork=%s', f2, f3, f4, f5);
+        END IF;
+        RETURN format('rel_block spc=%s db=%s rel=%s fork=%s blk=%s', f2, f3, f4, f5, f6);
+    ELSIF f1 = 1 THEN        -- SLRU keyspace (field2: 0=clog,1=mx_members,2=mx_offsets)
+        IF f3 = 0 THEN
+            RETURN format('slru_dir kind=%s', f2);
+        ELSIF f6 = 4294967295 THEN
+            RETURN format('slru_seg_size kind=%s seg=%s', f2, f4);
+        END IF;
+        RETURN format('slru_block kind=%s seg=%s blk=%s', f2, f4, f6);
+    END IF;
+    RETURN format('meta f1=%s f2=%s f3=%s f4=%s f5=%s f6=%s', f1, f2, f3, f4, f5, f6);
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;

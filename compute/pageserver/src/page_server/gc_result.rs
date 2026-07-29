@@ -21,9 +21,9 @@ pub struct GcResult {
     /// this iteration. Can exceed the acted candidates — the block-range
     /// delete also clears a visited block's duplicate/straggler rows.
     pub candidates_dequeued: u64,
-    /// yb-amp PageServer GC: superseded version rows deleted from
-    /// `amp_storage.pages` by the trim.
-    pub pages_rows_deleted: u64,
+    /// yb-amp PageServer GC: rows deleted by the drain across
+    /// `amp_storage.pages`, `slru_pages`, and `meta` (trim / drop / shrink).
+    pub rows_deleted: u64,
 
     #[serde(serialize_with = "serialize_duration_as_millis")]
     pub elapsed: Duration,
@@ -47,7 +47,7 @@ impl AddAssign for GcResult {
         self.layers_not_updated += other.layers_not_updated;
         self.layers_removed += other.layers_removed;
         self.candidates_dequeued += other.candidates_dequeued;
-        self.pages_rows_deleted += other.pages_rows_deleted;
+        self.rows_deleted += other.rows_deleted;
 
         self.elapsed += other.elapsed;
     }

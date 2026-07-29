@@ -42,7 +42,7 @@ use wal_decoder::serialized_batch::{SerializedValueBatch, ValueMeta};
 
 use pageserver_api::reltag::SlruKind;
 
-use crate::gc_trim_candidates::GcTrimCandidateEmitter;
+use crate::gc_trim_candidates::{GcTrimCandidateEmitter, TrimBase};
 use crate::page_store::{
     LineageSegment, MetaRow, PageRow, PageStore, PendingGcRow, SlruPageRow, dedup_page_chain_by_lsn,
 };
@@ -391,7 +391,7 @@ pub struct PageWriter {
 struct AuxBuffers {
     slru_buffer: Vec<SlruPageRow>,
     meta_buffer: Vec<MetaRow>,
-    /// GC drop/shrink events (`GC_KIND_*` blknums). One-shot, so they
+    /// GC drop/shrink events (`GcKind::Drop*` / `ShrinkPages`). One-shot, so they
     /// ride the window flush for its durability: a lost buffer implies
     /// the producing record replays and re-emits. Trim candidates go
     /// through [`GcTrimCandidateEmitter`] instead.
@@ -593,12 +593,14 @@ impl PageWriter {
         )));
     }
 
-    /// Record a producer's base writes with the shared emitter
-    /// (sampling + metric + buffering — see [`GcTrimCandidateEmitter::record_bases`]);
-    /// no-op when collection is off.
-    pub(crate) fn record_gc_trim_bases<'a>(
+    /// Record a producer's base writes for GC trim — rel / SLRU bases or
+    /// `meta` puts; the row type ([`TrimBase`]) decides what a base is and
+    /// its kind (sampling + metric + buffering, see
+    /// [`GcTrimCandidateEmitter::record_bases`]). No-op when collection is
+    /// off.
+    pub(crate) fn record_gc_trim_bases<'a, R: TrimBase + 'a>(
         &self,
-        rows: impl IntoIterator<Item = &'a PageRow>,
+        rows: impl IntoIterator<Item = &'a R>,
         path: &'static str,
     ) {
         if let Some(emitter) = &self.gc_trim_candidate_emitter {
@@ -627,7 +629,7 @@ impl PageWriter {
         self.gc_trim_candidate_emitter.is_some()
     }
 
-    /// Buffer drop/shrink event candidates (`GC_KIND_*` blknums)
+    /// Buffer drop/shrink event candidates (`GcKind::Drop*` / `ShrinkPages`)
     /// for the next window flush; no-op when GC is off. Unsampled —
     /// sampling a one-shot event away would lose it permanently.
     pub(crate) fn push_gc_drop_shrink_events(&self, rows: &[PendingGcRow]) {
@@ -635,11 +637,18 @@ impl PageWriter {
             return;
         }
         for row in rows {
-            debug_assert!(row.blknum < 0, "trim candidates go through the emitter");
-            let path = if row.blknum == crate::page_store::GC_KIND_DROP {
-                "drop"
-            } else {
-                "shrink"
+            let path = match row.gc_kind {
+                crate::page_store::GcKind::ShrinkPages => "shrink",
+                crate::page_store::GcKind::DropPages
+                | crate::page_store::GcKind::DropSlru
+                | crate::page_store::GcKind::DropMeta => "drop",
+                other => {
+                    debug_assert!(
+                        false,
+                        "trim candidates go through the emitter, got {other:?}"
+                    );
+                    "drop"
+                }
             };
             crate::metrics::GC_CANDIDATES_EMITTED
                 .with_label_values(&[path])
@@ -655,42 +664,31 @@ impl PageWriter {
         }
     }
 
-    /// Fork identities that could still receive a materialised image
-    /// stamped at an old (folded) LSN (why that matters:
-    /// `defer_busy_drop_events`).
-    /// The set is complete with exactly two sources: `in_flight`
-    /// covers queued + running jobs (registered at dispatch BEFORE
-    /// enqueue, cleared after the batch's INSERT lands) and
-    /// `delta_ready` covers threshold-crossed keys a later flush may
-    /// yet dispatch. Both sets also hold SLRU block keys (clog /
-    /// multixact jobs); those aren't relation forks and are filtered
-    /// out — no drop event can name them.
-    ///
-    /// Sub-threshold tallies (`delta_counts`) are deliberately NOT
-    /// included: they can't dispatch without new deltas, and including
-    /// them would defer a dropped fork's drop event forever behind
-    /// counters that can never cross.
-    pub(crate) fn forks_with_pending_materialise(
-        &self,
-    ) -> std::collections::HashSet<crate::page_store::GcForkIdent> {
+    /// Objects (fork / segment) that could still receive a materialised
+    /// image at an old (folded) LSN, so a drop of one must be left queued.
+    /// Two sources: `in_flight` (dispatched-but-not-landed jobs) and
+    /// `delta_ready` (threshold-crossed keys a later flush may dispatch).
+    /// Rel blocks map to their fork, SLRU blocks to their segment; anything
+    /// else is filtered out. Sub-threshold `delta_counts` are excluded —
+    /// they can't dispatch without new deltas and would pin the drop forever.
+    pub(crate) fn objects_with_pending_materialise(&self) -> std::collections::HashSet<Key> {
+        use crate::page_store::materialise_object_key;
         let Some(m) = self.materializer.as_ref() else {
             return Default::default();
         };
-        let to_fork = |key: &Key| -> Option<crate::page_store::GcForkIdent> {
-            key.is_rel_block_key().then_some((
-                key.field2 as i64,
-                key.field3 as i64,
-                key.field4 as i64,
-                key.field5 as i16,
-            ))
-        };
-        let mut forks: std::collections::HashSet<crate::page_store::GcForkIdent> = self
+        let mut keys: std::collections::HashSet<Key> = self
             .delta_ready
             .iter()
-            .filter_map(|k| to_fork(&k))
+            .filter_map(|k| materialise_object_key(&k))
             .collect();
-        forks.extend(m.in_flight.lock().unwrap().iter().filter_map(to_fork));
-        forks
+        keys.extend(
+            m.in_flight
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(materialise_object_key),
+        );
+        keys
     }
 
     pub fn branch_id(&self) -> BranchId {
@@ -1642,8 +1640,10 @@ impl PageWriter {
         if res.is_ok() {
             // GC trim candidates for this window's bases, recorded only
             // now that the rows are durable: candidate implies its base
-            // landed.
+            // landed. Rel + SLRU bases and meta puts each feed the sampler.
             self.record_gc_trim_bases(rel_rows.iter().map(|r| r.as_ref()), "ingest");
+            self.record_gc_trim_bases(&slru_rows, "ingest");
+            self.record_gc_trim_bases(&meta_rows, "ingest");
             // Everything at lsn ≤ ingest_frontier is now durable: rows
             // ≤ frontier were either already durable or in the
             // snapshots we just wrote (see the frontier capture above).
@@ -3368,7 +3368,7 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// The GC drain's deferral input. `forks_with_pending_materialise`
+    /// The GC drain's deferral input. `objects_with_pending_materialise`
     /// must report a fork while a job is pending (`in_flight`, from
     /// dispatch until the batch completes) AND while a
     /// threshold-crossed key sits undispatched in `delta_ready` (cold
@@ -3383,11 +3383,17 @@ mod tests {
         const LIMIT: u32 = 10;
         let (w, _t, mut rx, in_flight) =
             writer_with_materializer(store.clone(), FlushPolicy::default(), LIMIT);
-        let fork = (1663i64, 5i64, 16384i64, 0i16);
+        // The busy set holds each object's sentinel key (blknum → MAX) —
+        // the same key a drop candidate carries. k(2)'s object is its
+        // rel-size sentinel.
+        let fork = Key {
+            field6: 0xFFFF_FFFF,
+            ..k(2)
+        };
 
         assert!(
-            w.forks_with_pending_materialise().is_empty(),
-            "quiescent writer reports no busy forks"
+            w.objects_with_pending_materialise().is_empty(),
+            "quiescent writer reports no busy objects"
         );
 
         // Cross the threshold + flush: job dispatched → in_flight.
@@ -3399,7 +3405,7 @@ mod tests {
         w.flush().await.unwrap();
         let job1 = rx.try_recv().expect("dispatched at threshold");
         assert!(
-            w.forks_with_pending_materialise().contains(&fork),
+            w.objects_with_pending_materialise().contains(&fork),
             "queued/running job must mark its fork busy"
         );
 
@@ -3420,21 +3426,38 @@ mod tests {
         // busy: a later flush can still dispatch it.
         in_flight.lock().unwrap().remove(&job1.key);
         assert!(
-            w.forks_with_pending_materialise().contains(&fork),
+            w.objects_with_pending_materialise().contains(&fork),
             "undispatched delta_ready residue must keep the fork busy"
         );
 
         // An (empty) flush drains the residue into a real dispatch.
         w.flush().await.unwrap();
         let job2 = rx.try_recv().expect("residue dispatches once unblocked");
-        assert!(w.forks_with_pending_materialise().contains(&fork));
+        assert!(w.objects_with_pending_materialise().contains(&fork));
 
         // Second batch completes: nothing pending anywhere → free.
         in_flight.lock().unwrap().remove(&job2.key);
         assert!(
-            !w.forks_with_pending_materialise().contains(&fork),
+            !w.objects_with_pending_materialise().contains(&fork),
             "fork frees once in_flight and residue are both clear"
         );
+
+        // SLRU jobs are materialised too (clog / multixact), so an
+        // in-flight SLRU block must mark its SEGMENT busy (by its seg-size
+        // sentinel) — otherwise a DropSlru racing that job would leak a
+        // resurrected image.
+        let slru_block =
+            pageserver_api::key::slru_block_to_key(pageserver_api::reltag::SlruKind::Clog, 7, 3);
+        let slru_seg = pageserver_api::key::slru_segment_size_to_key(
+            pageserver_api::reltag::SlruKind::Clog,
+            7,
+        );
+        in_flight.lock().unwrap().insert(slru_block);
+        assert!(
+            w.objects_with_pending_materialise().contains(&slru_seg),
+            "an in-flight SLRU block marks its segment (seg-size sentinel) busy"
+        );
+        in_flight.lock().unwrap().remove(&slru_block);
 
         drop_schema(&store, &schema).await;
     }
@@ -4895,9 +4918,9 @@ mod tests {
                 .gc_select_due_candidates(branch, Lsn(0), Lsn(i64::MAX as u64), 100_000)
                 .await
                 .unwrap();
-            rows.sort_by_key(|r| (r.blknum, r.due_lsn));
+            rows.sort_by_key(|r| (r.key.field6, r.due_lsn));
             rows.iter()
-                .map(|r| (r.blknum, r.due_lsn.0))
+                .map(|r| (r.key.field6 as i64, r.due_lsn.0))
                 .collect::<Vec<_>>()
         };
         let cutoff = || Arc::new(Rcu::new(Lsn(0)));

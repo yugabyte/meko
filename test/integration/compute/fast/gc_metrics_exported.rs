@@ -43,7 +43,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         sleep(Duration::from_secs(1)).await;
         emitted = c.metric_sum(http, "pageserver_yb_gc_candidates_emitted_total").await?;
         read = c.metric_sum(http, "pageserver_yb_gc_candidates_read_total").await?;
-        deleted = c.metric_sum(http, "pageserver_yb_gc_pages_rows_deleted_total").await?;
+        deleted = c.metric_sum(http, "pageserver_yb_gc_rows_deleted_total").await?;
         if emitted > 0.0 && read > 0.0 && deleted > 0.0 {
             break;
         }

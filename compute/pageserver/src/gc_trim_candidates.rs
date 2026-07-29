@@ -4,12 +4,14 @@
 //! Both producers — the ingest window flush and the
 //! materialiser's `commit_phase` — record their base writes with one
 //! [`GcTrimCandidateEmitter`], owned by the `PageWriter`: it samples them
-//! through the shared per-block counter, buffers the survivors, and
-//! flushes to `amp_storage.pending_gc` on its own loop. Best-effort by
-//! design: trims self-heal (the block's next base re-covers a lost
-//! span), so no candidate here needs the window-durable path.
-//! Drop/shrink events do — they stay on the `PageWriter`'s window
-//! flush.
+//! through the shared per-key counter, buffers the survivors, and
+//! flushes to `amp_storage.pending_gc` on its own loop. Covers all three
+//! versioned keyspaces: rel bases (`pages`, `will_init`), SLRU bases
+//! (`slru_pages`, `will_init`), and `meta` puts (no `will_init` — every
+//! put is a full-image base). Best-effort by design: trims self-heal
+//! (the key's next base re-covers a lost span), so no candidate here
+//! needs the window-durable path. Drop/shrink events do — they stay on
+//! the `PageWriter`'s window flush.
 //!
 //! The drain side (cutoff + select + act + dequeue) lives in
 //! `page_server/timeline/gc.rs`; the story is in
@@ -19,14 +21,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
-use pageserver_api::key::Key;
+use pageserver_api::key::{Key, slru_block_to_key};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::simple_rcu::Rcu;
 
-use crate::page_store::{GcBlockIdent, PageRow, PageStore, PendingGcRow};
+use crate::page_store::{GcKind, MetaRow, PageRow, PageStore, PendingGcRow, SlruPageRow};
 
 /// Flush the GC trim-candidate buffer at this many distinct blocks
 /// (= one full `ROWS_PER_INSERT` chunk) ...
@@ -41,35 +43,87 @@ const GC_TRIM_CANDIDATE_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 /// for why). Split out from the flush so the clamp is unit-testable
 /// without a `PageStore`.
 fn clamp_candidate_rows(
-    entries: impl IntoIterator<Item = (GcBlockIdent, Lsn)>,
+    entries: impl IntoIterator<Item = (Key, Lsn, GcKind)>,
     cutoff: Lsn,
 ) -> Vec<PendingGcRow> {
     let due_floor = Lsn(cutoff.0 + 1);
     entries
         .into_iter()
-        .map(
-            |((spcnode, dbnode, relnode, forknum, blknum), due_lsn)| PendingGcRow {
-                spcnode,
-                dbnode,
-                relnode,
-                forknum,
-                blknum,
-                due_lsn: due_lsn.max(due_floor),
-                relsize: None,
-            },
-        )
+        .map(|(key, due_lsn, gc_kind)| PendingGcRow {
+            key,
+            gc_kind,
+            due_lsn: due_lsn.max(due_floor),
+            relsize: None,
+        })
         .collect()
 }
 
+/// A store row that can seed a GC **trim** candidate: a base write, keyed
+/// by the `Key` its versions live under. [`GcTrimCandidateEmitter::record_bases`]
+/// filters to bases and records one candidate per base — the row type
+/// decides what counts as a base and how it's keyed.
+pub(crate) trait TrimBase {
+    /// The `gc_kind` a trim candidate for this row carries — the target
+    /// table, stamped by the row type so the drain never re-derives it
+    /// from the key.
+    const TRIM_KIND: GcKind;
+    /// A base is a new anchor that makes older versions collectable:
+    /// `will_init` for `pages`/`slru_pages`; always true for `meta` (full
+    /// overwrite — every put is a base, no `will_init` column).
+    fn is_base(&self) -> bool;
+    /// The `Key` this row's versions live under.
+    fn trim_key(&self) -> Key;
+    fn base_lsn(&self) -> Lsn;
+}
+
+impl TrimBase for PageRow {
+    const TRIM_KIND: GcKind = GcKind::TrimPages;
+    fn is_base(&self) -> bool {
+        self.will_init
+    }
+    fn trim_key(&self) -> Key {
+        self.key
+    }
+    fn base_lsn(&self) -> Lsn {
+        self.lsn
+    }
+}
+
+impl TrimBase for SlruPageRow {
+    const TRIM_KIND: GcKind = GcKind::TrimSlru;
+    fn is_base(&self) -> bool {
+        self.will_init
+    }
+    fn trim_key(&self) -> Key {
+        slru_block_to_key(self.kind, self.segno, self.blknum)
+    }
+    fn base_lsn(&self) -> Lsn {
+        self.lsn
+    }
+}
+
+impl TrimBase for MetaRow {
+    const TRIM_KIND: GcKind = GcKind::TrimMeta;
+    fn is_base(&self) -> bool {
+        true
+    }
+    fn trim_key(&self) -> Key {
+        Key::from_slice(&self.key)
+    }
+    fn base_lsn(&self) -> Lsn {
+        self.lsn
+    }
+}
+
 /// The **best-effort** GC trim-candidate emission pipeline — samples
-/// both producers' base writes (the ingest window flush and the
-/// materialiser's `commit_phase`) through one every-n counter, folds
-/// the survivors, and flushes them to `pending_gc` on its own loop. A
-/// crash or failed flush loses up to one candidate buffer, by design —
-/// trims are cumulative, so the block's next candidate re-covers the
-/// garbage. Same-block candidates fold to the LATEST due_lsn (the safe
-/// direction: a later trim covers an earlier one's garbage; folding to
-/// the earliest would not).
+/// both producers' base writes (rel + SLRU bases and `meta` puts, from
+/// the ingest window flush and the materialiser's `commit_phase`) through
+/// one every-n counter, folds the survivors, and flushes them to
+/// `pending_gc` on its own loop. A crash or failed flush loses up to one
+/// candidate buffer, by design — trims are cumulative, so the key's next
+/// candidate re-covers the garbage. Same-key candidates fold to the
+/// LATEST due_lsn (the safe direction: a later trim covers an earlier
+/// one's garbage; folding to the earliest would not).
 ///
 /// Drop/shrink events do NOT come through here: they are one-shot (no
 /// future base re-emits them), so they keep the window-durable path
@@ -94,10 +148,11 @@ pub(crate) struct GcTrimCandidateEmitter {
     /// to clamp each candidate's due_lsn above the cutoff — see
     /// [`Self::flush`].
     applied_gc_cutoff: Arc<Rcu<Lsn>>,
-    /// The candidate buffer: block identity -> latest due_lsn seen; drained
-    /// by `flush`. Its loss (crash, failed flush) is the emitter's
-    /// bounded best-effort exposure.
-    candidate_buffer: std::sync::Mutex<std::collections::HashMap<GcBlockIdent, Lsn>>,
+    /// The candidate buffer: key -> (latest due_lsn seen, its trim
+    /// `gc_kind`); drained by `flush`. The kind is invariant per key (a
+    /// key has one target table). Its loss (crash, failed flush) is the
+    /// emitter's bounded best-effort exposure.
+    candidate_buffer: std::sync::Mutex<std::collections::HashMap<Key, (Lsn, GcKind)>>,
     /// Signalled when the buffer crosses `GC_TRIM_CANDIDATE_FLUSH_ROWS`.
     flush_ready: tokio::sync::Notify,
 }
@@ -153,37 +208,44 @@ impl GcTrimCandidateEmitter {
         }
     }
 
-    /// Record a producer's base writes: sample each `will_init` row
-    /// through the shared every-n counter; every n-th base folds a
-    /// candidate into the buffer at the max lsn of its n counted bases
-    /// (same-block folds to the latest). `path` labels the emission
-    /// metric (`ingest` /
-    /// `materialiser`). In-memory only — the YB INSERT is deferred to
-    /// `flush`, so this adds no YB round-trip to either producer's hot
-    /// path.
-    pub(crate) fn record_bases<'a>(
+    /// Record a producer's base writes: keep the bases ([`TrimBase::is_base`]),
+    /// map each to `(key, lsn)`, and feed the shared every-n sampler. Covers
+    /// rel + SLRU bases and `meta` puts — the [`TrimBase`] impl decides what
+    /// a base is and how it's keyed (a rel/SLRU delta is skipped; every meta
+    /// put counts). See [`Self::record_base_keys`].
+    pub(crate) fn record_bases<'a, R: TrimBase + 'a>(
         &self,
-        rows: impl IntoIterator<Item = &'a PageRow>,
+        rows: impl IntoIterator<Item = &'a R>,
         path: &'static str,
     ) {
-        let emitted: Vec<(GcBlockIdent, Lsn)> = rows
-            .into_iter()
-            .filter(|row| row.will_init)
-            .filter_map(|row| {
-                let due = self.increment_base_count(row.key, row.lsn)?;
+        self.record_base_keys(
+            rows.into_iter()
+                .filter(|r| r.is_base())
+                .map(|r| (r.trim_key(), r.base_lsn())),
+            R::TRIM_KIND,
+            path,
+        );
+    }
+
+    /// Sample already-chosen base `(key, lsn)` pairs through the shared
+    /// every-n counter; every n-th base folds a candidate into the buffer
+    /// at the max lsn of its n counted bases (same-key folds to the
+    /// latest). `path` labels the emission metric (`ingest` /
+    /// `materialiser`). In-memory only — the YB INSERT is deferred to
+    /// `flush`, so this adds no YB round-trip to any producer's hot path.
+    fn record_base_keys(
+        &self,
+        keys: impl Iterator<Item = (Key, Lsn)>,
+        kind: GcKind,
+        path: &'static str,
+    ) {
+        let emitted: Vec<(Key, Lsn)> = keys
+            .filter_map(|(key, lsn)| {
+                let due = self.increment_base_count(key, lsn)?;
                 crate::metrics::GC_CANDIDATES_EMITTED
                     .with_label_values(&[path])
                     .inc();
-                Some((
-                    (
-                        row.key.field2 as i64,
-                        row.key.field3 as i64,
-                        row.key.field4 as i64,
-                        row.key.field5 as i16,
-                        row.key.field6 as i64,
-                    ),
-                    due,
-                ))
+                Some((key, due))
             })
             .collect();
         if emitted.is_empty() {
@@ -191,7 +253,7 @@ impl GcTrimCandidateEmitter {
         }
         let mut guard = self.candidate_buffer.lock().unwrap();
         for (ident, lsn) in emitted {
-            let due = guard.entry(ident).or_insert(lsn);
+            let (due, _kind) = guard.entry(ident).or_insert((lsn, kind));
             if lsn > *due {
                 *due = lsn;
             }
@@ -228,7 +290,7 @@ impl GcTrimCandidateEmitter {
         let cutoff = Lsn(self.applied_gc_cutoff.read().0);
         let rows = {
             let mut guard = self.candidate_buffer.lock().unwrap();
-            clamp_candidate_rows(guard.drain(), cutoff)
+            clamp_candidate_rows(guard.drain().map(|(k, (due, kind))| (k, due, kind)), cutoff)
         };
         if rows.is_empty() {
             return;
@@ -287,18 +349,83 @@ mod tests {
     #[test]
     fn clamp_lifts_due_lsn_to_above_cutoff() {
         let cutoff = Lsn(100);
-        let ident = |blk: i64| (1663i64, 5i64, 16400i64, 0i16, blk);
+        let blk = |blk: u32| {
+            pageserver_api::key::rel_block_to_key(
+                pageserver_api::reltag::RelTag {
+                    spcnode: 1663,
+                    dbnode: 5,
+                    relnode: 16400,
+                    forknum: 0,
+                },
+                blk,
+            )
+        };
+        let k = GcKind::TrimPages;
         let rows = clamp_candidate_rows(
             [
-                (ident(7), Lsn(40)),  // below cutoff → lifted
-                (ident(8), Lsn(100)), // at cutoff → lifted
-                (ident(9), Lsn(500)), // above cutoff → unchanged
+                (blk(7), Lsn(40), k),  // below cutoff → lifted
+                (blk(8), Lsn(100), k), // at cutoff → lifted
+                (blk(9), Lsn(500), k), // above cutoff → unchanged
             ],
             cutoff,
         );
-        let due = |blk: i64| rows.iter().find(|r| r.blknum == blk).unwrap().due_lsn;
+        let due = |b: u32| rows.iter().find(|r| r.key.field6 == b).unwrap().due_lsn;
         assert_eq!(due(7), Lsn(101), "below cutoff → cutoff+1");
         assert_eq!(due(8), Lsn(101), "at cutoff → cutoff+1");
         assert_eq!(due(9), Lsn(500), "above cutoff → unchanged");
+        assert!(
+            rows.iter().all(|r| r.gc_kind == k),
+            "the stamped kind flows through"
+        );
+        assert_eq!(<PageRow as TrimBase>::TRIM_KIND, k);
+    }
+
+    /// SLRU `TrimBase`: a `will_init` row is a base, keyed by its SLRU
+    /// block key; a delta is not a base.
+    #[test]
+    fn slru_row_trim_base() {
+        use bytes::Bytes;
+        use pageserver_api::reltag::SlruKind;
+        let mk = |will_init: bool| SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: 3,
+            blknum: 5,
+            lsn: Lsn(50),
+            is_image: will_init,
+            will_init,
+            payload: Bytes::new(),
+        };
+        let base = mk(true);
+        assert!(base.is_base());
+        assert!(base.trim_key().is_slru_block_key(), "SLRU keyspace");
+        assert_eq!(base.trim_key(), slru_block_to_key(SlruKind::Clog, 3, 5));
+        assert_eq!(base.base_lsn(), Lsn(50));
+        assert_eq!(<SlruPageRow as TrimBase>::TRIM_KIND, GcKind::TrimSlru);
+        assert!(!mk(false).is_base(), "a delta is not a base");
+    }
+
+    /// Meta `TrimBase`: every put is a base (meta has no `will_init` — full
+    /// overwrite), keyed by the round-tripped 18-byte encoding.
+    #[test]
+    fn meta_row_trim_base_every_put() {
+        use bytes::Bytes;
+        use pageserver_api::key::{KEY_SIZE, rel_size_to_key};
+        let key = rel_size_to_key(pageserver_api::reltag::RelTag {
+            spcnode: 1663,
+            dbnode: 5,
+            relnode: 16400,
+            forknum: 0,
+        });
+        let mut kb = vec![0u8; KEY_SIZE];
+        key.write_to_byte_slice(&mut kb);
+        let row = MetaRow {
+            key: Bytes::from(kb),
+            lsn: Lsn(20),
+            payload: Bytes::new(),
+        };
+        assert!(row.is_base(), "every meta put is a base");
+        assert_eq!(row.trim_key(), key, "key round-trips the 18-byte encoding");
+        assert_eq!(row.base_lsn(), Lsn(20));
+        assert_eq!(<MetaRow as TrimBase>::TRIM_KIND, GcKind::TrimMeta);
     }
 }

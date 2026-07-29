@@ -1025,32 +1025,34 @@ pub const GC_BUCKETS: i32 = 10;
 /// `yb-pageserver:gc` pool is sized to this.
 pub const GC_ACTION_PARALLELISM: usize = 2;
 
-/// Placement bucket for a candidate block. FROZEN: must stay a fixed,
-/// deterministic function of the identity columns (golden-value test) —
-/// changing it strands existing candidates in their old buckets and
+/// Encode a `Key` to its fixed 18-byte wire form — the `pending_gc.key`
+/// (and `meta.key`) bytea.
+pub(crate) fn key_to_bytes(key: &Key) -> Vec<u8> {
+    let mut b = vec![0u8; KEY_SIZE];
+    key.write_to_byte_slice(&mut b);
+    b
+}
+
+/// Placement bucket for a candidate. FROZEN: must stay a fixed,
+/// deterministic function of the encoded `key` bytes (golden-value test)
+/// — changing it strands existing candidates in their old buckets and
 /// breaks crash-replay dedup. Deliberately not `std::hash` (unstable
 /// across Rust versions) and not a YB generated column (the yb-client
 /// write path bypasses the YSQL layer).
-pub fn gc_bucket_id(spcnode: i64, dbnode: i64, relnode: i64, forknum: i16, blknum: i64) -> i32 {
-    // FNV-1a over the identity columns' little-endian bytes.
+pub fn gc_bucket_id(key: &Key) -> i32 {
+    // FNV-1a over the key's 18 encoded bytes.
+    let mut kb = [0u8; KEY_SIZE];
+    key.write_to_byte_slice(&mut kb);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for v in [
-        spcnode as u64,
-        dbnode as u64,
-        relnode as u64,
-        forknum as u64,
-        blknum as u64,
-    ] {
-        for b in v.to_le_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+    for b in kb {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     (h % GC_BUCKETS as u64) as i32
 }
 
 /// The `meta` key bytes of a fork's rel-size entry (`rel_size_to_key`),
-/// from the queue row's i64/i16 identity columns.
+/// from a fork's i64/i16 identity columns.
 fn rel_size_key_bytes(spcnode: i64, dbnode: i64, relnode: i64, forknum: i16) -> Vec<u8> {
     let rel = RelTag {
         spcnode: spcnode as u32,
@@ -1058,48 +1060,146 @@ fn rel_size_key_bytes(spcnode: i64, dbnode: i64, relnode: i64, forknum: i16) -> 
         relnode: relnode as u32,
         forknum: forknum as u8,
     };
-    let mut key = vec![0u8; KEY_SIZE];
-    rel_size_to_key(rel).write_to_byte_slice(&mut key);
-    key
+    key_to_bytes(&rel_size_to_key(rel))
 }
 
-/// Sentinel `blknum` marking a shrink event (relation
-/// truncation): reclaim blocks at/past the fork's size as of the
-/// cutoff.
-pub const GC_KIND_SHRINK: i64 = -1;
-
-/// Sentinel `blknum` marking a drop event (relfilenode dropped):
-/// reclaim the whole fork's pages `<= due_lsn`.
-pub const GC_KIND_DROP: i64 = -2;
-
-/// Block identity: (spcnode, dbnode, relnode, forknum, blknum);
-/// sentinel blknums can never collide with a real block's. Its fork
-/// prefix (minus blknum) is [`GcForkIdent`].
-pub(crate) type GcBlockIdent = (i64, i64, i64, i16, i64);
-
-/// Fork identity — a [`GcBlockIdent`] without its blknum; the grouping
-/// key for per-fork trims.
-pub(crate) type GcForkIdent = (i64, i64, i64, i16);
-
-/// The full identity (PK) of one drop/shrink candidate — its block ident
-/// plus `due_lsn`.
-pub(crate) type GcDropShrinkCandidateId = (GcBlockIdent, Lsn);
-
-/// One GC candidate: "visit this key once the cutoff reaches
-/// `due_lsn`". `blknum` doubles as the kind: >= 0 trim,
-/// [`GC_KIND_DROP`] (-2), [`GC_KIND_SHRINK`] (-1) — ascending =
-/// the drain's action order, drop → shrink → trim.
+/// GC candidate kind — the `pending_gc.gc_kind` column. Each variant maps
+/// 1:1 to the act function it dispatches to, so the drain routes by
+/// `gc_kind` alone and never inspects the key's shape:
+/// `TrimPages`→`gc_act_trim_blocks`, `TrimSlru`→`gc_act_trim_slru`,
+/// `TrimMeta`→`gc_act_trim_meta`, `ShrinkPages`→`gc_act_shrink_fork`
+/// (rel-only), `DropPages`→`gc_act_drop_fork`, `DropSlru`→
+/// `gc_act_drop_slru`, `DropMeta`→`gc_act_drop_meta`. The emitter, which
+/// knows the target table, stamps the kind — the key stays pure identity.
 ///
-/// `relsize`: shrink's truncation target; `None` for trim/drop.
+/// Stored as a `SMALLINT` via [`Self::to_i16`]/[`Self::from_i16`] (wire
+/// values 0..=6, frozen). A value this version doesn't recognise decodes
+/// to [`GcKind::Unknown`], which the drain alarms on and leaves queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum GcKind {
+    TrimPages,
+    TrimSlru,
+    TrimMeta,
+    ShrinkPages,
+    DropPages,
+    DropSlru,
+    DropMeta,
+    Unknown(i16),
+}
+
+impl GcKind {
+    pub fn to_i16(self) -> i16 {
+        match self {
+            GcKind::TrimPages => 0,
+            GcKind::TrimSlru => 1,
+            GcKind::TrimMeta => 2,
+            GcKind::ShrinkPages => 3,
+            GcKind::DropPages => 4,
+            GcKind::DropSlru => 5,
+            GcKind::DropMeta => 6,
+            GcKind::Unknown(v) => v,
+        }
+    }
+
+    pub fn from_i16(v: i16) -> GcKind {
+        match v {
+            0 => GcKind::TrimPages,
+            1 => GcKind::TrimSlru,
+            2 => GcKind::TrimMeta,
+            3 => GcKind::ShrinkPages,
+            4 => GcKind::DropPages,
+            5 => GcKind::DropSlru,
+            6 => GcKind::DropMeta,
+            other => GcKind::Unknown(other),
+        }
+    }
+
+    /// The coarse operation this kind buckets into for the drain (its
+    /// action phase + dequeue method), or `None` for [`GcKind::Unknown`]
+    /// (which the drain alarms on and leaves queued).
+    pub(crate) fn coarse(self) -> Option<CoarseOp> {
+        match self {
+            GcKind::TrimPages | GcKind::TrimSlru | GcKind::TrimMeta => Some(CoarseOp::Trim),
+            GcKind::DropPages | GcKind::DropSlru | GcKind::DropMeta => Some(CoarseOp::Drop),
+            GcKind::ShrinkPages => Some(CoarseOp::Shrink),
+            GcKind::Unknown(_) => None,
+        }
+    }
+}
+
+/// The coarse GC operation a [`GcKind`] buckets into: the drain acts
+/// coarsest-first (drop → shrink → trim) and dequeues each bucket its own
+/// way (trims range-swept, drop/shrink by PK).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoarseOp {
+    Trim,
+    Drop,
+    Shrink,
+}
+
+/// Fork identity: (spcnode, dbnode, relnode, forknum). The grouping key
+/// for per-fork rel trims and the rel drop/shrink acts, passed as a unit
+/// to the rel `gc_act_*` functions (which bind the columns).
+pub type GcForkIdent = (i64, i64, i64, i16);
+
+/// SLRU segment identity: (kind, segno). The grouping key for per-segment
+/// SLRU trims and the SLRU drop act, passed as a unit to the SLRU
+/// `gc_act_*` functions.
+pub type GcSlruSeg = (i16, i64);
+
+/// The full identity (PK) of one drop/shrink candidate — its object
+/// `key`, `gc_kind`, and `due_lsn`.
+pub(crate) type GcDropShrinkCandidateId = (Key, GcKind, Lsn);
+
+/// One GC candidate: "reclaim the garbage named by `key` once the cutoff
+/// reaches `due_lsn`", per `gc_kind`. `key` is an encoded [`Key`] — a rel
+/// or SLRU block (trim), or a rel / SLRU / meta object (drop/shrink); the
+/// drain decodes it and routes by its Key predicates.
+///
+/// `relsize`: shrink's truncation target (rel-only); `None` for trim/drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingGcRow {
-    pub spcnode: i64,
-    pub dbnode: i64,
-    pub relnode: i64,
-    pub forknum: i16,
-    pub blknum: i64,
+    pub key: Key,
+    pub gc_kind: GcKind,
     pub due_lsn: Lsn,
     pub relsize: Option<i64>,
+}
+
+/// Decode a rel key's fork identity `(spcnode, dbnode, relnode, forknum)`
+/// from its Key fields (field2..field5). Only meaningful for rel-keyspace
+/// keys (`field1 == 0`).
+pub(crate) fn rel_fork_of(key: &Key) -> GcForkIdent {
+    (
+        key.field2 as i64,
+        key.field3 as i64,
+        key.field4 as i64,
+        key.field5 as i16,
+    )
+}
+
+/// Decode an SLRU key's segment identity `(kind, segno)` from its fields
+/// (kind = field2, segno = field4). Only meaningful for SLRU-keyspace keys
+/// (`field1 == 1`) — a block or its seg-size sentinel.
+pub(crate) fn slru_seg_of(key: &Key) -> GcSlruSeg {
+    (key.field2 as i16, key.field4 as i64)
+}
+
+/// The busy-defer key of a materialisable *block* key: the object's
+/// sentinel key (blknum → `field6` MAX), which is exactly the key a
+/// `DropPages`/`DropSlru` candidate carries — so a drop is busy iff its own
+/// key is in the set. A rel block maps to its rel-size sentinel, an SLRU
+/// block to its seg-size sentinel (`field6 == MAX` is the sentinel
+/// invariant; see [`Key::is_rel_size_key`]/[`Key::is_slru_segment_size_key`]).
+/// `None` for anything that isn't a materialisable page block (e.g. meta,
+/// never materialised).
+///
+/// A drop is left queued while an image job for the same object is in
+/// flight, so a straggling image INSERT after the delete can't leak.
+pub(crate) fn materialise_object_key(key: &Key) -> Option<Key> {
+    (key.is_rel_block_key() || key.is_slru_block_key()).then_some(Key {
+        field6: 0xFFFF_FFFF,
+        ..*key
+    })
 }
 
 const PAGES_COLUMNS: &str =
@@ -2677,7 +2777,7 @@ impl PageStore {
         if rows.is_empty() {
             return Ok(());
         }
-        const COLS: usize = 9;
+        const COLS: usize = 6;
         let branch_s = branch_id.to_string();
         // Sequential by design: candidate volume is tiny (a buffered
         // flush is ~one ≤500-row chunk); only the GC action deletes
@@ -2688,7 +2788,7 @@ impl PageStore {
         for chunk in rows.chunks(ROWS_PER_INSERT) {
             let mut sql = format!(
                 "INSERT INTO \"{}\".pending_gc \
-                 (branch_id, bucket_id, spcnode, dbnode, relnode, forknum, blknum, due_lsn, relsize) \
+                 (branch_id, bucket_id, gc_kind, key, due_lsn, relsize) \
                  VALUES ",
                 self.schema
             );
@@ -2700,31 +2800,19 @@ impl PageStore {
                 }
                 let base = i * COLS + 1;
                 sql.push_str(&format!(
-                    "(${}, ${}, ${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                    "(${}, ${}, ${}, ${}, ${}, ${})",
                     base,
                     base + 1,
                     base + 2,
                     base + 3,
                     base + 4,
                     base + 5,
-                    base + 6,
-                    base + 7,
-                    base + 8,
                 ));
-                let bucket = gc_bucket_id(
-                    row.spcnode,
-                    row.dbnode,
-                    row.relnode,
-                    row.forknum,
-                    row.blknum,
-                );
+                let bucket = gc_bucket_id(&row.key);
                 params.push(Box::new(branch_s.clone()));
                 params.push(Box::new(bucket));
-                params.push(Box::new(row.spcnode));
-                params.push(Box::new(row.dbnode));
-                params.push(Box::new(row.relnode));
-                params.push(Box::new(row.forknum));
-                params.push(Box::new(row.blknum));
+                params.push(Box::new(row.gc_kind.to_i16()));
+                params.push(Box::new(key_to_bytes(&row.key)));
                 params.push(Box::new(row.due_lsn.0 as i64));
                 params.push(Box::new(row.relsize));
             }
@@ -2786,7 +2874,7 @@ impl PageStore {
                 }
                 write!(
                     s,
-                    "(SELECT spcnode, dbnode, relnode, forknum, blknum, due_lsn, relsize \
+                    "(SELECT gc_kind, key, due_lsn, relsize \
                       FROM \"{}\".pending_gc \
                       WHERE branch_id = $1 AND bucket_id = {bucket} \
                         AND due_lsn > $4 AND due_lsn <= $2 \
@@ -2804,28 +2892,44 @@ impl PageStore {
             .query(&sql, &[&branch_s, &cutoff_i, &limit_i, &floor_i])
             .await
             .context("gc_select_due_candidates")?;
-        rows.iter()
-            .map(|r| {
-                Ok(PendingGcRow {
-                    spcnode: r.get(0),
-                    dbnode: r.get(1),
-                    relnode: r.get(2),
-                    forknum: r.get(3),
-                    blknum: r.get(4),
-                    due_lsn: Lsn(r.get::<_, i64>(5) as u64),
-                    relsize: r.get(6),
+        Ok(rows
+            .iter()
+            .filter_map(|r| {
+                let kb: Vec<u8> = r.get(1);
+                // `Key::from_slice` assumes exactly KEY_SIZE bytes and would
+                // panic (out-of-bounds) on a shorter `key` bytea; skip + alarm
+                // a wrong-length key so one corrupt/foreign row can't take
+                // down the drain.
+                if kb.len() != pageserver_api::key::KEY_SIZE {
+                    tracing::error!(
+                        len = kb.len(),
+                        "pending_gc row has a malformed key; skipped"
+                    );
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["gc_malformed_key"])
+                        .inc();
+                    return None;
+                }
+                Some(PendingGcRow {
+                    gc_kind: GcKind::from_i16(r.get::<_, i16>(0)),
+                    key: Key::from_slice(&kb),
+                    due_lsn: Lsn(r.get::<_, i64>(2) as u64),
+                    relsize: r.get(3),
                 })
             })
-            .collect::<Result<Vec<_>>>()
+            .collect())
     }
 
-    /// Dequeue the visited blocks' candidates in `(floor, cutoff]`: a
-    /// bucket-grouped range delete keyed on the exact blknum. Same window
-    /// as the select, so a block's duplicate/straggler candidates all go,
-    /// not just acted ones — safe because the caller acted each block to
+    /// Dequeue the visited trim candidates: a bucket-grouped range delete
+    /// over `(floor, cutoff]`, matching each `(key, gc_kind)` pair. Same
+    /// window as the select, so an object's duplicate/straggler candidates
+    /// all go, not just acted ones — safe because the caller acted each to
     /// the cutoff and the materialiser clamps a late base above it (see
-    /// `PendingGcBuffer`). A busy-fork drop isn't passed here (acted, left
-    /// queued). Returns rows removed.
+    /// `PendingGcBuffer`). Matching each `(key, gc_kind)` pair confines the
+    /// sweep to the object's own kind: a same-`key` drop/shrink row
+    /// (`rel_size_to_key` carries DropPages / ShrinkPages *and* TrimMeta)
+    /// isn't matched — its pair was never passed. A busy-fork drop isn't
+    /// passed here (acted, left queued). Returns rows removed.
     ///
     /// Corner: the materialiser's due_lsn clamp only holds against the
     /// cutoff as the flush read it: a flush that read it before this tick
@@ -2836,67 +2940,51 @@ impl PageStore {
     pub async fn gc_dequeue_trim_candidates(
         &self,
         branch_id: BranchId,
-        blocks: &[GcBlockIdent],
+        trims: &[(Key, GcKind)],
         floor: Lsn,
         cutoff: Lsn,
     ) -> Result<u64> {
-        if blocks.is_empty() {
+        if trims.is_empty() {
             return Ok(0);
         }
         let branch_s = branch_id.to_string();
         let floor_i = floor.0 as i64;
         let cutoff_i = cutoff.0 as i64;
-        let mut by_bucket: std::collections::HashMap<i32, Vec<&GcBlockIdent>> =
+        // Bucket by key (bucket_id is the hash of the key); within a bucket,
+        // carry the parallel (key, gc_kind) arrays the `IN unnest(...)` zips.
+        let mut by_bucket: std::collections::HashMap<i32, (Vec<Vec<u8>>, Vec<i16>)> =
             std::collections::HashMap::new();
-        for b in blocks {
-            by_bucket
-                .entry(gc_bucket_id(b.0, b.1, b.2, b.3, b.4))
-                .or_default()
-                .push(b);
+        for (k, kind) in trims {
+            let (keyb, kinds) = by_bucket.entry(gc_bucket_id(k)).or_default();
+            keyb.push(key_to_bytes(k));
+            kinds.push(kind.to_i16());
         }
         let sql = format!(
             "DELETE FROM \"{}\".pending_gc \
-             WHERE branch_id = $1 AND bucket_id = $2 AND due_lsn > $9 AND due_lsn <= $3 \
-               AND (spcnode, dbnode, relnode, forknum, blknum) IN ( \
-                   SELECT * FROM unnest($4::bigint[], $5::bigint[], $6::bigint[], \
-                                        $7::smallint[], $8::bigint[]))",
+             WHERE branch_id = $1 AND bucket_id = $2 \
+               AND due_lsn > $3 AND due_lsn <= $4 \
+               AND (key, gc_kind) IN (SELECT * FROM unnest($5::bytea[], $6::smallint[]))",
             self.schema
         );
         let mut removed = 0u64;
-        for (bucket, blks) in by_bucket {
-            let mut spc = Vec::with_capacity(blks.len());
-            let mut db = Vec::with_capacity(blks.len());
-            let mut rel = Vec::with_capacity(blks.len());
-            let mut fork = Vec::with_capacity(blks.len());
-            let mut blk = Vec::with_capacity(blks.len());
-            for b in &blks {
-                spc.push(b.0);
-                db.push(b.1);
-                rel.push(b.2);
-                fork.push(b.3);
-                blk.push(b.4);
-            }
+        for (bucket, (keyb, kinds)) in by_bucket {
+            let n = keyb.len();
             removed += self
                 .ysql_client
                 .execute(
                     &sql,
-                    &[
-                        &branch_s, &bucket, &cutoff_i, &spc, &db, &rel, &fork, &blk, &floor_i,
-                    ],
+                    &[&branch_s, &bucket, &floor_i, &cutoff_i, &keyb, &kinds],
                 )
                 .await
                 .with_context(|| {
-                    format!(
-                        "gc_dequeue_trim_candidates branch={branch_id} bucket={bucket} n={}",
-                        blks.len()
-                    )
+                    format!("gc_dequeue_trim_candidates branch={branch_id} bucket={bucket} n={n}")
                 })?;
         }
         Ok(removed)
     }
 
-    /// Dequeue the given drop/shrink candidates by their PK. Returns rows
-    /// removed.
+    /// Dequeue the given drop/shrink candidates by their PK
+    /// `(key, gc_kind, due_lsn)`. Returns rows removed.
     pub async fn gc_dequeue_drop_shrink_candidates(
         &self,
         branch_id: BranchId,
@@ -2906,50 +2994,36 @@ impl PageStore {
             return Ok(0);
         }
         let branch_s = branch_id.to_string();
-        let mut by_bucket: std::collections::HashMap<i32, Vec<GcDropShrinkCandidateId>> =
+        let mut by_bucket: std::collections::HashMap<i32, Vec<&GcDropShrinkCandidateId>> =
             std::collections::HashMap::new();
-        for &c in candidates {
-            let (b, _) = c;
-            by_bucket
-                .entry(gc_bucket_id(b.0, b.1, b.2, b.3, b.4))
-                .or_default()
-                .push(c);
+        for c in candidates {
+            by_bucket.entry(gc_bucket_id(&c.0)).or_default().push(c);
         }
         let sql = format!(
             "DELETE FROM \"{}\".pending_gc \
              WHERE branch_id = $1 AND bucket_id = $2 \
-               AND (spcnode, dbnode, relnode, forknum, blknum, due_lsn) IN ( \
-                   SELECT * FROM unnest($3::bigint[], $4::bigint[], $5::bigint[], \
-                                        $6::smallint[], $7::bigint[], $8::bigint[]))",
+               AND (key, gc_kind, due_lsn) IN ( \
+                   SELECT * FROM unnest($3::bytea[], $4::smallint[], $5::bigint[]))",
             self.schema
         );
         let mut removed = 0u64;
         for (bucket, cs) in by_bucket {
-            let mut spc = Vec::with_capacity(cs.len());
-            let mut db = Vec::with_capacity(cs.len());
-            let mut rel = Vec::with_capacity(cs.len());
-            let mut fork = Vec::with_capacity(cs.len());
-            let mut blk = Vec::with_capacity(cs.len());
+            let mut keyb = Vec::with_capacity(cs.len());
+            let mut kinds = Vec::with_capacity(cs.len());
             let mut due = Vec::with_capacity(cs.len());
-            for &((s, d0, r0, f0, b0), lsn) in &cs {
-                spc.push(s);
-                db.push(d0);
-                rel.push(r0);
-                fork.push(f0);
-                blk.push(b0);
-                due.push(lsn.0 as i64);
+            for c in &cs {
+                keyb.push(key_to_bytes(&c.0));
+                kinds.push(c.1.to_i16());
+                due.push(c.2.0 as i64);
             }
+            let n = cs.len();
             removed += self
                 .ysql_client
-                .execute(
-                    &sql,
-                    &[&branch_s, &bucket, &spc, &db, &rel, &fork, &blk, &due],
-                )
+                .execute(&sql, &[&branch_s, &bucket, &keyb, &kinds, &due])
                 .await
                 .with_context(|| {
                     format!(
-                        "gc_dequeue_drop_shrink_candidates branch={branch_id} bucket={bucket} n={}",
-                        cs.len()
+                        "gc_dequeue_drop_shrink_candidates branch={branch_id} bucket={bucket} n={n}"
                     )
                 })?;
         }
@@ -2976,14 +3050,10 @@ impl PageStore {
     ///
     /// TODO(gc_whole_fork_threshold): above a per-fork block count,
     /// switch to a whole-fork variant in blknum-range batches.
-    #[allow(clippy::too_many_arguments)]
     pub async fn gc_act_trim_blocks(
         &self,
         branch_id: BranchId,
-        spcnode: i64,
-        dbnode: i64,
-        relnode: i64,
-        forknum: i16,
+        (spcnode, dbnode, relnode, forknum): GcForkIdent,
         blknums: &[i64],
         cutoff: Lsn,
     ) -> Result<u64> {
@@ -3034,7 +3104,31 @@ impl PageStore {
         Ok(deleted)
     }
 
-    /// Drop action ([`GC_KIND_DROP`]): reclaim a dropped fork. Delete
+    /// Delete every `meta` row for the listed keys with `lsn <= due_lsn`.
+    /// The shared drop primitive: a dropped rel fork / SLRU segment clears
+    /// its size-sentinel key, and [`Self::gc_act_drop_meta`] clears a
+    /// dead-key set — the `= ANY` form covers the single-key case too.
+    /// Idempotent. Returns rows deleted.
+    async fn delete_meta_up_to_lsn(
+        &self,
+        branch_id: BranchId,
+        keys: &[Vec<u8>],
+        due_lsn: Lsn,
+    ) -> Result<u64> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "DELETE FROM \"{schema}\".meta \
+             WHERE branch_id=$1 AND key = ANY($2::bytea[]) AND lsn <= $3",
+            schema = self.schema
+        );
+        self.ysql_client
+            .execute(&sql, &[&branch_id.to_string(), &keys, &(due_lsn.0 as i64)])
+            .await
+    }
+
+    /// Drop action ([`GcKind::DropPages`]): reclaim a dropped fork. Delete
     /// every `pages` row with `lsn <= due_lsn` (= the drop's LSN) plus
     /// the fork's rel-size `meta` rows up to the same LSN. Scoped to
     /// `due_lsn`, NOT the cutoff, so a relnode reused above the drop
@@ -3046,14 +3140,10 @@ impl PageStore {
     /// the ancestor, so the `Removed` marker is load-bearing (it shadows
     /// a parent's `Exists`) — deleting it could resurrect the rel in a
     /// child.
-    #[allow(clippy::too_many_arguments)]
     pub async fn gc_act_drop_fork(
         &self,
         branch_id: BranchId,
-        spcnode: i64,
-        dbnode: i64,
-        relnode: i64,
-        forknum: i16,
+        (spcnode, dbnode, relnode, forknum): GcForkIdent,
         due_lsn: Lsn,
     ) -> Result<u64> {
         let branch_s = branch_id.to_string();
@@ -3077,13 +3167,7 @@ impl PageStore {
 
         // The fork's own rel-size meta key (<= due_lsn).
         let key_bytes = rel_size_key_bytes(spcnode, dbnode, relnode, forknum);
-        let meta_sql = format!(
-            "DELETE FROM \"{schema}\".meta \
-             WHERE branch_id=$1 AND key=$2 AND lsn <= $3",
-            schema = self.schema
-        );
-        self.ysql_client
-            .execute(&meta_sql, &[&branch_s, &key_bytes, &due])
+        self.delete_meta_up_to_lsn(branch_id, std::slice::from_ref(&key_bytes), due_lsn)
             .await
             .with_context(|| {
                 format!("gc_act_drop_fork meta branch={branch_id} rel={relnode} fork={forknum}")
@@ -3091,20 +3175,16 @@ impl PageStore {
         Ok(deleted)
     }
 
-    /// Shrink action ([`GC_KIND_SHRINK`]): delete `pages` with
+    /// Shrink action ([`GcKind::ShrinkPages`]): delete `pages` with
     /// `blknum >= relsize AND lsn <= due_lsn` (both from the candidate).
     /// The `lsn <= due_lsn` bound keeps a re-extended block live — its new
     /// base sits above `due_lsn`. Trap: candidates can't be merged per
     /// fork (a wider `blknum` × higher `lsn` bound would delete a block
     /// re-extended between two truncations). Returns rows deleted.
-    #[allow(clippy::too_many_arguments)]
     pub async fn gc_act_shrink_fork(
         &self,
         branch_id: BranchId,
-        spcnode: i64,
-        dbnode: i64,
-        relnode: i64,
-        forknum: i16,
+        (spcnode, dbnode, relnode, forknum): GcForkIdent,
         relsize: i64,
         due_lsn: Lsn,
     ) -> Result<u64> {
@@ -3134,6 +3214,140 @@ impl PageStore {
                      relsize={relsize} due_lsn={due_lsn}"
                 )
             })
+    }
+
+    /// Trim action for one SLRU segment's listed blocks: per block, keep
+    /// the newest base (`will_init`) `<= cutoff` plus everything above;
+    /// delete below. Single-tablet (`(branch, kind, segno)` is the full
+    /// hash key). The `slru_pages` analog of [`Self::gc_act_trim_blocks`].
+    pub async fn gc_act_trim_slru(
+        &self,
+        branch_id: BranchId,
+        (kind, segno): GcSlruSeg,
+        blknums: &[i64],
+        cutoff: Lsn,
+    ) -> Result<u64> {
+        if blknums.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "WITH anchor AS ( \
+                 SELECT blknum, MAX(lsn) AS lsn \
+                 FROM \"{schema}\".slru_pages \
+                 WHERE branch_id=$1 AND kind=$2 AND segno=$3 \
+                   AND blknum = ANY($4) AND lsn <= $5 AND will_init \
+                 GROUP BY blknum \
+             ) \
+             DELETE FROM \"{schema}\".slru_pages p \
+             USING anchor a \
+             WHERE p.branch_id=$1 AND p.kind=$2 AND p.segno=$3 \
+               AND p.blknum = a.blknum \
+               AND (p.lsn < a.lsn \
+                 OR (p.lsn = a.lsn AND NOT p.will_init))",
+            schema = self.schema
+        );
+        self.ysql_client
+            .execute(
+                &sql,
+                &[
+                    &branch_id.to_string(),
+                    &kind,
+                    &segno,
+                    &blknums,
+                    &(cutoff.0 as i64),
+                ],
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "gc_act_trim_slru branch={branch_id} kind={kind} segno={segno} blocks={}",
+                    blknums.len()
+                )
+            })
+    }
+
+    /// Drop action for a truncated SLRU segment: delete every `slru_pages`
+    /// row for `(kind, segno)` with `lsn <= due_lsn`, plus the segment's
+    /// size-sentinel `meta` key (`seg_size_key` bytes) up to the same LSN.
+    /// `<= due_lsn` keeps a wraparound-recreated segno (written above the
+    /// truncation) alive. Idempotent. Returns `slru_pages` rows deleted.
+    pub async fn gc_act_drop_slru(
+        &self,
+        branch_id: BranchId,
+        (kind, segno): GcSlruSeg,
+        seg_size_key: Vec<u8>,
+        due_lsn: Lsn,
+    ) -> Result<u64> {
+        let branch_s = branch_id.to_string();
+        let due = due_lsn.0 as i64;
+        let pages_sql = format!(
+            "DELETE FROM \"{schema}\".slru_pages \
+             WHERE branch_id=$1 AND kind=$2 AND segno=$3 AND lsn <= $4",
+            schema = self.schema
+        );
+        let deleted = self
+            .ysql_client
+            .execute(&pages_sql, &[&branch_s, &kind, &segno, &due])
+            .await
+            .with_context(|| {
+                format!("gc_act_drop_slru pages branch={branch_id} kind={kind} segno={segno}")
+            })?;
+        self.delete_meta_up_to_lsn(branch_id, std::slice::from_ref(&seg_size_key), due_lsn)
+            .await
+            .with_context(|| {
+                format!("gc_act_drop_slru meta branch={branch_id} kind={kind} segno={segno}")
+            })?;
+        Ok(deleted)
+    }
+
+    /// Trim action for `meta` keys: per key keep the newest version
+    /// `<= cutoff`, delete everything below it. `meta` is full-overwrite
+    /// (no `will_init`/chain), so the anchor is just each key's newest
+    /// version `<= cutoff` (a grouped `MAX`, computed once per key then
+    /// joined — the `meta` analog of [`Self::gc_act_trim_blocks`]). A key
+    /// with no version `<= cutoff` is untouched (it's absent from the
+    /// anchor). Returns rows deleted.
+    pub async fn gc_act_trim_meta(
+        &self,
+        branch_id: BranchId,
+        keys: &[Vec<u8>],
+        cutoff: Lsn,
+    ) -> Result<u64> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let sql = format!(
+            "WITH anchor AS ( \
+                 SELECT key, MAX(lsn) AS lsn \
+                 FROM \"{schema}\".meta \
+                 WHERE branch_id=$1 AND key = ANY($2::bytea[]) AND lsn <= $3 \
+                 GROUP BY key \
+             ) \
+             DELETE FROM \"{schema}\".meta m \
+             USING anchor a \
+             WHERE m.branch_id=$1 AND m.key = a.key AND m.lsn < a.lsn",
+            schema = self.schema
+        );
+        self.ysql_client
+            .execute(&sql, &[&branch_id.to_string(), &keys, &(cutoff.0 as i64)])
+            .await
+            .with_context(|| format!("gc_act_trim_meta branch={branch_id} keys={}", keys.len()))
+    }
+
+    /// Drop action for dead `meta` keys (a retired object's directory /
+    /// sentinel / two-phase / DROP DATABASE keys): delete every listed
+    /// key's rows `<= due_lsn`. `<= due_lsn` keeps a recreated key (written
+    /// above the drop) alive. Idempotent. Returns rows deleted.
+    pub async fn gc_act_drop_meta(
+        &self,
+        branch_id: BranchId,
+        keys: &[Key],
+        due_lsn: Lsn,
+    ) -> Result<u64> {
+        let key_bytes: Vec<Vec<u8>> = keys.iter().map(key_to_bytes).collect();
+        self.delete_meta_up_to_lsn(branch_id, &key_bytes, due_lsn)
+            .await
+            .with_context(|| format!("gc_act_drop_meta branch={branch_id} keys={}", keys.len()))
     }
 
     /// Minimum branch point over live children of `branch_id` — the
@@ -4672,6 +4886,7 @@ fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pageserver_api::key::rel_block_to_key;
 
     fn test_yb_config() -> YbConnConfig {
         let host = std::env::var("YB_TEST_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -6677,47 +6892,147 @@ mod tests {
                 .map(|r| (r.get::<_, i64>(0) as u64, r.get(1), r.get(2)))
                 .collect())
         }
+
+        /// SLRU analog of [`Self::test_raw_block_versions`]: one block's
+        /// stored versions for `(kind, segno, blknum)`, ordered by lsn.
+        async fn test_raw_slru_versions(
+            &self,
+            branch_id: BranchId,
+            kind: i16,
+            segno: i64,
+            blknum: i64,
+        ) -> Result<Vec<(u64, bool, bool)>> {
+            let sql = format!(
+                "SELECT lsn, is_image, will_init FROM \"{}\".slru_pages \
+                 WHERE branch_id=$1 AND kind=$2 AND segno=$3 AND blknum=$4 \
+                 ORDER BY lsn, is_image",
+                self.schema
+            );
+            let rows = self
+                .ysql_client
+                .query(&sql, &[&branch_id.to_string(), &kind, &segno, &blknum])
+                .await
+                .context("test_raw_slru_versions")?;
+            Ok(rows
+                .iter()
+                .map(|r| (r.get::<_, i64>(0) as u64, r.get(1), r.get(2)))
+                .collect())
+        }
     }
 
-    fn gc_cand(relnode: i64, forknum: i16, blknum: i64, due: u64) -> PendingGcRow {
+    fn gc_rel(relnode: i64, forknum: i16) -> RelTag {
+        RelTag {
+            spcnode: GC_SPC as u32,
+            dbnode: GC_DB as u32,
+            relnode: relnode as u32,
+            forknum: forknum as u8,
+        }
+    }
+
+    /// Build a candidate. The `sel` selector keeps the old blknum-sentinel
+    /// convention for these tests: `sel >= 0` → a trim candidate for that
+    /// block; `sel == -2` → a drop; `sel == -1` → a shrink (both keyed by
+    /// the fork's rel-size object key).
+    fn gc_cand(relnode: i64, forknum: i16, sel: i64, due: u64) -> PendingGcRow {
+        let (key, gc_kind) = if sel >= 0 {
+            (
+                rel_block_to_key(gc_rel(relnode, forknum), sel as u32),
+                GcKind::TrimPages,
+            )
+        } else if sel == -2 {
+            (rel_size_to_key(gc_rel(relnode, forknum)), GcKind::DropPages)
+        } else {
+            (
+                rel_size_to_key(gc_rel(relnode, forknum)),
+                GcKind::ShrinkPages,
+            )
+        };
         PendingGcRow {
-            spcnode: GC_SPC,
-            dbnode: GC_DB,
-            relnode,
-            forknum,
-            blknum,
+            key,
+            gc_kind,
             due_lsn: Lsn(due),
             relsize: None,
         }
     }
 
-    /// The visited-block idents of a selected batch — what the drain
+    /// The trim candidates' keys in a selected batch — what the drain
     /// feeds [`PageStore::gc_dequeue_trim_candidates`].
-    fn blocks_of(rows: &[PendingGcRow]) -> Vec<GcBlockIdent> {
+    fn blocks_of(rows: &[PendingGcRow]) -> Vec<(Key, GcKind)> {
         rows.iter()
-            .map(|r| (r.spcnode, r.dbnode, r.relnode, r.forknum, r.blknum))
+            .filter(|r| is_trim_kind(r.gc_kind))
+            .map(|r| (r.key, r.gc_kind))
             .collect()
+    }
+
+    /// The drop/shrink candidates' exact PKs in a selected batch — what the
+    /// drain feeds [`PageStore::gc_dequeue_drop_shrink_candidates`].
+    fn drop_shrink_ids(rows: &[PendingGcRow]) -> Vec<(Key, GcKind, Lsn)> {
+        rows.iter()
+            .filter(|r| !is_trim_kind(r.gc_kind))
+            .map(|r| (r.key, r.gc_kind, r.due_lsn))
+            .collect()
+    }
+
+    fn is_trim_kind(k: GcKind) -> bool {
+        matches!(k, GcKind::TrimPages | GcKind::TrimSlru | GcKind::TrimMeta)
+    }
+
+    /// A candidate's block number (trim) or a signed kind marker
+    /// (drop = -2, shrink = -1) — reconstructs the old blknum-sentinel
+    /// view these DB tests assert on.
+    fn blk_marker(r: &PendingGcRow) -> i64 {
+        match r.gc_kind {
+            GcKind::TrimPages | GcKind::TrimSlru | GcKind::TrimMeta => r.key.field6 as i64,
+            GcKind::DropPages | GcKind::DropSlru | GcKind::DropMeta => -2,
+            _ => -1,
+        }
     }
 
     /// `gc_bucket_id` is the client-side placement hash that replaced the
     /// YB `GENERATED ALWAYS AS (yb_hash_code(...) % N)` column. It must
     /// stay **frozen** — a change would strand a block's older candidates
     /// in their old bucket and defeat crash-replay dedup — so these are
+    /// `GcKind` <-> `i16` round-trips for every value (known → variant,
+    /// out-of-range → `Unknown`, preserving the raw wire value). No DB.
+    #[test]
+    fn gc_kind_i16_roundtrip() {
+        for v in [0i16, 1, 2, 3, 4, 5, 6, 7, -1, 42, i16::MAX, i16::MIN] {
+            assert_eq!(GcKind::from_i16(v).to_i16(), v, "roundtrip for {v}");
+        }
+        assert_eq!(GcKind::from_i16(0), GcKind::TrimPages);
+        assert_eq!(GcKind::from_i16(6), GcKind::DropMeta);
+        assert_eq!(GcKind::from_i16(7), GcKind::Unknown(7));
+        assert_eq!(GcKind::TrimPages.to_i16(), 0);
+        assert_eq!(GcKind::DropMeta.to_i16(), 6);
+    }
+
     /// golden values, not just property checks. No DB needed (pure fn).
     #[test]
     fn gc_bucket_id_is_frozen_and_bounded() {
+        let blk = |spc: u32, db: u32, rel: u32, blk: u32| {
+            rel_block_to_key(
+                RelTag {
+                    spcnode: spc,
+                    dbnode: db,
+                    relnode: rel,
+                    forknum: 0,
+                },
+                blk,
+            )
+        };
         // Golden values (change ⇒ you broke the frozen hash — intended?).
-        assert_eq!(gc_bucket_id(1663, 5, 16400, 0, 1), 6);
-        assert_eq!(gc_bucket_id(1663, 5, 16400, 0, 2), 7);
-        assert_eq!(gc_bucket_id(1663, 5, 16401, 0, 0), 6);
-        assert_eq!(gc_bucket_id(1663, 5, 16400, 0, 999), 7);
-        assert_eq!(gc_bucket_id(0, 0, 0, 0, 0), 5);
+        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 1)), 8);
+        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 2)), 7);
+        assert_eq!(gc_bucket_id(&blk(1663, 5, 16401, 0)), 2);
+        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 999)), 7);
+        assert_eq!(gc_bucket_id(&blk(0, 0, 0, 0)), 9);
 
         // Deterministic + in range over a spread of blocks.
         let mut counts = [0usize; GC_BUCKETS as usize];
-        for g in 0..10_000i64 {
-            let b = gc_bucket_id(1663, 5, 16400 + (g % 50), 0, g);
-            assert_eq!(b, gc_bucket_id(1663, 5, 16400 + (g % 50), 0, g), "stable");
+        for g in 0..10_000u32 {
+            let key = blk(1663, 5, 16400 + (g % 50), g);
+            let b = gc_bucket_id(&key);
+            assert_eq!(b, gc_bucket_id(&key), "stable");
             assert!((0..GC_BUCKETS).contains(&b), "in range");
             counts[b as usize] += 1;
         }
@@ -6735,6 +7050,68 @@ mod tests {
             .gc_select_due_candidates(branch, Lsn(0), Lsn(i64::MAX as u64), 1_000_000)
             .await
             .unwrap()
+    }
+
+    /// Cross-check the SQL `gc_key_decode` inspection helper against the
+    /// Rust Key codec: for each keyspace build a key with its Rust
+    /// constructor, run the decoder on the encoded bytes, and assert the
+    /// formatted output — plus the not-18-bytes fallback. Guards the plpgsql
+    /// decoder and the Rust codec from drifting apart (the migration comment
+    /// on `gc_key_decode` points here).
+    #[tokio::test]
+    async fn gc_key_decode_matches_key_codec() {
+        use pageserver_api::key::{
+            rel_block_to_key, rel_size_to_key, slru_block_to_key, slru_segment_size_to_key,
+            twophase_file_key,
+        };
+        use pageserver_api::reltag::{RelTag, SlruKind};
+
+        let (store, schema) = make_store("gc_key_decode").await;
+        let rel = RelTag {
+            spcnode: 1663,
+            dbnode: 5,
+            relnode: 16400,
+            forknum: 0,
+        };
+        let cases: Vec<(Vec<u8>, &str)> = vec![
+            (
+                key_to_bytes(&rel_block_to_key(rel, 7)),
+                "rel_block spc=1663 db=5 rel=16400 fork=0 blk=7",
+            ),
+            (
+                key_to_bytes(&rel_size_to_key(rel)),
+                "rel_size spc=1663 db=5 rel=16400 fork=0",
+            ),
+            (
+                key_to_bytes(&slru_block_to_key(SlruKind::Clog, 9, 3)),
+                "slru_block kind=0 seg=9 blk=3",
+            ),
+            (
+                key_to_bytes(&slru_block_to_key(SlruKind::MultiXactMembers, 2, 5)),
+                "slru_block kind=1 seg=2 blk=5",
+            ),
+            (
+                key_to_bytes(&slru_segment_size_to_key(SlruKind::Clog, 9)),
+                "slru_seg_size kind=0 seg=9",
+            ),
+            (
+                key_to_bytes(&twophase_file_key(753)),
+                "meta f1=2 f2=0 f3=0 f4=0 f5=0 f6=753",
+            ),
+        ];
+        let sql = format!("SELECT \"{schema}\".gc_key_decode($1)");
+        for (bytes, expected) in cases {
+            let rows = store.ysql_client.query(&sql, &[&bytes]).await.unwrap();
+            let got: String = rows[0].get(0);
+            assert_eq!(got, expected, "decode of {bytes:?}");
+        }
+        // A bytea that isn't a full 18-byte Key decodes to the raw fallback,
+        // never panics.
+        let short = vec![1u8, 2, 3];
+        let rows = store.ysql_client.query(&sql, &[&short]).await.unwrap();
+        assert_eq!(rows[0].get::<_, String>(0), "raw(3 bytes)");
+
+        drop_schema(&store, &schema).await;
     }
 
     /// Scenario: the same candidates are inserted twice — as crash +
@@ -6888,27 +7265,27 @@ mod tests {
             gc_cand(16401, 0, 7, 10),
             gc_cand(16401, 0, 7, 20),
             gc_cand(16401, 0, 7, 30),
-            gc_cand(16401, 0, 7, 200),           // above cutoff
-            gc_cand(16401, 0, 8, 25),            // other block
-            gc_cand(16401, 0, GC_KIND_DROP, 40), // drop sentinel, same fork
+            gc_cand(16401, 0, 7, 200), // above cutoff
+            gc_cand(16401, 0, 8, 25),  // other block
+            gc_cand(16401, 0, -2, 40), // drop sentinel, same fork
         ];
         store.gc_enqueue_candidates(branch, &batch).await.unwrap();
 
-        let block_a: GcBlockIdent = (GC_SPC, GC_DB, 16401, 0, 7);
+        let block_a: Key = rel_block_to_key(gc_rel(16401, 0), 7);
         store
-            .gc_dequeue_trim_candidates(branch, &[block_a], Lsn(0), Lsn(100))
+            .gc_dequeue_trim_candidates(branch, &[(block_a, GcKind::TrimPages)], Lsn(0), Lsn(100))
             .await
             .unwrap();
 
         let mut left: Vec<(i64, u64)> = all_pending(&store, branch)
             .await
             .iter()
-            .map(|r| (r.blknum, r.due_lsn.0))
+            .map(|r| (blk_marker(r), r.due_lsn.0))
             .collect();
         left.sort();
         assert_eq!(
             left,
-            vec![(GC_KIND_DROP, 40), (7, 200), (8, 25)],
+            vec![(-2, 40), (7, 200), (8, 25)],
             "block 7's <= cutoff candidates swept; its above-cutoff one, block 8, and the drop survive"
         );
     }
@@ -6934,9 +7311,9 @@ mod tests {
             .await
             .unwrap();
 
-        let block_a: GcBlockIdent = (GC_SPC, GC_DB, 16401, 0, 7);
+        let block_a: Key = rel_block_to_key(gc_rel(16401, 0), 7);
         store
-            .gc_dequeue_trim_candidates(branch, &[block_a], Lsn(20), Lsn(100))
+            .gc_dequeue_trim_candidates(branch, &[(block_a, GcKind::TrimPages)], Lsn(20), Lsn(100))
             .await
             .unwrap();
 
@@ -6984,7 +7361,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(drained.len(), 1);
-        assert_eq!((drained[0].blknum, drained[0].due_lsn.0), (7, 5));
+        assert_eq!((blk_marker(&drained[0]), drained[0].due_lsn.0), (7, 5));
         store
             .gc_dequeue_trim_candidates(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
             .await
@@ -6993,7 +7370,7 @@ mod tests {
         let left: Vec<(i64, u64)> = all_pending(&store, branch)
             .await
             .iter()
-            .map(|r| (r.blknum, r.due_lsn.0))
+            .map(|r| (blk_marker(r), r.due_lsn.0))
             .collect();
         assert_eq!(
             left,
@@ -7021,7 +7398,7 @@ mod tests {
         let branch = rand_branch();
 
         let fanout: Vec<PendingGcRow> = (0..5)
-            .map(|i| gc_cand(16401 + i, 0, GC_KIND_DROP, 10)) // one due_lsn
+            .map(|i| gc_cand(16401 + i, 0, -2, 10)) // one due_lsn
             .collect();
         store.gc_enqueue_candidates(branch, &fanout).await.unwrap();
 
@@ -7037,7 +7414,7 @@ mod tests {
             assert!(batch.len() <= 2, "select respects the cap");
             ticks_used += 1;
             store
-                .gc_dequeue_trim_candidates(branch, &blocks_of(&batch), Lsn(0), Lsn(20))
+                .gc_dequeue_drop_shrink_candidates(branch, &drop_shrink_ids(&batch))
                 .await
                 .unwrap();
         }
@@ -7066,10 +7443,10 @@ mod tests {
             .gc_enqueue_candidates(
                 branch,
                 &[
-                    gc_cand(16401, 0, GC_KIND_DROP, 10),   // acted
-                    gc_cand(16401, 0, GC_KIND_SHRINK, 20), // acted
-                    gc_cand(16401, 0, GC_KIND_DROP, 300),  // due, NOT acted — must survive
-                    gc_cand(16401, 0, 7, 15),              // trim, acted (range-swept)
+                    gc_cand(16401, 0, -2, 10),  // acted
+                    gc_cand(16401, 0, -1, 20),  // acted
+                    gc_cand(16401, 0, -2, 300), // due, NOT acted — must survive
+                    gc_cand(16401, 0, 7, 15),   // trim, acted (range-swept)
                 ],
             )
             .await
@@ -7080,26 +7457,39 @@ mod tests {
             .gc_dequeue_drop_shrink_candidates(
                 branch,
                 &[
-                    ((GC_SPC, GC_DB, 16401, 0, GC_KIND_DROP), Lsn(10)),
-                    ((GC_SPC, GC_DB, 16401, 0, GC_KIND_SHRINK), Lsn(20)),
+                    (
+                        rel_size_to_key(gc_rel(16401, 0)),
+                        GcKind::DropPages,
+                        Lsn(10),
+                    ),
+                    (
+                        rel_size_to_key(gc_rel(16401, 0)),
+                        GcKind::ShrinkPages,
+                        Lsn(20),
+                    ),
                 ],
             )
             .await
             .unwrap();
         // Trim: range-sweep block 7's candidates in (0, 100].
         store
-            .gc_dequeue_trim_candidates(branch, &[(GC_SPC, GC_DB, 16401, 0, 7)], Lsn(0), Lsn(100))
+            .gc_dequeue_trim_candidates(
+                branch,
+                &[(rel_block_to_key(gc_rel(16401, 0), 7), GcKind::TrimPages)],
+                Lsn(0),
+                Lsn(100),
+            )
             .await
             .unwrap();
 
         let left: Vec<(i64, u64)> = all_pending(&store, branch)
             .await
             .iter()
-            .map(|r| (r.blknum, r.due_lsn.0))
+            .map(|r| (blk_marker(r), r.due_lsn.0))
             .collect();
         assert_eq!(
             left,
-            vec![(GC_KIND_DROP, 300)],
+            vec![(-2, 300)],
             "the un-acted same-fork drop@300 survives exact-PK dequeue"
         );
     }
@@ -7223,10 +7613,7 @@ mod tests {
         store
             .gc_act_trim_blocks(
                 branch,
-                GC_SPC,
-                GC_DB,
-                rel as i64,
-                0,
+                (GC_SPC, GC_DB, rel as i64, 0),
                 &[blk_a as i64, blk_b as i64],
                 Lsn(100),
             )
@@ -7303,10 +7690,7 @@ mod tests {
         store
             .gc_act_trim_blocks(
                 branch,
-                GC_SPC,
-                GC_DB,
-                rel as i64,
-                0,
+                (GC_SPC, GC_DB, rel as i64, 0),
                 &[blk as i64],
                 Lsn(100),
             )
@@ -7376,7 +7760,7 @@ mod tests {
             .unwrap();
 
         store
-            .gc_act_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .gc_act_drop_fork(branch, (GC_SPC, GC_DB, rel as i64, 0), Lsn(100))
             .await
             .unwrap();
 
@@ -7414,7 +7798,118 @@ mod tests {
 
         // Idempotent.
         let again = store
-            .gc_act_drop_fork(branch, GC_SPC, GC_DB, rel as i64, 0, Lsn(100))
+            .gc_act_drop_fork(branch, (GC_SPC, GC_DB, rel as i64, 0), Lsn(100))
+            .await
+            .unwrap();
+        assert_eq!(again, 0);
+    }
+
+    /// Scenario: an SLRU segment drop deletes the segment's `slru_pages`
+    /// rows and its seg-size sentinel `meta` key at `lsn <= due_lsn`; a
+    /// wraparound-reused segno written ABOVE `due_lsn` survives, and a
+    /// different segment is untouched. Idempotent.
+    #[tokio::test]
+    async fn gc_act_drop_slru_scoped_to_due_lsn() {
+        use pageserver_api::key::slru_segment_size_to_key;
+        let (store, _schema) = make_store("gc_drop_slru").await;
+        let branch = rand_branch();
+        let (seg, other) = (5u32, 6u32);
+        let clog = 0i16; // SlruKind::Clog
+
+        let seg_size_key = |s: u32| {
+            let mut b = vec![0u8; KEY_SIZE];
+            slru_segment_size_to_key(SlruKind::Clog, s).write_to_byte_slice(&mut b);
+            b
+        };
+        let slru = |s: u32, blk: u32, lsn: u64, is_image: bool, will_init: bool| SlruPageRow {
+            kind: SlruKind::Clog,
+            segno: s,
+            blknum: blk,
+            lsn: Lsn(lsn),
+            is_image,
+            will_init,
+            payload: Bytes::from_static(b"x"),
+        };
+        let seg_size_row = |s: u32, lsn: u64| MetaRow {
+            key: Bytes::from(seg_size_key(s)),
+            lsn: Lsn(lsn),
+            payload: Bytes::from_static(b"sz"),
+        };
+
+        store
+            .put_slru_pages(
+                branch,
+                &[
+                    // dropped incarnation: everything <= due (100) must go
+                    slru(seg, 0, 10, true, true),
+                    slru(seg, 0, 30, false, false),
+                    slru(seg, 1, 20, true, true),
+                    // segno reused above the drop: must survive
+                    slru(seg, 0, 200, true, true),
+                    // unrelated segment: must survive
+                    slru(other, 0, 10, true, true),
+                ],
+            )
+            .await
+            .unwrap();
+        store
+            .put_meta(
+                branch,
+                &[
+                    seg_size_row(seg, 10),
+                    seg_size_row(seg, 20),
+                    // reused incarnation's size: must survive
+                    seg_size_row(seg, 200),
+                    seg_size_row(other, 10),
+                ],
+            )
+            .await
+            .unwrap();
+
+        store
+            .gc_act_drop_slru(branch, (clog, seg as i64), seg_size_key(seg), Lsn(100))
+            .await
+            .unwrap();
+
+        let b0 = store
+            .test_raw_slru_versions(branch, clog, seg as i64, 0)
+            .await
+            .unwrap();
+        assert_eq!(b0, vec![(200, true, true)], "reused segno's row survives");
+        let b1 = store
+            .test_raw_slru_versions(branch, clog, seg as i64, 1)
+            .await
+            .unwrap();
+        assert!(b1.is_empty(), "dropped incarnation fully reclaimed");
+        let o = store
+            .test_raw_slru_versions(branch, clog, other as i64, 0)
+            .await
+            .unwrap();
+        assert_eq!(o.len(), 1, "unrelated segment untouched");
+
+        // Seg-size meta: versions <= due gone, the reuse's kept.
+        let below = store
+            .read_meta(branch, &seg_size_key(seg), Lsn(199))
+            .await
+            .unwrap();
+        assert!(below.is_none(), "dropped incarnation's seg-size gone");
+        let above = store
+            .read_meta(branch, &seg_size_key(seg), Lsn(1000))
+            .await
+            .unwrap();
+        assert_eq!(above.unwrap().lsn, Lsn(200), "reused seg-size survives");
+        assert!(
+            store
+                .read_meta(branch, &seg_size_key(other), Lsn(1000))
+                .await
+                .unwrap()
+                .is_some(),
+            "unrelated segment's seg-size untouched"
+        );
+
+        // Idempotent (== 0 is retry-safe).
+        let again = store
+            .gc_act_drop_slru(branch, (clog, seg as i64), seg_size_key(seg), Lsn(100))
             .await
             .unwrap();
         assert_eq!(again, 0);
@@ -7455,7 +7950,7 @@ mod tests {
         // the surviving-row checks below pin the outcome (exact DELETE
         // counts aren't retry-safe — see the module note).
         store
-            .gc_act_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, 2, Lsn(50))
+            .gc_act_shrink_fork(branch, (GC_SPC, GC_DB, rel as i64, 0), 2, Lsn(50))
             .await
             .unwrap();
 
@@ -7483,12 +7978,12 @@ mod tests {
 
         // Idempotent, and a fork with no matching rows is a clean no-op.
         let again = store
-            .gc_act_shrink_fork(branch, GC_SPC, GC_DB, rel as i64, 0, 2, Lsn(50))
+            .gc_act_shrink_fork(branch, (GC_SPC, GC_DB, rel as i64, 0), 2, Lsn(50))
             .await
             .unwrap();
         assert_eq!(again, 0, "nothing left below the tail to delete");
         let none = store
-            .gc_act_shrink_fork(branch, GC_SPC, GC_DB, 16431, 0, 2, Lsn(50))
+            .gc_act_shrink_fork(branch, (GC_SPC, GC_DB, 16431, 0), 2, Lsn(50))
             .await
             .unwrap();
         assert_eq!(none, 0);
@@ -7663,7 +8158,7 @@ mod tests {
             let cutoff = Lsn(rng.random_range(0..=350u64));
             let blks: Vec<i64> = (0..nblocks as i64).collect();
             store
-                .gc_act_trim_blocks(branch, GC_SPC, GC_DB, rel as i64, 0, &blks, cutoff)
+                .gc_act_trim_blocks(branch, (GC_SPC, GC_DB, rel as i64, 0), &blks, cutoff)
                 .await
                 .unwrap();
 

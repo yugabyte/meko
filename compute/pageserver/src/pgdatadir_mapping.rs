@@ -2078,26 +2078,67 @@ impl DatadirModification<'_> {
             .is_some_and(|w| w.gc_enabled())
     }
 
-    /// Record a drop (`GC_KIND_DROP`) / shrink (`GC_KIND_SHRINK`) GC
-    /// event for `rel` at the modification's current LSN — the
-    /// drop/truncation record being ingested. Buffered on the
-    /// modification and handed to the writer at commit; not sampled
-    /// (drop/shrink are one-shot events, unlike per-base trims).
-    /// No-op unless GC is on (`enable_gc`).
-    fn record_gc_drop_shrink_event(&mut self, rel: RelTag, kind: i64, relsize: Option<i64>) {
+    /// Record a drop (`GcKind::Drop*`) / shrink (`GcKind::ShrinkPages`) GC
+    /// event naming the object `key` at the modification's current LSN —
+    /// the drop/truncation record being ingested. Buffered on the
+    /// modification and handed to the writer at commit (WAL-driven,
+    /// durable); not sampled (drop/shrink are one-shot events, unlike
+    /// per-base trims). No-op unless GC is on (`enable_gc`).
+    fn record_gc_drop_shrink_event(
+        &mut self,
+        key: pageserver_api::key::Key,
+        gc_kind: crate::page_store::GcKind,
+        relsize: Option<i64>,
+    ) {
         if !self.gc_enabled() {
             return;
         }
         self.pending_gc_drop_shrink_events
             .push(crate::page_store::PendingGcRow {
-                spcnode: rel.spcnode as i64,
-                dbnode: rel.dbnode as i64,
-                relnode: rel.relnode as i64,
-                forknum: rel.forknum as i16,
-                blknum: kind,
+                key,
+                gc_kind,
                 due_lsn: self.lsn,
                 relsize,
             });
+    }
+
+    /// Queue GC drop candidates for a dropped database: per rel its
+    /// rel-size sentinel and v2 sparse-reldir tombstone, then the db-level
+    /// rel-dir and relmap keys. The caller removes the DbDir entry, which
+    /// shadows the sparse keys from readers — so deleting the tombstones is
+    /// safe (unlike a single rel drop).
+    fn record_gc_drop_db_keys(
+        &mut self,
+        rels: impl IntoIterator<Item = RelTag>,
+        spcnode: Oid,
+        dbnode: Oid,
+    ) {
+        for rel in rels {
+            // The fork's pages + rel-size sentinel — a rel fork drop.
+            self.record_gc_drop_shrink_event(
+                rel_size_to_key(rel),
+                crate::page_store::GcKind::DropPages,
+                None,
+            );
+            // The v2 sparse-reldir tombstone (a meta key). A no-op DELETE
+            // if the db uses v1 (no sparse keys written).
+            self.record_gc_drop_shrink_event(
+                rel_tag_sparse_key(rel.spcnode, rel.dbnode, rel.relnode, rel.forknum),
+                crate::page_store::GcKind::DropMeta,
+                None,
+            );
+        }
+        // The db-level dir + relmap meta keys.
+        self.record_gc_drop_shrink_event(
+            rel_dir_to_key(spcnode, dbnode),
+            crate::page_store::GcKind::DropMeta,
+            None,
+        );
+        self.record_gc_drop_shrink_event(
+            relmap_file_key(spcnode, dbnode),
+            crate::page_store::GcKind::DropMeta,
+            None,
+        );
     }
 
     pub async fn drop_dbdir(
@@ -2111,17 +2152,14 @@ impl DatadirModification<'_> {
             .get_db_size(spcnode, dbnode, Version::Modified(self), ctx)
             .await?;
 
-        // Record a GC drop event per rel fork while the reldir can
-        // still be enumerated (the entry is removed just below). Gate the
-        // enumeration on GC being on so it costs nothing when off.
+        // Record GC drop candidates for the db's keys while the reldir can
+        // still be enumerated (the DbDir entry is removed just below).
         if self.gc_enabled() {
             let rels = self
                 .tline
                 .list_rels(spcnode, dbnode, Version::Modified(self), ctx)
                 .await?;
-            for rel in rels {
-                self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_DROP, None);
-            }
+            self.record_gc_drop_db_keys(rels, spcnode, dbnode);
         }
 
         // Remove entry from dbdir
@@ -2371,8 +2409,8 @@ impl DatadirModification<'_> {
             // GC shrink event: the tail at/past `nblocks` becomes
             // collectable once the cutoff passes this truncation.
             self.record_gc_drop_shrink_event(
-                rel,
-                crate::page_store::GC_KIND_SHRINK,
+                rel_size_to_key(rel),
+                crate::page_store::GcKind::ShrinkPages,
                 Some(nblocks as i64),
             );
         }
@@ -2542,7 +2580,11 @@ impl DatadirModification<'_> {
         // Queue GC drop events for the forks that actually existed (the
         // incoming map is speculative — every fork of every xnode).
         for rel in dropped_rels {
-            self.record_gc_drop_shrink_event(rel, crate::page_store::GC_KIND_DROP, None);
+            self.record_gc_drop_shrink_event(
+                rel_size_to_key(rel),
+                crate::page_store::GcKind::DropPages,
+                None,
+            );
         }
         Ok(())
     }
@@ -2622,6 +2664,17 @@ impl DatadirModification<'_> {
         // Delete size entry, as well as all blocks
         self.delete(slru_segment_key_range(kind, segno));
 
+        // GC drop event: reclaim the segment's `slru_pages` rows + size
+        // sentinel once the cutoff passes this truncation. The `delete`
+        // above is a no-op in yb-mode (rows leak at ingest without this);
+        // `<= due_lsn` keeps a wraparound-recreated segno alive. The key
+        // is the segment's size sentinel (SLRU keyspace).
+        self.record_gc_drop_shrink_event(
+            slru_segment_size_to_key(kind, segno),
+            crate::page_store::GcKind::DropSlru,
+            None,
+        );
+
         Ok(())
     }
 
@@ -2668,6 +2721,14 @@ impl DatadirModification<'_> {
 
         // Delete it
         self.delete(twophase_key_range(xid));
+
+        // GC drop event: reclaim the twophase file's meta row once the
+        // cutoff passes this resolve. (`delete` is a no-op in yb-mode.)
+        self.record_gc_drop_shrink_event(
+            twophase_file_key(xid),
+            crate::page_store::GcKind::DropMeta,
+            None,
+        );
 
         Ok(())
     }

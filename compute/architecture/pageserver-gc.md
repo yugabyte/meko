@@ -1,11 +1,14 @@
 # Pageserver GC
 
-The pageserver stores each page version as its own row in
-`amp_storage.pages` (schema: [`yugabyte.md`](yugabyte.md)). GC reclaims the
-rows no read can reach any more — superseded page versions, blocks past a
-truncation, and the pages of a dropped relfilenode — by `DELETE`ing them.
-It is pure space reclamation: it never changes what a correct read
-returns.
+The pageserver stores each version as its own row — relation blocks in
+`amp_storage.pages`, clog/multixact blocks in `amp_storage.slru_pages`, and
+everything else (rel-size sentinels, directory listings, control /
+checkpoint, aux, two-phase) in `amp_storage.meta` (schema:
+[`yugabyte.md`](yugabyte.md)). GC reclaims the rows no read can reach any
+more — superseded versions, blocks past a truncation, and the rows of a
+retired object (a dropped relfilenode, a truncated SLRU segment, a dropped
+database's keys) — by `DELETE`ing them. It is pure space reclamation: it
+never changes what a correct read returns.
 
 This is the pageserver's **page** GC. It is separate from **WAL GC** (the
 safekeeper trimming WAL segments once they are durably ingested and past
@@ -23,31 +26,40 @@ GC is **default off**; a branch turns it on with `enable_gc` — see
 
 Finding garbage after the fact is expensive, so instead the write path
 **records each garbage-producing event** as it happens — a base write, a
-truncation, a relfilenode drop — as a row in `amp_storage.pending_gc` (a
+truncation, an object drop — as a row in `amp_storage.pending_gc` (a
 sibling queue table), tagged with the LSN at which that event's garbage
 becomes collectable. A periodic **drain** then acts on each record once
-the GC cutoff has advanced past that LSN. A queue row's `blknum` column
-doubles as the candidate **kind**:
+the GC cutoff has advanced past that LSN. A candidate names its garbage by
+an encoded `Key` (the same 18-byte layout `meta` uses — a rel block, an
+SLRU block, or a whole object) plus a `gc_kind` that names both the
+**operation** and its **target table**, so the drain dispatches on
+`gc_kind` alone: each kind maps 1:1 to an act function and the key is never
+re-inspected for routing. The seven kinds are `{trim, drop}` ×
+`{pages, slru, meta}` plus `shrink` (rel `pages` only) — the emitter, which
+knows the table it wrote, stamps the kind; the key stays pure identity.
 
-| `blknum` | kind | recorded when | becomes collectable |
+| operation | key | recorded when | becomes collectable |
 | --- | --- | --- | --- |
-| `>= 0` | **trim** | a block's every-n-th new base (`is_image`/`will_init`); `due_lsn` = the newest counted base's LSN | that block's versions below its newest base, at/under the cutoff |
-| `-1` | **shrink** | a relation is truncated at `due_lsn` | blocks at/above the post-truncation size |
-| `-2` | **drop** | a relfilenode is dropped (`DROP TABLE`/index, or every rel of a `DROP DATABASE`) at `due_lsn` | all of the fork's pages `<= due_lsn` |
+| **trim** (`TrimPages`/`TrimSlru`/`TrimMeta`) | the block (rel / SLRU) or meta key | a block's every-n-th new base (`is_image`/`will_init`), or a meta put; `due_lsn` = the newest counted base's LSN | that key's versions below its newest base `<= cutoff` |
+| **shrink** (`ShrinkPages`, rel-only) | the rel-size key | a relation is truncated at `due_lsn` | blocks at/above the post-truncation size |
+| **drop** (`DropPages`/`DropSlru`/`DropMeta`) | the retired object's key | a relfilenode drop, an SLRU segment truncation, each dead key of a `DROP DATABASE`, or a two-phase resolve, at `due_lsn` | all of the object's rows `<= due_lsn` |
 
 `due_lsn` is the LSN at which the garbage became collectable; a candidate
-is actionable only once the cutoff reaches its `due_lsn`.
+is actionable only once the cutoff reaches its `due_lsn`. A `gc_kind` the
+drain doesn't recognise is alarmed and left queued. The
+`gc_key_decode(bytea)` SQL function unpacks a `key` for inspection.
 
 ## Candidate emission
 
 Candidates split by **durability requirement**, not by producer:
 
 - **Trim candidates** (self-healing): both producers — the ingest
-  window flush (each `will_init` row it lands) and the materialiser
-  (one per rel image it writes) — feed one shared in-RAM buffer on the
-  `PageWriter` (`GcTrimCandidateEmitter`, `pageserver/src/gc_trim_candidates.rs`),
-  flushed by its own loop at 500
-  distinct blocks or 5 s, whichever first (same-block candidates fold
+  window flush and the materialiser — sample their base writes into one
+  shared in-RAM buffer on the `PageWriter` (`GcTrimCandidateEmitter`,
+  `pageserver/src/gc_trim_candidates.rs`): `will_init` rows of `pages` /
+  `slru_pages`, and every `meta` put (meta is full-overwrite — no
+  `will_init`, so each put is a base). Flushed by its own loop at 500
+  distinct keys or 5 s, whichever first (same-key candidates fold
   to the latest `due_lsn`). **Best-effort by design**: a crash or
   failed flush loses at most one buffer, healed by the block's next
   base — trims are cumulative, so the next candidate's greedy-to-cutoff
@@ -55,12 +67,14 @@ Candidates split by **durability requirement**, not by producer:
   in a lost buffer leaks (bounded; reclaimable by a future backstop
   sweep). The flusher shuts down after both producers stop, with a
   final flush, so a clean shutdown loses nothing.
-- **Shrink and drop events** (one-shot — a dropped fork gets no future
+- **Shrink and drop events** (one-shot — a retired object gets no future
   base to re-emit a candidate) stay **window-durable** on the ingest
   path: buffered alongside the window's rows and flushed with them, so
   a buffer lost to a crash implies `consistent_lsn` didn't advance and
-  the producing record (`put_rel_truncation`, `put_rel_drops`, per-rel
-  under `drop_dbdir` for `DROP DATABASE`) replays and re-emits.
+  the producing record replays and re-emits — `put_rel_truncation`
+  (shrink), and the drops from `put_rel_drops`, `drop_slru_segment`,
+  `drop_twophase_file`, and each dead key under `drop_dbdir`
+  (`DROP DATABASE`).
 
 Best-effort is safe for trim because no single trim candidate is
 load-bearing (the block's next base heals it), and both producers
@@ -71,8 +85,8 @@ anyway: the sampling counter below is in-memory and resets on restart,
 so a replayed window may emit at a different base or not at all.
 
 `gc_candidate_every_n_bases` (default 10) samples both trim producers
-through one shared per-block counter: one trim candidate per n bases per
-block, stamped `due_lsn = max LSN among its n counted bases`. The
+through one shared per-key counter: one trim candidate per n bases per
+key, stamped `due_lsn = max LSN among its n counted bases`. The
 max matters only cross-producer — a materialiser image lands at its
 fold point, below bases ingest has since counted, and stamping the
 n-th base's own LSN would make the drain visit (and dequeue) the
@@ -123,7 +137,7 @@ runs:
    `floor < due_lsn <= cutoff`, oldest-first, one bounded range scan per
    placement bucket. The **floor** (`GcDrainProgress::floor`) marks how
    far the drain has progressed: every candidate at or below it has been
-   handled — dequeued, acted-but-requeued (a busy-fork drop), or parked
+   handled — dequeued, acted-but-requeued (a busy-object drop), or parked
    as unknown-kind — so the scan seeks past those rows' YB delete
    tombstones instead of re-skimming them from the queue head every tick.
    It is in-memory only — 0 after a restart, so the first tick scans
@@ -137,7 +151,7 @@ runs:
    from the queue head (still bounded by the cutoff). The interval is
    wall-clock, so the sweep cadence holds regardless of the tick rate
    (`gc_period`). This re-selects the two things that sit *below* the
-   floor un-dequeued: a busy-fork drop still waiting for its fork to go
+   floor un-dequeued: a busy-object drop still waiting for its object to go
    idle, and a rare clamp-race trim straggler (a candidate the `due_lsn`
    clamp couldn't lift above a concurrently advancing cutoff). Without
    it, on a pageserver that never restarts those would linger
@@ -146,21 +160,29 @@ runs:
    lost to a crash before flushing); that class waits on a future
    full rel-directory sweep (see the design doc's full-sweep alternative).
 4. **Act**, ordered **drop → shrink → trim** (coarser first — a dropped
-   fork moots its own shrink/trim candidates):
-   - **drop** (`gc_act_drop_fork`): delete the fork's `pages` rows
-     `<= due_lsn` (bounded by the drop LSN, so a later reuse of the
-     relfilenode keeps its newer pages) plus the fork's rel-size meta key.
-   - **shrink** (`gc_act_shrink_fork`): delete `pages` with `blknum >= relsize
-     AND lsn <= due_lsn`, using the `relsize` (truncation target) carried
-     on the candidate — no meta read. The `lsn <= due_lsn` bound keeps a
-     re-extended block, whose new base sits above the truncation.
-   - **trim** (`gc_act_trim_blocks`): per block keep the newest base
-     `<= cutoff` (the anchor) and everything above; delete below. Trims
-     across forks run in parallel (`GC_ACTION_PARALLELISM`, default 2,
-     scaled) — distinct forks are distinct `pages` hash keys / tablets,
-     no ordering constraint.
+   object moots its own shrink/trim candidates), each dispatched by its
+   `gc_kind` to the matching act function:
+   - **drop** — delete the object's rows `<= due_lsn` (bounded by the drop
+     LSN, so a later reuse — relfilenode, wrapped-around segno, recreated
+     database — keeps its newer rows): a rel fork (`gc_act_drop_fork`:
+     `pages` + the rel-size meta key), an SLRU segment (`gc_act_drop_slru`:
+     `slru_pages` + the segment-size meta key), or dead meta keys
+     (`gc_act_drop_meta`).
+   - **shrink** (`gc_act_shrink_fork`, rel-only): delete `pages` with
+     `blknum >= relsize AND lsn <= due_lsn`, using the `relsize`
+     (truncation target) carried on the candidate — no meta read. The
+     `lsn <= due_lsn` bound keeps a re-extended block, whose new base sits
+     above the truncation. (SLRU truncation is segment-granular, so it
+     drops rather than shrinks; `meta` isn't shrunk.)
+   - **trim** — keep the newest base `<= cutoff` (the anchor) and
+     everything above, delete below: rel blocks (`gc_act_trim_blocks`) and
+     SLRU blocks (`gc_act_trim_slru`, one tablet per `(kind, segno)`);
+     `meta` has no `will_init`/chain, so `gc_act_trim_meta` just keeps the
+     newest version `<= cutoff` per key. Trims across objects run in
+     parallel (`GC_ACTION_PARALLELISM`, default 2, scaled) — distinct
+     objects are distinct hash keys / tablets, no ordering constraint.
 
-   All drops are acted regardless of fork state; the busy-fork ones are
+   All drops are acted regardless of busy state; the busy-object ones are
    just held back from the **dequeue** (step 5), not from the delete.
    All actions land before step 5 — that phase barrier is the
    crash-safety contract.
@@ -178,20 +200,21 @@ runs:
      per-candidate at `<= due_lsn`, so only the acted candidate may clear;
      an un-acted sibling (e.g. a capped-out later re-drop) keeps its
      distinct `due_lsn` and stays queued for its own tick.
-   - **busy-fork drops**: *not* passed to the dequeue. The drop's pages
-     are already deleted; leaving the row queued lets a later tick re-act
+   - **busy-object drops** (a rel fork or SLRU segment with a materialise
+     job in flight): *not* passed to the dequeue. The drop's rows are
+     already deleted; leaving the row queued lets a later tick re-act
      it and sweep any image a straggling materialise job inserts (at a
-     folded LSN below the drop) after the delete. A dropped fork gets no
-     new jobs, so the rescan (or the fork going idle) converges it. This
+     folded LSN below the drop) after the delete. A dropped object gets no
+     new jobs, so the rescan (or the object going idle) converges it. This
      is the one image-leak race the eager delete could open, closed by
      the re-act; shrink and trim don't need it (a late image on a live
-     fork is reclaimed by that block/fork's next visit).
+     object is reclaimed by that object's next visit).
 6. **Advance the floor**, only now — after act and dequeue both
    succeeded, so a failed tick leaves it and the failed batch
    re-selects. An **uncapped** tick (everything due handled) advances
    the floor to the cutoff; a **capped** tick only to `last selected
    due_lsn − 1`, since the limit can split that group's ties and the −1
-   keeps them selectable. Unchanged on an empty select. A busy-fork drop
+   keeps them selectable. Unchanged on an empty select. A busy-object drop
    and an unknown-kind row (alarmed via `correctness_errors_total`) don't
    hold the floor back — both stay on disk below it, swept by a later
    tick or the rescan.
@@ -211,7 +234,7 @@ per-branch is also per-instance today.
 | Knob | Default | Effect |
 | --- | --- | --- |
 | `enable_gc` | `false` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
-| `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per block. Read once at activation. |
+| `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
 | `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Read fresh each tick. |
 | `gc_period` | — | Drain tick interval. |
 | `gc_horizon` / `pitr_interval` | — | Retention window feeding the cutoff. |
@@ -226,10 +249,10 @@ one doc.)
 | --- | --- | --- | --- |
 | `pageserver_yb_gc_drain_lag_bytes` | UIntGauge | — | Residual `cutoff − due.last().due_lsn` on a budget-capped tick (the due span the tick couldn't reach); 0 when it drained everything due. 0 baseline while keeping up; grows once inserts outrun the drain — **the backlog/starvation alarm**. NB: during a backlog the periodic floor reset reads artificially high for one sample (it scans from the head, so `due.last()` is older); alert on a rate/smoothed value, not a raw sample. |
 | `pageserver_yb_gc_applied_cutoff_lsn` | UIntGauge | — | Current GC cutoff (`applied_gc_cutoff_lsn`), per tick. `pageserver_last_record_lsn − this` = retained-history window. Frozen while the queue grows ⇒ cutoff pinned (lease/child/`consistent_lsn`), not a slow drain. |
-| `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted, by producer path. For trim this counts sampler firings: one per `gc_candidate_every_n_bases` bases per block — but if a block fires more than once within one emitter flush window, those firings fold into a single `pending_gc` row, so inserted rows ≤ emitted. Drop/shrink events unsampled, one row each. `rate()` = emission rate, an upper bound on the insert rate. |
+| `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted, by producer path. For trim this counts sampler firings: one per `gc_candidate_every_n_bases` bases per key — but if a key fires more than once within one emitter flush window, those firings fold into a single `pending_gc` row, so inserted rows ≤ emitted. Drop/shrink events unsampled, one row each. `rate()` = emission rate, an upper bound on the insert rate. |
 | `pageserver_yb_gc_candidates_read_total` | IntCounter | — | Rows the drain's `pending_gc` select returned per tick (pre-routing). `== gc_drain_limit` ⇒ capped; `≫ removed` ⇒ read but not cleared. |
-| `pageserver_yb_gc_candidates_dequeued_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue: trim range-sweeps a visited block's whole `(floor, cutoff]` set (collapses duplicates), drop/shrink clear exactly the acted candidates. ≈ `read` at steady state. `rate(emitted) − rate(dequeued)` = queue growth. |
-| `pageserver_yb_gc_pages_rows_deleted_total` | IntCounter | — | `amp_storage.pages` rows deleted by the drain (trim / drop / shrink). `rate()` = reclamation throughput. |
+| `pageserver_yb_gc_candidates_dequeued_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue: trim range-sweeps a visited key's whole `(floor, cutoff]` set (collapses duplicates), drop/shrink clear exactly the acted candidates. ≈ `read` at steady state. `rate(emitted) − rate(dequeued)` = queue growth. |
+| `pageserver_yb_gc_rows_deleted_total` | IntCounter | — | Rows deleted by the drain across `amp_storage.pages`, `slru_pages`, and `meta` (trim / drop / shrink). `rate()` = reclamation throughput. |
 | `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence. |
 
 ## Troubleshooting
@@ -254,7 +277,7 @@ Three checks localize most GC escalations (metrics above):
 - `candidates_emitted` flat → `enable_gc` unset, or
   `gc_candidate_every_n_bases` too high (both read at timeline
   activation — a live change needs a PS restart).
-- Candidates drained but `pages_rows_deleted ≈ 0` → the cutoff isn't
+- Candidates drained but `rows_deleted ≈ 0` → the cutoff isn't
   advancing past them; it's pinned (below).
 
 **History window too large / cutoff pinned.** The cutoff is
@@ -282,7 +305,10 @@ cause.
 **Direct probes.**
 - `SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '…'` —
   queue depth.
+- `SELECT gc_kind, amp_storage.gc_key_decode(key), due_lsn FROM
+  amp_storage.pending_gc WHERE branch_id = '…'` — the queued candidates,
+  decoded.
 - `applied_gc_cutoff_lsn` in `amp_storage.branch_state` — the current
   cutoff.
 - The drain log line `gc drain complete … candidates_dequeued=…
-  pages_rows_deleted=…`.
+  rows_deleted=…`.

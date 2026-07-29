@@ -1,5 +1,5 @@
 //! DROP TABLE reclamation: dropping a relation queues a drop event
-//! (`pending_gc.blknum = -2`) and the drain then deletes every stored
+//! (`pending_gc.gc_kind = 4`, DropPages) and the drain then deletes every stored
 //! page of the dropped relfilenode once the cutoff passes the drop.
 //! Asserts the strongest end-state — the rel's `pages` rows AND its
 //! `pending_gc` rows both reach zero — on a dedicated branch so the
@@ -34,8 +34,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let rel_pages = format!(
         "SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}' AND relnode = {relnode}"
     );
+    // pending_gc keys the rel by its encoded Key; field4 (bytes 10-13,
+    // 1-indexed) holds the relnode — match it as a 4-byte big-endian slice.
     let rel_queue = format!(
-        "SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b}' AND relnode = {relnode}"
+        "SELECT count(*) FROM amp_storage.pending_gc \
+         WHERE branch_id = '{b}' AND substring(key FROM 10 FOR 4) = '\\x{relnode:08x}'::bytea"
     );
     // Wait for the seed writes to actually flush to YB before dropping.
     let mut stored = 0;

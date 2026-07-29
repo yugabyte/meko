@@ -302,10 +302,10 @@ pub(crate) static GC_CANDIDATES_DEQUEUED: Lazy<IntCounter> = Lazy::new(|| {
 });
 
 /// `pages` rows deleted by the GC drain (trim / drop / shrink).
-pub(crate) static GC_PAGES_ROWS_DELETED: Lazy<IntCounter> = Lazy::new(|| {
+pub(crate) static GC_ROWS_DELETED: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
-        "pageserver_yb_gc_pages_rows_deleted_total",
-        "amp_storage.pages rows deleted by the GC drain",
+        "pageserver_yb_gc_rows_deleted_total",
+        "rows deleted across amp_storage.pages, slru_pages and meta by the GC drain",
     )
     .expect("failed to define a metric")
 });
@@ -436,8 +436,13 @@ pub(crate) static YB_PAYLOAD_ROWS: Lazy<IntCounterVec> = Lazy::new(|| {
 /// - `gc_shrink_missing_relsize` — a `pending_gc` shrink candidate with
 ///   no stored `relsize`. The shrink skips the candidate rather than
 ///   wedging the drain.
+/// - `gc_shrink_non_rel` — a `pending_gc` shrink candidate whose `key`
+///   isn't a rel key (shrink is rel-only). Skipped, not acted.
 /// - `gc_unknown_candidate_kind` — a `pending_gc` row with an unknown
-///   `blknum` kind. The drain skips it; it stays queued.
+///   `gc_kind`. The drain skips it; it stays queued.
+/// - `gc_malformed_key` — a `pending_gc` row whose `key` bytea isn't the
+///   fixed 18-byte `Key` length. The drain skips it rather than panicking
+///   on decode.
 pub(crate) static CORRECTNESS_ERRORS: Lazy<metrics::IntCounterVec> = Lazy::new(|| {
     metrics::register_int_counter_vec!(
         "pageserver_yb_correctness_errors_total",

@@ -4,13 +4,16 @@
 //! `timeline`.
 
 use super::*;
+use pageserver_api::key::Key;
 
-/// One tick's due candidates split by kind: trim blocks grouped by fork
-/// (`blknum >= 0`) plus the drop (`-2`) and shrink (`-1`) sentinel rows.
-/// Produced by [`Timeline::partition_by_kind`], consumed by
-/// [`Timeline::act`].
+/// One tick's due candidates split by coarse operation (the drain's
+/// action order + dequeue method): trim candidates keep their `(key,
+/// gc_kind)` so `act_trims` dispatches to the right table; drop and shrink
+/// keep the whole row (it carries its `gc_kind`). Produced by
+/// [`Timeline::partition_by_kind`]; borrowed by [`Timeline::act`] then
+/// [`Timeline::dequeue`].
 struct DuePartition {
-    trim_blocks_by_fork: std::collections::HashMap<crate::page_store::GcForkIdent, Vec<i64>>,
+    trims: Vec<(Key, crate::page_store::GcKind)>,
     drops: Vec<crate::page_store::PendingGcRow>,
     shrinks: Vec<crate::page_store::PendingGcRow>,
 }
@@ -126,14 +129,15 @@ impl Timeline {
     ///   scan past rows earlier ticks already handled;
     /// - **act**: drop → shrink → trim, coarsest-first (a dropped fork
     ///   moots its own shrink/trim work), forks parallel within a kind.
-    ///   All drops are acted, busy fork or not;
+    ///   All drops are acted, busy or not;
     /// - **dequeue**, only after every action succeeded: trim blocks
     ///   range-sweep their candidates in `(floor, cutoff]` (duplicates
     ///   coalesce); drop/shrink clear by their PK `(ident, due_lsn)`. A
-    ///   busy-fork drop is acted but left queued so a later tick re-acts
+    ///   busy-object drop (a rel fork or SLRU segment with a materialise
+    ///   job in flight) is acted but left queued so a later tick re-acts
     ///   it, sweeping any image a straggling job inserts after the delete
-    ///   (a dropped fork gets no new jobs, so a floor reset converges it).
-    ///   Idempotent actions make act-before-dequeue crash-safe;
+    ///   (a dropped object gets no new jobs, so a floor reset converges
+    ///   it). Idempotent actions make act-before-dequeue crash-safe;
     /// - **advance the floor**, strictly after the dequeue: an error
     ///   before this point returns via `?` leaving it unchanged, so the
     ///   next tick re-selects. Uncapped → the cutoff (everything
@@ -142,7 +146,7 @@ impl Timeline {
     ///
     /// Every `gc_queue_floor_reset_interval` a tick resets the floor to
     /// 0 to sweep anything stranded below it — a clamp-race trim
-    /// straggler or a still-queued busy-fork drop.
+    /// straggler or a still-queued busy-object drop.
     async fn drain_due_candidates(
         &self,
         store: &Arc<crate::page_store::PageStore>,
@@ -195,17 +199,17 @@ impl Timeline {
         };
         let partition = Self::partition_by_kind(due);
 
-        // Forks with a materialise job pending, snapshotted BEFORE acting
-        // so a job in flight during a drop's delete is always caught: a
-        // busy-fork drop is acted but not dequeued (see `act`), so a
-        // straggling image INSERT after the delete can't leak. Paid only
-        // when drops are present.
-        let busy = if partition.drops.is_empty() {
+        // Objects (rel forks / SLRU segments) with a materialise job
+        // pending, snapshotted BEFORE acting so a job in flight during a
+        // drop's delete is always caught: a busy-object drop is acted but
+        // not dequeued (see `dequeue`), so a straggling image INSERT after
+        // the delete can't leak. Paid only when drops are present.
+        let objects_pending_materialise = if partition.drops.is_empty() {
             Default::default()
         } else {
             self.page_writer
                 .as_ref()
-                .map(|pw| pw.forks_with_pending_materialise())
+                .map(|pw| pw.objects_with_pending_materialise())
                 .unwrap_or_default()
         };
 
@@ -214,30 +218,23 @@ impl Timeline {
         if self.cancel.is_cancelled() {
             return Err(GcError::TimelineCancelled);
         }
-        let parallelism = pageserver_api::config::scale_count(
-            crate::page_store::GC_ACTION_PARALLELISM,
-            self.conf.scale_factor,
-        );
 
-        let (pages_deleted, trim_to_dequeue, drop_shrink_to_dequeue) = self
-            .act(store, partition, &busy, applied_cutoff, parallelism)
+        // Act (delete), then dequeue what was acted — strictly after every
+        // action succeeded. An error before the dequeue returns via `?`
+        // leaving the floor unchanged, so the next tick re-selects the same
+        // batch. `objects_pending_materialise` was snapshotted before acting.
+        let rows_deleted = self.act(store, &partition, applied_cutoff).await?;
+        result.rows_deleted = rows_deleted;
+
+        let dequeued = self
+            .dequeue(
+                store,
+                &partition,
+                &objects_pending_materialise,
+                floor,
+                applied_cutoff,
+            )
             .await?;
-        result.pages_rows_deleted = pages_deleted;
-
-        // Dequeue strictly after every action succeeded, then commit the
-        // floor. An error before this point returns via `?` leaving the
-        // floor unchanged, so the next tick re-selects the same batch.
-        // Trim blocks range-sweep `(floor, cutoff]`; drop/shrink clear by
-        // their PK `(ident, due_lsn)`.
-        let removed_trim = store
-            .gc_dequeue_trim_candidates(self.branch_id, &trim_to_dequeue, floor, applied_cutoff)
-            .await
-            .map_err(GcError::Persistence)?;
-        let removed_drop_shrink = store
-            .gc_dequeue_drop_shrink_candidates(self.branch_id, &drop_shrink_to_dequeue)
-            .await
-            .map_err(GcError::Persistence)?;
-        let removed = removed_trim + removed_drop_shrink;
         // Monotone `max` so a floor-reset tick's older batch (it scans
         // from 0) can't lower a higher floor. Stamp the reset only now the
         // dequeue succeeded, so a failed reset tick retries next tick
@@ -247,9 +244,9 @@ impl Timeline {
         if is_reset {
             progress.last_floor_reset = Some(std::time::Instant::now());
         }
-        result.candidates_dequeued = removed;
-        crate::metrics::GC_CANDIDATES_DEQUEUED.inc_by(removed);
-        crate::metrics::GC_PAGES_ROWS_DELETED.inc_by(result.pages_rows_deleted);
+        result.candidates_dequeued = dequeued;
+        crate::metrics::GC_CANDIDATES_DEQUEUED.inc_by(dequeued);
+        crate::metrics::GC_ROWS_DELETED.inc_by(result.rows_deleted);
         crate::metrics::GC_DRAIN_TICKS
             .with_label_values(&[if all_due_visited { "drained" } else { "capped" }])
             .inc();
@@ -257,116 +254,109 @@ impl Timeline {
         info!(
             applied_gc_cutoff = %applied_cutoff,
             candidates_dequeued = result.candidates_dequeued,
-            pages_rows_deleted = result.pages_rows_deleted,
+            rows_deleted = result.rows_deleted,
             "gc drain complete"
         );
         Ok(())
     }
 
-    /// Act on every due candidate, coarsest-first — drop (`-2`) → shrink
-    /// (`-1`) → trim (`>= 0`), forks parallel within a kind: a dropped
-    /// fork moots its own shrink/trim work. Each act helper is a phase
-    /// barrier; a first error aborts before the caller dequeues (in-flight
-    /// siblings may still land server-side — harmless, idempotent, they
-    /// stay queued). All drops are acted, busy fork or not.
-    ///
-    /// Returns `(pages rows deleted, trim blocks to range-sweep, drop/shrink
-    /// rows to dequeue by exact PK)` — tying the dequeue sets to what was
-    /// acted. `busy` must be snapshotted by the caller before this runs.
+    /// Act on every due candidate, coarsest-first — drop → shrink → trim,
+    /// objects parallel within a kind: a dropped fork moots its own
+    /// shrink/trim work. Each act helper is a phase barrier; a first error
+    /// aborts before the caller dequeues (in-flight siblings may still land
+    /// server-side — harmless, idempotent, they stay queued). All drops are
+    /// acted, busy object or not. Returns rows deleted (across pages,
+    /// slru_pages, and meta); the caller
+    /// then [`Self::dequeue`]s what was acted.
     async fn act(
         &self,
         store: &Arc<crate::page_store::PageStore>,
-        due: DuePartition,
-        busy: &std::collections::HashSet<crate::page_store::GcForkIdent>,
+        due: &DuePartition,
         applied_cutoff: Lsn,
-        parallelism: usize,
-    ) -> Result<
-        (
-            u64,
-            Vec<crate::page_store::GcBlockIdent>,
-            Vec<crate::page_store::GcDropShrinkCandidateId>,
-        ),
-        GcError,
-    > {
-        let DuePartition {
-            trim_blocks_by_fork,
-            drops,
-            shrinks,
-        } = due;
-        // Captured before act_trims consumes the map.
-        let trim_blocks: Vec<crate::page_store::GcBlockIdent> = trim_blocks_by_fork
+    ) -> Result<u64, GcError> {
+        let mut pages_deleted = self.act_drops(store, &due.drops).await?;
+        pages_deleted += self.act_shrinks(store, &due.shrinks).await?;
+        pages_deleted += self.act_trims(store, &due.trims, applied_cutoff).await?;
+        Ok(pages_deleted)
+    }
+
+    /// Remove from `pending_gc` exactly what [`Self::act`] just reclaimed,
+    /// returning the count. Trim keys range-sweep `(floor, cutoff]`;
+    /// drop/shrink clear by their PK. A drop whose object is in
+    /// `objects_pending_materialise` (snapshotted before acting) is left
+    /// queued for a later tick — a straggling image INSERT after its delete
+    /// would otherwise leak — and logged, not removed. Runs only after
+    /// `act` succeeded (crash-safety: act-before-dequeue).
+    async fn dequeue(
+        &self,
+        store: &Arc<crate::page_store::PageStore>,
+        due: &DuePartition,
+        objects_pending_materialise: &std::collections::HashSet<Key>,
+        floor: Lsn,
+        applied_cutoff: Lsn,
+    ) -> Result<u64, GcError> {
+        // Trims dequeue by a range sweep over their (key, gc_kind) pairs;
+        // shrinks and non-busy drops by PK; a busy drop (in
+        // objects_pending_materialise) stays queued.
+        let mut drop_shrink_to_dequeue: Vec<crate::page_store::GcDropShrinkCandidateId> = due
+            .shrinks
             .iter()
-            .flat_map(|(&(s, d, r, f), blks)| blks.iter().map(move |&b| (s, d, r, f, b)))
+            .map(|r| (r.key, r.gc_kind, r.due_lsn))
             .collect();
-
-        let mut pages_deleted = self.act_drops(store, &drops, parallelism).await?;
-        pages_deleted += self.act_shrinks(store, &shrinks, parallelism).await?;
-        pages_deleted += self
-            .act_trims(store, trim_blocks_by_fork, applied_cutoff, parallelism)
-            .await?;
-
-        let (trim_to_dequeue, drop_shrink_to_dequeue, deferred_forks) =
-            Self::get_dequeue_targets(trim_blocks, &shrinks, &drops, busy);
-        // A busy fork's drop is acted but left queued; it re-selects (and
-        // re-logs) only on floor resets, so a fork recurring here across
+        let mut deferred_dequeue_keys: Vec<Key> = Vec::new();
+        for r in &due.drops {
+            if objects_pending_materialise.contains(&r.key) {
+                deferred_dequeue_keys.push(r.key);
+            } else {
+                drop_shrink_to_dequeue.push((r.key, r.gc_kind, r.due_lsn));
+            }
+        }
+        // A busy object's drop is acted but left queued; it re-selects (and
+        // re-logs) only on floor resets, so an object recurring here across
         // resets means its materialise job is wedged, pinning the drop's
         // reclamation. info! (not debug): the whole point is prod
-        // visibility, and the volume is one line per fork per reset.
-        if !deferred_forks.is_empty() {
-            let sample = &deferred_forks[..deferred_forks.len().min(8)];
+        // visibility, and the volume is one line per object per reset.
+        if !deferred_dequeue_keys.is_empty() {
+            let sample = &deferred_dequeue_keys[..deferred_dequeue_keys.len().min(8)];
             tracing::info!(
-                count = deferred_forks.len(),
-                forks = ?sample,
-                "gc: busy-fork drops left queued (materialise job in flight)"
+                count = deferred_dequeue_keys.len(),
+                objects = ?sample,
+                "gc: busy-object drops left queued (materialise job in flight)"
             );
         }
-        Ok((pages_deleted, trim_to_dequeue, drop_shrink_to_dequeue))
+        let removed_trim = store
+            .gc_dequeue_trim_candidates(self.branch_id, &due.trims, floor, applied_cutoff)
+            .await
+            .map_err(GcError::Persistence)?;
+        let removed_drop_shrink = store
+            .gc_dequeue_drop_shrink_candidates(self.branch_id, &drop_shrink_to_dequeue)
+            .await
+            .map_err(GcError::Persistence)?;
+        Ok(removed_trim + removed_drop_shrink)
     }
 
-    /// Split what [`Self::act`] cleared into its dequeue sets: trim blocks
-    /// (range-swept over `(floor, cutoff]`) and drop/shrink candidates
-    /// (by their PK). Busy-fork drops stay queued for a later tick; their
-    /// forks are returned only for the breadcrumb log.
-    fn get_dequeue_targets(
-        trim_blocks: Vec<crate::page_store::GcBlockIdent>,
-        shrink_rows: &[crate::page_store::PendingGcRow],
-        drop_rows: &[crate::page_store::PendingGcRow],
-        busy: &std::collections::HashSet<crate::page_store::GcForkIdent>,
-    ) -> (
-        Vec<crate::page_store::GcBlockIdent>,
-        Vec<crate::page_store::GcDropShrinkCandidateId>,
-        Vec<crate::page_store::GcForkIdent>,
-    ) {
-        let fork =
-            |r: &crate::page_store::PendingGcRow| (r.spcnode, r.dbnode, r.relnode, r.forknum);
-        let is_busy = |r: &crate::page_store::PendingGcRow| busy.contains(&fork(r));
-        let candidate_id = |r: &crate::page_store::PendingGcRow| {
-            (
-                (r.spcnode, r.dbnode, r.relnode, r.forknum, r.blknum),
-                r.due_lsn,
-            )
-        };
-        let mut drop_shrink_targets: Vec<crate::page_store::GcDropShrinkCandidateId> =
-            shrink_rows.iter().map(candidate_id).collect();
-        drop_shrink_targets.extend(drop_rows.iter().filter(|r| !is_busy(r)).map(candidate_id));
-        let deferred_forks = drop_rows.iter().filter(|r| is_busy(r)).map(fork).collect();
-        (trim_blocks, drop_shrink_targets, deferred_forks)
-    }
-
-    /// Run `f` over each of `items` with `parallelism`-way concurrency and
-    /// sum the per-call deleted counts. Each future must own its captures
-    /// (so it's `Send` across `buffer_unordered`) — clone the `Arc` store
-    /// inside the closure, before its `async move`.
+    /// Run `f` over each of `items` with bounded concurrency
+    /// (`GC_ACTION_PARALLELISM` × tenant `scale_factor`) and sum the
+    /// per-call deleted counts. Each item gets a fresh `store` clone handed
+    /// to `f`, so the future it returns owns its captures (required to be
+    /// `Send` across `buffer_unordered`).
     async fn run_parallel_actions<T, Fut>(
+        &self,
+        store: &Arc<crate::page_store::PageStore>,
         items: impl Iterator<Item = T>,
-        parallelism: usize,
-        f: impl Fn(T) -> Fut,
+        f: impl Fn(Arc<crate::page_store::PageStore>, T) -> Fut,
     ) -> Result<u64, GcError>
     where
         Fut: std::future::Future<Output = anyhow::Result<u64>>,
     {
         use futures::{StreamExt as _, TryStreamExt as _};
-        let deleted: Vec<u64> = futures::stream::iter(items.map(f))
+        // Fan-out width: GC_ACTION_PARALLELISM scaled by the tenant
+        // scale_factor (cheap; recomputed per fan-out).
+        let parallelism = pageserver_api::config::scale_count(
+            crate::page_store::GC_ACTION_PARALLELISM,
+            self.conf.scale_factor,
+        );
+        let deleted: Vec<u64> = futures::stream::iter(items.map(|item| f(store.clone(), item)))
             .buffer_unordered(parallelism)
             .try_collect()
             .await
@@ -374,36 +364,80 @@ impl Timeline {
         Ok(deleted.into_iter().sum())
     }
 
-    /// Drop actions, one per candidate, forks in parallel (distinct
-    /// tablets, no ordering constraint): delete every page of the fork
-    /// with `lsn <= due_lsn` (relnode-reuse safe). Not deduped per fork —
-    /// exact-PK dequeue clears only the acted candidate, so acting each
-    /// one is correct; two same-fork drops in a tick just run two
-    /// (subsumed) deletes. Returns pages rows deleted.
+    /// Drop actions, reclaiming each object's rows `<= due_lsn`
+    /// (id-reuse-safe — a recreated object writes above it). Rel-fork and
+    /// SLRU drops act per candidate, in parallel (distinct tablets, no
+    /// ordering constraint). Dead meta keys batch per `due_lsn` into one
+    /// `key = ANY` delete — a DROP DATABASE emits O(rels) of them (a
+    /// sparse-reldir tombstone per rel + the dir/relmap keys) all at the
+    /// drop's LSN — the same batched meta path `act_trims` uses. Returns
+    /// rows deleted.
     async fn act_drops(
         &self,
         store: &Arc<crate::page_store::PageStore>,
         drop_rows: &[crate::page_store::PendingGcRow],
-        parallelism: usize,
     ) -> Result<u64, GcError> {
-        let targets: Vec<(crate::page_store::GcForkIdent, Lsn)> = drop_rows
-            .iter()
-            .map(|r| ((r.spcnode, r.dbnode, r.relnode, r.forknum), r.due_lsn))
-            .collect();
+        use crate::page_store::GcKind;
+        use std::collections::HashMap;
         let branch_id = self.branch_id;
-        Self::run_parallel_actions(
-            targets.into_iter(),
-            parallelism,
-            |((spcnode, dbnode, relnode, forknum), due_lsn)| {
-                let store = store.clone();
-                async move {
-                    store
-                        .gc_act_drop_fork(branch_id, spcnode, dbnode, relnode, forknum, due_lsn)
-                        .await
+
+        // Split by table: rel-fork / SLRU drops act per candidate; DropMeta
+        // keys group by `due_lsn` for one batched delete each. A non-drop
+        // kind here is a partition bug — skip + alarm, don't misdelete.
+        let mut fork_slru: Vec<crate::page_store::PendingGcRow> = Vec::new();
+        let mut meta_by_due: HashMap<Lsn, Vec<Key>> = HashMap::new();
+        for row in drop_rows {
+            match row.gc_kind {
+                GcKind::DropPages | GcKind::DropSlru => fork_slru.push(*row),
+                GcKind::DropMeta => meta_by_due.entry(row.due_lsn).or_default().push(row.key),
+                other => {
+                    tracing::error!(gc_kind = ?other, key = %row.key, "act_drops: non-drop kind");
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["gc_unknown_candidate_kind"])
+                        .inc();
                 }
-            },
-        )
-        .await
+            }
+        }
+
+        // TODO(perf): a DROP DATABASE emits O(rels) DropPages too; these could
+        // batch like DropMeta above — one composite (spc,db,rel,fork) unnest
+        // delete per due_lsn, plus batched rel-size sentinels. DropSlru is few.
+        let mut deleted = self
+            .run_parallel_actions(store, fork_slru.into_iter(), |store, row| async move {
+                let (key, due) = (row.key, row.due_lsn);
+                match row.gc_kind {
+                    // rel fork: drop its pages + rel-size sentinel key.
+                    GcKind::DropPages => {
+                        store
+                            .gc_act_drop_fork(branch_id, crate::page_store::rel_fork_of(&key), due)
+                            .await
+                    }
+                    // SLRU segment: drop its slru_pages + its seg-size
+                    // sentinel meta key (= this key).
+                    GcKind::DropSlru => {
+                        store
+                            .gc_act_drop_slru(
+                                branch_id,
+                                crate::page_store::slru_seg_of(&key),
+                                crate::page_store::key_to_bytes(&key),
+                                due,
+                            )
+                            .await
+                    }
+                    // The split above routed only Drop{Pages,Slru} here.
+                    _ => Ok(0),
+                }
+            })
+            .await?;
+
+        // Dead meta keys, one batched delete per `due_lsn`.
+        for (due, keys) in meta_by_due {
+            deleted += store
+                .gc_act_drop_meta(branch_id, &keys, due)
+                .await
+                .map_err(GcError::Persistence)?;
+        }
+        Ok(deleted)
     }
 
     /// Shrink actions, one delete per candidate. Returns rows deleted.
@@ -411,22 +445,16 @@ impl Timeline {
         &self,
         store: &Arc<crate::page_store::PageStore>,
         shrink_rows: &[crate::page_store::PendingGcRow],
-        parallelism: usize,
     ) -> Result<u64, GcError> {
         let targets = Self::shrink_targets(shrink_rows);
         let branch_id = self.branch_id;
-        Self::run_parallel_actions(
+        self.run_parallel_actions(
+            store,
             targets.into_iter(),
-            parallelism,
-            |((spcnode, dbnode, relnode, forknum), relsize, due_lsn)| {
-                let store = store.clone();
-                async move {
-                    store
-                        .gc_act_shrink_fork(
-                            branch_id, spcnode, dbnode, relnode, forknum, relsize, due_lsn,
-                        )
-                        .await
-                }
+            |store, (fork, relsize, due_lsn)| async move {
+                store
+                    .gc_act_shrink_fork(branch_id, fork, relsize, due_lsn)
+                    .await
             },
         )
         .await
@@ -435,103 +463,146 @@ impl Timeline {
     /// Build one shrink target per candidate, each with its own
     /// `(relsize, due_lsn)` — never coalesced per fork (that would reclaim
     /// a block re-extended between two truncations; see the trap on
-    /// `gc_act_shrink_fork`). A candidate missing its stored `relsize` is
-    /// skipped and alarmed, not acted, so the drain isn't wedged.
+    /// `gc_act_shrink_fork`). Shrink is rel-only: a non-rel or
+    /// missing-`relsize` candidate is skipped and alarmed, not acted, so
+    /// the drain isn't wedged.
     fn shrink_targets(
         shrink_rows: &[crate::page_store::PendingGcRow],
     ) -> Vec<(crate::page_store::GcForkIdent, i64, Lsn)> {
         shrink_rows
             .iter()
-            .filter_map(|r| match r.relsize {
-                Some(relsize) => Some((
-                    (r.spcnode, r.dbnode, r.relnode, r.forknum),
-                    relsize,
-                    r.due_lsn,
-                )),
-                None => {
+            .filter_map(|r| {
+                if !r.key.is_rel_size_key() {
                     tracing::error!(
-                        relnode = r.relnode,
-                        forknum = r.forknum,
+                        key = %r.key,
                         due_lsn = %r.due_lsn,
-                        "pending_gc shrink candidate without a stored relsize; skipped"
+                        "pending_gc shrink candidate is not a rel-size key; skipped"
                     );
                     crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["gc_shrink_missing_relsize"])
+                        .with_label_values(&["gc_shrink_non_rel"])
                         .inc();
-                    None
+                    return None;
+                }
+                match r.relsize {
+                    Some(relsize) => {
+                        Some((crate::page_store::rel_fork_of(&r.key), relsize, r.due_lsn))
+                    }
+                    None => {
+                        tracing::error!(
+                            key = %r.key,
+                            due_lsn = %r.due_lsn,
+                            "pending_gc shrink candidate without a stored relsize; skipped"
+                        );
+                        crate::metrics::CORRECTNESS_ERRORS
+                            .with_label_values(&["gc_shrink_missing_relsize"])
+                            .inc();
+                        None
+                    }
                 }
             })
             .collect()
     }
 
-    /// Trim actions, forks in parallel: per listed block keep the
-    /// anchor (newest base `<= applied_cutoff`) and everything above
-    /// it, delete below. Returns pages rows deleted.
+    /// Trim actions: per rel fork / SLRU segment keep each block's anchor
+    /// (newest base `<= applied_cutoff`) and everything above, delete
+    /// below; per meta key keep the newest version `<= cutoff`. Objects
+    /// run in parallel within each keyspace. Returns rows deleted.
     async fn act_trims(
         &self,
         store: &Arc<crate::page_store::PageStore>,
-        trim_blocks_by_fork: std::collections::HashMap<crate::page_store::GcForkIdent, Vec<i64>>,
+        trims: &[(Key, crate::page_store::GcKind)],
         applied_cutoff: Lsn,
-        parallelism: usize,
     ) -> Result<u64, GcError> {
+        use crate::page_store::GcKind;
+        use std::collections::HashMap;
         let branch_id = self.branch_id;
-        Self::run_parallel_actions(
-            trim_blocks_by_fork.into_iter(),
-            parallelism,
-            |((spcnode, dbnode, relnode, forknum), blknums)| {
-                let store = store.clone();
-                // blknums already sorted + deduped in partition_by_kind.
-                async move {
-                    store
-                        .gc_act_trim_blocks(
-                            branch_id,
-                            spcnode,
-                            dbnode,
-                            relnode,
-                            forknum,
-                            &blknums,
-                            applied_cutoff,
-                        )
-                        .await
+
+        // Group by target table off the candidate's kind (block keys by
+        // their object); keys are already deduped in partition_by_kind. An
+        // unexpected kind here would be a partition bug — skip + alarm.
+        let mut rel_by_fork: HashMap<crate::page_store::GcForkIdent, Vec<i64>> = HashMap::new();
+        let mut slru_by_seg: HashMap<crate::page_store::GcSlruSeg, Vec<i64>> = HashMap::new();
+        let mut meta_keys: Vec<Vec<u8>> = Vec::new();
+        for (key, gc_kind) in trims {
+            match *gc_kind {
+                GcKind::TrimPages => rel_by_fork
+                    .entry(crate::page_store::rel_fork_of(key))
+                    .or_default()
+                    .push(key.field6 as i64),
+                GcKind::TrimSlru => slru_by_seg
+                    .entry(crate::page_store::slru_seg_of(key))
+                    .or_default()
+                    .push(key.field6 as i64),
+                GcKind::TrimMeta => meta_keys.push(crate::page_store::key_to_bytes(key)),
+                other => {
+                    tracing::error!(gc_kind = ?other, key = %key, "act_trims: non-trim kind");
+                    crate::metrics::CORRECTNESS_ERRORS
+                        .with_label_values(&["gc_unknown_candidate_kind"])
+                        .inc();
                 }
-            },
-        )
-        .await
+            }
+        }
+
+        let rel_deleted = self
+            .run_parallel_actions(
+                store,
+                rel_by_fork.into_iter(),
+                |store, (fork, blknums)| async move {
+                    store
+                        .gc_act_trim_blocks(branch_id, fork, &blknums, applied_cutoff)
+                        .await
+                },
+            )
+            .await?;
+
+        let slru_deleted = self
+            .run_parallel_actions(
+                store,
+                slru_by_seg.into_iter(),
+                |store, (seg, blknums)| async move {
+                    store
+                        .gc_act_trim_slru(branch_id, seg, &blknums, applied_cutoff)
+                        .await
+                },
+            )
+            .await?;
+
+        // Meta trim: one batched keep-newest over all meta keys.
+        let meta_deleted = store
+            .gc_act_trim_meta(branch_id, &meta_keys, applied_cutoff)
+            .await
+            .map_err(GcError::Persistence)?;
+
+        Ok(rel_deleted + slru_deleted + meta_deleted)
     }
 
-    /// Partition due candidates by kind (`blknum` doubles as the kind —
-    /// see `GC_KIND_DROP` / `GC_KIND_SHRINK`). Trim rows (`blknum >= 0`)
-    /// group by fork — N candidates for one block coalesce into one
-    /// visit, lossless because the trim anchors at the cutoff, not any
-    /// candidate's due_lsn (see `gc_act_trim_blocks`). An unknown negative
-    /// kind is skipped with a `correctness_errors_total` alarm and left
-    /// on disk, never dequeued.
+    /// Partition due candidates into the drain's coarse buckets — trim /
+    /// drop / shrink — off `gc_kind`, which sets the drain's action order
+    /// and dequeue method. A trim keeps its `(key, gc_kind)` so `act_trims`
+    /// can dispatch to the right table (N due candidates for one key
+    /// coalesce, since the trim anchors at the cutoff, not any candidate's
+    /// due_lsn); drop and shrink keep the full row (it carries its kind).
+    /// An unknown kind is skipped with a `correctness_errors_total` alarm
+    /// and left on disk, never dequeued.
     ///
-    /// Each fork's block list is deduped here (a hot block has many due
-    /// candidates), so neither the trim action nor the flattened dequeue
-    /// bind array carries duplicate blknums.
+    /// `trims` is deduped by key here (a hot key has many due candidates),
+    /// so neither the trim action nor the dequeue carries duplicate keys.
     ///
     /// Returns the split as a [`DuePartition`].
     fn partition_by_kind(due: Vec<crate::page_store::PendingGcRow>) -> DuePartition {
-        let mut trim_blocks_by_fork: std::collections::HashMap<
-            crate::page_store::GcForkIdent,
-            Vec<i64>,
-        > = std::collections::HashMap::new();
+        use crate::page_store::CoarseOp;
+        let mut trims = Vec::new();
         let mut drop_rows = Vec::new();
         let mut shrink_rows = Vec::new();
         for row in due {
-            match row.blknum {
-                b if b >= 0 => {
-                    trim_blocks_by_fork
-                        .entry((row.spcnode, row.dbnode, row.relnode, row.forknum))
-                        .or_default()
-                        .push(b);
-                }
-                crate::page_store::GC_KIND_DROP => drop_rows.push(row),
-                crate::page_store::GC_KIND_SHRINK => shrink_rows.push(row),
-                other => {
+            match row.gc_kind.coarse() {
+                Some(CoarseOp::Trim) => trims.push((row.key, row.gc_kind)),
+                Some(CoarseOp::Drop) => drop_rows.push(row),
+                Some(CoarseOp::Shrink) => shrink_rows.push(row),
+                None => {
                     tracing::error!(
-                        blknum = other,
+                        gc_kind = ?row.gc_kind,
+                        key = %row.key,
                         due_lsn = %row.due_lsn,
                         "pending_gc candidate of unknown kind; left on disk, never dequeued"
                     );
@@ -541,12 +612,10 @@ impl Timeline {
                 }
             }
         }
-        for blknums in trim_blocks_by_fork.values_mut() {
-            blknums.sort_unstable();
-            blknums.dedup();
-        }
+        trims.sort_unstable();
+        trims.dedup();
         DuePartition {
-            trim_blocks_by_fork,
+            trims,
             drops: drop_rows,
             shrinks: shrink_rows,
         }
@@ -598,20 +667,45 @@ impl Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page_store::{GC_KIND_DROP, GC_KIND_SHRINK, PendingGcRow};
+    use crate::page_store::{GcKind, PendingGcRow};
+    use pageserver_api::key::{rel_block_to_key, rel_size_to_key};
+    use pageserver_api::reltag::RelTag;
 
-    fn row(blknum: i64) -> PendingGcRow {
-        PendingGcRow {
+    fn rel(relnode: u32) -> RelTag {
+        RelTag {
             spcnode: 1663,
             dbnode: 5,
-            relnode: 16400,
+            relnode,
             forknum: 0,
-            blknum,
+        }
+    }
+    /// A trim candidate for a rel block.
+    fn trim_row(relnode: u32, blknum: u32) -> PendingGcRow {
+        PendingGcRow {
+            key: rel_block_to_key(rel(relnode), blknum),
+            gc_kind: GcKind::TrimPages,
             due_lsn: Lsn(100),
             relsize: None,
         }
     }
-
+    /// A drop candidate — the fork's rel-size object key.
+    fn drop_row(relnode: u32, due: u64) -> PendingGcRow {
+        PendingGcRow {
+            key: rel_size_to_key(rel(relnode)),
+            gc_kind: GcKind::DropPages,
+            due_lsn: Lsn(due),
+            relsize: None,
+        }
+    }
+    /// A shrink candidate — the fork's rel-size key + relsize.
+    fn shrink_row(relnode: u32, relsize: i64, due: u64) -> PendingGcRow {
+        PendingGcRow {
+            key: rel_size_to_key(rel(relnode)),
+            gc_kind: GcKind::ShrinkPages,
+            due_lsn: Lsn(due),
+            relsize: Some(relsize),
+        }
+    }
     /// Scenario: the queue holds a row of a kind this version doesn't
     /// know. The partition must skip + alarm it — never panic on table
     /// contents — while still routing the known kinds.
@@ -623,56 +717,54 @@ mod tests {
                 .get()
         };
         let before = alarms();
+        let unknown = PendingGcRow {
+            key: rel_block_to_key(rel(16400), 0),
+            gc_kind: GcKind::Unknown(7), // no such kind
+            due_lsn: Lsn(100),
+            relsize: None,
+        };
         let p = Timeline::partition_by_kind(vec![
-            row(7),
-            row(GC_KIND_DROP),
-            row(GC_KIND_SHRINK),
-            row(-3),
+            trim_row(16400, 0),
+            drop_row(16400, 100),
+            shrink_row(16400, 2, 100),
+            unknown,
         ]);
-        assert_eq!(p.trim_blocks_by_fork.values().flatten().count(), 1);
+        assert_eq!(p.trims.len(), 1);
         assert_eq!(p.drops.len(), 1);
         assert_eq!(p.shrinks.len(), 1);
         assert_eq!(alarms() - before, 1, "the unknown kind alarms once");
     }
 
-    /// `get_dequeue_targets` splits the acted candidates into trim blocks
-    /// (range-swept) and drop/shrink candidates (exact `(ident, due_lsn)`),
-    /// excluding drops whose fork is busy (acted, left queued) and
-    /// reporting those deferred forks.
+    /// Each of the 7 kinds buckets by coarse operation (trim / drop /
+    /// shrink), and a trim retains its `gc_kind` for table dispatch.
     #[test]
-    fn get_dequeue_targets_splits_trim_and_drop_shrink() {
-        let mkrow = |relnode: i64, blknum: i64| PendingGcRow {
-            spcnode: 1663,
-            dbnode: 5,
-            relnode,
-            forknum: 0,
-            blknum,
-            due_lsn: Lsn(10),
+    fn partition_buckets_all_seven_kinds() {
+        let row = |key: Key, gc_kind: GcKind| PendingGcRow {
+            key,
+            gc_kind,
+            due_lsn: Lsn(100),
             relsize: None,
         };
-        let mut busy = std::collections::HashSet::new();
-        busy.insert((1663, 5, 16400, 0)); // fork of the busy drop below
-
-        let (trim_blocks, exact_rows, deferred_forks) = Timeline::get_dequeue_targets(
-            vec![(1663, 5, 16403, 0, 7)],    // a visited trim block
-            &[mkrow(16402, GC_KIND_SHRINK)], // shrink candidate
-            &[mkrow(16400, GC_KIND_DROP), mkrow(16401, GC_KIND_DROP)], // busy, then idle
-            &busy,
-        );
-
-        assert_eq!(trim_blocks, vec![(1663, 5, 16403, 0, 7)]);
+        let k = rel_block_to_key(rel(16400), 0);
+        let p = Timeline::partition_by_kind(vec![
+            row(k, GcKind::TrimPages),
+            row(k, GcKind::TrimSlru),
+            row(k, GcKind::TrimMeta),
+            row(k, GcKind::ShrinkPages),
+            row(k, GcKind::DropPages),
+            row(k, GcKind::DropSlru),
+            row(k, GcKind::DropMeta),
+        ]);
+        // 3 TRIM_* → trims (deduped by key, but distinct kinds stay), 3
+        // DROP_* → drops, 1 SHRINK → shrinks.
+        let mut trim_kinds: Vec<GcKind> = p.trims.iter().map(|(_, kind)| *kind).collect();
+        trim_kinds.sort_unstable();
         assert_eq!(
-            exact_rows,
-            vec![
-                ((1663, 5, 16402, 0, GC_KIND_SHRINK), Lsn(10)), // shrink candidate
-                ((1663, 5, 16401, 0, GC_KIND_DROP), Lsn(10)),   // idle drop; busy 16400 excluded
-            ]
+            trim_kinds,
+            vec![GcKind::TrimPages, GcKind::TrimSlru, GcKind::TrimMeta]
         );
-        assert_eq!(
-            deferred_forks,
-            vec![(1663, 5, 16400, 0)],
-            "the busy fork's drop is deferred and reported"
-        );
+        assert_eq!(p.drops.len(), 3);
+        assert_eq!(p.shrinks.len(), 1);
     }
 
     /// Two shrink candidates on the SAME fork (two truncations) must stay
@@ -684,16 +776,8 @@ mod tests {
     /// delete would drop that live lsn-60 base.
     #[test]
     fn shrink_targets_not_merged_per_fork() {
-        let cand = |relsize: i64, due: u64| PendingGcRow {
-            spcnode: 1663,
-            dbnode: 5,
-            relnode: 16400,
-            forknum: 0,
-            blknum: GC_KIND_SHRINK,
-            due_lsn: Lsn(due),
-            relsize: Some(relsize),
-        };
-        let targets = Timeline::shrink_targets(&[cand(2, 50), cand(3, 80)]);
+        let targets =
+            Timeline::shrink_targets(&[shrink_row(16400, 2, 50), shrink_row(16400, 3, 80)]);
         assert_eq!(
             targets,
             vec![
@@ -715,17 +799,11 @@ mod tests {
                 .with_label_values(&["gc_shrink_missing_relsize"])
                 .get()
         };
-        let mk = |relsize: Option<i64>| PendingGcRow {
-            spcnode: 1663,
-            dbnode: 5,
-            relnode: 16400,
-            forknum: 0,
-            blknum: GC_KIND_SHRINK,
-            due_lsn: Lsn(50),
-            relsize,
-        };
+        let mut missing = shrink_row(16400, 0, 50);
+        missing.relsize = None;
+        let valid = shrink_row(16400, 4, 50);
         let before = alarms();
-        let targets = Timeline::shrink_targets(&[mk(None), mk(Some(4))]);
+        let targets = Timeline::shrink_targets(&[missing, valid]);
         assert_eq!(
             targets,
             vec![((1663, 5, 16400, 0), 4, Lsn(50))],

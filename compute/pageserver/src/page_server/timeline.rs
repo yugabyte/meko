@@ -3292,6 +3292,7 @@ impl TimelineWriter<'_> {
         // appropriate INSERTs into amp_storage.pages via PageWriter.
         // The layer-file tombstone path that this hook fed into is
         // gone (Phase 4d).
+        // TODO(gc): retire this no-op + its `pending_deletions` / `self.delete` scaffolding — GC now reclaims dropped objects.
         Ok(())
     }
 
