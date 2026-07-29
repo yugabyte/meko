@@ -1631,7 +1631,7 @@ impl DatadirModification<'_> {
     /// not readable until this modification is committed, whereas metadata keys are visible for read
     /// via [`Self::get`] as soon as their record has been ingested.
     fn is_data_key(key: &Key) -> bool {
-        key.is_rel_block_key() || key.is_slru_block_key()
+        key.is_block_key()
     }
 
     /// Initialize a completely new repository.
@@ -2093,13 +2093,19 @@ impl DatadirModification<'_> {
         if !self.gc_enabled() {
             return;
         }
-        self.pending_gc_drop_shrink_events
-            .push(crate::page_store::PendingGcRow {
-                key,
-                gc_kind,
-                due_lsn: self.lsn,
-                relsize,
-            });
+        let row = crate::page_store::PendingGcRow {
+            key,
+            gc_kind,
+            due_lsn: self.lsn,
+            relsize,
+        };
+        // The drain refuses a row whose key shape doesn't match its kind, so a
+        // mispaired emitter leaks silently. Fail in CI instead.
+        debug_assert!(
+            crate::page_server::timeline::Timeline::classify_candidate(&row).is_ok(),
+            "emitter enqueued a candidate the drain will refuse: {row:?}"
+        );
+        self.pending_gc_drop_shrink_events.push(row);
     }
 
     /// Queue GC drop candidates for a dropped database: per rel its

@@ -433,16 +433,28 @@ pub(crate) static YB_PAYLOAD_ROWS: Lazy<IntCounterVec> = Lazy::new(|| {
 ///   periodic or shutdown tick; rows may not have made it to YB.
 /// - `tenant_task_panic` — a tenant background task ended via
 ///   panic (`JoinError::is_panic()`).
-/// - `gc_shrink_missing_relsize` — a `pending_gc` shrink candidate with
-///   no stored `relsize`. The shrink skips the candidate rather than
-///   wedging the drain.
-/// - `gc_shrink_non_rel` — a `pending_gc` shrink candidate whose `key`
-///   isn't a rel key (shrink is rel-only). Skipped, not acted.
-/// - `gc_unknown_candidate_kind` — a `pending_gc` row with an unknown
-///   `gc_kind`. The drain skips it; it stays queued.
-/// - `gc_malformed_key` — a `pending_gc` row whose `key` bytea isn't the
-///   fixed 18-byte `Key` length. The drain skips it rather than panicking
-///   on decode.
+///
+/// The `gc_*` labels below all mean "the drain refused to act on a
+/// `pending_gc` row". None of them dequeues it: the row is left queued, so
+/// these **re-fire on each floor reset** until the row is fixed, drained by
+/// a newer binary, or deleted by hand. Treat a sustained rate as one stuck
+/// row, not a stream of new ones. The `error!` line carries the row.
+///
+/// - `gc_candidate_key_shape_mismatch` — the row's `key` shape doesn't match
+///   the keyspace its `gc_kind` acts on (e.g. a `DropPages` carrying a rel
+///   *block* key instead of the fork's rel-size key). The act paths decode
+///   the object identity from the key blind, so acting could delete a live
+///   object. The log line has the `gc_kind` and `key`.
+/// - `gc_shrink_missing_relsize` — a shrink candidate with no stored
+///   `relsize`.
+/// - `gc_shrink_relsize_out_of_range` — a shrink candidate whose `relsize`
+///   isn't a block number (negative, or `>= u32::MAX`). A negative one
+///   would delete the whole fork (`blknum >= relsize` matches everything).
+/// - `gc_unknown_candidate_kind` — an unknown `gc_kind`, most likely
+///   written by a newer binary; it drains itself on roll-forward.
+/// - `gc_malformed_key` — the `key` bytea isn't the fixed 18-byte `Key`
+///   length. Skipped at decode rather than panicking; there's no valid key
+///   to dequeue it by either.
 pub(crate) static CORRECTNESS_ERRORS: Lazy<metrics::IntCounterVec> = Lazy::new(|| {
     metrics::register_int_counter_vec!(
         "pageserver_yb_correctness_errors_total",

@@ -1,4 +1,4 @@
-mod gc;
+pub(crate) mod gc;
 pub(crate) mod handle;
 pub(crate) mod logical_size;
 pub(crate) mod remote_state;
@@ -366,11 +366,11 @@ impl GcInfo {
 #[derive(Default)]
 pub(crate) struct GcDrainProgress {
     /// Select floor high-water mark: everything at `due_lsn <= floor`
-    /// has been handled (dequeued, or acted-but-requeued, or parked as
-    /// unknown-kind), so the tick scans `(floor, cutoff]` for both the
-    /// select and the dequeue. Not a correctness bound — too low re-scans,
-    /// too high defers rows to a later tick or the floor reset. 0 on
-    /// restart.
+    /// has been handled — dequeued, acted-but-requeued (a busy-object drop),
+    /// or parked (a row `classify_candidate` refused, a malformed key) — so
+    /// the tick scans `(floor, cutoff]` for both the select and the dequeue.
+    /// Not a correctness bound — too low re-scans, too high defers rows to a
+    /// later tick or the floor reset. 0 on restart.
     pub(crate) floor: Lsn,
 
     /// When the floor was last reset to 0.

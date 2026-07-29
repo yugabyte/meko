@@ -910,6 +910,25 @@ impl Key {
         self.field1 == 0x00 && self.field4 != 0 && self.field6 != 0xffffffff
     }
 
+    /// Either block keyspace: [`Self::is_rel_block_key`] or
+    /// [`Self::is_slru_block_key`].
+    #[inline(always)]
+    pub fn is_block_key(&self) -> bool {
+        self.is_rel_block_key() || self.is_slru_block_key()
+    }
+
+    /// Whether this key's rows live in the `amp_storage.meta` table — the
+    /// complement of [`Self::is_block_key`], matching how `PageWriter::put`
+    /// routes a key. Both must agree or a meta-keyed GC action deletes against
+    /// the wrong table.
+    ///
+    /// Trap: not a `field1` test. For instance, the rel-size sentinel shares
+    /// the rel-block prefix (`field1 == 0`) yet is a meta-table key.
+    #[inline(always)]
+    pub fn is_meta_table_key(&self) -> bool {
+        !self.is_block_key()
+    }
+
     #[inline(always)]
     pub fn is_rel_block_of_rel(&self, rel: Oid) -> bool {
         self.is_rel_block_key() && self.field4 == rel
@@ -923,6 +942,35 @@ impl Key {
             && self.field4 == 0
             && self.field5 == 0
             && self.field6 == 1
+    }
+
+    /// The shape [`relmap_file_key`] builds — a database's relation map.
+    #[inline(always)]
+    pub fn is_relmap_file_key(&self) -> bool {
+        self.field1 == 0x00
+            && self.field2 != 0
+            && self.field3 != 0
+            && self.field4 == 0
+            && self.field5 == 0
+            && self.field6 == 0
+    }
+
+    /// The shape [`rel_tag_sparse_key`] builds — one relation's entry in the
+    /// v2 sparse rel directory (the value is present-marker or tombstone).
+    #[inline(always)]
+    pub fn is_rel_tag_sparse_key(&self) -> bool {
+        self.field1 == REL_DIR_KEY_PREFIX && self.field6 == 1
+    }
+
+    /// The shape [`twophase_file_key`] builds — one prepared transaction's
+    /// state file. Excludes [`TWOPHASEDIR_KEY`], which is the same keyspace
+    /// with an all-zero xid and is live directory state, not a file.
+    #[inline(always)]
+    pub fn is_twophase_file_key(&self) -> bool {
+        self.field1 == 0x02
+            && self.field2 == 0
+            && self.field3 == 0
+            && (self.field4, self.field5, self.field6) != (0, 0, 0)
     }
 
     #[inline(always)]
@@ -1007,5 +1055,52 @@ mod tests {
     fn test_possible_largest_key() {
         Key::from_i128(0x7FFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF);
         // TODO: put this key into the system and see if anything breaks.
+    }
+
+    /// `is_meta_table_key` must agree with the write path's table routing:
+    /// only the two *block* keyspaces are non-meta. The size sentinels sit in
+    /// `meta` even though they share the block keyspaces' `field1`.
+    #[test]
+    fn meta_table_key_is_the_complement_of_the_block_keyspaces() {
+        use crate::key::{
+            DBDIR_KEY, rel_block_to_key, rel_dir_to_key, rel_size_to_key, slru_block_to_key,
+            slru_dir_to_key, slru_segment_size_to_key, twophase_file_key,
+        };
+        use crate::reltag::{RelTag, SlruKind};
+
+        let rel = RelTag {
+            spcnode: 1663,
+            dbnode: 5,
+            relnode: 16400,
+            forknum: 0,
+        };
+        let blocks = [
+            rel_block_to_key(rel, 7),
+            slru_block_to_key(SlruKind::Clog, 3, 7),
+        ];
+        let meta = [
+            // Size sentinels: same `field1` as the block keyspaces above, yet
+            // meta — the table is the shape within the keyspace, not a prefix.
+            rel_size_to_key(rel),
+            slru_segment_size_to_key(SlruKind::Clog, 3),
+            rel_dir_to_key(rel.spcnode, rel.dbnode),
+            slru_dir_to_key(SlruKind::Clog),
+            twophase_file_key(42),
+            DBDIR_KEY,
+        ];
+        for key in blocks {
+            assert!(key.is_block_key(), "{key} is a block key");
+        }
+        for key in meta {
+            assert!(key.is_meta_table_key(), "{key} lives in meta");
+        }
+        // The two predicates partition the space — no key is both or neither.
+        for key in blocks.iter().chain(&meta) {
+            assert_ne!(
+                key.is_block_key(),
+                key.is_meta_table_key(),
+                "{key} must be exactly one of block / meta"
+            );
+        }
     }
 }

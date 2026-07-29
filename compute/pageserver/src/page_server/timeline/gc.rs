@@ -6,16 +6,50 @@
 use super::*;
 use pageserver_api::key::Key;
 
-/// One tick's due candidates split by coarse operation (the drain's
-/// action order + dequeue method): trim candidates keep their `(key,
-/// gc_kind)` so `act_trims` dispatches to the right table; drop and shrink
-/// keep the whole row (it carries its `gc_kind`). Produced by
-/// [`Timeline::partition_by_kind`]; borrowed by [`Timeline::act`] then
-/// [`Timeline::dequeue`].
-struct DuePartition {
+/// One tick's due candidates split by coarse operation, which sets the act
+/// order and the dequeue method. A candidate
+/// [`Timeline::classify_candidate`] rejects enters no bucket at all.
+struct PartitionedCandidates {
     trims: Vec<(Key, crate::page_store::GcKind)>,
     drops: Vec<crate::page_store::PendingGcRow>,
-    shrinks: Vec<crate::page_store::PendingGcRow>,
+    shrinks: Vec<(crate::page_store::PendingGcRow, i64)>,
+}
+
+/// A validated candidate: its bucket, plus whatever the validation parsed on
+/// the way (so no later stage re-unwraps it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CandidatePartition {
+    Trim,
+    Drop,
+    Shrink { relsize: i64 },
+}
+
+/// Why the drain won't act on a due candidate. None of these dequeues the
+/// row.
+///
+// TODO(gc): a `gc_purge_unactionable_candidates` tenant flag (default off) to
+// dequeue the non-`UnknownKind` faults instead of leaving them queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CandidateRejectionReason {
+    UnknownKind,
+    /// Shape doesn't match the kind, so the act path would blind-decode the
+    /// wrong object.
+    KeyShapeMismatch,
+    ShrinkMissingRelsize,
+    /// Not a valid block number.
+    ShrinkRelsizeOutOfRange,
+}
+
+impl CandidateRejectionReason {
+    /// `correctness_errors_total` labels.
+    fn label(self) -> &'static str {
+        match self {
+            CandidateRejectionReason::UnknownKind => "gc_unknown_candidate_kind",
+            CandidateRejectionReason::KeyShapeMismatch => "gc_candidate_key_shape_mismatch",
+            CandidateRejectionReason::ShrinkMissingRelsize => "gc_shrink_missing_relsize",
+            CandidateRejectionReason::ShrinkRelsizeOutOfRange => "gc_shrink_relsize_out_of_range",
+        }
+    }
 }
 
 impl Timeline {
@@ -127,6 +161,9 @@ impl Timeline {
     /// - **select**: rows with `floor < due_lsn <= applied_cutoff`,
     ///   oldest-first, capped at `gc_drain_limit` — the floor seeks the
     ///   scan past rows earlier ticks already handled;
+    /// - **validate & partition**: every row is checked against its kind
+    ///   ([`Self::classify_candidate`]) before it reaches an act helper, so
+    ///   a corrupt row can't misdelete a live object;
     /// - **act**: drop → shrink → trim, coarsest-first (a dropped fork
     ///   moots its own shrink/trim work), forks parallel within a kind.
     ///   All drops are acted, busy or not;
@@ -140,9 +177,8 @@ impl Timeline {
     ///   it). Idempotent actions make act-before-dequeue crash-safe;
     /// - **advance the floor**, strictly after the dequeue: an error
     ///   before this point returns via `?` leaving it unchanged, so the
-    ///   next tick re-selects. Uncapped → the cutoff (everything
-    ///   `<= cutoff` handled); capped → `last selected due_lsn − 1` (the
-    ///   −1 keeps a limit-split tie group selectable).
+    ///   next tick re-selects. Where it lands — and why a capped tick that
+    ///   cleared nothing lands somewhere else — is [`Self::next_drain_floor`].
     ///
     /// Every `gc_queue_floor_reset_interval` a tick resets the floor to
     /// 0 to sweep anything stranded below it — a clamp-race trim
@@ -155,26 +191,26 @@ impl Timeline {
     ) -> Result<(), GcError> {
         let drain_limit = self.get_gc_drain_limit();
         let (floor, is_reset) = self.pick_drain_floor();
-        let due = store
+        let selected = store
             .gc_select_due_candidates(self.branch_id, floor, applied_cutoff, drain_limit)
             .await
             .map_err(GcError::Persistence)?;
         crate::metrics::GC_APPLIED_CUTOFF_LSN.set(applied_cutoff.0);
-        // Under the limit ⇒ every due candidate was returned — the
-        // tick fully drains the due span (drained vs capped label).
-        let all_due_visited = due.len() < drain_limit;
+        // Under the limit ⇒ every due candidate was returned (drained vs
+        // capped label). Raw count, so a dropped malformed row still counts.
+        let all_due_visited = selected.raw_count < drain_limit;
         // Residual drain lag: the due span a capped tick couldn't
         // reach; 0 when everything due was drained (incl. empty
         // queue — the gauge must reset or it freezes at a stale
         // value).
-        crate::metrics::GC_DRAIN_LAG_BYTES.set(match due.last() {
-            Some(r) if !all_due_visited => applied_cutoff.0.saturating_sub(r.due_lsn.0),
+        crate::metrics::GC_DRAIN_LAG_BYTES.set(match selected.max_due_lsn {
+            Some(max) if !all_due_visited => applied_cutoff.0.saturating_sub(max.0),
             _ => 0,
         });
         // All selected rows, before trim routing.
-        crate::metrics::GC_CANDIDATES_READ.inc_by(due.len() as u64);
+        crate::metrics::GC_CANDIDATES_READ.inc_by(selected.raw_count as u64);
 
-        let Some(last_due) = due.last().map(|r| r.due_lsn) else {
+        let Some(max_due_lsn) = selected.max_due_lsn else {
             crate::metrics::GC_DRAIN_TICKS
                 .with_label_values(&["empty"])
                 .inc();
@@ -186,18 +222,7 @@ impl Timeline {
             }
             return Ok(());
         };
-        // Where the floor advances after this tick: uncapped → the cutoff
-        // (everything `<= cutoff` handled; the insert clamp keeps new
-        // candidates above it, so this skips the boundary tie group and
-        // the not-dequeued deferred/unknown-kind rows next tick); capped →
-        // `last − 1` (the limit can split the last tie group, so keep it
-        // selectable).
-        let next_floor = if all_due_visited {
-            applied_cutoff
-        } else {
-            Lsn(last_due.0.saturating_sub(1))
-        };
-        let partition = Self::partition_by_kind(due);
+        let partition = Self::partition_by_kind(selected.rows);
 
         // Objects (rel forks / SLRU segments) with a materialise job
         // pending, snapshotted BEFORE acting so a job in flight during a
@@ -235,6 +260,8 @@ impl Timeline {
                 applied_cutoff,
             )
             .await?;
+        let next_floor =
+            Self::next_drain_floor(all_due_visited, dequeued, max_due_lsn, applied_cutoff);
         // Monotone `max` so a floor-reset tick's older batch (it scans
         // from 0) can't lower a higher floor. Stamp the reset only now the
         // dequeue succeeded, so a failed reset tick retries next tick
@@ -271,7 +298,7 @@ impl Timeline {
     async fn act(
         &self,
         store: &Arc<crate::page_store::PageStore>,
-        due: &DuePartition,
+        due: &PartitionedCandidates,
         applied_cutoff: Lsn,
     ) -> Result<u64, GcError> {
         let mut pages_deleted = self.act_drops(store, &due.drops).await?;
@@ -290,7 +317,7 @@ impl Timeline {
     async fn dequeue(
         &self,
         store: &Arc<crate::page_store::PageStore>,
-        due: &DuePartition,
+        due: &PartitionedCandidates,
         objects_pending_materialise: &std::collections::HashSet<Key>,
         floor: Lsn,
         applied_cutoff: Lsn,
@@ -301,7 +328,7 @@ impl Timeline {
         let mut drop_shrink_to_dequeue: Vec<crate::page_store::GcDropShrinkCandidateId> = due
             .shrinks
             .iter()
-            .map(|r| (r.key, r.gc_kind, r.due_lsn))
+            .map(|(r, _)| (r.key, r.gc_kind, r.due_lsn))
             .collect();
         let mut deferred_dequeue_keys: Vec<Key> = Vec::new();
         for r in &due.drops {
@@ -382,20 +409,15 @@ impl Timeline {
         let branch_id = self.branch_id;
 
         // Split by table: rel-fork / SLRU drops act per candidate; DropMeta
-        // keys group by `due_lsn` for one batched delete each. A non-drop
-        // kind here is a partition bug — skip + alarm, don't misdelete.
+        // keys group by `due_lsn` for one batched delete each.
         let mut fork_slru: Vec<crate::page_store::PendingGcRow> = Vec::new();
         let mut meta_by_due: HashMap<Lsn, Vec<Key>> = HashMap::new();
         for row in drop_rows {
             match row.gc_kind {
                 GcKind::DropPages | GcKind::DropSlru => fork_slru.push(*row),
                 GcKind::DropMeta => meta_by_due.entry(row.due_lsn).or_default().push(row.key),
-                other => {
-                    tracing::error!(gc_kind = ?other, key = %row.key, "act_drops: non-drop kind");
-                    crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["gc_unknown_candidate_kind"])
-                        .inc();
-                }
+                // partition_by_kind routes only drop kinds into this bucket.
+                other => debug_assert!(false, "act_drops: non-drop kind {other:?}"),
             }
         }
 
@@ -444,7 +466,7 @@ impl Timeline {
     async fn act_shrinks(
         &self,
         store: &Arc<crate::page_store::PageStore>,
-        shrink_rows: &[crate::page_store::PendingGcRow],
+        shrink_rows: &[(crate::page_store::PendingGcRow, i64)],
     ) -> Result<u64, GcError> {
         let targets = Self::shrink_targets(shrink_rows);
         let branch_id = self.branch_id;
@@ -463,43 +485,14 @@ impl Timeline {
     /// Build one shrink target per candidate, each with its own
     /// `(relsize, due_lsn)` — never coalesced per fork (that would reclaim
     /// a block re-extended between two truncations; see the trap on
-    /// `gc_act_shrink_fork`). Shrink is rel-only: a non-rel or
-    /// missing-`relsize` candidate is skipped and alarmed, not acted, so
-    /// the drain isn't wedged.
+    /// `gc_act_shrink_fork`). A total decode: the `relsize` is the one
+    /// `classify_candidate` validated and the key is already known rel-size.
     fn shrink_targets(
-        shrink_rows: &[crate::page_store::PendingGcRow],
+        shrink_rows: &[(crate::page_store::PendingGcRow, i64)],
     ) -> Vec<(crate::page_store::GcForkIdent, i64, Lsn)> {
         shrink_rows
             .iter()
-            .filter_map(|r| {
-                if !r.key.is_rel_size_key() {
-                    tracing::error!(
-                        key = %r.key,
-                        due_lsn = %r.due_lsn,
-                        "pending_gc shrink candidate is not a rel-size key; skipped"
-                    );
-                    crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["gc_shrink_non_rel"])
-                        .inc();
-                    return None;
-                }
-                match r.relsize {
-                    Some(relsize) => {
-                        Some((crate::page_store::rel_fork_of(&r.key), relsize, r.due_lsn))
-                    }
-                    None => {
-                        tracing::error!(
-                            key = %r.key,
-                            due_lsn = %r.due_lsn,
-                            "pending_gc shrink candidate without a stored relsize; skipped"
-                        );
-                        crate::metrics::CORRECTNESS_ERRORS
-                            .with_label_values(&["gc_shrink_missing_relsize"])
-                            .inc();
-                        None
-                    }
-                }
-            })
+            .map(|(r, relsize)| (crate::page_store::rel_fork_of(&r.key), *relsize, r.due_lsn))
             .collect()
     }
 
@@ -518,8 +511,7 @@ impl Timeline {
         let branch_id = self.branch_id;
 
         // Group by target table off the candidate's kind (block keys by
-        // their object); keys are already deduped in partition_by_kind. An
-        // unexpected kind here would be a partition bug — skip + alarm.
+        // their object); keys are already deduped in partition_by_kind.
         let mut rel_by_fork: HashMap<crate::page_store::GcForkIdent, Vec<i64>> = HashMap::new();
         let mut slru_by_seg: HashMap<crate::page_store::GcSlruSeg, Vec<i64>> = HashMap::new();
         let mut meta_keys: Vec<Vec<u8>> = Vec::new();
@@ -534,12 +526,8 @@ impl Timeline {
                     .or_default()
                     .push(key.field6 as i64),
                 GcKind::TrimMeta => meta_keys.push(crate::page_store::key_to_bytes(key)),
-                other => {
-                    tracing::error!(gc_kind = ?other, key = %key, "act_trims: non-trim kind");
-                    crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["gc_unknown_candidate_kind"])
-                        .inc();
-                }
+                // partition_by_kind routes only trim kinds into this bucket.
+                other => debug_assert!(false, "act_trims: non-trim kind {other:?}"),
             }
         }
 
@@ -576,48 +564,153 @@ impl Timeline {
         Ok(rel_deleted + slru_deleted + meta_deleted)
     }
 
-    /// Partition due candidates into the drain's coarse buckets — trim /
-    /// drop / shrink — off `gc_kind`, which sets the drain's action order
-    /// and dequeue method. A trim keeps its `(key, gc_kind)` so `act_trims`
-    /// can dispatch to the right table (N due candidates for one key
-    /// coalesce, since the trim anchors at the cutoff, not any candidate's
-    /// due_lsn); drop and shrink keep the full row (it carries its kind).
-    /// An unknown kind is skipped with a `correctness_errors_total` alarm
-    /// and left on disk, never dequeued.
+    /// The `meta` keys a `DropMeta` may name — one shape per emitter in
+    /// `pgdatadir_mapping`; add an emitter, add its shape.
     ///
-    /// `trims` is deduped by key here (a hot key has many due candidates),
-    /// so neither the trim action nor the dequeue carries duplicate keys.
+    /// Trap: an allowlist, not "any meta-table key". Drop deletes every version
+    /// `<= due_lsn`, so it is only correct on a dead object, and most meta keys
+    /// are live state (the size sentinels, a dbdir, the twophase *directory*).
+    fn is_droppable_meta_key(key: &Key) -> bool {
+        key.is_rel_tag_sparse_key()
+            || key.is_rel_dir_key()
+            || key.is_relmap_file_key()
+            || key.is_twophase_file_key()
+    }
+
+    /// A shrink's truncation target, validated. `u32::MAX` is the rel-size
+    /// sentinel's own `field6`, so the largest real target is one below it.
+    fn validated_relsize(
+        row: &crate::page_store::PendingGcRow,
+    ) -> Result<i64, CandidateRejectionReason> {
+        let relsize = row
+            .relsize
+            .ok_or(CandidateRejectionReason::ShrinkMissingRelsize)?;
+        (0..u32::MAX as i64)
+            .contains(&relsize)
+            .then_some(relsize)
+            .ok_or(CandidateRejectionReason::ShrinkRelsizeOutOfRange)
+    }
+
+    /// Validate one due candidate and classify it. The drain's sole
+    /// row-validation point: one arm per kind, declaring the two things a kind
+    /// implies — the key shape it must carry, and the bucket it acts in.
+    pub(crate) fn classify_candidate(
+        row: &crate::page_store::PendingGcRow,
+    ) -> Result<CandidatePartition, CandidateRejectionReason> {
+        use crate::page_store::GcKind;
+
+        let shaped = |ok: bool| {
+            ok.then_some(())
+                .ok_or(CandidateRejectionReason::KeyShapeMismatch)
+        };
+        Ok(match row.gc_kind {
+            GcKind::TrimPages => {
+                shaped(row.key.is_rel_block_key())?;
+                CandidatePartition::Trim
+            }
+            GcKind::TrimSlru => {
+                shaped(row.key.is_slru_block_key())?;
+                CandidatePartition::Trim
+            }
+            // Trim needs no allowlist, unlike DropMeta: it keeps the newest
+            // version `<= cutoff`, and every `meta` row is self-contained (see
+            // `build_meta_row`), so it can't lose readable state for any key.
+            // This is also the exact domain — `MetaRow::trim_key` emits
+            // whatever was written to the table.
+            GcKind::TrimMeta => {
+                shaped(row.key.is_meta_table_key())?;
+                CandidatePartition::Trim
+            }
+            GcKind::DropPages => {
+                shaped(row.key.is_rel_size_key())?;
+                CandidatePartition::Drop
+            }
+            GcKind::DropSlru => {
+                shaped(row.key.is_slru_segment_size_key())?;
+                CandidatePartition::Drop
+            }
+            GcKind::DropMeta => {
+                shaped(Self::is_droppable_meta_key(&row.key))?;
+                CandidatePartition::Drop
+            }
+            GcKind::ShrinkPages => {
+                shaped(row.key.is_rel_size_key())?;
+                CandidatePartition::Shrink {
+                    relsize: Self::validated_relsize(row)?,
+                }
+            }
+            GcKind::Unknown(_) => return Err(CandidateRejectionReason::UnknownKind),
+        })
+    }
+
+    /// Split due candidates into the [`PartitionedCandidates`] buckets, validating each
+    /// via [`Self::classify_candidate`] so the act helpers can trust theirs. A
+    /// refused row is alarmed and left queued (see [`CandidateRejectionReason`]).
     ///
-    /// Returns the split as a [`DuePartition`].
-    fn partition_by_kind(due: Vec<crate::page_store::PendingGcRow>) -> DuePartition {
-        use crate::page_store::CoarseOp;
+    /// `trims` is deduped by key (a hot key has many due candidates), so
+    /// neither the trim action nor the dequeue carries duplicates.
+    fn partition_by_kind(due: Vec<crate::page_store::PendingGcRow>) -> PartitionedCandidates {
         let mut trims = Vec::new();
-        let mut drop_rows = Vec::new();
-        let mut shrink_rows = Vec::new();
+        let mut drops = Vec::new();
+        let mut shrinks = Vec::new();
         for row in due {
-            match row.gc_kind.coarse() {
-                Some(CoarseOp::Trim) => trims.push((row.key, row.gc_kind)),
-                Some(CoarseOp::Drop) => drop_rows.push(row),
-                Some(CoarseOp::Shrink) => shrink_rows.push(row),
-                None => {
+            match Self::classify_candidate(&row) {
+                Ok(CandidatePartition::Trim) => trims.push((row.key, row.gc_kind)),
+                Ok(CandidatePartition::Drop) => drops.push(row),
+                Ok(CandidatePartition::Shrink { relsize }) => shrinks.push((row, relsize)),
+                Err(fault) => {
                     tracing::error!(
                         gc_kind = ?row.gc_kind,
                         key = %row.key,
                         due_lsn = %row.due_lsn,
-                        "pending_gc candidate of unknown kind; left on disk, never dequeued"
+                        relsize = ?row.relsize,
+                        fault = ?fault,
+                        "pending_gc candidate the drain won't act on; left queued"
                     );
                     crate::metrics::CORRECTNESS_ERRORS
-                        .with_label_values(&["gc_unknown_candidate_kind"])
+                        .with_label_values(&[fault.label()])
                         .inc();
                 }
             }
         }
         trims.sort_unstable();
         trims.dedup();
-        DuePartition {
+        PartitionedCandidates {
             trims,
-            drops: drop_rows,
-            shrinks: shrink_rows,
+            drops,
+            shrinks,
+        }
+    }
+
+    /// Where the select floor advances after a tick. `all_due_visited` → the
+    /// cutoff (everything `<= cutoff` is handled; the insert clamp keeps new
+    /// candidates above it). Otherwise → `max_due_lsn − 1`, keeping a
+    /// limit-split tie group selectable next tick.
+    ///
+    /// Trap: `max_due_lsn − 1` can wedge the queue. When a tick clears nothing
+    /// (every row refused, or every row a busy-object drop) the floor lands just
+    /// below the batch, so the next tick re-selects it unchanged. That repeats
+    /// forever if one `due_lsn` holds `gc_drain_limit` rows or more: the batch
+    /// is then filled by that group alone, nothing above it is ever reached, and
+    /// the branch's whole queue stalls — not just those rows. Groups do get that
+    /// large; a DROP DATABASE emits one candidate per rel at the drop's LSN.
+    ///
+    /// So a tick that cleared nothing advances to `max_due_lsn` instead, putting
+    /// the group below the floor so the rest of the queue drains. Rows at that
+    /// `due_lsn` the limit didn't return stay stuck behind it — a floor reset
+    /// re-scans from the head, but the group refills the batch — until the
+    /// blocking rows themselves are cleared. Nothing is lost either way; none of
+    /// them was dequeued.
+    fn next_drain_floor(
+        all_due_visited: bool,
+        dequeued: u64,
+        max_due_lsn: Lsn,
+        applied_cutoff: Lsn,
+    ) -> Lsn {
+        match (all_due_visited, dequeued) {
+            (true, _) => applied_cutoff,
+            (false, 0) => max_due_lsn,
+            (false, _) => Lsn(max_due_lsn.0.saturating_sub(1)),
         }
     }
 
@@ -668,8 +761,12 @@ impl Timeline {
 mod tests {
     use super::*;
     use crate::page_store::{GcKind, PendingGcRow};
-    use pageserver_api::key::{rel_block_to_key, rel_size_to_key};
-    use pageserver_api::reltag::RelTag;
+    use pageserver_api::key::{
+        DBDIR_KEY, TWOPHASEDIR_KEY, rel_block_to_key, rel_dir_to_key, rel_size_to_key,
+        rel_tag_sparse_key, relmap_file_key, slru_block_to_key, slru_dir_to_key,
+        slru_segment_size_to_key, twophase_file_key,
+    };
+    use pageserver_api::reltag::{RelTag, SlruKind};
 
     fn rel(relnode: u32) -> RelTag {
         RelTag {
@@ -679,84 +776,95 @@ mod tests {
             forknum: 0,
         }
     }
-    /// A trim candidate for a rel block.
-    fn trim_row(relnode: u32, blknum: u32) -> PendingGcRow {
+    /// The key shape each `gc_kind` is required to carry — what a
+    /// well-formed candidate of that kind looks like.
+    fn well_formed_key(gc_kind: GcKind) -> Key {
+        match gc_kind {
+            GcKind::TrimPages => rel_block_to_key(rel(16400), 7),
+            GcKind::ShrinkPages | GcKind::DropPages => rel_size_to_key(rel(16400)),
+            GcKind::TrimSlru => slru_block_to_key(SlruKind::Clog, 3, 7),
+            GcKind::DropSlru => slru_segment_size_to_key(SlruKind::Clog, 3),
+            // One of DropMeta's four allowed shapes; also a valid TrimMeta
+            // key, since every droppable meta key is trimmable.
+            GcKind::TrimMeta | GcKind::DropMeta => twophase_file_key(42),
+            GcKind::Unknown(_) => unreachable!("an unknown kind has no required shape"),
+        }
+    }
+    /// A well-formed candidate of `gc_kind` (a shrink gets a valid relsize).
+    fn row_of(gc_kind: GcKind) -> PendingGcRow {
         PendingGcRow {
-            key: rel_block_to_key(rel(relnode), blknum),
-            gc_kind: GcKind::TrimPages,
+            key: well_formed_key(gc_kind),
+            gc_kind,
             due_lsn: Lsn(100),
-            relsize: None,
+            relsize: (gc_kind == GcKind::ShrinkPages).then_some(2),
         }
     }
-    /// A drop candidate — the fork's rel-size object key.
-    fn drop_row(relnode: u32, due: u64) -> PendingGcRow {
-        PendingGcRow {
-            key: rel_size_to_key(rel(relnode)),
-            gc_kind: GcKind::DropPages,
-            due_lsn: Lsn(due),
-            relsize: None,
-        }
+    /// Count of `correctness_errors_total{kind=label}`.
+    fn alarms(label: &str) -> u64 {
+        crate::metrics::CORRECTNESS_ERRORS
+            .with_label_values(&[label])
+            .get()
     }
-    /// A shrink candidate — the fork's rel-size key + relsize.
-    fn shrink_row(relnode: u32, relsize: i64, due: u64) -> PendingGcRow {
-        PendingGcRow {
-            key: rel_size_to_key(rel(relnode)),
-            gc_kind: GcKind::ShrinkPages,
-            due_lsn: Lsn(due),
-            relsize: Some(relsize),
-        }
+    /// A validated shrink bucket entry, as `partition_by_kind` would build it —
+    /// the row and its relsize derived from one argument so the pair can't
+    /// drift.
+    fn shrink_entry(relsize: i64, due: u64) -> (PendingGcRow, i64) {
+        (
+            PendingGcRow {
+                relsize: Some(relsize),
+                due_lsn: Lsn(due),
+                ..row_of(GcKind::ShrinkPages)
+            },
+            relsize,
+        )
     }
     /// Scenario: the queue holds a row of a kind this version doesn't
     /// know. The partition must skip + alarm it — never panic on table
-    /// contents — while still routing the known kinds.
+    /// contents — while still routing the known kinds. Entering no bucket
+    /// is what leaves it queued: `act` never sees it and `dequeue` only
+    /// clears what the buckets carry, so a newer binary still finds it.
     #[test]
-    fn partition_skips_and_alarms_unknown_kind() {
-        let alarms = || {
-            crate::metrics::CORRECTNESS_ERRORS
-                .with_label_values(&["gc_unknown_candidate_kind"])
-                .get()
-        };
-        let before = alarms();
+    fn partition_parks_unknown_kind_without_dequeueing_it() {
+        let before = alarms("gc_unknown_candidate_kind");
         let unknown = PendingGcRow {
-            key: rel_block_to_key(rel(16400), 0),
             gc_kind: GcKind::Unknown(7), // no such kind
-            due_lsn: Lsn(100),
-            relsize: None,
+            ..row_of(GcKind::TrimPages)
         };
         let p = Timeline::partition_by_kind(vec![
-            trim_row(16400, 0),
-            drop_row(16400, 100),
-            shrink_row(16400, 2, 100),
+            row_of(GcKind::TrimPages),
+            row_of(GcKind::DropPages),
+            row_of(GcKind::ShrinkPages),
             unknown,
         ]);
         assert_eq!(p.trims.len(), 1);
         assert_eq!(p.drops.len(), 1);
         assert_eq!(p.shrinks.len(), 1);
-        assert_eq!(alarms() - before, 1, "the unknown kind alarms once");
+        assert_eq!(
+            alarms("gc_unknown_candidate_kind") - before,
+            1,
+            "the unknown kind alarms once"
+        );
     }
 
-    /// Each of the 7 kinds buckets by coarse operation (trim / drop /
-    /// shrink), and a trim retains its `gc_kind` for table dispatch.
+    /// Each of the 7 kinds, carrying its required key shape, buckets by
+    /// coarse operation (trim / drop / shrink) — none rejected — and a trim
+    /// retains its `gc_kind` for table dispatch.
     #[test]
     fn partition_buckets_all_seven_kinds() {
-        let row = |key: Key, gc_kind: GcKind| PendingGcRow {
-            key,
-            gc_kind,
-            due_lsn: Lsn(100),
-            relsize: None,
-        };
-        let k = rel_block_to_key(rel(16400), 0);
-        let p = Timeline::partition_by_kind(vec![
-            row(k, GcKind::TrimPages),
-            row(k, GcKind::TrimSlru),
-            row(k, GcKind::TrimMeta),
-            row(k, GcKind::ShrinkPages),
-            row(k, GcKind::DropPages),
-            row(k, GcKind::DropSlru),
-            row(k, GcKind::DropMeta),
-        ]);
-        // 3 TRIM_* → trims (deduped by key, but distinct kinds stay), 3
-        // DROP_* → drops, 1 SHRINK → shrinks.
+        let p = Timeline::partition_by_kind(
+            [
+                GcKind::TrimPages,
+                GcKind::TrimSlru,
+                GcKind::TrimMeta,
+                GcKind::ShrinkPages,
+                GcKind::DropPages,
+                GcKind::DropSlru,
+                GcKind::DropMeta,
+            ]
+            .map(row_of)
+            .to_vec(),
+        );
+        // 3 TRIM_* → trims, 3 DROP_* → drops, 1 SHRINK → shrinks.
         let mut trim_kinds: Vec<GcKind> = p.trims.iter().map(|(_, kind)| *kind).collect();
         trim_kinds.sort_unstable();
         assert_eq!(
@@ -765,6 +873,183 @@ mod tests {
         );
         assert_eq!(p.drops.len(), 3);
         assert_eq!(p.shrinks.len(), 1);
+    }
+
+    /// Every kind's key shape is enforced, because each act path decodes
+    /// the object identity from the key *blind* — a `TrimPages` row holding
+    /// a rel-*size* key would trim `field6 = u32::MAX` as a block number,
+    /// and a `DropPages` row holding a rel-*block* key would drop a live
+    /// fork wholesale. Every kind is rejected when handed a key from the
+    /// wrong keyspace. (`partition_buckets_all_seven_kinds` pins the
+    /// converse: each kind's *right* shape classifies.)
+    #[test]
+    fn classify_rejects_a_key_shape_that_mismatches_its_kind() {
+        // Per kind: a key of the WRONG shape for it.
+        let cases = [
+            (GcKind::TrimPages, rel_size_to_key(rel(16400))),
+            (GcKind::ShrinkPages, rel_block_to_key(rel(16400), 7)),
+            (GcKind::DropPages, rel_block_to_key(rel(16400), 7)),
+            (
+                GcKind::TrimSlru,
+                slru_segment_size_to_key(SlruKind::Clog, 3),
+            ),
+            (GcKind::DropSlru, slru_block_to_key(SlruKind::Clog, 3, 7)),
+            (GcKind::TrimMeta, rel_block_to_key(rel(16400), 7)),
+            (GcKind::DropMeta, rel_block_to_key(rel(16400), 7)),
+        ];
+        for (gc_kind, wrong_key) in cases {
+            let row = PendingGcRow {
+                key: wrong_key,
+                ..row_of(gc_kind)
+            };
+            assert_eq!(
+                Timeline::classify_candidate(&row),
+                Err(CandidateRejectionReason::KeyShapeMismatch),
+                "{gc_kind:?} must reject {wrong_key}"
+            );
+        }
+    }
+
+    /// A shrink's `relsize` is the truncation target `gc_act_shrink_fork`
+    /// deletes from (`blknum >= relsize`), so it must be present AND a real
+    /// block number. A **negative** relsize is the dangerous one: it would
+    /// match every block and delete the whole fork.
+    #[test]
+    fn classify_rejects_a_shrink_relsize_it_cannot_trust() {
+        let with_relsize = |relsize: Option<i64>| PendingGcRow {
+            relsize,
+            ..row_of(GcKind::ShrinkPages)
+        };
+        assert_eq!(
+            Timeline::classify_candidate(&with_relsize(None)),
+            Err(CandidateRejectionReason::ShrinkMissingRelsize),
+        );
+        for bad in [-1, i64::MIN, u32::MAX as i64, i64::MAX] {
+            assert_eq!(
+                Timeline::classify_candidate(&with_relsize(Some(bad))),
+                Err(CandidateRejectionReason::ShrinkRelsizeOutOfRange),
+                "relsize {bad} is not a block number",
+            );
+        }
+        // Truncate-to-empty and the largest real fork are both valid.
+        for ok in [0, u32::MAX as i64 - 1] {
+            assert!(Timeline::classify_candidate(&with_relsize(Some(ok))).is_ok());
+        }
+    }
+
+    /// `DropMeta` accepts exactly the four shapes its emitters produce, and
+    /// nothing else — a drop deletes *every* version `<= due_lsn`, so naming
+    /// any other meta key destroys live state. `TrimMeta` accepts all of them
+    /// plus the rest of the meta table: it keeps the newest version, which is
+    /// safe on live state and is what `MetaRow::trim_key` actually feeds it.
+    #[test]
+    fn drop_meta_allows_only_its_emitters_shapes_trim_meta_allows_any() {
+        let refused = Err(CandidateRejectionReason::KeyShapeMismatch);
+        let cases = [
+            // One per DropMeta emitter in `pgdatadir_mapping`.
+            (
+                "relmap",
+                relmap_file_key(1663, 5),
+                Ok(CandidatePartition::Drop),
+            ),
+            (
+                "rel dir",
+                rel_dir_to_key(1663, 5),
+                Ok(CandidatePartition::Drop),
+            ),
+            (
+                "sparse reldir entry",
+                rel_tag_sparse_key(1663, 5, 16400, 0),
+                Ok(CandidatePartition::Drop),
+            ),
+            (
+                "twophase file",
+                twophase_file_key(42),
+                Ok(CandidatePartition::Drop),
+            ),
+            // Live meta keys no emitter produces. Each would lose real data:
+            // the size sentinels belong to Drop{Pages,Slru} (which delete them
+            // with the object), and the dir keys are live state.
+            ("rel size sentinel", rel_size_to_key(rel(16400)), refused),
+            (
+                "slru seg-size sentinel",
+                slru_segment_size_to_key(SlruKind::Clog, 3),
+                refused,
+            ),
+            ("dbdir", DBDIR_KEY, refused),
+            ("twophase dir", TWOPHASEDIR_KEY, refused),
+            ("slru dir", slru_dir_to_key(SlruKind::Clog), refused),
+        ];
+        for (what, key, expect_drop) in cases {
+            let row = |gc_kind| PendingGcRow {
+                key,
+                ..row_of(gc_kind)
+            };
+            assert_eq!(
+                Timeline::classify_candidate(&row(GcKind::DropMeta)),
+                expect_drop,
+                "DropMeta on the {what} key"
+            );
+            assert_eq!(
+                Timeline::classify_candidate(&row(GcKind::TrimMeta)),
+                Ok(CandidatePartition::Trim),
+                "{what} is trimmable — trim keeps the newest version"
+            );
+        }
+    }
+
+    /// The floor must move even when a tick clears nothing, or a tie group of
+    /// `>= gc_drain_limit` permanently-queued rows re-selects forever and
+    /// starves everything above it (see `next_drain_floor`).
+    #[test]
+    fn next_drain_floor_steps_over_a_tick_that_cleared_nothing() {
+        let (max_due, cutoff) = (Lsn(500), Lsn(900));
+        // Capped and nothing cleared ⇒ step over the group, don't hold at 499.
+        assert_eq!(
+            Timeline::next_drain_floor(false, 0, max_due, cutoff),
+            max_due,
+            "a capped tick that dequeued nothing must not re-select itself"
+        );
+        // Capped but progress made ⇒ keep the split tie group selectable.
+        assert_eq!(
+            Timeline::next_drain_floor(false, 1, max_due, cutoff),
+            Lsn(499)
+        );
+        // all_due_visited ⇒ the cutoff, cleared or not (left-queued rows wait
+        // for a reset either way).
+        for dequeued in [0, 7] {
+            assert_eq!(
+                Timeline::next_drain_floor(true, dequeued, max_due, cutoff),
+                cutoff
+            );
+        }
+        // No underflow at the bottom of the range.
+        assert_eq!(Timeline::next_drain_floor(false, 1, Lsn(0), cutoff), Lsn(0));
+    }
+
+    /// A refused row enters no bucket at all — so `act` can't touch it and
+    /// `dequeue` can't clear it, which is how it stays queued for a fixed or
+    /// newer binary. It alarms once per occurrence (not once per key), and a
+    /// well-formed sibling still drains normally.
+    #[test]
+    fn partition_leaves_refused_rows_queued() {
+        let before = alarms("gc_candidate_key_shape_mismatch");
+        let bad = PendingGcRow {
+            key: rel_size_to_key(rel(16400)), // not a block key
+            ..row_of(GcKind::TrimPages)
+        };
+        let bad_later = PendingGcRow {
+            due_lsn: Lsn(200),
+            ..bad
+        };
+        let p = Timeline::partition_by_kind(vec![bad, bad_later, row_of(GcKind::TrimPages)]);
+        assert_eq!(
+            p.trims,
+            vec![(well_formed_key(GcKind::TrimPages), GcKind::TrimPages)],
+            "only the well-formed trim is acted and dequeued"
+        );
+        assert!(p.drops.is_empty() && p.shrinks.is_empty());
+        assert_eq!(alarms("gc_candidate_key_shape_mismatch") - before, 2);
     }
 
     /// Two shrink candidates on the SAME fork (two truncations) must stay
@@ -776,8 +1061,7 @@ mod tests {
     /// delete would drop that live lsn-60 base.
     #[test]
     fn shrink_targets_not_merged_per_fork() {
-        let targets =
-            Timeline::shrink_targets(&[shrink_row(16400, 2, 50), shrink_row(16400, 3, 80)]);
+        let targets = Timeline::shrink_targets(&[shrink_entry(2, 50), shrink_entry(3, 80)]);
         assert_eq!(
             targets,
             vec![
@@ -786,29 +1070,5 @@ mod tests {
             ],
             "same-fork shrinks stay separate, each with its own (relsize, due_lsn)"
         );
-    }
-
-    /// A shrink candidate with no stored `relsize` is a bug upstream: the
-    /// builder drops it (never guessing a size) and alarms, so the drain
-    /// keeps going rather than wedging. A valid candidate alongside it
-    /// still passes through.
-    #[test]
-    fn shrink_targets_skip_and_alarm_on_missing_relsize() {
-        let alarms = || {
-            crate::metrics::CORRECTNESS_ERRORS
-                .with_label_values(&["gc_shrink_missing_relsize"])
-                .get()
-        };
-        let mut missing = shrink_row(16400, 0, 50);
-        missing.relsize = None;
-        let valid = shrink_row(16400, 4, 50);
-        let before = alarms();
-        let targets = Timeline::shrink_targets(&[missing, valid]);
-        assert_eq!(
-            targets,
-            vec![((1663, 5, 16400, 0), 4, Lsn(50))],
-            "the missing-relsize candidate is skipped; the valid one passes"
-        );
-        assert_eq!(alarms() - before, 1, "the skip alarms exactly once");
     }
 }

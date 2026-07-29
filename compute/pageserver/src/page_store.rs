@@ -1064,8 +1064,7 @@ fn rel_size_key_bytes(spcnode: i64, dbnode: i64, relnode: i64, forknum: i16) -> 
 }
 
 /// GC candidate kind — the `pending_gc.gc_kind` column. Each variant maps
-/// 1:1 to the act function it dispatches to, so the drain routes by
-/// `gc_kind` alone and never inspects the key's shape:
+/// 1:1 to the act function it dispatches to:
 /// `TrimPages`→`gc_act_trim_blocks`, `TrimSlru`→`gc_act_trim_slru`,
 /// `TrimMeta`→`gc_act_trim_meta`, `ShrinkPages`→`gc_act_shrink_fork`
 /// (rel-only), `DropPages`→`gc_act_drop_fork`, `DropSlru`→
@@ -1113,28 +1112,6 @@ impl GcKind {
             other => GcKind::Unknown(other),
         }
     }
-
-    /// The coarse operation this kind buckets into for the drain (its
-    /// action phase + dequeue method), or `None` for [`GcKind::Unknown`]
-    /// (which the drain alarms on and leaves queued).
-    pub(crate) fn coarse(self) -> Option<CoarseOp> {
-        match self {
-            GcKind::TrimPages | GcKind::TrimSlru | GcKind::TrimMeta => Some(CoarseOp::Trim),
-            GcKind::DropPages | GcKind::DropSlru | GcKind::DropMeta => Some(CoarseOp::Drop),
-            GcKind::ShrinkPages => Some(CoarseOp::Shrink),
-            GcKind::Unknown(_) => None,
-        }
-    }
-}
-
-/// The coarse GC operation a [`GcKind`] buckets into: the drain acts
-/// coarsest-first (drop → shrink → trim) and dequeues each bucket its own
-/// way (trims range-swept, drop/shrink by PK).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CoarseOp {
-    Trim,
-    Drop,
-    Shrink,
 }
 
 /// Fork identity: (spcnode, dbnode, relnode, forknum). The grouping key
@@ -1163,6 +1140,18 @@ pub struct PendingGcRow {
     pub gc_kind: GcKind,
     pub due_lsn: Lsn,
     pub relsize: Option<i64>,
+}
+
+/// What one `gc_select_due_candidates` sweep found.
+pub struct GcSelectedCandidates {
+    /// The `pending_gc` rows with a valid key, oldest `due_lsn` first.
+    pub rows: Vec<PendingGcRow>,
+    /// Rows selected, malformed ones included — so not `rows.len()`.
+    /// `< limit` ⇒ the tick saw the whole due span.
+    pub raw_count: usize,
+    /// Highest `due_lsn` selected, malformed ones included. `None` only when
+    /// nothing was due.
+    pub max_due_lsn: Option<Lsn>,
 }
 
 /// Decode a rel key's fork identity `(spcnode, dbnode, relnode, forknum)`
@@ -1196,7 +1185,7 @@ pub(crate) fn slru_seg_of(key: &Key) -> GcSlruSeg {
 /// A drop is left queued while an image job for the same object is in
 /// flight, so a straggling image INSERT after the delete can't leak.
 pub(crate) fn materialise_object_key(key: &Key) -> Option<Key> {
-    (key.is_rel_block_key() || key.is_slru_block_key()).then_some(Key {
+    key.is_block_key().then_some(Key {
         field6: 0xFFFF_FFFF,
         ..*key
     })
@@ -2852,7 +2841,7 @@ impl PageStore {
         floor: Lsn,
         cutoff: Lsn,
         limit: usize,
-    ) -> Result<Vec<PendingGcRow>> {
+    ) -> Result<GcSelectedCandidates> {
         let branch_s = branch_id.to_string();
         let floor_i = floor.0 as i64;
         let cutoff_i = cutoff.0 as i64;
@@ -2892,14 +2881,19 @@ impl PageStore {
             .query(&sql, &[&branch_s, &cutoff_i, &limit_i, &floor_i])
             .await
             .context("gc_select_due_candidates")?;
-        Ok(rows
+        // Before the malformed filter, so a dropped row still counts (ASC
+        // order ⇒ the last row is the max).
+        let raw_count = rows.len();
+        let max_due_lsn = rows.last().map(|r| Lsn(r.get::<_, i64>(2) as u64));
+        let rows = rows
             .iter()
             .filter_map(|r| {
                 let kb: Vec<u8> = r.get(1);
                 // `Key::from_slice` assumes exactly KEY_SIZE bytes and would
                 // panic (out-of-bounds) on a shorter `key` bytea; skip + alarm
                 // a wrong-length key so one corrupt/foreign row can't take
-                // down the drain.
+                // down the drain. Not dequeued (no valid key to match on), so
+                // it re-alarms on each floor reset.
                 if kb.len() != pageserver_api::key::KEY_SIZE {
                     tracing::error!(
                         len = kb.len(),
@@ -2917,7 +2911,12 @@ impl PageStore {
                     relsize: r.get(3),
                 })
             })
-            .collect())
+            .collect();
+        Ok(GcSelectedCandidates {
+            rows,
+            raw_count,
+            max_due_lsn,
+        })
     }
 
     /// Dequeue the visited trim candidates: a bucket-grouped range delete
@@ -7050,6 +7049,7 @@ mod tests {
             .gc_select_due_candidates(branch, Lsn(0), Lsn(i64::MAX as u64), 1_000_000)
             .await
             .unwrap()
+            .rows
     }
 
     /// Cross-check the SQL `gc_key_decode` inspection helper against the
@@ -7157,7 +7157,8 @@ mod tests {
         let due = store
             .gc_select_due_candidates(branch, Lsn(0), Lsn(10), 1000)
             .await
-            .unwrap();
+            .unwrap()
+            .rows;
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
         assert_eq!(dues, (1..=10).collect::<Vec<_>>(), "gating/order wrong");
 
@@ -7165,7 +7166,8 @@ mod tests {
         let due = store
             .gc_select_due_candidates(branch, Lsn(0), Lsn(20), 5)
             .await
-            .unwrap();
+            .unwrap()
+            .rows;
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
         assert_eq!(dues, vec![1, 2, 3, 4, 5], "limit must keep oldest");
     }
@@ -7195,7 +7197,8 @@ mod tests {
         let due = store
             .gc_select_due_candidates(branch, Lsn(0), Lsn(20), 2)
             .await
-            .unwrap();
+            .unwrap()
+            .rows;
         assert_eq!(due.len(), 2);
         assert_eq!(due.last().unwrap().due_lsn, Lsn(10));
         store
@@ -7208,7 +7211,8 @@ mod tests {
         let due = store
             .gc_select_due_candidates(branch, Lsn(9), Lsn(20), 1000)
             .await
-            .unwrap();
+            .unwrap()
+            .rows;
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
         assert_eq!(dues, vec![10, 10, 15], "boundary ties must re-select");
 
@@ -7216,7 +7220,8 @@ mod tests {
         let due = store
             .gc_select_due_candidates(branch, Lsn(10), Lsn(20), 1000)
             .await
-            .unwrap();
+            .unwrap()
+            .rows;
         let dues: Vec<u64> = due.iter().map(|r| r.due_lsn.0).collect();
         assert_eq!(dues, vec![15], "floor is exclusive");
     }
@@ -7236,7 +7241,8 @@ mod tests {
         let drained = store
             .gc_select_due_candidates(branch, Lsn(0), Lsn(30), 1000)
             .await
-            .unwrap();
+            .unwrap()
+            .rows;
         assert_eq!(drained.len(), 3);
         store
             .gc_dequeue_trim_candidates(branch, &blocks_of(&drained), Lsn(0), Lsn(30))
@@ -7359,7 +7365,8 @@ mod tests {
         let drained = store
             .gc_select_due_candidates(branch, Lsn(0), Lsn(30), 1)
             .await
-            .unwrap();
+            .unwrap()
+            .rows;
         assert_eq!(drained.len(), 1);
         assert_eq!((blk_marker(&drained[0]), drained[0].due_lsn.0), (7, 5));
         store
@@ -7381,7 +7388,8 @@ mod tests {
         let next = store
             .gc_select_due_candidates(branch, Lsn(0), Lsn(30), 1000)
             .await
-            .unwrap();
+            .unwrap()
+            .rows;
         assert_eq!(next.len(), 1, "only the unvisited block remains due");
     }
 
@@ -7407,7 +7415,8 @@ mod tests {
             let batch = store
                 .gc_select_due_candidates(branch, Lsn(0), Lsn(20), 2)
                 .await
-                .unwrap();
+                .unwrap()
+                .rows;
             if batch.is_empty() {
                 break;
             }

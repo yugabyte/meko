@@ -5116,7 +5116,8 @@ mod tests {
             let mut rows = store
                 .gc_select_due_candidates(branch, Lsn(0), Lsn(i64::MAX as u64), 100_000)
                 .await
-                .unwrap();
+                .unwrap()
+                .rows;
             rows.sort_by_key(|r| (r.key.field6, r.due_lsn));
             rows.iter()
                 .map(|r| (r.key.field6 as i64, r.due_lsn.0))

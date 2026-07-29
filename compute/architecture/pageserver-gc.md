@@ -113,7 +113,7 @@ locking it across the INSERT, so a concurrent tick can advance the
 cutoff past the clamped value and skip that one row; it waits for the
 periodic floor reset (or a restart), and the block's next base
 re-covers the garbage. This invariant is also what lets the dequeue
-sweep by block-range instead of naming exact PKs (see Drain step 5): a
+sweep by block-range instead of naming exact PKs (see the dequeue step): a
 base landing after a tick's trim anchor is clamped above the cutoff, so
 the `<= cutoff` sweep only removes a candidate whose garbage the trim
 didn't collect in the rare clamp race (above), where the block's next
@@ -138,7 +138,7 @@ runs:
    placement bucket. The **floor** (`GcDrainProgress::floor`) marks how
    far the drain has progressed: every candidate at or below it has been
    handled — dequeued, acted-but-requeued (a busy-object drop), or parked
-   as unknown-kind — so the scan seeks past those rows' YB delete
+   (an unknown kind, a malformed key) — so the scan seeks past those rows' YB delete
    tombstones instead of re-skimming them from the queue head every tick.
    It is in-memory only — 0 after a restart, so the first tick scans
    from the head. Both the select and the dequeue use it as the lower
@@ -159,7 +159,54 @@ runs:
    **not** catch a leak with *no* queue row (e.g. an emitter candidate buffer
    lost to a crash before flushing); that class waits on a future
    full rel-directory sweep (see the design doc's full-sweep alternative).
-4. **Act**, ordered **drop → shrink → trim** (coarser first — a dropped
+4. **Validate & partition** (`classify_candidate` → `partition_by_kind`).
+   Every selected row is checked against its `gc_kind` before it can reach
+   an act function, because the act paths take the object identity from the
+   `key` *blind* (`rel_fork_of` / `slru_seg_of` just read Key fields) — a
+   key whose shape doesn't match its kind would delete a wrong, live
+   object. So each kind requires its keyspace's shape: rel block
+   (`TrimPages`) or rel-size sentinel (`ShrinkPages` / `DropPages`), SLRU
+   block (`TrimSlru`) or segment-size sentinel (`DropSlru`), any `meta`-table
+   key (`TrimMeta`). A shrink additionally needs a `relsize` in `BlockNumber`
+   range — `gc_act_shrink_fork` deletes `blknum >= relsize`, so a negative one
+   would match every block and delete the whole fork.
+
+   `DropMeta` is the one kind with an **allowlist** rather than a keyspace
+   test, because trim keeps one version and drop keeps none: `gc_act_trim_meta`
+   keeps the newest version `<= cutoff`, while `gc_act_drop_meta` deletes
+   `lsn <= due_lsn` outright. A drop is therefore only correct on a key whose
+   object is *dead*, and nearly every `meta` key is live state for something —
+   a size sentinel (owned by `Drop{Pages,Slru}`, which delete it with the
+   object), a dbdir, the twophase *directory* (whose key is
+   `twophase_file_key(0)`). So `DropMeta` accepts exactly the four shapes its
+   emitters produce — relmap, rel-dir, sparse-reldir entry, twophase file —
+   and adding an emitter means adding its shape. `TrimMeta` needs no
+   allowlist: every `meta` row is self-contained (an image, or a `will_init`
+   record that fully replaces the key), so keeping the newest `<= cutoff`
+   cannot lose readable state for any key.
+
+   A refused row alarms on `correctness_errors_total` under its own label
+   (the log line carries the row), enters no bucket, and is **left queued** —
+   never dequeued. That holds for every fault, including ones that look like
+   plain corruption, because acting and dequeueing are one decision here: the
+   garbage the row names is leaked either way, so purging the row would buy
+   only silence, and would forfeit the chance for a fixed or newer binary to
+   drain it. An unknown `gc_kind` is the clearest case (a newer binary
+   probably wrote it, and roll-forward reclaims it), but a shape or `relsize`
+   fault has the same rollback explanation.
+
+   The cost is that the alarm re-fires on each floor reset while the row
+   sits there — which is the intent; a stuck row should stay lit rather than
+   bump a counter once. A refused row also costs one drain slot per reset,
+   bounded: a capped tick still advances the floor past it. To clear rows
+   judged unrecoverable, `DELETE` them from `pending_gc`.
+
+   A wrong-length `key` bytea is caught even earlier, at decode in the
+   select: there's no `Key` to classify, and none to build a dequeue
+   predicate from either, so it is dropped from the batch and left queued.
+   It still counts toward the tick's limit and floor anchor
+   (`GcSelectedCandidates`), so one corrupt row can't strand the rows above it.
+5. **Act**, ordered **drop → shrink → trim** (coarser first — a dropped
    object moots its own shrink/trim candidates), each dispatched by its
    `gc_kind` to the matching act function:
    - **drop** — delete the object's rows `<= due_lsn` (bounded by the drop
@@ -183,10 +230,10 @@ runs:
      objects are distinct hash keys / tablets, no ordering constraint.
 
    All drops are acted regardless of busy state; the busy-object ones are
-   just held back from the **dequeue** (step 5), not from the delete.
-   All actions land before step 5 — that phase barrier is the
+   just held back from the **dequeue**, not from the delete.
+   All actions land before it — that phase barrier is the
    crash-safety contract.
-5. **Dequeue**, strictly after the actions succeed: a candidate leaves
+6. **Dequeue**, strictly after the actions succeed: a candidate leaves
    the queue only once its garbage is gone, and idempotent actions make
    action-before-dequeue crash-safe (a crash in between re-runs the tick
    into a no-op). Two paths, each matching its kind's delete bound:
@@ -209,15 +256,33 @@ runs:
      is the one image-leak race the eager delete could open, closed by
      the re-act; shrink and trim don't need it (a late image on a live
      object is reclaimed by that object's next visit).
-6. **Advance the floor**, only now — after act and dequeue both
-   succeeded, so a failed tick leaves it and the failed batch
-   re-selects. An **uncapped** tick (everything due handled) advances
-   the floor to the cutoff; a **capped** tick only to `last selected
-   due_lsn − 1`, since the limit can split that group's ties and the −1
-   keeps them selectable. Unchanged on an empty select. A busy-object drop
-   and an unknown-kind row (alarmed via `correctness_errors_total`) don't
-   hold the floor back — both stay on disk below it, swept by a later
-   tick or the rescan.
+7. **Advance the floor** (`next_drain_floor`), only now — after act and
+   dequeue both succeeded, so a failed tick leaves it and the failed batch
+   re-selects. An **uncapped** tick (everything due handled) advances the
+   floor to the cutoff. A **capped** tick normally advances only to `max
+   selected due_lsn − 1`, since the limit can split that group's ties and the
+   −1 keeps them selectable. Unchanged on an empty select. The rows that stay
+   queued below the floor — a busy-object drop, a refused candidate,
+   a malformed key — don't hold it back; they're swept by a later tick or the
+   rescan.
+
+   **Except** when a capped tick dequeued *nothing*: then it advances to `max
+   selected due_lsn` instead, stepping over that tie group. Holding at
+   `max − 1` only makes progress if the tick cleared something; a tie group of
+   `>= gc_drain_limit` rows that all stay queued (every one refused, or every
+   one a busy-object drop) would otherwise re-select identically forever — and
+   because it fills the limit at the *oldest* `due_lsn`, nothing above it is
+   ever reached, stalling the branch's whole queue rather than just those rows.
+   Groups do get that large: a DROP DATABASE emits one candidate per rel at the
+   drop's LSN (those clear normally — the stall needs rows that don't).
+
+   Stepping over is not a full recovery. Any row at that `due_lsn` the limit
+   didn't return is stuck behind the group too, and a floor reset won't reach
+   it — the reset re-scans from the head, but the group refills the batch and
+   the select has no tiebreaker within a `due_lsn`, so the same subset comes
+   back. Those rows wait until the blocking ones are cleared (drained by a
+   newer binary, or `DELETE`d). What stepping over buys is that the *rest* of
+   the queue keeps draining instead of the whole branch wedging.
 
 The whole drain (select, actions, dequeue) runs on a dedicated
 **`yb-pageserver:gc` connection pool** sized to the action width, so a
@@ -247,13 +312,29 @@ one doc.)
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `pageserver_yb_gc_drain_lag_bytes` | UIntGauge | — | Residual `cutoff − due.last().due_lsn` on a budget-capped tick (the due span the tick couldn't reach); 0 when it drained everything due. 0 baseline while keeping up; grows once inserts outrun the drain — **the backlog/starvation alarm**. NB: during a backlog the periodic floor reset reads artificially high for one sample (it scans from the head, so `due.last()` is older); alert on a rate/smoothed value, not a raw sample. |
+| `pageserver_yb_gc_drain_lag_bytes` | UIntGauge | — | Residual `cutoff − max selected due_lsn` on a budget-capped tick (the due span the tick couldn't reach); 0 when it drained everything due. 0 baseline while keeping up; grows once inserts outrun the drain — **the backlog/starvation alarm**. NB: during a backlog the periodic floor reset reads artificially high for one sample (it scans from the head, so `due.last()` is older); alert on a rate/smoothed value, not a raw sample. |
 | `pageserver_yb_gc_applied_cutoff_lsn` | UIntGauge | — | Current GC cutoff (`applied_gc_cutoff_lsn`), per tick. `pageserver_last_record_lsn − this` = retained-history window. Frozen while the queue grows ⇒ cutoff pinned (lease/child/`consistent_lsn`), not a slow drain. |
 | `pageserver_yb_gc_candidates_emitted_total` | IntCounter | `path` (`ingest`/`materialiser`/`drop`/`shrink`) | Candidates emitted, by producer path. For trim this counts sampler firings: one per `gc_candidate_every_n_bases` bases per key — but if a key fires more than once within one emitter flush window, those firings fold into a single `pending_gc` row, so inserted rows ≤ emitted. Drop/shrink events unsampled, one row each. `rate()` = emission rate, an upper bound on the insert rate. |
 | `pageserver_yb_gc_candidates_read_total` | IntCounter | — | Rows the drain's `pending_gc` select returned per tick (pre-routing). `== gc_drain_limit` ⇒ capped; `≫ removed` ⇒ read but not cleared. |
 | `pageserver_yb_gc_candidates_dequeued_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue: trim range-sweeps a visited key's whole `(floor, cutoff]` set (collapses duplicates), drop/shrink clear exactly the acted candidates. ≈ `read` at steady state. `rate(emitted) − rate(dequeued)` = queue growth. |
 | `pageserver_yb_gc_rows_deleted_total` | IntCounter | — | Rows deleted by the drain across `amp_storage.pages`, `slru_pages`, and `meta` (trim / drop / shrink). `rate()` = reclamation throughput. |
 | `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence. |
+
+The drain also owns five `kind` values of
+`pageserver_yb_correctness_errors_total` (the rest are in
+[`pageserver-metrics.md`](pageserver-metrics.md)). All five mean "the drain
+refused to act on a queue row", and **none of them dequeues it**, so
+each **re-fires on every floor reset** until the row is fixed, drained by a
+newer binary, or `DELETE`d by hand. Read a sustained rate as one stuck row, not
+a stream of new ones — the `error!` line carries the row.
+
+| `kind` | Meaning |
+| --- | --- |
+| `gc_candidate_key_shape_mismatch` | The row's `key` shape doesn't match the keyspace its `gc_kind` acts on (e.g. `DropPages` carrying a rel *block* key, not the fork's rel-size key). The act paths decode the object identity from the key blind, so acting could delete a live object. |
+| `gc_shrink_missing_relsize` | A `ShrinkPages` candidate with no stored `relsize` — nothing to truncate at. |
+| `gc_shrink_relsize_out_of_range` | A `ShrinkPages` `relsize` that isn't a block number (negative, or `>= u32::MAX`). A negative one would match every block (`blknum >= relsize`) and delete the whole fork. |
+| `gc_unknown_candidate_kind` | A `gc_kind` this binary doesn't know, most likely written by a newer one — it reclaims the row on roll-forward. |
+| `gc_malformed_key` | The `key` bytea isn't the fixed 18-byte `Key` length. Refused at decode in the select rather than panicking; there's no valid key to dequeue it by either. |
 
 ## Troubleshooting
 
