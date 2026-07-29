@@ -169,6 +169,22 @@ func (s *EnvironmentService) EnrollWithToken(tokenPlain, placement string, f Clu
 	e.CertFingerprint = "sha256:" + randHex(6)
 	statusPlain, statusHash := newToken("mko_sts_")
 	e.StatusTokenHash = statusHash
+	// The enrollment token is deliberately NOT burned here, even though the agent
+	// now persists the status token and so does not need to enroll again in normal
+	// operation.
+	//
+	// Burning it makes every failure mode permanent instead of TTL-bounded:
+	// EnrollLookup requires a non-empty hash, so once cleared the agent's
+	// re-enroll-on-401 path can never succeed, and an agent that failed to persist
+	// its state — or whose status token was rotated or invalidated — is locked out
+	// with no recovery short of re-registering the environment, which resets its
+	// state and datapack counts. Leaving it reusable for the rest of its 30-minute
+	// window keeps that window as a genuine recovery budget.
+	//
+	// Single-use is still the right end state, but it needs a re-issue path first
+	// (an endpoint that mints a fresh enrollment token for a known environment, or
+	// status-token rotation authenticated by the current token). Until then the
+	// TTL is the only bound, which is what it was designed to be.
 	if err := s.repo.Upsert(e); err != nil {
 		return nil, "", false, err
 	}

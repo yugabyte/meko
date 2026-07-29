@@ -42,7 +42,10 @@ rules:
   # per-datapack service workloads the agent provisions into datapack namespaces
   - apiGroups: [""]
     resources: ["services", "secrets"]
-    verbs: ["get", "list", "create", "delete"]
+    # update: the agent replaces its own meko-agent-state Secret in place when the
+    # status token rotates. Without it the PUT is 403 and the Secret keeps a dead
+    # token, so the next restart resumes with a credential the server rejects.
+    verbs: ["get", "list", "create", "update", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "create", "delete"]
