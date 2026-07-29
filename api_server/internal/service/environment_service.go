@@ -205,6 +205,23 @@ func (s *EnvironmentService) ApplyStatus(envID string, r StatusReport) (bool, er
 	return true, nil
 }
 
+// SetState moves an environment to an agent-reported bootstrap phase. Distinct
+// from Action, which applies operator intent from a fixed set.
+func (s *EnvironmentService) SetState(envID, state string) (bool, error) {
+	e, err := s.repo.Get(envID)
+	if err != nil || e == nil {
+		return false, err
+	}
+	e.State = state
+	return true, s.repo.Upsert(e)
+}
+
+// Entitlement is the plan the control plane reports. Static until a billing source
+// is wired; kept here so the handler has no policy in it.
+func (s *EnvironmentService) Entitlement() models.Entitlement {
+	return models.Entitlement{Plan: "enterprise", Source: "ybm-aeon"}
+}
+
 // SetDesired replaces the desired resource set. ok=false ⇒ unknown environment.
 func (s *EnvironmentService) SetDesired(envID string, res []models.DesiredResource) (bool, error) {
 	e, err := s.repo.Get(envID)

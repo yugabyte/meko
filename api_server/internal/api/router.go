@@ -317,11 +317,21 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		fleet.GET("/environments", envH.List)
 		fleet.POST("/environments", envH.Register)
 		fleet.GET("/environments/:id", envH.Get)
+		fleet.PATCH("/environments/:id", envH.Action)
+		fleet.DELETE("/environments/:id", envH.Deregister)
 		fleet.POST("/environments/:id/desired", envH.SetDesired)
+		fleet.GET("/entitlements", envH.Entitlements)
 		agentGroup := v1.Group("/agent")
 		agentGroup.POST("/enroll", envH.AgentEnroll)
 		agentGroup.GET("/desired-state", envH.AgentDesiredState)
 		agentGroup.POST("/status", envH.AgentStatus)
+		agentGroup.POST("/bootstrap-progress", envH.AgentBootstrapProgress)
+
+		// The fleet console, served from this binary so the control plane is one
+		// thing to deploy. Registered on the root Echo instance, not the /api/v1
+		// group, and only in control-plane mode — a data-plane api-server keeps
+		// returning 404 at / as before.
+		e.GET("/", handlers.ConsoleHandler())
 	}
 
 	authEnabled := cfg.CognitoRegion != "" &&

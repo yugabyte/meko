@@ -288,9 +288,60 @@ func (m *ycp) req(method, path string, body, out any) (int, error) {
 	}
 	defer resp.Body.Close()
 	if out != nil && resp.StatusCode < 300 {
-		json.NewDecoder(resp.Body).Decode(out)
+		if err := decodeBody(resp.Body, out); err != nil {
+			return resp.StatusCode, err
+		}
 	}
 	return resp.StatusCode, nil
+}
+
+// decodeBody unwraps the two response shapes the agent has to speak to.
+//
+// cmd/ycp returns the payload flat; api_server wraps it as
+// {"data":…,"error":…}. Decoding the wrapped form straight into the payload
+// struct silently yields zero values — which meant an empty environment_id and
+// status_token, so every following status report was rejected with 400 while
+// enrollment had already succeeded server-side. Detect the envelope and decode
+// its "data" instead.
+func decodeBody(r io.Reader, out any) error {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	var env struct {
+		Data  json.RawMessage `json:"data"`
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		hasEnvelope bool
+	}
+	// Only treat it as an envelope when "data" is actually present: a flat payload
+	// that happens to lack every field would otherwise look like one.
+	var probe map[string]json.RawMessage
+	if json.Unmarshal(raw, &probe) == nil {
+		if _, ok := probe["data"]; ok {
+			if _, ok := probe["error"]; ok {
+				env.hasEnvelope = true
+			}
+		}
+	}
+	if !env.hasEnvelope {
+		return json.Unmarshal(raw, out)
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return err
+	}
+	if env.Error != nil && env.Error.Message != "" {
+		return fmt.Errorf("%s: %s", env.Error.Code, env.Error.Message)
+	}
+	if len(env.Data) == 0 || string(env.Data) == "null" {
+		return nil
+	}
+	return json.Unmarshal(env.Data, out)
 }
 
 // enroll performs the token handshake and records the returned status token.

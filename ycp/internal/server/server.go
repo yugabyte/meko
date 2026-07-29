@@ -77,7 +77,13 @@ func Handler(s store.Store) http.Handler {
 			writeErr(w, 500, "internal", err.Error())
 			return
 		}
-		hint := "helm install meko-agent meko/meko-agent --set ycp.url=$YCP --set enrollmentToken=" + plain
+		// Not `meko/meko-agent`: there is no such chart and no published `meko` Helm
+		// repo. The agent is a component of the `meko` chart in meko-devops, and the
+		// token goes in a Secret rather than on the command line.
+		hint := "kubectl -n <ns> create secret generic meko-agent-enrollment --from-literal=enrollment-token=" + plain +
+			" && helm upgrade --install meko-agent charts/meko -n <ns> --set agent.enabled=true" +
+			" --set agent.ycpUrl=$YCP --set agent.envName=" + e.ID +
+			" (see charts/meko/README.md in meko-devops for the full command)"
 		if body.ClusterSpec != nil {
 			hint = "meko bootstrap provision --cloud " + body.ClusterSpec.Provider + " --region " + body.Region + " --enrollment-token " + plain
 		}

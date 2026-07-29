@@ -41,3 +41,12 @@ type DesiredResource struct {
 	Name string          `json:"name"`
 	Spec json.RawMessage `json:"spec,omitempty"`
 }
+
+// Entitlement is the plan/limits envelope the console reads to decide what it may
+// offer. Sourced from the billing system upstream; static for now.
+type Entitlement struct {
+	Plan            string `json:"plan"`
+	Source          string `json:"source"`
+	MaxEnvironments *int   `json:"max_environments"`
+	MaxDatapacks    *int   `json:"max_datapacks"`
+}
