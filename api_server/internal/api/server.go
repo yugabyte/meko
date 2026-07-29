@@ -93,6 +93,18 @@ type ServerConfig struct {
 	StripePriceIDStarter string
 	StripePriceIDGrowth  string
 	StripePriceIDScale   string
+
+	// AWS Marketplace SaaS Contract integration. When ProductCode is
+	// empty the /marketplace/* routes are not registered and the UI's
+	// AWS-upgrade CTA stays hidden. Region defaults to us-east-1
+	// (Marketplace APIs are only served there today).
+	//
+	// TODO: AWS-PRODUCT-CODE — set once your listing publishes.
+	// TODO: AWS-WELCOME-URL — meko_ui path to redirect the buyer to
+	//       after a successful register call.
+	AWSMarketplaceProductCode string
+	AWSMarketplaceRegion      string
+	AWSMarketplaceWelcomeURL  string
 	// MCPPATFlushInterval controls how often the background
 	// goroutine drains the in-memory last_used_at touch map onto the
 	// database. Zero (the default) falls back to

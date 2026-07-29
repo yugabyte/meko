@@ -43,12 +43,19 @@ func (r *AdminRepo) ListUsers(ctx context.Context) ([]AdminUserRow, error) {
 	return out, rows.Err()
 }
 
-// CountUsersByTier returns (total, free, pro) user counts where "free"
-// is user_type='free' and "pro" is everything else (pro/enterprise).
+// CountUsersByTier returns per-tier user counts. Introduced when Standard
+// was added: before, the split was 2-bucket (free vs. everyone-else,
+// bucketed as "pro"), which lumped Standard subscribers into the pro
+// column once the enum grew. Now split explicitly:
+//
+//	free      -- user_type='free'
+//	standard  -- user_type='standard' (AWS Marketplace $25/mo)
+//	pro       -- user_type IN ('pro','enterprise')  (sales-led paid)
+//
 // When start/endExclusive are set, counts users created_at in the window.
 func (r *AdminRepo) CountUsersByTier(
 	ctx context.Context, start, endExclusive *time.Time,
-) (total, free, pro int64, err error) {
+) (total, free, standard, pro int64, err error) {
 	pred, args := rangePredicate("created_at", start, endExclusive, 1)
 	where := ""
 	if pred != "" {
@@ -57,12 +64,13 @@ func (r *AdminRepo) CountUsersByTier(
 	q := `SELECT
 		   COUNT(*),
 		   COUNT(*) FILTER (WHERE user_type = 'free'),
-		   COUNT(*) FILTER (WHERE user_type <> 'free')
+		   COUNT(*) FILTER (WHERE user_type = 'standard'),
+		   COUNT(*) FILTER (WHERE user_type IN ('pro','enterprise'))
 		 FROM meko_system.users` + where
-	if err = r.systemDB.QueryRowContext(ctx, q, args...).Scan(&total, &free, &pro); err != nil {
-		return 0, 0, 0, fmt.Errorf("count users by tier: %w", err)
+	if err = r.systemDB.QueryRowContext(ctx, q, args...).Scan(&total, &free, &standard, &pro); err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("count users by tier: %w", err)
 	}
-	return total, free, pro, nil
+	return total, free, standard, pro, nil
 }
 
 // ListUserIDs returns every user_id in meko_system.users. Used to scope

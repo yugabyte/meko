@@ -105,3 +105,11 @@ CREATE TABLE IF NOT EXISTS meko_system.billing_webhook_events (
     processed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY ((event_id) HASH)
 ) SPLIT INTO 2 TABLETS;
+
+-- Note: meko_system.marketplace_entitlements was originally added here
+-- in an earlier revision of this migration and has since moved to
+-- 000009_standard_tier.up.sql, which owns the whole AWS Marketplace
+-- shape (table, indexes, and standard enum value) as a single unit.
+-- Existing dev pods that already ran the earlier revision still have
+-- the table -- 000009 uses CREATE TABLE IF NOT EXISTS so re-apply is
+-- a no-op there.

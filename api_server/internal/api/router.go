@@ -70,6 +70,12 @@ type serviceRegistry struct {
 	// envSvc is nil unless control-plane mode is enabled (--control-plane-mode);
 	// the YCP fleet + agent routes are registered only when it is non-nil.
 	envSvc *service.EnvironmentService
+
+	// Marketplace: nil until AWS_MARKETPLACE_PRODUCT_CODE is set.
+	// Route registration guards on marketplaceSvc.Enabled().
+	marketplaceRepo       *repository.MarketplaceRepo
+	marketplaceSvc        *service.MarketplaceService
+	marketplaceWelcomeURL string
 }
 
 // buildServiceRegistry initialises all repositories and services in
@@ -219,40 +225,60 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	tokenSavingsRepo := repository.NewTokenSavingsRepo(cfg.SystemDB)
 	tokenSavingsSvc := service.NewTokenSavingsService(tokenSavingsRepo, dpRepo)
 
+	// AWS Marketplace: nil until AWS_MARKETPLACE_PRODUCT_CODE is set on
+	// the pod. NewMarketplaceService returns (nil, nil) in that state
+	// so handlers 503 cleanly and nothing panics.
+	marketplaceRepo := repository.NewMarketplaceRepo(cfg.SystemDB)
+	marketplaceSvc, mErr := service.NewMarketplaceService(
+		context.Background(),
+		service.MarketplaceConfig{
+			ProductCode: cfg.AWSMarketplaceProductCode,
+			Region:      cfg.AWSMarketplaceRegion,
+		},
+		marketplaceRepo,
+		billingRepo,
+	)
+	if mErr != nil {
+		slog.Error("marketplace: init failed; routes will 503", "error", mErr)
+	}
+
 	slog.Info("service registry initialized")
 	return &serviceRegistry{
-		accountRepo:         accountRepo,
-		ybaRepo:             ybaRepo,
-		ybaSvc:              ybaSvc,
-		dpRepo:              dpRepo,
-		dpSvc:               dpSvc,
-		kbRepo:              kbRepo,
-		freeTierRepo:        freeTierRepo,
-		accountUsageSvc:     accountUsageSvc,
-		langfuseSvc:         langfuseSvc,
-		agentSvc:            agentSvc,
-		kbSvc:               kbSvc,
-		ragSvc:              ragSvc,
-		memoriesSvc:         memoriesSvc,
-		promoteMemoriesSvc:  promoteMemoriesSvc,
-		s3Svc:               s3Svc,
-		sharingRepo:         sharingRepo,
-		sharingSvc:          sharingSvc,
-		feedbackRepo:        feedbackRepo,
-		mcpPATRepo:          mcpPATRepo,
-		mcpPATAuditRepo:     mcpPATAuditRepo,
-		mcpPATSvc:           mcpPATSvc,
-		billingRepo:         billingRepo,
-		billingSvc:          billingSvc,
-		adminMetricsSvc:     adminMetricsSvc,
-		adminDataPlaneSvc:   adminDataPlaneSvc,
-		artifactRepo:        artifactRepo,
-		artifactSvc:         artifactSvc,
-		tokenSavingsRepo:    tokenSavingsRepo,
-		tokenSavingsSvc:     tokenSavingsSvc,
-		ampSvc:              ampSvc,
-		ampRegistrationRepo: ampRegistrationRepo,
-		envSvc:              envSvc,
+		accountRepo:           accountRepo,
+		ybaRepo:               ybaRepo,
+		ybaSvc:                ybaSvc,
+		dpRepo:                dpRepo,
+		dpSvc:                 dpSvc,
+		kbRepo:                kbRepo,
+		freeTierRepo:          freeTierRepo,
+		accountUsageSvc:       accountUsageSvc,
+		langfuseSvc:           langfuseSvc,
+		agentSvc:              agentSvc,
+		kbSvc:                 kbSvc,
+		ragSvc:                ragSvc,
+		memoriesSvc:           memoriesSvc,
+		promoteMemoriesSvc:    promoteMemoriesSvc,
+		s3Svc:                 s3Svc,
+		sharingRepo:           sharingRepo,
+		sharingSvc:            sharingSvc,
+		feedbackRepo:          feedbackRepo,
+		mcpPATRepo:            mcpPATRepo,
+		mcpPATAuditRepo:       mcpPATAuditRepo,
+		mcpPATSvc:             mcpPATSvc,
+		billingRepo:           billingRepo,
+		billingSvc:            billingSvc,
+		adminMetricsSvc:       adminMetricsSvc,
+		adminDataPlaneSvc:     adminDataPlaneSvc,
+		artifactRepo:          artifactRepo,
+		artifactSvc:           artifactSvc,
+		tokenSavingsRepo:      tokenSavingsRepo,
+		tokenSavingsSvc:       tokenSavingsSvc,
+		ampSvc:                ampSvc,
+		ampRegistrationRepo:   ampRegistrationRepo,
+		envSvc:                envSvc,
+		marketplaceRepo:       marketplaceRepo,
+		marketplaceSvc:        marketplaceSvc,
+		marketplaceWelcomeURL: cfg.AWSMarketplaceWelcomeURL,
 	}
 }
 
@@ -372,8 +398,40 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 
 	registerDatapackRoutes(datapackGroup, dpDirect, reg, cfg.MaxArtifactSizeBytes, cfg.EnableConversationSearch)
 	registerBillingRoutes(v1, datapackGroup, reg)
+	registerMarketplaceRoutes(v1, datapackGroup, reg)
 
 	return e, reg, nil
+}
+
+// registerMarketplaceRoutes wires the AWS Marketplace fulfillment +
+// SNS endpoints. Skipped entirely when MarketplaceService is nil (no
+// ProductCode configured), so a Meko instance that hasn't finished
+// its AWS listing yet just doesn't expose the routes.
+//
+// The fulfillment endpoint attaches to `authed` because the buyer
+// must be signed in to Meko for us to know which user to bind the
+// entitlement to. SNS attaches to `v1` directly because AWS SNS calls
+// are unauthenticated — payload authenticity is proven by the SNS
+// message signature (TODO in the handler).
+func registerMarketplaceRoutes(v1 *echo.Group, authed *echo.Group, reg *serviceRegistry) {
+	if reg.marketplaceSvc == nil || !reg.marketplaceSvc.Enabled() {
+		slog.Warn("marketplace routes disabled (AWS_MARKETPLACE_PRODUCT_CODE not set)")
+		return
+	}
+	h := handlers.NewMarketplaceHandler(
+		reg.marketplaceSvc, reg.marketplaceRepo, reg.billingRepo, reg.marketplaceWelcomeURL,
+	)
+	// Register is PUBLIC — AWS Marketplace form-POSTs here from
+	// aws.amazon.com and the buyer may not yet have a Meko session.
+	// The handler stashes the token and bounces to /signup (new
+	// buyer) or /marketplace/complete (existing user).
+	v1.POST("/marketplace/register", h.Register)
+	// Complete requires a Meko session. Called by the browser after
+	// signup / when an already-signed-in user gets bounced from
+	// Register; reads the stashed token and finalizes the entitlement.
+	authed.GET("/marketplace/complete", h.Complete)
+	v1.POST("/marketplace/sns", h.SNS)
+	slog.Info("marketplace routes registered")
 }
 
 // registerBillingRoutes wires the three Stripe-backed endpoints when

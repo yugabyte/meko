@@ -17,7 +17,7 @@ import { getInferenceGatewayErrorMessage, postChat } from "@/lib/inferenceGatewa
 import type { DatapackThreadMessage } from "@/lib/api/mekoApi";
 import { useAccountUsage, ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
+import { blockedMessage, getFreeTierStatus } from "@/lib/freeTier";
 import { FreeTierLimitBanner } from "@/lib/freeTierBanner";
 import { queryClient } from "@/lib/queryClient";
 import type { DatapackShareGrant } from "@/lib/datapackShareGrants";
@@ -206,9 +206,9 @@ export function WorkbenchLMChat({
   // Order matters: report the blocker the user can act on first.
   // free-tier caps → datapack → account → token → knowledge readiness.
   const blockedReason = freeTier.hasHitNumConversations
-    ? FREE_TIER_BLOCKED_MESSAGES.conversations
+    ? blockedMessage("conversations", currentUser?.user_type)
     : freeTier.hasHitTokenBurn
-      ? FREE_TIER_BLOCKED_MESSAGES.tokenBurn
+      ? blockedMessage("tokenBurn", currentUser?.user_type)
       : !datapackName
         ? "Select a datapack from the header to start chatting."
         : !userId

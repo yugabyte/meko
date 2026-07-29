@@ -49,6 +49,11 @@ export function AppWorkspaceHeader({
     .map((p) => (p ?? "").trim())
     .filter((p) => p !== "" && p !== "-")
     .join(" ");
+  // Cap long emails/names at 35 chars so the tier badge (STANDARD /
+  // ENTERPRISE) stays on the same visual line as "Signed in as …" on
+  // typical laptop widths. Full value stays in `title` for hover.
+  const displayEmail = truncateIdentity(email);
+  const displayName = truncateIdentity(realName);
 
   return (
     <header
@@ -94,7 +99,7 @@ export function AppWorkspaceHeader({
           ) : currentUser?.account_id ? (
             <IncomingShareNotificationsBell recipientUserId={currentUser.account_id} />
           ) : null}
-          <p className="flex min-w-0 max-w-xs flex-wrap items-baseline justify-end gap-x-1 text-right text-sm leading-tight sm:max-w-sm">
+          <p className="flex min-w-0 max-w-md flex-nowrap items-center justify-end gap-x-1 whitespace-nowrap text-right text-sm leading-tight">
             {userLoading ? (
               <span className="text-muted-foreground">Loading…</span>
             ) : showPlaceholder ? (
@@ -103,8 +108,8 @@ export function AppWorkspaceHeader({
               realName ? (
                 <>
                   <span className="shrink-0 text-muted-foreground">Signed in as</span>
-                  <span className="min-w-0 truncate font-medium text-foreground" title={realName}>
-                    {realName}
+                  <span className="min-w-0 shrink-0 font-medium text-foreground" title={realName}>
+                    {displayName}
                   </span>
                 </>
               ) : (
@@ -113,8 +118,8 @@ export function AppWorkspaceHeader({
             ) : email ? (
               <>
                 <span className="shrink-0 text-muted-foreground">Signed in as</span>
-                <span className="min-w-0 truncate font-medium text-foreground" title={email}>
-                  {email}
+                <span className="min-w-0 shrink-0 font-medium text-foreground" title={email}>
+                  {displayEmail}
                 </span>
                 <TierBadge userType={currentUser?.user_type} />
               </>
@@ -129,17 +134,34 @@ export function AppWorkspaceHeader({
   );
 }
 
+// Cap long emails so "Signed in as <email> STANDARD" fits on one
+// visual line on typical laptop widths. The full value stays in the
+// element's `title` for hover.
+const IDENTITY_MAX_CHARS = 35;
+function truncateIdentity(value: string): string {
+  if (value.length <= IDENTITY_MAX_CHARS) return value;
+  return `${value.slice(0, IDENTITY_MAX_CHARS - 1)}…`;
+}
+
 /**
- * Tier chip shown next to the signed-in email. Renders for free / pro /
- * enterprise — anything unknown / empty stays hidden so unauthenticated
- * or pre-/auth/me states don't flash a wrong tag. Source of truth:
- * `currentUser.user_type` from `/auth/me`.
+ * Tier chip shown next to the signed-in email. Renders for free /
+ * standard / pro / enterprise — anything unknown / empty stays hidden
+ * so unauthenticated or pre-/auth/me states don't flash a wrong tag.
+ * Source of truth: `currentUser.user_type` from `/auth/me`.
  */
 function TierBadge({ userType }: { userType?: string | null }) {
   const userTier = (userType ?? "").trim().toLowerCase();
-  if (userTier !== "free" && userTier !== "pro" && userTier !== "enterprise") return null;
+  if (
+    userTier !== "free" &&
+    userTier !== "standard" &&
+    userTier !== "pro" &&
+    userTier !== "enterprise"
+  ) {
+    return null;
+  }
   // Each tier gets a distinct hue so the eye separates them at a glance.
   //   free       — muted/neutral; "you can upgrade" without nagging.
+  //   standard   — emerald (matches Standard callouts on Pricing).
   //   pro        — blue (matches the existing CTA / Pricing accents).
   //   enterprise — purple so it reads as one tier above Pro.
   const tone =
@@ -147,7 +169,9 @@ function TierBadge({ userType }: { userType?: string | null }) {
       ? "border-purple-500/40 bg-purple-500/10 text-purple-700 dark:text-purple-300"
       : userTier === "pro"
         ? "border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-300"
-        : "border-border bg-muted text-muted-foreground";
+        : userTier === "standard"
+          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+          : "border-border bg-muted text-muted-foreground";
   const label = userTier.toUpperCase();
   return (
     <span

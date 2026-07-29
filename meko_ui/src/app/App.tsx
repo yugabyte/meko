@@ -122,6 +122,7 @@ function AppRouter() {
 
   useOnboardingGuard({
     location: location.pathname,
+    search: location.search,
     authLoading,
     authenticated,
     hasCompletedOnboarding,

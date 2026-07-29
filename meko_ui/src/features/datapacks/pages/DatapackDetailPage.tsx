@@ -12,7 +12,7 @@ import {
 import { WarningBanner } from "@/components/ui/warning-banner";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { useAccountUsage } from "@/hooks/useAccountUsage";
-import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
+import { blockedMessage, getFreeTierStatus } from "@/lib/freeTier";
 import { FreeTierLimitBanner } from "@/lib/freeTierBanner";
 import {
   DEFAULT_ACCOUNT_DATAPACK_NAME,
@@ -501,7 +501,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                         disabled={freeTier.hasHitKbStorageFileSize}
                         title={
                           freeTier.hasHitKbStorageFileSize
-                            ? FREE_TIER_BLOCKED_MESSAGES.knowledgeUpload
+                            ? blockedMessage("knowledgeUpload", currentUser?.user_type)
                             : undefined
                         }
                       >

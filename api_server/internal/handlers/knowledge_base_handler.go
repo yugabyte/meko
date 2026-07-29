@@ -293,33 +293,49 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "size must be greater than 0")
 	}
-	if req.Size > maxFileSizeBytes {
-		return apiError(c, http.StatusBadRequest,
-			"VALIDATION_ERROR", service.FreeTierUpgradeMessageFileSize)
-	}
 	if req.ContentType == "" {
 		req.ContentType = "application/octet-stream"
 	}
 
-	// Free-tier storage cap. Applies ONLY when the requester's user_type
-	// is explicitly "free"; Pro / Enterprise / unknown all skip the
-	// block. Pre-presign so no bytes hit S3 against a doomed upload.
-	// We gate on the REQUESTER's tier (not the owner's) to stay
-	// consistent with the FE — a Pro user uploading to a shared
-	// Free-owner datapack does not see the cap on either side.
+	// Per-file size cap + total-storage cap. Both derived from
+	// LimitsFor(user_type):
+	//   free      -> 5 MB   / 100 MB total
+	//   standard  -> 50 MB  / 5 GB total   (Marketplace-paid)
+	//   pro/etc.  -> TierUnlimited on both
+	// Gated on the REQUESTER's tier (not the owner's) to stay
+	// consistent with the FE — a Pro user uploading into a shared
+	// Free-owner datapack sees no cap on either side. Falls back to
+	// the legacy 5 MB per-file cap when there's no account context.
 	account, _ := auth.GetAccount(c)
-	if account != nil && service.IsFreeUserType(account.AccountType) {
+	perFileCap := int64(maxFileSizeBytes)
+	if account != nil {
+		if l := service.LimitsFor(account.AccountType).MaxKBFileBytes; l > 0 {
+			perFileCap = l
+		}
+	}
+	if req.Size > perFileCap {
+		userType := ""
+		if account != nil {
+			userType = account.AccountType
+		}
+		return apiError(c, http.StatusBadRequest,
+			"VALIDATION_ERROR", service.UpgradeMessageFileSize(userType))
+	}
+
+	if account != nil && service.IsGatedUserType(account.AccountType) {
+		limits := service.LimitsFor(account.AccountType)
 		if currentBytes, err := h.knowledgeBaseSvc.SumDocumentSizesByOwner(dp.UserID); err != nil {
 			slog.Error("kb upload cap: sum sizes",
 				"user_id", dp.UserID, "datapack_id", dp.ID, "error", err)
 			return apiError(c, http.StatusInternalServerError,
-				"INTERNAL_ERROR", "failed to read free-tier storage usage")
-		} else if currentBytes+req.Size > service.FreeTierMaxKBStorageBytes {
-			slog.Info("kb upload blocked by free-tier cap",
+				"INTERNAL_ERROR", "failed to read tier storage usage")
+		} else if currentBytes+req.Size > limits.MaxKBStorageBytes {
+			slog.Info("kb upload blocked by tier cap",
 				"user_id", dp.UserID,
+				"user_type", account.AccountType,
 				"current_bytes", currentBytes,
 				"incoming_bytes", req.Size,
-				"cap", service.FreeTierMaxKBStorageBytes,
+				"cap", limits.MaxKBStorageBytes,
 			)
 			return apiError(c, http.StatusPaymentRequired,
 				"FREE_TIER_KB_STORAGE_LIMIT", service.FreeTierUpgradeMessageKBUpload)

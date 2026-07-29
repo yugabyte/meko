@@ -1,36 +1,44 @@
-// Shared free-tier "you've hit the limit" banner used at the top of
-// gated pages (Datapacks overview, Datapack detail, WorkbenchLM chat).
-// More prominent than the per-button tooltip; intended as the primary
-// upgrade CTA when a user has run out of headroom on a dimension.
+// Shared "you've hit the tier limit" banner used at the top of gated
+// pages. Picks Free→Standard vs Standard→Pro copy based on the current
+// user_type from /auth/me. CTA links to /settings where PricingSection
+// hosts both the Standard "Upgrade" button and the Pro "Talk to our team"
+// link — no more mailto in the banner itself.
 //
-// Kept in its own .tsx file because `lib/freeTier.ts` is pure data
-// (constants + helpers) and importing a TSX component there would force
-// the whole module into a .tsx file. Caller is responsible for the
-// "should I render at all" check — typically
-// `freeTier.hasHit* && isFreeTier(currentUser?.user_type)`.
+// Kept in its own .tsx file because `lib/freeTier.ts` is pure data.
+// Caller decides whether to render at all (typically
+// `tierStatus.hasHit* && isGatedTier(currentUser?.user_type)`).
 
+import { Link } from "react-router-dom";
 import { WarningBanner } from "@/components/ui/warning-banner";
-import { FREE_TIER_BANNER_MESSAGES, SALES_CONTACT_URL } from "@/lib/freeTier";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { ROUTES } from "@/app/routes/paths";
+import { TIER_BANNER_MESSAGES, nextTierFor, type TierBannerKind } from "@/lib/freeTier";
 
-export function FreeTierLimitBanner({
+export function TierLimitBanner({
   kind,
   className,
 }: {
-  kind: keyof typeof FREE_TIER_BANNER_MESSAGES;
+  kind: TierBannerKind;
   className?: string;
 }) {
+  const { data: user } = useCurrentUser({ enabled: true });
+  const target = nextTierFor(user?.user_type);
+  const message = TIER_BANNER_MESSAGES[target][kind];
+  const linkLabel = target === "standard" ? "Upgrade" : "Talk to our team";
   return (
     <WarningBanner className={className}>
-      {FREE_TIER_BANNER_MESSAGES[kind]}{" "}
-      <a
-        href={SALES_CONTACT_URL}
-        target="_blank"
-        rel="noreferrer noopener"
+      {message}{" "}
+      <Link
+        to={ROUTES.settings}
         className="underline underline-offset-2 hover:no-underline"
       >
-        Contact sales
-      </a>
+        {linkLabel}
+      </Link>
       .
     </WarningBanner>
   );
 }
+
+/** Back-compat alias — existing callers importing `FreeTierLimitBanner`
+ *  keep working while we migrate. Prefer `TierLimitBanner` in new code. */
+export const FreeTierLimitBanner = TierLimitBanner;

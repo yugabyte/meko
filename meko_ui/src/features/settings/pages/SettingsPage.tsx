@@ -6,11 +6,14 @@
 // mount so deep-links into `/settings` from external nav still work without
 // requiring the header to have loaded first.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Copy, KeyRound, Loader2, Mail, User as UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
+import { queryClient } from "@/lib/queryClient";
+import { ACCOUNT_USAGE_QUERY_KEY } from "@/hooks/useAccountUsage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { UpdatePasswordDialog } from "@/features/settings/components/UpdatePasswordDialog";
@@ -23,6 +26,29 @@ export default function SettingsPage() {
   const { data: user = null, isLoading: loading, error } = useCurrentUser();
   const errorMessage = error ? getApiErrorMessage(error, "Failed to load your account.") : null;
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+
+  // AWS Marketplace welcome landing. api_server's /marketplace/register
+  // redirects the buyer here with `?source=aws-marketplace&plan=<tier>`
+  // once the entitlement is persisted. Show a one-shot toast + refetch
+  // usage so the new tier is reflected immediately, then strip the
+  // query params so a page reload doesn't re-toast.
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    if (q.get("source") !== "aws-marketplace") return;
+    const plan = q.get("plan") ?? "";
+    toast({
+      title: "You're subscribed via AWS Marketplace",
+      description: plan
+        ? `Your Meko workspace is now on the ${plan} plan.`
+        : "Your Meko workspace has been upgraded.",
+    });
+    void queryClient.invalidateQueries({ queryKey: [ACCOUNT_USAGE_QUERY_KEY] });
+    q.delete("source");
+    q.delete("plan");
+    navigate({ pathname: location.pathname, search: q.toString() }, { replace: true });
+  }, [location.pathname, location.search, navigate]);
 
   // Convenience helper for the "copy account id" button — UUIDs are awkward
   // to retype, and support / debugging frequently asks for them.
@@ -50,7 +76,7 @@ export default function SettingsPage() {
       {/* Tight padding on mobile (16px) so content gets ~340px of a
           375px viewport; restore the spacious 32px gutter at md+. */}
       <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6 md:px-8 md:py-8">
-        <div className="mx-auto w-full max-w-2xl space-y-6">
+        <div className="mx-auto w-full max-w-5xl space-y-6">
           {loading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />

@@ -10,6 +10,7 @@ import WorkbenchLMPage from "@/features/workbench-lm/pages/WorkbenchLMPage";
 import SettingsPage from "@/features/settings/pages/SettingsPage";
 import BillingPage from "@/features/billing/pages/BillingPage";
 import AdminPage from "@/features/admin/pages/AdminPage";
+import MarketplaceCompletePage from "@/features/billing/pages/MarketplaceCompletePage";
 
 type Props = {
   isOnboardingRoute: boolean;
@@ -54,10 +55,17 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   // direct URL to /admin with the flag/opt-in off actually bounces — rather than
   // rendering Datapacks content under a stale /admin URL.
   const onAdminRoute = pathname === ROUTES.admin || pathname.startsWith(`${ROUTES.admin}/`);
+  const isMarketplaceComplete = pathname === ROUTES.marketplaceComplete;
 
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, admin. */
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, billing, marketplace-complete, admin. */
   const isDatapacks =
-    !isObserve && !isConnect && !isWorkbenchLM && !isSettings && !isBilling && !onAdminRoute;
+    !isObserve &&
+    !isConnect &&
+    !isWorkbenchLM &&
+    !isSettings &&
+    !isBilling &&
+    !isMarketplaceComplete &&
+    !onAdminRoute;
 
   // See onboarding-shell comment above re: h-dvh for iOS keyboard.
   return (
@@ -108,6 +116,7 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
           >
             <BillingPage />
           </div>
+          {isMarketplaceComplete ? <MarketplaceCompletePage /> : null}
           <div
             className="min-h-0 flex-1 overflow-hidden"
             style={{ display: isDatapacks ? "contents" : "none" }}

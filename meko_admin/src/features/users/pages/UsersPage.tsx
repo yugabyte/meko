@@ -1,12 +1,13 @@
-// Admin Users page: lists all users and lets an admin flip each user's tier
-// (Free <-> Pro), confirming the change through an AlertDialog first.
+// Admin Users page: lists all users and lets an admin move each user along the
+// tier ladder (free → standard → pro, and back down), confirming through an
+// AlertDialog first. Enterprise is sales-led and not settable here.
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
 import { ArrowUpCircle, ArrowDownCircle, Loader2, Search } from "lucide-react";
 import axios from "axios";
-import { fetchAdminUsers, updateUserTier, type AdminUser } from "@/lib/adminApi";
+import { fetchAdminUsers, updateUserTier, type AdminUser, type Tier } from "@/lib/adminApi";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -50,10 +51,30 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type TierFilter = "all" | "free" | "pro";
+type TierFilter = "all" | "free" | "standard" | "pro";
 
-const LABEL: Record<string, string> = { free: "Free", pro: "Pro" };
+const LABEL: Record<string, string> = {
+  free: "Free",
+  standard: "Standard",
+  pro: "Pro",
+  enterprise: "Enterprise",
+};
+
+// The tiers the admin console moves users through, low → high. Enterprise sits
+// above this ladder (sales-led): an enterprise user can only be downgraded to
+// pro, never upgraded from here.
+const TIER_LADDER = ["free", "standard", "pro"] as const;
 const PAGE_SIZE = 12;
+
+// The one-step upgrade/downgrade targets for a tier along the ladder.
+function tierSteps(tier: Tier): { up?: string; down?: string } {
+  const i = (TIER_LADDER as readonly string[]).indexOf(tier);
+  if (i === -1) return { down: "pro" }; // enterprise → step down into the ladder
+  return {
+    up: i + 1 < TIER_LADDER.length ? TIER_LADDER[i + 1] : undefined,
+    down: i - 1 >= 0 ? TIER_LADDER[i - 1] : undefined,
+  };
+}
 
 function errMessage(e: unknown, fallback: string): string {
   if (axios.isAxiosError(e)) {
@@ -77,12 +98,46 @@ function initials(u: AdminUser): string {
   return (combined || u.email?.[0] || "?").toUpperCase();
 }
 
+function TierBadge({ tier }: { tier: Tier }) {
+  switch (tier) {
+    case "pro":
+      return (
+        <Badge
+          variant="outline"
+          className="border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+        >
+          Pro
+        </Badge>
+      );
+    case "standard":
+      return (
+        <Badge
+          variant="outline"
+          className="border-transparent bg-blue-500/15 text-blue-600 dark:text-blue-400"
+        >
+          Standard
+        </Badge>
+      );
+    case "enterprise":
+      return (
+        <Badge
+          variant="outline"
+          className="border-transparent bg-violet-500/15 text-violet-600 dark:text-violet-400"
+        >
+          Enterprise
+        </Badge>
+      );
+    default:
+      return <Badge variant="secondary">Free</Badge>;
+  }
+}
+
 export function UsersPage() {
   const [filter, setFilter] = useState<TierFilter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  // The user whose tier change is awaiting confirmation in the dialog.
-  const [target, setTarget] = useState<AdminUser | null>(null);
+  // The user + target tier awaiting confirmation in the dialog.
+  const [pending, setPending] = useState<{ user: AdminUser; tier: string } | null>(null);
   const queryClient = useQueryClient();
 
   const usersQuery = useQuery({
@@ -92,15 +147,15 @@ export function UsersPage() {
   });
 
   const mutation = useMutation({
-    mutationFn: ({ userId, tier }: { userId: string; tier: "free" | "pro" }) =>
+    mutationFn: ({ userId, tier }: { userId: string; tier: string }) =>
       updateUserTier(userId, tier),
     onSuccess: (_data, { tier }) => {
-      toast.success(`Changed ${target?.email ?? "user"} to ${LABEL[tier]}`);
+      toast.success(`Changed ${pending?.user.email ?? "user"} to ${LABEL[tier] ?? tier}`);
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       queryClient.invalidateQueries({ queryKey: ["admin-usage"] });
     },
     onError: (e) => toast.error(errMessage(e, "Could not update tier.")),
-    onSettled: () => setTarget(null),
+    onSettled: () => setPending(null),
   });
 
   const users = usersQuery.data;
@@ -126,7 +181,6 @@ export function UsersPage() {
   const pageRows = filtered.slice(start, start + PAGE_SIZE);
   const showPagination = filtered.length > PAGE_SIZE;
 
-  const targetTier: "free" | "pro" = target?.tier === "pro" ? "free" : "pro";
   const isFiltering = search.trim() !== "" || filter !== "all";
 
   return (
@@ -154,6 +208,7 @@ export function UsersPage() {
             <SelectContent>
               <SelectItem value="all">All</SelectItem>
               <SelectItem value="free">Free</SelectItem>
+              <SelectItem value="standard">Standard</SelectItem>
               <SelectItem value="pro">Pro</SelectItem>
             </SelectContent>
           </Select>
@@ -196,7 +251,8 @@ export function UsersPage() {
               </TableRow>
             ) : (
               pageRows.map((u) => {
-                const isThisPending = mutation.isPending && target?.id === u.id;
+                const steps = tierSteps(u.tier);
+                const rowPending = mutation.isPending && pending?.user.id === u.id;
                 return (
                   <TableRow key={u.id}>
                     <TableCell>
@@ -213,37 +269,46 @@ export function UsersPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      {u.tier === "pro" ? (
-                        <Badge
-                          variant="outline"
-                          className="border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                        >
-                          Pro
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary">Free</Badge>
-                      )}
+                      <TierBadge tier={u.tier} />
                     </TableCell>
                     <TableCell className="text-center text-sm text-muted-foreground">
                       {u.created_at ? format(parseISO(u.created_at), "MMM d, yyyy") : "—"}
                     </TableCell>
                     <TableCell className="text-center">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="min-w-[7rem] gap-1.5"
-                        disabled={mutation.isPending}
-                        onClick={() => setTarget(u)}
-                      >
-                        {isThisPending ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : u.tier === "pro" ? (
-                          <ArrowDownCircle className="h-3.5 w-3.5" />
-                        ) : (
-                          <ArrowUpCircle className="h-3.5 w-3.5" />
+                      <div className="flex items-center justify-center gap-2">
+                        {steps.up && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="min-w-[6.5rem] gap-1.5"
+                            disabled={mutation.isPending}
+                            onClick={() => setPending({ user: u, tier: steps.up! })}
+                          >
+                            {rowPending && pending?.tier === steps.up ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <ArrowUpCircle className="h-3.5 w-3.5" />
+                            )}
+                            {LABEL[steps.up]}
+                          </Button>
                         )}
-                        {u.tier === "pro" ? "Free" : "Pro"}
-                      </Button>
+                        {steps.down && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="min-w-[6.5rem] gap-1.5"
+                            disabled={mutation.isPending}
+                            onClick={() => setPending({ user: u, tier: steps.down! })}
+                          >
+                            {rowPending && pending?.tier === steps.down ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <ArrowDownCircle className="h-3.5 w-3.5" />
+                            )}
+                            {LABEL[steps.down]}
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -283,11 +348,14 @@ export function UsersPage() {
         </div>
       )}
 
-      <AlertDialog open={target !== null} onOpenChange={(o) => !o && !mutation.isPending && setTarget(null)}>
+      <AlertDialog
+        open={pending !== null}
+        onOpenChange={(o) => !o && !mutation.isPending && setPending(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Change {target?.email} to {LABEL[targetTier]}?
+              Change {pending?.user.email} to {pending ? LABEL[pending.tier] ?? pending.tier : ""}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This overrides the user's plan immediately.
@@ -299,7 +367,7 @@ export function UsersPage() {
               disabled={mutation.isPending}
               onClick={(e) => {
                 e.preventDefault();
-                if (target) mutation.mutate({ userId: target.id, tier: targetTier });
+                if (pending) mutation.mutate({ userId: pending.user.id, tier: pending.tier });
               }}
             >
               Confirm

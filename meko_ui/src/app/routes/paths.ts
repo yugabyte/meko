@@ -24,6 +24,9 @@ export const ROUTES = {
    * see `@/lib/admin`. Sub-sections live under `/admin/...` (see ADMIN_SECTION).
    */
   admin: "/admin",
+  /** AWS Marketplace fulfillment completion landing page. Reads ?t=<token>
+   *  from the URL and calls the BE to resolve the entitlement. */
+  marketplaceComplete: "/marketplace/complete",
 } as const;
 
 /**

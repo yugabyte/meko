@@ -173,23 +173,27 @@ func (s *DatapackService) Create(req CreateRequest) (*CreateResponse, error) {
 	// count so legacy users whose datapacks predate the counter can't
 	// under-gate; the extra query is skipped once the lifetime cap is
 	// already hit.
-	if IsFreeUserType(req.UserType) && s.freeTierRepo != nil {
+	// Tier cap: applies to free + standard; pro / enterprise skip.
+	// Standard has a higher cap but the same enforcement path.
+	if IsGatedUserType(req.UserType) && s.freeTierRepo != nil {
+		limits := LimitsFor(req.UserType)
 		n, err := s.freeTierRepo.RequestCount(req.UserID, repository.MetricDatapackCreation)
 		if err != nil {
-			return nil, fmt.Errorf("free-tier cap check: %w", err)
+			return nil, fmt.Errorf("tier cap check: %w", err)
 		}
-		if n < FreeTierMaxDatapacks {
+		if n < limits.MaxDatapacks {
 			liveCount, liveErr := s.repo.CountByOwner(req.UserID)
 			if liveErr != nil {
-				return nil, fmt.Errorf("free-tier cap check (live count): %w", liveErr)
+				return nil, fmt.Errorf("tier cap check (live count): %w", liveErr)
 			}
 			if liveCount > n {
 				n = liveCount
 			}
 		}
-		if n >= FreeTierMaxDatapacks {
-			slog.Info("datapack create blocked by free-tier cap",
-				"user_id", req.UserID, "lifetime_creations", n, "cap", FreeTierMaxDatapacks)
+		if n >= limits.MaxDatapacks {
+			slog.Info("datapack create blocked by tier cap",
+				"user_id", req.UserID, "user_type", req.UserType,
+				"lifetime_creations", n, "cap", limits.MaxDatapacks)
 			return nil, ErrFreeTierDatapackLimit
 		}
 	}

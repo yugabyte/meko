@@ -13,6 +13,7 @@ import {
   getPasswordPolicyError,
   PasswordPolicyPanel,
 } from "@/features/auth/components/PasswordPolicyPanel";
+import { safeReturnTo } from "@/features/auth/returnTo";
 
 export default function SignUpPage() {
   const navigate = useNavigate();
@@ -91,7 +92,16 @@ export default function SignUpPage() {
     setError(null);
     try {
       await confirmSignup({ email: email.trim(), code: code.trim() });
-      navigate(ROUTES.login, { replace: true });
+      // Carry return_to through to the sign-in page so post-signup
+      // flows (AWS Marketplace complete-registration, invite links)
+      // resume after auth. Navigate to ROUTES.signin directly rather
+      // than ROUTES.login because PublicRoutes' `/login` -> `/signin`
+      // <Navigate> redirect drops the query string on the way.
+      const returnTo = safeReturnTo(searchParams.get("return_to"));
+      const signinPath = returnTo
+        ? `${ROUTES.signin}?return_to=${encodeURIComponent(returnTo)}`
+        : ROUTES.signin;
+      navigate(signinPath, { replace: true });
     } catch (err) {
       setError(getApiErrorMessage(err, "Confirmation failed. Please try again."));
     } finally {
@@ -112,6 +122,11 @@ export default function SignUpPage() {
         <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">
           {awaitingCode ? "Confirm your account" : "Sign up for Meko"}
         </h1>
+        {searchParams.get("source") === "aws-marketplace" && !awaitingCode ? (
+          <div className="mb-4 rounded-lg border border-blue-500/30 bg-blue-500/[0.06] px-3 py-2 text-xs text-blue-700 dark:text-blue-300">
+            You're finishing your AWS Marketplace subscription. Create your Meko account to unlock your Standard plan.
+          </div>
+        ) : null}
         <form className="space-y-4" onSubmit={awaitingCode ? handleConfirm : handleSignup}>
           {!awaitingCode ? (
             <>
@@ -266,7 +281,22 @@ export default function SignUpPage() {
           <>
             <p className="mt-5 text-center text-sm text-muted-foreground">
               Already have an account?{" "}
-              <Link to={ROUTES.login} className="font-medium text-brand hover:underline">
+              <Link
+                to={
+                  // Carry return_to through so an existing AWS Marketplace
+                  // buyer who clicks "Sign in instead" still lands on
+                  // /marketplace/complete after auth. Uses ROUTES.signin
+                  // (not ROUTES.login) because /login → <Navigate to=/signin>
+                  // strips the query string.
+                  (() => {
+                    const rt = safeReturnTo(searchParams.get("return_to"));
+                    return rt
+                      ? `${ROUTES.signin}?return_to=${encodeURIComponent(rt)}`
+                      : ROUTES.signin;
+                  })()
+                }
+                className="font-medium text-brand hover:underline"
+              >
                 Sign in
               </Link>
             </p>

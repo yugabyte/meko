@@ -1,27 +1,12 @@
-// Free-tier limit thresholds + helper that converts a `/auth/me/usage`
-// response into the four "has hit limit" booleans the UI gates on.
-//
-// Single source of truth for the thresholds — every gated surface
-// (Add Datapack button, KB upload buttons, WorkbenchLM chat composer)
-// imports from here so tuning a cap is a one-line edit.
+// Tier limit thresholds + helper that converts a `/auth/me/usage`
+// response into "has hit limit" booleans for whichever tier the user
+// is on. Single source of truth for the caps — every gated surface
+// imports from here so tuning is a one-line env change.
 
-import { MB } from "@/lib/fileSize";
+import { MB, GB } from "@/lib/fileSize";
 import { readRuntimeEnv } from "@/lib/runtimeEnv";
 import type { AccountUsage } from "@/lib/api/mekoApi";
 
-/**
- * Hard caps the Free tier is allowed to consume before the UI starts
- * disabling creation actions. Defaults match
- * `api_server/internal/service/free_tier.go`; the same MEKO_FREE_TIER_*
- * env vars override both sides at build/start time. Storage is bytes.
- *   - 3 datapacks       — enough to evaluate; not enough for a real workspace.
- *   - 100 MB KB storage — a few hundred small docs / a couple of PDFs.
- *   - 1 000 conversations / 10 M tokens for WorkbenchLM — playground
- *                         budget; hard cap before unbounded spend.
- *
- * Adjustments to these numbers should be paired with a Pricing
- * section update in Settings so the displayed table stays accurate.
- */
 function envInt(name: string, def: number): number {
   const raw = readRuntimeEnv(name);
   if (!raw) return def;
@@ -30,62 +15,92 @@ function envInt(name: string, def: number): number {
 }
 
 /**
- * Master switch — mirrors `MEKO_FREE_TIER_QUOTA_ENABLED` on the BE/MCP
- * (PR #151). When `false`, the FE skips the /auth/me/usage fetch
- * entirely, treats every user as un-gated, and hides the WorkbenchLM
- * token-burn counter. Off by default so existing deployments are
- * unaffected until explicitly opted in.
+ * Master switch — mirrors `MEKO_FREE_TIER_QUOTA_ENABLED` on the BE/MCP.
+ * When `false`, the FE skips the /auth/me/usage fetch entirely, treats
+ * every user as un-gated, and hides the WorkbenchLM token-burn counter.
+ * Off by default so existing deployments are unaffected until opted in.
  */
 export const FREE_TIER_QUOTA_ENABLED: boolean = (() => {
   const raw = readRuntimeEnv("MEKO_FREE_TIER_QUOTA_ENABLED");
   return ["1", "true", "yes"].includes((raw ?? "").trim().toLowerCase());
 })();
 
+/** Free tier — defaults mirror `api_server/internal/service/free_tier.go`. */
 export const FREE_TIER_LIMITS = {
   datapacks: envInt("MEKO_FREE_TIER_DATAPACKS", 10),
   kbStorageBytes: envInt("MEKO_FREE_TIER_KB_BYTES", MB(100)),
+  kbFileBytes: envInt("MEKO_FREE_TIER_KB_FILE_BYTES", MB(5)),
   conversations: envInt("MEKO_FREE_TIER_CONVERSATIONS", 1000),
   tokenBurn: envInt("MEKO_FREE_TIER_TOKEN_BURN", 10_000_000),
 } as const;
 
-export type FreeTierStatus = {
+/** Standard tier ($25/mo via AWS Marketplace) — same env-override pattern. */
+export const STANDARD_TIER_LIMITS = {
+  datapacks: envInt("MEKO_STANDARD_TIER_DATAPACKS", 50),
+  kbStorageBytes: envInt("MEKO_STANDARD_TIER_KB_BYTES", GB(5)),
+  kbFileBytes: envInt("MEKO_STANDARD_TIER_KB_FILE_BYTES", MB(50)),
+  conversations: envInt("MEKO_STANDARD_TIER_CONVERSATIONS", 10_000),
+  tokenBurn: envInt("MEKO_STANDARD_TIER_TOKEN_BURN", 50_000_000),
+} as const;
+
+export type TierName = "free" | "standard" | "pro" | "enterprise" | "unknown";
+
+/** Normalise raw user_type strings from /auth/me into a known TierName. */
+export function resolveTier(userType?: string | null): TierName {
+  const t = (userType ?? "").trim().toLowerCase();
+  if (t === "free" || t === "standard" || t === "pro" || t === "enterprise") {
+    return t;
+  }
+  return "unknown";
+}
+
+/** Convenience — Free is the only tier that used to have gates before Standard. */
+export function isFreeTier(userType?: string | null): boolean {
+  return resolveTier(userType) === "free";
+}
+
+/** True when the tier has cap enforcement (free + standard). */
+export function isGatedTier(userType?: string | null): boolean {
+  const t = resolveTier(userType);
+  return t === "free" || t === "standard";
+}
+
+export type TierLimits = typeof FREE_TIER_LIMITS;
+
+/** Cap set for the given tier. Unknown / pro / enterprise → Infinity per field. */
+export function limitsFor(userType?: string | null): TierLimits {
+  const t = resolveTier(userType);
+  if (t === "free") return FREE_TIER_LIMITS;
+  if (t === "standard") return STANDARD_TIER_LIMITS;
+  return {
+    datapacks: Number.POSITIVE_INFINITY,
+    kbStorageBytes: Number.POSITIVE_INFINITY,
+    kbFileBytes: Number.POSITIVE_INFINITY,
+    conversations: Number.POSITIVE_INFINITY,
+    tokenBurn: Number.POSITIVE_INFINITY,
+  };
+}
+
+export type TierStatus = {
   hasHitDatapackCount: boolean;
   hasHitKbStorageFileSize: boolean;
   hasHitNumConversations: boolean;
   hasHitTokenBurn: boolean;
-  /** True when any of the above flags are set — convenience for surfaces
-   *  that only care about "is the user blocked somewhere." */
   hasHitAny: boolean;
 };
 
 /**
- * Returns true ONLY when the account is explicitly on the free tier.
- * Every other value (pro / enterprise / empty / unknown) returns false,
- * so caps apply only to a user the BE has marked "free". Fail-open by
- * design — mirrors the BE's `IsFreeUserType`.
+ * Maps `/auth/me/usage` counters into hit/not-hit flags against the
+ * caller's tier limits. Returns all-false for pro / enterprise / when
+ * usage is loading — the BE re-enforces creation caps, so a brief
+ * un-gated window before data lands is preferable to the inverse
+ * (button flashes disabled then enables).
  */
-export function isFreeTier(userType?: string | null): boolean {
-  return (userType ?? "").trim().toLowerCase() === "free";
-}
-
-/**
- * Maps the raw counters from `/auth/me/usage` into hit/not-hit flags
- * against `FREE_TIER_LIMITS`. Pure function so call sites can call it
- * inline without memoization — the inputs are 5 primitives.
- *
- * Returns all-false when:
- *   - `usage` is undefined (react-query still loading on first paint), OR
- *   - `userType` is "pro" / "enterprise" — paid tiers have no caps.
- * The loading-state trade-off is one tiny window during which a user
- * could click before the gates engage; we accept it — the BE re-enforces
- * creation caps and "the button briefly enables, then re-disables on
- * data arrival" is worse UX than the inverse.
- */
-export function getFreeTierStatus(
+export function getTierStatus(
   usage: AccountUsage | undefined,
   userType?: string | null,
-): FreeTierStatus {
-  if (!FREE_TIER_QUOTA_ENABLED || !usage || !isFreeTier(userType)) {
+): TierStatus {
+  if (!FREE_TIER_QUOTA_ENABLED || !usage || !isGatedTier(userType)) {
     return {
       hasHitDatapackCount: false,
       hasHitKbStorageFileSize: false,
@@ -94,15 +109,15 @@ export function getFreeTierStatus(
       hasHitAny: false,
     };
   }
-  // Gate on LIFETIME creations (never decremented on delete) so
-  // delete-and-recreate cannot reset the quota. Take the max with the
-  // live count so a missing/zero counter (stale BE, best-effort read
-  // failure, legacy user predating the counter) can't under-gate.
+  const limits = limitsFor(userType);
+  // LIFETIME creations (never decremented on delete) gate datapacks so
+  // delete-and-recreate can't reset the quota. Take max with live count
+  // so a zero counter (stale BE / legacy user) can't under-gate.
   const datapackCreations = Math.max(usage.datapack_creations ?? 0, usage.datapack_count);
-  const hasHitDatapackCount = datapackCreations >= FREE_TIER_LIMITS.datapacks;
-  const hasHitKbStorageFileSize = usage.kb_storage_file_size >= FREE_TIER_LIMITS.kbStorageBytes;
-  const hasHitNumConversations = usage.num_conversations >= FREE_TIER_LIMITS.conversations;
-  const hasHitTokenBurn = usage.token_burn >= FREE_TIER_LIMITS.tokenBurn;
+  const hasHitDatapackCount = datapackCreations >= limits.datapacks;
+  const hasHitKbStorageFileSize = usage.kb_storage_file_size >= limits.kbStorageBytes;
+  const hasHitNumConversations = usage.num_conversations >= limits.conversations;
+  const hasHitTokenBurn = usage.token_burn >= limits.tokenBurn;
   return {
     hasHitDatapackCount,
     hasHitKbStorageFileSize,
@@ -114,37 +129,102 @@ export function getFreeTierStatus(
 }
 
 /**
- * Standard tooltip / blocked-reason copy used by every gated surface.
- * Centralised so the wording stays consistent everywhere (and so
- * marketing can update it in one place when they want a different
- * upgrade CTA).
+ * Back-compat alias. Existing callers pass Free users only, so behavior
+ * matches getTierStatus with userType="free". Prefer getTierStatus in
+ * new code.
  */
-export const FREE_TIER_BLOCKED_MESSAGES = {
-  datapack: "You have hit the free tier limit. Upgrade to Pro to create a new datapack.",
-  knowledgeUpload: "You have hit the free tier limit. Upgrade to Pro to upload further files.",
-  conversations:
-    "You have hit the free tier limit on conversations. Upgrade to Pro to keep using AI tools with Meko.",
-  tokenBurn:
-    "You have hit the free tier limit on WorkbenchLM token usage. Upgrade to Pro to keep chatting.",
+export const getFreeTierStatus = getTierStatus;
+
+/**
+ * Suggested next tier for the "Upgrade" CTA — Free hits recommend
+ * Standard, Standard hits recommend Pro. Anything else falls back to
+ * Pro so we never say "Upgrade to Free."
+ */
+export function nextTierFor(userType?: string | null): "standard" | "pro" {
+  return resolveTier(userType) === "free" ? "standard" : "pro";
+}
+
+/**
+ * Short tooltip / disabled-reason copy for gated buttons. Picked per
+ * (target tier × dimension); target tier comes from nextTierFor().
+ */
+export const TIER_BLOCKED_MESSAGES = {
+  standard: {
+    datapack: "You've hit the Free tier limit. Upgrade to Standard to create more datapacks.",
+    knowledgeUpload: "You've hit the Free tier limit. Upgrade to Standard to upload more files.",
+    conversations:
+      "You've hit the Free tier limit on conversations. Upgrade to Standard to keep using AI tools with Meko.",
+    tokenBurn:
+      "You've hit the Free tier limit on WorkbenchLM tokens. Upgrade to Standard to keep chatting.",
+  },
+  pro: {
+    datapack: "You've hit the Standard tier limit. Upgrade to Pro to create more datapacks.",
+    knowledgeUpload: "You've hit the Standard tier limit. Upgrade to Pro to upload more files.",
+    conversations:
+      "You've hit the Standard tier limit on conversations. Upgrade to Pro to keep using AI tools with Meko.",
+    tokenBurn:
+      "You've hit the Standard tier limit on WorkbenchLM tokens. Upgrade to Pro to keep chatting.",
+  },
 } as const;
 
-/** External marketing contact page for the "Upgrade to Pro" CTA on the
- *  banner + the PricingSection card. Single point of update when sales
- *  prefers a different URL (Cal.com booking, HubSpot form, etc.). */
+export type BlockedMessageKind = keyof (typeof TIER_BLOCKED_MESSAGES)["standard"];
+
+/** Legacy alias — existing callers used FREE_TIER_BLOCKED_MESSAGES which
+ *  always spoke Free→Pro. New callers should use `blockedMessage(kind, userType)`. */
+export const FREE_TIER_BLOCKED_MESSAGES = TIER_BLOCKED_MESSAGES.standard;
+
+/** Pick the right blocked-message copy for the caller's tier. */
+export function blockedMessage(kind: BlockedMessageKind, userType?: string | null): string {
+  return TIER_BLOCKED_MESSAGES[nextTierFor(userType)][kind];
+}
+
+/** External marketing contact page for the Pro "Talk to our team" CTA. */
 export const SALES_CONTACT_URL = "https://share-na2.hsforms.com/16H0_N54LT0WVNmcALDOFIwbutl6";
 
-/** Long-form banner copy shown at the top of gated pages — more
- *  prominent than the tooltip/under-input message. Each surface picks
- *  the matching key based on which cap was hit. The numbers are baked
- *  in to keep the banner self-explanatory without forcing the user to
- *  hunt for the limit in Settings → Pricing. */
-export const FREE_TIER_BANNER_MESSAGES = {
-  datapack:
-    "You have reached the free tier limit on datapack creation. To create a new datapack, upgrade to Pro by contacting our sales team.",
-  kbStorage:
-    "You have reached the free tier limit on knowledge-base storage. To upload more files, upgrade to Pro by contacting our sales team.",
-  conversations:
-    "You have reached the free tier limit on conversations. To continue chatting, upgrade to Pro by contacting our sales team.",
-  tokenBurn:
-    "You have reached the free tier limit on WorkbenchLM token usage. To continue chatting, upgrade to Pro by contacting our sales team.",
+/** AWS Marketplace listing URL used by the Standard tile's Upgrade
+ *  button. Runtime var so ops can point at Limited vs Public listings
+ *  per-deployment without a rebuild. Independent of the tile's
+ *  visibility -- see STANDARD_TIER_ENABLED for that. */
+export const AWS_MARKETPLACE_LISTING_URL: string =
+  readRuntimeEnv("MEKO_AWS_MARKETPLACE_URL") ?? "";
+
+/** Pre-GA gate for the Standard tier. When false the Settings page
+ *  hides the Standard column entirely (2-card Free + Pro layout).
+ *  Runtime var; set `MEKO_ENABLE_STANDARD_TIER=true` on the pod (or
+ *  in local dev's .env) to enable. */
+export const STANDARD_TIER_ENABLED: boolean = (() => {
+  const raw = readRuntimeEnv("MEKO_ENABLE_STANDARD_TIER") ?? "";
+  return ["1", "true", "yes"].includes(raw.trim().toLowerCase());
+})();
+
+/** Long-form banner copy shown at the top of gated pages. Keyed by
+ *  (target tier × dimension) so the banner reflects which upgrade
+ *  actually helps the user. */
+export const TIER_BANNER_MESSAGES = {
+  standard: {
+    datapack:
+      "You've reached the Free tier limit on datapack creation. Upgrade to Standard for higher limits.",
+    kbStorage:
+      "You've reached the Free tier limit on knowledge-base storage. Upgrade to Standard for higher limits.",
+    conversations:
+      "You've reached the Free tier limit on conversations. Upgrade to Standard for higher limits.",
+    tokenBurn:
+      "You've reached the Free tier limit on WorkbenchLM token usage. Upgrade to Standard for higher limits.",
+  },
+  pro: {
+    datapack:
+      "You've reached the Standard tier limit on datapack creation. Upgrade to Pro for higher limits.",
+    kbStorage:
+      "You've reached the Standard tier limit on knowledge-base storage. Upgrade to Pro for higher limits.",
+    conversations:
+      "You've reached the Standard tier limit on conversations. Upgrade to Pro for higher limits.",
+    tokenBurn:
+      "You've reached the Standard tier limit on WorkbenchLM token usage. Upgrade to Pro for higher limits.",
+  },
 } as const;
+
+export type TierBannerKind = keyof (typeof TIER_BANNER_MESSAGES)["standard"];
+
+/** Legacy alias — used by callers before Standard existed. Still speaks the
+ *  Free→Standard variant so behaviour matches for pure-Free callers. */
+export const FREE_TIER_BANNER_MESSAGES = TIER_BANNER_MESSAGES.standard;

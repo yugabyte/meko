@@ -22,7 +22,7 @@ import {
   type ProvisionStatus,
 } from "@/lib/api/mekoApi";
 import { useAccountUsage } from "@/hooks/useAccountUsage";
-import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
+import { blockedMessage, getFreeTierStatus } from "@/lib/freeTier";
 import { FreeTierLimitBanner } from "@/lib/freeTierBanner";
 import { addAppEventListener, removeAppEventListener } from "@/lib/browserEvents";
 import {
@@ -330,7 +330,7 @@ export default function DatapacksOverviewPage({ currentUser }: OverviewProps) {
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="top" className="max-w-[280px] text-center">
-                    {FREE_TIER_BLOCKED_MESSAGES.datapack}
+                    {blockedMessage("datapack", currentUser?.user_type)}
                   </TooltipContent>
                 </Tooltip>
               ) : (

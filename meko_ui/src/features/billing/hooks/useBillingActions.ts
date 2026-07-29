@@ -7,6 +7,7 @@ import {
   type CheckoutPlanId,
 } from "@/lib/api/billingApi";
 import type { PlanId } from "@/features/billing/constants/plans";
+import { AWS_MARKETPLACE_LISTING_URL } from "@/lib/freeTier";
 
 /**
  * 404 from /billing/* almost always means the BE didn't register the
@@ -63,9 +64,18 @@ export function useBillingActions() {
 
   const busy = checkout.isPending || portal.isPending;
 
+  // Upgrade CTA. When AWS_MARKETPLACE_LISTING_URL is set the button
+  // deep-links to the Marketplace listing (buyer picks a tier there,
+  // then AWS redirects back to /marketplace/register). Empty URL
+  // falls back to Stripe Checkout so this flip stays reversible with
+  // one env var during the Stripe → Marketplace trial.
   const openCheckout = (planId: PlanId) => {
     if (busy) return;
     if (planId === "free" || planId === "enterprise") return;
+    if (AWS_MARKETPLACE_LISTING_URL) {
+      window.location.assign(AWS_MARKETPLACE_LISTING_URL);
+      return;
+    }
     checkout.mutate(planId);
   };
 

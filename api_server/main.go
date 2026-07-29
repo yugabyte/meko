@@ -197,6 +197,18 @@ func run() error {
 		envInt64OrDefault("MEKO_MAX_ARTIFACT_SIZE_BYTES", 5*1024*1024),
 		"maximum decoded file size in bytes accepted by POST /datapacks/:id/artifacts (default 5 MiB)")
 
+	// AWS Marketplace SaaS Contract integration. Empty ProductCode
+	// disables /marketplace/* routes entirely.
+	awsMarketplaceProductCode := flag.String("aws-marketplace-product-code",
+		os.Getenv("AWS_MARKETPLACE_PRODUCT_CODE"),
+		"AWS Marketplace Product Code assigned to your SaaS listing. Empty disables marketplace routes.")
+	awsMarketplaceRegion := flag.String("aws-marketplace-region",
+		os.Getenv("AWS_MARKETPLACE_REGION"),
+		"AWS region for Marketplace APIs (default us-east-1; Marketplace only serves from there today).")
+	awsMarketplaceWelcomeURL := flag.String("aws-marketplace-welcome-url",
+		os.Getenv("AWS_MARKETPLACE_WELCOME_URL"),
+		"URL to redirect the buyer to after a successful fulfillment (e.g. https://app.meko.io/marketplace/welcome).")
+
 	flag.Parse()
 
 	resolvedLogLevel := parseLogLevel(*logLevel)
@@ -382,10 +394,13 @@ func run() error {
 		StripePriceIDStarter:     *stripePriceStarter,
 		StripePriceIDGrowth:      *stripePriceGrowth,
 		StripePriceIDScale:       *stripePriceScale,
-		MaxArtifactSizeBytes:     *maxArtifactSizeBytes,
-		ShowPGAMP:                *showPGAMP,
-		EnableConversationSearch: *enableConversationSearch,
-		ControlPlaneMode:         *controlPlaneMode,
+		MaxArtifactSizeBytes:      *maxArtifactSizeBytes,
+		ShowPGAMP:                 *showPGAMP,
+		EnableConversationSearch:  *enableConversationSearch,
+		ControlPlaneMode:          *controlPlaneMode,
+		AWSMarketplaceProductCode: *awsMarketplaceProductCode,
+		AWSMarketplaceRegion:      *awsMarketplaceRegion,
+		AWSMarketplaceWelcomeURL:  *awsMarketplaceWelcomeURL,
 	})
 }
 

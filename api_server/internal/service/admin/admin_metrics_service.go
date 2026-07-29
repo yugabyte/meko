@@ -18,11 +18,12 @@ import (
 // id that does not exist; the handler maps it to 404.
 var ErrUserNotFound = errors.New("user not found")
 
-// tierFree / tierPro are the two collapsed tiers the admin console
-// shows: user_type='free' maps to free, everything else to pro.
+// The canonical account_type tiers the admin console understands.
 const (
-	tierFree = "free"
-	tierPro  = "pro"
+	tierFree       = "free"
+	tierStandard   = "standard"
+	tierPro        = "pro"
+	tierEnterprise = "enterprise"
 )
 
 // AdminUser is one row of GET /admin/users.
@@ -37,12 +38,24 @@ type AdminUser struct {
 
 // AdminMetrics is the GET /admin/metrics payload for either the overall
 // ("all") scope or a single user. Tier is nil for the overall scope.
+//
+// FreeUsers / StandardUsers / ProUsers are a partition of TotalUsers:
+//
+//	free_users     -- user_type='free'
+//	standard_users -- user_type='standard' (AWS Marketplace)
+//	pro_users      -- user_type IN ('pro','enterprise') (sales-led)
+//
+// Before Standard existed the split was 2-bucket (free vs. else, all
+// counted as pro_users); the field is kept in the response so existing
+// consumers (meko_ui, meko_admin) don't break, but it no longer
+// includes Standard subscribers.
 type AdminMetrics struct {
-	Scope              string  `json:"scope"`
-	TotalUsers         int64   `json:"total_users"`
-	FreeUsers          int64   `json:"free_users"`
-	ProUsers           int64   `json:"pro_users"`
-	Tier               *string `json:"tier"`
+	Scope         string  `json:"scope"`
+	TotalUsers    int64   `json:"total_users"`
+	FreeUsers     int64   `json:"free_users"`
+	StandardUsers int64   `json:"standard_users"`
+	ProUsers      int64   `json:"pro_users"`
+	Tier          *string `json:"tier"`
 	Datapacks          int64   `json:"datapacks"`
 	SharedDatapacks    int64   `json:"shared_datapacks"`
 	KBDocuments        int64   `json:"kb_documents"`
@@ -70,12 +83,15 @@ func NewAdminMetricsService(repo *adminrepo.AdminRepo) *AdminMetricsService {
 	return &AdminMetricsService{repo: repo}
 }
 
-// tierFor collapses a raw user_type into the admin console's two tiers.
+// tierFor returns the user's tier as a canonical account_type value,
+// defaulting unknown/empty values to free.
 func tierFor(userType string) string {
-	if userType == tierFree {
+	switch userType {
+	case tierFree, tierStandard, tierPro, tierEnterprise:
+		return userType
+	default:
 		return tierFree
 	}
-	return tierPro
 }
 
 // ListUsers returns all users (newest first) for the admin console.
@@ -130,11 +146,11 @@ func (s *AdminMetricsService) overall(ctx context.Context, start, end *time.Time
 	m := AdminMetrics{Scope: "all"}
 
 	// User headcount + tier split are always all-time, never date-filtered.
-	total, free, pro, err := s.repo.CountUsersByTier(ctx, nil, nil)
+	total, free, standard, pro, err := s.repo.CountUsersByTier(ctx, nil, nil)
 	if err != nil {
 		return m, err
 	}
-	m.TotalUsers, m.FreeUsers, m.ProUsers = total, free, pro
+	m.TotalUsers, m.FreeUsers, m.StandardUsers, m.ProUsers = total, free, standard, pro
 
 	// Datapacks are always the current total, never date-filtered.
 	dpCount, err := s.repo.CountDatapacksAll(nil, nil)
@@ -234,9 +250,13 @@ func (s *AdminMetricsService) perUser(ctx context.Context, userID string, start,
 	}
 	tier := tierFor(userType)
 	m.Tier = &tier
-	if tier == tierFree {
+	switch tier {
+	case tierFree:
 		m.FreeUsers = 1
-	} else {
+	case tierStandard:
+		m.StandardUsers = 1
+	default:
+		// tierPro / tierEnterprise
 		m.ProUsers = 1
 	}
 

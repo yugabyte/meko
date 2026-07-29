@@ -8,7 +8,7 @@ import { documentNameLastSegment } from "@/features/datapacks/components/knowled
 import { kbDocumentStatusLabel } from "@/features/datapacks/components/knowledge-documents/knowledgeDocumentStatus";
 import { useAccountUsage } from "@/hooks/useAccountUsage";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
-import { FREE_TIER_BLOCKED_MESSAGES, getFreeTierStatus } from "@/lib/freeTier";
+import { blockedMessage, getFreeTierStatus } from "@/lib/freeTier";
 
 export const KNOWLEDGE_PREVIEW_LIMIT = 3;
 
@@ -126,7 +126,7 @@ export function DatapackDetailKnowledgeTile({
               </span>
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-[280px] text-center">
-              {FREE_TIER_BLOCKED_MESSAGES.knowledgeUpload}
+              {blockedMessage("knowledgeUpload", currentUser?.user_type)}
             </TooltipContent>
           </Tooltip>
         ) : (

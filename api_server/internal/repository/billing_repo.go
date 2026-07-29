@@ -205,6 +205,37 @@ func (r *BillingRepo) UpsertSubscription(
 	return nil
 }
 
+// SetUserTypePlan writes users.user_type = <plan>. Shared by the
+// Marketplace fulfillment / SNS flow (which owns its own entitlement
+// table but reuses this column so gating stays in one place).
+func (r *BillingRepo) SetUserTypePlan(ctx context.Context, userID, plan string) error {
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE meko_system.users
+		 SET user_type = $1::meko_system.account_type,
+			 updated_at = NOW()
+		 WHERE user_id = $2`,
+		plan, userID,
+	); err != nil {
+		return fmt.Errorf("billing: set user_type=%s: %w", plan, err)
+	}
+	return nil
+}
+
+// SetUserTypeFree is the Marketplace-side counterpart to DowngradeToFree,
+// without the Stripe-subscription DELETE (Marketplace has its own row).
+func (r *BillingRepo) SetUserTypeFree(ctx context.Context, userID string) error {
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE meko_system.users
+		 SET user_type = 'free'::meko_system.account_type,
+			 updated_at = NOW()
+		 WHERE user_id = $1`,
+		userID,
+	); err != nil {
+		return fmt.Errorf("billing: reset user_type: %w", err)
+	}
+	return nil
+}
+
 // DowngradeToFree handles the canceled / unpaid / paused branch: drop
 // the subscription row and reset the user back to the free tier in one
 // tx. The row is removed (not just status-flipped) so the

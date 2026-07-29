@@ -20,6 +20,7 @@ import { AUTH_METHODS, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { identifyThenTrack } from "@/lib/telemetry/rudderstack";
 import { clearPendingLoginMethod, setPendingLoginMethod } from "@/features/auth/pendingLoginMethod";
 import { AuthPageShell } from "@/features/auth/components/AuthPageShell";
+import { safeReturnTo } from "@/features/auth/returnTo";
 import { setLocalItem } from "@/lib/browserStorage";
 import { ROUTES } from "@/app/routes/paths";
 import { ThemeToggleButton } from "@/features/layout/ThemeToggleButton";
@@ -144,7 +145,12 @@ export default function SignInPage() {
         });
         return;
       }
-      let nextPath: (typeof ROUTES)["datapacks" | "onboarding"] = ROUTES.onboarding;
+      // return_to overrides the default landing route so post-login
+      // flows (AWS Marketplace complete-registration, invite links,
+      // etc.) can resume where they left off. safeReturnTo blocks
+      // anything but a same-origin absolute path.
+      const returnTo = safeReturnTo(searchParams.get("return_to"));
+      let nextPath: string = returnTo || ROUTES.onboarding;
       try {
         const user = await getCurrentUser();
         // Identify, then fire user_signed_in after a short gap so the event maps
@@ -168,7 +174,9 @@ export default function SignInPage() {
         dispatchAppEvent(ONBOARDING_STATUS_UPDATED_EVENT, {
           has_completed_onboarding: user.has_completed_onboarding,
         });
-        if (user.has_completed_onboarding) {
+        // return_to (marketplace flow, etc.) always wins over the
+        // default onboarding/datapacks branching.
+        if (!returnTo && user.has_completed_onboarding) {
           nextPath = ROUTES.datapacks;
         }
       } catch {

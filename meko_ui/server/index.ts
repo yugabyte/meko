@@ -156,6 +156,12 @@ app.use((req, res, next) => {
     // injects the admin secret on /api/v1/admin/* (see adminProxyEnabled above),
     // so ADMIN_API_KEY must be set too for the console to load data.
     "SHOW_ADMIN_VIEW",
+    // AWS Marketplace Standard tier UI: show/hide the tile on the pricing
+    // section, and the URL the "Upgrade" button deep-links to. Runtime flags
+    // so they can be flipped per-deployment (limited vs public listing, or
+    // hide the tile entirely) without a rebuild.
+    "MEKO_ENABLE_STANDARD_TIER",
+    "MEKO_AWS_MARKETPLACE_URL",
   ];
   app.get("/runtime-config.js", (_req, res) => {
     const cfg: Record<string, string> = {};

@@ -73,12 +73,16 @@ export async function unregisterAmp(): Promise<void> {
 
 /* ---- usage metrics (proxied from api_server) ---- */
 
+// Canonical account tiers (meko_system.account_type). Enterprise is sales-led
+// and never set from the admin console, but a user may already have it.
+export type Tier = "free" | "standard" | "pro" | "enterprise";
+
 export type AdminUser = {
   id: string;
   email: string;
   first_name: string;
   last_name: string;
-  tier: "free" | "pro";
+  tier: Tier;
   created_at: string;
 };
 
@@ -87,7 +91,7 @@ export type UsageMetrics = {
   total_users: number;
   free_users: number;
   pro_users: number;
-  tier: "free" | "pro" | null; // per-user only
+  tier: Tier | null; // per-user only
   datapacks: number;
   shared_datapacks: number;
   kb_documents: number;

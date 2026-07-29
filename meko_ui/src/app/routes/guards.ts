@@ -1,10 +1,17 @@
 import { AUTH_ROUTES, PROTECTED_ROUTE_PREFIXES, ROUTES } from "./paths";
+import { safeReturnTo } from "@/features/auth/returnTo";
 
 type GuardInput = {
   location: string;
   authLoading: boolean;
   authenticated: boolean;
   hasCompletedOnboarding: boolean;
+  /** Raw ?return_to= from the URL, if present. When set to a safe
+   *  same-origin path, the guard honors it instead of bouncing an
+   *  already-authed user to their default landing page — critical for
+   *  the AWS Marketplace flow where /signup carries the buyer back to
+   *  /marketplace/complete after they authenticate. */
+  returnTo?: string | null;
 };
 
 export function isAuthRoute(location: string): boolean {
@@ -38,6 +45,11 @@ export function resolveGuardRedirect(input: GuardInput): string | null {
   // it. Fresh users still land on /onboarding after login (see App.tsx).
 
   if (authenticated && onAuthRoute) {
+    // Marketplace / invite links land on /signup with a return_to
+    // pointing back into the app. Honor that instead of the default
+    // landing so the buyer flow can resume.
+    const rt = safeReturnTo(input.returnTo);
+    if (rt) return rt;
     return hasCompletedOnboarding ? ROUTES.datapacks : ROUTES.onboarding;
   }
 

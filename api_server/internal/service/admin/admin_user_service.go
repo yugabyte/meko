@@ -11,12 +11,13 @@ import (
 // meko_system.account_type enum; the handler maps it to 400.
 var ErrInvalidTier = errors.New("invalid tier")
 
-// validTiers are the only tiers the admin switch may set: Free <-> Pro.
-var validTiers = map[string]bool{"free": true, "pro": true}
+// validTiers are the tiers the admin console may set: free / standard / pro.
+// Enterprise is sales-led / off-platform and is intentionally NOT settable here.
+var validTiers = map[string]bool{"free": true, "standard": true, "pro": true}
 
 // UpdateUserTier directly overrides a user's user_type for admin/comp
-// grants. Returns ErrInvalidTier for a non-free/pro tier, ErrUserNotFound
-// when the user does not exist.
+// grants. Returns ErrInvalidTier for a tier outside {free, standard, pro},
+// ErrUserNotFound when the user does not exist.
 func (s *AdminMetricsService) UpdateUserTier(ctx context.Context, userID, tier string) error {
 	if !validTiers[tier] {
 		return ErrInvalidTier

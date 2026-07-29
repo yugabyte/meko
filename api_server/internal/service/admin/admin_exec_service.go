@@ -54,7 +54,7 @@ type ExecutiveSummary struct {
 func (s *AdminMetricsService) Executive(ctx context.Context) (ExecutiveSummary, error) {
 	out := ExecutiveSummary{TopUsers: []ExecUserSavings{}}
 
-	total, _, _, err := s.repo.CountUsersByTier(ctx, nil, nil)
+	total, _, _, _, err := s.repo.CountUsersByTier(ctx, nil, nil)
 	if err != nil {
 		return out, err
 	}
