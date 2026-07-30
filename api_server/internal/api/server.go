@@ -143,13 +143,22 @@ type ServerConfig struct {
 	// registers the conversation_index_history MCP tool in meko-mcp-server
 	// and feeds the UI runtime-config key of the same name.
 	EnableConversationSearch bool
- 
 
 	// ControlPlaneMode gates the YCP fleet registry + agent API (BYOC control
 	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*
 	// are registered against meko_system.environments.
 	ControlPlaneMode bool
 
+	// BasePath mounts every route under a URL prefix (e.g. "/ycp") for
+	// deployments fronted at a subpath of a shared domain instead of their own
+	// host — YCP at https://devcloud.yugabyte.com/ycp/ is the case this exists
+	// for. Empty (the default) serves at the domain root. Spelling is forgiving:
+	// "ycp", "/ycp" and "/ycp/" all normalize to "/ycp" (see normalizeBasePath) —
+	// but anything that is not a path prefix (a full URL, a route pattern, a dot
+	// segment) fails NewRouter rather than being coerced into an unreachable
+	// mount. GET /api/v1/health stays reachable at the domain root either way so
+	// container probes don't have to know the prefix.
+	BasePath string
 }
 
 // defaultMCPPATFlushInterval is the fallback flush cadence used when

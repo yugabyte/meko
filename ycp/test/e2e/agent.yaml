@@ -69,7 +69,11 @@ spec:
           image: meko-agent:e2e
           imagePullPolicy: Never
           env:
-            - { name: YCP_URL, value: "http://meko-api-server.ycp-e2e.svc.cluster.local:80" }
+            # Carries the subpath the control plane is mounted under (see
+            # MEKO_YCP_BASE_PATH in controlplane.yaml) — the same shape as the
+            # real deployment at https://devcloud.yugabyte.com/ycp. run.sh
+            # substitutes __BASE_PATH__ from $BASE before applying.
+            - { name: YCP_URL, value: "http://meko-api-server.ycp-e2e.svc.cluster.local:80__BASE_PATH__" }
             - { name: ENV_NAME, value: "e2e-cell" }
             - { name: ENV_PLACEMENT, value: "cloud" }
             - { name: ENV_PROVIDER, value: "kind" }

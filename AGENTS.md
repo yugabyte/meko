@@ -147,6 +147,7 @@ Reset system tables for a clean slate:
 - **MCP is the agent contract.** Agents (CrewAI, LangChain, etc.) and the inference gateway all reach memory/conversation/RAG via the per-datapack MCP server. Auth is a bearer token passed in each request (never via env).
 - **Cognito is optional.** When `--cognito-*` flags are unset, `/api/v1/datapacks` accepts unauthenticated calls. Production always sets them; `/success` is the OAuth2 callback.
 - **Langfuse split.** `api_server` uses Langfuse's admin API for provisioning *and* connects directly to Langfuse Postgres (read-only) for observability endpoints. Without `--langfuse-db-*`, those endpoints return 503.
+- **The mount point is configurable.** `--base-path` / `MEKO_YCP_BASE_PATH` moves every route under a URL prefix (console, `/api/v1`, swagger, the OAuth2 callback) for deployments fronted at a subpath of a shared domain — YCP at `https://devcloud.yugabyte.com/ycp/`. Unset (the default) serves at the domain root, unchanged. It must be a plain path prefix, not a URL: anything else fails startup rather than mounting somewhere unreachable. `GET /api/v1/health` answers at the domain root either way, since container probes bypass the proxy that supplies the prefix.
 - **No streaming yet.** `inference_gateway` returns full LLM replies in one response; session history is in-memory (lost on restart, not shared across instances).
 
 ## Auto-Generated Files (do not edit)

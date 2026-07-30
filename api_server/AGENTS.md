@@ -36,6 +36,12 @@ internal/
 - Everything is constructed once in `serviceRegistry` / `buildServiceRegistry`
   (`internal/api/router.go`) in dependency order and shared. New service? add a
   field, build it there, register its routes in the right auth group.
+- **Register routes on `root`, never on the bare `echo.Echo`.** `NewRouter` builds
+  `root := e.Group(basePath)` and everything hangs off it, so `--base-path=/ycp`
+  moves the whole surface at once. A route added straight to `e` silently stays at
+  the domain root — and also escapes the group's middleware, which is how the
+  health alias briefly lost its rate limiter. The alias is the one deliberate
+  exception, and it is handed the limiter explicitly.
 - **Config = flags in `main.go` with an `os.Getenv`/`envOrDefault` fallback**
   (mirror the existing ones). Secrets are always env/flag, never hardcoded
   (`YBA_API_TOKEN`, `ADMIN_API_KEY`, `--langfuse-admin-api-key`). Feature gates

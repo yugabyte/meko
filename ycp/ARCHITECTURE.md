@@ -16,6 +16,13 @@ serves the fleet registry, the agent API, and the operator console. This
 directory holds the *data-plane* side of the contract plus the wire types both
 sides share.
 
+Everything it serves can be mounted under a URL prefix with `--base-path=/ycp`,
+which is how it is fronted at `https://devcloud.yugabyte.com/ycp/` — a subpath of
+the YBM domain rather than its own subdomain, so browser auth tokens and session
+storage carry over. The paths below are written relative to that mount; only
+`GET /api/v1/health` is additionally served at the domain root, for probes. See
+[`GETTING_STARTED.md`](./GETTING_STARTED.md#serving-it-under-a-subpath-ycp).
+
 There used to be a second implementation of the control-plane contract in
 `ycp/cmd/ycp` — a dependency-light reference version with an in-memory registry.
 It was removed, because one contract with two implementations mostly produced

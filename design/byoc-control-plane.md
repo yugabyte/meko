@@ -413,7 +413,10 @@ that flag, plus the operator and workloads in the customer cluster, **is** Meko.
   reads the customer's plan from YBM Aeon upstream — via OIDC claims or the Aeon
   billing API — and enforces caps against that. No money moves through YCP.
 
-- **New flags:** `-control-plane-mode`, `-agent-ca-cert`, `-agent-ca-key`,
+- **New flags:** `-control-plane-mode`, `-base-path` (mount the whole surface
+  under a prefix — YCP is fronted at `devcloud.yugabyte.com/ycp/`, a subpath of
+  the YBM domain, so browser tokens and session storage carry over),
+  `-agent-ca-cert`, `-agent-ca-key`,
   `-enrollment-token-key`, plus the OIDC flags from §4 (`-oidc-issuer-url`,
   `-oidc-client-id`, `-oidc-client-secret`, `-oidc-redirect-url`). The
   `-cognito-*`, `-stripe-*`, and `-crd-namespace` flags are removed — human auth

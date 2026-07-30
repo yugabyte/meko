@@ -323,19 +323,40 @@
       k8s:a.k8s_version, nodes:a.node_count, provider:a.provider };
   }
   // ---- API access -------------------------------------------------------
-  // Two things this control plane needs that a bare fetch() does not give us:
+  // Three things this control plane needs that a bare fetch() does not give us:
   //
-  //  1. The fleet routes are behind X-Meko-Admin-Secret. A browser cannot hold a
+  //  1. The console may be mounted at a subpath, not the domain root — YCP is
+  //     served at https://devcloud.yugabyte.com/ycp/ so it shares YBM's domain
+  //     (and therefore its auth tokens and session storage). fetch("/api/v1/…")
+  //     would go to the domain root and 404, so every call is prefixed.
+  //  2. The fleet routes are behind X-Meko-Admin-Secret. A browser cannot hold a
   //     shared secret on its own, so we ask once and keep it in localStorage.
-  //  2. api_server wraps every body as {"data":…,"error":…}. Unwrap when the
+  //  3. api_server wraps every body as {"data":…,"error":…}. Unwrap when the
   //     envelope is present, and tolerate a flat body — the retired reference
   //     control plane returned the same fields without the wrapper.
+  //
+  // BASE_PATH is read off our own URL rather than injected by the server,
+  // because the console is served at the mount root and nowhere else. That also
+  // makes it correct whichever way the proxy is configured: when it forwards
+  // /ycp through, api_server runs with --base-path=/ycp and the API lives at
+  // /ycp/api/v1; when it strips /ycp instead, it strips it from these calls too.
+  const BASE_PATH = window.location.pathname.replace(/\/+$/, "");
+  // sessionStorage, not localStorage: web storage is scoped per ORIGIN, not per
+  // path, so on the shared devcloud domain this key sits in the same bucket every
+  // YBM page can read. sessionStorage does not fix that — it narrows the window
+  // to the life of this tab and keeps the secret off disk, instead of leaving a
+  // fleet-admin credential sitting in the origin forever. Anything stronger
+  // (per-user auth on the fleet routes, a short-lived token) has to come from the
+  // server; until then, treat this secret as exposed to the whole domain.
   const ADMIN_KEY = "ycp.adminSecret";
-  function adminSecret() { return localStorage.getItem(ADMIN_KEY) || ""; }
+  function adminSecret() { return sessionStorage.getItem(ADMIN_KEY) || ""; }
   function promptForSecret(msg) {
     const v = window.prompt((msg ? msg + "\n\n" : "") + "Admin secret (X-Meko-Admin-Secret):", adminSecret());
     if (v === null) return false;
-    localStorage.setItem(ADMIN_KEY, v.trim());
+    sessionStorage.setItem(ADMIN_KEY, v.trim());
+    // Drop any copy an older build of this console left in localStorage, which
+    // outlives the tab and is readable by every page on the domain.
+    try { localStorage.removeItem(ADMIN_KEY); } catch (e) { /* storage disabled */ }
     return true;
   }
   async function api(path, opts) {
@@ -343,7 +364,7 @@
     const headers = Object.assign({}, opts.headers || {});
     const key = adminSecret();
     if (key) headers["X-Meko-Admin-Secret"] = key;
-    const r = await fetch(path, Object.assign({}, opts, { headers }));
+    const r = await fetch(BASE_PATH + path, Object.assign({}, opts, { headers }));
     if (r.status === 401 || r.status === 403) {
       if (promptForSecret("The control plane rejected that admin secret.")) return api(path, opts);
       throw new Error("unauthorized");

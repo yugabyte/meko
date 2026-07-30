@@ -50,10 +50,14 @@ type oauthProvider struct {
 	// name is the Cognito identity_provider value; it must match the IdP
 	// configured on the user pool (e.g. "GitHub", "Google").
 	name string
-	// callbackPath is the app route Cognito redirects back to. It must be
-	// registered as an Allowed callback URL on the app client (origin + this
-	// path).
+	// callbackPath is the app route Cognito redirects back to, relative to
+	// the API's mount point. It must be registered as an Allowed callback URL
+	// on the app client (origin + mount prefix + this path).
 	callbackPath string
+	// loginPath is the route that starts the flow, also relative to the mount
+	// point. Only used to recover the mount prefix from the request (see
+	// mountPrefix); the redirect_uri itself is always built from callbackPath.
+	loginPath string
 	// reasonPrefix namespaces the ?error=<reason> codes the SPA maps,
 	// e.g. "github" -> github_state / github_no_code / github_exchange.
 	reasonPrefix string
@@ -63,6 +67,25 @@ type oauthProvider struct {
 	// /auth/me, not a callback-set cookie) but kept as the extension point
 	// for any future provider that needs first-signup side effects.
 	onNewAccount func(c echo.Context)
+}
+
+// mountPrefix recovers the URL prefix the API is served under from the route
+// currently being handled: with --base-path=/ycp the router registers this
+// handler at "/ycp/api/v1/auth/google/login", so trimming the route's own tail
+// leaves "/ycp"; at the domain root it leaves "".
+//
+// Deriving it beats hardcoding the path, because redirect_uri has to match
+// byte-for-byte between /oauth2/authorize and the token exchange. Both halves
+// of the flow call this from their own route and arrive at the same answer, so
+// a base-path deployment cannot end up sending Cognito a URL that resolves to
+// a route this server never registered. Returns "" if the route doesn't end in
+// the expected suffix, which reproduces the pre-base-path behaviour.
+func mountPrefix(c echo.Context, routePath string) string {
+	p := c.Path()
+	if !strings.HasSuffix(p, routePath) {
+		return ""
+	}
+	return strings.TrimSuffix(p, routePath)
 }
 
 // startOAuthLogin begins an app-driven social sign-in: it stamps a CSRF
@@ -87,7 +110,7 @@ func startOAuthLogin(c echo.Context, cognitoDomain, clientID string, p oauthProv
 	}
 	setOAuthStateCookie(c, state)
 	setOAuthPKCECookie(c, verifier)
-	redirectURI := requestOrigin(c) + p.callbackPath
+	redirectURI := requestOrigin(c) + mountPrefix(c, p.loginPath) + p.callbackPath
 	return c.Redirect(http.StatusFound,
 		buildAuthorizeURL(cognitoDomain, clientID, p.name, redirectURI, state, challenge))
 }
@@ -135,7 +158,7 @@ func completeOAuthCallback(
 	}
 	clearOAuthPKCECookie(c)
 
-	exchangeRedirectURI := requestOrigin(c) + p.callbackPath
+	exchangeRedirectURI := requestOrigin(c) + mountPrefix(c, p.callbackPath) + p.callbackPath
 	result, err := cognito.ExchangeCode(
 		c.Request().Context(), code, cognitoDomain, exchangeRedirectURI, codeVerifier,
 	)
@@ -214,7 +237,7 @@ func FederatedLogoutHandler(cfg FederatedLogoutConfig) echo.HandlerFunc {
 		}
 
 		q := url.Values{
-			"client_id": {cfg.ClientID},
+			"client_id":  {cfg.ClientID},
 			"logout_uri": {strings.TrimRight(requestOrigin(c), "/") + "/"},
 		}
 		domain := strings.TrimRight(cfg.CognitoDomain, "/")

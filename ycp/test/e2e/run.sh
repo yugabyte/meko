@@ -7,7 +7,10 @@
 # full bring-up an operator does by hand:
 #
 #   1. every workload rolls out, migrate init container included,
-#   2. the control plane serves /api/v1/health with both DB checks ok,
+#   2. the control plane serves <base>/api/v1/health with both DB checks ok,
+#   2b. the whole surface really is mounted under the /ycp base path -- console at
+#      /ycp/, API under /ycp/api/v1, nothing at the domain root except the health
+#      alias that the kubelet probe uses,
 #   3. the fleet API rejects an unauthenticated call and accepts the admin secret,
 #   4. registering an environment mints an enrollment token,
 #   5. the agent enrolls with that token and reports itself READY with real
@@ -52,6 +55,12 @@ TIMEOUT="${YCP_E2E_TIMEOUT:-300s}"
 # the environment id as slug(name), and the agent enrolls by name.
 ENV_NAME=e2e-cell
 ADMIN_KEY=e2eadminkey   # matches ycp-e2e-secrets in controlplane.yaml
+# Subpath the control plane is mounted under. Non-empty on purpose: production
+# fronts YCP at https://devcloud.yugabyte.com/ycp/, so the prefixed mount is the
+# shape worth smoke-testing. `YCP_E2E_BASE_PATH= ./run.sh` tests the root mount
+# instead -- the manifests pick this up through the __BASE_PATH__ placeholder
+# render() substitutes, so there is nothing else to edit.
+BASE="${YCP_E2E_BASE_PATH-/ycp}"
 
 # This script lives at ycp/test/e2e/run.sh.
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,30 +97,23 @@ IMG_PREFIX=""
 if [ "$ENGINE" = podman ]; then
   export KIND_EXPERIMENTAL_PROVIDER=podman
   IMG_PREFIX="docker.io/library/"
-  # Every base image these builds pull is public, so this run needs no registry
-  # credentials at all. Point podman at an empty auth file and it stops consulting
-  # ~/.docker/config.json — whose `credHelpers` it otherwise invokes for
-  # unrelated registries, failing the build outright when the helper's own
-  # credentials have expired (`gcloud.auth.docker-helper ... Reauthentication
-  # failed`). Set REGISTRY_AUTH_FILE yourself to override.
-  if [ -z "${REGISTRY_AUTH_FILE:-}" ]; then
-    AUTH_FILE="$(mktemp "${TMPDIR:-/tmp}/ycp-e2e-auth.XXXXXX")"
-    printf '{"auths":{}}' > "$AUTH_FILE"
-    export REGISTRY_AUTH_FILE="$AUTH_FILE"
-  fi
 fi
 "$ENGINE" info >/dev/null 2>&1 ||
   die "$ENGINE is installed but not usable — is the daemon/machine running? (podman machine start)"
 
 # api() prints the response body and fails the call on a non-2xx, so a broken
 # request surfaces here instead of as a confusing parse error downstream.
+# api() prefixes $BASE, so every call below is written as the route is declared
+# in the router and the subpath stays in one place.
 api() {
   local method="$1" path="$2"; shift 2
-  curl -fsS -X "$method" "http://127.0.0.1:$PORT$path" \
+  curl -fsS -X "$method" "http://127.0.0.1:$PORT$BASE$path" \
     -H "X-Meko-Admin-Secret: $ADMIN_KEY" "$@"
 }
 
 # Just the status code, no auth header, no -f. For asserting the gate.
+# Takes a full path (no $BASE prefixing) so it can also assert what is NOT
+# served at the domain root under a base path.
 status_of() {
   curl -so /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$1" || true
 }
@@ -133,7 +135,6 @@ cleanup() {
   rc=$?
   if [ -n "${PF_PID:-}" ]; then kill "$PF_PID" 2>/dev/null || true; fi
   if [ -n "${TMPDIR_E2E:-}" ]; then rm -rf "$TMPDIR_E2E"; fi
-  if [ -n "${AUTH_FILE:-}" ]; then rm -f "$AUTH_FILE"; fi
   [ "$rc" -ne 0 ] && diagnose
   if [ "$KEEP" = "1" ]; then
     log "keeping cluster (YCP_E2E_KEEP=1); remove with: kind delete cluster --name $CLUSTER"
@@ -145,10 +146,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Scratch space for image archives (podman path) — inside the trap's reach.
-# Spelled out rather than `mktemp -t ycp-e2e`: BSD mktemp treats that as a prefix
-# and appends randomness, GNU mktemp rejects it for having no trailing X's.
+# Scratch space for image archives (podman path) and rendered manifests — inside
+# the trap's reach. Spelled out rather than `mktemp -t ycp-e2e`: BSD mktemp treats
+# that as a prefix and appends randomness, GNU mktemp rejects it for having no
+# trailing X's.
 TMPDIR_E2E="$(mktemp -d "${TMPDIR:-/tmp}/ycp-e2e.XXXXXX")"
+
+# Every base image these builds pull is public, so this run needs no registry
+# credentials at all. Point podman at an empty auth file and it stops consulting
+# ~/.docker/config.json — whose `credHelpers` it otherwise invokes for unrelated
+# registries, failing the build outright when the helper's own credentials have
+# expired (`gcloud.auth.docker-helper ... Reauthentication failed`). Set
+# REGISTRY_AUTH_FILE yourself to override. Created here, after the trap, so an
+# early exit (a stopped podman machine is the common one) cannot leak it.
+if [ "$ENGINE" = podman ] && [ -z "${REGISTRY_AUTH_FILE:-}" ]; then
+  AUTH_FILE="$TMPDIR_E2E/auth.json"
+  printf '{"auths":{}}' > "$AUTH_FILE"
+  export REGISTRY_AUTH_FILE="$AUTH_FILE"
+fi
+
+# $BASE is the single source of the subpath: the manifests carry a __BASE_PATH__
+# placeholder and are rendered here at apply time. Hardcoding it in the YAML as
+# well would let the two drift, and because the root health alias answers either
+# way, a mismatch would sail past the health gate and fail later as something
+# that looks unrelated (an admin-gate 404).
+render() {
+  out="$TMPDIR_E2E/$(basename "$1")"
+  sed "s|__BASE_PATH__|$BASE|g" "$1" > "$out"
+  printf '%s' "$out"
+}
 
 # ---------------------------------------------------------------- build & cluster
 
@@ -163,6 +189,11 @@ API_IMG="${IMG_PREFIX}meko-api-server:$TAG"
 AGENT_IMG="${IMG_PREFIX}meko-agent:$TAG"
 "$ENGINE" build -f "$REPO_DIR/api_server/Dockerfile" -t "$API_IMG"   "$REPO_DIR/api_server"
 "$ENGINE" build -f "$YCP_DIR/Dockerfile.agent"       -t "$AGENT_IMG" "$YCP_DIR"
+# dpmcp is built but not loaded or deployed: this run provisions no datapacks, so
+# nothing would pull it. Building it here is what keeps a broken Dockerfile.dpmcp
+# from merging green and then failing ycp-images.yml on main, where the only
+# symptom is a per-datapack MCP pod stuck in ImagePullBackOff.
+"$ENGINE" build -f "$YCP_DIR/Dockerfile.dpmcp"       -t "${IMG_PREFIX}dpmcp:$TAG" "$YCP_DIR"
 
 log "creating kind cluster $CLUSTER"
 kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
@@ -192,7 +223,7 @@ fi
 # ------------------------------------------------------------------ control plane
 
 log "applying the control plane"
-k apply -f "$E2E_DIR/controlplane.yaml"
+k apply -f "$(render "$E2E_DIR/controlplane.yaml")"
 
 log "waiting for Postgres"
 k -n "$NS" rollout status deploy/postgres --timeout="$TIMEOUT"
@@ -212,14 +243,14 @@ PF_PID=$!
 
 # 2. Health, including both DB connections. The endpoint answers 200 even when a
 #    DB is down, so the body is what has to be checked -- not the status code.
-log "checking /api/v1/health"
+log "checking $BASE/api/v1/health"
 health=""
 for _ in $(seq 1 30); do
-  health="$(curl -fsS "http://127.0.0.1:$PORT/api/v1/health" 2>/dev/null || true)"
+  health="$(curl -fsS "http://127.0.0.1:$PORT$BASE/api/v1/health" 2>/dev/null || true)"
   [ -n "$health" ] && break
   sleep 2
 done
-[ -n "$health" ] || die "/api/v1/health never responded"
+[ -n "$health" ] || die "$BASE/api/v1/health never responded"
 python3 - "$health" <<'PY' || die "health reported a database as unavailable: see above"
 import json, sys
 d = json.loads(sys.argv[1])["data"]
@@ -227,16 +258,38 @@ bad = {k: v for k, v in d.items() if k.endswith("database") and v != "ok"}
 if bad:
     print(f"    unhealthy: {bad}", file=sys.stderr)
     sys.exit(1)
-print(f"    /api/v1/health -> {d}")
+print(f"    health -> {d}")
 PY
+
+# 2b. The subpath mount, which is how this is deployed: the console answers at
+#     the prefix, the API lives under it, and the domain root serves nothing but
+#     the health alias that kubelet's probe uses. Skipped when BASE is empty.
+if [ -n "$BASE" ]; then
+  log "checking the $BASE subpath mount"
+  code="$(status_of "$BASE/")"
+  [ "$code" = "200" ] || die "GET $BASE/ (console) returned $code, want 200"
+  curl -fsS "http://127.0.0.1:$PORT$BASE/" | grep -q "Yugabyte Control Plane" ||
+    die "GET $BASE/ did not serve the console HTML"
+  code="$(status_of "$BASE")"
+  [ "$code" = "200" ] || die "GET $BASE (no trailing slash) returned $code, want 200"
+  code="$(status_of /api/v1/environments)"
+  [ "$code" = "404" ] || die "GET /api/v1/environments at the domain root returned $code, want 404"
+  code="$(status_of /)"
+  [ "$code" = "404" ] || die "GET / at the domain root returned $code, want 404"
+  # The pod is Ready, which kubelet only concluded by probing the unprefixed
+  # path -- assert it directly so the reason is obvious if the alias regresses.
+  code="$(status_of /api/v1/health)"
+  [ "$code" = "200" ] || die "GET /api/v1/health (probe alias) returned $code, want 200"
+  echo "    console at $BASE/ and $BASE, API under $BASE, root 404s, probe alias 200"
+fi
 
 # 3. The fleet routes are gated. 401 (not 503) also confirms the server was given
 #    an admin key: without --admin-api-key the middleware answers 503 to
 #    everything, and the whole flow below would fail with no obvious cause.
 log "checking the admin-secret gate"
-code="$(status_of /api/v1/environments)"
-[ "$code" = "401" ] || die "GET /api/v1/environments without a secret returned $code, want 401"
-api GET /api/v1/environments >/dev/null || die "GET /api/v1/environments with the admin secret failed"
+code="$(status_of "$BASE/api/v1/environments")"
+[ "$code" = "401" ] || die "GET $BASE/api/v1/environments without a secret returned $code, want 401"
+api GET /api/v1/environments >/dev/null || die "GET $BASE/api/v1/environments with the admin secret failed"
 echo "    unauthenticated -> 401, authenticated -> 200"
 
 # ------------------------------------------------------------------------- agent
@@ -256,7 +309,7 @@ echo "    enrollment token minted (${TOKEN:0:12}...)"
 
 log "handing the token to the agent and deploying it"
 k -n "$NS" create secret generic meko-agent-enrollment --from-literal=enrollment-token="$TOKEN"
-k apply -f "$E2E_DIR/agent.yaml"
+k apply -f "$(render "$E2E_DIR/agent.yaml")"
 k -n "$NS" rollout status deploy/meko-agent --timeout="$TIMEOUT"
 
 # 5. The real handshake: the agent read the token from its Secret, reached the

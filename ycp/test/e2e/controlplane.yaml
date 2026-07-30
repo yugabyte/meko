@@ -148,6 +148,15 @@ spec:
               valueFrom: { secretKeyRef: { name: ycp-e2e-secrets, key: admin-api-key } }
             - name: MCP_INTERNAL_SECRET
               valueFrom: { secretKeyRef: { name: ycp-e2e-secrets, key: secret-key } }
+            # Mount everything under a subpath, the way YBM devcloud fronts
+            # YCP at https://devcloud.yugabyte.com/ycp/. run.sh substitutes
+            # __BASE_PATH__ from $BASE before applying this file, so the value
+            # cannot drift from what the assertions expect (empty = root
+            # mount). The readiness probe below deliberately stays unprefixed:
+            # kubelet reaches the pod directly, so the root health alias is
+            # what keeps probes working under a base path.
+            - name: MEKO_YCP_BASE_PATH
+              value: "__BASE_PATH__"
           ports: [{ name: http, containerPort: 25433 }]
           readinessProbe:
             httpGet: { path: /api/v1/health, port: 25433 }

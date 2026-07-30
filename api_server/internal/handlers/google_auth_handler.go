@@ -18,6 +18,7 @@ import (
 var googleProvider = oauthProvider{
 	name:         "Google",
 	callbackPath: "/api/v1/auth/google/callback",
+	loginPath:    "/api/v1/auth/google/login",
 	reasonPrefix: "google",
 }
 

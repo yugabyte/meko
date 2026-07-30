@@ -68,14 +68,17 @@ jobs:
             # The e2e runs api_server --control-plane-mode, so control-plane
             # changes have to trigger it too -- otherwise the one test that covers
             # the real control plane never runs when the control plane changes.
-            # Deliberately a file list rather than 'api_server/**': this job builds
-            # two images and a kind cluster, and most api_server PRs touch none of
-            # the YCP surface.
+            # Deliberately narrower than 'api_server/**': this job builds two
+            # images and a kind cluster, and most api_server PRs touch none of
+            # the YCP surface. The internal/api package is taken whole, though —
+            # routing, ServerConfig and the base-path mount are split across
+            # several files there, and listing them one at a time meant a change
+            # to the one that wasn't listed skipped the e2e.
             meko_ycp_cp:
               - 'ycp/**'
               - 'api_server/main.go'
               - 'api_server/Dockerfile'
-              - 'api_server/internal/api/router.go'
+              - 'api_server/internal/api/**'
               - 'api_server/internal/service/environment_*.go'
               - 'api_server/internal/repository/environment_*.go'
               - 'api_server/internal/handlers/environment_*.go'

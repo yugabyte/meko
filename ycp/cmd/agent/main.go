@@ -494,7 +494,11 @@ func main() {
 	// These defaults are demo residue and none of them are right for a real
 	// deployment; the chart sets every one. ENV_NAME especially: unset, an agent
 	// enrolls as some other environment's name rather than failing.
-	ycpURL := env("YCP_URL", "http://ycp:8080")
+	// YCP_URL may carry a subpath (https://devcloud.yugabyte.com/ycp) now that
+	// the control plane can be mounted under one. Every request appends
+	// "/api/v1/…", so a trailing slash here would ask for "//api/v1/…" — a path
+	// no route matches.
+	ycpURL := strings.TrimRight(env("YCP_URL", "http://ycp:8080"), "/")
 	envName := env("ENV_NAME", "itest-mcs")
 	placement := env("ENV_PLACEMENT", "cloud")
 	enrollToken := os.Getenv("ENROLLMENT_TOKEN")

@@ -72,6 +72,20 @@ token, the agent enrolls with it and reaches `READY` with real cluster facts, an
 — the assertion that matters most — the agent **restarts without re-enrolling**,
 proving the status token was persisted on both sides.
 
+It deploys the control plane under a `/ycp` base path, matching how production
+fronts it at `https://devcloud.yugabyte.com/ycp/`, and asserts the mount: the
+console answers at `/ycp/` and `/ycp`, the API under `/ycp/api/v1`, the domain
+root 404s, and `/api/v1/health` still answers there (which is also what the pod's
+readiness probe uses). The agent's `YCP_URL` carries the subpath. The prefix lives
+only in `$BASE` in `run.sh` and is substituted into the manifests' `__BASE_PATH__`
+placeholder at apply time, so `YCP_E2E_BASE_PATH= ./test/e2e/run.sh` tests the
+root mount with nothing else to edit.
+
+`dpmcp`'s image is built too, though nothing deploys it — this run provisions no
+datapacks. Building it is what stops a broken `Dockerfile.dpmcp` from merging
+green and then failing `ycp-images.yml` on `main`, where the only symptom is a
+per-datapack MCP pod stuck in `ImagePullBackOff`.
+
 ```bash
 ./test/e2e/run.sh                  # create, test, tear down
 YCP_E2E_KEEP=1 ./test/e2e/run.sh   # leave the cluster up to poke at
@@ -83,7 +97,7 @@ node it just created — so it cannot touch whatever cluster your kubeconfig
 happens to point at. On failure it dumps pod state, container logs and events.
 
 Knobs: `YCP_E2E_CLUSTER`, `YCP_E2E_TAG`, `YCP_E2E_PORT`, `YCP_E2E_TIMEOUT`,
-`YCP_E2E_KEEP`.
+`YCP_E2E_KEEP`, `YCP_E2E_BASE_PATH`.
 
 Both run in CI — see the `meko_ycp` and `meko_ycp_e2e` jobs in
 [`pr-build.yml`](../.github/workflows/pr-build.yml). The e2e fires on `ycp/**` and
@@ -132,7 +146,7 @@ stop the token being accepted.
 
 | Env | Default | Purpose |
 |-----|---------|---------|
-| `YCP_URL` | `http://ycp:8080` | Control-plane base URL. |
+| `YCP_URL` | `http://ycp:8080` | Control-plane base URL. Include the subpath when the control plane runs with `--base-path` (e.g. `https://devcloud.yugabyte.com/ycp`); a trailing slash is trimmed. |
 | `ENV_NAME` | `itest-mcs` | Environment to enroll as; must match the registered id (the slug of the name it was registered under). The default is demo residue — always set it. |
 | `ENROLLMENT_TOKEN` | _(unset)_ | One-time bootstrap credential, 30-min TTL. Read from a Secret, never a command line. |
 | `ENV_PLACEMENT` | `cloud` | Reported placement. |

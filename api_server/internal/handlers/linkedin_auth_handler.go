@@ -18,6 +18,7 @@ import (
 var linkedinProvider = oauthProvider{
 	name:         "LinkedIn",
 	callbackPath: "/api/v1/auth/linkedin/callback",
+	loginPath:    "/api/v1/auth/linkedin/login",
 	reasonPrefix: "linkedin",
 }
 

@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 	echoSwagger "github.com/swaggo/echo-swagger"
 
-	_ "meko/api_server/docs" // registers swagger spec with swag
+	"meko/api_server/docs" // registers the swagger spec with swag
 	"meko/api_server/internal/auth"
 	"meko/api_server/internal/email"
 	"meko/api_server/internal/handlers"
@@ -287,6 +287,12 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 // datapack routes require a valid JWT. When Cognito config is empty
 // (e.g. in tests), all routes are public.
 //
+// Every route hangs off `root`, which is cfg.BasePath (empty by default, so
+// the mount table is unchanged for every deployment that serves at the domain
+// root). With --base-path=/ycp the whole surface -- console, /api/v1, swagger,
+// the OAuth2 callback -- moves under /ycp, which is what lets the control plane
+// sit behind https://<host>/ycp/ on a shared domain.
+//
 // The constructed *serviceRegistry is also returned so the caller
 // (api.Run) can wire long-lived background workers -- specifically
 // the MCP PAT last_used_at flusher -- against the same repo
@@ -297,15 +303,43 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	e.HTTPErrorHandler = handlers.CustomHTTPErrorHandler
 	RegisterMiddleware(e)
 
-	e.GET("/swagger/*", echoSwagger.WrapHandler)
+	// Refuse to start on a base path that isn't one. Booting anyway would serve
+	// 404 everywhere while still passing the health probe below, which reads as
+	// a healthy deployment.
+	basePath, err := normalizeBasePath(cfg.BasePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if basePath != "" {
+		slog.Info("serving every route under a base path", "base_path", basePath)
+	}
+	root := e.Group(basePath)
+
+	// The swagger spec is generated with basePath /api/v1 baked in; move it with
+	// the routes so "Try it out" targets paths that actually exist.
+	docs.SwaggerInfo.BasePath = basePath + "/api/v1"
+	root.GET("/swagger/*", echoSwagger.WrapHandler)
 
 	reg := buildServiceRegistry(cfg)
 
 	var successCfg *handlers.SuccessConfig
 
-	v1 := e.Group("/api/v1", ManagementRateLimiter())
+	// One limiter instance shared by the group and the root health alias below,
+	// so the alias cannot hand out a second per-IP budget.
+	mgmtRateLimiter := ManagementRateLimiter()
+	v1 := root.Group("/api/v1", mgmtRateLimiter)
 
 	v1.GET("/health", handlers.HealthHandler(cfg.SystemDB, cfg.DB))
+	// Health also stays at the domain root when a base path is set. Container
+	// probes and load-balancer checks hit the pod directly, bypassing the proxy
+	// that supplies the prefix, so they would 404 on the prefixed path -- and a
+	// chart that predates --base-path shouldn't fail its readiness gate the
+	// moment the flag is turned on. It carries the same rate limiter as the
+	// prefixed copy: the handler pings both databases, so an unthrottled route
+	// to it is an unauthenticated way to saturate the connection pools.
+	if basePath != "" {
+		e.GET("/api/v1/health", handlers.HealthHandler(cfg.SystemDB, cfg.DB), mgmtRateLimiter)
+	}
 
 	// Internal machine-to-machine routes. Protected by a static
 	// shared secret rather than the user-facing JWT path, so they
@@ -354,10 +388,16 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		agentGroup.POST("/bootstrap-progress", envH.AgentBootstrapProgress)
 
 		// The fleet console, served from this binary so the control plane is one
-		// thing to deploy. Registered on the root Echo instance, not the /api/v1
+		// thing to deploy. Registered on the base-path root, not the /api/v1
 		// group, and only in control-plane mode — a data-plane api-server keeps
 		// returning 404 at / as before.
-		e.GET("/", handlers.ConsoleHandler())
+		//
+		// Under a base path both /ycp/ and /ycp serve the console: a person
+		// types the latter, and Echo treats the two as distinct routes.
+		root.GET("/", handlers.ConsoleHandler())
+		if basePath != "" {
+			e.GET(basePath, handlers.ConsoleHandler())
+		}
 	}
 
 	authEnabled := cfg.CognitoRegion != "" &&
@@ -394,7 +434,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		registerNoAuthRoutes(v1, devAuth, reg)
 	}
 
-	e.GET("/success", handlers.SuccessHandler(successCfg))
+	root.GET("/success", handlers.SuccessHandler(successCfg))
 
 	registerDatapackRoutes(datapackGroup, dpDirect, reg, cfg.MaxArtifactSizeBytes, cfg.EnableConversationSearch)
 	registerBillingRoutes(v1, datapackGroup, reg)
