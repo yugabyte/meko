@@ -330,8 +330,15 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 	// Collect after RUN, before teardown (best-effort). It runs on its own
 	// bounded deadline, independent of the test context, so collection still
 	// happens after a test timeout.
+	//
+	// What the env gathers is ATTACHED to the result when the run needs
+	// explaining. It used to be dropped into a discard sink: the env did the work
+	// — controller logs, pod logs, events — and the bytes went nowhere, so a test
+	// that failed outside the amp-feature flow (which collects for itself) landed
+	// with a single error line and no evidence at all. Gated by
+	// report.collect_diagnostics so a green run does not haul logs per test.
 	cctx, ccancel := context.WithTimeout(context.Background(), ResolveCollectTimeout(opts.Config))
-	_ = env.Collect(cctx, discardArtifactSink{})
+	_ = env.Collect(cctx, collectSink(t, wd, opts))
 	ccancel()
 
 	// Reap what Setup created, after collect. Reading setupTeardown is only safe
@@ -376,3 +383,44 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 type discardArtifactSink struct{}
 
 func (discardArtifactSink) Add(string, string, []byte) error { return nil }
+
+// testArtifactSink persists what an env collects onto the test's result, so the
+// bytes reach the run's artifacts dir and the report portal.
+type testArtifactSink struct{ t *T }
+
+func (s testArtifactSink) Add(name, kind string, content []byte) error {
+	s.t.AttachBytes(name, kind, content)
+	return nil
+}
+
+// collectSink decides whether this run keeps the env's diagnostics. The gate is
+// the same report.collect_diagnostics knob the suites use, judged against the
+// same notion of failure the result will carry — a timeout and a panic count,
+// because those are exactly the runs whose evidence is hardest to reconstruct
+// afterwards.
+func collectSink(t *T, wd watchdogResult, opts RunOptions) ArtifactSink {
+	failed, _, _, _ := t.outcome()
+	failed = failed || wd.err != nil || wd.timedOut || wd.panicked
+	mode := DefaultCollectDiagnostics
+	if opts.Config != nil {
+		mode = opts.Config.GetString("report.collect_diagnostics", DefaultCollectDiagnostics)
+	}
+	if !shouldCollect(mode, failed) {
+		return discardArtifactSink{}
+	}
+	return testArtifactSink{t: t}
+}
+
+// shouldCollect mirrors diag.ShouldCollect, which core cannot import (diag
+// depends on core), including its choice to read an unrecognised mode as
+// on_failure rather than silently hauling logs for every green run.
+func shouldCollect(mode string, failed bool) bool {
+	switch mode {
+	case "never":
+		return false
+	case "always":
+		return true
+	default: // on_failure and anything unrecognised
+		return failed
+	}
+}

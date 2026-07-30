@@ -1109,23 +1109,26 @@ var ErrPGForwardAlive = errors.New("pg port-forward is alive")
 // budget on `dial 127.0.0.1: connection refused` while the endpoint itself was
 // serving its co-tenant fine).
 //
-// It is deliberately NOT a retry helper: liveness is read from the forward
-// handle, not guessed from the dial error, and a live forward returns
-// ErrPGForwardAlive so the caller keeps the real failure. It re-resolves and
-// swaps the forward but does not wait for Postgres — the caller owns that, so
-// an endpoint that is genuinely down still fails on its own terms.
+// It is deliberately NOT a retry helper. The caller may only reach it with a
+// REFUSED connection to a forward this env owns; an env with no forward answers
+// ErrPGForwardAlive. It re-resolves and swaps the forward but does not wait for
+// Postgres — the caller owns that, so an endpoint that is genuinely down still
+// fails on its own terms, one readiness budget later.
 func (e *Env) RefreshPGEndpoint(ctx context.Context) (pg.ConnInfo, error) {
-	// "Nothing to repair" is decided FIRST, so a live forward (or a direct
-	// tailnet/in-cluster address, which has no forward at all) can never be
-	// mistaken for a recoverable failure.
+	// A direct tailnet/in-cluster address has no forward at all, so a failure
+	// there is the endpoint's and nothing here can help.
 	if len(e.pfs) == 0 {
 		return pg.ConnInfo{}, ErrPGForwardAlive
 	}
-	for _, pf := range e.pfs {
-		if pf != nil && pf.Alive() {
-			return pg.ConnInfo{}, ErrPGForwardAlive
-		}
-	}
+	// Process liveness is NOT the test. kubectl can keep running while its tunnel
+	// is dead — the pod behind a Service forward gets replaced and every later
+	// dial of the local port is refused although the child never exits (observed
+	// 2026-07-29 on features/pg_delta_chain: "connection refused … port-forward
+	// not re-established: pg port-forward is alive"). What authorises the rebuild
+	// is the caller's refused connection: a loopback port with nothing listening
+	// cannot have carried an answer from the endpoint, so re-establishing it
+	// cannot hide a product failure — the caller waits again afterwards and any
+	// real fault surfaces then.
 	if e.prov == nil {
 		return pg.ConnInfo{}, fmt.Errorf("sharedk8s: no provider to re-resolve the endpoint")
 	}

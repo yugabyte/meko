@@ -975,18 +975,25 @@ func TestTransientControllerPredicate(t *testing.T) {
 	}
 }
 
-// A LIVE port-forward must never be re-established: if the plumbing is up, a
-// Postgres failure through it belongs to the endpoint, and recovering here
-// would convert a product outage into a passing test. Same for an env with no
-// forward at all (direct/tailnet address) — there is nothing to repair.
-func TestRefreshPGEndpointRefusesWhenForwardIsAlive(t *testing.T) {
-	live := &Env{pfs: []*k8s.PortForward{{}}} // zero value == not dead == alive
-	if _, err := live.RefreshPGEndpoint(context.Background()); !errors.Is(err, ErrPGForwardAlive) {
-		t.Errorf("live forward: err = %v, want ErrPGForwardAlive", err)
-	}
-
+// An env with no forward at all (direct tailnet/in-cluster address) has nothing
+// to repair, so a failure there is the endpoint's and RefreshPGEndpoint must
+// refuse. A forward that exists is rebuilt on the caller's refused connection
+// regardless of whether kubectl is still running: a loopback port with nothing
+// listening cannot have carried an answer from the endpoint, and the caller
+// waits for Postgres again afterwards, so no product failure is absorbed.
+func TestRefreshPGEndpointRefusesWithoutAForward(t *testing.T) {
 	direct := &Env{}
 	if _, err := direct.RefreshPGEndpoint(context.Background()); !errors.Is(err, ErrPGForwardAlive) {
 		t.Errorf("no forward: err = %v, want ErrPGForwardAlive", err)
+	}
+}
+
+// A forward-owning env must not silently succeed without a provider to
+// re-resolve through — that would report a repair that never happened.
+func TestRefreshPGEndpointNeedsAProvider(t *testing.T) {
+	e := &Env{pfs: []*k8s.PortForward{{}}}
+	_, err := e.RefreshPGEndpoint(context.Background())
+	if err == nil || errors.Is(err, ErrPGForwardAlive) {
+		t.Errorf("err = %v, want a plain provider error", err)
 	}
 }

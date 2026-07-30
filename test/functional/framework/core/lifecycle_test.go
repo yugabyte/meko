@@ -8,6 +8,7 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/env/fake"
+	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 func runOne(t *testing.T, test core.Test, provider core.EnvProvider, detected core.DetectedVersions) *core.Result {
@@ -271,4 +272,69 @@ func TestReportEnvFailedRunReportsEveryTest(t *testing.T) {
 			t.Errorf("sink result for %s = %q / %q", tc.Name, got.Status, got.ErrorSummary)
 		}
 	}
+}
+
+// collectingEnv hands the engine one blob at collect time, so a test can assert
+// where those bytes end up.
+type collectingEnv struct{}
+
+func (collectingEnv) ControllerURL() string           { return "" }
+func (collectingEnv) Versions() core.DetectedVersions { return core.DetectedVersions{} }
+func (collectingEnv) Exec() exec.RemoteExecutor       { return nil }
+func (collectingEnv) Handles() core.EnvHandles        { return core.EnvHandles{} }
+func (collectingEnv) Collect(_ context.Context, into core.ArtifactSink) error {
+	return into.Add("controller/controller.log", "log", []byte("evidence"))
+}
+
+// collectingProvider serves that env for every test.
+type collectingProvider struct{}
+
+func (collectingProvider) Provision(context.Context, core.EnvSpec, *core.Seed) (core.Environment, error) {
+	return collectingEnv{}, nil
+}
+func (collectingProvider) Attach(context.Context, string) (core.Environment, error) {
+	return collectingEnv{}, nil
+}
+func (collectingProvider) Teardown(context.Context, core.Environment) error { return nil }
+
+// What an env collects must land ON THE RESULT, not in a discard sink: a test
+// that fails outside a suite flow has no other source of evidence, and the
+// engine already pays for the collection either way.
+func TestEnvCollectAttachesToResultOnFailure(t *testing.T) {
+	failing := core.Test{Name: "t", Run: func(*core.T) error { return fmt.Errorf("boom") }}
+	r := runOne(t, failing, collectingProvider{}, core.DetectedVersions{})
+	if r.Status != core.StatusFailed {
+		t.Fatalf("status = %s, want failed", r.Status)
+	}
+	if !hasAttachment(r, "controller/controller.log") {
+		t.Errorf("collected evidence was dropped; attachments = %+v", r.Attachments)
+	}
+}
+
+// With on_failure the same collection must NOT be attached to a green run — the
+// gate is what keeps a passing suite from hauling a controller log per test.
+func TestEnvCollectSkippedForPassingRunOnFailureMode(t *testing.T) {
+	cfg, err := core.LoadConfigNoDefaults(nil, nil, []string{"report.collect_diagnostics=on_failure"})
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	_, results := core.RunTests(context.Background(),
+		[]core.Test{{Name: "t", Run: func(*core.T) error { return nil }}},
+		core.RunOptions{Parallel: 1, Seed: core.NewRunSeed(1, true), Config: cfg,
+			Provider: collectingProvider{}})
+	if len(results) != 1 || results[0].Status != core.StatusPassed {
+		t.Fatalf("want one passed result, got %+v", results)
+	}
+	if hasAttachment(results[0], "controller/controller.log") {
+		t.Errorf("a passing run attached diagnostics under on_failure: %+v", results[0].Attachments)
+	}
+}
+
+func hasAttachment(r *core.Result, name string) bool {
+	for _, a := range r.Attachments {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
 }
