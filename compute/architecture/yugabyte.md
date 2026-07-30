@@ -259,16 +259,18 @@ The pageserver's row-per-version page store; see
 One row per `(block, LSN)`. Holds **relation pages only** — keys where
 `Key::is_rel_block_key()` holds (`field1 == 0x00`, `field4 != 0`,
 `field6 != 0xffffffff`). SLRU blocks go to `slru_pages`; everything
-else goes to `meta`. The hash partition on `(branch_id, spcnode,
-dbnode, relnode, forknum)` keeps a relation fork's whole block-set on
-one tablet, so range scans within a relfork are tablet-local.
-Clustering by `(blknum, lsn DESC, is_image DESC)` stores a block's rows
-newest-first; `is_image` is DESC so the stored order matches the
-chain-read `ORDER BY lsn DESC, is_image DESC` (image before delta at an
-LSN tie).
+else goes to `meta`. The key is all-range, led by a 6-way placement
+bucket (`page_store::page_bucket_id`) so the table pre-splits into
+exactly 6 tablets and writes spread from the first row. Within a bucket
+the relfork identity still clusters together, so range scans within a
+relfork stay tablet-local for any 2MB stretch. Clustering by
+`(blknum, lsn DESC, is_image DESC)` stores a block's rows newest-first;
+`is_image` is DESC so the stored order matches the chain-read
+`ORDER BY lsn DESC, is_image DESC` (image before delta at an LSN tie).
 
 ```sql
 CREATE TABLE amp_storage.pages (
+    bucket_id    SMALLINT NOT NULL,    -- ((relnode/7)+(relnode/13)+(blknum/256))%6
     branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
@@ -279,10 +281,24 @@ CREATE TABLE amp_storage.pages (
     lsn          BIGINT   NOT NULL,    -- u64 stored as i64 (real LSNs << 2^63)
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, lsn DESC, is_image DESC)
-);
+    CONSTRAINT pages_bucket_id_matches_formula CHECK (
+        bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
+    ),
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
+                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, is_image DESC)
+) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
+
+Because `bucket_id` leads the key, **every** query against `pages` binds
+it to a single value. A chain read knows its blknum and so binds the
+entire 7-column prefix (one tablet); a blknum range scan touches one
+bucket per 2MB stretch and loops over `page_buckets_for_range`;
+whole-fork and cross-fork operations fan out over all six. On the thin
+lane that is forced — its range-key bind takes one value per column, with
+no set form — whereas YSQL could equally use `bucket_id = ANY(…)`, which
+YB pushes into the index condition; the per-bucket shape is shared so
+both lanes fan out alike. See [`pageserver.md`](pageserver.md) "Why the
+bucket" for the function's design and the salt's failure mode.
 
 `payload` here — and in `slru_pages` and `meta` below — holds a
 compression envelope, not bare page bytes: a codec tag byte followed by
@@ -456,16 +472,24 @@ to the compute only once its bytes are in this table.
 
 ```sql
 CREATE TABLE amp_storage.wals (
+    bucket_id        SMALLINT NOT NULL,  -- per-batch placement bucket, 0..5
     branch_id        TEXT     NOT NULL,
-    bucket_id        SMALLINT NOT NULL,  -- per-batch placement bucket, 0..9
     segno            BIGINT   NOT NULL,
     chunk_offset     BIGINT   NOT NULL,
     chunk_size       INT      NOT NULL,
     data             BYTEA    NOT NULL,
     last_modified_us BIGINT   NOT NULL,
-    PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)
-) SPLIT INTO 10 TABLETS;
+    CONSTRAINT wals_bucket_id_in_range CHECK (bucket_id >= 0 AND bucket_id < 6),
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)
+) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
+
+All-range key led by `bucket_id`, pre-split into `WALS_BUCKETS` tablets.
+Unlike `pages`, this bucket is **not** derivable from the row — it is a
+rotating per-batch counter — so readers always fan out across all of them,
+and any scan must page through empty-page-plus-continuation responses from
+tablets holding no match. See [`safekeeper.md`](safekeeper.md) for why
+`bucket_id` leads rather than `branch_id`.
 
 `data` holds a compression envelope, not bare WAL bytes — a codec tag
 byte followed by (by default) an LZ4 block, encoded and decoded by the
@@ -485,16 +509,16 @@ aligns the next write at exactly the truncation point), so
 branch and a same-PK INSERT is necessarily an idempotent retry of the
 same bytes.
 
-`bucket_id` exists purely for tablet placement: the
-`(branch_id, bucket_id)` hash key spreads a branch's WAL across all
-`WALS_BUCKETS = 10` tablets. The consumer stamps each write **batch**
-with one bucket, rotating through the buckets one batch at a time —
-each batch lands on ONE tablet (the direct-RPC lane applies it as one
-atomic write batch; the YSQL lane's multi-VALUES INSERT hits the
+`bucket_id` exists purely for tablet placement: as the leading
+range-key column it spreads a branch's WAL across all
+`WALS_BUCKETS = 6` pre-split tablets. The consumer stamps each write
+**batch** with one bucket, rotating through the buckets one batch at a
+time — each batch lands on ONE tablet (the direct-RPC lane applies it as
+one atomic write batch; the YSQL lane's multi-VALUES INSERT hits the
 single-shard transaction fast path), while sustained load rotates
 across all tablets. Readers cannot derive a chunk's bucket, so
-index-tight reads name every bucket with a `bucket_id IN (0..9)`
-hash-key list — YSQL executes that as batched per-bucket index probes,
+index-tight reads name every bucket with a `bucket_id IN (0..5)`
+key list — YSQL executes that as batched per-bucket index probes,
 not a scan.
 
 Schema and batching documented in detail in

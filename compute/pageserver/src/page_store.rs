@@ -11,6 +11,7 @@
 //! Schema:
 //! ```sql
 //! CREATE TABLE amp_storage.pages (
+//!     bucket_id   SMALLINT NOT NULL,
 //!     branch_id   TEXT     NOT NULL,
 //!     spcnode     BIGINT   NOT NULL,
 //!     dbnode      BIGINT   NOT NULL,
@@ -21,15 +22,28 @@
 //!     lsn         BIGINT   NOT NULL,
 //!     will_init   BOOLEAN  NOT NULL,
 //!     payload     BYTEA    NOT NULL,
-//!     PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-//!                  blknum, lsn DESC, is_image DESC)
-//! );
+//!     PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
+//!                  relnode ASC, forknum ASC, blknum ASC,
+//!                  lsn DESC, is_image DESC)
+//! ) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 //! ```
 //!
-//! Hash partition `(branch, spcnode, dbnode, relnode, forknum)`
-//! means each fork's whole block-set lives on one tablet. Per-block
-//! reads are one tablet hash lookup; per-fork range scans (basebackup,
-//! image-layer materialisation) are one tablet's range scan.
+//! The key is all-range, led by the [`PAGE_BUCKETS`]-way placement
+//! bucket [`page_bucket_id`], so the table pre-splits into exactly
+//! `PAGE_BUCKETS` tablets and writes spread from the first row. Within a
+//! bucket the key is clustered as before, so a block's chain is still
+//! one contiguous run and a per-fork scan is still a range scan.
+//!
+//! Because the bucket is `(… + blknum / PAGE_BUCKET_STRIDE) % PAGE_BUCKETS`,
+//! a read whose blknum is known (a chain read) binds the whole key prefix
+//! and touches one tablet, while a blknum *range* scan touches one bucket
+//! per 2MB stretch it spans, capped at `PAGE_BUCKETS`. Every query here
+//! binds bucket_id as a single VALUE and callers that span buckets loop.
+//! The thin lane has no alternative — [`yb_thin_client::RangeRead::new_range`]
+//! binds one value per key column, and the shim's `range_values` ABI has no
+//! set form. YSQL could equally write `bucket_id = ANY(…)`, which YB does
+//! push into the index condition; both lanes use the one-bucket-per-query
+//! shape so the two read alike.
 //!
 //! The trailing `is_image` breaks `lsn` ties; it is DESC so the stored
 //! order matches the read-path `ORDER BY lsn DESC, is_image DESC`
@@ -528,6 +542,22 @@ impl<T> BlockChainCollector<T> {
 /// Rows per fetched page on direct-RPC multi-block range scans.
 const DIRECT_SCAN_PAGE_ROWS: u64 = 128;
 
+/// Whole-scan restarts for the batched thin-lane page scan
+/// ([`PageStore::scan_one_fork_thin`]). A read-restart on a *pinned* batch —
+/// which every paging round after the first is — cannot be healed inside
+/// `TsClient::read`, so the scan driver retries the whole fan-out on a fresh
+/// read point. Mirrors the client's own `MAX_SCAN_RESTARTS`.
+const THIN_SCAN_RESTARTS: usize = 5;
+
+/// Consecutive empty-but-continuing pages tolerated per op before the scan
+/// fails loudly. Deliberately NOT a cap on total rounds: a legitimate large
+/// scan needs unboundedly many, so a round cap would false-fail it. An op
+/// crossing tablets that hold no matching row returns empty pages with a
+/// continuation, which is normal for a handful of rounds; only a token that
+/// never advances does it indefinitely (an earlier shim did exactly that and
+/// spun at ~35% CPU forever).
+const THIN_SCAN_BARREN_ROUNDS: usize = 64;
+
 /// Read-side cell access for the hot-path client's row type
 /// (`yb_thin_client::Row`), keeping the chain/scan decode helpers below
 /// generic over the row rather than the client. The client's `Value`
@@ -997,7 +1027,7 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
 /// PostgreSQL caps a query at 65535 parameters; with `branch_id`
 /// baked into the SQL as a literal (this is a single-branch
 /// pageserver — see #16), the largest fan-out
-/// is `pages` at 9 params/row → 500×9 = 4500 params, well under.
+/// is `pages` at 10 params/row → 500×10 = 5000 params, well under.
 /// Chunks dispatch in parallel — tokio-postgres pipelines them on the
 /// shared connection so YB absorbs them concurrently.
 const ROWS_PER_INSERT: usize = 500;
@@ -1035,6 +1065,14 @@ pub fn gc_bucket_id(key: &Key) -> i32 {
     }
     (h % GC_BUCKETS as u64) as i32
 }
+
+/// The `amp_storage.pages` placement bucket, shared with the operator tools
+/// (`yb-dump-pages` pins its queries with the same function). Defined once in
+/// `pageserver_api` — a second copy of a frozen key function is how rows go
+/// missing.
+pub use pageserver_api::pages_bucket::{
+    PAGE_BUCKET_STRIDE, PAGE_BUCKETS, page_bucket_id, page_buckets_for_range,
+};
 
 /// The `meta` key bytes of a fork's rel-size entry (`rel_size_to_key`),
 /// from a fork's i64/i16 identity columns.
@@ -1176,12 +1214,15 @@ pub(crate) fn materialise_object_key(key: &Key) -> Option<Key> {
     })
 }
 
-const PAGES_COLUMNS: &str =
-    "branch_id, spcnode, dbnode, relnode, forknum, blknum, lsn, is_image, will_init, payload";
+/// `branch_id` stays first: [`build_insert_sql`] bakes it into every row
+/// tuple as a literal, so it must lead and `bucket_id` follows as the first
+/// bound column.
+const PAGES_COLUMNS: &str = "branch_id, bucket_id, spcnode, dbnode, relnode, forknum, blknum, \
+                             lsn, is_image, will_init, payload";
 /// Per-row bound columns for `pages` (everything after the baked
-/// `branch_id` literal): spcnode, dbnode, relnode,
+/// `branch_id` literal): bucket_id, spcnode, dbnode, relnode,
 /// forknum, blknum, lsn, is_image, will_init, payload.
-const PAGES_PER_ROW: usize = 9;
+const PAGES_PER_ROW: usize = 10;
 
 const SLRU_COLUMNS: &str = "branch_id, kind, segno, blknum, is_image, lsn, will_init, payload";
 /// Per-row bound columns for `slru_pages`: kind, segno, blknum,
@@ -1226,19 +1267,27 @@ fn build_insert_sql(
 }
 
 /// Single-key chain read (`read_chain`). `$1`=branch_id;
-/// `$2..$7` = spcnode, dbnode, relnode, forknum, blknum, target_lsn.
+/// `$2..$7` = spcnode, dbnode, relnode, forknum, blknum, target_lsn;
+/// `$8`=bucket_id.
+///
+/// `bucket_id` is appended rather than placed first so the existing
+/// placeholders keep their numbers — the leading key column has to be *bound*,
+/// but nothing requires it to be `$1`. A single blknum is one bucket, so this
+/// read is always pinned to one tablet. The anchor subquery is its own scan of
+/// `pages` and needs the same bound, or it loses the leading column and reads
+/// every bucket.
 fn build_read_chain_sql(schema: &str) -> String {
     format!(
         "SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                 p.lsn, p.is_image, p.will_init, p.payload \
          FROM \"{schema}\".pages p \
-         WHERE p.branch_id=$1 \
+         WHERE p.bucket_id=$8 AND p.branch_id=$1 \
            AND p.spcnode=$2 AND p.dbnode=$3 AND p.relnode=$4 \
            AND p.forknum=$5 AND p.blknum=$6 \
            AND p.lsn <= $7 \
            AND p.lsn >= COALESCE(( \
                  SELECT a.lsn FROM \"{schema}\".pages a \
-                 WHERE a.branch_id=$1 \
+                 WHERE a.bucket_id=$8 AND a.branch_id=$1 \
                    AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4 \
                    AND a.forknum=$5 AND a.blknum=$6 \
                    AND a.is_image=TRUE AND a.lsn <= $7 \
@@ -1259,7 +1308,21 @@ fn build_read_chain_sql(schema: &str) -> String {
 /// - `driver`: the `FROM` source yielding `b(blknum)` — a `blocks` CTE for the
 ///   range, `unnest($6::bigint[])` for the set.
 /// - `lsn`: the placeholder holding target_lsn (`$8` for range, `$7` for set).
-fn build_scan_one_fork_lateral_sql(schema: &str, prefix: &str, driver: &str, lsn: &str) -> String {
+/// - `bucket`: the placeholder holding this query's single `bucket_id`
+///   (`$9` for range, `$8` for set).
+///
+/// One `bucket_id` per query, bound as a VALUE: the caller runs this once per
+/// bucket its blknum span touches and merges. `bucket_id = ANY(...)` would also
+/// work on this lane — YB pushes an IN-list into the index condition — but the
+/// per-bucket shape matches the thin lane, which cannot express a set at all,
+/// so both lanes fan out the same way.
+fn build_scan_one_fork_lateral_sql(
+    schema: &str,
+    prefix: &str,
+    driver: &str,
+    lsn: &str,
+    bucket: &str,
+) -> String {
     format!(
         "{prefix}\
          SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
@@ -1269,13 +1332,13 @@ fn build_scan_one_fork_lateral_sql(schema: &str, prefix: &str, driver: &str, lsn
              SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                     p.lsn, p.is_image, p.will_init, p.payload \
              FROM \"{schema}\".pages p \
-             WHERE p.branch_id=$1 \
+             WHERE p.bucket_id={bucket} AND p.branch_id=$1 \
                AND p.spcnode=$2 AND p.dbnode=$3 AND p.relnode=$4 \
                AND p.forknum=$5 AND p.blknum = b.blknum \
                AND p.lsn <= {lsn} \
                AND p.lsn >= COALESCE(( \
                      SELECT a.lsn FROM \"{schema}\".pages a \
-                     WHERE a.branch_id=$1 \
+                     WHERE a.bucket_id={bucket} AND a.branch_id=$1 \
                        AND a.spcnode=$2 AND a.dbnode=$3 AND a.relnode=$4 \
                        AND a.forknum=$5 AND a.blknum = b.blknum \
                        AND a.is_image=TRUE AND a.lsn <= {lsn} \
@@ -1286,49 +1349,71 @@ fn build_scan_one_fork_lateral_sql(schema: &str, prefix: &str, driver: &str, lsn
     )
 }
 
-/// One-fork range scan (`scan_range`). `$1`=branch_id;
+/// One-fork range scan (`scan_range`), for ONE bucket. `$1`=branch_id;
 /// `$2..$8` = spcnode, dbnode, relnode, forknum, blknum_lo, blknum_hi,
-/// target_lsn. Driver: the DISTINCT blknums that actually exist in `[$6, $7)`
-/// (a Distinct Index Scan ⇒ one row per block) feeding the shared LATERAL.
+/// target_lsn; `$9`=bucket_id. Driver: the DISTINCT blknums that actually
+/// exist in `[$6, $7)` (a Distinct Index Scan ⇒ one row per block) feeding
+/// the shared LATERAL.
+///
+/// The caller runs this once per bucket in
+/// [`page_buckets_for_range`] and merges; `[$6, $7)` may span more of the
+/// fork than this bucket holds, and the `bucket_id` bound is what narrows the
+/// CTE to the stretches actually stored here.
 fn build_scan_one_fork_sql(schema: &str) -> String {
     let prefix = format!(
         "WITH blocks AS ( \
              SELECT DISTINCT blknum FROM \"{schema}\".pages \
-             WHERE branch_id=$1 \
+             WHERE bucket_id=$9 AND branch_id=$1 \
                AND spcnode=$2 AND dbnode=$3 AND relnode=$4 \
                AND forknum=$5 \
                AND blknum >= $6 AND blknum < $7 \
                AND lsn <= $8 \
          ) "
     );
-    build_scan_one_fork_lateral_sql(schema, &prefix, "blocks b", "$8")
+    build_scan_one_fork_lateral_sql(schema, &prefix, "blocks b", "$8", "$9")
 }
 
 /// Multi-key ("scattered") one-fork scan (`scan_scattered_set`). Same LATERAL
 /// body as [`build_scan_one_fork_sql`], but driven directly from the
 /// caller-supplied blknum array via `unnest` rather than a contiguous `[lo, hi)`
 /// range discovered by a `DISTINCT` pages scan. `$1`=branch_id; `$2..$5`=
-/// spcnode, dbnode, relnode, forknum; `$6`=blknum bigint[]; `$7`=target_lsn.
+/// spcnode, dbnode, relnode, forknum; `$6`=blknum bigint[]; `$7`=target_lsn;
+/// `$8`=bucket_id.
 ///
 /// We already know the blocks, so we do NOT re-scan pages with a
 /// `SELECT DISTINCT ... blknum = ANY(...)` (that would bet on YB skip-scanning
 /// the `= ANY` on the range column). `unnest` makes every tablet touch below a
-/// single-blknum point seek (hash `=` + blknum `=`). A blknum absent from the
-/// table yields an empty LATERAL → CROSS JOIN drops it (no row), same as the
-/// old DISTINCT-CTE excluding it.
+/// single-blknum point seek (bucket `=` + the rest of the key prefix `=`). A
+/// blknum absent from the table yields an empty LATERAL → CROSS JOIN drops it
+/// (no row), same as the old DISTINCT-CTE excluding it.
+///
+/// The caller partitions its blknums by [`page_bucket_id`] and issues one
+/// query per bucket with only that bucket's blknums in `$6`, so `$8` is a
+/// single value and every point seek stays pruned.
 fn build_scan_one_fork_scattered_sql(schema: &str) -> String {
-    build_scan_one_fork_lateral_sql(schema, "", "unnest($6::bigint[]) AS b(blknum)", "$7")
+    build_scan_one_fork_lateral_sql(schema, "", "unnest($6::bigint[]) AS b(blknum)", "$7", "$8")
 }
 
-/// Cross-fork range scan (`scan_range`). `$1`=branch_id;
+/// Cross-fork range scan (`scan_range`), for ONE bucket. `$1`=branch_id;
 /// `$2..$12` = (spc,db,rel,fork,blk)_lo, (spc,db,rel,fork,blk)_hi,
-/// target_lsn.
+/// target_lsn; `$13`=bucket_id.
+///
+/// A cross-fork range spans relations, so the bucket cannot be derived from
+/// the bounds — the caller loops over all [`PAGE_BUCKETS`] and merges. That is
+/// still strictly better than before: with a hash key and no hash column
+/// bound, this query was a full sequential scan of `pages`. Now it is six
+/// bucket-pinned range scans.
+///
+/// Note the row-comparison bounds stay on `(spcnode, …, blknum)` only. They
+/// deliberately do not mention `bucket_id`, which sits *above* them in the key
+/// and is unrelated to fork ordering; the `bucket_id=$13` equality is what
+/// prunes, and the row comparison narrows within it.
 fn build_scan_cross_fork_sql(schema: &str) -> String {
     format!(
         "WITH blocks AS ( \
              SELECT DISTINCT spcnode, dbnode, relnode, forknum, blknum \
              FROM \"{schema}\".pages \
-             WHERE branch_id=$1 \
+             WHERE bucket_id=$13 AND branch_id=$1 \
                AND (spcnode, dbnode, relnode, forknum, blknum) >= ($2, $3, $4, $5, $6) \
                AND (spcnode, dbnode, relnode, forknum, blknum) <  ($7, $8, $9, $10, $11) \
                AND lsn <= $12 \
@@ -1340,14 +1425,14 @@ fn build_scan_cross_fork_sql(schema: &str) -> String {
              SELECT p.spcnode, p.dbnode, p.relnode, p.forknum, p.blknum, \
                     p.lsn, p.is_image, p.will_init, p.payload \
              FROM \"{schema}\".pages p \
-             WHERE p.branch_id=$1 \
+             WHERE p.bucket_id=$13 AND p.branch_id=$1 \
                AND p.spcnode = b.spcnode AND p.dbnode = b.dbnode \
                AND p.relnode = b.relnode AND p.forknum = b.forknum \
                AND p.blknum = b.blknum \
                AND p.lsn <= $12 \
                AND p.lsn >= COALESCE(( \
                      SELECT a.lsn FROM \"{schema}\".pages a \
-                     WHERE a.branch_id=$1 \
+                     WHERE a.bucket_id=$13 AND a.branch_id=$1 \
                        AND a.spcnode = b.spcnode AND a.dbnode = b.dbnode \
                        AND a.relnode = b.relnode AND a.forknum = b.forknum \
                        AND a.blknum = b.blknum \
@@ -1586,6 +1671,7 @@ impl PageStore {
             // flush before any chunk is sent (fail-fast), and the per-row
             // scalar columns land in owned storage we can bind by
             // reference — no per-cell `Box<dyn ToSql>`.
+            let mut bucket = Vec::with_capacity(n);
             let mut spc = Vec::with_capacity(n);
             let mut dbn = Vec::with_capacity(n);
             let mut rel = Vec::with_capacity(n);
@@ -1595,6 +1681,7 @@ impl PageStore {
             for (i, row) in chunk.iter().enumerate() {
                 let (s, d, r, f, b) =
                     key_columns(&row.key).with_context(|| format!("put_pages row {i}: bad key"))?;
+                bucket.push(page_bucket_id(r, b));
                 spc.push(s);
                 dbn.push(d);
                 rel.push(r);
@@ -1640,6 +1727,7 @@ impl PageStore {
                 let payloads: Vec<&[u8]> = enc.iter().map(|b| b.as_ref()).collect();
                 let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(n * PAGES_PER_ROW);
                 for i in 0..n {
+                    params.push(&bucket[i]);
                     params.push(&spc[i]);
                     params.push(&dbn[i]);
                     params.push(&rel[i]);
@@ -1707,6 +1795,7 @@ impl PageStore {
         let pages = &p.pages;
         // Column metadata is constant for the whole flush — resolve once
         // instead of per row (ROWS_PER_INSERT * chunks lookups otherwise).
+        let col_bucket = pages.col("bucket_id")?;
         let col_spc = pages.col("spcnode")?;
         let col_db = pages.col("dbnode")?;
         let col_rel = pages.col("relnode")?;
@@ -1726,9 +1815,15 @@ impl PageStore {
             for (i, row) in chunk.iter().enumerate() {
                 let (sp, db, rel, fork, blk) =
                     key_columns(&row.key).with_context(|| format!("put_pages row {i}: bad key"))?;
+                // key_values are in PRIMARY KEY order, not declaration order —
+                // hence bucket_id first and (lsn, is_image) rather than
+                // (is_image, lsn). The CHECK constraint in the migration does
+                // NOT fire on this lane, so `page_bucket_id` here is the only
+                // thing keeping these rows findable.
                 batch.push(UpsertRow::new(
                     pages,
                     vec![
+                        int_bind_thin(col_bucket, page_bucket_id(rel, blk) as i64),
                         BindValue::Text(branch_s.clone()),
                         int_bind_thin(col_spc, sp),
                         int_bind_thin(col_db, db),
@@ -1824,9 +1919,14 @@ impl PageStore {
 
         let started = std::time::Instant::now();
         let sql = build_read_chain_sql(&self.schema);
+        // One blknum ⇒ one bucket ⇒ one tablet.
+        let bucket = page_bucket_id(rel, blk);
         let rows = self
             .ysql_client
-            .query(&sql, &[&branch_s, &sp, &db, &rel, &fork, &blk, &target])
+            .query(
+                &sql,
+                &[&branch_s, &sp, &db, &rel, &fork, &blk, &target, &bucket],
+            )
             .await
             .context("read_chain")?;
         crate::metrics::YB_STORE_OP_SECONDS
@@ -1861,17 +1961,23 @@ impl PageStore {
     ) -> Result<Vec<Arc<PageRow>>> {
         use yb_thin_client::{BindValue, CondOp, RangeRead};
         let pages = &p.pages;
-        let read = RangeRead::new(
+        // All-range key, so the prefix goes in as `range_values` (there is no
+        // hash key to bind). A known blknum determines the bucket, so all
+        // seven leading key columns are bound and this stays a single-tablet
+        // clustered read — `blknum` is part of the prefix now rather than a
+        // trailing `cond`.
+        let read = RangeRead::new_range(
             pages,
             vec![
+                int_bind_thin(pages.col("bucket_id")?, page_bucket_id(rel, blk) as i64),
                 BindValue::Text(branch_s.to_string()),
                 int_bind_thin(pages.col("spcnode")?, sp),
                 int_bind_thin(pages.col("dbnode")?, db),
                 int_bind_thin(pages.col("relnode")?, rel),
                 int_bind_thin(pages.col("forknum")?, fork as i64),
+                BindValue::I64(blk),
             ],
         )?
-        .cond(pages, "blknum", CondOp::Eq, BindValue::I64(blk))?
         .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
         .targets(pages, &["lsn", "is_image", "will_init", "payload"])?
         .limit(DIRECT_CHAIN_PAGE_ROWS);
@@ -1896,39 +2002,138 @@ impl PageStore {
     ) -> Result<HashMap<Key, Vec<Arc<PageRow>>>> {
         use yb_thin_client::{BindValue, CondOp, RangeRead};
         let pages = &p.pages;
-        let read = RangeRead::new(
-            pages,
-            vec![
-                BindValue::Text(branch_s.to_string()),
-                int_bind_thin(pages.col("spcnode")?, sp),
-                int_bind_thin(pages.col("dbnode")?, db),
-                int_bind_thin(pages.col("relnode")?, rel),
-                int_bind_thin(pages.col("forknum")?, fork as i64),
-            ],
-        )?
-        .cond(pages, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
-        .cond(pages, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
-        .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
-        .targets(
-            pages,
-            &["blknum", "lsn", "is_image", "will_init", "payload"],
-        )?
-        .limit(DIRECT_SCAN_PAGE_ROWS);
+        // A blknum span can cross 2MB stretch boundaries, so it can live in
+        // several buckets. `bucket_id` leads the key, so it cannot be a `cond`
+        // and cannot be an IN-list either — it has to be one bound read per
+        // bucket. In practice that is 1, or 2 when the span straddles a
+        // stretch boundary: `max_get_vectored_keys` caps a vectored read at 32
+        // blocks against a 256-block stride.
+        let buckets = page_buckets_for_range(rel, blk_lo, blk_hi);
+        if buckets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut reads: Vec<RangeRead> = Vec::with_capacity(buckets.len());
+        for &bucket in &buckets {
+            reads.push(
+                RangeRead::new_range(
+                    pages,
+                    vec![
+                        int_bind_thin(pages.col("bucket_id")?, bucket as i64),
+                        BindValue::Text(branch_s.to_string()),
+                        int_bind_thin(pages.col("spcnode")?, sp),
+                        int_bind_thin(pages.col("dbnode")?, db),
+                        int_bind_thin(pages.col("relnode")?, rel),
+                        int_bind_thin(pages.col("forknum")?, fork as i64),
+                    ],
+                )?
+                .cond(pages, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
+                .cond(pages, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
+                .cond(pages, "lsn", CondOp::Le, BindValue::I64(target))?
+                .targets(
+                    pages,
+                    &["blknum", "lsn", "is_image", "will_init", "payload"],
+                )?
+                .limit(DIRECT_SCAN_PAGE_ROWS),
+            );
+        }
 
-        let collector = p
-            .client
-            .read_scan(
-                pages,
-                &read,
-                BlockChainCollector::new,
-                |collector, rows| -> anyhow::Result<bool> {
-                    feed_scan_rows(collector, rows)?;
-                    Ok(false)
-                },
-            )
-            .await?;
+        // Every bucket's read rides ONE `Perform`, and every continuation is
+        // pinned to the snapshot round 1 ran at — so the whole fan-out resolves
+        // at a SINGLE read point (#139), exactly as the one query it replaced
+        // did. Looping `read_scan` per bucket instead would be one RPC *and one
+        // read point* per bucket, letting a concurrent GC drain land between
+        // them and splice rows from two different snapshots into one scan.
+        // Same shape as the safekeeper's `fetch_chunks_thin` fan-out.
+        //
+        // Paging is mandatory, not an optimisation: an op's scan spans tablets,
+        // and a tablet holding no matching row returns an EMPTY page plus a
+        // continuation — "nothing here", not "scan done". Stopping at the first
+        // page would silently drop whole tablets' worth of blocks.
+        let mut fetched: Option<Vec<BlockChainCollector<yb_thin_client::Row>>> = None;
+        for attempt in 1..=THIN_SCAN_RESTARTS {
+            let mut collectors: Vec<BlockChainCollector<yb_thin_client::Row>> = (0..reads.len())
+                .map(|_| BlockChainCollector::new())
+                .collect();
+            let mut paging: Vec<Option<bytes::Bytes>> = vec![None; reads.len()];
+            // Consecutive rounds an op returned nothing while still handing back
+            // a continuation. Crossing empty tablets legitimately does this a
+            // few times; forever means the token is not advancing.
+            let mut barren: Vec<usize> = vec![0; reads.len()];
+            let mut active: Vec<usize> = (0..reads.len()).collect();
+            let mut read_time_ht = 0u64;
+            let mut restart = false;
 
-        assemble_page_scan(sp, db, rel, fork, collector, "scan_range_thin")
+            while !active.is_empty() {
+                let ops: Vec<yb_thin_client::ReadOp> = active
+                    .iter()
+                    .map(|&i| yb_thin_client::ReadOp {
+                        table: pages.as_ref(),
+                        read: &reads[i],
+                        paging_state: paging[i].as_deref(),
+                    })
+                    .collect();
+                let batch = match p.client.read(&ops, read_time_ht).await {
+                    Ok(b) => b,
+                    // Only an UNPINNED batch heals a read-restart inside
+                    // `TsClient::read`; from round 2 on every op carries a
+                    // paging state, so the restart surfaces here and this loop
+                    // is the driver that owns it — drop the half-built
+                    // collectors and start over on a fresh read point.
+                    Err(e) if e.is_read_restart() && attempt < THIN_SCAN_RESTARTS => {
+                        tracing::warn!(
+                            "thin-lane page scan read-restart (attempt \
+                             {attempt}/{THIN_SCAN_RESTARTS}), restarting the scan: {e}"
+                        );
+                        restart = true;
+                        break;
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                read_time_ht = batch.used_read_time_ht;
+                let mut next: Vec<usize> = Vec::new();
+                for (slot, res) in batch.ops.into_iter().enumerate() {
+                    let Some(&i) = active.get(slot) else { continue };
+                    let got = res.rows.len();
+                    feed_scan_rows(&mut collectors[i], res.rows)?;
+                    if let Some(ps) = res.paging_state {
+                        barren[i] = if got == 0 { barren[i] + 1 } else { 0 };
+                        anyhow::ensure!(
+                            barren[i] <= THIN_SCAN_BARREN_ROUNDS,
+                            "thin-lane page scan for rel={rel} fork={fork} \
+                             blk=[{blk_lo},{blk_hi}) bucket={} returned {THIN_SCAN_BARREN_ROUNDS} \
+                             empty pages in a row while still continuing — the continuation \
+                             token is not advancing",
+                            buckets[i]
+                        );
+                        paging[i] = Some(ps);
+                        next.push(i);
+                    }
+                }
+                active = next;
+            }
+            if !restart {
+                fetched = Some(collectors);
+                break;
+            }
+        }
+        // The final attempt either converges or propagates its error above.
+        let collectors = fetched.expect("the final scan attempt returns or propagates");
+
+        // Blocks are disjoint across buckets (the bucket is a function of
+        // blknum), so the per-bucket key maps never collide and `extend` cannot
+        // clobber a chain.
+        let mut by_key = HashMap::new();
+        for collector in collectors {
+            by_key.extend(assemble_page_scan(
+                sp,
+                db,
+                rel,
+                fork,
+                collector,
+                "scan_range_thin",
+            )?);
+        }
+        Ok(by_key)
     }
 
     /// Range scan: return all chains for relation-page keys in `range`
@@ -2027,13 +2232,27 @@ impl PageStore {
             // pushable lower bound so both ends of the lsn range are pushed
             // into the DocDB scan, same as the single-block case.
             let sql = build_scan_one_fork_sql(&self.schema);
-            self.ysql_client
-                .query(
-                    &sql,
-                    &[&branch_s, &sp, &db, &rel, &fork, &blk_lo, &blk_hi, &target],
-                )
-                .await
-                .context("scan_range one-fork")?
+            // `[blk_lo, blk_hi)` can cross 2MB stretch boundaries, so the
+            // fork's blocks in it may live in several buckets — one pinned
+            // query each, results concatenated. Every key belongs to exactly
+            // one bucket, so a key's chain arrives entirely from one query and
+            // stays correctly ordered within itself; `group_page_rows_by_key`
+            // buckets by key and never relies on order across queries.
+            let mut acc = Vec::new();
+            for bucket in page_buckets_for_range(rel, blk_lo, blk_hi) {
+                let mut got = self
+                    .ysql_client
+                    .query(
+                        &sql,
+                        &[
+                            &branch_s, &sp, &db, &rel, &fork, &blk_lo, &blk_hi, &target, &bucket,
+                        ],
+                    )
+                    .await
+                    .context("scan_range one-fork")?;
+                acc.append(&mut got);
+            }
+            acc
         } else {
             // Cross-fork range. Same shape, with row-comparison
             // predicates. Joining the CTE on the full (spcnode, dbnode,
@@ -2054,16 +2273,26 @@ impl PageStore {
             // full (spcnode, dbnode, relnode, forknum, blknum) tuple so
             // anchors stay paired with the right block.
             let sql = build_scan_cross_fork_sql(&self.schema);
-            self.ysql_client
-                .query(
-                    &sql,
-                    &[
-                        &branch_s, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi, &db_hi,
-                        &rel_hi, &fork_hi, &blk_hi, &target,
-                    ],
-                )
-                .await
-                .context("scan_range cross-fork")?
+            // A cross-fork range spans relations, so its buckets can't be
+            // derived from the bounds — fan out over all of them. Still an
+            // improvement: with the old hash key this query bound no hash
+            // column at all and seq-scanned the whole table.
+            let mut acc = Vec::new();
+            for bucket in 0..PAGE_BUCKETS as i16 {
+                let mut got = self
+                    .ysql_client
+                    .query(
+                        &sql,
+                        &[
+                            &branch_s, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi, &db_hi,
+                            &rel_hi, &fork_hi, &blk_hi, &target, &bucket,
+                        ],
+                    )
+                    .await
+                    .context("scan_range cross-fork")?;
+                acc.append(&mut got);
+            }
+            acc
         };
 
         group_page_rows_by_key(rows, "scan_range")
@@ -2110,11 +2339,31 @@ impl PageStore {
         let branch_s = branch_id.to_string();
         let target = target_lsn.0 as i64;
         let sql = build_scan_one_fork_scattered_sql(&self.schema);
-        let rows = self
-            .ysql_client
-            .query(&sql, &[&branch_s, &sp, &db, &rel, &fork, &blknums, &target])
-            .await
-            .context("scan_scattered_set one-fork")?;
+        // Partition the blknums by bucket and send each group to its own
+        // bucket-pinned query. Indexed by bucket rather than a map so the
+        // order of the queries is deterministic; `blknums` is already sorted,
+        // so each group stays sorted and each query's `ORDER BY blknum` still
+        // means something.
+        let mut by_bucket: Vec<Vec<i64>> = vec![Vec::new(); PAGE_BUCKETS as usize];
+        for blk in blknums {
+            by_bucket[page_bucket_id(rel, blk) as usize].push(blk);
+        }
+        let mut rows = Vec::new();
+        for (bucket, blks) in by_bucket.iter().enumerate() {
+            if blks.is_empty() {
+                continue;
+            }
+            let bucket = bucket as i16;
+            let mut got = self
+                .ysql_client
+                .query(
+                    &sql,
+                    &[&branch_s, &sp, &db, &rel, &fork, blks, &target, &bucket],
+                )
+                .await
+                .context("scan_scattered_set one-fork")?;
+            rows.append(&mut got);
+        }
 
         group_page_rows_by_key(rows, "scan_scattered_set")
     }
@@ -3044,11 +3293,13 @@ impl PageStore {
         if blknums.is_empty() {
             return Ok(0);
         }
+        // `$8`=bucket_id, on both the anchor CTE and the DELETE — each is its
+        // own scan of `pages` and needs the leading key column bound.
         let sql = format!(
             "WITH anchor AS ( \
                  SELECT blknum, MAX(lsn) AS lsn \
                  FROM \"{schema}\".pages \
-                 WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+                 WHERE bucket_id=$8 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
                    AND relnode=$4 AND forknum=$5 \
                    AND blknum = ANY($6) \
                    AND lsn <= $7 AND will_init \
@@ -3056,35 +3307,46 @@ impl PageStore {
              ) \
              DELETE FROM \"{schema}\".pages p \
              USING anchor a \
-             WHERE p.branch_id=$1 AND p.spcnode=$2 AND p.dbnode=$3 \
+             WHERE p.bucket_id=$8 AND p.branch_id=$1 AND p.spcnode=$2 AND p.dbnode=$3 \
                AND p.relnode=$4 AND p.forknum=$5 \
                AND p.blknum = a.blknum \
                AND (p.lsn < a.lsn \
                  OR (p.lsn = a.lsn AND NOT p.will_init))",
             schema = self.schema
         );
-        let deleted = self
-            .ysql_client
-            .execute(
-                &sql,
-                &[
-                    &branch_id.to_string(),
-                    &spcnode,
-                    &dbnode,
-                    &relnode,
-                    &forknum,
-                    &blknums,
-                    &(cutoff.0 as i64),
-                ],
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "gc_act_trim_blocks branch={branch_id} rel={relnode} fork={forknum} \
-                     blocks={}",
-                    blknums.len()
+        // Candidate blocks are an arbitrary set, so they can straddle buckets:
+        // group them and issue one bucket-pinned DELETE per group. Each block's
+        // anchor is computed within its own bucket, which is where all of that
+        // block's rows live, so the per-block semantics are unchanged.
+        let mut by_bucket: Vec<Vec<i64>> = vec![Vec::new(); PAGE_BUCKETS as usize];
+        for &blk in blknums {
+            by_bucket[page_bucket_id(relnode, blk) as usize].push(blk);
+        }
+        let branch_s = branch_id.to_string();
+        let cutoff_i = cutoff.0 as i64;
+        let mut deleted = 0u64;
+        for (bucket, blks) in by_bucket.iter().enumerate() {
+            if blks.is_empty() {
+                continue;
+            }
+            let bucket = bucket as i16;
+            deleted += self
+                .ysql_client
+                .execute(
+                    &sql,
+                    &[
+                        &branch_s, &spcnode, &dbnode, &relnode, &forknum, blks, &cutoff_i, &bucket,
+                    ],
                 )
-            })?;
+                .await
+                .with_context(|| {
+                    format!(
+                        "gc_act_trim_blocks branch={branch_id} rel={relnode} fork={forknum} \
+                         bucket={bucket} blocks={}",
+                        blks.len()
+                    )
+                })?;
+        }
         Ok(deleted)
     }
 
@@ -3134,20 +3396,31 @@ impl PageStore {
         let due = due_lsn.0 as i64;
         let pages_sql = format!(
             "DELETE FROM \"{schema}\".pages \
-             WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+             WHERE bucket_id=$7 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
                AND relnode=$4 AND forknum=$5 AND lsn <= $6",
             schema = self.schema
         );
-        let deleted = self
-            .ysql_client
-            .execute(
-                &pages_sql,
-                &[&branch_s, &spcnode, &dbnode, &relnode, &forknum, &due],
-            )
-            .await
-            .with_context(|| {
-                format!("gc_act_drop_fork pages branch={branch_id} rel={relnode} fork={forknum}")
-            })?;
+        // A whole fork spans every bucket it has blocks in, and we don't know
+        // its size here, so fan out over all of them. One pinned DELETE per
+        // bucket rather than one unpinned DELETE that would scan the table.
+        let mut deleted = 0u64;
+        for bucket in 0..PAGE_BUCKETS as i16 {
+            deleted += self
+                .ysql_client
+                .execute(
+                    &pages_sql,
+                    &[
+                        &branch_s, &spcnode, &dbnode, &relnode, &forknum, &due, &bucket,
+                    ],
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "gc_act_drop_fork pages branch={branch_id} rel={relnode} \
+                         fork={forknum} bucket={bucket}"
+                    )
+                })?;
+        }
 
         // The fork's own rel-size meta key (<= due_lsn).
         let key_bytes = rel_size_key_bytes(spcnode, dbnode, relnode, forknum);
@@ -3174,30 +3447,34 @@ impl PageStore {
     ) -> Result<u64> {
         let sql = format!(
             "DELETE FROM \"{schema}\".pages \
-             WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+             WHERE bucket_id=$8 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
                AND relnode=$4 AND forknum=$5 AND blknum >= $6 AND lsn <= $7",
             schema = self.schema
         );
-        self.ysql_client
-            .execute(
-                &sql,
-                &[
-                    &branch_id.to_string(),
-                    &spcnode,
-                    &dbnode,
-                    &relnode,
-                    &forknum,
-                    &relsize,
-                    &(due_lsn.0 as i64),
-                ],
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "gc_act_shrink_fork branch={branch_id} rel={relnode} fork={forknum} \
-                     relsize={relsize} due_lsn={due_lsn}"
+        // `blknum >= relsize` has no upper bound — the fork's old length is
+        // unknown here — so every bucket can hold matching blocks. Fan out
+        // over all of them rather than dropping the leading-column bound.
+        let branch_s = branch_id.to_string();
+        let due = due_lsn.0 as i64;
+        let mut deleted = 0u64;
+        for bucket in 0..PAGE_BUCKETS as i16 {
+            deleted += self
+                .ysql_client
+                .execute(
+                    &sql,
+                    &[
+                        &branch_s, &spcnode, &dbnode, &relnode, &forknum, &relsize, &due, &bucket,
+                    ],
                 )
-            })
+                .await
+                .with_context(|| {
+                    format!(
+                        "gc_act_shrink_fork branch={branch_id} rel={relnode} fork={forknum} \
+                         relsize={relsize} due_lsn={due_lsn} bucket={bucket}"
+                    )
+                })?;
+        }
+        Ok(deleted)
     }
 
     /// Trim action for one SLRU segment's listed blocks: per block, keep
@@ -4963,7 +5240,8 @@ mod tests {
         let branch = rand_branch();
         let id = format!("'{branch}'");
 
-        // pages: 9 per-row params; 2 rows → $1..$18, id baked per row.
+        // pages: 10 per-row params (bucket_id leads the bound columns, right
+        // after the baked branch_id); 2 rows → $1..$20, id baked per row.
         let pages = build_insert_sql(
             "amp_storage",
             "pages",
@@ -4974,8 +5252,8 @@ mod tests {
         );
         let expected_pages = format!(
             "INSERT INTO \"amp_storage\".pages ({PAGES_COLUMNS}) VALUES \
-             ({id},$1,$2,$3,$4,$5,$6,$7,$8,$9),\
-             ({id},$10,$11,$12,$13,$14,$15,$16,$17,$18)"
+             ({id},$1,$2,$3,$4,$5,$6,$7,$8,$9,$10),\
+             ({id},$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)"
         );
         assert_eq!(pages, expected_pages);
 

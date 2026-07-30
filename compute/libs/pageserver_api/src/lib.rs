@@ -10,4 +10,5 @@ pub mod reltag;
 pub mod upcall_api;
 
 pub mod config;
+pub mod pages_bucket;
 pub mod write_trace;

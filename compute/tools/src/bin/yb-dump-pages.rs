@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use pageserver_api::pages_bucket::{page_bucket_id, page_buckets_for_range};
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 use utils::payload_codec;
@@ -73,6 +74,43 @@ fn key_where(a: &Args) -> String {
     w
 }
 
+/// A `bucket_id` predicate narrowing the scan to the buckets the requested
+/// blknums can live in, or empty when they could be anywhere.
+///
+/// `bucket_id` LEADS `pages`' key, so without this the scan cannot be bounded
+/// on its first column and has to cover all `PAGE_BUCKETS` of them. The
+/// bucket comes from [`page_bucket_id`] — the same frozen function the writer
+/// uses, shared via `pageserver_api` rather than restated here, because a
+/// drifted copy would look in the wrong bucket and silently report fewer rows
+/// than exist.
+///
+/// - a single `--blknum` ⇒ exactly one bucket (equality, one tablet);
+/// - a bounded `--blknum-from`/`--blknum-to` ⇒ the touched set;
+/// - an open-ended or absent blknum filter ⇒ no predicate. The blknums are
+///   genuinely unknown, so narrowing would risk hiding rows; correctness beats
+///   pruning in a diagnostic.
+fn bucket_where(rel: i64, blknum: Option<i64>, from: Option<i64>, to: Option<i64>) -> String {
+    let buckets: Vec<i16> = match (blknum, from, to) {
+        (Some(b), _, _) => vec![page_bucket_id(rel, b)],
+        // `--blknum-to` is inclusive, hence the +1 to the half-open helper.
+        // Saturating because both bounds come straight from the command line.
+        (None, Some(lo), Some(hi)) => page_buckets_for_range(rel, lo, hi.saturating_add(1)),
+        _ => return String::new(),
+    };
+    match buckets.len() {
+        // An inverted range (`--blknum-from` > `--blknum-to`) can match no
+        // block, so there are no buckets. Emitting `bucket_id IN ()` here would
+        // be a SQL syntax error; the blknum bounds already exclude every row,
+        // so add no bucket predicate and let them do it.
+        0 => String::new(),
+        1 => format!(" AND bucket_id = {}", buckets[0]),
+        _ => {
+            let ids: Vec<String> = buckets.iter().map(|b| b.to_string()).collect();
+            format!(" AND bucket_id IN ({})", ids.join(","))
+        }
+    }
+}
+
 fn fmt_lsn(v: u64) -> String {
     format!("{:X}/{:08X}", v >> 32, v & 0xFFFFFFFF)
 }
@@ -101,6 +139,9 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
     if let Some(b) = a.blknum_to {
         w += &format!(" AND blknum <= {b}");
     }
+    // Pins the leading key column when the blknums are known; see
+    // `bucket_where`. Appended after the blknum bounds it is derived from.
+    w += &bucket_where(a.rel, a.blknum, a.blknum_from, a.blknum_to);
     let lim = if a.limit > 0 {
         format!("LIMIT {}", a.limit)
     } else {
@@ -120,7 +161,8 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
     let fork = "CASE forknum WHEN 0 THEN 'main' WHEN 1 THEN 'fsm' WHEN 2 THEN 'vm' \
                 WHEN 3 THEN 'init' ELSE forknum::text END";
     let sql = format!(
-        "SELECT blknum::text, {lsn}, {fork}, is_image::text, will_init::text{payload} \
+        "SELECT blknum::text, bucket_id::text, {lsn}, {fork}, is_image::text, \
+                will_init::text{payload} \
          FROM amp_storage.pages WHERE {w} \
          ORDER BY blknum ASC, lsn DESC, is_image DESC {lim}"
     );
@@ -129,9 +171,9 @@ async fn list(a: &Args, client: &YsqlClient) -> Result<()> {
         .await
         .context("query amp_storage.pages")?;
     /// Text columns the SQL always projects, ahead of the raw `payload`.
-    const SCALAR_COLS: usize = 5;
+    const SCALAR_COLS: usize = 6;
 
-    let mut headers = vec!["blknum", "lsn", "fork", "is_image", "will_init"];
+    let mut headers = vec!["blknum", "bucket", "lsn", "fork", "is_image", "will_init"];
     if !a.no_payload {
         // `stored` is what DocDB holds (envelope included); `bytes` is the
         // decoded page. Their ratio is the compression actually achieved on
@@ -304,7 +346,14 @@ async fn decode(a: &Args, client: &YsqlClient) -> Result<()> {
     let blk = a
         .blknum
         .context("--decode needs a single --blknum (a chain is per-block)")?;
-    let w = format!("{} AND blknum = {blk}", key_where(a));
+    // `--blknum` is mandatory here, so the bucket is always exactly known and
+    // this chain read is pinned to one tablet — the same shape as
+    // `PageStore::read_chain`.
+    let w = format!(
+        "{} AND blknum = {blk}{}",
+        key_where(a),
+        bucket_where(a.rel, a.blknum, a.blknum_from, a.blknum_to)
+    );
     // LSN-ascending, image-first on ties (an image supersedes a same-LSN delta).
     // `payload` comes back as raw bytea (not server-side hex): it carries a
     // compression envelope that has to be unwrapped here before the image /
@@ -425,6 +474,77 @@ mod tests {
     fn fmt_lsn_formats_lsn() {
         assert_eq!(fmt_lsn(0x22_9B61F090), "22/9B61F090");
         assert_eq!(fmt_lsn(0xD_E4B94BA8), "D/E4B94BA8");
+    }
+
+    /// `bucket_id` leads `pages`' key, so a dump that knows its blknums must
+    /// bind it or scan all six buckets. Asserts the predicate for each shape of
+    /// blknum filter, and — the important one — that it is EMPTY when the
+    /// blknums are unknown, since a bucket guessed there would hide rows.
+    #[test]
+    fn bucket_where_pins_only_when_blknum_is_known() {
+        // rel 16400: (16400/7 + 16400/13) % 6 == 3 for stretch 0.
+        const REL: i64 = 16400;
+
+        // A single block ⇒ equality on one bucket (one tablet).
+        assert_eq!(
+            bucket_where(REL, Some(300), None, None),
+            format!(" AND bucket_id = {}", page_bucket_id(REL, 300))
+        );
+
+        // Bounded range inside one stretch ⇒ still a single equality.
+        assert_eq!(
+            bucket_where(REL, None, Some(10), Some(200)),
+            " AND bucket_id = 3"
+        );
+
+        // Bounded range straddling a stretch boundary ⇒ the touched set.
+        assert_eq!(
+            bucket_where(REL, None, Some(200), Some(300)),
+            " AND bucket_id IN (3,4)"
+        );
+
+        // `--blknum-to` is INCLUSIVE: 255 is the last block of stretch 0, so it
+        // must NOT drag in stretch 1, while 256 must.
+        assert_eq!(
+            bucket_where(REL, None, Some(0), Some(255)),
+            " AND bucket_id = 3"
+        );
+        assert_eq!(
+            bucket_where(REL, None, Some(0), Some(256)),
+            " AND bucket_id IN (3,4)"
+        );
+
+        // A span of >= PAGE_BUCKETS stretches saturates to every bucket.
+        assert_eq!(
+            bucket_where(REL, None, Some(0), Some(256 * 6)),
+            " AND bucket_id IN (0,1,2,3,4,5)"
+        );
+
+        // Unknown blknums ⇒ NO predicate. Narrowing here would risk hiding
+        // rows, which is the one thing a diagnostic must never do.
+        assert_eq!(bucket_where(REL, None, None, None), "");
+        assert_eq!(bucket_where(REL, None, Some(10), None), "");
+        assert_eq!(bucket_where(REL, None, None, Some(10)), "");
+
+        // A single --blknum wins over any range flags, matching the WHERE the
+        // caller builds (it emits `blknum = b` and ignores the bounds).
+        assert_eq!(
+            bucket_where(REL, Some(300), Some(0), Some(9999)),
+            format!(" AND bucket_id = {}", page_bucket_id(REL, 300))
+        );
+
+        // i64::MAX must not overflow the inclusive->half-open +1.
+        assert_eq!(
+            bucket_where(REL, None, Some(0), Some(i64::MAX)),
+            " AND bucket_id IN (0,1,2,3,4,5)"
+        );
+
+        // An INVERTED range (from > to) can match no block, so
+        // `page_buckets_for_range` returns no buckets. That must NOT render as
+        // `bucket_id IN ()`, which is a SQL syntax error — the blknum bounds
+        // already exclude everything, so emit no bucket predicate at all.
+        assert_eq!(bucket_where(REL, None, Some(200), Some(50)), "");
+        assert_eq!(bucket_where(REL, None, Some(1), Some(0)), "");
     }
 
     #[test]

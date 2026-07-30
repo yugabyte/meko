@@ -233,7 +233,19 @@ runs:
      `meta` has no `will_init`/chain, so `gc_act_trim_meta` just keeps the
      newest version `<= cutoff` per key. Trims across objects run in
      parallel (`GC_ACTION_PARALLELISM`, default 2, scaled) — distinct
-     objects are distinct hash keys / tablets, no ordering constraint.
+     objects are distinct keys / tablets, no ordering constraint.
+
+   Every act on `pages` must bind `bucket_id`, the leading column of that
+   table's all-range key (see [`pageserver.md`](pageserver.md) "Why the
+   bucket"), or the DELETE loses its leading bound and scans the table. So
+   each one fans out over buckets rather than issuing a single statement:
+   `gc_act_trim_blocks` groups its candidate blknums by `page_bucket_id` and
+   issues one bucket-pinned DELETE per group (a block's anchor is computed
+   within its own bucket, which is where all of that block's rows live, so the
+   per-block semantics are unchanged), while `gc_act_drop_fork` and
+   `gc_act_shrink_fork` cover a whole fork — length unknown at that point —
+   and so loop over all `PAGE_BUCKETS`. Each returns the summed row count.
+   `slru_pages` and `meta` are still hash-keyed and unaffected.
 
    All drops are acted regardless of busy state; the busy-object ones are
    just held back from the **dequeue**, not from the delete.

@@ -84,9 +84,15 @@ against both a local no-TLS cluster (default) and a TLS-required one
 
 - [`yb-dump-pages`](tools/src/bin/yb-dump-pages.rs) — dump or decode
   `amp_storage.pages` rows for one (rel, fork) tuple. Renders the LSN as
-  `H/L` hex and forknum as `main`/`fsm`/`vm`/`init`. Required hash columns:
+  `H/L` hex and forknum as `main`/`fsm`/`vm`/`init`, and projects the
+  placement `bucket` so you can see where a row landed. Required key columns:
   `--tenant --timeline --spc --db --rel --fork`. Range filters: `--blknum`
   (or `--blknum-from/--blknum-to`), `--lsn-from`/`--lsn-to` (PG `X/Y` hex).
+  When the blknums are known — a single `--blknum`, or a bounded
+  `--blknum-from`+`--blknum-to` — the query is pinned to just the buckets
+  those blocks can occupy (`page_bucket_id`, shared with the writer via
+  `pageserver_api::pages_bucket`); otherwise it scans all of them, since
+  guessing a bucket could hide rows.
   `--no-payload` drops the byte preview, `--limit 0` is unbounded.
   `--decode` switches to a single-block chain decoder: it walks the chain
   LSN-ascending (the order walredo applies it), prints each image's
@@ -95,7 +101,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   max+1 — the signature of a chain walredo can't fold and of a base image
   too small for the deltas above it (see issue #22).
 - [`yb-dump-wals`](tools/src/bin/yb-dump-wals.rs) — dump `amp_storage.wals`
-  rows (the safekeeper's WAL chunks in YB). Required hash columns:
+  rows (the safekeeper's WAL chunks in YB). Required key columns:
   `--tenant --timeline`. Range filters: `--segno` (or
   `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
   variants), `--lsn-from`/`--lsn-to` (mapped to segno+offset via

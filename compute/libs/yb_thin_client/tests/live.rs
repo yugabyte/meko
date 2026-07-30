@@ -809,12 +809,17 @@ async fn repro_concurrent_read_write() {
         .unwrap();
 }
 
-/// Repro for the safekeeper WAL fetch: the "covering chunk" arm is the only
-/// caller that uses `.descending().limit(1)` — the highest chunk_offset below
-/// a position — and `fetch_chunks` issues many such ops in ONE batch. Neither
-/// is exercised elsewhere. Insert chunks at ascending offsets, then check the
-/// descending limit-1 read returns the MAX offset below the cutoff (not the
-/// min), both standalone and inside a multi-op batch.
+/// The "covering chunk" arm is the only caller that uses
+/// `.descending().limit(1)` — the highest chunk_offset below a position — and
+/// `fetch_chunks` issues many such ops in ONE batch. Insert chunks at ascending
+/// offsets, then check the descending limit-1 read returns the MAX offset below
+/// the cutoff (not the min), both standalone and inside a multi-op batch.
+///
+/// Kept HASH-sharded deliberately, even though production `wals` is now
+/// all-range: this is the suite's coverage of descending limit-1 on a
+/// hash-keyed table, which `slru_pages` and `meta` still are. The
+/// range-sharded shape of the real `wals`, including the covering arm across
+/// tablet boundaries, is covered by `repro_wals_range_sharded`.
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_wals_covering_read() {
@@ -985,17 +990,33 @@ async fn repro_wals_covering_read() {
         .unwrap();
 }
 
+/// The `pages` bucket function, mirroring `page_store::page_bucket_id`.
+/// Duplicated rather than imported (this crate must not depend on pageserver
+/// internals); if the two ever drift, this test fails loudly rather than
+/// silently reading a subset.
+fn pages_bucket_of(relnode: i64, blknum: i64) -> i16 {
+    ((relnode / 7 + relnode / 13 + blknum / 256) % 6) as i16
+}
+
 /// Repro for the branch-read wedge: a MULTI-PAGE clustered scan over the real
 /// `pages` schema. `read_scan` pages the range and pins pages 2+ to the first
 /// page's `used_read_time_ht`; if the shim returns 0 for that, the snapshot
 /// isn't pinned across pages and the scan can miss rows. `N` rows read with a
 /// small `limit` forces several pages; we assert every row comes back.
+///
+/// The schema is the post-bucketization one: all-range key led by `bucket_id`,
+/// pre-split into 6 tablets. `N` deliberately spans several 2MB stretches, so
+/// the fork's blocks live in several buckets on DIFFERENT tablets and a
+/// correct scan is one bucket-pinned read each — mirroring how
+/// `PageStore::scan_one_fork` now fans out over `page_buckets_for_range`.
+/// A single unpinned read would leave the leading key column unbound.
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_pages_multipage_scan() {
     use yb_thin_client::{CondOp, RangeRead};
     const TABLE: &str = "pages_repro";
-    const N: i64 = 250; // blocks 0..N, one row each
+    const N: i64 = 1000; // blocks 0..N — 4 stretches of 256, so 4 buckets
+    const REL: i64 = 3;
     let ysql = ysql().await;
     ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
@@ -1003,22 +1024,29 @@ async fn repro_pages_multipage_scan() {
     ysql.execute(
         &format!(
             "CREATE TABLE {TABLE} (
+                 bucket_id SMALLINT NOT NULL,
                  branch_id TEXT NOT NULL, spcnode BIGINT NOT NULL, dbnode BIGINT NOT NULL,
                  relnode BIGINT NOT NULL, forknum SMALLINT NOT NULL, blknum BIGINT NOT NULL,
                  is_image BOOLEAN NOT NULL, lsn BIGINT NOT NULL, will_init BOOLEAN NOT NULL,
                  payload BYTEA NOT NULL,
-                 PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                              blknum, lsn DESC, is_image DESC))"
+                 PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
+                              relnode ASC, forknum ASC, blknum ASC,
+                              lsn DESC, is_image DESC))
+             SPLIT AT VALUES ((1), (2), (3), (4), (5))"
         ),
         &[],
     )
     .await
     .unwrap();
-    // Insert N rows (branch 'b', identity 1/2/3/0), one version per block.
+    // Insert N rows (branch 'b', identity 1/2/REL/0), one version per block.
+    // bucket_id is computed in SQL with the same integer-division expression as
+    // the migration's CHECK, which is what makes the Rust helper above a real
+    // cross-check rather than a restatement.
     ysql.execute(
         &format!(
             "INSERT INTO {TABLE} \
-             SELECT 'b', 1, 2, 3, 0, g, true, 100, true, '\\x01'::bytea \
+             SELECT ((({REL} / 7) + ({REL} / 13) + (g / 256)) % 6)::smallint, \
+                    'b', 1, 2, {REL}, 0, g, true, 100, true, '\\x01'::bytea \
              FROM generate_series(0, {}) g",
             N - 1
         ),
@@ -1035,73 +1063,110 @@ async fn repro_pages_multipage_scan() {
     .expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
-    // A one-fork multi-block scan (blknum in [0, N)), lsn <= 100, small page
-    // limit to force paging — mirrors PageStore::scan_one_fork.
-    let read = RangeRead::new(
-        &table,
-        vec![
-            BindValue::Text("b".into()),
-            BindValue::I64(1),
-            BindValue::I64(2),
-            BindValue::I64(3),
-            BindValue::I16(0),
-        ],
-    )
-    .unwrap()
-    .cond(&table, "blknum", CondOp::Ge, BindValue::I64(0))
-    .unwrap()
-    .cond(&table, "blknum", CondOp::Lt, BindValue::I64(N))
-    .unwrap()
-    .cond(&table, "lsn", CondOp::Le, BindValue::I64(100))
-    .unwrap()
-    .targets(
-        &table,
-        &["blknum", "lsn", "is_image", "will_init", "payload"],
-    )
-    .unwrap()
-    .limit(32); // < N, so the scan pages
+    assert_eq!(
+        table.num_hash_columns(),
+        0,
+        "bucketized pages must be range-sharded"
+    );
 
+    // The buckets [0, N) actually touches, derived rather than hardcoded.
+    let want_buckets: std::collections::BTreeSet<i16> =
+        (0..N).map(|b| pages_bucket_of(REL, b)).collect();
+    assert!(
+        want_buckets.len() > 1,
+        "N={N} must span >1 bucket or this test would not exercise fan-out, got {want_buckets:?}"
+    );
+
+    // A one-fork multi-block scan (blknum in [0, N)), lsn <= 100, small page
+    // limit to force paging — mirrors PageStore::scan_one_fork: the range key
+    // prefix binds (bucket, branch, spc, db, rel, fork) and blknum stays a
+    // cond, one read per touched bucket.
     let mut blks = std::collections::BTreeSet::new();
-    client
-        .read_scan(
+    for bucket in &want_buckets {
+        let read = RangeRead::new_range(
             &table,
-            &read,
-            || (),
-            |(), rows| -> anyhow::Result<bool> {
-                for r in rows {
-                    blks.insert(r[0].as_i64()?);
-                }
-                // `false` = keep paging: this scan collects the whole range, so
-                // it must run to exhaustion. Returning `true` (stop) here after
-                // the first page is exactly the bug that lost rows 33..250.
-                Ok(false)
-            },
+            vec![
+                BindValue::I16(*bucket),
+                BindValue::Text("b".into()),
+                BindValue::I64(1),
+                BindValue::I64(2),
+                BindValue::I64(REL),
+                BindValue::I16(0),
+            ],
         )
-        .await
-        .expect("read_scan");
+        .unwrap()
+        .cond(&table, "blknum", CondOp::Ge, BindValue::I64(0))
+        .unwrap()
+        .cond(&table, "blknum", CondOp::Lt, BindValue::I64(N))
+        .unwrap()
+        .cond(&table, "lsn", CondOp::Le, BindValue::I64(100))
+        .unwrap()
+        .targets(
+            &table,
+            &["blknum", "lsn", "is_image", "will_init", "payload"],
+        )
+        .unwrap()
+        .limit(32); // < the per-bucket row count, so the scan pages
+
+        client
+            .read_scan(
+                &table,
+                &read,
+                || (),
+                |(), rows| -> anyhow::Result<bool> {
+                    for r in rows {
+                        let blk = r[0].as_i64()?;
+                        // Every row a bucket-pinned read returns must belong to
+                        // that bucket, or the leading bound was not applied.
+                        assert_eq!(
+                            pages_bucket_of(REL, blk),
+                            *bucket,
+                            "bucket {bucket} read returned blknum {blk} from another bucket"
+                        );
+                        assert!(blks.insert(blk), "blknum {blk} returned twice");
+                    }
+                    // `false` = keep paging: this scan collects the whole range,
+                    // so it must run to exhaustion. Returning `true` (stop) here
+                    // after the first page is exactly the bug that lost rows.
+                    Ok(false)
+                },
+            )
+            .await
+            .expect("read_scan");
+    }
     assert_eq!(
         blks.len() as i64,
         N,
-        "multi-page scan lost rows: got {} of {N} blocks",
-        blks.len()
+        "multi-page scan lost rows: got {} of {N} blocks across {} bucket(s)",
+        blks.len(),
+        want_buckets.len()
     );
-    println!("repro: multi-page scan OK — {} of {N} blocks", blks.len());
+    println!(
+        "repro: multi-page scan OK — {} of {N} blocks across buckets {:?}",
+        blks.len(),
+        want_buckets
+    );
 
     // --- thin-client WRITE round-trip with distinct lsn/is_image ---------
-    // The pages key has three range columns in clustering order
-    // (blknum, lsn DESC, is_image DESC) — a different order than the table
-    // definition (blknum, is_image, lsn). Write via the thin client with
-    // distinct lsn (777) and is_image (false), read back, and cross-check via
-    // YSQL, to catch any key-column misordering in the write path.
+    // `key_values` go in PRIMARY KEY order, which is NOT the declaration
+    // order: `bucket_id` leads, and (lsn DESC, is_image DESC) cluster in the
+    // opposite order to how the table declares (is_image, lsn). Write via the
+    // thin client with distinct lsn (777) and is_image (false), read back, and
+    // cross-check via YSQL, to catch any key-column misordering in the write
+    // path — including a bucket bound to the wrong column, which would land
+    // the row where no reader looks.
+    let w_blk: i64 = 9;
+    let w_bucket = pages_bucket_of(REL, w_blk);
     let row = UpsertRow::new(
         &table,
         vec![
+            BindValue::I16(w_bucket),
             BindValue::Text("w".into()),
             BindValue::I64(1),
             BindValue::I64(2),
-            BindValue::I64(3),
+            BindValue::I64(REL),
             BindValue::I16(0),
-            BindValue::I64(9),      // blknum
+            BindValue::I64(w_blk),  // blknum
             BindValue::I64(777),    // lsn
             BindValue::Bool(false), // is_image
         ],
@@ -1116,18 +1181,21 @@ async fn repro_pages_multipage_scan() {
     .expect("build pages upsert");
     client.upsert(&[row]).await.expect("thin upsert");
 
-    let wread = RangeRead::new(
+    // Mirrors PageStore::read_chain_thin: a known blknum determines the bucket,
+    // so the whole 7-column prefix binds and this is a single-tablet read with
+    // `blknum` in the prefix rather than a trailing cond.
+    let wread = RangeRead::new_range(
         &table,
         vec![
+            BindValue::I16(w_bucket),
             BindValue::Text("w".into()),
             BindValue::I64(1),
             BindValue::I64(2),
-            BindValue::I64(3),
+            BindValue::I64(REL),
             BindValue::I16(0),
+            BindValue::I64(w_blk),
         ],
     )
-    .unwrap()
-    .cond(&table, "blknum", CondOp::Eq, BindValue::I64(9))
     .unwrap()
     .cond(&table, "lsn", CondOp::Le, BindValue::I64(1000))
     .unwrap()
@@ -1150,7 +1218,12 @@ async fn repro_pages_multipage_scan() {
     let yrows = ysql
         .query(
             &format!(
-                "SELECT lsn, is_image, will_init FROM {TABLE} WHERE branch_id='w' AND blknum=9"
+                // Deliberately does NOT bind bucket_id: an unpinned scan finds
+                // the row wherever it landed, so this catches a thin-client
+                // write that stamped the wrong bucket (which the pinned read
+                // above would miss by looking in the same wrong place).
+                "SELECT lsn, is_image, will_init FROM {TABLE} \
+                 WHERE branch_id='w' AND blknum={w_blk}"
             ),
             &[],
         )

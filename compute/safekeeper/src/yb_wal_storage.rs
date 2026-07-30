@@ -16,16 +16,23 @@
 //! before the INSERT, so the typical batch is ONE row; runs break at
 //! segment boundaries and at byte discontinuities.
 //!
-//! Bucketing: the hash key is `(branch_id, bucket_id)`, so a branch's WAL
-//! spreads across [`WALS_BUCKETS`] tablets. `bucket_id` is assigned per
+//! Bucketing: the key is ALL-RANGE, led by `bucket_id`, and the table is
+//! pre-split into exactly [`WALS_BUCKETS`] tablets, so a branch's WAL spreads
+//! across all of them from the first row. `bucket_id` is assigned per
 //! consumer BATCH by [`consumer_main`], rotating through the buckets one
 //! batch at a time. One bucket per batch means every batch targets ONE
 //! tablet: the direct lane applies it as one atomic write batch, and the
 //! YSQL lane's multi-VALUES INSERT hits the single-shard transaction fast
 //! path (no distributed txn), while write load rotates across all tablets.
 //! Readers can't derive a chunk's bucket, so index-tight reads add a
-//! `bucket_id IN (0..WALS_BUCKETS-1)` hash-key list (batched per-bucket
-//! index probes).
+//! `bucket_id IN (0..WALS_BUCKETS-1)` key list (batched per-bucket index
+//! probes).
+//!
+//! `bucket_id` leads rather than `branch_id` so the pre-split boundaries are
+//! literal integers: branch IDs are minted at runtime, and a leading
+//! `branch_id` would also put one branch's whole WAL stream in a single
+//! contiguous key span — one tablet until it auto-splits, which is the write
+//! hotspot the bucket exists to prevent.
 //!
 //! Notes:
 //! - `chunk_offset` uniquely identifies a chunk within a segment because
@@ -126,18 +133,23 @@ pub use ysql_client::YsqlClient;
 /// `search_path`.
 const WALS_TABLE: &str = "amp_storage.wals";
 
-/// Number of placement buckets in `amp_storage.wals`. `bucket_id` is the
-/// second hash-key column; the consumer stamps each BATCH with one
-/// bucket, rotating `(counter + 1) % WALS_BUCKETS` per batch, so a
-/// branch's write load spreads across tablets instead of funneling into
-/// one, while each batch stays single-tablet-atomic.
-const WALS_BUCKETS: i16 = 10;
+/// Number of placement buckets in `amp_storage.wals`, and the number of
+/// tablets the migration pre-splits it into. `bucket_id` is the LEADING
+/// key column; the consumer stamps each BATCH with one bucket, rotating
+/// `(counter + 1) % WALS_BUCKETS` per batch, so a branch's write load spreads
+/// across tablets instead of funneling into one, while each batch stays
+/// single-tablet-atomic.
+///
+/// Must match the `SPLIT AT VALUES` boundary count in migration 0002, and the
+/// `wals_bucket_id_in_range` CHECK there. 6 matches `pages` and keeps the
+/// leader count even on a 3-node RF=3 cluster (2 per node).
+const WALS_BUCKETS: i16 = 6;
 
 /// `bucket_id IN (0,1,...,WALS_BUCKETS-1)` for interpolation into `wals`
 /// queries. Readers can't derive a chunk's bucket (assignment is
 /// per consumer batch at write time, placement-only), so every
-/// index-tight read names every bucket; YSQL executes a hash-key IN-list
-/// as batched per-bucket index probes, not a scan.
+/// index-tight read names every bucket. `bucket_id` leads the all-range key,
+/// so YSQL turns this IN-list into batched per-bucket index probes, not a scan.
 fn bucket_in_list() -> String {
     let ids: Vec<String> = (0..WALS_BUCKETS).map(|b| b.to_string()).collect();
     format!("bucket_id IN ({})", ids.join(","))
@@ -740,10 +752,11 @@ impl YbWalStorage {
     /// `remove_up_to(N)` DELETE after a safekeeper restart is bounded
     /// from below rather than scanning from 0.
     async fn load_min_segno(client: &YsqlClient, table: &str, branch_id: &str) -> Result<u64> {
-        // The bucket list completes the hash key for every bucket, so the
-        // aggregate hash-routes to per-bucket index probes rather than
-        // scanning the whole branch. min(segno) is index-tight: segno is the
-        // leading range key, so each bucket's minimum is its first index row.
+        // Naming every bucket completes the key prefix for each, so the
+        // aggregate resolves to per-bucket index probes rather than scanning
+        // the whole branch. min(segno) is index-tight: within a
+        // (bucket_id, branch_id) prefix `segno` is the next key column, so
+        // each bucket's minimum is its first index row.
         let sql = bake_branch_id(
             &format!(
                 "SELECT min(segno) AS m FROM {} \
@@ -1069,8 +1082,8 @@ impl Storage for YbWalStorage {
             // an unbounded-low range scan into a tight one. Idempotent if
             // `segno_up_to <= lower`: the predicate is unsatisfiable and
             // the DELETE is a no-op.
-            // The bucket list completes the hash key for every bucket, so the
-            // DELETE hash-routes to a per-bucket index range on `segno`
+            // Naming every bucket completes the key prefix for each, so the
+            // DELETE resolves to a per-bucket index range on `segno`
             // instead of scanning the branch across all tablets.
             let lower = delete_lower_bound.load(Ordering::Relaxed);
             let sql = bake_branch_id(
@@ -1134,9 +1147,9 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
-        // The bucket of a chunk can't be derived, so probe all buckets
-        // (hash-key IN-list = batched index probes) and take the highest
-        // covering offset across them.
+        // The bucket of a chunk can't be derived, so probe all buckets (an
+        // IN-list on the leading key column = batched index probes) and take
+        // the highest covering offset across them.
         let sql = format!(
             "SELECT chunk_offset, data FROM {} \
              WHERE branch_id = $1 AND {} AND segno = $2 AND chunk_offset <= $3 \
@@ -1255,9 +1268,9 @@ fn decode_chunk_data(stored: &[u8], what: &str) -> Result<Vec<u8>> {
 /// idempotent (keyed DELETE; the trim's predicate stops matching once the
 /// chunk has been truncated).
 ///
-/// The bucket list completes the hash key for all buckets, so the
-/// statements hash-route to the buckets' tablets rather than scatter-scanning
-/// the branch; the cut still spans every bucket.
+/// Naming every bucket completes the key prefix for each, so the statements
+/// resolve to the buckets' tablets rather than scatter-scanning the branch;
+/// the cut still spans every bucket.
 ///
 /// # Why the trim is read-modify-write
 ///
@@ -1683,9 +1696,10 @@ async fn flush_batch_thin(
             let total: usize = chunks.iter().map(|p| p.chunk_size as usize).sum();
             UpsertRow::new(
                 &yb_thinclient.wals,
+                // PRIMARY KEY order: `bucket_id` leads the all-range key.
                 vec![
-                    BindValue::Text(branch_id.to_string()),
                     BindValue::I16(first.bucket_id),
+                    BindValue::Text(branch_id.to_string()),
                     BindValue::I64(first.segno as i64),
                     BindValue::I64(first.chunk_offset),
                 ],
@@ -1718,8 +1732,9 @@ async fn flush_batch_thin(
 /// Build and execute one multi-row `INSERT ... VALUES (...), (...)`
 /// with one row per coalesced run. Returns the error chain on failure
 /// (the statement is atomic — all rows commit or none; and since the
-/// batch carries one bucket, all rows hash to one tablet, so the
-/// statement takes the single-shard transaction fast path).
+/// batch carries one bucket and `bucket_id` leads the pre-split key, all rows
+/// land on one tablet, so the statement takes the single-shard transaction
+/// fast path).
 /// `encoded` carries the [`payload_codec`]-wrapped run buffers produced by
 /// [`flush_batch`], 1:1 with `runs`.
 async fn flush_batch_ysql(
@@ -2264,33 +2279,28 @@ async fn fetch_chunks_thin(
     let targets = ["chunk_offset", "chunk_size", "data"];
     let segno_i = segno as i64;
 
-    // Both arms scan one `(branch_id, bucket_id, segno)`'s chunk range and
+    // Both arms scan one `(bucket_id, branch_id, segno)`'s chunk range and
     // differ only in their `chunk_offset` bound, so they share a base read.
     //
-    // How that key prefix is bound depends on how `wals` is partitioned, and
-    // the shim rejects a spec carrying both kinds: hash-sharded takes the
-    // hash key `(branch_id, bucket_id)` plus a `segno` equality cond;
-    // range-sharded has no hash columns, so all three go in as a range key
-    // prefix. Keyed off the schema the shim reports rather than a build-time
-    // assumption, so the same binary works either side of the partitioning
-    // change. The hash form pins the scan to ONE tablet; the range form only
-    // to a contiguous key span, which is why the caller must page.
-    let range_sharded = wals.num_hash_columns() == 0;
+    // `wals` is all-range with no hash columns, so the prefix goes in as
+    // `range_values` in PRIMARY KEY order — bucket first. This bounds the scan
+    // to a contiguous key span but NOT to a single tablet, which is why the
+    // caller must page: a tablet holding no matching chunk returns an empty
+    // page plus a continuation, meaning "nothing here", not "scan done".
+    //
+    // The hash-sharded arm this used to carry is gone with the migration. It
+    // could not be kept anyway: the key order changed to bucket-leading, so a
+    // hash binding of `(branch_id, bucket_id)` would now be wrong rather than
+    // merely unused.
     let base_read = |bucket: i16| -> anyhow::Result<RangeRead> {
-        let branch = BindValue::Text(branch_id.to_string());
-        Ok(if range_sharded {
-            RangeRead::new_range(
-                wals,
-                vec![branch, BindValue::I16(bucket), BindValue::I64(segno_i)],
-            )?
-        } else {
-            RangeRead::new(wals, vec![branch, BindValue::I16(bucket)])?.cond(
-                wals,
-                "segno",
-                CondOp::Eq,
+        Ok(RangeRead::new_range(
+            wals,
+            vec![
+                BindValue::I16(bucket),
+                BindValue::Text(branch_id.to_string()),
                 BindValue::I64(segno_i),
-            )?
-        })
+            ],
+        )?)
     };
 
     // Covering arm for one bucket: its highest chunk starting below
@@ -2356,11 +2366,12 @@ async fn fetch_chunks_thin(
     // only that first page reads as "no covering chunk" and surfaces as a
     // bogus `WAL hole at {lsn}` for a perfectly healthy segment.
     //
-    // Under today's hash-sharded `wals` a full hash prefix pins every op to
-    // one tablet, so this converges in a single round and costs nothing; it
-    // also picks up forward rows that a size-capped page used to drop.
-    // Reads are rare relative to writes, so the extra round trips are cheap
-    // insurance — and nothing here touches the write path.
+    // `wals` is range-sharded, so an op's scan is bounded to a contiguous key
+    // span but NOT pinned to one tablet, and this loop genuinely runs several
+    // rounds — see `THIN_SCAN_BARREN_ROUNDS`-style reasoning below. It also
+    // picks up forward rows that a size-capped page used to drop. Reads are
+    // rare relative to writes, so the extra round trips are cheap insurance —
+    // and nothing here touches the write path.
     // Rounds within one attempt; attempts of the whole fetch on a read-restart.
     //
     // The restart budget is not optional. `TsClient::read` heals a read-restart
@@ -2462,9 +2473,10 @@ async fn fetch_chunks_from_yb(
     // interpreted-WAL decoder trips on ("invalid xlog page header", #139).
     // Both arms stay index-tight on the (segno, chunk_offset) PK; the hot
     // boundary-aligned path simply returns no covering row. The bucket of
-    // a chunk can't be derived, so each arm carries the hash-key
-    // `bucket_id IN (…)` list — YSQL turns it into batched per-bucket
-    // index probes, still within this ONE statement / ONE read snapshot.
+    // a chunk can't be derived, so each arm carries the
+    // `bucket_id IN (…)` list over the leading key column — YSQL turns it into
+    // batched per-bucket index probes, still within this ONE statement / ONE
+    // read snapshot.
     let sql = bake_branch_id(
         &format!(
             "(SELECT chunk_offset, chunk_size, data FROM {tbl} \
@@ -2698,21 +2710,25 @@ mod tests {
             .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
             .await
             .expect("drop scratch wals table");
-        // Same shape as the production schema (bucketed hash key); the
-        // migration's `SPLIT INTO 10 TABLETS` is omitted — placement is
-        // not under test and default tablet counts keep setup fast.
+        // Same shape as the production schema (all-range key led by
+        // `bucket_id`); the migration's `SPLIT AT VALUES` is omitted —
+        // placement is not under test and default tablet counts keep setup
+        // fast. Note that without the pre-split this is a single tablet, so it
+        // does NOT exercise the cross-tablet paging the production table
+        // needs; `thin_lane_range_sharded_covering_read_pages_past_an_empty_tablet`
+        // splits explicitly for that.
         client
             .execute(
                 &format!(
                     "CREATE TABLE {q} (\
-                       branch_id        TEXT     NOT NULL,\
                        bucket_id        SMALLINT NOT NULL,\
+                       branch_id        TEXT     NOT NULL,\
                        segno            BIGINT   NOT NULL,\
                        chunk_offset     BIGINT   NOT NULL,\
                        chunk_size       INT      NOT NULL,\
                        data             BYTEA    NOT NULL,\
                        last_modified_us BIGINT   NOT NULL,\
-                       PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)\
+                       PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)\
                      )"
                 ),
                 &[],
@@ -4122,13 +4138,15 @@ mod tests {
         let branch_s = BranchId::generate().to_string();
 
         // (bucket_id, segno, chunk_offset, chunk_size); rows never
-        // overlap within a segno, per the writer invariant.
+        // overlap within a segno, per the writer invariant. Buckets must be
+        // < WALS_BUCKETS or the reader's `bucket_id IN (…)` list cannot see
+        // them and the max silently comes back low.
         let rows: &[(i16, i64, i64, i32)] = &[
-            (7, 5, 8192, 128),  // TRUE global max end: 5*SEG + 8320
-            (7, 3, 0, 64),      // low decoy in the SAME bucket as the max
+            (4, 5, 8192, 128),  // TRUE global max end: 5*SEG + 8320
+            (4, 3, 0, 64),      // low decoy in the SAME bucket as the max
             (2, 5, 0, 8192),    // second-highest end, same top segno, other bucket
             (0, 4, 16000, 384), // bucket-local max in an older segno
-            (9, 1, 0, 512),     // ancient decoy
+            (5, 1, 0, 512),     // ancient decoy
         ];
         let insert_sql = format!(
             "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
@@ -4380,21 +4398,23 @@ mod tests {
             .execute(&format!("DROP TABLE IF EXISTS {q}"), &[])
             .await
             .expect("drop scratch wals table");
-        // The post-migration shape: all-range PK, no hash columns. The split
-        // point deliberately cuts one segno's chunk range in half.
+        // The post-migration shape: all-range PK, no hash columns, led by
+        // `bucket_id` (the split boundaries have to be literals, and branch IDs
+        // are minted at runtime). The split point is given in key order and
+        // deliberately cuts one segno's chunk range in half.
         client
             .execute(
                 &format!(
                     "CREATE TABLE {q} (\
-                       branch_id        TEXT     NOT NULL,\
                        bucket_id        SMALLINT NOT NULL,\
+                       branch_id        TEXT     NOT NULL,\
                        segno            BIGINT   NOT NULL,\
                        chunk_offset     BIGINT   NOT NULL,\
                        chunk_size       INT      NOT NULL,\
                        data             BYTEA    NOT NULL,\
                        last_modified_us BIGINT   NOT NULL,\
-                       PRIMARY KEY (branch_id ASC, bucket_id ASC, segno ASC, chunk_offset ASC)\
-                     ) SPLIT AT VALUES (('{branch_id}', 0, 1, 2000))"
+                       PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)\
+                     ) SPLIT AT VALUES ((0, '{branch_id}', 1, 2000))"
                 ),
                 &[],
             )

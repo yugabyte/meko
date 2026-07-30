@@ -6,8 +6,12 @@ license.workspace = true
 
 # Operator-side diagnostic tools that read the YB-backed page store / WAL
 # directly (see scripts/build.py DIAG_TOOLS). They depend only on shared libs
-# (utils / ysql_client / postgres_ffi), not on pageserver internals, so they
-# live in their own crate rather than as bins of the pageserver.
+# (utils / ysql_client / postgres_ffi / pageserver_api), not on pageserver
+# internals, so they live in their own crate rather than as bins of the
+# pageserver. `pageserver_api` is here for `pages_bucket`: pinning a query to
+# the right `pages` bucket requires the SAME frozen function the writer uses,
+# and a hand-copied formula that drifted would make these tools silently
+# report fewer rows than exist.
 [[bin]]
 name = "yb-dump-pages"
 path = "src/bin/yb-dump-pages.rs"
@@ -24,6 +28,7 @@ path = "src/bin/yb-reset-consistent-lsn.rs"
 anyhow.workspace = true
 bytes.workspace = true
 clap = { workspace = true, features = ["string"] }
+pageserver_api.workspace = true
 postgres_ffi.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }
 utils.workspace = true

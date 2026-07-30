@@ -129,16 +129,16 @@ effective config comes from `pageserver.toml`. See
 
 ### `amp_storage.pages`
 
-One row per (Key, LSN). The PK hash-partitions on the **(branch_id,
-spcnode, dbnode, relnode, forknum)** identity (a relation forknum's
-whole block-set lives on one tablet), then clusters by
-`(blknum, lsn DESC, is_image DESC)` so a per-block scan walks rows in
-LSN-descending order; `is_image` is DESC so the stored order matches
-the chain-read `ORDER BY lsn DESC, is_image DESC` (image before delta
-at a tie).
+One row per (Key, LSN). The PK is **all-range**, led by a 6-way placement
+bucket, then the **(branch_id, spcnode, dbnode, relnode, forknum)**
+identity, then `(blknum, lsn DESC, is_image DESC)` so a per-block scan
+walks rows in LSN-descending order; `is_image` is DESC so the stored
+order matches the chain-read `ORDER BY lsn DESC, is_image DESC` (image
+before delta at a tie).
 
 ```sql
 CREATE TABLE amp_storage.pages (
+    bucket_id    SMALLINT NOT NULL,    -- ((relnode/7)+(relnode/13)+(blknum/256))%6
     branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
@@ -149,10 +149,72 @@ CREATE TABLE amp_storage.pages (
     lsn          BIGINT   NOT NULL,    -- u64 stored as i64 (real LSNs are << 2^63)
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, lsn DESC, is_image DESC)
-);
+    CONSTRAINT pages_bucket_id_matches_formula CHECK (
+        bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
+    ),
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
+                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, is_image DESC)
+) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
+
+#### Why the bucket
+
+The old key hash-partitioned on the relfork identity, which pinned a
+relation's whole block-set to ONE tablet: a single hot relation could not
+use more than one tablet's write throughput. An all-range key can instead
+be **pre-split** at known boundaries — hence exactly 6 tablets from the
+first row (2 leaders per node on a 3-node RF=3 cluster). Tablets may
+auto-split further later; 6 bounds the *initial* fan-out, not the eventual
+tablet count.
+
+It also makes coarse GC expressible. Under a hash key, "delete everything
+for this branch" — or for a database, or a relation — is not a range at
+all: the hash scatters those rows across the whole key space, so reclaiming
+them means scanning. Ordering the key `(bucket_id, branch_id, spcnode,
+dbnode, relnode, forknum, blknum, …)` makes each of those a bounded prefix
+range per bucket, so branch / db / relation drops become
+`PAGE_BUCKETS` range deletes.
+
+`page_store::page_bucket_id` is **frozen** and writer-computed. The two
+terms do different jobs:
+
+- `blknum / 256` keeps 2MB stretches contiguous, so a sequential scan
+  walks whole stretches rather than spraying every block across tablets.
+  A relation over 12MB spreads across all six buckets by this term alone.
+- `relnode / 7 + relnode / 13` salts sub-2MB relations, which are one
+  stretch and would otherwise all land in bucket 0. Two coprime divisors
+  because a single one collapses when the OID allocation stride resonates
+  with the modulus: with `relnode / 7` alone, a stride of 42 puts every
+  relation in one bucket. `forknum` is deliberately absent — the main fork
+  holds nearly all the data, so adding it would only shuffle FSM/VM.
+
+Consequences to know:
+
+- Every query binds `bucket_id` to a single **VALUE**. A chain read has a
+  known blknum, so it binds the whole 7-column prefix and hits one tablet.
+  A blknum *range* scan touches one bucket per 2MB stretch it spans, so
+  callers loop over `page_buckets_for_range` and merge; whole-fork and
+  cross-fork operations fan out over all six. The thin lane has no
+  alternative — `RangeRead::new_range` binds one value per key column and
+  the shim's `range_values` ABI has no set form. YSQL could equally write
+  `bucket_id = ANY(…)`, which YB does push into the index condition; both
+  lanes use the one-bucket-per-query shape so the two read alike.
+- The CHECK is enforcement only on the YSQL lane — thin-client writes go
+  straight to DocDB and never reach it. A mis-computed bucket is worse
+  than in `pending_gc` (a missed candidate): the row lands outside the key
+  range every reader looks in, i.e. a lost page.
+- **A relation's forks share its bucket**, and the FSM/VM forks are a
+  handful of blocks that are rewritten constantly. Measured on a 2M-row
+  1KB-value table: relnode 16384's visibility map was 12 blocks carrying
+  396k row versions (~33k per block) in 28 MB — enough to push that one
+  bucket to 1.46x of ideal by **row count** while byte skew stayed at
+  1.25x, since VM rows are ~71 bytes against 1KB pages. It amortises as
+  the main fork grows and GC trims those chains, and the main fork on its
+  own measured 1.17x. Putting `forknum` in the salt would *relocate* that
+  concentration, not spread it — a 12-block fork is under one stretch
+  either way — so if you are diagnosing per-bucket row counts on a young
+  or heavily-vacuumed table, check `GROUP BY forknum` before suspecting
+  the salt.
 
 Only **relation-page keys** live here — keys where
 `Key::is_rel_block_key()` holds (`field1 == 0x00`, `field4 != 0`,

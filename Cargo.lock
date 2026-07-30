@@ -5674,6 +5674,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "pageserver_api",
  "postgres_ffi",
  "tokio",
  "utils",

@@ -278,12 +278,15 @@ impl WalSource for WalReader<'_> {
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
-        // A chunk's placement bucket can't be derived, so probe every
-        // bucket via the hash-key IN-list (0..WALS_BUCKETS in
-        // safekeeper/src/yb_wal_storage.rs) — batched index probes, and
-        // this decoder walk issues one lookup per chunk.
+        // A chunk's placement bucket is a rotating per-batch counter, so it
+        // can't be derived from the row — probe every bucket by naming them all
+        // (0..WALS_BUCKETS in safekeeper/src/yb_wal_storage.rs, currently 6).
+        // `bucket_id` leads `wals`' all-range key, so this IN-list is what YSQL
+        // turns into per-bucket index probes instead of a scan; this decoder
+        // walk issues one such lookup per chunk. Keep the list in step with
+        // WALS_BUCKETS — a short list would silently miss chunks.
         let sql = "SELECT chunk_offset, data FROM amp_storage.wals \
-                   WHERE branch_id = $1 AND bucket_id IN (0,1,2,3,4,5,6,7,8,9) \
+                   WHERE branch_id = $1 AND bucket_id IN (0,1,2,3,4,5) \
                      AND segno = $2 AND chunk_offset <= $3 \
                    ORDER BY chunk_offset DESC LIMIT 1";
         let params: [&(dyn ToSql + Sync); 3] = [&self.branch, &segno, &off];

@@ -101,16 +101,32 @@ Persistence paths:
 
 ```sql
 CREATE TABLE amp_storage.wals (
-    branch_id        TEXT     NOT NULL,
     bucket_id        SMALLINT NOT NULL,
+    branch_id        TEXT     NOT NULL,
     segno            BIGINT   NOT NULL,
     chunk_offset     BIGINT   NOT NULL,   -- byte offset of `data` within the segment
     chunk_size       INT      NOT NULL,
     data             BYTEA    NOT NULL,
     last_modified_us BIGINT   NOT NULL,
-    PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)
-) SPLIT INTO 10 TABLETS;
+    CONSTRAINT wals_bucket_id_in_range CHECK (bucket_id >= 0 AND bucket_id < 6),
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)
+) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 ```
+
+The key is all-range and led by `bucket_id`, so the table pre-splits into
+exactly `WALS_BUCKETS` tablets and a branch's WAL spreads across all of
+them from the first row. `bucket_id` leads rather than `branch_id` for two
+reasons: pre-split boundaries have to be literal values and branch IDs are
+minted at runtime; and a leading `branch_id` would put one branch's whole
+WAL stream in a single contiguous key span — one tablet until it
+auto-splits — which is the write hotspot the bucket exists to prevent,
+since one branch streaming WAL hard is the hot write pattern.
+
+Because the key spans tablets rather than pinning to one, a read that scans
+it **must page**: a tablet holding no matching chunk returns an empty page
+*plus* a continuation, meaning "nothing here", not "scan done". Treating
+that as the end of the scan makes a healthy segment look empty and surfaces
+as `WAL hole at {lsn}: no covering chunk in wals`.
 
 `compute/safekeeper/src/yb_wal_storage.rs` owns this table. The table name is
 hardcoded (`WALS_TABLE = "amp_storage.wals"`, always schema-qualified so it is
@@ -122,15 +138,15 @@ independent of the connection's `search_path`).
   is by construction an idempotent replay of the same bytes — which is what
   makes it safe to run the hot-path INSERTs with
   `yb_enable_upsert_mode = true` (skip YB's read-before-write check).
-- **`bucket_id` is placement, not identity** (`WALS_BUCKETS = 10`). The
-  `(branch_id, bucket_id)` hash key spreads a branch's WAL across all ten
-  tablets. The consumer stamps each assembled **batch** with one bucket,
-  rotating one bucket per batch: every batch targets ONE tablet (atomic as a
-  group on both write lanes, and the single-shard transaction fast path on
-  YSQL — no distributed transaction), while sustained load rotates across
-  all tablets. Readers cannot derive a chunk's bucket, so index-tight reads
-  carry a `bucket_id IN (0..9)` hash-key list, which YSQL executes as
-  batched per-bucket index probes rather than a scan.
+- **`bucket_id` is placement, not identity** (`WALS_BUCKETS = 6`). As the
+  leading range-key column it spreads a branch's WAL across all six
+  pre-split tablets. The consumer stamps each assembled **batch** with one
+  bucket, rotating one bucket per batch: every batch targets ONE tablet
+  (atomic as a group on both write lanes, and the single-shard transaction
+  fast path on YSQL — no distributed transaction), while sustained load
+  rotates across all tablets. Readers cannot derive a chunk's bucket, so
+  index-tight reads carry a `bucket_id IN (0..5)` key list, which YSQL
+  executes as batched per-bucket index probes rather than a scan.
 
 #### `data` is compressed
 

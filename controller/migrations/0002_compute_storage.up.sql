@@ -50,13 +50,52 @@ CREATE TABLE IF NOT EXISTS amp_storage.blobs (
 -- =====================================================================
 
 -- Relation pages only: keys where `Key::is_rel_block_key()` holds
--- (field1 == 0x00, field4 != 0, field6 != 0xffffffff). Hash partition
--- on (branch, spcnode, dbnode, relnode, forknum) keeps a
--- relation's whole block-set on one tablet; range scans within a
--- relfork are tablet-local. The trailing `is_image` breaks `lsn`
--- ties; it is DESC so the stored order matches the read-path
--- `ORDER BY lsn DESC, is_image DESC` (image before delta at a tie).
+-- (field1 == 0x00, field4 != 0, field6 != 0xffffffff).
+--
+-- ALL-RANGE key led by `bucket_id`, an m-way (m = 6) placement bucket.
+-- The old form hash-partitioned on (branch, spcnode, dbnode, relnode,
+-- forknum), which pinned a whole relfork to ONE tablet: a single hot
+-- relation could not use more than one tablet's write throughput, and
+-- the tablet count for a branch was whatever the hash space gave us.
+-- Range keys let us PRE-SPLIT at known boundaries instead.
+--
+-- bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
+--   * `blknum / 256` keeps 2MB stretches (256 x 8KB) contiguous, so a
+--     sequential scan walks whole stretches instead of spraying every
+--     block across buckets. A relation larger than 6 x 2MB spreads over
+--     all six buckets by this term alone.
+--   * `relnode / 7 + relnode / 13` salts small (< 2MB) relations, which
+--     are one stretch and would otherwise ALL land in bucket 0. Two
+--     coprime divisors, because a single one collapses when the OID
+--     stride resonates with m: with `relnode / 7` alone, a stride of 42
+--     puts every relation in one bucket. Both terms have to degenerate
+--     at once, which first happens at stride 273. Worst measured
+--     imbalance for any stride <= 200 is 2.0x, and 1.39x for <= 30.
+--   * forknum is deliberately NOT in the salt: the main fork (0) holds
+--     nearly all the data, so mixing it in only moves FSM/VM around.
+--     A relation's forks therefore share a bucket, which also keeps its
+--     metadata forks on the same tablet as its data.
+--
+-- WRITER-computed (page_store::page_bucket_id, FROZEN, modulus =
+-- PAGE_BUCKETS) and deliberately not a generated column — the
+-- thin-client write path bypasses the YSQL layer entirely. The CHECK
+-- below is real enforcement only on the YSQL lane; it does not fire for
+-- thin-client writes, so it documents the contract rather than
+-- guaranteeing it. NB: a mis-computed bucket here is worse than in
+-- `pending_gc` (a missed candidate) — the row becomes unreachable at
+-- read time, i.e. a lost page. Queries MUST bind bucket_id as a VALUE;
+-- without bucket_id equality a query scans all six buckets.
+--
+-- Pre-split into exactly m tablets so writes spread from the first row.
+-- Tablets can auto-split further later; m bounds the initial fan-out,
+-- not the eventual tablet count. Whole-branch / whole-db / whole-fork
+-- operations (drops, dumps) must fan out across all six buckets.
+--
+-- The trailing `is_image` breaks `lsn` ties; it is DESC so the stored
+-- order matches the read-path `ORDER BY lsn DESC, is_image DESC`
+-- (image before delta at a tie).
 CREATE TABLE IF NOT EXISTS amp_storage.pages (
+    bucket_id    SMALLINT NOT NULL,
     branch_id    TEXT     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
@@ -67,9 +106,17 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id, spcnode, dbnode, relnode, forknum) HASH,
-                 blknum, lsn DESC, is_image DESC)
-);
+    -- Subsumes a plain 0..5 range check: the expression cannot leave
+    -- that interval for non-negative relnode/blknum. Integer division
+    -- throughout — `/` and `%` are truncated in both PostgreSQL and
+    -- Rust, so this is character-for-character the Rust function. A
+    -- float (`/ 256.0`, `floor(...)`) would let the two sides diverge.
+    CONSTRAINT pages_bucket_id_matches_formula CHECK (
+        bucket_id = ((relnode / 7) + (relnode / 13) + (blknum / 256)) % 6
+    ),
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, spcnode ASC, dbnode ASC,
+                 relnode ASC, forknum ASC, blknum ASC, lsn DESC, is_image DESC)
+) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 
 -- SLRU pages — pg_xact, pg_multixact_offsets, pg_multixact_members.
 -- `kind` matches `Key::field2` byte ordering: 0=Clog,
@@ -207,16 +254,36 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
 -- =====================================================================
 
 -- Live WAL chunks the safekeeper mirrors into YB — the durable copy of the WAL
--- stream. Partitioned into buckets to spread the load across multiple DocDB
--- tablets.
+-- stream. Partitioned into m = 6 buckets to spread the load across DocDB
+-- tablets, matching `pages`.
+--
+-- ALL-RANGE key led by `bucket_id`, pre-split into exactly m tablets.
+-- Unlike `pages`, this bucket is NOT a function of the row: it is a
+-- rotating per-batch counter (`(n + 1) % WALS_BUCKETS`), so one batch
+-- lands on one tablet and consecutive batches move on. Reads therefore
+-- cannot compute it and always fan out across all six buckets — which
+-- the read path already did under the old hash key.
+--
+-- `bucket_id` leads rather than `branch_id` for two reasons. Pre-splitting
+-- on a leading `branch_id` would need literal branch boundaries, but
+-- branch IDs are minted at runtime; and it would put one branch's entire
+-- WAL stream in a single contiguous key span — one tablet until it
+-- auto-splits — which is the exact write hotspot `bucket_id` exists to
+-- avoid, since one branch streaming WAL hard is the hot write pattern.
+-- Bucket-leading spreads a single branch's WAL over all six tablets from
+-- the first row while keeping each batch on one tablet.
 CREATE TABLE IF NOT EXISTS amp_storage.wals (
-    branch_id        TEXT     NOT NULL,
     bucket_id        SMALLINT NOT NULL,
+    branch_id        TEXT     NOT NULL,
     segno            BIGINT   NOT NULL,
     chunk_offset     BIGINT   NOT NULL,
     chunk_size       INT      NOT NULL,
     data             BYTEA    NOT NULL,
     last_modified_us BIGINT   NOT NULL,
+    -- Placement only, so unlike `pages` there is no formula to check —
+    -- just the modulus bound. Enforced on the YSQL lane only (the
+    -- thin-client write path bypasses it).
+    CONSTRAINT wals_bucket_id_in_range CHECK (bucket_id >= 0 AND bucket_id < 6),
     -- (segno, chunk_offset) is the chunk's natural identity within the
     -- branch. The writer never produces overlapping chunks
     -- (truncate_wal aligns the next write at exactly the truncation
@@ -224,8 +291,8 @@ CREATE TABLE IF NOT EXISTS amp_storage.wals (
     -- the same bytes. `bucket_id` is placement only — it carries no
     -- identity (retries replay the same stamped batch, keeping its
     -- original bucket).
-    PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset)
-) SPLIT INTO 10 TABLETS;
+    PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC)
+) SPLIT AT VALUES ((1), (2), (3), (4), (5));
 
 -- =====================================================================
 -- Functions.
