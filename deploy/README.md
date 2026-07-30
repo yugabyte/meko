@@ -395,7 +395,7 @@ a ConfigMap + Secret):
 | `YB_SSLMODE` | _(unset)_ | `disable`/`require`/`verify-ca`/`verify-full` |
 | `YB_SSLROOTCERT` | _(unset)_ | CA bundle path (for verify modes) |
 | `YB_PASSWORD` | _(unset)_ | YB password (from a Secret) |
-| `ENDPOINT_PG_VERSION` | `17` | compute Postgres major version |
+| `ENDPOINT_PG_VERSION` | `18` | compute Postgres major version; locates `pg_install/v{N}` (the image ships v18 only) |
 | `COMPUTE_PORT` | `55433` | compute Postgres port |
 | `COMPUTE_PASSWORD` | `cloud_admin` | password for the `cloud_admin` role |
 | `SHARED_PRELOAD_LIBRARIES` | `neon` | compute `shared_preload_libraries` |

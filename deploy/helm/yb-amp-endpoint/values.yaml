@@ -40,8 +40,10 @@ yugabyte:
 
 # Endpoint / compute settings.
 endpoint:
-  # -- Postgres major version for the compute.
-  pgVersion: "17"
+  # -- Postgres major version for the compute. The image ships v18 only; this
+  # locates the install at `pg_install/v{N}`, so anything else points at a
+  # directory that isn't there.
+  pgVersion: "18"
   # -- Postgres port the compute listens on (exposed by the Service).
   computePort: 55433
   # -- Branch id to serve. Empty => the pod bootstraps a fresh branch on first start.

@@ -69,7 +69,11 @@ if YB_PASSWORD_ENV is None and env("YB_PASSWORD") is not None:
     YB_PASSWORD_ENV = "YB_PASSWORD"
 
 # Endpoint / compute.
-PG_VERSION = env("ENDPOINT_PG_VERSION", "17")
+# Major version only, and only used to locate the Postgres install on disk
+# (`pg_install/v{N}/{bin,lib}`). The image ships v18 and nothing else, so a
+# default of anything else would point PG_BIN at a directory that isn't there.
+# It is also what the safekeeper create is told, as a full PgVersionId.
+PG_VERSION = env("ENDPOINT_PG_VERSION", "18")
 COMPUTE_PORT = env_int("COMPUTE_PORT", 55433)
 COMPUTE_CTL_HTTP_PORT = env_int("COMPUTE_CTL_HTTP_PORT", 3080)
 COMPUTE_PASSWORD = env("COMPUTE_PASSWORD", "cloud_admin")
@@ -529,6 +533,11 @@ def main():
     # Create the branch on the safekeeper.
     sk_create = {
         "branch_id": BRANCH_ID,
+        # ENDPOINT_PG_VERSION is set by the controller from the branch's
+        # recorded version, so trust it rather than re-reading the branch row.
+        # Only the major survives the trip: the safekeeper keeps this in memory
+        # for the greeting check, which compares major versions, and the durable
+        # `pg_version` is the controller-seeded one it reads back on restart.
         "pg_version": int(PG_VERSION) * 10000,
         "start_lsn": start_lsn,
     }

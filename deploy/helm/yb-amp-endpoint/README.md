@@ -61,7 +61,7 @@ replication. For query-level metrics, enable the `stat_statements` collector
 | `yugabyte.sslmode` / `yugabyte.sslrootcert` | _(empty)_ | TLS mode / CA bundle path |
 | `yugabyte.password` | _(empty)_ | inline password → chart-managed Secret |
 | `yugabyte.existingSecret` / `existingSecretKey` | _(empty)_ / `password` | use an existing Secret instead |
-| `endpoint.pgVersion` | `17` | compute Postgres version |
+| `endpoint.pgVersion` | `18` | compute Postgres version (the image ships v18 only) |
 | `endpoint.computePort` | `55433` | compute Postgres port (exposed by the Service) |
 | `endpoint.branchId` | _(empty)_ | serve an existing branch; empty ⇒ bootstrap |
 | `endpoint.sharedPreloadLibraries` | `yb_amp` | compute `shared_preload_libraries` |
