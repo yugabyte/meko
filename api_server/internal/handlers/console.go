@@ -8,9 +8,10 @@ import (
 )
 
 // The fleet console, compiled in so control-plane mode has no static-asset
-// dependency at runtime. Copied from ycp/web/console.html rather than shared:
-// api_server and ycp are separate Go modules, and go:embed cannot reach across
-// module boundaries. Keep the two in step when either changes.
+// dependency at runtime. It started as a copy of ycp/web/console.html, which
+// could not be shared because api_server and ycp are separate Go modules and
+// go:embed cannot reach across module boundaries; that copy is gone with the
+// reference control plane, so this is now the only one.
 //
 //go:embed web/console.html
 var consoleFS embed.FS

@@ -1,24 +1,30 @@
 name: YCP Images
 
-# Publishes the three YCP images to the same ECR registry as the rest of the
+# Publishes the YCP data-plane images to the same ECR registry as the rest of the
 # platform (161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/*, alongside
 # meko-mcp-server, rag-agent, meko-provisioner and inference-gateway):
-#   meko/ycp         — the control plane (Dockerfile)
 #   meko/meko-agent  — the BYOC pull agent (Dockerfile.agent)
 #   meko/dpmcp       — the per-datapack MCP server (Dockerfile.dpmcp)
 #
-# This is the first workflow in the repo that pushes a container image; the other
-# four are still built and pushed by hand.
+# The control plane is NOT here: it is api_server run with --control-plane-mode,
+# and nothing in CI builds that image yet (see ycp/STATUS.md). There used to be a
+# third image, meko/ycp, built from a reference implementation in ycp/cmd/ycp; that
+# was retired, and nothing deploys it. The ECR repository is left in place rather
+# than deleted, so any deployment still pinning an old tag keeps working.
 #
-# PRs do NOT push. They build the same three images and deploy them to a
-# throwaway kind cluster in the `meko_ycp_e2e` job of pr-build.yml, so image
-# breakage is caught before merge without writing to a shared registry.
+# This is the first workflow in the repo that pushes a container image; the others
+# are still built and pushed by hand.
+#
+# PRs do NOT push. They build these images and stand the agent up against a real
+# control plane on a throwaway kind cluster in the `meko_ycp_e2e` job of
+# pr-build.yml, so image breakage is caught before merge without writing to a
+# shared registry.
 #
 # Auth is OIDC: the workflow assumes DEFAULT_AWS_ROLE_ARN below, which trusts
 # GitHub's OIDC provider for this repo's main branch only. No GitHub secret or
 # variable is involved, deliberately — both need repo admin to set, which the
 # component owners do not have. A role ARN is not sensitive, and this one grants
-# nothing beyond pushing these three image repos.
+# nothing beyond pushing these image repos.
 #
 #   - Override with the AWS_ROLE_ARN Actions variable if one is ever configured.
 #   - Or set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY secrets to use static keys.
@@ -27,7 +33,6 @@ name: YCP Images
 #     cannot go red waiting on AWS setup.
 #
 # ECR does not create repositories on push. Before the first run:
-#   aws ecr create-repository --region us-east-2 --repository-name meko/ycp
 #   aws ecr create-repository --region us-east-2 --repository-name meko/meko-agent
 #   aws ecr create-repository --region us-east-2 --repository-name meko/dpmcp
 on:
@@ -53,20 +58,18 @@ env:
   # Assumed via OIDC. Safe to keep in the clear: the account ID is already
   # committed elsewhere in this repo, the role is assumable only by
   # repo:yugabyte/meko:ref:refs/heads/main, and its only permission is pushing
-  # the three meko/{ycp,meko-agent,dpmcp} repos.
+  # the meko/{meko-agent,dpmcp} repos.
   DEFAULT_AWS_ROLE_ARN: arn:aws:iam::161908593886:role/meko-github-actions-ecr-push
 
 jobs:
   images:
-    name: Build & push YCP images
+    name: Build & push YCP data-plane images
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - image: ycp
-            dockerfile: Dockerfile
           - image: meko-agent
             dockerfile: Dockerfile.agent
           - image: dpmcp

@@ -1,76 +1,43 @@
-# YCP — minimal Yugabyte Control Plane (demo)
+# YCP — the BYOC data-plane side
 
-A runnable, stdlib-only implementation of the BYOC control plane described in
-`design/byoc-control-plane.md`, backing `design/ycp-openapi.yaml`.
+YCP (Yugabyte Control Plane) is Meko's BYOC control plane. **The control plane
+itself is `api_server` run with `--control-plane-mode`**, not code in this
+directory. What lives here is the data-plane half of that contract:
 
-- **`cmd/ycp`** — in-memory control-plane API + embedded console (served at `/`).
-- **`cmd/agent`** — minimal `meko-agent`: reads real cluster facts from the
-  in-cluster Kubernetes REST API (no client-go), enrolls the environment into
-  YCP, and reports status on an interval. All traffic is outbound.
-- **`web/console.html`** — the operator console, wired to the live API.
-- **`deploy/ycp-demo.yaml`** — namespace + read-only RBAC + two deployments.
+- **`cmd/agent`** — `meko-agent`: reads real cluster facts from the in-cluster
+  Kubernetes REST API (no client-go), enrolls the environment into YCP, reconciles
+  desired datapacks, and reports status on an interval. All traffic is outbound.
+- **`cmd/dpmcp`** — the per-datapack MCP server the agent provisions.
+- **`internal/api`** — the wire types and lifecycle states both sides share.
+- **`test/e2e`** — build-and-deploy smoke test on kind, against the real control
+  plane.
 
-No external Go dependencies; no container registry needed. Pods run a stock
-public `alpine` image that waits for a binary injected via `kubectl cp`, then
-execs it.
+A reference implementation of the control plane used to sit in `cmd/ycp`; it was
+removed. [`ARCHITECTURE.md`](./ARCHITECTURE.md) explains why and where each piece
+of the contract is implemented now.
 
-> **See also:** [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the component /
-> pull-loop design, and [`DEPLOY.md`](./DEPLOY.md) for the full deployment guide
-> (local, cluster, internal LoadBalancer, teardown, config reference). The quick
-> steps below are a condensed version of `DEPLOY.md`.
-
-## Run locally
+## Build and test
 
 ```bash
-go run ./cmd/ycp -addr :8080      # open http://localhost:8080
+go build ./...
+go test ./...                 # no database or cluster needed
+ycp/test/e2e/run.sh           # build + deploy on kind; needs docker + kind
 ```
 
-## Build static linux/amd64 binaries
+## Deploy
 
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/ycp-linux-amd64  ./cmd/ycp
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/agent-linux-amd64 ./cmd/agent
-```
+Both images ship to the platform ECR registry and deploy through the `meko` Helm
+chart in [meko-devops](https://github.com/yugabyte/meko-devops):
 
-## Deploy to a cluster (example: itest-mcs)
+| What | How |
+|------|-----|
+| The control plane | `charts/meko -f values-ycp.yaml` — see `charts/meko/YCP-RUNBOOK.md` |
+| An agent in a data plane | `charts/meko -f values-agent.yaml` — same runbook, §4 |
 
-```bash
-CTX=gke_yugabyte_us-west1_itest-mcs
-kubectl --context $CTX apply -f deploy/ycp-demo.yaml
+[`DEPLOY.md`](./DEPLOY.md) covers what is specific to this directory: which
+Dockerfile builds which image, how the agent is configured, and how it is
+operated once attached.
 
-# inject binaries into the alpine pods (they wait-then-exec)
-YCP_POD=$(kubectl --context $CTX -n ycp-demo get pod -l app=ycp -o jsonpath='{.items[0].metadata.name}')
-AGENT_POD=$(kubectl --context $CTX -n ycp-demo get pod -l app=meko-agent -o jsonpath='{.items[0].metadata.name}')
-kubectl --context $CTX -n ycp-demo cp dist/ycp-linux-amd64  $YCP_POD:/app/ycp
-kubectl --context $CTX -n ycp-demo cp dist/agent-linux-amd64 $AGENT_POD:/app/agent
-```
-
-> Note: `kubectl cp` is not persistent — if a pod restarts, re-copy its binary
-> (the container re-enters its wait loop). This is a deliberate no-registry
-> shortcut for the demo, not how the real agent ships (that's a Helm chart in
-> `meko-devops`).
-
-## View the console
-
-The `ycp` Service is an **internal** LoadBalancer (GKE annotation
-`networking.gke.io/load-balancer-type: Internal`), so GCP assigns a private IP
-reachable only from within the cluster's VPC — not the public internet:
-
-```bash
-kubectl --context $CTX -n ycp-demo get svc ycp -w   # wait for EXTERNAL-IP (a private VPC address)
-IP=$(kubectl --context $CTX -n ycp-demo get svc ycp -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-# reach http://$IP from a host inside the VPC (bastion, VM, VPN); the itest-mcs row is LIVE
-```
-
-To reach it from your laptop (outside the VPC), port-forward instead:
-
-```bash
-kubectl --context $CTX -n ycp-demo port-forward svc/ycp 8080:80
-# open http://localhost:8080
-```
-
-## Tear down
-
-```bash
-kubectl --context $CTX delete -f deploy/ycp-demo.yaml
-```
+> **See also:** [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the pull-loop design
+> and the token model, and [`STATUS.md`](./STATUS.md) for what works today and
+> what is still open.

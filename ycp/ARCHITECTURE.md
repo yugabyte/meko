@@ -6,22 +6,39 @@ fleet registry and desired state, while each customer's data plane runs a small
 **pull agent** that reaches out to YCP over outbound HTTPS only. No inbound
 connection is ever made to a customer cluster.
 
-This directory is a runnable, dependency-light reference implementation of the
-design in [`../design/byoc-control-plane.md`](../design/byoc-control-plane.md),
+The design is [`../design/byoc-control-plane.md`](../design/byoc-control-plane.md),
 backing the OpenAPI subset in [`../design/ycp-openapi.yaml`](../design/ycp-openapi.yaml).
+
+## Where the control plane lives
+
+**In `api_server/`, not here.** `api_server` run with `--control-plane-mode`
+serves the fleet registry, the agent API, and the operator console. This
+directory holds the *data-plane* side of the contract plus the wire types both
+sides share.
+
+There used to be a second implementation of the control-plane contract in
+`ycp/cmd/ycp` — a dependency-light reference version with an in-memory registry.
+It was removed, because one contract with two implementations mostly produced
+divergence: it returned its payloads flat while `api_server` wraps them in
+`{"data":…}`, which broke the agent in a way CI could not see
+([meko#399](https://github.com/yugabyte/meko/issues/399)), and the e2e that was
+supposed to protect the control plane was exercising the copy nobody deploys.
+The e2e in `test/e2e/` now runs `api_server --control-plane-mode`.
 
 ## Components
 
 | Path | Binary | Role |
 |------|--------|------|
-| `cmd/ycp` | `ycp` | Control-plane API + embedded operator console (`web/console.html`). |
 | `cmd/agent` | `meko-agent` | Per-environment pull agent. Reads cluster facts from the in-cluster k8s API, enrolls, reconciles desired datapacks, reports status. |
-| `cmd/dpmcp` | `dpmcp` | Per-datapack MCP server (JSON-RPC 2.0 over HTTP). One instance per datapack; agent provisions it. |
-| `internal/server` | — | HTTP router for the YCP API and console host. |
-| `internal/store` | — | Fleet-registry persistence: `Memory` (dev) and `Postgres` (durable) behind one `Store` interface. |
+| `cmd/dpmcp` | `dpmcp` | Per-datapack MCP server (JSON-RPC 2.0 over HTTP). One instance per datapack; the agent provisions it. |
 | `internal/mcp` | — | The MCP protocol server + its memory store (`MemStore` / `PgStore`). |
-| `internal/api` | — | Wire types shared by server and agent; JSON tags mirror the OpenAPI. |
-| `web` | — | Embedded operator console (served at `/`). |
+| `internal/api` | — | Wire types + lifecycle states; JSON tags mirror the OpenAPI. The agent's half of the contract `api_server` implements. |
+| `test/e2e` | — | Build-and-deploy smoke test on kind against `api_server --control-plane-mode`. |
+
+The control-plane side: `api_server/internal/handlers/environment_handler.go`
+(routes), `internal/service/environment_service.go` (tokens, lifecycle),
+`internal/repository` (the registry), `internal/handlers/web/console.html` (the
+console), `internal/db/migrations/controlplane/` (its schema).
 
 ## Topology
 
@@ -29,17 +46,17 @@ backing the OpenAPI subset in [`../design/ycp-openapi.yaml`](../design/ycp-opena
   Operator console (browser)
           │  HTTPS
           ▼
-  ┌───────────────────────┐        ┌──────────────────────────────────────┐
-  │        YCP           │        │      Customer data plane (k8s)         │
-  │  cmd/ycp             │        │                                        │
-  │  ┌─────────────────┐  │        │   ┌────────────┐   outbound only       │
-  │  │ server (API +   │  │◀───────┼───│ meko-agent │──────────┐            │
-  │  │ console)        │  │ enroll │   │ cmd/agent  │          │            │
-  │  ├─────────────────┤  │ desired│   └─────┬──────┘          ▼            │
-  │  │ store (fleet    │  │ status │         │ provisions   in-cluster      │
-  │  │ registry)       │  │        │         ▼              k8s API         │
-  │  └─────────────────┘  │        │   ┌────────────┐                       │
-  └───────────────────────┘        │   │ dpmcp ×N   │  (one per datapack)   │
+  ┌────────────────────────────┐   ┌──────────────────────────────────────┐
+  │  YCP control plane         │   │      Customer data plane (k8s)         │
+  │  api_server                │   │                                        │
+  │  --control-plane-mode      │   │   ┌────────────┐   outbound only       │
+  │  ┌──────────────────────┐  │◀──┼───│ meko-agent │──────────┐            │
+  │  │ fleet API + console  │  │enroll │ cmd/agent  │          │            │
+  │  ├──────────────────────┤  │desired└─────┬──────┘          ▼            │
+  │  │ Postgres / YugabyteDB│  │status       │ provisions   in-cluster      │
+  │  │ (fleet registry)     │  │   │         ▼              k8s API         │
+  │  └──────────────────────┘  │   │   ┌────────────┐                       │
+  └────────────────────────────┘   │   │ dpmcp ×N   │  (one per datapack)   │
                                     │   │ cmd/dpmcp  │                       │
                                     │   └────────────┘                       │
                                     └────────────────────────────────────────┘
@@ -50,15 +67,14 @@ agent → YCP. YCP never dials into a customer cluster.
 
 ## The pull loop
 
-1. **Register** — an operator `POST`s `/api/v1/environments`. YCP mints a
-   single reusable **enrollment token** (kubeadm-style bootstrap token, 30-min
-   TTL) and returns it once, along with an install hint. Only the token *hash*
-   is persisted.
+1. **Register** — an operator `POST`s `/api/v1/environments`. YCP mints an
+   **enrollment token** (kubeadm-style bootstrap token, 30-min TTL) and returns
+   it once, along with an install hint. Only the token *hash* is persisted.
 2. **Enroll** — `meko-agent` starts in the customer cluster, reads its
    service-account token + cluster facts, and `POST`s `/api/v1/agent/enroll`
-   with the enrollment token. YCP validates the token, consumes it, and mints a
-   long-lived env-scoped **status token** (returned once, hash persisted). The
-   environment moves to `ATTESTING`.
+   with the enrollment token. YCP validates it and mints a long-lived env-scoped
+   **status token** (returned once, hash persisted). The environment moves to
+   `ATTESTING`.
 3. **Reconcile** — on each tick the agent `GET`s `/api/v1/agent/desired-state`
    (bearer: status token). Desired state is a generic, resource-typed set
    (`{kind, name, spec}`); the agent dispatches each resource to a reconciler
@@ -91,37 +107,40 @@ READY → DRAINING (drain) → DEREGISTERED (deregister)
 
 ## Authentication
 
-Two token types, both stored only as SHA-256 hashes (`store.HashToken`):
+Two token types, both stored only as SHA-256 hashes (`hashToken` in
+`api_server/internal/service/environment_service.go`):
 
-- **Enrollment token** (`mko_enr_…`) — TTL-based, reusable within its window so
-  an agent restart can re-enroll. Validated by matching hash + non-expiry.
+- **Enrollment token** (`mko_enr_…`) — a bootstrap credential with a 30-minute
+  TTL, reusable within that window. Validated by matching hash + non-expiry.
 - **Status token** (`mko_sts_…`) — long-lived, env-scoped. Sent as a bearer on
-  every agent → YCP call; validated per-environment by `ValidateStatusToken`.
+  every agent → YCP call.
 
 Plaintext tokens are returned to the caller exactly once and never persisted.
 
-## Persistence
-
-`store.Store` has two implementations behind one interface:
-
-- **`Memory`** — in-memory maps guarded by an `sync.RWMutex`. Used when no
-  database is configured (dev/tests). Seeds a demo fleet on first use.
-- **`Postgres`** — durable state (`store/postgres.go`), selected when
-  `YCP_DATABASE_URL` / `-db` is set.
-
-The `dpmcp` memory store mirrors this: `mcp.MemStore` for dev, `mcp.PgStore`
-(backed by the datapack's own database) in production.
+**The agent persists its status token**, in a `meko-agent-state` Secret in its
+own namespace, and resumes from it on restart. That is what keeps the enrollment
+token a genuine first-contact-only credential: an agent that re-enrolled on
+every restart would work for 30 minutes and then lock itself out. `test/e2e`
+asserts the restart path for exactly this reason. Remaining gaps — CA pinning,
+status-token rotation — are tracked in
+[meko#401](https://github.com/yugabyte/meko/issues/401).
 
 ## Testing
 
-- `internal/store` — unit tests for the registry: token hashing, slugging,
-  enrollment TTL, lifecycle transitions, seed idempotency, list ordering,
-  desired-state, status application, datapack filtering.
-- `internal/server` — HTTP-level integration tests over `httptest.Server`
-  covering the full register → enroll → desired → status pull loop, the console
-  read endpoints, lifecycle actions, and the agent-surface guard rails.
+```bash
+go test ./...                 # unit tests: no database or cluster needed
+ycp/test/e2e/run.sh           # build + deploy on kind; needs docker + kind
+```
+
+- `cmd/agent` — decoding of both response envelopes, including the case that
+  broke the agent: a `{"data":…}` wrapper decoded straight into the payload
+  struct, yielding zero values instead of an error.
 - `internal/mcp` — end-to-end MCP protocol test (initialize → tools/list →
   tools/call) plus the unknown-method error path.
+- `test/e2e` — builds the api-server and agent images, stands them up on a
+  throwaway kind cluster, and drives register → enroll → READY → restart. This is
+  the only test that exercises the real images, the real migrations, RBAC and the
+  token handshake over the wire; see the header comment in `test/e2e/run.sh`.
 
-Run them with `go test ./...` — everything is mocked/in-memory, so no database
-or cluster is required.
+The registry's own unit tests live with the implementation, in
+`api_server/internal/service/` and `api_server/internal/repository/`.

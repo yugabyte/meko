@@ -1,0 +1,84 @@
+# The meko-agent under test, enrolling into the control plane in controlplane.yaml.
+#
+# Applied by run.sh only AFTER an environment has been registered through the fleet
+# API and its one-time enrollment token written to the meko-agent-enrollment Secret.
+# That ordering is forced by the control plane: api_server has no way to pre-seed a
+# token, so it can only come from a real POST /api/v1/environments — which is the
+# operator flow, and therefore the thing worth testing.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: meko-agent
+  namespace: ycp-e2e
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: meko-agent-e2e
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "delete"]
+  # services/secrets covers both the per-datapack workloads the agent provisions
+  # and its own meko-agent-state Secret. update is what lets it replace the stored
+  # status token in place; without it the agent cannot survive a restart, which is
+  # one of the things this e2e is here to prove.
+  - apiGroups: [""]
+    resources: ["services", "secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: meko-agent-e2e
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: meko-agent-e2e
+subjects:
+  - kind: ServiceAccount
+    name: meko-agent
+    namespace: ycp-e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-agent
+  namespace: ycp-e2e
+  labels: { app: meko-agent }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: meko-agent } }
+  template:
+    metadata:
+      labels: { app: meko-agent }
+    spec:
+      serviceAccountName: meko-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: meko-agent
+          image: meko-agent:e2e
+          imagePullPolicy: Never
+          env:
+            - { name: YCP_URL, value: "http://meko-api-server.ycp-e2e.svc.cluster.local:80" }
+            - { name: ENV_NAME, value: "e2e-cell" }
+            - { name: ENV_PLACEMENT, value: "cloud" }
+            - { name: ENV_PROVIDER, value: "kind" }
+            - { name: ENV_REGION, value: "local" }
+            - name: ENROLLMENT_TOKEN
+              valueFrom: { secretKeyRef: { name: meko-agent-enrollment, key: enrollment-token } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }

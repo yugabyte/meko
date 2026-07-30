@@ -426,12 +426,13 @@ func (m *ycp) req(method, path string, body, out any) (int, error) {
 
 // decodeBody unwraps the two response shapes the agent has to speak to.
 //
-// cmd/ycp returns the payload flat; api_server wraps it as
-// {"data":…,"error":…}. Decoding the wrapped form straight into the payload
-// struct silently yields zero values — which meant an empty environment_id and
-// status_token, so every following status report was rejected with 400 while
-// enrollment had already succeeded server-side. Detect the envelope and decode
-// its "data" instead.
+// api_server wraps every payload as {"data":…,"error":…}. Decoding that straight
+// into the payload struct silently yields zero values — which meant an empty
+// environment_id and status_token, so every following status report was rejected
+// with 400 while enrollment had already succeeded server-side. Detect the
+// envelope and decode its "data" instead. A flat payload is still accepted: it is
+// what the retired reference control plane returned, and tolerating both is one
+// type switch.
 func decodeBody(r io.Reader, out any) error {
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -490,6 +491,9 @@ func (m *ycp) enroll(name, placement, enrollToken string, f api.ClusterFacts) (s
 }
 
 func main() {
+	// These defaults are demo residue and none of them are right for a real
+	// deployment; the chart sets every one. ENV_NAME especially: unset, an agent
+	// enrolls as some other environment's name rather than failing.
 	ycpURL := env("YCP_URL", "http://ycp:8080")
 	envName := env("ENV_NAME", "itest-mcs")
 	placement := env("ENV_PLACEMENT", "cloud")

@@ -7,11 +7,11 @@ import (
 	"meko/ycp/internal/api"
 )
 
-// The agent talks to two control planes that shaped their responses differently:
-// cmd/ycp returns payloads flat, api_server wraps them as {"data":…,"error":…}.
-// Decoding the wrapped form straight into the payload struct silently produced
-// zero values, so the agent enrolled with an empty environment_id and every
-// subsequent status report was rejected with 400.
+// api_server wraps every response as {"data":…,"error":…}. Decoding that straight
+// into the payload struct silently produced zero values, so the agent enrolled
+// with an empty environment_id and every subsequent status report was rejected
+// with 400. The flat form is still accepted: it is what the retired reference
+// control plane returned, and tolerating both costs one type switch.
 func TestDecodeBodyFlat(t *testing.T) {
 	var er api.EnrollResponse
 	in := `{"environment_id":"acme-prod","status_token":"mko_sts_x","mcp_base_url":"acme.mcp"}`

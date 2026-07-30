@@ -328,8 +328,8 @@
   //  1. The fleet routes are behind X-Meko-Admin-Secret. A browser cannot hold a
   //     shared secret on its own, so we ask once and keep it in localStorage.
   //  2. api_server wraps every body as {"data":…,"error":…}. Unwrap when the
-  //     envelope is present so this console works against either control-plane
-  //     implementation (ycp/cmd/ycp returns the same fields flat).
+  //     envelope is present, and tolerate a flat body — the retired reference
+  //     control plane returned the same fields without the wrapper.
   const ADMIN_KEY = "ycp.adminSecret";
   function adminSecret() { return localStorage.getItem(ADMIN_KEY) || ""; }
   function promptForSecret(msg) {
