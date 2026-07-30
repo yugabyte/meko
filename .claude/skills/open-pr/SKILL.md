@@ -86,7 +86,7 @@ Use these sections. Drop one only when it truly doesn't apply, and say so:
 - **Math / derivation** — only when the PR computes something: the formula, where
   the numbers come from, a tiny worked example, and what's measured vs modeled.
 - **Deploy notes** — only when runtime setup changes: migrations, required env,
-  ordering. Any new `api_server/internal/db/migrations/**` file belongs here.
+  ordering. Any new `meko/api_server/internal/db/migrations/**` file belongs here.
 
 Keep it crisp. Link related PRs/issues with **full URLs**, never bare `#123`.
 Add `Closes <full issue URL>` when the PR completes a tracked GitHub issue so the

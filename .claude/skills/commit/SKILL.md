@@ -3,10 +3,10 @@ name: commit
 description: >-
   Before staging files for a git commit (or finalizing one) in this repo, check
   whether the change needs companion updates that must travel in the **same**
-  commit: (1) docs under `docs/content/docs/**` and the `AGENTS.md` guides,
+  commit: (1) docs under `meko/docs/content/docs/**` and the `meko/AGENTS.md` guides,
   (2) tests covering the new/changed behavior, (3) regenerated artifacts
   (Swagger, provisioner CRDs/RBAC/`zz_generated`), and (4) the setup/config
-  surface (`LOCAL_DEV_SETUP.md`, `DEVELOPMENT.md`, migrations). For each, decide
+  surface (`meko/LOCAL_DEV_SETUP.md`, `meko/DEVELOPMENT.md`, migrations). For each, decide
   whether the change makes it wrong or missing, and update it in the same
   commit. Also, run the formatter and linter for every language the commit
   touches before committing. Use for `git commit`, `git add`-then-commit,
@@ -48,7 +48,7 @@ git diff --cached --name-only | cut -d/ -f1 | sort -u   # which components?
 
 Meko is a polyglot monorepo — the component in column 1 determines which
 companions and which toolchain apply. If the only staged files are themselves
-under `docs/`, an `AGENTS.md`, or a top-level `*.md`, you can skip the doc arm —
+under `meko/docs/`, an `AGENTS.md`, or a top-level `*.md`, you can skip the doc arm —
 but still ask whether the change needed a test that isn't staged.
 
 ## Step 2 — walk the four companions
@@ -58,13 +58,13 @@ commit.** A single change can hit several — do all that apply.
 
 ---
 
-### Companion 1 — Docs (`docs/content/docs/**`) and the `AGENTS.md` guides
+### Companion 1 — Docs (`meko/docs/content/docs/**`) and the `meko/AGENTS.md` guides
 
 Two distinct audiences, both canonical:
 
-- `docs/content/docs/**` — the public Hugo site. What users are told is true.
-- `AGENTS.md` (root) and per-component `AGENTS.md` (`api_server/`, `meko_ui/`,
-  `meko_admin/`, `meko-provisioner/`) — what agents and new developers are told
+- `meko/docs/content/docs/**` — the public Hugo site. What users are told is true.
+- `meko/AGENTS.md` and per-component `AGENTS.md` (`meko/api_server/`, `meko/meko_ui/`,
+  `meko/meko_admin/`, `meko/meko-provisioner/`) — what agents and new developers are told
   is true about layout, commands, and conventions.
 
 A staged path matching the left column means you must read the doc on the right
@@ -72,15 +72,15 @@ and decide if it needs updating:
 
 | Code area (staged path matches) | Doc(s) to recheck |
 |---|---|
-| MCP tool surface — a tool added / removed / renamed, or its arguments changed | `docs/content/docs/reference/mcp-server.md` |
-| `cli_app/**` — a command, subcommand, or flag added / removed / renamed | `docs/content/docs/reference/meko-cli.md` |
-| `api_server/internal/handlers/**` — a route added / removed / renamed, or a method / path / auth / body change | The handler's Swagger comments (see Companion 3), plus `docs/content/docs/reference/*.md` and `docs/content/docs/integrations/*.md` if the route is publicly documented |
-| Auth / PAT / API-key behavior (`api_server/internal/auth/**`, PAT handlers) | `docs/content/docs/reference/api-keys.md`, `docs/content/docs/integrations/connect-programmatically.md` |
-| Memory, knowledge-base, or datapack semantics (extraction, search, scoring, quotas) | `docs/content/docs/guides/working-with-memory.md`, `guides/working-with-knowledge-bases.md`, `architecture/core-concepts/**` |
-| A new component, a component renamed, or a cross-component contract changed | Root `AGENTS.md` — the layout table and Architecture Notes; `docs/content/docs/architecture/how-meko-fits.md` |
-| Build / run / test / lint commands changed (`build.sh`, `go.mod` toolchain, `package.json` scripts, `.golangci.yml`) | Root `AGENTS.md` (Build & Run / Tests / Lint blocks), `DEVELOPMENT.md` |
+| MCP tool surface — a tool added / removed / renamed, or its arguments changed | `meko/docs/content/docs/reference/mcp-server.md` |
+| `meko/cli_app/**` — a command, subcommand, or flag added / removed / renamed | `meko/docs/content/docs/reference/meko-cli.md` |
+| `meko/api_server/internal/handlers/**` — a route added / removed / renamed, or a method / path / auth / body change | The handler's Swagger comments (see Companion 3), plus `meko/docs/content/docs/reference/*.md` and `meko/docs/content/docs/integrations/*.md` if the route is publicly documented |
+| Auth / PAT / API-key behavior (`meko/api_server/internal/auth/**`, PAT handlers) | `meko/docs/content/docs/reference/api-keys.md`, `meko/docs/content/docs/integrations/connect-programmatically.md` |
+| Memory, knowledge-base, or datapack semantics (extraction, search, scoring, quotas) | `meko/docs/content/docs/guides/working-with-memory.md`, `guides/working-with-knowledge-bases.md`, `architecture/core-concepts/**` |
+| A new component, a component renamed, or a cross-component contract changed | `meko/AGENTS.md` — the layout table and Architecture Notes; `meko/docs/content/docs/architecture/how-meko-fits.md` |
+| Build / run / test / lint commands changed (`meko/build.sh`, `go.mod` toolchain, `package.json` scripts, `meko/.golangci.yml`) | Root `AGENTS.md` (Build & Run / Tests / Lint blocks), `meko/DEVELOPMENT.md` |
 | Folder layout or per-component convention changed | That component's own `AGENTS.md` |
-| User-visible behavior shipped | `docs/content/docs/changelog/**` |
+| User-visible behavior shipped | `meko/docs/content/docs/changelog/**` |
 
 The doc needs an update if the change invalidates **any** of these:
 
@@ -140,9 +140,9 @@ code.
 
 | You changed | Regenerate |
 |---|---|
-| `meko-provisioner/**/*_types.go`, or any kubebuilder marker (`+kubebuilder:…`) | `(cd meko-provisioner && make manifests generate)` — updates `config/crd/bases/*.yaml`, `config/rbac/role.yaml`, `**/zz_generated.*.go`, `PROJECT` |
-| Swagger annotations on an `api_server` handler (`@Summary`, `@Router`, …), or `main.go`'s top-of-file Swagger block | Regenerate `api_server/docs/` (`docs.go`, `swagger.json`, `swagger.yaml`) |
-| A DB schema change | Add a paired migration under `api_server/internal/db/migrations/{system,data}/` — **both** `.up.sql` and `.down.sql`, numbered in sequence. Never edit a migration that has already shipped |
+| `meko/meko-provisioner/**/*_types.go`, or any kubebuilder marker (`+kubebuilder:…`) | `(cd meko/meko-provisioner && make manifests generate)` — updates `config/crd/bases/*.yaml`, `config/rbac/role.yaml`, `**/zz_generated.*.go`, `PROJECT` |
+| Swagger annotations on an `api_server` handler (`@Summary`, `@Router`, …), or `main.go`'s top-of-file Swagger block | Regenerate `meko/api_server/docs/` (`docs.go`, `swagger.json`, `swagger.yaml`) |
+| A DB schema change | Add a paired migration under `meko/api_server/internal/db/migrations/{system,data}/` — **both** `.up.sql` and `.down.sql`, numbered in sequence. Never edit a migration that has already shipped |
 
 Never hand-edit the generated output; change the source and re-run the generator.
 Then `git add` the regenerated files so code and artifact land together.
@@ -154,7 +154,7 @@ Then `git add` the regenerated files so code and artifact land together.
 A change that alters how the system is stood up has to update the instructions
 someone follows to stand it up:
 
-- `LOCAL_DEV_SETUP.md` and `DEVELOPMENT.md` — a new required env var or flag, a
+- `meko/LOCAL_DEV_SETUP.md` and `meko/DEVELOPMENT.md` — a new required env var or flag, a
   changed port, a new prerequisite service, a changed bootstrap step.
 - Root `AGENTS.md > Database` — the reset/truncate snippet, if you added a
   registry table it should clear.
@@ -179,13 +179,13 @@ gofmt -l <the modules you touched>     # silent == clean
 gofmt -w <any files it listed> && git add -u
 ```
 
-Then lint the module you changed — `.golangci.yml` at the repo root governs
+Then lint the module you changed — `meko/.golangci.yml` at the repo root governs
 `cli_app` and `api_server`:
 
 ```
-(cd api_server       && golangci-lint run ./...)
-(cd cli_app          && golangci-lint run ./...)
-(cd meko-provisioner && GOTOOLCHAIN=go1.25.8 make lint)
+(cd meko/api_server       && golangci-lint run ./...)
+(cd meko/cli_app          && golangci-lint run ./...)
+(cd meko/meko-provisioner && GOTOOLCHAIN=go1.25.8 make lint)
 ```
 
 Note `goimports.local-prefixes: meko` — local imports go in their own group.
@@ -194,15 +194,15 @@ Line limit 120 for Go.
 ### TypeScript (`meko_ui`, `meko_admin`)
 
 ```
-(cd meko_ui    && npm run check)     # tsc
-(cd meko_admin && npm run check)
+(cd meko/meko_ui    && npm run check)     # tsc
+(cd meko/meko_admin && npm run check)
 ```
 
 ### Python (`system_agent`, `inference_gateway`)
 
 ```
-(cd system_agent && mypy . && pycodestyle .)    # max-line-length 100 (tox.ini)
-(cd inference_gateway && pytest)                # no formatter configured
+(cd meko/system_agent && mypy . && pycodestyle .)    # max-line-length 100 (tox.ini)
+(cd meko/inference_gateway && pytest)                # no formatter configured
 ```
 
 Resolve every warning rather than committing past it — a warning that lands is
@@ -213,12 +213,12 @@ targeted and give a one-line reason.
 Format only the code you're landing: if a formatter rewrites files unrelated to
 your change, leave those out of this commit.
 
-Skip this step only when nothing staged is code (pure docs/config commits). It is
+Skip this step only when nothing staged is code (pure meko/docs/config commits). It is
 **not** optional just because the warnings are pre-existing.
 
 ## Step 4 — update in the same commit
 
-Edit the companions that apply. Do **not** split into a separate "docs/tests
+Edit the companions that apply. Do **not** split into a separate "meko/docs/tests
 follow-up" commit — if the code lands and a companion still says the old thing,
 even for one commit, search/agent context (and users) pick up the wrong model.
 
@@ -336,14 +336,14 @@ minor." If you can't categorize the skip, default to checking.
 - **Regenerated artifacts:** you didn't touch a `*_types.go`, a kubebuilder
   marker, a Swagger annotation, or the schema.
 - **Setup/config:** the change doesn't alter any command, port, env var, flag, or
-  prerequisite that `LOCAL_DEV_SETUP.md` / `DEVELOPMENT.md` reference.
+  prerequisite that `meko/LOCAL_DEV_SETUP.md` / `meko/DEVELOPMENT.md` reference.
 
 ## Anti-patterns
 
 - **"I'll update the doc/test in a follow-up."** No. The follow-up never happens,
   and the companion lies for the gap. Same commit.
 - **Hand-editing a generated file** (`zz_generated.*.go`, `config/crd/bases/*.yaml`,
-  `api_server/docs/swagger.json`) instead of changing the source and re-running
+  `meko/api_server/docs/swagger.json`) instead of changing the source and re-running
   the generator. The next `make manifests generate` silently reverts you.
 - **Editing a migration that already shipped.** Migrations run on every
   `api_server` boot; add a new numbered pair instead.
@@ -357,7 +357,7 @@ minor." If you can't categorize the skip, default to checking.
 ## Failure mode this prevents
 
 This repo has a visible trail of it. `datapack_update`'s arguments changed to
-`name`/`description`, but `docs/content/docs/reference/mcp-server.md` kept
+`name`/`description`, but `meko/docs/content/docs/reference/mcp-server.md` kept
 telling users it took a `connection_string` — repaired later by a standalone
 docs PR (`docs(mcp-server): datapack_update takes name/description, not
 connection_string`, #366). The `scope` attribute was removed from the MCP server

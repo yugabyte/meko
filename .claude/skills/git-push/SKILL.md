@@ -47,15 +47,15 @@ prints the offenders otherwise:
 # Go — pass only the modules that appear above (each has its own go.mod)
 gofmt -l api_server cli_app meko-provisioner docs
 
-# TypeScript — if meko_ui/ or meko_admin/ changed
-(cd meko_ui    && npm run check)      # tsc
-(cd meko_admin && npm run check)      # tsc
+# TypeScript — if meko/meko_ui/ or meko/meko_admin/ changed
+(cd meko/meko_ui    && npm run check)      # tsc
+(cd meko/meko_admin && npm run check)      # tsc
 
-# Python — if system_agent/ changed
-(cd system_agent && mypy . && pycodestyle .)
+# Python — if meko/system_agent/ changed
+(cd meko/system_agent && mypy . && pycodestyle .)
 
-# Python — if inference_gateway/ changed (no formatter configured; run its tests)
-(cd inference_gateway && pytest)
+# Python — if meko/inference_gateway/ changed (no formatter configured; run its tests)
+(cd meko/inference_gateway && pytest)
 ```
 
 If they're silent, move on. Otherwise **do not push** — fix and re-check:
@@ -66,7 +66,7 @@ git diff                          # review what it rewrote
 ```
 
 Line limits are **120 for Go, 100 elsewhere**; tabs for Go, 4 spaces for Python,
-2 spaces for YAML/shell (`.editorconfig`, `.golangci.yml`, `tox.ini`).
+2 spaces for YAML/shell (`.editorconfig`, `meko/.golangci.yml`, `meko/tox.ini`).
 
 Formatting can land as its own commit — `git commit -am "<area>: gofmt"` —
 since PRs merge squashed, so there's no need to amend or rebase it back into the
@@ -76,7 +76,7 @@ formatter rewrites files unrelated to your change, leave those out.
 Re-run the checks until they're silent, then continue.
 
 Optional but cheap when you've touched Go — `golangci-lint run ./...` in the
-module you changed (`.golangci.yml` at the repo root governs `cli_app` and
+module you changed (`meko/.golangci.yml` at the repo root governs `cli_app` and
 `api_server`; `meko-provisioner` uses `GOTOOLCHAIN=go1.25.8 make lint`).
 
 ## Step 3 — verify no commit is agent-attributed (hard gate)
@@ -144,7 +144,7 @@ the topic with its number — `hsunder/361-gc-trim-unify`,
 `feature/270-free-tier-quota`.
 
 Conventional-commit-style type prefixes are **not** branch prefixes: `fix/`,
-`feat/`, `bug/`, `chore/`, `docs/`, `test/`, `refactor/`, `release/` are all
+`feat/`, `bug/`, `chore/`, `meko/docs/`, `test/`, `refactor/`, `release/` are all
 rejected, as are bare names with no prefix at all (`change-qs`, `meko1`). Older
 branches on the remote predate this rule; don't copy them.
 

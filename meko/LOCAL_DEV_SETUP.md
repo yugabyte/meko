@@ -2,7 +2,7 @@
 
 ## Prereqs
 YugabyteDB on `127.0.0.1:5433`, Docker, Go 1.25, Python 3.11
-`rag_agent` venv, `~/code/meko/.env` populated.
+`rag_agent` venv, `~/code/meko/meko/.env` populated.
 
 ### YugabyteDB:
 1. (OPTIONAL, langfuse only): Create the langfuse database
@@ -13,7 +13,7 @@ YugabyteDB on `127.0.0.1:5433`, Docker, Go 1.25, Python 3.11
 ## 1. MinIO
 
 ```bash
-cd ~/code/meko/meko_ui
+cd ~/code/meko/meko/meko_ui
 docker compose -f docker-compose.minio.yml up -d
 ```
 
@@ -45,7 +45,7 @@ docker exec meko-minio mc ls --recursive local/meko-kb-uploads
 
 ## 2. `.env`
 
-Source with `set -a; source ~/code/meko/.env; set +a` before launching
+Source with `set -a; source ~/code/meko/meko/.env; set +a` before launching
 api_server or rag_agent.
 
 ```bash
@@ -123,7 +123,7 @@ S3_REGION=us-east-2
 ## 3. api_server
 
 ```bash
-cd ~/code/meko/api_server
+cd ~/code/meko/meko/api_server
 set -a && source ../.env && set +a
 
 go run . -port 25433 \
@@ -155,7 +155,7 @@ api server starting port=25433
 
 ```bash
 cd ~/code/yugabyte-db/python/ai/rag_agent
-set -a && source ~/code/meko/.env && set +a
+set -a && source ~/code/meko/meko/.env && set +a
 
 export YUGABYTEDB_CONNECTION_STRING="postgresql://${META_USER}:${META_PW}@${META_HOST}:${META_PORT}/${META_DB}"
 export AWS_ACCESS_KEY_ID="${S3_ACCESS_KEY}"
@@ -233,5 +233,5 @@ MinIO / any single-host S3-compatible server: set it to `path`.
 ```bash
 pkill -f start_rag_agent.py
 # Ctrl+C api_server
-docker compose -f ~/code/meko/meko_ui/docker-compose.minio.yml down    # add -v to wipe data
+docker compose -f ~/code/meko/meko/meko_ui/docker-compose.minio.yml down    # add -v to wipe data
 ```
