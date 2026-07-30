@@ -279,10 +279,11 @@ completion.
 
 ## 6. Testing
 
-The package is tested without a database (matching `core.MemBackend`): in-memory
-fakes for every port and the in-memory `MemStore` for the `Store` itself —
-`MemStore` is a real, exported type (`mem.go`), so the API package's tests run
-against it too rather than carrying their own task-store fake. The tests cover
+The package is tested mostly without a database (matching `core.MemBackend`; the
+one live-database exception is below): in-memory fakes for every port and the
+in-memory `MemStore` for the `Store` itself — `MemStore` is a real, exported type
+(`mem.go`), so the API package's tests run against it too rather than carrying
+their own task-store fake. The tests cover
 
 - the **worker**, two ways: the per-task `execute` path against a faithful
   in-memory store — runs all steps to completion, **resumes** a reclaimed task
@@ -306,9 +307,40 @@ against it too rather than carrying their own task-store fake. The tests cover
   correct ordered step kinds, ids generated and threaded consistently across
   steps, and branch ancestor wiring.
 
-What is **not** unit-tested here is `PgStore`'s SQL (the claim/lease query, the
-transactional `Create` writes, the `step_ids`-ordered `Steps` query) and
-`PgBackend`'s `Ensure*` SQL — there is no DB-backed Go harness in the repo today
-(the same gap as the rest of `PgBackend`). That SQL is exercised by the integration suite;
-the `0002` schema + the new `uuid[]` / `array_position` queries were validated by
-applying the migrations against YugabyteDB directly.
+Two things are tested **against a real database**, because `MemStore` cannot stand
+in for either (`store_pg_test.go`): the resize lock's `SQLSTATE 23505 →
+ErrResizeInProgress → 409` mapping (`TestPgResizeLock`) and the schema assumption
+that mapping rests on (`TestPgUniqueConstraintsOnTask`, below). `MemStore` rejects
+a concurrent resize with a plain in-memory check, so it exercises none of the
+mapping — which is how #400 shipped a lock that worked while every concurrent
+resize returned **500** instead of `409`. Both migrate a schema of their own and
+skip unless `AMP_TEST_DATABASE_URL` points at a YugabyteDB; CI's "Migrations &
+live-DB store tests" job provides one.
+
+That bug is also a **platform rule worth keeping**: do not key an error check on
+`pgconn.PgError.ConstraintName`. Upstream PostgreSQL raises a unique violation
+with `errtableconstraint()`, which populates the wire protocol's `C` field that
+pgx exposes as `ConstraintName`; YSQL builds the same error in `pg_yb_utils.c`,
+formatting the constraint name into the **message** and leaving `ConstraintName`
+and `Detail` empty (confirmed on 2026.1: a verbose YSQL unique violation carries
+SQLSTATE, message and `LOCATION`, no `CONSTRAINT NAME`). There is therefore **no
+portable field to read a constraint name from** — and scraping it out of the
+message text only trades a silent break for a brittle one.
+
+So identify a violation by SQLSTATE plus **what the statement was doing**, not by
+name. `isResizeLockViolation` takes the `TaskSpec` being inserted and reports the
+lock for `23505` on a `resize_endpoint` task with a `target_ref`; that is exact
+because the only other unique constraint on `task` is its primary key, whose
+conflict `Create` already absorbs with `ON CONFLICT (id) DO NOTHING`. Since that
+is an assumption about the schema, `TestPgUniqueConstraintsOnTask` asserts the
+live table's unique-index inventory is exactly `{task_pkey,
+task_one_active_resize_per_endpoint}` — add a unique index to `task` and it fails,
+pointing at the classifier that now has to discriminate. The other mappings in
+`core/pg.go` already switch on `Code` alone and are unaffected.
+
+What is otherwise **not** unit-tested here is the rest of `PgStore`'s SQL (the
+claim/lease query, the transactional `Create` writes, the `step_ids`-ordered
+`Steps` query) and `PgBackend`'s `Ensure*` SQL (the same gap as the rest of
+`PgBackend`). That SQL is exercised by the integration suite; the `0002` schema +
+the new `uuid[]` / `array_position` queries were validated by applying the
+migrations against YugabyteDB directly.

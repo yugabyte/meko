@@ -22,6 +22,38 @@ import (
 // task_one_active_resize_per_endpoint (PgStore) / a guarded check (MemStore).
 var ErrResizeInProgress = errors.New("a resize is already in progress for this endpoint")
 
+// resizeLockConstraint is the partial unique index that enforces the resize lock
+// (migration 0004). A second non-terminal resize_endpoint task for the same
+// endpoint violates it. Named here for the schema guard in the tests, which is
+// what lets isResizeLockViolation classify structurally (see below).
+const resizeLockConstraint = "task_one_active_resize_per_endpoint"
+
+// isResizeLockViolation reports whether inserting spec failed because the resize
+// lock rejected it — a concurrent resize of the same endpoint.
+//
+// It identifies the lock by SQLSTATE and the task being inserted, never by the
+// constraint's name, because there is no portable field to read that name from:
+// upstream PostgreSQL raises the unique violation with errtableconstraint(),
+// which fills the wire protocol's `C` field that pgx exposes as ConstraintName,
+// while YSQL builds the same error in pg_yb_utils.c and only formats the name
+// into the message, leaving ConstraintName and Detail empty. Keying on that field
+// is what made every concurrent resize a 500 instead of a 409 (#400), and keying
+// on the message text instead would just trade a silent break for a brittle one.
+//
+// Structural classification is sound here because a unique violation from that
+// INSERT can only be this lock: the only other unique constraint on task is its
+// primary key, whose conflict ON CONFLICT (id) DO NOTHING already absorbs.
+// TestPgUniqueConstraintsOnTask pins that inventory against the live schema, so
+// adding a second unique index on task fails the build rather than silently
+// widening what this reports as a resize conflict.
+func isResizeLockViolation(spec TaskSpec, err error) bool {
+	if spec.Kind != KindResizeEndpoint || spec.TargetRef == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" // 23505: unique_violation
+}
+
 // Store persists tasks and their steps. Every method is written to be
 // idempotent per the YB retry contract (AGENTS.md): absolute UPDATEs and
 // INSERT ... ON CONFLICT, never read-modify-write.
@@ -135,8 +167,7 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 		// The first-writer-wins resize lock: a second in-flight resize of the same
 		// endpoint violates the partial unique index, which we surface as a typed
 		// conflict for the API to turn into a 409.
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "task_one_active_resize_per_endpoint" {
+		if isResizeLockViolation(spec, err) {
 			return nil, ErrResizeInProgress
 		}
 		return nil, fmt.Errorf("insert task: %w", err)

@@ -14,9 +14,13 @@ name: CI
 #                on PRs and main pushes. The slow suite runs daily on main and
 #                on-demand via `/ci integration_slow` (see on-demand-checks.yml).
 #   controller — Go controller: `go build`, `go vet`, `go test`.
-#   migrations — steps each controller migration up/down/up in turn against a
-#                throwaway YugabyteDB; catches a `.down.sql` that doesn't fully
-#                revert its `.up.sql`. Runs on migration / db-runner changes.
+#   migrations — the controller's live-database Go tests, against a throwaway
+#                YugabyteDB: steps each migration up/down/up in turn (catching a
+#                `.down.sql` that doesn't fully revert its `.up.sql`), then runs
+#                the store tests whose behaviour only exists against a real
+#                database — the resize lock's SQLSTATE mapping, which YSQL and
+#                upstream PostgreSQL report differently (#400). Runs on
+#                migration / db-runner / task-store changes.
 #   ui         — amp_ui: `npm ci`, `tsc --noEmit` (npm run check), vite build.
 #   deploy     — Helm charts + endpoint supervisor: `helm lint` and
 #                `helm unittest` on both charts, the Guaranteed-QoS guardrail,
@@ -121,6 +125,9 @@ jobs:
             migrations:
               - 'controller/migrations/**'
               - 'controller/internal/db/**'
+              # The task store's live-database tests (the resize lock) run in the
+              # same job, on the same YugabyteDB container.
+              - 'controller/internal/task/**'
               - '.github/workflows/pr-build.yml'
 
       # A change counts as "code" if at least one changed file is not a markdown
@@ -492,12 +499,15 @@ jobs:
           pipx install ruff==0.11.2
           ruff check deploy/
 
-  # Steps each controller migration up/down/up in turn against a real YugabyteDB
-  # (0002/0003 use YB-specific HASH / SPLIT DDL, so plain Postgres can't run
-  # them). The per-migration re-up catches a .down.sql that doesn't fully revert
-  # its .up.sql. Lightweight: Go + a YB container, no PG/compute build.
+  # The controller's live-database Go tests, on a real YugabyteDB (0002/0003 use
+  # YB-specific HASH / SPLIT DDL, so plain Postgres can't run them):
+  #   * each migration up/down/up in turn — the per-migration re-up catches a
+  #     .down.sql that doesn't fully revert its .up.sql;
+  #   * the task store's resize lock, whose 23505 -> ErrResizeInProgress mapping
+  #     MemStore cannot exercise (#400).
+  # Lightweight: Go + a YB container, no PG/compute build.
   migrations:
-    name: Migrations — up/down round-trip
+    name: Migrations & live-DB store tests
     needs: changes
     if: needs.changes.outputs.migrations == 'true' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -536,3 +546,14 @@ jobs:
         env:
           AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
         run: go -C controller test ./internal/db/... -run TestMigrateRoundTrip -v
+
+      # Everything in internal/task that needs a live database (the TestPg* tests):
+      # the resize lock's unique-violation -> 409 mapping, which MemStore can't
+      # exercise and which YSQL and upstream PostgreSQL report differently (#400),
+      # plus the unique-index inventory on `task` that the mapping assumes.
+      # Migrates a schema of its own, so the round-trip above and these can share
+      # the throwaway database.
+      - name: Task store — live-database tests
+        env:
+          AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
+        run: go -C controller test ./internal/task/... -run 'TestPg' -v
