@@ -22,9 +22,8 @@ name: control-plane GKE (itest-dev)
 #   * on a PR that opts in with a `/ci deploy_gke` line in the PR description.
 #     The rule is literally the same code on-demand-checks.yml runs —
 #     .github/actions/ci-directives, see docs/ci-directives.md: the line deploys on
-#     each new commit while it is present, adding it to the body deploys
-#     immediately, and a deploy happens at most once per head commit, so editing
-#     the description again does not redeploy what already went out.
+#     each new commit while it is present. Adding it to a PR already up needs a
+#     commit to fire — an empty one is enough.
 # It touches the itest cluster and needs org secrets (KUBECONFIG_ITEST_DEV,
 # QUAY_TOKEN), so fork PRs (which get no secrets) are always skipped.
 # Stale ci-pr-* namespaces are swept by control-plane-gke-cleanup.yml.
@@ -41,9 +40,11 @@ on:
   pull_request:
     branches: [main]
     # No paths filter: the `/ci deploy_gke` directive in the body (resolved by the
-    # decide job) is the switch. `edited` lets a freshly-added directive fire
-    # without a new push; synchronize re-runs a PR that already carries it.
-    types: [opened, reopened, synchronize, edited]
+    # decide job) is the switch. `synchronize` re-runs a PR that already carries it.
+    # `edited` is deliberately absent — see the note in on-demand-checks.yml: an
+    # edit that adds nothing still emits skipped check runs that mask a live suite
+    # of the same name. Add a directive late, then push an empty commit to fire it.
+    types: [opened, reopened, synchronize]
 
 # NB: there is deliberately NO workflow-level `concurrency` here — it lives on the
 # heavy jobs below, matching on-demand-checks.yml. One workflow-level group cannot
@@ -66,7 +67,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read      # listWorkflowRuns / listJobsForWorkflowRun, for the dedupe
     outputs:
       suites: ${{ steps.gate.outputs.decided }}
     steps:
@@ -76,14 +76,7 @@ jobs:
       - id: gate
         uses: ./.github/actions/ci-directives
         with:
-          # Both jobs carry the deploy_gke suite, so either one having run for this
-          # commit means it is done. Keys must stay byte-identical to the job
-          # `name:` values below; the action warns if one drifts.
-          suites: |
-            {
-              "Build + push images (Quay)": "deploy_gke",
-              "Deploy to itest-dev + smoke test": "deploy_gke"
-            }
+          suites: '["deploy_gke"]'
           # A manual dispatch means "deploy now", so it skips the body entirely.
           unconditional-events: schedule workflow_dispatch
 

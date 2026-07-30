@@ -10,13 +10,11 @@ description: >-
 #     calling workflow owns, without reading the body at all.
 #   * On a PR, a suite runs when the body carries its `/ci` line, or when the diff
 #     touches one of `auto-paths`.
-#   * MINUS any suite an earlier run of the SAME workflow already handled for this
-#     exact head commit, so a suite runs at most once per commit however many events
-#     fire. This is what keeps a description edit, a reopen, or a base-change
-#     `synchronize` (head sha unchanged) from re-launching a suite that already ran,
-#     without falling back to "only the suites this edit newly added" — that rule
-#     skipped a suite on any unrelated body tweak even when it had never run, so a
-#     PR could merge with the suite silently never having run.
+#
+# There is no per-commit dedupe: every qualifying event runs the suites the body
+# asks for. `edited` is not a trigger (see on-demand-checks.yml), so the events
+# that can repeat for one head commit are `reopened` and a re-open after a base
+# change — rare, and the cost is a wasted runner rather than a wrong answer.
 #
 # SECURITY: the PR body is untrusted. It is read only here, inside github-script,
 # and turned into booleans against the caller's fixed suite allowlist. It is NEVER
@@ -26,11 +24,8 @@ description: >-
 inputs:
   suites:
     description: >-
-      JSON object mapping the display `name:` of each job that runs a suite to that
-      suite's directive token, e.g. {"On-demand — integration (slow)":
-      "integration_slow"}. Several job names may map to one token (a suite spread
-      over several jobs). The distinct tokens are what this action decides; the job
-      names are how it recognizes a suite that already ran for this commit.
+      JSON array of the directive tokens this workflow owns, e.g.
+      ["integration_slow", "generate_image"]. Each becomes a boolean on `decided`.
     required: true
   auto-paths:
     description: >-
@@ -69,9 +64,8 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
-          const SUITE_JOBS = JSON.parse(process.env.SUITES);
           const AUTO_PATHS = JSON.parse(process.env.AUTO_PATHS || '{}');
-          const TOKENS = [...new Set(Object.values(SUITE_JOBS))];
+          const TOKENS = [...new Set(JSON.parse(process.env.SUITES))];
 
           const finish = (decided, why) => {
             core.setOutput('decided', JSON.stringify(decided));
@@ -107,80 +101,8 @@ runs:
             return out;
           };
 
-          // Match a job name to its suite: exact, or the `name (matrix values)` form
-          // the API reports if a job ever grows a matrix. Names are the only handle
-          // the jobs API gives us — `workflow_name` is useless here, because check
-          // runs that OTHER workflows create against this commit (dorny/test-reporter's,
-          // say) are listed under this run's jobs carrying this workflow's name. Keep
-          // suite job names distinctive so they cannot collide with one.
-          const suiteOf = (jobName) => {
-            const key = Object.keys(SUITE_JOBS).find(
-              (k) => jobName === k || jobName.startsWith(`${k} (`),
-            );
-            return key && SUITE_JOBS[key];
-          };
-
-          // Suites an earlier run of THIS workflow already handled for this commit.
-          const handledForSha = async (headSha) => {
-            // GITHUB_WORKFLOW_REF is "owner/repo/.github/workflows/<file>@<ref>", so
-            // this resolves to the CALLING workflow and keeps working if it is renamed.
-            const workflowFile =
-              process.env.GITHUB_WORKFLOW_REF.split('@')[0].split('/').pop();
-            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: workflowFile,
-              head_sha: headSha,
-              per_page: 100,
-            });
-            const handled = new Set();
-            for (const run of runs) {
-              if (run.id === context.runId) continue;
-              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: run.id,
-                per_page: 100,
-              });
-              let recognized = 0;
-              for (const job of jobs) {
-                const suite = suiteOf(job.name);
-                if (!suite) continue;
-                recognized++;
-                // Only `skipped` means "that run was never asked for the suite", so it
-                // still needs one. Everything else counts as handled: queued and in
-                // progress (don't duplicate), any terminal conclusion (don't re-run),
-                // and `cancelled` too — for the SAME head sha a cancellation is a
-                // deliberate act, since a push would have changed the sha, and
-                // resurrecting a long suite someone just killed on the next unrelated
-                // body edit is the worse failure. Push, or use "Re-run jobs".
-                if (job.conclusion !== 'skipped') handled.add(suite);
-              }
-              // The job-name keys are display names, which nothing enforces. If a
-              // completed run of this workflow yields no recognized suite job, a
-              // `name:` has drifted and `handled` is silently always empty — which
-              // re-launches every suite on every description edit. Say so loudly
-              // rather than fail closed and burn runners.
-              if (run.status === 'completed' && recognized === 0) {
-                core.warning(
-                  `Run ${run.id} has no job matching the \`suites\` map — a job \`name:\` ` +
-                    `likely changed. Per-commit suite dedupe is off until that is fixed.`,
-                );
-              }
-            }
-            return handled;
-          };
-
-          // NB: two events landing within the ~20s this takes can both miss the
-          // other's not-yet-created jobs and start the same suite twice. That wastes a
-          // runner; the opposite bias — a suite silently never running — is what this
-          // gate exists to prevent, so accept it.
-          const handled = await handledForSha(pr.head.sha);
-
-          // Path-triggered suites. Evaluated on `edited` too: `handled` is what stops
-          // a body tweak from re-launching one, so an event filter here would be
-          // redundant — and it used to leave a hole, where a push run whose gate hit a
-          // transient API error could never be recovered by a later edit.
+          // Path-triggered suites: a suite turns itself on when the diff touches
+          // its prefix, no `/ci` line needed.
           const autoOn = new Set();
           if (Object.keys(AUTO_PATHS).length) {
             const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -199,10 +121,6 @@ runs:
 
           const now = parse(pr.body);
           const decided = Object.fromEntries(
-            TOKENS.map((t) => [t, (now.has(t) || autoOn.has(t)) && !handled.has(t)]),
+            TOKENS.map((t) => [t, now.has(t) || autoOn.has(t)]),
           );
-          finish(
-            decided,
-            `body: ${[...now].sort().join(', ') || '(none)'}; ` +
-              `already run for ${pr.head.sha.slice(0, 8)}: ${[...handled].sort().join(', ') || '(none)'}`,
-          );
+          finish(decided, `body: ${[...now].sort().join(', ') || '(none)'}`);

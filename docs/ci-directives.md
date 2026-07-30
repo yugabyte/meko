@@ -9,16 +9,14 @@ called by [`on-demand-checks.yml`](../.github/workflows/on-demand-checks.yml) an
 
 - One or more suites per line, space/comma separated:
   `/ci integration_slow generate_image`.
-- A suite runs on each new commit while its line is present. Adding a `/ci` line
-  to the description runs that suite immediately, no push needed.
-- A suite runs **once per commit**: re-opening the PR, changing the base, or
-  editing the description again will not re-run a suite that already ran for the
-  current head commit. Those later runs report the suite as `Skipped`; the earlier
-  run's real result stays in the PR's checks list next to it, so read the run, not
-  just the topmost entry. The `Decide …` job annotates exactly what it decided and
-  why. To run a suite a second time against the same commit, use *Re-run jobs* in
-  the Actions tab on the run that executed it — cancelling a suite counts as having
-  run it, so a later description edit will not restart it.
+- A suite runs on each new commit while its line is present. The directive is read
+  when the PR **opens** and on every **push** — editing the description fires
+  nothing, so put the `/ci` lines in before you open the PR. Adding one later takes
+  a commit (the `git-push` skill covers it).
+- Every qualifying event runs the suites the body asks for — there is no
+  per-commit dedupe, so re-opening a PR re-runs them. The `Decide …` job annotates
+  exactly what it decided and why. To run a suite again against the same commit
+  without a new one, use *Re-run jobs* in the Actions tab.
 
 `integration_slow` also runs **automatically** — no `/ci` line needed — on any
 PR whose diff adds or modifies files under `test/integration/compute/slow/`. The

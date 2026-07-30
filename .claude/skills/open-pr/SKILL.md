@@ -69,6 +69,15 @@ Some CI suites are opt-in, requested with `/ci <suite>` lines in the PR body.
 Set the ones the change needs. The directive list, how the lines fire, and the
 criteria live in [`docs/ci-directives.md`](../../../docs/ci-directives.md).
 
+**Put them in the body you create the PR with.** The directive is read when the
+PR opens and on every push — a later description edit fires nothing, so a suite
+added afterwards needs a commit before it runs (the `git-push` skill covers
+that).
+
+Getting this wrong is quiet, not loud: the PR reads green while the suite you
+asked for never ran. If you claim a suite as evidence, confirm it actually
+reported — `gh pr checks <number>` showing `skipping` for it means it did not.
+
 Write it to a file to avoid shell-quoting pain:
 
 ```

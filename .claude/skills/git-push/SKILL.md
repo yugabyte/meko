@@ -182,6 +182,20 @@ Only touch the title/body when the branch content actually changed what they
 should say. A one-commit follow-up that the existing summary already covers
 needs no edit — don't churn the description for its own sake.
 
+### If the refresh ADDS a `/ci` directive, it will not fire on its own
+
+Editing the description does not trigger CI — directives are read when the PR
+opens and on every push. So a `/ci <suite>` line you add while refreshing the
+summary requests a suite that never runs, and the PR still reads green. Follow
+it with a commit:
+
+```
+git commit --allow-empty -m "ci: rerun" && git push
+```
+
+Then confirm the suite actually reported (`gh pr checks <number>`): a `skipping`
+bucket for it means it did not run, and its coverage is not yours to claim.
+
 ## No agent attribution
 
 Never add a `🤖 Generated with Claude Code`, session link, `Co-Authored-By`, or
