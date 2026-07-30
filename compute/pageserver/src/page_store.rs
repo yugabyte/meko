@@ -3334,13 +3334,17 @@ impl PageStore {
             .with_context(|| format!("gc_act_drop_meta branch={branch_id} keys={}", keys.len()))
     }
 
-    /// Minimum branch point over live children of `branch_id` — the
-    /// child pin folded into the GC cutoff. Seq scan over
-    /// `branch_state` (one row per branch; small by construction).
+    /// Minimum branch point over all child rows of `branch_id` — the GC
+    /// cutoff holds the parent's history at/below every child's fork
+    /// point. A deleted child can still be read until branch-deletion GC
+    /// cleans it up, and that cleanup ends by removing its row — so
+    /// count every row still present, `deleted_at` set or not.
+    /// TODO(gc): during deleted-branch GC, drop the branch's row from
+    /// `branch_state` as the last step — that is what releases the pin.
     pub async fn min_children_fork_lsn(&self, branch_id: BranchId) -> Result<Option<Lsn>> {
         let sql = format!(
             "SELECT min(ancestor_lsn) FROM \"{}\".branch_state \
-             WHERE ancestor_branch_id = $1 AND deleted_at IS NULL",
+             WHERE ancestor_branch_id = $1",
             self.schema
         );
         let row = self
@@ -7937,11 +7941,11 @@ mod tests {
         );
     }
 
-    /// Scenario: the child pin. The cutoff folds in min(ancestor_lsn)
-    /// over LIVE children only — a deleted child must release its pin,
-    /// and a branch with no children pins nothing.
+    /// Scenario: every child row pins, `deleted_at` set or not; only
+    /// removing the row (what branch-deletion GC will do) releases the
+    /// pin. A branch with no children pins nothing.
     #[tokio::test]
-    async fn min_children_fork_lsn_live_children_only() {
+    async fn min_children_fork_lsn_follows_child_rows() {
         let (store, _schema) = make_store("gc_children").await;
         let parent = rand_branch();
 
@@ -7957,18 +7961,34 @@ mod tests {
         child_lo.ancestor_lsn = Some(Lsn(110));
         create_branch_state_row(&store, &child_lo).await.unwrap();
 
-        let mut child_deleted = sample_branch_state_row(rand_branch());
-        child_deleted.ancestor_branch_id = Some(parent);
-        child_deleted.ancestor_lsn = Some(Lsn(90));
-        child_deleted.deleted_at = Some(chrono::Utc::now().naive_utc());
-        create_branch_state_row(&store, &child_deleted)
+        // A child mid-deletion: deleted_at stamped, row still present.
+        let mid_deletion = rand_branch();
+        let mut child_deleting = sample_branch_state_row(mid_deletion);
+        child_deleting.ancestor_branch_id = Some(parent);
+        child_deleting.ancestor_lsn = Some(Lsn(90));
+        child_deleting.deleted_at = Some(chrono::Utc::now().naive_utc());
+        create_branch_state_row(&store, &child_deleting)
             .await
             .unwrap();
 
         assert_eq!(
             store.min_children_fork_lsn(parent).await.unwrap(),
+            Some(Lsn(90)),
+            "a mid-deletion child still pins at its fork point"
+        );
+
+        // Deletion completes = the row is removed; only that releases
+        // the pin.
+        let delete_sql = format!("DELETE FROM \"{PROD_SCHEMA}\".branch_state WHERE branch_id = $1");
+        store
+            .ysql_client
+            .execute(&delete_sql, &[&mid_deletion.to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            store.min_children_fork_lsn(parent).await.unwrap(),
             Some(Lsn(110)),
-            "deleted child's 90 must not pin; live min is 110"
+            "row removal releases the pin; live min is 110"
         );
     }
 

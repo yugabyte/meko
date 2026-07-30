@@ -124,11 +124,17 @@ base re-covers it.
 Each `gc_period` tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`)
 runs:
 
-1. **Cutoff.** Compute `min(retention window, live child fork points,
+1. **Cutoff.** Compute `min(retention window, child fork points,
    live leases, consistent_lsn)`, floored at the branch's own ancestor
    LSN. Persist `applied_gc_cutoff_lsn = max(old, new)` to
-   `timeline_state` (generation-fenced, monotone), then publish it to the
+   `branch_state` (generation-fenced, monotone), then publish it to the
    in-memory `Rcu<Lsn>`.
+
+   A deleted child can still be read until branch-deletion GC cleans it
+   up, and that cleanup ends by removing its `branch_state` row — so
+   child fork points count every row still present, `deleted_at` set or
+   not (TODO: during deleted-branch GC, drop the branch's `branch_state`
+   row as the last step).
 2. **Await readers.** Wait out in-flight reads still holding a guard on
    the *old* cutoff before deleting anything they might need. Reads never
    wait for GC; GC waits for reads.
@@ -367,9 +373,10 @@ the branch's ancestor LSN. Find the floor:
 - **Lease** — a compute holding an lsn lease (long query, stuck
   basebackup, a client that never released) pins it at its read LSN; find
   and clear the holder.
-- **Child branch** — a live child pins its parent at the fork point. NB: a
-  *dropped* child still pins today (its `timeline_state` isn't marked
-  deleted on drop), so a stale dropped branch leaks a parent pin.
+- **Child branch** — every child `branch_state` row pins its parent at
+  its fork point, `deleted_at` set or not (a deleted child can still be
+  read until branch-deletion GC removes its row — until that flow
+  exists, a dropped branch pins its parent indefinitely).
 - **`consistent_lsn`** — ingestion lagging (safekeeper/walreceiver behind)
   holds the cutoff back; not a GC problem.
 - **Retention** — a large `gc_horizon` / `pitr_interval` is intentional;
