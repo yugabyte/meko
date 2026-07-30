@@ -12,6 +12,12 @@ dependencies = [
     "langchain-openai>=0.2",
     "langchain-aws>=0.2",
     "langchain-mcp-adapters>=0.1",
+    # Direct pin: mcp 2.0.0 removed mcp.shared.context.RequestContext, which
+    # langchain-mcp-adapters (<=0.3.1, no upper bound of its own) imports at
+    # module load — an unpinned image build resolves mcp 2.x and the gateway
+    # crashes on startup (ImportError in routes/chat.py's import chain).
+    # Lift only once adapters declare mcp>=2 support.
+    "mcp>=1.9,<2",
 ]
 
 [project.optional-dependencies]
