@@ -4,18 +4,6 @@ __pycache__/
 *.pyo
 *.egg-info/
 venv/
-.env
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
 
 # Build output
 build/
@@ -33,7 +21,5 @@ tests/
 
 # User journey UI standalone
 user-journey-ui-standalone/
-
-.claude/worktrees/
 
 api_server/api_server

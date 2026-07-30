@@ -1,0 +1,23 @@
+# Repo-wide ignores. Anything specific to one project's toolchain or build output
+# belongs in that project's own .gitignore (meko/.gitignore, ycp/.gitignore), not
+# here. Root patterns cascade into every tree, so a rule that belongs everywhere
+# lives here once rather than being duplicated per project.
+
+# Secrets — never committed from any tree
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code scratch worktrees. This rule has to live at the root because
+# .claude/ is a root directory — in meko/.gitignore it would only match
+# meko/.claude/worktrees/ and silently miss the real one.
+.claude/worktrees/
