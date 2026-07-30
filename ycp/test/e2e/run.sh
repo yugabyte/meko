@@ -66,6 +66,10 @@ BASE="${YCP_E2E_BASE_PATH-/ycp}"
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YCP_DIR="$(cd "$E2E_DIR/../.." && pwd)"
 REPO_DIR="$(cd "$YCP_DIR/.." && pwd)"
+# ycp/ sits at the repository root because it is shared with amp, while the
+# control plane it tests against lives in the meko tree. Name that explicitly
+# rather than counting ".." from here, so moving either one fails loudly.
+MEKO_DIR="$REPO_DIR/meko"
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nFAIL: %s\n' "$*" >&2; exit 1; }
@@ -179,7 +183,7 @@ render() {
 # ---------------------------------------------------------------- build & cluster
 
 log "building images from source ($ENGINE)"
-# Two build contexts: the control plane is api_server/ (its own Go module), the
+# Two build contexts: the control plane is meko/api_server/ (its own Go module), the
 # agent is ycp/. Same split as the Dockerfiles the release workflows use.
 #
 # Host architecture on purpose -- no --platform. The kind node image is multi-arch,
@@ -187,7 +191,7 @@ log "building images from source ($ENGINE)"
 # under emulation would only make this slower.
 API_IMG="${IMG_PREFIX}meko-api-server:$TAG"
 AGENT_IMG="${IMG_PREFIX}meko-agent:$TAG"
-"$ENGINE" build -f "$REPO_DIR/api_server/Dockerfile" -t "$API_IMG"   "$REPO_DIR/api_server"
+"$ENGINE" build -f "$MEKO_DIR/api_server/Dockerfile" -t "$API_IMG"   "$MEKO_DIR/api_server"
 "$ENGINE" build -f "$YCP_DIR/Dockerfile.agent"       -t "$AGENT_IMG" "$YCP_DIR"
 # dpmcp is built but not loaded or deployed: this run provisions no datapacks, so
 # nothing would pull it. Building it here is what keeps a broken Dockerfile.dpmcp
