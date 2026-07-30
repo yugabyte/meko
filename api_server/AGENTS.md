@@ -82,9 +82,11 @@ choice — call it out in the PR; never let an unguarded route slip in by omissi
 
 ## Conventions
 
-- `.golangci.yml` governs this module: **`goimports.local-prefixes: meko`**
-  (local imports in their own group), tabs, **120-col** lines. Run
-  `golangci-lint run ./...`.
+- `.golangci.yml` (repo root, golangci-lint **v2** format) governs this module:
+  **`formatters.settings.goimports.local-prefixes: [meko]`** (local imports in
+  their own group), tabs, **120-col** lines. Run `golangci-lint run ./...` with a
+  v2.8.0 binary — see the root `AGENTS.md > Lint` for the install line, since the
+  obvious `go install` produces one that refuses to lint a `go 1.25` module.
 - Structured logging via `slog` with key/value pairs.
 - Naming: exported `PascalCase`; constructors `New<Type>`; `…Repo` / `…Service` /
   `…Handler` suffixes; swagger doc comments on handlers are the source for

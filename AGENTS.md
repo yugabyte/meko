@@ -128,7 +128,15 @@ Per-component dev loops:
 (cd system_agent && mypy . && pycodestyle .)
 ```
 
-`.golangci.yml` at repo root governs `cli_app` and `api_server`. Note `goimports.local-prefixes: meko` — local imports go in their own group. Line limits: **120 for Go, 100 elsewhere**. Tabs for Go, 4 spaces for Python, 2 spaces for YAML/shell (see `.editorconfig`).
+`.golangci.yml` at repo root governs `cli_app` and `api_server`; `meko-provisioner` has its own. Both are **golangci-lint v2** configs (`version: "2"` on line 1) — v1 binaries cannot read them, and v2 needs the action at v7+. CI and the provisioner Makefile both pin **v2.8.0**; bump them together.
+
+Install a matching binary with the repo's Go, not the tool's — `go install` otherwise builds it with golangci-lint's own older toolchain and it refuses to lint a `go 1.25` module:
+
+```bash
+GOTOOLCHAIN=go1.25.0 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0
+```
+
+Note `formatters.settings.goimports.local-prefixes: [meko]` — local imports go in their own group (in v2, `goimports` is a *formatter*, not a linter). Line limits: **120 for Go, 100 elsewhere**. Tabs for Go, 4 spaces for Python, 2 spaces for YAML/shell (see `.editorconfig`).
 
 ## Database
 

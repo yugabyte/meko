@@ -132,14 +132,23 @@ jobs:
       - name: Static analysis (go vet)
         run: go vet ./...
 
-      # Non-blocking for now: this is the first time golangci-lint runs in CI,
-      # so surface findings without failing the PR. Flip to blocking once the
-      # baseline is clean.
+      # Non-blocking: the baseline is ~490 findings (mostly lll, errcheck and
+      # govet's stricter enable-all set), so this surfaces findings without
+      # failing the PR. Flip to blocking once that is worked down.
+      #
+      # Both versions are pinned on purpose. The config file format is itself
+      # versioned — `.golangci.yml` declares `version: "2"` — and action v7+
+      # runs golangci-lint v2 only, so an unpinned `latest` silently stops
+      # matching the config the day a new major ships. That already happened:
+      # this step ran `latest` (v2) against a v1 config under a v1-only action
+      # and errored on every run, invisible because of continue-on-error.
+      # Keep the version in step with GOLANGCI_LINT_VERSION in
+      # meko-provisioner/Makefile so the whole repo lints identically.
       - name: Lint (golangci-lint)
         continue-on-error: true
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.8.0
           working-directory: api_server
 
       # Unit tests are mocked; the few DB-backed tests self-skip when no

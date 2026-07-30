@@ -1,72 +1,83 @@
+version: "2"
 run:
-  timeout: 5m
   modules-download-mode: readonly
-
-linters-settings:
-  govet:
-    enable-all: true
-  revive:
-    rules:
-      - name: exported
-        severity: warning
-      - name: unexported-return
-        severity: warning
-      - name: blank-imports
-        severity: warning
-      - name: context-as-argument
-        severity: warning
-      - name: dot-imports
-        severity: warning
-      - name: error-return
-        severity: warning
-      - name: error-strings
-        severity: warning
-      - name: error-naming
-        severity: warning
-      - name: increment-decrement
-        severity: warning
-      - name: var-naming
-        severity: warning
-      - name: range
-        severity: warning
-      - name: receiver-naming
-        severity: warning
-      - name: indent-error-flow
-        severity: warning
-  lll:
-    line-length: 120
-  goimports:
-    local-prefixes: meko
-  misspell:
-    locale: US
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-  staticcheck:
-    checks:
-      - all
-
 linters:
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - revive
-    - goimports
-    - lll
-    - misspell
-    - gosimple
-    - typecheck
     - gocritic
     - gosec
+    - lll
+    - misspell
+    - prealloc
+    - revive
     - unconvert
     - unparam
-    - prealloc
-
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    govet:
+      enable-all: true
+    lll:
+      line-length: 120
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+        - name: unexported-return
+          severity: warning
+        - name: blank-imports
+          severity: warning
+        - name: context-as-argument
+          severity: warning
+        - name: dot-imports
+          severity: warning
+        - name: error-return
+          severity: warning
+        - name: error-strings
+          severity: warning
+        - name: error-naming
+          severity: warning
+        - name: increment-decrement
+          severity: warning
+        - name: var-naming
+          severity: warning
+        - name: range
+          severity: warning
+        - name: receiver-naming
+          severity: warning
+        - name: indent-error-flow
+          severity: warning
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - vendor
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-dirs:
-    - vendor
   max-issues-per-linter: 0
   max-same-issues: 0
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - meko
+  exclusions:
+    generated: lax
+    paths:
+      - vendor
+      - third_party$
+      - builtin$
+      - examples$
