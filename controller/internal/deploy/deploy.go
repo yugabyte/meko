@@ -32,9 +32,9 @@ type EndpointSpec struct {
 	BranchID  string
 	PgVersion int
 	YB        YBConn
-	// ControllerURL, when non-empty, makes the endpoint register its
-	// pageserver + safekeeper with that controller and take its generation from
-	// the controller's attach-hook. Empty => controller-free self-bootstrap.
+	// ControllerURL, when non-empty, points the endpoint at that controller for
+	// its branch bookkeeping. Empty => controller-free self-bootstrap. The
+	// pageserver's generation is not involved: it claims its own.
 	ControllerURL string
 	// CPU and Memory are the compute reserved for the endpoint pod, as Kubernetes
 	// resource quantities (e.g. "2", "4Gi"). Each is applied as BOTH the request

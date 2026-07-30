@@ -107,10 +107,10 @@ and, per user, their storage pools, projects, branches, and endpoints. See
 ## Storage-layer control surface
 
 The controller owns cluster control for the storage layer: **generation authority**
-(the attach-hook fencing counter), the pageserver-node / branch / endpoint
+the branch / endpoint
 **registries**, and **provisioning** of the shared `yb_storage` database (all its
 schemas) on startup. It serves these as an HTTP surface (`/control/v1/...`,
-`/debug/v1/attach-hook`, `/ready`) on the same listener as the versioned `/api/v1`
+`/ready`) on the same listener as the versioned `/api/v1`
 product API; the endpoint pods and the `yb_amp_local` dev harness drive it. State
 lives in the `amp_registry` schema of `yb_storage`. See
 [`architecture/sc-integration.md`](architecture/sc-integration.md) for the design.

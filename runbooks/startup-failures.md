@@ -30,14 +30,16 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 2. **safekeeper** → checkpoint: its HTTP `/v1/status` (or process up + port listening).
 3. **endpoint_storage** (if used) → checkpoint: process up, no TLS errors in its log.
 4. **pageserver** — *single-branch model (#16)*: the process refuses to start unless
-   `pageserver.toml` carries `branch_id`/`generation`. On a fresh repo this is
+   `pageserver.toml` carries `branch_id`. On a fresh repo this is
    normal: `yb_amp_local start` prints `Skipping pageserver …: no timeline identity yet` and
-   `branch create` bakes the identity in, bumps the generation via the SC attach-hook, and starts
-   the pageserver itself. Manual deployments must write the identity before spawning; how to
-   create the branch comes from the controller-seeded `amp_storage.branch_state` row, not the toml. Checkpoint once started:
-   `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
-5. **Register SK with the SC** (see "Manual registration"). PS registration is launcher-driven
-   (`node_register` + attach-hook happen inside every `yb_amp_local pageserver start`).
+   `branch create` bakes the identity in and starts the pageserver itself. Manual
+   deployments must write the identity before spawning. The generation is not in the
+   toml — the process claims it from `amp_storage.branch_state` at startup, and will
+   refuse to start if that row is missing (the controller provisions it at branch
+   create). How to create the branch comes from the same row, not the toml.
+   Checkpoint once started: `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
+5. **Register SK with the SC** (see "Manual registration"). The pageserver needs no
+   registration step — it claims its generation itself on every start.
 6. **Create the branch** (via `yb_amp_local branch create`; that seeds
    `amp_storage.branch_state`, and the pageserver bootstraps from it — a NULL ancestor means
    initdb + import, a set one means branch off it — then the branch is created on the safekeeper).

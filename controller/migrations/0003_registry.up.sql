@@ -1,7 +1,6 @@
 -- 0003: the `amp_registry` schema — the controller's storage-layer bookkeeping:
--- generation authority (the fencing counter) plus the branch and endpoint
--- registries behind the HTTP surface the controller serves to yb_amp_local and
--- the integration harness.
+-- the branch and endpoint registries behind the HTTP surface the controller
+-- serves to yb_amp_local and the integration harness.
 --
 -- Kept in its own `amp_registry` schema so the flat-storage model (32-hex branch_id
 -- VARCHAR) stays separate from the controller product model (project/branch/
@@ -17,33 +16,22 @@ CREATE SCHEMA IF NOT EXISTS amp_registry;
 -- yb-mode doesn't shard branches across pageservers (YB tablet-shards the
 -- keyspace itself), so this is keyed only by `branch_id`.
 --
--- Two groups of columns, with different writers:
+-- The row is the branch's CREATION RECORD — `branch_name`, `pg_version`,
+-- `ancestor_branch_id`, `start_lsn` — written once by RecordBranch at
+-- branch-create time and read back by the launcher to materialize the branch's
+-- pageserver + safekeeper (a NULL `ancestor_branch_id` means bootstrap, a set
+-- one means fork that ancestor at `start_lsn`).
 --
---   * The FENCING group — `generation` + `placement_policy` — is owned by the
---     attach-hook. The generation counter is the fencing primitive: monotonic
---     across the branch's lifecycle (deliberately PRESERVED on detach, so a
---     later reattach still fences a pageserver from a prior generation) and
---     NULL only until the branch's first attach. Because detach keeps the
---     counter, `placement_policy` is what actually distinguishes detached from
---     attached; `Inspect` reads the pair.
---
---   * The CREATION group — `branch_name`, `pg_version`, `ancestor_branch_id`,
---     `start_lsn` — is written once by RecordBranch at branch-create time and
---     is what the launcher reads back to materialize the branch's pageserver +
---     safekeeper (a NULL `ancestor_branch_id` means bootstrap, a set one means
---     fork that ancestor at `start_lsn`).
---
--- The creation group is nullable because the attach-hook keeps a safety-net
--- INSERT for a branch that somehow reaches attach without having been created,
--- and that path has only a branch id to go on. `pg_version IS NOT NULL` is
--- therefore the predicate for "this branch was properly created", the same
--- shape as the presence predicates on `amp_storage.branch_state`.
+-- There is deliberately NO generation here. Fencing is the pageserver's own
+-- concern: it claims a generation at startup by incrementing
+-- `amp_storage.branch_state.current_generation` and taking what that statement
+-- returns, so the counter lives in the same row as the writes it fences and
+-- there is no second copy to keep in step.
 --
 -- A dropped branch is TOMBSTONED, not deleted: `dropped_at` is stamped and the
--- row stays. A branch id is never reused, so keeping the row keeps the
--- generation counter (and so the fencing history) intact, and leaves a record of
--- what the id was. Every reader that answers "is this branch live?" —
--- `Inspect`, `ListBranches`, `ListBranchNames` — filters `dropped_at IS NULL`.
+-- row stays, because a branch id is never reused and the record of what the id
+-- was is worth keeping. Every reader that answers "is this branch live?" —
+-- `ListBranches`, `ListBranchNames` — filters `dropped_at IS NULL`.
 --
 -- The branch's data-plane state (consistent LSN, WAL start, the daemons' own
 -- column groups) lives in `amp_storage.branch_state`, keyed by the same id.
@@ -53,8 +41,6 @@ CREATE TABLE IF NOT EXISTS amp_registry.branches (
     pg_version             INTEGER,
     ancestor_branch_id     VARCHAR,
     start_lsn              pg_lsn,
-    generation             INTEGER,
-    placement_policy       VARCHAR NOT NULL,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     dropped_at             TIMESTAMPTZ,
     PRIMARY KEY (branch_id)

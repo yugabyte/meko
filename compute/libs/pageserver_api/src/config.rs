@@ -163,19 +163,14 @@ impl Display for NodeMetadata {
 pub struct ConfigToml {
     /// Single-branch identity: the one branch this pageserver
     /// process serves for its entire lifetime. Set by the launcher
-    /// (neon_local / the controller) before spawning the process.
-    /// Both `branch_id` / `generation` must be
-    /// present together (validated in `PageServerConf::parse_and_validate`).
+    /// (the controller) before spawning the process.
+    ///
+    /// The attachment's generation is NOT configured here: the pageserver
+    /// claims it itself at startup, by incrementing
+    /// `amp_storage.branch_state.current_generation` and taking what that
+    /// statement returns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_id: Option<BranchId>,
-    /// Generation number for this attachment. The launcher bumps the
-    /// generation in `amp_registry.branches` on every spawn and
-    /// writes the fresh value here; the pageserver CAS-installs it on
-    /// the `amp_storage.branch_state` row at startup
-    /// (`cas_bump_generation_on_attach`), which fences out any stale
-    /// process still holding an older generation.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub generation: Option<u32>,
     // types mapped 1:1 into the runtime PageServerConfig type
     pub listen_pg_addr: String,
     pub listen_http_addr: String,
@@ -836,7 +831,6 @@ impl Default for ConfigToml {
 
         Self {
             branch_id: None,
-            generation: None,
             listen_pg_addr: (DEFAULT_PG_LISTEN_ADDR.to_string()),
             listen_http_addr: (DEFAULT_HTTP_LISTEN_ADDR.to_string()),
             listen_https_addr: (None),

@@ -566,8 +566,7 @@ write-hot, continuously-drained queue.
 
 ## `amp_registry` schema
 
-The controller's storage-layer bookkeeping: generation authority (the
-fencing counter) plus the node / branch / endpoint / pending-init
+The controller's storage-layer bookkeeping: the branch and endpoint
 registries behind the HTTP surface the controller serves to
 `yb_amp_local`, endpoint pods, and the integration harness. Kept in its
 own schema so the flat storage model (32-hex `branch_id` VARCHAR) stays
@@ -579,7 +578,7 @@ pool.
 
 | Table | Purpose |
 |---|---|
-| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — branches are not sharded across pageservers (YB tablet-shards the keyspace itself). Carries the branch's *creation record* (`branch_name`, `pg_version`, `ancestor_branch_id`, `start_lsn`), written once at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL `ancestor_branch_id` = bootstrap, non-NULL = fork that ancestor at `start_lsn`); and the *fencing* pair (`generation` + `placement_policy`). The `generation` counter, bumped by the attach-hook, is the fencing primitive; monotonic across the branch's lifecycle (preserved on detach), NULL until first attach. A dropped branch is tombstoned via `dropped_at`, never deleted. |
+| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — branches are not sharded across pageservers (YB tablet-shards the keyspace itself). Carries the branch's *creation record* (`branch_name`, `pg_version`, `ancestor_branch_id`, `start_lsn`), written once at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL `ancestor_branch_id` = bootstrap, non-NULL = fork that ancestor at `start_lsn`). No generation lives here — fencing is the pageserver's own, in `amp_storage.branch_state.current_generation`. A dropped branch is tombstoned via `dropped_at`, never deleted. |
 | `amp_registry.endpoints` | Durable registry of compute endpoints, keyed by endpoint id. `spec` is opaque JSONB the controller never interprets (it round-trips through `yb_amp_local`'s serde model). |
 
 Registry semantics are documented in

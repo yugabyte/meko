@@ -43,34 +43,6 @@ func recordingServer(t *testing.T, cap *capture, status int, respBody string) *h
 
 func ptrStr(s string) *string { return &s }
 
-func TestControllerAttachHook(t *testing.T) {
-	var cap capture
-	srv := recordingServer(t, &cap, http.StatusOK, `{"gen":7}`)
-	c := NewController(srv.URL, nil)
-
-	resp, err := c.AttachHook(context.Background(), registry.AttachHookRequest{
-		BranchID: "0102030405060708090a0b0c0d0e0f10",
-		Attach:   true,
-	})
-	if err != nil {
-		t.Fatalf("AttachHook: %v", err)
-	}
-	if cap.method != http.MethodPost || cap.path != "/debug/v1/attach-hook" {
-		t.Fatalf("got %s %s", cap.method, cap.path)
-	}
-
-	var sent registry.AttachHookRequest
-	if err := json.Unmarshal(cap.body, &sent); err != nil {
-		t.Fatalf("request body not valid AttachHookRequest: %v", err)
-	}
-	if sent.BranchID != "0102030405060708090a0b0c0d0e0f10" || !sent.Attach {
-		t.Fatalf("unexpected request body: %+v", sent)
-	}
-	if resp.Generation == nil || *resp.Generation != 7 {
-		t.Fatalf("unexpected generation: %+v", resp.Generation)
-	}
-}
-
 func TestControllerRecordAndListBranches(t *testing.T) {
 	var cap capture
 

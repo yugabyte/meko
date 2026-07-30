@@ -85,10 +85,9 @@ type DeployConfig struct {
 
 	// ControllerURL is the URL deployed endpoints use to reach the
 	// controller-managed controller (e.g. http://host.docker.internal:50051).
-	// When set, the endpoint registers its pageserver + safekeeper, takes its
-	// generation from the attach-hook, and registers the timeline — the
-	// controller-coordinated path (controller-project-create.md). Empty = the
-	// endpoint runs controller-free with a pinned generation.
+	// When set, the endpoint runs the controller-coordinated path
+	// (controller-project-create.md). Empty = the endpoint runs
+	// controller-free. Either way the pageserver claims its own generation.
 	ControllerURL string
 
 	// The universe the deployed endpoints use as their durable backend. This is
@@ -118,7 +117,7 @@ type Config struct {
 	ListenAddr     string
 	SigningKeyPath string // optional; controller generates an ephemeral key if unset
 	Metrics        bool   // expose Prometheus /metrics and record instrumentation
-	Dev            bool   // serve the storage-layer control surface (attach-hook + registries), unauthenticated
+	Dev            bool   // serve the storage-layer control surface (branch/endpoint registries), unauthenticated
 	Log            LogConfig
 	DB             DBConfig
 	Task           TaskConfig
@@ -143,7 +142,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&c.Log.Format, "log-format", env("AMP_LOG_FORMAT", "json"), "log format: json|text")
 	fs.StringVar(&c.SigningKeyPath, "signing-key", env("AMP_SIGNING_KEY_PATH", ""), "path to the control-plane signing key (optional)")
 	fs.BoolVar(&c.Metrics, "metrics", envBool("AMP_METRICS", true), "expose the Prometheus /metrics scrape endpoint and record instrumentation")
-	fs.BoolVar(&c.Dev, "dev", envBool("AMP_DEV", false), "serve the storage-layer control surface (attach-hook, node/branch/endpoint registries) unauthenticated; for yb_amp_local and the integration harness")
+	fs.BoolVar(&c.Dev, "dev", envBool("AMP_DEV", false), "serve the storage-layer control surface (branch/endpoint registries) unauthenticated; for yb_amp_local and the integration harness")
 	fs.DurationVar(&c.Task.PollInterval, "task-poll-interval", envDuration("AMP_TASK_POLL_INTERVAL", 2*time.Second), "task worker poll interval")
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
 	fs.DurationVar(&c.Task.RenewInterval, "task-lease-renew-interval", envDuration("AMP_TASK_LEASE_RENEW_INTERVAL", 10*time.Second), "how often the worker renews the lease of a running task (must be < task-lease-ttl)")

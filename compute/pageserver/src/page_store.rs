@@ -414,21 +414,6 @@ pub enum PublishGcCutoffOutcome {
     },
 }
 
-/// Result of `PageStore::cas_bump_generation_on_attach`. Called once
-/// per attach to push the controller-issued generation through to the
-/// YB column before any flushes run, so the flush path's
-/// `current_generation <= $our` invariant holds even on re-attach.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CasBumpOutcome {
-    /// Stored gen was strictly less than ours; we bumped it.
-    Bumped,
-    /// Stored gen already equals ours (idempotent re-attach).
-    AlreadyAtOurGen,
-    /// Stored gen is strictly greater than ours — a newer pageserver
-    /// has taken over. Caller should refuse the attach + shut down.
-    StaleGeneration { live_generation: u32 },
-}
-
 #[derive(Debug, Clone)]
 pub struct PageStoreConfig {
     pub yb: YbConnConfig,
@@ -3722,22 +3707,24 @@ impl PageStore {
     /// (or — race — is populated in a state we shouldn't touch).
     pub async fn update_branch_initial_state(&self, row: &BranchStateRow) -> Result<()> {
         let sql = format!(
-            // `pg_version` is deliberately absent: the controller seeds it at
-            // branch create and is its only writer. `row.pg_version` is read
-            // back from that seed, so writing it here would be a no-op at best.
+            // Two columns are deliberately absent, each with a single writer
+            // elsewhere: `pg_version`, seeded by the controller at branch
+            // create; and `current_generation`, claimed by this process at
+            // startup (`claim_generation`). Writing either here would clobber
+            // its owner — the generation especially, since our fenced writes
+            // are checked against the claimed value.
             "UPDATE \"{}\".branch_state SET \
                  consistent_lsn        = $2, \
                  applied_gc_cutoff_lsn = $3, \
                  ancestor_branch_id    = $4, \
                  ancestor_lsn          = $5, \
-                 current_generation    = $6, \
-                 initdb_lsn            = $7, \
-                 prev_record_lsn       = $8, \
-                 archived_at           = $9, \
-                 deleted_at            = $10, \
-                 rel_size_migration    = $11, \
-                 rel_size_migrated_at  = $12, \
-                 lineage               = $13 \
+                 initdb_lsn            = $6, \
+                 prev_record_lsn       = $7, \
+                 archived_at           = $8, \
+                 deleted_at            = $9, \
+                 rel_size_migration    = $10, \
+                 rel_size_migrated_at  = $11, \
+                 lineage               = $12 \
              WHERE branch_id = $1 AND consistent_lsn IS NULL",
             self.schema
         );
@@ -3752,7 +3739,6 @@ impl PageStore {
                     &(row.applied_gc_cutoff_lsn.0 as i64),
                     &row.ancestor_branch_id.map(|id| id.to_string()),
                     &row.ancestor_lsn.map(|l| l.0 as i64),
-                    &row.current_generation,
                     &row.initdb_lsn.map(|l| l.0 as i64),
                     &row.prev_record_lsn.map(|l| l.0 as i64),
                     &row.archived_at,
@@ -3767,6 +3753,26 @@ impl PageStore {
         if n == 0 {
             self.assert_branch_state_row_exists(row.branch_id).await?;
         }
+        Ok(())
+    }
+
+    /// Test-only: pin `current_generation` to an exact value. Production only
+    /// ever increments it via [`Self::claim_generation`]; tests need a specific
+    /// generation to exercise the fencing predicates.
+    #[cfg(test)]
+    pub(crate) async fn set_generation_for_test(
+        &self,
+        branch_id: BranchId,
+        generation: i32,
+    ) -> Result<()> {
+        let sql = format!(
+            "UPDATE \"{}\".branch_state SET current_generation = $2 WHERE branch_id = $1",
+            self.schema
+        );
+        self.ysql_client
+            .execute(&sql, &[&branch_id.to_string(), &generation])
+            .await
+            .context("set_generation_for_test")?;
         Ok(())
     }
 
@@ -3864,7 +3870,7 @@ impl PageStore {
     /// flush takes care of shutting the stale process down.
     ///
     /// Does not touch `branch_id`, `current_generation`
-    /// (owned by `cas_bump_generation_on_attach`), or `pg_version`
+    /// (owned by `claim_generation`), or `pg_version`
     /// (immutable per timeline). Other fields are full-overwrite from
     /// the caller's row.
     pub async fn update_branch_state(
@@ -4085,81 +4091,13 @@ impl PageStore {
     /// `bump_generation` / `advance_gc_cutoff_lsn` /
     /// `upsert_timeline`. Each touches disjoint columns.
     ///
-    /// Eager attach-time bump of `current_generation`. Called once
-    /// per attach, before any flush. Pushes the controller-issued
-    /// generation through to the YB column so the flush path's
-    /// `current_generation <= $our` predicate matches on the first
-    /// try (without this, the flush self-heals on its own — see
-    /// [`Self::advance_consistent_lsn`] — but a stale PS could
-    /// briefly write redundant rows in the gap between attach and
-    /// first flush).
-    ///
-    /// `WHERE current_generation < $2` is the CAS predicate. If 0
-    /// rows updated, probe the stored value to disambiguate:
-    /// - stored `== ours` → idempotent re-attach, return
-    ///   [`CasBumpOutcome::AlreadyAtOurGen`].
-    /// - stored `> ours` → another pageserver bumped past us
-    ///   already, return [`CasBumpOutcome::StaleGeneration`].
-    /// - row missing → bail (the row is supposed to be created at
-    ///   timeline creation; arriving here without it is a wiring bug).
-    pub async fn cas_bump_generation_on_attach(
-        &self,
-        branch_id: BranchId,
-        generation: utils::generation::Generation,
-    ) -> Result<CasBumpOutcome> {
-        let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
-        let sql = format!(
-            "UPDATE \"{}\".branch_state \
-             SET current_generation = $2 \
-             WHERE branch_id = $1 \
-               AND current_generation < $2",
-            self.schema
-        );
-        let n = self
-            .ysql_client
-            .execute(&sql, &[&branch_id.to_string(), &gen_i32])
-            .await
-            .context("cas_bump_generation_on_attach")?;
-        if n == 1 {
-            return Ok(CasBumpOutcome::Bumped);
-        }
-        // n == 0 — probe.
-        let probe_sql = format!(
-            "SELECT current_generation FROM \"{}\".branch_state \
-             WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
-            self.schema
-        );
-        let row = self
-            .ysql_client
-            .query_opt(&probe_sql, &[&branch_id.to_string()])
-            .await
-            .context("cas_bump_generation_on_attach probe")?;
-        match row {
-            None => anyhow::bail!(
-                "no timeline row for {branch_id} — \
-                 cas_bump_generation_on_attach ran before timeline_create wrote the row"
-            ),
-            Some(r) => {
-                let stored: i32 = r.get(0);
-                let stored_u32 = stored as u32;
-                if stored_u32 == gen_i32 as u32 {
-                    Ok(CasBumpOutcome::AlreadyAtOurGen)
-                } else {
-                    Ok(CasBumpOutcome::StaleGeneration {
-                        live_generation: stored_u32,
-                    })
-                }
-            }
-        }
-    }
-
     /// **Generation-fenced**: the UPDATE's WHERE clause checks
     /// `current_generation = $4`. The invariant `YB.current_generation
-    /// == our_gen` is established once at attach time by
-    /// [`Self::cas_bump_generation_on_attach`] (called from
-    /// `Timeline::bump_generation_on_attach`) and held for the
-    /// lifetime of the attached PS: only attach paths write the
-    /// column, and they only move it forward. So a stale PS's flush
+    /// == our_gen` is established at startup by
+    /// [`Self::claim_generation`], which increments the column and returns
+    /// what this process got, and holds for the lifetime of the attached
+    /// PS: only a claim writes the column, and a claim only moves it
+    /// forward. So a stale PS's flush
     /// finds `YB.current_generation > our_gen` → zero rows → probe
     /// → [`AdvanceConsistentLsnOutcome::StaleGeneration`] → fatal shutdown.
     ///
@@ -4240,6 +4178,40 @@ impl PageStore {
         } else {
             Ok(AdvanceConsistentLsnOutcome::Updated)
         }
+    }
+
+    /// Claim this process's generation for `branch_id`, atomically.
+    ///
+    /// The pageserver is its own generation authority: one statement increments
+    /// the counter and returns what it got, so two processes racing to attach
+    /// necessarily receive different numbers and the loser's gen-fenced writes
+    /// stop matching. Nothing issues the number from outside, so there is no CAS
+    /// against an externally-chosen value to lose.
+    ///
+    /// `COALESCE(current_generation, 0) + 1` because the column is NULL until
+    /// the pageserver's group exists — a first attach claims generation 1, and
+    /// the row itself was provisioned by the controller at branch create.
+    pub async fn claim_generation(&self, branch_id: BranchId) -> Result<i32> {
+        let sql = format!(
+            "UPDATE \"{}\".branch_state \
+             SET current_generation = COALESCE(current_generation, 0) + 1 \
+             WHERE branch_id = $1 \
+             RETURNING current_generation",
+            self.schema
+        );
+        let row = self
+            .ysql_client
+            .query_opt(&sql, &[&branch_id.to_string()])
+            .await
+            .context("claim_generation")?
+            .with_context(|| {
+                format!(
+                    "no branch_state row for {branch_id} — the controller provisions it \
+                     at branch create, so this pageserver started against an \
+                     unprovisioned branch"
+                )
+            })?;
+        Ok(row.get::<_, i32>(0))
     }
 
     pub async fn bump_generation(&self, branch_id: BranchId) -> Result<i32> {
@@ -4928,12 +4900,23 @@ mod tests {
 
     /// Create a timeline the way production does: the controller provisions the
     /// row, then the pageserver fills in its own column group.
+    /// Mirror the production order for a branch's first attach: the controller
+    /// provisions the row, the pageserver claims its generation, and only then
+    /// fills in the rest of its column group. The claim is what makes
+    /// `current_generation` non-NULL — `update_branch_initial_state` no longer
+    /// writes it — so it cannot be skipped. The claim is then pinned to the
+    /// generation the caller's `row` asks for, since tests exercise fencing at
+    /// specific generations.
     async fn create_branch_state_row(
         store: &PageStore,
         row: &BranchStateRow,
     ) -> anyhow::Result<()> {
         store
             .provision_branch_row_for_test(row.branch_id, row.pg_version)
+            .await?;
+        store.claim_generation(row.branch_id).await?;
+        store
+            .set_generation_for_test(row.branch_id, row.current_generation)
             .await?;
         store.update_branch_initial_state(row).await
     }
@@ -5668,104 +5651,6 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// `cas_bump_generation_on_attach` covers the four outcomes:
-    /// Bumped (stored < ours), AlreadyAtOurGen (stored == ours),
-    /// StaleGeneration (stored > ours), and the wiring-bug error
-    /// path (row missing). Regression for the symptom that hit prod
-    /// where every PS restart shut itself down as "stale" because
-    /// the controller bumped its gen but nothing pushed the new
-    /// value to the YB column.
-    #[tokio::test]
-    async fn cas_bump_generation_on_attach_outcomes() {
-        use utils::generation::Generation;
-        use utils::lsn::Lsn;
-
-        let (store, schema) = make_store("gen_cas").await;
-        let branch = rand_branch();
-        let mut row = sample_branch_state_row(branch);
-        row.current_generation = 1;
-        row.consistent_lsn = Lsn(0x1000);
-        create_branch_state_row(&store, &row).await.unwrap();
-
-        // Bumped: stored gen=1, attach at gen=2 → succeeds, YB now 2.
-        //
-        // Accept AlreadyAtOurGen too: `cas_bump_generation_on_attach`
-        // runs through `YsqlClient`'s at-least-once retry, so if the
-        // UPDATE commits server-side but the connection drops before the
-        // ack (the "unknown session" class seen under CI load), the
-        // retried UPDATE matches 0 rows (already bumped) and the probe
-        // reports AlreadyAtOurGen for what was really a bump. Both leave
-        // YB at our generation and the caller
-        // (`bump_generation_on_attach`) treats them identically; only the
-        // resulting persisted value is load-bearing, so assert on that.
-        let res = store
-            .cas_bump_generation_on_attach(branch, Generation::new(2))
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                res,
-                CasBumpOutcome::Bumped | CasBumpOutcome::AlreadyAtOurGen
-            ),
-            "expected Bumped (or AlreadyAtOurGen under a post-commit retry), got: {res:?}"
-        );
-        let got = store.get_branch_state(branch).await.unwrap().unwrap();
-        assert_eq!(got.current_generation, 2);
-
-        // AlreadyAtOurGen: stored gen=2, attach at gen=2 → no-op.
-        let res = store
-            .cas_bump_generation_on_attach(branch, Generation::new(2))
-            .await
-            .unwrap();
-        assert_eq!(res, CasBumpOutcome::AlreadyAtOurGen);
-        let got = store.get_branch_state(branch).await.unwrap().unwrap();
-        assert_eq!(got.current_generation, 2);
-
-        // Bumped again: stored gen=2, attach at gen=5 → succeeds, YB now 5.
-        // (Mirrors the user's report: SC's tenants.generation
-        // moved 1→2→3 over restarts; this is the third restart
-        // arriving at the PS, which must heal the lagging YB column.)
-        // Accept AlreadyAtOurGen for the same post-commit-retry reason as
-        // the first bump above.
-        let res = store
-            .cas_bump_generation_on_attach(branch, Generation::new(5))
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                res,
-                CasBumpOutcome::Bumped | CasBumpOutcome::AlreadyAtOurGen
-            ),
-            "expected Bumped (or AlreadyAtOurGen under a post-commit retry), got: {res:?}"
-        );
-        let got = store.get_branch_state(branch).await.unwrap().unwrap();
-        assert_eq!(got.current_generation, 5);
-
-        // StaleGeneration: stored gen=5, attach at gen=4 → another
-        // PS bumped past us, return live=5 so caller can refuse.
-        let res = store
-            .cas_bump_generation_on_attach(branch, Generation::new(4))
-            .await
-            .unwrap();
-        assert_eq!(res, CasBumpOutcome::StaleGeneration { live_generation: 5 });
-        let got = store.get_branch_state(branch).await.unwrap().unwrap();
-        assert_eq!(got.current_generation, 5, "stale CAS must not regress");
-
-        // Row missing: attach against a branch that
-        // doesn't exist → error (wiring bug, not a stale-gen case).
-        let other_branch = rand_branch();
-        let err = store
-            .cas_bump_generation_on_attach(other_branch, Generation::new(1))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("no timeline row"),
-            "expected 'no timeline row' err, got: {err}"
-        );
-
-        drop_schema(&store, &schema).await;
-    }
-
     #[tokio::test]
     async fn advance_consistent_lsn_gen_gate() {
         use utils::generation::Generation;
@@ -6492,6 +6377,9 @@ mod tests {
             .provision_branch_row_for_test(child, anc_row.pg_version)
             .await
             .unwrap();
+        // Production claims the generation at startup, before creating the row.
+        store.claim_generation(child).await.unwrap();
+        store.set_generation_for_test(child, 3).await.unwrap();
         let row = store
             .create_branch_row(child, anc, Lsn(70), 3)
             .await
@@ -6511,6 +6399,7 @@ mod tests {
             .provision_branch_row_for_test(child2, anc_row.pg_version)
             .await
             .unwrap();
+        store.claim_generation(child2).await.unwrap();
         let row = store
             .create_branch_row(child2, anc, Lsn(90), 1)
             .await

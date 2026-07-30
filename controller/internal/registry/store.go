@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/yugabyte/amp/controller/internal/db"
 )
 
@@ -19,9 +17,8 @@ var (
 	ErrConflict = errors.New("registry: conflict")
 )
 
-// Store persists the storage-layer control state (generation authority + the
-// branch/endpoint/pending-init registries) in the `amp_registry` schema of the
-// shared yb_storage database. All statements are schema-qualified so they resolve
+// Store persists the storage-layer control state (the branch and endpoint
+// registries) in the `amp_registry` schema of the shared yb_storage database. All statements are schema-qualified so they resolve
 // regardless of the pool's search_path (`controller`).
 type Store struct {
 	pool *db.Pool
@@ -47,7 +44,7 @@ func (s *Store) RegistryCounts(ctx context.Context) (branches int64, err error) 
 	return branches, nil
 }
 
-// --- generation authority -------------------------------------------------
+// --- PostgreSQL version -----------------------------------------------------
 
 // pgVersionNumPG18 is `PG_VERSION_NUM` of the PostgreSQL 18 build amp ships
 // (18.2 → 180002; see pg_install/v18 pg_config.h). It is the seed value the
@@ -68,114 +65,6 @@ func FullPgVersionID(major int) (int, error) {
 		return 0, fmt.Errorf("unsupported PG major version %d: amp ships PG 18 only", major)
 	}
 	return pgVersionNumPG18, nil
-}
-
-// AttachHook issues a branch's next generation. On attach it increments and
-// returns the generation, creating the branch row on first attach; on detach it
-// clears the attachment and returns nil. The generation is a monotonic per-branch
-// counter — the fencing primitive.
-func (s *Store) AttachHook(ctx context.Context, req AttachHookRequest) (*uint32, error) {
-	if !req.Attach {
-		// Detach clears the attachment but PRESERVES the generation counter: it
-		// must stay monotonic across the branch's lifecycle so a later reattach
-		// fences any stale pageserver from a prior generation.
-		if _, err := s.pool.Exec(ctx,
-			`UPDATE amp_registry.branches
-			   SET placement_policy = '"Detached"'
-			 WHERE branch_id = $1`, req.BranchID); err != nil {
-			return nil, fmt.Errorf("detach branch: %w", err)
-		}
-		return nil, nil
-	}
-
-	initialGen := int32(0)
-	if req.GenerationOverride != nil {
-		initialGen = *req.GenerationOverride
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	// The branch row is normally created at branch-create time (see
-	// RecordBranch), before any pageserver/safekeeper starts. This insert is a
-	// safety net for a branch that reaches attach without having been created;
-	// a concurrent creator is a no-op. It fills only the fencing group — this
-	// path has nothing but a branch id to go on, so the creation group stays
-	// NULL and the branch reads as "not properly created".
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.branches
-		   (branch_id, generation, placement_policy)
-		 VALUES ($1, $2, '{"Attached":0}')
-		 ON CONFLICT (branch_id) DO NOTHING`,
-		req.BranchID, initialGen); err != nil {
-		return nil, fmt.Errorf("insert branch: %w", err)
-	}
-
-	var gen *int32
-	err = tx.QueryRow(ctx,
-		// COALESCE: a branch created by RecordBranch starts with
-		// generation NULL ("never attached"), and NULL + 1 would stay NULL.
-		// First attach therefore issues generation 1, as it always has.
-		`UPDATE amp_registry.branches
-		    SET generation = COALESCE(generation, 0) + 1, placement_policy = '{"Attached":0}'
-		  WHERE branch_id = $1 AND dropped_at IS NULL
-		  RETURNING generation`,
-		req.BranchID).Scan(&gen)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("increment generation: %w", err)
-	}
-	if gen == nil {
-		return nil, fmt.Errorf("generation is NULL after increment for branch %s", req.BranchID)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit attach: %w", err)
-	}
-	g := uint32(*gen)
-	return &g, nil
-}
-
-// Inspect returns a branch's current generation, or nil when the branch is
-// unattached (detached or never attached) or unknown.
-func (s *Store) Inspect(ctx context.Context, branchID string) (*uint32, error) {
-	var gen *int32
-	var policy string
-	err := s.pool.QueryRow(ctx,
-		`SELECT generation, placement_policy FROM amp_registry.branches
-		  WHERE branch_id = $1 AND dropped_at IS NULL`,
-		branchID).Scan(&gen, &policy)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("inspect branch: %w", err)
-	}
-	if gen == nil || policy == `"Detached"` {
-		return nil, nil
-	}
-	g := uint32(*gen)
-	return &g, nil
-}
-
-// BranchImport returns the branch's current attachment as a single shard. The
-// branch must already be attached (via AttachHook).
-func (s *Store) BranchImport(ctx context.Context, branchID string) (BranchCreateResponse, error) {
-	gen, err := s.Inspect(ctx, branchID)
-	if err != nil {
-		return BranchCreateResponse{}, err
-	}
-	if gen == nil {
-		return BranchCreateResponse{}, ErrNotFound
-	}
-	return BranchCreateResponse{Shards: []BranchCreateResponseShard{{
-		BranchID:   branchID,
-		Generation: *gen,
-	}}}, nil
 }
 
 // --- timeline / branch-name registry --------------------------------------
@@ -216,9 +105,9 @@ func (s *Store) ListBranchNames(ctx context.Context) ([]BranchNameEntry, error) 
 // branch row. Idempotent.
 //
 // The row is kept with `dropped_at` stamped rather than deleted: a branch id is
-// never reused, so keeping it preserves the generation counter (and the fencing
-// history) and leaves a record of the branch. Every "is this live?" reader
-// filters `dropped_at IS NULL`, so the name stops resolving either way.
+// never reused, so the record of what the id was is worth keeping. Every
+// "is this live?" reader filters `dropped_at IS NULL`, so the name stops
+// resolving either way.
 func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -229,7 +118,7 @@ func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 	for _, stmt := range []string{
 		`DELETE FROM amp_registry.endpoints WHERE branch_id = $1`,
 		`UPDATE amp_registry.branches
-		    SET dropped_at = now(), placement_policy = '"Detached"'
+		    SET dropped_at = now()
 		  WHERE branch_id = $1 AND dropped_at IS NULL`,
 	} {
 		if _, err := tx.Exec(ctx, stmt, branchID); err != nil {
@@ -251,21 +140,19 @@ func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 // branch's rows in one transaction, before any pageserver, safekeeper, or
 // endpoint supervisor for the branch is started:
 //
-//   - amp_registry.branches — the branch's identity (name + how to create it)
-//     and the generation authority. generation stays NULL ("never attached")
-//     until the first attach-hook bumps it to 1.
+//   - amp_registry.branches — the branch's identity: its name and how to
+//     create it.
 //   - amp_storage.branch_state — the per-branch state row the pageserver and
 //     safekeeper share. Both daemons only ever validate that it exists and
 //     UPDATE their own column group; neither creates it, so it has to be here
 //     before either starts.
 //
-// Re-recording is idempotent. The branches upsert deliberately fills the
-// creation group ON CONFLICT rather than doing nothing: a row can already exist
-// without ever having carried a creation record — the attach-hook's safety-net
-// insert creates a bare row — and a plain DO NOTHING
-// would leave that row's creation group NULL forever while reporting success,
-// making the branch invisible to ListBranches. The `pg_version IS NULL` guard
-// keeps a genuine re-record a no-op, so an existing record is never rewritten.
+// Re-recording is idempotent. This is the only creator of a branches row, so
+// the ON CONFLICT arm should never fire in practice; it fills the creation
+// group rather than doing nothing so that a row which somehow exists without
+// one still becomes visible to ListBranches instead of reporting success and
+// staying invisible. The `pg_version IS NULL` guard keeps a genuine re-record a
+// no-op, so an existing record is never rewritten.
 func (s *Store) RecordBranch(ctx context.Context, branchID string, req BranchCreateRecord) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -275,9 +162,8 @@ func (s *Store) RecordBranch(ctx context.Context, branchID string, req BranchCre
 
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.branches
-		   (branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn,
-		    generation, placement_policy)
-		 VALUES ($1, $2, $3, $4, $5::pg_lsn, NULL, '"Detached"')
+		   (branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn)
+		 VALUES ($1, $2, $3, $4, $5::pg_lsn)
 		 ON CONFLICT (branch_id) DO UPDATE
 		    SET branch_name        = EXCLUDED.branch_name,
 		        pg_version         = EXCLUDED.pg_version,
@@ -323,9 +209,8 @@ func (s *Store) RecordBranch(ctx context.Context, branchID string, req BranchCre
 }
 
 // ListBranches returns every live, properly created branch — the ones the
-// launcher can materialize. A row whose `pg_version` is NULL was created by the
-// attach-hook's safety net and carries no creation record, so it is skipped, as
-// is a tombstoned (dropped) branch.
+// launcher can materialize. A row whose `pg_version` is NULL carries no creation
+// record, so it is skipped, as is a tombstoned (dropped) branch.
 func (s *Store) ListBranches(ctx context.Context) ([]BranchRecord, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn::text

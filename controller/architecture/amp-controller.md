@@ -227,10 +227,10 @@ Exactly one of each runs per placement group (§1):
 - **amp-controller** — the control plane this document describes. The deployment
   boundary is one placement group, one controller (§1); it owns the lifecycle of
   everything below it and exposes the API (§3) that an agent layer (§12) will consume.
-- **storage-layer registry** — the generation-fencing authority for the
-  pageserver (it issues generations via the attach-hook the launcher calls; the
-  safekeeper is endpoint-owned and not registered with it) plus the branch/
-  endpoint registries. amp-controller owns this **in-process** (§11.1) in a dedicated
+- **storage-layer registry** — the branch and endpoint registries. (Generation
+  fencing is not its job: the pageserver claims its own generation from
+  `amp_storage.branch_state`. The safekeeper is endpoint-owned and not registered
+  with it either.) amp-controller owns this **in-process** (§11.1) in a dedicated
   `amp_registry` schema — never amp-controller's product state store, never exposed to
   users. See [`sc-integration.md`](sc-integration.md).
 - **endpoint_storage** — YB Amp's small standalone store for endpoint-scoped scratch
@@ -725,8 +725,8 @@ in API-layer validation (full DDL lives with the code and its migrations):
 
 ## 11. Storage-layer control + endpoint_storage
 
-Cluster control for the storage layer — generation authority, the node / branch
-/ endpoint registries, and provisioning of the `yb_storage` schemas — is owned by
+Cluster control for the storage layer — the branch / endpoint registries and
+provisioning of the `yb_storage` schemas — is owned by
 amp-controller **in-process** (§11.1). The one service that still rides along is
 **endpoint_storage** (§11.5), the other global service (§5.1): a standalone app
 amp-controller fronts, persisting to the universe over YSQL, so it adds no new
@@ -735,10 +735,10 @@ external dependency (principle 2).
 ### 11.1 The storage-layer control surface
 
 The storage-layer control functions live directly in amp-controller (Go), not in
-a separate binary: generation authority (the attach-hook fencing counter), the
-pageserver-node / branch / endpoint / pending-init registries, and provisioning
-of the whole `yb_storage` DB (its `public`, `pageserver`, `safekeeper`, and
-`amp_registry` schemas) via the controller's golang-migrate migrations.
+a separate binary: the branch and endpoint registries, and provisioning of the
+whole `yb_storage` DB (its `amp_storage` and `amp_registry` schemas) via the
+controller's golang-migrate migrations. Generation fencing is not among them —
+the pageserver claims its own generation from `amp_storage.branch_state`.
 
 **Decision: own the storage-layer registry in-process — never
 amp-controller's product state store, and never exposed to users.** The registry
@@ -746,9 +746,8 @@ state lives in a dedicated `amp_registry` schema, separate from the product mode
 the `controller` schema (§10).
 
 **How it is served.** amp-controller serves the pod-facing surface —
-`/control/v1/...` (node/branch/endpoint registries, pending-init recipes),
-`/debug/v1/attach-hook` + `/debug/v1/inspect` (generation authority), and
-`/ready` — on its API listener, alongside the versioned `/api/v1` product API.
+`/control/v1/...` (branch and endpoint registries) and `/ready` — on its API
+listener, alongside the versioned `/api/v1` product API.
 The implementation is `controller/internal/registry` (the store over the
 `amp_registry` schema + the HTTP handlers). Endpoint pods and the `yb_amp_local`
 dev harness drive it; the controller's own task framework records pending-init
@@ -764,16 +763,16 @@ the upstream multi-tenant machinery is dropped.
 |---|---|---|
 | ~~Safekeeper registry~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly | **Removed** |
 | Branch bookkeeping (`/control/v1/branch/*`) | Branch register/drop, branch-name mappings, pending-init recipes | **Kept** |
-| Generation authority (`/debug/v1/attach-hook`, `/inspect`) | Issue/inspect the per-branch fencing generation | **Kept** |
+| ~~Generation authority~~ | Removed: the pageserver claims its own generation from `amp_storage.branch_state` |
 | Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows for `yb_amp_local` | **Kept** (for the launcher) |
 | ~~Heartbeat/availability, scheduler, tenant placement/sharding, time travel, pageserver passthrough, timeline imports, metadata health~~ | Upstream multi-tenant machinery | **Dropped** — dead weight in the per-branch topology |
 
 | API surface | What it does | Used by yb-amp today | amp-controller posture |
 |---|---|---|---|
-| Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; fencing is via the launcher's attach-hook) | Import flows only | **Reuse** (import only) |
+| Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; it fences with a generation it claims itself) | Import flows only | **Reuse** (import only) |
 | ~~Safekeeper registry (`/control/v1/safekeeper*`)~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly, so the controller never contacts a safekeeper | No longer exists | **Removed** |
 | Branch bookkeeping | Branch create/register/delete, branch-name mappings | Yes | **Reuse** |
-| Generation debug ops (`attach-hook`, `inspect`) | Issue/inspect generations | Yes | **Reuse** (internal/ops only) |
+| ~~Generation debug ops~~ | Issue/inspect generations | No — the pageserver claims its own | **Removed** |
 | Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows | Yes — built as a shim for `yb_amp_local` | **Not reused** — superseded by amp-controller's endpoint records (§10.1); an opaque spec cannot carry the schema-enforced invariants of §10.2 |
 | Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-branch topology |
 
@@ -795,8 +794,9 @@ one from corrupting storage state.
 
 ### 11.4 Notes
 
-- **No upcall API.** Generation fencing does not ride an upcall API — the launcher
-  fences via the attach-hook, and the `re-attach`/`validate` upcalls were removed.
+- **No upcall API.** Generation fencing does not ride an upcall API — the
+  pageserver claims its generation directly from `amp_storage.branch_state`, and
+  the `re-attach`/`validate` upcalls were removed.
   The pageserver wants `control_plane_api` set but makes no runtime callbacks, so a
   placeholder URL is fine.
 - **Scale shape.** One pageserver per branch means node count tracks endpoint

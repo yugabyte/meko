@@ -65,9 +65,9 @@ endpoint materializes the branch, and cAmp finalizes.
   `BOOTSTRAP=true`.
 
 **The endpoint materializes** (its supervisor, during bring-up):
-1. Runs the attach-hook; the controller attaches the branch and grants
-   its **generation**. (Neither the pageserver node nor the safekeeper is
-   registered with the controller — the endpoint owns them.)
+1. Starts its pageserver, which claims its **generation** from
+   `amp_storage.branch_state`. (Neither the pageserver node nor the
+   safekeeper is registered with the controller — the endpoint owns them.)
 2. Runs **`initdb`** — the pageserver bootstraps the branch, taking its init
    mode from the branch's seeded `amp_storage.branch_state` row.
 3. Once the branch is `Active`, reads its `start_lsn` and creates the branch on
@@ -134,7 +134,7 @@ writes are synchronous today and move onto the task framework under #113.
 |---|---|
 | `record_branch` (per branch) | `create-project` → `project` + default `branch` (cAmp DB) **and** the controller's branch record, keyed by `branch_id` (`POST /control/v1/branch/{branch_id}/record`). There is no separate tenant-create step anymore — a root branch is just a record with a NULL ancestor. |
 | control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |
-| control plane inits PS + `register_and_attach` | the **endpoint** registers its pageserver + runs the attach-hook (generation) |
+| control plane inits PS + `register_and_attach` | the **endpoint** starts its pageserver, which claims its own generation |
 | PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb`, driven by the seeded `branch_state` row |
 | SK branch create + SC `timeline_register` | the **endpoint** creates the branch on its safekeeper; there is no register call back to the controller |
 | `endpoint.start` after provisioning | the endpoint starts compute once the branch is `Active` |
@@ -147,18 +147,16 @@ writes are synchronous today and move onto the task framework under #113.
   branch `register` call. cAmp records the recipe, deploys the endpoint, records the
   address, and clears the recipe — it never reaches into the endpoint's
   pageserver/safekeeper directly.
-- **Generation** is granted by the controller's attach-hook when the
-  endpoint attaches; it is never pinned.
+- **Generation** is claimed by the pageserver itself at startup; it is never
+  pinned and never issued by the controller.
 - **Controller calls used:** record a branch, keyed by `branch_id`
-  (`POST /control/v1/branch/{branch_id}/record`, by cAmp); and the attach-hook,
-  by the endpoint. (No node or safekeeper register — both are endpoint-owned;
-  see #171.)
+  (`POST /control/v1/branch/{branch_id}/record`, by cAmp). (No node or safekeeper
+  register — both are endpoint-owned; see #171.)
 - **Direction (planned).** The SC is being integrated into amp-controller and the
   create flow is moving to *create-then-configure*: endpoints created unassigned
   and bound to a branch on demand (a pre-warm pool, for faster turnaround). amp
-  mints `branch_id` + `generation` (the data plane only enforces the generation)
-  and pushes a `configure` to the pod; the attach-hook moves into amp's
-  deploy code; the pod's branch `register` folds into the configure response
+  mints `branch_id` and pushes a `configure` to the pod; the pod's branch
+  `register` folds into the configure response
   (`start_lsn` is the pod's lone output). See
   [`sc-integration.md`](sc-integration.md).
 - **Durability.** These steps run synchronously today; #113 tracks moving them

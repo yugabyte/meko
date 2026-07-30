@@ -32,14 +32,6 @@ func (c *Controller) Ready(ctx context.Context) error {
 	return c.t.do(ctx, http.MethodGet, "/ready", nil, nil)
 }
 
-// AttachHook bumps (or clears) a branch's generation via POST
-// /debug/v1/attach-hook.
-func (c *Controller) AttachHook(ctx context.Context, req registry.AttachHookRequest) (registry.AttachHookResponse, error) {
-	var resp registry.AttachHookResponse
-	err := c.t.do(ctx, http.MethodPost, "/debug/v1/attach-hook", req, &resp)
-	return resp, err
-}
-
 // RecordBranch records a branch's creation record via POST
 // /control/v1/branch/{branchID}/record.
 func (c *Controller) RecordBranch(ctx context.Context, branchID string, req registry.BranchCreateRecord) error {

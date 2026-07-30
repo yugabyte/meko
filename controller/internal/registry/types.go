@@ -1,38 +1,10 @@
 // Package registry serves the storage-layer control API that yb_amp_local and
-// the integration harness drive: generation authority (attach-hook) plus the
-// branch / endpoint / pending-init registries, backed by the
+// the integration harness drive: the branch and endpoint registries, backed by the
 // `amp_registry` schema in the shared yb_storage database. The wire types
 // here are JSON-compatible with the launcher's client.
 package registry
 
 import "encoding/json"
-
-// AttachHookRequest bumps (attach) or clears (detach) a branch's generation.
-// attach = true increments the generation; false detaches (the generation
-// counter is preserved, staying monotonic across the branch's lifecycle).
-// generation_override applies only when the branch row is first created.
-type AttachHookRequest struct {
-	BranchID           string `json:"branch_id"`
-	Attach             bool   `json:"attach"`
-	GenerationOverride *int32 `json:"generation_override"`
-}
-
-// AttachHookResponse carries the newly issued generation (null on detach). The
-// wire field is "gen".
-type AttachHookResponse struct {
-	Generation *uint32 `json:"gen"`
-}
-
-// InspectRequest asks for a branch's current attachment.
-type InspectRequest struct {
-	BranchID string `json:"branch_id"`
-}
-
-// InspectResponse reports the branch's current generation, or null when the
-// branch is unattached.
-type InspectResponse struct {
-	Generation *uint32 `json:"generation"`
-}
 
 // SetBranchNameRequest sets (or clears) a branch's name alias.
 type SetBranchNameRequest struct {
@@ -68,15 +40,4 @@ type ComputeEndpoint struct {
 	EndpointID string          `json:"endpoint_id"`
 	BranchID   string          `json:"branch_id"`
 	Spec       json.RawMessage `json:"spec"`
-}
-
-// BranchCreateResponseShard describes a branch's current generation.
-type BranchCreateResponseShard struct {
-	BranchID   string `json:"branch_id"`
-	Generation uint32 `json:"generation"`
-}
-
-// BranchCreateResponse is returned by the branch create / import endpoints.
-type BranchCreateResponse struct {
-	Shards []BranchCreateResponseShard `json:"shards"`
 }

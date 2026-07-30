@@ -24,7 +24,6 @@ use postgres_backend::AuthType;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{RemotePath, RemoteStorageConfig};
 use reqwest::Url;
-use utils::generation::Generation;
 use utils::id::BranchId;
 use utils::logging::{LogFormat, SecretString};
 
@@ -45,14 +44,12 @@ use crate::page_server::BRANCHES_SEGMENT_NAME;
 ///
 /// For fields that require additional validation or filling in of defaults at runtime,
 /// check for examples in the [`PageServerConf::parse_and_validate`] method.
-/// The single branch a pageserver process serves for its
-/// entire lifetime, plus the generation granted by the launcher for
-/// this attachment. Parsed from the `branch_id` /
-/// `generation` fields of `pageserver.toml` (all-or-nothing).
+/// The single branch a pageserver process serves for its entire lifetime,
+/// parsed from the `branch_id` field of `pageserver.toml`. The generation is
+/// not part of it — the process claims that itself at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimelineIdentity {
     pub branch_id: BranchId,
-    pub generation: Generation,
 }
 
 #[derive(Debug, Clone)]
@@ -323,7 +320,6 @@ impl PageServerConf {
     ) -> anyhow::Result<Self> {
         let pageserver_api::config::ConfigToml {
             branch_id,
-            generation,
             listen_pg_addr,
             listen_http_addr,
             listen_https_addr,
@@ -386,19 +382,7 @@ impl PageServerConf {
             scale_factor,
         } = config_toml;
 
-        let timeline_identity = match (branch_id, generation) {
-            (Some(branch_id), Some(generation)) => Some(TimelineIdentity {
-                branch_id,
-                generation: Generation::new(generation),
-            }),
-            (None, None) => None,
-            _ => anyhow::bail!(
-                "branch_id and generation must be set together in pageserver.toml \
-                 (got branch_id: {}, generation: {})",
-                branch_id.is_some(),
-                generation.is_some(),
-            ),
-        };
+        let timeline_identity = branch_id.map(|branch_id| TimelineIdentity { branch_id });
 
         let yb_page_writer = yb_page_writer.resolve(scale_factor);
         let walredo_pool_size =
@@ -611,7 +595,6 @@ mod tests {
         let input = r#"
             control_plane_api = "http://localhost:6666"
             branch_id   = "77ffde89f43d4ca08ef0a0ed1f089eaa"
-            generation  = 7
         "#;
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("identity config is valid");
@@ -623,7 +606,6 @@ mod tests {
             ident.branch_id.to_string(),
             "77ffde89f43d4ca08ef0a0ed1f089eaa"
         );
-        assert_eq!(ident.generation, utils::generation::Generation::new(7));
         // serialize → reparse → same identity fields survive the round trip
         let serialized = toml_edit::ser::to_string_pretty(&config_toml).expect("serializes");
         let reparsed = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(&serialized)
@@ -631,20 +613,6 @@ mod tests {
         let conf2 = PageServerConf::parse_and_validate(reparsed, &workdir)
             .expect("parse_and_validate round trip");
         assert_eq!(conf2.timeline_identity, conf.timeline_identity);
-    }
-
-    #[test]
-    fn test_partial_timeline_identity_is_rejected() {
-        // branch_id without generation must fail validation
-        let input = r#"
-            control_plane_api = "http://localhost:6666"
-            branch_id = "c8178f5ed40cf94a9b3a23b4f9e1f966"
-        "#;
-        let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
-            .expect("fields parse");
-        let workdir = Utf8PathBuf::from("/nonexistent");
-        PageServerConf::parse_and_validate(config_toml, &workdir)
-            .expect_err("partial identity must be rejected");
     }
 
     #[test]

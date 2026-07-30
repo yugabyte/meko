@@ -1292,49 +1292,6 @@ impl Timeline {
         Ok(())
     }
 
-    /// Eager attach-time push of our controller-issued generation
-    /// into `amp_storage.branch_state.current_generation`. The flush
-    /// path's `WHERE current_generation = $our_gen` predicate is
-    /// strict, so the invariant "YB column == our_gen at all times
-    /// after attach" must hold from the first flush onwards. The
-    /// controller bumps its `tenants.generation` on every
-    /// attach but doesn't propagate to YB; this CAS is where the new
-    /// value lands.
-    ///
-    /// Returns Err on stale-gen (another PS has bumped past us), and
-    /// the caller (attach path) should refuse the attach. Returns Err
-    /// on the wiring-bug "row missing" case. Returns Ok on Bumped or
-    /// AlreadyAtOurGen.
-    ///
-    /// No-op when `page_writer` is None (upstream pageserver mode).
-    pub(crate) async fn bump_generation_on_attach(&self) -> anyhow::Result<()> {
-        let Some(pw) = self.page_writer.as_ref() else {
-            return Ok(());
-        };
-        match pw
-            .fpu_page_store()
-            .cas_bump_generation_on_attach(self.branch_id, self.generation)
-            .await?
-        {
-            crate::page_store::CasBumpOutcome::Bumped
-            | crate::page_store::CasBumpOutcome::AlreadyAtOurGen => Ok(()),
-            crate::page_store::CasBumpOutcome::StaleGeneration { live_generation } => {
-                // A newer pageserver has already attached and bumped
-                // the column past ours. Refuse the attach so the
-                // caller can surface the error to the storage
-                // controller; that path then drives the standard
-                // shutdown via stale_gen detection on the live PS.
-                anyhow::bail!(
-                    "attach refused: timeline {tenant}/{timeline} has live generation {live} > our generation {ours:?}",
-                    tenant = self.branch_id,
-                    timeline = self.branch_id,
-                    live = live_generation,
-                    ours = self.generation,
-                )
-            }
-        }
-    }
-
     /// `consistent_lsn` from the perspective of the tenant's current generation.
     /// In yb-amp the slot is driven directly by `PageWriter` (no upload
     /// pipeline), so projected and visible are the same single `AtomicLsn`.

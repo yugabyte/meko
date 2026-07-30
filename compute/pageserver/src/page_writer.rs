@@ -4266,12 +4266,15 @@ mod tests {
     async fn seed_branch_state_row(store: &PageStore, branch: BranchId) {
         // The controller provisions the row at branch create; tests stand in
         // for it before the pageserver fills in its own column group. That
-        // provisioning is what sets `pg_version` — the row below carries it
-        // only to match, since the pageserver never writes that column.
+        // provisioning is what sets `pg_version`, and the claim below is what
+        // sets `current_generation` to 1 — the row passed to
+        // update_branch_initial_state carries both only to match, since that
+        // call writes neither.
         store
             .provision_branch_row_for_test(branch, 180_002)
             .await
             .unwrap();
+        store.claim_generation(branch).await.unwrap();
         store
             .update_branch_initial_state(&crate::page_store::BranchStateRow {
                 branch_id: branch,

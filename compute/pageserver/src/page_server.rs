@@ -108,11 +108,11 @@ pub struct TenantSharedResources {
 }
 
 /// The tenant's effective configuration: the `[tenant_config]` section
-/// of pageserver.toml plus the launcher-assigned generation.
+/// of pageserver.toml plus the generation this process claimed at startup.
 #[derive(Clone)]
 pub(super) struct AttachedTenantConf {
     tenant_conf: pageserver_api::models::BranchConfig,
-    /// controller-assigned generation used to fence YB writes.
+    /// The generation this process claimed at startup, used to fence YB writes.
     pub(super) generation: Generation,
     /// The deadline before which we are blocked from GC so that
     /// leases have a chance to be renewed.
@@ -204,8 +204,9 @@ pub struct PageServer {
 
     id: BranchId,
 
-    /// The launcher-assigned generation, used to fence YB writes against
-    /// stale pageservers. Does not change over the lifetime of the process.
+    /// The generation this process claimed at startup, used to fence YB writes
+    /// against stale pageservers. Does not change over the lifetime of the
+    /// process.
     generation: Generation,
 
     /// THE timeline this process serves. Set exactly once during startup
@@ -565,19 +566,6 @@ impl PageServer {
         if let Some(pw) = timeline.page_writer.as_ref() {
             pw.set_consistent_lsn_slot(timeline.remote_state.consistent_lsn.clone());
         }
-
-        // Eager push of the controller-issued generation to YB. The
-        // controller bumps `tenants.generation` on
-        // every attach (including re-attach to the same PS after a
-        // restart) but doesn't propagate the new value to YB itself
-        // — this is where it lands. The flush path's
-        // `WHERE current_generation = $our_gen` fence is strict, so
-        // the invariant "YB column == our_gen at all times after
-        // attach" must hold from the first flush onwards. This call
-        // establishes that invariant. If a newer pageserver has
-        // already bumped past us, the CAS errors out and the attach
-        // is refused.
-        timeline.bump_generation_on_attach().await?;
 
         let _ = cause;
 

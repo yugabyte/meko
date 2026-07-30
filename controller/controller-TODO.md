@@ -119,10 +119,10 @@ deploy self-sufficiency).
 ## 7. Integrate the controller in-process — [#202](https://github.com/yugabyte/amp/issues/202) — DONE
 
 The `storage_controller/` crate is removed. The controller now owns the
-storage-layer control functions in Go: generation authority (attach-hook), the
+storage-layer control functions in Go: the
 node/branch/endpoint registries, and provisioning of `yb_storage` (all schemas)
 via its golang-migrate migrations. It serves the pod-facing surface
-(`/control/v1/...`, `/debug/v1/attach-hook`, `/ready`) on its API listener —
+(`/control/v1/...`, `/ready`) on its API listener —
 `controller/internal/registry/` — and the task framework's recipe store is an
 in-process call over the same tables (`controller/architecture/sc-integration.md`).
 `yb_amp_local` and the integration harness launch the `controller` binary in

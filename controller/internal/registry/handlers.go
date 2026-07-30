@@ -16,10 +16,6 @@ func Register(e *echo.Echo, store *Store) {
 
 	e.GET("/ready", h.ready)
 
-	e.POST("/debug/v1/attach-hook", h.attachHook)
-	e.POST("/debug/v1/inspect", h.inspect)
-	e.POST("/debug/v1/branch/:branch_id/import", h.branchImport)
-
 	e.PUT("/control/v1/branch/:branch_id/branch_name", h.setBranchName)
 	e.GET("/control/v1/timeline_branch_names", h.listBranchNames)
 	e.PUT("/control/v1/branch/:branch_id/drop", h.branchDrop)
@@ -41,38 +37,6 @@ func (h *handlers) ready(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "database unavailable")
 	}
 	return c.JSON(http.StatusOK, nil)
-}
-
-func (h *handlers) attachHook(c echo.Context) error {
-	var req AttachHookRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	gen, err := h.store.AttachHook(c.Request().Context(), req)
-	if err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, AttachHookResponse{Generation: gen})
-}
-
-func (h *handlers) inspect(c echo.Context) error {
-	var req InspectRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	gen, err := h.store.Inspect(c.Request().Context(), req.BranchID)
-	if err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, InspectResponse{Generation: gen})
-}
-
-func (h *handlers) branchImport(c echo.Context) error {
-	resp, err := h.store.BranchImport(c.Request().Context(), c.Param("branch_id"))
-	if err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, resp)
 }
 
 func (h *handlers) setBranchName(c echo.Context) error {

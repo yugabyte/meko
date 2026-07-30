@@ -30,7 +30,6 @@ const (
 	goldPemfile      = "/tmp/claude-2206/-net-dev-server-hsunder-share-code-amp/bca88cc9-be37-4760-9c1f-bbfa36b6fbac/scratchpad/goldenrepo/.yb_amp/auth_public_key.pem"
 	goldEndpointID   = "ep-main"
 	goldComputePort  = 55432
-	goldGeneration   = 2
 )
 
 func goldenPath(name string) string { return filepath.Join("testdata", "golden", name) }
@@ -101,9 +100,9 @@ func TestPageserverTomlGolden(t *testing.T) {
 	if err := WritePageserverToml(path, goldPageserverParams()); err != nil {
 		t.Fatalf("WritePageserverToml: %v", err)
 	}
-	// Bake the identity (branch_id / generation=2), matching the
-	// init -> set_timeline_identity -> attach sequence.
-	if err := SetPageserverIdentity(path, goldBranchID, goldGeneration); err != nil {
+	// Bake the identity (branch_id), matching the init -> set_timeline_identity
+	// sequence. The generation is not configured — the pageserver claims it.
+	if err := SetPageserverIdentity(path, goldBranchID); err != nil {
 		t.Fatalf("SetPageserverIdentity: %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -128,7 +127,7 @@ func TestSetPageserverIdentityPreservesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := decodeTOML(t, readGolden(t, "pageserver.toml"))
-	if err := SetPageserverIdentity(path, goldBranchID, 2); err != nil {
+	if err := SetPageserverIdentity(path, goldBranchID); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(path)

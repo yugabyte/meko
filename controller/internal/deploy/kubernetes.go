@@ -734,11 +734,10 @@ type resourceValues struct {
 	Memory string `json:"memory"`
 }
 
-// values builds the per-endpoint Helm values. With spec.ControllerURL set
-// (and spec.Bootstrap=true), the endpoint registers its pageserver+safekeeper
-// with the controller, attaches the branch (generation via the attach-hook),
-// runs initdb for the supplied branch, and registers it.
-// Without it, the endpoint attaches an already-materialized branch.
+// values builds the per-endpoint Helm values. With spec.ControllerURL set the
+// endpoint runs the controller-coordinated path; without it, it self-manages.
+// Either way the pageserver claims its own generation and reads how to create
+// the branch from the controller-seeded branch_state row.
 func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValues {
 	pgVersion := spec.PgVersion
 	if pgVersion <= 0 {

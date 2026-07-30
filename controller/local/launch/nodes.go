@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/yugabyte/amp/controller/internal/registry"
 	"github.com/yugabyte/amp/controller/local/cfg"
 	"github.com/yugabyte/amp/controller/local/client"
 	"github.com/yugabyte/amp/controller/local/config"
@@ -20,43 +19,11 @@ import (
 
 // --- pageserver ---
 
-// registerAndAttach bumps the branch's generation via the attach-hook and
-// persists the fresh generation into pageserver.toml. No-op when the
-// pageserver has no baked branch identity. Mirrors Rust
-// `PageServerNode::register_and_attach`.
-func registerAndAttach(ctx context.Context, env *config.LocalEnv, conf *config.PageServerConf) error {
-	if conf.BranchID == nil {
-		return nil
-	}
-	base, err := controllerBase(env)
-	if err != nil {
-		return err
-	}
-	ctrl := client.NewController(base, httpClient())
-	resp, err := ctrl.AttachHook(ctx, registry.AttachHookRequest{
-		BranchID: *conf.BranchID,
-		Attach:   true,
-	})
-	if err != nil {
-		return err
-	}
-	if resp.Generation == nil {
-		return fmt.Errorf("attach_hook did not return a generation")
-	}
-	tomlPath := filepath.Join(conf.DataDir, "pageserver.toml")
-	if err := cfg.SetPageserverIdentity(tomlPath, *conf.BranchID, *resp.Generation); err != nil {
-		return err
-	}
-	fmt.Printf("pageserver serves %s at generation %d\n", *conf.BranchID, *resp.Generation)
-	return nil
-}
-
-// startPageserver registers+attaches then spawns yb-pageserver, mirroring
-// Rust `PageServerNode::start` (register_and_attach + start_node).
+// startPageserver spawns yb-pageserver. The process claims its own generation
+// from `amp_storage.branch_state` at startup, so there is nothing to arrange
+// here first.
 func startPageserver(ctx context.Context, env *config.LocalEnv, conf *config.PageServerConf, timeout time.Duration) error {
-	if err := registerAndAttach(ctx, env, conf); err != nil {
-		return err
-	}
+	_ = ctx
 	return startPageserverNode(env, conf, timeout)
 }
 

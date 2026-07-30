@@ -42,7 +42,7 @@ Per-component deep dives:
   single-safekeeper WAL design: ingest, batching into
   `amp_storage.wals`, the control file, and the durability ack model.
 - [`../controller/architecture/sc-integration.md`](../controller/architecture/sc-integration.md)
-  — cluster control in the controller: generation authority (attach-hook), the
+  — cluster control in the controller: the
   node/branch/endpoint registries, and `yb_storage` provisioning.
 - [`architecture/remote-storage.md`](architecture/remote-storage.md)
   — the `RemoteStorage` abstraction and its `YbStore` backend

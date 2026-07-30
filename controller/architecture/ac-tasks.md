@@ -187,8 +187,7 @@ A few invariants worth calling out:
   reads it once the branch is materialized), so a clear failure logs a warning and
   the step still succeeds.
 - **Direction (planned).** `create_endpoint` is the landing site for the SC
-  integration: it will additionally mint the pageserver `generation` (attach-hook)
-  — moving that work out of the pod — and evolve
+  integration, evolving
   toward a create-then-configure model (create an unassigned pod, then push a
   `configure` binding it to a branch). See
   [`sc-integration.md`](sc-integration.md).

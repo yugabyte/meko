@@ -34,9 +34,9 @@ Read in this order:
 5. `compute/architecture/safekeeper.md` — `ControlFileStorage::Yb`,
    `YbWalStorage`, the `WalReader` fallback chain, the single-safekeeper
    constraint in YB-WAL mode.
-6. `controller/architecture/sc-integration.md` — cluster control: generation
-   authority (attach-hook), the node/branch/endpoint registries, and the
-   provisioning of the `yb_storage` DB (all its schemas) on controller startup.
+6. `controller/architecture/sc-integration.md` — cluster control: the
+   branch/endpoint registries, and the provisioning of the `yb_storage` DB (all
+   its schemas) on controller startup.
    These live in the Go `controller/`; the compute daemons bind the schemas the
    controller provisions.
 

@@ -1,8 +1,8 @@
 //! The single-branch holder: this pageserver process serves exactly one
-//! branch for its entire lifetime, identified by the
-//! `branch_id` / `generation` baked into `pageserver.toml`
-//! by the launcher. The branch is opened synchronously at startup, before
-//! any listener accepts traffic.
+//! branch for its entire lifetime, identified by the `branch_id` baked into
+//! `pageserver.toml` by the launcher. The generation it fences with is not
+//! configured — the process claims its own at startup. The branch is opened
+//! synchronously at startup, before any listener accepts traffic.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -196,24 +196,37 @@ pub async fn init_tenant_mgr(
 ) -> anyhow::Result<TenantManager> {
     let ctx = RequestContext::todo_child(TaskKind::Startup, DownloadBehavior::Warn);
 
-    // Single-branch pageserver: the identity baked into
-    // pageserver.toml by the launcher is the sole source of truth for
-    // which branch this process serves and at what
-    // generation. The local branches/ dir is just scratch (initdb
-    // tarballs, basebackup cache), never authoritative.
+    // Single-branch pageserver: the branch id baked into pageserver.toml by
+    // the launcher is the sole source of truth for which branch this process
+    // serves. The local branches/ dir is just scratch (initdb tarballs,
+    // basebackup cache), never authoritative.
     let Some(identity) = conf.timeline_identity else {
         anyhow::bail!(
-            "pageserver.toml must set branch_id/generation: this pageserver \
+            "pageserver.toml must set branch_id: this pageserver \
              serves exactly one branch, assigned by the launcher before spawn"
         );
     };
-    let attached = HashMap::from([(identity.branch_id, identity.generation)]);
+
+    // Claim our generation. The pageserver is its own authority: the increment
+    // and the read are one atomic statement against the branch's row, so two
+    // processes racing to attach cannot come away with the same number, and the
+    // loser's gen-fenced writes stop matching. This has to happen before the
+    // branch is opened — every write the page store makes is fenced on it.
+    let generation = Generation::new(
+        resources
+            .fpu_page_store
+            .claim_generation(identity.branch_id)
+            .await? as u32,
+    );
+    info!(branch_id = %identity.branch_id, ?generation, "claimed generation");
+
+    let attached = HashMap::from([(identity.branch_id, generation)]);
 
     purge_stale_tenant_dirs(conf, &attached, &background_purges).await;
 
     TENANT.startup_scheduled.inc();
 
-    let (branch_id, generation) = (identity.branch_id, identity.generation);
+    let branch_id = identity.branch_id;
     let branch_path = conf.branch_path(&branch_id);
     // branch dir is just a cache (initdb.tar.zst, basebackup_cache).
     // Doesn't need crash-safe sync.

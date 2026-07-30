@@ -139,13 +139,15 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 }
 
 // SetPageserverIdentity bakes the single-branch identity into an existing
-// pageserver.toml (read-modify-write), injecting/overwriting `branch_id` and
-// `generation`. Any other keys already in the file are preserved.
+// pageserver.toml (read-modify-write), injecting/overwriting `branch_id`. Any
+// other keys already in the file are preserved.
 //
-// How to create the branch's timeline is NOT configured here: the pageserver
-// reads it from the controller-seeded `amp_storage.branch_state` row (a NULL
-// ancestor means bootstrap, a set one means branch off it).
-func SetPageserverIdentity(path string, branchID config.BranchID, generation uint32) error {
+// Neither the generation nor how to create the branch's timeline is configured
+// here. The pageserver claims its generation itself at startup, by incrementing
+// `amp_storage.branch_state.current_generation`; and it reads its init mode
+// from the same controller-seeded row (a NULL ancestor means bootstrap, a set
+// one means branch off it).
+func SetPageserverIdentity(path string, branchID config.BranchID) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %q: %w", path, err)
@@ -155,7 +157,6 @@ func SetPageserverIdentity(path string, branchID config.BranchID, generation uin
 		return fmt.Errorf("parse %q: %w", path, err)
 	}
 	doc["branch_id"] = branchID
-	doc["generation"] = int64(generation)
 	out, err := encodeTOML(doc)
 	if err != nil {
 		return fmt.Errorf("serialize %q: %w", path, err)

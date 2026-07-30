@@ -28,8 +28,8 @@ subsystem has its own page.
 
 > **Control plane docs live outside `compute/`.** These pages cover the
 > storage/compute engine only. The **amp controller** (the Go control plane,
-> `amp-controller` / `ac`) — which owns cluster control: generation authority,
-> the node/branch/endpoint registries, and endpoint provisioning — is documented
+> `amp-controller` / `ac`) — which owns cluster control: the branch/endpoint
+> registries and endpoint provisioning — is documented
 > under [`../../controller/architecture/`](../../controller/architecture/), with its
 > own subproject guide in [`../../controller/AGENTS.md`](../../controller/AGENTS.md). It
 > deploys to Kubernetes via the `yb-amp-controller` Helm chart (`deploy/`), which

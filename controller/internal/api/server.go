@@ -69,9 +69,8 @@ func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, pr
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
 
-	// The storage-layer control surface (attach-hook + node/branch/endpoint
-	// registries) that endpoint pods, yb_amp_local, and the integration harness
-	// drive. Mounted outside the versioned API and the spec.
+	// The storage-layer control surface (the branch/endpoint registries) that
+	// endpoint pods, yb_amp_local, and the integration harness drive. Mounted outside the versioned API and the spec.
 	if regStore != nil {
 		registry.Register(e, regStore)
 	}

@@ -87,9 +87,10 @@ A yb-amp install is:
   top of it would add latency and failure modes without adding safety;
   configurations that try are rejected at boot and at runtime (see
   [`safekeeper.md`](safekeeper.md) §5).
-- **Controller** (`controller`, Go): the control plane — generation
-  authority (attach-hook fencing), the node/branch/endpoint
-  registries, endpoint provisioning, and the product API. Its state
+- **Controller** (`controller`, Go): the control plane — the branch/endpoint
+  registries, endpoint provisioning, and the product API. (Generation fencing
+  is the pageserver's own: it claims its generation from
+  `amp_storage.branch_state` at startup.) Its state
   lives in the same YB database (`amp_registry` + `controller` schemas),
   and it applies all schema migrations on startup. Documented under
   [`../../controller/architecture/`](../../controller/architecture/).

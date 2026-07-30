@@ -31,7 +31,7 @@ image pull secret — those are prerequisites.
   workloads via the Kubernetes/Helm driver, so it needs this.
 - **Controller Deployment** `amp-controller` — one pod, container port `api`
   (8080: REST API + UI + `/healthz`/`/readyz` + the storage-layer control surface
-  `/control/v1`+`/debug/v1`). Carries the full `AMP_*` env block; readiness
+  `/control/v1`). Carries the full `AMP_*` env block; readiness
   `/readyz` on the api port — deliberately **no liveness probe**: startup
   migrations run before anything answers `/healthz`, and a liveness kill
   mid-migration leaves the schema dirty (#398).

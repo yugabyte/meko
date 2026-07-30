@@ -333,7 +333,7 @@ func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID st
 	// timeline comes from the controller-seeded branch_state row, not from here.
 	branchIDCopy := branchID
 	psConf.BranchID = &branchIDCopy
-	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID, 0); err != nil {
+	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID); err != nil {
 		return err
 	}
 	if err := startPageserver(ctx, env, &psConf, 60*time.Second); err != nil {
@@ -403,7 +403,7 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 	}
 	branchIDCopy := branchID
 	psConf.BranchID = &branchIDCopy
-	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID, 0); err != nil {
+	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID); err != nil {
 		return err
 	}
 

@@ -70,9 +70,8 @@ endpoint:
       restartPolicy: NotRequired
 
 # Controller coordination. Empty url => the endpoint runs
-# controller-free with a pinned generation. Set => the endpoint
-# registers its pageserver + safekeeper with the controller, takes its
-# generation from the attach-hook, and registers the timeline; the controller
+# controller-free. Set => the endpoint runs its branch bookkeeping against the
+# controller; the controller
 # reaches this endpoint at its stable Service DNS (set as CONTROLLER_REACHABLE_HOST), so
 # a rescheduled pod re-registers the same address (#121).
 controller:

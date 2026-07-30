@@ -74,9 +74,10 @@ provisions them. For standalone testing the supervisor can do it itself:
 The supervisor materializes the branch itself:
 
 - **Pageserver identity + initial branch.** The pageserver's
-  single-branch identity (`branch_id` / `generation`) is baked into the
-  `pageserver.toml` the supervisor renders. The init mode is chosen
-  from the environment:
+  single-branch identity (`branch_id`) is baked into the
+  `pageserver.toml` the supervisor renders; the generation is not — the
+  pageserver claims its own at startup (see GENERATION below). The init
+  mode is chosen from the environment:
   - `BRANCH_ID` unset → generate a fresh 32-hex id and bake
     the controller-seeded `branch_state` row with a NULL ancestor (the pageserver runs `initdb`
     and imports the initial page set on start).
@@ -106,20 +107,15 @@ The supervisor materializes the branch itself:
 
 ## GENERATION
 
-Two coordination modes, selected by whether `CONTROLLER_URL` is set:
+Not a supervisor concern in either mode. The pageserver claims its own
+generation when it starts, by incrementing
+`amp_storage.branch_state.current_generation` and taking what that
+statement returns, so nothing about fencing passes through the pod's
+environment or `pageserver.toml`. A restarted or rescheduled pod
+therefore always outranks the instance it replaces.
 
-- **Controller-free (default).** `GENERATION` comes from the
-  environment, default `1`, and stays pinned. Safe because each
-  endpoint pod is the sole attacher of its branch — there is no
-  concurrent pageserver to fence.
-- **Controller-coordinated (`CONTROLLER_URL` set).** Before writing the
-  pageserver config, the supervisor calls the attach-hook
-  (`POST /debug/v1/attach-hook` with `{"attach": true}`) — the
-  controller is the generation authority, and the returned generation is
-  what gets baked into `pageserver.toml`. After the safekeeper timeline
-  exists, the branch is also registered with the controller (best-effort
-  bookkeeping: start LSN + name; a failure logs a warning rather than
-  crashing the pod). The controller tracks neither safekeepers nor
+Setting `CONTROLLER_URL` still selects controller coordination for
+everything else — but the controller tracks neither safekeepers nor
   pageserver nodes; it reaches the pod's SK for fork-point reads at the
   fixed HTTP port.
 

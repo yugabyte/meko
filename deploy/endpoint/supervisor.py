@@ -75,7 +75,6 @@ COMPUTE_CTL_HTTP_PORT = env_int("COMPUTE_CTL_HTTP_PORT", 3080)
 COMPUTE_PASSWORD = env("COMPUTE_PASSWORD", "cloud_admin")
 SHARED_PRELOAD_LIBRARIES = env("SHARED_PRELOAD_LIBRARIES", "yb_amp")
 BRANCH_ID = env("BRANCH_ID")
-GENERATION = env_int("GENERATION", 1)
 
 # Internal service ports.
 PAGESERVER_PG_PORT = env_int("PAGESERVER_PG_PORT", 64000)
@@ -94,11 +93,10 @@ LISTEN_HOST = "127.0.0.1"
 # the controller-free pod. Point it at the controller's surface if you have one.
 CONTROL_PLANE_API = env("CONTROL_PLANE_API", "http://localhost:6666")
 
-# Controller coordination (opt-in). When CONTROLLER_URL is set, this endpoint
-# takes its pageserver generation from the controller's attach-hook (instead of
-# the standalone GENERATION default) — the controller is the generation-fencing
-# authority. Left unset, the endpoint stays controller-free and self-manages
-# (the default).
+# Controller coordination (opt-in). Left unset, the endpoint stays
+# controller-free and self-manages (the default). The pageserver's generation is
+# not part of this either way: the process claims its own from
+# `amp_storage.branch_state` at startup.
 CONTROLLER_URL = env("CONTROLLER_URL")
 USE_CONTROLLER = CONTROLLER_URL is not None
 # Listen address for the pageserver/safekeeper: 0.0.0.0 under controller
@@ -242,7 +240,6 @@ def write_pageserver_config(datadir):
         f"control_plane_api='{CONTROLLER_URL or CONTROL_PLANE_API}'",
         f"yb_storage_conn={yb_conn_inline_toml()}",
         f"branch_id='{BRANCH_ID}'",
-        f"generation={GENERATION}",
     ]
     (datadir / "pageserver.toml").write_text("\n".join(lines) + "\n")
 
@@ -460,27 +457,8 @@ def provision_schema():
         psql(YB_DBNAME, file=mig)
 
 
-def register_and_attach():
-    """Take this endpoint's pageserver generation from the controller's
-    attach-hook; returns the granted generation. The controller is the
-    generation-fencing authority.
-
-    The controller tracks neither safekeepers (#171) nor pageserver nodes: in
-    the co-located topology each endpoint owns its single pageserver+safekeeper
-    and only needs the branch's next generation from the attach-hook."""
-    base = CONTROLLER_URL.rstrip("/")
-
-    _, resp = http_request("POST", f"{base}/debug/v1/attach-hook",
-                           body={"branch_id": BRANCH_ID, "attach": True})
-    gen = (resp or {}).get("gen")
-    if gen is None:
-        raise RuntimeError(f"attach-hook did not return a generation: {resp}")
-    log(f"controller granted pageserver generation {gen} for branch {BRANCH_ID}")
-    return gen
-
-
 def main():
-    global BRANCH_ID, GENERATION
+    global BRANCH_ID
 
     sup = Supervisor()
     signal.signal(signal.SIGTERM, sup.shutdown)
@@ -494,13 +472,6 @@ def main():
 
     if DEV_PROVISION_SCHEMA:
         provision_schema()
-
-    # Under controller coordination, register the nodes and take the pageserver
-    # generation from the controller *before* writing the pageserver config (it
-    # bakes the generation in). The controller becomes the tenant/generation
-    # authority; the pageserver still materializes the timeline itself (below).
-    if USE_CONTROLLER:
-        GENERATION = register_and_attach()
 
     es_dir = RUN_DIR / "endpoint_storage"
     sk_dir = RUN_DIR / "safekeeper"
