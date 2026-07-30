@@ -19,26 +19,29 @@ name: On-demand checks
 #   * the daily `schedule` fires — runs integration_slow + generate_image on
 #     main (default branch).
 #   * a new commit is pushed (`synchronize`) or the PR opens/reopens — every
-#     directive currently in the body applies, so a persisted `/ci` line
-#     re-runs its suite on each push;
-#   * a PR opens/reopens or a commit is pushed (`synchronize`) AND the diff adds
-#     or modifies files under test/integration/compute/slow/ — integration_slow
-#     then runs automatically, no `/ci` line needed (the slow suite is what
-#     exercises those scenarios, so a change to them should always be run). This
-#     is NOT evaluated on `edited`: a description edit changes no files, and
-#     re-running the suite on a body tweak would defeat the added-only rule below;
-#   * the description is `edited` to ADD a directive — only the newly-added
-#     suites run. Editing the description WITHOUT changing the `/ci` lines
-#     runs nothing (the decide gate returns an empty set and every job is
-#     skipped). This is why the workflow also listens to `edited`, which
-#     pr-build.yml deliberately does not — keeping the `edited` blast radius
-#     to this on-demand workflow so a typo fix in the body never re-triggers the
-#     whole build matrix.
+#     directive currently in the body applies, so a persisted `/ci` line re-runs
+#     its suite on each new commit. Likewise if the diff adds or modifies files
+#     under test/integration/compute/slow/, which runs integration_slow with no
+#     `/ci` line needed (the slow suite is what exercises those scenarios, so
+#     changing them should always run it);
+#   * the description is `edited` — same rule, which is why the workflow listens to
+#     `edited` at all where pr-build.yml deliberately does not: adding a `/ci` line
+#     fires its suite without needing a push, and the `edited` blast radius stays
+#     confined to this on-demand workflow so a typo fix never re-triggers the whole
+#     build matrix.
 #
-# SECURITY: the PR body is untrusted. It is parsed only inside the `decide`
-# job's github-script (which turns it into boolean/enum outputs against a fixed
-# allowlist of suite names) and is NEVER interpolated into a `run:` shell step.
-# Keep it that way — do not `echo "${{ github.event.pull_request.body }}"`.
+# The rule itself lives in .github/actions/ci-directives — one implementation shared
+# with every other workflow that has opt-in suites, so `/ci deploy_gke` over in
+# control-plane-gke.yml behaves exactly like `/ci integration_slow` does here. It
+# also subtracts the suites an earlier run of THIS workflow already handled for the
+# same head commit, so a suite runs at most once per commit however many events
+# fire — which is what stops a body edit, a reopen, or a base-change `synchronize`
+# from re-launching a 3h suite that already went green.
+#
+# SECURITY: the PR body is untrusted. It is read only inside that action's
+# github-script, which turns it into booleans against the fixed allowlist passed in
+# below, and is NEVER interpolated into a `run:` shell step. Keep it that way — do
+# not `echo "${{ github.event.pull_request.body }}"`.
 
 on:
   pull_request:
@@ -50,16 +53,18 @@ on:
     # of the hour to dodge cron congestion.
     - cron: '17 7 * * *'
 
-concurrency:
-  # A new push (`synchronize`) supersedes any in-flight run for this PR — latest
-  # commit wins, same as pr-build.yml. But a description `edited` event does NOT
-  # cancel: concurrency is resolved before the decide gate reads the body, so a
-  # no-op edit (nothing changed in the /ci lines) would otherwise kill a running
-  # suite for nothing. Instead an edit's run queues behind the in-flight one and
-  # skips (or, if it added a directive, runs that suite once the current run
-  # finishes).
-  group: on-demand-checks-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event.action != 'edited' }}
+# NB: there is deliberately NO workflow-level `concurrency` here — it lives on the
+# heavy jobs instead (see `integration` / `generate_image` below).
+#
+# A workflow-level group has to serve two jobs it cannot serve at once. Cancelling
+# is right for the 3h suite (latest commit wins) but wrong for `decide`, which is
+# 20s and is the thing that must ALWAYS report: GitHub keeps only one *pending*
+# run per group, so a second event cancels the first while it is still queued, and
+# a run cancelled before it starts never creates its job check runs at all — the
+# suite then vanishes from the PR's checks list entirely rather than reporting.
+# Per-job groups let `decide` always run while the heavy jobs still supersede each
+# other across commits, including a suite started by an `edited` run and then
+# abandoned by a later push.
 
 permissions:
   contents: read
@@ -71,85 +76,41 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: read      # listWorkflowRuns / listJobsForWorkflowRun, for the dedupe
     outputs:
-      integration_slow: ${{ steps.p.outputs.integration_slow }}
-      generate_image: ${{ steps.p.outputs.generate_image }}
+      suites: ${{ steps.gate.outputs.decided }}
     steps:
-      - uses: actions/github-script@v9
-        id: p
+      # Needed only to make the local composite action below available.
+      - uses: actions/checkout@v7
+
+      - id: gate
+        uses: ./.github/actions/ci-directives
         with:
-          script: |
-            // Scheduled daily run (main only): run the slow suite and build the
-            // controller image unconditionally.
-            if (context.eventName === 'schedule') {
-              core.setOutput('integration_slow', 'true');
-              core.setOutput('generate_image', 'true');
-              core.notice('Scheduled daily run: integration_slow, generate_image');
-              return;
+          # Keep the keys byte-identical to the job `name:` values below — that is
+          # how a suite already run for this commit is recognized. A drifted name is
+          # reported as a warning by the action rather than silently re-running.
+          suites: |
+            {
+              "On-demand — integration (slow)": "integration_slow",
+              "On-demand — controller image build": "generate_image"
             }
-
-            const pr = context.payload.pull_request;
-            const action = context.payload.action;
-
-            // Parse "/ci <suite> [suite...]" lines -> a Set of suite tokens.
-            const parse = (text) => {
-              const out = new Set();
-              for (const line of (text || '').split(/\r?\n/)) {
-                const m = line.match(/^\s*\/ci\s+(.+?)\s*$/i);
-                if (m) for (const s of m[1].split(/[\s,]+/)) if (s) out.add(s.toLowerCase());
-              }
-              return out;
-            };
-
-            const now = parse(pr.body);
-            let effective;
-            if (action === 'edited') {
-              // changes.body.from is the previous body; absent when this edit
-              // did not touch the body (e.g. a title-only edit). Only run the
-              // suites that were *added* by this edit.
-              const from = context.payload.changes?.body?.from;
-              const before = from === undefined ? now : parse(from);
-              effective = new Set([...now].filter((s) => !before.has(s)));
-            } else {
-              // opened / reopened / synchronize: everything currently in the body.
-              effective = now;
-            }
-
-            // Auto-run the slow suite when the PR adds or modifies slow-suite
-            // files, so `integration_slow` fires without an explicit `/ci` line.
-            // Only on code-changing events (opened/reopened/synchronize) — an
-            // `edited` event changes no files, and evaluating it there would
-            // re-trigger the suite on every description tweak, defeating the
-            // added-only rule above.
-            let slowFilesTouched = false;
-            if (action !== 'edited') {
-              const SLOW_DIR = 'test/integration/compute/slow/';
-              const files = await github.paginate(github.rest.pulls.listFiles, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: pr.number,
-                per_page: 100,
-              });
-              slowFilesTouched = files.some(
-                (f) => f.status !== 'removed' && f.filename.startsWith(SLOW_DIR),
-              );
-              if (slowFilesTouched) {
-                core.notice('Slow-suite files changed → running integration_slow automatically');
-              }
-            }
-
-            core.setOutput('integration_slow', String(effective.has('integration_slow') || slowFilesTouched));
-            core.setOutput('generate_image', String(effective.has('generate_image')));
-
-            const picked = [...effective].sort().join(', ') || '(none)';
-            core.notice(`On-demand suites this run (directives): ${picked}`);
+          auto-paths: |
+            {"integration_slow": "test/integration/compute/slow/"}
 
   integration:
     name: On-demand — integration (slow)
     needs: decide
-    if: needs.decide.outputs.integration_slow == 'true' && github.actor != 'dependabot[bot]'
+    if: fromJSON(needs.decide.outputs.suites).integration_slow && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    concurrency:
+      # Latest commit wins: a newer run's slow suite cancels the one still going for
+      # an older commit, whichever event started it. `decide` is outside this group
+      # so it always reports. No queueing happens here — cancel-in-progress means an
+      # incoming job cancels rather than waits, so nothing sits pending waiting to be
+      # cancelled before it starts.
+      group: on-demand-slow-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     env:
       # Keep in sync with pr-build.yml's integration job and scripts/yb-local.sh.
       YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
@@ -233,9 +194,12 @@ jobs:
   generate_image:
     name: On-demand — controller image build
     needs: decide
-    if: needs.decide.outputs.generate_image == 'true'
+    if: fromJSON(needs.decide.outputs.suites).generate_image
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: on-demand-image-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v7
 

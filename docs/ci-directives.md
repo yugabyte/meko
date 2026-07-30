@@ -1,21 +1,28 @@
 # On-demand CI directives (`/ci`)
 
 Some CI suites are too slow or heavy to run on every PR. Request them per-PR by
-adding a `/ci <suite>` line to the **PR description** (body); the
-[`on-demand-checks.yml`](../.github/workflows/on-demand-checks.yml) and
-[`control-plane-gke.yml`](../.github/workflows/control-plane-gke.yml) workflows
-parse the body and run the matching jobs.
+adding a `/ci <suite>` line to the **PR description** (body). Every suite obeys the
+same rule, implemented once in
+[`.github/actions/ci-directives`](../.github/actions/ci-directives/action.yml) and
+called by [`on-demand-checks.yml`](../.github/workflows/on-demand-checks.yml) and
+[`control-plane-gke.yml`](../.github/workflows/control-plane-gke.yml).
 
 - One or more suites per line, space/comma separated:
   `/ci integration_slow generate_image`.
-- A suite re-runs on every push while its line is present. Adding a `/ci` line
-  to the description runs the newly-added suite immediately; editing the
-  description **without** changing the `/ci` lines runs nothing.
+- A suite runs on each new commit while its line is present. Adding a `/ci` line
+  to the description runs that suite immediately, no push needed.
+- A suite runs **once per commit**: re-opening the PR, changing the base, or
+  editing the description again will not re-run a suite that already ran for the
+  current head commit. Those later runs report the suite as `Skipped`; the earlier
+  run's real result stays in the PR's checks list next to it, so read the run, not
+  just the topmost entry. The `Decide …` job annotates exactly what it decided and
+  why. To run a suite a second time against the same commit, use *Re-run jobs* in
+  the Actions tab on the run that executed it — cancelling a suite counts as having
+  run it, so a later description edit will not restart it.
 
 `integration_slow` also runs **automatically** — no `/ci` line needed — on any
-PR whose diff adds or modifies files under `test/integration/compute/slow/`
-(evaluated when the PR opens/reopens or a commit is pushed). The slow suite is
-what exercises those scenarios, so changing them always runs it.
+PR whose diff adds or modifies files under `test/integration/compute/slow/`. The
+slow suite is what exercises those scenarios, so changing them always runs it.
 
 ## Suites
 
