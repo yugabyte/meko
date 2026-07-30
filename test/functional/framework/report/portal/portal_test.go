@@ -13,14 +13,15 @@ import (
 
 // fakePortal records every live-API call and hands out deterministic ids.
 type fakePortal struct {
-	mu    sync.Mutex
-	calls []string // "METHOD path"
-	body  map[string]json.RawMessage
+	mu     sync.Mutex
+	calls  []string // "METHOD path"
+	body   map[string]json.RawMessage
+	bodies map[string][]json.RawMessage // every call, for paths hit more than once
 }
 
 func newFakePortal(t *testing.T) (*fakePortal, *httptest.Server) {
 	t.Helper()
-	fp := &fakePortal{body: map[string]json.RawMessage{}}
+	fp := &fakePortal{body: map[string]json.RawMessage{}, bodies: map[string][]json.RawMessage{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := json.Marshal(map[string]any{})
 		if r.Body != nil {
@@ -39,6 +40,7 @@ func newFakePortal(t *testing.T) (*fakePortal, *httptest.Server) {
 		key := r.Method + " " + r.URL.Path
 		fp.calls = append(fp.calls, key)
 		fp.body[key] = raw
+		fp.bodies[key] = append(fp.bodies[key], raw)
 		fp.mu.Unlock()
 		switch {
 		case r.Method == "POST" && r.URL.Path == "/api/v1/runs":
@@ -263,5 +265,57 @@ func TestSinkPerfDatapointWithoutIdentity(t *testing.T) {
 	}
 	if _, ok := body["identity"]; ok {
 		t.Errorf("perf POST carried an identity field with none recorded: %v", body)
+	}
+}
+
+// Each attempt posts its own result; no earlier attempt is flagged superseded.
+func TestSinkStreamsRetryAttemptMetadata(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	now := time.Now()
+	_ = s.RunStarted(core.RunInfo{StartedAt: now})
+
+	group := "b0a1c2d3-0000-4000-8000-000000000001"
+	first := &core.Result{TestName: "perf/tpcc", Status: core.StatusEnvFailed, StartedAt: now,
+		RetryGroup: group, Attempt: 1}
+	second := &core.Result{TestName: "perf/tpcc", Status: core.StatusPassed, StartedAt: now,
+		RetryGroup: group, Attempt: 2, RetryReason: "env: pod unschedulable (insufficient cpu)"}
+	for _, r := range []*core.Result{first, second} {
+		_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: r.TestName, Result: r})
+		_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestFinished, TestName: r.TestName, Result: r})
+	}
+
+	fp.mu.Lock()
+	creates := append([]json.RawMessage(nil), fp.bodies["POST /api/v1/runs/run-1/results"]...)
+	patches := append([]json.RawMessage(nil), fp.bodies["PATCH /api/v1/results/res-1"]...)
+	fp.mu.Unlock()
+
+	if len(creates) != 2 || len(patches) != 2 {
+		t.Fatalf("posted %d results / %d finishes, want 2 each (one per attempt)", len(creates), len(patches))
+	}
+	for i, raw := range append(creates, patches...) {
+		var got struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		want := 1.0
+		if i%2 == 1 {
+			want = 2.0
+		}
+		if got.Data["retry_group"] != group || got.Data["attempt"] != want {
+			t.Errorf("call %d data = %v, want group %s attempt %v", i, got.Data, group, want)
+		}
+		if _, superseded := got.Data["superseded"]; superseded {
+			t.Errorf("call %d set a superseded flag; the portal derives the current attempt itself", i)
+		}
+		reason, has := got.Data["retry_reason"]
+		if i%2 == 0 && has {
+			t.Errorf("attempt 1 carried retry_reason %v, want none", reason)
+		}
+		if i%2 == 1 && reason != "env: pod unschedulable (insufficient cpu)" {
+			t.Errorf("attempt 2 retry_reason = %v", reason)
+		}
 	}
 }

@@ -25,6 +25,8 @@ type RunOptions struct {
 	// cleanly with this reason instead of reporting env_failed — used when no
 	// real environment is configured (e.g. "env.docker not configured").
 	ProviderUnavailableReason string
+	// Attempt places this execution in a retry chain; zero → newResult stamps 1.
+	Attempt AttemptInfo
 }
 
 // RunTests drives tests through the per-test lifecycle across a worker pool of
@@ -60,7 +62,7 @@ func RunTests(ctx context.Context, tests []Test, opts RunOptions) (RunSummary, [
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				results[i] = RunOne(ctx, tests[i], opts)
+				results[i] = RunWithEnvRetry(ctx, tests[i], opts, RunOne)
 			}
 		}()
 	}
@@ -76,6 +78,7 @@ func RunTests(ctx context.Context, tests []Test, opts RunOptions) (RunSummary, [
 		StartedAt: started,
 		EndedAt:   time.Now(),
 	}
+	// One entry per test: only a chain's FINAL attempt lands here.
 	for _, r := range results {
 		summary.Counts[r.Status]++
 	}
@@ -238,6 +241,14 @@ func ReportResult(test Test, opts RunOptions, status Status, summary string) *Re
 // newResult builds the initial Result and per-test seed.
 func newResult(test Test, opts RunOptions) (*Result, *Seed) {
 	seed := opts.Seed.ForTest(test.Name)
+	// Every result carries attempt metadata, so the portal never sees no group.
+	at := opts.Attempt
+	if at.Group == "" {
+		at.Group = newRetryGroup()
+	}
+	if at.N < 1 {
+		at.N = 1
+	}
 	result := &Result{
 		TestName:    test.Name,
 		Suite:       test.Suite,
@@ -247,6 +258,9 @@ func newResult(test Test, opts RunOptions) (*Result, *Seed) {
 		Seed:        seed.Value(),
 		StartedAt:   time.Now(),
 		Versions:    opts.DetectedVersions,
+		RetryGroup:  at.Group,
+		Attempt:     at.N,
+		RetryReason: at.Reason,
 	}
 	if opts.Config != nil {
 		snap := opts.Config.Resolved()
@@ -364,8 +378,9 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 			result.Status = StatusSkipped
 			result.SkipReason = skipMsg
 		case wd.err != nil:
+			// A Setup failure, or a body error marked core.EnvFail, is not a product signal.
 			result.Status = StatusFailed
-			if setupFailed {
+			if setupFailed || IsEnvFailure(wd.err) {
 				result.Status = StatusEnvFailed
 			}
 			result.ErrorSummary = wd.err.Error()

@@ -57,12 +57,14 @@ const (
 	DefaultQuaySecret      = "quay_images"
 	DefaultPullSecretName  = "quay-secret"
 	DefaultServiceAccount  = "yw-sa"
-	DefaultStorageClass    = "standard"
-	DefaultReach           = ReachTailnet
-	DefaultServicePort     = 80
-	DefaultHelmTimeout     = 40 * time.Minute
-	DefaultBootstrapName   = "demo"
-	DefaultBootstrapEmail  = "demo@yugabyte.com"
+	// DefaultStorageClass must bind WaitForFirstConsumer: an Immediate class
+	// provisions the PVC first and zone-pins the ~4.5 CPU yugaware-0 pod.
+	DefaultStorageClass   = "standard-rwo"
+	DefaultReach          = ReachTailnet
+	DefaultServicePort    = 80
+	DefaultHelmTimeout    = 40 * time.Minute
+	DefaultBootstrapName  = "demo"
+	DefaultBootstrapEmail = "demo@yugabyte.com"
 	// DefaultBootstrapPassword is the well-known non-secret YBA dev default. It is
 	// a config default only — a real deployment overrides it via config, never a
 	// literal in a caller.

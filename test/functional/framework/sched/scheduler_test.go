@@ -248,3 +248,36 @@ func TestSchedulerCancelledContextStillTearsDown(t *testing.T) {
 		t.Fatalf("cancelled test produced no result")
 	}
 }
+
+// The packing scheduler retries like the worker pool, counting the test ONCE.
+func TestSchedulerRetriesSchedulingEnvFailureOnce(t *testing.T) {
+	cfg, err := core.LoadConfig(nil, nil, []string{"sched.env_retry_backoff=0s"})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	var mu sync.Mutex
+	attempts := 0
+	body := func(*core.T) error {
+		mu.Lock()
+		defer mu.Unlock()
+		attempts++
+		if attempts == 1 {
+			return core.EnvFail("0/10 nodes are available: 4 Insufficient cpu")
+		}
+		return nil
+	}
+	summary, results := sched.Run(context.Background(), []core.Test{exclusiveTest("perf/tpcc", body)}, sched.Options{
+		RunOptions:        core.RunOptions{Parallel: 1, Seed: core.NewRunSeed(9, true), Config: cfg, Provider: &fake.Provider{}},
+		Capacity:          2,
+		PerEnvParallelism: 2,
+	})
+	if attempts != 2 {
+		t.Fatalf("body ran %d times, want 2 (one retry)", attempts)
+	}
+	if len(results) != 1 || results[0].Status != core.StatusPassed || results[0].Attempt != 2 {
+		t.Fatalf("results = %+v, want a single passed attempt 2", results)
+	}
+	if summary.Total != 1 || summary.Counts[core.StatusPassed] != 1 || summary.Counts[core.StatusEnvFailed] != 0 {
+		t.Errorf("counts = %v (total %d), want exactly one passed", summary.Counts, summary.Total)
+	}
+}

@@ -49,7 +49,7 @@ func clampBackingRF(k8sCfg ybk8s.Config, rf int) ybk8s.Config {
 func deployYBBackingCfg(ctx context.Context, t *core.T, k8sCfg ybk8s.Config, td *teardownStack, logf func(string, ...any)) (ybk8s.Info, *k8s.Kubectl, error) {
 	secrets, err := core.NewSecrets(t.Options)
 	if err != nil {
-		return ybk8s.Info{}, nil, fmt.Errorf("secrets: %w", err)
+		return ybk8s.Info{}, nil, core.EnvFail("secrets: %w", err)
 	}
 	d := ybk8s.New(k8sCfg, t.ResourceSuffix()).WithLogf(logf).WithSecretResolver(secrets.Value)
 	td.push("teardown yb-in-k8s (namespace + PVCs + client pod)", func(ctx context.Context) error {
@@ -58,7 +58,8 @@ func deployYBBackingCfg(ctx context.Context, t *core.T, k8sCfg ybk8s.Config, td 
 
 	info, err := d.Deploy(ctx)
 	if err != nil {
-		return ybk8s.Info{}, nil, fmt.Errorf("provision yb in k8s: %w", err)
+		// Standing the backing up is ENVIRONMENT work, not a perf regression.
+		return ybk8s.Info{}, nil, core.EnvFail("provision yb in k8s: %w", err)
 	}
 	kube := k8s.New(k8s.Config{Context: k8sCfg.KubeContext, Namespace: info.Namespace}).
 		WithRunner(k8s.KubeconfigRunner(k8sCfg.Kubeconfig))
@@ -80,7 +81,7 @@ func startPerfClientPod(ctx context.Context, kube *k8s.Kubectl, sink apps.Artifa
 	}
 	cp := clientpod.NewK8s(kube)
 	if err := cp.Start(ctx, spec); err != nil {
-		return nil, fmt.Errorf("start client pod: %w", err)
+		return nil, core.EnvFail("start client pod: %w", err)
 	}
 	td.push("report-kill client pod (collect logs + delete)", func(ctx context.Context) error {
 		return cp.Stop(ctx, sink)
@@ -96,14 +97,14 @@ func startPerfClientPod(ctx context.Context, kube *k8s.Kubectl, sink apps.Artifa
 func waitBackingYSQL(ctx context.Context, kube *k8s.Kubectl, info ybk8s.Info, rf int, readyTimeout time.Duration) error {
 	want := fmt.Sprintf("jsonpath={.status.readyReplicas}=%d", rf)
 	if err := kube.WaitFor(ctx, "statefulset/yb-tserver", want, readyTimeout); err != nil {
-		return fmt.Errorf("tservers not Ready before workload: %w", err)
+		return core.EnvFail("tservers not Ready before workload: %w", err)
 	}
 	ci, err := freshTserverConn(ctx, kube, info)
 	if err != nil {
-		return err
+		return core.AsEnvFailure(err)
 	}
 	if err := pg.WaitReady(ctx, ci, readyTimeout); err != nil {
-		return fmt.Errorf("backing YSQL not accepting connections before workload: %w", err)
+		return core.EnvFail("backing YSQL not accepting connections before workload: %w", err)
 	}
 	return sleepCtx(ctx, ysqlSettle)
 }

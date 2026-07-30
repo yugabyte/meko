@@ -50,26 +50,33 @@ import (
 
 // Defaults (core/defaults_test.go asserts the embedded default.yaml agrees).
 const (
-	DefaultNamespacePrefix   = "ampqa-yb"
-	DefaultImageRegistry     = "yugabytedb/yugabyte"
+	DefaultNamespacePrefix = "ampqa-yb"
+	// quay itest carries unreleased builds; Docker Hub has released ones only.
+	DefaultImageRegistry     = "quay.io/yugabyte/yugabyte-itest"
 	DefaultImagePullRegistry = "quay.io"
 
 	// DefaultImagePullSecretName is the k8s Secret object created in the YB
 	// namespace and referenced as the chart's Image.pullSecretName when a private
 	// registry pull credential is configured (apps.ybk8s.image_pull_secret).
 	DefaultImagePullSecretName = "yb-pull-secret"
+	// itest is private, so a caller on the default registry MUST name a pull
+	// secret; it stays opt-in so a public-registry override needs no secrets.
 
 	DefaultReplicationFactor = 1
-	DefaultStorageClass      = "standard"
-	DefaultStorageSize       = "10Gi"
-	DefaultServiceName       = "yb-tserver-service"
-	DefaultYSQLPort          = 5433
-	DefaultMasterCPU         = "0.5"
-	DefaultMasterMemory      = "1Gi"
-	DefaultTServerCPU        = "0.5"
-	DefaultTServerMemory     = "2Gi"
-	DefaultReach             = ReachTailnet
-	DefaultHelmTimeout       = 30 * time.Minute
+	// DefaultStorageClass must bind WaitForFirstConsumer: an Immediate class
+	// provisions the disk first and zone-pins the master/tserver pods.
+	DefaultStorageClass  = "standard-rwo"
+	DefaultStorageSize   = "10Gi"
+	DefaultServiceName   = "yb-tserver-service"
+	DefaultYSQLPort      = 5433
+	DefaultMasterCPU     = "0.5"
+	DefaultMasterMemory  = "1Gi"
+	DefaultTServerCPU    = "0.5"
+	DefaultTServerMemory = "2Gi"
+	DefaultReach         = ReachTailnet
+	// DefaultHelmTimeout bounds `helm install --wait` and the tserver-ready wait:
+	// a cold RF=3 rollout is 6 ordered pods × (node add + multi-GB pull), ~35m.
+	DefaultHelmTimeout = 45 * time.Minute
 
 	// DefaultUser is the YB superuser the framework and amp connect as; the
 	// cluster's always-present maintenance database is likewise "yugabyte".

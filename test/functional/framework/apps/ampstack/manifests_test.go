@@ -46,3 +46,14 @@ func TestJoinGflags(t *testing.T) {
 		t.Errorf("joinGflags all-empty = %q, want empty", got)
 	}
 }
+
+// The yugabyted PVC pins a class instead of the cluster default (zone-pinning).
+func TestYugabytedManifestStorageClass(t *testing.T) {
+	m := yugabytedManifest("ns", "img", "10Gi", DefaultYBStorageClass, "", "", "")
+	if !strings.Contains(m, "storageClassName: "+DefaultYBStorageClass) {
+		t.Errorf("manifest missing storageClassName %q:\n%s", DefaultYBStorageClass, m)
+	}
+	if m := yugabytedManifest("ns", "img", "10Gi", "", "", "", ""); strings.Contains(m, "storageClassName") {
+		t.Errorf("empty class must leave the PVC on the cluster default:\n%s", m)
+	}
+}

@@ -29,6 +29,7 @@ var ampstackParams = map[string]string{
 	"env.ampstack.rbac_cluster_scoped": "bool: create ClusterRole/ClusterRoleBinding (default false)",
 	"env.ampstack.helm_shim":           "bool: install the --create-namespace-stripping helm shim (default true)",
 	"env.ampstack.storage_class":       "endpoint /data PVC storage class (default: emptyDir)",
+	"env.ampstack.yb_storage_class":    "built-in yugabyted PVC storage class (default standard-rwo, a WaitForFirstConsumer class)",
 	"env.ampstack.pull_secret_b64":     "pre-encoded .dockerconfigjson; empty → mint via aws ecr get-login-password",
 	"task.registry":                    "registry file path (default ~/.ampqa/envs.json)",
 	"task.env_id":                      "registry entry id (teardown-amp; default: match by namespace)",

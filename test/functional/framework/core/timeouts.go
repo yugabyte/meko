@@ -12,8 +12,10 @@ const (
 	DefaultPerfTimeout        = 60 * time.Minute
 	DefaultLongRunningTimeout = 24 * time.Hour
 	DefaultTeardownTimeout    = 5 * time.Minute
-	DefaultProvisionTimeout   = 5 * time.Minute
-	DefaultCollectTimeout     = 2 * time.Minute
+	// DefaultProvisionTimeout bounds EnvProvider.Provision: a provision that waits
+	// on a pod pays a node add + image pull, which 5m turned into an env_failed.
+	DefaultProvisionTimeout = 10 * time.Minute
+	DefaultCollectTimeout   = 2 * time.Minute
 )
 
 // CategoryDefaultTimeout is the hard-coded fallback test timeout for a

@@ -64,6 +64,12 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if got := cfg.GetInt("sched.per_env_parallelism", -1); got != sched.DefaultPerEnvParallelism {
 		t.Errorf("sched.per_env_parallelism = %d, want %d", got, sched.DefaultPerEnvParallelism)
 	}
+	if got := cfg.GetInt("sched.env_retries", -1); got != core.DefaultEnvRetries {
+		t.Errorf("sched.env_retries = %d, want %d", got, core.DefaultEnvRetries)
+	}
+	if got := cfg.GetDuration("sched.env_retry_backoff", -1); got != core.DefaultEnvRetryBackoff {
+		t.Errorf("sched.env_retry_backoff = %s, want %s", got, core.DefaultEnvRetryBackoff)
+	}
 	weights := map[string]int{
 		"single_container":     1,
 		"shared_control_plane": 1,
@@ -233,11 +239,18 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if acfg.LocalPort != 0 {
 		t.Errorf("ampstack LocalPort = %d, want 0", acfg.LocalPort)
 	}
-	if acfg.YBReadyTimeout != 15*time.Minute {
-		t.Errorf("ampstack YBReadyTimeout = %s, want 15m", acfg.YBReadyTimeout)
+	if acfg.YBReadyTimeout != ampstack.DefaultYBReadyTimeout {
+		t.Errorf("ampstack YBReadyTimeout = %s, want %s", acfg.YBReadyTimeout, ampstack.DefaultYBReadyTimeout)
 	}
-	if acfg.ControllerReadyTimeout != 5*time.Minute {
-		t.Errorf("ampstack ControllerReadyTimeout = %s, want 5m", acfg.ControllerReadyTimeout)
+	if acfg.ControllerReadyTimeout != ampstack.DefaultControllerReadyTimeout {
+		t.Errorf("ampstack ControllerReadyTimeout = %s, want %s", acfg.ControllerReadyTimeout, ampstack.DefaultControllerReadyTimeout)
+	}
+	// The yugabyted PVC pins a class; the endpoints' stays empty (emptyDir).
+	if acfg.YBStorageClass != ampstack.DefaultYBStorageClass {
+		t.Errorf("ampstack YBStorageClass = %q, want %q", acfg.YBStorageClass, ampstack.DefaultYBStorageClass)
+	}
+	if acfg.StorageClass != "" {
+		t.Errorf("ampstack StorageClass = %q, want empty (endpoint /data is an emptyDir)", acfg.StorageClass)
 	}
 
 	// --- env.exclusivek8s ---
@@ -269,11 +282,11 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if xcfg.LocalPortBase != exclusivek8s.DefaultLocalPortBase {
 		t.Errorf("exclusivek8s LocalPortBase = %d, want %d", xcfg.LocalPortBase, exclusivek8s.DefaultLocalPortBase)
 	}
-	if xcfg.YBReadyTimeout != 15*time.Minute {
-		t.Errorf("exclusivek8s YBReadyTimeout = %s, want 15m", xcfg.YBReadyTimeout)
+	if xcfg.YBReadyTimeout != ampstack.DefaultYBReadyTimeout {
+		t.Errorf("exclusivek8s YBReadyTimeout = %s, want %s", xcfg.YBReadyTimeout, ampstack.DefaultYBReadyTimeout)
 	}
-	if xcfg.ReadyTimeout != 5*time.Minute {
-		t.Errorf("exclusivek8s ReadyTimeout = %s, want 5m", xcfg.ReadyTimeout)
+	if xcfg.ReadyTimeout != ampstack.DefaultControllerReadyTimeout {
+		t.Errorf("exclusivek8s ReadyTimeout = %s, want %s", xcfg.ReadyTimeout, ampstack.DefaultControllerReadyTimeout)
 	}
 
 	// --- env.universe ---
@@ -1453,5 +1466,29 @@ func TestDefaultBaseNotCorruptedByOverrides(t *testing.T) {
 	artifacts, _ := resolved["artifacts"].(map[string]any)
 	if _, ok := artifacts["leaky"]; ok {
 		t.Errorf("artifacts.leaky leaked into a later LoadConfig call's embedded base")
+	}
+}
+
+// Every PVC-creating app defaults to a WaitForFirstConsumer class; an Immediate
+// one (GKE's `standard`) zone-pins the pod before it is scheduled.
+func TestPVCStorageClassDefaultsAreWaitForFirstConsumer(t *testing.T) {
+	const wfc = "standard-rwo"
+	cfg, err := core.LoadConfig(nil, nil, nil)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	classes := map[string]string{
+		"apps.ybastack.storage_class":   ybastack.DefaultStorageClass,
+		"apps.ybk8s.storage_class":      ybk8s.DefaultStorageClass,
+		"apps.yba.k8s.storage_class":    yba.DefaultK8sStorageClass,
+		"env.ampstack.yb_storage_class": ampstack.DefaultYBStorageClass,
+	}
+	for key, constant := range classes {
+		if constant != wfc {
+			t.Errorf("%s code default = %q, want %q (Immediate binding zone-pins the pod)", key, constant, wfc)
+		}
+		if got := cfg.GetString(key, "__MISSING__"); got != constant {
+			t.Errorf("%s = %q, want %q", key, got, constant)
+		}
 	}
 }

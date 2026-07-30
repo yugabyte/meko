@@ -45,7 +45,7 @@ func (s *Sink) RunFinished(core.RunSummary) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	doc := build(s.results)
+	doc := build(core.FinalAttempts(s.results))
 	out, err := xml.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err

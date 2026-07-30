@@ -27,7 +27,9 @@ type Sink struct {
 	manifest *os.File
 	info     core.RunInfo
 	summary  []summaryRow
-	err      error
+	// summaryAt maps retry_group → summary index, so a retry REPLACES its row.
+	summaryAt map[string]int
+	err       error
 	// artifacts maps a test name → (attachment name → run-relative path) for the
 	// bytes this sink persisted from EventAttachment events, so the run-relative
 	// Path is recorded into the test's on-disk result at EventTestFinished
@@ -122,7 +124,18 @@ func (s *Sink) ResultEvent(ev core.ResultEvent) error {
 		DurationMS: r.Duration.Milliseconds(),
 		Seed:       r.Seed,
 	}
-	s.summary = append(s.summary, row)
+	// run.json is one row per TEST; the append-only manifest keeps every attempt.
+	if i, seen := s.summaryAt[r.RetryGroup]; seen && r.RetryGroup != "" {
+		s.summary[i] = row
+	} else {
+		if r.RetryGroup != "" {
+			if s.summaryAt == nil {
+				s.summaryAt = map[string]int{}
+			}
+			s.summaryAt[r.RetryGroup] = len(s.summary)
+		}
+		s.summary = append(s.summary, row)
+	}
 	if s.manifest != nil {
 		line, _ := json.Marshal(row)
 		if _, err := s.manifest.Write(append(line, '\n')); err != nil {

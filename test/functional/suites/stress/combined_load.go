@@ -120,15 +120,20 @@ func runCombinedLoad(t *core.T) (err error) {
 	phases := []struct {
 		name string
 		fn   func(context.Context) error
+		// env: a phase that only stands infrastructure up → env_failed.
+		env bool
 	}{
-		{"provision_backing", r.provisionBacking},
-		{"deploy_client_pod", r.deployClientPod},
-		{"schema_setup", r.schemaSetup},
-		{"load_consistency_dataset", r.loadConsistencyDataset},
-		{"combined_load_with_chaos", r.combinedLoadWithChaos},
+		{"provision_backing", r.provisionBacking, true},
+		{"deploy_client_pod", r.deployClientPod, true},
+		{"schema_setup", r.schemaSetup, false},
+		{"load_consistency_dataset", r.loadConsistencyDataset, false},
+		{"combined_load_with_chaos", r.combinedLoadWithChaos, false},
 	}
 	for _, p := range phases {
 		if err := step(p.name, p.fn); err != nil {
+			if p.env {
+				return core.AsEnvFailure(err)
+			}
 			return err
 		}
 	}

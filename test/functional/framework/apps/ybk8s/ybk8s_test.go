@@ -176,8 +176,8 @@ func TestDeployRF1DefaultBuildsBothPaths(t *testing.T) {
 	for _, want := range []string{
 		"--wait", "--timeout", "ampqa-yb-run7",
 		"replicas.master=1", "replicas.tserver=1", "gflags.master.replication_factor=1",
-		"Image.repository=yugabytedb/yugabyte", "Image.tag=2025.2.1.0-b141",
-		"storage.tserver.storageClass=standard", "enableLoadBalancer=false",
+		"Image.repository=quay.io/yugabyte/yugabyte-itest", "Image.tag=2025.2.1.0-b141",
+		"--set-string storage.tserver.storageClass=standard-rwo", "enableLoadBalancer=false",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("helm install missing %q in: %s", want, joined)

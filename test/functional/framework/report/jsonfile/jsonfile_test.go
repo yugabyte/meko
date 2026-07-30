@@ -88,3 +88,57 @@ func TestJSONFileSinkWritesFiles(t *testing.T) {
 		t.Fatalf("manifest lines = %d, want 2", lines)
 	}
 }
+
+// run.json totals: a retried test appears once; the manifest keeps every attempt.
+func TestJSONFileRunSummaryListsFinalAttemptOnly(t *testing.T) {
+	s := jsonfile.New(t.TempDir())
+	if err := s.RunStarted(core.RunInfo{Seed: 1, Total: 1, Parallel: 1, StartedAt: time.Now()}); err != nil {
+		t.Fatalf("RunStarted: %v", err)
+	}
+	dir := s.Dir()
+	for _, r := range []*core.Result{
+		{TestName: "perf/tpcc", Suite: "perf", Status: core.StatusEnvFailed, RetryGroup: "g1", Attempt: 1},
+		{TestName: "perf/tpcc", Suite: "perf", Status: core.StatusPassed, RetryGroup: "g1", Attempt: 2},
+	} {
+		if err := s.ResultEvent(core.ResultEvent{Kind: core.EventTestFinished, TestName: r.TestName, Result: r}); err != nil {
+			t.Fatalf("ResultEvent: %v", err)
+		}
+	}
+	if err := s.RunFinished(core.RunSummary{Counts: map[core.Status]int{core.StatusPassed: 1}, Total: 1, EndedAt: time.Now()}); err != nil {
+		t.Fatalf("RunFinished: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var run struct {
+		Tests []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"tests"`
+	}
+	if err := json.Unmarshal(raw, &run); err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Tests) != 1 || run.Tests[0].Status != "passed" {
+		t.Errorf("run.json tests = %+v, want one passed row", run.Tests)
+	}
+
+	// Both attempts survive in the manifest.
+	f, err := os.Open(filepath.Join(dir, "manifest.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	lines := 0
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if len(sc.Bytes()) > 0 {
+			lines++
+		}
+	}
+	if lines != 2 {
+		t.Errorf("manifest has %d lines, want 2 (one per attempt)", lines)
+	}
+}

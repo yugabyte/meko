@@ -162,12 +162,30 @@ func (s *Sink) testStarted(ev core.ResultEvent) {
 	if ev.Result != nil && !ev.Result.StartedAt.IsZero() {
 		body["start_time"] = ev.Result.StartedAt
 	}
+	if d := attemptData(ev.Result); d != nil {
+		body["data"] = d
+	}
 	var out struct {
 		ResultID string `json:"result_id"`
 	}
 	if err := s.call(http.MethodPost, "/api/v1/runs/"+s.runID+"/results", body, &out); err == nil {
+		// Each attempt is its own row: rebind the name, restart step ordinals.
 		s.results[ev.TestName] = out.ResultID
+		s.ordinal[ev.TestName] = 0
 	}
+}
+
+// attemptData is the retry metadata the portal groups attempts by. Earlier
+// attempts are never patched — current = highest attempt in a retry_group.
+func attemptData(r *core.Result) map[string]any {
+	if r == nil || r.RetryGroup == "" {
+		return nil
+	}
+	d := map[string]any{"retry_group": r.RetryGroup, "attempt": r.Attempt}
+	if r.RetryReason != "" {
+		d["retry_reason"] = r.RetryReason
+	}
+	return d
 }
 
 // testFinished patches status/end and ships the raw Result under "amp": the
@@ -187,9 +205,14 @@ func (s *Sink) testFinished(ev core.ResultEvent) {
 	if err != nil {
 		raw = []byte(`{}`)
 	}
-	_ = s.call(http.MethodPatch, "/api/v1/results/"+rid, map[string]any{
+	body := map[string]any{
 		"status": string(r.Status), "end_time": r.EndedAt, "amp": json.RawMessage(raw),
-	}, nil)
+	}
+	// Repeated on finish so a killed run, or a post-run ingest, still has it.
+	if d := attemptData(r); d != nil {
+		body["data"] = d
+	}
+	_ = s.call(http.MethodPatch, "/api/v1/results/"+rid, body, nil)
 }
 
 // resultView mirrors the jsonfile sink's on-disk shape — the one the portal's

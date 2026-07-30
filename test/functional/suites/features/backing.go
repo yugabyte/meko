@@ -341,7 +341,8 @@ func (f *flow) namespace() string { return "ampqa-fnd-" + f.suffix() }
 func (f *flow) provisionBacking(ctx context.Context) error {
 	store, plan, err := f.prov(ctx, f.t, f.td, f.logf)
 	if err != nil {
-		return err
+		// Standing infrastructure up is ENVIRONMENT work, not a product signal.
+		return core.AsEnvFailure(err)
 	}
 	f.store = store
 	f.reap = plan

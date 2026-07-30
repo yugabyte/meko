@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -262,29 +263,28 @@ available), distinct from a genuine all-pass.`,
 			// otherwise the first test's short provision deadline would have to
 			// absorb the whole control-plane bring-up. A failed bring-up tears down
 			// what it created and fails the run.
-			if prep, ok := provider.(interface {
-				Prepare(context.Context) error
-			}); ok {
-				if err := prep.Prepare(c.Context()); err != nil {
-					if closer, ok := provider.(interface{ Close() error }); ok {
-						_ = closer.Close()
-					}
-					// No environment means no test body can run — but the run must
-					// still say so per test. Every selected test reports env_failed
-					// with this reason, so the report shows WHICH tests were blocked
-					// and WHY instead of an empty run.
-					rep := makeReporter()
-					summary, results := core.ReportEnvFailedRun(tests, opts.RunOptions, "environment prepare failed: "+err.Error())
-					var dropped int64
-					if rep != nil {
-						rep.Close()
-						dropped = rep.Dropped()
-					}
-					if jsonOutput {
-						_ = printEnvelope(c.OutOrStdout(), "ampqa.run", "run", runData(runSeed.Value(), parallel, summary, results, dropped))
-					}
-					return &exitError{code: 1, err: fmt.Errorf("prepare environment: %w", err)}
+			preparedProvider, prepErr := prepareProvider(c.Context(), provider, cfg, func() (core.EnvProvider, error) {
+				p, _, err := buildProvider(name, cfg, secrets, masker, detected)
+				return p, err
+			})
+			provider = preparedProvider
+			opts.Provider = provider
+			if prepErr != nil {
+				// No environment means no test body can run — but the run must
+				// still say so per test. Every selected test reports env_failed
+				// with this reason, so the report shows WHICH tests were blocked
+				// and WHY instead of an empty run.
+				rep := makeReporter()
+				summary, results := core.ReportEnvFailedRun(tests, opts.RunOptions, "environment prepare failed: "+prepErr.Error())
+				var dropped int64
+				if rep != nil {
+					rep.Close()
+					dropped = rep.Dropped()
 				}
+				if jsonOutput {
+					_ = printEnvelope(c.OutOrStdout(), "ampqa.run", "run", runData(runSeed.Value(), parallel, summary, results, dropped))
+				}
+				return &exitError{code: 1, err: fmt.Errorf("prepare environment: %w", prepErr)}
 			}
 
 			// --setup-only: stand each selected test's environment up, skip its
@@ -358,6 +358,42 @@ available), distinct from a genuine all-pass.`,
 	cmd.Flags().StringVar(&htmlPath, "html", "", "write a self-contained HTML report to this path when the run finishes; default from report.html_path")
 	cmd.Flags().BoolVar(&noDefaults, "no-default-config", false, "skip the embedded configs/default.yaml base layer (debugging only)")
 	return cmd
+}
+
+// prepareProvider stands a self-building provider's control plane up before the
+// scheduler starts, REBUILDING it per retry — never reuse a half-built one.
+func prepareProvider(ctx context.Context, provider core.EnvProvider, cfg *core.Config, rebuild func() (core.EnvProvider, error)) (core.EnvProvider, error) {
+	retries := core.ResolveEnvRetries(cfg)
+	for attempt := 1; ; attempt++ {
+		prep, ok := provider.(interface{ Prepare(context.Context) error })
+		if !ok {
+			return provider, nil
+		}
+		err := prep.Prepare(ctx)
+		if err == nil {
+			return provider, nil
+		}
+		if closer, ok := provider.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+		reason, retryable := core.SchedulingReason(err.Error())
+		if !retryable || attempt > retries {
+			return provider, err
+		}
+		backoff := core.ResolveEnvRetryBackoff(cfg)
+		log.Printf("RETRY environment prepare: attempt %d failed (env: %s) — %q; rebuilding and retrying in %s (attempt %d of %d)",
+			attempt, reason, err, backoff, attempt+1, retries+1)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return provider, err
+		}
+		next, rerr := rebuild()
+		if rerr != nil {
+			return provider, rerr
+		}
+		provider = next
+	}
 }
 
 func excludeSuite(tests []core.Test, suite string) []core.Test {

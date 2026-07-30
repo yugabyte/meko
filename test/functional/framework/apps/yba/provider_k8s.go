@@ -50,8 +50,9 @@ const (
 	// pull-secret content is stored under.
 	DefaultK8sPullSecretFile = "pull_secret.yaml"
 	// DefaultK8sStorageClass is the k8s StorageClass the universe PVCs bind to
-	// (deviceInfo.storageClass + zone STORAGE_CLASS).
-	DefaultK8sStorageClass = "standard"
+	// (deviceInfo.storageClass + zone STORAGE_CLASS). Must bind
+	// WaitForFirstConsumer: an Immediate class zone-pins the universe pods.
+	DefaultK8sStorageClass = "standard-rwo"
 	// DefaultK8sRegion / DefaultK8sZone are the co-located GKE region/zone (the
 	// shared dev project's us-west1, matching apps.cloud.gcp).
 	DefaultK8sRegion = "us-west1"

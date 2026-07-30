@@ -191,10 +191,10 @@ func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
 	// If Acquire failed it was ctx cancellation; RunOne then surfaces the dead
 	// context as an env_failed during provisioning — no separate path needed.
 	if !s.acquireSlot(ctx) {
-		return core.RunOne(ctx, test, s.opts.RunOptions)
+		return core.RunWithEnvRetry(ctx, test, s.opts.RunOptions, core.RunOne)
 	}
 	defer s.releaseSlot()
-	return core.RunOne(ctx, test, s.opts.RunOptions)
+	return core.RunWithEnvRetry(ctx, test, s.opts.RunOptions, core.RunOne)
 }
 
 // runShared packs the shared tests onto at most ceil(N/perEnv) environments.
@@ -272,12 +272,16 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 		go func(idx int) {
 			defer batch.Done()
 			defer func() { <-inFlight }()
+			// The shared env is not re-provisioned, but a body's env failure retries.
+			onEnv := func(c context.Context, t core.Test, o core.RunOptions) *core.Result {
+				return core.RunOneOnEnv(c, t, env, o)
+			}
 			if !s.acquireSlot(ctx) {
-				s.results[idx] = core.RunOneOnEnv(ctx, s.tests[idx], env, s.opts.RunOptions)
+				s.results[idx] = core.RunWithEnvRetry(ctx, s.tests[idx], s.opts.RunOptions, onEnv)
 				return
 			}
 			defer s.releaseSlot()
-			s.results[idx] = core.RunOneOnEnv(ctx, s.tests[idx], env, s.opts.RunOptions)
+			s.results[idx] = core.RunWithEnvRetry(ctx, s.tests[idx], s.opts.RunOptions, onEnv)
 		}(i)
 	}
 	batch.Wait()

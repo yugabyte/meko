@@ -99,3 +99,37 @@ func TestJUnitSinkMapsStatuses(t *testing.T) {
 		t.Fatalf("passed case should have no child element: %+v", c)
 	}
 }
+
+// The XML shows a retried test ONCE, or CI reads the env failure as a real one.
+func TestJUnitCountsRetriedTestOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "junit.xml")
+	s := junit.New(path)
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	for _, r := range []*core.Result{
+		{TestName: "perf/tpcc", Suite: "perf", Status: core.StatusEnvFailed,
+			ErrorSummary: "0/10 nodes are available: 4 Insufficient cpu",
+			RetryGroup:   "g1", Attempt: 1},
+		{TestName: "perf/tpcc", Suite: "perf", Status: core.StatusPassed, RetryGroup: "g1", Attempt: 2},
+	} {
+		_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestFinished, TestName: r.TestName, Result: r})
+	}
+	_ = s.RunFinished(core.RunSummary{Counts: map[core.Status]int{core.StatusPassed: 1}, Total: 1, EndedAt: time.Now()})
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc tsuites
+	if err := xml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Tests != 1 || doc.Failures != 0 || doc.Errors != 0 {
+		t.Errorf("totals = %d tests / %d failures / %d errors, want 1/0/0", doc.Tests, doc.Failures, doc.Errors)
+	}
+	if len(doc.Suites) != 1 || len(doc.Suites[0].Cases) != 1 {
+		t.Fatalf("want a single testcase, got %+v", doc.Suites)
+	}
+	if doc.Suites[0].Cases[0].Failure != nil {
+		t.Errorf("final attempt passed but the case carries a failure: %+v", doc.Suites[0].Cases[0].Failure)
+	}
+}

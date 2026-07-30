@@ -85,8 +85,8 @@ func FromConfig(c *core.Config) Config {
 		ControllerPort:    c.GetInt("env.exclusivek8s.controller_port", DefaultControllerPort),
 		ControllerReach:   ampstack.ControllerReachMode(c.GetString("env.exclusivek8s.controller_reach", "")),
 		LocalPortBase:     c.GetInt("env.exclusivek8s.local_port_base", DefaultLocalPortBase),
-		YBReadyTimeout:    c.GetDuration("env.exclusivek8s.yb_ready_timeout", 15*time.Minute),
-		ReadyTimeout:      c.GetDuration("env.exclusivek8s.controller_ready_timeout", 5*time.Minute),
+		YBReadyTimeout:    c.GetDuration("env.exclusivek8s.yb_ready_timeout", ampstack.DefaultYBReadyTimeout),
+		ReadyTimeout:      c.GetDuration("env.exclusivek8s.controller_ready_timeout", ampstack.DefaultControllerReadyTimeout),
 		Product:           c.GetString("versions.product", ""),
 	}
 }
@@ -168,10 +168,10 @@ func applyDefaults(cfg *Config) {
 		cfg.LocalPortBase = DefaultLocalPortBase
 	}
 	if cfg.YBReadyTimeout == 0 {
-		cfg.YBReadyTimeout = 15 * time.Minute
+		cfg.YBReadyTimeout = ampstack.DefaultYBReadyTimeout
 	}
 	if cfg.ReadyTimeout == 0 {
-		cfg.ReadyTimeout = 5 * time.Minute
+		cfg.ReadyTimeout = ampstack.DefaultControllerReadyTimeout
 	}
 }
 

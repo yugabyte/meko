@@ -51,6 +51,11 @@ type Result struct {
 	// what makes two perf results comparable (matching LoadSignature) and is
 	// rendered as a small variant block.
 	PerfIdentity *PerfIdentity `json:",omitempty"`
+	// RetryGroup/Attempt/RetryReason place this execution in a retry chain (see
+	// RunWithEnvRetry); RetryReason says why the PREVIOUS attempt was retried.
+	RetryGroup  string
+	Attempt     int
+	RetryReason string `json:",omitempty"`
 	// StepsDropped/MetricsDropped count events dropped from the retained slices
 	// once the per-test retention cap was hit (report.max_steps_retained /
 	// report.max_metrics_retained). The live sink already received every event;

@@ -60,17 +60,25 @@ const (
 	DefaultYBImage        = "yugabytedb/yugabyte:latest"
 	// DefaultYBImageRegistry is the registry+repo the built-in yugabyted image
 	// is derived from (as "<registry>:<version>") when env.ampstack.yb_image is
-	// unset. Preview trains (odd 2.N) live at quay.io/yugabyte/yugabyte-itest —
-	// point this there (plus quay creds) to run a preview build.
-	DefaultYBImageRegistry     = "yugabytedb/yugabyte"
-	DefaultYBStorage           = "20Gi"
-	DefaultControllerService   = "amp-controller"
-	DefaultControllerName      = "amp-controller"
-	DefaultControllerContainer = "controller"
-	DefaultControllerPort      = 8080
-	DefaultHelmRelease         = "yb-amp-controller"
-	DefaultDBName              = "yb_storage"
-	DefaultECRRegistry         = "454529406029.dkr.ecr.us-west-2.amazonaws.com"
+	// unset. quay itest is the only registry with unreleased builds (Docker Hub
+	// carries released ones only); it is private, so pulling needs its credential.
+	DefaultYBImageRegistry = "quay.io/yugabyte/yugabyte-itest"
+	DefaultYBStorage       = "20Gi"
+	// DefaultYBStorageClass must bind WaitForFirstConsumer: an Immediate class
+	// (GKE's default `standard`) provisions the disk first and zone-pins the pod.
+	DefaultYBStorageClass = "standard-rwo"
+	// DefaultYBReadyTimeout bounds the built-in yugabyted's Ready wait: a cold
+	// start pays a node add + multi-GB image pull before its own bootstrap.
+	DefaultYBReadyTimeout = 20 * time.Minute
+	// DefaultControllerReadyTimeout: small image, and the node is already warm.
+	DefaultControllerReadyTimeout = 5 * time.Minute
+	DefaultControllerService      = "amp-controller"
+	DefaultControllerName         = "amp-controller"
+	DefaultControllerContainer    = "controller"
+	DefaultControllerPort         = 8080
+	DefaultHelmRelease            = "yb-amp-controller"
+	DefaultDBName                 = "yb_storage"
+	DefaultECRRegistry            = "454529406029.dkr.ecr.us-west-2.amazonaws.com"
 	// Registry flavors for env.ampstack.registry — where bare image refs
 	// resolve and which auth lands in the pull secret. Quay is the default:
 	// release and custom builds publish to quay.io/yugabyte/amp-*.
@@ -187,6 +195,9 @@ type Config struct {
 
 	YBImage   string
 	YBStorage string
+	// YBStorageClass is the built-in yugabyted PVC's class, separate from
+	// StorageClass (the endpoints') which defaults to emptyDir — no PVC at all.
+	YBStorageClass string
 	// YBMasterGflags / YBTserverGflags are CSV flag=value lists forwarded to
 	// the built-in yugabyted's --master_flags / --tserver_flags. Builtin
 	// backing only — external clusters own their flags. The
@@ -329,6 +340,7 @@ func FromConfig(get Getter) Config {
 		ControllerChart: get.GetString("env.ampstack.controller_chart", ""),
 		YBImage:         resolveYBImage(get),
 		YBStorage:       get.GetString("env.ampstack.yb_storage", DefaultYBStorage),
+		YBStorageClass:  get.GetString("env.ampstack.yb_storage_class", DefaultYBStorageClass),
 		YBMasterGflags: joinGflags(get.GetString("env.ampstack.yb_gflags", ""),
 			get.GetString("env.ampstack.yb_master_gflags", "")),
 		YBTserverGflags: joinGflags(get.GetString("env.ampstack.yb_gflags", ""),
@@ -365,8 +377,8 @@ func FromConfig(get Getter) Config {
 		HelmRelease:               get.GetString("env.ampstack.helm_release", DefaultHelmRelease),
 		ControllerReach:           ControllerReachMode(get.GetString("env.ampstack.controller_reach", string(ReachTailnet))),
 		LocalPort:                 get.GetInt("env.ampstack.local_port", 0),
-		YBReadyTimeout:            get.GetDuration("env.ampstack.yb_ready_timeout", 15*time.Minute),
-		ControllerReadyTimeout:    get.GetDuration("env.ampstack.controller_ready_timeout", 5*time.Minute),
+		YBReadyTimeout:            get.GetDuration("env.ampstack.yb_ready_timeout", DefaultYBReadyTimeout),
+		ControllerReadyTimeout:    get.GetDuration("env.ampstack.controller_ready_timeout", DefaultControllerReadyTimeout),
 	}
 }
 
@@ -424,6 +436,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.YBStorage == "" {
 		cfg.YBStorage = DefaultYBStorage
 	}
+	if cfg.YBStorageClass == "" {
+		cfg.YBStorageClass = DefaultYBStorageClass
+	}
 	if cfg.DBName == "" {
 		cfg.DBName = DefaultDBName
 	}
@@ -474,10 +489,10 @@ func applyDefaults(cfg *Config) {
 		cfg.ControllerReach = ReachTailnet
 	}
 	if cfg.YBReadyTimeout == 0 {
-		cfg.YBReadyTimeout = 15 * time.Minute
+		cfg.YBReadyTimeout = DefaultYBReadyTimeout
 	}
 	if cfg.ControllerReadyTimeout == 0 {
-		cfg.ControllerReadyTimeout = 5 * time.Minute
+		cfg.ControllerReadyTimeout = DefaultControllerReadyTimeout
 	}
 }
 
@@ -635,7 +650,7 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 			return StackInfo{}, err
 		}
 	} else {
-		if err := a.kube.Apply(ctx, yugabytedManifest(a.cfg.Namespace, a.cfg.YBImage, a.cfg.YBStorage, a.cfg.StorageClass, a.cfg.YBMasterGflags, a.cfg.YBTserverGflags, pullSecretNameIf(pullSecretApplied, a.cfg.PullSecretName))); err != nil {
+		if err := a.kube.Apply(ctx, yugabytedManifest(a.cfg.Namespace, a.cfg.YBImage, a.cfg.YBStorage, a.cfg.YBStorageClass, a.cfg.YBMasterGflags, a.cfg.YBTserverGflags, pullSecretNameIf(pullSecretApplied, a.cfg.PullSecretName))); err != nil {
 			return StackInfo{}, fmt.Errorf("apply yugabyted: %w", err)
 		}
 		if err := a.kube.WaitFor(ctx, "statefulset/"+yugabytedStatefulSet, "jsonpath={.status.readyReplicas}=1", a.cfg.YBReadyTimeout); err != nil {

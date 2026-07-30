@@ -25,6 +25,11 @@ sched:
   parallel: 1
   # SHARED tests packed onto one shared env (default for --per-env-parallelism).
   per_env_parallelism: 4
+  # Extra attempts after a SCHEDULING-CLASS env failure only (unschedulable,
+  # insufficient cpu/memory, PV node affinity, readiness timeout). 0 = off.
+  env_retries: 1
+  # Pause before a retry — 60s ≈ a GKE node add.
+  env_retry_backoff: 60s
   # Lease weight per env Shape (used when a test's EnvSpec sets no Weight).
   # Shapes not listed fall back to 1 (2 for dedicated_stack).
   weights:
@@ -42,8 +47,8 @@ timeouts:
   stress: 60m
   perf: 60m
   long_running: 24h
-  # EnvProvider.Provision deadline.
-  provision: 5m
+  # EnvProvider.Provision deadline (a pod wait pays a node add + image pull).
+  provision: 10m
   # EnvProvider.Teardown deadline (runs even after a body timeout, own budget).
   teardown: 5m
   # Environment.Collect deadline (best-effort, before teardown).
@@ -154,8 +159,12 @@ env:
     # and quay_user/quay_token (the pull secret then lands on the StatefulSet).
     # (No auto-switch by train parity — the registry is always explicit.)
     yb_image: ""
-    yb_image_registry: "yugabytedb/yugabyte"
+    # quay itest carries unreleased builds; Docker Hub does not.
+    yb_image_registry: "quay.io/yugabyte/yugabyte-itest"
     yb_storage: "20Gi"
+    # BUILT-IN yugabyted PVC class (storage_class is the endpoints'). Needs a
+    # WaitForFirstConsumer class; "" falls back to the cluster default.
+    yb_storage_class: "standard-rwo"
     db_name: "yb_storage"
     # backing: where the control plane's YugabyteDB lives.
     #   builtin_yugabyted (default) → ampstack deploys the single-node yugabyted
@@ -200,7 +209,7 @@ env:
     controller_reach: "tailnet"
     # 0 → kubectl auto-allocates the port-forward local port (portforward only).
     local_port: 0
-    yb_ready_timeout: 15m
+    yb_ready_timeout: 20m
     controller_ready_timeout: 5m
 
   # env/universe: a YugabyteDB universe used directly as the test TARGET (not the
@@ -258,7 +267,7 @@ env:
     # legacy kubectl-forward fallback.
     controller_reach: ""
     local_port_base: 18080
-    yb_ready_timeout: 15m
+    yb_ready_timeout: 20m
     controller_ready_timeout: 5m
 
 # --- Functional suite: amp-on-backing tests (suites/functional) ---
@@ -472,8 +481,8 @@ apps:
       image_registry: "quay.io/yugabyte/yugabyte-itest"
       # in-cluster image-pull Secret YBA references.
       pull_secret_name: "quay-secret"
-      # StorageClass the universe PVCs bind to.
-      storage_class: "standard"
+      # StorageClass the universe PVCs bind to; must bind WaitForFirstConsumer.
+      storage_class: "standard-rwo"
       # cluster DNS domain (KUBE_DOMAIN); empty → cluster.local.
       kube_domain: ""
       # use_in_cluster true → YBA uses its OWN in-cluster service account (no
@@ -560,7 +569,8 @@ apps:
     quay_secret: "quay_images"
     pull_secret_name: "quay-secret"
     service_account: "yw-sa"
-    storage_class: "standard"
+    # Must bind WaitForFirstConsumer (an Immediate class zone-pins yugaware-0).
+    storage_class: "standard-rwo"
     # rbac_dir: optional universe-management RBAC templates; each
     # ClusterRoleBinding is renamed "<name>-<namespace>" so parallel YBAs never
     # clobber a cluster-scoped binding. Empty → the chart's own namespaced RBAC.
@@ -602,7 +612,8 @@ apps:
     # s3://releases.yugabyte.com/<chart_version>/helm/yugabyte-<short>.tgz.
     chart_version: ""
     # image_registry is the chart Image.repository; image_tag empty → chart_version.
-    image_registry: "yugabytedb/yugabyte"
+    # quay itest carries unreleased builds (see env.ampstack.yb_image_registry).
+    image_registry: "quay.io/yugabyte/yugabyte-itest"
     image_tag: ""
     # image_pull_secret: NAME of a secrets: entry whose value is a "<user>:<pass>"
     # registry token, for pulling build-specific images from a PRIVATE registry
@@ -619,7 +630,8 @@ apps:
     replication_factor: 1
     master_replicas: 0
     tserver_replicas: 0
-    storage_class: "standard"
+    # Must bind WaitForFirstConsumer (an Immediate class zone-pins the pods).
+    storage_class: "standard-rwo"
     storage_size: "10Gi"
     # service_name is the tserver Service whose in-cluster DNS the amp controller
     # connects at; the framework reaches YSQL over the tailnet via pod IPs.
@@ -635,7 +647,7 @@ apps:
     reach: "tailnet"
     # helm_release empty → the per-run namespace name.
     helm_release: ""
-    helm_timeout: "30m"
+    helm_timeout: "45m"
 
   # apps/ybpod: yugabyted-in-pod deploy App. Stands up a single-node (RF1)
   # YugabyteDB inside a bare pod by installing the release TARBALL and running

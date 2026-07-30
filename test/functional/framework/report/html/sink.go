@@ -54,7 +54,7 @@ func (s *Sink) RunFinished(sum core.RunSummary) error {
 		Parallel:  s.info.Parallel,
 		StartedAt: sum.StartedAt,
 		EndedAt:   sum.EndedAt,
-		Results:   s.results,
+		Results:   core.FinalAttempts(s.results),
 	})
 	if err != nil {
 		return err
