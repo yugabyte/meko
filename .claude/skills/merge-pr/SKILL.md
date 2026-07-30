@@ -109,8 +109,8 @@ worktree anywhere — it stays on the keep-branch. Meko merges squashed, so
 being on its branch.
 
 Do not add any agent/assistant signature to the merge commit message — the squash
-commit lands in `main`'s history under the user's name (`AGENTS.md > Git Commit
-Guidelines`).
+commit lands in `main`'s history under the user's name (see the `commit` skill's
+no-attribution rule).
 
 ## Step 5 — report
 

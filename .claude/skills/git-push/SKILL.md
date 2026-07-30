@@ -68,7 +68,7 @@ git diff                          # review what it rewrote
 Line limits are **120 for Go, 100 elsewhere**; tabs for Go, 4 spaces for Python,
 2 spaces for YAML/shell (`.editorconfig`, `.golangci.yml`, `tox.ini`).
 
-Formatting can land as its own commit — `git commit -am "[MEKO-xxx] <area>: gofmt"` —
+Formatting can land as its own commit — `git commit -am "<area>: gofmt"` —
 since PRs merge squashed, so there's no need to amend or rebase it back into the
 commit that introduced the drift. Format only what you're landing: if the
 formatter rewrites files unrelated to your change, leave those out.
@@ -81,8 +81,8 @@ module you changed (`.golangci.yml` at the repo root governs `cli_app` and
 
 ## Step 3 — verify no commit is agent-attributed (hard gate)
 
-`AGENTS.md > Git Commit Guidelines` is explicit: commit messages, PR
-descriptions, and code comments must not mention any AI assistant, and no
+Repo policy is explicit: commit messages, PR descriptions, and code comments must
+not mention any AI assistant, and no
 `Co-Authored-By` line may reference one. Commits are authored by the user alone
 — both the **author/committer identity** and the **message** must be free of any
 agent/assistant attribution (a `Co-Authored-By:` naming Claude or Cursor, a
@@ -206,16 +206,16 @@ branch and update it so it matches reality:
 git log --oneline origin/main..HEAD    # re-read the full set of commits
 ```
 
-- **Title** — must carry the tracking ticket / JIRA number so the change is
-  traceable, mirroring the commit subject style:
-  `[MEKO-123] <component>: <title>` (e.g.
-  `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`). Use
-  `[MEKO-xxx]` when there's no ticket. If the branch grew from one commit to
-  several, the title should describe the branch as a whole, not just the first
-  commit.
+- **Title** — must carry the tracking reference so the change is traceable,
+  mirroring the commit subject style: `[MEKO-<num>] <component>: <title>` for meko
+  work (e.g. `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`), or
+  `[#<issue>]` for AMP work tracked as a GitHub issue in this repo. When there is no ticket or
+  issue, omit the tag and start at `<component>:` — never invent `[MEKO-xxx]` or
+  guess a number. If the branch grew from one commit to several, the title should
+  describe the branch as a whole, not just the first commit.
 - **Summary** — update the body so it describes what the branch actually does
-  now, using the sections `AGENTS.md > Pull requests` requires (drop one only
-  when it truly doesn't apply, and say so):
+  now, using the sections below (drop one only when it truly doesn't apply, and
+  say so):
   - **Summary** — 1–3 sentences: what changed and the user-facing effect, not the diff.
   - **Files changed** — one bullet per file, 1–2 lines each (group by component when the PR spans several).
   - **Testing** — what you ran (`go build` / `go vet` / `golangci-lint` / `npm run check` / `pytest`) and what still needs manual verification.
@@ -242,7 +242,7 @@ needs no edit — don't churn the description for its own sake.
 Never add a `🤖 Generated with Claude Code`, session link, `Co-Authored-By`, or
 any other agent/assistant signature to the PR title or body. The PR is the
 user's. This is repo policy, not just style — see
-`AGENTS.md > Git Commit Guidelines`.
+the `commit` skill's no-attribution rule.
 
 ## Anti-patterns
 

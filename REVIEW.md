@@ -154,11 +154,13 @@ Confirm the diff didn't leave these stale:
 ## 4. Hygiene
 
 - **Title carries the tracking ticket** — e.g.
-  `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`.
-- Body follows the AGENTS.md PR template (Summary, Files changed, Testing,
-  Config/env vars, and Math/derivation or Deploy notes when they apply); explains
-  **what and why**, not just the diff. Link related PRs/issues with full URLs,
-  never a bare `#123`.
+  `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`. An untagged
+  title is correct when there is genuinely no ticket, so don't ask for a
+  placeholder like `[MEKO-xxx]`. Do flag an invented or guessed number.
+- Body follows the sections the `open-pr` skill specifies (Summary, Files changed,
+  Testing, Config/env vars, and Math/derivation or Deploy notes when they apply);
+  explains **what and why**, not just the diff. Link related PRs/issues with full
+  URLs, never a bare `#123`.
 - Lint/typecheck clean for the touched module: Go — `go build ./...`,
   `go vet ./...`, `golangci-lint run ./...` (`goimports.local-prefixes: meko`,
   tabs, 120-col); web — `npm run check`; Python — `mypy` + `pycodestyle`.

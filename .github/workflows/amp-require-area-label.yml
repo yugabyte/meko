@@ -1,0 +1,79 @@
+name: AMP — require area label
+
+# Every AMP issue must carry one of the four `amp_*` area labels — see the
+# `create-amp-issue` skill. GitHub can't block label-less creation, so this
+# enforces it post-hoc: it auto-applies the area label from the issue form's
+# "Area" dropdown when there is one, and flags anything still uncovered with
+# `needs-area-label` + a comment. The flag clears automatically once a real area
+# label is added (the `labeled` trigger re-runs this).
+#
+# Ported from yb-amp, where the areas were `compute` / `control plane`. Here they
+# are the four `amp_*` labels, which is what keeps AMP work filterable now that
+# both projects share one tracker.
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled]
+
+permissions:
+  issues: write
+
+jobs:
+  amp_require_area_label:
+    name: AMP — require area label
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const AREA_LABELS = [
+              "amp_compute",
+              "amp_controller",
+              "amp_voyager",
+              "amp_perf_advisor",
+            ];
+            const NEEDS = "needs-area-label";
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const number = context.payload.issue.number;
+
+            const issue = (await github.rest.issues.get({ ...repo, issue_number: number })).data;
+            let labels = issue.labels.map(l => (typeof l === "string" ? l : l.name));
+
+            // 1. Auto-apply the area label from the issue form's "Area" dropdown
+            //    when one is present. Forms render the answer as
+            //    "### Area\n\n<value>". Matching is on substrings so a dropdown
+            //    can be reworded without silently breaking this — but keep the
+            //    option list and this map in sync deliberately.
+            if (!labels.some(l => AREA_LABELS.includes(l))) {
+              const m = (issue.body || "").match(/^###\s*Area\s*\r?\n\r?\n(.+)$/im);
+              const add = [];
+              if (m) {
+                const v = m[1].toLowerCase();
+                if (v.includes("compute") || v.includes("storage")) add.push("amp_compute");
+                if (v.includes("control")) add.push("amp_controller");
+                if (v.includes("voyager")) add.push("amp_voyager");
+                if (v.includes("perf")) add.push("amp_perf_advisor");
+              }
+              if (add.length) {
+                await github.rest.issues.addLabels({ ...repo, issue_number: number, labels: add });
+                labels = labels.concat(add);
+              }
+            }
+
+            const hasArea = labels.some(l => AREA_LABELS.includes(l));
+
+            if (!hasArea && !labels.includes(NEEDS)) {
+              await github.rest.issues.addLabels({ ...repo, issue_number: number, labels: [NEEDS] });
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number: number,
+                body:
+                  "⚠️ This issue has no **area label**. Every AMP issue needs one of " +
+                  "`amp_compute`, `amp_controller`, `amp_voyager`, `amp_perf_advisor` " +
+                  "(and an `AMP:` milestone) — see the `create-amp-issue` skill in " +
+                  "[`.claude/skills/create-amp-issue`](../blob/main/.claude/skills/create-amp-issue/SKILL.md). " +
+                  "Add one and this `needs-area-label` flag clears automatically.",
+              });
+            } else if (hasArea && labels.includes(NEEDS)) {
+              await github.rest.issues.removeLabel({ ...repo, issue_number: number, name: NEEDS }).catch(() => {});
+            }

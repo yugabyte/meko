@@ -234,12 +234,17 @@ git commit -m "..."
 The commit subject follows:
 
 ```
-[MEKO-<num>] <component>: <title>
+[MEKO-<num>] <component>: <title>      # with a ticket
+<component>: <title>                   # without one
 ```
 
 - **`[MEKO-<num>]`** — the tracking ticket, first so `git log --oneline` is
-  greppable by ticket. Use **`[MEKO-xxx]`** when the work genuinely has no
-  ticket; the tag itself isn't optional.
+  greppable by ticket. For **AMP** work the equivalent is `[#<issue>]`, a GitHub
+  issue in this repo (see the `create-amp-issue` skill). **Omit the tag entirely
+  when the work genuinely has no ticket or issue** — start with `<component>:`.
+  Never invent a placeholder like `[MEKO-xxx]` or guess a number: a tag that
+  resolves to nothing is worse than no tag, because it looks greppable but isn't,
+  and it outlives the reason it was used.
 - **`<component>`** — the top-level directory the change lives in: `api_server`,
   `cli_app`, `meko_ui`, `meko_admin`, `meko-provisioner`, `inference_gateway`,
   `system_agent`, `docs` — or a meta token (`ci`, `build`, `tools`) for work that
@@ -252,9 +257,11 @@ Examples (all real subjects from this repo's history):
 ```
 [MEKO-377] api_server: serve promote-memories over PAT so memory_promote works from MCP
 [MEKO-375] meko_ui: integrate Meko Admin console + align theme to meko_admin
-[MEKO-xxx] ci: prefix CI job names with "Meko"
+api_server: make the app usable without Cognito
 docs(mcp-server): datapack_update takes name/description, not connection_string
 ```
+
+The last two carry no ticket and that is correct — untagged, not `[MEKO-xxx]`.
 
 The subject describes the **code** change; companion updates (docs, tests,
 generated files) ride along silently — don't enumerate them in the subject. Call
@@ -262,8 +269,8 @@ out a companion in the body only if it's large or load-bearing.
 
 ### No agent attribution — message *or* authorship
 
-`AGENTS.md > Git Commit Guidelines` is explicit: **do not mention any AI
-assistant in commit messages, PR descriptions, or code comments; no
+This is repo policy: **do not mention any AI assistant in commit messages, PR
+descriptions, or code comments; no
 `Co-Authored-By` lines referencing AI assistants; write commit messages as if
 authored entirely by the developer.** That means **two** things, and the commit
 is where both are set, so this is the place to get them right:
@@ -308,8 +315,7 @@ If this commit advances or completes a tracked ticket or GitHub issue:
   so the work is linked.
 - **Close it when the work ships.** Put `Closes <full issue URL>` in the PR body
   (or the final commit message) so merge auto-closes a GitHub issue, or move the
-  JIRA ticket once merged. Link with full URLs, never bare `#123` —
-  `AGENTS.md > Pull requests`.
+  JIRA ticket once merged. Link with full URLs, never bare `#123`.
 
 Don't leave a shipped fix's ticket open "to close later" — that gap is exactly
 when the tracker misleads. If the commit only partially advances the ticket,

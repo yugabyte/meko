@@ -41,16 +41,19 @@ the `check-branch-name.sh` hook blocks the push otherwise. See `git-push` Step 4
 
 ## Step 2 — write the title
 
-`AGENTS.md > Pull requests` requires the tracking ticket in the title so the
-change is traceable. Mirror the commit subject convention (see the `commit`
-skill):
+A PR title must carry the tracking reference so the change is traceable. Mirror
+the commit subject convention (see the `commit` skill):
 
 ```
-[MEKO-<num>] <component>: <title>
+[MEKO-<num>] <component>: <title>      # with a ticket
+<component>: <title>                   # without one
 ```
 
-- `[MEKO-<num>]` — the JIRA/tracking ticket. Use `[MEKO-xxx]` when the work
-  genuinely has no ticket; don't omit the tag entirely.
+- `[MEKO-<num>]` — the tracking ticket for meko work. For **AMP** work use
+  `[#<issue>]`, a GitHub issue in this repo (see the `create-amp-issue` skill).
+  **Omit the tag entirely when the work genuinely has no ticket or issue**; never
+  invent a placeholder like `[MEKO-xxx]` or guess a number, since it looks
+  greppable but resolves to nothing.
 - `<component>` — the top-level directory the change lives in: `api_server`,
   `cli_app`, `meko_ui`, `meko_admin`, `meko-provisioner`, `inference_gateway`,
   `system_agent`, `docs`, or a meta token (`ci`, `build`, `tools`).
@@ -61,7 +64,7 @@ Examples:
 ```
 [MEKO-123] meko_ui: make Create Cluster pg_version selectable
 [MEKO-377] api_server: serve promote-memories over PAT
-[MEKO-xxx] ci: prefix CI job names with "Meko"
+api_server: make the app usable without Cognito
 ```
 
 If the branch has one commit, reuse its subject. If it has several, write a title
@@ -69,8 +72,7 @@ that describes the branch as a whole.
 
 ## Step 3 — write the body
 
-Use the sections `AGENTS.md > Pull requests` specifies. Drop one only when it
-truly doesn't apply, and say so:
+Use these sections. Drop one only when it truly doesn't apply, and say so:
 
 - **Summary** — 1–3 sentences: what changed and the user-facing effect, not the
   diff.
@@ -103,9 +105,8 @@ gh pr create --base main --title "<title>" --body-file <path-to-body.md>
 **Never** append a `🤖 Generated with Claude Code`, a `https://claude.ai/code/…`
 session link, a `Co-Authored-By:` line, or any other agent/assistant signature to
 the PR title or body — even if a harness default suggests it. The PR is authored
-by the user. This is repo policy: `AGENTS.md > Git Commit Guidelines` forbids
-mentioning any AI assistant in commit messages, PR descriptions, or code
-comments.
+by the user. Repo policy forbids mentioning any AI assistant in commit messages,
+PR descriptions, or code comments.
 
 ## Step 4 — report
 
@@ -116,8 +117,8 @@ closes an issue, confirm the `Closes <url>` line is present.
 
 - **Opening a PR from `main`.** Always branch first.
 - **Opening a second PR when one already exists** for the branch. Use `git-push`.
-- **A title with no ticket tag.** `AGENTS.md` requires it — `[MEKO-xxx]` if there
-  really is no ticket.
+- **Inventing a ticket tag.** `[MEKO-xxx]` or a guessed number is worse than no
+  tag. When there really is no ticket, start the title at `<component>:`.
 - **A one-line body that just restates the title.** Give the reviewer the *why*,
   the per-file breakdown, and the test evidence.
 - **Bare `#123` cross-references.** Use full URLs.

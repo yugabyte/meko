@@ -2,6 +2,40 @@
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
+## Prerequisites — verify before doing anything else
+
+An **authenticated GitHub CLI (`gh`)** is required. Nearly everything around the
+code — PRs, reviews, CI runs and logs, labels, rulesets, issues — lives on
+GitHub, and this repo is private, so unauthenticated access silently returns the
+wrong thing rather than failing.
+
+**Check at the start of a session**, before planning or editing:
+
+```bash
+gh auth status          # must report a logged-in account with a valid token
+```
+
+### If it's missing, stop and set it up
+
+Do not work around it. Specifically, do **not**:
+
+- fetch GitHub URLs with a web fetcher instead of `gh` — a private repo returns
+  the wrong content or nothing, and you cannot tell which from the response;
+- ask the user to paste CI output or issue bodies in by hand.
+
+`gh auth login` is interactive, so the user must run it themselves:
+
+```bash
+gh auth login          # choose GitHub.com → HTTPS → authenticate in browser
+```
+
+In Claude Code, have them prefix it with `!` (`! gh auth login`) so it runs in
+the session and the output lands in the conversation. On a remote dev server the
+browser will not open by itself — if a URL is printed, the user opens it locally.
+
+Re-check with `gh auth status` before continuing. Do not assume success because
+the user said they did it.
+
 ## Repository Layout
 
 Meko is a polyglot monorepo. Each top-level directory is an independently-built component; they share only the YugabyteDB schema and the MCP/HTTP contracts between them.
@@ -162,40 +196,23 @@ Enforcement comes from two places, and they cover different halves of the rule:
 Check the name before the *first* push: renaming a published branch means
 deleting the remote branch and re-pushing, which breaks any open PR.
 
-## Agent skills (`.claude/`)
-
-`.claude/skills/` holds the git workflow skills agents follow in this repo —
-`commit`, `git-push`, `open-pr`, `merge-pr`. They encode the conventions in this
-file (subject format, PR sections, no AI attribution, branch naming) as
-step-by-step gates, so read the relevant one before a commit, push, PR, or merge
-rather than improvising. `.claude/settings.json` wires the branch-name hook.
-
 The hook has a test suite — run it after touching the parser:
 
 ```bash
 bash .claude/hooks/check-branch-name.test.sh
 ```
 
-## Pull requests
+## Agent skills (`.claude/skills/`)
 
-**Title** must carry the tracking ticket / JIRA number so the change is traceable
-— e.g. `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`.
+Pointers only — each skill is the authority on its own subject, so read the
+relevant one rather than assuming; nothing here restates their contents.
 
-Write PR descriptions with these sections (drop one only when it truly doesn't
-apply, and say so):
+| Skill | Read it before |
+|---|---|
+| `commit` | any commit — it gates the companions (docs, tests, generated files, setup) that must travel in the same commit, and the subject format |
+| `git-push` | pushing a branch, or refreshing an existing PR |
+| `open-pr` | opening a new PR — title convention and the body sections |
+| `merge-pr` | merging |
+| `create-amp-issue` | filing or updating a GitHub issue for **AMP** work (`amp_*` label + `AMP:` milestone) |
 
-- **Summary** — 1–3 sentences: what changed and the user-facing effect, not the diff.
-- **Files changed** — one bullet per file, 1–2 lines each (group by component when the PR spans several).
-- **Testing** — what you ran (`go build`/`go vet`/`golangci-lint`, `npm run check`) and what still needs manual verification.
-- **Config / env vars** — any new/required env var or flag, where it's set, and the default/degraded behavior when unset.
-- **Math / derivation** — only when the PR computes something: the formula, where the numbers come from, a tiny worked example, and what's measured vs modeled.
-- **Deploy notes** — only when runtime setup changes: migrations, required env, ordering.
-
-Keep it crisp; link related PRs/issues with full URLs, never bare `#123`. See
-the Git Commit Guidelines below (no AI attribution in commits or PR descriptions).
-
-## Git Commit Guidelines
-
-- Do not mention any AI assistant in commit messages, PR descriptions, or code comments.
-- Do not include `Co-Authored-By` lines referencing AI assistants.
-- Write commit messages as if authored entirely by the developer.
+`.claude/settings.json` wires the branch-name hook (see Branch naming above).

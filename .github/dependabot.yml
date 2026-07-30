@@ -1,0 +1,32 @@
+# Keep the GitHub Actions we pin (by major tag, e.g. `@v6`) current via reviewed,
+# CI-tested PRs — so we don't hand-bump them and don't have to point at a moving
+# `@main`. Dependabot opens a grouped PR when any action used in
+# `.github/workflows/` has an update (including majors), with the changelog; the
+# PR runs through CI before merge.
+#
+# Ported from yb-amp. Only the github-actions ecosystem is enabled: this repo is
+# polyglot (5 Go modules, 3 npm trees, 2 Python packages), and turning those on
+# would open far more PRs than anyone will triage. Add them deliberately, one
+# ecosystem at a time, rather than all at once.
+#
+# The `ci` commit prefix produces subjects like
+# `ci: bump the github-actions group with 3 updates`, which already matches this
+# repo's untagged subject convention — a dependency bump has no ticket, so it
+# correctly carries no `[MEKO-<num>]` tag.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    # Named owners so a bump doesn't sit unattended — Dependabot won't chase it.
+    assignees:
+      - "hsunder"
+      - "nchandrappa"
+    groups:
+      # One PR per cycle for all action bumps, instead of one per action.
+      github-actions:
+        patterns:
+          - "*"
