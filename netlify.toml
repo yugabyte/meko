@@ -1,10 +1,14 @@
 # Settings in the [build] context are global and are applied to
 # all contexts unless otherwise overridden by more specific contexts.
+#
+# Must live at the repository root: that is the only place Netlify reads `base`
+# from. Everything else here resolves relative to `base`.
 [build]
+  base = "meko/docs"
   # Default build command.
   command = "npm run build"
-  # Configure Netlify to ignore builds unless /docs folder changes.
-  ignore = "git diff --quiet HEAD^ HEAD -- . ':!docs/**'"
+  # Skip the build unless something under the base directory changed.
+  ignore = "git diff --quiet HEAD^ HEAD -- ."
 
 # Deploy contexts
 # Environment variables here override variables set in the web UI.

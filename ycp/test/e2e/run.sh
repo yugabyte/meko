@@ -66,9 +66,8 @@ BASE="${YCP_E2E_BASE_PATH-/ycp}"
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 YCP_DIR="$(cd "$E2E_DIR/../.." && pwd)"
 REPO_DIR="$(cd "$YCP_DIR/.." && pwd)"
-# ycp/ sits at the repository root because it is shared with amp, while the
-# control plane it tests against lives in the meko tree. Name that explicitly
-# rather than counting ".." from here, so moving either one fails loudly.
+# ycp/ sits at the repository root because it is shared with amp; the control
+# plane it tests against lives in the meko tree.
 MEKO_DIR="$REPO_DIR/meko"
 
 log() { printf '\n==> %s\n' "$*"; }
