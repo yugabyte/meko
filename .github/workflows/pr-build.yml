@@ -17,7 +17,7 @@ name: CI
 #                     enrolls and reports READY, and a restarted agent resumes
 #                     without re-enrolling. Publishing images to ECR is a separate
 #                     workflow (ycp-images.yml) that runs only on merge to main.
-#                     Fires on `ycp/**` and on the api_server files that make up
+#                     Fires on `ycp/**` and on the meko/api_server files that make up
 #                     the control plane (see the meko_ycp_cp filter).
 #
 # Docs-only PRs (only *.md changed) skip the heavy jobs via the `meko_code` filter.
@@ -54,13 +54,13 @@ jobs:
         with:
           filters: |
             meko_api_server:
-              - 'api_server/**'
+              - 'meko/api_server/**'
               - '.github/workflows/pr-build.yml'
             meko_inference:
-              - 'inference_gateway/**'
+              - 'meko/inference_gateway/**'
               - '.github/workflows/pr-build.yml'
             meko_ui:
-              - 'meko_ui/**'
+              - 'meko/meko_ui/**'
               - '.github/workflows/pr-build.yml'
             meko_ycp:
               - 'ycp/**'
@@ -68,7 +68,7 @@ jobs:
             # The e2e runs api_server --control-plane-mode, so control-plane
             # changes have to trigger it too -- otherwise the one test that covers
             # the real control plane never runs when the control plane changes.
-            # Deliberately narrower than 'api_server/**': this job builds two
+            # Deliberately narrower than 'meko/api_server/**': this job builds two
             # images and a kind cluster, and most api_server PRs touch none of
             # the YCP surface. The internal/api package is taken whole, though —
             # routing, ServerConfig and the base-path mount are split across
@@ -76,16 +76,16 @@ jobs:
             # to the one that wasn't listed skipped the e2e.
             meko_ycp_cp:
               - 'ycp/**'
-              - 'api_server/main.go'
-              - 'api_server/Dockerfile'
-              - 'api_server/internal/api/**'
-              - 'api_server/internal/service/environment_*.go'
-              - 'api_server/internal/repository/environment_*.go'
-              - 'api_server/internal/handlers/environment_*.go'
-              - 'api_server/internal/handlers/console*.go'
-              - 'api_server/internal/handlers/web/**'
-              - 'api_server/internal/db/**'
-              - 'api_server/internal/auth/internal_auth.go'   # RequireAdminSecret
+              - 'meko/api_server/main.go'
+              - 'meko/api_server/Dockerfile'
+              - 'meko/api_server/internal/api/**'
+              - 'meko/api_server/internal/service/environment_*.go'
+              - 'meko/api_server/internal/repository/environment_*.go'
+              - 'meko/api_server/internal/handlers/environment_*.go'
+              - 'meko/api_server/internal/handlers/console*.go'
+              - 'meko/api_server/internal/handlers/web/**'
+              - 'meko/api_server/internal/db/**'
+              - 'meko/api_server/internal/auth/internal_auth.go'   # RequireAdminSecret
               - '.github/workflows/pr-build.yml'
       # A change counts as "code" if at least one changed file is not a markdown
       # doc; the jobs gate on it so a docs-only PR skips build/test while a PR
@@ -115,14 +115,14 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: api_server
+        working-directory: meko/api_server
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: api_server/go.mod
-          cache-dependency-path: api_server/go.sum
+          go-version-file: meko/api_server/go.mod
+          cache-dependency-path: meko/api_server/go.sum
 
       # Build first so a compile break fails fast with a clear message before
       # tests run.
@@ -143,13 +143,13 @@ jobs:
       # this step ran `latest` (v2) against a v1 config under a v1-only action
       # and errored on every run, invisible because of continue-on-error.
       # Keep the version in step with GOLANGCI_LINT_VERSION in
-      # meko-provisioner/Makefile so the whole repo lints identically.
+      # meko/meko-provisioner/Makefile so the whole repo lints identically.
       - name: Lint (golangci-lint)
         continue-on-error: true
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.8.0
-          working-directory: api_server
+          working-directory: meko/api_server
 
       # Unit tests are mocked; the few DB-backed tests self-skip when no
       # YugabyteDB is reachable, so this runs without a database.
@@ -164,7 +164,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: inference_gateway
+        working-directory: meko/inference_gateway
     steps:
       - uses: actions/checkout@v4
 
@@ -188,7 +188,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: meko_ui
+        working-directory: meko/meko_ui
     steps:
       - uses: actions/checkout@v4
 
@@ -196,7 +196,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: meko_ui/package-lock.json
+          cache-dependency-path: meko/meko_ui/package-lock.json
 
       - name: Install dependencies
         run: npm ci

@@ -21,7 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: cli_app/go.mod
+          go-version-file: meko/cli_app/go.mod
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

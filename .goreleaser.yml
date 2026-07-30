@@ -4,7 +4,7 @@ project_name: meko
 
 builds:
   - id: meko
-    dir: cli_app
+    dir: meko/cli_app
     main: .
     binary: meko
     ldflags:
