@@ -48,6 +48,76 @@ func (f *fakeController) server(t *testing.T) *httptest.Server {
 	return srv
 }
 
+func TestDeleteProjectAsync_IssuesDeleteWithoutPolling(t *testing.T) {
+	var deleted bool
+	var polled bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/storage-pools/p/projects/pr", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		deleted = true
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"t7","kind":"delete_project","status":"pending"}`))
+	})
+	mux.HandleFunc("/api/v1/tasks/t7", func(w http.ResponseWriter, _ *http.Request) {
+		polled = true // must NOT be hit — async delete does not poll
+		_, _ = w.Write([]byte(`{"id":"t7","status":"succeeded"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := NewAMPClient(srv.URL, http.DefaultClient)
+
+	if err := c.DeleteProjectAsync(context.Background(), "p", "pr"); err != nil {
+		t.Fatalf("DeleteProjectAsync: %v", err)
+	}
+	if !deleted {
+		t.Error("expected the DELETE to be issued")
+	}
+	if polled {
+		t.Error("DeleteProjectAsync must not poll /tasks")
+	}
+}
+
+func TestCreateProjectWithWriter_SendsWithWriterAndPollsToProject(t *testing.T) {
+	var body map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/storage-pools/p/projects", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"id":"t9","kind":"create_project","status":"pending"}`))
+	})
+	mux.HandleFunc("/api/v1/tasks/t9", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"t9","kind":"create_project","status":"succeeded","project_id":"pr9"}`))
+	})
+	mux.HandleFunc("/api/v1/storage-pools/p/projects/pr9", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AMPProject{ID: "pr9", Name: "orders"})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := NewAMPClient(srv.URL, http.DefaultClient)
+
+	// Polls the task to completion and returns the materialized project.
+	p, err := c.CreateProjectWithWriter(context.Background(), "p", "orders", nil, "4", "8Gi")
+	if err != nil {
+		t.Fatalf("CreateProjectWithWriter: %v", err)
+	}
+	if p.ID != "pr9" {
+		t.Errorf("project id = %q, want pr9", p.ID)
+	}
+	// with_writer must be true and cpu/memory nested under `resources`.
+	if body["with_writer"] != true {
+		t.Errorf("with_writer = %v, want true", body["with_writer"])
+	}
+	res, _ := body["resources"].(map[string]any)
+	if res == nil || res["cpu"] != "4" || res["memory"] != "8Gi" {
+		t.Errorf("resources = %v, want cpu=4 memory=8Gi", body["resources"])
+	}
+}
+
 func TestResizeEndpoint_NestsResourcesAndReadsBack(t *testing.T) {
 	f := &fakeController{
 		result:   map[string]any{"in_place_resize": "completed", "in_place_message": "ok"},

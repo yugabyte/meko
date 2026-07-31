@@ -3,15 +3,15 @@ import { type ReactElement } from "react";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ComputeInstance } from "./ComputeInstance";
-import { deleteCompute, type AmpCompute } from "@/lib/api/ampApi";
+import { ampDeleteCompute, type AmpCompute } from "@/lib/api/ampApi";
 
 vi.mock("@/lib/api/ampApi", () => ({
-  deleteCompute: vi.fn().mockResolvedValue({ id: "e1", deleted: true }),
-  resizeCompute: vi.fn(),
+  ampDeleteCompute: vi.fn().mockResolvedValue({ id: "e1", deleted: true }),
+  ampResizeCompute: vi.fn(),
 }));
 vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }));
 
-const mockDelete = vi.mocked(deleteCompute);
+const mockDelete = vi.mocked(ampDeleteCompute);
 
 const ep: AmpCompute = {
   id: "e1",
@@ -58,7 +58,7 @@ describe("ComputeInstance", () => {
     expect(screen.queryByRole("button", { name: /unprovision/i })).toBeNull();
   });
 
-  it("calls deleteCompute with the endpoint id after the confirm dialog", async () => {
+  it("calls ampDeleteCompute with the endpoint id after the confirm dialog", async () => {
     renderInstance({ isDefaultBranch: false });
 
     fireEvent.click(screen.getByRole("button", { name: /unprovision/i })); // open confirm

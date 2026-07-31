@@ -132,13 +132,19 @@ func (c *AMPClient) DeleteProject(ctx context.Context, poolID, projectID string)
 	return err
 }
 
-// CreateProject creates a database in a pool. The controller returns a task; we
-// poll it to completion, then read the materialized project back.
-func (c *AMPClient) CreateProject(ctx context.Context, poolID, name string, pgVersion *int) (AMPProject, error) {
-	body := map[string]any{"name": name}
-	if pgVersion != nil {
-		body["pg_version"] = *pgVersion
-	}
+// DeleteProjectAsync issues the delete but does NOT poll the resulting task.
+// Used for bulk teardown (datapack deletion), where blocking on each cascade to
+// finish would make deleting a datapack take minutes. Synchronous rejections
+// (404 / 409 / 5xx) still surface here; the cascade itself runs on the controller.
+func (c *AMPClient) DeleteProjectAsync(ctx context.Context, poolID, projectID string) error {
+	var task ampTask
+	return c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/projects/"+projectID, nil, &task)
+}
+
+// createProject POSTs a create_project request, polls the task to completion,
+// and reads the materialized project back. Shared by the project-only and
+// with_writer variants — they differ only in the request body.
+func (c *AMPClient) createProject(ctx context.Context, poolID string, body map[string]any) (AMPProject, error) {
 	var task ampTask
 	if err := c.do(ctx, http.MethodPost, "/storage-pools/"+poolID+"/projects", body, &task); err != nil {
 		return AMPProject{}, err
@@ -153,6 +159,40 @@ func (c *AMPClient) CreateProject(ctx context.Context, poolID, name string, pgVe
 	var p AMPProject
 	err = c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+*done.ProjectID, nil, &p)
 	return p, err
+}
+
+// CreateProject creates a database in a pool (no compute), polling the task to
+// completion and reading the materialized project back.
+func (c *AMPClient) CreateProject(ctx context.Context, poolID, name string, pgVersion *int) (AMPProject, error) {
+	body := map[string]any{"name": name}
+	if pgVersion != nil {
+		body["pg_version"] = *pgVersion
+	}
+	return c.createProject(ctx, poolID, body)
+}
+
+// CreateProjectWithWriter creates a database AND its `main`-branch read_write
+// endpoint in ONE background task (with_writer). Like CreateProject it polls the
+// task to completion and returns the materialized project — the initial cluster +
+// writer provisions in well under a minute, so we wait (consistent with every
+// other Meko→controller call) rather than leave the caller guessing. cpu/memory
+// size the writer; omit either to take AMP's default (2 cores / 4Gi).
+func (c *AMPClient) CreateProjectWithWriter(ctx context.Context, poolID, name string, pgVersion *int, cpu, memory string) (AMPProject, error) {
+	body := map[string]any{"name": name, "with_writer": true}
+	if pgVersion != nil {
+		body["pg_version"] = *pgVersion
+	}
+	if cpu != "" || memory != "" {
+		res := map[string]any{}
+		if cpu != "" {
+			res["cpu"] = cpu
+		}
+		if memory != "" {
+			res["memory"] = memory
+		}
+		body["resources"] = res
+	}
+	return c.createProject(ctx, poolID, body)
 }
 
 /* ---- branches ---- */

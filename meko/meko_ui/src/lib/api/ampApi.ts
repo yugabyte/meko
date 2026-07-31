@@ -1,7 +1,8 @@
 // AMP cluster API calls, kept separate from the core mekoApi surface. A
 // "cluster" is Meko's user-facing name for an AMP project (a Postgres
-// database). Gated by SHOW_PG_AMP at the call sites; reuses mekoApi's `request`
-// (envelope unwrap + error handling) and the standard Meko API base.
+// database). Every function + route is `amp`-prefixed so it's clear at the call
+// site (and on the wire, /datapacks/:id/amp/...) that this is the AMP surface.
+// Gated by SHOW_PG_AMP; reuses mekoApi's `request` (envelope unwrap + errors).
 //
 // NOTE: response field names (project_id, storage_pool_id, …) mirror the AMP
 // controller payload that api_server passes through unchanged, so they keep the
@@ -12,7 +13,7 @@ import { request } from "@/lib/api/mekoApi";
 type RouteOptions = { signal?: AbortSignal };
 
 function clustersRoute(datapackId: string): string {
-  return `/datapacks/${encodeURIComponent(datapackId)}/clusters`;
+  return `/datapacks/${encodeURIComponent(datapackId)}/amp/clusters`;
 }
 
 /** A branch (Postgres timeline) of an AMP cluster; `main` is the default. */
@@ -35,20 +36,35 @@ export type AmpCluster = {
   created_at: string;
 };
 
-/** GET /datapacks/:id/clusters — the datapack's AMP clusters ([] if none). */
-export async function listClusters(datapackId: string, options: RouteOptions = {}) {
+function clusterRoute(datapackId: string, clusterId: string): string {
+  return `${clustersRoute(datapackId)}/${encodeURIComponent(clusterId)}`;
+}
+
+/** GET /datapacks/:id/amp/clusters — the datapack's AMP clusters ([] if none). */
+export async function ampListClusters(datapackId: string, options: RouteOptions = {}) {
   return request<AmpCluster[]>(clustersRoute(datapackId), "GET", undefined, options);
 }
 
-/** POST /datapacks/:id/clusters — create a cluster (provisions the shared
- *  pool on first use). */
-export async function createCluster(
+/** POST /datapacks/:id/amp/clusters — create a cluster and its `main`-branch
+ *  read_write endpoint in ONE background task (with_writer). api_server polls the
+ *  task to completion (initial cluster + writer provisions in well under a
+ *  minute) and returns the materialized cluster. `cpu`/`memory` size the writer;
+ *  omit either for AMP's default (2 cores / 4Gi). */
+export async function ampCreateCluster(
   datapackId: string,
-  payload: { name: string; pg_version?: number },
+  payload: { name: string; cpu?: string; memory?: string; pg_version?: number },
 ) {
-  const body: Record<string, unknown> = { name: payload.name.trim() };
+  const body: Record<string, unknown> = { name: payload.name.trim(), with_writer: true };
+  if (payload.cpu?.trim()) body.cpu = payload.cpu.trim();
+  if (payload.memory?.trim()) body.memory = payload.memory.trim();
   if (payload.pg_version != null) body.pg_version = payload.pg_version;
   return request<AmpCluster>(clustersRoute(datapackId), "POST", body);
+}
+
+/** DELETE /datapacks/:id/amp/clusters/:id — delete a cluster, cascading to its
+ *  branches + compute. Blocks server-side until the AMP task completes. */
+export async function ampDeleteCluster(datapackId: string, clusterId: string) {
+  return request<{ id: string; deleted: boolean }>(clusterRoute(datapackId, clusterId), "DELETE");
 }
 
 /** Compute sizing reserved for an endpoint (Kubernetes quantities): cpu e.g.
@@ -80,16 +96,12 @@ export type AmpResizeResult = {
   message?: string;
 };
 
-function clusterRoute(datapackId: string, clusterId: string): string {
-  return `${clustersRoute(datapackId)}/${encodeURIComponent(clusterId)}`;
-}
-
 function branchComputeRoute(datapackId: string, clusterId: string, branchId: string): string {
   return `${clusterRoute(datapackId, clusterId)}/branches/${encodeURIComponent(branchId)}/compute`;
 }
 
 /** GET a cluster's branch tree. */
-export async function listBranches(
+export async function ampListBranches(
   datapackId: string,
   clusterId: string,
   options: RouteOptions = {},
@@ -99,7 +111,7 @@ export async function listBranches(
 
 /** POST a new branch (fork). fork_point_lsn is required when the parent has no
  *  running compute for the controller to read the latest LSN from. */
-export async function createBranch(
+export async function ampCreateBranch(
   datapackId: string,
   clusterId: string,
   payload: { name: string; parent_branch_id?: string; fork_point_lsn?: string },
@@ -111,7 +123,7 @@ export async function createBranch(
 }
 
 /** GET the compute instances on a branch. */
-export async function listCompute(
+export async function ampListCompute(
   datapackId: string,
   clusterId: string,
   branchId: string,
@@ -123,7 +135,7 @@ export async function listCompute(
 /** POST to provision a compute instance on a branch. `cpu`/`memory` are
  *  optional Kubernetes quantities (e.g. "2", "4Gi") mirroring AMP's endpoint
  *  `resources`; omit either to take AMP's defaults (2 cores / 4Gi). */
-export async function createCompute(
+export async function ampCreateCompute(
   datapackId: string,
   clusterId: string,
   branchId: string,
@@ -139,7 +151,7 @@ export async function createCompute(
 /** POST to resize a compute instance in place. At least one of cpu/memory must
  *  be set; empty fields are left unchanged. Returns the endpoint at its new
  *  size plus whether the live resize applied. */
-export async function resizeCompute(
+export async function ampResizeCompute(
   datapackId: string,
   clusterId: string,
   branchId: string,
@@ -157,7 +169,7 @@ export async function resizeCompute(
 }
 
 /** DELETE (unprovision) a compute instance on a branch. */
-export async function deleteCompute(
+export async function ampDeleteCompute(
   datapackId: string,
   clusterId: string,
   branchId: string,

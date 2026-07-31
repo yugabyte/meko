@@ -24,10 +24,18 @@ func NewAMPHandler(svc *service.AMPService) *AMPHandler {
 type createClusterRequest struct {
 	Name      string `json:"name"`
 	PgVersion *int   `json:"pg_version,omitempty"`
+	// WithWriter runs the composite "create cluster" (project + main branch +
+	// read_write endpoint) as one background task, sized by CPU/Memory. Default
+	// false keeps the project-only behavior (e.g. the MCP tool).
+	WithWriter bool   `json:"with_writer,omitempty"`
+	CPU        string `json:"cpu,omitempty"`
+	Memory     string `json:"memory,omitempty"`
 }
 
-// CreateCluster handles POST /api/v1/datapacks/:datapack_id/clusters.
+// CreateCluster handles POST /api/v1/datapacks/:datapack_id/amp/clusters.
 // Ensures the datapack's AMP shared pool (first time) then creates a cluster.
+// with_writer:true also provisions the `main`-branch read_write endpoint in the
+// same task; either way it polls to completion and returns 201 + the cluster.
 func (h *AMPHandler) CreateCluster(c echo.Context) error {
 	datapackID := c.Param("datapack_id")
 	if datapackID == "" {
@@ -52,13 +60,23 @@ func (h *AMPHandler) CreateCluster(c echo.Context) error {
 		datapackName = dp.Name
 	}
 
-	cluster, err := h.svc.CreateCluster(c.Request().Context(), service.CreateClusterInput{
+	in := service.CreateClusterInput{
 		DatapackID:   datapackID,
 		DatapackName: datapackName,
 		UserID:       account.ID,
 		Name:         req.Name,
 		PgVersion:    req.PgVersion,
-	})
+		CPU:          strings.TrimSpace(req.CPU),
+		Memory:       strings.TrimSpace(req.Memory),
+	}
+	// with_writer provisions the writer endpoint in the same task. Both paths
+	// poll the task to completion and return the materialized cluster (201).
+	var cluster service.AMPProject
+	if req.WithWriter {
+		cluster, err = h.svc.CreateClusterWithWriter(c.Request().Context(), in)
+	} else {
+		cluster, err = h.svc.CreateCluster(c.Request().Context(), in)
+	}
 	if err != nil {
 		return apiError(c, http.StatusBadGateway, "AMP_ERROR", err.Error())
 	}

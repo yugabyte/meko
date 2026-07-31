@@ -3,18 +3,18 @@ import { type ReactElement } from "react";
 import { render, screen, cleanup } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BranchCompute } from "./BranchCompute";
-import { listCompute, type AmpCompute } from "@/lib/api/ampApi";
+import { ampListCompute, type AmpCompute } from "@/lib/api/ampApi";
 
 // BranchCompute enforces AMP's "one read-write compute per branch" rule in the
 // provision form. That gate is the whole point of the component, so test it
 // against real loaded data (via the useCompute query) rather than mocking the
 // child out. ampApi is mocked so the query resolves synchronously in the test.
 vi.mock("@/lib/api/ampApi", () => ({
-  listCompute: vi.fn(),
-  createCompute: vi.fn(),
+  ampListCompute: vi.fn(),
+  ampCreateCompute: vi.fn(),
 }));
 
-const mockList = vi.mocked(listCompute);
+const mockList = vi.mocked(ampListCompute);
 
 function renderWithClient(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

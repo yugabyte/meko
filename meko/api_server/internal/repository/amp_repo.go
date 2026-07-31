@@ -63,3 +63,16 @@ func (r *AMPRepo) Upsert(ctx context.Context, datapackID, sharedPoolID, ownerUse
 	}
 	return nil
 }
+
+// DeleteByDatapack removes the datapack→pool mapping row, called when a datapack
+// is deleted after its AMP clusters are torn down. No-op if the row is absent.
+func (r *AMPRepo) DeleteByDatapack(ctx context.Context, datapackID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM meko_system.amp_datapack_pool WHERE datapack_id = $1`,
+		datapackID,
+	)
+	if err != nil {
+		return fmt.Errorf("amp_datapack_pool: delete %s: %w", datapackID, err)
+	}
+	return nil
+}

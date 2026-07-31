@@ -61,7 +61,7 @@ import { CONTEXTUAL_PROMINENCE_SEARCH_ENABLED } from "@/lib/tokenSavings";
 import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailAgentsTile";
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
 import { DatapackDetailClustersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailClustersTile";
-import { CreateClusterDialog } from "@/features/datapacks/components/datapack-detail/dialogs/CreateClusterDialog";
+import { CreateClusterWizard } from "@/features/datapacks/components/datapack-detail/dialogs/CreateClusterWizard";
 import { isAmpEnabled } from "@/lib/amp";
 import {
   DatapackDetailKnowledgeTile,
@@ -468,7 +468,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 onConfirm={handleDeleteConfirm}
               />
               {isAmpEnabled() ? (
-                <CreateClusterDialog
+                <CreateClusterWizard
                   open={isCreateClusterOpen}
                   onOpenChange={setIsCreateClusterOpen}
                   datapackId={routeDatapackId}

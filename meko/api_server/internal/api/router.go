@@ -207,6 +207,8 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 			repository.NewAMPRepo(cfg.SystemDB),
 			ampRegistrationRepo,
 		)
+		// Datapack deletion cleans up the datapack's AMP clusters + pool mapping.
+		dpSvc.SetAMPService(ampSvc)
 		slog.Info("amp routes enabled (controller endpoint resolved from amp_registration)")
 	} else {
 		slog.Warn("amp routes disabled (set --show-pg-amp to enable)")
@@ -737,19 +739,19 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		dpOwner := auth.RequireDatapackOwnership(reg.dpRepo)
 		read := auth.RequireScope(auth.ScopeRead)
 		write := auth.RequireScope(auth.ScopeWrite)
-		dpDirect.POST("/datapacks/:datapack_id/clusters", ampH.CreateCluster, write, dpOwner)
-		dpDirect.GET("/datapacks/:datapack_id/clusters", ampH.ListClusters, read, dpAccess)
-		dpDirect.GET("/datapacks/:datapack_id/clusters/:cluster_id", ampH.GetCluster, read, dpAccess)
-		dpDirect.DELETE("/datapacks/:datapack_id/clusters/:cluster_id", ampH.DeleteCluster, write, dpOwner)
-		dpDirect.GET("/datapacks/:datapack_id/clusters/:cluster_id/branches", ampH.ListBranches, read, dpAccess)
-		dpDirect.POST("/datapacks/:datapack_id/clusters/:cluster_id/branches", ampH.CreateBranch, write, dpOwner)
-		dpDirect.GET("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id", ampH.GetBranch, read, dpAccess)
-		dpDirect.DELETE("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id", ampH.DeleteBranch, write, dpOwner)
-		dpDirect.GET("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute", ampH.ListCompute, read, dpAccess)
-		dpDirect.POST("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute", ampH.CreateCompute, write, dpOwner)
-		dpDirect.GET("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute/:compute_id", ampH.GetCompute, read, dpAccess)
-		dpDirect.POST("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute/:compute_id/resize", ampH.ResizeCompute, write, dpOwner)
-		dpDirect.DELETE("/datapacks/:datapack_id/clusters/:cluster_id/branches/:branch_id/compute/:compute_id", ampH.DeleteCompute, write, dpOwner)
+		dpDirect.POST("/datapacks/:datapack_id/amp/clusters", ampH.CreateCluster, write, dpOwner)
+		dpDirect.GET("/datapacks/:datapack_id/amp/clusters", ampH.ListClusters, read, dpAccess)
+		dpDirect.GET("/datapacks/:datapack_id/amp/clusters/:cluster_id", ampH.GetCluster, read, dpAccess)
+		dpDirect.DELETE("/datapacks/:datapack_id/amp/clusters/:cluster_id", ampH.DeleteCluster, write, dpOwner)
+		dpDirect.GET("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches", ampH.ListBranches, read, dpAccess)
+		dpDirect.POST("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches", ampH.CreateBranch, write, dpOwner)
+		dpDirect.GET("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id", ampH.GetBranch, read, dpAccess)
+		dpDirect.DELETE("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id", ampH.DeleteBranch, write, dpOwner)
+		dpDirect.GET("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id/compute", ampH.ListCompute, read, dpAccess)
+		dpDirect.POST("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id/compute", ampH.CreateCompute, write, dpOwner)
+		dpDirect.GET("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id/compute/:compute_id", ampH.GetCompute, read, dpAccess)
+		dpDirect.POST("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id/compute/:compute_id/resize", ampH.ResizeCompute, write, dpOwner)
+		dpDirect.DELETE("/datapacks/:datapack_id/amp/clusters/:cluster_id/branches/:branch_id/compute/:compute_id", ampH.DeleteCompute, write, dpOwner)
 	}
 
 	g.POST("/agents", agentH.CreateUser)

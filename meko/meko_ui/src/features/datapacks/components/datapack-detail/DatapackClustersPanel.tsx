@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { useClusters } from "@/features/datapacks/hooks/useAmpClusters";
-import { CreateClusterDialog } from "./dialogs/CreateClusterDialog";
+import { CreateClusterWizard } from "./dialogs/CreateClusterWizard";
 import { ClusterRow } from "./datapack-clusters/ClusterRow";
 
 type Props = { datapackId: string; className?: string };
@@ -97,7 +97,7 @@ export function DatapackClustersPanel({ datapackId, className }: Props) {
         )}
       </div>
 
-      <CreateClusterDialog
+      <CreateClusterWizard
         open={createOpen}
         onOpenChange={setCreateOpen}
         datapackId={datapackId}

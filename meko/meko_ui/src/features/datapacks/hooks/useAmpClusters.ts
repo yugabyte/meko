@@ -6,14 +6,15 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  createBranch,
-  createCluster,
-  createCompute,
-  deleteCompute,
-  listBranches,
-  listClusters,
-  listCompute,
-  resizeCompute,
+  ampCreateBranch,
+  ampCreateCluster,
+  ampCreateCompute,
+  ampDeleteCluster,
+  ampDeleteCompute,
+  ampListBranches,
+  ampListClusters,
+  ampListCompute,
+  ampResizeCompute,
   type AmpBranch,
   type AmpCluster,
   type AmpCompute,
@@ -37,16 +38,28 @@ const STALE = 30_000;
 export function useClusters(datapackId: string, options?: { enabled?: boolean }) {
   return useQuery<AmpCluster[]>({
     queryKey: ampKeys.clusters(datapackId),
-    queryFn: ({ signal }) => listClusters(datapackId, { signal }),
+    queryFn: ({ signal }) => ampListClusters(datapackId, { signal }),
     staleTime: STALE,
     enabled: options?.enabled ?? true,
   });
 }
 
+// Composite create: ONE background task (project + main branch + writer) that
+// api_server polls to completion; returns the created cluster. Invalidates the
+// list so the new cluster shows immediately.
 export function useCreateCluster(datapackId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { name: string; pg_version?: number }) => createCluster(datapackId, payload),
+    mutationFn: (payload: { name: string; cpu?: string; memory?: string }) =>
+      ampCreateCluster(datapackId, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.clusters(datapackId) }),
+  });
+}
+
+export function useDeleteCluster(datapackId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { clusterId: string }) => ampDeleteCluster(datapackId, vars.clusterId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.clusters(datapackId) }),
   });
 }
@@ -54,7 +67,7 @@ export function useCreateCluster(datapackId: string) {
 export function useBranches(datapackId: string, clusterId: string, options?: { enabled?: boolean }) {
   return useQuery<AmpBranch[]>({
     queryKey: ampKeys.branches(datapackId, clusterId),
-    queryFn: ({ signal }) => listBranches(datapackId, clusterId, { signal }),
+    queryFn: ({ signal }) => ampListBranches(datapackId, clusterId, { signal }),
     staleTime: STALE,
     enabled: options?.enabled ?? true,
   });
@@ -64,7 +77,7 @@ export function useCreateBranch(datapackId: string, clusterId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: { name: string; parent_branch_id?: string; fork_point_lsn?: string }) =>
-      createBranch(datapackId, clusterId, payload),
+      ampCreateBranch(datapackId, clusterId, payload),
     onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.branches(datapackId, clusterId) }),
   });
 }
@@ -77,7 +90,7 @@ export function useCompute(
 ) {
   return useQuery<AmpCompute[]>({
     queryKey: ampKeys.compute(datapackId, clusterId, branchId),
-    queryFn: ({ signal }) => listCompute(datapackId, clusterId, branchId, { signal }),
+    queryFn: ({ signal }) => ampListCompute(datapackId, clusterId, branchId, { signal }),
     staleTime: STALE,
     enabled: options?.enabled ?? true,
   });
@@ -87,7 +100,7 @@ export function useCreateCompute(datapackId: string, clusterId: string, branchId
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { role: "read_write" | "read_only"; resources?: AmpResources }) =>
-      createCompute(datapackId, clusterId, branchId, vars.role, vars.resources ?? {}),
+      ampCreateCompute(datapackId, clusterId, branchId, vars.role, vars.resources ?? {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) }),
   });
 }
@@ -96,7 +109,7 @@ export function useResizeCompute(datapackId: string, clusterId: string, branchId
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { computeId: string; resources: AmpResources }) =>
-      resizeCompute(datapackId, clusterId, branchId, vars.computeId, vars.resources),
+      ampResizeCompute(datapackId, clusterId, branchId, vars.computeId, vars.resources),
     onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) }),
   });
 }
@@ -105,7 +118,7 @@ export function useDeleteCompute(datapackId: string, clusterId: string, branchId
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: { computeId: string }) =>
-      deleteCompute(datapackId, clusterId, branchId, vars.computeId),
+      ampDeleteCompute(datapackId, clusterId, branchId, vars.computeId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ampKeys.compute(datapackId, clusterId, branchId) }),
   });
 }

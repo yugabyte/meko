@@ -83,7 +83,14 @@ type DatapackService struct {
 	// deleting a datapack never refunds quota. Optional: when nil the
 	// cap is not enforced (matches early-bootstrap minimal wiring).
 	freeTierRepo *repository.FreeTierUsageRepo
+	// ampSvc, when set (AMP feature enabled), tears down the datapack's AMP
+	// clusters + pool mapping on delete. Nil leaves deletion AMP-blind.
+	ampSvc *AMPService
 }
+
+// SetAMPService wires the optional AMP cleanup run on datapack deletion. Called
+// from router setup only when --show-pg-amp is on; nil otherwise.
+func (s *DatapackService) SetAMPService(amp *AMPService) { s.ampSvc = amp }
 
 // NewDatapackService creates a new DatapackService.
 func NewDatapackService(
@@ -389,6 +396,16 @@ func (s *DatapackService) Delete(userID, datapackID string) error {
 	if s.langfuseSvc != nil {
 		if err := s.langfuseSvc.CleanupForDeletedDatapack(userID, dp.ID); err != nil {
 			return fmt.Errorf("failed to cleanup langfuse project before deleting datapack: %w", err)
+		}
+	}
+
+	// Tear down the datapack's AMP clusters + pool mapping (best-effort, before
+	// the registry row goes so the pool is still resolvable). AMP being down
+	// must not block datapack deletion, so a failure is logged, not fatal.
+	if s.ampSvc != nil {
+		if err := s.ampSvc.CleanupForDeletedDatapack(context.Background(), dp.ID); err != nil {
+			slog.Warn("amp cleanup failed during datapack deletion; resources may be orphaned",
+				"datapack_id", dp.ID, "error", err)
 		}
 	}
 

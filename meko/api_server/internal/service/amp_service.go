@@ -53,7 +53,9 @@ type CreateClusterInput struct {
 	DatapackName string // human-readable datapack name; used to name the AMP pool
 	UserID       string // Meko user id (also the AMP user id)
 	Name         string
-	PgVersion    *int // optional; omit to take AMP's default (18, the only supported version today)
+	PgVersion    *int   // optional; omit to take AMP's default (18, the only supported version today)
+	CPU          string // writer sizing (Kubernetes quantity, e.g. "2"); only used with_writer
+	Memory       string // writer sizing (e.g. "4Gi"); only used with_writer
 }
 
 // ampPoolName is the name given to a datapack's AMP shared pool. storage_pool.name
@@ -103,6 +105,38 @@ func (s *AMPService) CreateCluster(ctx context.Context, in CreateClusterInput) (
 	return c.CreateProject(ctx, pool.ID, name, in.PgVersion)
 }
 
+// CreateClusterWithWriter is the composite "create cluster" the wizard uses: it
+// ensures the pool (idempotent), then runs ONE background task that provisions
+// the database, its `main` branch, and a read_write endpoint together
+// (create_project with_writer). Like CreateCluster it polls the task to
+// completion and returns the materialized cluster.
+func (s *AMPService) CreateClusterWithWriter(ctx context.Context, in CreateClusterInput) (AMPProject, error) {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return AMPProject{}, fmt.Errorf("cluster name is required")
+	}
+	c, err := s.client(ctx)
+	if err != nil {
+		return AMPProject{}, err
+	}
+
+	// Step 1 — ensure the AMP user + shared pool for this datapack (idempotent).
+	if err := c.EnsureUser(ctx, in.UserID); err != nil {
+		return AMPProject{}, fmt.Errorf("ensure amp user: %w", err)
+	}
+	pool, err := c.EnsurePool(ctx, in.DatapackID, in.UserID, ampPoolName(in.DatapackName, in.DatapackID))
+	if err != nil {
+		_ = s.repo.Upsert(ctx, in.DatapackID, in.DatapackID, in.UserID, "failed")
+		return AMPProject{}, fmt.Errorf("ensure amp pool: %w", err)
+	}
+	if err := s.repo.Upsert(ctx, in.DatapackID, pool.ID, in.UserID, "ready"); err != nil {
+		return AMPProject{}, err
+	}
+
+	// Step 2 — run the composite task (project + main branch + writer).
+	return c.CreateProjectWithWriter(ctx, pool.ID, name, in.PgVersion, in.CPU, in.Memory)
+}
+
 // ListClusters returns the clusters in a datapack's AMP pool. If no pool has
 // been provisioned yet, it returns an empty slice (no AMP call).
 func (s *AMPService) ListClusters(ctx context.Context, datapackID string) ([]AMPProject, error) {
@@ -145,6 +179,52 @@ func (s *AMPService) DeleteCluster(ctx context.Context, datapackID, projectID st
 		return err
 	}
 	return c.DeleteProject(ctx, poolID, projectID)
+}
+
+// CleanupForDeletedDatapack tears down a datapack's AMP footprint when the
+// datapack is deleted. Fast by design:
+//   - No pool ever provisioned → instant no-op.
+//   - Pool exists but has NO active clusters → just drop the mapping row; no AMP
+//     delete calls are made, so datapack deletion is effectively instant.
+//   - Pool has clusters → fire each cluster delete WITHOUT polling (the cascade
+//     runs on the controller), then drop the mapping row. Datapack deletion is
+//     not blocked minutes waiting on the teardown to finish.
+//
+// The shared pool itself is left in place — AMP has no delete-pool API — but it
+// is emptied. If issuing any cluster delete fails synchronously, the mapping row
+// is kept so a later reconcile can retry.
+func (s *AMPService) CleanupForDeletedDatapack(ctx context.Context, datapackID string) error {
+	mapping, err := s.repo.GetByDatapack(ctx, datapackID)
+	if err != nil {
+		return err
+	}
+	if mapping == nil {
+		return nil // never provisioned; nothing to clean up
+	}
+	c, err := s.client(ctx)
+	if err != nil {
+		return err
+	}
+	projects, err := c.ListProjects(ctx, mapping.SharedPoolID)
+	if err != nil {
+		return fmt.Errorf("list clusters for cleanup: %w", err)
+	}
+	// No active clusters — skip AMP entirely and just drop the mapping.
+	if len(projects) == 0 {
+		return s.repo.DeleteByDatapack(ctx, datapackID)
+	}
+	// Fire each cluster delete without polling: the cascade runs on the
+	// controller so datapack deletion returns promptly.
+	var errs []string
+	for _, p := range projects {
+		if err := c.DeleteProjectAsync(ctx, mapping.SharedPoolID, p.ID); err != nil {
+			errs = append(errs, fmt.Sprintf("delete cluster %s: %v", p.ID, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("amp cleanup: %s", strings.Join(errs, "; "))
+	}
+	return s.repo.DeleteByDatapack(ctx, datapackID)
 }
 
 // poolID resolves a datapack's AMP shared pool id, erroring if none exists yet
