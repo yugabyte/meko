@@ -56,7 +56,7 @@ architecture docs:
 
 AI coding agents working in this repo should read [`AGENTS.md`](AGENTS.md)
 first for repo conventions, architecture pointers, and ongoing project
-context. [`CLAUDE.md`](CLAUDE.md) just points there.
+context.
 
 This repo has a Meko datapack associated with it for agent memory:
 

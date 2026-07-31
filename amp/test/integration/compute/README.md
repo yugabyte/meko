@@ -7,7 +7,7 @@ markers after every test. This is the verification gate the
 `integration-before-corruption-claim` skill points at.
 
 > The companion **control-plane (controller-on-Docker)** suite lives in
-> [`../control_plane`](../control_plane); Postgres assertion helpers
+> [`../controller`](../controller); Postgres assertion helpers
 > shared by both suites are in [`../libs/integration_common`](../libs/integration_common).
 
 ## Running
@@ -191,7 +191,7 @@ test/integration/
     scenarios.rs           scenario registry (includes build.rs codegen)
     fast/  *.rs *.sql *.out  fast scenarios + golden workloads (same dir)
     slow/  *.rs *.sql *.out  slow scenarios + golden workloads (same dir)
-  control_plane/           the controller-on-Docker suite (`integration_control_plane`)
+  controller/              the controller-on-Docker suite (`integration_control_plane`)
   libs/integration_common/         shared `db` helpers used by both suites
 ```
 

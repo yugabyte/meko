@@ -181,7 +181,7 @@ Key overrides: `REGISTRY` (base registry+path, default `gcr.io/yugabyte`), `TAG`
 The [`control-plane GKE (itest-dev)`](../../.github/workflows/amp-control-plane-gke.yml)
 workflow runs `up-gke.sh` + [`smoke-test.sh`](#smoke-test--smoke-testsh) against
 the **itest-dev** cluster — the "k8s" half of the control-plane deploy integration
-(the docker-driver half is [`test/e2e/control_plane`](../test/e2e/control_plane)).
+(the docker-driver half is [`test/integration/controller`](../test/integration/controller)).
 
 Because a cold run is expensive (~30-min endpoint build + a live GKE deploy) it is
 **not** a per-PR check. It runs only: **nightly** on `main` (07:17 UTC, the same

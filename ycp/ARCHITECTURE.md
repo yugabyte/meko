@@ -6,8 +6,8 @@ fleet registry and desired state, while each customer's data plane runs a small
 **pull agent** that reaches out to YCP over outbound HTTPS only. No inbound
 connection is ever made to a customer cluster.
 
-The design is [`../design/byoc-control-plane.md`](../design/byoc-control-plane.md),
-backing the OpenAPI subset in [`../design/ycp-openapi.yaml`](../design/ycp-openapi.yaml).
+The design is [`meko/design/byoc-control-plane.md`](../meko/design/byoc-control-plane.md),
+backing the OpenAPI subset in [`meko/design/ycp-openapi.yaml`](../meko/design/ycp-openapi.yaml).
 
 ## Where the control plane lives
 
