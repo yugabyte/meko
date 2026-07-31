@@ -390,24 +390,6 @@ pub enum AdvanceConsistentLsnOutcome {
     StaleGeneration { live_generation: u32 },
 }
 
-/// Result of [`PageStore::update_branch_state`]. The UPDATE's WHERE
-/// clause enforces `current_generation = $caller_gen`, so a stale
-/// pageserver — one whose generation has been bumped past since
-/// attach — gets `StaleGeneration`. The caller logs the skip; the
-/// next flush's `advance_consistent_lsn` is what actually trips
-/// the shutdown-for-stale-generation path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateBranchStateOutcome {
-    /// Row was found at our generation; UPDATE landed.
-    Updated,
-    /// Either the row is missing (wiring bug — `update_branch_initial_state`
-    /// is supposed to have run) or the live generation is no longer
-    /// ours. In practice the latter dominates; we can't disambiguate
-    /// without a follow-up SELECT, and the caller doesn't need to —
-    /// either way the right move is "log and proceed".
-    StaleGeneration,
-}
-
 /// Result of [`PageStore::publish_gc_cutoff`]. Same generation-fence
 /// semantics as [`AdvanceConsistentLsnOutcome`]: a stale pageserver's
 /// publish matches no row, and it must not proceed to the GC drain —
@@ -3611,28 +3593,6 @@ impl PageStore {
             .with_context(|| format!("gc_act_drop_meta branch={branch_id} keys={}", keys.len()))
     }
 
-    /// Minimum branch point over all child rows of `branch_id` — the GC
-    /// cutoff holds the parent's history at/below every child's fork
-    /// point. A deleted child can still be read until branch-deletion GC
-    /// cleans it up, and that cleanup ends by removing its row — so
-    /// count every row still present, `deleted_at` set or not.
-    /// TODO(gc): during deleted-branch GC, drop the branch's row from
-    /// `branch_state` as the last step — that is what releases the pin.
-    pub async fn min_children_fork_lsn(&self, branch_id: BranchId) -> Result<Option<Lsn>> {
-        let sql = format!(
-            "SELECT min(ancestor_lsn) FROM \"{}\".branch_state \
-             WHERE ancestor_branch_id = $1",
-            self.schema
-        );
-        let row = self
-            .ysql_client
-            .query_opt(&sql, &[&branch_id.to_string()])
-            .await
-            .context("min_children_fork_lsn")?;
-        let min: Option<i64> = row.and_then(|r| r.get(0));
-        Ok(min.map(|l| Lsn(l as u64)))
-    }
-
     /// Persist the GC read floor, monotonically and generation-fenced,
     /// BEFORE any drain deletes. `GREATEST` keeps the column monotone
     /// even if the freshly-computed cutoff regressed (inputs can move
@@ -3640,6 +3600,23 @@ impl PageStore {
     /// The fence makes a superseded pageserver stop before draining:
     /// its in-memory lease set is stale, so its cutoff must not be
     /// allowed to delete anything.
+    ///
+    /// The LEAST subquery returns the minimum fork point among the
+    /// branch's children, if any, so the applied cutoff =
+    /// min(cutoff, min_children_fork_point). All child rows are
+    /// accounted for: a deleted child can still be read until
+    /// branch-deletion GC cleans it up (for instance, to restore it
+    /// within the PITR interval) — only when that GC removes the
+    /// child's entry from `branch_state` can the parent safely ignore
+    /// it.
+    ///
+    /// The child min is deliberately read INSIDE this UPDATE: forking a
+    /// child makes a dummy UPDATE to this same row (controller
+    /// `RecordBranch`), so the fork and the cutoff advance serialize.
+    /// That rests on the conflict loser re-reading: on a write-write
+    /// conflict this statement re-executes at a fresh read time (read
+    /// committed) or errors and the next GC tick retries — either way
+    /// the child min is re-read past the fork's commit.
     pub async fn publish_gc_cutoff(
         &self,
         branch_id: BranchId,
@@ -3647,12 +3624,15 @@ impl PageStore {
         cutoff: Lsn,
     ) -> Result<PublishGcCutoffOutcome> {
         let sql = format!(
-            "UPDATE \"{}\".branch_state \
-             SET applied_gc_cutoff_lsn = GREATEST(applied_gc_cutoff_lsn, $2) \
+            "UPDATE \"{schema}\".branch_state \
+             SET applied_gc_cutoff_lsn = GREATEST(applied_gc_cutoff_lsn, \
+                 LEAST($2, (SELECT min(ancestor_lsn) \
+                            FROM \"{schema}\".branch_state \
+                            WHERE ancestor_branch_id = $1))) \
              WHERE branch_id = $1 \
                AND current_generation = $3 \
              RETURNING applied_gc_cutoff_lsn",
-            self.schema
+            schema = self.schema
         );
         let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let row = self
@@ -3981,10 +3961,11 @@ impl PageStore {
     ///   loudly rather than silently losing the state.
     ///
     /// **Not for incremental updates.** Per-flush UPDATEs of
-    /// `consistent_lsn` go through [`Self::advance_consistent_lsn`];
-    /// per-`UploadMetadata` UPDATEs from RTC go through
-    /// [`Self::update_branch_state`]. Both of those are gen-fenced; this one
-    /// isn't, because at creation our group by definition isn't populated yet
+    /// `consistent_lsn` go through [`Self::advance_consistent_lsn`] and the
+    /// GC cutoff through [`Self::publish_gc_cutoff`]; both are gen-fenced
+    /// (and the cutoff is additionally monotone and child-pinned there —
+    /// after creation nothing else may write that column). This one isn't fenced,
+    /// because at creation our group by definition isn't populated yet
     /// (or — race — is populated in a state we shouldn't touch).
     pub async fn update_branch_initial_state(&self, row: &BranchStateRow) -> Result<()> {
         let sql = format!(
@@ -4136,77 +4117,6 @@ impl PageStore {
         Ok(())
     }
 
-    /// Gen-fenced UPDATE of the index_part.json-derived fields on the
-    /// row. Called from RTC's `perform_upload_task`
-    /// (`UploadOp::UploadMetadata`) and from
-    /// `persist_index_part_with_deleted_flag`.
-    ///
-    /// The WHERE clause requires `current_generation = $caller_gen`:
-    /// stale pageservers — those whose generation no longer matches
-    /// the live row — get 0 rows updated, returning
-    /// [`UpdateBranchStateOutcome::StaleGeneration`]. Caller should
-    /// log and proceed (matching the pattern in
-    /// [`Self::advance_consistent_lsn`]); the eventual
-    /// `task_mgr::shutdown_for_stale_generation` path on the next
-    /// flush takes care of shutting the stale process down.
-    ///
-    /// Does not touch `branch_id`, `current_generation`
-    /// (owned by `claim_generation`), or `pg_version`
-    /// (immutable per timeline). Other fields are full-overwrite from
-    /// the caller's row.
-    pub async fn update_branch_state(
-        &self,
-        row: &BranchStateRow,
-        generation: utils::generation::Generation,
-    ) -> Result<UpdateBranchStateOutcome> {
-        let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
-        let sql = format!(
-            "UPDATE \"{}\".branch_state SET \
-                consistent_lsn   = $2, \
-                applied_gc_cutoff_lsn = $3, \
-                ancestor_branch_id    = $4, \
-                ancestor_lsn          = $5, \
-                initdb_lsn            = $6, \
-                prev_record_lsn       = $7, \
-                archived_at           = $8, \
-                deleted_at            = $9, \
-                rel_size_migration    = $10, \
-                rel_size_migrated_at  = $11, \
-                lineage               = $12 \
-             WHERE branch_id          = $1 \
-               AND current_generation = $13",
-            self.schema
-        );
-        let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
-        let n = self
-            .ysql_client
-            .execute(
-                &sql,
-                &[
-                    &row.branch_id.to_string(),
-                    &(row.consistent_lsn.0 as i64),
-                    &(row.applied_gc_cutoff_lsn.0 as i64),
-                    &row.ancestor_branch_id.map(|id| id.to_string()),
-                    &row.ancestor_lsn.map(|l| l.0 as i64),
-                    &row.initdb_lsn.map(|l| l.0 as i64),
-                    &row.prev_record_lsn.map(|l| l.0 as i64),
-                    &row.archived_at,
-                    &row.deleted_at,
-                    &rel_size_migration_text,
-                    &row.rel_size_migrated_at.map(|l| l.0 as i64),
-                    &lineage_json,
-                    &gen_i32,
-                ],
-            )
-            .await
-            .context("update_branch_state")?;
-        if n == 0 {
-            Ok(UpdateBranchStateOutcome::StaleGeneration)
-        } else {
-            Ok(UpdateBranchStateOutcome::Updated)
-        }
-    }
-
     pub async fn get_branch_state(&self, branch_id: BranchId) -> Result<Option<BranchStateRow>> {
         let sql = format!(
             // `consistent_lsn IS NOT NULL` is the pageserver's presence
@@ -4282,6 +4192,10 @@ impl PageStore {
     ///   `last_record_lsn`, so durability catches up within one flush
     ///   interval — callers may retry briefly on this error)
     /// - branch point must not be below the ancestor's GC cutoff
+    ///   (defense-in-depth: the controller's `RecordBranch` already
+    ///   validated this at registration, and once the child row is
+    ///   committed the ancestor's cutoff cannot advance past its fork
+    ///   point — see [`Self::publish_gc_cutoff`])
     ///
     /// The new row's `consistent_lsn` is set to `ancestor_lsn` — the
     /// walreceiver resume point. It must never be 0 (a 0 would make
@@ -5074,8 +4988,7 @@ const BRANCH_STATE_COLUMNS: &str = "branch_id, consistent_lsn, \
 /// the upstream `index_part.json` wire shape; and `lineage`,
 /// persisted as a JSONB blob for forward-compat) into the values
 /// the `tokio_postgres::Client::execute` parameter list expects.
-/// Shared by `update_branch_initial_state` and
-/// `update_branch_state` so the serialisation stays in lockstep.
+/// Used by `update_branch_initial_state`.
 fn serialize_row_aux(row: &BranchStateRow) -> Result<(Option<String>, serde_json::Value)> {
     let rel_size_migration_text = row
         .rel_size_migration
@@ -8219,55 +8132,251 @@ mod tests {
         );
     }
 
-    /// Scenario: every child row pins, `deleted_at` set or not; only
-    /// removing the row (what branch-deletion GC will do) releases the
-    /// pin. A branch with no children pins nothing.
+    /// Scenario: the fork↔cutoff interlock, GC half. The publish clamps
+    /// to min(ancestor_lsn) over child ROWS inside the same UPDATE that
+    /// writes the cutoff — so a fork registered before the statement's
+    /// snapshot is never cut past. Every row counts, `deleted_at` set or
+    /// not; only removing the row (what branch-deletion GC will do)
+    /// releases the pin. (The no-children case is the monotone test
+    /// above: its publishes advance unclamped.)
     #[tokio::test]
-    async fn min_children_fork_lsn_follows_child_rows() {
-        let (store, _schema) = make_store("gc_children").await;
+    async fn publish_gc_cutoff_clamps_to_child_rows() {
+        use utils::generation::Generation;
+
+        let (store, _schema) = make_store("gc_publish_clamp").await;
         let parent = rand_branch();
+        let mut row = sample_branch_state_row(parent);
+        row.current_generation = 5;
+        row.applied_gc_cutoff_lsn = Lsn(50);
+        create_branch_state_row(&store, &row).await.unwrap();
 
-        assert_eq!(store.min_children_fork_lsn(parent).await.unwrap(), None);
+        // Children forked at 110 and 150, and one at 90 that is
+        // mid-deletion (deleted_at stamped, row still present).
+        create_child_row(&store, parent, 110, false).await;
+        create_child_row(&store, parent, 150, false).await;
+        let mid_deletion = create_child_row(&store, parent, 90, true).await;
 
-        let mut child_hi = sample_branch_state_row(rand_branch());
-        child_hi.ancestor_branch_id = Some(parent);
-        child_hi.ancestor_lsn = Some(Lsn(150));
-        create_branch_state_row(&store, &child_hi).await.unwrap();
-
-        let mut child_lo = sample_branch_state_row(rand_branch());
-        child_lo.ancestor_branch_id = Some(parent);
-        child_lo.ancestor_lsn = Some(Lsn(110));
-        create_branch_state_row(&store, &child_lo).await.unwrap();
-
-        // A child mid-deletion: deleted_at stamped, row still present.
-        let mid_deletion = rand_branch();
-        let mut child_deleting = sample_branch_state_row(mid_deletion);
-        child_deleting.ancestor_branch_id = Some(parent);
-        child_deleting.ancestor_lsn = Some(Lsn(90));
-        child_deleting.deleted_at = Some(chrono::Utc::now().naive_utc());
-        create_branch_state_row(&store, &child_deleting)
+        // The mid-deletion child still pins: 105 clamps to 90.
+        let out = store
+            .publish_gc_cutoff(parent, Generation::new(5), Lsn(105))
             .await
             .unwrap();
+        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(90) });
 
-        assert_eq!(
-            store.min_children_fork_lsn(parent).await.unwrap(),
-            Some(Lsn(90)),
-            "a mid-deletion child still pins at its fork point"
-        );
-
-        // Deletion completes = the row is removed; only that releases
-        // the pin.
+        // Removing its row releases the pin: the same target advances.
         let delete_sql = format!("DELETE FROM \"{PROD_SCHEMA}\".branch_state WHERE branch_id = $1");
         store
             .ysql_client
             .execute(&delete_sql, &[&mid_deletion.to_string()])
             .await
             .unwrap();
-        assert_eq!(
-            store.min_children_fork_lsn(parent).await.unwrap(),
-            Some(Lsn(110)),
-            "row removal releases the pin; live min is 110"
+        let out = store
+            .publish_gc_cutoff(parent, Generation::new(5), Lsn(105))
+            .await
+            .unwrap();
+        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(105) });
+
+        // Target past the remaining children clamps to their MIN fork
+        // point (110, not 150).
+        let out = store
+            .publish_gc_cutoff(parent, Generation::new(5), Lsn(200))
+            .await
+            .unwrap();
+        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(110) });
+    }
+
+    /// A child `branch_state` row of `parent` forked at `lsn`, live or
+    /// mid-deletion (`deleted_at` stamped, row present). Returns the
+    /// child's id.
+    async fn create_child_row(
+        store: &PageStore,
+        parent: BranchId,
+        lsn: u64,
+        deleted: bool,
+    ) -> BranchId {
+        let child = rand_branch();
+        let mut row = sample_branch_state_row(child);
+        row.ancestor_branch_id = Some(parent);
+        row.ancestor_lsn = Some(Lsn(lsn));
+        if deleted {
+            row.deleted_at = Some(chrono::Utc::now().naive_utc());
+        }
+        create_branch_state_row(store, &row).await.unwrap();
+        child
+    }
+
+    /// A raw SQL session for the interlock stress test's fork side — the
+    /// controller registers forks over its own pgx connection (with a real
+    /// multi-statement transaction), which `YsqlClient` doesn't model.
+    /// Connection defaults come from `test_yb_config()` so the raw session
+    /// always hits the same cluster as the store under test.
+    async fn raw_pg_client() -> tokio_postgres::Client {
+        let url = test_yb_config().to_database_url().unwrap();
+        let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .expect("connect raw client to local YB");
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        client
+    }
+
+    /// A fork-shaped peer for the race: the same transaction shape as
+    /// the controller's `RecordBranch` — child row INSERT + conditional
+    /// dummy UPDATE on the parent row — standing in for the Go
+    /// controller, which a Rust test cannot invoke. `Ok(true)` =
+    /// registered, `Ok(false)` = rejected (rolled back, child row never
+    /// lands), `Err` = transient (the caller just retries the attempt).
+    async fn fork_txn(
+        client: &mut tokio_postgres::Client,
+        parent_key: &str,
+        child_key: &str,
+        fork_lsn: i64,
+    ) -> Result<bool> {
+        let insert_sql = format!(
+            "INSERT INTO \"{PROD_SCHEMA}\".branch_state \
+             (branch_id, pg_version, ancestor_branch_id, ancestor_lsn) \
+             VALUES ($1, 180002, $2, $3) ON CONFLICT (branch_id) DO NOTHING"
         );
+        let touch_sql = format!(
+            "UPDATE \"{PROD_SCHEMA}\".branch_state \
+             SET applied_gc_cutoff_lsn = applied_gc_cutoff_lsn \
+             WHERE branch_id = $1 \
+               AND COALESCE(applied_gc_cutoff_lsn, 0) <= $2"
+        );
+        let tx = client.transaction().await?;
+        tx.execute(&insert_sql, &[&child_key, &parent_key, &fork_lsn])
+            .await?;
+        let touched = tx.execute(&touch_sql, &[&parent_key, &fork_lsn]).await?;
+        if touched == 1 {
+            tx.commit().await?;
+            Ok(true)
+        } else {
+            tx.rollback().await?;
+            Ok(false)
+        }
+    }
+
+    /// The fork ↔ cutoff write-skew race, one pair at a time: each round
+    /// fires ONE fork transaction (the controller's, via [`fork_txn`])
+    /// and ONE `publish_gc_cutoff` — the fork just above the current
+    /// cutoff, the publish target past it. Rounds cycle through three
+    /// shapes:
+    ///
+    /// - fork committed, then publish: must accept, and the published
+    ///   cutoff must stop at the fork point (deterministic);
+    /// - publish committed, then fork: must reject (deterministic);
+    /// - dead heat (`tokio::join!`): either serialization order is
+    ///   legal; the round asserts the invariant either way.
+    ///
+    /// Without the interlock (the clamp inside the publish UPDATE + the
+    /// touch in the fork txn) a third outcome exists — the fork accepted
+    /// AND the cutoff past its fork point, each side committed on a
+    /// stale view of the other. The fork-then-publish shape catches that
+    /// deterministically in its first round; the dead-heat shape hunts
+    /// it in genuine interleavings. ~30 rounds of milliseconds each —
+    /// the whole test runs in about a second.
+    #[tokio::test]
+    async fn fork_registration_vs_cutoff_advance_race() {
+        use utils::generation::Generation;
+
+        const ROUNDS: u64 = 30;
+        const STEP: u64 = 1_000;
+
+        let (store, _schema) = make_store("gc_interlock_race").await;
+        let parent = rand_branch();
+        let mut row = sample_branch_state_row(parent);
+        row.current_generation = 5;
+        row.applied_gc_cutoff_lsn = Lsn(0);
+        create_branch_state_row(&store, &row).await.unwrap();
+        let parent_key = parent.to_string();
+        let mut client = raw_pg_client().await;
+        let delete_sql = format!("DELETE FROM \"{PROD_SCHEMA}\".branch_state WHERE branch_id = $1");
+
+        for round in 0..ROUNDS {
+            let cutoff = store
+                .get_branch_state(parent)
+                .await
+                .unwrap()
+                .expect("race parent row exists")
+                .applied_gc_cutoff_lsn;
+            let fork_lsn = cutoff.0 as i64 + 1;
+            let target = Lsn(cutoff.0 + STEP);
+            let child_key = rand_branch().to_string();
+
+            let publish = || store.publish_gc_cutoff(parent, Generation::new(5), target);
+            let (forked, out) = match round % 3 {
+                // Fork committed first: the publish must see the child.
+                0 => {
+                    let forked = fork_txn(&mut client, &parent_key, &child_key, fork_lsn)
+                        .await
+                        .unwrap();
+                    assert!(
+                        forked,
+                        "round {round}: a fork above the cutoff with no \
+                         publish in flight must register"
+                    );
+                    (forked, publish().await)
+                }
+                // Publish committed first: the fork must see the cutoff.
+                1 => {
+                    let out = publish().await;
+                    let forked = fork_txn(&mut client, &parent_key, &child_key, fork_lsn)
+                        .await
+                        .unwrap();
+                    assert!(
+                        !forked,
+                        "round {round}: a fork below the just-published \
+                         cutoff must be rejected"
+                    );
+                    (forked, out)
+                }
+                // Dead heat: the genuine race; either order is legal.
+                _ => {
+                    let (forked, out) = tokio::join!(
+                        fork_txn(&mut client, &parent_key, &child_key, fork_lsn),
+                        publish()
+                    );
+                    (forked.unwrap(), out)
+                }
+            };
+            let PublishGcCutoffOutcome::Published { applied } = out.unwrap() else {
+                panic!("race: generation must stay 5");
+            };
+
+            if forked {
+                assert!(
+                    applied.0 as i64 <= fork_lsn,
+                    "round {round}: write skew — fork at {fork_lsn} accepted \
+                     while the cutoff advanced to {applied}"
+                );
+                // Unpin (row removal, as branch-deletion GC will do) so
+                // the next round's cutoff can advance.
+                store
+                    .ysql_client
+                    .execute(&delete_sql, &[&child_key])
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // All children were unpinned by row removal; the parent must be
+        // free to advance exactly to a fresh target.
+        let target = Lsn((ROUNDS + 10) * STEP * 2);
+        let out = store
+            .publish_gc_cutoff(parent, Generation::new(5), target)
+            .await
+            .unwrap();
+        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: target });
+
+        // branch_state is shared with the whole suite: remove this run's
+        // parent (children are already gone — accepted ones deleted,
+        // rejected ones rolled back).
+        store
+            .ysql_client
+            .execute(&delete_sql, &[&parent_key])
+            .await
+            .unwrap();
     }
 
     /// Randomized model check of the trim, fixed seeds (reproducible).

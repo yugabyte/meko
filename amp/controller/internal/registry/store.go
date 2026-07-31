@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/yugabyte/amp/controller/internal/db"
 )
 
@@ -15,6 +18,9 @@ var (
 	ErrNotFound = errors.New("registry: not found")
 	// ErrConflict is returned when a request collides with existing state.
 	ErrConflict = errors.New("registry: conflict")
+	// ErrInvalid is returned when a request is semantically invalid
+	// against current state. Retrying the same request cannot succeed.
+	ErrInvalid = errors.New("registry: invalid request")
 )
 
 // Store persists the storage-layer control state (the branch and endpoint
@@ -153,7 +159,31 @@ func (s *Store) BranchDrop(ctx context.Context, branchID string) error {
 // one still becomes visible to ListBranches instead of reporting success and
 // staying invisible. The `pg_version IS NULL` guard keeps a genuine re-record a
 // no-op, so an existing record is never rewritten.
+//
+// A fork (AncestorBranchID set) is additionally validated against the
+// ancestor's GC cutoff — ErrInvalid if the fork point's history is already
+// reclaimed — via a write on the ancestor's row that serializes with the
+// ancestor's GC cutoff advance (see the interlock comment in the body).
 func (s *Store) RecordBranch(ctx context.Context, branchID string, req BranchCreateRecord) error {
+	err := s.recordBranch(ctx, branchID, req)
+	// The fork interlock write-conflicts with the ancestor's GC cutoff
+	// advance by design; surface the losing side legibly (409, retryable)
+	// instead of a raw serialization abort at HTTP 500.
+	if isSerializationAbort(err) {
+		return fmt.Errorf(
+			"%w: branch registration conflicted with a concurrent GC cutoff advance on the ancestor — retry: %w",
+			ErrConflict, err)
+	}
+	return err
+}
+
+// isSerializationAbort reports SQLSTATE 40001 (serialization_failure).
+func isSerializationAbort(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "40001"
+}
+
+func (s *Store) recordBranch(ctx context.Context, branchID string, req BranchCreateRecord) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin record branch: %w", err)
@@ -193,13 +223,65 @@ func (s *Store) RecordBranch(ctx context.Context, branchID string, req BranchCre
 	if req.AncestorBranchID != nil {
 		ancestorLSN = &req.StartLSN
 	}
-	if _, err := tx.Exec(ctx,
+	stateRow, err := tx.Exec(ctx,
 		`INSERT INTO amp_storage.branch_state
 		   (branch_id, pg_version, ancestor_branch_id, ancestor_lsn)
 		 VALUES ($1, $2, $3, ($4::pg_lsn - '0/0'::pg_lsn)::bigint)
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		branchID, pgVersion, req.AncestorBranchID, ancestorLSN); err != nil {
+		branchID, pgVersion, req.AncestorBranchID, ancestorLSN)
+	if err != nil {
 		return fmt.Errorf("record branch state: %w", err)
+	}
+
+	// There is a race between forking a child off the ancestor and the
+	// ancestor's GC advancing its cutoff (time increases downwards):
+	//
+	//   initial state: cutoff = 100
+	//
+	//   fork child @110                    GC on the ancestor
+	//   ───────────────                    ──────────────────
+	//   validate: cutoff = 100 ✓
+	//                                      compute cutoff = 120;
+	//                                      sees no child row
+	//                                      (not committed yet)
+	//   commit child row
+	//                                      publish 120, trim ≤ 120
+	//   child's fork point is gone ✗
+	//
+	// It is handled by making the fork perform a dummy UPDATE on the
+	// ancestor's branch_state row, in the same transaction as the child
+	// row INSERT: the fork and the cutoff advance both write the same row
+	// and hence are serialized. The WHERE is the validation, evaluated
+	// inside that serialized statement. Gated on the child row being
+	// NEWLY inserted: a re-record must stay a no-op even after the cutoff
+	// advances. Mirrored by `fork_txn` in
+	// compute/pageserver/src/page_store.rs (tests) — keep in lockstep.
+	if req.AncestorBranchID != nil && stateRow.RowsAffected() == 1 {
+		touched, err := tx.Exec(ctx,
+			`UPDATE amp_storage.branch_state
+			    SET applied_gc_cutoff_lsn = applied_gc_cutoff_lsn
+			  WHERE branch_id = $1
+			    AND COALESCE(applied_gc_cutoff_lsn, 0) <= ($2::pg_lsn - '0/0'::pg_lsn)::bigint`,
+			*req.AncestorBranchID, req.StartLSN)
+		if err != nil {
+			return fmt.Errorf("validate fork point: %w", err)
+		}
+		if touched.RowsAffected() == 0 {
+			// Rolled back with the txn: the child row above never lands.
+			var exists bool
+			err := tx.QueryRow(ctx,
+				`SELECT true FROM amp_storage.branch_state WHERE branch_id = $1`,
+				*req.AncestorBranchID).Scan(&exists)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("%w: fork ancestor %s has no branch_state row",
+					ErrNotFound, *req.AncestorBranchID)
+			}
+			if err != nil {
+				return fmt.Errorf("probe fork ancestor %s: %w", *req.AncestorBranchID, err)
+			}
+			return fmt.Errorf("%w: fork point %s is below ancestor %s's GC cutoff (history already reclaimed)",
+				ErrInvalid, req.StartLSN, *req.AncestorBranchID)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

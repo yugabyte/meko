@@ -505,6 +505,81 @@ impl Cluster {
         Ok(branch)
     }
 
+    /// Create a named ROOT branch (no ancestor) and return its id. For
+    /// scenarios that need their own ancestor to fork from: children of
+    /// the shared `main` pin its GC cutoff for the rest of the suite run
+    /// (a dropped child's `branch_state` row keeps pinning), so a
+    /// cutoff-sensitive scenario cannot use `main`.
+    pub fn branch_create_root_named(&self, name: &str) -> anyhow::Result<String> {
+        let out = self
+            .yb_command()
+            .args([
+                "branch",
+                "create",
+                "--branch-name",
+                name,
+                "--pg-version",
+                "18",
+            ])
+            .output()
+            .context("spawning yb_amp_local branch create")?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let branch = text
+            .lines()
+            .find(|l| l.contains("successfully created"))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .unwrap_or("")
+            .to_string();
+        if branch.is_empty() {
+            bail!("branch create --branch-name {name} produced no id:\n{text}");
+        }
+        Ok(branch)
+    }
+
+    /// Like [`Self::branch_create_named`] but forks at an explicit
+    /// ancestor LSN and never bails on rejection: returns the created
+    /// branch id (if any) plus the CLI's combined output, so scenarios
+    /// can assert both the accept and the reject direction of the fork
+    /// validation.
+    pub fn branch_create_at(
+        &self,
+        name: &str,
+        ancestor: &str,
+        start_lsn: &str,
+    ) -> anyhow::Result<(Option<String>, String)> {
+        let out = self
+            .yb_command()
+            .args([
+                "branch",
+                "create",
+                "--branch-name",
+                name,
+                "--ancestor-branch-name",
+                ancestor,
+                "--ancestor-start-lsn",
+                start_lsn,
+                "--pg-version",
+                "18",
+            ])
+            .output()
+            .context("spawning yb_amp_local branch create")?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let branch = text
+            .lines()
+            .find(|l| l.contains("successfully created"))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .map(str::to_string);
+        Ok((branch, text))
+    }
+
     /// Create a named child branch off `ancestor` and return its branch
     /// id (parsed from the "branch <id> successfully created" line). Like
     /// [`Self::branch_create`] but names the branch and its ancestor, which

@@ -74,7 +74,7 @@ impl Timeline {
         // `TenantSharedResources::gc_page_store`).
         let store = self.gc_drain.page_store.clone();
 
-        let cutoff = self.compute_gc_cutoff(&store).await?;
+        let cutoff = self.compute_gc_cutoff();
         let applied_cutoff = self.publish_and_await_readers(&store, cutoff).await?;
         self.drain_due_candidates(&store, applied_cutoff, &mut result)
             .await?;
@@ -82,14 +82,12 @@ impl Timeline {
     }
 
     /// This drain's target cutoff: the min over the retention floor,
-    /// live leases, child fork points (from timeline_state — children
-    /// are other processes), and consistent_lsn (post-crash replay
-    /// reads below it; the cutoff must never pass it), then floored at
-    /// our own fork point.
-    async fn compute_gc_cutoff(
-        &self,
-        store: &Arc<crate::page_store::PageStore>,
-    ) -> Result<Lsn, GcError> {
+    /// live leases, and consistent_lsn (post-crash replay reads below
+    /// it; the cutoff must never pass it), then floored at our own fork
+    /// point. Child fork points are deliberately absent — their pin is
+    /// the clamp inside
+    /// [`crate::page_store::PageStore::publish_gc_cutoff`].
+    fn compute_gc_cutoff(&self) -> Lsn {
         let (retention_min, lease_min) = {
             let gc_info = self.gc_info.read().unwrap();
             let now = SystemTime::now();
@@ -101,20 +99,12 @@ impl Timeline {
                 .next();
             (gc_info.min_cutoff(), lease_min)
         };
-        let children_min = store
-            .min_children_fork_lsn(self.branch_id)
-            .await
-            .map_err(GcError::Persistence)?;
         let mut cutoff = retention_min;
         if let Some(lease) = lease_min {
             cutoff = cutoff.min(lease);
         }
-        if let Some(child) = children_min {
-            cutoff = cutoff.min(child);
-        }
         cutoff = cutoff.min(self.get_consistent_lsn());
-        cutoff = cutoff.max(self.get_ancestor_lsn());
-        Ok(cutoff)
+        cutoff.max(self.get_ancestor_lsn())
     }
 
     /// Publish `cutoff` (generation-fenced, monotone), then advance the

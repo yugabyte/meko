@@ -315,11 +315,12 @@ pub(crate) struct GcInfo {
     /// explicit user-defined snapshot points.
     ///
     /// TODO(cleanup): vestigial in yb-amp — child fork points are
-    /// protected by the drain's `min_children_fork_lsn` (from YB
-    /// `timeline_state`); `refresh_gc_info` zeroes this and the cutoff
-    /// (`min_cutoff`) never reads it. The `insert_child` /
-    /// `remove_child_not_offloaded` machinery can go once no other
-    /// consumer remains.
+    /// protected by the clamp inside `publish_gc_cutoff` (min
+    /// `ancestor_lsn` over every child row still present in YB
+    /// `branch_state`); `refresh_gc_info`
+    /// zeroes this and the cutoff (`min_cutoff`) never reads it. The
+    /// `insert_child` / `remove_child_not_offloaded` machinery can go
+    /// once no other consumer remains.
     pub(crate) retain_lsns: Vec<(Lsn, BranchId)>,
 
     /// The cutoff coordinates, which are combined by selecting the minimum.

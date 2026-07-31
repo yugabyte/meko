@@ -253,7 +253,10 @@ Deploy/retire converge on retry rather than duplicating or wedging:
 - `helm uninstall --ignore-not-found` tolerates an already-gone release (helm ≥ 3.13).
 - `DeleteEndpoint` is `DELETE … WHERE id = $1` (absent row = no-op).
 - `RecordBranch` is idempotent: it fills a branch's creation group once and
-  leaves an existing record untouched.
+  leaves an existing record untouched. A *newly registered* fork is also
+  validated against the ancestor's GC cutoff (below it → 400, the insert
+  rolls back); a re-record skips that check, so a retry after the cutoff
+  advanced stays a no-op success.
 
 ## Configuration (§9)
 

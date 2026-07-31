@@ -124,17 +124,33 @@ base re-covers it.
 Each `gc_period` tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`)
 runs:
 
-1. **Cutoff.** Compute `min(retention window, child fork points,
-   live leases, consistent_lsn)`, floored at the branch's own ancestor
-   LSN. Persist `applied_gc_cutoff_lsn = max(old, new)` to
-   `branch_state` (generation-fenced, monotone), then publish it to the
-   in-memory `Rcu<Lsn>`.
+1. **Cutoff.** Compute `min(retention window, live leases,
+   consistent_lsn)`, floored at the branch's own ancestor LSN. Persist
+   `applied_gc_cutoff_lsn = max(old, new)` to `branch_state`
+   (generation-fenced, monotone), then publish it to the in-memory
+   `Rcu<Lsn>`.
 
-   A deleted child can still be read until branch-deletion GC cleans it
-   up, and that cleanup ends by removing its `branch_state` row — so
-   child fork points count every row still present, `deleted_at` set or
-   not (TODO: during deleted-branch GC, drop the branch's `branch_state`
-   row as the last step).
+   **Child fork points** pin the cutoff too, but they are folded in only
+   *inside the persist UPDATE itself*, which clamps to `min(ancestor_lsn)`
+   over every child row still present. A deleted child can still be read
+   until branch-deletion GC cleans it up (for instance, to restore it
+   within the PITR interval); only removing its `branch_state` row —
+   that GC's last step (no such flow yet — see
+   [#362](https://github.com/yugabyte/amp/issues/362)) — releases the
+   pin.
+   Reading the child min separately (a pre-read folded into the computed
+   min) would be the fork ↔ cutoff race: a fork committing between the
+   read and the write gets cut past.
+   Instead the two sides interlock on the parent's `branch_state` row —
+   fork registration (controller `RecordBranch`) inserts the child row
+   and, in the same transaction, runs a conditional write on the parent's
+   row (`WHERE applied_gc_cutoff_lsn <= fork_lsn`, self-assignment SET).
+   Both sides write the parent row, so they serialize instead of
+   write-skewing: fork-first ⇒ the publish's clamp sees the child and
+   holds at its fork point; publish-first ⇒ the fork's condition sees the
+   advanced cutoff and the registration rolls back (rejected). A plain
+   read on either side would not conflict and both could commit on stale
+   views of each other.
 2. **Await readers.** Wait out in-flight reads still holding a guard on
    the *old* cutoff before deleting anything they might need. Reads never
    wait for GC; GC waits for reads.

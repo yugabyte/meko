@@ -70,13 +70,18 @@ func branchCreateRoot(ctx context.Context, env *config.LocalEnv, args BranchCrea
 		pgVersion = config.DefaultPgVersion
 	}
 
+	name := args.BranchName
+	if name == "" {
+		name = DefaultBranchName
+	}
+
 	base, err := controllerBase(env)
 	if err != nil {
 		return err
 	}
 	ctrl := client.NewController(base, httpClient())
 	if err := ctrl.RecordBranch(ctx, branchID, registry.BranchCreateRecord{
-		BranchName: DefaultBranchName,
+		BranchName: name,
 		PgVersion:  pgVersion,
 		StartLSN:   "0/0",
 	}); err != nil {

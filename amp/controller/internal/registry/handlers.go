@@ -117,6 +117,8 @@ func mapErr(err error) error {
 		return echo.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrConflict):
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
+	case errors.Is(err, ErrInvalid):
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	default:
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
