@@ -218,6 +218,13 @@ func run() error {
 	awsMarketplaceWelcomeURL := flag.String("aws-marketplace-welcome-url",
 		os.Getenv("AWS_MARKETPLACE_WELCOME_URL"),
 		"URL to redirect the buyer to after a successful fulfillment (e.g. https://app.meko.io/marketplace/welcome).")
+	// Cross-account: set when the AWS account that owns the Marketplace
+	// listing (seller) is different from the account this api_server runs
+	// in (app). Format: arn:aws:iam::<seller-account-id>:role/<role-name>.
+	// Empty for single-account deployments.
+	awsMarketplaceRoleARN := flag.String("aws-marketplace-role-arn",
+		os.Getenv("AWS_MARKETPLACE_ROLE_ARN"),
+		"Cross-account IAM role ARN in the Marketplace seller account (STS:AssumeRole target for ResolveCustomer + GetEntitlements). Empty = use ambient AWS credentials.")
 
 	flag.Parse()
 
@@ -412,6 +419,7 @@ func run() error {
 		AWSMarketplaceProductCode: *awsMarketplaceProductCode,
 		AWSMarketplaceRegion:      *awsMarketplaceRegion,
 		AWSMarketplaceWelcomeURL:  *awsMarketplaceWelcomeURL,
+		AWSMarketplaceRoleARN:     *awsMarketplaceRoleARN,
 	})
 }
 

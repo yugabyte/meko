@@ -236,6 +236,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		service.MarketplaceConfig{
 			ProductCode: cfg.AWSMarketplaceProductCode,
 			Region:      cfg.AWSMarketplaceRegion,
+			RoleARN:     cfg.AWSMarketplaceRoleARN,
 		},
 		marketplaceRepo,
 		billingRepo,

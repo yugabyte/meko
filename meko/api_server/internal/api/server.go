@@ -105,6 +105,11 @@ type ServerConfig struct {
 	AWSMarketplaceProductCode string
 	AWSMarketplaceRegion      string
 	AWSMarketplaceWelcomeURL  string
+	// AWSMarketplaceRoleARN (optional): when set, api_server assumes this
+	// role in the seller account before calling ResolveCustomer /
+	// GetEntitlements. Needed when the app pod's AWS account is not the
+	// Marketplace seller account. Empty for single-account deployments.
+	AWSMarketplaceRoleARN string
 	// MCPPATFlushInterval controls how often the background
 	// goroutine drains the in-memory last_used_at touch map onto the
 	// database. Zero (the default) falls back to

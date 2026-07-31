@@ -24,10 +24,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsCfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/marketplaceentitlementservice"
 	entTypes "github.com/aws/aws-sdk-go-v2/service/marketplaceentitlementservice/types"
 	"github.com/aws/aws-sdk-go-v2/service/marketplacemetering"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"meko/api_server/internal/repository"
 )
@@ -44,6 +47,23 @@ type MarketplaceConfig struct {
 	// AWS SDK region. Marketplace APIs are only served from us-east-1
 	// today, regardless of where your app runs. Leave empty to default.
 	Region string
+
+	// RoleARN (optional) — when the AWS account that owns the
+	// Marketplace product listing (the "seller" account) is DIFFERENT
+	// from the account api_server runs in (the "app" account), point
+	// this at a cross-account role in the seller account. api_server
+	// will STS:AssumeRole into that role before making any
+	// ResolveCustomer / GetEntitlements call, so those calls carry the
+	// seller's authority (which is what AWS Marketplace checks for
+	// authorization).
+	//
+	// Set via AWS_MARKETPLACE_ROLE_ARN. Format:
+	//   arn:aws:iam::<seller-account-id>:role/<role-name>
+	//
+	// Leave empty for single-account deployments where the app account
+	// is also the seller — the SDK's ambient credentials work
+	// unmodified in that case.
+	RoleARN string
 }
 
 // Marketplace-side status values we care about. We stash them as
@@ -87,14 +107,38 @@ func NewMarketplaceService(
 	if err != nil {
 		return nil, fmt.Errorf("marketplace: load aws config: %w", err)
 	}
+
+	// Cross-account: when RoleARN is set, wrap the ambient config with
+	// an STS AssumeRole credentials provider. Marketplace API calls
+	// (ResolveCustomer / GetEntitlements) then run under the seller
+	// account's authority instead of the app pod's. All OTHER AWS SDK
+	// callers in api_server keep using ambient creds -- we only rewrap
+	// the config the marketplace clients are constructed from.
+	marketplaceCfg := awsConf
+	if cfg.RoleARN != "" {
+		stsClient := sts.NewFromConfig(awsConf)
+		provider := stscreds.NewAssumeRoleProvider(stsClient, cfg.RoleARN, func(o *stscreds.AssumeRoleOptions) {
+			// Human-readable name that shows up in CloudTrail on the
+			// seller account, making cross-account calls easy to trace.
+			o.RoleSessionName = "meko-api-server-marketplace"
+		})
+		marketplaceCfg = awsConf.Copy()
+		marketplaceCfg.Credentials = aws.NewCredentialsCache(provider)
+		slog.Info("marketplace: cross-account role configured", "role_arn", cfg.RoleARN)
+	}
+
 	svc := &MarketplaceService{
 		cfg:            cfg,
 		repo:           repo,
 		billingRepo:    billingRepo,
-		meteringClient: marketplacemetering.NewFromConfig(awsConf),
-		entitlementCli: marketplaceentitlementservice.NewFromConfig(awsConf),
+		meteringClient: marketplacemetering.NewFromConfig(marketplaceCfg),
+		entitlementCli: marketplaceentitlementservice.NewFromConfig(marketplaceCfg),
 	}
-	slog.Info("marketplace: initialized", "product_code", cfg.ProductCode, "region", region)
+	slog.Info("marketplace: initialized",
+		"product_code", cfg.ProductCode,
+		"region", region,
+		"cross_account", cfg.RoleARN != "",
+	)
 	return svc, nil
 }
 
