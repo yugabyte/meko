@@ -7,18 +7,27 @@ so **the guide you need is the one covering the tree you are editing**:
 
 | Editing | Read |
 |---|---|
+| `amp/**` | [`amp/AGENTS.md`](amp/AGENTS.md) — AMP's own layout, build and test commands |
 | `meko/**` | [`meko/AGENTS.md`](meko/AGENTS.md) — layout, build/run/test/lint commands, architecture notes, per-component guides |
 | `ycp/**` | this file, plus [`ycp/ARCHITECTURE.md`](ycp/ARCHITECTURE.md) and [`ycp/DEPLOY.md`](ycp/DEPLOY.md) |
-
-`amp/` will join as a sibling tree with its own guide; see
-[#393](https://github.com/yugabyte/meko/issues/393).
 
 ## Reading paths in this repo
 
 Paths in root-level files — this one, and everything in `.claude/skills/` — are
-relative to the **repository root**, so they carry the `meko/` prefix. Commands quoted
-inside `meko/AGENTS.md` are relative to `meko/`, which is where that file lives. Both
-are correct; check which altitude you are reading before copying a path.
+relative to the **repository root**, so they carry the `meko/` or `amp/` prefix. Commands
+quoted inside `meko/AGENTS.md` or `amp/AGENTS.md` are relative to that file's own
+directory. Both are correct; check which altitude you are reading before copying a path.
+
+## Required one-time git config
+
+```bash
+git config log.follow true
+```
+
+Both trees were moved into subdirectories by rename commits, and `git log` does no
+rename detection without this. **Don't conclude a file has no history from a short
+`git log`** — check the config first. `git blame` is unaffected. Directory-level log
+can't be recovered; use a file, or an old SHA (all pre-move SHAs still resolve).
 
 ## `ycp/` — shared, top-level
 
