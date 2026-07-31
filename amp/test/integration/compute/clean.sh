@@ -25,7 +25,10 @@
 
 set -uo pipefail
 
-REPO=$(git rev-parse --show-toplevel)
+# The amp tree root. Derived from this script's own location rather than
+# `git rev-parse --show-toplevel`, which returns the repository root — not the
+# same directory once amp/ is a subdirectory of a larger repo.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 YB_AMP_REPO_DIR=${YB_AMP_REPO_DIR:-$REPO/.integration-tests}
 YB_HOST=${YB_HOST:-127.0.0.1}

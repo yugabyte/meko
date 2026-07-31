@@ -953,14 +953,14 @@ orchestration below is deliberately thin. Two CI lanes, split by weight:
   stress / perf / long-running — anything needing real k8s stacks, big quotas,
   and hours of wall-clock.
 
-**Wired today (GitHub Actions).** `pr-build.yml` builds/lints/unit-tests compute
+**Wired today (GitHub Actions).** `amp-pr-build.yml` builds/lints/unit-tests compute
 (Rust) and controller (Go) and publishes JUnit test reports; a **compute
 integration** job runs the custom harness `test/integration/compute/run.sh`
 against a YugabyteDB container (live-DB unit tests + the fast scenario suite,
 each scenario emitting a PASS/FAIL line), and helm-unittest guards the charts.
-The slow scenario suite is on-demand via `/ci integration_slow` (from the PR
-body) and also runs **daily** on `main` via `on-demand-checks.yml`'s `schedule`
-cron. `control-plane-gke.yml` exercises the control plane on GKE.
+The slow scenario suite is on-demand via `/ci amp_integration_slow` (from the PR
+body) and also runs **daily** on `main` via `amp-on-demand-checks.yml`'s `schedule`
+cron. `amp-control-plane-gke.yml` exercises the control plane on GKE.
 
 **Releases are tag-driven and fully automatic** (no version workflow in this
 repo — the old `version-bump.yml` was removed): the Jenkins `amp-build`

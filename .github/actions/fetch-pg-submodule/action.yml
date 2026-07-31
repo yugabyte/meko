@@ -1,4 +1,4 @@
-# compute/vendor/postgres-v18 resolves to yugabyte/amp-postgres (internal),
+# amp/compute/vendor/postgres-v18 resolves to yugabyte/amp-postgres (internal),
 # which the repo-scoped default GITHUB_TOKEN cannot read. This action mints a
 # short-lived, read-only installation token for that repo alone from the
 # yb-agentk-dev GitHub App (App ID 3784852; private key in the AGENTK_PRIVATE_KEY
@@ -7,7 +7,7 @@
 # personal PAT keeps CI working regardless of any individual's org membership.
 name: Fetch amp-postgres submodule
 description: >-
-  Fetch the internal compute/vendor/postgres-v18 (yugabyte/amp-postgres)
+  Fetch the internal amp/compute/vendor/postgres-v18 (yugabyte/amp-postgres)
   submodule using a short-lived amp-postgres App token, retrying to ride out
   token-propagation 404s. Requires the repo to be checked out first.
 

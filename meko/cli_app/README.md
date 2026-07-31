@@ -188,7 +188,7 @@ The CLI release pipeline is fully automated via
 ### How it works
 
 1. A developer pushes a version tag.
-2. The GitHub Actions workflow (`.github/workflows/release.yml`) triggers.
+2. The GitHub Actions workflow (`.github/workflows/meko-release.yml`) triggers.
 3. GoReleaser cross-compiles the CLI for macOS and Linux (amd64 + arm64).
 4. Archives (`.tar.gz`) and a SHA256 checksum file are uploaded to a new
    GitHub Release.
@@ -218,7 +218,7 @@ During local development, `meko --version` shows `dev`.
 | File | Purpose |
 |------|---------|
 | `.goreleaser.yml` | GoReleaser config: build targets, archive format, release settings |
-| `.github/workflows/release.yml` | GitHub Actions workflow triggered on `v*` tags |
+| `.github/workflows/meko-release.yml` | GitHub Actions workflow triggered on `v*` tags |
 
 ### Testing the release locally
 

@@ -1,36 +1,37 @@
 # Validate + build the amp MCP Agent Skill bundle. Build-only: no secrets, no
 # external publish (that step is infra-gated — see controller/mcp/skills/README.md).
-name: amp-mcp-skills
+name: Amp MCP skills
 
 on:
   push:
     paths:
-      - "controller/mcp/skills/**"
-      - ".claude-plugin/marketplace.json"
+      - "amp/controller/mcp/skills/**"
+      - "amp/.claude-plugin/marketplace.json"
       - ".github/workflows/amp-mcp-skills.yml"
   pull_request:
     paths:
-      - "controller/mcp/skills/**"
-      - ".claude-plugin/marketplace.json"
+      - "amp/controller/mcp/skills/**"
+      - "amp/.claude-plugin/marketplace.json"
       - ".github/workflows/amp-mcp-skills.yml"
   workflow_dispatch: {}
 
 jobs:
   build:
+    name: Amp MCP skills — validate & build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Validate marketplace.json
         run: |
-          python3 -c "import json,sys; json.load(open('.claude-plugin/marketplace.json')); print('marketplace.json OK')"
+          python3 -c "import json,sys; json.load(open('amp/.claude-plugin/marketplace.json')); print('marketplace.json OK')"
 
       - name: Build skill bundle
-        run: bash controller/mcp/skills/scripts/package-skill.sh
+        run: bash amp/controller/mcp/skills/scripts/package-skill.sh
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
         with:
           name: amp-mcp-skills
-          path: controller/mcp/skills/*.skill
+          path: amp/controller/mcp/skills/*.skill
           if-no-files-found: error

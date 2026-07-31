@@ -52,7 +52,10 @@ diffs remain un-allowlisted).
 EOF
 }
 
-REPO=$(git rev-parse --show-toplevel)
+# The amp tree root. Derived from this script's own location rather than
+# `git rev-parse --show-toplevel`, which returns the repository root — not the
+# same directory once amp/ is a subdirectory of a larger repo.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO"
 
 PROFILE=release

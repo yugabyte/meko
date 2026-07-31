@@ -44,6 +44,16 @@ from pathlib import Path
 # matter where it's invoked from.
 ROOT = Path(__file__).resolve().parent.parent
 SUBMODULE = "compute/vendor/postgres-v18"
+
+
+def submodule_in_tree():
+    """SUBMODULE as git's object tree records it, i.e. relative to the repo root.
+
+    git submodule pathspecs and `git -C` are relative to the cwd, but `HEAD:<path>`
+    never is. When the amp tree is a subdirectory of a larger repo the two differ, so
+    ask git for the prefix rather than assuming either layout.
+    """
+    return (git_out("rev-parse", "--show-prefix") or "") + SUBMODULE
 PG_VERSION = "v18"
 PG_INSTALL = ROOT / "pg_install" / PG_VERSION
 BUILD_DIR = ROOT / "build"
@@ -141,13 +151,14 @@ def sync_submodule_if_needed():
     old headers), so a header change like FMGR_ABI_EXTRA would otherwise ship a
     stale ABI to every extension.
     """
-    want = git_out("rev-parse", f"HEAD:{SUBMODULE}")
+    want = git_out("rev-parse", f"HEAD:{submodule_in_tree()}")
     have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
     pg_built = (PG_INSTALL / "bin" / "postgres").is_file()
 
     if want != have:
         where = have[:12] if have else "absent"
-        say(f"{SUBMODULE} gitlink ({want[:12]}) != working tree ({where})")
+        gitlink = want[:12] if want else "unresolved"
+        say(f"{SUBMODULE} gitlink ({gitlink}) != working tree ({where})")
         say("Syncing submodule and rebuilding PostgreSQL from source...")
         run(["git", "submodule", "update", "--init", "--recursive", "--", SUBMODULE])
         return True

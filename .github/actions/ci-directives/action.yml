@@ -25,7 +25,7 @@ inputs:
   suites:
     description: >-
       JSON array of the directive tokens this workflow owns, e.g.
-      ["integration_slow", "generate_image"]. Each becomes a boolean on `decided`.
+      ["amp_integration_slow", "amp_generate_image"]. Each becomes a boolean on `decided`.
     required: true
   auto-paths:
     description: >-

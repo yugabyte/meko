@@ -1,7 +1,7 @@
-name: control-plane GKE (itest-dev)
+name: Amp control-plane GKE (itest-dev)
 
 # Deploys the amp control plane to the GKE cluster itest-dev and runs the
-# deployment smoke test against it (deploy/smoke-test.sh) — the "k8s" half of the
+# deployment smoke test against it (amp/deploy/smoke-test.sh) — the "k8s" half of the
 # control-plane deploy integration, complementing the docker-driver e2e in
 # test/e2e/control_plane.
 #
@@ -11,7 +11,7 @@ name: control-plane GKE (itest-dev)
 #             registry layer cache (:buildcache) so unchanged inputs finish in
 #             minutes; controller/ui/mcp are cheap and built every run.
 #   deploy  — authenticate to itest-dev with a static kubeconfig, mint the Quay
-#             pull secret in a per-PR namespace, deploy via deploy/up-gke.sh, run
+#             pull secret in a per-PR namespace, deploy via amp/deploy/up-gke.sh, run
 #             the smoke test, then always tear the namespace down.
 #
 # Placement — this is expensive (a ~30-min cold endpoint build + a live GKE
@@ -19,13 +19,13 @@ name: control-plane GKE (itest-dev)
 #   * nightly on main (schedule) — against the default-branch head. Same 07:17 UTC
 #     slot as the slow integration suite (on-demand-checks.yml);
 #   * on manual dispatch (workflow_dispatch);
-#   * on a PR that opts in with a `/ci deploy_gke` line in the PR description.
+#   * on a PR that opts in with a `/ci amp_deploy_gke` line in the PR description.
 #     The rule is literally the same code on-demand-checks.yml runs —
 #     .github/actions/ci-directives, see docs/ci-directives.md: the line deploys on
 #     each new commit while it is present. Adding it to a PR already up needs a
 #     commit to fire — an empty one is enough.
 # It touches the itest cluster and needs org secrets (KUBECONFIG_ITEST_DEV,
-# QUAY_TOKEN), so fork PRs (which get no secrets) are always skipped.
+# QUAY_AMP_TOKEN), so fork PRs (which get no secrets) are always skipped.
 # Stale ci-pr-* namespaces are swept by control-plane-gke-cleanup.yml.
 #
 # SECURITY: the PR body is untrusted. It is read only inside that action's
@@ -39,7 +39,7 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [main]
-    # No paths filter: the `/ci deploy_gke` directive in the body (resolved by the
+    # No paths filter: the `/ci amp_deploy_gke` directive in the body (resolved by the
     # decide job) is the switch. `synchronize` re-runs a PR that already carries it.
     # `edited` is deliberately absent — see the note in on-demand-checks.yml: an
     # edit that adds nothing still emits skipped check runs that mask a live suite
@@ -62,7 +62,7 @@ env:
 
 jobs:
   decide:
-    name: Decide whether to deploy to GKE
+    name: Amp GKE — decide whether to deploy
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -76,18 +76,18 @@ jobs:
       - id: gate
         uses: ./.github/actions/ci-directives
         with:
-          suites: '["deploy_gke"]'
+          suites: '["amp_deploy_gke"]'
           # A manual dispatch means "deploy now", so it skips the body entirely.
           unconditional-events: schedule workflow_dispatch
 
   images:
-    name: Build + push images (Quay)
+    name: Amp GKE — build + push images (Quay)
     needs: decide
-    # Nightly, manual, or a same-repo PR whose body carries `/ci deploy_gke`.
+    # Nightly, manual, or a same-repo PR whose body carries `/ci amp_deploy_gke`.
     # The head-repo check excludes fork PRs (they get no secrets); non-PR events
     # (schedule / dispatch) pass it trivially.
     if: >-
-      fromJSON(needs.decide.outputs.suites).deploy_gke &&
+      fromJSON(needs.decide.outputs.suites).amp_deploy_gke &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -121,12 +121,12 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      # Quay auth for `docker push`. QUAY_TOKEN is a "robot-user:token" pair; split
+      # Quay auth for `docker push`. QUAY_AMP_TOKEN is a "robot-user:token" pair; split
       # on the first colon and log in. The same secret builds the in-cluster pull
-      # secret in the deploy job (its .dockerconfigjson auth is base64(QUAY_TOKEN)).
+      # secret in the deploy job (its .dockerconfigjson auth is base64(QUAY_AMP_TOKEN)).
       - name: Quay login
         env:
-          QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
         run: echo "${QUAY_TOKEN#*:}" | docker login quay.io -u "${QUAY_TOKEN%%:*}" --password-stdin
 
       # The deploy tag is a custom-<short-sha> tag (the amp custom-build
@@ -145,7 +145,7 @@ jobs:
       - name: Endpoint image
         run: |
           EP="$QUAY_NS/amp-endpoint"
-          docker buildx build --push -f deploy/endpoint/Dockerfile . \
+          docker buildx build --push -f amp/deploy/endpoint/Dockerfile amp \
             -t "$EP:${{ steps.tag.outputs.tag }}" \
             --cache-from type=registry,ref="$EP:buildcache" \
             --cache-to   type=registry,ref="$EP:buildcache",mode=max
@@ -155,27 +155,27 @@ jobs:
       # bundle-only image is what up-gke.sh's chart expects with SC managed).
       - uses: actions/setup-go@v7
         with:
-          go-version-file: controller/go.mod
-          cache-dependency-path: controller/go.sum
+          go-version-file: amp/controller/go.mod
+          cache-dependency-path: amp/controller/go.sum
 
       - name: Controller image
         run: |
-          make controller-bundle-only
-          docker buildx build --push -f deploy/controller/Dockerfile . \
+          make -C amp controller-bundle-only
+          docker buildx build --push -f amp/deploy/controller/Dockerfile amp \
             -t "$QUAY_NS/amp-controller:${{ steps.tag.outputs.tag }}"
 
       - name: UI image
         run: |
           docker buildx build --push \
-            -t "$QUAY_NS/amp-controller-ui:${{ steps.tag.outputs.tag }}" amp_ui
+            -t "$QUAY_NS/amp-controller-ui:${{ steps.tag.outputs.tag }}" amp/amp_ui
 
       - name: MCP image
         run: |
-          docker buildx build --push -f controller/mcp/Dockerfile \
-            -t "$QUAY_NS/amp-mcp:${{ steps.tag.outputs.tag }}" controller/mcp
+          docker buildx build --push -f amp/controller/mcp/Dockerfile \
+            -t "$QUAY_NS/amp-mcp:${{ steps.tag.outputs.tag }}" amp/controller/mcp
 
   deploy:
-    name: Deploy to itest-dev + smoke test
+    name: Amp GKE — deploy to itest-dev + smoke test
     needs: images
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -191,7 +191,7 @@ jobs:
 
       # Static kubeconfig for itest-dev (a ServiceAccount-token kubeconfig, base64
       # in the secret) — no GCP auth / gke-gcloud-auth-plugin needed. See
-      # deploy/README.md "Running in CI (itest-dev)" for how to mint it.
+      # amp/deploy/README.md "Running in CI (itest-dev)" for how to mint it.
       - name: Write kubeconfig
         run: |
           mkdir -p "$HOME/.kube"
@@ -210,12 +210,12 @@ jobs:
       # yb_storage, and helm-installs the controller/MCP/UI from the Quay images.
       # CLUSTER is empty → it uses the kubeconfig written above.
       #
-      # The pull secret carries the same QUAY_TOKEN robot creds used to push: a
+      # The pull secret carries the same QUAY_AMP_TOKEN robot creds used to push: a
       # dockerconfigjson whose quay.io "auth" is base64("robot-user:token") —
-      # which is exactly base64(QUAY_TOKEN), since QUAY_TOKEN already is that pair.
-      - name: Deploy (deploy/up-gke.sh)
+      # which is exactly base64(QUAY_AMP_TOKEN), since it already is that pair.
+      - name: Deploy (amp/deploy/up-gke.sh)
         env:
-          QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
         run: |
           AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
           export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
@@ -229,10 +229,10 @@ jobs:
           PULL_SECRET="$PULL_SECRET" \
           CONTROLLER_EXPOSE=none \
           ENDPOINT_SERVICE_TYPE=ClusterIP \
-          deploy/up-gke.sh
+          amp/deploy/up-gke.sh
 
-      - name: Smoke test (deploy/smoke-test.sh)
-        run: NS="$NS" deploy/smoke-test.sh
+      - name: Smoke test (amp/deploy/smoke-test.sh)
+        run: NS="$NS" amp/deploy/smoke-test.sh
 
       - name: Dump controller/endpoint state on failure
         if: failure()

@@ -96,7 +96,7 @@ pub fn step(msg: &str) {
 pub struct Cluster {
     /// Path to the `yb_amp_local` binary.
     yb_amp: PathBuf,
-    /// Repo root (`git rev-parse --show-toplevel`).
+    /// The amp tree root (see `amp_root`).
     repo: PathBuf,
     /// `YB_AMP_REPO_DIR` — this run's on-disk cluster directory.
     repo_dir: PathBuf,
@@ -180,7 +180,7 @@ impl Cluster {
     /// `clean.sh`, `init`, `start`, then one shared tenant + `main`
     /// endpoint.
     pub async fn setup() -> anyhow::Result<Cluster> {
-        let repo = git_toplevel()?;
+        let repo = amp_root()?;
         let test_dir = env_or(
             &["TEST_DIR"],
             &repo.join(".integration-tests").to_string_lossy(),
@@ -1170,17 +1170,20 @@ impl Drop for Cluster {
 
 // ---- free helpers --------------------------------------------------
 
-fn git_toplevel() -> anyhow::Result<PathBuf> {
-    let out = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("git rev-parse --show-toplevel")?;
-    if !out.status.success() {
-        bail!("not a git repository");
-    }
-    Ok(PathBuf::from(
-        String::from_utf8_lossy(&out.stdout).trim().to_string(),
-    ))
+/// The amp tree root.
+///
+/// Resolved from this crate's manifest directory at compile time, not from
+/// `git rev-parse --show-toplevel`: once amp/ is a subdirectory of a larger
+/// repository those are different directories, and everything built from this
+/// (notably `.integration-tests`) belongs under amp/.
+fn amp_root() -> anyhow::Result<PathBuf> {
+    // <amp>/test/integration/compute -> <amp>
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .ancestors()
+        .nth(3)
+        .map(PathBuf::from)
+        .context("CARGO_MANIFEST_DIR is not <amp>/test/integration/compute")
 }
 
 fn env_or(keys: &[&str], default: &str) -> String {

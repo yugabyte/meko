@@ -41,7 +41,10 @@
 
 set -uo pipefail
 
-REPO=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+# The amp tree root. Derived from this script's own location rather than
+# `git rev-parse --show-toplevel`, which returns the repository root — not the
+# same directory once amp/ is a subdirectory of a larger repo.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd || pwd)"
 TEST_DIR="${1:-$REPO/.integration-tests}"
 SKIP_DIR="${2:-${YB_AMP_REPO_DIR:-}}"
 

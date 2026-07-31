@@ -1,4 +1,4 @@
-name: CI
+name: Meko CI
 
 # Per-component PR validation, gated on which files actually changed:
 #   meko_api_server — Go REST API: `go build` (fail fast), `go vet`,
@@ -55,16 +55,16 @@ jobs:
           filters: |
             meko_api_server:
               - 'meko/api_server/**'
-              - '.github/workflows/pr-build.yml'
+              - '.github/workflows/meko-pr-build.yml'
             meko_inference:
               - 'meko/inference_gateway/**'
-              - '.github/workflows/pr-build.yml'
+              - '.github/workflows/meko-pr-build.yml'
             meko_ui:
               - 'meko/meko_ui/**'
-              - '.github/workflows/pr-build.yml'
+              - '.github/workflows/meko-pr-build.yml'
             meko_ycp:
               - 'ycp/**'
-              - '.github/workflows/pr-build.yml'
+              - '.github/workflows/meko-pr-build.yml'
             # The e2e runs api_server --control-plane-mode, so control-plane
             # changes have to trigger it too -- otherwise the one test that covers
             # the real control plane never runs when the control plane changes.
@@ -86,7 +86,7 @@ jobs:
               - 'meko/api_server/internal/handlers/web/**'
               - 'meko/api_server/internal/db/**'
               - 'meko/api_server/internal/auth/internal_auth.go'   # RequireAdminSecret
-              - '.github/workflows/pr-build.yml'
+              - '.github/workflows/meko-pr-build.yml'
       # A change counts as "code" if at least one changed file is not a markdown
       # doc; the jobs gate on it so a docs-only PR skips build/test while a PR
       # touching both code and docs still builds.

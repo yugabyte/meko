@@ -81,6 +81,22 @@ invent a placeholder or guess a number.
 [`meko/REVIEW.md`](meko/REVIEW.md) is the per-component review guide for the meko
 tree.
 
+### On-demand CI (`/ci` directives)
+
+Some AMP suites are too heavy for every PR and are opt-in: add a `/ci <suite>` line to
+the **PR description**, before opening it — editing the description afterwards fires
+nothing.
+
+| Directive | Runs |
+|---|---|
+| `amp_integration_slow` | slow integration scenario suite. Also automatic when the diff touches `amp/test/integration/compute/slow/` |
+| `amp_generate_image` | controller container image build |
+| `amp_deploy_gke` | build + push four images to Quay, deploy to the itest-dev GKE cluster, smoke test. Also nightly on `main` |
+
+All three are `amp_`-prefixed because they belong to AMP; there is nothing equivalent for
+meko yet. Full contract, including what makes a change correctness-sensitive:
+[`amp/docs/ci-directives.md`](amp/docs/ci-directives.md).
+
 ### Agent skills (`.claude/skills/`)
 
 Pointers only; each skill is the authority on its own subject.

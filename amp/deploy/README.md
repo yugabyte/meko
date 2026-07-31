@@ -178,7 +178,7 @@ Key overrides: `REGISTRY` (base registry+path, default `gcr.io/yugabyte`), `TAG`
 
 ### Running in CI (itest-dev)
 
-The [`control-plane GKE (itest-dev)`](../.github/workflows/control-plane-gke.yml)
+The [`control-plane GKE (itest-dev)`](../../.github/workflows/amp-control-plane-gke.yml)
 workflow runs `up-gke.sh` + [`smoke-test.sh`](#smoke-test--smoke-testsh) against
 the **itest-dev** cluster — the "k8s" half of the control-plane deploy integration
 (the docker-driver half is [`test/e2e/control_plane`](../test/e2e/control_plane)).
@@ -186,7 +186,7 @@ the **itest-dev** cluster — the "k8s" half of the control-plane deploy integra
 Because a cold run is expensive (~30-min endpoint build + a live GKE deploy) it is
 **not** a per-PR check. It runs only: **nightly** on `main` (07:17 UTC, the same
 slot as the slow integration suite), on **manual dispatch**, or on a PR you
-explicitly opt in by adding a **`/ci deploy_gke`** line to the PR description — the
+explicitly opt in by adding a **`/ci amp_deploy_gke`** line to the PR description — the
 same on-demand directive mechanism the slow suite uses (see
 [`docs/ci-directives.md`](../docs/ci-directives.md)); the line re-runs the deploy on
 every push while it is present. Fork PRs are always skipped (no secrets). It:
@@ -200,7 +200,7 @@ every push while it is present. Fork PRs are always skipped (no secrets). It:
   and **always** tears the namespace down.
 
 Stale `ci-pr-*` namespaces (from a run cancelled before teardown) are swept every
-6 h by [`control-plane-gke-cleanup.yml`](../.github/workflows/control-plane-gke-cleanup.yml).
+6 h by [`amp-control-plane-gke-cleanup.yml`](../../.github/workflows/amp-control-plane-gke-cleanup.yml).
 
 Required repo secrets (both workflows):
 

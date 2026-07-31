@@ -33,7 +33,10 @@ MCP_IMAGE="${MCP_IMAGE:-amp/controller-mcp:dev}"
 YB_NAME="amp-mcp-itest-yb"
 MCP_NAME="amp-mcp-itest-srv"
 
-REPO="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+# The amp tree root. Derived from this script's own location rather than
+# `git rev-parse --show-toplevel`, which returns the repository root — not the
+# same directory once amp/ is a subdirectory of a larger repo.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 MCP_DIR="$REPO/controller/mcp"
 WORK="$(mktemp -d)"
 CONTROLLER_BIN="${CONTROLLER_BIN:-$WORK/controller}"

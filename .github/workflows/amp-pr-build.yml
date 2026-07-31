@@ -1,4 +1,4 @@
-name: CI
+name: Amp CI
 
 # Per-component PR validation, gated on which files actually changed:
 #   compute    — Rust workspace (safekeeper, pageserver, ...) + the yb_amp
@@ -12,7 +12,7 @@ name: CI
 #   integration        — `test/integration/compute/run.sh` against a YugabyteDB container:
 #                live-DB unit tests + the fast scenario suite (run.sh's default)
 #                on PRs and main pushes. The slow suite runs daily on main and
-#                on-demand via `/ci integration_slow` (see on-demand-checks.yml).
+#                on-demand via `/ci amp_integration_slow` (see on-demand-checks.yml).
 #   controller — Go controller: `go build`, `go vet`, `go test`.
 #   migrations — the controller's live-database Go tests, against a throwaway
 #                YugabyteDB: steps each migration up/down/up in turn (catching a
@@ -57,7 +57,8 @@ permissions:
   contents: read
 
 jobs:
-  changes:
+  amp_changes:
+    name: Amp CI — changes
     runs-on: ubuntu-latest
     # NB: job-level permissions REPLACE the workflow-level block, so
     # contents: read must be restated or checkout loses repo access.
@@ -87,48 +88,48 @@ jobs:
         with:
           filters: |
             compute:
-              - '**/*.rs'
-              - '**/Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
-              - 'clippy.toml'
-              - '.yb-amp_clippy_args'
-              - 'run_clippy.sh'
-              - '.config/nextest.toml'
-              - 'compute/libs/**'
-              - 'compute/pgxn/**'
-              - 'test/integration/compute/**'
+              - 'amp/**/*.rs'
+              - 'amp/**/Cargo.toml'
+              - 'amp/Cargo.lock'
+              - 'amp/rust-toolchain.toml'
+              - 'amp/clippy.toml'
+              - 'amp/.yb-amp_clippy_args'
+              - 'amp/run_clippy.sh'
+              - 'amp/.config/nextest.toml'
+              - 'amp/compute/libs/**'
+              - 'amp/compute/pgxn/**'
+              - 'amp/test/integration/compute/**'
               # The compute integration suite runs the yb_amp_local launcher.
-              - 'controller/local/**'
+              - 'amp/controller/local/**'
               # The controller migrations provision the schema the pageserver /
               # safekeeper / endpoint_storage daemons bind to, so a migration
               # change must run the integration suite.
-              - 'controller/migrations/**'
-              - 'compute/vendor/postgres-v18'
-              - 'Makefile'
-              - 'postgres.mk'
-              - 'build.sh'
-              - 'scripts/build.py'
-              - '.github/workflows/pr-build.yml'
+              - 'amp/controller/migrations/**'
+              - 'amp/compute/vendor/postgres-v18'
+              - 'amp/Makefile'
+              - 'amp/postgres.mk'
+              - 'amp/build.sh'
+              - 'amp/scripts/build.py'
+              - '.github/workflows/amp-pr-build.yml'
             controller:
-              - 'controller/**'
-              - '.github/workflows/pr-build.yml'
+              - 'amp/controller/**'
+              - '.github/workflows/amp-pr-build.yml'
             mcp:
-              - 'controller/mcp/**'
-              - '.github/workflows/pr-build.yml'
+              - 'amp/controller/mcp/**'
+              - '.github/workflows/amp-pr-build.yml'
             ui:
-              - 'amp_ui/**'
-              - '.github/workflows/pr-build.yml'
+              - 'amp/amp_ui/**'
+              - '.github/workflows/amp-pr-build.yml'
             deploy:
-              - 'deploy/**'
-              - '.github/workflows/pr-build.yml'
+              - 'amp/deploy/**'
+              - '.github/workflows/amp-pr-build.yml'
             migrations:
-              - 'controller/migrations/**'
-              - 'controller/internal/db/**'
+              - 'amp/controller/migrations/**'
+              - 'amp/controller/internal/db/**'
               # The task store's live-database tests (the resize lock) run in the
               # same job, on the same YugabyteDB container.
-              - 'controller/internal/task/**'
-              - '.github/workflows/pr-build.yml'
+              - 'amp/controller/internal/task/**'
+              - '.github/workflows/amp-pr-build.yml'
 
       # A change counts as "code" if at least one changed file is not a markdown
       # doc. dorny's default `some` quantifier OR-matches, so a bare `!**/*.md`
@@ -141,22 +142,33 @@ jobs:
           predicate-quantifier: 'every'
           filters: |
             code:
+              # Deliberately NOT scoped to amp/. The component filters above already
+              # do that, and each of them lists this workflow's own path — which sits
+              # at the repository root, outside amp/. Scoping this to amp/** would set
+              # a component true while code stayed false, silently skipping every job
+              # for a change to the pipeline that runs them.
               - '**'
               - '!**/*.md'
 
   compute:
-    name: Compute — build, lint & unit tests
-    needs: changes
-    if: needs.changes.outputs.compute == 'true' && needs.changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
+    name: Amp Compute — build, lint & unit tests
+    needs: amp_changes
+    if: needs.amp_changes.outputs.compute == 'true' && needs.amp_changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       contents: read
       checks: write # dorny/test-reporter publishes a check run
+    defaults:
+      run:
+        working-directory: amp
     steps:
       # The full PG + workspace debug build is large; drop the big
       # preinstalled toolchains we don't use to avoid running out of disk.
+      # Runs before checkout, so it must not inherit the job's working-directory:
+      # amp/ does not exist yet at this point.
       - name: Free up runner disk space
+        working-directory: ${{ github.workspace }}
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /usr/local/share/boost
@@ -185,19 +197,21 @@ jobs:
         run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: amp
 
       # scripts/build.py reuses pg_install/v18 when its .pg_commit stamp
       # matches the checked-out submodule commit, so key the cache on the
       # gitlink plus the build plumbing that shapes the install.
       - name: Compute PostgreSQL cache key
         id: pgrev
-        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+        run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PostgreSQL install
         uses: actions/cache@v6
         with:
-          path: pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+          path: amp/pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
 
       # The storage crates link the prebuilt yb_thin_client C++ shim (a public
       # per-arch download pinned to the vendored ABI); fetch it and point
@@ -236,8 +250,8 @@ jobs:
         uses: dorny/test-reporter@v3
         if: ${{ !cancelled() }}
         with:
-          name: Compute unit-test results
-          path: target/nextest/ci/junit.xml
+          name: Amp Compute unit-test results
+          path: amp/target/nextest/ci/junit.xml
           reporter: java-junit
           # v3 defaults to the Actions run summary; keep the standalone
           # per-test PR check instead.
@@ -248,22 +262,28 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: junit-compute-unit
-          path: target/nextest/ci/junit.xml
+          path: amp/target/nextest/ci/junit.xml
           retention-days: 14
 
 
   integration:
-    name: Compute — integration tests
-    needs: changes
-    if: needs.changes.outputs.compute == 'true' && needs.changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
+    name: Amp Compute — integration tests
+    needs: amp_changes
+    if: needs.amp_changes.outputs.compute == 'true' && needs.amp_changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       # Pinned to the 2026.1.0 official release; bump deliberately, not via
       # `latest`, so CI can't drift to an untested YB.
       YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+    defaults:
+      run:
+        working-directory: amp
     steps:
+      # Runs before checkout, so it must not inherit the job's working-directory:
+      # amp/ does not exist yet at this point.
       - name: Free up runner disk space
+        working-directory: ${{ github.workspace }}
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /usr/local/share/boost
@@ -306,16 +326,18 @@ jobs:
         run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: amp
 
       - name: Compute PostgreSQL cache key
         id: pgrev
-        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+        run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PostgreSQL install
         uses: actions/cache@v6
         with:
-          path: pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+          path: amp/pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
 
       - name: Wait for YugabyteDB
         run: |
@@ -329,7 +351,7 @@ jobs:
 
       # Both PRs and main pushes run run.sh's default (live-DB unit tests + fast
       # suite). The slow suite is NOT run here — it runs daily on main and
-      # on-demand via `/ci integration_slow` (see on-demand-checks.yml). On
+      # on-demand via `/ci amp_integration_slow` (see on-demand-checks.yml). On
       # failure the harness stops the cluster but keeps the run's *.log files
       # (see clean.sh's INTEGRATION_KEEP_LOGS mode), collected by Upload below.
       # See the build job — the storage crates need the prebuilt shim to link.
@@ -353,16 +375,16 @@ jobs:
           # safekeeper/endpoint_storage), kept by the
           # harness's INTEGRATION_KEEP_LOGS teardown. Glob to *.log so any stray
           # non-log leftovers can't break artifact zip creation.
-          path: .integration-tests/**/*.log
+          path: amp/.integration-tests/**/*.log
           # `.integration-tests` is a dot-dir; upload-artifact skips hidden paths
           # by default, so without this the artifact is empty.
           include-hidden-files: true
           if-no-files-found: ignore
 
   controller:
-    name: Controller — build & tests
-    needs: changes
-    if: needs.changes.outputs.controller == 'true' && needs.changes.outputs.code == 'true'
+    name: Amp Controller — build & tests
+    needs: amp_changes
+    if: needs.amp_changes.outputs.controller == 'true' && needs.amp_changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -370,14 +392,14 @@ jobs:
       checks: write # dorny/test-reporter publishes a check run
     defaults:
       run:
-        working-directory: controller
+        working-directory: amp/controller
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: controller/go.mod
-          cache-dependency-path: controller/go.sum
+          go-version-file: amp/controller/go.mod
+          cache-dependency-path: amp/controller/go.sum
 
       - name: Build
         run: go build ./...
@@ -393,8 +415,8 @@ jobs:
         uses: dorny/test-reporter@v3
         if: ${{ !cancelled() }}
         with:
-          name: Controller test results
-          path: controller/junit.xml
+          name: Amp Controller test results
+          path: amp/controller/junit.xml
           reporter: java-junit
           use-actions-summary: false
       - name: Upload test JUnit
@@ -403,19 +425,19 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: junit-controller
-          path: controller/junit.xml
+          path: amp/controller/junit.xml
           retention-days: 14
 
 
   mcp:
-    name: Controller MCP — tests
-    needs: changes
-    if: needs.changes.outputs.mcp == 'true' && needs.changes.outputs.code == 'true'
+    name: Amp Controller MCP — tests
+    needs: amp_changes
+    if: needs.amp_changes.outputs.mcp == 'true' && needs.amp_changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: controller/mcp
+        working-directory: amp/controller/mcp
     steps:
       - uses: actions/checkout@v7
 
@@ -425,7 +447,7 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-          cache-dependency-glob: controller/mcp/uv.lock
+          cache-dependency-glob: amp/controller/mcp/uv.lock
 
       - name: Sync dependencies
         run: uv sync --dev
@@ -437,14 +459,14 @@ jobs:
         run: uv run pytest -q
 
   ui:
-    name: UI — typecheck & build
-    needs: changes
-    if: needs.changes.outputs.ui == 'true'
+    name: Amp UI — typecheck & build
+    needs: amp_changes
+    if: needs.amp_changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: amp_ui
+        working-directory: amp/amp_ui
     steps:
       - uses: actions/checkout@v7
 
@@ -452,7 +474,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: amp_ui/package-lock.json
+          cache-dependency-path: amp/amp_ui/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -464,11 +486,14 @@ jobs:
         run: npm run build
 
   deploy:
-    name: Deploy — helm charts & supervisor lint
-    needs: changes
-    if: needs.changes.outputs.deploy == 'true'
+    name: Amp Deploy — helm charts & supervisor lint
+    needs: amp_changes
+    if: needs.amp_changes.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: amp
     steps:
       - uses: actions/checkout@v7
 
@@ -507,9 +532,9 @@ jobs:
   #     MemStore cannot exercise (#400).
   # Lightweight: Go + a YB container, no PG/compute build.
   migrations:
-    name: Migrations & live-DB store tests
-    needs: changes
-    if: needs.changes.outputs.migrations == 'true' && needs.changes.outputs.code == 'true'
+    name: Amp Migrations & live-DB store tests
+    needs: amp_changes
+    if: needs.amp_changes.outputs.migrations == 'true' && needs.amp_changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -519,8 +544,8 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version-file: controller/go.mod
-          cache-dependency-path: controller/go.sum
+          go-version-file: amp/controller/go.mod
+          cache-dependency-path: amp/controller/go.sum
 
       # Bridge-networked YB with 5433 published to the host, so the Go test (pgx,
       # pure Go) reaches it at 127.0.0.1:5433 — same topology as scripts/yb-local.sh.
@@ -545,7 +570,7 @@ jobs:
       - name: Migration up/down/up round-trip
         env:
           AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
-        run: go -C controller test ./internal/db/... -run TestMigrateRoundTrip -v
+        run: go -C amp/controller test ./internal/db/... -run TestMigrateRoundTrip -v
 
       # Everything in internal/task that needs a live database (the TestPg* tests):
       # the resize lock's unique-violation -> 409 mapping, which MemStore can't
@@ -556,4 +581,4 @@ jobs:
       - name: Task store — live-database tests
         env:
           AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
-        run: go -C controller test ./internal/task/... -run 'TestPg' -v
+        run: go -C amp/controller test ./internal/task/... -run 'TestPg' -v

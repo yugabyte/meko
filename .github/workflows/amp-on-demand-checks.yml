@@ -1,27 +1,27 @@
-name: On-demand checks
+name: Amp on-demand checks
 
 # Opt-in, heavy CI jobs that the regular per-component CI (pr-build.yml) does
 # NOT run on every PR, requested from the PR description with `/ci <suite>`
 # directive lines, e.g.
 #
-#   /ci integration_slow
-#   /ci integration_slow generate_image
+#   /ci amp_integration_slow
+#   /ci amp_integration_slow amp_generate_image
 #
 # Recognized suites (one or more per line, space/comma separated) — the
 # human-facing list and "when to request each" live in docs/ci-directives.md:
-#   integration_slow  — the slow integration scenario suite (run.sh slow). Also
+#   amp_integration_slow  — the slow integration scenario suite (run.sh slow). Also
 #                       runs daily on main via the `schedule` trigger below. The
 #                       unit + fast suites run on every compute PR/push via
 #                       pr-build.yml, so this + that == full coverage.
-#   generate_image    — build the controller container image (deploy/controller)
+#   amp_generate_image    — build the controller container image (deploy/controller)
 #
 # When it fires:
-#   * the daily `schedule` fires — runs integration_slow + generate_image on
+#   * the daily `schedule` fires — runs amp_integration_slow + amp_generate_image on
 #     main (default branch).
 #   * a new commit is pushed (`synchronize`) or the PR opens/reopens — every
 #     directive currently in the body applies, so a persisted `/ci` line re-runs
 #     its suite on each new commit. Likewise if the diff adds or modifies files
-#     under test/integration/compute/slow/, which runs integration_slow with no
+#     under test/integration/compute/slow/, which runs amp_integration_slow with no
 #     `/ci` line needed (the slow suite is what exercises those scenarios, so
 #     changing them should always run it).
 #
@@ -39,8 +39,8 @@ name: On-demand checks
 # recovers, so a red suite would hide exactly as well as a green one.
 #
 # The rule itself lives in .github/actions/ci-directives — one implementation shared
-# with every other workflow that has opt-in suites, so `/ci deploy_gke` over in
-# control-plane-gke.yml behaves exactly like `/ci integration_slow` does here.
+# with every other workflow that has opt-in suites, so `/ci amp_deploy_gke` over in
+# control-plane-gke.yml behaves exactly like `/ci amp_integration_slow` does here.
 #
 # SECURITY: the PR body is untrusted. It is read only inside that action's
 # github-script, which turns it into booleans against the fixed allowlist passed in
@@ -58,7 +58,7 @@ on:
     - cron: '17 7 * * *'
 
 # NB: there is deliberately NO workflow-level `concurrency` here — it lives on the
-# heavy jobs instead (see `integration` / `generate_image` below).
+# heavy jobs instead (see `integration` / `amp_generate_image` below).
 #
 # A workflow-level group has to serve two jobs it cannot serve at once. Cancelling
 # is right for the 3h suite (latest commit wins) but wrong for `decide`, which is
@@ -74,7 +74,7 @@ permissions:
 
 jobs:
   decide:
-    name: Decide which on-demand suites to run
+    name: Amp on-demand — decide which suites to run
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -88,14 +88,14 @@ jobs:
       - id: gate
         uses: ./.github/actions/ci-directives
         with:
-          suites: '["integration_slow", "generate_image"]'
+          suites: '["amp_integration_slow", "amp_generate_image"]'
           auto-paths: |
-            {"integration_slow": "test/integration/compute/slow/"}
+            {"amp_integration_slow": "amp/test/integration/compute/slow/"}
 
   integration:
-    name: On-demand — integration (slow)
+    name: Amp on-demand — integration (slow)
     needs: decide
-    if: fromJSON(needs.decide.outputs.suites).integration_slow && github.actor != 'dependabot[bot]'
+    if: fromJSON(needs.decide.outputs.suites).amp_integration_slow && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
@@ -109,8 +109,14 @@ jobs:
     env:
       # Keep in sync with pr-build.yml's integration job and scripts/yb-local.sh.
       YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+    defaults:
+      run:
+        working-directory: amp
     steps:
+      # Runs before checkout, so it must not inherit the job's working-directory:
+      # amp/ does not exist yet at this point.
       - name: Free up runner disk space
+        working-directory: ${{ github.workspace }}
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
             /usr/local/.ghcup /usr/local/share/boost
@@ -144,16 +150,18 @@ jobs:
         run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: amp
 
       - name: Compute PostgreSQL cache key
         id: pgrev
-        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+        run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PostgreSQL install
         uses: actions/cache@v6
         with:
-          path: pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+          path: amp/pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
 
       - name: Wait for YugabyteDB
         run: |
@@ -182,26 +190,29 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: on-demand-integration-logs-${{ github.run_id }}
-          path: .integration-tests/**/*.log
+          path: amp/.integration-tests/**/*.log
           include-hidden-files: true
           if-no-files-found: ignore
 
-  generate_image:
-    name: On-demand — controller image build
+  amp_generate_image:
+    name: Amp on-demand — controller image build
     needs: decide
-    if: fromJSON(needs.decide.outputs.suites).generate_image
+    if: fromJSON(needs.decide.outputs.suites).amp_generate_image
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
       group: on-demand-image-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: amp
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: controller/go.mod
+          go-version-file: amp/controller/go.mod
 
       # controller-bundle-only is Go-only: no Rust toolchain and no
       # amp-postgres submodule, so this image build is self-contained.

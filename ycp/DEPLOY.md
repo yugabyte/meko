@@ -100,7 +100,7 @@ Knobs: `YCP_E2E_CLUSTER`, `YCP_E2E_TAG`, `YCP_E2E_PORT`, `YCP_E2E_TIMEOUT`,
 `YCP_E2E_KEEP`, `YCP_E2E_BASE_PATH`.
 
 Both run in CI — see the `meko_ycp` and `meko_ycp_e2e` jobs in
-[`pr-build.yml`](../.github/workflows/pr-build.yml). The e2e fires on `ycp/**` and
+[`meko-pr-build.yml`](../.github/workflows/meko-pr-build.yml). The e2e fires on `ycp/**` and
 on the `api_server` files that make up the control plane (its flags, router,
 environment service/repository/handlers, console and migrations), since it builds
 that image too.

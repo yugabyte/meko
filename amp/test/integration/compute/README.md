@@ -52,7 +52,7 @@ its tserver RPC endpoint lives on `:9100`). These need a real YB with the
 production schema migrated; out of the box they assume a developer-managed
 cluster on `5433`/`yb_storage`, which `unit` replaces with the run's
 isolated ephemeral database (this is how CI runs them — see
-`.github/workflows/pr-build.yml`).
+`.github/workflows/amp-pr-build.yml`).
 
 - **`-n <count>`** repeats the selection and prints a cumulative
   `passed / failed` count. It runs *all* selected tests each iteration
