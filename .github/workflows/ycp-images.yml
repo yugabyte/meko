@@ -75,9 +75,9 @@ jobs:
           - image: dpmcp
             dockerfile: Dockerfile.dpmcp
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Read credentials through env rather than interpolating them into the
       # script body, and expose only which mode to use to later steps.
@@ -102,7 +102,7 @@ jobs:
         id: oidc
         if: steps.auth.outputs.mode == 'oidc'
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ steps.auth.outputs.role_arn }}
           aws-region: ${{ env.AWS_REGION }}
@@ -111,7 +111,7 @@ jobs:
         id: keys
         if: steps.auth.outputs.mode == 'keys'
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -136,7 +136,7 @@ jobs:
       # Tagged with the commit SHA (immutable, what a deployment should pin) and
       # `latest` for convenience. linux/amd64 only — the demo clusters are amd64.
       - name: Build and push ${{ matrix.image }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ycp
           file: ycp/${{ matrix.dockerfile }}

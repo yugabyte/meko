@@ -231,7 +231,7 @@ jobs:
         run: ./run_clippy.sh
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.3
         with:
           tool: cargo-nextest
 
@@ -444,7 +444,7 @@ jobs:
       # uv reads the Python version from controller/mcp/.python-version (3.11)
       # and installs deps from uv.lock; enable-cache speeds up repeat runs.
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: amp/controller/mcp/uv.lock

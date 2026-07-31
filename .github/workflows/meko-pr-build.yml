@@ -48,8 +48,8 @@ jobs:
       meko_ycp_cp: ${{ steps.filter.outputs.meko_ycp_cp }}
       meko_code: ${{ steps.code.outputs.meko_code }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -98,7 +98,7 @@ jobs:
       # this must stay a negated pattern: a bare positive '**/*.md' rule is true
       # whenever a PR touches even one markdown file, which silently skipped CI
       # on every mixed code+docs PR.
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: code
         with:
           predicate-quantifier: 'every'
@@ -117,9 +117,9 @@ jobs:
       run:
         working-directory: meko/api_server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: meko/api_server/go.mod
           cache-dependency-path: meko/api_server/go.sum
@@ -166,9 +166,9 @@ jobs:
       run:
         working-directory: meko/inference_gateway
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
           cache: pip
@@ -190,9 +190,9 @@ jobs:
       run:
         working-directory: meko/meko_ui
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -220,9 +220,9 @@ jobs:
       run:
         working-directory: ycp
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: ycp/go.mod
           cache-dependency-path: ycp/go.sum
@@ -255,7 +255,7 @@ jobs:
     # Image builds + a kind cluster + Postgres reaching ready is the slow part.
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: helm/kind-action@v1
         with:

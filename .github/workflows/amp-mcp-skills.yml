@@ -20,7 +20,7 @@ jobs:
     name: Amp MCP skills — validate & build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate marketplace.json
         run: |
@@ -30,7 +30,7 @@ jobs:
         run: bash amp/controller/mcp/skills/scripts/package-skill.sh
 
       - name: Upload bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: amp-mcp-skills
           path: amp/controller/mcp/skills/*.skill
