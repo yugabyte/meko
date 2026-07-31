@@ -76,6 +76,31 @@ Commit subjects and PR titles carry `[MEKO-<num>]` for meko work or `[#<issue>]`
 AMP work, and **omit the tag entirely** when there is genuinely no ticket — never
 invent a placeholder or guess a number.
 
+#### `[#N]` in commits that predate the monorepo merge means an *amp* number
+
+AMP's 69 open issues were transferred out of `yugabyte/amp` and **renumbered**, so a
+`[#N]` tag on any commit from before the merge refers to amp's old sequence, not to
+`#N` in this repo. amp's numbering reached **#447** (issues and pull requests share one
+sequence), so treat any `[#N]` with **N ≤ 447** on a pre-merge commit as an amp number
+and resolve it before assuming it points here.
+
+| amp numbers | where they are now |
+|---|---|
+| the 69 **open** issues, scattered over `#5`–`#440` | moved here as `#432`–`#500` — [mapping table](https://github.com/yugabyte/meko/issues/393#issuecomment-5139709911) |
+| the 175 **closed** issues, up to `#433` | left in `yugabyte/amp`; still resolve there |
+| pull requests | left in `yugabyte/amp` |
+
+The ranges overlap, which is the trap: `#432`–`#500` here *are* the migrated amp issues,
+but everything below that is meko's own. A live example — `[#244]`, the tag on AMP's
+ImageVolume work:
+
+- amp#244 "control_plane: support Postgres extensions via k8s ImageVolume" → now
+  [meko#474](https://github.com/yugabyte/meko/issues/474)
+- meko#244 is "Add discord link to Meko app and remove Slack link" — an unrelated meko PR
+
+Old `yugabyte/amp` issue URLs redirect to the new location, so prefer pasting a full URL
+over a bare `#N`.
+
 ### Reviewing
 
 [`meko/REVIEW.md`](meko/REVIEW.md) is the per-component review guide for the meko
