@@ -48,7 +48,7 @@
     "@radix-ui/react-tooltip": "1.2.8",
     "@rudderstack/analytics-js": "3.31.4",
     "@tanstack/react-query": "5.100.14",
-    "axios": "1.16.1",
+    "axios": "1.18.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
@@ -74,7 +74,7 @@
     "react-hook-form": "7.76.1",
     "react-markdown": "10.1.0",
     "react-resizable-panels": "2.1.9",
-    "react-router-dom": "7.15.1",
+    "react-router-dom": "7.18.2",
     "recharts": "2.15.4",
     "remark-gfm": "4.0.1",
     "sonner": "2.0.7",
@@ -91,7 +91,7 @@
     "@replit/vite-plugin-dev-banner": "0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "0.0.4",
     "@tailwindcss/vite": "4.1.18",
-    "@testing-library/react": "^16.3.2",
+    "@testing-library/react": "16.3.2",
     "@types/connect-pg-simple": "7.0.3",
     "@types/express": "5.0.6",
     "@types/express-session": "1.18.2",
@@ -105,20 +105,20 @@
     "autoprefixer": "10.4.23",
     "drizzle-kit": "0.31.8",
     "esbuild": "0.25.12",
-    "jsdom": "^29.1.1",
-    "postcss": "8.5.10",
+    "jsdom": "29.1.1",
+    "postcss": "8.5.18",
     "tailwindcss": "4.1.18",
     "tsx": "4.22.3",
     "typescript": "5.6.3",
     "vite": "7.3.5",
-    "vitest": "^4.1.10"
+    "vitest": "4.1.10"
   },
   "optionalDependencies": {
     "bufferutil": "4.1.0"
   },
   "overrides": {
     "@esbuild-kit/core-utils": {
-      "esbuild": "^0.25.0"
+      "esbuild": "0.25.12"
     },
     "vite": {
       "esbuild": "0.27.2"
