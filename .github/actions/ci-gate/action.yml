@@ -1,0 +1,137 @@
+name: CI gate
+description: >-
+  Collapse every job in the calling workflow into a single pass/fail check with a
+  stable name, so the branch ruleset can require that one name instead of listing
+  each job. One implementation shared by every gated workflow, so they all decide
+  identically — see the `merge-pr` skill for the merge rule this enforces.
+
+# The rule, in one place:
+#
+#   * A needed job lands on success, failure, cancelled or skipped.
+#   * success and skipped pass. `skipped` is a paths-filtered component the PR does
+#     not touch, or an opt-in suite nobody asked for — the one non-pass the merge
+#     rule allows.
+#   * failure and cancelled fail. A cancelled test is not a passed test; re-run it.
+#
+# The caller owns two lines that cannot be moved in here, because both are
+# evaluated before any step runs:
+#
+#   needs: [...]     which jobs to wait for — and the `needs` context this reads.
+#   if: always()     load-bearing. A job with `needs` is skipped by default when any
+#                    dependency fails or skips, and a skipped check counts as a PASS
+#                    in branch protection. Without it the gate waves through exactly
+#                    the runs it exists to block.
+#
+# The `needs` list is the one thing that can silently rot: add a job, forget the
+# line, and the gate goes green without covering it. The second step below closes
+# that by auditing the calling workflow's own file — so forgetting it fails CI on
+# the PR that adds the job, naming the job it missed.
+
+# NB: do NOT write an expression mentioning `needs` anywhere in this manifest, not
+# even inside a description or a comment-like string. Action manifests are template-
+# validated on load and `needs` is not a valid named-value in one, so a documentation
+# example spelled with the real expression syntax fails the whole action with
+# "Unrecognized named-value: 'needs'" before any step runs. Describe it in prose; the
+# caller supplies the value. action.test.sh guards this.
+inputs:
+  needs:
+    description: >-
+      The caller's `needs` context serialised to JSON — the gate jobs pass
+      toJSON(needs) as an expression. There is no way to read a job's own needs from
+      inside a composite action, so the caller has to hand it over.
+    required: true
+  exclude:
+    description: >-
+      Space-separated job ids that are allowed to sit outside the gate (a cleanup or
+      notify job that must not block a merge). Everything else in the workflow file
+      has to appear in the gate's `needs`.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # The verdict. Reads only the JSON handed in — no API calls, no checkout needed.
+    - name: Check every needed job passed or skipped
+      shell: bash
+      env:
+        NEEDS: ${{ inputs.needs }}
+      run: |
+        python3 - <<'PY'
+        import json, os, sys
+
+        needs = json.loads(os.environ.get("NEEDS") or "{}")
+        if not needs:
+            sys.exit("::error::this gate has an empty `needs` — it is gating nothing")
+
+        rows = sorted((name, (v or {}).get("result", "?")) for name, v in needs.items())
+
+        # A table in the run summary, so a red gate says which job was red without
+        # anyone having to open the job list.
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a") as fh:
+                fh.write("| job | result |\n|---|---|\n")
+                for name, result in rows:
+                    mark = {"success": "✅", "skipped": "⏭️"}.get(result, "❌")
+                    fh.write(f"| `{name}` | {mark} {result} |\n")
+
+        for name, result in rows:
+            print(f"{name}: {result}")
+
+        # skipped is deliberately absent here: it is the allowed non-pass.
+        bad = [(n, r) for n, r in rows if r in ("failure", "cancelled")]
+        if bad:
+            listed = ", ".join(f"{n} ({r})" for n, r in bad)
+            sys.exit(f"::error::did not pass: {listed}")
+
+        print(f"::notice::all {len(rows)} jobs passed or skipped")
+        PY
+
+    # always(): a failing gate must still report an out-of-date `needs` list, or the
+    # drift stays invisible until the run that was already red goes green.
+    - name: Assert the gate covers every job in this workflow
+      if: always()
+      shell: bash
+      env:
+        # github.workflow_ref is "<owner>/<repo>/<path>@<ref>" — the only handle a
+        # job has on which file it came from. github.job is this job's id (the key
+        # under `jobs:`), which is what has to appear in that file.
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        REPO: ${{ github.repository }}
+        GATE_JOB: ${{ github.job }}
+        EXCLUDE: ${{ inputs.exclude }}
+      run: |
+        python3 -c 'import yaml' 2>/dev/null || pip3 install --quiet pyyaml
+        python3 - <<'PY'
+        import os, sys, yaml
+
+        ref, repo = os.environ["WORKFLOW_REF"], os.environ["REPO"]
+        path = ref[len(repo) + 1:].split("@", 1)[0]
+
+        # The PR's own version of the file: on pull_request, checkout gives the merge
+        # ref, so a PR that adds a job is audited against the job it just added.
+        try:
+            workflow = yaml.safe_load(open(path)) or {}
+        except FileNotFoundError:
+            sys.exit(f"::error::{path} not found — the gate job needs actions/checkout")
+
+        jobs = set(workflow.get("jobs") or {})
+        gate = os.environ["GATE_JOB"]
+        if gate not in jobs:
+            sys.exit(f"::error::{path}: no job id `{gate}` — cannot audit the gate")
+
+        declared = (workflow["jobs"][gate] or {}).get("needs") or []
+        if isinstance(declared, str):
+            declared = [declared]
+
+        missing = sorted(jobs - {gate} - set(os.environ.get("EXCLUDE", "").split()) - set(declared))
+        if missing:
+            sys.exit(
+                f"::error file={path}::not covered by the `{gate}` gate: "
+                f"{', '.join(missing)}. Add them to its `needs`, or list them in the "
+                f"action's `exclude` input if they must not block a merge."
+            )
+
+        print(f"::notice::{gate} covers all {len(jobs) - 1} other jobs in {path}")
+        PY

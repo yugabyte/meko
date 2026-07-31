@@ -2,20 +2,20 @@
 name: merge-pr
 description: >-
   Merge a pull request in this repo — but only with the user's **explicit
-  approval** and after confirming its CI checks have **passed** (not pending,
-  not failing). Switch this checkout to a keep-branch **before** deleting the
-  merged branch — never let cleanup strand the worktree on shared `main`. Use
-  for "merge the PR", "merge this", `gh pr merge`, or any flow that ends in
-  merging a PR. Never merge on your own initiative, and never with red or
-  still-pending CI.
+  approval** and only when **every** check is passing or skipped, required or not:
+  no PR lands with a failed test, and skipped is the only non-pass allowed. Switch
+  this checkout to a keep-branch **before** deleting the merged branch — never let
+  cleanup strand the worktree on shared `main`. Use for "merge the PR", "merge
+  this", `gh pr merge`, or any flow that ends in merging a PR. Never merge on your
+  own initiative, and never with red or still-pending CI.
 ---
 
 # merge-pr
 
 Merging is the irreversible step — once it's on `main`, everyone builds on it.
-So the bar is: **CI is green first**, then merge, then clean up the local branch
-so a stale pointer doesn't linger. Skipping the CI check is how a broken `main`
-happens.
+So the bar is: **every check passing or skipped first** — no failed test lands, ever
+— then merge, then clean up the local branch so a stale pointer doesn't linger.
+Skipping the CI check is how a broken `main` happens.
 
 ## Step 1 — identify the PR
 
@@ -29,22 +29,33 @@ branch you'll move off of in Step 3.
 
 ## Step 2 — confirm CI passed (hard gate)
 
-Do **not** merge until every required check is a pass. Check the rollup:
+**No PR lands with a failed test. Skipped is the only non-pass that's allowed.**
+That's the whole rule, and it covers **every** check — not just the required ones. A
+red advisory check is still a failing test.
 
 ```
-gh pr checks <number>
+gh pr checks <number> --json name,state,bucket
 ```
 
-Meko runs per-component test jobs (`meko_api_server`, `meko_inference`,
-`meko_ui`, …), gated by a paths filter — jobs for components the PR doesn't touch
-are skipped, which is a pass, not a failure. What matters is that nothing is
-red or still running.
+| bucket | verdict |
+|---|---|
+| `pass` | fine |
+| `skipping` | fine — a job for a component this PR doesn't touch |
+| `pending` | not yet: wait and re-check (`gh pr checks <number> --watch`) |
+| `fail` | stop |
 
-- **All passing** → proceed to Step 3.
-- **Any still pending / in progress** → wait and re-check; do not merge yet.
-  (Poll, e.g. `gh pr checks <number> --watch`, or re-run after a bit.)
-- **Any failing** → stop. Report which check failed and its log. The fix is a new
-  commit on the branch (push it, let CI re-run), not merging past red.
+A failing test is never waved through:
+
+- **Not as "flaky."** Re-run it (`gh run rerun --failed <run-id>`) until it's green,
+  or fix it. A flake that stays red stays blocking.
+- **Not as "unrelated to my change."** After the squash it is `main`'s failure, and
+  everyone builds on `main`.
+- **Not by deleting or disabling the test.** Fixing the code, or legitimately marking
+  a test skipped with a stated reason, is fine; silencing a real failure to clear the
+  gate is not.
+
+Report which check failed and its log. The fix is a new commit on the branch — push
+it and let CI re-run.
 
 Also confirm it's actually mergeable (no conflicts, review state satisfied):
 
@@ -122,8 +133,11 @@ onto the new `main` when starting the next task.
 
 ## Anti-patterns
 
-- **Merging with pending or failing CI.** The whole point of Step 2. A green
-  `main` depends on never merging past red.
+- **Merging with a failed test, or with CI still pending.** The whole point of
+  Step 2 — `pass` and `skipping` are the only acceptable buckets, for every check
+  and not just the required ones. A green `main` depends on never merging past red.
+- **Rationalising a red test** as flaky, unrelated, or pre-existing — or deleting it
+  — instead of getting it green.
 - **Merging without being asked.** Step 3 — merging is never the agent's
   initiative.
 - **Force-merging with admin bypass** to skip a gate. If the gate is wrong, fix

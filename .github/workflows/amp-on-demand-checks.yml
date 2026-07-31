@@ -221,3 +221,24 @@ jobs:
 
       - name: Build controller image
         run: docker build -t yb-amp/controller:ci -f deploy/controller/Dockerfile .
+
+  # The single required check for this workflow. `decide` always runs and the heavy
+  # suites skip unless asked for, so on a PR carrying no `/ci` line this gate is
+  # green in ~30s. When a suite IS requested, its failure blocks the merge — which
+  # is the point: an opt-in suite you asked for is a test like any other.
+  amp_on_demand_gate:
+    name: Amp on-demand gate
+    # See .github/actions/ci-gate: always() is load-bearing, and skipped passes.
+    if: always()
+    needs:
+      - decide
+      - integration
+      - amp_generate_image
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Needed only to make the local composite action below available.
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}

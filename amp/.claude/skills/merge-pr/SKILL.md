@@ -29,13 +29,16 @@ branch you'll move off of in Step 3.
 
 ## Step 2 — confirm CI passed (hard gate)
 
-Do **not** merge until every required check is a pass. Check the rollup:
+Do **not** merge until every check is a pass — **every** one, not just the checks the
+ruleset requires. A red advisory check is still a failing test. Check the rollup:
 
 ```
 gh pr checks <number>
 ```
 
-- **All passing** → proceed to Step 3.
+- **All passing or skipped** → proceed to Step 3. `skipped` is the one allowed
+  non-pass: it means a job for a component this PR doesn't touch, or an opt-in suite
+  nobody requested.
 - **Any still pending / in progress** → wait and re-check; do not merge yet.
   (Poll, e.g. `gh pr checks <number> --watch`, or re-run after a bit.)
 - **Any failing** → stop. Report which check failed and its log. The fix is a new

@@ -2,22 +2,52 @@
 # external publish (that step is infra-gated — see controller/mcp/skills/README.md).
 name: Amp MCP skills
 
+# NB: the path scoping deliberately lives in the `changes` job below, NOT in a
+# workflow-level `paths:` filter. A workflow skipped by path filtering never creates
+# its check runs at all, so a required check for it stays "expected — waiting for
+# status" forever and blocks every PR that does not touch these paths. Filtering per
+# job instead reports `skipped`, which branch protection counts as a pass. That is
+# what makes "Amp MCP skills gate" safe to require.
 on:
-  push:
-    paths:
-      - "amp/controller/mcp/skills/**"
-      - "amp/.claude-plugin/marketplace.json"
-      - ".github/workflows/amp-mcp-skills.yml"
   pull_request:
-    paths:
-      - "amp/controller/mcp/skills/**"
-      - "amp/.claude-plugin/marketplace.json"
-      - ".github/workflows/amp-mcp-skills.yml"
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
+  changes:
+    name: Amp MCP skills — changes
+    runs-on: ubuntu-latest
+    # NB: job-level permissions REPLACE the workflow-level block, so
+    # contents: read must be restated or checkout loses repo access.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skills: ${{ steps.filter.outputs.skills }}
+    steps:
+      # paths-filter uses the GitHub API for pull_request events, but for push
+      # events it diffs locally and needs the repo checked out.
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            skills:
+              - 'amp/controller/mcp/skills/**'
+              - 'amp/.claude-plugin/marketplace.json'
+              - '.github/workflows/amp-mcp-skills.yml'
+
   build:
     name: Amp MCP skills — validate & build
+    needs: changes
+    # workflow_dispatch means "build it now" and has no diff to filter on, so it
+    # bypasses the filter rather than skipping.
+    if: needs.changes.outputs.skills == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -35,3 +65,21 @@ jobs:
           name: amp-mcp-skills
           path: amp/controller/mcp/skills/*.skill
           if-no-files-found: error
+
+  # The single required check for this workflow — see the note on Meko CI gate in
+  # meko-pr-build.yml.
+  amp_mcp_skills_gate:
+    name: Amp MCP skills gate
+    # See .github/actions/ci-gate: always() is load-bearing, and skipped passes.
+    if: always()
+    needs:
+      - changes
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Needed only to make the local composite action below available.
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}

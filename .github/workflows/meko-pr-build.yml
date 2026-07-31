@@ -273,3 +273,27 @@ jobs:
       - name: Build & deploy smoke test
         run: ./test/e2e/run.sh
         working-directory: ycp
+
+  # The single required check for this workflow. The `main-branch` ruleset requires
+  # "Meko CI gate" and nothing else from here, so adding a job above never means
+  # touching repository settings — add it to `needs` and it is gated. The gate's own
+  # step audits that: a job missing from `needs` fails the PR that added it.
+  meko_ci_gate:
+    name: Meko CI gate
+    # See .github/actions/ci-gate: always() is load-bearing, and skipped passes.
+    if: always()
+    needs:
+      - changes
+      - meko_api_server
+      - meko_inference
+      - meko_ui
+      - meko_ycp
+      - meko_ycp_e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Needed only to make the local composite action below available.
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
