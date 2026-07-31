@@ -25,6 +25,7 @@ subsystem has its own page.
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
 | [`yugabyte.md`](yugabyte.md) | What lives in YB: schemas, tables, connection paths, the retry contract |
 | [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, bootstrap |
+| [`extensions.md`](extensions.md) | Externalized extensions as ImageVolumes: build pipeline, chart wiring, catalog, branch-fork inheritance |
 
 > **Control plane docs live outside `compute/`.** These pages cover the
 > storage/compute engine only. The **amp controller** (the Go control plane,

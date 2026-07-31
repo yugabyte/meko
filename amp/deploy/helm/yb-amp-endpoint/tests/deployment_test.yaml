@@ -123,6 +123,64 @@ tests:
       - notExists:
           path: spec.strategy
 
+  - it: mounts no extension ImageVolumes by default
+    template: templates/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ext-vector
+            mountPath: /extensions/vector
+            readOnly: true
+
+  - it: mounts each extension as a read-only ImageVolume
+    template: templates/deployment.yaml
+    set:
+      endpoint:
+        extensions:
+          - name: vector
+            image: quay.io/yugabyte/amp-ext-pgvector:0.8.2
+            preload: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ext-vector
+            mountPath: /extensions/vector
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ext-vector
+            image:
+              reference: quay.io/yugabyte/amp-ext-pgvector:0.8.2
+              pullPolicy: IfNotPresent
+
+  - it: sanitizes the volume name for extension names with underscores
+    template: templates/deployment.yaml
+    set:
+      endpoint:
+        extensions:
+          - name: pg_cron
+            image: quay.io/yugabyte/amp-ext-pg_cron:1.6
+            preload: true
+    asserts:
+      # Volume + mount names must be RFC 1123 labels: '_' -> '-'. The mount path
+      # keeps the raw extension name so extension_control_path still resolves.
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ext-pg-cron
+            mountPath: /extensions/pg_cron
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ext-pg-cron
+            image:
+              reference: quay.io/yugabyte/amp-ext-pg_cron:1.6
+              pullPolicy: IfNotPresent
+
   - it: sets fsGroup from podSecurityContext (the image's gid) by default
     template: templates/deployment.yaml
     asserts:

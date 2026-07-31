@@ -16,6 +16,7 @@ import (
 
 	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/extensions"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 	"github.com/yugabyte/amp/controller/internal/node"
 	"github.com/yugabyte/amp/controller/internal/task"
@@ -42,6 +43,10 @@ type Provisioning struct {
 	// Recipes records a branch's creation record (the task framework's
 	// RecipeStore port). Production wires the in-process store; tests inject a fake.
 	Recipes task.RecipeStore
+	// Extensions is the externalized-extension catalog the create_endpoint step
+	// resolves a branch's extension set against. Wired only for the Kubernetes
+	// driver (ImageVolumes); nil for Docker / when the feature is off.
+	Extensions *extensions.Catalog
 }
 
 // Controllers implements the generated StrictServerInterface: the controller's
@@ -691,6 +696,29 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		}
 	}
 
+	// Externalized extensions to enable on this endpoint. Each opt-in is
+	// validated against the controller's catalog (an unknown name is a 400, not
+	// a silent drop) and, in the step, persisted onto the branch's durable set so
+	// forks inherit it. Requires the catalog (Kubernetes deployer); rejected when
+	// it is unavailable (Docker driver / feature off), so a caller gets a clear
+	// error rather than a silently ignored request.
+	var exts []string
+	if request.Body != nil && request.Body.Extensions != nil {
+		if c.prov.Extensions == nil {
+			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "externalized extensions are not supported on this controller"))}, nil
+		}
+		for _, raw := range *request.Body.Extensions {
+			name := strings.TrimSpace(raw)
+			if name == "" {
+				continue
+			}
+			if !c.prov.Extensions.Has(name) {
+				return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", fmt.Sprintf("unknown extension %q", name)))}, nil
+			}
+			exts = append(exts, name)
+		}
+	}
+
 	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, request.BranchId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
@@ -704,12 +732,13 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// create_endpoint step; the single-writer rule (a duplicate read_write
 	// endpoint) now surfaces as a failed task rather than a synchronous 409.
 	t, err := c.tasks.CreateEndpoint(ctx, task.CreateEndpointInput{
-		ProjectID: br.ProjectID,
-		BranchID:  br.BranchID,
-		Role:      role,
-		PgVersion: br.PgVersion,
-		CPU:       cpu,
-		Memory:    memory,
+		ProjectID:  br.ProjectID,
+		BranchID:   br.BranchID,
+		Role:       role,
+		PgVersion:  br.PgVersion,
+		CPU:        cpu,
+		Memory:     memory,
+		Extensions: exts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)

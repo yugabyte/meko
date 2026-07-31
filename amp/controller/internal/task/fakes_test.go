@@ -44,6 +44,7 @@ type fakeStateStore struct {
 	endpointBranch  map[uuid.UUID]branchRef // endpoint id -> its (project, branch)
 	branchProject   map[uuid.UUID]uuid.UUID // branch id -> its project
 	branchParent    map[uuid.UUID]uuid.UUID // branch id -> its parent branch id (forks only)
+	branchExts      map[uuid.UUID][]string  // branch id -> opted-in extension names
 	deletedBranches map[uuid.UUID]struct{}
 	deletedProjects map[uuid.UUID]struct{}
 
@@ -72,9 +73,48 @@ func newFakeStateStore() *fakeStateStore {
 		endpointBranch:       map[uuid.UUID]branchRef{},
 		branchProject:        map[uuid.UUID]uuid.UUID{},
 		branchParent:         map[uuid.UUID]uuid.UUID{},
+		branchExts:           map[uuid.UUID][]string{},
 		deletedBranches:      map[uuid.UUID]struct{}{},
 		deletedProjects:      map[uuid.UUID]struct{}{},
 	}
+}
+
+// seedBranchExtensions sets a branch's opted-in extension set. Test helper.
+func (f *fakeStateStore) seedBranchExtensions(branchID uuid.UUID, names ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.branchExts[branchID] = append([]string(nil), names...)
+}
+
+// BranchExtensions returns the branch's opted-in extension set (empty if none).
+func (f *fakeStateStore) BranchExtensions(_ context.Context, _, branchID uuid.UUID) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if names, ok := f.branchExts[branchID]; ok {
+		return append([]string(nil), names...), nil
+	}
+	return nil, nil
+}
+
+// AddBranchExtensions unions names into the branch's opted-in set (existing-first
+// order, deduplicated). Mirrors the backends; empty names is a no-op.
+func (f *fakeStateStore) AddBranchExtensions(_ context.Context, _, branchID uuid.UUID, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := make(map[string]struct{})
+	var union []string
+	for _, n := range append(append([]string(nil), f.branchExts[branchID]...), names...) {
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		union = append(union, n)
+	}
+	f.branchExts[branchID] = union
+	return nil
 }
 
 // seedEndpoint registers a live endpoint on (projectID, branchID) so the cascade

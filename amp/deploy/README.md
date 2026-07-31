@@ -378,6 +378,21 @@ This compiles patched Postgres v18, the Rust services, and the `neon`
 extension, so the first build is slow. The `ghcr.io/neondatabase/build-tools`
 base image is required (same as the repo-root Dockerfile).
 
+The endpoint image ships **only** PG18 + the `yb_amp` extension. Every other
+extension (starting with `pgvector`) is built and shipped separately as an OCI
+ImageVolume — see [`extensions/`](extensions) and
+[`compute/architecture/extensions.md`](../compute/architecture/extensions.md):
+
+```sh
+deploy/extensions/build.sh            # build the ABI-anchor base + all extensions locally
+deploy/extensions/build.sh --push pgvector   # build + push just pgvector
+```
+
+The chart mounts them via `endpoint.extensions` (`{ name, image, preload }`),
+rendering one read-only ImageVolume per entry at `/extensions/<name>` and
+deriving `extension_control_path` / `dynamic_library_path` (and any preload
+entry for `SHARED_PRELOAD_LIBRARIES`) from the list.
+
 On an **Apple Silicon Mac** the default qemu emulation crashes the Rust compile;
 see [`building-images-apple-silicon.md`](building-images-apple-silicon.md) to build
 locally via Rosetta.

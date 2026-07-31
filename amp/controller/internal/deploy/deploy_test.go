@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,6 +81,40 @@ func TestKubernetesValues(t *testing.T) {
 	}
 	if v.Endpoint.BranchId != spec.BranchID {
 		t.Errorf("Endpoint.BranchId = %q, want %q", v.Endpoint.BranchId, spec.BranchID)
+	}
+}
+
+func TestKubernetesValuesExtensions(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	spec := testEndpointSpec()
+	spec.Extensions = []Extension{
+		{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2", Preload: false},
+		{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6", Preload: true},
+	}
+	v := k.values(spec, "yb-ep-rel")
+	want := []extensionValues{
+		{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2", Preload: false},
+		{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6", Preload: true},
+	}
+	if !reflect.DeepEqual(v.Endpoint.Extensions, want) {
+		t.Fatalf("endpoint.extensions = %+v, want %+v", v.Endpoint.Extensions, want)
+	}
+}
+
+func TestKubernetesValuesNoExtensionsOmitted(t *testing.T) {
+	// With no extensions, the key must be omitted entirely so the chart's own
+	// no-extensions default applies.
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	v := k.values(testEndpointSpec(), "yb-ep-rel")
+	if v.Endpoint.Extensions != nil {
+		t.Fatalf("endpoint.extensions = %+v, want nil (omitted)", v.Endpoint.Extensions)
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	if strings.Contains(string(data), "\"extensions\"") {
+		t.Errorf("marshaled values contain an extensions key, want it omitted: %s", data)
 	}
 }
 

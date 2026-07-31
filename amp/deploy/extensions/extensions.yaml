@@ -1,0 +1,43 @@
+# yb-amp externalized extensions — build manifest.
+#
+# Each entry is built into a minimal OCI image (see extension.Dockerfile) that
+# the endpoint mounts as a Kubernetes ImageVolume. build.sh reads this file,
+# builds the ABI-anchor base once, then each extension, and (optionally) pushes
+# them. Keep this the single source of truth for versions + checksums.
+
+# Container registry the built images are tagged/pushed under. Extension images
+# are <registry>/amp-ext-<name>:<version>; the base is <registry>/amp-pg18-build.
+registry: quay.io/yugabyte
+
+# The ABI-anchor base image name (built from pg18-build.Dockerfile). Extensions
+# are compiled FROM this so they link against the exact forked PG18 the endpoint
+# ships. build.sh builds it as <base_image>:local and pushes as
+# <registry>/<base_image>:<pg_tag>.
+base_image: amp-pg18-build
+pg_tag: v18
+
+extensions:
+  - name: pgvector
+    # 0.8.1 was the first release to build against PostgreSQL 18 (0.8.0 calls the
+    # pre-18 vacuum_delay_point() with no args); 0.8.2 is the current release.
+    version: "0.8.2"
+    url: https://github.com/pgvector/pgvector/archive/refs/tags/v0.8.2.tar.gz
+    sha256: 69f4019389af05dc1c9548deb8628e62878e6e207c03907f2b8af2016472cdaa
+    # Carried from the legacy compute image and refreshed for 0.8.2: adds the
+    # YB_AMP_SMGR unlogged-build hooks (no data loss on HNSW/IVFFlat index build)
+    # and ships the per-version vector--0.7.4.sql upgrade path.
+    patch: pgvector-pg18.patch
+    # The extension's lead .control basename (CREATE EXTENSION vector).
+    control: vector
+    # trusted => a non-superuser can CREATE EXTENSION (legacy image did this).
+    trusted: true
+    # pgvector needs no shared_preload_libraries entry.
+    preload: false
+    # Runs in the extracted source dir before the patch: the patch's Makefile
+    # references sql/vector--0.7.4.sql, which upstream ships only in the 0.7.4 tag.
+    prep: >-
+      curl -fsSL https://github.com/pgvector/pgvector/raw/refs/tags/v0.7.4/sql/vector.sql -o ./sql/vector--0.7.4.sql &&
+      echo "10218d05dc02299562252a9484775178b14a1d8edb92a2d1672ef488530f7778  ./sql/vector--0.7.4.sql" | sha256sum -c -
+    # Empty => build with the generic extension.Dockerfile. Set to a path
+    # (relative to repo root) for a complex extension needing its own recipe.
+    dockerfile: ""

@@ -1,1 +1,0 @@
-SELECT neon.approximate_working_set_size(false) AS approximate_working_set_size;

@@ -24,6 +24,13 @@ name: Amp control-plane GKE (itest-dev)
 #     .github/actions/ci-directives, see docs/ci-directives.md: the line deploys on
 #     each new commit while it is present. Adding it to a PR already up needs a
 #     commit to fire — an empty one is enough.
+#   * `/ci amp_deploy_gke_extensions` — a superset of `amp_deploy_gke` (it implies
+#     the deploy) that ALSO builds + pushes the externalized-extension images
+#     (amp/deploy/extensions/build.sh --push: the ABI-anchor PG18 base + pgvector) to
+#     Quay, and runs the smoke test with SMOKE_EXTENSIONS=1 so it exercises the
+#     pgvector ImageVolume opt-in + fork inheritance. Adds a cold PG18 base build
+#     (~30 min) on top of amp_deploy_gke, so it is PR-directive-only: nightly does NOT
+#     rebuild it.
 # It touches the itest cluster and needs org secrets (KUBECONFIG_ITEST_DEV,
 # QUAY_AMP_TOKEN), so fork PRs (which get no secrets) are always skipped.
 # Stale ci-pr-* namespaces are swept by control-plane-gke-cleanup.yml.
@@ -37,6 +44,11 @@ on:
     # the same slot as the slow integration suite (on-demand-checks.yml).
     - cron: '17 7 * * *'
   workflow_dispatch:
+    inputs:
+      push_extensions:
+        description: 'Also build+push the extension images (pgvector) and run the extension smoke checks'
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
     # No paths filter: the `/ci amp_deploy_gke` directive in the body (resolved by the
@@ -69,6 +81,7 @@ jobs:
       pull-requests: read
     outputs:
       suites: ${{ steps.gate.outputs.decided }}
+      ext: ${{ steps.gate_ext.outputs.decided }}
     steps:
       # Needed only to make the local composite action below available.
       - uses: actions/checkout@v7
@@ -80,6 +93,17 @@ jobs:
           # A manual dispatch means "deploy now", so it skips the body entirely.
           unconditional-events: schedule workflow_dispatch
 
+      # amp_deploy_gke_extensions is a superset of amp_deploy_gke (see the
+      # images/deploy gates below, which OR it in) that also builds+pushes the
+      # extension images. It is NOT unconditional on schedule — nightly must not eat
+      # the ~30-min PG18 base build; only a PR `/ci amp_deploy_gke_extensions` line
+      # (or the manual push_extensions dispatch input, OR'd in downstream) turns it on.
+      - id: gate_ext
+        uses: ./.github/actions/ci-directives
+        with:
+          suites: '["amp_deploy_gke_extensions"]'
+          unconditional-events: ''
+
   images:
     name: Amp GKE — build + push images (Quay)
     needs: decide
@@ -87,7 +111,9 @@ jobs:
     # The head-repo check excludes fork PRs (they get no secrets); non-PR events
     # (schedule / dispatch) pass it trivially.
     if: >-
-      fromJSON(needs.decide.outputs.suites).amp_deploy_gke &&
+      (fromJSON(needs.decide.outputs.suites).amp_deploy_gke ||
+       fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions ||
+       github.event.inputs.push_extensions == 'true') &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -174,9 +200,22 @@ jobs:
           docker buildx build --push -f amp/controller/mcp/Dockerfile \
             -t "$QUAY_NS/amp-mcp:${{ steps.tag.outputs.tag }}" amp/controller/mcp
 
+      # Externalized-extension images (amp_deploy_gke_extensions only): builds the
+      # ABI-anchor PG18 base locally (~30 min cold, to compile against) and pushes
+      # ONLY each manifest extension (pgvector) to Quay under
+      # quay.io/yugabyte/amp-ext-<name>:<version> (--no-base-push: nothing pulls
+      # the base back, so it isn't published). Version-tagged (not the commit tag),
+      # so they're stable and the deployed controller's catalog (ExtensionRegistry
+      # default quay.io/yugabyte) resolves them as-is.
+      - name: Extension images (pgvector)
+        if: fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true'
+        run: |
+          python3 -m pip install --user pyyaml
+          amp/deploy/extensions/build.sh --push --no-base-push --registry "$QUAY_NS"
+
   deploy:
     name: Amp GKE — deploy to itest-dev + smoke test
-    needs: images
+    needs: [decide, images]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
@@ -231,8 +270,14 @@ jobs:
           ENDPOINT_SERVICE_TYPE=ClusterIP \
           amp/deploy/up-gke.sh
 
+      # With amp_deploy_gke_extensions, the extension images were pushed above and
+      # the controller's catalog resolves pgvector — so exercise the ImageVolume
+      # opt-in + fork inheritance (SMOKE_EXTENSIONS=1). Requires the cluster's
+      # ImageVolume feature gate to be enabled on itest-dev.
       - name: Smoke test (amp/deploy/smoke-test.sh)
-        run: NS="$NS" amp/deploy/smoke-test.sh
+        env:
+          SMOKE_EXTENSIONS: ${{ (fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true') && '1' || '0' }}
+        run: NS="$NS" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" amp/deploy/smoke-test.sh
 
       - name: Dump controller/endpoint state on failure
         if: failure()

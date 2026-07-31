@@ -102,6 +102,17 @@ control plane stores the same 16 bytes (the `branch_id`) as a SQL `uuid` and
 converts with `hex.EncodeToString(id[:])` when rendering chart values. (The endpoint
 image receives it as the flat `BRANCH_ID` env var, #168.)
 
+### Extensions (ImageVolumes)
+
+Endpoints mount externalized PostgreSQL extensions (pgvector, …) as read-only
+Kubernetes ImageVolumes rather than baking them into the endpoint image. The
+controller resolves a branch's extension set (catalog defaults ∪ the branch's
+opted-in, fork-inherited set) to pinned images via
+[`internal/extensions`](../internal/extensions/catalog.go) and renders them into
+the chart's `endpoint.extensions`. The full design — build pipeline, the two
+PG18 path GUCs, and branch-fork inheritance — is in
+[`compute/architecture/extensions.md`](../../compute/architecture/extensions.md).
+
 ## Controller coordination + addressing
 
 With `controller.url` set (the controller path), the endpoint pod runs its branch

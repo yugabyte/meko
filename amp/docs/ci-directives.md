@@ -29,6 +29,7 @@ slow suite is what exercises those scenarios, so changing them always runs it.
 | `amp_integration_slow` | slow integration scenario suite (`test/integration/compute/run.sh slow`) | is correctness-sensitive (see below) |
 | `amp_generate_image` | controller container image build (`deploy/controller/Dockerfile`) | changes the `controller/` deploy surface or `deploy/controller/Dockerfile` |
 | `amp_deploy_gke` | build + push the four images to Quay and deploy to the itest-dev GKE cluster + smoke test ([`amp-control-plane-gke.yml`](../../.github/workflows/amp-control-plane-gke.yml)) | changes the `deploy/` k8s surface (Helm charts, `up-gke.sh`, Dockerfiles) or the control-plane deploy path. Also runs nightly on `main`. |
+| `amp_deploy_gke_extensions` | a superset of `amp_deploy_gke`: also builds + pushes the externalized-extension images (`deploy/extensions/build.sh --push`: the ABI-anchor PG18 base + pgvector) to Quay, and runs the smoke test with `SMOKE_EXTENSIONS=1` (the pgvector ImageVolume opt-in + fork inheritance) | changes `deploy/extensions/` (the extension build pipeline / manifest) or the endpoint's extension-mount path. Adds a cold PG18 base build (~30 min) on top of `amp_deploy_gke`. |
 
 ## When a change is correctness-sensitive (`amp_integration_slow`)
 

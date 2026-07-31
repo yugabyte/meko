@@ -193,6 +193,10 @@ type CreateEndpointInput struct {
 	// deployer/chart default (2 cores / 4Gi).
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Extensions are externalized extensions to enable on the endpoint (catalog
+	// names, pre-validated by the handler). The step persists them onto the
+	// branch's durable set and mounts them; nil leaves the branch set as-is.
+	Extensions []string `json:"extensions,omitempty"`
 }
 
 // CreateEndpoint records a create_endpoint task: a single create_endpoint step on
@@ -212,6 +216,7 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			PgVersion:  in.PgVersion,
 			CPU:        in.CPU,
 			Memory:     in.Memory,
+			Extensions: in.Extensions,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, endpointID.String(), steps)

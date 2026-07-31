@@ -12,6 +12,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/api"
 	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/extensions"
 	"github.com/yugabyte/amp/controller/internal/task"
 )
 
@@ -223,6 +224,81 @@ func TestEndpointDiskType(t *testing.T) {
 	}
 	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 1 {
 		t.Errorf("endpoints after network create = %v, want 1", l.Body)
+	}
+}
+
+// TestEndpointExtensions covers the createEndpoint extensions[] opt-in: a known
+// name is accepted, mounted onto the deployed endpoint (resolved to its pinned
+// image) and persisted onto the branch's durable set; an unknown name is a 400;
+// and requesting extensions with no catalog (feature off) is a 400.
+func TestEndpointExtensions(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewCatalog("quay.io/yugabyte")}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "ext-pool")
+	projectID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	rw := api.CreateEndpointRequestRoleReadWrite
+
+	// Unknown extension -> 400 before any task is planned.
+	unknown := []string{"not-a-real-ext"}
+	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &unknown})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(unknown ext): %v", err)
+	}
+	if bad.StatusCode() != http.StatusBadRequest || bad.JSON400 == nil {
+		t.Fatalf("unknown ext status = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
+	}
+
+	// Known extension -> 202, and once driven it is mounted + persisted.
+	want := []string{"pgvector"}
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &want})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(pgvector): %v", err)
+	}
+	if ok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("pgvector status = %d, want 202; body = %s", ok.StatusCode(), ok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	if len(dep.created) != 1 {
+		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
+	}
+	exts := dep.created[0].Extensions
+	if len(exts) != 1 || exts[0].Name != "pgvector" || exts[0].Image != "quay.io/yugabyte/amp-ext-pgvector:0.8.2" {
+		t.Fatalf("deploy spec extensions = %+v, want the pinned pgvector", exts)
+	}
+	// The opt-in is durable on the branch (so a fork inherits it).
+	persisted, _ := backend.BranchExtensions(ctx, projectID, branchID)
+	if len(persisted) != 1 || persisted[0] != "pgvector" {
+		t.Errorf("branch extensions = %v, want [pgvector] persisted", persisted)
+	}
+}
+
+// TestEndpointExtensionsUnsupported: requesting extensions when the controller
+// has no catalog (e.g. the Docker driver / feature off) is rejected with 400,
+// rather than silently ignored.
+func TestEndpointExtensionsUnsupported(t *testing.T) {
+	prov := api.Provisioning{Deployer: &fakeDeployer{}} // no Extensions catalog
+	client, backend, _ := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "ext-off-pool")
+	projectID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+
+	rw := api.CreateEndpointRequestRoleReadWrite
+	want := []string{"pgvector"}
+	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &want})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(ext, no catalog): %v", err)
+	}
+	if resp.StatusCode() != http.StatusBadRequest || resp.JSON400 == nil {
+		t.Fatalf("ext without catalog status = %d, want 400; body = %s", resp.StatusCode(), resp.Body)
 	}
 }
 

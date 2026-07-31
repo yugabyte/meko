@@ -77,3 +77,14 @@ Whether a YB password is configured at all (inline or via an existing secret).
 true
 {{- end -}}
 {{- end }}
+
+{{/*
+Kubernetes volume name for an extension's ImageVolume. A Volume/VolumeMount name
+must be an RFC 1123 DNS label (lowercase alphanumeric + '-'), but an extension
+name can carry '_' or uppercase (pg_cron, pg_stat_statements). Sanitize to keep
+the object valid while the mount path / GUCs still use the raw name. Input is the
+extension entry (with .name). Runs of invalid chars collapse to a single '-'.
+*/}}
+{{- define "yb-amp-endpoint.extVolumeName" -}}
+{{- printf "ext-%s" (regexReplaceAll "[^a-z0-9]+" (.name | lower) "-" | trimAll "-") -}}
+{{- end }}

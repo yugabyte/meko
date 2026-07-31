@@ -1,1 +1,0 @@
-SELECT checkpoints_timed FROM pg_catalog.pg_stat_bgwriter;

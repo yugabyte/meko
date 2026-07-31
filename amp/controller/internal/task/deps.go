@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/extensions"
 )
 
 // This file defines the *ports* the step catalog (the step_*.go files) depends
@@ -50,6 +51,18 @@ type StateStore interface {
 	// read_write endpoint (a different id violating the single-writer index) or a
 	// missing branch is a real error.
 	EnsureEndpointRecord(ctx context.Context, endpointID, projectID, branchID uuid.UUID, role string, config []byte) error
+
+	// BranchExtensions returns the branch's opted-in externalized extension names
+	// (the durable set the create_endpoint step unions with the catalog defaults
+	// to resolve the endpoint's ImageVolume mounts). An absent branch yields an
+	// empty slice, not an error.
+	BranchExtensions(ctx context.Context, projectID, branchID uuid.UUID) ([]string, error)
+
+	// AddBranchExtensions adds names to the branch's durable extension set (the
+	// createEndpoint opt-in). It is an absolute union — extensions becomes
+	// distinct(existing ∪ names) — so a task replay is idempotent. An absent
+	// branch is a no-op (mirrors BranchExtensions); empty names is a no-op.
+	AddBranchExtensions(ctx context.Context, projectID, branchID uuid.UUID, names []string) error
 
 	// SetEndpointAddress records an endpoint's client address and its tailnet
 	// address (absolute UPDATE, idempotent). tailnetAddress is "" when the
@@ -134,6 +147,11 @@ type Deps struct {
 	Deployer      deploy.Deployer
 	EndpointYB    deploy.YBConn
 	ControllerURL string // controller URL a launched endpoint uses to reach the controller
+	// Extensions is the externalized-extension catalog the create_endpoint step
+	// resolves a branch's extension set against (names -> pinned images). Nil
+	// disables externalized extensions (the endpoint ships only image-baked ones),
+	// e.g. under the Docker driver or when the feature is off.
+	Extensions *extensions.Catalog
 }
 
 // hex32 renders a UUID as the storage layer's 32-lowercase-hex BranchId (no

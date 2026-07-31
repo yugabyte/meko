@@ -83,6 +83,59 @@ tests:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '"max_connections":"200"'
 
+  - it: leaves preload + settings untouched when no extensions are mounted
+    asserts:
+      - equal:
+          path: data.SHARED_PRELOAD_LIBRARIES
+          value: "yb_amp"
+      - equal:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          value: "{}"
+
+  - it: derives extension_control_path and dynamic_library_path from mounted extensions
+    set:
+      endpoint:
+        extraSettings:
+          work_mem: "16MB"
+        extensions:
+          - name: vector
+            image: quay.io/yugabyte/amp-ext-pgvector:0.8.2
+            preload: false
+    asserts:
+      # A non-preload extension does not touch shared_preload_libraries.
+      - equal:
+          path: data.SHARED_PRELOAD_LIBRARIES
+          value: "yb_amp"
+      # The two path GUCs are prepended with the PG18 defaults, then the mount.
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"extension_control_path":"\$system:/extensions/vector/share/postgresql"'
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"dynamic_library_path":"\$libdir:/extensions/vector/lib/postgresql"'
+      # Pre-existing extraSettings survive the merge.
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '"work_mem":"16MB"'
+
+  - it: appends preload extensions (using library override) to shared_preload_libraries
+    set:
+      endpoint:
+        extensions:
+          - name: pg_cron
+            image: quay.io/yugabyte/amp-ext-pg_cron:1.6
+            preload: true
+          - name: vector
+            image: quay.io/yugabyte/amp-ext-pgvector:0.8.2
+            preload: false
+    asserts:
+      - equal:
+          path: data.SHARED_PRELOAD_LIBRARIES
+          value: "yb_amp,pg_cron"
+      - matchRegex:
+          path: data.COMPUTE_EXTRA_SETTINGS_JSON
+          pattern: '/extensions/pg_cron/share/postgresql:/extensions/vector/share/postgresql'
+
   - it: applies internal service port overrides
     set:
       ports:

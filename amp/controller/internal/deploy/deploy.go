@@ -42,6 +42,22 @@ type EndpointSpec struct {
 	// Empty defaults to 2 cores / 4Gi at the deployer (matching the chart default).
 	CPU    string
 	Memory string
+	// Extensions are the externalized PostgreSQL extensions to mount into the
+	// endpoint as read-only ImageVolumes (compute/architecture/extensions.md).
+	// The Kubernetes deployer renders one volume per entry and derives
+	// extension_control_path / dynamic_library_path (and shared_preload_libraries
+	// for Preload entries) from them; the Docker deployer does not support
+	// ImageVolumes and ignores this.
+	Extensions []Extension
+}
+
+// Extension is one externalized extension to mount into an endpoint: its name
+// (the /extensions/<Name> mount subdir), the OCI image built by
+// deploy/extensions, and whether it needs a shared_preload_libraries entry.
+type Extension struct {
+	Name    string
+	Image   string
+	Preload bool
 }
 
 // ResizeSpec is a request to change an existing endpoint's compute reservation.

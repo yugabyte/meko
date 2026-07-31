@@ -724,6 +724,19 @@ type endpointValues struct {
 	// Resources is the pod's CPU + memory reservation. The chart renders each
 	// value as both a request and a limit, so the pod gets Guaranteed QoS.
 	Resources resourceValues `json:"resources"`
+	// Extensions are the externalized extensions to mount as ImageVolumes; the
+	// chart renders one volume per entry and derives the extension GUCs from
+	// them. Omitted (empty) leaves the chart's no-extensions default.
+	Extensions []extensionValues `json:"extensions,omitempty"`
+}
+
+// extensionValues mirrors an entry of the chart's endpoint.extensions list: the
+// mount name/subdir, the OCI image reference, and whether it needs a
+// shared_preload_libraries entry.
+type extensionValues struct {
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	Preload bool   `json:"preload"`
 }
 
 // resourceValues is the endpoint container's compute reservation. cpu and memory
@@ -769,6 +782,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			ComputePort: k.cfg.ComputePort,
 			BranchId:    spec.BranchID,
 			Resources:   resourceValues{CPU: cpu, Memory: memory},
+			Extensions:  extensionValuesFor(spec.Extensions),
 		},
 		Controller: controllerValues{URL: spec.ControllerURL},
 		Service:    serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},
@@ -795,4 +809,18 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 		v.NodeSelector = k.cfg.NodeSelector
 	}
 	return v
+}
+
+// extensionValuesFor maps the spec's extensions to the chart's endpoint.extensions
+// list. Nil in => nil out, so the marshaled values omit the key entirely and the
+// chart's no-extensions default applies.
+func extensionValuesFor(exts []Extension) []extensionValues {
+	if len(exts) == 0 {
+		return nil
+	}
+	out := make([]extensionValues, len(exts))
+	for i, e := range exts {
+		out[i] = extensionValues{Name: e.Name, Image: e.Image, Preload: e.Preload}
+	}
+	return out
 }

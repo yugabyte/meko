@@ -47,6 +47,7 @@ func drainTasks(t *testing.T, store *task.MemStore, backend core.Backend, prov a
 		EndpointYB:    prov.EndpointYB,
 		ControllerURL: prov.ControllerURL,
 		Recipes:       prov.Recipes,
+		Extensions:    prov.Extensions,
 	}
 	cfg := config.TaskConfig{
 		PollInterval:  time.Millisecond,

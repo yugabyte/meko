@@ -22,6 +22,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/db"
 	"github.com/yugabyte/amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/extensions"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 	"github.com/yugabyte/amp/controller/internal/metrics"
 	"github.com/yugabyte/amp/controller/internal/node"
@@ -132,10 +133,15 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				BackingYBExistingSecretKey: cfg.Deploy.BackingYBExistingSecretKey,
 				Timeout:                    cfg.Deploy.Timeout,
 			}, logger)
+			// Externalized extensions are mounted as ImageVolumes, which only the
+			// Kubernetes runtime supports; the catalog resolves a branch's set to
+			// pinned images for the endpoint spec (compute/architecture/extensions.md).
+			prov.Extensions = extensions.NewCatalog(cfg.Deploy.ExtensionRegistry)
 			logger.Info("kubernetes endpoint deployer enabled",
 				"namespace", cfg.Deploy.Namespace,
 				"chart", cfg.Deploy.ChartPath,
 				"image", cfg.Deploy.EndpointImageRepo+":"+cfg.Deploy.EndpointImageTag,
+				"extension_registry", cfg.Deploy.ExtensionRegistry,
 				"backing_yb", cfg.Deploy.BackingYBHostPorts,
 				"storage_class", cfg.Deploy.StorageClass,
 				"controller_url", prov.ControllerURL)
@@ -240,6 +246,7 @@ func runServe(args []string) error {
 		EndpointYB:    prov.EndpointYB,
 		ControllerURL: prov.ControllerURL,
 		Recipes:       prov.Recipes,
+		Extensions:    prov.Extensions,
 	}
 	// Prometheus instrumentation: one registry, shared by the worker (task
 	// metrics) and the HTTP server (request + runtime metrics, and the /metrics

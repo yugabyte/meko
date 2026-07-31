@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/amp/controller/internal/deploy"
+	"github.com/yugabyte/amp/controller/internal/extensions"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 )
 
@@ -30,6 +31,10 @@ type CreateEndpointArgs struct {
 	// the deployer/chart default (2 cores / 4Gi).
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Extensions are externalized extensions to enable on this endpoint (catalog
+	// names). The step upserts them onto the branch's durable set before
+	// resolving mounts, so the opt-in survives a recreate and forks inherit it.
+	Extensions []string `json:"extensions,omitempty"`
 }
 
 // createEndpointStep records the endpoint, provisions the compute, and records
@@ -40,10 +45,11 @@ type CreateEndpointArgs struct {
 // construction (deployer is required); only the embedded args are serialized.
 type createEndpointStep struct {
 	CreateEndpointArgs
-	state    StateStore
-	deployer deploy.Deployer
-	yb       deploy.YBConn
-	scURL    string
+	state      StateStore
+	deployer   deploy.Deployer
+	yb         deploy.YBConn
+	scURL      string
+	extensions *extensions.Catalog
 }
 
 // NewCreateEndpointStep binds create_endpoint args + its deps into an executable step.
@@ -54,6 +60,7 @@ func NewCreateEndpointStep(args CreateEndpointArgs, deps Deps) Step {
 		deployer:           deps.Deployer,
 		yb:                 deps.EndpointYB,
 		scURL:              deps.ControllerURL,
+		extensions:         deps.Extensions,
 	}
 }
 
@@ -73,10 +80,30 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	}
 	logger := applog.FromContext(ctx).With(applog.KeyEndpointID, s.EndpointID.String())
 
+	// Persist any requested opt-in extensions onto the branch's durable set
+	// first, so they survive a recreate and forks inherit them. Idempotent
+	// (absolute union); a no-op when none were requested. Only meaningful with a
+	// catalog (the handler rejects opt-ins otherwise), but harmless without one.
+	if len(s.Extensions) > 0 {
+		if err := s.state.AddBranchExtensions(ctx, s.ProjectID, s.BranchID, s.Extensions); err != nil {
+			return Fail(fmt.Errorf("add branch extensions: %w", err))
+		}
+	}
+
+	// Resolve the endpoint's externalized extensions: the branch's opted-in set
+	// (inherited across forks, plus anything just added above) unioned with the
+	// catalog defaults, mapped to pinned images. Nil catalog => none (Docker
+	// driver / feature off). Done before the record so the resolved set is
+	// persisted in the recreate config.
+	extSpecs, extNames, err := s.resolveExtensions(ctx)
+	if err != nil {
+		return Fail(err)
+	}
+
 	// Record the endpoint row first: it claims the single-writer slot (a second
 	// writer is rejected here) and gives the deploy a stable id, before any
 	// compute is spent. config is the spec stored for (re)creation.
-	config, err := endpointConfig(s.CreateEndpointArgs)
+	config, err := endpointConfig(s.CreateEndpointArgs, extNames)
 	if err != nil {
 		return Fail(err)
 	}
@@ -94,6 +121,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		ControllerURL: s.scURL,
 		CPU:           s.CPU,
 		Memory:        s.Memory,
+		Extensions:    extSpecs,
 	}
 
 	deployed, err := s.deployer.CreateEndpoint(ctx, spec)
@@ -108,18 +136,68 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}))
 }
 
+// resolveExtensions computes the endpoint's externalized extension mounts: the
+// branch's opted-in set (durable, inherited across forks) unioned with the
+// catalog defaults, resolved to pinned image references. It returns the deploy
+// specs (for the EndpointSpec) and the resolved names (for the recreate config).
+// With no catalog it returns (nil, nil) — the endpoint ships only image-baked
+// extensions. Unknown names are dropped by the catalog, so a stale branch entry
+// can't wedge the deploy.
+func (s *createEndpointStep) resolveExtensions(ctx context.Context) ([]deploy.Extension, []string, error) {
+	if s.extensions == nil {
+		return nil, nil, nil
+	}
+	opted, err := s.state.BranchExtensions(ctx, s.ProjectID, s.BranchID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read branch extensions: %w", err)
+	}
+	names := unionStrings(s.extensions.DefaultNames(), opted)
+	resolved := s.extensions.Resolve(names)
+	if len(resolved) == 0 {
+		return nil, nil, nil
+	}
+	specs := make([]deploy.Extension, len(resolved))
+	got := make([]string, len(resolved))
+	for i, r := range resolved {
+		specs[i] = deploy.Extension{Name: r.Name, Image: r.Image, Preload: r.Preload}
+		got[i] = r.Name
+	}
+	return specs, got, nil
+}
+
+// unionStrings returns a ∪ b preserving order (a first, then b's new entries),
+// de-duplicated.
+func unionStrings(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	var out []string
+	for _, s := range append(append([]string(nil), a...), b...) {
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
 // endpointConfig is the spec stored on the endpoint row for (re)creation. The
 // endpoint's own id is the row id, so it is not part of the recreate spec. This
-// is the JSON persisted on the endpoint row for (re)creation.
-func endpointConfig(args CreateEndpointArgs) ([]byte, error) {
-	b, err := json.Marshal(map[string]any{
+// is the JSON persisted on the endpoint row for (re)creation. extensions is the
+// resolved externalized-extension set (names), recorded so a recreate/audit sees
+// what the endpoint mounted; omitted when empty.
+func endpointConfig(args CreateEndpointArgs, extensions []string) ([]byte, error) {
+	cfg := map[string]any{
 		"project_id": args.ProjectID,
 		"branch_id":  args.BranchID,
 		"role":       args.Role,
 		"pg_version": args.PgVersion,
 		"cpu":        args.CPU,
 		"memory":     args.Memory,
-	})
+	}
+	if len(extensions) > 0 {
+		cfg["extensions"] = extensions
+	}
+	b, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("encode endpoint config: %w", err)
 	}

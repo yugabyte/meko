@@ -471,6 +471,12 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, projectID, 
 		return ErrConflict
 	}
 	pid := parentBranchID
+	// A fork inherits a snapshot of the parent's extension set (copied, so a
+	// later change to either side doesn't alias the other).
+	var inherited []string
+	if len(parent.Extensions) > 0 {
+		inherited = append([]string(nil), parent.Extensions...)
+	}
 	m.branches[branchID] = Branch{
 		ProjectID:      projectID,
 		BranchID:       branchID,
@@ -480,8 +486,51 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, projectID, 
 		ParentBranchID: &pid,
 		ForkLSN:        forkLSN,
 		CreatedAt:      m.now(),
+		Extensions:     inherited,
 	}
 	m.branchNames[nk] = struct{}{}
+	return nil
+}
+
+// BranchExtensions returns the branch's opted-in extension names. An absent
+// branch yields an empty slice, not an error (mirrors PgBackend).
+func (m *MemBackend) BranchExtensions(_ context.Context, projectID, branchID uuid.UUID) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.branches[branchID]
+	if !ok || b.ProjectID != projectID {
+		return nil, nil
+	}
+	if len(b.Extensions) == 0 {
+		return nil, nil
+	}
+	return append([]string(nil), b.Extensions...), nil
+}
+
+// AddBranchExtensions adds names to the branch's durable extension set (absolute
+// union, existing-first order preserved). Idempotent; an absent branch or empty
+// names is a no-op. Mirrors PgBackend.
+func (m *MemBackend) AddBranchExtensions(_ context.Context, projectID, branchID uuid.UUID, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.branches[branchID]
+	if !ok || b.ProjectID != projectID {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(b.Extensions)+len(names))
+	union := make([]string, 0, len(b.Extensions)+len(names))
+	for _, n := range append(append([]string(nil), b.Extensions...), names...) {
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		union = append(union, n)
+	}
+	b.Extensions = union
+	m.branches[branchID] = b
 	return nil
 }
 

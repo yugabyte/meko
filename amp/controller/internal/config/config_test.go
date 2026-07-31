@@ -378,6 +378,36 @@ func TestDeployFromEnv(t *testing.T) {
 	}
 }
 
+func TestExtensionRegistryDefaultFlagEnv(t *testing.T) {
+	// Default: quay.io/yugabyte (resolved regardless of whether deploy is on).
+	c, err := Load([]string{"--database-url", "postgres://localhost/db"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Deploy.ExtensionRegistry != "quay.io/yugabyte" {
+		t.Errorf("ExtensionRegistry = %q, want default quay.io/yugabyte", c.Deploy.ExtensionRegistry)
+	}
+
+	// Flag override.
+	c, err = Load([]string{"--database-url", "postgres://localhost/db", "--extension-registry", "reg.example.com/amp"})
+	if err != nil {
+		t.Fatalf("Load(flag): %v", err)
+	}
+	if c.Deploy.ExtensionRegistry != "reg.example.com/amp" {
+		t.Errorf("ExtensionRegistry = %q, want the flag value", c.Deploy.ExtensionRegistry)
+	}
+
+	// Env, with the flag winning over it.
+	t.Setenv("AMP_DATABASE_URL", "postgres://localhost/db")
+	t.Setenv("AMP_EXTENSION_REGISTRY", "env.example.com/amp")
+	if c, err = Load(nil); err != nil || c.Deploy.ExtensionRegistry != "env.example.com/amp" {
+		t.Fatalf("env ExtensionRegistry = %q err=%v, want env.example.com/amp", c.Deploy.ExtensionRegistry, err)
+	}
+	if c, err = Load([]string{"--extension-registry", "flag.example.com/amp"}); err != nil || c.Deploy.ExtensionRegistry != "flag.example.com/amp" {
+		t.Fatalf("flag-over-env ExtensionRegistry = %q err=%v, want flag.example.com/amp", c.Deploy.ExtensionRegistry, err)
+	}
+}
+
 func TestDeployFlagOverridesEnv(t *testing.T) {
 	chart := t.TempDir()
 	t.Setenv("AMP_DATABASE_URL", "postgres://localhost/db")

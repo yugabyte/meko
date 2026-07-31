@@ -63,6 +63,7 @@ type DeployConfig struct {
 
 	EndpointImageRepo  string            // endpoint container image repository
 	EndpointImageTag   string            // endpoint container image tag
+	ExtensionRegistry  string            // registry the externalized-extension images (amp-ext-*) live under; empty = bare refs
 	PullSecret         string            // imagePullSecrets name in the namespace (empty = none)
 	ComputePort        int               // compute Postgres port the endpoint Service publishes
 	ServiceType        string            // endpoint Service type: "ClusterIP" (default), "NodePort", or "LoadBalancer"
@@ -158,6 +159,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.KubeconfigPath, "kubeconfig", env("AMP_KUBECONFIG", ""), "KUBECONFIG for helm (empty = default discovery / in-cluster)")
 	fs.StringVar(&d.EndpointImageRepo, "endpoint-image-repo", env("AMP_ENDPOINT_IMAGE_REPO", ""), "endpoint container image repository")
 	fs.StringVar(&d.EndpointImageTag, "endpoint-image-tag", env("AMP_ENDPOINT_IMAGE_TAG", "latest"), "endpoint container image tag")
+	fs.StringVar(&d.ExtensionRegistry, "extension-registry", env("AMP_EXTENSION_REGISTRY", "quay.io/yugabyte"), "k8s: registry the externalized-extension images (amp-ext-<name>:<version>) are pulled from")
 	fs.StringVar(&d.PullSecret, "deploy-pull-secret", env("AMP_DEPLOY_PULL_SECRET", ""), "imagePullSecrets name in the namespace (empty = none)")
 	fs.IntVar(&d.ComputePort, "deploy-compute-port", envInt("AMP_DEPLOY_COMPUTE_PORT", 55433), "compute Postgres port the endpoint Service publishes")
 	fs.StringVar(&d.ServiceType, "deploy-service-type", env("AMP_DEPLOY_SERVICE_TYPE", "ClusterIP"), "k8s: endpoint Service type — ClusterIP (default), NodePort, or LoadBalancer")

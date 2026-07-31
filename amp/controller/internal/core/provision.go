@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -70,13 +72,73 @@ func (b *PgBackend) EnsureProject(ctx context.Context, poolID, projectID, branch
 func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, projectID, branchID uuid.UUID, name, forkLSN string, pgVersion int) error {
 	// is_default = false; record the fork ancestry. The explicit pg_version is the
 	// parent's, resolved write-ahead at plan time (a branch inherits its
-	// ancestor's version), so it never drifts from the parent.
+	// ancestor's version), so it never drifts from the parent. Idempotent:
+	// ON CONFLICT DO NOTHING. The branch's extension set is NOT here — it lives on
+	// the shared storage-branch record (amp_registry.branches), where a fork
+	// inherits it via RecordBranch (compute/architecture/extensions.md#branch-fork).
 	if _, err := b.pool.Exec(ctx,
 		`INSERT INTO branch (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
 		 VALUES ($1::uuid, $2::uuid, $3, $4, false, $5::uuid, $6::pg_lsn)
 		 ON CONFLICT (project_id, branch_id) DO NOTHING`,
 		projectID.String(), branchID.String(), name, pgVersion, parentBranchID.String(), forkLSN); err != nil {
 		return mapBranchErr("insert branch", err)
+	}
+	return nil
+}
+
+// BranchExtensions returns the branch's opted-in extension names (the durable
+// set an endpoint unions with the catalog defaults at create time). The set
+// lives on the shared storage-branch record (amp_registry.branches), keyed by
+// the 32-hex storage branch id, so a fork and a read-replica endpoint both see
+// it. An absent branch yields an empty slice, not an error, so the endpoint step
+// degrades to the defaults rather than failing. See
+// compute/architecture/extensions.md.
+func (b *PgBackend) BranchExtensions(ctx context.Context, _, branchID uuid.UUID) ([]string, error) {
+	var raw []byte
+	err := b.pool.QueryRow(ctx,
+		`SELECT extensions FROM amp_registry.branches WHERE branch_id = $1`,
+		storageBranchID(branchID)).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read branch extensions: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var names []string
+	if err := json.Unmarshal(raw, &names); err != nil {
+		return nil, fmt.Errorf("decode branch extensions: %w", err)
+	}
+	return names, nil
+}
+
+// AddBranchExtensions adds names to the branch's durable extension set on the
+// shared storage-branch record (amp_registry.branches, keyed by the 32-hex
+// storage branch id) — the createEndpoint opt-in the create_endpoint step
+// persists before resolving mounts. It is an *absolute* union — extensions is
+// recomputed as the sorted distinct set of the existing entries ∪ names — so
+// replaying the step can't double-apply (satisfying the YB idempotency contract;
+// no SET col = col + …). An absent branch matches zero rows (a no-op, mirroring
+// BranchExtensions).
+func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UUID, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	payload, err := json.Marshal(names)
+	if err != nil {
+		return fmt.Errorf("encode branch extensions: %w", err)
+	}
+	if _, err := b.pool.Exec(ctx,
+		`UPDATE amp_registry.branches
+		    SET extensions = COALESCE(
+		        (SELECT jsonb_agg(DISTINCT e ORDER BY e)
+		           FROM jsonb_array_elements_text(extensions || $2::jsonb) AS e),
+		        '[]'::jsonb)
+		  WHERE branch_id = $1`,
+		storageBranchID(branchID), string(payload)); err != nil {
+		return fmt.Errorf("add branch extensions: %w", err)
 	}
 	return nil
 }
@@ -212,6 +274,15 @@ func (b *PgBackend) DeleteProject(ctx context.Context, projectID uuid.UUID) erro
 		return fmt.Errorf("commit delete project: %w", err)
 	}
 	return nil
+}
+
+// storageBranchID renders a branch UUID as the storage layer's 32-lowercase-hex
+// BranchId (no dashes) — the key of amp_registry.branches, where the branch's
+// extension set lives. It matches the task layer's hex32 and the API layer's
+// identical rendering (the storage layer is flat — the branch id is the whole
+// storage identity, with no separate tenant).
+func storageBranchID(id uuid.UUID) string {
+	return hex.EncodeToString(id[:])
 }
 
 // scanUUIDs scans a single-column (id::text) result set into a slice of UUIDs.

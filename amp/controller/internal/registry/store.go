@@ -190,10 +190,31 @@ func (s *Store) recordBranch(ctx context.Context, branchID string, req BranchCre
 	}
 	defer tx.Rollback(ctx)
 
+	// `extensions` is inherited from the ancestor at fork time: the child's row is
+	// seeded with a snapshot of the ancestor's opted-in extension set (empty for a
+	// bootstrap branch, whose ancestor is NULL). We resolve it in a *separate*
+	// SELECT and pass it as a plain parameter rather than a subquery in the INSERT
+	// VALUES: YB does not support a table-referencing subquery inside an
+	// `INSERT ... ON CONFLICT DO UPDATE`. The scalar COALESCE always returns one
+	// row (NULL -> '[]'), so there is no ErrNoRows to handle. The value is
+	// deliberately NOT written in the ON CONFLICT arm: a re-record must never
+	// clobber a set the branch's own create_endpoint opt-in (AddBranchExtensions)
+	// may have unioned in after this row was first written. See
+	// compute/architecture/extensions.md#branch-fork.
+	inheritedExts := []byte("[]")
+	if req.AncestorBranchID != nil {
+		var raw []byte
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE((SELECT extensions FROM amp_registry.branches WHERE branch_id = $1), '[]'::jsonb)`,
+			*req.AncestorBranchID).Scan(&raw); err != nil {
+			return fmt.Errorf("read ancestor extensions: %w", err)
+		}
+		inheritedExts = raw
+	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.branches
-		   (branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn)
-		 VALUES ($1, $2, $3, $4, $5::pg_lsn)
+		   (branch_id, branch_name, pg_version, ancestor_branch_id, start_lsn, extensions)
+		 VALUES ($1, $2, $3, $4, $5::pg_lsn, $6::jsonb)
 		 ON CONFLICT (branch_id) DO UPDATE
 		    SET branch_name        = EXCLUDED.branch_name,
 		        pg_version         = EXCLUDED.pg_version,
@@ -201,7 +222,7 @@ func (s *Store) recordBranch(ctx context.Context, branchID string, req BranchCre
 		        start_lsn          = EXCLUDED.start_lsn
 		  WHERE amp_registry.branches.pg_version IS NULL
 		    AND amp_registry.branches.dropped_at IS NULL`,
-		branchID, req.BranchName, req.PgVersion, req.AncestorBranchID, req.StartLSN); err != nil {
+		branchID, req.BranchName, req.PgVersion, req.AncestorBranchID, req.StartLSN, string(inheritedExts)); err != nil {
 		return fmt.Errorf("record branch: %w", err)
 	}
 

@@ -20,8 +20,33 @@ data:
   ENDPOINT_PG_VERSION: {{ .Values.endpoint.pgVersion | quote }}
   COMPUTE_PORT: {{ .Values.endpoint.computePort | quote }}
   BRANCH_ID: {{ .Values.endpoint.branchId | quote }}
-  SHARED_PRELOAD_LIBRARIES: {{ .Values.endpoint.sharedPreloadLibraries | quote }}
-  COMPUTE_EXTRA_SETTINGS_JSON: {{ .Values.endpoint.extraSettings | toJson | quote }}
+  {{- /*
+    Extensions mounted as ImageVolumes contribute two things:
+      * their library name to shared_preload_libraries (preload: true only), and
+      * their share/ + lib/ dirs to extension_control_path / dynamic_library_path
+        (prepended with the PG18 defaults $system / $libdir so the built-in and
+        remote-downloaded extensions still resolve).
+    extension_control_path entries are sharedir bases: PG18 appends "/extension"
+    to each non-$system entry itself (get_extension_control_directories), so we
+    pass .../share/postgresql, NOT .../share/postgresql/extension.
+  */ -}}
+  {{- $preload := .Values.endpoint.sharedPreloadLibraries }}
+  {{- $extra := deepCopy .Values.endpoint.extraSettings }}
+  {{- if .Values.endpoint.extensions }}
+  {{- $ctrlPaths := list "$system" }}
+  {{- $libPaths := list "$libdir" }}
+  {{- range .Values.endpoint.extensions }}
+  {{- $ctrlPaths = append $ctrlPaths (printf "/extensions/%s/share/postgresql" .name) }}
+  {{- $libPaths = append $libPaths (printf "/extensions/%s/lib/postgresql" .name) }}
+  {{- if .preload }}
+  {{- $preload = printf "%s,%s" $preload (default .name .library) }}
+  {{- end }}
+  {{- end }}
+  {{- $_ := set $extra "extension_control_path" (join ":" $ctrlPaths) }}
+  {{- $_ := set $extra "dynamic_library_path" (join ":" $libPaths) }}
+  {{- end }}
+  SHARED_PRELOAD_LIBRARIES: {{ $preload | quote }}
+  COMPUTE_EXTRA_SETTINGS_JSON: {{ $extra | toJson | quote }}
 
   {{- if .Values.controller.url }}
   # --- Controller coordination ---

@@ -108,6 +108,18 @@ type CreateEndpointRequest struct {
 	// supported and is rejected with 400.
 	DiskType *CreateEndpointRequestDiskType `json:"disk_type,omitempty"`
 
+	// Extensions Externalized PostgreSQL extensions to opt this endpoint's **branch**
+	// into, by catalog name (e.g. `pgvector`). Enabling is a branch
+	// property, not an endpoint one: each name is added to the branch's
+	// durable extension set (so branch forks inherit it and every endpoint
+	// on the branch picks it up) and mounted into the pod as a read-only
+	// Kubernetes ImageVolume, with `extension_control_path` /
+	// `dynamic_library_path` pointed at it so `CREATE EXTENSION` resolves.
+	// Unknown names are rejected with 400. Requires the Kubernetes deployer;
+	// rejected when externalized extensions are unavailable (e.g. the Docker
+	// driver). See compute/architecture/extensions.md.
+	Extensions *[]string `json:"extensions,omitempty"`
+
 	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
 	// Kubernetes resource quantity and is applied as BOTH the request and the
 	// limit on the endpoint container, so the pod is scheduled with the

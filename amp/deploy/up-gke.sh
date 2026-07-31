@@ -46,10 +46,10 @@ TAG="${TAG:-}"                                       # image tag; empty => lates
 BUILD="${BUILD:-0}"                                  # 1 => build + push all images first
 
 # Image repo *names* under REGISTRY. Full ref is ${REGISTRY}/${repo}:${TAG}.
-CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO:-amp/controller}"
-ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO:-amp/endpoint}"
-UI_IMAGE_REPO="${UI_IMAGE_REPO:-amp/controller-ui}"
-MCP_IMAGE_REPO="${MCP_IMAGE_REPO:-amp/mcp}"
+CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO:-amp-controller}"
+ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO:-amp-endpoint}"
+UI_IMAGE_REPO="${UI_IMAGE_REPO:-amp-controller-ui}"
+MCP_IMAGE_REPO="${MCP_IMAGE_REPO:-amp-mcp}"
 
 # Pull auth. Four modes, selected by PULL_SECRET / GCR_KEY_FILE /
 # PULL_SECRET_DOCKERCONFIGJSON (checked in that order when PULL_SECRET is set):

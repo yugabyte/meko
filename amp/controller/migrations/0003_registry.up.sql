@@ -35,12 +35,21 @@ CREATE SCHEMA IF NOT EXISTS amp_registry;
 --
 -- The branch's data-plane state (consistent LSN, WAL start, the daemons' own
 -- column groups) lives in `amp_storage.branch_state`, keyed by the same id.
+--
+-- `extensions` is the branch's opted-in externalized extension set (the names,
+-- beyond the always-mounted catalog defaults, that endpoints on this branch
+-- mount as ImageVolumes — see compute/architecture/extensions.md). It lives here,
+-- on the shared branch-identity record, so every branch-creation path inherits
+-- it: RecordBranch copies the ancestor's set into a fork's row at create time,
+-- and both a fork and a new read-replica endpoint on the branch pick it up. The
+-- create_endpoint opt-in unions names in; defaults to the empty set.
 CREATE TABLE IF NOT EXISTS amp_registry.branches (
     branch_id              VARCHAR NOT NULL,
     branch_name            VARCHAR,
     pg_version             INTEGER,
     ancestor_branch_id     VARCHAR,
     start_lsn              pg_lsn,
+    extensions             JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     dropped_at             TIMESTAMPTZ,
     PRIMARY KEY (branch_id)

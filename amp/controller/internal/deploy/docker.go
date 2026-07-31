@@ -83,6 +83,11 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		"BRANCH_ID":           spec.BranchID,
 		"ENDPOINT_PG_VERSION": strconv.Itoa(spec.PgVersion),
 	}
+	// TODO(extensions): spec.Extensions are mounted as Kubernetes ImageVolumes
+	// (compute/architecture/extensions.md); the Docker runtime has no equivalent,
+	// so a dev endpoint here ships only the extensions baked into the image. If
+	// dev needs externalized extensions, bind-mount each image's tree under
+	// /extensions/<name> and set the extension GUCs in COMPUTE_EXTRA_SETTINGS_JSON.
 	if spec.ControllerURL != "" {
 		// SC-coordinated: the controller reaches this endpoint's services by its
 		// container name on the shared network, at their internal ports.

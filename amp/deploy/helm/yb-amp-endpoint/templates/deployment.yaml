@@ -139,6 +139,16 @@ spec:
           volumeMounts:
             - name: run
               mountPath: /data
+            {{- range .Values.endpoint.extensions }}
+            # Extension ImageVolume: read-only tree with share/ (control+SQL)
+            # and lib/ (the .so). extension_control_path / dynamic_library_path
+            # (derived in the ConfigMap) point PostgreSQL at these subdirs. The
+            # volume name is sanitized (DNS-1123) but the mount path keeps the raw
+            # extension name.
+            - name: {{ include "yb-amp-endpoint.extVolumeName" . }}
+              mountPath: /extensions/{{ .name }}
+              readOnly: true
+            {{- end }}
         {{- if .Values.metrics.postgresExporter.enabled }}
         # postgres_exporter sidecar: scrapes the compute's Postgres over the pod's
         # shared loopback and exposes Prometheus metrics for the amp metrics
@@ -184,6 +194,15 @@ spec:
         {{- else }}
           emptyDir:
             sizeLimit: {{ .Values.runDir.sizeLimit }}
+        {{- end }}
+        {{- range .Values.endpoint.extensions }}
+        # OCI ImageVolume (k8s 1.33+ beta, feature gate ImageVolume): mounts the
+        # extension image's filesystem read-only. Built by deploy/extensions. The
+        # volume name is sanitized to a valid DNS-1123 label (see helper).
+        - name: {{ include "yb-amp-endpoint.extVolumeName" . }}
+          image:
+            reference: {{ .image | quote }}
+            pullPolicy: IfNotPresent
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

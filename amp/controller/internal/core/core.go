@@ -91,6 +91,10 @@ type Branch struct {
 	// "X/X" pg_lsn form), or "" for the default branch.
 	ForkLSN   string
 	CreatedAt time.Time
+	// Extensions is the branch's opted-in externalized extension set (beyond the
+	// catalog defaults). A fork inherits its parent's set. See
+	// compute/architecture/extensions.md.
+	Extensions []string
 }
 
 // Endpoint is the durable record of a compute endpoint on a branch. Address

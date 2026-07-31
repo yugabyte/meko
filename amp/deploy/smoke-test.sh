@@ -25,6 +25,15 @@
 #   - deleting a branch that still has child forks is refused with 409
 #   - delete_project cascades (retires endpoints, drops branches + project)
 #
+# Optional (SMOKE_EXTENSIONS=1): the externalized-extension path — create an
+# endpoint that opts into pgvector (extensions:["pgvector"]), assert the
+# ImageVolume mounted at /extensions/pgvector, `CREATE EXTENSION vector`, store
+# real vector rows and read them back with a nearest-neighbour (`<->`) query.
+# (The fork-inheritance sub-test is commented out pending #440 — a pre-existing
+# pageserver attach bug crash-loops the fork endpoint; see the block near the
+# end of the SMOKE_EXTENSIONS section.) Requires the cluster's ImageVolume
+# feature gate and images pushed by deploy/extensions/build.sh.
+#
 # It cleans up everything it creates (its project is torn down by the cascade
 # delete it exercises; the pool/user rows and any stray endpoint Helm releases are
 # removed at the end). Re-runnable. Pass KEEP=1 to leave resources for inspection.
@@ -101,6 +110,18 @@ psql_pod() {
   # no header/padding/footer — the grep assertions below anchor on that exact form.
   kubectl -n "$NS" exec -i "$pod" -- \
     "$PSQL_BIN" -h "$host" -p "$port" -U cloud_admin -d postgres -tA -v ON_ERROR_STOP=1
+}
+
+# wait_ready_pod <endpoint-id> -> echoes the endpoint pod name (no pod/ prefix)
+# once its container is Ready; empty on timeout.
+wait_ready_pod() {
+  local ep="$1" pod=""
+  for ((i=0; i<60; i++)); do
+    pod=$(kubectl -n "$NS" get pods -o name 2>/dev/null | grep "yb-ep-$ep" | head -1)
+    [ -n "$pod" ] && [ "$(kubectl -n "$NS" get "$pod" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" = true ] && break
+    sleep 3
+  done
+  echo "${pod#pod/}"
 }
 
 # --- start: port-forward the controller API ---
@@ -214,6 +235,83 @@ st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "delete_project cascade succ
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/storage-pools/$POOL/projects/$PROJ")" = 404 ] && ok "project gone (404)" || bad "project still present"
 for ((i=0; i<20; i++)); do [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && break; sleep 3; done
 [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && ok "endpoint instance retired" || bad "endpoint instance lingering"
+
+if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
+  hdr "externalized extensions: pgvector opt-in mounts, CREATE EXTENSION (fork inherit disabled pending #440)"
+
+  # A self-contained project so this section is independent of the cascade above.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects" '{"name":"extproj"}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext project created" || bad "ext project task=$st"
+  EPROJ=$(curl -sf "$BASE/storage-pools/$POOL/projects" | jq -r '.projects[]|select(.name=="extproj")|.id')
+  EDEF=$(curl -sf "$BASE/storage-pools/$POOL/projects/$EPROJ" | jq -r '.default_branch.branch_id')
+  [ -n "$EPROJ" ] && [ -n "$EDEF" ] && ok "ext project materialized ($EPROJ / $EDEF)" || bad "ext project not materialized"
+
+  # Endpoint that opts into pgvector.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$EPROJ/branches/$EDEF/endpoints" '{"role":"read_write","extensions":["pgvector"]}')
+  [ "$code" = 202 ] && ok "createEndpoint(extensions:[pgvector]) 202" || bad "createEndpoint(ext) code=$code"
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(ext) succeeded" || bad "create_endpoint(ext) task=$st"
+  EEP=$(curl -sf "$BASE/storage-pools/$POOL/projects/$EPROJ/branches/$EDEF/endpoints" | jq -r '.endpoints[0].id')
+  EPOD=$(wait_ready_pod "$EEP")
+  [ -n "$EPOD" ] && ok "ext endpoint pod Ready ($EPOD)" || bad "ext endpoint pod not Ready"
+
+  # The ImageVolume is mounted at /extensions/pgvector with the control file.
+  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control \
+    && ok "pgvector ImageVolume mounted (/extensions/pgvector)" || bad "pgvector ImageVolume not mounted"
+
+  # CREATE EXTENSION + store real vector data + a nearest-neighbour query that
+  # exercises the type end-to-end (insert -> CHECKPOINT through the storage stack
+  # -> ORDER BY <-> read back). The NN of [3,3,3] is [2,2,2] (id=2) at distance
+  # sqrt(3) = 1.732; the literal <-> also sanity-checks the operator (5.196).
+  out=$(psql_pod "$EPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS vector;
+DROP TABLE IF EXISTS items;
+CREATE TABLE items (id serial PRIMARY KEY, embedding vector(3));
+INSERT INTO items (embedding) VALUES ('[1,1,1]'), ('[2,2,2]'), ('[9,9,9]');
+CHECKPOINT;
+SELECT id || '|' || round((embedding <-> '[3,3,3]')::numeric, 3)
+  FROM items ORDER BY embedding <-> '[3,3,3]' LIMIT 1;
+SELECT round(('[1,2,3]'::vector <-> '[4,5,6]'::vector)::numeric, 3);
+SQL
+)
+  { echo "$out" | grep -q '^2|1.732$' && echo "$out" | grep -q '^5.196$'; } \
+    && ok "pgvector data I/O: NN([3,3,3])=id2 dist=1.732 + literal <-> =5.196" \
+    || bad "pgvector data query (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+
+  # --- fork-inheritance sub-test: DISABLED pending #440 ----------------------
+  # https://github.com/yugabyte/amp/issues/440
+  # The block below (fork the branch -> deploy its no-opt-in endpoint -> assert it
+  # inherited the pgvector mount) is correct, but the fork endpoint currently
+  # crash-loops on a pre-existing storage-engine bug unrelated to extensions: the
+  # pageserver fails to attach to an ancestor branch whose
+  # amp_storage.branch_state.applied_gc_cutoff_lsn is still NULL (a young branch
+  # not yet GC'd), erroring "create branch timeline row: deserializing column 2:
+  # a Postgres value was NULL". Extension fork inheritance itself is covered at
+  # the metadata layer by controller/internal/core/pg_extensions_test.go. When
+  # #440 is fixed, uncomment the block below.
+  #
+  # # Fork the branch: the child inherits pgvector (it was persisted onto the branch
+  # # at endpoint-create), so its endpoint mounts pgvector WITHOUT re-opting-in.
+  # code=""
+  # for ((r=0; r<8; r++)); do
+  #   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$EPROJ/branches" "{\"name\":\"extb1\",\"parent_branch_id\":\"$EDEF\"}")
+  #   [ "$code" = 202 ] && break
+  #   sleep 5
+  # done
+  # st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext fork extb1 succeeded" || bad "ext fork task=$st"
+  # EB1=$(curl -sf "$BASE/storage-pools/$POOL/projects/$EPROJ/branches" | jq -r '.branches[]|select(.name=="extb1")|.branch_id')
+  #
+  # IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$EPROJ/branches/$EB1/endpoints" '{"role":"read_write"}')
+  # st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "fork endpoint (no opt-in) succeeded" || bad "fork endpoint task=$st"
+  # FEP=$(curl -sf "$BASE/storage-pools/$POOL/projects/$EPROJ/branches/$EB1/endpoints" | jq -r '.endpoints[0].id')
+  # FPOD=$(wait_ready_pod "$FEP")
+  # kubectl -n "$NS" exec "$FPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control \
+  #   && ok "fork endpoint inherited pgvector mount" || bad "fork endpoint did NOT inherit pgvector"
+  # ---------------------------------------------------------------------------
+
+  # Tear down the ext project (cascade retires both endpoints, drops branches).
+  IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/projects/$EPROJ")
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext project cascade deleted" || bad "ext project delete task=$st"
+fi
 
 printf '\n\033[1m================ RESULT: PASS=%d FAIL=%d ================\033[0m\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

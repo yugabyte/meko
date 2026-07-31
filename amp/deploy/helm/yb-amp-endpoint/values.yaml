@@ -48,10 +48,25 @@ endpoint:
   computePort: 55433
   # -- Branch id to serve. Empty => the pod bootstraps a fresh branch on first start.
   branchId: ""
-  # -- Postgres shared_preload_libraries for the compute.
+  # -- Postgres shared_preload_libraries for the compute. Extensions with
+  # `preload: true` below are appended to this automatically.
   sharedPreloadLibraries: "yb_amp"
-  # -- Extra Postgres GUCs, as a name: value map.
+  # -- Extra Postgres GUCs, as a name: value map. extension_control_path and
+  # dynamic_library_path are derived from `extensions` below and merged in;
+  # setting them here is overridden by the derived value.
   extraSettings: {}
+  # -- Externalized extensions to mount as read-only Kubernetes ImageVolumes
+  # (built from deploy/extensions). Each mounts at /extensions/<name>, and its
+  # share/ + lib/ subdirs are appended to extension_control_path /
+  # dynamic_library_path so `CREATE EXTENSION <name>` resolves. A restart is
+  # required to add or remove one (the volume set is fixed at pod start; a
+  # `preload: true` extension also needs the postmaster restart to load).
+  # Each entry:
+  #   name    extension name; also the mount subdir and the CREATE EXTENSION name
+  #   image   OCI image reference (repo:tag) built from deploy/extensions
+  #   preload add the library to shared_preload_libraries (default false)
+  #   library shared-library name if it differs from `name` (default `name`)
+  extensions: []
   # -- Compute reserved for the endpoint container. Each value is a Kubernetes
   # resource quantity and is rendered as BOTH a request and a limit, so the pod
   # is scheduled with the Guaranteed QoS class. Defaults to 2 cores / 4Gi.
