@@ -1,52 +1,11 @@
-# PR review guide
+# PR review guide — meko
 
-Use this when reviewing a pull request in this repo (human or agent). A good
-review covers whatever the change actually touches — correctness, tests, docs,
-operational impact, hygiene — so weight your attention by what's in the diff.
-This guide is the meko-specific layer on top of reading the code: the traps and
-checks particular to this codebase.
+**Read [`REVIEW.md`](../REVIEW.md) at the repository root first.** It carries the
+size gates, the review budget, the reporting rules and the model-selection rule —
+all of which apply to every review in this repo. This file is only the
+meko-specific layer: the traps and checks particular to this codebase.
 
-> **Report findings that matter.** Surface issues you're reasonably confident
-> about and that carry real severity — don't report low-confidence guesses or
-> low-severity nits. Tag each finding with its severity so the author can
-> triage.
->
-> **Keep the output reasonably sized.** Cover the findings, but write each one
-> tersely — enough for the author to locate the issue and act on it (what's
-> wrong, where, why it matters), and no more. Skip restating the diff, padding,
-> and multi-paragraph explanations of one-line problems. Terse and actionable
-> beats verbose.
-
-> **Agents: pick the model by review complexity.** Run substantive reviews —
-> anything touching correctness, concurrency, storage/schema, or cross-service
-> seams — on an Opus-class model (e.g. Opus 4.8); review judgment is the
-> priority there, not speed or cost. Simple reviews (docs, comments, config,
-> small mechanical diffs) may downgrade to Sonnet. Never use Haiku, and don't
-> use Fable unless explicitly requested.
-
-## 1. Before you start — gates
-
-**Oversized PRs — ask before proceeding.** Check the size first. If any
-threshold is exceeded, **stop and ask the user for permission to proceed** — the
-point is to avoid accidentally burning tokens on a review that big:
-
-- more than **20 commits**, or
-- more than **100 files** changed, or
-- more than **5000 lines** changed (additions + deletions).
-
-If they decline, suggest the PR author run the review with their local AI agent
-instead.
-
-**Cap the review's own budget.** Stop and report progress rather than pushing
-past either limit:
-
-- **Wall-clock: 10 minutes.**
-- **Tokens: 1M (~$25 on Opus).**
-
-On hitting a cap, say how far you got and what's left. These are hard limits, not
-targets — don't exceed them.
-
-## 2. Area-specific concerns
+## 1. Area-specific concerns
 
 Meko is a polyglot monorepo; each top-level directory is built independently and
 they share only the YugabyteDB schema and the MCP/HTTP contracts between them.
@@ -136,7 +95,7 @@ Playground chat backend; forwards memory/conversation calls through MCP:
 binary; talks only to `api_server`. Keep API vocabulary at the client boundary
 and match the surrounding cobra/bubbletea patterns.
 
-## 3. Companion updates travel in the same PR
+## 2. Companion updates travel in the same PR
 
 Confirm the diff didn't leave these stale:
 
@@ -151,19 +110,17 @@ Confirm the diff didn't leave these stale:
 - On UI changes, that visible behavior was verified on a running server (no
   in-editor preview).
 
-## 4. Hygiene
+## 3. Hygiene — meko-specific
+
+The repo-wide rules (no agent attribution, what the body must explain, full URLs) are
+in the root [`REVIEW.md`](../REVIEW.md). On top of those:
 
 - **Title carries the tracking ticket** — e.g.
   `[MEKO-123] meko_ui: make Create Cluster pg_version selectable`. An untagged
   title is correct when there is genuinely no ticket, so don't ask for a
   placeholder like `[MEKO-xxx]`. Do flag an invented or guessed number.
-- Body follows the sections the `open-pr` skill specifies (Summary, Files changed,
-  Testing, Config/env vars, and Math/derivation or Deploy notes when they apply);
-  explains **what and why**, not just the diff. Link related PRs/issues with full
-  URLs, never a bare `#123`.
+- Body includes the `open-pr` sections that apply: Summary, Files changed, Testing,
+  Config/env vars, and Math/derivation or Deploy notes.
 - Lint/typecheck clean for the touched module: Go — `go build ./...`,
   `go vet ./...`, `golangci-lint run ./...` (`goimports.local-prefixes: meko`,
   tabs, 120-col); web — `npm run check`; Python — `mypy` + `pycodestyle`.
-- **No agent/assistant attribution** in commits or the PR body — no "Generated
-  with Claude Code" line, no `claude.ai/code` session link or id, and no
-  `Co-Authored-By:` trailer. The PR and its commits are authored by the human.

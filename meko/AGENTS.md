@@ -219,4 +219,8 @@ relevant one rather than assuming; nothing here restates their contents.
 | `merge-pr` | merging |
 | `create-amp-issue` | filing or updating a GitHub issue for **AMP** work (`amp_*` label + `AMP:` milestone) |
 
+Those are the ones that apply to meko work. Two further skills — `amp-mcp-tools` and
+`integration-before-corruption-claim` — apply only when editing `amp/**`; the root
+[`AGENTS.md`](../AGENTS.md) carries the complete index.
+
 `.claude/settings.json` wires the branch-name hook (see Branch naming above).

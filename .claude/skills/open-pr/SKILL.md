@@ -92,6 +92,23 @@ Keep it crisp. Link related PRs/issues with **full URLs**, never bare `#123`.
 Add `Closes <full issue URL>` when the PR completes a tracked GitHub issue so the
 merge auto-closes it.
 
+### On-demand CI directives — request the right suites
+
+Some AMP suites are too heavy to run on every PR and are opt-in, requested with
+`/ci <suite>` lines in the PR body: `amp_integration_slow`, `amp_generate_image`,
+`amp_deploy_gke`. They are `amp_`-prefixed because they belong to AMP — there is no
+meko equivalent, and writing one on a meko PR really does deploy amp to itest-dev.
+The full contract and what makes a change correctness-sensitive live in
+[`amp/docs/ci-directives.md`](../../../amp/docs/ci-directives.md).
+
+**Put them in the body you create the PR with.** The directive is read when the PR
+opens and on every push — a later description edit fires nothing, so a suite added
+afterwards needs a commit before it runs (the `git-push` skill covers that).
+
+Getting this wrong is quiet, not loud: the PR reads green while the suite you asked
+for never ran. If you claim a suite as evidence, confirm it actually reported —
+`gh pr checks <number>` showing `skipping` for it means it did not.
+
 Write the body to a file to avoid shell-quoting pain:
 
 ```

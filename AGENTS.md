@@ -103,8 +103,9 @@ over a bare `#N`.
 
 ### Reviewing
 
-[`meko/REVIEW.md`](meko/REVIEW.md) is the per-component review guide for the meko
-tree.
+[`REVIEW.md`](REVIEW.md) routes to the right guide — [`amp/REVIEW.md`](amp/REVIEW.md)
+or [`meko/REVIEW.md`](meko/REVIEW.md). Each project keeps its own because the concerns
+differ; both are titled `# PR review guide`, so check which tree the PR touches.
 
 ### On-demand CI (`/ci` directives)
 
@@ -133,3 +134,9 @@ Pointers only; each skill is the authority on its own subject.
 | `open-pr` | opening a new PR |
 | `merge-pr` | merging |
 | `create-amp-issue` | filing or updating a GitHub issue for AMP work |
+| `integration-before-corruption-claim` | claiming data loss or corruption in `amp/` — run the integration suite first |
+| `amp-mcp-tools` | working on the amp controller's MCP tools. A **symlink** to `amp/controller/mcp/skills/amp-mcp-tools`, so it stays in step with the packaged skill bundle |
+
+All skills are repo-wide and live at the root, including the AMP-specific ones — there is
+no per-tree `.claude/`. The two `amp`-scoped entries above only apply when you are editing
+`amp/**`, but they are indexed here so a single list stays authoritative.

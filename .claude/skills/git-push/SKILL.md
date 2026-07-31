@@ -45,7 +45,7 @@ prints the offenders otherwise:
 
 ```
 # Go — pass only the modules that appear above (each has its own go.mod)
-gofmt -l api_server cli_app meko-provisioner docs
+gofmt -l meko/api_server meko/cli_app meko/meko-provisioner meko/docs
 
 # TypeScript — if meko/meko_ui/ or meko/meko_admin/ changed
 (cd meko/meko_ui    && npm run check)      # tsc
@@ -56,12 +56,17 @@ gofmt -l api_server cli_app meko-provisioner docs
 
 # Python — if meko/inference_gateway/ changed (no formatter configured; run its tests)
 (cd meko/inference_gateway && pytest)
+
+# Rust + Go — if amp/ changed. CI does NOT check amp formatting, so this is the only gate.
+(cd amp && cargo fmt --all -- --check)
+(cd amp && gofmt -l controller test/functional)   # `make fmt` does NOT cover Go
 ```
 
 If they're silent, move on. Otherwise **do not push** — fix and re-check:
 
 ```
 gofmt -w <the files gofmt -l listed>
+(cd amp && make fmt)              # cargo fmt + ruff, in place; does not touch Go
 git diff                          # review what it rewrote
 ```
 
@@ -236,6 +241,20 @@ gh pr edit <number> --title "<refreshed title>" --body "<refreshed summary>"
 Only touch the title/body when the branch content actually changed what they
 should say. A one-commit follow-up that the existing summary already covers
 needs no edit — don't churn the description for its own sake.
+
+### If the refresh ADDS a `/ci` directive, it will not fire on its own
+
+Editing the description does not trigger CI — directives are read when the PR
+opens and on every push. So an `amp_*` `/ci` line you add while refreshing the
+summary requests a suite that never runs, and the PR still reads green. Follow it
+with a commit:
+
+```
+git commit --allow-empty -m "ci: rerun" && git push
+```
+
+Then confirm the suite actually reported (`gh pr checks <number>`): a `skipping`
+bucket for it means it did not run, and its coverage is not yours to claim.
 
 ## No agent attribution
 

@@ -5,11 +5,13 @@ description: >-
   whether the change needs companion updates that must travel in the **same**
   commit: (1) docs under `meko/docs/content/docs/**` and the `meko/AGENTS.md` guides,
   (2) tests covering the new/changed behavior, (3) regenerated artifacts
-  (Swagger, provisioner CRDs/RBAC/`zz_generated`), and (4) the setup/config
-  surface (`meko/LOCAL_DEV_SETUP.md`, `meko/DEVELOPMENT.md`, migrations). For each, decide
-  whether the change makes it wrong or missing, and update it in the same
-  commit. Also, run the formatter and linter for every language the commit
-  touches before committing. Use for `git commit`, `git add`-then-commit,
+  (Swagger, provisioner CRDs/RBAC/`zz_generated`), (4) the setup/config
+  surface (`meko/LOCAL_DEV_SETUP.md`, `meko/DEVELOPMENT.md`, migrations), and
+  (5) for `amp/**`, the `amp/*/architecture/*.md` docs and `amp/runbooks/*.md`.
+  For each, decide whether the change makes it wrong or missing, and update it in
+  the same commit. Also, run the formatter and linter for every language the commit
+  touches before committing — including `cargo fmt` and `cargo clippy` for Rust,
+  which nothing else enforces. Use for `git commit`, `git add`-then-commit,
   `/commit-commands:commit`, `/commit-commands:commit-push-pr`, or any flow that
   ends in a commit.
 ---
@@ -51,7 +53,7 @@ companions and which toolchain apply. If the only staged files are themselves
 under `meko/docs/`, an `AGENTS.md`, or a top-level `*.md`, you can skip the doc arm —
 but still ask whether the change needed a test that isn't staged.
 
-## Step 2 — walk the four companions
+## Step 2 — walk the five companions
 
 For each companion below: **does this change touch it? If so, update it in this
 commit.** A single change can hit several — do all that apply.
@@ -165,6 +167,33 @@ A new flag that silently degrades when unset still needs documenting: say what
 the degraded behavior is (the pattern `AGENTS.md` already uses for
 `--cognito-*` and `--langfuse-db-*`).
 
+### Companion 5 — amp architecture docs and runbooks (`amp/**` only)
+
+The `amp/*/architecture/*.md` docs are the canonical description of how the
+storage/compute engine and the Go controller are wired **today**. A staged path
+matching the left column means you must read the doc on the right and decide
+whether it needs updating in this commit:
+
+| Staged path matches | Arch doc(s) to recheck |
+|---|---|
+| `amp/compute/safekeeper/**`, `amp/compute/libs/safekeeper_api/**`, `amp/compute/libs/walproposer/**` | `amp/compute/architecture/safekeeper.md`, `safekeeper-lsns.md` |
+| `amp/compute/pageserver/**` | `amp/compute/architecture/pageserver.md`, `pageserver-lsns.md`, `pageserver-gc.md` |
+| `amp/controller/internal/registry/**`, `amp/controller/internal/core/**` | `amp/controller/architecture/sc-integration.md` |
+| `amp/compute/endpoint_storage/**`, `amp/compute/libs/remote_storage/**` | `amp/compute/architecture/remote-storage.md` |
+| `amp/compute/pgxn/**`, `amp/compute/compute_tools/**`, `amp/compute/image/**` | `amp/compute/architecture/compute.md`, `compute_ctl.md` |
+| `amp/controller/migrations/**/*.sql`, anything creating/altering `yb_storage` tables | `amp/compute/architecture/yugabyte.md` + the per-subsystem doc owning the table |
+| A binary's CLI surface (clap `Args` structs in `amp/*/src/bin/*.rs`) | the "Run / configure" block in the matching subsystem doc |
+| **HTTP router** — a route added/removed/renamed, or a method/path/auth/body change | the matching `*-apis.md` |
+| **Metrics module** (`amp/*/src/metrics.rs`) — a metric added/removed/renamed, or a label/type change | the matching `*-metrics.md` |
+| Top-level topology (new binary, new wire link, removed component) | `amp/compute/architecture/high-level.md` + `README.md` |
+
+`amp/runbooks/*.md` are the operational procedures. Update one when your change
+makes it wrong — where state lives or how to inspect it, a hardcoded CLI
+command/flag/port/env var, a metric name or HTTP endpoint a troubleshooting step
+polls, or a startup precondition it diagnoses. **A runbook step that sends an
+operator to the wrong place is actively harmful during an incident**, which is why
+this is a commit-time gate and not a follow-up.
+
 ## Step 3 — format and lint clean
 
 If the commit touches code, it lands **formatted and lint-clean** for every
@@ -204,6 +233,36 @@ Line limit 120 for Go.
 (cd meko/system_agent && mypy . && pycodestyle .)    # max-line-length 100 (tox.ini)
 (cd meko/inference_gateway && pytest)                # no formatter configured
 ```
+
+### Rust (`amp/**` — `*.rs`, `Cargo.toml`, build scripts)
+
+**Nothing runs this for you, and CI does not check formatting.** `cargo build`
+only compiles, and the `pre-commit.py` hook (`cargo fmt`) is opt-in via
+`make setup-pre-commit-hook` — so if you skip this, unformatted code ships.
+
+```
+(cd amp && cargo fmt --all -- --check)    # is anything mis-formatted?
+```
+
+If that reports diffs, format in place and re-stage:
+
+```
+(cd amp && cargo fmt --all) && git add -u
+```
+
+Then clippy, which must print nothing:
+
+```
+(cd amp && cargo clippy --workspace --all-targets) 2>&1 | grep -E "^warning: " | grep -v generated
+```
+
+If it doesn't: `cargo clippy --fix --workspace --all-targets --allow-dirty
+--allow-staged` clears the machine-applicable lints; fix the rest by hand, then
+`cargo build --workspace` to confirm the fixes compile. Reach for a **targeted**
+`#[allow(clippy::...)]` with a one-line reason only for design-choice lints where
+a refactor would be riskier than the lint — `too_many_arguments` on a wide wiring
+signature, `large_enum_variant` where boxing would ripple through the type. Never
+blanket-allow at crate level.
 
 Resolve every warning rather than committing past it — a warning that lands is
 one the next person has to wade past to see whether *their* change added
@@ -311,8 +370,10 @@ is cheapest here, at commit time.
 
 If this commit advances or completes a tracked ticket or GitHub issue:
 
-- **Reference it** with the `[MEKO-<num>]` subject tag (see Subject format above)
-  so the work is linked.
+- **Reference it** with the subject tag (see Subject format above) so the work is
+  linked: `[MEKO-<num>]` for meko work, `[#<issue>]` for AMP work tracked as a
+  GitHub issue in this repo. Omit the tag entirely when there is genuinely no
+  ticket — never invent a placeholder or guess a number.
 - **Close it when the work ships.** Put `Closes <full issue URL>` in the PR body
   (or the final commit message) so merge auto-closes a GitHub issue, or move the
   JIRA ticket once merged. Link with full URLs, never bare `#123`.
