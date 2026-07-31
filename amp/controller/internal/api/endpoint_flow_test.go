@@ -433,8 +433,8 @@ func TestEndpointResize(t *testing.T) {
 	if taskResp.JSON200 == nil || taskResp.JSON200.Result == nil {
 		t.Fatalf("resize task result missing; body = %s", taskResp.Body)
 	}
-	if res, ok := (*taskResp.JSON200.Result).(map[string]any); !ok || res["in_place_resize"] != "completed" {
-		t.Errorf("task result = %v, want in_place_resize=completed", *taskResp.JSON200.Result)
+	if res, ok := taskResp.JSON200.Result.(map[string]any); !ok || res["in_place_resize"] != "completed" {
+		t.Errorf("task result = %v, want in_place_resize=completed", taskResp.JSON200.Result)
 	}
 
 	// Resize only cpu -> memory keeps its current value (8Gi).
@@ -636,8 +636,8 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 			t.Fatalf("infeasible resize task status = %v, want succeeded (durable size set)", statusOf(tk))
 		}
 		taskResp, _ := f.client.GetTaskWithResponse(ctx, resp.JSON202.Id)
-		if res, ok := (*taskResp.JSON200.Result).(map[string]any); !ok || res["in_place_resize"] != "infeasible" {
-			t.Errorf("task result = %v, want in_place_resize=infeasible", *taskResp.JSON200.Result)
+		if res, ok := taskResp.JSON200.Result.(map[string]any); !ok || res["in_place_resize"] != "infeasible" {
+			t.Errorf("task result = %v, want in_place_resize=infeasible", taskResp.JSON200.Result)
 		}
 		got, _ := f.client.GetEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID)
 		if *got.JSON200.Resources.Cpu != cpu || *got.JSON200.Resources.Memory != mem {
