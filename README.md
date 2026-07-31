@@ -1,3 +1,14 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="meko/meko_ui/public/meko-logo.svg">
+    <img src="meko/meko_ui/public/Meko_Logo_Blk.svg" alt="meko" width="240">
+  </picture>
+</p>
+
+<p align="center">
+  <img src="amp/docs/yb-amp-logo.png" alt="YugabyteDB AMP" width="480">
+</p>
+
 # meko
 
 This repository is organised one directory per project, with shared components at the
