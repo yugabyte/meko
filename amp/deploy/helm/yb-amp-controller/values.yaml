@@ -1,0 +1,250 @@
+# Default values for yb-amp-controller.
+#
+# Two workloads: the amp controller (always) and its MCP server (gated by
+# mcp.enabled). The release namespace (-n / --namespace) is the deploy namespace;
+# nothing here creates it.
+
+# -- Pull secrets for the controller + MCP images (ECR). List of {name: ...}.
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# RBAC. The namespaced ServiceAccount + Role + RoleBinding are always created.
+rbac:
+  # -- Also create the cluster-scoped ClusterRole + ClusterRoleBinding: namespaces
+  # get/list/create (Helm --create-namespace probing) and nodes get/list (NodePort
+  # endpoint node-IP resolution). Default off — with the default controller
+  # (internal-lb) and endpoint (ClusterIP) service types nothing reads nodes, and
+  # namespace-scoped installs on shared clusters have no cluster-scope rights.
+  # Enable only for a NodePort deploy (which needs node-IP reads).
+  clusterScoped: false
+
+controller:
+  # -- Number of controller pods. The controller holds in-pod state (its managed
+  # controller subprocess), so keep this at 1.
+  replicaCount: 1
+
+  image:
+    # -- Controller image repository.
+    repository: amp/controller
+    # -- Image tag. Empty string defaults to the chart appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # -- Postgres DSN for the controller's backing YugabyteDB (AMP_DATABASE_URL).
+  databaseUrl: "postgres://yugabyte@yb-tserver:5433/yb_storage?sslmode=disable"
+  # -- Schema the controller's own tables live in (AMP_DB_SCHEMA).
+  dbSchema: "controller"
+  # -- Log format: text | json (AMP_LOG_FORMAT).
+  logFormat: "text"
+
+  # Container ports.
+  ports:
+    # -- REST API + UI + storage-layer control surface port (AMP serves /api/v1,
+    # /healthz, /readyz, and /control/v1 here).
+    api: 8080
+
+  # External exposure of the controller UI/API. The in-cluster ClusterIP Service
+  # (api + sc) is always created; this `service` block selects an EXTRA external
+  # Service. The MCP server is exposed the same way (see mcp below).
+  service:
+    # -- How to expose the controller externally: nodeport | internal-lb | external-lb | none.
+    type: "internal-lb"
+    # -- Fixed nodePort when type=nodeport (30000-32767); empty => auto-assign.
+    nodePortValue: ""
+    # -- Annotations for the LoadBalancer Service when type=internal-lb, as a list
+    # of "key=value" strings. Defaults to the GKE internal-LB annotations.
+    annotations:
+      - "networking.gke.io/load-balancer-type=Internal"
+      - "networking.gke.io/internal-load-balancer-allow-global-access=true"
+
+  # Config the controller hands to each endpoint it deploys. This chart only ever
+  # deploys on Kubernetes, so the deploy driver is fixed to "kubernetes" in the
+  # template — there is no driver knob here.
+  endpoint:
+    image:
+      # -- Endpoint image repository (AMP_ENDPOINT_IMAGE_REPO).
+      repository: amp/endpoint
+      # -- Endpoint image tag (AMP_ENDPOINT_IMAGE_TAG); empty => chart appVersion.
+      tag: ""
+    # -- CSV of backing-YB tserver host:port the controller hands to endpoints (AMP_DEPLOY_YB_HOST_PORTS).
+    ybHostPorts: "yb-tserver:5433"
+    # -- YB role endpoints connect as (AMP_DEPLOY_YB_USER).
+    ybUser: "yugabyte"
+    # -- YB database endpoints use (AMP_DEPLOY_YB_DBNAME).
+    ybDbname: "yb_storage"
+    # -- StorageClass for each endpoint's /data PVC; empty => emptyDir (AMP_DEPLOY_STORAGE_CLASS).
+    storageClass: ""
+    # -- Size of each endpoint's /data PVC when storageClass is set (AMP_DEPLOY_DISK_SIZE).
+    diskSize: "10Gi"
+    # -- Node labels endpoint pods must schedule onto, as a list of "key=value"
+    # strings (joined into the AMP_DEPLOY_NODE_SELECTOR CSV). Leave storageClass
+    # empty and point this at a local-NVMe-SSD ephemeral node pool (GKE:
+    # "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each
+    # endpoint's emptyDir /data on NVMe. Empty => no selector (schedules anywhere).
+    nodeSelector: []
+    # -- Tailscale MagicDNS suffix (e.g. "tail5955.ts.net") used to derive each
+    # endpoint's tailnet address when its Service is tailnet-exposed
+    # (tailscale.com/expose=true in service.annotations). Empty disables tailnet
+    # address reporting (AMP_DEPLOY_TAILNET_SUFFIX).
+    tailnetSuffix: ""
+    service:
+      # -- Service type for each deployed endpoint: ClusterIP | NodePort | LoadBalancer (AMP_DEPLOY_SERVICE_TYPE).
+      type: "ClusterIP"
+      # -- Reserved for a fixed endpoint NodePort. The controller's deployer
+      # currently auto-assigns it, so this is not yet wired through.
+      nodePortValue: ""
+      # -- Annotations for LoadBalancer endpoint Services, as a list of "key=value"
+      # strings (joined into the AMP_DEPLOY_SERVICE_ANNOTATIONS CSV).
+      annotations: []
+
+  # -- Compute resources for the controller container.
+  resources: {}
+  # -- Readiness probe (HTTP /readyz on the api port). The controller has NO
+  # liveness probe: startup migrations run before anything answers /healthz,
+  # and a liveness kill mid-migration leaves the schema dirty (#398).
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+# MCP server: a thin, stateless HTTP wrapper of the controller REST API, in its
+# own pod. Reaches the controller over the in-cluster Service DNS.
+mcp:
+  # -- Deploy the MCP server (Deployment + Service). false drops both.
+  enabled: true
+  # -- Number of MCP pods. Stateless, so this is safe to scale.
+  replicaCount: 1
+
+  image:
+    # -- MCP server image repository (built from controller/mcp/Dockerfile).
+    repository: amp/mcp
+    # -- Image tag. Empty string defaults to the chart appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # -- Controller base URL the MCP server points at (AMP_CONTROLLER_URL). Empty =>
+  # the in-cluster controller Service DNS on the api port (computed in a helper).
+  controllerUrl: ""
+  # -- MCP transport: http (for k8s) | stdio (AMP_MCP_TRANSPORT).
+  transport: "http"
+  # -- Port the MCP server binds and the Service exposes (AMP_MCP_PORT).
+  port: 8000
+
+  # -- Compute resources for the MCP container.
+  resources: {}
+  # -- HTTP GET /healthz liveness/readiness probes on the MCP port. The server
+  # serves /healthz under the http transport (which this pod always runs), so a
+  # 200 confirms the MCP application is serving, not just that the port is bound.
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+  # The MCP server is exposed the SAME way as the controller: an in-cluster
+  # ClusterIP Service (amp-controller-mcp) is always created, and `controller.expose`
+  # additionally creates a matching external Service (amp-controller-mcp-np /
+  # amp-controller-mcp-lb) alongside the controller's. So dev (nodeport / none) keeps
+  # the MCP endpoint internal, and a prod `external-lb` exposes it externally — one
+  # knob, no separate MCP exposure setting.
+
+# UI: the amp_ui React SPA served by nginx, in its own pod. nginx serves the
+# static build and reverse-proxies /api/ to the controller over the in-cluster
+# Service DNS, so the SPA uses relative /api/v1 URLs with no CORS.
+ui:
+  # -- Deploy the UI (Deployment + Service). false drops both.
+  enabled: true
+  # -- Number of UI pods. Stateless (static assets + a stateless proxy), so this
+  # is safe to scale.
+  replicaCount: 1
+
+  image:
+    # -- UI image repository (built from amp_ui/Dockerfile).
+    repository: amp/controller-ui
+    # -- Image tag. Empty string defaults to the chart appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # -- Controller base URL nginx proxies /api/ to (CONTROLLER_URL). Empty => the
+  # in-cluster controller Service DNS on the api port (computed in a helper). Must
+  # be an origin with no trailing path (nginx forwards the original /api/... URI).
+  controllerUrl: ""
+  # -- Port nginx listens on and the Service exposes (UI_PORT).
+  port: 80
+
+  # -- Compute resources for the UI (nginx) container.
+  resources: {}
+  # -- HTTP GET /healthz liveness/readiness probes on the UI port. nginx serves
+  # /healthz itself (a static 200), so a 200 confirms nginx is serving — it does
+  # not depend on the controller being reachable.
+  livenessProbe:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+  # The UI is exposed the SAME way as the controller (controller.service.type): an
+  # in-cluster ClusterIP Service (amp-controller-ui) is always created, plus a
+  # matching external Service (amp-controller-ui-np / amp-controller-ui-lb)
+  # alongside the controller's — so the one exposure knob puts the UI wherever the
+  # controller UI/API is. With controller.service.type=internal-lb (the default),
+  # the UI is reachable on an internal LoadBalancer (amp-controller-ui-lb) out of
+  # the box — this is the front door for the SPA (it reverse-proxies /api/ to the
+  # controller in-cluster).
+  service:
+    # -- How to expose the UI externally, on its OWN Service independent of the
+    # controller: nodeport | internal-lb | external-lb | none. Default internal-lb
+    # => the UI gets its own internal LoadBalancer (amp-controller-ui-lb) out of the
+    # box (the SPA reverse-proxies /api/ to the controller in-cluster). Set to none
+    # to only keep the in-cluster ClusterIP Service.
+    type: "internal-lb"
+    # -- Annotations for the UI LoadBalancer when type=internal-lb, as a list of
+    # "key=value" strings. Defaults to the GKE internal-LB annotations.
+    annotations:
+      - "networking.gke.io/load-balancer-type=Internal"
+      - "networking.gke.io/internal-load-balancer-allow-global-access=true"
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# OpenTelemetry metrics collectors (controller/architecture/ac-metrics.md).
+# Deployed as OpenTelemetryCollector CRs reconciled by the OpenTelemetry
+# Operator — so this REQUIRES the operator (opentelemetry.io CRDs) in the
+# cluster. Two deployment-mode collectors scrape the amp components' Prometheus
+# endpoints and remote-write to a Prometheus-compatible store.
+otel:
+  # -- Deploy the OTel collector CRs. Off by default; needs the OTel Operator.
+  enabled: false
+  # -- Collector image. Empty => the operator's configured default (must be a
+  # distro with the prometheus receiver + prometheusremotewrite exporter, i.e.
+  # opentelemetry-collector-contrib).
+  image: ""
+  # -- Prometheus remote-write endpoint of the metrics store (VictoriaMetrics,
+  # Prometheus, Thanos receive, …).
+  remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
+  # -- Also scrape per-pod cAdvisor resource metrics (CPU/mem/net) for the
+  # endpoint pods, via each node's kubelet.
+  podMetrics: true
+  # -- Pod-name regex the compute collector keeps for cAdvisor metrics. Defaults
+  # to the controller's endpoint naming (yb-ep-*); widen it (e.g.
+  # ".*yb-amp-endpoint.*") for manually-installed endpoint releases.
+  podMetricsSelector: "yb-ep-.*"
+  # Scrape ports for the Neon services on each endpoint pod. Keep these in sync
+  # with the yb-amp-endpoint chart's ports.{pageserverHttp,safekeeperHttp,computeCtlHttp}
+  # if you override them there.
+  scrapePorts:
+    pageserver: 9898
+    safekeeper: 7676
+    computeCtl: 3080
+  collectors:
+    # Scrapes the amp controller (:8080) + in-pod controller (:50051).
+    controller:
+      enabled: true
+    # Scrapes every endpoint pod: postgres_exporter/pageserver/safekeeper/compute_ctl.
+    compute:
+      enabled: true

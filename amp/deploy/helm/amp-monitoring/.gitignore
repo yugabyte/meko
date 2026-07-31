@@ -1,0 +1,2 @@
+# Downloaded subchart archives (pinned in Chart.lock; fetched via `helm dependency update`).
+charts/*.tgz

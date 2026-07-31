@@ -1,0 +1,178 @@
+# yb-amp single-container endpoint image.
+#
+# Ships, in one image, every process that makes up a yb-amp endpoint:
+#   - yb-pageserver        (page service, backed by YugabyteDB)
+#   - safekeeper           (WAL, backed by YugabyteDB)
+#   - endpoint_storage     (LFC scratch blobs, backed by YugabyteDB)
+#   - compute_ctl + postgres v18 + the `yb_amp` extension (the compute)
+# plus a small Python supervisor (PID 1 under tini) that renders each
+# service's config from environment variables, brings the stack up in
+# order, and monitors/restarts the children.
+#
+# No control plane runs in this image: it is a shared, cluster-level service
+# that lives in the AMP layer. The endpoint assumes the `yb_storage` schema
+# already exists (the controller provisions it on startup). For standalone
+# testing, the supervisor can provision the schema itself
+# (DEV_PROVISION_SCHEMA=true) by applying the bundled provisioning migration.
+#
+# Build (from the repo root):
+#   docker build -t yb-amp/yb-amp-endpoint:dev -f deploy/endpoint/Dockerfile .
+#
+# yb-amp is Postgres v18 only (compute/vendor/postgres-v18, POSTGRES_VERSIONS=v18).
+
+ARG REPOSITORY=ghcr.io/neondatabase
+ARG IMAGE=build-tools
+ARG TAG=pinned
+ARG DEBIAN_VERSION=bookworm
+ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
+
+# 1. Build patched Postgres v18 -> pg_install/v18.
+FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
+WORKDIR /home/nonroot
+COPY --chown=nonroot compute/vendor/postgres-v18 compute/vendor/postgres-v18
+COPY --chown=nonroot Makefile Makefile
+COPY --chown=nonroot postgres.mk postgres.mk
+COPY --chown=nonroot scripts/ninstall.sh scripts/ninstall.sh
+ENV BUILD_TYPE=release
+RUN set -e \
+    && mold -run make -j "$(nproc)" -s postgres
+
+# Prebuilt yb_thin_client C++ shim (public, versioned per-arch download,
+# pinned to the vendored ABI). Staged at a fixed path; the final image puts
+# that path on LD_LIBRARY_PATH so the loader finds it (the binaries carry no
+# rpath for it).
+FROM $REPOSITORY/$IMAGE:$TAG AS yb-thin-client
+WORKDIR /home/nonroot
+COPY --chown=nonroot scripts/fetch-yb-thin-client.sh scripts/fetch-yb-thin-client.sh
+COPY --chown=nonroot compute/libs/yb_thin_client/shim/VERSION compute/libs/yb_thin_client/shim/VERSION
+COPY --chown=nonroot compute/libs/yb_thin_client/shim/COMMIT compute/libs/yb_thin_client/shim/COMMIT
+# Stage under $HOME (the build-tools image runs as nonroot, which can't write
+# /opt); the downstream COPY --from runs as root and places it at /opt.
+RUN set -eux \
+    && src="$(bash scripts/fetch-yb-thin-client.sh)" \
+    && mkdir -p /home/nonroot/yb_thin_client/lib \
+    && cp "$src/libyb_thin_client.so" /home/nonroot/yb_thin_client/lib/ \
+    && cp "$src/../version.txt" /home/nonroot/yb_thin_client/version.txt
+
+# 2. Build the Rust binaries + the `yb_amp` Postgres extension.
+FROM $REPOSITORY/$IMAGE:$TAG AS build
+WORKDIR /home/nonroot
+ARG GIT_VERSION=local
+ARG BUILD_TAG
+
+# Reuse the Postgres build artifacts from the pg-build stage.
+COPY --chown=nonroot --from=pg-build /home/nonroot/pg_install/ pg_install
+COPY --chown=nonroot . .
+
+# The storage binaries link the yb_thin_client shim; stage it and point
+# build.rs at it (no stub fallback). Runtime resolution is handled in the
+# final image via LD_LIBRARY_PATH.
+COPY --from=yb-thin-client /home/nonroot/yb_thin_client /opt/yb_thin_client
+ENV YB_THIN_CLIENT_LIB_DIR=/opt/yb_thin_client/lib
+
+# `io-align-512` is the default pageserver feature, so a plain release
+# build is correct. We only need the endpoint's own services plus the
+# control-plane tools used for (optional) schema provisioning.
+#
+# The cargo target dir + registry are BuildKit cache mounts (uid/gid match
+# the build image's `nonroot` user), so unrelated context changes (e.g.
+# editing supervisor.py, which busts the `COPY . .` layer) trigger only an
+# incremental recompile rather than a full one. Cache mounts are not part of
+# the image layer, so the built binaries are copied out to /home/nonroot/out
+# (a real dir) before the mount is unmounted; the final stage copies from there.
+RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
+    --mount=type=cache,target=/home/nonroot/.cargo/registry,uid=1000,gid=1000 \
+    set -e \
+    && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes" \
+       cargo build --locked --release \
+         --bin yb-pageserver \
+         --bin yb-safekeeper \
+         --bin yb-endpoint-storage \
+         --bin yb-compute-ctl \
+         --bin yb-dump-pages \
+         --bin yb-dump-wals \
+         --bin yb-reset-consistent-lsn \
+    && mkdir -p /home/nonroot/out \
+    && cp target/release/yb-pageserver \
+          target/release/yb-safekeeper \
+          target/release/yb-endpoint-storage \
+          target/release/yb-compute-ctl \
+          target/release/yb-dump-pages \
+          target/release/yb-dump-wals \
+          target/release/yb-reset-consistent-lsn \
+          /home/nonroot/out/ \
+    && mold -run make -j "$(nproc)" -s yb-amp-pg-ext
+
+# 3. Assemble the runtime image.
+FROM debian:${DEBIAN_FLAVOR} AS endpoint
+WORKDIR /data
+
+RUN set -e \
+    && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        openssl \
+        libcurl4 \
+        libreadline8 \
+        libseccomp2 \
+        libicu72 \
+        zlib1g \
+        liblz4-1 \
+        libzstd1 \
+        libossp-uuid16 \
+        tini \
+        python3 \
+        netcat-openbsd \
+        procps \
+    && rm -f /etc/apt/apt.conf.d/80-retries \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && useradd -d /data -m yugabyte \
+    && chown -R yugabyte:yugabyte /data
+
+# Storage + control-plane binaries (copied out of the cache-mounted target dir
+# into /home/nonroot/out by the build stage).
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver      /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl         /usr/local/bin/
+
+# Operator diagnostic tools (the tools crate): dump the YB-backed page store /
+# WAL, reset the consistent LSN. On PATH so an operator can `docker exec` and run them.
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-dump-pages          /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-dump-wals           /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-reset-consistent-lsn /usr/local/bin/
+# The storage binaries link libyb_thin_client.so (a DT_NEEDED) but carry no
+# rpath for it, so ship it at a fixed path and put that on the loader search
+# path via LD_LIBRARY_PATH (distro-agnostic — the base's default lib dir
+# varies, e.g. /usr/lib vs /usr/lib64).
+COPY --from=yb-thin-client /home/nonroot/yb_thin_client/lib/libyb_thin_client.so /opt/yb_thin_client/lib/libyb_thin_client.so
+
+# Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
+COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
+
+# Schema migrations, for the optional DEV_PROVISION_SCHEMA path.
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/controller/migrations /usr/local/share/yb-amp/migrations
+
+# The supervisor.
+COPY --chown=yugabyte:yugabyte deploy/endpoint/supervisor.py /usr/local/bin/yb-endpoint-supervisor
+RUN chmod +x /usr/local/bin/yb-endpoint-supervisor
+
+# NB: LD_LIBRARY_PATH carries BOTH the Postgres v18 libs and the
+# yb_thin_client shim dir (copied above). `ENV` assigns rather than appends, so
+# both must be named here — a second `ENV LD_LIBRARY_PATH=...` elsewhere in this
+# stage would silently drop whichever path it omits, and the storage binaries
+# (DT_NEEDED on libyb_thin_client.so, no rpath) would fail to exec.
+ENV PG_DISTRIB_DIR=/usr/local \
+    YB_AMP_MIGRATIONS_DIR=/usr/local/share/yb-amp/migrations \
+    LD_LIBRARY_PATH=/usr/local/v18/lib:/opt/yb_thin_client/lib \
+    PATH=/usr/local/bin:/usr/local/v18/bin:$PATH
+
+USER yugabyte
+
+# Compute Postgres port (overridable via COMPUTE_PORT / chart values).
+EXPOSE 55433
+# pageserver / safekeeper / endpoint_storage HTTP.
+EXPOSE 9898 7676 9993
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/yb-endpoint-supervisor"]

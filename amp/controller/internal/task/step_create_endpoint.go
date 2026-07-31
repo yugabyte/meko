@@ -1,0 +1,127 @@
+package task
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/google/uuid"
+
+	"github.com/yugabyte/amp/controller/internal/deploy"
+	applog "github.com/yugabyte/amp/controller/internal/log"
+)
+
+// StepCreateEndpoint is the task_step.kind for the create_endpoint step.
+const StepCreateEndpoint = "create_endpoint"
+
+// CreateEndpointArgs are the inputs to the create_endpoint step — the shared step
+// that create-project, branch, and scale-up all use (§8). It records the
+// endpoint, deploys the compute, records the address, and clears the branch
+// recipe.
+type CreateEndpointArgs struct {
+	EndpointID uuid.UUID `json:"endpoint_id"`
+	ProjectID  uuid.UUID `json:"project_id"`
+	BranchID   uuid.UUID `json:"branch_id"`
+	Role       string    `json:"role"`
+	PgVersion  int       `json:"pg_version"`
+	// CPU and Memory are the pod's compute reservation (Kubernetes quantities,
+	// e.g. "2" / "4Gi"), applied as request == limit for Guaranteed QoS. Carried
+	// in the args so a reclaim/replay deploys the same size. Empty falls back to
+	// the deployer/chart default (2 cores / 4Gi).
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+}
+
+// createEndpointStep records the endpoint, provisions the compute, and records
+// the resulting address. All three effects are idempotent, so the step
+// converges when replayed: the record insert is id-keyed ON CONFLICT DO NOTHING,
+// the deploy is keyed by the endpoint's stable name (deployer idempotency), and
+// the address write is an absolute UPDATE. Its deploy collaborators are bound at
+// construction (deployer is required); only the embedded args are serialized.
+type createEndpointStep struct {
+	CreateEndpointArgs
+	state    StateStore
+	deployer deploy.Deployer
+	yb       deploy.YBConn
+	scURL    string
+}
+
+// NewCreateEndpointStep binds create_endpoint args + its deps into an executable step.
+func NewCreateEndpointStep(args CreateEndpointArgs, deps Deps) Step {
+	return &createEndpointStep{
+		CreateEndpointArgs: args,
+		state:              deps.State,
+		deployer:           deps.Deployer,
+		yb:                 deps.EndpointYB,
+		scURL:              deps.ControllerURL,
+	}
+}
+
+func buildCreateEndpointStep(raw json.RawMessage, deps Deps) (Step, error) {
+	var args CreateEndpointArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, fmt.Errorf("decode create_endpoint args: %w", err)
+	}
+	return NewCreateEndpointStep(args, deps), nil
+}
+
+func (*createEndpointStep) Kind() string { return StepCreateEndpoint }
+
+func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
+	if s.deployer == nil {
+		return Fail(fmt.Errorf("create_endpoint step requires a deployer, but none is configured"))
+	}
+	logger := applog.FromContext(ctx).With(applog.KeyEndpointID, s.EndpointID.String())
+
+	// Record the endpoint row first: it claims the single-writer slot (a second
+	// writer is rejected here) and gives the deploy a stable id, before any
+	// compute is spent. config is the spec stored for (re)creation.
+	config, err := endpointConfig(s.CreateEndpointArgs)
+	if err != nil {
+		return Fail(err)
+	}
+	if err := s.state.EnsureEndpointRecord(ctx, s.EndpointID, s.ProjectID, s.BranchID, s.Role, config); err != nil {
+		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
+	}
+
+	// The deploy spec speaks the storage layer's flat branch id: a branch's id is
+	// the storage branch id verbatim, rendered via hex32 (no enclosing tenant).
+	spec := deploy.EndpointSpec{
+		Name:          EndpointDeployName(s.EndpointID),
+		BranchID:      hex32(s.BranchID),
+		PgVersion:     s.PgVersion,
+		YB:            s.yb,
+		ControllerURL: s.scURL,
+		CPU:           s.CPU,
+		Memory:        s.Memory,
+	}
+
+	deployed, err := s.deployer.CreateEndpoint(ctx, spec)
+	if err != nil {
+		return Fail(fmt.Errorf("deploy endpoint: %w", err))
+	}
+	if err := s.state.SetEndpointAddress(ctx, s.EndpointID, deployed.Address, deployed.TailnetAddress); err != nil {
+		return Fail(fmt.Errorf("record endpoint address: %w", err))
+	}
+
+	logger.Info("endpoint created and deployed", "address", deployed.Address, "tailnet_address", deployed.TailnetAddress)
+	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}))
+}
+
+// endpointConfig is the spec stored on the endpoint row for (re)creation. The
+// endpoint's own id is the row id, so it is not part of the recreate spec. This
+// is the JSON persisted on the endpoint row for (re)creation.
+func endpointConfig(args CreateEndpointArgs) ([]byte, error) {
+	b, err := json.Marshal(map[string]any{
+		"project_id": args.ProjectID,
+		"branch_id":  args.BranchID,
+		"role":       args.Role,
+		"pg_version": args.PgVersion,
+		"cpu":        args.CPU,
+		"memory":     args.Memory,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode endpoint config: %w", err)
+	}
+	return b, nil
+}

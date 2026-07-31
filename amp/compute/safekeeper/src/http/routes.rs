@@ -1,0 +1,294 @@
+use std::fmt;
+use std::io::Write as _;
+use std::str::FromStr;
+use std::sync::Arc;
+
+use http_utils::endpoint::{
+    self, ChannelWriter, auth_middleware, check_permission_with, profile_cpu_handler,
+    profile_heap_handler, prometheus_metrics_handler, request_span,
+};
+use http_utils::error::ApiError;
+use http_utils::failpoints::failpoints_handler;
+use http_utils::json::{json_request, json_response};
+use http_utils::request::{ensure_no_body, parse_request_param};
+use http_utils::{RequestExt, RouterBuilder};
+use hyper::{Body, Request, Response, StatusCode};
+use postgres_ffi::WAL_SEGMENT_SIZE;
+use safekeeper_api::ServerInfo;
+use safekeeper_api::models::{SafekeeperStatus, TimelineCreateRequest, TimelineStatus};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
+use tracing::info_span;
+use utils::auth::SwappableJwtAuth;
+use utils::id::BranchId;
+
+use crate::{GlobalTimelines, SafeKeeperConf, debug_dump, patch_control_file};
+
+/// Healthcheck handler.
+async fn status_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
+    check_permission(&request, None)?;
+    let status = SafekeeperStatus {};
+    json_response(StatusCode::OK, status)
+}
+
+fn get_conf(request: &Request<Body>) -> &SafeKeeperConf {
+    request
+        .data::<Arc<SafeKeeperConf>>()
+        .expect("unknown state type")
+        .as_ref()
+}
+
+fn get_global_timelines(request: &Request<Body>) -> Arc<GlobalTimelines> {
+    request
+        .data::<Arc<GlobalTimelines>>()
+        .expect("unknown state type")
+        .clone()
+}
+
+fn check_permission(request: &Request<Body>, branch_id: Option<BranchId>) -> Result<(), ApiError> {
+    check_permission_with(request, |claims| {
+        crate::auth::check_permission(claims, branch_id)
+    })
+}
+
+async fn timeline_create_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
+    let request_data: TimelineCreateRequest = json_request(&mut request).await?;
+
+    let branch_id = request_data.branch_id;
+    check_permission(&request, Some(branch_id))?;
+
+    let server_info = ServerInfo {
+        pg_version: request_data.pg_version,
+        system_id: request_data.system_id.unwrap_or(0),
+        wal_seg_size: request_data.wal_seg_size.unwrap_or(WAL_SEGMENT_SIZE as u32),
+    };
+    let global_timelines = get_global_timelines(&request);
+    global_timelines
+        .create(branch_id, server_info, request_data.start_lsn)
+        .await
+        .map_err(ApiError::InternalServerError)?;
+
+    json_response(StatusCode::OK, ())
+}
+
+/// Report info about timeline.
+async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
+    let branch_id = parse_request_param(&request, "branch_id")?;
+    check_permission(&request, Some(branch_id))?;
+
+    let global_timelines = get_global_timelines(&request);
+    let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
+    let (inmem, state) = tli.get_state().await;
+    let flush_lsn = tli.get_flush_lsn().await;
+
+    let conf = get_conf(&request);
+    // Note: we report in memory values which can be lost.
+    let status = TimelineStatus {
+        branch_id,
+        pg_info: state.server,
+        flush_lsn,
+        timeline_start_lsn: state.timeline_start_lsn,
+        local_start_lsn: state.local_start_lsn,
+        // yb-amp: commit_lsn ≡ flush_lsn (single-SK).
+        commit_lsn: flush_lsn,
+        remote_consistent_lsn: inmem.remote_consistent_lsn,
+        peers: tli.get_peers(conf).await,
+        walsenders: tli.get_walsenders().get_all_public(),
+        walreceivers: tli.get_walreceivers().get_all(),
+    };
+    json_response(StatusCode::OK, status)
+}
+
+async fn patch_control_file_handler(
+    mut request: Request<Body>,
+) -> Result<Response<Body>, ApiError> {
+    check_permission(&request, None)?;
+
+    let branch_id = parse_request_param(&request, "branch_id")?;
+
+    let global_timelines = get_global_timelines(&request);
+    let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
+
+    let patch_request: patch_control_file::Request = json_request(&mut request).await?;
+    let response = patch_control_file::handle_request(tli, patch_request)
+        .await
+        .map_err(ApiError::InternalServerError)?;
+
+    json_response(StatusCode::OK, response)
+}
+
+/// Force persist control file.
+async fn timeline_checkpoint_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
+    check_permission(&request, None)?;
+
+    let branch_id = parse_request_param(&request, "branch_id")?;
+
+    let global_timelines = get_global_timelines(&request);
+    let tli = global_timelines.get(branch_id)?;
+    tli.write_shared_state()
+        .await
+        .sk
+        .state_mut()
+        .flush()
+        .await
+        .map_err(ApiError::InternalServerError)?;
+    json_response(StatusCode::OK, ())
+}
+
+fn parse_kv_str<E: fmt::Display, T: FromStr<Err = E>>(k: &str, v: &str) -> Result<T, ApiError> {
+    v.parse()
+        .map_err(|e| ApiError::BadRequest(anyhow::anyhow!("cannot parse {k}: {e}")))
+}
+
+/// Dump debug info about all available safekeeper state.
+async fn dump_debug_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
+    check_permission(&request, None)?;
+    ensure_no_body(&mut request).await?;
+
+    let mut dump_all: Option<bool> = None;
+    let mut dump_control_file: Option<bool> = None;
+    let mut dump_memory: Option<bool> = None;
+    let mut branch_id: Option<BranchId> = None;
+
+    let query = request.uri().query().unwrap_or("");
+    let mut values = url::form_urlencoded::parse(query.as_bytes());
+
+    for (k, v) in &mut values {
+        match k.as_ref() {
+            "dump_all" => dump_all = Some(parse_kv_str(&k, &v)?),
+            "dump_control_file" => dump_control_file = Some(parse_kv_str(&k, &v)?),
+            "dump_memory" => dump_memory = Some(parse_kv_str(&k, &v)?),
+            "branch_id" => branch_id = Some(parse_kv_str(&k, &v)?),
+            _ => Err(ApiError::BadRequest(anyhow::anyhow!(
+                "Unknown query parameter: {}",
+                k
+            )))?,
+        }
+    }
+
+    let dump_all = dump_all.unwrap_or(false);
+    let dump_control_file = dump_control_file.unwrap_or(dump_all);
+    let dump_memory = dump_memory.unwrap_or(dump_all);
+
+    let global_timelines = get_global_timelines(&request);
+
+    let args = debug_dump::Args {
+        dump_all,
+        dump_control_file,
+        dump_memory,
+        branch_id,
+    };
+
+    let resp = debug_dump::build(args, global_timelines)
+        .await
+        .map_err(ApiError::InternalServerError)?;
+
+    let started_at = std::time::Instant::now();
+
+    let (tx, rx) = mpsc::channel(1);
+
+    let body = Body::wrap_stream(ReceiverStream::new(rx));
+
+    let mut writer = ChannelWriter::new(128 * 1024, tx);
+
+    let response = Response::builder()
+        .status(200)
+        .header(hyper::header::CONTENT_TYPE, "application/octet-stream")
+        .body(body)
+        .unwrap();
+
+    let span = info_span!("blocking");
+    tokio::task::spawn_blocking(move || {
+        let _span = span.entered();
+
+        let res = serde_json::to_writer(&mut writer, &resp)
+            .map_err(std::io::Error::from)
+            .and_then(|_| writer.flush());
+
+        match res {
+            Ok(()) => {
+                tracing::info!(
+                    bytes = writer.flushed_bytes(),
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    "responded /v1/debug_dump"
+                );
+            }
+            Err(e) => {
+                tracing::warn!("failed to write out /v1/debug_dump response: {e:#}");
+                // semantics of this error are quite... unclear. we want to error the stream out to
+                // abort the response to somehow notify the client that we failed.
+                //
+                // though, most likely the reason for failure is that the receiver is already gone.
+                drop(
+                    writer
+                        .tx
+                        .blocking_send(Err(std::io::ErrorKind::BrokenPipe.into())),
+                );
+            }
+        }
+    });
+
+    Ok(response)
+}
+
+/// Safekeeper http router.
+pub fn make_router(
+    conf: Arc<SafeKeeperConf>,
+    global_timelines: Arc<GlobalTimelines>,
+) -> RouterBuilder<hyper::Body, ApiError> {
+    let mut router = endpoint::make_router();
+    if conf.http_auth.is_some() {
+        router = router.middleware(auth_middleware(|request| {
+            const ALLOWLIST_ROUTES: &[&str] =
+                &["/v1/status", "/metrics", "/profile/cpu", "/profile/heap"];
+            if ALLOWLIST_ROUTES.contains(&request.uri().path()) {
+                None
+            } else {
+                // Option<Arc<SwappableJwtAuth>> is always provided as data below, hence unwrap().
+                request
+                    .data::<Option<Arc<SwappableJwtAuth>>>()
+                    .unwrap()
+                    .as_deref()
+            }
+        }))
+    }
+
+    let force_metric_collection_on_scrape = conf.force_metric_collection_on_scrape;
+
+    let prometheus_metrics_handler_wrapper =
+        move |req| prometheus_metrics_handler(req, force_metric_collection_on_scrape);
+
+    // NB: on any changes do not forget to update the OpenAPI spec
+    // located nearby (/safekeeper/src/http/openapi_spec.yaml).
+    let auth = conf.http_auth.clone();
+    router
+        .data(conf)
+        .data(global_timelines)
+        .data(auth)
+        .get("/metrics", move |r| {
+            request_span(r, prometheus_metrics_handler_wrapper)
+        })
+        .get("/profile/cpu", |r| request_span(r, profile_cpu_handler))
+        .get("/profile/heap", |r| request_span(r, profile_heap_handler))
+        .get("/v1/status", |r| request_span(r, status_handler))
+        .put("/v1/failpoints", |r| {
+            request_span(r, move |r| async {
+                check_permission(&r, None)?;
+                let cancel = CancellationToken::new();
+                failpoints_handler(r, cancel).await
+            })
+        })
+        // Will be used in the future instead of implicit timeline creation
+        .post("/v1/branch", |r| request_span(r, timeline_create_handler))
+        .get("/v1/branch/:branch_id", |r| {
+            request_span(r, timeline_status_handler)
+        })
+        .patch("/v1/branch/:branch_id/control_file", |r| {
+            request_span(r, patch_control_file_handler)
+        })
+        .post("/v1/branch/:branch_id/checkpoint", |r| {
+            request_span(r, timeline_checkpoint_handler)
+        })
+        .get("/v1/debug_dump", |r| request_span(r, dump_debug_handler))
+}

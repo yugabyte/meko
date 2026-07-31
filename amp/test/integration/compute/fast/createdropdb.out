@@ -1,0 +1,12 @@
+VACUUM
+CREATE DATABASE
+You are now connected to database "integration_createdropdb" as user "cloud_admin".
+CREATE TABLE
+INSERT 0 100
+ count
+-------
+   100
+(1 row)
+
+You are now connected to database "postgres" as user "cloud_admin".
+DROP DATABASE

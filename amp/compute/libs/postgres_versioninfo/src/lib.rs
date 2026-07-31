@@ -1,0 +1,175 @@
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_repr::{Deserialize_repr, Serialize_repr};
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
+/// An enum with one variant for each major version of PostgreSQL that we support.
+///
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Deserialize_repr, Serialize_repr)]
+#[repr(u32)]
+pub enum PgMajorVersion {
+    PG18 = 18,
+    // !!! When you add a new PgMajorVersion, don't forget to update PgMajorVersion::ALL
+}
+
+/// A full PostgreSQL version ID, in MMmmbb numerical format (Major/minor/bugfix)
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct PgVersionId(u32);
+
+impl PgVersionId {
+    pub const UNKNOWN: PgVersionId = PgVersionId(0);
+
+    pub fn from_full_pg_version(version: u32) -> PgVersionId {
+        match version {
+            0 => PgVersionId(version), // unknown version
+            180000..190000 => PgVersionId(version),
+            _ => panic!("Invalid full PostgreSQL version ID {version}"),
+        }
+    }
+
+    /// Numeric form used by callers that need to round-trip the value
+    /// through an integer column / wire field.
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
+}
+
+impl Display for PgVersionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        u32::fmt(&self.0, f)
+    }
+}
+
+impl Serialize for PgVersionId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        u32::serialize(&self.0, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PgVersionId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        u32::deserialize(deserializer).map(PgVersionId)
+    }
+
+    fn deserialize_in_place<D>(deserializer: D, place: &mut Self) -> Result<(), D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        u32::deserialize_in_place(deserializer, &mut place.0)
+    }
+}
+
+impl PgMajorVersion {
+    /// Get the numerical representation of the represented Major Version
+    pub const fn major_version_num(&self) -> u32 {
+        match self {
+            PgMajorVersion::PG18 => 18,
+        }
+    }
+
+    /// Whether this version uses the 64-bit two-phase (2PC) state format.
+    ///
+    /// PostgreSQL 17 widened 2PC state to 64-bit `FullTransactionId`: the
+    /// `pg_twophase` directory stores `u64` xids (`TwoPhaseDirectoryV17`) and
+    /// state-file names use 16 hex digits. v16 and earlier used 32-bit / 8-hex.
+    /// Centralised here so every 2PC read/write site agrees on the boundary
+    /// (which is v17, not v18 — this single-version tree just happens to only
+    /// build v18).
+    pub const fn has_64bit_twophase(&self) -> bool {
+        self.major_version_num() >= 17
+    }
+
+    /// Whether this version uses 64-bit SLRU page numbers.
+    ///
+    /// PostgreSQL 17 widened SLRU page numbers (clog / multixact / etc.) from
+    /// 32-bit to 64-bit in the WAL records that carry them.
+    pub const fn has_64bit_slru_pageno(&self) -> bool {
+        self.major_version_num() >= 17
+    }
+
+    /// Get the contents of this version's PG_VERSION file.
+    ///
+    /// The PG_VERSION file is used to determine the PostgreSQL version that currently
+    /// owns the data in a PostgreSQL data directory.
+    pub fn versionfile_string(&self) -> &'static str {
+        match self {
+            PgMajorVersion::PG18 => "18\x0A",
+        }
+    }
+
+    /// Get the v{version} string of this major PostgreSQL version.
+    ///
+    /// Because this was hand-coded in various places, this was moved into a shared
+    /// implementation.
+    pub fn v_str(&self) -> String {
+        match self {
+            PgMajorVersion::PG18 => "v18",
+        }
+        .to_string()
+    }
+
+    /// All currently supported major versions of PostgreSQL.
+    pub const ALL: &'static [PgMajorVersion] = &[PgMajorVersion::PG18];
+}
+
+impl Display for PgMajorVersion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PgMajorVersion::PG18 => "PgMajorVersion::PG18",
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
+pub struct InvalidPgVersion(u32);
+
+impl Display for InvalidPgVersion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InvalidPgVersion({})", self.0)
+    }
+}
+
+impl TryFrom<PgVersionId> for PgMajorVersion {
+    type Error = InvalidPgVersion;
+
+    fn try_from(value: PgVersionId) -> Result<Self, Self::Error> {
+        Ok(match value.0 / 10000 {
+            18 => PgMajorVersion::PG18,
+            _ => return Err(InvalidPgVersion(value.0)),
+        })
+    }
+}
+
+impl From<PgMajorVersion> for PgVersionId {
+    fn from(value: PgMajorVersion) -> Self {
+        PgVersionId((value as u32) * 10000)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub struct PgMajorVersionParseError(String);
+
+impl Display for PgMajorVersionParseError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PgMajorVersionParseError({})", self.0)
+    }
+}
+
+impl FromStr for PgMajorVersion {
+    type Err = PgMajorVersionParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "18" => PgMajorVersion::PG18,
+            _ => return Err(PgMajorVersionParseError(s.to_string())),
+        })
+    }
+}

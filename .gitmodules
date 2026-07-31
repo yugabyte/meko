@@ -1,0 +1,4 @@
+[submodule "amp/compute/vendor/postgres-v18"]
+	path = amp/compute/vendor/postgres-v18
+	url = ../amp-postgres.git
+	branch = REL_18_STABLE_amp

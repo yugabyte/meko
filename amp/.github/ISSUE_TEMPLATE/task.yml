@@ -1,0 +1,34 @@
+name: Task / Epic
+description: A unit of work (or a set of related tasks toward one outcome)
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pick an **Area** below — it sets the required area label
+        (`storage` / `control plane`). Also set a **milestone** after
+        filing (both are required; see `docs/issue-tracking.md`).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which subsystem does this affect?
+      options:
+        - storage
+        - control plane
+        - both
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation / problem
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of done
+  - type: textarea
+    id: notes
+    attributes:
+      label: Implementation notes / sub-tasks

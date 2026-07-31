@@ -1,0 +1,19 @@
+# Shared helpers for the integration test crates (the `compute` and
+# `control_plane` suites). Currently just the typed tokio-postgres
+# assertion helpers in `db`; add anything common to both suites here
+# rather than duplicating it.
+[package]
+name = "integration_common"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+tokio-postgres.workspace = true
+workspace_hack.workspace = true

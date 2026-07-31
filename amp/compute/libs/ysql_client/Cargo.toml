@@ -1,0 +1,37 @@
+[package]
+name = "ysql_client"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[features]
+# Opt-in CLI helpers (shared `YbConnArgs` clap struct) for the diagnostic
+# binaries. Off by default so core consumers don't pull in clap.
+cli = ["dep:clap"]
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, optional = true }
+futures.workspace = true
+serde = { workspace = true, features = ["derive"] }
+metrics.workspace = true
+once_cell.workspace = true
+rand.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+# YB smart-driver fork of tokio-postgres. Used for cluster-aware YB
+# connections (yb_servers() discovery, load balancing, topology-aware
+# routing). TLS goes through `yb-postgres-rustls`, the rustls adapter
+# published for this fork, which implements the fork's own
+# `yb_tokio_postgres::tls::MakeTlsConnect` directly (its
+# `yb-postgres-openssl` sibling fails the TLS handshake against YB
+# tservers).
+yb-tokio-postgres.workspace = true
+yb-postgres-rustls.workspace = true
+rustls = { workspace = true, features = ["ring"] }
+rustls-native-certs.workspace = true
+rustls-pemfile.workspace = true
+
+[dev-dependencies]
+toml.workspace = true

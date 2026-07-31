@@ -1,0 +1,54 @@
+# nginx site config for the amp_ui SPA. The nginx image entrypoint runs envsubst
+# over this file at container start, substituting the ${...} env vars below;
+# nginx's own $variables ($uri, $host, $request_uri, ...) are left untouched (they
+# are not environment variables). Substituted vars:
+#   ${UI_PORT}               — port to listen on
+#   ${CONTROLLER_URL}        — controller REST API origin that /api/ is proxied to
+#   ${NGINX_LOCAL_RESOLVERS} — cluster DNS, filled from /etc/resolv.conf by the
+#                              image entrypoint (NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1)
+
+# Resolve upstreams at request time via the cluster DNS. This is what lets nginx
+# start even when the controller Service DNS isn't resolvable yet — a literal
+# proxy_pass host is resolved at startup and would CrashLoopBackOff the UI pod if
+# the controller isn't up. valid= re-resolves periodically, so address changes
+# are picked up without a restart.
+resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
+
+server {
+    listen       ${UI_PORT};
+    server_name  _;
+
+    root   /usr/share/nginx/html;
+    index  index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # SPA: any path that isn't a real file falls back to index.html, so
+    # client-side routing (React Router) survives deep links and reloads.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Reverse-proxy the controller REST API so the SPA's relative /api/v1 calls
+    # stay same-origin (no CORS). CONTROLLER_URL is an origin with no trailing
+    # path; going through a variable defers DNS to request time (see resolver
+    # above), and $request_uri forwards the original /api/... path + query verbatim.
+    location /api/ {
+        set                $controller_upstream ${CONTROLLER_URL};
+        proxy_pass         $controller_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+
+    # Health endpoint for k8s probes — served by nginx itself, so a 200 means the
+    # UI is serving and does not depend on the controller being reachable.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+}

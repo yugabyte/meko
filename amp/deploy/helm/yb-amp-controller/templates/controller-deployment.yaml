@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yb-amp-controller.controllerName" . }}
+  labels:
+    {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controller.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "yb-amp-controller.controllerSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "yb-amp-controller.controllerName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: controller
+          image: {{ include "yb-amp-controller.controllerImage" . }}
+          imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.controller.ports.api }}
+          env:
+            - name: AMP_DATABASE_URL
+              value: {{ .Values.controller.databaseUrl | quote }}
+            - name: AMP_DB_SCHEMA
+              value: {{ .Values.controller.dbSchema | quote }}
+            - name: AMP_LOG_FORMAT
+              value: {{ .Values.controller.logFormat | quote }}
+            # Endpoint deployer. This chart only ever runs on Kubernetes, so the
+            # driver is fixed to the Kubernetes/Helm driver (not a value).
+            - name: AMP_DEPLOY
+              value: "true"
+            - name: AMP_DEPLOY_DRIVER
+              value: "kubernetes"
+            - name: AMP_DEPLOY_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: AMP_ENDPOINT_IMAGE_REPO
+              value: {{ .Values.controller.endpoint.image.repository | quote }}
+            - name: AMP_ENDPOINT_IMAGE_TAG
+              value: {{ .Values.controller.endpoint.image.tag | default .Chart.AppVersion | quote }}
+            {{- with .Values.imagePullSecrets }}
+            - name: AMP_DEPLOY_PULL_SECRET
+              value: {{ (first .).name | quote }}
+            {{- end }}
+            - name: AMP_DEPLOY_YB_HOST_PORTS
+              value: {{ .Values.controller.endpoint.ybHostPorts | quote }}
+            - name: AMP_DEPLOY_YB_USER
+              value: {{ .Values.controller.endpoint.ybUser | quote }}
+            - name: AMP_DEPLOY_YB_DBNAME
+              value: {{ .Values.controller.endpoint.ybDbname | quote }}
+            # The in-cluster URL endpoints use to reach this controller's storage-layer surface.
+            - name: AMP_DEPLOY_CONTROLLER_URL
+              value: {{ include "yb-amp-controller.endpointControllerUrl" . | quote }}
+            # Endpoint Service exposure. ClusterIP (default) avoids a per-endpoint
+            # cloud LB; LoadBalancer uses the annotations (e.g. internal-LB). The
+            # controller parses the annotations as a "k=v,k=v" CSV.
+            - name: AMP_DEPLOY_SERVICE_TYPE
+              value: {{ .Values.controller.endpoint.service.type | quote }}
+            - name: AMP_DEPLOY_SERVICE_ANNOTATIONS
+              value: {{ join "," .Values.controller.endpoint.service.annotations | quote }}
+            # Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each
+            # endpoint's tailnet address when its Service is tailnet-exposed;
+            # empty disables tailnet address reporting.
+            - name: AMP_DEPLOY_TAILNET_SUFFIX
+              value: {{ .Values.controller.endpoint.tailnetSuffix | quote }}
+            # Endpoint data volume: a PVC of this storage class (empty => emptyDir).
+            - name: AMP_DEPLOY_STORAGE_CLASS
+              value: {{ .Values.controller.endpoint.storageClass | quote }}
+            - name: AMP_DEPLOY_DISK_SIZE
+              value: {{ .Values.controller.endpoint.diskSize | quote }}
+            # Node labels endpoint pods must match (e.g. a local-NVMe-SSD ephemeral
+            # pool). The controller parses this as a "k=v,k=v" CSV.
+            - name: AMP_DEPLOY_NODE_SELECTOR
+              value: {{ join "," (.Values.controller.endpoint.nodeSelector | default (list)) | quote }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: api
+            initialDelaySeconds: {{ .Values.controller.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.controller.readinessProbe.periodSeconds }}
+          # No liveness probe, deliberately (#398). The controller migrates its
+          # schema BEFORE serving, so nothing answers /healthz during a slow
+          # migration (an index backfill on an RF=3 backing runs for minutes) —
+          # a liveness probe kills that work mid-DDL and leaves schema_migrations
+          # dirty, wedging every later start. Readiness alone degrades safely: a
+          # not-ready pod is out of traffic but never killed.
+          {{- with .Values.controller.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

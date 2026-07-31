@@ -1,0 +1,281 @@
+CREATE TABLE
+INSERT 0 10000
+CREATE INDEX
+CREATE INDEX
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+VACUUM
+                Table "public.foo"
+ Column |  Type   | Collation | Nullable | Default
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null |
+ b      | integer |           |          |
+ c      | integer |           |          |
+Indexes:
+    "foo_pkey" PRIMARY KEY, btree (a)
+    "foo_b_idx" btree (b)
+    "foo_c_idx" btree (c)
+
+DROP TABLE

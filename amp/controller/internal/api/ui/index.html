@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>controller — control plane</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --border: #e3e8ee;
+      --text: #1a2b3c;
+      --muted: #6b7785;
+      --accent: #ff6e42;
+      --accent-ink: #ffffff;
+      --accent-soft: #fff1ec;
+      --ok: #1f9d6b;
+      --ok-soft: #e7f6ef;
+      --info: #2f6feb;
+      --info-soft: #e9f0fe;
+      --danger: #d64545;
+      --danger-soft: #fbeaea;
+      --radius: 8px;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+      /* A serif display face sets a project (database) name apart from the sans UI. */
+      --font-display: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    a { color: var(--info); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+
+    header.topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .brand { display: flex; align-items: baseline; gap: 10px; }
+    .brand .logo {
+      font-weight: 700;
+      font-size: 20px;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+    .brand .logo .dot { color: var(--accent); }
+    .brand .tag { color: var(--muted); font-size: 13px; }
+    header.topbar .spacer { flex: 1; }
+    header.topbar .docs-link { font-size: 13px; color: var(--muted); }
+
+    main { max-width: 980px; margin: 0 auto; padding: 28px 24px 64px; }
+
+    .crumbs { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+    .crumbs a { color: var(--muted); }
+    .crumbs .sep { margin: 0 8px; opacity: 0.6; }
+
+    h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+    h2 { font-size: 16px; margin: 28px 0 12px; }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .card + .card { margin-top: 14px; }
+    .card-head {
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 16px; border-bottom: 1px solid var(--border);
+    }
+    .card-head h3 { margin: 0; font-size: 15px; }
+    .card-head .spacer { flex: 1; }
+    .card-body { padding: 16px; }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: #fafbfc; }
+
+    .badge {
+      display: inline-block; padding: 1px 8px; border-radius: 999px;
+      font-size: 12px; font-weight: 600; line-height: 1.6;
+    }
+    .badge.admin { background: var(--accent-soft); color: var(--accent); }
+    .badge.default { background: var(--info-soft); color: var(--info); }
+    .badge.rw { background: var(--ok-soft); color: var(--ok); }
+    .badge.ro { background: var(--info-soft); color: var(--info); }
+    .badge.muted { background: #eef1f4; color: var(--muted); }
+
+    .id { color: var(--muted); }
+    .id .short { color: var(--text); }
+    button.copy {
+      border: none; background: transparent; cursor: pointer; color: var(--muted);
+      padding: 0 2px; margin-left: 2px; line-height: 0; vertical-align: middle;
+    }
+    button.copy svg { width: 12px; height: 12px; display: block; }
+    button.copy:hover { color: var(--text); }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      border: 1px solid var(--border); background: var(--surface); color: var(--text);
+      padding: 7px 13px; border-radius: 6px; font-size: 13px; font-weight: 500;
+      cursor: pointer; line-height: 1;
+    }
+    .btn:hover { background: #f3f5f7; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+    .btn.primary:hover { filter: brightness(0.96); }
+    .btn.danger { color: var(--danger); border-color: #f1c7c7; background: var(--surface); }
+    .btn.danger:hover { background: var(--danger-soft); }
+    .btn.small { padding: 4px 9px; font-size: 12px; }
+    .btn:disabled { opacity: 0.55; cursor: default; }
+
+    .inline-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    input[type="text"] {
+      border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;
+      font-size: 13px; min-width: 200px; color: var(--text); background: var(--surface);
+    }
+    input[type="text"]:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    select {
+      border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px;
+      font-size: 13px; color: var(--text); background: var(--surface); cursor: pointer;
+    }
+    select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    label.check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+
+    .empty { color: var(--muted); padding: 18px 16px; font-size: 13px; }
+    .muted { color: var(--muted); }
+    .nowrap { white-space: nowrap; }
+
+    .pool { margin-top: 14px; }
+    .pool .projects { padding: 0; }
+    .project { border-top: 1px solid var(--border); padding: 14px 16px; }
+    .project:first-child { border-top: none; }
+    .project .pj-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .project .pj-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; letter-spacing: 0.01em; }
+    .branches { margin-top: 10px; padding-left: 14px; border-left: 2px solid var(--border); }
+    .branch-bar { margin-bottom: 4px; }
+    .branch-switch { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+    .branch { padding: 10px 0; border-top: 1px dashed var(--border); }
+    .branch:first-child { border-top: none; }
+    .branch .br-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .branch .br-name { font-weight: 600; }
+    .br-ref { color: var(--text); font-weight: 600; }
+    .meta { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; gap: 16px; flex-wrap: wrap; }
+    .meta .k { color: var(--muted); }
+    .endpoints { margin-top: 10px; padding-left: 14px; border-left: 2px solid var(--border); }
+    .endpoint { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 3px 0; flex-wrap: wrap; }
+    .endpoint .addr { font-family: ui-monospace, monospace; }
+
+    #toast {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: var(--danger-soft); color: var(--danger); border: 1px solid #f1c7c7;
+      padding: 10px 16px; border-radius: 8px; box-shadow: var(--shadow);
+      font-size: 13px; max-width: 80vw; display: none; z-index: 50;
+    }
+    #toast.ok { background: var(--ok-soft); color: var(--ok); border-color: #bfe6d3; }
+
+    dialog.modal {
+      border: 1px solid var(--border); border-radius: var(--radius); padding: 0;
+      box-shadow: 0 12px 32px rgba(16, 24, 40, 0.18); width: calc(100% - 32px); max-width: 420px;
+      color: var(--text); background: var(--surface);
+    }
+    dialog.modal::backdrop { background: rgba(16, 24, 40, 0.35); }
+    .modal form { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    .modal h3 { margin: 0; font-size: 16px; }
+    .modal .sub { margin: 0; }
+    .modal .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+    .modal .field input[type="text"] { width: 100%; min-width: 0; }
+    .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+    .modal .form-error {
+      background: var(--danger-soft); color: var(--danger); border: 1px solid #f1c7c7;
+      border-radius: 6px; padding: 8px 10px; font-size: 13px;
+    }
+
+    .spinner { color: var(--muted); padding: 24px 16px; font-size: 13px; }
+    .section-actions { margin-bottom: 12px; }
+
+    /* Recent-tasks panel, docked bottom-right above the toast. */
+    #tasks-panel {
+      position: fixed; right: 20px; bottom: 20px; width: 360px; max-width: calc(100vw - 40px);
+      max-height: 50vh; display: flex; flex-direction: column; z-index: 40;
+      box-shadow: 0 8px 24px rgba(16, 24, 40, 0.16);
+    }
+    #tasks-panel .card-head { padding: 10px 14px; }
+    #tasks-panel .card-head h3 { font-size: 13px; }
+    #tasks-body { overflow-y: auto; padding: 8px 14px; }
+    .task-row {
+      display: flex; align-items: center; gap: 8px; padding: 7px 0;
+      border-bottom: 1px solid var(--border); font-size: 12px;
+    }
+    .task-row:last-child { border-bottom: none; }
+    .task-row .kind { font-weight: 600; }
+    .task-row .when { color: var(--muted); margin-left: auto; white-space: nowrap; }
+    .task-row .task-err { flex-basis: 100%; color: var(--danger); font-size: 12px; }
+    .badge.pending { background: #eef1f4; color: var(--muted); }
+    .badge.running { background: var(--info-soft); color: var(--info); }
+    .badge.succeeded { background: var(--ok-soft); color: var(--ok); }
+    .badge.failed { background: var(--danger-soft); color: var(--danger); }
+    @media (max-width: 720px) {
+      #tasks-panel { position: static; right: auto; bottom: auto; width: auto; max-width: none; margin: 18px auto 0; max-width: 980px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">controller<span class="dot">.</span></span>
+      <span class="tag">control plane</span>
+    </div>
+    <div class="spacer"></div>
+    <a class="docs-link" href="/api/v1/docs" target="_blank" rel="noopener">API docs ↗</a>
+  </header>
+  <main id="app"><div class="spinner">Loading…</div></main>
+
+  <!-- Recent-tasks panel. Lives outside #app so a route re-render leaves it in
+       place; it is refreshed after every mutation and on demand. -->
+  <section id="tasks-panel" class="card">
+    <div class="card-head">
+      <h3>Recent tasks</h3>
+      <div class="spacer"></div>
+      <button class="btn small" id="tasks-refresh">Refresh</button>
+    </div>
+    <div class="card-body" id="tasks-body">
+      <div class="empty">No tasks yet.</div>
+    </div>
+  </section>
+
+  <div id="toast"></div>
+
+  <!-- Create-branch modal. Lives outside #app so a route re-render can't wipe it;
+       its inputs/parent are populated each time it is opened. -->
+  <dialog id="branch-dialog" class="modal" aria-labelledby="bd-title">
+    <form id="bd-form">
+      <h3 id="bd-title">Create branch</h3>
+      <p class="sub muted">Forking from <strong id="bd-parent" class="br-ref"></strong></p>
+      <label class="field">Branch name
+        <input type="text" id="bd-name" placeholder="e.g. feature-login" autocomplete="off" />
+      </label>
+      <label class="field">Fork point LSN <span class="muted">(optional)</span>
+        <input type="text" id="bd-lsn" placeholder="e.g. 0/16ABCD0 — defaults to latest" autocomplete="off" />
+      </label>
+      <div id="bd-error" class="form-error" hidden></div>
+      <div class="actions">
+        <button type="button" class="btn" id="bd-cancel">Cancel</button>
+        <button type="submit" class="btn primary" id="bd-submit">Create branch</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    "use strict";
+
+    const API = "/api/v1";
+
+    // --- tiny helpers --------------------------------------------------------
+
+    const app = document.getElementById("app");
+    const toastEl = document.getElementById("toast");
+    let toastTimer = null;
+
+    function toast(msg, ok) {
+      toastEl.textContent = msg;
+      toastEl.classList.toggle("ok", !!ok);
+      toastEl.style.display = "block";
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastEl.style.display = "none"; }, 4000);
+    }
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+
+    function shortId(id) {
+      const s = String(id || "");
+      return s.length > 8 ? s.slice(0, 8) : s;
+    }
+
+    // Inline clipboard glyph — an SVG (not a unicode codepoint) so it renders
+    // identically everywhere, independent of installed fonts.
+    const COPY_ICON =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<rect x="9" y="9" width="11" height="11" rx="2"/>' +
+      '<path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+
+    // Render a uuid as a short, copyable chip.
+    function idChip(id) {
+      const s = esc(id);
+      return `<span class="id mono" title="${s}"><span class="short">${esc(shortId(id))}</span>` +
+        `<button class="copy" data-copy="${s}" title="Copy full id">${COPY_ICON}</button></span>`;
+    }
+
+    function fmtDate(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (isNaN(d)) return esc(iso);
+      return d.toLocaleString();
+    }
+
+    // REST call against the controller API. Throws Error(message) on non-2xx,
+    // surfacing the API's {error:{code,message}} envelope when present.
+    async function api(method, path, body) {
+      const opts = { method, headers: {} };
+      if (body !== undefined) {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(body);
+      }
+      const res = await fetch(API + path, opts);
+      const text = await res.text();
+      let data = null;
+      if (text) { try { data = JSON.parse(text); } catch (_) { /* non-JSON */ } }
+      if (!res.ok) {
+        const msg = data && data.error && data.error.message
+          ? data.error.message
+          : `${method} ${path} failed (${res.status})`;
+        throw new Error(msg);
+      }
+      // A 2xx with no/garbled body would otherwise return null and blow up the
+      // caller on data.users/u.id; surface it as a catchable error instead.
+      if (res.status !== 204 && data === null) {
+        throw new Error(`invalid or empty response from ${method} ${path}`);
+      }
+      return data;
+    }
+
+    // Lists are paginated; this UI is simple, so pull a generous single page.
+    const PAGE = "?limit=1000";
+
+    // --- data fetchers -------------------------------------------------------
+
+    const listUsers     = () => api("GET", `/users${PAGE}`);
+    const getUser       = (id) => api("GET", `/users/${id}`);
+    const createUser    = (isAdmin) => api("POST", "/users", { is_admin: isAdmin });
+    const listPools     = () => api("GET", `/storage-pools${PAGE}`);
+    const createPool    = (name, owner) => api("POST", "/storage-pools", { name, owner_user_id: owner });
+    // A project (database) is created with its default branch automatically.
+    const listProjects  = (poolId) => api("GET", `/storage-pools/${poolId}/projects${PAGE}`);
+    const createProject = (poolId, name) => api("POST", `/storage-pools/${poolId}/projects`, { name });
+    const listBranches  = (poolId, projectId) => api("GET", `/storage-pools/${poolId}/projects/${projectId}/branches${PAGE}`);
+    const listEndpoints = (poolId, projectId, branchId) =>
+      api("GET", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints${PAGE}`);
+    const createEndpoint= (poolId, projectId, branchId, role) =>
+      api("POST", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints`, { role });
+    const deleteEndpoint= (poolId, projectId, branchId, endpointId) =>
+      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints/${endpointId}`);
+    const deleteProject = (poolId, projectId) =>
+      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}`);
+    const deleteBranch  = (poolId, projectId, branchId) =>
+      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}`);
+    // Fork a branch into a new branch. parentBranchId is the branch to fork off
+    // (the default branch or another branch — branch-of-branch). forkLsn is
+    // optional (defaults to the parent's latest LSN server-side); pass it only
+    // when set.
+    const createBranch  = (poolId, projectId, parentBranchId, name, forkLsn) => {
+      const body = { name, parent_branch_id: parentBranchId };
+      if (forkLsn) body.fork_point_lsn = forkLsn;
+      return api("POST", `/storage-pools/${poolId}/projects/${projectId}/branches`, body);
+    };
+
+    // --- tasks ---------------------------------------------------------------
+    // The six mutating endpoints (create/delete project, branch, endpoint) no
+    // longer return the resource: they return 202 + a Task, and the work runs
+    // asynchronously. The client POSTs, then polls GET /tasks/{id} until the
+    // task reaches a terminal status, then refreshes the relevant list.
+
+    const getTask  = (id) => api("GET", `/tasks/${id}`);
+    const listTasks= (limit) => api("GET", `/tasks?limit=${limit || 20}`);
+
+    // Poll a task to completion. Resolves with the succeeded Task; rejects with
+    // an Error carrying the task's error string on failure (or a timeout). The
+    // ~750ms cadence keeps the UI responsive without hammering the API; the
+    // timeout (default 2min) covers a slow endpoint deploy without hanging forever.
+    async function pollTask(taskId, { intervalMs = 750, timeoutMs = 120000 } = {}) {
+      const deadline = Date.now() + timeoutMs;
+      while (true) {
+        const t = await getTask(taskId);
+        if (t.status === "succeeded") return t;
+        if (t.status === "failed") {
+          throw new Error(t.error || `task ${shortId(taskId)} failed`);
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out waiting for task ${shortId(taskId)} (still ${t.status})`);
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
+
+    // --- router --------------------------------------------------------------
+
+    function route() {
+      const hash = location.hash.replace(/^#/, "") || "/";
+      const m = hash.match(/^\/users\/([0-9a-fA-F-]+)$/);
+      if (m) return renderUser(m[1]);
+      return renderHome();
+    }
+
+    function go(path) { location.hash = path; }
+
+    // Wire copy-to-clipboard chips. Called after each (partial) render; the
+    // dataset guard keeps it idempotent so re-renders don't stack listeners.
+    function bind() {
+      app.querySelectorAll("[data-copy]").forEach((el) => {
+        if (el.dataset.bound) return;
+        el.dataset.bound = "1";
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const v = el.getAttribute("data-copy");
+          // clipboard is undefined outside secure contexts (plain HTTP, not
+          // localhost); guard so the chip degrades instead of throwing.
+          if (!navigator.clipboard) {
+            toast("Copy needs HTTPS or localhost");
+            return;
+          }
+          navigator.clipboard.writeText(v).then(
+            () => toast("Copied id to clipboard", true),
+            () => toast("Copy failed"));
+        });
+      });
+    }
+
+    // --- home: users ---------------------------------------------------------
+
+    async function renderHome() {
+      app.innerHTML = `<div class="spinner">Loading users…</div>`;
+      let data;
+      try { data = await listUsers(); }
+      catch (e) { app.innerHTML = errorPanel(e.message); return; }
+
+      const users = data.users || [];
+      const rows = users.map((u) => `
+        <tr class="clickable" data-user="${esc(u.id)}">
+          <td>${idChip(u.id)}</td>
+          <td>${u.is_admin ? '<span class="badge admin">admin</span>' : '<span class="badge muted">user</span>'}</td>
+          <td class="nowrap muted">${fmtDate(u.created_at)}</td>
+          <td class="nowrap"><a href="#/users/${esc(u.id)}">Open →</a></td>
+        </tr>`).join("");
+
+      app.innerHTML = `
+        <h1>Users</h1>
+        <p class="sub">Select a user to manage its storage pools, projects, and branches.</p>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Create user</h3>
+          </div>
+          <div class="card-body">
+            <div class="inline-form">
+              <label class="check"><input type="checkbox" id="new-admin" /> Admin</label>
+              <button class="btn primary" id="create-user">Create user</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:18px">
+          <div class="card-head">
+            <h3>All users</h3>
+            <div class="spacer"></div>
+            <span class="muted">${data.total} total</span>
+          </div>
+          ${users.length ? `<table>
+            <thead><tr><th>ID</th><th>Role</th><th>Created</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>` : `<div class="empty">No users yet. Create one above.</div>`}
+        </div>`;
+
+      document.getElementById("create-user").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const isAdmin = document.getElementById("new-admin").checked;
+        btn.disabled = true;
+        try {
+          const u = await createUser(isAdmin);
+          toast("User created", true);
+          go(`/users/${u.id}`);
+        } catch (err) {
+          toast(err.message); btn.disabled = false;
+        }
+      });
+
+      app.querySelectorAll("tr[data-user]").forEach((tr) => {
+        tr.addEventListener("click", () => go(`/users/${tr.getAttribute("data-user")}`));
+      });
+      bind();
+    }
+
+    // --- user detail: pools -> projects -> branches -> endpoints -------------
+
+    async function renderUser(userId) {
+      app.innerHTML = `<div class="spinner">Loading user…</div>`;
+
+      let user, allPools;
+      try {
+        [user, allPools] = await Promise.all([getUser(userId), listPools()]);
+      } catch (e) {
+        app.innerHTML = errorPanel(e.message, true);
+        return;
+      }
+
+      // Pools are top-level and the list returns every pool; show the ones this
+      // user owns (owner filtering is not yet an API feature).
+      const pools = (allPools.storage_pools || []).filter((p) => p.owner_user_id === userId);
+
+      app.innerHTML = `
+        <div class="crumbs"><a href="#/">Users</a><span class="sep">/</span>${esc(shortId(userId))}</div>
+        <h1>User ${esc(shortId(userId))}
+          ${user.is_admin ? '<span class="badge admin">admin</span>' : ''}</h1>
+        <p class="sub">${idChip(userId)} &nbsp;·&nbsp; created ${fmtDate(user.created_at)}</p>
+
+        <h2>Storage pools</h2>
+        <div class="section-actions">
+          <div class="inline-form">
+            <input type="text" id="new-pool" placeholder="New pool name" />
+            <button class="btn primary" id="create-pool">Create pool</button>
+          </div>
+        </div>
+        <div id="pools">
+          ${pools.length
+            ? pools.map(poolCard).join("")
+            : `<div class="card"><div class="empty">This user owns no storage pools yet. Create one above.</div></div>`}
+        </div>`;
+
+      document.getElementById("create-pool").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const input = document.getElementById("new-pool");
+        const name = input.value.trim();
+        if (!name) { toast("Enter a pool name"); return; }
+        btn.disabled = true;
+        try {
+          await createPool(name, userId);
+          toast("Pool created", true);
+          renderUser(userId);
+        } catch (err) { toast(err.message); btn.disabled = false; }
+      });
+
+      // Hydrate each pool's projects (and their branches/endpoints) independently.
+      pools.forEach((p) => hydratePool(p.id, userId));
+      bindPoolForms(userId);
+      bind();
+    }
+
+    function poolCard(p) {
+      return `
+        <div class="card pool" data-pool="${esc(p.id)}">
+          <div class="card-head">
+            <h3>${esc(p.name)}</h3>
+            <div class="spacer"></div>
+            <span class="muted nowrap">${idChip(p.id)} · ${fmtDate(p.created_at)}</span>
+          </div>
+          <div class="card-body">
+            <div class="inline-form">
+              <input type="text" class="new-project" data-pool="${esc(p.id)}" placeholder="New project (database) name" />
+              <button class="btn primary create-project" data-pool="${esc(p.id)}">Create project</button>
+              <span class="muted">pg 17 · creates a default branch</span>
+            </div>
+          </div>
+          <div class="projects" id="proj-${esc(p.id)}">
+            <div class="spinner">Loading projects…</div>
+          </div>
+        </div>`;
+    }
+
+    function bindPoolForms(userId) {
+      app.querySelectorAll(".create-project").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const poolId = btn.getAttribute("data-pool");
+          const input = app.querySelector(`.new-project[data-pool="${poolId}"]`);
+          const name = input.value.trim();
+          if (!name) { toast("Enter a project name"); return; }
+          const prev = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = "Creating…";
+          try {
+            const task = await createProject(poolId, name);
+            await pollTask(task.id);
+            toast("Project created", true);
+            input.value = "";
+            await hydratePool(poolId, userId);
+          } catch (err) { toast(err.message); }
+          finally { refreshTasks(); }
+          btn.disabled = false;
+          btn.textContent = prev;
+        });
+      });
+    }
+
+    async function hydratePool(poolId, userId) {
+      const host = document.getElementById(`proj-${poolId}`);
+      if (!host) return;
+      let data;
+      try { data = await listProjects(poolId); }
+      catch (e) { host.innerHTML = `<div class="empty">Failed to load projects: ${esc(e.message)}</div>`; return; }
+
+      const projects = data.projects || [];
+      if (!projects.length) {
+        host.innerHTML = `<div class="empty">No projects yet.</div>`;
+        return;
+      }
+      host.innerHTML = projects.map((p) => `
+        <div class="project" id="pj-${esc(p.id)}">
+          <div class="pj-head">
+            <span class="pj-name">${esc(p.name)}</span>
+            <span class="badge muted">project</span>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn danger delete-project" data-pool="${esc(poolId)}" data-project="${esc(p.id)}" data-name="${esc(p.name)}">Delete project</button>
+          </div>
+          <div class="meta">
+            <span><span class="k">project</span> ${idChip(p.id)}</span>
+            <span><span class="k">created</span> ${fmtDate(p.created_at)}</span>
+          </div>
+          <div class="branches" id="br-${esc(p.id)}">
+            <div class="muted" style="font-size:12px">Loading branches…</div>
+          </div>
+        </div>`).join("");
+
+      bind();
+
+      // Delete-project: confirm, fire the DELETE (202 + Task), poll, then
+      // re-list this pool's projects so the removed one disappears.
+      host.querySelectorAll(".delete-project").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const projectId = btn.getAttribute("data-project");
+          const name = btn.getAttribute("data-name");
+          if (!confirm(`Delete project "${name}"? This retires every endpoint and drops all its branches. This cannot be undone.`)) return;
+          const prev = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = "Deleting…";
+          try {
+            const task = await deleteProject(poolId, projectId);
+            await pollTask(task.id);
+            toast("Project deleted", true);
+            await hydratePool(poolId, userId);
+          } catch (err) {
+            toast(err.message);
+            btn.disabled = false;
+            btn.textContent = prev;
+          } finally { refreshTasks(); }
+        });
+      });
+
+      // Branches per project, in parallel.
+      projects.forEach((p) => hydrateBranches(poolId, p.id, userId));
+    }
+
+    // A project's branches are shown one at a time: the default branch ("main")
+    // is selected by default, with a dropdown to switch to any other branch.
+    // Only the selected branch's detail (lineage, fork form, endpoints) is shown.
+    // selectBranchId optionally pre-selects a branch after a re-hydrate (e.g. the
+    // one just created) instead of falling back to the default.
+    async function hydrateBranches(poolId, projectId, userId, selectBranchId) {
+      const host = document.getElementById(`br-${projectId}`);
+      if (!host) return;
+      let data;
+      try { data = await listBranches(poolId, projectId); }
+      catch (e) { host.innerHTML = `<div class="empty">Failed to load branches: ${esc(e.message)}</div>`; return; }
+
+      const branches = data.branches || [];
+      if (!branches.length) {
+        host.innerHTML = `<div class="muted" style="font-size:12px">No branches yet.</div>`;
+        return;
+      }
+
+      // Index by id so lineage can be shown by parent *name* (not just its id),
+      // and so switching the dropdown can render a branch without refetching.
+      const byId = {};
+      branches.forEach((b) => { byId[b.branch_id] = b; });
+
+      // The default branch is the project's trunk, so list it first; the rest
+      // follow in creation order (the API returns them sorted by created_at).
+      const def = branches.find((b) => b.is_default) || branches[0];
+      const ordered = [def, ...branches.filter((b) => b.branch_id !== def.branch_id)];
+      const options = ordered.map((b) =>
+        `<option value="${esc(b.branch_id)}">${esc(b.name)}${b.is_default ? " · default" : ""}</option>`).join("");
+
+      const count = branches.length;
+      host.innerHTML = `
+        <div class="branch-bar inline-form">
+          <label class="branch-switch">Branch
+            <select class="branch-select" aria-label="Select branch">${options}</select>
+          </label>
+          <button class="btn primary create-branch">Create branch…</button>
+          <span class="muted nowrap" style="font-size:12px; margin-left:auto">${count} branch${count === 1 ? "" : "es"} in this project</span>
+        </div>
+        <div class="branch-detail"></div>`;
+
+      const select = host.querySelector(".branch-select");
+      const detail = host.querySelector(".branch-detail");
+
+      // The "Create branch…" button sits next to the dropdown and forks whichever
+      // branch is currently selected (read at click time, so it tracks the dropdown).
+      host.querySelector(".create-branch").addEventListener("click", () => {
+        const cur = byId[select.value];
+        if (!cur) return;
+        openBranchDialog({ poolId, projectId, userId, parentId: cur.branch_id, parentName: cur.name });
+      });
+
+      // Render the panel for one branch: its metadata (the fork point shown by the
+      // parent branch's name) and its endpoints. Forking is driven from the
+      // "Create branch…" button in the branch bar above.
+      function renderDetail(branchId) {
+        const b = byId[branchId];
+        if (!b) return;
+
+        let lineage = "";
+        if (b.parent_branch_id) {
+          const parent = byId[b.parent_branch_id];
+          const pname = parent ? parent.name : shortId(b.parent_branch_id);
+          lineage = `<span><span class="k">forked from</span> ` +
+            `<span class="br-ref">${esc(pname)}</span> ${idChip(b.parent_branch_id)}` +
+            `${b.fork_lsn ? ` @ <code>${esc(b.fork_lsn)}</code>` : ""}</span>`;
+        }
+
+        detail.innerHTML = `
+          <div class="branch" id="brrow-${esc(b.branch_id)}">
+            <div class="br-head">
+              <span class="br-name">${esc(b.name)}</span>
+              ${b.is_default ? '<span class="badge default">default</span>' : '<span class="badge muted">branch</span>'}
+              <span class="badge muted">pg ${esc(b.pg_version)}</span>
+              <span class="spacer" style="flex:1"></span>
+              ${b.is_default ? '' : `<button class="btn danger delete-branch">Delete branch</button>`}
+            </div>
+            <div class="meta">
+              <span><span class="k">branch</span> ${idChip(b.branch_id)}</span>
+              ${lineage}
+              <span><span class="k">created</span> ${fmtDate(b.created_at)}</span>
+            </div>
+            <div class="endpoints" id="ep-${esc(b.branch_id)}">
+              <div class="muted" style="font-size:12px">Loading endpoints…</div>
+            </div>
+          </div>`;
+        bind();
+
+        // Delete-branch: confirm, fire the DELETE (202 + Task), poll, then
+        // re-hydrate the branch list (falling back to the default branch).
+        const delBr = detail.querySelector(".delete-branch");
+        if (delBr) {
+          delBr.addEventListener("click", async () => {
+            if (!confirm(`Delete branch "${b.name}"? This retires its endpoints and drops the branch. This cannot be undone.`)) return;
+            const prev = delBr.textContent;
+            delBr.disabled = true;
+            delBr.textContent = "Deleting…";
+            try {
+              const task = await deleteBranch(poolId, projectId, b.branch_id);
+              await pollTask(task.id);
+              toast("Branch deleted", true);
+              await hydrateBranches(poolId, projectId, userId);
+            } catch (err) {
+              toast(err.message);
+              delBr.disabled = false;
+              delBr.textContent = prev;
+            } finally { refreshTasks(); }
+          });
+        }
+
+        hydrateEndpoints(poolId, projectId, b.branch_id);
+      }
+
+      const initial = selectBranchId && byId[selectBranchId] ? selectBranchId : def.branch_id;
+      select.value = initial;
+      select.addEventListener("change", () => renderDetail(select.value));
+      renderDetail(initial);
+    }
+
+    async function hydrateEndpoints(poolId, projectId, branchId) {
+      const host = document.getElementById(`ep-${branchId}`);
+      if (!host) return;
+      let data;
+      try { data = await listEndpoints(poolId, projectId, branchId); }
+      catch (e) { host.innerHTML = `<div class="muted" style="font-size:12px">Failed to load endpoints: ${esc(e.message)}</div>`; return; }
+
+      const eps = data.endpoints || [];
+      const list = eps.length
+        ? eps.map((ep) => {
+            const cls = ep.role === "read_write" ? "rw" : "ro";
+            const label = ep.role === "read_write" ? "read-write" : "read-only";
+            // Demo-only: every endpoint uses the fixed cloud_admin default.
+            const conn = `postgresql://cloud_admin:cloud_admin@${ep.address}/postgres`;
+            return `<div class="endpoint">
+              <span class="badge ${cls}">${label}</span>
+              <span class="addr">${esc(ep.address)}</span>
+              ${idChip(ep.id)}
+              <button class="btn danger delete-endpoint" data-endpoint="${esc(ep.id)}" data-role="${esc(label)}" style="margin-left:auto">Delete</button>
+              <div class="cred" style="font-size:12px; margin-top:4px; color:var(--muted); flex-basis:100%">
+                user <code>cloud_admin</code> · password <code>cloud_admin</code> · db <code>postgres</code>
+                <button class="copy" data-copy="${esc(conn)}" title="Copy connection string">${COPY_ICON}</button>
+              </div>
+            </div>`;
+          }).join("")
+        : `<div class="muted" style="font-size:12px">No endpoints yet.</div>`;
+      // Compute is a separate resource: the controller accepts the request
+      // (202 + Task) and deploys the endpoint asynchronously in a task. The
+      // client polls GET /tasks/{id} (pollTask) until it succeeds, then
+      // refreshes the endpoint list.
+      const provision = `
+        <div class="inline-form" style="margin-top:8px">
+          <select class="ep-role" aria-label="endpoint role">
+            <option value="read_write">read-write</option>
+            <option value="read_only">read-only</option>
+          </select>
+          <button class="btn create-endpoint" data-branch="${esc(branchId)}">Provision compute</button>
+        </div>`;
+      host.innerHTML = list + provision;
+      bind();
+
+      const epBtn = host.querySelector(".create-endpoint");
+      if (epBtn) {
+        epBtn.addEventListener("click", async () => {
+          const role = host.querySelector(".ep-role").value;
+          const prev = epBtn.textContent;
+          epBtn.disabled = true;
+          epBtn.textContent = "Provisioning… (~30–60s)";
+          try {
+            // POST returns 202 + a Task; the worker deploys the compute pod and
+            // records its address. Poll until the task settles, then re-list.
+            const task = await createEndpoint(poolId, projectId, branchId, role);
+            await pollTask(task.id);
+            toast("Endpoint provisioned", true);
+            await hydrateEndpoints(poolId, projectId, branchId);
+          } catch (err) {
+            toast(err.message);
+            epBtn.disabled = false;
+            epBtn.textContent = prev;
+          } finally { refreshTasks(); }
+        });
+      }
+
+      // Delete-endpoint: confirm, fire the DELETE (202 + Task), poll, re-list.
+      host.querySelectorAll(".delete-endpoint").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const endpointId = btn.getAttribute("data-endpoint");
+          const roleLabel = btn.getAttribute("data-role");
+          if (!confirm(`Delete the ${roleLabel} endpoint ${shortId(endpointId)}? The running compute is retired.`)) return;
+          const prev = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = "Deleting…";
+          try {
+            const task = await deleteEndpoint(poolId, projectId, branchId, endpointId);
+            await pollTask(task.id);
+            toast("Endpoint deleted", true);
+            await hydrateEndpoints(poolId, projectId, branchId);
+          } catch (err) {
+            toast(err.message);
+            btn.disabled = false;
+            btn.textContent = prev;
+          } finally { refreshTasks(); }
+        });
+      });
+    }
+
+    // --- error panel ---------------------------------------------------------
+
+    function errorPanel(msg, withBack) {
+      return `<div class="card"><div class="card-body">
+        ${withBack ? '<div class="crumbs"><a href="#/">← Users</a></div>' : ''}
+        <strong>Something went wrong.</strong>
+        <p class="muted">${esc(msg)}</p>
+      </div></div>`;
+    }
+
+    // --- create-branch modal -------------------------------------------------
+    // One shared <dialog> serves every branch panel; openBranchDialog stashes the
+    // context (which branch to fork, in which project) the submit handler reads.
+
+    const branchDialog = document.getElementById("branch-dialog");
+    const bdForm   = document.getElementById("bd-form");
+    const bdParent = document.getElementById("bd-parent");
+    const bdName   = document.getElementById("bd-name");
+    const bdLsn    = document.getElementById("bd-lsn");
+    const bdError  = document.getElementById("bd-error");
+    const bdSubmit = document.getElementById("bd-submit");
+    let bdCtx = null;
+
+    function bdShowError(msg) { bdError.textContent = msg; bdError.hidden = false; }
+
+    function openBranchDialog(ctx) {
+      bdCtx = ctx;
+      bdParent.textContent = ctx.parentName;
+      bdName.value = "";
+      bdLsn.value = "";
+      bdError.hidden = true;
+      bdSubmit.disabled = false;
+      branchDialog.showModal();
+      bdName.focus();
+    }
+
+    document.getElementById("bd-cancel").addEventListener("click", () => branchDialog.close());
+    // Click on the backdrop (the dialog element itself, outside the form) closes it.
+    branchDialog.addEventListener("click", (e) => {
+      const rect = branchDialog.getBoundingClientRect();
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        branchDialog.close();
+      }
+    });
+
+    bdForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!bdCtx) return;
+      const name = bdName.value.trim();
+      if (!name) { bdShowError("Enter a branch name"); bdName.focus(); return; }
+      const forkLsn = bdLsn.value.trim();
+      bdSubmit.disabled = true;
+      bdError.hidden = true;
+      bdSubmit.textContent = "Creating…";
+      try {
+        // POST returns 202 + a Task; poll it to completion, then re-list the
+        // branches. target_ref carries the new branch id, so pre-select it.
+        const task = await createBranch(bdCtx.poolId, bdCtx.projectId, bdCtx.parentId, name, forkLsn);
+        const done = await pollTask(task.id);
+        branchDialog.close();
+        toast("Branch created", true);
+        await hydrateBranches(bdCtx.poolId, bdCtx.projectId, bdCtx.userId, done.target_ref || undefined);
+      } catch (err) {
+        bdShowError(err.message);
+        bdSubmit.disabled = false;
+      } finally {
+        bdSubmit.textContent = "Create branch";
+        refreshTasks();
+      }
+    });
+
+    // --- recent-tasks panel --------------------------------------------------
+    // A read-only window onto GET /tasks (newest first). Refreshed after every
+    // mutation (so a just-finished task shows its terminal status) and via the
+    // panel's own Refresh button.
+
+    const tasksBody = document.getElementById("tasks-body");
+
+    function taskRow(t) {
+      const status = String(t.status || "");
+      const err = t.status === "failed" && t.error
+        ? `<span class="task-err">${esc(t.error)}</span>` : "";
+      return `<div class="task-row">
+        <span class="badge ${esc(status)}">${esc(status)}</span>
+        <span class="kind mono">${esc(t.kind)}</span>
+        <span class="when">${fmtDate(t.updated_at || t.created_at)}</span>
+        ${err}
+      </div>`;
+    }
+
+    let tasksRefreshing = false;
+    async function refreshTasks() {
+      if (tasksRefreshing) return;
+      tasksRefreshing = true;
+      try {
+        const data = await listTasks(20);
+        const tasks = data.tasks || [];
+        tasksBody.innerHTML = tasks.length
+          ? tasks.map(taskRow).join("")
+          : `<div class="empty">No tasks yet.</div>`;
+      } catch (e) {
+        tasksBody.innerHTML = `<div class="empty">Failed to load tasks: ${esc(e.message)}</div>`;
+      } finally {
+        tasksRefreshing = false;
+      }
+    }
+
+    document.getElementById("tasks-refresh").addEventListener("click", refreshTasks);
+
+    // --- boot ----------------------------------------------------------------
+
+    window.addEventListener("hashchange", route);
+    route();
+    refreshTasks();
+  </script>
+</body>
+</html>

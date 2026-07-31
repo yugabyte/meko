@@ -1,0 +1,49 @@
+suite: service
+templates:
+  - templates/service.yaml
+tests:
+  - it: exposes the compute Postgres port
+    set:
+      endpoint.computePort: 5599
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - contains:
+          path: spec.ports
+          content:
+            name: pg-compute
+            port: 5599
+            targetPort: pg-compute
+            protocol: TCP
+
+  - it: only publishes the compute port by default
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+
+  - it: publishes internal HTTP ports when enabled
+    set:
+      service.exposeInternalHttp: true
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 4
+      - contains:
+          path: spec.ports
+          content:
+            name: es-http
+            port: 9993
+            targetPort: es-http
+            protocol: TCP
+
+  - it: honours the service type override
+    set:
+      service.type: LoadBalancer
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer

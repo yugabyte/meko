@@ -1,0 +1,218 @@
+openapi: "3.0.2"
+info:
+  title: Safekeeper control API
+  description: Neon Safekeeper API
+  version: "1.0"
+  license:
+    name: "Apache"
+    url: https://github.com/neondatabase/neon/blob/main/LICENSE
+
+
+servers:
+  - url: "http://localhost:7676"
+
+
+paths:
+  /v1/status:
+    get:
+      tags:
+      - "Info"
+      summary: Get safekeeper status
+      description: ""
+      operationId: v1GetSafekeeperStatus
+      responses:
+        "200":
+          description: Safekeeper status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SafekeeperStatus"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        default:
+          $ref: "#/components/responses/GenericError"
+
+
+  /v1/branch:
+    post:
+      tags:
+      - "Branch"
+      summary: Register new branch
+      description: ""
+      operationId: v1CreateBranch
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimelineCreateRequest"
+      responses:
+        "201":
+          description: Branch created
+          # TODO: return branch info?
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        default:
+          $ref: "#/components/responses/GenericError"
+
+  /v1/branch/{branch_id}:
+    parameters:
+      - name: branch_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: hex
+
+    get:
+      tags:
+      - "Branch"
+      summary: Get branch information and status
+      description: ""
+      operationId: v1GetBranch
+      responses:
+        "200":
+          description: Branch status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineStatus"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        default:
+          $ref: "#/components/responses/GenericError"
+        "404":
+          description: Branch not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotFoundError"
+
+    delete:
+      tags:
+      - "Branch"
+      summary: Delete branch
+      description: ""
+      operationId: v1DeleteBranch
+      responses:
+        "200":
+          description: Branch deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineDeleteResult"
+        "403":
+          $ref: "#/components/responses/ForbiddenError"
+        default:
+          $ref: "#/components/responses/GenericError"
+
+
+components:
+  securitySchemes:
+    JWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+
+  schemas:
+
+    #
+    # Requests
+    #
+
+    TimelineCreateRequest:
+      type: object
+      required:
+        - branch_id
+        - peer_ids
+      properties:
+        branch_id:
+          type: string
+          format: hex
+        peer_ids:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+
+    #
+    # Responses
+    #
+
+    SafekeeperStatus:
+      type: object
+
+    TimelineStatus:
+      type: object
+      required:
+        - branch_id
+      properties:
+        branch_id:
+          type: string
+          format: hex
+        flush_lsn:
+          type: string
+        timeline_start_lsn:
+          type: string
+        local_start_lsn:
+          type: string
+        commit_lsn:
+          type: string
+        remote_consistent_lsn:
+          type: string
+
+    TimelineDeleteResult:
+      type: object
+      required:
+        - dir_existed
+        - was_active
+      properties:
+        dir_existed:
+          type: boolean
+        was_active:
+          type: boolean
+
+    #
+    # Errors
+    #
+
+    GenericErrorContent:
+      type: object
+      properties:
+        msg:
+          type: string
+
+    NotFoundError:
+      type: object
+      properties:
+        msg:
+          type: string
+
+  responses:
+
+    #
+    # Errors
+    #
+
+    GenericError:
+      description: Generic error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GenericErrorContent"
+
+    ForbiddenError:
+      description: Forbidden error response
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - msg
+            properties:
+              msg:
+                type: string
+
+
+security:
+  - JWT: []

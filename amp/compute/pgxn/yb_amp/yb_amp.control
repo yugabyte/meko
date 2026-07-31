@@ -1,0 +1,6 @@
+# yb_amp extension
+comment = 'cloud storage for PostgreSQL'
+default_version = '1.6'
+module_pathname = '$libdir/yb_amp'
+relocatable = true
+trusted = true

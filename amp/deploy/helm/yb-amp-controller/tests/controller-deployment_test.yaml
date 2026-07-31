@@ -1,0 +1,107 @@
+suite: controller-deployment
+templates:
+  - templates/controller-deployment.yaml
+# Pin appVersion so the image-tag assertion is deterministic — the real
+# appVersion is stamped from the repo-root VERSION file (scripts/version.sh).
+chart:
+  appVersion: "1.2.3"
+tests:
+  - it: renders the controller Deployment with its ServiceAccount
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: amp-controller
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: amp-controller
+
+  - it: defaults the controller image tag to the chart appVersion
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: amp/controller:1.2.3
+
+  - it: honours controller image repository and tag overrides
+    set:
+      controller.image.repository: registry.example.com/amp/controller
+      controller.image.tag: "20260618-221855"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/amp/controller:20260618-221855
+
+  - it: exposes the api and sc container ports
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: api
+            containerPort: 8080
+
+  - it: wires the endpoint control-surface URL helper to the controller Service DNS
+    release:
+      namespace: amp
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_CONTROLLER_URL
+            value: http://amp-controller.amp.svc.cluster.local:8080
+
+  - it: carries the AMP_* deploy env block
+    set:
+      controller.databaseUrl: postgres://yugabyte@yb-tserver.amp.svc.cluster.local:5433/yb_storage?sslmode=disable
+    release:
+      namespace: amp
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DATABASE_URL
+            value: postgres://yugabyte@yb-tserver.amp.svc.cluster.local:5433/yb_storage?sslmode=disable
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DB_SCHEMA
+            value: controller
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_DRIVER
+            value: kubernetes
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_NAMESPACE
+            value: amp
+
+  - it: derives the endpoint pull secret from the first imagePullSecret
+    set:
+      imagePullSecrets:
+        - name: pull-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.imagePullSecrets
+          content:
+            name: pull-secret
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_PULL_SECRET
+            value: pull-secret
+
+  - it: probes readiness only — a liveness probe would kill a slow migration (#398)
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: api
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe

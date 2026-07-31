@@ -1,0 +1,21 @@
+psql:multixact.sql:10: NOTICE:  extension "yb_amp_test_utils" already exists, skipping
+CREATE EXTENSION
+CREATE TABLE
+INSERT 0 10000
+DO
+ clear_buffer_cache
+--------------------
+
+(1 row)
+
+ count
+-------
+ 10000
+(1 row)
+
+ count
+-------
+ 10000
+(1 row)
+
+DROP TABLE

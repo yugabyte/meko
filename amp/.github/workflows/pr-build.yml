@@ -1,0 +1,559 @@
+name: CI
+
+# Per-component PR validation, gated on which files actually changed:
+#   compute    — Rust workspace (safekeeper, pageserver, ...) + the yb_amp
+#                compute extensions: `./build.sh` (debug), clippy with
+#                `-D warnings` via ./run_clippy.sh, then the unit tests
+#                via cargo-nextest (the three live-DB test modules
+#                are excluded here and run in the integration job instead, where a
+#                migrated cluster exists). PostgreSQL itself is built from
+#                the compute/vendor/postgres-v18 submodule and cached keyed on the
+#                submodule commit, so warm runs skip it.
+#   integration        — `test/integration/compute/run.sh` against a YugabyteDB container:
+#                live-DB unit tests + the fast scenario suite (run.sh's default)
+#                on PRs and main pushes. The slow suite runs daily on main and
+#                on-demand via `/ci integration_slow` (see on-demand-checks.yml).
+#   controller — Go controller: `go build`, `go vet`, `go test`.
+#   migrations — the controller's live-database Go tests, against a throwaway
+#                YugabyteDB: steps each migration up/down/up in turn (catching a
+#                `.down.sql` that doesn't fully revert its `.up.sql`), then runs
+#                the store tests whose behaviour only exists against a real
+#                database — the resize lock's SQLSTATE mapping, which YSQL and
+#                upstream PostgreSQL report differently (#400). Runs on
+#                migration / db-runner / task-store changes.
+#   ui         — amp_ui: `npm ci`, `tsc --noEmit` (npm run check), vite build.
+#   deploy     — Helm charts + endpoint supervisor: `helm lint` and
+#                `helm unittest` on both charts, the Guaranteed-QoS guardrail,
+#                and `ruff` on deploy/ Python. Renders/validates without a cluster.
+#
+# Unit-test results are published as PR checks (dorny/test-reporter) from
+# the JUnit XML that nextest/gotestsum emit, so failures show up as a
+# per-test pass/fail report instead of a wall of log.
+#
+# NOTE: GitHub withholds Actions secrets (incl. AGENTK_PRIVATE_KEY) from
+# Dependabot-triggered pull_request runs, so the App-token / submodule fetch
+# can't work there. The compute + integration jobs therefore skip for
+# Dependabot PRs (`github.actor != 'dependabot[bot]'`) — those bumps only
+# touch workflow/config, don't need a private-submodule compute build, and
+# the actions get exercised by the compute jobs on the next regular PR.
+
+# The push trigger exists to populate the shared cache scope: caches written
+# by PR runs are only visible to that PR, while caches written on main are
+# visible to every PR — so the post-merge run on main is what lets all PRs
+# reuse one PostgreSQL build (and warm cargo caches).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  # One group per PR (cancel superseded commits); pushes to main get a group
+  # per commit so cache-populating runs are never cancelled by a later merge.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    # NB: job-level permissions REPLACE the workflow-level block, so
+    # contents: read must be restated or checkout loses repo access.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      compute: ${{ steps.filter.outputs.compute }}
+      controller: ${{ steps.filter.outputs.controller }}
+      mcp: ${{ steps.filter.outputs.mcp }}
+      ui: ${{ steps.filter.outputs.ui }}
+      deploy: ${{ steps.filter.outputs.deploy }}
+      # the controller migrations or their Go runner changed — run the up/down
+      # round-trip test against YugabyteDB.
+      migrations: ${{ steps.filter.outputs.migrations }}
+      # true iff at least one changed file is not a markdown doc (see the `code`
+      # filter step) — the compute/controller build+test jobs gate on it so a
+      # docs-only PR skips them.
+      code: ${{ steps.code.outputs.code }}
+    steps:
+      # paths-filter uses the GitHub API for pull_request events, but for
+      # push events it diffs locally and needs the repo checked out. On a
+      # push to main it detects changes against the commit before the push.
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            compute:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'clippy.toml'
+              - '.yb-amp_clippy_args'
+              - 'run_clippy.sh'
+              - '.config/nextest.toml'
+              - 'compute/libs/**'
+              - 'compute/pgxn/**'
+              - 'test/integration/compute/**'
+              # The compute integration suite runs the yb_amp_local launcher.
+              - 'controller/local/**'
+              # The controller migrations provision the schema the pageserver /
+              # safekeeper / endpoint_storage daemons bind to, so a migration
+              # change must run the integration suite.
+              - 'controller/migrations/**'
+              - 'compute/vendor/postgres-v18'
+              - 'Makefile'
+              - 'postgres.mk'
+              - 'build.sh'
+              - 'scripts/build.py'
+              - '.github/workflows/pr-build.yml'
+            controller:
+              - 'controller/**'
+              - '.github/workflows/pr-build.yml'
+            mcp:
+              - 'controller/mcp/**'
+              - '.github/workflows/pr-build.yml'
+            ui:
+              - 'amp_ui/**'
+              - '.github/workflows/pr-build.yml'
+            deploy:
+              - 'deploy/**'
+              - '.github/workflows/pr-build.yml'
+            migrations:
+              - 'controller/migrations/**'
+              - 'controller/internal/db/**'
+              # The task store's live-database tests (the resize lock) run in the
+              # same job, on the same YugabyteDB container.
+              - 'controller/internal/task/**'
+              - '.github/workflows/pr-build.yml'
+
+      # A change counts as "code" if at least one changed file is not a markdown
+      # doc. dorny's default `some` quantifier OR-matches, so a bare `!**/*.md`
+      # can't subtract from a positive glob; `every` makes a file count only when
+      # it matches BOTH `**` and `!**/*.md` (i.e. is non-doc). compute + controller
+      # gate on this so a docs-only PR skips their build/test.
+      - uses: dorny/paths-filter@v4
+        id: code
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+
+  compute:
+    name: Compute — build, lint & unit tests
+    needs: changes
+    if: needs.changes.outputs.compute == 'true' && needs.changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      checks: write # dorny/test-reporter publishes a check run
+    steps:
+      # The full PG + workspace debug build is large; drop the big
+      # preinstalled toolchains we don't use to avoid running out of disk.
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v7
+
+      - name: Fetch the PostgreSQL submodule
+        uses: ./.github/actions/fetch-pg-submodule
+        with:
+          private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool libreadline-dev zlib1g-dev flex bison \
+            libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
+            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev
+
+      - name: Install pinned Rust toolchain
+        # Reads rust-toolchain.toml (channel + clippy/rustfmt components).
+        run: rustup toolchain install
+
+      - name: Parallelize make
+        run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # scripts/build.py reuses pg_install/v18 when its .pg_commit stamp
+      # matches the checked-out submodule commit, so key the cache on the
+      # gitlink plus the build plumbing that shapes the install.
+      - name: Compute PostgreSQL cache key
+        id: pgrev
+        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PostgreSQL install
+        uses: actions/cache@v6
+        with:
+          path: pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+
+      # The storage crates link the prebuilt yb_thin_client C++ shim (a public
+      # per-arch download pinned to the vendored ABI); fetch it and point
+      # build.rs at it. No stub fallback — the build hard-requires the .so.
+      - name: Fetch yb_thin_client shim
+        run: |
+          DIR="$(scripts/fetch-yb-thin-client.sh)"
+          echo "YB_THIN_CLIENT_LIB_DIR=$DIR" >> "$GITHUB_ENV"
+          # The storage binaries link the .so but carry no rpath, so make it
+          # findable at runtime for the tests + the daemons they spawn.
+          echo "LD_LIBRARY_PATH=$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build (PostgreSQL + Rust workspace + compute extensions)
+        run: ./build.sh
+
+      - name: Lint (clippy, -D warnings)
+        run: ./run_clippy.sh
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      # Unit tests. The three live-DB modules assert against
+      # a real YB with the migrated production schema; they run in the integration
+      # job (run.sh's `unit` selection) where that cluster exists. Keep
+      # this filter in sync with test/integration/compute/main.rs::unit_tests.
+      # NB: nextest does not run doctests; add `cargo test --doc` here if
+      # the workspace ever grows some.
+      - name: Unit tests
+        run: |
+          cargo nextest run --workspace --locked --profile ci \
+            -E 'not (test(/^page_store::tests::/) | test(/^page_writer::tests::/) | test(/^yb_wal_storage::tests::/))'
+
+      - name: Publish unit-test report
+        uses: dorny/test-reporter@v3
+        if: ${{ !cancelled() }}
+        with:
+          name: Compute unit-test results
+          path: target/nextest/ci/junit.xml
+          reporter: java-junit
+          # v3 defaults to the Actions run summary; keep the standalone
+          # per-test PR check instead.
+          use-actions-summary: false
+      - name: Upload unit-test JUnit
+        # The report portal's catalog job ingests this into per-test results.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-compute-unit
+          path: target/nextest/ci/junit.xml
+          retention-days: 14
+
+
+  integration:
+    name: Compute — integration tests
+    needs: changes
+    if: needs.changes.outputs.compute == 'true' && needs.changes.outputs.code == 'true' && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # Pinned to the 2026.1.0 official release; bump deliberately, not via
+      # `latest`, so CI can't drift to an untested YB.
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+    steps:
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v7
+
+      - name: Fetch the PostgreSQL submodule
+        uses: ./.github/actions/fetch-pg-submodule
+        with:
+          private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+
+      # Start YB first so it initializes while the toolchain installs.
+      # Use host networking + advertise 127.0.0.1 so YB advertises an address
+      # the host-side clients (safekeeper, yb_thin_client) can actually reach —
+      # without --advertise_address it hands back the container hostname and
+      # cluster bring-up fails ("could not find a server to connect to"). This
+      # mirrors the developer setup. Host networking also exposes YSQL (5433)
+      # and the tserver RPC (9100, for the yb_thin_client live tests) directly.
+      # The harness defaults to 127.0.0.1:5433 (see test/integration/compute/
+      # cluster.rs) and creates its own ephemeral database per run.
+      - name: Start YugabyteDB
+        run: |
+          docker run -d --name yb --network host "$YB_IMAGE" \
+            bin/yugabyted start --advertise_address=127.0.0.1 --background=false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool libreadline-dev zlib1g-dev flex bison \
+            libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
+            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
+            postgresql-client
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Parallelize make
+        run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compute PostgreSQL cache key
+        id: pgrev
+        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PostgreSQL install
+        uses: actions/cache@v6
+        with:
+          path: pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+
+      - name: Wait for YugabyteDB
+        run: |
+          for i in $(seq 1 120); do
+            pg_isready -h 127.0.0.1 -p 5433 -q && exit 0
+            sleep 2
+          done
+          echo "YugabyteDB never became ready" >&2
+          docker logs yb
+          exit 1
+
+      # Both PRs and main pushes run run.sh's default (live-DB unit tests + fast
+      # suite). The slow suite is NOT run here — it runs daily on main and
+      # on-demand via `/ci integration_slow` (see on-demand-checks.yml). On
+      # failure the harness stops the cluster but keeps the run's *.log files
+      # (see clean.sh's INTEGRATION_KEEP_LOGS mode), collected by Upload below.
+      # See the build job — the storage crates need the prebuilt shim to link.
+      - name: Fetch yb_thin_client shim
+        run: |
+          DIR="$(scripts/fetch-yb-thin-client.sh)"
+          echo "YB_THIN_CLIENT_LIB_DIR=$DIR" >> "$GITHUB_ENV"
+          # The storage binaries link the .so but carry no rpath, so make it
+          # findable at runtime for the tests + the daemons they spawn.
+          echo "LD_LIBRARY_PATH=$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Integration tests (live-DB unit + fast scenarios)
+        run: test/integration/compute/run.sh
+
+      - name: Upload run logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-logs-${{ github.run_id }}
+          # The failed run's *.log files (harness + compute/pageserver/
+          # safekeeper/endpoint_storage), kept by the
+          # harness's INTEGRATION_KEEP_LOGS teardown. Glob to *.log so any stray
+          # non-log leftovers can't break artifact zip creation.
+          path: .integration-tests/**/*.log
+          # `.integration-tests` is a dot-dir; upload-artifact skips hidden paths
+          # by default, so without this the artifact is empty.
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  controller:
+    name: Controller — build & tests
+    needs: changes
+    if: needs.changes.outputs.controller == 'true' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: write # dorny/test-reporter publishes a check run
+    defaults:
+      run:
+        working-directory: controller
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: controller/go.mod
+          cache-dependency-path: controller/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Static analysis (go vet)
+        run: go vet ./...
+
+      # gotestsum wraps `go test`, emitting JUnit XML for the report below.
+      - name: Unit tests
+        run: go run gotest.tools/gotestsum@latest --format testname --junitfile junit.xml -- ./...
+
+      - name: Publish test report
+        uses: dorny/test-reporter@v3
+        if: ${{ !cancelled() }}
+        with:
+          name: Controller test results
+          path: controller/junit.xml
+          reporter: java-junit
+          use-actions-summary: false
+      - name: Upload test JUnit
+        # The report portal's catalog job ingests this into per-test results.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-controller
+          path: controller/junit.xml
+          retention-days: 14
+
+
+  mcp:
+    name: Controller MCP — tests
+    needs: changes
+    if: needs.changes.outputs.mcp == 'true' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: controller/mcp
+    steps:
+      - uses: actions/checkout@v7
+
+      # uv reads the Python version from controller/mcp/.python-version (3.11)
+      # and installs deps from uv.lock; enable-cache speeds up repeat runs.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: controller/mcp/uv.lock
+
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      # Mock-based (httpx.MockTransport + FastMCP in-memory Client) — no network
+      # and no real controller, so this runs standalone. The real-controller
+      # round-trip test self-skips unless AMP_CONTROLLER_URL is set.
+      - name: Tests
+        run: uv run pytest -q
+
+  ui:
+    name: UI — typecheck & build
+    needs: changes
+    if: needs.changes.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: amp_ui
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: amp_ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (tsc --noEmit)
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+  deploy:
+    name: Deploy — helm charts & supervisor lint
+    needs: changes
+    if: needs.changes.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install helm + helm-unittest plugin
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.18.6
+      - run: helm plugin install https://github.com/helm-unittest/helm-unittest.git
+
+      # helm lint + helm-unittest render templates and assert output; nothing here
+      # deploys — this validates the charts without a cluster. yq (v4, mikefarah)
+      # for the Guaranteed-QoS guardrail is preinstalled on ubuntu runners.
+      - name: helm lint
+        run: |
+          helm lint deploy/helm/yb-amp-endpoint
+          helm lint deploy/helm/yb-amp-controller
+
+      - name: helm unittest + Guaranteed-QoS guardrail (endpoint chart)
+        run: make endpoint-chart-test
+
+      - name: helm unittest (controller chart)
+        run: helm unittest deploy/helm/yb-amp-controller
+
+      # The endpoint supervisor is the only Python in deploy/; lint it with the
+      # repo's ruff config (scripts/reformat only covers controller + scripts).
+      - name: Lint deploy Python (ruff)
+        run: |
+          pipx install ruff==0.11.2
+          ruff check deploy/
+
+  # The controller's live-database Go tests, on a real YugabyteDB (0002/0003 use
+  # YB-specific HASH / SPLIT DDL, so plain Postgres can't run them):
+  #   * each migration up/down/up in turn — the per-migration re-up catches a
+  #     .down.sql that doesn't fully revert its .up.sql;
+  #   * the task store's resize lock, whose 23505 -> ErrResizeInProgress mapping
+  #     MemStore cannot exercise (#400).
+  # Lightweight: Go + a YB container, no PG/compute build.
+  migrations:
+    name: Migrations & live-DB store tests
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true' && needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: controller/go.mod
+          cache-dependency-path: controller/go.sum
+
+      # Bridge-networked YB with 5433 published to the host, so the Go test (pgx,
+      # pure Go) reaches it at 127.0.0.1:5433 — same topology as scripts/yb-local.sh.
+      - name: Start YugabyteDB
+        run: |
+          docker run -d --name yugabyte -p 5433:5433 "$YB_IMAGE" \
+            bin/yugabyted start --background=false
+
+      - name: Wait for YugabyteDB + create the throwaway test database
+        run: |
+          for _ in $(seq 1 120); do
+            if docker exec yugabyte sh -c 'bin/ysqlsh -h "$(hostname -i)" -p 5433 -U yugabyte -d yugabyte -tAc "select 1"' >/dev/null 2>&1; then
+              docker exec yugabyte sh -c 'bin/ysqlsh -h "$(hostname -i)" -p 5433 -U yugabyte -d yugabyte -c "CREATE DATABASE migration_roundtrip"'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "YugabyteDB never became ready" >&2
+          docker logs yugabyte 2>&1 | tail -50
+          exit 1
+
+      - name: Migration up/down/up round-trip
+        env:
+          AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
+        run: go -C controller test ./internal/db/... -run TestMigrateRoundTrip -v
+
+      # Everything in internal/task that needs a live database (the TestPg* tests):
+      # the resize lock's unique-violation -> 409 mapping, which MemStore can't
+      # exercise and which YSQL and upstream PostgreSQL report differently (#400),
+      # plus the unique-index inventory on `task` that the mapping assumes.
+      # Migrates a schema of its own, so the round-trip above and these can share
+      # the throwaway database.
+      - name: Task store — live-database tests
+        env:
+          AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
+        run: go -C controller test ./internal/task/... -run 'TestPg' -v

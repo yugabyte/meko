@@ -1,0 +1,54 @@
+[tool.poetry]
+description = ""
+authors = []
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pytest = "^7.4.4"
+
+[tool.poetry.group.dev.dependencies]
+mypy = "==1.13.0"
+ruff = "^0.11.2"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.mypy]
+exclude = [
+    "^compute/vendor/",
+    "^target/",
+]
+check_untyped_defs = true
+# Help mypy find imports when running against list of individual files.
+# Without this line it would behave differently when executed on the entire project.
+mypy_path = "$MYPY_CONFIG_FILE_DIR"
+
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+disallow_untyped_defs = false
+strict = true
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = [
+    "compute/vendor/",
+    "target/",
+]
+line-length = 100 # this setting is rather guidance, it won't fail if it can't make the shorter
+
+[tool.ruff.lint]
+ignore = [
+    "E501", # Line too long, we don't want to be too strict about it
+]
+select = [
+    "E", # pycodestyle
+    "F", # Pyflakes
+    "I", # isort
+    "W", # pycodestyle
+    "B", # bugbear
+    "UP", # pyupgrade
+    "TC", # flake8-type-checking
+]

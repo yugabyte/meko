@@ -1,0 +1,91 @@
+# Storage-layer control (in the controller)
+
+The Go `controller/` owns cluster control for the storage layer, **in-process** —
+there is no separate control-plane binary. This doc describes what it owns, the
+schema it uses, and the HTTP surface it serves.
+
+## What it owns
+
+- ~~Generation authority~~ — **no longer the controller's.** The per-branch
+  fencing counter lives in `amp_storage.branch_state.current_generation`, and the
+  pageserver claims its own at startup (`UPDATE ... SET current_generation =
+  COALESCE(current_generation, 0) + 1 RETURNING current_generation`). Keeping the
+  counter in the same row as the writes it fences means there is no second copy to
+  keep in step, and no round trip to issue one.
+- **Registries** — **branch** records + branch-name mappings, the **pending-init**
+  recipe (a branch declared but not yet materialized), and the compute **endpoint**
+  registry (`yb_amp_local`'s durable endpoint records).
+- **Provisioning** — the whole `yb_storage` database. The controller's
+  golang-migrate migrations create the whole `amp_storage` schema — blobs+enum,
+  the page-store tables, the WAL mirror, and both per-branch state tables (the
+  schema the compute daemons bind at startup — they create none of their own) —
+  plus the `amp_registry` schema below.
+
+## Schema
+
+State lives in the **`amp_registry` schema** of the shared `yb_storage` DB, provisioned
+by `controller/migrations/0003_registry.up.sql`. Four branch-keyed tables:
+`branches` (the branch's identity, creation record, and generation authority),
+`endpoints`. It is kept separate from the
+controller **product** model (`project`/`branch`/`endpoint` by UUID, in the
+`controller` schema) — the registry keys on the flat 32-hex `branch_id`.
+
+Dropped vs upstream: the heartbeat/availability loop, the scheduler, tenant
+placement/sharding, the `/v1` pageserver passthrough, timeline imports, and
+metadata health — none are needed in the per-branch topology.
+
+## HTTP surface
+
+The controller serves the surface on its **API listener** (`:8080`), alongside the
+versioned `/api/v1` product API, implemented in
+`controller/internal/registry` (store + handlers, routed in `handlers.go`):
+
+| Method + path | Purpose |
+|---|---|
+| `GET /ready` | readiness (DB reachable + migrations applied) |
+| `PUT /control/v1/branch/{id}/branch_name`, `PUT .../drop` | branch bookkeeping |
+| `GET /control/v1/timeline_branch_names` | branch-name listing |
+| `POST /control/v1/branch/{id}/record`, `GET /control/v1/branches` | branch creation records |
+| `POST/GET /control/v1/endpoint`, `DELETE /control/v1/endpoint/{id}` | endpoint registry |
+
+The wire shapes match the launcher client DTOs in `controller/local/client`. In
+dev/local the surface is unauthenticated
+(the whole controller is, today — auth is deferred, #189).
+
+## Callers
+
+- **`yb_amp_local`** (the dev harness, `controller/local/`) launches the `controller`
+  binary in place of the old subprocess and drives this surface over HTTP via its
+  controller client (`controller/local/client`) — attach when starting a
+  pageserver, branch register/drop, pending-init record/list/delete,
+  endpoint create/list/delete. The integration harness (`test/integration/compute/`)
+  exercises the same path.
+- **Endpoint pods** (Kubernetes/Docker deploy) reach the surface at the controller's
+  own URL (`AMP_DEPLOY_CONTROLLER_URL`) for branch bookkeeping. They do not ask it
+  for a generation — the pageserver claims its own.
+- **The controller's own task framework** records/clears pending-init recipes through
+  the same store **in-process** (not over HTTP) — the `RecipeStore` port in
+  `controller/internal/task` is satisfied by an in-process adapter over the registry
+  store.
+
+## Why the generation is minted per spawn (not injected at deploy)
+
+The generation is claimed on the **pageserver-spawn path**: the pageserver process
+increments the counter itself at boot and takes what the statement returns, before
+opening the branch. This is deliberate and load-bearing for fencing — the generation
+must advance on **every** pageserver incarnation so that a restarted or rescheduled
+pod fences its predecessor. Kubernetes restarts-in-place and node-failure reschedules
+happen **outside** the controller's deploy flow (kubelet drives them), so the process
+claiming a fresh generation on every boot is exactly what keeps those safe: a
+lingering old instance holds a lower generation and its next generation-checked write
+aborts (see [pageserver.md](../../compute/architecture/pageserver.md)
+§ "Generation fencing").
+
+Rejected alternative (closed #206 / #207 / #212 / #213): have amp mint the generation once
+at deploy time and inject it into the pod (a `GENERATION` env value). A kubelet restart
+would then **reuse** the injected generation and fail to fence the still-live old
+instance — a split-brain / corruption risk. Claiming at process start has the same
+per-incarnation property the controller's attach-hook had, without the round trip or
+the second copy of the counter. For the same reason, pageserver-node registration stays pod-driven rather than
+moving in-process, and there is no liveness heartbeater (nothing consumes node
+availability — the `nodes` registry is bookkeeping only).

@@ -1,0 +1,25 @@
+disallowed-methods = [
+    # allow-invalid because the function only exists when tokio's
+    # `rt-multi-thread` feature is on, and crates that enable a smaller tokio
+    # (e.g. ysql_client, `features = ["sync"]`) can't resolve the path. Without
+    # it every such crate warns "does not refer to an existing function" —
+    # noise that hides real lints, on a ban that still applies wherever the
+    # path does resolve.
+    { path = "tokio::task::block_in_place", allow-invalid = true },
+
+    # Allow this for now, to deny it later once we stop using Handle::block_on completely
+    # "tokio::runtime::Handle::block_on",
+
+    # tokio-epoll-uring:
+    # - allow-invalid because the method doesn't exist on macOS
+    { path = "tokio_epoll_uring::thread_local_system", replacement = "tokio_epoll_uring_ext module inside pageserver crate", allow-invalid = true }
+]
+
+disallowed-macros = [
+    # use std::pin::pin
+    "futures::pin_mut",
+    # cannot disallow this, because clippy finds used from tokio macros
+    #"tokio::pin",
+]
+
+allow-unwrap-in-tests = true

@@ -1,0 +1,54 @@
+{
+  "title": "amp — Postgres (postgres_exporter)",
+  "uid": "amp-postgres",
+  "tags": ["amp","postgres"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {"list": [
+    {"name": "endpoint", "type": "query", "datasource": {"type":"prometheus","uid":"victoriametrics"},
+     "query": "label_values(pg_up, endpoint)", "refresh": 2, "includeAll": true, "multi": true, "current": {"text":"All","value":"$__all"}}
+  ]},
+  "panels": [
+    {"type":"stat","title":"pg_up","gridPos":{"h":4,"w":6,"x":0,"y":0},
+     "datasource":{"type":"prometheus","uid":"victoriametrics"},
+     "fieldConfig":{"defaults":{"mappings":[{"type":"value","options":{"1":{"text":"UP","color":"green"},"0":{"text":"DOWN","color":"red"}}}],"thresholds":{"steps":[{"color":"red","value":null},{"color":"green","value":1}]}}},
+     "targets":[{"expr":"pg_up{endpoint=~\"$endpoint\"}","legendFormat":"{{endpoint}}"}]},
+    {"type":"stat","title":"PG server version","gridPos":{"h":4,"w":6,"x":6,"y":0},
+     "datasource":{"type":"prometheus","uid":"victoriametrics"},
+     "targets":[{"expr":"pg_settings_server_version_num{endpoint=~\"$endpoint\"}","legendFormat":"{{endpoint}}"}]},
+    {"type":"stat","title":"Connections (numbackends)","gridPos":{"h":4,"w":6,"x":12,"y":0},
+     "datasource":{"type":"prometheus","uid":"victoriametrics"},
+     "targets":[{"expr":"sum(pg_stat_database_numbackends{endpoint=~\"$endpoint\"})","legendFormat":"connections"}]},
+    {"type":"stat","title":"Cache hit ratio %","gridPos":{"h":4,"w":6,"x":18,"y":0},
+     "datasource":{"type":"prometheus","uid":"victoriametrics"},
+     "fieldConfig":{"defaults":{"unit":"percent","min":0,"max":100,"thresholds":{"steps":[{"color":"red","value":null},{"color":"yellow","value":90},{"color":"green","value":98}]}}},
+     "targets":[{"expr":"100 * sum(rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[5m])) / clamp_min(sum(rate(pg_stat_database_blks_hit_total{endpoint=~\"$endpoint\"}[5m])) + sum(rate(pg_stat_database_blks_read_total{endpoint=~\"$endpoint\"}[5m])), 1)","legendFormat":"hit %"}]},
+    {"type":"timeseries","title":"Transactions / s","gridPos":{"h":8,"w":12,"x":0,"y":4},
+     "datasource":{"type":"prometheus","uid":"victoriametrics"},
+     "fieldConfig":{"defaults":{"unit":"ops"}},
+     "targets":[
+       {"expr":"sum by (endpoint) (rate(pg_stat_database_xact_commit_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"commits {{endpoint}}"},
+       {"expr":"sum by (endpoint) (rate(pg_stat_database_xact_rollback_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"rollbacks {{endpoint}}"}]},
+    {"type":"timeseries","title":"Tuples / s","gridPos":{"h":8,"w":12,"x":12,"y":4},
+     "datasource":{"type":"prometheus","uid":"victoriametrics"},
+     "fieldConfig":{"defaults":{"unit":"ops"}},
+     "targets":[
+       {"expr":"sum(rate(pg_stat_database_tup_fetched_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"fetched"},
+       {"expr":"sum(rate(pg_stat_database_tup_returned_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"returned"},
+       {"expr":"sum(rate(pg_stat_database_tup_inserted_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"inserted"},
+       {"expr":"sum(rate(pg_stat_database_tup_updated_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"updated"},
+       {"expr":"sum(rate(pg_stat_database_tup_deleted_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"deleted"}]},
+    {"type":"timeseries","title":"Block I/O time (ms/s)","gridPos":{"h":8,"w":12,"x":0,"y":12},
+     "datasource":{"type":"prometheus","uid":"victoriametrics"},
+     "targets":[
+       {"expr":"sum(rate(pg_stat_database_blk_read_time_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"read time"},
+       {"expr":"sum(rate(pg_stat_database_blk_write_time_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"write time"}]},
+    {"type":"timeseries","title":"Deadlocks & temp bytes / s","gridPos":{"h":8,"w":12,"x":12,"y":12},
+     "datasource":{"type":"prometheus","uid":"victoriametrics"},
+     "targets":[
+       {"expr":"sum(rate(pg_stat_database_deadlocks_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"deadlocks/s"},
+       {"expr":"sum(rate(pg_stat_database_temp_bytes_total{endpoint=~\"$endpoint\"}[5m]))","legendFormat":"temp bytes/s"}]}
+  ]
+}

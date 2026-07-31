@@ -1,0 +1,126 @@
+name: Resolve /ci directives
+description: >-
+  Decide which opt-in CI suites run for this event, from the `/ci <suite>` lines in
+  the PR description. One implementation shared by every workflow that has on-demand
+  suites, so they all behave identically — see docs/ci-directives.md.
+
+# The rule, in one place:
+#
+#   * schedule / workflow_dispatch (see `unconditional-events`) run every suite the
+#     calling workflow owns, without reading the body at all.
+#   * On a PR, a suite runs when the body carries its `/ci` line, or when the diff
+#     touches one of `auto-paths`.
+#
+# There is no per-commit dedupe: every qualifying event runs the suites the body
+# asks for. `edited` is not a trigger (see on-demand-checks.yml), so the events
+# that can repeat for one head commit are `reopened` and a re-open after a base
+# change — rare, and the cost is a wasted runner rather than a wrong answer.
+#
+# SECURITY: the PR body is untrusted. It is read only here, inside github-script,
+# and turned into booleans against the caller's fixed suite allowlist. It is NEVER
+# interpolated into a `run:` shell step, and the caller's inputs reach the script
+# through env rather than `${{ }}` interpolation into JS source. Keep it that way.
+
+inputs:
+  suites:
+    description: >-
+      JSON array of the directive tokens this workflow owns, e.g.
+      ["integration_slow", "generate_image"]. Each becomes a boolean on `decided`.
+    required: true
+  auto-paths:
+    description: >-
+      Optional JSON object mapping a suite token to a repo path prefix. That suite
+      turns itself on, no `/ci` line needed, when the PR diff adds or modifies a
+      file under the prefix.
+    required: false
+    default: '{}'
+  unconditional-events:
+    description: >-
+      Space/comma-separated event names that run every owned suite without reading
+      the body — the events that carry no PR to read.
+    required: false
+    default: schedule
+  github-token:
+    description: Token used for the pulls/actions reads below.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  decided:
+    description: >-
+      JSON object mapping each suite token to true/false. Gate jobs on it with
+      `if: fromJSON(needs.decide.outputs.suites).<token>`.
+    value: ${{ steps.p.outputs.decided }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v9
+      id: p
+      env:
+        SUITES: ${{ inputs.suites }}
+        AUTO_PATHS: ${{ inputs.auto-paths }}
+        UNCONDITIONAL: ${{ inputs.unconditional-events }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const AUTO_PATHS = JSON.parse(process.env.AUTO_PATHS || '{}');
+          const TOKENS = [...new Set(JSON.parse(process.env.SUITES))];
+
+          const finish = (decided, why) => {
+            core.setOutput('decided', JSON.stringify(decided));
+            core.notice(
+              `event=${context.eventName}${context.payload.action ? `/${context.payload.action}` : ''} ` +
+                `${why} → ${TOKENS.map((t) => `${t}=${decided[t] === true}`).join(' ')}`,
+            );
+          };
+          const all = (v) => Object.fromEntries(TOKENS.map((t) => [t, v]));
+
+          // Events that carry no PR body to read: run everything this workflow owns.
+          const unconditional = (process.env.UNCONDITIONAL || '')
+            .split(/[\s,]+/)
+            .filter(Boolean);
+          if (unconditional.includes(context.eventName)) {
+            finish(all(true), 'unconditional event');
+            return;
+          }
+
+          const pr = context.payload.pull_request;
+          if (!pr) {
+            finish(all(false), 'no pull request to read');
+            return;
+          }
+
+          // Parse "/ci <suite> [suite...]" lines -> a Set of suite tokens.
+          const parse = (text) => {
+            const out = new Set();
+            for (const line of (text || '').split(/\r?\n/)) {
+              const m = line.match(/^\s*\/ci\s+(.+?)\s*$/i);
+              if (m) for (const s of m[1].split(/[\s,]+/)) if (s) out.add(s.toLowerCase());
+            }
+            return out;
+          };
+
+          // Path-triggered suites: a suite turns itself on when the diff touches
+          // its prefix, no `/ci` line needed.
+          const autoOn = new Set();
+          if (Object.keys(AUTO_PATHS).length) {
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            for (const [suite, prefix] of Object.entries(AUTO_PATHS)) {
+              if (files.some((f) => f.status !== 'removed' && f.filename.startsWith(prefix))) {
+                autoOn.add(suite);
+                core.notice(`${prefix} changed → running ${suite} automatically`);
+              }
+            }
+          }
+
+          const now = parse(pr.body);
+          const decided = Object.fromEntries(
+            TOKENS.map((t) => [t, now.has(t) || autoOn.has(t)]),
+          );
+          finish(decided, `body: ${[...now].sort().join(', ') || '(none)'}`);

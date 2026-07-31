@@ -1,0 +1,88 @@
+suite: otel collectors
+templates:
+  - templates/otel-collectors.yaml
+tests:
+  - it: renders nothing when otel is disabled (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders both collector CRs plus RBAC (SA + ClusterRole + binding) when enabled
+    set:
+      otel.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: the controller collector is a deployment-mode OpenTelemetryCollector
+    set:
+      otel.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - isKind:
+          of: OpenTelemetryCollector
+      - isAPIVersion:
+          of: opentelemetry.io/v1beta1
+      - equal:
+          path: spec.mode
+          value: deployment
+
+  - it: the compute collector is a deployment-mode OpenTelemetryCollector
+    set:
+      otel.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - isKind:
+          of: OpenTelemetryCollector
+      - equal:
+          path: spec.mode
+          value: deployment
+
+  - it: points the exporter at the configured remote-write endpoint
+    set:
+      otel.enabled: true
+      otel.remoteWriteEndpoint: http://vm.example:8428/api/v1/write
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - equal:
+          path: spec.config.exporters.prometheus_remote_write.endpoint
+          value: http://vm.example:8428/api/v1/write
+
+  - it: omits the controller collector when only compute is enabled
+    set:
+      otel.enabled: true
+      otel.collectors.controller.enabled: false
+    asserts:
+      # SA + ClusterRole + ClusterRoleBinding + compute CR only.
+      - hasDocuments:
+          count: 4
+
+  - it: includes the cadvisor job only when podMetrics is on
+    set:
+      otel.enabled: true
+      otel.podMetrics: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - lengthEqual:
+          path: spec.config.receivers.prometheus.config.scrape_configs
+          count: 5
+
+  - it: drops the cadvisor job when podMetrics is off
+    set:
+      otel.enabled: true
+      otel.podMetrics: false
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - lengthEqual:
+          path: spec.config.receivers.prometheus.config.scrape_configs
+          count: 4

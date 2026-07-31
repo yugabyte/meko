@@ -1,0 +1,321 @@
+package portal
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/yugabyte/amp/test/functional/framework/core"
+)
+
+// fakePortal records every live-API call and hands out deterministic ids.
+type fakePortal struct {
+	mu     sync.Mutex
+	calls  []string // "METHOD path"
+	body   map[string]json.RawMessage
+	bodies map[string][]json.RawMessage // every call, for paths hit more than once
+}
+
+func newFakePortal(t *testing.T) (*fakePortal, *httptest.Server) {
+	t.Helper()
+	fp := &fakePortal{body: map[string]json.RawMessage{}, bodies: map[string][]json.RawMessage{}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := json.Marshal(map[string]any{})
+		if r.Body != nil {
+			b := make([]byte, 0, 1024)
+			buf := make([]byte, 1024)
+			for {
+				n, err := r.Body.Read(buf)
+				b = append(b, buf[:n]...)
+				if err != nil {
+					break
+				}
+			}
+			raw = b
+		}
+		fp.mu.Lock()
+		key := r.Method + " " + r.URL.Path
+		fp.calls = append(fp.calls, key)
+		fp.body[key] = raw
+		fp.bodies[key] = append(fp.bodies[key], raw)
+		fp.mu.Unlock()
+		switch {
+		case r.Method == "POST" && r.URL.Path == "/api/v1/runs":
+			_ = json.NewEncoder(w).Encode(map[string]string{"run_id": "run-1"})
+		case r.Method == "POST" && r.URL.Path == "/api/v1/runs/run-1/results":
+			_ = json.NewEncoder(w).Encode(map[string]string{"result_id": "res-1"})
+		case r.Method == "POST" && r.URL.Path == "/api/v1/results/res-1/steps":
+			_ = json.NewEncoder(w).Encode(map[string]string{"step_id": "step-1"})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return fp, srv
+}
+
+func (fp *fakePortal) has(t *testing.T, call string) json.RawMessage {
+	t.Helper()
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	raw, ok := fp.body[call]
+	if !ok {
+		t.Fatalf("call %q missing; got %v", call, fp.calls)
+	}
+	return raw
+}
+
+func TestSinkStreamsFullLifecycle(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{
+		Report: "regression", Branch: "main", CommitSHA: "abc123",
+		BuildTag: "custom-20260717-9", TriggerType: "jenkins", TriggeredBy: "portal",
+	})
+
+	start := time.Now()
+	_ = s.RunStarted(core.RunInfo{Seed: 7, Total: 1, Parallel: 2, StartedAt: start})
+
+	res := &core.Result{TestName: "features/x", Status: core.StatusPassed,
+		StartedAt: start, EndedAt: start.Add(time.Minute), Duration: time.Minute}
+	step := &core.Step{Name: "deploy", Status: core.StatusPassed, StartedAt: start, EndedAt: start.Add(time.Second)}
+
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "features/x", Result: res})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventStepStarted, TestName: "features/x", Step: step})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventStepFinished, TestName: "features/x", Step: step})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventMetric, TestName: "features/x",
+		Metric: &core.Metric{Key: "rows", Value: 100, Unit: "n"}})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventAttachment, TestName: "features/x",
+		Attachment: &core.Attachment{Name: "run.log", Kind: "log", Size: 2}, Content: []byte("ok")})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestFinished, TestName: "features/x", Result: res})
+	_ = s.RunFinished(core.RunSummary{Counts: map[core.Status]int{core.StatusPassed: 1},
+		Total: 1, StartedAt: start, EndedAt: start.Add(time.Minute)})
+
+	var run struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(fp.has(t, "POST /api/v1/runs"), &run); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"report", "branch", "commit_sha", "build_tag", "trigger_type", "triggered_by"} {
+		if run.Data[k] == "" || run.Data[k] == nil {
+			t.Errorf("run data missing %q: %v", k, run.Data)
+		}
+	}
+
+	var fin struct {
+		Status string          `json:"status"`
+		Amp    json.RawMessage `json:"amp"`
+	}
+	if err := json.Unmarshal(fp.has(t, "PATCH /api/v1/results/res-1"), &fin); err != nil {
+		t.Fatal(err)
+	}
+	if fin.Status != "passed" || len(fin.Amp) == 0 {
+		t.Errorf("finish patch = %+v, want passed with amp payload", fin)
+	}
+	var amp struct {
+		DurationMS int64 `json:"duration_ms"`
+	}
+	_ = json.Unmarshal(fin.Amp, &amp)
+	if amp.DurationMS != time.Minute.Milliseconds() {
+		t.Errorf("amp duration_ms = %d", amp.DurationMS)
+	}
+
+	fp.has(t, "PATCH /api/v1/steps/step-1")
+	fp.has(t, "POST /api/v1/results/res-1/metrics")
+	fp.has(t, "POST /api/v1/files/add")
+	fp.has(t, "POST /api/v1/attachments")
+
+	var done struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(fp.has(t, "PATCH /api/v1/runs/run-1"), &done); err != nil {
+		t.Fatal(err)
+	}
+	if done.Status != "passed" {
+		t.Errorf("final run status = %q, want passed", done.Status)
+	}
+}
+
+func TestSinkFailedRunStatus(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	_ = s.RunFinished(core.RunSummary{
+		Counts: map[core.Status]int{core.StatusPassed: 1, core.StatusFailed: 1}, Total: 2, EndedAt: time.Now(),
+	})
+	var done struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(fp.has(t, "PATCH /api/v1/runs/run-1"), &done); err != nil {
+		t.Fatal(err)
+	}
+	if done.Status != "failed" {
+		t.Errorf("final run status = %q, want failed", done.Status)
+	}
+}
+
+func TestSinkSurvivesDeadPortal(t *testing.T) {
+	s := New("http://127.0.0.1:1", Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	if !s.dead {
+		t.Fatal("sink should disable itself when the run cannot be opened")
+	}
+	// Every later event must be a silent no-op, not a hang or panic.
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "x", Result: &core.Result{}})
+	_ = s.RunFinished(core.RunSummary{EndedAt: time.Now()})
+}
+
+// With Meta.RunID set the sink adopts the trigger-created run (PATCH, no
+// second run object) and streams results into it.
+func TestSinkAdoptsExistingRun(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{RunID: "run-1", Report: "regression"})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	res := &core.Result{TestName: "x", Status: core.StatusPassed}
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "x", Result: res})
+
+	fp.has(t, "PATCH /api/v1/runs/run-1")
+	fp.has(t, "POST /api/v1/runs/run-1/results")
+	fp.mu.Lock()
+	for _, c := range fp.calls {
+		if c == "POST /api/v1/runs" {
+			t.Error("sink opened a second run despite RunID being set")
+		}
+	}
+	fp.mu.Unlock()
+}
+
+// An attachment emitted AFTER the test's finish event (teardown/report-kill
+// blobs race the finish on the reporter queue) must still land on the test's
+// result — the sink keeps the result id past testFinished.
+func TestSinkAttachmentAfterTestFinished(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+
+	res := &core.Result{TestName: "features/x", Status: core.StatusFailed}
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "features/x", Result: res})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestFinished, TestName: "features/x", Result: res})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventAttachment, TestName: "features/x",
+		Attachment: &core.Attachment{Name: "late.log", Kind: "log", Size: 4}, Content: []byte("late")})
+
+	var att struct {
+		ParentID string `json:"parent_id"`
+		Source   string `json:"source"`
+	}
+	if err := json.Unmarshal(fp.has(t, "POST /api/v1/attachments"), &att); err != nil {
+		t.Fatal(err)
+	}
+	if att.ParentID != "res-1" {
+		t.Errorf("late attachment parent_id = %q, want res-1", att.ParentID)
+	}
+	if att.Source == "" {
+		t.Errorf("late attachment source empty — bytes were not uploaded")
+	}
+	fp.has(t, "POST /api/v1/files/add")
+}
+
+// A streamed perf datapoint must carry the run's identity on the POST: without
+// it the stored row has no load signature and nothing downstream can tell
+// whether two numbers measure the same load.
+func TestSinkPerfDatapointSendsIdentity(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "perf/x", Result: &core.Result{}})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventDatapoint, TestName: "perf/x",
+		Datapoint:    &core.Datapoint{Name: "pgbench.tps", Value: 500, Unit: "tps", Direction: core.HigherIsBetter},
+		PerfIdentity: &core.PerfIdentity{LoadSignature: "sig123", YBImage: "yb:2025.2", Commit: "abc"},
+	})
+
+	var body struct {
+		Datapoints []json.RawMessage `json:"datapoints"`
+		Identity   *struct {
+			LoadSignature string `json:"load_signature"`
+			YBImage       string `json:"yb_image"`
+		} `json:"identity"`
+	}
+	if err := json.Unmarshal(fp.has(t, "POST /api/v1/results/res-1/perf"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Datapoints) != 1 {
+		t.Fatalf("posted %d datapoints, want 1", len(body.Datapoints))
+	}
+	if body.Identity == nil || body.Identity.LoadSignature != "sig123" || body.Identity.YBImage != "yb:2025.2" {
+		t.Errorf("perf POST identity = %+v, want load_signature sig123 / yb_image yb:2025.2", body.Identity)
+	}
+}
+
+// With no identity recorded the POST simply omits the field (the API treats it
+// as absent) — it must not send a null or an empty object.
+func TestSinkPerfDatapointWithoutIdentity(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "perf/x", Result: &core.Result{}})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventDatapoint, TestName: "perf/x",
+		Datapoint: &core.Datapoint{Name: "pgbench.tps", Value: 500}})
+
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(fp.has(t, "POST /api/v1/results/res-1/perf"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["identity"]; ok {
+		t.Errorf("perf POST carried an identity field with none recorded: %v", body)
+	}
+}
+
+// Each attempt posts its own result; no earlier attempt is flagged superseded.
+func TestSinkStreamsRetryAttemptMetadata(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	now := time.Now()
+	_ = s.RunStarted(core.RunInfo{StartedAt: now})
+
+	group := "b0a1c2d3-0000-4000-8000-000000000001"
+	first := &core.Result{TestName: "perf/tpcc", Status: core.StatusEnvFailed, StartedAt: now,
+		RetryGroup: group, Attempt: 1}
+	second := &core.Result{TestName: "perf/tpcc", Status: core.StatusPassed, StartedAt: now,
+		RetryGroup: group, Attempt: 2, RetryReason: "env: pod unschedulable (insufficient cpu)"}
+	for _, r := range []*core.Result{first, second} {
+		_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: r.TestName, Result: r})
+		_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestFinished, TestName: r.TestName, Result: r})
+	}
+
+	fp.mu.Lock()
+	creates := append([]json.RawMessage(nil), fp.bodies["POST /api/v1/runs/run-1/results"]...)
+	patches := append([]json.RawMessage(nil), fp.bodies["PATCH /api/v1/results/res-1"]...)
+	fp.mu.Unlock()
+
+	if len(creates) != 2 || len(patches) != 2 {
+		t.Fatalf("posted %d results / %d finishes, want 2 each (one per attempt)", len(creates), len(patches))
+	}
+	for i, raw := range append(creates, patches...) {
+		var got struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		want := 1.0
+		if i%2 == 1 {
+			want = 2.0
+		}
+		if got.Data["retry_group"] != group || got.Data["attempt"] != want {
+			t.Errorf("call %d data = %v, want group %s attempt %v", i, got.Data, group, want)
+		}
+		if _, superseded := got.Data["superseded"]; superseded {
+			t.Errorf("call %d set a superseded flag; the portal derives the current attempt itself", i)
+		}
+		reason, has := got.Data["retry_reason"]
+		if i%2 == 0 && has {
+			t.Errorf("attempt 1 carried retry_reason %v, want none", reason)
+		}
+		if i%2 == 1 && reason != "env: pod unschedulable (insufficient cpu)" {
+			t.Errorf("attempt 2 retry_reason = %v", reason)
+		}
+	}
+}

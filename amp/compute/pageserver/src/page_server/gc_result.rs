@@ -1,0 +1,54 @@
+use std::ops::AddAssign;
+use std::time::Duration;
+
+use anyhow::Result;
+use serde::Serialize;
+
+///
+/// Result of performing GC
+///
+#[derive(Default, Serialize, Debug)]
+pub struct GcResult {
+    pub layers_total: u64,
+    pub layers_needed_by_cutoff: u64,
+    pub layers_needed_by_pitr: u64,
+    pub layers_needed_by_branches: u64,
+    pub layers_needed_by_leases: u64,
+    pub layers_not_updated: u64,
+    pub layers_removed: u64, // # of layer files removed because they have been made obsolete by newer ondisk files.
+
+    /// yb-amp PageServer GC: candidate rows dequeued from `pending_gc`
+    /// this iteration. Can exceed the acted candidates — the block-range
+    /// delete also clears a visited block's duplicate/straggler rows.
+    pub candidates_dequeued: u64,
+    /// yb-amp PageServer GC: rows deleted by the drain across
+    /// `amp_storage.pages`, `slru_pages`, and `meta` (trim / drop / shrink).
+    pub rows_deleted: u64,
+
+    #[serde(serialize_with = "serialize_duration_as_millis")]
+    pub elapsed: Duration,
+}
+
+// helper function for `GcResult`, serializing a `Duration` as an integer number of milliseconds
+fn serialize_duration_as_millis<S>(d: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    d.as_millis().serialize(serializer)
+}
+
+impl AddAssign for GcResult {
+    fn add_assign(&mut self, other: Self) {
+        self.layers_total += other.layers_total;
+        self.layers_needed_by_pitr += other.layers_needed_by_pitr;
+        self.layers_needed_by_cutoff += other.layers_needed_by_cutoff;
+        self.layers_needed_by_branches += other.layers_needed_by_branches;
+        self.layers_needed_by_leases += other.layers_needed_by_leases;
+        self.layers_not_updated += other.layers_not_updated;
+        self.layers_removed += other.layers_removed;
+        self.candidates_dequeued += other.candidates_dequeued;
+        self.rows_deleted += other.rows_deleted;
+
+        self.elapsed += other.elapsed;
+    }
+}

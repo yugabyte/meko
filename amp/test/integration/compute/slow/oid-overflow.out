@@ -1,0 +1,27 @@
+CREATE EXTENSION
+CREATE TABLE
+INSERT 0 1
+CREATE TABLE
+INSERT 0 1
+VACUUM
+VACUUM
+VACUUM
+SET
+DO
+VACUUM
+ clear_buffer_cache
+--------------------
+
+(1 row)
+
+ x
+---
+ 1
+(1 row)
+
+ x
+---
+ 2
+(1 row)
+
+DROP TABLE

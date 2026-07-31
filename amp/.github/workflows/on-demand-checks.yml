@@ -1,0 +1,212 @@
+name: On-demand checks
+
+# Opt-in, heavy CI jobs that the regular per-component CI (pr-build.yml) does
+# NOT run on every PR, requested from the PR description with `/ci <suite>`
+# directive lines, e.g.
+#
+#   /ci integration_slow
+#   /ci integration_slow generate_image
+#
+# Recognized suites (one or more per line, space/comma separated) — the
+# human-facing list and "when to request each" live in docs/ci-directives.md:
+#   integration_slow  — the slow integration scenario suite (run.sh slow). Also
+#                       runs daily on main via the `schedule` trigger below. The
+#                       unit + fast suites run on every compute PR/push via
+#                       pr-build.yml, so this + that == full coverage.
+#   generate_image    — build the controller container image (deploy/controller)
+#
+# When it fires:
+#   * the daily `schedule` fires — runs integration_slow + generate_image on
+#     main (default branch).
+#   * a new commit is pushed (`synchronize`) or the PR opens/reopens — every
+#     directive currently in the body applies, so a persisted `/ci` line re-runs
+#     its suite on each new commit. Likewise if the diff adds or modifies files
+#     under test/integration/compute/slow/, which runs integration_slow with no
+#     `/ci` line needed (the slow suite is what exercises those scenarios, so
+#     changing them should always run it).
+#
+# Description `edited` is deliberately NOT a trigger, so a directive added to a PR
+# that is already up needs a commit to fire — `git commit --allow-empty -m "ci:
+# rerun" && git push`. That is a real `synchronize`: right head sha, native check
+# runs, and the per-job concurrency below supersedes anything in flight. To re-run
+# what already ran, use "Re-run jobs" (it reuses the run, so it cannot mask itself).
+#
+# Why not `edited`: an edit that added no directive still produced a run whose
+# suite jobs `skipped`, and a skipped check run permanently supersedes the live one
+# of the same name in the PR's checks list — verified on #437, where the slow
+# suite, the image build and the GKE smoke test all passed on the push run and all
+# four read `Skipping` on the PR, before and after they finished. The list never
+# recovers, so a red suite would hide exactly as well as a green one.
+#
+# The rule itself lives in .github/actions/ci-directives — one implementation shared
+# with every other workflow that has opt-in suites, so `/ci deploy_gke` over in
+# control-plane-gke.yml behaves exactly like `/ci integration_slow` does here.
+#
+# SECURITY: the PR body is untrusted. It is read only inside that action's
+# github-script, which turns it into booleans against the fixed allowlist passed in
+# below, and is NEVER interpolated into a `run:` shell step. Keep it that way — do
+# not `echo "${{ github.event.pull_request.body }}"`.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+  schedule:
+    # Daily on main: the slow integration suite + the controller image build
+    # (scheduled runs only fire on the default branch). 07:17 UTC — off the top
+    # of the hour to dodge cron congestion.
+    - cron: '17 7 * * *'
+
+# NB: there is deliberately NO workflow-level `concurrency` here — it lives on the
+# heavy jobs instead (see `integration` / `generate_image` below).
+#
+# A workflow-level group has to serve two jobs it cannot serve at once. Cancelling
+# is right for the 3h suite (latest commit wins) but wrong for `decide`, which is
+# 20s and must ALWAYS report: GitHub keeps only one *pending* run per group, so
+# two pushes in quick succession cancel the first while it is still queued, and a
+# run cancelled before it starts never creates its job check runs at all — the
+# suite then vanishes from the PR's checks list rather than reporting. Per-job
+# groups let `decide` always run while the heavy jobs still supersede each other
+# across commits.
+
+permissions:
+  contents: read
+
+jobs:
+  decide:
+    name: Decide which on-demand suites to run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      suites: ${{ steps.gate.outputs.decided }}
+    steps:
+      # Needed only to make the local composite action below available.
+      - uses: actions/checkout@v7
+
+      - id: gate
+        uses: ./.github/actions/ci-directives
+        with:
+          suites: '["integration_slow", "generate_image"]'
+          auto-paths: |
+            {"integration_slow": "test/integration/compute/slow/"}
+
+  integration:
+    name: On-demand — integration (slow)
+    needs: decide
+    if: fromJSON(needs.decide.outputs.suites).integration_slow && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    concurrency:
+      # Latest commit wins: a newer run's slow suite cancels the one still going for
+      # an older commit, whichever event started it. `decide` is outside this group
+      # so it always reports. No queueing happens here — cancel-in-progress means an
+      # incoming job cancels rather than waits, so nothing sits pending waiting to be
+      # cancelled before it starts.
+      group: on-demand-slow-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    env:
+      # Keep in sync with pr-build.yml's integration job and scripts/yb-local.sh.
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+    steps:
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v7
+
+      - name: Fetch the PostgreSQL submodule
+        uses: ./.github/actions/fetch-pg-submodule
+        with:
+          private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+
+      - name: Start YugabyteDB
+        run: |
+          docker run -d --name yb --network host "$YB_IMAGE" \
+            bin/yugabyted start --advertise_address=127.0.0.1 --background=false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool libreadline-dev zlib1g-dev flex bison \
+            libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
+            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
+            postgresql-client
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Parallelize make
+        run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compute PostgreSQL cache key
+        id: pgrev
+        run: echo "rev=$(git rev-parse HEAD:compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PostgreSQL install
+        uses: actions/cache@v6
+        with:
+          path: pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('Makefile', 'postgres.mk') }}
+
+      - name: Wait for YugabyteDB
+        run: |
+          for i in $(seq 1 120); do
+            pg_isready -h 127.0.0.1 -p 5433 -q && exit 0
+            sleep 2
+          done
+          echo "YugabyteDB never became ready" >&2
+          docker logs yb
+          exit 1
+
+      # The storage crates link the prebuilt yb_thin_client shim; fetch it and
+      # make it findable at build (YB_THIN_CLIENT_LIB_DIR) and at runtime for
+      # the daemons the tests spawn (LD_LIBRARY_PATH). No stub fallback.
+      - name: Fetch yb_thin_client shim
+        run: |
+          DIR="$(scripts/fetch-yb-thin-client.sh)"
+          echo "YB_THIN_CLIENT_LIB_DIR=$DIR" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Integration tests (slow suite)
+        run: test/integration/compute/run.sh slow
+
+      - name: Upload run logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: on-demand-integration-logs-${{ github.run_id }}
+          path: .integration-tests/**/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  generate_image:
+    name: On-demand — controller image build
+    needs: decide
+    if: fromJSON(needs.decide.outputs.suites).generate_image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: on-demand-image-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: controller/go.mod
+
+      # controller-bundle-only is Go-only: no Rust toolchain and no
+      # amp-postgres submodule, so this image build is self-contained.
+      - name: Bundle controller binary
+        run: make controller-bundle-only
+
+      - name: Build controller image
+        run: docker build -t yb-amp/controller:ci -f deploy/controller/Dockerfile .

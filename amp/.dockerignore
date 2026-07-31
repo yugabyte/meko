@@ -1,0 +1,46 @@
+*
+
+# Files
+!Cargo.lock
+!Cargo.toml
+!Makefile
+# The repo-root VERSION file: utils/build.rs reads it during the in-container
+# cargo build to stamp AMP_VERSION. Without this re-include the `*` above drops
+# it from the build context and every compute binary ships AMP_VERSION=0.0.0.
+!VERSION
+!postgres.mk
+!rust-toolchain.toml
+!scripts/ninstall.sh
+!scripts/fetch-yb-thin-client.sh
+!docker-compose/run-tests.sh
+
+# Directories
+!.cargo/
+!.config/
+# compute/ now holds pageserver, safekeeper, endpoint_storage, compute_tools,
+# pgxn (the yb_amp extension), and libs — the whole storage/compute engine.
+!compute/
+!control_plane/
+# The endpoint image bakes the controller's DB migrations (the optional
+# DEV_PROVISION_SCHEMA path). Only migrations/ is needed, so keep the rest of the
+# Go controller out of the build context — unrelated controller changes then
+# don't bust the Rust build stage's `COPY . .` cache.
+!controller/
+controller/*
+!controller/migrations/
+# The Go yb_amp_local launcher lives here; the endpoint/controller images build it.
+!controller/local/
+!docker-compose/ext-src
+!proxy/
+!storage_scrubber/
+!storage_broker/
+!workspace_hack/
+!build-tools/patches
+!deploy/endpoint/
+# deploy/controller bakes the endpoint Helm chart into the controller image (the k8s
+# deploy runtime installs it with `helm upgrade --install`).
+!deploy/helm/
+# deploy/controller packages the prebuilt bundle from `make controller-bundle`.
+!target/controller-bundle/
+# cargo must read every workspace member's manifest to load the workspace.
+!test/integration/
