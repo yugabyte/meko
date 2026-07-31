@@ -23,7 +23,7 @@ updates:
       prefix: "ci"
     # Named owners so a bump doesn't sit unattended — Dependabot won't chase it.
     assignees:
-      - "hsunder"
+      - "hari90"
       - "nchandrappa"
     groups:
       # One PR per cycle for all action bumps, instead of one per action.
