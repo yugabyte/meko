@@ -356,8 +356,8 @@ supervisor exits non-zero so the pod is recreated.
 
 ### Why no control plane
 
-Cluster control — the pageserver node registry, generation/attach fencing, and
-the endpoint registry (in YugabyteDB's `amp_registry` schema) — is a
+Cluster control — branch and endpoint bookkeeping in YugabyteDB's `amp_registry`
+schema — is a
 **shared, cluster-level** concern owned by the `controller`. It is **not** part of
 the endpoint pod. The pod talks only to YugabyteDB.
 

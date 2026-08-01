@@ -25,11 +25,11 @@ func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.Branc
 			}
 		}
 	}
-	base, err := controllerBase(env)
+	ctrl, err := controllerClient(env)
 	if err != nil {
 		return err
 	}
-	return client.NewController(base, httpClient()).BranchDrop(ctx, branchID)
+	return ctrl.BranchDrop(ctx, branchID)
 }
 
 // BranchCreateArgs are the flags of `branch create`.
@@ -55,8 +55,29 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 	return branchCreateRoot(ctx, env, args)
 }
 
-// branchCreateRoot records a pending Bootstrap init for a new root branch.
+// branchCreateRoot declares a new root branch — one with no ancestor, which the
+// first endpoint materializes by running initdb.
+//
+// The unqualified form (`branch create` with no name and no id) is a request for
+// the repo's `main`, and that branch already exists: the launcher's project comes
+// with a default branch of that name, provisioned by EnsureLadder. So this adopts
+// it rather than declaring a second root, which would collide on
+// branches_name_per_project anyway. Naming a root branch explicitly, or pinning its
+// id, still declares a new one alongside `main`.
 func branchCreateRoot(ctx context.Context, env *config.LocalEnv, args BranchCreateArgs) error {
+	name := args.BranchName
+	if name == "" {
+		name = DefaultBranchName
+	}
+
+	if args.BranchID == "" && name == DefaultBranchName && env.DefaultBranchID != nil {
+		adopted := *env.DefaultBranchID
+		// NB: harness invariant — the 2nd whitespace token is the branch id.
+		fmt.Println(successfullyCreatedLine(adopted))
+		fmt.Printf("Adopted the project's default branch '%s' as '%s'\n", adopted, name)
+		return nil
+	}
+
 	branchID := args.BranchID
 	if branchID == "" {
 		id, err := generateBranchID()
@@ -70,16 +91,10 @@ func branchCreateRoot(ctx context.Context, env *config.LocalEnv, args BranchCrea
 		pgVersion = config.DefaultPgVersion
 	}
 
-	name := args.BranchName
-	if name == "" {
-		name = DefaultBranchName
-	}
-
-	base, err := controllerBase(env)
+	ctrl, err := controllerClient(env)
 	if err != nil {
 		return err
 	}
-	ctrl := client.NewController(base, httpClient())
 	if err := ctrl.RecordBranch(ctx, branchID, registry.BranchCreateRecord{
 		BranchName: name,
 		PgVersion:  pgVersion,
@@ -115,11 +130,10 @@ func branchCreateFork(ctx context.Context, env *config.LocalEnv, args BranchCrea
 		branchID = id
 	}
 
-	base, err := controllerBase(env)
+	ctrl, err := controllerClient(env)
 	if err != nil {
 		return err
 	}
-	ctrl := client.NewController(base, httpClient())
 
 	ancestorBranchID, err := getBranchTimelineID(ctx, env, ctrl, args.AncestorBranchName)
 	if err != nil {

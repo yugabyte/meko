@@ -228,44 +228,53 @@ DDL lives with the code and its migrations.
 
 A project's id is a control-plane-only id (it maps to no storage object); a branch's
 `branch_id` *is* the storage layer's flat `BranchId` — a 128-bit id, carried here
-verbatim as `uuid`. The storage layer is flat: there is no enclosing tenant. All
-foreign keys are
+verbatim as `uuid` and globally unique, so it stands alone as the branch's primary
+key. The storage layer is flat: there is no enclosing tenant, and nothing above a
+branch is part of its identity — `project_id` is an ordinary scoping column, and an
+endpoint has none at all (it reaches its project through its branch). One
+consequence: the fork FK can no longer also assert that a parent is in the same
+project, so in-project lineage is an application invariant rather than a schema
+one. All foreign keys are
 `RESTRICT` (the PG default) unless noted: teardown is top-down through tasks, never via
 `ON DELETE CASCADE` surprises.
 
 **Ownership & access**
 
 ```sql
-CREATE TABLE app_user (                        -- "user" is reserved in PG
+CREATE TABLE users (                        -- "user" is reserved in PG
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     is_admin    boolean NOT NULL DEFAULT false  -- admins skip all grants
 );
 
 -- A storage pool maps roughly to a Meko datapack. Any user can create one and is
 -- recorded as its owner; others reach it only via a user_pool_grant (a "share").
-CREATE TABLE storage_pool (
+CREATE TABLE storage_pools (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name           text NOT NULL UNIQUE,
-    owner_user_id  uuid NOT NULL REFERENCES app_user(id)
+    owner_user_id  uuid NOT NULL REFERENCES users(id)
 );
 
-CREATE TABLE project (                         -- a "database": one project, one default branch
+CREATE TABLE projects (                         -- a "database": one project, one default branch
     id               uuid PRIMARY KEY,   -- control-plane-only id; maps to no storage object
-    storage_pool_id  uuid NOT NULL REFERENCES storage_pool(id),
+    storage_pool_id  uuid NOT NULL REFERENCES storage_pools(id),
     name             text NOT NULL,
-    UNIQUE (storage_pool_id, name)             -- name unique within its pool
+    dropped_at       timestamptz                -- tombstone; see `branch` below
 );
 
-CREATE TABLE user_pool_grant (                 -- the "share": create/see projects in a pool
-    user_id          uuid NOT NULL REFERENCES app_user(id),
-    storage_pool_id  uuid NOT NULL REFERENCES storage_pool(id),
+-- Name unique within its pool, among LIVE projects.
+CREATE UNIQUE INDEX projects_name_per_pool ON project (storage_pool_id, name)
+    WHERE dropped_at IS NULL;
+
+CREATE TABLE user_pool_grants (                 -- the "share": create/see projects in a pool
+    user_id          uuid NOT NULL REFERENCES users(id),
+    storage_pool_id  uuid NOT NULL REFERENCES storage_pools(id),
     PRIMARY KEY (user_id, storage_pool_id)
 );
 
 CREATE TYPE grant_role AS ENUM ('read_only', 'read_write');
-CREATE TABLE user_project_grant (              -- per-project access; revoke = drop the row
-    user_id     uuid NOT NULL REFERENCES app_user(id),
-    project_id  uuid NOT NULL REFERENCES project(id),
+CREATE TABLE user_project_grants (              -- per-project access; revoke = drop the row
+    user_id     uuid NOT NULL REFERENCES users(id),
+    project_id  uuid NOT NULL REFERENCES projects(id),
     role        grant_role NOT NULL,
     PRIMARY KEY (user_id, project_id)
 );
@@ -274,54 +283,79 @@ CREATE TABLE user_project_grant (              -- per-project access; revoke = d
 **Physical**
 
 ```sql
--- A branch's branch_id *is* the storage layer's flat BranchId; the storage layer
--- is flat (no enclosing tenant). Controller identity is the (project_id, branch_id)
--- pair, the project being a control-plane scoping only.
-CREATE TABLE branch (
-    project_id          uuid NOT NULL REFERENCES project(id),  -- control-plane scoping only
-    branch_id           uuid NOT NULL,                         -- = storage-layer flat branch_id
+-- A branch's branch_id *is* the storage layer's flat BranchId, globally unique;
+-- the storage layer is flat (no enclosing tenant), so the id alone is the whole
+-- identity and project_id is a control-plane scoping column.
+CREATE TABLE branches (
+    branch_id           uuid PRIMARY KEY,                      -- = storage-layer flat branch_id
+    project_id          uuid NOT NULL REFERENCES projects(id), -- control-plane scoping only
     name                text NOT NULL,
     pg_version          int  NOT NULL, -- Is PG Version needed?
     is_default          boolean NOT NULL DEFAULT false,  -- the project's default (root) branch
 
     -- Branching
-    parent_branch_id    uuid,                  -- fork ancestry; NULL for the default branch
+    parent_branch_id    uuid REFERENCES branches(branch_id),  -- fork ancestry; NULL for a root
     fork_lsn            pg_lsn,                -- the point the branch was taken at
 
-    PRIMARY KEY (project_id, branch_id),
-    UNIQUE (project_id, name),                 -- name unique within its project
-    FOREIGN KEY (project_id, parent_branch_id)    -- a fork parent stays in-project
-        REFERENCES branch (project_id, branch_id)
+    -- A dropped branch is TOMBSTONED, not deleted: a branch id is never reused and
+    -- its pages/WAL in amp_storage outlive the drop. Every "is this live?" reader
+    -- filters `dropped_at IS NULL`. Projects tombstone for the follow-on reason:
+    -- the FK above is RESTRICT, so a project whose branches survive as tombstones
+    -- could never be deleted.
+    dropped_at          timestamptz
 );
 
--- Exactly one default branch per project (created with the project); the rest are forks.
-CREATE UNIQUE INDEX one_default_per_project ON branch (project_id) WHERE is_default;
+-- "The branches of this project" is the hottest access path and the primary key
+-- no longer serves it, so it gets an index of its own.
+CREATE INDEX branches_by_project ON branches (project_id);
+CREATE INDEX branches_by_parent  ON branches (parent_branch_id);
+
+-- Name unique within its project, and exactly one default branch per project —
+-- both among LIVE branches, so a drop frees the name and lets a new default be
+-- designated. Partial because the rows stay behind forever.
+CREATE UNIQUE INDEX branches_name_per_project ON branches (project_id, name)
+    WHERE dropped_at IS NULL;
+CREATE UNIQUE INDEX branches_one_default_per_project ON branches (project_id)
+    WHERE is_default AND dropped_at IS NULL;
 
 CREATE TYPE endpoint_role  AS ENUM ('read_write', 'read_only');
 
 -- Durable record, ephemeral instance. Addressed by id; endpoints have no name.
-CREATE TABLE endpoint (
+CREATE TABLE endpoints (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    -- the spec: complete enough to recreate the endpoint from scratch
-    project_id      uuid NOT NULL,
-    branch_id       uuid NOT NULL,
+    -- the spec: complete enough to recreate the endpoint from scratch.
+    -- No project_id: an endpoint reaches its project through its branch, so the
+    -- two can never disagree.
+    branch_id       uuid NOT NULL REFERENCES branches(branch_id),
     role            endpoint_role  NOT NULL,
+
+    -- Launcher/harness handle; NULL for product endpoints, which have no name.
+    name            text,
 
     -- Access to the endpoint
     address         TEXT,
-    
-    config          jsonb, -- The config used to create an endpoint
 
-    FOREIGN KEY (project_id, branch_id)        -- project-scoped binding
-        REFERENCES branch (project_id, branch_id)
+    config          jsonb, -- The config used to create an endpoint
+    spec            jsonb  -- Opaque yb_amp_local config; NULL for product endpoints
 );
 
 -- The single-writer rule, enforced in the schema rather than only in code.
-CREATE UNIQUE INDEX one_writer_per_branch
-    ON endpoint (project_id, branch_id)
+CREATE UNIQUE INDEX endpoints_one_writer_per_branch
+    ON endpoints (branch_id)
     WHERE role = 'read_write';
+
+-- A named endpoint is addressable by its handle. Global rather than per-project
+-- because an endpoint carries no project_id to scope by; NULLs are distinct in a
+-- unique index, so the unnamed product rows coexist.
+CREATE UNIQUE INDEX endpoints_name ON endpoints (name);
+CREATE INDEX endpoints_by_branch ON endpoints (branch_id);
 ```
+
+These are the *only* branch and endpoint tables. The storage layer addresses the
+same rows through `/control/v1`, keying on the flat 32-hex rendering of
+`branch_id` and on `endpoint.name`; it does not keep copies of its own. See
+[`sc-integration.md`](sc-integration.md).
 
 **Operational**
 
@@ -330,7 +364,7 @@ user-visible, API-monitorable unit) plus its ordered `task_step` rows — the st
 run, written before execution and marked complete as it goes.
 
 ```sql
-CREATE TABLE task (                            -- one per operation; status is exposed via API
+CREATE TABLE tasks (                            -- one per operation; status is exposed via API
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     kind         text        NOT NULL,         -- 'create_project', 'branch', 'scale', ...
     status       text        NOT NULL DEFAULT 'pending',
@@ -341,9 +375,9 @@ CREATE TABLE task (                            -- one per operation; status is e
     lease_expiry timestamptz                    -- lease expiry => another instance may reclaim
 );
 
-CREATE TABLE task_step (                        -- the write-ahead steps of one task
+CREATE TABLE task_steps (                        -- the write-ahead steps of one task
     id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),  -- referenced by task.step_ids
-    task_id    uuid        NOT NULL REFERENCES task(id),
+    task_id    uuid        NOT NULL REFERENCES tasks(id),
     kind       text        NOT NULL,            -- which re-usable step
     status     text        NOT NULL DEFAULT 'pending',
     args       jsonb       NOT NULL,            -- inputs, written when the task is planned

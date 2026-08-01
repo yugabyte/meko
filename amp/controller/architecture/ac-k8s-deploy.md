@@ -237,7 +237,7 @@ the clean fix is to move the endpoint workload to a bare **ReplicaSet** (a
 template PATCH there doesn't roll) — tracked as a follow-up.
 
 A resize is **first-writer-wins**: a partial unique index on the task table
-(`task_one_active_resize_per_endpoint`) admits at most one in-flight
+(`tasks_one_active_resize_per_endpoint`) admits at most one in-flight
 `resize_endpoint` per endpoint, so a concurrent resize is rejected with `409`
 until the first reaches a terminal state (the lock self-releases; a crashed task
 is reclaimed by its lease). CPU/memory are set as request == limit, preserving

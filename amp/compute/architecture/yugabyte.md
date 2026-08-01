@@ -16,9 +16,9 @@ All subsystems share **one** database, `yb_storage`. Within it:
 
 | Schema | Tables | Provisioned by |
 |---|---|---|
-| `amp_storage` | the data plane: `pages`, `slru_pages`, `meta`, `pending_gc`, `wals`, `blobs` (+ the `blob_namespace` ENUM), and `branch_state` — the per-branch row the pageserver and safekeeper share | migration `0002_compute_storage` |
-| `controller` | the controller's product model: `app_user`, `storage_pool`, `project`, `user_pool_grant`, `user_project_grant`, `branch`, `endpoint`, `task`, `task_step` (plus the `grant_role`, `endpoint_role`, `task_status`, `step_status` ENUMs) | migration `0001_init` |
-| `amp_registry` | the controller's storage-layer registry: `branches`, `endpoints` | migration `0003_registry` |
+| `amp_storage` | the data plane: `pages`, `slru_pages`, `meta`, `pending_gc`, `wals`, `blobs` (+ the `blob_namespace` ENUM), and `branch_state` — the per-branch row the pageserver and safekeeper share | migration `0003_compute_storage` |
+| `amp_registry` | the control plane's resource model: `users`, `storage_pools`, `projects`, `user_pool_grants`, `user_project_grants`, `branches`, `endpoints` (plus the `grant_role` and `endpoint_role` ENUMs). One branch table and one endpoint table, serving both the product API and the storage-layer control surface | migration `0002_resource_model` |
+| `controller` | the write-ahead task log: `tasks`, `task_steps` (plus the `task_status` / `step_status` ENUMs) | migration `0001_task_log` |
 
 ### Provisioning — controller migrations on startup
 
@@ -30,22 +30,24 @@ the controller applies them via `golang-migrate` on every startup
 the latter exists for init-container / pre-deploy use). Already-applied
 migrations are skipped via the `schema_migrations` bookkeeping table.
 
-The migrator's `search_path` is pinned to the control-plane schema
-(`--db-schema` / `AMP_DB_SCHEMA`, default `controller`), and `db.Migrate`
-issues `CREATE SCHEMA IF NOT EXISTS controller` before the migrate driver
-initialises — the bookkeeping table lives in that schema, so the schema
-must exist before the very first migration runs. Unqualified DDL in the
-migrations therefore lands in `controller`; every object outside it
-(`amp_storage.*`, `amp_registry.*`) is written
-schema-qualified. Every statement in `0002_compute_storage` and
-`0003_registry` is IF-NOT-EXISTS-guarded, so those migrations are
-idempotent at the SQL level too.
+The migrator's `search_path` is pinned to the control-plane resource
+schema (`--db-schema` / `AMP_DB_SCHEMA`, default `amp_registry`), and
+`db.Migrate` issues `CREATE SCHEMA IF NOT EXISTS <schema>` before the
+migrate driver initialises — the bookkeeping table lives in that schema,
+so the schema must exist before the very first migration runs. (The
+migration connection is pinned to a single connection for the same
+reason a fresh database used to fail: YB caches the catalog per backend,
+so a `CREATE SCHEMA` on one pooled connection is not necessarily visible
+to the next.) Unqualified DDL in the migrations therefore lands in
+`amp_registry`; every object outside it (`controller.*`, `amp_storage.*`)
+is written schema-qualified. Every statement in `0002_compute_storage`
+is IF-NOT-EXISTS-guarded, so it is idempotent at the SQL level too.
 
 The data-plane migration —
-[`controller/migrations/0002_compute_storage.up.sql`](../../controller/migrations/0002_compute_storage.up.sql)
+[`controller/migrations/0003_compute_storage.up.sql`](../../controller/migrations/0003_compute_storage.up.sql)
 — is the authoritative definition of every compute-facing schema and
 table. The schema/table names are **hardcoded** by the daemons
-(`compute/pageserver/src/page_store.rs` `DEFAULT_SCHEMA = "pageserver"`,
+(`compute/pageserver/src/page_store.rs` `DEFAULT_SCHEMA = "amp_storage"`,
 `compute/safekeeper/src/yb_wal_storage.rs` `amp_storage.wals`,
 `compute/libs/remote_storage/src/yb_store.rs` `blobs`) and bound at
 daemon startup — no service creates its own tables, so the controller
@@ -591,35 +593,41 @@ write-hot, continuously-drained queue.
 ## `amp_registry` schema
 
 The controller's storage-layer bookkeeping: the branch and endpoint
-registries behind the HTTP surface the controller serves to
-`yb_amp_local`, endpoint pods, and the integration harness. Kept in its
-own schema so the flat storage model (32-hex `branch_id` VARCHAR) stays
-separate from the controller's product model (project / branch /
-endpoint by UUID in the `controller` schema). The controller's
-connection pool pins `search_path` to `controller`; the registry store
-schema-qualifies every reference (`amp_registry.*`), so both coexist on one
-pool.
+bookkeeping behind the HTTP surface the controller serves to
+`yb_amp_local` and the integration harness.
+
+There is exactly **one** `branches` table and **one** `endpoints` table,
+and they are the product model's — the storage layer's flat view is a
+rendering of the same rows, not a second registry. The controller's
+connection pool pins `search_path` here, so these are the unqualified
+tables; the task log (`controller.*`) and the data plane
+(`amp_storage.*`) are schema-qualified at the statement.
 
 | Table | Purpose |
 |---|---|
-| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — branches are not sharded across pageservers (YB tablet-shards the keyspace itself). Carries the branch's *creation record* (`branch_name`, `pg_version`, `ancestor_branch_id`, `start_lsn`), written once at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL `ancestor_branch_id` = bootstrap, non-NULL = fork that ancestor at `start_lsn`). Also holds `extensions` (a JSONB array): the branch's opted-in externalized-extension set, seeded from the ancestor on fork by `RecordBranch` and unioned by the create_endpoint opt-in, so forks and read replicas inherit it (compute/architecture/extensions.md). No generation lives here — fencing is the pageserver's own, in `amp_storage.branch_state.current_generation`. A dropped branch is tombstoned via `dropped_at`, never deleted. |
-| `amp_registry.endpoints` | Durable registry of compute endpoints, keyed by endpoint id. `spec` is opaque JSONB the controller never interprets (it round-trips through `yb_amp_local`'s serde model). |
+| `amp_registry.users`, `storage_pools`, `projects`, `user_pool_grants`, `user_project_grants` | The resource ladder above a branch. `projects` is tombstoned (`dropped_at`) rather than deleted, because its branches are. |
+| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — it is the storage layer's globally-unique `BranchId`, and branches are not sharded across pageservers (YB tablet-shards the keyspace itself), so nothing needs a composite key. `project_id` is an ordinary scoping column, indexed by `branches_by_project`. Carries the branch's *creation record* (`name`, `pg_version`, `parent_branch_id`, `fork_lsn`), written at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL parent = bootstrap, non-NULL = fork that ancestor at `fork_lsn`). Also holds `extensions` (a JSONB array): the branch's opted-in externalized-extension set, seeded from the ancestor on fork by `RecordBranch` and unioned by the create_endpoint opt-in, so forks and read replicas inherit it (compute/architecture/extensions.md). The storage layer addresses the row as `replace(branch_id::text, '-', '')`. No generation lives here — fencing is the pageserver's own, in `amp_storage.branch_state.current_generation`. A dropped branch is tombstoned via `dropped_at`, never deleted; the name and default-branch uniqueness indexes are partial on that, so a drop frees the name. |
+| `amp_registry.endpoints` | One row per compute endpoint, keyed by `id` and belonging to a branch — there is no `project_id` column, so an endpoint and its branch can never disagree about the project. Product endpoints are unnamed; the ones `yb_amp_local` creates carry their handle in `name` and their launcher config in `spec` (opaque JSONB the controller never interprets — it round-trips through the launcher's serde model). `endpoints_one_writer_per_branch` applies to both. |
 
-Registry semantics are documented in
+Semantics are documented in
 [`../../controller/architecture/sc-integration.md`](../../controller/architecture/sc-integration.md).
 
 ## `controller` schema
 
-The controller's product model — users, storage pools, projects,
-grants, branches and endpoints by UUID, and the write-ahead task
-framework's `task` / `task_step` tables that drive the
-create/delete workflows. Managed entirely by the controller's
-migration `0001_init`; do **not** edit by hand. Inspect with:
+The write-ahead task framework's `tasks` / `task_steps` tables (plus
+their status enums) that drive the create/delete workflows — the
+controller's own operational machinery, not a user resource, which is why
+it sits outside the resource model. Unlike `amp_registry` this schema name
+is fixed, not configurable (`db.TaskSchema`), the same way `amp_storage`
+is. Provisioned first (`0001_task_log`) so a fresh database can record
+work from the moment the controller starts; managed entirely by that
+migration, so do **not** edit by hand. Inspect with:
 
 ```sql
 \c yb_storage
-SET search_path = controller, public;
+SET search_path = amp_registry, public;
 \dt
+\dt controller.*
 ```
 
 ## YB-side configuration that matters

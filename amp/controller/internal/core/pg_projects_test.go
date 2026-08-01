@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -29,32 +28,40 @@ func TestListProjectsIncludeFailed(t *testing.T) {
 	if url == "" {
 		t.Skip("set AMP_TEST_DATABASE_URL (e.g. postgres://yugabyte@host:5433/yb_storage?sslmode=disable) to run")
 	}
+	// An isolated DATABASE per run, not an isolated schema: the migrations create
+	// two fixed schemas (the resource model under --db-schema plus the always-
+	// `controller` task log), so relocating one no longer isolates anything. A
+	// throwaway database also lets the test use the production schema names.
+	//
+	// Provisioning gets a budget of its own, separate from the assertions below:
+	// ScratchMigrated queues behind a machine-local lock that serializes DDL across
+	// test packages, so how long it takes says nothing about this test's own
+	// latency and should not eat into it.
+	const schema = "controller" // the --db-schema default
+	provCtx, provCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer provCancel()
+	scratchURL, drop, err := db.ScratchMigrated(provCtx, url, "amp_test_core_projects", schema)
+	if err != nil {
+		t.Fatalf("provision scratch database: %v", err)
+	}
+	t.Cleanup(drop)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Isolated schema per run so we never touch a live controller schema.
-	schema := fmt.Sprintf("amptest_%s", uuid.New().String()[:8])
-	if err := db.Migrate(ctx, url, schema); err != nil {
-		t.Fatalf("migrate schema %s: %v", schema, err)
-	}
-	pool, err := db.Connect(ctx, url, schema)
+	pool, err := db.Connect(ctx, scratchURL, schema)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	t.Cleanup(func() {
-		if _, err := pool.Exec(context.Background(), fmt.Sprintf("DROP SCHEMA %s CASCADE", schema)); err != nil {
-			t.Logf("cleanup: drop schema %s: %v", schema, err)
-		}
-		pool.Close()
-	})
+	t.Cleanup(pool.Close)
 
 	// --- seed: one pool, three projects each with a default branch, each with a
 	// create_project task in a different terminal/in-flight state. ---
 	owner := uuid.New()
 	poolID := uuid.New()
-	mustExec(t, ctx, pool, `INSERT INTO app_user (id) VALUES ($1)`, owner)
-	mustExec(t, ctx, pool, `INSERT INTO storage_pool (id, name, owner_user_id) VALUES ($1,$2,$3)`,
-		poolID, "pool-"+schema, owner)
+	mustExec(t, ctx, pool, `INSERT INTO amp_registry.users (id) VALUES ($1)`, owner)
+	mustExec(t, ctx, pool, `INSERT INTO amp_registry.storage_pools (id, name, owner_user_id) VALUES ($1,$2,$3)`,
+		poolID, "pool-core-projects", owner)
 
 	type seed struct {
 		name       string
@@ -67,11 +74,11 @@ func TestListProjectsIncludeFailed(t *testing.T) {
 		{name: "inflight", taskStatus: "running", id: uuid.New()},
 	}
 	for _, s := range seeds {
-		mustExec(t, ctx, pool, `INSERT INTO project (id, storage_pool_id, name) VALUES ($1,$2,$3)`,
+		mustExec(t, ctx, pool, `INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1,$2,$3)`,
 			s.id, poolID, s.name)
-		mustExec(t, ctx, pool, `INSERT INTO branch (project_id, branch_id, name, pg_version, is_default) VALUES ($1,$2,'main',18,true)`,
+		mustExec(t, ctx, pool, `INSERT INTO amp_registry.branches (project_id, branch_id, name, pg_version, is_default) VALUES ($1,$2,'main',18,true)`,
 			s.id, uuid.New())
-		mustExec(t, ctx, pool, `INSERT INTO task (kind, status, project_id) VALUES ('create_project',$1::task_status,$2)`,
+		mustExec(t, ctx, pool, `INSERT INTO tasks (kind, status, project_id) VALUES ('create_project',$1::task_status,$2)`,
 			s.taskStatus, s.id)
 	}
 

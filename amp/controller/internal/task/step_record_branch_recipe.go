@@ -53,7 +53,7 @@ func (*recordBranchRecipeStep) Kind() string { return StepRecordBranchRecipe }
 
 func (s *recordBranchRecipeStep) Execute(ctx context.Context) StepResult {
 	if s.recipes == nil {
-		applog.FromContext(ctx).Warn("controller not available; branch recipe recorded in the control DB only",
+		applog.FromContext(ctx).Warn("no storage-layer store; branch declared in the control plane but not seeded for attach",
 			applog.KeyProjectID, s.ProjectID.String(), applog.KeyBranchID, s.BranchID.String())
 		return Ok(mustResult(map[string]bool{"recorded": false}))
 	}
@@ -61,7 +61,7 @@ func (s *recordBranchRecipeStep) Execute(ctx context.Context) StepResult {
 	if s.AncestorBranchID != nil {
 		ancestor = hex32(*s.AncestorBranchID)
 	}
-	if err := s.recipes.RecordBranchRecipe(ctx, hex32(s.BranchID), BranchRecipe{
+	if err := s.recipes.RecordBranchRecipe(ctx, s.ProjectID, hex32(s.BranchID), BranchRecipe{
 		BranchName:       s.BranchName,
 		PgVersion:        s.PgVersion,
 		AncestorBranchID: ancestor,

@@ -239,6 +239,7 @@ type OnDiskConfig struct {
 	PgDistribDir               string                         `toml:"pg_distrib_dir"`
 	YbAmpDistribDir            string                         `toml:"yb_amp_distrib_dir"`
 	DefaultBranchID            *BranchID                      `toml:"default_branch_id,omitempty"`
+	ProjectID                  string                         `toml:"project_id,omitempty"`
 	PrivateKeyPath             string                         `toml:"private_key_path"`
 	PublicKeyPath              string                         `toml:"public_key_path"`
 	Controller                 YbAmpControllerConf            `toml:"controller"`

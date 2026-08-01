@@ -41,7 +41,7 @@ func (b *PgBackend) CreateUser(ctx context.Context, isAdmin bool) (User, error) 
 
 func (b *PgBackend) EnsureUser(ctx context.Context, id uuid.UUID, isAdmin bool) (User, error) {
 	if _, err := b.pool.Exec(ctx,
-		`INSERT INTO app_user (id, is_admin) VALUES ($1::uuid, $2)
+		`INSERT INTO amp_registry.users (id, is_admin) VALUES ($1::uuid, $2)
 		 ON CONFLICT (id) DO NOTHING`,
 		id.String(), isAdmin); err != nil {
 		return User{}, fmt.Errorf("insert user: %w", err)
@@ -51,7 +51,7 @@ func (b *PgBackend) EnsureUser(ctx context.Context, id uuid.UUID, isAdmin bool) 
 
 func (b *PgBackend) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 	row := b.pool.QueryRow(ctx,
-		`SELECT id::text, is_admin, created_at FROM app_user WHERE id = $1::uuid`,
+		`SELECT id::text, is_admin, created_at FROM amp_registry.users WHERE id = $1::uuid`,
 		id.String())
 	u, err := scanUser(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -66,7 +66,7 @@ func (b *PgBackend) CreateStoragePool(ctx context.Context, owner uuid.UUID, name
 
 func (b *PgBackend) CreateStoragePoolWithID(ctx context.Context, id, owner uuid.UUID, name string) (StoragePool, error) {
 	_, err := b.pool.Exec(ctx,
-		`INSERT INTO storage_pool (id, name, owner_user_id) VALUES ($1::uuid, $2, $3::uuid)
+		`INSERT INTO amp_registry.storage_pools (id, name, owner_user_id) VALUES ($1::uuid, $2, $3::uuid)
 		 ON CONFLICT (id) DO NOTHING`,
 		id.String(), name, owner.String())
 	if err != nil {
@@ -85,13 +85,13 @@ func (b *PgBackend) CreateStoragePoolWithID(ctx context.Context, id, owner uuid.
 }
 
 func (b *PgBackend) ListUsers(ctx context.Context, limit, offset int) ([]User, int, error) {
-	total, err := b.count(ctx, `SELECT count(*) FROM app_user`)
+	total, err := b.count(ctx, `SELECT count(*) FROM amp_registry.users`)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count users: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
 		`SELECT id::text, is_admin, created_at
-		 FROM app_user ORDER BY created_at, id LIMIT $1 OFFSET $2`,
+		 FROM amp_registry.users ORDER BY created_at, id LIMIT $1 OFFSET $2`,
 		limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list users: %w", err)
@@ -113,13 +113,13 @@ func (b *PgBackend) ListUsers(ctx context.Context, limit, offset int) ([]User, i
 }
 
 func (b *PgBackend) ListStoragePools(ctx context.Context, limit, offset int) ([]StoragePool, int, error) {
-	total, err := b.count(ctx, `SELECT count(*) FROM storage_pool`)
+	total, err := b.count(ctx, `SELECT count(*) FROM amp_registry.storage_pools`)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count storage pools: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
 		`SELECT id::text, name, owner_user_id::text, created_at
-		 FROM storage_pool ORDER BY created_at, id LIMIT $1 OFFSET $2`,
+		 FROM amp_registry.storage_pools ORDER BY created_at, id LIMIT $1 OFFSET $2`,
 		limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list storage pools: %w", err)
@@ -166,15 +166,15 @@ func (b *PgBackend) CreateProject(ctx context.Context, poolID uuid.UUID, name st
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO project (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
+		`INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
 		 ON CONFLICT (id) DO NOTHING`,
 		projectID.String(), poolID.String(), name); err != nil {
 		return Project{}, mapProjectErr("insert project", err)
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO branch (project_id, branch_id, name, pg_version, is_default)
+		`INSERT INTO amp_registry.branches (project_id, branch_id, name, pg_version, is_default)
 		 VALUES ($1::uuid, $2::uuid, $3, $4, true)
-		 ON CONFLICT (project_id, branch_id) DO NOTHING`,
+		 ON CONFLICT (branch_id) DO NOTHING`,
 		projectID.String(), branchID.String(), DefaultBranchName, pgVersion); err != nil {
 		return Project{}, mapProjectErr("insert default branch", err)
 	}
@@ -184,14 +184,23 @@ func (b *PgBackend) CreateProject(ctx context.Context, poolID uuid.UUID, name st
 	return b.getProject(ctx, poolID, projectID)
 }
 
-// projectSelect joins project -> storage_pool and its default branch so a
+// projectSelect joins project -> storage_pools and its default branch so a
 // project is only visible through the pool it belongs to, and always carries
 // its default branch. Pools are top-level, so this is not owner-scoped.
+//
+// The default-branch join filters tombstones inline; the project's own tombstone
+// filter is projectLive, which callers append alongside their WHERE.
 const projectSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at,
 		b.project_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.created_at
-	FROM project p
-	JOIN storage_pool sp ON sp.id = p.storage_pool_id
-	JOIN branch b ON b.project_id = p.id AND b.is_default`
+	FROM amp_registry.projects p
+	JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id
+	JOIN amp_registry.branches b ON b.project_id = p.id AND b.is_default AND b.dropped_at IS NULL`
+
+// projectLive excludes tombstoned (dropped) projects. Projects are tombstoned
+// rather than deleted so their tombstoned branches keep a valid parent (see
+// PgBackend.DeleteProject), which means every read has to filter them out
+// explicitly. Assumes the project table is aliased `p`.
+const projectLive = ` AND p.dropped_at IS NULL`
 
 // projectCreateNotFailed excludes a project whose create_project task failed.
 // The project row is written mid-provisioning (the create_project step's
@@ -202,12 +211,12 @@ const projectSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.cre
 // left intact so it still shows on the tasks page. Assumes the project table is
 // aliased `p`.
 const projectCreateNotFailed = ` AND NOT EXISTS (
-		SELECT 1 FROM task t
+		SELECT 1 FROM tasks t
 		WHERE t.project_id = p.id AND t.kind = 'create_project' AND t.status = 'failed')`
 
 func (b *PgBackend) getProject(ctx context.Context, poolID, projectID uuid.UUID) (Project, error) {
 	row := b.pool.QueryRow(ctx,
-		projectSelect+` WHERE p.id = $1::uuid AND sp.id = $2::uuid`,
+		projectSelect+` WHERE p.id = $1::uuid AND sp.id = $2::uuid`+projectLive,
 		projectID.String(), poolID.String())
 	p, err := scanProject(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -237,15 +246,16 @@ func (b *PgBackend) ListProjects(ctx context.Context, poolID uuid.UUID, limit, o
 	// one in the count too, or total would over-report and a cluster would be
 	// "counted but never returned", breaking pagination.
 	total, err := b.count(ctx,
-		`SELECT count(*) FROM project p
+		`SELECT count(*) FROM amp_registry.projects p
 		 WHERE p.storage_pool_id = $1::uuid
-		   AND EXISTS (SELECT 1 FROM branch b WHERE b.project_id = p.id AND b.is_default)`+filter,
+		   AND EXISTS (SELECT 1 FROM amp_registry.branches b
+		               WHERE b.project_id = p.id AND b.is_default AND b.dropped_at IS NULL)`+projectLive+filter,
 		poolID.String())
 	if err != nil {
 		return nil, 0, fmt.Errorf("count projects: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		projectSelect+` WHERE sp.id = $1::uuid`+filter+`
+		projectSelect+` WHERE sp.id = $1::uuid`+projectLive+filter+`
 		 ORDER BY p.created_at, p.id LIMIT $2 OFFSET $3`,
 		poolID.String(), limit, offset)
 	if err != nil {
@@ -279,13 +289,16 @@ func (b *PgBackend) CreateBranch(ctx context.Context, poolID, projectID, parentB
 	// The SELECT is keyed by the parent within the project; a missing parent
 	// inserts nothing, so the read-back 404s. ON CONFLICT (pk) DO NOTHING makes a
 	// same-id retry converge; a duplicate name surfaces as 23505 on
-	// UNIQUE (project_id, name) -> ErrConflict. forkLSN is validated to be a
-	// well-formed LSN by the caller before it reaches the pg_lsn cast.
+	// branches_name_per_project -> ErrConflict. forkLSN is validated to be a
+	// well-formed LSN by the caller before it reaches the pg_lsn cast. A
+	// tombstoned parent selects nothing, so forking a dropped branch 404s
+	// rather than resurrecting its lineage.
 	if _, err := b.pool.Exec(ctx,
-		`INSERT INTO branch (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
+		`INSERT INTO amp_registry.branches (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
 		 SELECT $1::uuid, $2::uuid, $3, p.pg_version, false, $4::uuid, $5::pg_lsn
-		 FROM branch p WHERE p.project_id = $1::uuid AND p.branch_id = $4::uuid
-		 ON CONFLICT (project_id, branch_id) DO NOTHING`,
+		 FROM amp_registry.branches p
+		 WHERE p.project_id = $1::uuid AND p.branch_id = $4::uuid AND p.dropped_at IS NULL
+		 ON CONFLICT (branch_id) DO NOTHING`,
 		projectID.String(), branchID.String(), name, parentBranchID.String(), forkLSN); err != nil {
 		return Branch{}, mapBranchErr("insert branch", err)
 	}
@@ -295,7 +308,7 @@ func (b *PgBackend) CreateBranch(ctx context.Context, poolID, projectID, parentB
 func (b *PgBackend) getBranchByID(ctx context.Context, projectID, branchID uuid.UUID) (Branch, error) {
 	row := b.pool.QueryRow(ctx,
 		`SELECT project_id::text, branch_id::text, name, pg_version, is_default, parent_branch_id::text, fork_lsn::text, created_at
-		 FROM branch WHERE project_id = $1::uuid AND branch_id = $2::uuid`,
+		 FROM amp_registry.branches WHERE project_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL`,
 		projectID.String(), branchID.String())
 	br, err := scanBranch(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -304,16 +317,20 @@ func (b *PgBackend) getBranchByID(ctx context.Context, projectID, branchID uuid.
 	return br, err
 }
 
-// branchSelect joins branch -> project -> storage_pool so a branch is only
-// visible through the project (and pool) it belongs to.
+// branchSelect joins branch -> project -> storage_pools so a branch is only
+// visible through the project (and pool) it belongs to. Tombstoned projects are
+// filtered in the join; the branch's own tombstone filter is branchLive.
 const branchSelect = `SELECT b.project_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.created_at
-	FROM branch b
-	JOIN project p ON p.id = b.project_id
-	JOIN storage_pool sp ON sp.id = p.storage_pool_id`
+	FROM amp_registry.branches b
+	JOIN amp_registry.projects p ON p.id = b.project_id AND p.dropped_at IS NULL
+	JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id`
+
+// branchLive excludes tombstoned (dropped) branches. Assumes `b` is the branch.
+const branchLive = ` AND b.dropped_at IS NULL`
 
 func (b *PgBackend) GetBranch(ctx context.Context, poolID, projectID, branchID uuid.UUID) (Branch, error) {
 	row := b.pool.QueryRow(ctx,
-		branchSelect+` WHERE b.branch_id = $1::uuid AND b.project_id = $2::uuid AND sp.id = $3::uuid`,
+		branchSelect+` WHERE b.branch_id = $1::uuid AND b.project_id = $2::uuid AND sp.id = $3::uuid`+branchLive,
 		branchID.String(), projectID.String(), poolID.String())
 	br, err := scanBranch(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -328,14 +345,14 @@ func (b *PgBackend) ListBranches(ctx context.Context, poolID, projectID uuid.UUI
 		return nil, 0, err
 	}
 	total, err := b.count(ctx,
-		`SELECT count(*) FROM branch WHERE project_id = $1::uuid`,
+		`SELECT count(*) FROM amp_registry.branches WHERE project_id = $1::uuid AND dropped_at IS NULL`,
 		projectID.String())
 	if err != nil {
 		return nil, 0, fmt.Errorf("count branches: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
 		`SELECT project_id::text, branch_id::text, name, pg_version, is_default, parent_branch_id::text, fork_lsn::text, created_at
-		 FROM branch WHERE project_id = $1::uuid
+		 FROM amp_registry.branches WHERE project_id = $1::uuid AND dropped_at IS NULL
 		 ORDER BY created_at, branch_id LIMIT $2 OFFSET $3`,
 		projectID.String(), limit, offset)
 	if err != nil {
@@ -357,11 +374,12 @@ func (b *PgBackend) ListBranches(ctx context.Context, poolID, projectID uuid.UUI
 	return branches, total, nil
 }
 
-// projectInPool returns ErrNotFound unless projectID exists under poolID.
+// projectInPool returns ErrNotFound unless a live projectID exists under poolID.
 func (b *PgBackend) projectInPool(ctx context.Context, poolID, projectID uuid.UUID) error {
 	var x int
 	err := b.pool.QueryRow(ctx,
-		`SELECT 1 FROM project WHERE id = $1::uuid AND storage_pool_id = $2::uuid`,
+		`SELECT 1 FROM amp_registry.projects
+		  WHERE id = $1::uuid AND storage_pool_id = $2::uuid AND dropped_at IS NULL`,
 		projectID.String(), poolID.String()).Scan(&x)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
@@ -373,8 +391,9 @@ func (b *PgBackend) projectInPool(ctx context.Context, poolID, projectID uuid.UU
 }
 
 // mapProjectErr translates the constraint violations the project writes can
-// raise: a duplicate project name (unique storage_pool_id, name) -> ErrConflict,
-// and a missing pool (foreign key on project.storage_pool_id) -> ErrNotFound.
+// raise: a duplicate project name among live projects (projects_name_per_pool)
+// -> ErrConflict, and a missing pool (foreign key on project.storage_pool_id)
+// -> ErrNotFound.
 func mapProjectErr(what string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -389,8 +408,8 @@ func mapProjectErr(what string, err error) error {
 }
 
 // mapBranchErr translates the constraint violations a branch write can raise: a
-// duplicate branch name (unique project_id, name) -> ErrConflict, and a missing
-// in-project parent (foreign key) -> ErrNotFound.
+// duplicate branch name among live branches (branches_name_per_project) ->
+// ErrConflict, and a missing in-project parent (foreign key) -> ErrNotFound.
 func mapBranchErr(what string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -407,7 +426,7 @@ func mapBranchErr(what string, err error) error {
 func (b *PgBackend) getStoragePoolByID(ctx context.Context, id uuid.UUID) (StoragePool, error) {
 	row := b.pool.QueryRow(ctx,
 		`SELECT id::text, name, owner_user_id::text, created_at
-		 FROM storage_pool WHERE id = $1::uuid`,
+		 FROM amp_registry.storage_pools WHERE id = $1::uuid`,
 		id.String())
 	return scanPool(row)
 }
@@ -419,17 +438,17 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, projectID, branchID uuid
 		cfg = config
 	}
 	_, err := b.pool.Exec(ctx,
-		`INSERT INTO endpoint (id, project_id, branch_id, role, config)
-		 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::endpoint_role, $5::jsonb)
+		`INSERT INTO amp_registry.endpoints (id, branch_id, role, config)
+		 VALUES ($1::uuid, $2::uuid, $3::amp_registry.endpoint_role, $4::jsonb)
 		 ON CONFLICT (id) DO NOTHING`,
-		id.String(), projectID.String(), branchID.String(), role, cfg)
+		id.String(), branchID.String(), role, cfg)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
-			case "23505": // unique_violation: a read_write endpoint already exists (one_writer_per_branch)
+			case "23505": // unique_violation: a read_write endpoint already exists (endpoints_one_writer_per_branch)
 				return Endpoint{}, ErrConflict
-			case "23503": // foreign_key_violation: the (project_id, branch_id) branch does not exist
+			case "23503": // foreign_key_violation: the branch does not exist
 				return Endpoint{}, ErrNotFound
 			}
 		}
@@ -441,8 +460,12 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, projectID, branchID uuid
 // endpointSelect projects an endpoint row; address is NULL until the endpoint
 // is deployed (SetEndpointAddress), so it is coalesced to the empty string to
 // match Endpoint.Address being a plain string.
-const endpointSelect = `SELECT e.id::text, e.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.created_at
-	FROM endpoint e`
+// An endpoint has no project_id of its own — it reaches its project through its
+// branch — so every projection joins `branches` to supply it. That join is also
+// what scopes a query to a project.
+const endpointSelect = `SELECT e.id::text, eb.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.created_at
+	FROM amp_registry.endpoints e
+	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
 func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint, error) {
 	row := b.pool.QueryRow(ctx, endpointSelect+` WHERE e.id = $1::uuid`, id.String())
@@ -452,10 +475,10 @@ func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint
 func (b *PgBackend) GetEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (Endpoint, error) {
 	row := b.pool.QueryRow(ctx,
 		endpointSelect+`
-		 JOIN branch b ON b.project_id = e.project_id AND b.branch_id = e.branch_id
-		 JOIN project p ON p.id = b.project_id
-		 JOIN storage_pool sp ON sp.id = p.storage_pool_id
-		 WHERE e.id = $1::uuid AND b.branch_id = $2::uuid AND b.project_id = $3::uuid AND sp.id = $4::uuid`,
+		 JOIN amp_registry.projects p ON p.id = eb.project_id AND p.dropped_at IS NULL
+		 JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id
+		 WHERE e.id = $1::uuid AND eb.branch_id = $2::uuid AND eb.project_id = $3::uuid
+		   AND eb.dropped_at IS NULL AND sp.id = $4::uuid`,
 		endpointID.String(), branchID.String(), projectID.String(), poolID.String())
 	ep, err := scanEndpoint(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -471,13 +494,15 @@ func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, projectID, branch
 		return nil, 0, err
 	}
 	total, err := b.count(ctx,
-		`SELECT count(*) FROM endpoint WHERE project_id = $1::uuid AND branch_id = $2::uuid`,
+		`SELECT count(*) FROM amp_registry.endpoints e
+		  JOIN amp_registry.branches b ON b.branch_id = e.branch_id
+		 WHERE b.project_id = $1::uuid AND e.branch_id = $2::uuid`,
 		projectID.String(), branchID.String())
 	if err != nil {
 		return nil, 0, fmt.Errorf("count endpoints: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		endpointSelect+` WHERE e.project_id = $1::uuid AND e.branch_id = $2::uuid
+		endpointSelect+` WHERE eb.project_id = $1::uuid AND e.branch_id = $2::uuid
 		 ORDER BY e.created_at, e.id LIMIT $3 OFFSET $4`,
 		projectID.String(), branchID.String(), limit, offset)
 	if err != nil {
@@ -501,7 +526,7 @@ func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, projectID, branch
 
 func (b *PgBackend) SetEndpointAddress(ctx context.Context, endpointID uuid.UUID, address, tailnetAddress string) error {
 	_, err := b.pool.Exec(ctx,
-		`UPDATE endpoint SET address = $2, tailnet_address = $3 WHERE id = $1::uuid`,
+		`UPDATE amp_registry.endpoints SET address = $2, tailnet_address = $3 WHERE id = $1::uuid`,
 		endpointID.String(), address, tailnetAddress)
 	if err != nil {
 		return fmt.Errorf("set endpoint address: %w", err)
@@ -510,7 +535,7 @@ func (b *PgBackend) SetEndpointAddress(ctx context.Context, endpointID uuid.UUID
 }
 
 func (b *PgBackend) DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error {
-	_, err := b.pool.Exec(ctx, `DELETE FROM endpoint WHERE id = $1::uuid`, endpointID.String())
+	_, err := b.pool.Exec(ctx, `DELETE FROM amp_registry.endpoints WHERE id = $1::uuid`, endpointID.String())
 	if err != nil {
 		return fmt.Errorf("delete endpoint: %w", err)
 	}
@@ -524,7 +549,7 @@ func (b *PgBackend) DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) er
 // an absent row is a no-op.
 func (b *PgBackend) UpdateEndpointResources(ctx context.Context, endpointID uuid.UUID, cpu, memory string) error {
 	_, err := b.pool.Exec(ctx,
-		`UPDATE endpoint
+		`UPDATE amp_registry.endpoints
 		    SET config = COALESCE(config, '{}'::jsonb) || jsonb_build_object('cpu', $2::text, 'memory', $3::text)
 		  WHERE id = $1::uuid`,
 		endpointID.String(), cpu, memory)

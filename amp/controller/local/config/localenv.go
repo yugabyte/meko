@@ -27,6 +27,16 @@ type LocalEnv struct {
 	PrivateKeyPath  string
 	PublicKeyPath   string
 
+	// ProjectID is the control-plane project the launcher's branches and
+	// endpoints belong to, provisioned through the product API at startup
+	// (launch.EnsureLadder). Empty on a repo that has not been started yet.
+	//
+	// The storage layer's namespace is flat, but the rows it addresses are the
+	// control plane's own — and those are project-scoped — so every /control/v1
+	// call carries this. Persisted so a later `endpoint create` in a fresh process
+	// reaches the same project.
+	ProjectID string
+
 	Controller YbAmpControllerConf
 
 	// Pageservers are discovered by LoadConfig from the pageserver.toml
@@ -195,6 +205,7 @@ func LoadConfig(repopath string) (*LocalEnv, error) {
 		PgDistribDir:         onDisk.PgDistribDir,
 		YbAmpDistribDir:      onDisk.YbAmpDistribDir,
 		DefaultBranchID:      onDisk.DefaultBranchID,
+		ProjectID:            onDisk.ProjectID,
 		PrivateKeyPath:       onDisk.PrivateKeyPath,
 		PublicKeyPath:        onDisk.PublicKeyPath,
 		Controller:           onDisk.Controller,
@@ -226,6 +237,7 @@ func (e *LocalEnv) toOnDisk() OnDiskConfig {
 		PgDistribDir:               e.PgDistribDir,
 		YbAmpDistribDir:            e.YbAmpDistribDir,
 		DefaultBranchID:            e.DefaultBranchID,
+		ProjectID:                  e.ProjectID,
 		PrivateKeyPath:             e.PrivateKeyPath,
 		PublicKeyPath:              e.PublicKeyPath,
 		Controller:                 e.Controller,

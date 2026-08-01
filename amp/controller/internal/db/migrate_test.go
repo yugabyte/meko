@@ -21,7 +21,7 @@ import (
 // than an all-up / all-down / all-up round-trip, which would only test the down
 // migrations as a whole batch.
 //
-// It needs YugabyteDB: migrations 0002/0003 use YB-specific `HASH` / `SPLIT INTO
+// It needs YugabyteDB: migration 0002 uses YB-specific `HASH` / `SPLIT INTO
 // TABLETS` DDL that plain Postgres rejects. So it skips unless
 // AMP_TEST_DATABASE_URL points at one — CI's "Migrations" job provides a
 // throwaway database.
@@ -30,10 +30,33 @@ func TestMigrateRoundTrip(t *testing.T) {
 	if url == "" {
 		t.Skip("AMP_TEST_DATABASE_URL not set; the up/down round-trip needs a YugabyteDB")
 	}
-	const schema = "controller"
 	ctx := context.Background()
 
-	m, sqlDB, err := newMigrator(ctx, url, schema)
+	// A throwaway database, not a throwaway schema: the migrations create two
+	// fixed schemas (the resource model under --db-schema plus the always-
+	// `controller` task log), so relocating one of them no longer isolates a run.
+	// This also means the walk exercises the production schema names.
+	scratchURL, drop, err := ScratchDatabase(ctx, url, "amp_test_migrate_roundtrip")
+	if err != nil {
+		t.Fatalf("provision scratch database: %v", err)
+	}
+	// Registered BEFORE the unlock below so it runs after it: cleanups are LIFO,
+	// and drop takes the same lock, which would deadlock if it ran while held.
+	t.Cleanup(drop)
+
+	// Hold the machine-local DDL lock for the WHOLE walk, not just one statement:
+	// this test applies and reverts every migration in turn, and YugabyteDB's
+	// catalog is cluster-wide, so dropping `amp_storage` here serialization-aborts
+	// against another package creating its own copy. Taken after ScratchDatabase
+	// (which locks internally) because flock is not reentrant within a process.
+	unlock, err := lockScratchProvisioning(ctx)
+	if err != nil {
+		t.Fatalf("take DDL lock: %v", err)
+	}
+	t.Cleanup(unlock)
+
+	const schema = "controller" // the --db-schema default
+	m, sqlDB, err := newMigrator(ctx, scratchURL, schema)
 	if err != nil {
 		t.Fatalf("build migrator: %v", err)
 	}

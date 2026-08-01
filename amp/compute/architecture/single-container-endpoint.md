@@ -45,9 +45,9 @@ for durability).
 
 ## Why the controller is not in the pod
 
-The controller is a **shared, cluster-level control plane**: it owns
-generation/attach fencing and the endpoint registry in YugabyteDB's
-`amp_registry` schema. One controller per endpoint pod would mean N
+The controller is a **shared, cluster-level control plane**: it owns the
+branch and endpoint records in YugabyteDB's `amp_registry` schema. One
+controller per endpoint pod would mean N
 uncoordinated controllers racing on that shared state, so the controller
 runs once, in the AMP layer (the `yb-amp-controller` chart). The pod
 itself talks only to YugabyteDB — plus, optionally, to that external
@@ -57,7 +57,7 @@ Two consequences follow.
 
 ### Schema provisioning is external
 
-Every yb-amp schema (`controller.*`, `amp_registry.*`, `amp_storage.*`
+Every yb-amp schema (`amp_registry.*`, `controller.*`, `amp_storage.*`
 including `amp_storage.blobs` and the `blob_namespace` ENUM) is created
 by the controller's migrations on controller startup
 ([`controller/migrations/`](../../controller/migrations/), applied by

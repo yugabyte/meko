@@ -246,7 +246,7 @@ runtime-agnostic [`deploy.Deployer`](../internal/deploy/) (Docker today,
 Kubernetes via Helm), records the resolved `address`, and best-effort drops the
 controller's pending-init recipe (the endpoint has now materialized the
 branch). A branch admits at most one `read_write` endpoint — the schema's
-`one_writer_per_branch` partial unique index — so a second writer now surfaces as
+`endpoints_one_writer_per_branch` partial unique index — so a second writer now surfaces as
 a **`failed` task** rather than a synchronous `409`. `deleteEndpoint` runs the
 same cheap `404` pre-check, then plans a `delete_endpoint` task that retires the
 running instance and drops the row; it returns `202` (not the old `204`). Both

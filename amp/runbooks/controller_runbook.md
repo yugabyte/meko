@@ -248,7 +248,7 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
   (first-writer-wins lock). Wait for the in-flight task to finish (`GET
   /tasks?kind=resize_endpoint` → its status) and retry.
 - **`500` on the resize call, with `duplicate key value violates unique
-  constraint "task_one_active_resize_per_endpoint"` in the controller log** — the
+  constraint "tasks_one_active_resize_per_endpoint"` in the controller log** — the
   same in-flight-resize conflict as above, on a controller predating the #400 fix
   (it read the constraint name from a pgx field YSQL leaves empty, so the conflict
   was never translated to `409`). Treat it as a `409` — retry after the in-flight

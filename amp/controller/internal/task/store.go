@@ -19,14 +19,14 @@ import (
 // first-writer-wins lock: the in-flight resize holds the endpoint until it
 // reaches a terminal status, and a concurrent resize gets this error (which the
 // API maps to 409 Conflict). Enforced atomically by the partial unique index
-// task_one_active_resize_per_endpoint (PgStore) / a guarded check (MemStore).
+// tasks_one_active_resize_per_endpoint (PgStore) / a guarded check (MemStore).
 var ErrResizeInProgress = errors.New("a resize is already in progress for this endpoint")
 
 // resizeLockConstraint is the partial unique index that enforces the resize lock
 // (migration 0004). A second non-terminal resize_endpoint task for the same
 // endpoint violates it. Named here for the schema guard in the tests, which is
 // what lets isResizeLockViolation classify structurally (see below).
-const resizeLockConstraint = "task_one_active_resize_per_endpoint"
+const resizeLockConstraint = "tasks_one_active_resize_per_endpoint"
 
 // isResizeLockViolation reports whether inserting spec failed because the resize
 // lock rejected it — a concurrent resize of the same endpoint.
@@ -160,7 +160,7 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 	// The task first (the steps' task_id FK points at it), carrying the ordered
 	// step ids; then the steps themselves.
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO task (id, kind, status, project_id, target_ref, params, step_ids)
+		`INSERT INTO tasks (id, kind, status, project_id, target_ref, params, step_ids)
 		 VALUES ($1::uuid, $2, 'pending', $3::uuid, $4, $5::jsonb, $6::uuid[])
 		 ON CONFLICT (id) DO NOTHING`,
 		taskID.String(), spec.Kind, projectArg, spec.TargetRef, []byte(params), stepIDs); err != nil {
@@ -179,7 +179,7 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 			args = json.RawMessage("{}")
 		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO task_step (id, task_id, kind, status, args)
+			`INSERT INTO task_steps (id, task_id, kind, status, args)
 			 VALUES ($1::uuid, $2::uuid, $3, 'pending', $4::jsonb)
 			 ON CONFLICT (id) DO NOTHING`,
 			stepIDs[i], taskID.String(), sp.Kind, []byte(args)); err != nil {
@@ -195,12 +195,12 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 
 func (s *PgStore) ClaimNext(ctx context.Context, owner string, lease time.Duration) (*Task, error) {
 	row := s.pool.QueryRow(ctx,
-		`UPDATE task
+		`UPDATE tasks
 		 SET status = 'running', owner = $1,
 		     lease_expiry = now() + make_interval(secs => $2),
 		     updated_at = now()
 		 WHERE id = (
-		     SELECT id FROM task
+		     SELECT id FROM tasks
 		     WHERE status = 'pending'
 		        OR (status = 'running' AND lease_expiry < now())
 		     ORDER BY created_at
@@ -218,7 +218,7 @@ func (s *PgStore) ClaimNext(ctx context.Context, owner string, lease time.Durati
 
 func (s *PgStore) RenewLease(ctx context.Context, taskID uuid.UUID, owner string, lease time.Duration) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE task
+		`UPDATE tasks
 		 SET lease_expiry = now() + make_interval(secs => $3), updated_at = now()
 		 WHERE id = $1::uuid AND owner = $2 AND status = 'running'`,
 		taskID.String(), owner, lease.Seconds())
@@ -232,8 +232,8 @@ func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, er
 	// Order by each step's position in the task's step_ids list (execution order).
 	rows, err := s.pool.Query(ctx,
 		`SELECT st.id::text, st.task_id::text, st.kind, st.status::text, st.args, st.result, st.error, st.updated_at
-		 FROM task_step st
-		 JOIN task t ON t.id = st.task_id
+		 FROM task_steps st
+		 JOIN tasks t ON t.id = st.task_id
 		 WHERE st.task_id = $1::uuid
 		 ORDER BY array_position(t.step_ids, st.id)`,
 		taskID.String())
@@ -273,9 +273,9 @@ func (s *PgStore) Steps(ctx context.Context, taskID uuid.UUID) ([]StepRecord, er
 
 func (s *PgStore) StartStep(ctx context.Context, taskID, stepID uuid.UUID, owner string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE task_step SET status = 'running', updated_at = now()
+		`UPDATE task_steps SET status = 'running', updated_at = now()
 		 WHERE id = $1::uuid
-		   AND EXISTS (SELECT 1 FROM task WHERE id = $2::uuid AND owner = $3)`,
+		   AND EXISTS (SELECT 1 FROM tasks WHERE id = $2::uuid AND owner = $3)`,
 		stepID.String(), taskID.String(), owner)
 	return err
 }
@@ -286,9 +286,9 @@ func (s *PgStore) CompleteStep(ctx context.Context, taskID, stepID uuid.UUID, ow
 		arg = []byte(result)
 	}
 	_, err := s.pool.Exec(ctx,
-		`UPDATE task_step SET status = 'succeeded', result = $2::jsonb, error = NULL, updated_at = now()
+		`UPDATE task_steps SET status = 'succeeded', result = $2::jsonb, error = NULL, updated_at = now()
 		 WHERE id = $1::uuid
-		   AND EXISTS (SELECT 1 FROM task WHERE id = $3::uuid AND owner = $4)`,
+		   AND EXISTS (SELECT 1 FROM tasks WHERE id = $3::uuid AND owner = $4)`,
 		stepID.String(), arg, taskID.String(), owner)
 	return err
 }
@@ -302,14 +302,14 @@ func (s *PgStore) FailStep(ctx context.Context, taskID, stepID uuid.UUID, owner 
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`UPDATE task_step SET status = 'failed', error = $2, updated_at = now()
+		`UPDATE task_steps SET status = 'failed', error = $2, updated_at = now()
 		 WHERE id = $1::uuid
-		   AND EXISTS (SELECT 1 FROM task WHERE id = $3::uuid AND owner = $4)`,
+		   AND EXISTS (SELECT 1 FROM tasks WHERE id = $3::uuid AND owner = $4)`,
 		stepID.String(), msg, taskID.String(), owner); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx,
-		`UPDATE task SET status = 'failed', error = $2, updated_at = now()
+		`UPDATE tasks SET status = 'failed', error = $2, updated_at = now()
 		 WHERE id = $1::uuid AND owner = $3`,
 		taskID.String(), msg, owner); err != nil {
 		return err
@@ -319,14 +319,14 @@ func (s *PgStore) FailStep(ctx context.Context, taskID, stepID uuid.UUID, owner 
 
 func (s *PgStore) CompleteTask(ctx context.Context, taskID uuid.UUID, owner string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE task SET status = 'succeeded', error = NULL, updated_at = now()
+		`UPDATE tasks SET status = 'succeeded', error = NULL, updated_at = now()
 		 WHERE id = $1::uuid AND owner = $2`,
 		taskID.String(), owner)
 	return err
 }
 
 func (s *PgStore) Get(ctx context.Context, id uuid.UUID) (*Task, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+taskColumns+` FROM task WHERE id = $1::uuid`, id.String())
+	row := s.pool.QueryRow(ctx, `SELECT `+taskColumns+` FROM tasks WHERE id = $1::uuid`, id.String())
 	t, err := scanTask(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -362,7 +362,7 @@ func (s *PgStore) List(ctx context.Context, f TaskFilter, limit, offset int) ([]
 	}
 
 	var total int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM task`+where, args...).Scan(&total); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM tasks`+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count tasks: %w", err)
 	}
 
@@ -371,7 +371,7 @@ func (s *PgStore) List(ctx context.Context, f TaskFilter, limit, offset int) ([]
 	offsetArg := len(args) + 2
 	args = append(args, limit, offset)
 	rows, err := s.pool.Query(ctx,
-		fmt.Sprintf(`SELECT %s FROM task%s ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`,
+		fmt.Sprintf(`SELECT %s FROM tasks%s ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d`,
 			taskColumns, where, limitArg, offsetArg),
 		args...)
 	if err != nil {

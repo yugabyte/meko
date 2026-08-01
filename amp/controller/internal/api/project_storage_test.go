@@ -22,25 +22,28 @@ import (
 
 // fakeRecipeStore is an in-memory task.RecipeStore that records the calls the
 // project/branch handlers make, so the create-project recipe path is exercised
-// end-to-end without a database. The storage layer is flat: the recipe is keyed
+// end-to-end without a database. The storage layer is flat, so the recipe is keyed
 // by a single branch_id (the controller passes the branch's branch_id verbatim at
-// this boundary). failRecord, when set, makes RecordBranchRecipe fail so the
-// handler's error path can be tested.
+// this boundary) — but the row it seeds lives in the control plane's own
+// project-scoped branch table, so the project id travels with it. failRecord, when
+// set, makes RecordBranchRecipe fail so the handler's error path can be tested.
 type fakeRecipeStore struct {
-	mu             sync.Mutex
-	recordHit      bool
-	recordedBranch string
-	recordedReq    task.BranchRecipe
-	failRecord     bool
+	mu              sync.Mutex
+	recordHit       bool
+	recordedProject uuid.UUID
+	recordedBranch  string
+	recordedReq     task.BranchRecipe
+	failRecord      bool
 }
 
-func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, branchID string, r task.BranchRecipe) error {
+func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, projectID uuid.UUID, branchID string, r task.BranchRecipe) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failRecord {
 		return fmt.Errorf("record recipe failed")
 	}
 	f.recordHit = true
+	f.recordedProject = projectID
 	f.recordedBranch = branchID
 	f.recordedReq = r
 	return nil

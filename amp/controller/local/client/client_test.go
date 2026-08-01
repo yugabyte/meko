@@ -8,7 +8,18 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/yugabyte/amp/controller/internal/registry"
+)
+
+// The storage-layer control surface is project-scoped: the branch and endpoint
+// rows it addresses are the control plane's own, and those belong to a project.
+// These pin the exact scoped paths the launcher must hit, so a prefix change that
+// silently broke the contract fails here.
+var (
+	testProjectID   = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000001")
+	testProjectBase = "/control/v1/projects/" + testProjectID.String()
 )
 
 // capture records what the test server saw for one request.
@@ -48,7 +59,7 @@ func TestControllerRecordAndListBranches(t *testing.T) {
 
 	// Record.
 	rec := recordingServer(t, &cap, http.StatusOK, `null`)
-	c := NewController(rec.URL, nil)
+	c := NewController(rec.URL, testProjectID, nil)
 	err := c.RecordBranch(context.Background(), "branch-xyz", registry.BranchCreateRecord{
 		BranchName: "main",
 		PgVersion:  180000,
@@ -57,7 +68,7 @@ func TestControllerRecordAndListBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordBranch: %v", err)
 	}
-	if cap.method != http.MethodPost || cap.path != "/control/v1/branch/branch-xyz/record" {
+	if cap.method != http.MethodPost || cap.path != testProjectBase+"/branch/branch-xyz/record" {
 		t.Fatalf("record hit %s %s", cap.method, cap.path)
 	}
 	var sent registry.BranchCreateRecord
@@ -71,12 +82,12 @@ func TestControllerRecordAndListBranches(t *testing.T) {
 	// List.
 	lst := recordingServer(t, &cap, http.StatusOK,
 		`[{"branch_id":"branch-xyz","branch_name":"main","pg_version":180000,"ancestor_branch_id":null,"start_lsn":"0/0"}]`)
-	c2 := NewController(lst.URL, nil)
+	c2 := NewController(lst.URL, testProjectID, nil)
 	branches, err := c2.ListBranches(context.Background())
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
 	}
-	if cap.method != http.MethodGet || cap.path != "/control/v1/branches" {
+	if cap.method != http.MethodGet || cap.path != testProjectBase+"/branches" {
 		t.Fatalf("list hit %s %s", cap.method, cap.path)
 	}
 	if len(branches) != 1 || branches[0].BranchID != "branch-xyz" || branches[0].PgVersion != 180000 {
@@ -87,7 +98,7 @@ func TestControllerRecordAndListBranches(t *testing.T) {
 func TestControllerEndpointCreateAndList(t *testing.T) {
 	var cap capture
 	rec := recordingServer(t, &cap, http.StatusOK, `null`)
-	c := NewController(rec.URL, nil)
+	c := NewController(rec.URL, testProjectID, nil)
 
 	err := c.EndpointCreate(context.Background(), registry.ComputeEndpoint{
 		EndpointID: "ep-1",
@@ -97,7 +108,7 @@ func TestControllerEndpointCreateAndList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EndpointCreate: %v", err)
 	}
-	if cap.method != http.MethodPost || cap.path != "/control/v1/endpoint" {
+	if cap.method != http.MethodPost || cap.path != testProjectBase+"/endpoint" {
 		t.Fatalf("create hit %s %s", cap.method, cap.path)
 	}
 	var sent registry.ComputeEndpoint
@@ -110,12 +121,12 @@ func TestControllerEndpointCreateAndList(t *testing.T) {
 
 	lst := recordingServer(t, &cap, http.StatusOK,
 		`[{"endpoint_id":"ep-1","branch_id":"branch-1","spec":{"k":"v"}}]`)
-	c2 := NewController(lst.URL, nil)
+	c2 := NewController(lst.URL, testProjectID, nil)
 	eps, err := c2.EndpointList(context.Background())
 	if err != nil {
 		t.Fatalf("EndpointList: %v", err)
 	}
-	if cap.method != http.MethodGet || cap.path != "/control/v1/endpoint" {
+	if cap.method != http.MethodGet || cap.path != testProjectBase+"/endpoint" {
 		t.Fatalf("list hit %s %s", cap.method, cap.path)
 	}
 	if len(eps) != 1 || eps[0].EndpointID != "ep-1" || string(eps[0].Spec) != `{"k":"v"}` {
@@ -123,11 +134,11 @@ func TestControllerEndpointCreateAndList(t *testing.T) {
 	}
 
 	del := recordingServer(t, &cap, http.StatusOK, `null`)
-	c3 := NewController(del.URL, nil)
+	c3 := NewController(del.URL, testProjectID, nil)
 	if err := c3.EndpointDelete(context.Background(), "ep-1"); err != nil {
 		t.Fatalf("EndpointDelete: %v", err)
 	}
-	if cap.method != http.MethodDelete || cap.path != "/control/v1/endpoint/ep-1" {
+	if cap.method != http.MethodDelete || cap.path != testProjectBase+"/endpoint/ep-1" {
 		t.Fatalf("delete hit %s %s", cap.method, cap.path)
 	}
 }
@@ -135,7 +146,7 @@ func TestControllerEndpointCreateAndList(t *testing.T) {
 func TestControllerListBranchNames(t *testing.T) {
 	var cap capture
 	names := recordingServer(t, &cap, http.StatusOK, `[{"branch_id":"b1","branch_name":"main"}]`)
-	c2 := NewController(names.URL, nil)
+	c2 := NewController(names.URL, testProjectID, nil)
 	got, err := c2.ListBranchNames(context.Background())
 	if err != nil {
 		t.Fatalf("ListBranchNames: %v", err)
@@ -148,7 +159,7 @@ func TestControllerListBranchNames(t *testing.T) {
 func TestControllerReady(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusOK, `null`)
-	c := NewController(srv.URL, nil)
+	c := NewController(srv.URL, testProjectID, nil)
 	if err := c.Ready(context.Background()); err != nil {
 		t.Fatalf("Ready: %v", err)
 	}
@@ -160,7 +171,7 @@ func TestControllerReady(t *testing.T) {
 func TestControllerHTTPError(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusConflict, `{"message":"nope"}`)
-	c := NewController(srv.URL, nil)
+	c := NewController(srv.URL, testProjectID, nil)
 	_, err := c.EndpointList(context.Background())
 	if err == nil {
 		t.Fatal("expected error on 409")

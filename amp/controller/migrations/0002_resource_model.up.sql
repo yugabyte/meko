@@ -1,0 +1,205 @@
+-- 0002: the `amp_registry` schema — the control plane's resource model.
+--
+-- Implements the design in controller/architecture/ac-highlvl.md §6 (resource
+-- ladder + tables) and controller/architecture/amp-controller.md §10 (state).
+-- The load-bearing invariants (§10.2) are expressed here in the schema, not only
+-- in API checks: the single-writer partial unique index, one-default-per-project,
+-- and RESTRICT (never CASCADE) deletes.
+--
+-- The user-facing resource ladder is storage pool -> project -> branch ->
+-- endpoint. A project is purely a control-plane grouping ("a database") that owns
+-- a set of branches; it does NOT map to any storage object.
+--
+-- ONE branch table and ONE endpoint table. Both the product API (/api/v1, by
+-- uuid) and the storage-layer control surface (/control/v1, by flat 32-hex
+-- branch id) read and write these same rows — the two are renderings of one
+-- identity, not two registries, so they cannot drift.
+--
+-- Keys are flat. A branch's `branch_id` IS the storage layer's `BranchId`, a
+-- 128-bit id carried here verbatim as `uuid` and globally unique on its own, so
+-- it is the whole primary key; the storage layer is flat and has no enclosing
+-- tenant. An endpoint keys on its own `id` and reaches its project through its
+-- branch.
+--
+-- Every object here is SCHEMA-QUALIFIED. `amp_registry` is a fixed name, not a
+-- deployment knob — the same as `amp_storage` — so the DDL says so outright
+-- rather than inheriting whatever search_path it happens to run under. That
+-- search_path belongs to the controller's own schema (--db-schema, default
+-- `controller`, where the task log and schema_migrations live), which is why the
+-- Go statements over these tables are schema-qualified too (db.ResourceSchema).
+
+CREATE SCHEMA IF NOT EXISTS amp_registry;
+
+-- Ownership & access ---------------------------------------------------------
+
+CREATE TABLE amp_registry.users (                           -- "user" is reserved in PG; "users" is not
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    is_admin    boolean     NOT NULL DEFAULT false,  -- admins skip all grants
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- A storage pool maps roughly to a Meko datapack. Any user can create one and
+-- is recorded as its owner; others reach it only via a user_pool_grants row.
+CREATE TABLE amp_registry.storage_pools (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           text        NOT NULL UNIQUE,
+    owner_user_id  uuid        NOT NULL REFERENCES amp_registry.users (id),
+    created_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- A project is a "database": one project, one default branch. id is a
+-- control-plane id only (no storage object maps to a project anymore).
+--
+-- Tombstoned, not deleted (see `branches` below for the full rationale): a
+-- project owns branches, branches are tombstoned, and the branch -> project FK is
+-- RESTRICT, so the project row has to outlive them.
+CREATE TABLE amp_registry.projects (
+    id               uuid PRIMARY KEY,
+    storage_pool_id  uuid        NOT NULL REFERENCES amp_registry.storage_pools (id),
+    name             text        NOT NULL,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    dropped_at       timestamptz
+);
+
+-- Name unique within its pool, among LIVE projects: dropping a project frees its
+-- name for reuse (unlike a branch id, a project name is not an identity the
+-- storage layer ever saw).
+CREATE UNIQUE INDEX projects_name_per_pool ON amp_registry.projects (storage_pool_id, name)
+    WHERE dropped_at IS NULL;
+
+-- The "share": lets a non-owner create and see projects in a pool.
+CREATE TABLE amp_registry.user_pool_grants (
+    user_id          uuid NOT NULL REFERENCES amp_registry.users (id),
+    storage_pool_id  uuid NOT NULL REFERENCES amp_registry.storage_pools (id),
+    PRIMARY KEY (user_id, storage_pool_id)
+);
+
+CREATE TYPE amp_registry.grant_role AS ENUM ('read_only', 'read_write');
+
+-- Per-project access; revoke = drop the row.
+CREATE TABLE amp_registry.user_project_grants (
+    user_id     uuid       NOT NULL REFERENCES amp_registry.users (id),
+    project_id  uuid       NOT NULL REFERENCES amp_registry.projects (id),
+    role        amp_registry.grant_role NOT NULL,
+    PRIMARY KEY (user_id, project_id)
+);
+
+-- Physical -------------------------------------------------------------------
+
+-- A branch is a PG cluster. `branch_id` is the storage-layer BranchId verbatim
+-- (the flat storage identity) and is globally unique, so it stands alone as the
+-- primary key; the storage layer addresses it as `replace(branch_id::text,'-','')`.
+-- `project_id` is an ordinary scoping column, not part of the identity.
+--
+-- This is also the branch's CREATION RECORD — `name`, `pg_version`,
+-- `parent_branch_id`, `fork_lsn` — written at branch-create time and read back
+-- by yb_amp_local to materialize the branch's pageserver + safekeeper (a NULL
+-- parent means bootstrap, a set one means fork that ancestor at `fork_lsn`).
+--
+-- NB: with a single-column key the fork FK can no longer also assert that a
+-- parent is in the SAME project — that was a side effect of the old composite
+-- key. Lineage staying in-project is now an application invariant (the API
+-- resolves a parent within the project before forking), not a schema one.
+--
+-- There is deliberately NO generation here. Fencing is the pageserver's own
+-- concern: it claims a generation at startup by incrementing
+-- `amp_storage.branch_state.current_generation`, so the counter lives in the same
+-- row as the writes it fences and there is no second copy to keep in step.
+--
+-- A dropped branch is TOMBSTONED, not deleted: `dropped_at` is stamped and the
+-- row stays, because a branch id is never reused, the record of what the id was
+-- is worth keeping, and the branch's page/WAL data in amp_storage outlives the
+-- drop (left for a later GC pass, #36). Every reader that answers "is this branch
+-- live?" filters `dropped_at IS NULL`.
+--
+-- The branch's data-plane state (consistent LSN, WAL start, the daemons' own
+-- column groups) lives in `amp_storage.branch_state`, keyed by the same id.
+CREATE TABLE amp_registry.branches (
+    branch_id           uuid        PRIMARY KEY,
+    project_id          uuid        NOT NULL REFERENCES amp_registry.projects (id),
+    name                text        NOT NULL,
+    pg_version          int         NOT NULL,
+    is_default          boolean     NOT NULL DEFAULT false,  -- the project's root branch
+
+    parent_branch_id    uuid        REFERENCES amp_registry.branches (branch_id),  -- fork ancestry; NULL for a root
+    fork_lsn            pg_lsn,     -- the point the branch was taken at
+
+    -- The branch's opted-in externalized extension set: the names, beyond the
+    -- always-mounted catalog defaults, that endpoints on this branch mount as
+    -- ImageVolumes (compute/architecture/extensions.md). It lives on the branch
+    -- identity record so every branch-creation path inherits it — RecordBranch
+    -- copies the ancestor's set into a fork's row at create time, and both a fork
+    -- and a new read-replica endpoint pick it up. The create_endpoint opt-in
+    -- unions names in; defaults to the empty set.
+    extensions          jsonb       NOT NULL DEFAULT '[]'::jsonb,
+
+    created_at          timestamptz NOT NULL DEFAULT now(),
+    dropped_at          timestamptz -- tombstone; a branch id is never reused
+);
+
+-- "The branches of this project" is the list endpoint, the storage-layer
+-- surface's every read, and the project-delete cascade. It is the hottest access
+-- path on the table and the primary key no longer serves it, so it gets an index
+-- of its own — the partial unique index below cannot stand in, since it covers
+-- only live rows and leads with a second column.
+CREATE INDEX branches_by_project ON amp_registry.branches (project_id);
+
+-- Name unique within its project, and exactly one default branch per project —
+-- both among LIVE branches, so a drop frees the name and lets a replacement
+-- default be designated. Partial because the rows stay behind forever.
+CREATE UNIQUE INDEX branches_name_per_project ON amp_registry.branches (project_id, name)
+    WHERE dropped_at IS NULL;
+CREATE UNIQUE INDEX branches_one_default_per_project ON amp_registry.branches (project_id)
+    WHERE is_default AND dropped_at IS NULL;
+
+-- Fork lineage: "the children of this branch" gates a branch delete.
+CREATE INDEX branches_by_parent ON amp_registry.branches (parent_branch_id);
+
+CREATE TYPE amp_registry.endpoint_role AS ENUM ('read_write', 'read_only');
+
+-- Durable record, ephemeral instance.
+--
+-- An endpoint belongs to a branch and reaches its project through it — there is
+-- no project_id column, so the two can never disagree.
+--
+-- Product endpoints are addressed by `id` and have no name; the ones
+-- yb_amp_local and the integration harness create carry their caller-chosen
+-- handle in `name` and their launcher config in `spec`. One table either way:
+-- `role` and the single-writer index apply to both, so the launcher's own
+-- conflict check is now backed by the schema.
+CREATE TABLE amp_registry.endpoints (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    branch_id    uuid          NOT NULL REFERENCES amp_registry.branches (branch_id),
+    role         amp_registry.endpoint_role NOT NULL,
+
+    name         text,      -- launcher/harness handle; NULL for product endpoints
+
+    address         text,      -- connection details returned to users
+    tailnet_address text,      -- optional second address: the Tailscale (tailnet)
+                               --   URL, populated alongside the LoadBalancer address
+                               --   when the endpoint is tailnet-exposed; NULL otherwise
+    config       jsonb,        -- the spec used to (re)create the endpoint
+    spec         jsonb,        -- opaque launcher endpointConf, round-tripped verbatim;
+                               --   NULL for product endpoints. The controller never
+                               --   interprets it (it is yb_amp_local's serde model,
+                               --   mirroring Rust control_plane::endpoint::EndpointConf).
+
+    created_at   timestamptz   NOT NULL DEFAULT now()
+);
+
+-- The single-writer rule, enforced in the schema rather than only in code.
+CREATE UNIQUE INDEX endpoints_one_writer_per_branch
+    ON amp_registry.endpoints (branch_id)
+    WHERE role = 'read_write';
+
+-- A named endpoint is addressable by its handle. Global rather than per-project
+-- because an endpoint no longer carries a project_id to scope by, and a plain
+-- index is inferrable as an ON CONFLICT target; NULLs are distinct in a unique
+-- index, so the unnamed product rows coexist freely.
+CREATE UNIQUE INDEX endpoints_name ON amp_registry.endpoints (name);
+
+-- "The endpoints of this branch" is the cascade-delete enumeration and the list
+-- endpoint's filter. one_writer_per_branch covers only read_write rows, so
+-- read-only endpoints need an index of their own.
+CREATE INDEX endpoints_by_branch ON amp_registry.endpoints (branch_id);

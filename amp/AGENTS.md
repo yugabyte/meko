@@ -22,7 +22,7 @@ Read in this order:
 1. `compute/architecture/high-level.md` — component diagram, what lives where, the
    topology of a dev cluster.
 2. `compute/architecture/yugabyte.md` — the single YB database (`yb_storage`)
-   and its schemas (`amp_storage`, `amp_registry`), the
+   and its schemas (`amp_storage`, `amp_registry`, `controller`), the
    `blobs` and `wals` tables, the
    `blob_namespace` ENUM, the `rpc_max_message_size` chunking story.
 3. `compute/architecture/remote-storage.md` — `YbStore` design, `parse_key` /

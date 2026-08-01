@@ -41,7 +41,7 @@ flowchart LR
         tblState[("amp_storage.branch_state<br/>amp_storage.branch_state")]
         tblWal[("amp_storage.wals")]
         tblBlob[("amp_storage.blobs<br/>initdb archives, LFC scratch")]
-        tblSc[("registry + controller schemas")]
+        tblSc[("amp_registry: resource model<br/>controller: task log")]
     end
 
     app -- "SQL: SELECT / INSERT / UPDATE" --> pg
@@ -194,8 +194,8 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Live WAL | YB `amp_storage.wals` | `(bucket_id, branch_id, segno, chunk_offset)` all-range, pre-split into 6 |
 | initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
 | Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | written via endpoint_storage's HTTP API |
-| Controller registries | YB `amp_registry` schema | branches, endpoints |
-| Controller product model | YB `controller` schema | users, pools, projects, grants, branches, endpoints, tasks |
+| Control-plane resource model | YB `amp_registry` schema | users, pools, projects, grants, and the single `branch` / `endpoint` tables both the product API and the storage-layer surface read |
+| Task log | YB `controller` schema | `task`, `task_step` |
 | Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on `endpoint create`, removed on destroy |
 | Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
 
@@ -233,8 +233,10 @@ yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RP
         |                         branch_state (one row per branch, shared by
         |                           the pageserver and the safekeeper)
         |                         wals (WAL chunks, 10 tablets)
-        +-- schema `amp_registry` branches, endpoints
-        +-- schema `controller`  product model + task framework
+        +-- schema `amp_registry` resource model: users, pools, projects,
+        |                         branch, endpoint (one table each, shared by
+        |                         /api/v1 and /control/v1)
+        +-- schema `controller`  write-ahead task log
 
 yb-amp processes
   controller --dev --database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage \

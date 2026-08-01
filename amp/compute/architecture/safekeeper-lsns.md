@@ -4,8 +4,8 @@ Authoritative inventory of every LSN the safekeeper tracks: name, where it
 lives, what advances it, what reads it, and the invariants between them.
 Grounded in the Rust sources (`compute/safekeeper/`, `compute/libs/utils`,
 `compute/libs/safekeeper_api`), the walproposer C sources
-(`compute/pgxn/yb_amp/`), and the controller schema
-(`controller/migrations/0002_compute_storage.up.sql`).
+(`compute/pgxn/yb_amp/`), and the controller-owned data-plane schema
+(`controller/migrations/0003_compute_storage.up.sql`).
 
 **System framing.** Durability and resilience come from YugabyteDB, the
 underlying store. The safekeeper mirrors every WAL byte into the YB table
@@ -469,7 +469,7 @@ UPSERTs; a lagging safekeeper column means segments are trimmed later.
   `propStartLsn`, `GetAcknowledgedWALPosition`, slot advance,
   feedback shared-memory relay.
 - `compute/libs/utils/src/pageserver_feedback.rs` — feedback wire format.
-- `controller/migrations/0002_compute_storage.up.sql` —
+- `controller/migrations/0003_compute_storage.up.sql` —
   `amp_storage.branch_state` + `amp_storage.wals` schemas.
 - [`pageserver-lsns.md`](pageserver-lsns.md) — the pageserver side of the
   link.

@@ -149,7 +149,7 @@ viewed from two angles: we say "branch" when talking about the data, and "PG
 cluster" when talking about the compute serving it. A branch's `branch_id` **is**
 the storage layer's `BranchId` verbatim — the flat storage identity, with no
 enclosing tenant. Branches are uniquely identified within the controller by the pair
-**(project_id, branch_id)** — the project being a control-plane scoping only — so a
+**`branch_id`** alone — globally unique, the storage layer's own id — with the project a control-plane scoping column, so a
 branch cannot be named, resolved, or attached to outside its owning project. This scoping
 is structural: every API and internal interface that touches a branch takes the project as
 part of the key, so cross-project branch use is unrepresentable, not merely forbidden.
@@ -227,12 +227,13 @@ Exactly one of each runs per placement group (§1):
 - **amp-controller** — the control plane this document describes. The deployment
   boundary is one placement group, one controller (§1); it owns the lifecycle of
   everything below it and exposes the API (§3) that an agent layer (§12) will consume.
-- **storage-layer registry** — the branch and endpoint registries. (Generation
-  fencing is not its job: the pageserver claims its own generation from
-  `amp_storage.branch_state`. The safekeeper is endpoint-owned and not registered
-  with it either.) amp-controller owns this **in-process** (§11.1) in a dedicated
-  `amp_registry` schema — never amp-controller's product state store, never exposed to
-  users. See [`sc-integration.md`](sc-integration.md).
+- **storage-layer control surface** — branch and endpoint bookkeeping in the flat
+  rendering the storage layer uses. (Generation fencing is not its job: the
+  pageserver claims its own generation from `amp_storage.branch_state`. The
+  safekeeper is endpoint-owned and not registered with it either.) amp-controller
+  owns this **in-process** (§11.1), and it reads and writes the *same* `branch` and
+  `endpoint` tables the product API does — there is no separate registry to drift
+  from. See [`sc-integration.md`](sc-integration.md).
 - **endpoint_storage** — YB Amp's small standalone store for endpoint-scoped scratch
   data (LFC prewarm/offload state today). Also a managed service (§11.5); its contents
   are performance state, not correctness state.
@@ -528,9 +529,9 @@ CREATE TABLE task_step (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX task_step_by_task ON task_step (task_id);  -- "the steps of this task"
+CREATE INDEX task_steps_by_task ON task_step (task_id);  -- "the steps of this task"
 -- the claim/resume query only ever scans unfinished tasks
-CREATE INDEX task_runnable ON task (status) WHERE status IN ('pending', 'running');
+CREATE INDEX tasks_runnable ON task (status) WHERE status IN ('pending', 'running');
 ```
 
 ### 8.2 Ownership and recovery
@@ -675,7 +676,7 @@ admin users skip both grants; a pool's owner needs no share for that pool
   projects can't collide with or probe each other's names.
 - **branch** — the PG cluster's data; a branch's `branch_id` **is** the storage layer's
   flat `BranchId` verbatim (§4.3), keyed in the controller by the composite
-  **(project_id, branch_id)** — the project being a control-plane scoping only;
+  **`branch_id`** alone, with the project a control-plane scoping column;
   plus name (unique within its project), an `is_default` flag
   (exactly one default branch per project, created with the project, §6; the rest are
   forks), fork ancestry (parent branch + fork point), and lifecycle state.
@@ -710,7 +711,7 @@ in API-layer validation (full DDL lives with the code and its migrations):
    binding, fork parent — is a composite foreign key carrying `project_id`, so
    cross-project branch use (including cross-project forks) is unrepresentable.
 2. **Single writer per PG cluster.** A partial unique index —
-   `UNIQUE (project_id, branch_id) WHERE role = 'read_write'` — so two write
+   `UNIQUE (branch_id) WHERE role = 'read_write'` — so two write
    endpoints cannot exist no matter what code path tries.
 3. **One default branch per project.** A partial unique index on `branch` —
    `UNIQUE (project_id) WHERE is_default` — so a project cannot acquire a second default
@@ -735,24 +736,41 @@ external dependency (principle 2).
 ### 11.1 The storage-layer control surface
 
 The storage-layer control functions live directly in amp-controller (Go), not in
-a separate binary: the branch and endpoint registries, and provisioning of the
-whole `yb_storage` DB (its `amp_storage` and `amp_registry` schemas) via the
-controller's golang-migrate migrations. Generation fencing is not among them —
+a separate binary: branch and endpoint bookkeeping, and provisioning of the whole
+`yb_storage` DB (its `amp_registry`, `controller`, and `amp_storage` schemas) via
+the controller's golang-migrate migrations. Generation fencing is not among them —
 the pageserver claims its own generation from `amp_storage.branch_state`.
 
-**Decision: own the storage-layer registry in-process — never
-amp-controller's product state store, and never exposed to users.** The registry
-state lives in a dedicated `amp_registry` schema, separate from the product model in
-the `controller` schema (§10).
+**Decision: the storage layer's view is a RENDERING of the product model, not a
+registry of its own.** There is exactly one `branch` table and one `endpoint`
+table, in `amp_registry` (§10), and both surfaces read and write those same rows:
+
+| | product API | storage-layer control surface |
+|---|---|---|
+| route | `/api/v1/...` | `/control/v1/projects/{project_id}/...` |
+| branch key | `(project_id uuid, branch_id uuid)` | flat 32-lowercase-hex `branch_id` |
+| endpoint key | `id uuid` | caller-chosen handle in `endpoint.name` |
+
+The two renderings are the same 128-bit values (`hex32` is lossless and total in
+both directions), so there is nothing to synchronize and nothing that can drift.
+This reverses an earlier decision to keep a separate flat registry in its own
+schema: the duplication bought no isolation and cost correctness — a branch
+deleted through `/api/v1` never tombstoned its registry twin, so it stayed live on
+`GET /control/v1/branches` forever and inflated the branch gauge (#467 step 2).
+
+Because the rows are the control plane's own, the storage-layer surface is
+**project-scoped**: `yb_amp_local` provisions a user, a storage pool, and a project
+through `/api/v1` at startup and passes the project id on every `/control/v1`
+call, so a launcher branch is an ordinary branch the product API can list.
 
 **How it is served.** amp-controller serves the pod-facing surface —
-`/control/v1/...` (branch and endpoint registries) and `/ready` — on its API
-listener, alongside the versioned `/api/v1` product API.
-The implementation is `controller/internal/registry` (the store over the
-`amp_registry` schema + the HTTP handlers). Endpoint pods and the `yb_amp_local`
-dev harness drive it; the controller's own task framework records pending-init
-recipes through the same in-process store, not over HTTP. There is no separate
-control-plane binary and no subprocess supervision.
+`/control/v1/projects/{project_id}/...` and `/ready` — on its API listener,
+alongside the versioned `/api/v1` product API. The implementation is
+`controller/internal/registry` (the store over the shared branch/endpoint tables +
+the HTTP handlers). The `yb_amp_local` dev harness and the integration suite drive
+it; the controller's own task framework seeds branch state through the same
+in-process store, not over HTTP. There is no separate control-plane binary and no
+subprocess supervision.
 
 ### 11.2 What is implemented, what is not
 
@@ -762,9 +780,9 @@ the upstream multi-tenant machinery is dropped.
 | API surface | What it does | amp posture |
 |---|---|---|
 | ~~Safekeeper registry~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly | **Removed** |
-| Branch bookkeeping (`/control/v1/branch/*`) | Branch register/drop, branch-name mappings, pending-init recipes | **Kept** |
+| Branch bookkeeping (`/control/v1/projects/{id}/branch/*`) | Branch declare/drop, branch-name mappings, branch-state seeding — all against the shared `branch` table | **Kept** |
 | ~~Generation authority~~ | Removed: the pageserver claims its own generation from `amp_storage.branch_state` |
-| Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows for `yb_amp_local` | **Kept** (for the launcher) |
+| Compute-endpoint records (`/control/v1/projects/{id}/endpoint*`) | Launcher endpoint rows in the shared `endpoint` table (handle in `name`, launcher config in `spec`) | **Kept** (for the launcher) |
 | ~~Heartbeat/availability, scheduler, tenant placement/sharding, time travel, pageserver passthrough, timeline imports, metadata health~~ | Upstream multi-tenant machinery | **Dropped** — dead weight in the per-branch topology |
 
 | API surface | What it does | Used by yb-amp today | amp-controller posture |
@@ -773,7 +791,7 @@ the upstream multi-tenant machinery is dropped.
 | ~~Safekeeper registry (`/control/v1/safekeeper*`)~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly, so the controller never contacts a safekeeper | No longer exists | **Removed** |
 | Branch bookkeeping | Branch create/register/delete, branch-name mappings | Yes | **Reuse** |
 | ~~Generation debug ops~~ | Issue/inspect generations | No — the pageserver claims its own | **Removed** |
-| Compute-endpoint registry (`/control/v1/endpoint*`) | Opaque-spec endpoint rows | Yes — built as a shim for `yb_amp_local` | **Not reused** — superseded by amp-controller's endpoint records (§10.1); an opaque spec cannot carry the schema-enforced invariants of §10.2 |
+| Compute-endpoint registry (`/control/v1/projects/{id}/endpoint*`) | Launcher endpoint rows | Yes — the launcher's own records | **Folded in** — these are now rows in amp-controller's endpoint table (§10.1), carrying their opaque launcher config in `spec`, so they are subject to the schema-enforced invariants of §10.2 (notably `endpoints_one_writer_per_branch`) instead of sitting outside them |
 | Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-branch topology |
 
 ### 11.3 Invariants
@@ -782,10 +800,18 @@ the upstream multi-tenant machinery is dropped.
   amp-controller is the only mutation driver and the only reconciler. The
   registry is bookkeeping: there is no heartbeat-driven state machine and no
   scheduler/placement loop (both dropped).
-- **Product records stay in the `controller` schema.** Tenancy, PG clusters,
-  endpoints, and tasks live in amp-controller's own `controller` schema (§10). The
-  `amp_registry` schema holds only storage-layer bookkeeping: generations, node rows,
-  branch rows.
+- **One row per branch, one row per endpoint.** Tenancy, PG clusters, branches,
+  and endpoints live in `amp_registry` (§10) and are reached by both surfaces; the
+  write-ahead task log lives in `controller`, and the data plane in `amp_storage`.
+  There is no second copy of a branch anywhere — the storage layer's flat view is a
+  projection (`replace(branch_id::text, '-', '')`), not a table.
+- **Dropped branches are tombstoned, not deleted.** `branch.dropped_at` is stamped
+  and the row stays: a branch id is never reused, and its pages and WAL in
+  `amp_storage` outlive the drop (left for a later GC pass, #36). Every "is this
+  live?" reader filters `dropped_at IS NULL`, and the name/default uniqueness
+  indexes are partial on it so a drop frees the name. Projects are tombstoned for
+  the same reason — the branch → project FK is RESTRICT, so a project whose
+  branches survive as tombstones could never be deleted.
 
 Generations remain load-bearing in our topology: replacement is the recovery
 primitive (§5.3), so an old and a new pageserver for the same branch can

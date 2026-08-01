@@ -18,7 +18,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Assert one_writer_per_branch: a second read_write endpoint on the same branch must fail to create, and the first keeps serving reads+writes intact.",
+		Description: "Assert endpoints_one_writer_per_branch: a second read_write endpoint on the same branch must fail to create, and the first keeps serving reads+writes intact.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpSingleWriter,
 	})
@@ -59,7 +59,7 @@ func singleWriterSteps(ctx context.Context, cl ampCtl, proj ampProject, connect 
 	// One writer per branch: the second read_write create must fail (no retry —
 	// a retry would mask the guardrail).
 	if _, err := cl.CreateEndpointAndWait(ctx, proj.poolID, proj.projID, proj.branchID, controller.CreateEndpointRequest{Role: roleReadWrite}); err == nil {
-		return fmt.Errorf("creating a second read_write endpoint on branch %s succeeded, want it rejected (the one_writer_per_branch guardrail must reject a second writer)", proj.branchID)
+		return fmt.Errorf("creating a second read_write endpoint on branch %s succeeded, want it rejected (the endpoints_one_writer_per_branch guardrail must reject a second writer)", proj.branchID)
 	}
 
 	// The first endpoint still serves reads and writes; the marker is intact.

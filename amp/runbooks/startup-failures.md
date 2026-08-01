@@ -87,9 +87,11 @@ Fix by adding each missing key and re-running init. After a successful init, the
 `.yb_amp/config` may **drop the `[[pageservers]]` stanza** when the PS is off-box / self-registering —
 that's expected, not a failure.
 
-## B. SC migration: "no schema has been selected to create in"
+## B. Migration: "no schema has been selected to create in"
 A freshly created backing DB has no `amp_registry` schema, and the controller's `search_path` points
-at it. Create it before starting the SC:
+at it. `db.Migrate` creates it (on a single pinned connection, so YB's per-backend
+catalog cache cannot hide it from the next statement), but if you are driving
+`psql` by hand, create it first:
 ```bash
 PGPASSWORD="$YB_STORAGE_PASSWORD" $PSQL \
   "host=$YB_HOST port=$YB_PORT user=yugabyte dbname=$YB_DB sslmode=require" \

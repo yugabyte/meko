@@ -1,4 +1,4 @@
--- 0002: provision the compute-facing (data-plane) schema of the shared
+-- 0003: provision the compute-facing (data-plane) schema of the shared
 -- `yb_storage` database: `amp_storage`, holding the blobs table + its enum, the
 -- page-store tables, the WAL mirror, and the per-branch state row shared by the
 -- pageserver and the safekeeper.
@@ -9,10 +9,11 @@
 -- "amp_storage.wals") and bound immediately at daemon startup — they never create
 -- their own schema. So this migration must run before those daemons start.
 --
--- The controller's own registry (generation authority + node/branch/endpoint
--- records) lives in the `amp_registry` schema, provisioned by 0003. Every
--- statement is IF-NOT-EXISTS so the migration is idempotent. Objects are
--- schema-qualified (the migrator's search_path is `controller`).
+-- The write-ahead task log lives in the `controller` schema (0001) and the
+-- control plane's resource model — users, storage pools, projects, branches,
+-- endpoints — in `amp_registry` (0002). Every statement here is IF-NOT-EXISTS so
+-- the migration is idempotent. Objects are schema-qualified (the migrator's
+-- search_path is `amp_registry`).
 
 CREATE SCHEMA IF NOT EXISTS amp_storage;
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -196,8 +197,9 @@ func endpointStorageInit(env *config.LocalEnv, conf *config.EndpointStorageConf)
 // --- controller ---
 
 // startController provisions the external YB database, spawns the controller
-// under controller_<id>/, and waits for /ready. Mirrors the external-YB path
-// of Rust `Controller::start`.
+// under controller_<id>/, waits for /ready, and provisions the launcher's
+// resource ladder. Mirrors the external-YB path of Rust `Controller::start`,
+// plus the ladder step the unified branch/endpoint tables require.
 func startController(ctx context.Context, env *config.LocalEnv, instanceID uint8, timeout time.Duration) error {
 	instanceDir := filepath.Join(env.BaseDataDir, fmt.Sprintf("controller_%d", instanceID))
 	if err := os.MkdirAll(instanceDir, 0o755); err != nil {
@@ -222,11 +224,13 @@ func startController(ctx context.Context, env *config.LocalEnv, instanceID uint8
 		return err
 	}
 	args := []string{"--dev", "--database-url", dbURL, "--listen", listen}
+	// /ready is the one storage-layer route that is not project-scoped, so the
+	// readiness probe works before the ladder exists (uuid.Nil is never used).
 	statusCheck := func() error {
-		return client.NewController(listen, httpClient()).Ready(context.Background())
+		return client.NewController(listen, uuid.Nil, httpClient()).Ready(context.Background())
 	}
 	fmt.Printf("Starting controller at http://%s\n", listen)
-	return proc.StartProcess(
+	if err := proc.StartProcess(
 		"controller",
 		instanceDir,
 		bin,
@@ -235,7 +239,22 @@ func startController(ctx context.Context, env *config.LocalEnv, instanceID uint8
 		proc.PidCreate,
 		statusCheck,
 		timeout,
-	)
+	); err != nil {
+		return err
+	}
+
+	// The branch and endpoint tables are the control plane's own and are
+	// project-scoped, so the launcher needs a project before it can declare a
+	// branch. Provision it now that the controller answers, while we are the only
+	// thing running.
+	mutated, err := EnsureLadder(ctx, env)
+	if err != nil {
+		return fmt.Errorf("provision the launcher's control-plane project: %w", err)
+	}
+	if mutated {
+		persistLadder(env)
+	}
+	return nil
 }
 
 // stopController signals the controller instance to stop.

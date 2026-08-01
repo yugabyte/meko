@@ -309,8 +309,9 @@ func (e stringError) Error() string { return string(e) }
 // --- fakeRecipeStore: an in-memory task.RecipeStore -------------------------
 
 type recordedRecipe struct {
-	branchID string
-	recipe   BranchRecipe
+	projectID uuid.UUID
+	branchID  string
+	recipe    BranchRecipe
 }
 
 type fakeRecipeStore struct {
@@ -321,13 +322,13 @@ type fakeRecipeStore struct {
 
 func newFakeRecipeStore() *fakeRecipeStore { return &fakeRecipeStore{} }
 
-func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, branchID string, r BranchRecipe) error {
+func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, projectID uuid.UUID, branchID string, r BranchRecipe) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.errRecord != nil {
 		return f.errRecord
 	}
-	f.recorded = append(f.recorded, recordedRecipe{branchID: branchID, recipe: r})
+	f.recorded = append(f.recorded, recordedRecipe{projectID: projectID, branchID: branchID, recipe: r})
 	return nil
 }
 

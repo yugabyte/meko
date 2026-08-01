@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"reflect"
 	"testing"
@@ -18,7 +17,7 @@ import (
 // state end-to-end against a real Postgres/YSQL database: the opt-in union
 // (AddBranchExtensions), the durable read (BranchExtensions), and — the point of
 // the review ask — that a FORK inherits its parent's opted-in set. The set lives
-// on amp_registry.branches (keyed by the 32-hex storage branch id), and fork
+// on amp_registry.branches — the one branch table both surfaces share — and fork
 // inheritance is a snapshot RecordBranch copies from the ancestor at create time.
 //
 // This is the "verify branching" integration coverage for extensions that
@@ -27,46 +26,49 @@ import (
 // mounted volume is covered by the GKE smoke test (deploy/smoke-test.sh,
 // SMOKE_EXTENSIONS=1).
 //
-// Exercises the real PgBackend + registry.Store SQL. It provisions an isolated
-// schema per run and drops it afterwards. Set AMP_TEST_DATABASE_URL to run;
-// skipped otherwise so `go test ./...` stays green without a database.
+// Exercises the real PgBackend + registry.Store SQL against a throwaway DATABASE
+// (not a schema: the migrations create two fixed schemas, so relocating one
+// isolates nothing). Set AMP_TEST_DATABASE_URL to run; skipped otherwise so
+// `go test ./...` stays green without a database.
 func TestPgBranchExtensionsInheritance(t *testing.T) {
 	url := os.Getenv("AMP_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("set AMP_TEST_DATABASE_URL (e.g. postgres://yugabyte@host:5433/yb_storage?sslmode=disable) to run")
 	}
+	// Provisioning gets a budget of its own: ScratchMigrated queues behind a lock
+	// that serializes DDL across test packages, which says nothing about this
+	// test's own latency.
+	const schema = "controller" // the --db-schema default
+	provCtx, provCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer provCancel()
+	scratchURL, drop, err := db.ScratchMigrated(provCtx, url, "amp_test_core_extensions", schema)
+	if err != nil {
+		t.Fatalf("provision scratch database: %v", err)
+	}
+	t.Cleanup(drop)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	schema := fmt.Sprintf("amptest_%s", uuid.New().String()[:8])
-	if err := db.Migrate(ctx, url, schema); err != nil {
-		t.Fatalf("migrate schema %s: %v", schema, err)
-	}
-	pool, err := db.Connect(ctx, url, schema)
+	pool, err := db.Connect(ctx, scratchURL, schema)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	t.Cleanup(func() {
-		if _, err := pool.Exec(context.Background(), fmt.Sprintf("DROP SCHEMA %s CASCADE", schema)); err != nil {
-			t.Logf("cleanup: drop schema %s: %v", schema, err)
-		}
-		pool.Close()
-	})
+	t.Cleanup(pool.Close)
 
 	store := registry.NewStore(pool)
 	b := NewPgBackend(pool)
 
-	// A branch's storage-registry row is created by RecordBranch — the shared
-	// choke point both the controller and yb_amp_local reach. projectID is
-	// irrelevant to the extension set (it lives on the flat storage record), so
-	// we pass a fixed one throughout.
-	projectID := uuid.New()
+	// A branch's row is created by RecordBranch — the shared choke point both the
+	// controller and yb_amp_local reach. Branches are project-scoped now, so the
+	// project has to exist: the branch -> project FK is what enforces it.
+	projectID := seedExtensionsProject(t, ctx, pool)
 	rootID := uuid.New()
-	rootHex := storageBranchID(rootID)
+	rootHex := registry.FormatBranchID(rootID)
 
 	recordBranch := func(id uuid.UUID, name string, ancestorHex *string, startLSN string) {
 		t.Helper()
-		if err := store.RecordBranch(ctx, storageBranchID(id), registry.BranchCreateRecord{
+		if err := store.RecordBranch(ctx, projectID, registry.FormatBranchID(id), registry.BranchCreateRecord{
 			BranchName:       name,
 			PgVersion:        18,
 			AncestorBranchID: ancestorHex,
@@ -129,7 +131,7 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	// --- a grandchild forked AFTER the child's extra opt-in inherits the fuller
 	// set; a second fork off the (still single-extension) root does not. ---
 	grandID := uuid.New()
-	childHex := storageBranchID(childID)
+	childHex := registry.FormatBranchID(childID)
 	recordBranch(grandID, "b2", &childHex, "0/1C90")
 	if got := mustExts(grandID); !reflect.DeepEqual(got, []string{"pgvector", "rum"}) {
 		t.Fatalf("grandchild extensions = %v, want inherited [pgvector rum]", got)
@@ -152,4 +154,28 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	if got := mustExts(absent); len(got) != 0 {
 		t.Fatalf("absent branch still absent = %v, want none", got)
 	}
+}
+
+// seedExtensionsProject inserts the user -> pool -> project ladder a branch needs
+// and returns the project id. Names carry the pool id because storage_pool names
+// are unique cluster-wide and this database may be reused across tests.
+func seedExtensionsProject(t *testing.T, ctx context.Context, pool *db.Pool) uuid.UUID {
+	t.Helper()
+	owner, poolID, projectID := uuid.New(), uuid.New(), uuid.New()
+	name := "core-extensions-test-" + poolID.String()
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO amp_registry.users (id) VALUES ($1::uuid)`, []any{owner.String()}},
+		{`INSERT INTO amp_registry.storage_pools (id, name, owner_user_id) VALUES ($1::uuid, $2, $3::uuid)`,
+			[]any{poolID.String(), name, owner.String()}},
+		{`INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)`,
+			[]any{projectID.String(), poolID.String(), name}},
+	} {
+		if _, err := pool.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("seed %q: %v", stmt.sql, err)
+		}
+	}
+	return projectID
 }

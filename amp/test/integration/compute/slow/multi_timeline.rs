@@ -16,11 +16,14 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let a_port = c.compute_port() + 138;
     let b_port = c.compute_port() + 148;
     step("Create two independent branches (branch A, branch B)");
-    let ba = c.branch_create()?;
+    // Named: the bare branch_create() helper is the *shared* `main` branch, and a
+    // branch name is unique among a project's live branches — two anonymous ones
+    // would collide with it and with each other.
+    let ba = c.branch_create_root_named("mt_a")?;
     if ba.is_empty() {
         bail!("branch A create failed");
     }
-    let bb = c.branch_create()?;
+    let bb = c.branch_create_root_named("mt_b")?;
     if bb.is_empty() {
         bail!("branch B create failed");
     }
@@ -32,12 +35,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Provision + start an endpoint on each (one co-located PS+SK pair per branch)");
     c.yb(&[
-        "endpoint", "create", "ep_a", "--branch-id", &ba, "--branch-name", "main",
+        "endpoint", "create", "ep_a", "--branch-id", &ba, "--branch-name", "mt_a",
         "--pg-version", "18", "--pg-port", &a_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_a"])?;
     c.yb(&[
-        "endpoint", "create", "ep_b", "--branch-id", &bb, "--branch-name", "main",
+        "endpoint", "create", "ep_b", "--branch-id", &bb, "--branch-name", "mt_b",
         "--pg-version", "18", "--pg-port", &b_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_b"])?;

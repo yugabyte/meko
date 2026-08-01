@@ -43,14 +43,17 @@ the result — it does not run `initdb` itself.
    `parent_branch_id = NULL` for the default branch). The default branch is always
    named `main`, independent of the project name; forks off it choose their own
    names (unique within the project).
-3. Records the same creation record in the controller, keyed by the storage-layer
-   `branch_id` (`POST /control/v1/branch/{branch_id}/record` with
-   `{ branch_name, pg_version, ancestor_branch_id = NULL, start_lsn = 0 }`).
+3. Seeds the branch's `amp_storage.branch_state` row — the per-branch state a
+   pageserver reads at attach to decide bootstrap vs fork — through the
+   in-process store (the same code path `POST
+   /control/v1/projects/{project_id}/branch/{branch_id}/record` serves).
 4. Returns the project, with its embedded `default_branch`.
 
-Nothing is materialized, no `initdb` runs, and no compute is started. The record
-now lives in **both** cAmp's database (`branch`) and the controller (its
-`amp_registry.branches` row, listed flat via `GET /control/v1/branches`).
+Nothing is materialized, no `initdb` runs, and no compute is started. There is one
+branch record, not two: the `branch` row written in step 2 *is* what the
+storage-layer surface lists via `GET /control/v1/projects/{id}/branches`, rendered
+with its id flattened to 32 hex digits. The only other row is the data-plane
+`amp_storage.branch_state` seed from step 3.
 
 ## Step 2 — Materialize at the first endpoint
 
@@ -132,7 +135,7 @@ writes are synchronous today and move onto the task framework under #113.
 
 | `yb_amp_local` | Amp Controller (cAmp) |
 |---|---|
-| `record_branch` (per branch) | `create-project` → `project` + default `branch` (cAmp DB) **and** the controller's branch record, keyed by `branch_id` (`POST /control/v1/branch/{branch_id}/record`). There is no separate tenant-create step anymore — a root branch is just a record with a NULL ancestor. |
+| `record_branch` (per branch) | `create-project` → `project` + default `branch` **and** that branch's `amp_storage.branch_state` seed, keyed by the flat `branch_id` (the same effect as `POST /control/v1/projects/{project_id}/branch/{branch_id}/record`). There is no separate tenant-create step anymore — a root branch is just a branch row with a NULL parent. |
 | control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |
 | control plane inits PS + `register_and_attach` | the **endpoint** starts its pageserver, which claims its own generation |
 | PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb`, driven by the seeded `branch_state` row |
@@ -150,7 +153,7 @@ writes are synchronous today and move onto the task framework under #113.
 - **Generation** is claimed by the pageserver itself at startup; it is never
   pinned and never issued by the controller.
 - **Controller calls used:** record a branch, keyed by `branch_id`
-  (`POST /control/v1/branch/{branch_id}/record`, by cAmp). (No node or safekeeper
+  (`POST /control/v1/projects/{project_id}/branch/{branch_id}/record`, by cAmp). (No node or safekeeper
   register — both are endpoint-owned; see #171.)
 - **Direction (planned).** The SC is being integrated into amp-controller and the
   create flow is moving to *create-then-configure*: endpoints created unassigned

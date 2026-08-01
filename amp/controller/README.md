@@ -87,8 +87,14 @@ controller serve   --database-url postgres://yugabyte@127.0.0.1:5433/amp_control
             --listen :8080
 ```
 
-Control-plane tables live in their own schema (`--db-schema`, default `controller`),
-isolated from project data. Configuration is read from flags or the matching
+The control-plane resource model — users, storage pools, projects, branches,
+endpoints — lives in its own schema (`--db-schema`, default `amp_registry`),
+isolated from project data. Two companion schemas are fixed rather than
+configurable: `controller` holds the write-ahead task log, and `amp_storage`
+holds the data plane. There is exactly one branch table and one endpoint table,
+shared by the product API (`/api/v1`, by uuid) and the storage-layer control
+surface (`/control/v1`, by flat 32-hex branch id), so the two views cannot
+drift. Configuration is read from flags or the matching
 environment variables (`AMP_DATABASE_URL`, `AMP_LISTEN`, `AMP_DB_SCHEMA`,
 `AMP_LOG_LEVEL`, `AMP_LOG_FORMAT`, `AMP_TASK_POLL_INTERVAL`, `AMP_TASK_LEASE_TTL`,
 `AMP_SIGNING_KEY_PATH`); flags win.

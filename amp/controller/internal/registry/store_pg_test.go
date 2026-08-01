@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -23,45 +24,20 @@ import (
 // Needs YugabyteDB (the amp_storage migration uses YB-specific HASH DDL),
 // so it skips unless AMP_TEST_DATABASE_URL points at one.
 func TestPgRecordBranchForkValidation(t *testing.T) {
-	url := os.Getenv("AMP_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("AMP_TEST_DATABASE_URL not set; this test needs a YugabyteDB")
-	}
 	ctx := t.Context()
-	if err := db.Migrate(ctx, url, "registry_store_test"); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	pool, err := db.Connect(ctx, url, "registry_store_test")
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := migratedPool(t)
 	s := NewStore(pool)
+
+	// Branches are rows in the control plane's resource model, so they need a
+	// project to hang off — there is no separate flat registry to write into.
+	projectID := seedProject(t, pool)
 
 	newID := func() string { return strings.ReplaceAll(uuid.NewString(), "-", "") }
 	parent := newID()
-	var children []string
-	child := func() string {
-		id := newID()
-		children = append(children, id)
-		return id
-	}
-	t.Cleanup(func() {
-		cleanupCtx := context.WithoutCancel(ctx)
-		ids := append([]string{parent}, children...)
-		for _, q := range []string{
-			`DELETE FROM amp_registry.branches WHERE branch_id = ANY($1)`,
-			`DELETE FROM amp_storage.branch_state WHERE branch_id = ANY($1)`,
-		} {
-			if _, err := pool.Exec(cleanupCtx, q, ids); err != nil {
-				t.Errorf("cleanup %q: %v", q, err)
-			}
-		}
-	})
 
 	// A root branch, with a GC cutoff as the pageserver would have
 	// published it: 0/64 = 100.
-	if err := s.RecordBranch(ctx, parent, BranchCreateRecord{
+	if err := s.RecordBranch(ctx, projectID, parent, BranchCreateRecord{
 		BranchName: "fork-validation-parent", PgVersion: 18, StartLSN: "0/0",
 	}); err != nil {
 		t.Fatalf("record parent: %v", err)
@@ -72,17 +48,33 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 		t.Fatalf("seed cutoff: %v", err)
 	}
 
-	fork := func(id, lsn string) error {
-		return s.RecordBranch(ctx, id, BranchCreateRecord{
-			BranchName: "fork-validation-child", PgVersion: 18,
+	// Each fork needs its own name: branch names are unique among a project's live
+	// branches (branches_name_per_project), which the standalone registry did not
+	// enforce.
+	fork := func(id, name, lsn string) error {
+		return s.RecordBranch(ctx, projectID, id, BranchCreateRecord{
+			BranchName: name, PgVersion: 18,
 			AncestorBranchID: &parent, StartLSN: lsn,
 		})
 	}
-	rowCount := func(table, id string) int {
+	stateRows := func(id string) int {
 		var n int
 		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM `+table+` WHERE branch_id = $1`, id).Scan(&n); err != nil {
-			t.Fatalf("count %s: %v", table, err)
+			`SELECT count(*) FROM amp_storage.branch_state WHERE branch_id = $1`, id).Scan(&n); err != nil {
+			t.Fatalf("count branch_state: %v", err)
+		}
+		return n
+	}
+	branchRows := func(id string) int {
+		parsed, err := ParseBranchID(id)
+		if err != nil {
+			t.Fatalf("parse branch id %s: %v", id, err)
+		}
+		var n int
+		if err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM amp_registry.branches WHERE project_id = $1::uuid AND branch_id = $2::uuid`,
+			projectID.String(), parsed.String()).Scan(&n); err != nil {
+			t.Fatalf("count branch: %v", err)
 		}
 		return n
 	}
@@ -90,24 +82,29 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 	// Below the cutoff (0/50 = 80 < 100): rejected as invalid (permanent
 	// — the cutoff is monotone, a retry cannot succeed), and the whole
 	// registration rolls back — neither row lands.
-	below := child()
-	if err := fork(below, "0/50"); !errors.Is(err, ErrInvalid) {
+	below := newID()
+	if err := fork(below, "fork-validation-below", "0/50"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("fork below cutoff: want ErrInvalid, got %v", err)
 	}
-	if n := rowCount("amp_storage.branch_state", below); n != 0 {
+	if n := stateRows(below); n != 0 {
 		t.Fatalf("rejected fork left a branch_state row")
 	}
-	if n := rowCount("amp_registry.branches", below); n != 0 {
-		t.Fatalf("rejected fork left a branches row")
+	// The branch row is the one the product API serves, so a rejected fork must not
+	// leave it behind either — that is the atomicity the single table buys.
+	if n := branchRows(below); n != 0 {
+		t.Fatalf("rejected fork left a branch row")
 	}
 
 	// At the cutoff (0/64 = 100): registered.
-	at := child()
-	if err := fork(at, "0/64"); err != nil {
+	at := newID()
+	if err := fork(at, "fork-validation-at", "0/64"); err != nil {
 		t.Fatalf("fork at cutoff: %v", err)
 	}
-	if n := rowCount("amp_storage.branch_state", at); n != 1 {
+	if n := stateRows(at); n != 1 {
 		t.Fatalf("accepted fork missing its branch_state row")
+	}
+	if n := branchRows(at); n != 1 {
+		t.Fatalf("accepted fork missing its branch row")
 	}
 
 	// Re-record after the cutoff advanced past the fork point: still a
@@ -118,17 +115,109 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 		parent); err != nil {
 		t.Fatalf("advance cutoff: %v", err)
 	}
-	if err := fork(at, "0/64"); err != nil {
+	if err := fork(at, "fork-validation-at", "0/64"); err != nil {
 		t.Fatalf("idempotent re-record must not re-validate: %v", err)
 	}
 
 	// A missing ancestor row: not found.
 	missing := newID()
-	orphan := child()
-	if err := s.RecordBranch(ctx, orphan, BranchCreateRecord{
+	orphan := newID()
+	if err := s.RecordBranch(ctx, projectID, orphan, BranchCreateRecord{
 		BranchName: "fork-validation-orphan", PgVersion: 18,
 		AncestorBranchID: &missing, StartLSN: "1/0",
 	}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("fork from missing ancestor: want ErrNotFound, got %v", err)
 	}
+}
+
+// TestPgRecordBranchUnknownProject pins that this surface cannot conjure a branch
+// outside the resource model: with one shared branch table, the project FK is what
+// stops a launcher typo from creating an unreachable row.
+func TestPgRecordBranchUnknownProject(t *testing.T) {
+	ctx := t.Context()
+	pool := migratedPool(t)
+
+	err := NewStore(pool).RecordBranch(ctx, uuid.New(), strings.ReplaceAll(uuid.NewString(), "-", ""),
+		BranchCreateRecord{BranchName: "orphan", PgVersion: 18, StartLSN: "0/0"})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("record into an unknown project: want ErrNotFound, got %v", err)
+	}
+}
+
+// seedProject inserts the user -> pool -> project ladder a branch needs and
+// returns the project id.
+//
+// The names carry the pool's own id: every test in this package shares one
+// scratch database, and storage_pools.name is unique cluster-wide, so a fixed name
+// would make the second caller collide.
+func seedProject(t *testing.T, pool *db.Pool) uuid.UUID {
+	t.Helper()
+	ctx := t.Context()
+	owner, poolID, projectID := uuid.New(), uuid.New(), uuid.New()
+	name := "registry-store-test-" + poolID.String()
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO amp_registry.users (id) VALUES ($1::uuid)`, []any{owner.String()}},
+		{`INSERT INTO amp_registry.storage_pools (id, name, owner_user_id) VALUES ($1::uuid, $2, $3::uuid)`,
+			[]any{poolID.String(), name, owner.String()}},
+		{`INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)`,
+			[]any{projectID.String(), poolID.String(), name}},
+	} {
+		if _, err := pool.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("seed %q: %v", stmt.sql, err)
+		}
+	}
+	return projectID
+}
+
+// scratchURL is the throwaway database this package's Postgres-backed tests share,
+// provisioned once by TestMain. Empty when AMP_TEST_DATABASE_URL is unset, which
+// is what makes those tests skip.
+var scratchURL string
+
+// migrateSchema is the --db-schema default: the schema the migrator and the pool
+// point at. The branch and endpoint tables this store reads live in the fixed
+// db.ResourceSchema and are addressed schema-qualified.
+const migrateSchema = "controller"
+
+// TestMain provisions one throwaway DATABASE for the whole package and drops it
+// afterwards.
+//
+// A database rather than a schema because the migrations create two fixed schemas
+// — the resource model under --db-schema plus the always-`controller` task log —
+// so relocating one isolates nothing. Once per package rather than once per test
+// because YugabyteDB does not free a dropped keyspace's name synchronously, so a
+// drop-and-recreate between two tests in the same binary races itself.
+func TestMain(m *testing.M) {
+	url := os.Getenv("AMP_TEST_DATABASE_URL")
+	if url == "" {
+		os.Exit(m.Run())
+	}
+	ctx := context.Background()
+	u, drop, err := db.ScratchMigrated(ctx, url, "amp_test_registry_store", migrateSchema)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "provision scratch database: %v\n", err)
+		os.Exit(1)
+	}
+	scratchURL = u
+	code := m.Run()
+	drop()
+	os.Exit(code)
+}
+
+// migratedPool returns a pool over the package's migrated scratch database, or
+// skips the test when there is no database to talk to.
+func migratedPool(t *testing.T) *db.Pool {
+	t.Helper()
+	if scratchURL == "" {
+		t.Skip("AMP_TEST_DATABASE_URL not set; these tests need a YugabyteDB")
+	}
+	pool, err := db.Connect(t.Context(), scratchURL, migrateSchema)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
 }

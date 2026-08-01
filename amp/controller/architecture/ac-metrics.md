@@ -81,7 +81,7 @@ Plus the standard Go runtime (`go_*`) and process (`process_*`) collectors.
 
 The `registry_branches` gauge is **collected at scrape time**: a
 `prometheus.Collector` ([`internal/metrics/registry_stats.go`](../internal/metrics/registry_stats.go))
-runs `count(*)` over `amp_registry.branches` when `/metrics` is
+runs `count(*)` over the live (not tombstoned) rows of `amp_registry.branches` when `/metrics` is
 scraped, so there is no cached value to go stale and no background poller. If the
 count query fails it logs and emits nothing for that scrape rather than a wrong
 value. Everything else is recorded inline by the HTTP middleware and the task

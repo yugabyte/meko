@@ -31,21 +31,24 @@ type MemBackend struct {
 }
 
 // projectNameKey makes a project name unique within its pool (the schema's
-// UNIQUE (storage_pool_id, name)).
+// projects_name_per_pool).
 type projectNameKey struct {
 	poolID uuid.UUID
 	name   string
 }
 
 // branchNameKey makes a branch name unique within its project (the schema's
-// branch UNIQUE (project_id, name)): a project's default branch plus its
-// branches all share one name space.
+// branches_name_per_project): a project's default branch plus its branches all
+// share one name space.
 type branchNameKey struct {
 	projectID uuid.UUID
 	name      string
 }
 
-// branchKey identifies a branch (the schema's (project_id, branch_id) PK).
+// branchKey identifies a branch. The schema keys branches on `branch_id` alone
+// (it is the storage layer's globally-unique BranchId), but the project is
+// carried here too so the fake can answer project-scoped questions without a
+// second index.
 type branchKey struct {
 	projectID uuid.UUID
 	branchID  uuid.UUID
@@ -362,7 +365,7 @@ func (m *MemBackend) GetEndpoint(_ context.Context, poolID, projectID, branchID,
 		return Endpoint{}, ErrNotFound
 	}
 	ep, ok := m.endpoints[endpointID]
-	// Match PgBackend, which joins on (project_id, branch_id): the endpoint must
+	// Match PgBackend, which reaches the project through the branch: the endpoint must
 	// belong to this branch, not just share its branch id.
 	if !ok || ep.BranchID != branchID || ep.ProjectID != projectID {
 		return Endpoint{}, ErrNotFound
@@ -635,8 +638,19 @@ func (m *MemBackend) ChildBranchIDs(_ context.Context, projectID, branchID uuid.
 
 // DeleteBranch removes the (projectID, branchID) branch (idempotent; absent row
 // is a no-op), keeping m.branchNames and the single-writer m.writers slot
-// consistent. It mirrors PgBackend's self-FK RESTRICT: a still-referencing child
-// fork makes the delete an ErrConflict rather than a silent drop.
+// consistent. A still-referencing child fork makes the delete an ErrConflict
+// rather than a silent drop, matching PgBackend's explicit no-live-children
+// guard.
+//
+// PgBackend tombstones (`dropped_at`) where this drops the entry outright. That
+// is deliberate: through the Backend interface the two are indistinguishable —
+// every read filters tombstones, and the name a drop frees is freed here too
+// (branches_name_per_project is partial for exactly that reason) — so modeling the
+// column would add state without adding coverage. The one behaviour it does not
+// reproduce is re-Ensuring a dropped branch under its ORIGINAL id, which the real
+// backend converges to a still-dropped row and this would resurrect. Nothing does
+// that: the cascade never re-creates what it just retired, and ids are never
+// reused.
 func (m *MemBackend) DeleteBranch(_ context.Context, projectID, branchID uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -646,7 +660,15 @@ func (m *MemBackend) DeleteBranch(_ context.Context, projectID, branchID uuid.UU
 	}
 	for _, child := range m.branches {
 		if child.ProjectID == projectID && child.ParentBranchID != nil && *child.ParentBranchID == branchID {
-			return ErrConflict // a child fork still references this branch (RESTRICT)
+			return ErrConflict // a child fork still references this branch
+		}
+	}
+	// A still-present endpoint blocks the drop too, matching PgBackend's explicit
+	// guard: the caller must retire endpoints first, and an endpoint added since
+	// its enumeration has to fail the step so the replay retires it.
+	for _, e := range m.endpoints {
+		if e.ProjectID == projectID && e.BranchID == branchID {
+			return ErrConflict
 		}
 	}
 	delete(m.branches, branchID)
@@ -666,12 +688,11 @@ func (m *MemBackend) DeleteProject(_ context.Context, projectID uuid.UUID) error
 	if !ok {
 		return nil // tolerate absent
 	}
-	for id, e := range m.endpoints {
+	// Mirror PgBackend: a project with any live endpoint refuses the cascade, so
+	// an endpoint added since the step's enumeration replays instead of leaking.
+	for _, e := range m.endpoints {
 		if e.ProjectID == projectID {
-			if e.Role == RoleReadWrite {
-				delete(m.writers, branchKey{projectID: projectID, branchID: e.BranchID})
-			}
-			delete(m.endpoints, id)
+			return ErrConflict
 		}
 	}
 	for id, b := range m.branches {

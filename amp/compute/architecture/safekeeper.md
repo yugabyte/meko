@@ -40,7 +40,7 @@ documented in [`safekeeper-apis.md`](safekeeper-apis.md).
 
 All per-branch durable state lives in two tables of the shared `yb_storage`
 database, provisioned by
-`controller/migrations/0002_compute_storage.up.sql`:
+`controller/migrations/0003_compute_storage.up.sql`:
 
 ### Control file: `amp_storage.branch_state`
 

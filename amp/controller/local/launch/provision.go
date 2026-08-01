@@ -262,11 +262,10 @@ func provisionTimelineForEndpoint(ctx context.Context, env *config.LocalEnv, end
 	if env.PageserverConfForBranch(branchID) != nil {
 		return nil
 	}
-	base, err := controllerBase(env)
+	ctrl, err := controllerClient(env)
 	if err != nil {
 		return err
 	}
-	ctrl := client.NewController(base, httpClient())
 	branches, err := ctrl.ListBranches(ctx)
 	if err != nil {
 		return err

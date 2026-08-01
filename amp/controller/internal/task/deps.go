@@ -114,10 +114,10 @@ type StateStore interface {
 
 // BranchRecipe is the pending-init recipe a freshly-declared branch carries until
 // an endpoint materializes it (controller/architecture/controller-project-create.md).
-// It mirrors the controller's PendingTimelineInit without coupling the
-// task package to that client type; the adapter in ProductionRegistry bridges the
-// two. AncestorBranchID is "" for a project's default branch, set (with StartLSN)
-// for a branch off another; the ids it bridges are 32 lowercase hex digits.
+// It keeps the task package decoupled from the storage-layer store's types; the
+// adapter in cmd/controller bridges the two. AncestorBranchID is "" for a
+// project's default branch, set (with StartLSN) for a branch off another; the ids
+// it bridges are 32 lowercase hex digits.
 type BranchRecipe struct {
 	BranchName       string
 	PgVersion        int
@@ -125,14 +125,19 @@ type BranchRecipe struct {
 	StartLSN         string
 }
 
-// RecipeStore records a branch's creation record in the storage-layer registry
-// (controller-project-create.md). branchID is 32 lowercase hex digits (the
-// storage-layer BranchId the controller maps to — the storage layer is flat, so
-// the record is keyed by branch_id alone). It may be unavailable (no managed
-// controller), in which case the step no-ops with a warning — the branch then
-// lives only in the control DB's branch row.
+// RecipeStore seeds the storage-layer state a declared branch needs before any
+// pageserver can attach it (controller-project-create.md).
+//
+// projectID scopes the branch to its project: there is one branch table, shared
+// with the product API, so the write has to say which project's branch it means.
+// branchID is that branch's 32-lowercase-hex BranchId — the flat rendering the
+// storage layer addresses.
+//
+// It may be unavailable (no store wired), in which case the step no-ops with a
+// warning; the branch then exists in the control plane but has no
+// amp_storage.branch_state row, so nothing can materialize it.
 type RecipeStore interface {
-	RecordBranchRecipe(ctx context.Context, branchID string, r BranchRecipe) error
+	RecordBranchRecipe(ctx context.Context, projectID uuid.UUID, branchID string, r BranchRecipe) error
 }
 
 // Deps bundles the collaborators the production steps need. The Registry holds

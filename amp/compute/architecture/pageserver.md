@@ -122,7 +122,7 @@ The page store's tables live in the `amp_storage` schema inside `yb_storage`:
 `pages` (relation pages), `slru_pages` (SLRU blocks), `meta`
 (everything else), and `timeline_state` (one state row per branch).
 DDL is owned by the migration
-`controller/migrations/0002_compute_storage.up.sql`; the daemons
+`controller/migrations/0003_compute_storage.up.sql`; the daemons
 never create their own schema. Per-branch tuning is NOT in YB: the
 effective config comes from `pageserver.toml`. See
 [`yugabyte.md`](yugabyte.md) for the full DDL.
@@ -1169,7 +1169,7 @@ The compute opens libpq connections to the pageserver per backend
   `YbPageWriterConfig`, `TimelineInitConfig`, `scale_factor` helpers.
 - `compute/libs/utils/src/payload_codec.rs` — the tagged compression
   envelope for the `BYTEA` payload columns (see "Payload compression").
-- `controller/migrations/0002_compute_storage.up.sql` — the
+- `controller/migrations/0003_compute_storage.up.sql` — the
   authoritative DDL for the `amp_storage.*` tables.
 - [`pageserver-apis.md`](pageserver-apis.md) — HTTP/gRPC/libpq
   API inventory; [`pageserver-metrics.md`](pageserver-metrics.md)

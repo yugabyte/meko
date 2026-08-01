@@ -113,7 +113,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
     let reg = db::query_text_opt(
         &yb,
-        "SELECT branch_id FROM amp_registry.branches WHERE branch_name = 'gc_fork_doomed'",
+        "SELECT replace(branch_id::text, '-', '') FROM amp_registry.branches \
+         WHERE name = 'gc_fork_doomed' AND dropped_at IS NULL",
     )
     .await?;
     if reg.is_some() {

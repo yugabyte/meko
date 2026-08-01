@@ -12,23 +12,38 @@ schema it uses, and the HTTP surface it serves.
   COALESCE(current_generation, 0) + 1 RETURNING current_generation`). Keeping the
   counter in the same row as the writes it fences means there is no second copy to
   keep in step, and no round trip to issue one.
-- **Registries** — **branch** records + branch-name mappings, the **pending-init**
-  recipe (a branch declared but not yet materialized), and the compute **endpoint**
-  registry (`yb_amp_local`'s durable endpoint records).
+- **Branch and endpoint bookkeeping** — branch records + name mappings, seeding
+  the per-branch state a pageserver needs to attach, and the launcher's durable
+  endpoint records. Not a registry of its own: these are the control plane's own
+  `branch` and `endpoint` rows, read and written in the storage layer's rendering.
 - **Provisioning** — the whole `yb_storage` database. The controller's
   golang-migrate migrations create the whole `amp_storage` schema — blobs+enum,
   the page-store tables, the WAL mirror, and both per-branch state tables (the
   schema the compute daemons bind at startup — they create none of their own) —
-  plus the `amp_registry` schema below.
+  plus the control-plane schemas below.
 
 ## Schema
 
-State lives in the **`amp_registry` schema** of the shared `yb_storage` DB, provisioned
-by `controller/migrations/0003_registry.up.sql`. Four branch-keyed tables:
-`branches` (the branch's identity, creation record, and generation authority),
-`endpoints`. It is kept separate from the
-controller **product** model (`project`/`branch`/`endpoint` by UUID, in the
-`controller` schema) — the registry keys on the flat 32-hex `branch_id`.
+There is **one** `branch` table and **one** `endpoint` table, in the
+`amp_registry` schema of the shared `yb_storage` DB, provisioned by
+`controller/migrations/0002_resource_model.up.sql`. The product API and this surface are two
+renderings of those same rows, not two copies:
+
+| | product API | this surface |
+|---|---|---|
+| branch key | `(project_id uuid, branch_id uuid)` | flat 32-lowercase-hex `branch_id` |
+| endpoint key | `id uuid` | caller-chosen handle in `endpoint.name` |
+
+The hex form is `replace(branch_id::text, '-', '')` — the same 128 bits, so the
+translation is lossless and total and there is nothing to keep in step. A branch
+dropped through either surface is the same row with the same `dropped_at` stamp.
+
+Two companion schemas are fixed rather than configurable: `controller` holds the
+write-ahead task log, and `amp_storage` holds the data plane. `--db-schema`
+(default `amp_registry`) relocates only the resource model.
+
+Because the rows are project-scoped, so is this surface — see the routes below.
+`yb_amp_local` provisions its user/pool/project through `/api/v1` at startup.
 
 Dropped vs upstream: the heartbeat/availability loop, the scheduler, tenant
 placement/sharding, the `/v1` pageserver passthrough, timeline imports, and
@@ -42,11 +57,11 @@ versioned `/api/v1` product API, implemented in
 
 | Method + path | Purpose |
 |---|---|
-| `GET /ready` | readiness (DB reachable + migrations applied) |
-| `PUT /control/v1/branch/{id}/branch_name`, `PUT .../drop` | branch bookkeeping |
-| `GET /control/v1/timeline_branch_names` | branch-name listing |
-| `POST /control/v1/branch/{id}/record`, `GET /control/v1/branches` | branch creation records |
-| `POST/GET /control/v1/endpoint`, `DELETE /control/v1/endpoint/{id}` | endpoint registry |
+| `GET /ready` | readiness (DB reachable + migrations applied) — the one unscoped route, so it answers before a project exists |
+| `PUT /control/v1/projects/{p}/branch/{id}/branch_name`, `PUT .../drop` | branch rename / tombstone |
+| `GET /control/v1/projects/{p}/timeline_branch_names` | branch-name listing |
+| `POST /control/v1/projects/{p}/branch/{id}/record`, `GET /control/v1/projects/{p}/branches` | declare a branch + seed its `amp_storage.branch_state`; list live branches |
+| `POST/GET /control/v1/projects/{p}/endpoint`, `DELETE /control/v1/projects/{p}/endpoint/{id}` | launcher endpoint records |
 
 The wire shapes match the launcher client DTOs in `controller/local/client`. In
 dev/local the surface is unauthenticated
@@ -60,13 +75,16 @@ dev/local the surface is unauthenticated
   pageserver, branch register/drop, pending-init record/list/delete,
   endpoint create/list/delete. The integration harness (`test/integration/compute/`)
   exercises the same path.
-- **Endpoint pods** (Kubernetes/Docker deploy) reach the surface at the controller's
-  own URL (`AMP_DEPLOY_CONTROLLER_URL`) for branch bookkeeping. They do not ask it
-  for a generation — the pageserver claims its own.
-- **The controller's own task framework** records/clears pending-init recipes through
-  the same store **in-process** (not over HTTP) — the `RecipeStore` port in
-  `controller/internal/task` is satisfied by an in-process adapter over the registry
-  store.
+- **Endpoint pods** (Kubernetes/Docker deploy) make **no** calls to this surface.
+  They are handed `BRANCH_ID` and `CONTROLLER_URL` and need neither: the branch's
+  `amp_storage.branch_state` row is seeded before the pod starts, and the
+  pageserver claims its own generation. (`deploy/endpoint/supervisor.py` has no
+  `/control/v1` client.)
+- **The controller's own task framework** seeds branch state through the same store
+  **in-process** (not over HTTP) — the `RecipeStore` port in
+  `controller/internal/task` is satisfied by an in-process adapter, and it passes
+  the project id along with the branch id because the row it writes is
+  project-scoped.
 
 ## Why the generation is minted per spawn (not injected at deploy)
 

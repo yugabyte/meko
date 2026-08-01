@@ -272,7 +272,7 @@ func (a *ampFeatureRun) endpointPGClient(ctx context.Context, ep controller.Endp
 // concurrent resizes, each at a distinct cpu, and asserts exactly one is accepted
 // while every other is rejected with 409, the endpoint lands at the winner's cpu,
 // and a fresh resize is accepted once the winner reached terminal (the partial
-// unique index task_one_active_resize_per_endpoint drops the terminal task out of
+// unique index tasks_one_active_resize_per_endpoint drops the terminal task out of
 // its predicate, releasing the lock).
 func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 	cl, err := a.f.controllerClient(ctx)

@@ -94,7 +94,7 @@ ordinary Postgres-client types.
 
 `YbStore` does not create its table. The operator provisions it — the
 compute-facing schema is created by controller migration
-[`0002_compute_storage.up.sql`](../../controller/migrations/0002_compute_storage.up.sql),
+[`0003_compute_storage.up.sql`](../../controller/migrations/0003_compute_storage.up.sql),
 which the column names in `yb_store.rs` are hardcoded against:
 
 ```sql

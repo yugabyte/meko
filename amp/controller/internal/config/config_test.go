@@ -21,6 +21,9 @@ func TestLoadDefaults(t *testing.T) {
 	if c.ListenAddr != ":8080" {
 		t.Errorf("ListenAddr = %q, want :8080", c.ListenAddr)
 	}
+	// The controller's own schema (the task log + schema_migrations). The resource
+	// model is not relocatable and always lives in `amp_registry`
+	// (db.ResourceSchema), so this knob names only the former.
 	if c.DB.Schema != "controller" {
 		t.Errorf("DB.Schema = %q, want controller", c.DB.Schema)
 	}

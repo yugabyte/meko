@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"testing"
@@ -21,7 +22,7 @@ import (
 // live partial unique index raises the violation, and only YSQL's flavour of that
 // error exposed the bug.
 //
-// Needs YugabyteDB (migrations 0002/0003 use YB-specific HASH / SPLIT DDL that
+// Needs YugabyteDB (migration 0002 uses YB-specific HASH / SPLIT DDL that
 // plain Postgres rejects), so it skips unless AMP_TEST_DATABASE_URL points at
 // one — the same gate as TestMigrateRoundTrip.
 func TestPgResizeLock(t *testing.T) {
@@ -41,8 +42,8 @@ func TestPgResizeLock(t *testing.T) {
 		cleanupCtx := context.WithoutCancel(ctx)
 		// task_step has an unqualified FK to task, so the steps go first.
 		for _, q := range []string{
-			`DELETE FROM task_step WHERE task_id IN (SELECT id FROM task WHERE target_ref = ANY($1))`,
-			`DELETE FROM task WHERE target_ref = ANY($1)`,
+			`DELETE FROM task_steps WHERE task_id IN (SELECT id FROM tasks WHERE target_ref = ANY($1))`,
+			`DELETE FROM tasks WHERE target_ref = ANY($1)`,
 		} {
 			if _, err := pool.Exec(cleanupCtx, q, refs); err != nil {
 				t.Errorf("cleanup %q: %v", q, err)
@@ -107,13 +108,13 @@ func TestPgResizeLock(t *testing.T) {
 }
 
 // TestPgUniqueConstraintsOnTask pins the assumption isResizeLockViolation rests
-// on: the only unique constraints on `task` are its primary key — whose conflict
+// on: the only unique constraints on `tasks` are its primary key — whose conflict
 // Create already absorbs with ON CONFLICT (id) DO NOTHING — and the resize lock.
 // That is what makes "a unique violation from Create's task INSERT, for a
 // resize_endpoint task" an exact identification of the lock without reading the
 // constraint's name out of the error (which YSQL does not expose in any field).
 //
-// If this fails because a new unique index was added to `task`, isResizeLockViolation
+// If this fails because a new unique index was added to `tasks`, isResizeLockViolation
 // has to start discriminating between them — and it cannot do that by name on
 // YSQL, so the new index needs its own structural signal (e.g. classify before
 // the insert, or split the INSERT).
@@ -127,10 +128,10 @@ func TestPgUniqueConstraintsOnTask(t *testing.T) {
 		   JOIN pg_class c ON c.oid = i.indexrelid
 		   JOIN pg_class t ON t.oid = i.indrelid
 		   JOIN pg_namespace n ON n.oid = t.relnamespace
-		  WHERE t.relname = 'task' AND n.nspname = current_schema() AND i.indisunique
-		  ORDER BY c.relname`)
+		  WHERE t.relname = 'tasks' AND n.nspname = $1 AND i.indisunique
+		  ORDER BY c.relname`, taskSchema)
 	if err != nil {
-		t.Fatalf("list unique indexes on task: %v", err)
+		t.Fatalf("list unique indexes on tasks: %v", err)
 	}
 	defer rows.Close()
 
@@ -146,28 +147,56 @@ func TestPgUniqueConstraintsOnTask(t *testing.T) {
 		t.Fatalf("iterate indexes: %v", err)
 	}
 
-	want := []string{resizeLockConstraint, "task_pkey"} // ORDER BY relname
+	want := []string{resizeLockConstraint, "tasks_pkey"} // ORDER BY relname
 	if !slices.Equal(got, want) {
-		t.Fatalf("unique indexes on task = %v, want exactly %v — see this test's doc comment", got, want)
+		t.Fatalf("unique indexes on tasks = %v, want exactly %v — see this test's doc comment", got, want)
 	}
 }
 
-// migratedPool applies the controller migrations to a schema of this package's
-// own and returns a pool pinned to it, so a shared scratch database's
-// `controller` schema (and whatever version TestMigrateRoundTrip left it at) is
-// never touched. It skips the test when there is no database to talk to.
-func migratedPool(t *testing.T) (*db.Pool, context.Context) {
-	t.Helper()
+// scratchURL is the throwaway database this package's Postgres-backed tests share,
+// provisioned once by TestMain. Empty when AMP_TEST_DATABASE_URL is unset, which
+// is what makes those tests skip.
+var scratchURL string
+
+// taskSchema is the --db-schema default: the schema holding the controller's own
+// tables, which is what these tests exercise. The resource model lives in the
+// fixed db.ResourceSchema.
+const taskSchema = "controller"
+
+// TestMain provisions one throwaway DATABASE for the whole package and drops it
+// afterwards.
+//
+// A database rather than a schema because the migrations create two fixed schemas
+// — the resource model under --db-schema plus the always-`controller` task log —
+// so relocating one isolates nothing. Once per package rather than once per test
+// because YugabyteDB does not free a dropped keyspace's name synchronously, so a
+// drop-and-recreate between two tests in the same binary races itself.
+func TestMain(m *testing.M) {
 	url := os.Getenv("AMP_TEST_DATABASE_URL")
 	if url == "" {
+		os.Exit(m.Run())
+	}
+	ctx := context.Background()
+	u, drop, err := db.ScratchMigrated(ctx, url, "amp_test_task_store", taskSchema)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "provision scratch database: %v\n", err)
+		os.Exit(1)
+	}
+	scratchURL = u
+	code := m.Run()
+	drop()
+	os.Exit(code)
+}
+
+// migratedPool returns a pool over the package's migrated scratch database, or
+// skips the test when there is no database to talk to.
+func migratedPool(t *testing.T) (*db.Pool, context.Context) {
+	t.Helper()
+	if scratchURL == "" {
 		t.Skip("AMP_TEST_DATABASE_URL not set; these tests need a YugabyteDB")
 	}
-	const schema = "task_store_test"
 	ctx := t.Context()
-	if err := db.Migrate(ctx, url, schema); err != nil {
-		t.Fatalf("migrate %s: %v", schema, err)
-	}
-	pool, err := db.Connect(ctx, url, schema)
+	pool, err := db.Connect(ctx, scratchURL, taskSchema)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

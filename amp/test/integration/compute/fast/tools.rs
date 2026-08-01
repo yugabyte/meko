@@ -19,14 +19,19 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // which leave several (and dropped) branches behind — so addressing this
     // test's data by a fresh, dedicated branch id keeps the lookups below
     // unambiguous: the data we load here is the data we read.
+    //
+    // Named, via branch_create_root_named: the bare branch_create() helper is
+    // the *shared* `main` branch (that is what cluster bring-up calls), and a
+    // branch name is unique among a project's live branches, so asking for a
+    // second anonymous one would just collide with it.
     let tools_port = c.compute_port() + 120;
     step("create a dedicated branch + endpoint for this test");
-    let branch = c.branch_create()?;
+    let branch = c.branch_create_root_named("tools")?;
     if branch.is_empty() {
         bail!("branch create failed");
     }
     c.yb(&[
-        "endpoint", "create", ENDPOINT_ID, "--branch-id", &branch, "--branch-name", "main",
+        "endpoint", "create", ENDPOINT_ID, "--branch-id", &branch, "--branch-name", "tools",
         "--pg-version", "18", "--pg-port", &tools_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", ENDPOINT_ID])?;

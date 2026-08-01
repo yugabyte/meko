@@ -57,7 +57,7 @@ can read, but the name is deterministic.
   naming rule above (`tailscale.com/hostname`, else `"<namespace>-<release>"`).
   Otherwise it returns `""`.
 - **Persistence**: stored on `endpoint.tailnet_address` (part of the `endpoint`
-  table in `0001_init.up.sql`), set on a successful deploy by the widened
+  table in `0002_resource_model.up.sql`), set on a successful deploy by the widened
   `SetEndpointAddress` (`internal/task/step_create_endpoint.go`). NULL/`""` until
   set, coalesced to `""` on read.
 - **API**: served as the `tailnet_address` field on the `Endpoint` schema

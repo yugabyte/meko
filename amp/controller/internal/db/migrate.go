@@ -47,6 +47,15 @@ func newMigrator(ctx context.Context, url, schema string) (*migrate.Migrate, *sq
 	// RegisterConnConfig(cfg)) it doesn't stash the config in a never-freed
 	// global map, so newMigrator is safe to call repeatedly (tests, reconnects).
 	sqlDB := stdlib.OpenDB(*connCfg)
+
+	// Pin the migration to ONE connection. Migrations are strictly serial, so a
+	// pool buys nothing — and on YugabyteDB it actively hurts: each backend caches
+	// the catalog, so the CREATE SCHEMA below can land on one connection while the
+	// driver's CREATE TABLE schema_migrations lands on another that has not seen it
+	// yet, failing with 3F000 on an otherwise healthy brand-new database.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+
 	if err := sqlDB.PingContext(ctx); err != nil {
 		sqlDB.Close()
 		return nil, nil, fmt.Errorf("ping migration connection: %w", err)

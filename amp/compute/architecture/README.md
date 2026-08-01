@@ -76,6 +76,6 @@ subsystem has its own page.
 What's on local FS: the compute's `pgdata` and operational files
 (configs, logs, pidfiles). Everything that has to *survive a wipe of
 that disk* lives in YB. The authoritative data-plane schema is
-[`controller/migrations/0002_compute_storage.up.sql`](../../controller/migrations/0002_compute_storage.up.sql)
+[`controller/migrations/0003_compute_storage.up.sql`](../../controller/migrations/0003_compute_storage.up.sql)
 (registries in
-[`0003_registry.up.sql`](../../controller/migrations/0003_registry.up.sql)).
+[`0002_resource_model.up.sql`](../../controller/migrations/0002_resource_model.up.sql)).

@@ -3,8 +3,8 @@
 Authoritative inventory of every LSN the pageserver tracks: name, where it
 lives, what advances it, what reads it, and the invariants between them.
 Grounded in the Rust sources (`compute/pageserver/`, `compute/libs/utils`)
-and the controller schema
-(`controller/migrations/0002_compute_storage.up.sql`).
+and the controller-owned data-plane schema
+(`controller/migrations/0003_compute_storage.up.sql`).
 
 **System framing.** Durability and resilience come from YugabyteDB, the
 underlying store. The pageserver holds page data in an in-RAM buffer until a
@@ -580,7 +580,7 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
   parsing, shared-memory relay, backpressure lag computation.
 - `compute/safekeeper/src/send_wal.rs` — feedback intake,
   `update_remote_consistent_lsn`.
-- `controller/migrations/0002_compute_storage.up.sql` —
+- `controller/migrations/0003_compute_storage.up.sql` —
   `amp_storage.branch_state` schema.
 - [`safekeeper-lsns.md`](safekeeper-lsns.md) — the safekeeper side of the
   replication link.

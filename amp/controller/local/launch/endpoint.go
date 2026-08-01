@@ -54,11 +54,11 @@ type endpointConf struct {
 // loadEndpoints fetches all persisted endpoint records from the controller,
 // mirroring Rust `ComputeControlPlane::load`.
 func loadEndpoints(ctx context.Context, env *config.LocalEnv) (map[string]endpointConf, error) {
-	base, err := controllerBase(env)
+	ctrl, err := controllerClient(env)
 	if err != nil {
 		return nil, err
 	}
-	records, err := client.NewController(base, httpClient()).EndpointList(ctx)
+	records, err := ctrl.EndpointList(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing endpoints from controller: %w", err)
 	}
@@ -143,11 +143,10 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		endpointID = "ep-" + branchName
 	}
 
-	base, err := controllerBase(env)
+	ctrl, err := controllerClient(env)
 	if err != nil {
 		return err
 	}
-	ctrl := client.NewController(base, httpClient())
 
 	// Resolve the branch id: explicit --branch-id wins; else by registered
 	// name; else by a created branch's name.
@@ -656,11 +655,11 @@ func EndpointStop(ctx context.Context, env *config.LocalEnv, endpointID string, 
 		if err := os.RemoveAll(endpointDir); err != nil {
 			return fmt.Errorf("remove endpoint dir %q: %w", endpointDir, err)
 		}
-		base, err := controllerBase(env)
+		ctrl, err := controllerClient(env)
 		if err != nil {
 			return err
 		}
-		if err := client.NewController(base, httpClient()).EndpointDelete(ctx, endpointID); err != nil {
+		if err := ctrl.EndpointDelete(ctx, endpointID); err != nil {
 			return fmt.Errorf("delete endpoint from controller: %w", err)
 		}
 	}

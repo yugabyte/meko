@@ -21,8 +21,12 @@ type LogConfig struct {
 
 // DBConfig points at the YBDB/PostgreSQL state store.
 type DBConfig struct {
-	URL    string // YSQL connection string (required)
-	Schema string // schema that holds the control-plane tables
+	URL string // YSQL connection string (required)
+	// Schema holds the controller's own tables — the write-ahead task log — and
+	// the migrator's version table. The resource model (users, pools, projects,
+	// branches, endpoints) lives in a schema of its own, `amp_registry`,
+	// hardcoded the way `amp_storage` is — see db.ResourceSchema.
+	Schema string
 }
 
 // TaskConfig tunes the task framework worker.
@@ -138,7 +142,7 @@ func Load(args []string) (*Config, error) {
 
 	fs.StringVar(&c.ListenAddr, "listen", env("AMP_LISTEN", ":8080"), "HTTP listen address")
 	fs.StringVar(&c.DB.URL, "database-url", env("AMP_DATABASE_URL", ""), "YBDB/PostgreSQL connection string (required)")
-	fs.StringVar(&c.DB.Schema, "db-schema", env("AMP_DB_SCHEMA", "controller"), "schema that holds the control-plane tables")
+	fs.StringVar(&c.DB.Schema, "db-schema", env("AMP_DB_SCHEMA", "controller"), "schema that holds the controller's own tables (the resource model is always in `amp_registry`)")
 	fs.StringVar(&c.Log.Level, "log-level", env("AMP_LOG_LEVEL", "info"), "log level: debug|info|warn|error")
 	fs.StringVar(&c.Log.Format, "log-format", env("AMP_LOG_FORMAT", "json"), "log format: json|text")
 	fs.StringVar(&c.SigningKeyPath, "signing-key", env("AMP_SIGNING_KEY_PATH", ""), "path to the control-plane signing key (optional)")
