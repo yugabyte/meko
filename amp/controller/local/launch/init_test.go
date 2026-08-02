@@ -89,9 +89,6 @@ func TestInitRoundTrip(t *testing.T) {
 	if env.Controller.Yb.HostPorts != "10.0.0.1:5433" {
 		t.Errorf("controller.yb host_ports = %q, want 10.0.0.1:5433", env.Controller.Yb.HostPorts)
 	}
-	if env.DefaultBranchID == nil || *env.DefaultBranchID != zeroBranchID {
-		t.Errorf("default_branch_id = %v, want all-zeros", env.DefaultBranchID)
-	}
 
 	// No pageserver/safekeeper/endpoint_storage instances provisioned yet.
 	if len(env.Pageservers) != 0 || len(env.Safekeepers) != 0 || len(env.EndpointStorages) != 0 {

@@ -18,7 +18,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Dedicated branch + endpoint");
-    let b = c.branch_create_named("gc_tp", "main")?;
+    let b = c.branch_create_named("gc_tp", c.branch())?;
     // Inlined (not endpoint_create_on_branch) to pass --pg-setting:
     // PREPARE TRANSACTION needs max_prepared_transactions > 0 (compute
     // defaults to 0); without it the PREPARE below errors before GC runs.
@@ -26,8 +26,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         "endpoint",
         "create",
         "ep_gc_tp",
-        "--branch-name",
-        "gc_tp",
+        "--branch-id",
+        &b,
         "--pg-version",
         "18",
         "--pg-port",

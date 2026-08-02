@@ -16,8 +16,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_pg_port = c.compute_port() + 120;
 
     step("Create a child branch off main and start its endpoint");
-    let b1 = c.branch_create_named("gc_fresh", "main")?;
-    c.endpoint_create_on_branch("ep_gc_fresh", "gc_fresh", branch_pg_port)?;
+    let b1 = c.branch_create_named("gc_fresh", c.branch())?;
+    c.endpoint_create_on_branch("ep_gc_fresh", &b1, branch_pg_port)?;
     let bconn = db::compute_conn(branch_pg_port);
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
     let pages = format!("SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b1}'");

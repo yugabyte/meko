@@ -20,8 +20,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Dedicated branch + endpoint");
-    let b = c.branch_create_named("gc_mt", "main")?;
-    c.endpoint_create_on_branch("ep_gc_mt", "gc_mt", branch_pg_port)?;
+    let b = c.branch_create_named("gc_mt", c.branch())?;
+    c.endpoint_create_on_branch("ep_gc_mt", &b, branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
 
     step("Create a table and extend it repeatedly, rewriting its rel-size sentinel");

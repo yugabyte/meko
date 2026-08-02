@@ -65,7 +65,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step(&format!("branch {LAYOUT_BRANCH} (no new on-disk dirs yet)"));
-    c.yb(&["branch", "create", "--branch-name", LAYOUT_BRANCH, "--ancestor-branch-name", "main"])?;
+    let branch_id = c.branch_create_named(LAYOUT_BRANCH, c.branch())?;
     if r.join("endpoints").join(LAYOUT_EP).exists() {
         bail!("endpoints/{LAYOUT_EP} should not exist before endpoint create");
     }
@@ -74,7 +74,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         "endpoint create {LAYOUT_EP} provisions the branch's pair under its folder"
     ));
     c.yb(&[
-        "endpoint", "create", LAYOUT_EP, "--branch-name", LAYOUT_BRANCH,
+        "endpoint", "create", LAYOUT_EP, "--branch-id", &branch_id,
         "--pg-version", "18", "--pg-port", &layout_pg_port.to_string(),
     ])?;
     let ep_dir = r.join("endpoints").join(LAYOUT_EP);

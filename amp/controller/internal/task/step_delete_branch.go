@@ -49,9 +49,13 @@ func buildDeleteBranchStep(raw json.RawMessage, deps Deps) (Step, error) {
 func (*deleteBranchStep) Kind() string { return StepDeleteBranch }
 
 func (s *deleteBranchStep) Execute(ctx context.Context) StepResult {
-	if s.deployer == nil {
-		return Fail(fmt.Errorf("delete_branch step requires a deployer, but none is configured"))
-	}
+	// A deployer is checked per-endpoint below, not up front: it is only needed to
+	// retire endpoint *instances*, so a branch with none can be deleted without
+	// one. That is what lets a deployer-less controller (yb_amp_local, which
+	// spawns and stops its own processes) delete branches through the product API
+	// instead of a second surface. Dropping a record while its instance still runs
+	// stays refused — see the loop.
+	//
 	// Pre-check for child forks BEFORE retiring any endpoints: the parent FK is
 	// RESTRICT, so a branch with children cannot be deleted. Failing first means
 	// no endpoints are retired and nothing is half-deleted (the branch row would
@@ -67,6 +71,11 @@ func (s *deleteBranchStep) Execute(ctx context.Context) StepResult {
 	epIDs, err := s.state.EndpointIDsForBranch(ctx, s.ProjectID, s.BranchID)
 	if err != nil {
 		return Fail(fmt.Errorf("enumerate branch endpoints: %w", err))
+	}
+	if len(epIDs) > 0 && s.deployer == nil {
+		return Fail(fmt.Errorf(
+			"cannot retire %d endpoint(s) on branch %s: no deployer is configured; stop them first",
+			len(epIDs), s.BranchID))
 	}
 	for _, id := range epIDs {
 		if err := s.deployer.DeleteEndpoint(ctx, EndpointDeployName(id)); err != nil {

@@ -151,24 +151,25 @@ func TestServiceBranch(t *testing.T) {
 		t.Errorf("kind = %q, want %q", tk.Kind, KindBranch)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
-	want := []string{StepCreateBranch, StepRecordBranchRecipe, StepCreateEndpoint}
+	want := []string{StepRecordBranchRecipe, StepCreateEndpoint}
 	if !equalKinds(stepKinds(steps), want) {
 		t.Fatalf("steps = %v, want %v", stepKinds(steps), want)
 	}
 
-	var br CreateBranchArgs
-	decodeArgs(t, stepByKind(t, steps, StepCreateBranch), &br)
-	if br.ParentBranchID != parentID || br.ProjectID != projectID || br.ForkLSN != "0/16ABCD0" {
-		t.Errorf("branch args = %+v, want parent=%s project=%s fork=0/16ABCD0", br, parentID, projectID)
-	}
-	if br.BranchID == uuid.Nil || br.BranchID == parentID {
-		t.Errorf("branch id = %s, want a fresh id distinct from the parent", br.BranchID)
-	}
-
+	// record_branch_recipe carries the whole declaration: the branch row, its
+	// branch_state seed, and the fork/GC-cutoff interlock commit together, so a
+	// rejected fork leaves no orphan row. There is deliberately no separate
+	// create_branch step on this path.
 	var rec RecordBranchRecipeArgs
 	decodeArgs(t, stepByKind(t, steps, StepRecordBranchRecipe), &rec)
-	if rec.BranchID != br.BranchID {
-		t.Errorf("recipe branch %s != created branch %s", rec.BranchID, br.BranchID)
+	if rec.ProjectID != projectID {
+		t.Errorf("recipe project = %s, want %s", rec.ProjectID, projectID)
+	}
+	if rec.BranchID == uuid.Nil || rec.BranchID == parentID {
+		t.Errorf("branch id = %s, want a fresh id distinct from the parent", rec.BranchID)
+	}
+	if rec.BranchName != "feature" {
+		t.Errorf("recipe branch name = %q, want feature", rec.BranchName)
 	}
 	if rec.AncestorBranchID == nil || *rec.AncestorBranchID != parentID {
 		t.Errorf("branch recipe ancestor = %v, want the parent %s", rec.AncestorBranchID, parentID)
@@ -179,8 +180,8 @@ func TestServiceBranch(t *testing.T) {
 
 	var ep CreateEndpointArgs
 	decodeArgs(t, stepByKind(t, steps, StepCreateEndpoint), &ep)
-	if ep.BranchID != br.BranchID {
-		t.Errorf("endpoint targets %s, want the branch %s", ep.BranchID, br.BranchID)
+	if ep.BranchID != rec.BranchID {
+		t.Errorf("endpoint targets %s, want the branch %s", ep.BranchID, rec.BranchID)
 	}
 }
 

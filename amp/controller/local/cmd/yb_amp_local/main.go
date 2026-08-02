@@ -36,6 +36,7 @@ func main() {
 	root.AddCommand(
 		initCmd(),
 		startCmd(),
+		projectCmd(),
 		branchCmd(),
 		endpointCmd(),
 		pageserverCmd(),
@@ -159,7 +160,7 @@ func branchCreateCmd() *cobra.Command {
 	var a launch.BranchCreateArgs
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a root branch (no ancestor) or a fork",
+		Short: "Fork an existing branch (use `project create` for a new lineage)",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
 				return launch.BranchCreate(ctx, env, a)
@@ -167,12 +168,36 @@ func branchCreateCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&a.BranchID, "branch-id", "", "new branch id (generated if omitted)")
-	f.StringVar(&a.BranchName, "branch-name", "", "human-readable branch alias")
-	f.StringVar(&a.AncestorBranchName, "ancestor-branch-name", "", "ancestor branch to fork from")
+	f.StringVar(&a.AncestorBranchID, "ancestor-branch-id", "", "branch to fork from (required)")
+	f.StringVar(&a.BranchName, "branch-name", "", "name for the new branch (required)")
 	f.StringVar(&a.AncestorStartLSN, "ancestor-start-lsn", "", "specific ancestor LSN to fork at")
-	f.IntVar(&a.PgVersion, "pg-version", config.DefaultPgVersion, "Postgres version for a root branch")
-	f.BoolVar(&a.SetDefault, "set-default", false, "set this branch as the default (root only)")
+	_ = cmd.MarkFlagRequired("ancestor-branch-id")
+	_ = cmd.MarkFlagRequired("branch-name")
+	return cmd
+}
+
+// --- project ---
+
+func projectCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "project", Short: "Manage projects (each one an independent lineage)"}
+	cmd.AddCommand(projectCreateCmd())
+	return cmd
+}
+
+func projectCreateCmd() *cobra.Command {
+	var a launch.ProjectCreateArgs
+	cmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a project: a new lineage whose default branch is its root",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			a.Name = args[0]
+			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
+				return launch.ProjectCreate(ctx, env, a)
+			})
+		},
+	}
+	cmd.Flags().IntVar(&a.PgVersion, "pg-version", config.DefaultPgVersion, "Postgres major version")
 	return cmd
 }
 
@@ -218,8 +243,7 @@ func endpointCreateCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&a.BranchID, "branch-id", "", "branch id")
-	f.StringVar(&a.BranchName, "branch-name", "", "branch name")
+	f.StringVar(&a.BranchID, "branch-id", "", "branch to place the endpoint on (required)")
 	f.IntVar(&a.PgVersion, "pg-version", config.DefaultPgVersion, "Postgres version")
 	f.Uint16Var(&pgPort, "pg-port", 0, "compute Postgres port")
 	f.Uint16Var(&extPort, "external-http-port", 0, "compute external HTTP port")

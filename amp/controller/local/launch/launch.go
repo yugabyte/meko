@@ -31,10 +31,6 @@ import (
 	"github.com/yugabyte/amp/controller/local/config"
 )
 
-// DefaultBranchName is the alias given to a root branch (Rust
-// DEFAULT_BRANCH_NAME).
-const DefaultBranchName = "main"
-
 // httpClient is the shared HTTP client for all controller / daemon calls. A
 // generous timeout matches the launcher's blocking, one-shot usage.
 func httpClient() *http.Client {
@@ -130,10 +126,8 @@ func safekeepersForTimeline(env *config.LocalEnv, branchID config.BranchID) []co
 // Rust's `original_env != env` guard in `main`. Pageservers are intentionally
 // omitted: they are never serialized (rediscovered from pageserver.toml).
 type mutableState struct {
-	defaultBranch string
-	hasDefault    bool
-	safekeepers   []config.SafekeeperConf
-	endpointStgs  []config.EndpointStorageConf
+	safekeepers  []config.SafekeeperConf
+	endpointStgs []config.EndpointStorageConf
 }
 
 // SnapshotMutable records the persisted-mutable state of env before a command
@@ -142,10 +136,6 @@ func SnapshotMutable(env *config.LocalEnv) any {
 	s := mutableState{
 		safekeepers:  append([]config.SafekeeperConf(nil), env.Safekeepers...),
 		endpointStgs: append([]config.EndpointStorageConf(nil), env.EndpointStorages...),
-	}
-	if env.DefaultBranchID != nil {
-		s.defaultBranch = *env.DefaultBranchID
-		s.hasDefault = true
 	}
 	return s
 }

@@ -151,102 +151,6 @@ func FullPgVersionID(major int) (int, error) {
 
 // --- branch name registry ---------------------------------------------------
 
-// SetBranchName renames a branch.
-//
-// Unlike the standalone registry this replaced, a name cannot be cleared: `name`
-// is NOT NULL on `branches`, because the product API addresses branches by name. A nil or empty name is therefore ErrInvalid rather than a
-// silent no-op. A name already taken by another live branch in the project is
-// ErrConflict; an unknown or already-dropped branch is ErrNotFound.
-func (s *Store) SetBranchName(ctx context.Context, projectID uuid.UUID, branchID string, req SetBranchNameRequest) error {
-	if req.BranchName == nil || *req.BranchName == "" {
-		return fmt.Errorf("%w: branch_name is required (a branch always has a name)", ErrInvalid)
-	}
-	id, err := ParseBranchID(branchID)
-	if err != nil {
-		return err
-	}
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE amp_registry.branches SET name = $3
-		  WHERE project_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL`,
-		projectID.String(), id.String(), *req.BranchName)
-	if err != nil {
-		return mapWriteErr(fmt.Sprintf("rename branch %s to %q", branchID, *req.BranchName), err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: no live branch %s in project %s", ErrNotFound, branchID, projectID)
-	}
-	return nil
-}
-
-// ListBranchNames returns every live branch's (branch_id, name) mapping in the
-// project. Names are unique among live branches, so this is a bijection.
-func (s *Store) ListBranchNames(ctx context.Context, projectID uuid.UUID) ([]BranchNameEntry, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+branchIDHex+`, name FROM amp_registry.branches
-		  WHERE project_id = $1::uuid AND dropped_at IS NULL
-		  ORDER BY branch_id`,
-		projectID.String())
-	if err != nil {
-		return nil, fmt.Errorf("list branch names: %w", err)
-	}
-	defer rows.Close()
-
-	out := []BranchNameEntry{}
-	for rows.Next() {
-		var t BranchNameEntry
-		if err := rows.Scan(&t.BranchID, &t.BranchName); err != nil {
-			return nil, fmt.Errorf("scan branch name: %w", err)
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
-}
-
-// BranchDrop drops a branch: retire its endpoint records and tombstone the
-// branch row. Idempotent.
-//
-// This is the same effect the product API's DELETE .../branches/{id} has, on the
-// same row — which is the point of there being one table. The row is kept with
-// `dropped_at` stamped rather than deleted: a branch id is never reused, so the
-// record of what the id was is worth keeping, and the branch's page/WAL data in
-// amp_storage outlives the drop (left for a later GC pass, #36). Every "is this
-// live?" reader filters `dropped_at IS NULL`, so the name stops resolving either
-// way.
-func (s *Store) BranchDrop(ctx context.Context, projectID uuid.UUID, branchID string) error {
-	id, err := ParseBranchID(branchID)
-	if err != nil {
-		return err
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	for _, stmt := range []string{
-		// Scoped to spec-carrying rows, like EndpointList/EndpointDelete: this
-		// surface owns the launcher's endpoints only. Now that product endpoints
-		// share the table, an unscoped DELETE here would drop a deployed
-		// endpoint's row without retiring its instance — leaving compute running
-		// with no record, the exact drift this PR exists to remove.
-		`DELETE FROM amp_registry.endpoints e
-		  USING amp_registry.branches b
-		  WHERE b.branch_id = e.branch_id
-		    AND b.project_id = $1::uuid AND e.branch_id = $2::uuid
-		    AND e.spec IS NOT NULL`,
-		`UPDATE amp_registry.branches SET dropped_at = now()
-		  WHERE project_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL`,
-	} {
-		if _, err := tx.Exec(ctx, stmt, projectID.String(), id.String()); err != nil {
-			return fmt.Errorf("drop branch %s: %w", branchID, err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit drop: %w", err)
-	}
-	return nil
-}
-
 // --- branch creation -------------------------------------------------------
 
 // RecordBranch declares a branch and seeds the storage-layer state it needs to
@@ -335,21 +239,55 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	}
 
 	// is_default is false: a project's default branch is created with the project
-	// itself, and every branch declared through this surface hangs off it (or
-	// stands alone as another root). ON CONFLICT DO NOTHING makes a re-record and
-	// the product path's already-written row both converge, and leaves an existing
-	// creation record untouched rather than rewriting it — which is also what keeps
-	// a re-record from clobbering an `extensions` set that the branch's own
-	// create_endpoint opt-in (AddBranchExtensions) unioned in after this row was
-	// first written.
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.branches
-		   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions)
-		 VALUES ($1::uuid, $2::uuid, $3, $4, false, $5::uuid, $6::pg_lsn, $7::jsonb)
-		 ON CONFLICT (branch_id) DO NOTHING`,
-		projectID.String(), id.String(), req.BranchName, req.PgVersion,
-		ancestorUUID, req.StartLSN, string(inheritedExts)); err != nil {
+	// itself, and every branch declared here hangs off it (or stands alone as
+	// another root). ON CONFLICT DO NOTHING makes a re-record converge, and leaves
+	// an existing creation record untouched rather than rewriting it — which is
+	// also what keeps a re-record from clobbering an `extensions` set that the
+	// branch's own create_endpoint opt-in (AddBranchExtensions) unioned in after
+	// this row was first written.
+	//
+	// This INSERT is the branch's *only* creator on the fork path: the branch task
+	// is one step so that the row, the branch_state seed, and the interlock below
+	// all commit or roll back together. A fork therefore selects its parent rather
+	// than naming it, which is what enforces that the parent is LIVE — the FK alone
+	// cannot, since a tombstoned parent's row is still there.
+	var tag pgconn.CommandTag
+	if ancestorUUID != nil {
+		tag, err = tx.Exec(ctx,
+			`INSERT INTO amp_registry.branches
+			   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions)
+			 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn, $7::jsonb
+			   FROM amp_registry.branches p
+			  WHERE p.branch_id = $5::uuid AND p.project_id = $1::uuid AND p.dropped_at IS NULL
+			 ON CONFLICT (branch_id) DO NOTHING`,
+			projectID.String(), id.String(), req.BranchName, req.PgVersion,
+			ancestorUUID, req.StartLSN, string(inheritedExts))
+	} else {
+		tag, err = tx.Exec(ctx,
+			`INSERT INTO amp_registry.branches
+			   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions)
+			 VALUES ($1::uuid, $2::uuid, $3, $4, false, NULL, $5::pg_lsn, $6::jsonb)
+			 ON CONFLICT (branch_id) DO NOTHING`,
+			projectID.String(), id.String(), req.BranchName, req.PgVersion,
+			req.StartLSN, string(inheritedExts))
+	}
+	if err != nil {
 		return mapWriteErr(fmt.Sprintf("declare branch %s (%q)", branchID, req.BranchName), err)
+	}
+	// Zero rows is either an idempotent re-record (the branch already exists) or a
+	// parent that is gone or tombstoned. Only the latter is an error.
+	if tag.RowsAffected() == 0 && ancestorUUID != nil {
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM amp_registry.branches
+			                 WHERE project_id = $1::uuid AND branch_id = $2::uuid)`,
+			projectID.String(), id.String()).Scan(&exists); err != nil {
+			return fmt.Errorf("classify branch declare no-op: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("%w: fork parent %s is not a live branch in project %s",
+				ErrNotFound, *req.AncestorBranchID, projectID)
+		}
 	}
 
 	// The seed the pageserver reads at attach to decide how to create the
@@ -431,44 +369,6 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 		return fmt.Errorf("commit record branch: %w", err)
 	}
 	return nil
-}
-
-// ListBranches returns every live branch in the project — the ones the launcher
-// can materialize — in the flat rendering.
-//
-// Every row carries a creation record now that there is only one branch table
-// (`pg_version` and `name` are NOT NULL), so `dropped_at IS NULL` is the whole
-// liveness test; the old "pg_version IS NULL means no creation record yet"
-// discriminator has no analogue and needs none.
-//
-// `fork_lsn` is coalesced to "0/0" because a root branch has none. The old flat
-// registry stored "0/0" explicitly (every writer passed it), but the product
-// path's default branch leaves the column NULL, and BranchRecord.StartLSN is a
-// plain string. Only the fork arm of the launcher's provisioning reads it, so the
-// value is inert for a root — but the scan is not, and NULL crashed it.
-func (s *Store) ListBranches(ctx context.Context, projectID uuid.UUID) ([]BranchRecord, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+branchIDHex+`, name, pg_version,
-		        replace(parent_branch_id::text, '-', ''),
-		        COALESCE(fork_lsn::text, '0/0')
-		   FROM amp_registry.branches
-		  WHERE project_id = $1::uuid AND dropped_at IS NULL
-		  ORDER BY branch_id`,
-		projectID.String())
-	if err != nil {
-		return nil, fmt.Errorf("list branches: %w", err)
-	}
-	defer rows.Close()
-
-	out := []BranchRecord{}
-	for rows.Next() {
-		var p BranchRecord
-		if err := rows.Scan(&p.BranchID, &p.BranchName, &p.PgVersion, &p.AncestorBranchID, &p.StartLSN); err != nil {
-			return nil, fmt.Errorf("scan branch: %w", err)
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
 }
 
 // --- endpoint registry ----------------------------------------------------

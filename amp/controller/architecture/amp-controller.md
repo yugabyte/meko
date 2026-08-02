@@ -759,9 +759,11 @@ deleted through `/api/v1` never tombstoned its registry twin, so it stayed live 
 `GET /control/v1/branches` forever and inflated the branch gauge (#467 step 2).
 
 Because the rows are the control plane's own, the storage-layer surface is
-**project-scoped**: `yb_amp_local` provisions a user, a storage pool, and a project
-through `/api/v1` at startup and passes the project id on every `/control/v1`
-call, so a launcher branch is an ordinary branch the product API can list.
+**project-scoped**: each call carries the project of the branch it addresses.
+`yb_amp_local` provisions a user and a storage pool at startup; projects it
+creates on purpose (`project create`), since a project is one independent
+lineage. Its branches are ordinary `/api/v1` branches, which the product API
+lists like any other.
 
 **How it is served.** amp-controller serves the pod-facing surface —
 `/control/v1/projects/{project_id}/...` and `/ready` — on its API listener,
@@ -780,7 +782,6 @@ the upstream multi-tenant machinery is dropped.
 | API surface | What it does | amp posture |
 |---|---|---|
 | ~~Safekeeper registry~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly | **Removed** |
-| Branch bookkeeping (`/control/v1/projects/{id}/branch/*`) | Branch declare/drop, branch-name mappings, branch-state seeding — all against the shared `branch` table | **Kept** |
 | ~~Generation authority~~ | Removed: the pageserver claims its own generation from `amp_storage.branch_state` |
 | Compute-endpoint records (`/control/v1/projects/{id}/endpoint*`) | Launcher endpoint rows in the shared `endpoint` table (handle in `name`, launcher config in `spec`) | **Kept** (for the launcher) |
 | ~~Heartbeat/availability, scheduler, tenant placement/sharding, time travel, pageserver passthrough, timeline imports, metadata health~~ | Upstream multi-tenant machinery | **Dropped** — dead weight in the per-branch topology |
@@ -789,7 +790,6 @@ the upstream multi-tenant machinery is dropped.
 |---|---|---|---|
 | Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; it fences with a generation it claims itself) | Import flows only | **Reuse** (import only) |
 | ~~Safekeeper registry (`/control/v1/safekeeper*`)~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly, so the controller never contacts a safekeeper | No longer exists | **Removed** |
-| Branch bookkeeping | Branch create/register/delete, branch-name mappings | Yes | **Reuse** |
 | ~~Generation debug ops~~ | Issue/inspect generations | No — the pageserver claims its own | **Removed** |
 | Compute-endpoint registry (`/control/v1/projects/{id}/endpoint*`) | Launcher endpoint rows | Yes — the launcher's own records | **Folded in** — these are now rows in amp-controller's endpoint table (§10.1), carrying their opaque launcher config in `spec`, so they are subject to the schema-enforced invariants of §10.2 (notably `endpoints_one_writer_per_branch`) instead of sitting outside them |
 | Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-branch topology |

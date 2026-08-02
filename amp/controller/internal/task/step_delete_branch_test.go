@@ -57,11 +57,36 @@ func TestDeleteBranchStepTolerateAbsent(t *testing.T) {
 	}
 }
 
-func TestDeleteBranchStepRequiresDeployer(t *testing.T) {
-	step := NewDeleteBranchStep(DeleteBranchArgs{ProjectID: uuid.New(), BranchID: uuid.New()}, Deps{State: newFakeStateStore()}) // no deployer
-	if res := step.Execute(t.Context()); !res.Failed() {
-		t.Fatal("Execute succeeded with no deployer configured, want a failure")
-	}
+// TestDeleteBranchStepDeployerOnlyForEndpoints pins where the deployer is
+// actually required: retiring endpoint *instances*. A branch with none can be
+// deleted without one, which is what lets a deployer-less controller
+// (yb_amp_local, which spawns and stops its own processes) delete branches
+// through the product API instead of a second surface (#515). A branch that
+// still has endpoints must keep failing — dropping a record while its instance
+// runs is the leak this whole area exists to prevent.
+func TestDeleteBranchStepDeployerOnlyForEndpoints(t *testing.T) {
+	projectID, branchID := uuid.New(), uuid.New()
+
+	t.Run("no endpoints: succeeds without a deployer", func(t *testing.T) {
+		state := newFakeStateStore()
+		state.seedBranch(projectID, branchID)
+		step := NewDeleteBranchStep(DeleteBranchArgs{ProjectID: projectID, BranchID: branchID},
+			Deps{State: state}) // no deployer
+		if res := step.Execute(t.Context()); res.Failed() {
+			t.Fatalf("Execute failed with nothing to retire: %v", res.Err)
+		}
+	})
+
+	t.Run("endpoints present: refuses without a deployer", func(t *testing.T) {
+		state := newFakeStateStore()
+		state.seedBranch(projectID, branchID)
+		state.seedEndpoint(uuid.New(), projectID, branchID)
+		step := NewDeleteBranchStep(DeleteBranchArgs{ProjectID: projectID, BranchID: branchID},
+			Deps{State: state}) // no deployer
+		if res := step.Execute(t.Context()); !res.Failed() {
+			t.Fatal("Execute succeeded with endpoints to retire and no deployer, want a failure")
+		}
+	})
 }
 
 func TestDeleteBranchStepRetireFailureSkipsBranchDelete(t *testing.T) {

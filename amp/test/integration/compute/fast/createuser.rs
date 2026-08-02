@@ -25,9 +25,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     .await?;
 
     step("Branch off main (captures the new role); provision + start its endpoint");
-    c.yb(&["branch", "create", "--branch-name", "cu_branch", "--ancestor-branch-name", "main"])?;
+    let branch_id = c.branch_create_named("cu_branch", c.branch())?;
     c.yb(&[
-        "endpoint", "create", "ep_cu_branch", "--branch-name", "cu_branch",
+        "endpoint", "create", "ep_cu_branch", "--branch-id", &branch_id,
         "--pg-version", "18", "--pg-port", &b_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_cu_branch"])?;

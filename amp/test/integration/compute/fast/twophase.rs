@@ -30,14 +30,13 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let port = c.compute_port() + 158;
 
     step("provision a 2PC-enabled branch endpoint (max_prepared_transactions=5)");
-    // Named: the bare branch_create() helper is the *shared* `main` branch, and a
-    // branch name is unique among a project's live branches, so this needs its own.
-    let branch = c.branch_create_root_named("twophase")?;
+    // Its own project, i.e. its own lineage, independent of the shared `main`.
+    let branch = c.project_create("twophase")?;
     if branch.is_empty() {
         bail!("branch create failed");
     }
     c.yb(&[
-        "endpoint", "create", "ep_2pc", "--branch-id", &branch, "--branch-name", "twophase",
+        "endpoint", "create", "ep_2pc", "--branch-id", &branch,
         "--pg-version", "18", "--pg-port", &port.to_string(),
         "--pg-setting", "max_prepared_transactions=5",
     ])?;

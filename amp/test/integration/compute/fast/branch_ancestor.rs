@@ -37,9 +37,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("Branch anc_b1 off main, provision + start its endpoint");
-    c.yb(&["branch", "create", "--branch-name", "anc_b1", "--ancestor-branch-name", "main"])?;
+    let anc_b1 = c.branch_create_named("anc_b1", c.branch())?;
     c.yb(&[
-        "endpoint", "create", "ep_anc_b1", "--branch-name", "anc_b1",
+        "endpoint", "create", "ep_anc_b1", "--branch-id", &anc_b1,
         "--pg-version", "18", "--pg-port", &b1_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_anc_b1"])?;
@@ -69,12 +69,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
          CHECKPOINT;",
     )
     .await?;
+    let anc_b2 = c.branch_create_named("anc_b2", &anc_b1)?;
     c.yb(&[
-        "branch", "create", "--branch-name", "anc_b2",
-        "--ancestor-branch-name", "anc_b1",
-    ])?;
-    c.yb(&[
-        "endpoint", "create", "ep_anc_b2", "--branch-name", "anc_b2",
+        "endpoint", "create", "ep_anc_b2", "--branch-id", &anc_b2,
         "--pg-version", "18", "--pg-port", &b2_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_anc_b2"])?;

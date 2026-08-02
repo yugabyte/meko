@@ -236,12 +236,11 @@ func TestMutableChanged(t *testing.T) {
 	if !MutableChanged(before, env) {
 		t.Error("appending a safekeeper should report changed")
 	}
-	// Setting the default branch is a persisted mutation.
+	// Appending an endpoint_storage is a persisted mutation too.
 	env2 := envWithTemplates()
 	before2 := SnapshotMutable(env2)
-	def := "abc"
-	env2.DefaultBranchID = &def
+	env2.EndpointStorages = append(env2.EndpointStorages, config.EndpointStorageConf{EndpointID: "main"})
 	if !MutableChanged(before2, env2) {
-		t.Error("setting default branch should report changed")
+		t.Error("appending an endpoint_storage should report changed")
 	}
 }

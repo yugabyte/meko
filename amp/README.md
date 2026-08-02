@@ -193,8 +193,8 @@ repo root from its own location, so it works from any working directory
 ```sh
 ./yb_amp_local init                          # writes the .yb_amp repo dir
 ./yb_amp_local start                         # controller, safekeeper, pageserver, endpoint_storage
-./yb_amp_local branch create --set-default
-./yb_amp_local endpoint create main --branch-name main
+./yb_amp_local project create main           # a lineage; prints its root branch id
+./yb_amp_local endpoint create main --branch-id <branch-id>
 ./yb_amp_local endpoint start main
 ```
 
@@ -214,14 +214,18 @@ Once running, connect with any Postgres client:
 psql -p 55432 -h 127.0.0.1 -U cloud_admin postgres
 ```
 
-Branches are a cheap timeline forks at a given LSN, served out of
-the same YB rows:
+Branches are cheap timeline forks at a given LSN, served out of the same YB
+rows. A branch always forks an existing one, addressed by id — a lineage with no
+ancestor is a *project*, so `project create` makes those:
 
 ```sh
-yb_amp_local branch create --branch-name migration_check --ancestor-branch-name main
-yb_amp_local endpoint create migration_check --branch-name migration_check
+yb_amp_local branch create --branch-name migration_check --ancestor-branch-id <branch-id>
+yb_amp_local endpoint create migration_check --branch-id <new-branch-id>
 yb_amp_local endpoint start migration_check
 ```
+
+Both commands print `branch <id> successfully created`, so the id for the next
+step comes straight off the previous one.
 
 
 ## Service endpoints

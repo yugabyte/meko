@@ -54,21 +54,22 @@ type endpointConf struct {
 // loadEndpoints fetches all persisted endpoint records from the controller,
 // mirroring Rust `ComputeControlPlane::load`.
 func loadEndpoints(ctx context.Context, env *config.LocalEnv) (map[string]endpointConf, error) {
-	ctrl, err := controllerClient(env)
-	if err != nil {
-		return nil, err
-	}
-	records, err := ctrl.EndpointList(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing endpoints from controller: %w", err)
-	}
-	out := make(map[string]endpointConf, len(records))
-	for _, rec := range records {
-		var conf endpointConf
-		if err := json.Unmarshal(rec.Spec, &conf); err != nil {
-			return nil, fmt.Errorf("deserializing spec for endpoint %s: %w", rec.EndpointID, err)
+	out := map[string]endpointConf{}
+	if err := eachProjectController(ctx, env, func(ctrl *client.Controller) error {
+		records, err := ctrl.EndpointList(ctx)
+		if err != nil {
+			return fmt.Errorf("listing endpoints from controller: %w", err)
 		}
-		out[rec.EndpointID] = conf
+		for _, rec := range records {
+			var conf endpointConf
+			if err := json.Unmarshal(rec.Spec, &conf); err != nil {
+				return fmt.Errorf("deserializing spec for endpoint %s: %w", rec.EndpointID, err)
+			}
+			out[rec.EndpointID] = conf
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -108,9 +109,8 @@ func findFreePort(start uint16) (uint16, error) {
 
 // EndpointCreateArgs are the flags of `endpoint create`.
 type EndpointCreateArgs struct {
-	EndpointID       string // optional positional; defaults to "ep-<branch_name>"
-	BranchID         string
-	BranchName       string
+	EndpointID       string // optional positional; defaults to "ep-<branch_id>"
+	BranchID         string // required: the branch to place the endpoint on
 	PgVersion        int
 	PgPort           *uint16
 	ExternalHTTPPort *uint16
@@ -134,44 +134,22 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		return err
 	}
 
-	branchName := args.BranchName
-	if branchName == "" {
-		branchName = DefaultBranchName
+	// A branch is addressed by id, never by name: names are unique only within a
+	// project, and the launcher spans several (a lineage is a project).
+	branchID := config.BranchID(args.BranchID)
+	if branchID == "" {
+		return fmt.Errorf("`endpoint create` requires --branch-id")
 	}
 	endpointID := args.EndpointID
 	if endpointID == "" {
-		endpointID = "ep-" + branchName
+		endpointID = "ep-" + string(branchID)
 	}
 
-	ctrl, err := controllerClient(env)
+	// Scope to the project that owns this branch: a lineage is a project, so the
+	// branch is what says which one.
+	ctrl, err := controllerClientForBranch(ctx, env, branchID)
 	if err != nil {
 		return err
-	}
-
-	// Resolve the branch id: explicit --branch-id wins; else by registered
-	// name; else by a created branch's name.
-	branchID := args.BranchID
-	if branchID == "" {
-		id, err := getBranchTimelineID(ctx, env, ctrl, branchName)
-		if err != nil {
-			return err
-		}
-		if id == "" {
-			branches, err := ctrl.ListBranches(ctx)
-			if err != nil {
-				return err
-			}
-			for _, b := range branches {
-				if b.BranchName == branchName {
-					id = b.BranchID
-					break
-				}
-			}
-		}
-		if id == "" {
-			return fmt.Errorf("Found no branch id for branch name '%s'", branchName)
-		}
-		branchID = id
 	}
 
 	// Primary mode only; conflict check unless allow_multiple (not exposed).
@@ -655,7 +633,7 @@ func EndpointStop(ctx context.Context, env *config.LocalEnv, endpointID string, 
 		if err := os.RemoveAll(endpointDir); err != nil {
 			return fmt.Errorf("remove endpoint dir %q: %w", endpointDir, err)
 		}
-		ctrl, err := controllerClient(env)
+		ctrl, err := controllerClientForBranch(ctx, env, conf.BranchID)
 		if err != nil {
 			return err
 		}

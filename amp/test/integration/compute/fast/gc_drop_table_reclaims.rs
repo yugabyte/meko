@@ -18,8 +18,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Dedicated branch + endpoint");
-    let b = c.branch_create_named("gc_dt", "main")?;
-    c.endpoint_create_on_branch("ep_gc_dt", "gc_dt", branch_pg_port)?;
+    let b = c.branch_create_named("gc_dt", c.branch())?;
+    c.endpoint_create_on_branch("ep_gc_dt", &b, branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
 
     step("Seed a table and capture its relfilenode");

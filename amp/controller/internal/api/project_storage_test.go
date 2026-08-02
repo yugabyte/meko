@@ -28,6 +28,13 @@ import (
 // project-scoped branch table, so the project id travels with it. failRecord, when
 // set, makes RecordBranchRecipe fail so the handler's error path can be tested.
 type fakeRecipeStore struct {
+	// backend, when set, is where the fake materializes the branch. In production
+	// RecordBranch is the branch's creator on the fork path — the whole branch task
+	// is one transaction so a rejected fork leaves nothing — so a fake that only
+	// records the call would let these tests pass while the real thing created no
+	// branch at all.
+	backend *core.MemBackend
+
 	mu              sync.Mutex
 	recordHit       bool
 	recordedProject uuid.UUID
@@ -46,7 +53,24 @@ func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, projectID uuid.U
 	f.recordedProject = projectID
 	f.recordedBranch = branchID
 	f.recordedReq = r
-	return nil
+	if f.backend == nil {
+		return nil
+	}
+	// Mirror the real store: declare the branch as part of this call.
+	id, err := uuid.Parse(branchID)
+	if err != nil {
+		return fmt.Errorf("parse branch id %q: %w", branchID, err)
+	}
+	var parent uuid.UUID
+	if r.AncestorBranchID != "" {
+		if parent, err = uuid.Parse(r.AncestorBranchID); err != nil {
+			return fmt.Errorf("parse ancestor id %q: %w", r.AncestorBranchID, err)
+		}
+	}
+	if parent == uuid.Nil {
+		return nil // a project's default branch is created by create_project
+	}
+	return f.backend.EnsureBranch(context.Background(), parent, projectID, id, r.BranchName, r.StartLSN, r.PgVersion)
 }
 
 // newProjectControllersProv builds the controllers for the direct-call tests over
@@ -57,6 +81,11 @@ func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, projectID uuid.U
 func newProjectControllersProv(t *testing.T, prov api.Provisioning) (*api.Controllers, *core.MemBackend, *task.MemStore) {
 	t.Helper()
 	backend := core.NewMemBackend()
+	// The recipe store is the branch's creator on the fork path, so point the fake
+	// at the same backend the assertions read (see fakeRecipeStore.backend).
+	if fr, ok := prov.Recipes.(*fakeRecipeStore); ok {
+		fr.backend = backend
+	}
 	store := task.NewMemStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return api.NewControllers(backend, task.NewService(store), prov, logger), backend, store
@@ -519,8 +548,10 @@ func TestCreateBranchNoController(t *testing.T) {
 		t.Fatalf("response = %T, want CreateBranch400JSONResponse (no SC, no fork_point_lsn)", resp)
 	}
 
-	// Explicit fork point + no controller -> 202; the task materializes the branch
-	// row carrying the fork LSN (no recipe, since there is no controller).
+	// Explicit fork point + no store -> still 202 (the handler validated what it
+	// can), but the TASK fails: record_branch_recipe is what declares the branch,
+	// so without a store there is no branch to create and the step says so rather
+	// than reporting success having done nothing.
 	lsn := "0/ABCDEF1"
 	resp, err = c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
@@ -534,10 +565,32 @@ func TestCreateBranchNoController(t *testing.T) {
 		t.Fatalf("response = %T, want CreateBranch202JSONResponse", resp)
 	}
 	drainTasks(t, store, backend, prov)
-	if got := soleTaskWithKind(t, store, "branch"); got.Status != task.StatusSucceeded {
+	if got := soleTaskWithKind(t, store, "branch"); got.Status != task.StatusFailed {
+		t.Fatalf("branch task status = %q, want failed (no storage-layer store)", got.Status)
+	}
+
+	// And with a store wired, the same request declares the branch and carries the
+	// fork LSN — the task's one step does both.
+	provWithStore := api.Provisioning{Recipes: &fakeRecipeStore{}}
+	c2, backend2, store2 := newProjectControllersProv(t, provWithStore)
+	poolID2 := seedUserPool(t, backend2)
+	project2 := mustCreateProjectC(t, c2, store2, backend2, provWithStore, poolID2, "main")
+	resp, err = c2.CreateBranch(context.Background(), api.CreateBranchRequestObject{
+		PoolId:    poolID2,
+		ProjectId: project2.Id,
+		Body:      &api.CreateBranchJSONRequestBody{Name: "feature", ForkPointLsn: &lsn},
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch(with store): %v", err)
+	}
+	if _, ok := resp.(api.CreateBranch202JSONResponse); !ok {
+		t.Fatalf("response = %T, want CreateBranch202JSONResponse", resp)
+	}
+	drainTasks(t, store2, backend2, provWithStore)
+	if got := soleTaskWithKind(t, store2, "branch"); got.Status != task.StatusSucceeded {
 		t.Fatalf("branch task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
-	if got := branchByName(t, c, poolID, project.Id, "feature").ForkLsn; got == nil || *got != lsn {
+	if got := branchByName(t, c2, poolID2, project2.Id, "feature").ForkLsn; got == nil || *got != lsn {
 		t.Errorf("fork_lsn = %v, want %q", got, lsn)
 	}
 }

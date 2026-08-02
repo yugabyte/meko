@@ -41,8 +41,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Branch off main + endpoint");
-    let b = c.branch_create_named("mat_st", "main")?;
-    c.endpoint_create_on_branch("ep_mat_st", "mat_st", branch_pg_port)?;
+    let b = c.branch_create_named("mat_st", c.branch())?;
+    c.endpoint_create_on_branch("ep_mat_st", &b, branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
 
     let parent = db::query_text(

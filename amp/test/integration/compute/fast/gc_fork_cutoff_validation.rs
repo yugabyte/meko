@@ -35,8 +35,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let pg_port = c.compute_port() + 140;
 
     step("Create an isolated parent branch + endpoint");
-    let parent_id = c.branch_create_root_named(PARENT)?;
-    c.endpoint_create_on_branch(ENDPOINT, PARENT, pg_port)?;
+    let parent_id = c.project_create(PARENT)?;
+    c.endpoint_create_on_branch(ENDPOINT, &parent_id, pg_port)?;
     let parent = db::compute_conn(pg_port);
     let mut ready = false;
     for _ in 0..60 {
@@ -101,7 +101,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         "SELECT count(*) FROM amp_storage.branch_state WHERE ancestor_branch_id = '{parent_id}'"
     );
     let children_before = db::query_i64(&yb, &children_sql).await?;
-    let (created, out) = c.branch_create_at("gc_fork_doomed", PARENT, &doomed)?;
+    let (created, out) = c.branch_create_at("gc_fork_doomed", &parent_id, &doomed)?;
     if let Some(id) = created {
         bail!("fork at {doomed} (below cutoff {cutoff}) was accepted as {id}:\n{out}");
     }
@@ -122,7 +122,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("A fork at the durable head succeeds and registers its row");
-    let ok_branch = c.branch_create_named("gc_fork_ok", PARENT)?;
+    let ok_branch = c.branch_create_named("gc_fork_ok", &parent_id)?;
     let row = db::query_text_opt(
         &yb,
         &format!(

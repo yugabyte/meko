@@ -36,8 +36,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     .await?;
 
     step("Branch off main and start the child endpoint (pins the parent's cutoff)");
-    let b1 = c.branch_create_named("gc_pin_b1", "main")?;
-    c.endpoint_create_on_branch("ep_gc_pin", "gc_pin_b1", branch_pg_port)?;
+    let b1 = c.branch_create_named("gc_pin_b1", c.branch())?;
+    c.endpoint_create_on_branch("ep_gc_pin", &b1, branch_pg_port)?;
     let bconn = db::compute_conn(branch_pg_port);
 
     step("Parent overwrites those same blocks hard and its drain runs");

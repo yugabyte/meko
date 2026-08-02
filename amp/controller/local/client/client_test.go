@@ -54,47 +54,6 @@ func recordingServer(t *testing.T, cap *capture, status int, respBody string) *h
 
 func ptrStr(s string) *string { return &s }
 
-func TestControllerRecordAndListBranches(t *testing.T) {
-	var cap capture
-
-	// Record.
-	rec := recordingServer(t, &cap, http.StatusOK, `null`)
-	c := NewController(rec.URL, testProjectID, nil)
-	err := c.RecordBranch(context.Background(), "branch-xyz", registry.BranchCreateRecord{
-		BranchName: "main",
-		PgVersion:  180000,
-		StartLSN:   "0/0",
-	})
-	if err != nil {
-		t.Fatalf("RecordBranch: %v", err)
-	}
-	if cap.method != http.MethodPost || cap.path != testProjectBase+"/branch/branch-xyz/record" {
-		t.Fatalf("record hit %s %s", cap.method, cap.path)
-	}
-	var sent registry.BranchCreateRecord
-	if err := json.Unmarshal(cap.body, &sent); err != nil {
-		t.Fatalf("bad record body: %v", err)
-	}
-	if sent.BranchName != "main" || sent.PgVersion != 180000 || sent.StartLSN != "0/0" {
-		t.Fatalf("unexpected record body: %+v", sent)
-	}
-
-	// List.
-	lst := recordingServer(t, &cap, http.StatusOK,
-		`[{"branch_id":"branch-xyz","branch_name":"main","pg_version":180000,"ancestor_branch_id":null,"start_lsn":"0/0"}]`)
-	c2 := NewController(lst.URL, testProjectID, nil)
-	branches, err := c2.ListBranches(context.Background())
-	if err != nil {
-		t.Fatalf("ListBranches: %v", err)
-	}
-	if cap.method != http.MethodGet || cap.path != testProjectBase+"/branches" {
-		t.Fatalf("list hit %s %s", cap.method, cap.path)
-	}
-	if len(branches) != 1 || branches[0].BranchID != "branch-xyz" || branches[0].PgVersion != 180000 {
-		t.Fatalf("unexpected branches: %+v", branches)
-	}
-}
-
 func TestControllerEndpointCreateAndList(t *testing.T) {
 	var cap capture
 	rec := recordingServer(t, &cap, http.StatusOK, `null`)
@@ -140,19 +99,6 @@ func TestControllerEndpointCreateAndList(t *testing.T) {
 	}
 	if cap.method != http.MethodDelete || cap.path != testProjectBase+"/endpoint/ep-1" {
 		t.Fatalf("delete hit %s %s", cap.method, cap.path)
-	}
-}
-
-func TestControllerListBranchNames(t *testing.T) {
-	var cap capture
-	names := recordingServer(t, &cap, http.StatusOK, `[{"branch_id":"b1","branch_name":"main"}]`)
-	c2 := NewController(names.URL, testProjectID, nil)
-	got, err := c2.ListBranchNames(context.Background())
-	if err != nil {
-		t.Fatalf("ListBranchNames: %v", err)
-	}
-	if len(got) != 1 || got[0].BranchID != "b1" || got[0].BranchName != "main" {
-		t.Fatalf("unexpected names: %+v", got)
 	}
 }
 

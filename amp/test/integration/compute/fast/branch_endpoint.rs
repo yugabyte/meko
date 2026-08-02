@@ -34,7 +34,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("Create branch b1 (records the branch point; PS/SK come up at endpoint create)");
-    c.yb(&["branch", "create", "--branch-name", "b1", "--ancestor-branch-name", "main"])?;
+    let branch_id = c.branch_create_named("b1", c.branch())?;
 
     step("Write post-branch data on main (must NOT be visible on b1)");
     db::batch(
@@ -45,7 +45,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     step("Create + start endpoint on b1 (provisions pageserver 2 + safekeeper 2)");
     c.yb(&[
-        "endpoint", "create", "ep_b1", "--branch-name", "b1",
+        "endpoint", "create", "ep_b1", "--branch-id", &branch_id,
         "--pg-version", "18", "--pg-port", &branch_pg_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_b1"])?;

@@ -211,7 +211,7 @@ func TestListBranches(t *testing.T) {
 	if br.JSON202.Kind != "branch" {
 		t.Errorf("task kind = %q, want branch", br.JSON202.Kind)
 	}
-	drainTasks(t, store, backend, api.Provisioning{Deployer: &fakeDeployer{}})
+	drainTasks(t, store, backend, api.Provisioning{Deployer: &fakeDeployer{}, Recipes: &fakeRecipeStore{backend: backend}})
 
 	// Now the project lists both branches; the fork carries parent + is_default=false.
 	both, err := client.ListBranchesWithResponse(ctx, pool.Id, project.Id, nil)

@@ -14,24 +14,19 @@ import (
 // instance — the same pattern as the health probes and /metrics. They are the
 // surface yb_amp_local and the integration harness drive.
 //
+// The surface carries the launcher's endpoint records; branches are ordinary
+// /api/v1 resources. #516 moves the endpoints there too, leaving /ready.
+//
 // Every route is project-scoped. The storage layer's own namespace is flat, but
 // the rows it addresses live in the control plane's resource model, which is not:
-// a branch belongs to a project. yb_amp_local provisions one through /api/v1 at
-// startup and passes its id here, so a launcher branch is an ordinary branch that
-// shows up on the product API rather than a parallel universe of its own.
+// an endpoint belongs to a branch, and that branch to a project. yb_amp_local
+// provisions one through /api/v1 at startup and passes its id here.
 func Register(e *echo.Echo, store *Store) {
 	h := &handlers{store: store}
 
 	e.GET("/ready", h.ready)
 
 	const base = "/control/v1/projects/:project_id"
-
-	e.PUT(base+"/branch/:branch_id/branch_name", h.setBranchName)
-	e.GET(base+"/timeline_branch_names", h.listBranchNames)
-	e.PUT(base+"/branch/:branch_id/drop", h.branchDrop)
-
-	e.POST(base+"/branch/:branch_id/record", h.recordBranch)
-	e.GET(base+"/branches", h.listBranches)
 
 	e.POST(base+"/endpoint", h.endpointCreate)
 	e.GET(base+"/endpoint", h.endpointList)
@@ -59,71 +54,6 @@ func (h *handlers) ready(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "database unavailable")
 	}
 	return c.JSON(http.StatusOK, nil)
-}
-
-func (h *handlers) setBranchName(c echo.Context) error {
-	pid, err := projectID(c)
-	if err != nil {
-		return err
-	}
-	var req SetBranchNameRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	if err := h.store.SetBranchName(c.Request().Context(), pid, c.Param("branch_id"), req); err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, nil)
-}
-
-func (h *handlers) listBranchNames(c echo.Context) error {
-	pid, err := projectID(c)
-	if err != nil {
-		return err
-	}
-	names, err := h.store.ListBranchNames(c.Request().Context(), pid)
-	if err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, names)
-}
-
-func (h *handlers) branchDrop(c echo.Context) error {
-	pid, err := projectID(c)
-	if err != nil {
-		return err
-	}
-	if err := h.store.BranchDrop(c.Request().Context(), pid, c.Param("branch_id")); err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, nil)
-}
-
-func (h *handlers) recordBranch(c echo.Context) error {
-	pid, err := projectID(c)
-	if err != nil {
-		return err
-	}
-	var req BranchCreateRecord
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	if err := h.store.RecordBranch(c.Request().Context(), pid, c.Param("branch_id"), req); err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, nil)
-}
-
-func (h *handlers) listBranches(c echo.Context) error {
-	pid, err := projectID(c)
-	if err != nil {
-		return err
-	}
-	branches, err := h.store.ListBranches(c.Request().Context(), pid)
-	if err != nil {
-		return mapErr(err)
-	}
-	return c.JSON(http.StatusOK, branches)
 }
 
 func (h *handlers) endpointCreate(c echo.Context) error {

@@ -322,11 +322,9 @@ impl Cluster {
         self.yb(&init_args)?;
         self.yb(&["start"])?;
 
-        step("branch + endpoint");
-        let branch = self.branch_create()?;
-        if branch.is_empty() {
-            bail!("branch create failed");
-        }
+        step("project + endpoint");
+        // The shared `main` lineage is a project like any other.
+        let branch = self.project_create("main")?;
         tee_println!("branch: {branch}");
         self.branch = branch;
 
@@ -340,8 +338,6 @@ impl Cluster {
             "main",
             "--branch-id",
             &branch,
-            "--branch-name",
-            "main",
             "--pg-version",
             "18",
             "--pg-port",
@@ -483,90 +479,19 @@ impl Cluster {
         }
     }
 
-    /// `branch create --pg-version 18`, parsing the branch id out of the
-    /// "branch <id> successfully created" stdout line.
-    pub fn branch_create(&self) -> anyhow::Result<String> {
-        let out = self
-            .yb_command()
-            .args(["branch", "create", "--pg-version", "18"])
-            .output()
-            .context("spawning yb_amp_local branch create")?;
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let branch = text
-            .lines()
-            .find(|l| l.contains("successfully created"))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .unwrap_or("")
-            .to_string();
-        Ok(branch)
-    }
-
-    /// Create a named ROOT branch (no ancestor) and return its id. For
-    /// scenarios that need their own ancestor to fork from: children of
-    /// the shared `main` pin its GC cutoff for the rest of the suite run
-    /// (a dropped child's `branch_state` row keeps pinning), so a
-    /// cutoff-sensitive scenario cannot use `main`.
-    pub fn branch_create_root_named(&self, name: &str) -> anyhow::Result<String> {
-        let out = self
-            .yb_command()
-            .args([
-                "branch",
-                "create",
-                "--branch-name",
-                name,
-                "--pg-version",
-                "18",
-            ])
-            .output()
-            .context("spawning yb_amp_local branch create")?;
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let branch = text
-            .lines()
-            .find(|l| l.contains("successfully created"))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .unwrap_or("")
-            .to_string();
-        if branch.is_empty() {
-            bail!("branch create --branch-name {name} produced no id:\n{text}");
-        }
-        Ok(branch)
-    }
-
-    /// Like [`Self::branch_create_named`] but forks at an explicit
-    /// ancestor LSN and never bails on rejection: returns the created
-    /// branch id (if any) plus the CLI's combined output, so scenarios
-    /// can assert both the accept and the reject direction of the fork
-    /// validation.
-    pub fn branch_create_at(
+    /// Run a `yb_amp_local` command and scrape the branch id out of the
+    /// "branch <id> successfully created" line. Returns the id (if any) plus the
+    /// combined output, so callers can assert on a rejection too.
+    fn scrape_branch_id(
         &self,
-        name: &str,
-        ancestor: &str,
-        start_lsn: &str,
+        args: &[&str],
+        what: &str,
     ) -> anyhow::Result<(Option<String>, String)> {
         let out = self
             .yb_command()
-            .args([
-                "branch",
-                "create",
-                "--branch-name",
-                name,
-                "--ancestor-branch-name",
-                ancestor,
-                "--ancestor-start-lsn",
-                start_lsn,
-                "--pg-version",
-                "18",
-            ])
+            .args(args)
             .output()
-            .context("spawning yb_amp_local branch create")?;
+            .with_context(|| format!("spawning yb_amp_local {what}"))?;
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
@@ -580,40 +505,62 @@ impl Cluster {
         Ok((branch, text))
     }
 
-    /// Create a named child branch off `ancestor` and return its branch
-    /// id (parsed from the "branch <id> successfully created" line). Like
-    /// [`Self::branch_create`] but names the branch and its ancestor, which
-    /// the GC scenarios need so they can address the child's rows in YB.
-    pub fn branch_create_named(&self, name: &str, ancestor: &str) -> anyhow::Result<String> {
-        let out = self
-            .yb_command()
-            .args([
+    /// Create a PROJECT and return its default branch's id — the root of a new
+    /// lineage, with its own initdb and its own GC cutoff.
+    ///
+    /// This is how a scenario gets an ancestor of its own. Children of the shared
+    /// `main` pin its GC cutoff for the rest of the suite run (a dropped child's
+    /// `branch_state` row keeps pinning), so a cutoff-sensitive scenario cannot
+    /// fork `main`. There is no such thing as a rootless branch: a lineage is a
+    /// project, in the launcher exactly as in the product.
+    pub fn project_create(&self, name: &str) -> anyhow::Result<String> {
+        let (branch, text) =
+            self.scrape_branch_id(&["project", "create", name], "project create")?;
+        branch
+            .ok_or_else(|| anyhow::anyhow!("project create {name} produced no branch id:\n{text}"))
+    }
+
+    /// Fork `ancestor_id` and return the new branch's id.
+    pub fn branch_create_named(&self, name: &str, ancestor_id: &str) -> anyhow::Result<String> {
+        let (branch, text) = self.scrape_branch_id(
+            &[
                 "branch",
                 "create",
                 "--branch-name",
                 name,
-                "--ancestor-branch-name",
-                ancestor,
-                "--pg-version",
-                "18",
-            ])
-            .output()
-            .context("spawning yb_amp_local branch create")?;
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let branch = text
-            .lines()
-            .find(|l| l.contains("successfully created"))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .unwrap_or("")
-            .to_string();
-        if branch.is_empty() {
-            bail!("branch create --branch-name {name} produced no id:\n{text}");
-        }
-        Ok(branch)
+                "--ancestor-branch-id",
+                ancestor_id,
+            ],
+            "branch create",
+        )?;
+        branch.ok_or_else(|| {
+            anyhow::anyhow!("branch create --branch-name {name} produced no id:\n{text}")
+        })
+    }
+
+    /// Like [`Self::branch_create_named`] but forks at an explicit ancestor LSN
+    /// and never bails on rejection: returns the created branch id (if any) plus
+    /// the CLI's combined output, so scenarios can assert both the accept and the
+    /// reject direction of the fork validation.
+    pub fn branch_create_at(
+        &self,
+        name: &str,
+        ancestor_id: &str,
+        start_lsn: &str,
+    ) -> anyhow::Result<(Option<String>, String)> {
+        self.scrape_branch_id(
+            &[
+                "branch",
+                "create",
+                "--branch-name",
+                name,
+                "--ancestor-branch-id",
+                ancestor_id,
+                "--ancestor-start-lsn",
+                start_lsn,
+            ],
+            "branch create",
+        )
     }
 
     /// Create + start an endpoint on `branch_name` at `pg_port`. Scenarios
@@ -622,7 +569,7 @@ impl Cluster {
     pub fn endpoint_create_on_branch(
         &self,
         ep_name: &str,
-        branch_name: &str,
+        branch_id: &str,
         pg_port: u16,
     ) -> anyhow::Result<()> {
         let out = self
@@ -631,8 +578,8 @@ impl Cluster {
                 "endpoint",
                 "create",
                 ep_name,
-                "--branch-name",
-                branch_name,
+                "--branch-id",
+                branch_id,
                 "--pg-version",
                 "18",
                 "--pg-port",

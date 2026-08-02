@@ -32,7 +32,6 @@ func fullConfig() OnDiskConfig {
 	return OnDiskConfig{
 		PgDistribDir:    "/pg",
 		YbAmpDistribDir: "/yb-amp",
-		DefaultBranchID: &branch,
 		PrivateKeyPath:  "auth_private_key.pem",
 		PublicKeyPath:   "auth_public_key.pem",
 		Controller:      ctrl,

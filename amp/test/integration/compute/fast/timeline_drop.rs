@@ -13,15 +13,12 @@ use crate::db;
 
 const ENDPOINT_ID: &str = "ep_drop";
 const BRANCH_NAME: &str = "drop_me";
-// Explicit, known branch id so we can address the branch in `branch drop`
-// and query its registry row directly.
-const BRANCH_ID: &str = "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0";
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Branch endpoint sits in the compute lane just above `main`.
     let branch_pg_port = c.compute_port() + 101;
     let main = db::compute_conn(c.compute_port());
-    let branch = db::compute_conn(branch_pg_port);
+    let branch_conn = db::compute_conn(branch_pg_port);
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Seed data on main");
@@ -34,37 +31,36 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     )
     .await?;
 
-    step("Create branch with an explicit branch id");
-    c.yb(&[
-        "branch", "create", "--branch-name", BRANCH_NAME, "--ancestor-branch-name", "main",
-        "--branch-id", BRANCH_ID,
-    ])?;
+    // The controller assigns branch ids, so scrape the one it created rather than
+    // pinning a literal.
+    step("Create a branch off main");
+    let branch_id = c.branch_create_named(BRANCH_NAME, c.branch())?;
 
     step("Create + start an endpoint on the branch");
     c.yb(&[
-        "endpoint", "create", ENDPOINT_ID, "--branch-id", BRANCH_ID, "--branch-name", BRANCH_NAME,
+        "endpoint", "create", ENDPOINT_ID, "--branch-id", &branch_id,
         "--pg-version", "18", "--pg-port", &branch_pg_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", ENDPOINT_ID])?;
 
     step("Branch endpoint serves the seeded data via lineage");
-    let count = db::query_i64(&branch, "SELECT count(*) FROM drop_seed").await?;
+    let count = db::query_i64(&branch_conn, "SELECT count(*) FROM drop_seed").await?;
     if count != 100 {
         bail!("branch sees {count} rows, want 100");
     }
 
     step("Pre-drop: the branch is a live branch with an endpoint record");
-    let live = live_branch_rows(&yb).await?;
+    let live = live_branch_rows(&yb, &branch_id).await?;
     if live != 1 {
         bail!("pre-drop live branch rows = {live}, want 1");
     }
-    let eps = endpoint_rows(&yb).await?;
+    let eps = endpoint_rows(&yb, &branch_id).await?;
     if eps < 1 {
         bail!("pre-drop endpoint rows = {eps}, want >= 1");
     }
 
     step("Drop the branch and all its endpoints");
-    c.yb(&["branch", "drop", "--branch-id", BRANCH_ID])?;
+    c.yb(&["branch", "drop", "--branch-id", &branch_id])?;
 
     step("Post-drop: the endpoint's local dir is gone");
     let ep_dir = c.repo_dir().join("endpoints").join(ENDPOINT_ID);
@@ -73,13 +69,13 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 
     step("Post-drop: the endpoint record is deleted from the controller");
-    let eps = endpoint_rows(&yb).await?;
+    let eps = endpoint_rows(&yb, &branch_id).await?;
     if eps != 0 {
         bail!("post-drop endpoint rows = {eps}, want 0");
     }
 
     step("Post-drop: the branch is tombstoned, not live");
-    let live = live_branch_rows(&yb).await?;
+    let live = live_branch_rows(&yb, &branch_id).await?;
     if live != 0 {
         bail!("post-drop live branch rows = {live}, want 0 (branch should be tombstoned)");
     }
@@ -87,7 +83,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &yb,
         &format!(
             "SELECT count(*) FROM amp_registry.branches \
-             WHERE replace(branch_id::text, '-', '') = '{BRANCH_ID}' \
+             WHERE replace(branch_id::text, '-', '') = '{branch_id}' \
                AND dropped_at IS NOT NULL"
         ),
     )
@@ -110,12 +106,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 /// One branch table serves both the product API and the storage-layer control
 /// surface, so it is keyed by uuid; the flat 32-hex BranchId the launcher uses is
 /// that same value with the dashes taken out.
-async fn live_branch_rows(yb: &str) -> anyhow::Result<i64> {
+async fn live_branch_rows(yb: &str, branch_id: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
             "SELECT count(*) FROM amp_registry.branches \
-             WHERE replace(branch_id::text, '-', '') = '{BRANCH_ID}' \
+             WHERE replace(branch_id::text, '-', '') = '{branch_id}' \
                AND dropped_at IS NULL"
         ),
     )
@@ -123,12 +119,12 @@ async fn live_branch_rows(yb: &str) -> anyhow::Result<i64> {
 }
 
 /// Count of endpoint records pinned to our branch.
-async fn endpoint_rows(yb: &str) -> anyhow::Result<i64> {
+async fn endpoint_rows(yb: &str, branch_id: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
             "SELECT count(*) FROM amp_registry.endpoints \
-             WHERE replace(branch_id::text, '-', '') = '{BRANCH_ID}'"
+             WHERE replace(branch_id::text, '-', '') = '{branch_id}'"
         ),
     )
     .await

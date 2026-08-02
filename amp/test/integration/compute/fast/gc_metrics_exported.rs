@@ -17,8 +17,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_pg_port = c.compute_port() + 160;
 
     step("Dedicated branch + endpoint");
-    let b = c.branch_create_named("gc_metrics", "main")?;
-    c.endpoint_create_on_branch("ep_gc_metrics", "gc_metrics", branch_pg_port)?;
+    let b = c.branch_create_named("gc_metrics", c.branch())?;
+    c.endpoint_create_on_branch("ep_gc_metrics", &b, branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let http = c.endpoint_ps_http_port("ep_gc_metrics")?;
 

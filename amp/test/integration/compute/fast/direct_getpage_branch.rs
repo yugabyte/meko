@@ -52,9 +52,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     .context("parse branch lsn")?;
 
     step("branch dgp_br off main + provision its endpoint (attaches the branch)");
-    c.yb(&["branch", "create", "--branch-name", "dgp_br", "--ancestor-branch-name", "main"])?;
+    let branch_id = c.branch_create_named("dgp_br", c.branch())?;
     c.yb(&[
-        "endpoint", "create", "ep_dgp_br", "--branch-name", "dgp_br",
+        "endpoint", "create", "ep_dgp_br", "--branch-id", &branch_id,
         "--pg-version", "18", "--pg-port", &br_port.to_string(),
     ])?;
     c.yb(&["endpoint", "start", "ep_dgp_br"])?;

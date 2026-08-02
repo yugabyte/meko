@@ -58,10 +58,11 @@ versioned `/api/v1` product API, implemented in
 | Method + path | Purpose |
 |---|---|
 | `GET /ready` | readiness (DB reachable + migrations applied) — the one unscoped route, so it answers before a project exists |
-| `PUT /control/v1/projects/{p}/branch/{id}/branch_name`, `PUT .../drop` | branch rename / tombstone |
-| `GET /control/v1/projects/{p}/timeline_branch_names` | branch-name listing |
-| `POST /control/v1/projects/{p}/branch/{id}/record`, `GET /control/v1/projects/{p}/branches` | declare a branch + seed its `amp_storage.branch_state`; list live branches |
 | `POST/GET /control/v1/projects/{p}/endpoint`, `DELETE /control/v1/projects/{p}/endpoint/{id}` | launcher endpoint records |
+
+The launcher's endpoint records are all this surface carries; branches are
+ordinary `/api/v1` resources. #516 moves the endpoints there too, leaving
+`/ready`.
 
 The wire shapes match the launcher client DTOs in `controller/local/client`. In
 dev/local the surface is unauthenticated

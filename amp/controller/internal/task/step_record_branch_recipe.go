@@ -52,7 +52,23 @@ func buildRecordBranchRecipeStep(raw json.RawMessage, deps Deps) (Step, error) {
 func (*recordBranchRecipeStep) Kind() string { return StepRecordBranchRecipe }
 
 func (s *recordBranchRecipeStep) Execute(ctx context.Context) StepResult {
+	// What a missing store costs depends on which branch this is, because this step
+	// plays two roles:
+	//
+	//   - For a FORK it is the branch's creator: the row, its
+	//     amp_storage.branch_state seed, and the fork/GC-cutoff interlock commit in
+	//     one transaction (that atomicity is why a rejected fork leaves no orphan).
+	//     With no store there is no branch at all, so Ok would be a task reporting
+	//     success having created nothing. Fail.
+	//   - For a project's DEFAULT branch there is no ancestor and no interlock, and
+	//     the row was already written by create_project. Only the branch_state seed
+	//     is missed, which degrades exactly as it always has: the branch exists in
+	//     the control plane but nothing can materialize it.
 	if s.recipes == nil {
+		if s.AncestorBranchID != nil {
+			return Fail(fmt.Errorf(
+				"cannot declare branch %s: no storage-layer store is configured", s.BranchID))
+		}
 		applog.FromContext(ctx).Warn("no storage-layer store; branch declared in the control plane but not seeded for attach",
 			applog.KeyProjectID, s.ProjectID.String(), applog.KeyBranchID, s.BranchID.String())
 		return Ok(mustResult(map[string]bool{"recorded": false}))

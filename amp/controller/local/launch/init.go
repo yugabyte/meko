@@ -1,8 +1,6 @@
 package launch
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,20 +56,6 @@ type InitArgs struct {
 	NumPageservers uint16 // default 1; only the single-PS path is supported
 	Force          InitForceMode
 }
-
-// generateBranchID returns a fresh 32-hex-char (128-bit) branch id, mirroring
-// Rust `BranchId::generate`.
-func generateBranchID() (config.BranchID, error) {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return "", fmt.Errorf("generate branch id: %w", err)
-	}
-	return hex.EncodeToString(buf[:]), nil
-}
-
-// zeroBranchID is the all-zeros default_branch_id baked into the default init
-// config (Rust `BranchId::from_array([0; 16])`).
-const zeroBranchID = "00000000000000000000000000000000"
 
 // ybInlineTOML renders the shared [*.yb] connection block as the inline-table
 // string stored on the pageserver/safekeeper templates, mirroring Rust
@@ -192,7 +176,6 @@ func Init(args InitArgs) error {
 		return fmt.Errorf("generate auth keys: %w", err)
 	}
 
-	def := zeroBranchID
 	controllerConf := config.DefaultYbAmpControllerConf()
 	ybCopy := yb
 	controllerConf.Yb = &ybCopy
@@ -201,7 +184,6 @@ func Init(args InitArgs) error {
 	onDisk := config.OnDiskConfig{
 		PgDistribDir:        pgDistribDir,
 		YbAmpDistribDir:     ybAmpDistribDir,
-		DefaultBranchID:     &def,
 		PrivateKeyPath:      "auth_private_key.pem",
 		PublicKeyPath:       "auth_public_key.pem",
 		Controller:          controllerConf,

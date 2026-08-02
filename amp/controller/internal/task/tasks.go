@@ -107,7 +107,7 @@ func (s *Service) CreateProject(ctx context.Context, in CreateProjectInput) (*Ta
 		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{
 			ProjectID:  projectID,
 			BranchID:   branchID,
-			BranchName: defaultBranchName, // the default branch is always "main", not the project name
+			BranchName: defaultBranchName, // always "main", never the project name
 			PgVersion:  in.PgVersion,
 			StartLSN:   "0/0", // a default (Bootstrap) branch starts at the origin
 		}),
@@ -151,15 +151,14 @@ func (s *Service) Branch(ctx context.Context, in BranchInput) (*Task, error) {
 	branchID := uuid.New()
 	parent := in.ParentBranchID
 
+	// ONE step. The branch row, its amp_storage.branch_state seed, and the
+	// fork/GC-cutoff interlock all happen inside record_branch_recipe's single
+	// transaction, so a fork rejected for being below the ancestor's cutoff leaves
+	// nothing behind — splitting them across two steps would commit the row and
+	// then fail, orphaning a branch for a fork that never happened.
+	//
+	// create_branch is registered for task replay but planned by nothing.
 	steps := []StepSpec{
-		stepSpec(StepCreateBranch, CreateBranchArgs{
-			ParentBranchID: parent,
-			ProjectID:      in.ProjectID,
-			BranchID:       branchID,
-			Name:           in.Name,
-			ForkLSN:        in.ForkLSN,
-			PgVersion:      in.PgVersion,
-		}),
 		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{
 			ProjectID:        in.ProjectID,
 			BranchID:         branchID,
@@ -313,7 +312,8 @@ const roleReadWrite = "read_write"
 
 // defaultBranchName mirrors core.DefaultBranchName without importing core: a
 // project's default branch is always named "main", independent of the project
-// name. The create_project step (EnsureProject) names the branch the same way.
+// name and not settable by a caller. The create_project step (EnsureProject)
+// names the branch the same way.
 const defaultBranchName = "main"
 
 // create marshals the originating request as params, stamps the task's target

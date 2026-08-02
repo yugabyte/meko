@@ -217,7 +217,7 @@ Topology: single host, single YB instance, one controller, one
 pageserver + one safekeeper **per branch**, co-located under the
 endpoint that owns the branch, plus one endpoint_storage **per
 endpoint**. The PS+SK pair is provisioned at `endpoint create` —
-`branch create` only records the branch's init recipe (branch id,
+Branch creation only records the branch's init recipe (branch id,
 branch name, pg version, optional ancestor + start LSN) in the
 controller's `amp_registry.branches` row; the pair comes up
 under `endpoints/<endpoint>/{pageserver,safekeeper}` when the first

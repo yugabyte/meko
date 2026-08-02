@@ -8,14 +8,29 @@ import (
 // These tests pin the JSON wire shapes the launcher's client expects. A field
 // rename that silently broke the contract would fail here.
 
-func TestBranchRecordWire(t *testing.T) {
+// TestBranchCreateRecordWire pins the body of
+// POST /control/v1/projects/{p}/branch/{id}/record — still the in-process seam the
+// controller's record_branch_recipe step drives, and the launcher's client type.
+func TestBranchCreateRecordWire(t *testing.T) {
 	anc := "parent"
-	got := mustMarshal(t, BranchRecord{
-		BranchID: "b", BranchName: "main", PgVersion: 18, AncestorBranchID: &anc, StartLSN: "0/0",
+	got := mustMarshal(t, BranchCreateRecord{
+		BranchName: "main", PgVersion: 18, AncestorBranchID: &anc, StartLSN: "0/0",
 	})
-	want := `{"branch_id":"b","branch_name":"main","pg_version":18,"ancestor_branch_id":"parent","start_lsn":"0/0"}`
+	want := `{"branch_name":"main","pg_version":18,"ancestor_branch_id":"parent","start_lsn":"0/0"}`
 	if got != want {
-		t.Fatalf("branch record = %s, want %s", got, want)
+		t.Fatalf("branch create record = %s, want %s", got, want)
+	}
+}
+
+// TestComputeEndpointWire pins the launcher's endpoint record, whose `spec` is
+// opaque JSON the controller round-trips without interpreting.
+func TestComputeEndpointWire(t *testing.T) {
+	got := mustMarshal(t, ComputeEndpoint{
+		EndpointID: "ep-main", BranchID: "b", Spec: json.RawMessage(`{"k":"v"}`),
+	})
+	want := `{"endpoint_id":"ep-main","branch_id":"b","spec":{"k":"v"}}`
+	if got != want {
+		t.Fatalf("compute endpoint = %s, want %s", got, want)
 	}
 }
 

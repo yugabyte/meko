@@ -21,8 +21,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Dedicated branch + endpoint");
-    let b = c.branch_create_named("gc_invis", "main")?;
-    c.endpoint_create_on_branch("ep_gc_invis", "gc_invis", branch_pg_port)?;
+    let b = c.branch_create_named("gc_invis", c.branch())?;
+    c.endpoint_create_on_branch("ep_gc_invis", &b, branch_pg_port)?;
     let conn = db::compute_conn(branch_pg_port);
     let pages = format!("SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}'");
     let queue = format!("SELECT count(*) FROM amp_storage.pending_gc WHERE branch_id = '{b}'");

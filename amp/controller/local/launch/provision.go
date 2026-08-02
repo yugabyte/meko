@@ -262,32 +262,30 @@ func provisionTimelineForEndpoint(ctx context.Context, env *config.LocalEnv, end
 	if env.PageserverConfForBranch(branchID) != nil {
 		return nil
 	}
-	ctrl, err := controllerClient(env)
+	b, err := newBranchAPI(env)
 	if err != nil {
 		return err
 	}
-	branches, err := ctrl.ListBranches(ctx)
+	branch, err := b.resolveBranch(ctx, branchID)
 	if err != nil {
 		return err
-	}
-	var branch *registry.BranchRecord
-	for i := range branches {
-		if branches[i].BranchID == branchID {
-			branch = &branches[i]
-			break
-		}
 	}
 	if branch == nil {
 		return fmt.Errorf(
 			"branch %s has no provisioned pageserver and no creation record; run `branch create` first", branchID)
 	}
 
-	// A NULL ancestor means bootstrap (initdb + import); a set one means fork
-	// that ancestor at its start LSN.
-	if branch.AncestorBranchID == nil {
+	// A NULL parent means bootstrap (initdb + import); a set one means fork that
+	// ancestor at its fork point.
+	if branch.ParentBranchId == nil {
 		return provisionBootstrap(ctx, env, endpointID, branchID, branch.PgVersion)
 	}
-	return provisionBranch(ctx, env, endpointID, branchID, *branch.AncestorBranchID, branch.StartLSN, branch.PgVersion)
+	forkLSN := ""
+	if branch.ForkLsn != nil {
+		forkLSN = *branch.ForkLsn
+	}
+	return provisionBranch(ctx, env, endpointID, branchID,
+		config.BranchID(hex32UUID(*branch.ParentBranchId)), forkLSN, branch.PgVersion)
 }
 
 // provisionBootstrap brings up the main branch's pair: start the safekeeper,
