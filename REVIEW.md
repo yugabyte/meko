@@ -11,9 +11,9 @@ for is project-specific and lives one level down:
 |---|---|
 | `amp/**` | [`amp/REVIEW.md`](amp/REVIEW.md) — compute/storage engine (pageserver, safekeeper, `compute_ctl`), control plane, deploy/Kubernetes, and the on-demand `/ci` suites |
 | `meko/**` | [`meko/REVIEW.md`](meko/REVIEW.md) — `api_server`, database & migrations, `meko_ui`/`meko_admin`, `meko-provisioner`, `inference_gateway`, `cli_app` |
-| `ycp/**` | **Not covered by either.** See below |
+| `ycp/**` | this file — see [*`ycp/` — reviewing the shared tree*](#ycp--reviewing-the-shared-tree) below. It is shared, so its concerns live at the root |
 
-A PR spanning both trees needs both guides.
+A PR spanning more than one tree needs each of their guides.
 
 > **Report findings that matter.** Surface issues you're reasonably confident
 > about and that carry real severity — don't report low-confidence guesses or
@@ -76,11 +76,57 @@ the repository root. So `api_server/` in `meko/REVIEW.md` means `meko/api_server
 `compute/` in `amp/REVIEW.md` means `amp/compute/`. Paths in this file, like every
 root-level file, are repo-root-relative and carry the prefix.
 
-## `ycp/` has no review guide
+## `ycp/` — reviewing the shared tree
 
-`ycp/` sits at the root because it is shared between meko and amp, and **neither guide
-mentions it**. Until one does, review it against `meko/REVIEW.md`'s Go and migration
-sections — it is Go with its own `go.mod` — and note the coupling that has already
-caused one CI break: its e2e (`ycp/test/e2e/run.sh`) builds **two** images, the agent
-from `ycp/` and the control plane from `meko/api_server/`, so a change to either tree
-can break it.
+`ycp/` sits at the root because it is shared, so its review concerns live here rather
+than in either project's guide. It is small — one Go module, `module meko/ycp` — but it
+spans a **trust boundary**, and that is what makes reviewing it non-obvious: the control
+plane is ours, the `meko-agent` runs in the **customer's** cluster.
+
+Start from [`ycp/ARCHITECTURE.md`](ycp/ARCHITECTURE.md), then weight these by the diff.
+
+### `internal/api/types.go` is a wire contract, not internal types
+
+It is JSON on the wire between our control plane and an agent the customer upgrades on
+their own schedule, so **the two sides are always skewed in production**. Treat any
+change here as a compatibility change:
+
+- **JSON tags are the contract**, not the Go field names. Renaming a tag breaks agents in
+  the field while the Go still compiles.
+- `EnvState` is a **string** enum (`PENDING` … `DEREGISTERED`). A new value is safe only
+  if the receiver tolerates unknown states; removing or renaming one is not.
+- A new required field breaks older agents that never send it. Prefer additive and
+  optional (`omitempty`), and have the PR say how a mismatched pair behaves.
+
+### Direction is a security property
+
+The agent reaches YCP over **outbound HTTPS only**; YCP never dials into a customer
+cluster (`ARCHITECTURE.md:73`). Anything that introduces an inbound call, a callback URL,
+or a port the customer must open inverts that model — a finding, not a design detail.
+
+### The two tokens are not interchangeable
+
+Enrollment (`mko_enr_…`, 30-minute bootstrap TTL) is exchanged **once** for a long-lived
+env-scoped status token (`mko_sts_…`, returned once, hash persisted). The e2e asserts an
+agent survives a restart *without* re-enrolling, precisely because the status token
+persists. A change that loses that token, or silently falls back to enrollment, forces a
+human to re-run enrollment on every customer cluster. Check persistence and TTL handling
+deliberately.
+
+### The e2e builds two images from two trees
+
+`ycp/test/e2e/run.sh` builds the agent from `ycp/` **and** the control plane from
+`meko/api_server/` (`run.sh:193`), so a change in either tree can break it — this has
+already caused one CI break. It also asserts the whole surface is mounted under the
+`/ycp` base path, with nothing at the domain root but the kubelet health alias: a route
+added outside that base passes unit tests and fails deployment.
+
+### Mechanics
+
+`ycp/` has its own `go.mod`, so checks run from there (`cd ycp && go test ./...`) —
+`gofmt`/`vet` aimed at the other trees' paths will miss it. Images publish to ECR on
+merge to `main` (`.github/workflows/ycp-images.yml`), so a Dockerfile change ships on
+merge rather than at a release.
+
+For anything not covered here — general Go style, migrations — use
+[`meko/REVIEW.md`](meko/REVIEW.md).
