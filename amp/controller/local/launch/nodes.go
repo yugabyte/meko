@@ -329,6 +329,73 @@ func ensureExternalDatabase(ctx context.Context, yb *config.YbConnConfig) error 
 	return nil
 }
 
+// recreateExternalDatabase DROPs and re-CREATEs the controller's target db (and
+// yb_storage if the target differs), so a fresh `yb_amp_local start` always gets
+// a schema the controller's migrations just built rather than whatever an older
+// checkout left behind. A stale database is not a loud failure: the daemons come
+// up and individual queries fail later on columns that do not exist yet.
+//
+// This DISCARDS all local storage state. It is deliberately reachable only from
+// StartAll's provisioning phase — `controller start` keeps using
+// ensureExternalDatabase, so restarting just the controller does not wipe data.
+//
+// Refuses to run against anything but loopback. HostPorts is free-form, and
+// dropping a database on a shared cluster because someone pointed a dev config
+// at it is not a recoverable mistake.
+func recreateExternalDatabase(ctx context.Context, yb *config.YbConnConfig) error {
+	local, err := yb.LoopbackOnly()
+	if err != nil {
+		return fmt.Errorf("checking whether controller.yb is loopback: %w", err)
+	}
+	if !local {
+		return fmt.Errorf(
+			"refusing to drop and recreate databases on non-loopback host_ports %q: "+
+				"yb_amp_local only does this for a local dev cluster", yb.HostPorts)
+	}
+
+	dbname := yb.Dbname
+	if dbname == "" {
+		dbname = defaultYbDbname
+	}
+	// Only the database this config names — deliberately NOT also yb_storage when
+	// they differ. ensureExternalDatabase creates both because an extra empty
+	// database is harmless; dropping one is not. The integration harness runs
+	// against an ephemeral `yb_storage_integration_<run id>`
+	// (test/integration/compute/run.sh) precisely so concurrent runs and a
+	// developer's own cluster stay isolated, and reaching past the named database
+	// to drop the shared default would break exactly that.
+	if err := dropDatabase(ctx, yb, dbname); err != nil {
+		return err
+	}
+	return createDatabase(ctx, yb, dbname)
+}
+
+// dropDatabase runs `DROP DATABASE IF EXISTS <name> WITH (FORCE)` against the
+// admin `yugabyte` database. FORCE terminates existing backends, so a leftover
+// connection from a previous run does not block startup; IF EXISTS makes the
+// first-ever start a no-op rather than an error.
+func dropDatabase(ctx context.Context, yb *config.YbConnConfig, name string) error {
+	admin := *yb
+	admin.Dbname = "yugabyte"
+	url, err := admin.ToDatabaseURL()
+	if err != nil {
+		return fmt.Errorf("building admin database URL from controller.yb: %w", err)
+	}
+	connCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(connCtx, url)
+	if err != nil {
+		return fmt.Errorf("connecting to YB admin database 'yugabyte': %w", err)
+	}
+	defer conn.Close(context.Background())
+
+	stmt := fmt.Sprintf(`DROP DATABASE IF EXISTS "%s" WITH (FORCE)`, sqlIdentEscape(name))
+	if _, err := conn.Exec(connCtx, stmt); err != nil {
+		return fmt.Errorf("dropping database %q: %w", name, err)
+	}
+	return nil
+}
+
 // createDatabase runs `CREATE DATABASE <name>` against the admin `yugabyte`
 // database on the cluster described by yb. "already exists" is success.
 func createDatabase(ctx context.Context, yb *config.YbConnConfig, name string) error {

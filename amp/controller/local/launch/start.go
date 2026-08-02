@@ -35,6 +35,14 @@ func StartAll(ctx context.Context, env *config.LocalEnv, timeout time.Duration) 
 
 func startAllImpl(ctx context.Context, env *config.LocalEnv, timeout time.Duration) error {
 	// Phase 1 — provision the external yb_storage database.
+	//
+	// Create-if-missing on purpose: `start` must not drop the database. The
+	// pageservers Phase 3 starts are rediscovered from disk
+	// (endpoints/*/pageserver/pageserver.toml) and each claims a generation
+	// against amp_storage.branch_state at startup, so wiping the database here
+	// would leave those rows gone and every start after the first `endpoint
+	// create` would fail. Resetting the database belongs with resetting the
+	// on-disk state, which is `init` — see recreateExternalDatabase.
 	if env.Controller.Yb != nil {
 		if err := ensureExternalDatabase(ctx, env.Controller.Yb); err != nil {
 			return fmt.Errorf("prepare external controller database: %w", err)

@@ -198,6 +198,42 @@ repo root from its own location, so it works from any working directory
 ./yb_amp_local endpoint start main
 ```
 
+#### Re-initialising: `init --force`
+
+`init` refuses to touch an existing `.yb_amp` by default. `--force` selects what
+it does instead:
+
+| `--force` | Behaviour |
+|---|---|
+| `must-not-exist` | **default** — fail if `.yb_amp` already exists |
+| `empty-dir-ok` | proceed if `.yb_amp` exists but is empty |
+| `remove-all-contents` | empty `.yb_amp` and start over (the directory itself is kept, so a symlinked datadir survives) |
+
+**`init` also resets the `yb_storage` database**, dropping and recreating it so
+the controller's migrations rebuild the schema on the next `start`. This is what
+stops a database created by an older checkout from silently outliving the code
+that expects its schema — the failure that causes is quiet, because the daemons
+come up fine and individual queries break later on columns that were never added.
+
+Two consequences worth knowing:
+
+- **`init` discards local storage state**, so use it when you want a clean
+  instance, not to repair a running one. `start` never drops the database:
+  pageservers are rediscovered from `endpoints/*/pageserver/pageserver.toml` and
+  claim a generation against `amp_storage.branch_state`, so resetting the database
+  without also clearing those directories would break every subsequent start.
+  Reset both together, which is exactly what `init` does.
+- **Only a loopback cluster is reset.** If `--yb-host` points somewhere remote,
+  `init` says so and leaves that database alone rather than dropping a cluster
+  someone else may be using.
+
+So the way out of a stale local schema is:
+
+```sh
+./yb_amp_local init --force remove-all-contents
+./yb_amp_local start
+```
+
 The compute expects to find a YB cluster reachable from the host;
 configure host_ports/user/dbname/sslmode in `config.toml` under the
 `yb_storage_conn` section. `host_ports` is a single

@@ -14,6 +14,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -363,4 +364,37 @@ func parseHumantime(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("humantime: no duration components in %q", s)
 	}
 	return total, nil
+}
+
+// LoopbackOnly reports whether every endpoint in HostPorts is a loopback
+// address. Callers use it to gate destructive operations: `yb_amp_local` is a
+// local dev orchestrator, but HostPorts is free-form, so a config pointing at a
+// shared cluster must never be dropped and recreated.
+func (c *YbConnConfig) LoopbackOnly() (bool, error) {
+	hps, err := parseHostPorts(c.HostPorts)
+	if err != nil {
+		return false, err
+	}
+	for _, hp := range hps {
+		if !isLoopbackHost(hp.host) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// isLoopbackHost treats the usual spellings of "this machine" as loopback. A
+// name that does not parse as an IP is only accepted when it is literally
+// "localhost" — resolving arbitrary names here would make the guard depend on
+// DNS, and a guard that can be moved by DNS is not a guard.
+func isLoopbackHost(host string) bool {
+	h := strings.TrimSpace(host)
+	h = strings.TrimPrefix(strings.TrimSuffix(h, "]"), "[")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

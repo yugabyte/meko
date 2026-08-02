@@ -481,3 +481,48 @@ func TestAuthKeypairAndJWT(t *testing.T) {
 		t.Errorf("alg header: %v", parsed.Header["alg"])
 	}
 }
+
+func TestYbConnConfigLoopbackOnly(t *testing.T) {
+	cases := []struct {
+		name      string
+		hostPorts string
+		want      bool
+		wantErr   bool
+	}{
+		{"ipv4 loopback with port", "127.0.0.1:5433", true, false},
+		{"ipv4 loopback no port", "127.0.0.1", true, false},
+		{"ipv4 loopback other octet", "127.1.2.3:5433", true, false},
+		{"localhost", "localhost:5433", true, false},
+		{"localhost mixed case", "LocalHost:5433", true, false},
+		{"ipv6 loopback bracketed", "[::1]:5433", true, false},
+		{"all loopback multi-endpoint", "127.0.0.1:5433,localhost:5434", true, false},
+
+		// The point of the guard: one remote endpoint disqualifies the whole set.
+		{"remote ip", "10.0.0.5:5433", false, false},
+		{"remote hostname", "yb.internal:5433", false, false},
+		{"mixed loopback and remote", "127.0.0.1:5433,10.0.0.5:5433", false, false},
+		// Not resolved on purpose — a guard that DNS can move is not a guard.
+		{"hostname that merely looks local", "localhost.evil.example:5433", false, false},
+
+		{"unparseable", "127.0.0.1:notaport", false, true},
+		{"empty", "", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := YbConnConfig{HostPorts: tc.hostPorts, User: "yugabyte", Dbname: "yb_storage"}
+			got, err := c.LoopbackOnly()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("LoopbackOnly(%q) = %v, want error", tc.hostPorts, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoopbackOnly(%q) unexpected error: %v", tc.hostPorts, err)
+			}
+			if got != tc.want {
+				t.Errorf("LoopbackOnly(%q) = %v, want %v", tc.hostPorts, got, tc.want)
+			}
+		})
+	}
+}

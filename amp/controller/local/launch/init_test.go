@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ func TestInitRoundTrip(t *testing.T) {
 	t.Setenv("POSTGRES_DISTRIB_DIR", "/pg_install")
 
 	base := uint16(20000)
-	if err := Init(InitArgs{
+	if err := Init(context.Background(), InitArgs{
 		YbDbname:       "ephemeral_db",
 		YbHost:         "10.0.0.1",
 		YbPort:         5433,
@@ -97,7 +98,7 @@ func TestInitRoundTrip(t *testing.T) {
 	}
 
 	// Re-init with must-not-exist should now fail (dir exists).
-	if err := Init(InitArgs{Force: ForceMustNotExist}); err == nil {
+	if err := Init(context.Background(), InitArgs{Force: ForceMustNotExist}); err == nil {
 		t.Error("re-init with must-not-exist should fail on an existing repo")
 	}
 }

@@ -100,7 +100,7 @@ func initCmd() *cobra.Command {
 			} else {
 				args.PortBase = nil
 			}
-			return launch.Init(args)
+			return launch.Init(cmd.Context(), args)
 		},
 	}
 	f := cmd.Flags()

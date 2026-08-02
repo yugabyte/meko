@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -92,7 +93,18 @@ func ybInlineTOML(c *config.YbConnConfig) string {
 // endpoints dir) for the default (no-`--config`) path. It runs WITHOUT the
 // repo lock (the dir may not exist yet). Mirrors Rust `handle_init` +
 // `LocalEnv::init`.
-func Init(args InitArgs) error {
+// Init writes a fresh .yb_amp repo dir and resets the external yb_storage
+// database to match it.
+//
+// The database reset lives here rather than in `start` because the two halves
+// of a local instance have to be reset together. Pageservers are rediscovered
+// from endpoints/*/pageserver/pageserver.toml on every load and claim a
+// generation against amp_storage.branch_state at startup; dropping the database
+// while those directories survive leaves each one pointing at a row that no
+// longer exists. init is the one command that has already emptied the on-disk
+// state (prepareBaseDir), so resetting the database here keeps the pair
+// consistent by construction.
+func Init(ctx context.Context, args InitArgs) error {
 	base, err := config.BasePath()
 	if err != nil {
 		return err
@@ -205,6 +217,30 @@ func Init(args InitArgs) error {
 
 	if err := onDisk.Persist(filepath.Join(base, "config")); err != nil {
 		return err
+	}
+
+	// Reset the database last: prepareBaseDir has emptied the repo dir, so there
+	// are no endpoints left holding branch_state rows, and the controller's
+	// migrations rebuild the schema on the next `start`. Doing this at init
+	// rather than at start is what stops a database created by an older checkout
+	// from silently outliving the code that expects its schema.
+	//
+	// Only for a loopback cluster. Pointing init at a remote YB is legitimate,
+	// and refusing to initialise because someone else's database cannot be
+	// dropped would be worse than leaving it alone — so say what was skipped and
+	// carry on.
+	local, err := yb.LoopbackOnly()
+	if err != nil {
+		return fmt.Errorf("checking whether controller.yb is loopback: %w", err)
+	}
+	if local {
+		fmt.Println("Recreating the yb_storage database to match this fresh repo")
+		if err := recreateExternalDatabase(ctx, &yb); err != nil {
+			return fmt.Errorf("reset external controller database: %w", err)
+		}
+	} else {
+		fmt.Printf("Leaving the database on %s untouched: not a loopback host. "+
+			"If it holds a schema from an older checkout, reset it yourself.\n", yb.HostPorts)
 	}
 	return nil
 }
