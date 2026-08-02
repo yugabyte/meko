@@ -14,7 +14,7 @@
 #include "extension_server.h"
 #include "yb_amp_utils.h"
 
-int	hadron_extension_server_port = 0;
+int	yb_amp_extension_server_port = 0;
 static int	extension_server_request_timeout = 60;
 static int	extension_server_connect_timeout = 60;
 
@@ -47,7 +47,7 @@ yb_amp_download_extension_file_http(const char *filename, bool is_library)
 		curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, (long)extension_server_connect_timeout /* seconds */ );
 
 	compute_ctl_url = psprintf("http://localhost:%d/extension_server/%s%s",
-							   hadron_extension_server_port, filename, is_library ? "?is_library=true" : "");
+							   yb_amp_extension_server_port, filename, is_library ? "?is_library=true" : "");
 
 	elog(LOG, "Sending request to compute_ctl: %s", compute_ctl_url);
 
@@ -82,7 +82,7 @@ pg_init_extension_server()
 	DefineCustomIntVariable("yb_amp.extension_server_port",
 							"connection string to the compute_ctl",
 							NULL,
-							&hadron_extension_server_port,
+							&yb_amp_extension_server_port,
 							0, 0, INT_MAX,
 							PGC_POSTMASTER,
 							0,	/* no flags required */

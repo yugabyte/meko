@@ -54,6 +54,19 @@ A preloaded extension initializes in three stages, and `yb_amp` uses all three
    and registers the extension's wait events (`YbAmp/FileCache_*`,
    `YbAmp/PS_*`, `YbAmp/WAL_Download`).
 
+Because the extension is always preloaded, every shared-memory pointer it owns
+(`yb_amp_per_backend_counters_shared`, `yb_amp_error_counters_shared`,
+`walprop_shared`) is allocated in stage 3 before any backend can run a query, so
+code reached from SQL — the `yb_amp_perf_counters` view, for instance — does not
+re-check them. Two paths fall outside that guarantee and do check: the
+`emit_log_hook` installed in stage 1 can fire before stage 3 has run, and
+`postgres --sync-safekeepers` runs the walproposer standalone
+(`WalproposerShmemInit_SyncSafekeeper()`) without the shmem hooks.
+
+`yb_amp` is therefore only supported as a preload library. Loading it any other
+way (`LOAD 'yb_amp'`) runs `_PG_init` without the shmem request/startup hooks
+and leaves those pointers NULL.
+
 `_PG_init` also forces `io_method=sync` via
 `SetConfigOption("io_method", "sync", PGC_POSTMASTER, PGC_S_OVERRIDE)`. This is
 both a correctness and a performance requirement:
@@ -86,8 +99,6 @@ both a correctness and a performance requirement:
 | `yb_amp.pgstat_file_size_limit` | SIGHUP | `1 MB` | Cap on the `pgstat.stat` file WAL-logged on clean shutdown; `0` disables persisting it |
 | `yb_amp.debug_compare_local` | POSTMASTER | `none` | Debug mode comparing prefetch-ring / LFC / pageserver pages against local disk |
 | `yb_amp.privileged_role_name` | POSTMASTER | `yb_amp_superuser` | Name of the weak-superuser role granted to users |
-| `yb_amp.lakebase_mode` | POSTMASTER | `false` | Enable Lakebase-specific behavior (e.g. the SQL-error metrics hook) |
-| `databricks.test_hook` | SUSET | `0` | Test-only hook used by SQL regression tests |
 
 ### SQL-visible functions
 
@@ -403,8 +414,8 @@ Backpressure throttles backends when the pageserver or safekeeper falls behind:
 LSNs using `max_replication_write_lag` / `max_replication_flush_lag` /
 `max_replication_apply_lag`, and `backpressure_throttling_impl()` sleeps backends
 and accumulates the delay (readable via `backpressure_throttling_time()`). A
-send-side WAL rate limiter (`WalRateLimiter`, GUCs `databricks.max_wal_mb_per_second`
-and `databricks.throttled_max_wal_bytes_per_second`) bounds broadcast throughput.
+send-side WAL rate limiter (`WalRateLimiter`, GUCs `yb_amp.max_wal_mb_per_second`
+and `yb_amp.throttled_max_wal_bytes_per_second`) bounds broadcast throughput.
 
 The safekeeper connection GUCs (from `nwp_register_gucs`):
 

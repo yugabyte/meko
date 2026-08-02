@@ -177,24 +177,23 @@ extern void inc_query_time(uint64 elapsed);
 extern Size YbAmpPerfCountersShmemSize(void);
 extern void YbAmpPerfCountersShmemInit(void);
 
-/* BEGIN_HADRON */
+/*
+ * Cluster-wide error counters, surfaced through the yb_amp perf counters view.
+ * Always allocated: the SQL error hook and the walproposer both write here
+ * unconditionally.
+ */
 typedef struct
 {
 	pg_atomic_uint32 index_corruption_count;
 	pg_atomic_uint32 data_corruption_count;
 	pg_atomic_uint32 internal_error_count;
 	pg_atomic_uint32 ps_corruption_detected;
-} databricks_metrics;
+} yb_amp_error_counters;
 
-extern databricks_metrics *databricks_metrics_shared;
+extern yb_amp_error_counters *yb_amp_error_counters_shared;
 
-extern Size DatabricksMetricsShmemSize(void);
-extern void DatabricksMetricsShmemInit(void);
-
-extern int databricks_test_hook;
-
-static const int TestHookCorruption = 1;
-/* END_HADRON */
+extern Size YbAmpErrorCountersShmemSize(void);
+extern void YbAmpErrorCountersShmemInit(void);
 
 
 #endif							/* YBAMP_PERF_COUNTERS_H */

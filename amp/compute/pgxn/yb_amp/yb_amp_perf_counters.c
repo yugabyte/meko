@@ -21,34 +21,32 @@
 #include "yb_amp_perf_counters.h"
 #include "walproposer.h"
 
-/* BEGIN_HADRON */
-databricks_metrics *databricks_metrics_shared;
+yb_amp_error_counters *yb_amp_error_counters_shared;
 
 Size
-DatabricksMetricsShmemSize(void)
+YbAmpErrorCountersShmemSize(void)
 {
-	return sizeof(databricks_metrics);
+	return sizeof(yb_amp_error_counters);
 }
 
 void
-DatabricksMetricsShmemInit(void)
+YbAmpErrorCountersShmemInit(void)
 {
 	bool		found;
 
-	databricks_metrics_shared =
-		ShmemInitStruct("Databricks counters",
-						DatabricksMetricsShmemSize(),
+	yb_amp_error_counters_shared =
+		ShmemInitStruct("YbAmp error counters",
+						YbAmpErrorCountersShmemSize(),
 						&found);
 	Assert(found == IsUnderPostmaster);
 	if (!found)
 	{
-		pg_atomic_init_u32(&databricks_metrics_shared->index_corruption_count, 0);
-		pg_atomic_init_u32(&databricks_metrics_shared->data_corruption_count, 0);
-		pg_atomic_init_u32(&databricks_metrics_shared->internal_error_count, 0);
-		pg_atomic_init_u32(&databricks_metrics_shared->ps_corruption_detected, 0);
+		pg_atomic_init_u32(&yb_amp_error_counters_shared->index_corruption_count, 0);
+		pg_atomic_init_u32(&yb_amp_error_counters_shared->data_corruption_count, 0);
+		pg_atomic_init_u32(&yb_amp_error_counters_shared->internal_error_count, 0);
+		pg_atomic_init_u32(&yb_amp_error_counters_shared->ps_corruption_detected, 0);
 	}
 }
-/* END_HADRON */
 
 yb_amp_per_backend_counters *yb_amp_per_backend_counters_shared;
 
@@ -67,9 +65,7 @@ YbAmpPerfCountersShmemRequest(void)
 #else
 	size = mul_size(NUM_YBAMP_PERF_COUNTER_SLOTS, sizeof(yb_amp_per_backend_counters));
 #endif
-	if (lakebase_mode) {
-		size = add_size(size, DatabricksMetricsShmemSize());
-	}
+	size = add_size(size, YbAmpErrorCountersShmemSize());
 	RequestAddinShmemSpace(size);
 }
 
@@ -391,11 +387,9 @@ yb_amp_get_perf_counters(PG_FUNCTION_ARGS)
 	yb_amp_per_backend_counters totals = {0};
 	metric_t   *metrics;
 
-	/* BEGIN_HADRON */
 	WalproposerShmemState *wp_shmem;
 	uint32 num_safekeepers;
 	uint32 num_active_safekeepers;
-	/* END_HADRON */
 
 	/* We put all the tuples into a tuplestore in one go. */
 	InitMaterializedSRF(fcinfo, 0);
@@ -432,52 +426,42 @@ yb_amp_get_perf_counters(PG_FUNCTION_ARGS)
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 	}
 
-	if (lakebase_mode) {
-
-		if (databricks_test_hook == TestHookCorruption) {
-			ereport(ERROR,
-						(errcode(ERRCODE_DATA_CORRUPTED),
-						errmsg("test corruption")));
+	/*
+	 * Not ideal, but piggyback the error counters and the safekeeper status
+	 * onto the yb_amp perf counters view so that we don't need to introduce
+	 * yb_amp--1.x+1.sql to add a new view.
+	 *
+	 * Read safekeeper status from walproposer shared memory under its mutex so
+	 * that the total safekeeper count is consistent with the active wal
+	 * acceptors count. Assuming that we don't query this view too often the
+	 * mutex should not be a huge deal.
+	 */
+	wp_shmem = GetWalpropShmemState();
+	SpinLockAcquire(&wp_shmem->mutex);
+	num_safekeepers = wp_shmem->num_safekeepers;
+	num_active_safekeepers = 0;
+	for (int i = 0; i < num_safekeepers; i++) {
+		if (wp_shmem->safekeeper_status[i] == 1) {
+			num_active_safekeepers++;
 		}
-
-		// Not ideal but piggyback our databricks counters into the yb_amp perf counters view
-		// so that we don't need to introduce yb_amp--1.x+1.sql to add a new view.
-		{
-		// Keeping this code in its own block to work around the C90 "don't mix declarations and code" rule when we define
-		// the `databricks_metrics` array in the next block. Yes, we are seriously dealing with C90 rules in 2025.
-
-		// Read safekeeper status from wal proposer shared memory first.
-		// Note that we are taking a mutex when reading from walproposer shared memory so that the total safekeeper count is
-		// consistent with the active wal acceptors count. Assuming that we don't query this view too often the mutex should
-		// not be a huge deal.
-		wp_shmem = GetWalpropShmemState();
-		SpinLockAcquire(&wp_shmem->mutex);
-		num_safekeepers = wp_shmem->num_safekeepers;
-		num_active_safekeepers = 0;
-		for (int i = 0; i < num_safekeepers; i++) {
-			if (wp_shmem->safekeeper_status[i] == 1) {
-				num_active_safekeepers++;
-			}
-		}
-		SpinLockRelease(&wp_shmem->mutex);
 	}
+	SpinLockRelease(&wp_shmem->mutex);
+
 	{
-			metric_t databricks_metrics[] = {
-				{"sql_index_corruption_count", false, 0, (double) pg_atomic_read_u32(&databricks_metrics_shared->index_corruption_count)},
-				{"sql_data_corruption_count", false, 0, (double) pg_atomic_read_u32(&databricks_metrics_shared->data_corruption_count)},
-				{"sql_internal_error_count", false, 0, (double) pg_atomic_read_u32(&databricks_metrics_shared->internal_error_count)},
-				{"ps_corruption_detected", false, 0, (double) pg_atomic_read_u32(&databricks_metrics_shared->ps_corruption_detected)},
-				{"num_active_safekeepers", false, 0.0, (double) num_active_safekeepers},
-				{"num_configured_safekeepers", false, 0.0, (double) num_safekeepers},
-				{NULL, false, 0, 0},
-			};
-			for (int i = 0; databricks_metrics[i].name != NULL; i++)
-			{
-				metric_to_datums(&databricks_metrics[i], &values[0], &nulls[0]);
-				tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
-			}
+		metric_t extra_metrics[] = {
+			{"sql_index_corruption_count", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->index_corruption_count)},
+			{"sql_data_corruption_count", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->data_corruption_count)},
+			{"sql_internal_error_count", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->internal_error_count)},
+			{"ps_corruption_detected", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->ps_corruption_detected)},
+			{"num_active_safekeepers", false, 0.0, (double) num_active_safekeepers},
+			{"num_configured_safekeepers", false, 0.0, (double) num_safekeepers},
+			{NULL, false, 0, 0},
+		};
+		for (int i = 0; extra_metrics[i].name != NULL; i++)
+		{
+			metric_to_datums(&extra_metrics[i], &values[0], &nulls[0]);
+			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 		}
-		/* END_HADRON */
 	}
 
 	pfree(metrics);

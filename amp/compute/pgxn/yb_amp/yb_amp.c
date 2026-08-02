@@ -48,8 +48,6 @@
 PG_MODULE_MAGIC;
 void		_PG_init(void);
 
-bool lakebase_mode = false;
-
 static int  running_xacts_overflow_policy;
 static emit_log_hook_type prev_emit_log_hook;
 static bool monitor_query_exec_time = false;
@@ -81,8 +79,6 @@ uint32		WAIT_EVENT_YBAMP_PS_SEND;
 uint32		WAIT_EVENT_YBAMP_PS_READ;
 uint32		WAIT_EVENT_YBAMP_WAL_DL;
 #endif
-
-int databricks_test_hook = 0;
 
 enum RunningXactsOverflowPolicies {
 	OP_IGNORE,
@@ -448,18 +444,30 @@ ReportSearchPath(void)
 static int neon_pgstat_file_size_limit;
 #endif
 
-static void DatabricksSqlErrorHookImpl(ErrorData *edata) {
-	if (prev_emit_log_hook != NULL) {
+/*
+ * Count corruption and internal errors as they are reported, so that they are
+ * observable through the yb_amp perf counters view.
+ */
+static void
+yb_amp_sql_error_hook(ErrorData *edata)
+{
+	if (prev_emit_log_hook != NULL)
 		prev_emit_log_hook(edata);
-	}
 
-	if (edata->sqlerrcode == ERRCODE_DATA_CORRUPTED) {
-		pg_atomic_fetch_add_u32(&databricks_metrics_shared->data_corruption_count, 1);
-	} else if (edata->sqlerrcode == ERRCODE_INDEX_CORRUPTED) {
-		pg_atomic_fetch_add_u32(&databricks_metrics_shared->index_corruption_count, 1);
-	} else if (edata->sqlerrcode == ERRCODE_INTERNAL_ERROR) {
-		pg_atomic_fetch_add_u32(&databricks_metrics_shared->internal_error_count, 1);
-	}
+	/*
+	 * The hook is installed in _PG_init(), which runs before shared memory is
+	 * allocated in yb_amp_shmem_startup_hook(). Errors reported in that window
+	 * have nowhere to be counted, so skip them rather than dereference NULL.
+	 */
+	if (yb_amp_error_counters_shared == NULL)
+		return;
+
+	if (edata->sqlerrcode == ERRCODE_DATA_CORRUPTED)
+		pg_atomic_fetch_add_u32(&yb_amp_error_counters_shared->data_corruption_count, 1);
+	else if (edata->sqlerrcode == ERRCODE_INDEX_CORRUPTED)
+		pg_atomic_fetch_add_u32(&yb_amp_error_counters_shared->index_corruption_count, 1);
+	else if (edata->sqlerrcode == ERRCODE_INTERNAL_ERROR)
+		pg_atomic_fetch_add_u32(&yb_amp_error_counters_shared->internal_error_count, 1);
 }
 
 void
@@ -473,10 +481,8 @@ _PG_init(void)
 	load_file("$libdir/yb_amp_rmgr", false);
 #endif
 
-	if (lakebase_mode) {
-		prev_emit_log_hook = emit_log_hook;
-		emit_log_hook = DatabricksSqlErrorHookImpl;
-	}
+	prev_emit_log_hook = emit_log_hook;
+	emit_log_hook = yb_amp_sql_error_hook;
 
 	/*
 	 * Initializing a pre-loaded Postgres extension happens in three stages:
@@ -648,29 +654,6 @@ _PG_init(void)
 							&privileged_role_name,
 							"yb_amp_superuser",
 							PGC_POSTMASTER, 0, NULL, NULL, NULL);
-
-	DefineCustomBoolVariable(
-							"yb_amp.lakebase_mode",
-							"Is yb_amp running in Lakebase?",
-							NULL,
-							&lakebase_mode,
-							false,
-							PGC_POSTMASTER,
-							0,
-							NULL, NULL, NULL);
-
-	// A test hook used in sql regress to trigger specific behaviors
-	// to test features easily.
-	DefineCustomIntVariable(
-							"databricks.test_hook",
-							"The test hook used in sql regress tests only",
-							NULL,
-							&databricks_test_hook,
-							0,
-							0, INT32_MAX,
-							PGC_SUSET,
-							0,
-							NULL, NULL, NULL);
 
 	/*
 	 * Important: This must happen after other parts of the extension are
@@ -893,9 +876,7 @@ yb_amp_shmem_startup_hook(void)
 
 	LfcShmemInit();
 	YbAmpPerfCountersShmemInit();
-	if (lakebase_mode) {
-		DatabricksMetricsShmemInit();
-	}
+	YbAmpErrorCountersShmemInit();
 	RelsizeCacheShmemInit();
 	WalproposerShmemInit();
 	LwLsnCacheShmemInit();

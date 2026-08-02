@@ -67,17 +67,15 @@ int			wal_acceptor_reconnect_timeout = 1000;
 int			wal_acceptor_connection_timeout = 10000;
 int			safekeeper_proto_version = 3;
 char	   *safekeeper_conninfo_options = "";
-/* BEGIN_HADRON */
-int         databricks_max_wal_mb_per_second = -1;
+int         yb_amp_max_wal_mb_per_second = -1;
 // during throttling, we will limit the effective WAL write rate to 10KB.
 // PG can still push some WAL to SK, but at a very low rate.
-int 		databricks_throttled_max_wal_bytes_per_second = 10 * 1024;
+int 		yb_amp_throttled_max_wal_bytes_per_second = 10 * 1024;
 // The max sleep time of a batch. This is to make sure the rate limiter does not
 // overshoot too much and block PG for a very long time.
 // This is set as 5 minuetes for now. PG can send as much as 10MB of WALs to SK in one batch,
 // so this effectively caps the write rate to ~30KB/s in the worst case.
 static uint64 kRateLimitMaxBatchUSecs = 300 * USECS_PER_SEC;
-/* END_HADRON */
 
 /* Set to true in the walproposer bgw. */
 static bool am_walproposer;
@@ -95,7 +93,7 @@ static HotStandbyFeedback agg_hs_feedback;
 static void nwp_register_gucs(void);
 static void assign_yb_amp_safekeepers(const char *newval, void *extra);
 static uint64 backpressure_lag_impl(void);
-static uint64 hadron_backpressure_lag_impl(void);
+static uint64 yb_amp_backpressure_lag_impl(void);
 static uint64 startup_backpressure_wrap(void);
 static bool backpressure_throttling_impl(void);
 static void walprop_register_bgworker(void);
@@ -131,7 +129,6 @@ static int positive_mb_to_bytes(int mb)
 		return mb * 1024 * 1024;
 	}
 }
-/* END_HADRON */
 
 static void
 init_walprop_config(bool syncSafekeepers)
@@ -269,27 +266,25 @@ nwp_register_gucs(void)
 							0,
 							NULL, NULL, NULL);
 
-    /* BEGIN_HADRON */
     DefineCustomIntVariable(
-                            "databricks.max_wal_mb_per_second",
+                            "yb_amp.max_wal_mb_per_second",
                             "The maximum WAL MB per second allowed. If breached, sending WAL hit the backpressure. Setting to -1 disables the limit.",
                             NULL,
-                            &databricks_max_wal_mb_per_second,
+                            &yb_amp_max_wal_mb_per_second,
                             -1, -1, INT_MAX,
                             PGC_SUSET,
                             GUC_UNIT_MB,
                             NULL, NULL, NULL);
 
 	DefineCustomIntVariable(
-							"databricks.throttled_max_wal_bytes_per_second",
+							"yb_amp.throttled_max_wal_bytes_per_second",
 							"The maximum WAL bytes per second when PG is being throttled.",
 							NULL,
-							&databricks_throttled_max_wal_bytes_per_second,
+							&yb_amp_throttled_max_wal_bytes_per_second,
 							10 * 1024, 0, INT_MAX,
 							PGC_SUSET,
 							GUC_UNIT_BYTE,
 							NULL, NULL, NULL);
-    /* END_HADRON */
 }
 
 
@@ -393,8 +388,7 @@ assign_yb_amp_safekeepers(const char *newval, void *extra)
 	pfree(oldval);
 }
 
-/* BEGIN_HADRON */
-static uint64 hadron_backpressure_lag_impl(void)
+static uint64 yb_amp_backpressure_lag_impl(void)
 {
 	struct WalproposerShmemState* state = NULL;
 	uint64 lag = 0;
@@ -406,10 +400,10 @@ static uint64 hadron_backpressure_lag_impl(void)
 
 	lag = backpressure_lag_impl();
 	state = GetWalpropShmemState();
-	if ( state != NULL && databricks_max_wal_mb_per_second != -1 )
+	if ( state != NULL && yb_amp_max_wal_mb_per_second != -1 )
 	{
 		int old_limit = pg_atomic_read_u32(&state->wal_rate_limiter.effective_max_wal_bytes_per_second);
-		int new_limit = (lag == 0)? positive_mb_to_bytes(databricks_max_wal_mb_per_second) : databricks_throttled_max_wal_bytes_per_second;
+		int new_limit = (lag == 0)? positive_mb_to_bytes(yb_amp_max_wal_mb_per_second) : yb_amp_throttled_max_wal_bytes_per_second;
 		if( old_limit != new_limit )
 		{
 			uint64 batch_start_time = pg_atomic_read_u64(&state->wal_rate_limiter.batch_start_time_us);
@@ -446,7 +440,6 @@ static uint64 hadron_backpressure_lag_impl(void)
 
 	return lag;
 }
-/* END_HADRON */
 
 /* Check if we need to suspend inserts because of lagging replication. */
 static uint64
@@ -499,9 +492,9 @@ startup_backpressure_wrap(void)
 	if (AmStartupProcess() || !IsUnderPostmaster)
 		return 0;
 
-	delay_backend_us = &hadron_backpressure_lag_impl;
+	delay_backend_us = &yb_amp_backpressure_lag_impl;
 
-	return hadron_backpressure_lag_impl();
+	return yb_amp_backpressure_lag_impl();
 }
 
 /*
@@ -529,12 +522,10 @@ WalproposerShmemInit(void)
 		pg_atomic_init_u64(&walprop_shared->propStartLsn, 0);
 		pg_atomic_init_u64(&walprop_shared->backpressureThrottlingTime, 0);
 		pg_atomic_init_u64(&walprop_shared->currentClusterSize, 0);
-		/* BEGIN_HADRON */
 		pg_atomic_init_u32(&walprop_shared->wal_rate_limiter.effective_max_wal_bytes_per_second, -1);
 		pg_atomic_init_u32(&walprop_shared->wal_rate_limiter.should_limit, 0);
 		pg_atomic_init_u64(&walprop_shared->wal_rate_limiter.batch_start_time_us, 0);
 		pg_atomic_init_u64(&walprop_shared->wal_rate_limiter.batch_end_time_us, 0);
-		/* END_HADRON */
 	}
 }
 
@@ -546,12 +537,10 @@ WalproposerShmemInit_SyncSafekeeper(void)
 	SpinLockInit(&walprop_shared->mutex);
 	pg_atomic_init_u64(&walprop_shared->propStartLsn, 0);
 	pg_atomic_init_u64(&walprop_shared->backpressureThrottlingTime, 0);
-	/* BEGIN_HADRON */
 	pg_atomic_init_u32(&walprop_shared->wal_rate_limiter.effective_max_wal_bytes_per_second, -1);
 	pg_atomic_init_u32(&walprop_shared->wal_rate_limiter.should_limit, 0);
 	pg_atomic_init_u64(&walprop_shared->wal_rate_limiter.batch_start_time_us, 0);
 	pg_atomic_init_u64(&walprop_shared->wal_rate_limiter.batch_end_time_us, 0);
-	/* END_HADRON */
 }
 
 #define BACK_PRESSURE_DELAY 10000L // 0.01 sec
@@ -582,7 +571,7 @@ backpressure_throttling_impl(void)
 		return retry;
 
 	/* Calculate replicas lag */
-	lag = hadron_backpressure_lag_impl();
+	lag = yb_amp_backpressure_lag_impl();
 	if (lag == 0)
 		return retry;
 
@@ -674,14 +663,15 @@ record_pageserver_feedback(PageserverFeedback *ps_feedback)
 
 	Assert(ps_feedback->present);
 
-	// Begin Hadron: Record any corruption signal from the pageserver first.
-	// databricks_metrics_shared is only allocated when lakebase_mode=true;
-	// otherwise it's NULL and dereferencing it would SEGV. yb-amp runs
-	// without lakebase_mode, so skip the metric write when the shmem isn't
-	// initialised.
-	if (ps_feedback->corruption_detected && databricks_metrics_shared != NULL) {
-		pg_atomic_write_u32(&databricks_metrics_shared->ps_corruption_detected, 1);
-	}
+	/*
+	 * Record any corruption signal from the pageserver first.
+	 *
+	 * `postgres --sync-safekeepers` runs the walproposer standalone via
+	 * WalproposerShmemInit_SyncSafekeeper(), without the shmem startup hook
+	 * that allocates the error counters, so the pointer is NULL there.
+	 */
+	if (ps_feedback->corruption_detected && yb_amp_error_counters_shared != NULL)
+		pg_atomic_write_u32(&yb_amp_error_counters_shared->ps_corruption_detected, 1);
 
 	SpinLockAcquire(&walprop_shared->mutex);
 	memcpy(&walprop_shared->min_ps_feedback, ps_feedback, sizeof(PageserverFeedback));
@@ -1550,7 +1540,6 @@ XLogBroadcastWalProposer(WalProposer *wp)
 	if (endptr <= startptr)
 		return;
 
-	/* BEGIN_HADRON */
 	state = GetWalpropShmemState();
 	effective_max_wal_bytes_per_second = pg_atomic_read_u32(&state->wal_rate_limiter.effective_max_wal_bytes_per_second);
 	if (effective_max_wal_bytes_per_second != -1 && state != NULL)
@@ -1584,7 +1573,6 @@ XLogBroadcastWalProposer(WalProposer *wp)
 			pg_atomic_write_u64(&limiter->batch_end_time_us, batch_start_time + throttle_usecs);
 		}
 	}
-	/* END_HADRON */
 
 	WalProposerBroadcast(wp, startptr, endptr);
 	sentPtr = endptr;
@@ -2165,7 +2153,6 @@ GetYbAmpCurrentClusterSize(void)
 }
 uint64		GetYbAmpCurrentClusterSize(void);
 
-/* BEGIN_HADRON */
 static void
 walprop_pg_reset_safekeeper_statuses_for_metrics(WalProposer *wp, uint32 num_safekeepers)
 {
@@ -2185,7 +2172,6 @@ walprop_pg_update_safekeeper_status_for_metrics(WalProposer *wp, uint32 sk_index
 	shmem->safekeeper_status[sk_index] = status;
 	SpinLockRelease(&shmem->mutex);
 }
-/* END_HADRON */
 
 static const walproposer_api walprop_pg = {
 	.get_shmem_state = walprop_pg_get_shmem_state,
