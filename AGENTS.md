@@ -134,6 +134,7 @@ Pointers only; each skill is the authority on its own subject.
 | `open-pr` | opening a new PR |
 | `merge-pr` | merging |
 | `create-amp-issue` | filing or updating a GitHub issue for AMP work |
+| `resolve-pr-comments` | closing out a review — resolving addressed threads, and 👍/👎 on bot findings so the reviewer improves |
 | `integration-before-corruption-claim` | claiming data loss or corruption in `amp/` — run the integration suite first |
 | `amp-mcp-tools` | working on the amp controller's MCP tools. A **symlink** to `amp/controller/mcp/skills/amp-mcp-tools`, so it stays in step with the packaged skill bundle |
 

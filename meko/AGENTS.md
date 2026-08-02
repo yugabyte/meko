@@ -218,6 +218,7 @@ relevant one rather than assuming; nothing here restates their contents.
 | `open-pr` | opening a new PR — title convention and the body sections |
 | `merge-pr` | merging |
 | `create-amp-issue` | filing or updating a GitHub issue for **AMP** work (`amp_*` label + `AMP:` milestone) |
+| `resolve-pr-comments` | closing out a review — resolving addressed threads, and 👍/👎 on bot findings |
 
 Those are the ones that apply to meko work. Two further skills — `amp-mcp-tools` and
 `integration-before-corruption-claim` — apply only when editing `amp/**`; the root

@@ -256,6 +256,16 @@ git commit --allow-empty -m "ci: rerun" && git push
 Then confirm the suite actually reported (`gh pr checks <number>`): a `skipping`
 bucket for it means it did not run, and its coverage is not yours to claim.
 
+### If this push addressed review comments
+
+Use the **`resolve-pr-comments`** skill. Pushing the fix is only half of it: the
+threads stay open until someone resolves them, and each automated finding wants a
+👍/👎 saying whether the finding was *correct* — a vote that is separate from
+whether you fixed anything, and the only feedback loop that improves the reviewer.
+
+Do it **after** this push, never before. Resolving against a local edit claims
+something the PR does not yet show.
+
 ## No agent attribution
 
 Never add a `🤖 Generated with Claude Code`, session link, `Co-Authored-By`, or
