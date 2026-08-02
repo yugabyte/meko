@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -220,4 +221,80 @@ func migratedPool(t *testing.T) *db.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// TestPgForkInheritsPgSettings: a fork starts from its ancestor's settings, and
+// the caller's own merge over them — a fork can override one without restating
+// the rest.
+func TestPgForkInheritsPgSettings(t *testing.T) {
+	ctx := t.Context()
+	pool := migratedPool(t)
+	s := NewStore(pool)
+	projectID := seedProject(t, pool)
+
+	parent := FormatBranchID(uuid.New())
+	if err := s.RecordBranch(ctx, projectID, parent, BranchCreateRecord{
+		BranchName: "settings-parent", PgVersion: 18, StartLSN: "0/0",
+		PgSettings: map[string]string{"work_mem": "16MB", "jit": "off"},
+	}); err != nil {
+		t.Fatalf("record parent: %v", err)
+	}
+
+	// A fork that says nothing inherits the whole set.
+	plain := FormatBranchID(uuid.New())
+	if err := s.RecordBranch(ctx, projectID, plain, BranchCreateRecord{
+		BranchName: "settings-plain", PgVersion: 18, StartLSN: "0/16B8",
+		AncestorBranchID: &parent,
+	}); err != nil {
+		t.Fatalf("record plain fork: %v", err)
+	}
+	if got := readPgSettings(t, pool, plain); got["work_mem"] != "16MB" || got["jit"] != "off" || len(got) != 2 {
+		t.Errorf("plain fork pg_settings = %v, want the ancestor's two", got)
+	}
+
+	// A fork that overrides one keeps the rest.
+	over := FormatBranchID(uuid.New())
+	if err := s.RecordBranch(ctx, projectID, over, BranchCreateRecord{
+		BranchName: "settings-override", PgVersion: 18, StartLSN: "0/16B8",
+		AncestorBranchID: &parent,
+		PgSettings:       map[string]string{"work_mem": "64MB", "hash_mem_multiplier": "2"},
+	}); err != nil {
+		t.Fatalf("record overriding fork: %v", err)
+	}
+	got := readPgSettings(t, pool, over)
+	want := map[string]string{"work_mem": "64MB", "jit": "off", "hash_mem_multiplier": "2"}
+	if len(got) != len(want) {
+		t.Fatalf("overriding fork pg_settings = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("pg_settings[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+
+	// A root branch starts empty — there is no ancestor to inherit from.
+	root := FormatBranchID(uuid.New())
+	if err := s.RecordBranch(ctx, projectID, root, BranchCreateRecord{
+		BranchName: "settings-root", PgVersion: 18, StartLSN: "0/0",
+	}); err != nil {
+		t.Fatalf("record root: %v", err)
+	}
+	if got := readPgSettings(t, pool, root); len(got) != 0 {
+		t.Errorf("root pg_settings = %v, want empty", got)
+	}
+}
+
+func readPgSettings(t *testing.T, pool *db.Pool, branchID string) map[string]string {
+	t.Helper()
+	var raw []byte
+	if err := pool.QueryRow(t.Context(),
+		`SELECT pg_settings FROM amp_registry.branches
+		  WHERE replace(branch_id::text, '-', '') = $1`, branchID).Scan(&raw); err != nil {
+		t.Fatalf("read pg_settings for %s: %v", branchID, err)
+	}
+	out := map[string]string{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode pg_settings for %s: %v", branchID, err)
+	}
+	return out
 }

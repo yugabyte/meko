@@ -17,9 +17,13 @@ func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.Branc
 	if err != nil {
 		return err
 	}
-	for id, ep := range endpoints {
-		if ep.BranchID == branchID {
-			if err := EndpointStop(ctx, env, id, StopModeImmediate, true); err != nil {
+	// Over `all`: dropping a branch must destroy every endpoint on it, including
+	// one whose name is also used on another branch and so is absent from the
+	// by-name index.
+	for _, ep := range endpoints.all {
+		if ep.conf.BranchID == branchID {
+			id := ep.conf.EndpointID
+			if err := stopEndpoint(ctx, env, ep, StopModeImmediate, true); err != nil {
 				fmt.Fprintf(os.Stderr, "stop+destroy endpoint %s: %v\n", id, err)
 			}
 		}

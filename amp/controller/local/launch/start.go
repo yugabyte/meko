@@ -94,8 +94,10 @@ func StopAll(ctx context.Context, env *config.LocalEnv, immediate bool) {
 		mode = StopModeImmediate
 	}
 	if endpoints, err := loadEndpoints(ctx, env); err == nil {
-		for id := range endpoints {
-			if err := EndpointStop(ctx, env, id, mode, false); err != nil {
+		// Over `all`: stopping everything means everything, including an endpoint
+		// the by-name index dropped because another branch uses the same name.
+		for _, ep := range endpoints.all {
+			if err := stopEndpoint(ctx, env, ep, mode, false); err != nil {
 				fmt.Printf("postgres stop failed: %v\n", err)
 			}
 		}

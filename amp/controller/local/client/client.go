@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +25,14 @@ type HTTPError struct {
 	URL    string
 	Status int
 	Body   string
+}
+
+// IsNotFound reports whether err is a 404 from one of these clients. A resource
+// that is already gone is not a failure for the launcher's idempotent teardown
+// paths.
+func IsNotFound(err error) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && he.Status == http.StatusNotFound
 }
 
 func (e *HTTPError) Error() string {

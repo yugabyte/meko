@@ -92,9 +92,8 @@ endpoints — lives in its own schema (`--db-schema`, default `amp_registry`),
 isolated from project data. Two companion schemas are fixed rather than
 configurable: `controller` holds the write-ahead task log, and `amp_storage`
 holds the data plane. There is exactly one branch table and one endpoint table,
-shared by the product API (`/api/v1`, by uuid) and the storage-layer control
-surface (`/control/v1`, by flat 32-hex branch id), so the two views cannot
-drift. Configuration is read from flags or the matching
+reached through one API, so no two views of a branch can drift.
+Configuration is read from flags or the matching
 environment variables (`AMP_DATABASE_URL`, `AMP_LISTEN`, `AMP_DB_SCHEMA`,
 `AMP_LOG_LEVEL`, `AMP_LOG_FORMAT`, `AMP_TASK_POLL_INTERVAL`, `AMP_TASK_LEASE_TTL`,
 `AMP_SIGNING_KEY_PATH`); flags win.
@@ -110,15 +109,16 @@ listen address, e.g. `http://localhost:8080/`): a static page to manage users
 and, per user, their storage pools, projects, branches, and endpoints. See
 [`architecture/ac-apis.md`](architecture/ac-apis.md) for the full design.
 
-## Storage-layer control surface
+## Storage-layer control
 
-The controller owns cluster control for the storage layer: **generation authority**
-the branch / endpoint
-**registries**, and **provisioning** of the shared `yb_storage` database (all its
-schemas) on startup. It serves these as an HTTP surface (`/control/v1/...`,
-`/ready`) on the same listener as the versioned `/api/v1`
-product API; the endpoint pods and the `yb_amp_local` dev harness drive it. State
-lives in the `amp_registry` schema of `yb_storage`. See
+The controller owns cluster control for the storage layer: the branch and
+endpoint records, and **provisioning** of the shared `yb_storage` database (all
+its schemas) on startup. Generation authority is not among them — the pageserver
+claims its own from `amp_storage.branch_state`.
+
+None of it has an HTTP surface of its own. Branches and endpoints are `/api/v1`
+resources, and `amp_storage.branch_state` is seeded in-process by the task
+framework. State lives in the `amp_registry` schema of `yb_storage`. See
 [`architecture/sc-integration.md`](architecture/sc-integration.md) for the design.
 
 `make controller-bundle` builds the (Go-only) `controller` binary into

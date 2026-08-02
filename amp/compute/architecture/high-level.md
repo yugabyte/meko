@@ -234,13 +234,14 @@ yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RP
         |                           the pageserver and the safekeeper)
         |                         wals (WAL chunks, 10 tablets)
         +-- schema `amp_registry` resource model: users, pools, projects,
-        |                         branch, endpoint (one table each, shared by
-        |                         /api/v1 and /control/v1)
+        |                         branches, endpoints (one table each, reached
+        |                         through /api/v1)
         +-- schema `controller`  write-ahead task log
 
 yb-amp processes
-  controller --dev --database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage \
-             --listen 127.0.0.1:1234           (control_plane_api http://127.0.0.1:1234/upcall/v1/)
+  controller --database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage \
+             --listen 127.0.0.1:1234 --deploy --deploy-driver local
+                                               (control_plane_api http://127.0.0.1:1234/upcall/v1/)
   yb-pageserver      (endpoints/<ep>/pageserver/pageserver.toml;
                       defaults :64000 pg, :9898 http, :51051 grpc — +2 per extra node)
   yb-safekeeper      (endpoints/<ep>/safekeeper/safekeeper.toml;

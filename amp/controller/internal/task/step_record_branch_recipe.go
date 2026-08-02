@@ -24,6 +24,10 @@ type RecordBranchRecipeArgs struct {
 	PgVersion        int        `json:"pg_version"`
 	AncestorBranchID *uuid.UUID `json:"ancestor_branch_id,omitempty"`
 	StartLSN         string     `json:"start_lsn"`
+	// PgSettings are the caller's settings for the new branch. They merge OVER
+	// what it inherits from its ancestor and win on a key both define; nil
+	// inherits unchanged.
+	PgSettings map[string]string `json:"pg_settings,omitempty"`
 }
 
 // recordBranchRecipeStep records the controller's pending-init recipe.
@@ -82,6 +86,7 @@ func (s *recordBranchRecipeStep) Execute(ctx context.Context) StepResult {
 		PgVersion:        s.PgVersion,
 		AncestorBranchID: ancestor,
 		StartLSN:         s.StartLSN,
+		PgSettings:       s.PgSettings,
 	}); err != nil {
 		return Fail(fmt.Errorf("record branch recipe: %w", err))
 	}

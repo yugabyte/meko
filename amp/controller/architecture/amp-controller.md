@@ -733,7 +733,7 @@ amp-controller **in-process** (§11.1). The one service that still rides along i
 amp-controller fronts, persisting to the universe over YSQL, so it adds no new
 external dependency (principle 2).
 
-### 11.1 The storage-layer control surface
+### 11.1 The storage layer's view of the resource model
 
 The storage-layer control functions live directly in amp-controller (Go), not in
 a separate binary: branch and endpoint bookkeeping, and provisioning of the whole
@@ -742,37 +742,43 @@ the controller's golang-migrate migrations. Generation fencing is not among them
 the pageserver claims its own generation from `amp_storage.branch_state`.
 
 **Decision: the storage layer's view is a RENDERING of the product model, not a
-registry of its own.** There is exactly one `branch` table and one `endpoint`
-table, in `amp_registry` (§10), and both surfaces read and write those same rows:
+registry of its own.** There is one `branches` table and one `endpoints` table,
+in `amp_registry` (§10), reached through one API (`/api/v1`). The storage layer
+renders a branch id flat — 32 lowercase hex — where the product API renders it as
+a uuid, but those are the same 128 bits (`hex32` is lossless and total in both
+directions), so there is nothing to synchronize and nothing that can drift.
 
-| | product API | storage-layer control surface |
-|---|---|---|
-| route | `/api/v1/...` | `/control/v1/projects/{project_id}/...` |
-| branch key | `(project_id uuid, branch_id uuid)` | flat 32-lowercase-hex `branch_id` |
-| endpoint key | `id uuid` | caller-chosen handle in `endpoint.name` |
-
-The two renderings are the same 128-bit values (`hex32` is lossless and total in
-both directions), so there is nothing to synchronize and nothing that can drift.
 This reverses an earlier decision to keep a separate flat registry in its own
-schema: the duplication bought no isolation and cost correctness — a branch
-deleted through `/api/v1` never tombstoned its registry twin, so it stayed live on
-`GET /control/v1/branches` forever and inflated the branch gauge (#467 step 2).
+schema behind its own routes. The duplication bought no isolation and cost
+correctness — a branch deleted through `/api/v1` never tombstoned its registry
+twin, so it stayed live on the registry's list forever and inflated the branch
+gauge (#467 step 2).
 
-Because the rows are the control plane's own, the storage-layer surface is
-**project-scoped**: each call carries the project of the branch it addresses.
-`yb_amp_local` provisions a user and a storage pool at startup; projects it
-creates on purpose (`project create`), since a project is one independent
-lineage. Its branches are ordinary `/api/v1` branches, which the product API
-lists like any other.
+**How the launcher fits.** `yb_amp_local` is an ordinary client of `/api/v1`: it
+provisions a user and a storage pool at startup, creates projects on purpose
+(`project create`, since a project is one independent lineage), and its branches
+and endpoints are ordinary rows the product API lists like any other.
 
-**How it is served.** amp-controller serves the pod-facing surface —
-`/control/v1/projects/{project_id}/...` and `/ready` — on its API listener,
-alongside the versioned `/api/v1` product API. The implementation is
-`controller/internal/registry` (the store over the shared branch/endpoint tables +
-the HTTP handlers). The `yb_amp_local` dev harness and the integration suite drive
-it; the controller's own task framework seeds branch state through the same
-in-process store, not over HTTP. There is no separate control-plane binary and no
-subprocess supervision.
+Endpoints work for it because it starts its controller with
+`--deploy-driver=local` (`deploy.LocalDeployer`). The controller keeps the
+endpoint record — the row, the single-writer slot, the branch it hangs off — and
+launches nothing, which is right: the launcher spawns `yb-compute-ctl` itself,
+and a controller that also tried to deploy would fight it for the same endpoint.
+What that local process needs in order to run rides on the endpoint row itself,
+so the launcher keeps nothing on the side. Its handle is the row's `name`, its
+Postgres settings are the row's `pg_settings` (merged over its branch's), and the
+ports it binds are the row's `extended_config` — the opaque object the control
+plane stores and hands to the deployer without interpreting.
+
+The local driver is an explicit opt-in, not the fallback for an unconfigured
+controller: with `--deploy` unset the endpoint mutations still answer 501, which
+is what keeps a misconfigured production controller loud.
+
+**What is left of the pod-facing surface.** Nothing. `controller/internal/registry`
+serves no HTTP; it is the in-process store the task framework's
+`record_branch_recipe` step uses to seed `amp_storage.branch_state`. Readiness is
+`/readyz`, alongside `/healthz` and `/metrics` on the API listener. There is no
+separate control-plane binary and no subprocess supervision.
 
 ### 11.2 What is implemented, what is not
 
@@ -783,7 +789,6 @@ the upstream multi-tenant machinery is dropped.
 |---|---|---|
 | ~~Safekeeper registry~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly | **Removed** |
 | ~~Generation authority~~ | Removed: the pageserver claims its own generation from `amp_storage.branch_state` |
-| Compute-endpoint records (`/control/v1/projects/{id}/endpoint*`) | Launcher endpoint rows in the shared `endpoint` table (handle in `name`, launcher config in `spec`) | **Kept** (for the launcher) |
 | ~~Heartbeat/availability, scheduler, tenant placement/sharding, time travel, pageserver passthrough, timeline imports, metadata health~~ | Upstream multi-tenant machinery | **Dropped** — dead weight in the per-branch topology |
 
 | API surface | What it does | Used by yb-amp today | amp-controller posture |
@@ -791,7 +796,7 @@ the upstream multi-tenant machinery is dropped.
 | Upcalls (`/upcall/v1/*`) | Timeline-import status reporting only — the `re-attach`/`validate` generation-fencing upcalls were removed (the yb pageserver never called them; it fences with a generation it claims itself) | Import flows only | **Reuse** (import only) |
 | ~~Safekeeper registry (`/control/v1/safekeeper*`)~~ | Removed (#171): each endpoint owns its single co-located safekeeper and the launcher creates the timeline on it directly, so the controller never contacts a safekeeper | No longer exists | **Removed** |
 | ~~Generation debug ops~~ | Issue/inspect generations | No — the pageserver claims its own | **Removed** |
-| Compute-endpoint registry (`/control/v1/projects/{id}/endpoint*`) | Launcher endpoint rows | Yes — the launcher's own records | **Folded in** — these are now rows in amp-controller's endpoint table (§10.1), carrying their opaque launcher config in `spec`, so they are subject to the schema-enforced invariants of §10.2 (notably `endpoints_one_writer_per_branch`) instead of sitting outside them |
+| ~~Compute-endpoint registry~~ | Launcher endpoint rows | No longer exists | **Folded in** — the launcher creates endpoints through `/api/v1` like any other client, so they are rows in the endpoint table (§10.1) subject to the schema-enforced invariants of §10.2 (notably `endpoints_one_writer_per_branch`) |
 | Tenant placement/sharding, policies, time travel, pageserver passthrough | Upstream multi-tenant placement machinery | Dormant | **Not used** — dead weight in the per-branch topology |
 
 ### 11.3 Invariants

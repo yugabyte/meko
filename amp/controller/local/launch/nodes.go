@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -223,11 +222,15 @@ func startController(ctx context.Context, env *config.LocalEnv, instanceID uint8
 	if err != nil {
 		return err
 	}
-	args := []string{"--dev", "--database-url", dbURL, "--listen", listen}
-	// /ready is the one storage-layer route that is not project-scoped, so the
-	// readiness probe works before the ladder exists (uuid.Nil is never used).
+	// --deploy-driver=local: the controller keeps endpoint records but launches
+	// nothing, because the launcher spawns yb-compute-ctl itself. Without it the
+	// product endpoint API answers 501 (deploy.LocalDeployer).
+	args := []string{
+		"--database-url", dbURL, "--listen", listen,
+		"--deploy", "--deploy-driver", "local",
+	}
 	statusCheck := func() error {
-		return client.NewController(listen, uuid.Nil, httpClient()).Ready(context.Background())
+		return client.NewAPI(listen, httpClient()).Ready(context.Background())
 	}
 	fmt.Printf("Starting controller at http://%s\n", listen)
 	if err := proc.StartProcess(

@@ -78,7 +78,7 @@ func TestPgTombstoneGuards(t *testing.T) {
 		t.Fatalf("record root: %v", err)
 	}
 	endpointID := uuid.New()
-	if err := backend.EnsureEndpointRecord(ctx, endpointID, projectID, rootID, "read_write", nil); err != nil {
+	if err := backend.EnsureEndpointRecord(ctx, endpointID, projectID, rootID, "read_write", "", nil, nil); err != nil {
 		t.Fatalf("create product endpoint: %v", err)
 	}
 
@@ -106,48 +106,5 @@ func TestPgTombstoneGuards(t *testing.T) {
 	if err := backend.EnsureBranch(ctx, rootID, projectID, uuid.New(),
 		"guards-child", "0/16B8", 18); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("fork under a tombstoned parent = %v, want ErrNotFound", err)
-	}
-
-	// An endpoint handle taken by another project must not be silently
-	// reparented: endpoints_name is global, so the ON CONFLICT arm needs its own
-	// project scoping.
-	otherProject := seedProject(t, pool)
-	otherBranch := uuid.New()
-	if err := store.RecordBranch(ctx, otherProject, FormatBranchID(otherBranch), BranchCreateRecord{
-		BranchName: "guards-other", PgVersion: 18, StartLSN: "0/0",
-	}); err != nil {
-		t.Fatalf("record other-project branch: %v", err)
-	}
-	const handle = "ep-contested"
-	if err := store.EndpointCreate(ctx, otherProject, ComputeEndpoint{
-		EndpointID: handle, BranchID: FormatBranchID(otherBranch), Spec: []byte(`{"a":1}`),
-	}); err != nil {
-		t.Fatalf("create endpoint in the other project: %v", err)
-	}
-
-	thirdProject := seedProject(t, pool)
-	thirdBranch := uuid.New()
-	if err := store.RecordBranch(ctx, thirdProject, FormatBranchID(thirdBranch), BranchCreateRecord{
-		BranchName: "guards-third", PgVersion: 18, StartLSN: "0/0",
-	}); err != nil {
-		t.Fatalf("record third-project branch: %v", err)
-	}
-	if err := store.EndpointCreate(ctx, thirdProject, ComputeEndpoint{
-		EndpointID: handle, BranchID: FormatBranchID(thirdBranch), Spec: []byte(`{"b":2}`),
-	}); !errors.Is(err, ErrConflict) {
-		t.Fatalf("reusing another project's endpoint handle = %v, want ErrConflict", err)
-	}
-	// And the original is untouched — not reparented, spec not clobbered.
-	var ownerBranch, spec string
-	if err := pool.QueryRow(ctx,
-		`SELECT replace(e.branch_id::text,'-',''), e.spec::text
-		   FROM amp_registry.endpoints e WHERE e.name = $1`, handle).Scan(&ownerBranch, &spec); err != nil {
-		t.Fatalf("read back the contested endpoint: %v", err)
-	}
-	if ownerBranch != FormatBranchID(otherBranch) {
-		t.Errorf("endpoint reparented to %s, want %s", ownerBranch, FormatBranchID(otherBranch))
-	}
-	if spec != `{"a": 1}` && spec != `{"a":1}` {
-		t.Errorf("endpoint spec clobbered: %s", spec)
 	}
 }

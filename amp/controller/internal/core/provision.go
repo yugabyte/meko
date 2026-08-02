@@ -110,6 +110,24 @@ func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, projectID,
 	return nil
 }
 
+// BranchPgSettings returns the branch's baseline PostgreSQL settings, or nil if
+// it has none (or does not exist — the caller's own lookup reports that). Like
+// the extension set it lives on the branch record, so a fork and every endpoint
+// on the branch see it.
+func (b *PgBackend) BranchPgSettings(ctx context.Context, _, branchID uuid.UUID) (map[string]string, error) {
+	var raw []byte
+	err := b.pool.QueryRow(ctx,
+		`SELECT pg_settings FROM amp_registry.branches WHERE branch_id = $1::uuid`,
+		branchID.String()).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read branch pg_settings: %w", err)
+	}
+	return decodePgSettings(raw, "branch")
+}
+
 // BranchExtensions returns the branch's opted-in extension names (the durable
 // set an endpoint unions with the catalog defaults at create time). The set lives
 // on the branch record itself, so a fork and a read-replica endpoint both see it.
@@ -170,26 +188,41 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // index is not violated on replay. A *second* read_write endpoint (a different
 // id) surfaces as ErrConflict; a missing branch as ErrNotFound.
 //
+// An empty name is stored as NULL, not "": NULLs are distinct in a unique index,
+// so any number of unnamed endpoints coexist while two named the same on one
+// branch collide.
+//
 // projectID is accepted but not stored: an endpoint reaches its project through
 // its branch, so there is no column for it to disagree with. It stays in the
 // signature (and in the step's persisted args) because the caller plans the whole
 // ladder write-ahead and the branch FK is what validates the pairing.
-func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, projectID, branchID uuid.UUID, role string, config []byte) error {
+func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, projectID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
 	_ = projectID // implied by branchID; see the doc comment
 	var cfg any
 	if len(config) > 0 {
 		cfg = config
 	}
+	var nameArg any
+	if name != "" {
+		nameArg = name
+	}
+	settings := pgSettings
+	if len(settings) == 0 {
+		settings = []byte("{}")
+	}
 	_, err := b.pool.Exec(ctx,
-		`INSERT INTO amp_registry.endpoints (id, branch_id, role, config)
-		 VALUES ($1::uuid, $2::uuid, $3::amp_registry.endpoint_role, $4::jsonb)
+		`INSERT INTO amp_registry.endpoints (id, branch_id, role, name, config, pg_settings)
+		 VALUES ($1::uuid, $2::uuid, $3::amp_registry.endpoint_role, $4, $5::jsonb, $6::jsonb)
 		 ON CONFLICT (id) DO NOTHING`,
-		endpointID.String(), branchID.String(), role, cfg)
+		endpointID.String(), branchID.String(), role, nameArg, cfg, string(settings))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
-			case "23505": // unique_violation: a read_write endpoint already exists (endpoints_one_writer_per_branch)
+			// unique_violation: the branch already has a writer
+			// (endpoints_one_writer_per_branch) or an endpoint by that name
+			// (endpoints_name_per_branch).
+			case "23505":
 				return ErrConflict
 			case "23503": // foreign_key_violation: the branch does not exist
 				return ErrNotFound

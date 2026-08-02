@@ -49,6 +49,12 @@ type EndpointSpec struct {
 	// for Preload entries) from them; the Docker deployer does not support
 	// ImageVolumes and ignores this.
 	Extensions []Extension
+	// PgSettings are extra PostgreSQL settings for this compute, already resolved
+	// to the EFFECTIVE set (the branch's merged with the endpoint's own — see
+	// core.EffectivePgSettings). Both drivers hand them to the endpoint's
+	// supervisor, which appends each to the compute spec, so they win over the
+	// supervisor's own defaults. Nil for none.
+	PgSettings map[string]string
 }
 
 // Extension is one externalized extension to mount into an endpoint: its name

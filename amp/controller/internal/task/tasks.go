@@ -139,6 +139,8 @@ type BranchInput struct {
 	Name           string    `json:"name"`
 	ForkLSN        string    `json:"fork_lsn"`
 	PgVersion      int       `json:"pg_version"`
+	// PgSettings merge over what the fork inherits from its parent.
+	PgSettings map[string]string `json:"pg_settings,omitempty"`
 	// WithWriter also creates and deploys a write endpoint on the new branch.
 	WithWriter bool `json:"with_writer"`
 }
@@ -166,6 +168,7 @@ func (s *Service) Branch(ctx context.Context, in BranchInput) (*Task, error) {
 			PgVersion:        in.PgVersion,
 			AncestorBranchID: &parent,
 			StartLSN:         in.ForkLSN,
+			PgSettings:       in.PgSettings,
 		}),
 	}
 	if in.WithWriter {
@@ -187,6 +190,13 @@ type CreateEndpointInput struct {
 	BranchID  uuid.UUID `json:"branch_id"`
 	Role      string    `json:"role"`
 	PgVersion int       `json:"pg_version"`
+	// Name is the caller's handle for the endpoint, unique among its branch's
+	// endpoints. Empty means unnamed.
+	Name string `json:"name,omitempty"`
+	// Extended is opaque per-endpoint compute configuration, stored verbatim.
+	Extended json.RawMessage `json:"extended,omitempty"`
+	// PgSettings are this endpoint's own extra PostgreSQL settings.
+	PgSettings map[string]string `json:"pg_settings,omitempty"`
 	// CPU and Memory are the pod's compute reservation (Kubernetes quantities),
 	// applied as request == limit for Guaranteed QoS. Empty falls back to the
 	// deployer/chart default (2 cores / 4Gi).
@@ -213,9 +223,12 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			BranchID:   in.BranchID,
 			Role:       role,
 			PgVersion:  in.PgVersion,
+			Name:       in.Name,
 			CPU:        in.CPU,
 			Memory:     in.Memory,
 			Extensions: in.Extensions,
+			Extended:   in.Extended,
+			PgSettings: in.PgSettings,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, endpointID.String(), steps)

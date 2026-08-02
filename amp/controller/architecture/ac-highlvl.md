@@ -297,6 +297,10 @@ CREATE TABLE branches (
     parent_branch_id    uuid REFERENCES branches(branch_id),  -- fork ancestry; NULL for a root
     fork_lsn            pg_lsn,                -- the point the branch was taken at
 
+    -- Extra Postgres settings for every compute on this branch, {name: value}.
+    -- A fork inherits its ancestor's; an endpoint's own merge over these.
+    pg_settings         jsonb NOT NULL DEFAULT '{}'::jsonb,
+
     -- A dropped branch is TOMBSTONED, not deleted: a branch id is never reused and
     -- its pages/WAL in amp_storage outlive the drop. Every "is this live?" reader
     -- filters `dropped_at IS NULL`. Projects tombstone for the follow-on reason:
@@ -320,7 +324,7 @@ CREATE UNIQUE INDEX branches_one_default_per_project ON branches (project_id)
 
 CREATE TYPE endpoint_role  AS ENUM ('read_write', 'read_only');
 
--- Durable record, ephemeral instance. Addressed by id; endpoints have no name.
+-- Durable record, ephemeral instance. Addressed by id; optionally named.
 CREATE TABLE endpoints (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
@@ -330,32 +334,39 @@ CREATE TABLE endpoints (
     branch_id       uuid NOT NULL REFERENCES branches(branch_id),
     role            endpoint_role  NOT NULL,
 
-    -- Launcher/harness handle; NULL for product endpoints, which have no name.
+    -- A caller-chosen handle, optional; an endpoint is always addressable by id.
     name            text,
 
-    -- Access to the endpoint
+    -- Access to the endpoint. Empty for a compute the controller did not place
+    -- (--deploy-driver=local, where its owner starts it locally).
     address         TEXT,
 
-    config          jsonb, -- The config used to create an endpoint
-    spec            jsonb  -- Opaque yb_amp_local config; NULL for product endpoints
+    -- The config used to create an endpoint. Also carries the caller's
+    -- `extended` object: configuration handed to the deployer WITHOUT being
+    -- interpreted (for a local compute, the ports it binds), nested under one
+    -- key so it cannot collide with a field the control plane owns.
+    config          jsonb,
+
+    -- This endpoint's OWN extra Postgres settings. The effective set for its
+    -- compute is its branch's merged with these, these winning.
+    pg_settings     jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 
 -- The single-writer rule, enforced in the schema rather than only in code.
+-- Deliberately not partial on a paused endpoint: a paused writer keeps its slot.
 CREATE UNIQUE INDEX endpoints_one_writer_per_branch
     ON endpoints (branch_id)
     WHERE role = 'read_write';
-
--- A named endpoint is addressable by its handle. Global rather than per-project
--- because an endpoint carries no project_id to scope by; NULLs are distinct in a
--- unique index, so the unnamed product rows coexist.
-CREATE UNIQUE INDEX endpoints_name ON endpoints (name);
+-- A name identifies an endpoint within its branch, the way a branch name does
+-- within its project — two branches may each have a `primary`. NULLs are
+-- distinct, so any number of unnamed endpoints coexist.
+CREATE UNIQUE INDEX endpoints_name_per_branch ON endpoints (branch_id, name);
 CREATE INDEX endpoints_by_branch ON endpoints (branch_id);
 ```
 
-These are the *only* branch and endpoint tables. The storage layer addresses the
-same rows through `/control/v1`, keying on the flat 32-hex rendering of
-`branch_id` and on `endpoint.name`; it does not keep copies of its own. See
-[`sc-integration.md`](sc-integration.md).
+These are the *only* branch and endpoint tables, and `/api/v1` is the only way in.
+The storage layer renders `branch_id` flat (32-hex) rather than as a uuid, but it
+keeps no copies of its own. See [`sc-integration.md`](sc-integration.md).
 
 **Operational**
 

@@ -76,6 +76,7 @@ func (a recipeStore) RecordBranchRecipe(ctx context.Context, projectID uuid.UUID
 		PgVersion:        r.PgVersion,
 		AncestorBranchID: ancestor,
 		StartLSN:         r.StartLSN,
+		PgSettings:       r.PgSettings,
 	})
 }
 
@@ -89,6 +90,17 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 	var prov api.Provisioning
 
 	if cfg.Deploy.Enabled {
+		// Records only: the compute this controller names is deployed by someone
+		// else (yb_amp_local spawns its own), so there is no image to launch, no
+		// controller URL for it to dial back on, and no safekeeper the controller
+		// could reach — prov.Node stays nil, which is what makes a fork without an
+		// explicit fork point a clean 400 rather than a failed HTTP call.
+		if cfg.Deploy.Driver == config.DriverLocal {
+			prov.Deployer = deploy.LocalDeployer{}
+			logger.Info("local endpoint deployer enabled; endpoints are records only, nothing is launched")
+			return prov, nil
+		}
+
 		// Launched endpoints reach the controller's storage-layer surface at the
 		// controller's own network-reachable URL. An explicit override wins (e.g.
 		// an in-cluster Service URL for the Kubernetes driver); otherwise derive it
@@ -270,7 +282,7 @@ func runServe(args []string) error {
 
 	// The API creates tasks and reads their status through the task service (which
 	// wraps the same store the worker drains).
-	srv := api.NewServer(cfg, backend, task.NewService(store), prov, regStore, metricsReg, logger)
+	srv := api.NewServer(cfg, backend, task.NewService(store), prov, metricsReg, logger)
 
 	var wg sync.WaitGroup
 	wg.Add(1)

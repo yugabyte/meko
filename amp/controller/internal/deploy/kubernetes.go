@@ -728,6 +728,11 @@ type endpointValues struct {
 	// chart renders one volume per entry and derives the extension GUCs from
 	// them. Omitted (empty) leaves the chart's no-extensions default.
 	Extensions []extensionValues `json:"extensions,omitempty"`
+	// ExtraSettings are the endpoint's extra PostgreSQL GUCs. The chart merges
+	// them with the extension-derived paths into COMPUTE_EXTRA_SETTINGS_JSON,
+	// which the supervisor appends to the compute spec. Omitted leaves the
+	// chart's empty default.
+	ExtraSettings map[string]string `json:"extraSettings,omitempty"`
 }
 
 // extensionValues mirrors an entry of the chart's endpoint.extensions list: the
@@ -778,11 +783,12 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Dbname:    spec.YB.DBName,
 		},
 		Endpoint: endpointValues{
-			PgVersion:   strconv.Itoa(pgVersion),
-			ComputePort: k.cfg.ComputePort,
-			BranchId:    spec.BranchID,
-			Resources:   resourceValues{CPU: cpu, Memory: memory},
-			Extensions:  extensionValuesFor(spec.Extensions),
+			PgVersion:     strconv.Itoa(pgVersion),
+			ComputePort:   k.cfg.ComputePort,
+			BranchId:      spec.BranchID,
+			Resources:     resourceValues{CPU: cpu, Memory: memory},
+			Extensions:    extensionValuesFor(spec.Extensions),
+			ExtraSettings: spec.PgSettings,
 		},
 		Controller: controllerValues{URL: spec.ControllerURL},
 		Service:    serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},

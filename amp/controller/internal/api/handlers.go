@@ -429,6 +429,7 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 		ForkLSN:        forkLSN,
 		PgVersion:      parent.PgVersion,
 		WithWriter:     false,
+		PgSettings:     branchPgSettings(request.Body),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create branch task: %w", err)
@@ -542,7 +543,9 @@ var lsnRE = regexp.MustCompile(`^[0-9a-fA-F]{1,8}/[0-9a-fA-F]{1,8}$`)
 // tenant has more than one endpoint (#133). flush_lsn also never lags durable
 // WAL the way a pageserver's last_record_lsn can (#130). Without a deployer +
 // node client there is no safekeeper address to read, so an explicit
-// fork_point_lsn is required rather than silently forking at 0/0.
+// fork_point_lsn is required rather than silently forking at 0/0. That is the
+// case for a controller with no deployer at all and for the local driver, whose
+// computes sit at addresses the controller cannot derive.
 func (c *Controllers) resolveForkLSN(ctx context.Context, poolID uuid.UUID, parent core.Branch, requested *string) (string, CreateBranchResponseObject) {
 	if requested != nil {
 		if lsn := strings.TrimSpace(*requested); lsn != "" {
@@ -555,7 +558,7 @@ func (c *Controllers) resolveForkLSN(ctx context.Context, poolID uuid.UUID, pare
 	}
 	if c.prov.Deployer == nil || c.prov.Node == nil {
 		return "", CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
-			"fork_point_lsn is required when endpoint deployment is not configured"))}
+			"fork_point_lsn is required: this controller cannot reach the parent's safekeeper to resolve one"))}
 	}
 	rw, errResp := c.parentWriterEndpoint(ctx, poolID, parent)
 	if errResp != nil {
@@ -727,6 +730,44 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		return nil, fmt.Errorf("get branch: %w", err)
 	}
 
+	// A name already taken on the branch answers 409 here rather than surfacing
+	// as a failed task, so the caller learns immediately that it has to pick
+	// another. This is a courtesy check, not the guard: endpoints_name_per_branch
+	// is what actually enforces it, and it is what catches the race between this
+	// read and the step's insert.
+	var name string
+	if request.Body != nil && request.Body.Name != nil {
+		name = strings.TrimSpace(*request.Body.Name)
+	}
+	if name != "" {
+		taken, err := c.endpointNameTaken(ctx, request.PoolId, request.ProjectId, request.BranchId, name)
+		if err != nil {
+			return nil, err
+		}
+		if taken {
+			return CreateEndpoint409JSONResponse{ConflictJSONResponse(apiError("conflict",
+				fmt.Sprintf("an endpoint named %q already exists on this branch", name)))}, nil
+		}
+	}
+
+	// This endpoint's own settings. They merge over its branch's at deploy time
+	// (the step resolves the effective set), so only these are stored on the row.
+	var pgSettings map[string]string
+	if request.Body != nil && request.Body.PgSettings != nil {
+		pgSettings = *request.Body.PgSettings
+	}
+
+	// Opaque passthrough: stored verbatim under config.extended and handed to the
+	// deployer. The control plane does not look inside.
+	var extended json.RawMessage
+	if request.Body != nil && request.Body.ExtendedConfig != nil {
+		raw, err := json.Marshal(*request.Body.ExtendedConfig)
+		if err != nil {
+			return nil, fmt.Errorf("encode extended_config: %w", err)
+		}
+		extended = raw
+	}
+
 	// Plan the work as an async task and return 202 + the Task. The endpoint row,
 	// its deploy, and the address record are all created by the worker's
 	// create_endpoint step; the single-writer rule (a duplicate read_write
@@ -736,9 +777,12 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		BranchID:   br.BranchID,
 		Role:       role,
 		PgVersion:  br.PgVersion,
+		Name:       name,
 		CPU:        cpu,
 		Memory:     memory,
 		Extensions: exts,
+		Extended:   extended,
+		PgSettings: pgSettings,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)
@@ -817,6 +861,21 @@ func (c *Controllers) DeleteEndpoint(ctx context.Context, request DeleteEndpoint
 		Body:    taskToAPI(t),
 		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
 	}}, nil
+}
+
+// endpointNameTaken reports whether the branch already has an endpoint by this
+// name. A generous page covers any realistic per-branch endpoint count.
+func (c *Controllers) endpointNameTaken(ctx context.Context, poolID, projectID, branchID uuid.UUID, name string) (bool, error) {
+	eps, _, err := c.backend.ListEndpoints(ctx, poolID, projectID, branchID, 1000, 0)
+	if err != nil {
+		return false, fmt.Errorf("list endpoints: %w", err)
+	}
+	for _, ep := range eps {
+		if ep.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpointRequestObject) (ResizeEndpointResponseObject, error) {
@@ -970,6 +1029,15 @@ func projectToAPI(p core.Project) Project {
 	}
 }
 
+// branchPgSettings pulls the caller's settings off a create-branch body. They
+// merge over what the branch inherits from its ancestor.
+func branchPgSettings(body *CreateBranchRequest) map[string]string {
+	if body == nil || body.PgSettings == nil {
+		return nil
+	}
+	return *body.PgSettings
+}
+
 func branchToAPI(b core.Branch) Branch {
 	out := Branch{
 		ProjectId:      b.ProjectID,
@@ -982,6 +1050,9 @@ func branchToAPI(b core.Branch) Branch {
 	}
 	if b.ForkLSN != "" {
 		out.ForkLsn = &b.ForkLSN
+	}
+	if len(b.PgSettings) > 0 {
+		out.PgSettings = &b.PgSettings
 	}
 	return out
 }
@@ -998,16 +1069,29 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 	if memory == "" {
 		memory = defaultEndpointMemory
 	}
-	return Endpoint{
+	out := Endpoint{
 		Id:             e.ID,
 		ProjectId:      e.ProjectID,
 		BranchId:       e.BranchID,
 		Role:           EndpointRole(e.Role),
+		Name:           e.Name,
 		Address:        e.Address,
 		TailnetAddress: e.TailnetAddress,
 		Resources:      &EndpointResources{Cpu: &cpu, Memory: &memory},
 		CreatedAt:      e.CreatedAt,
 	}
+	if len(e.PgSettings) > 0 {
+		out.PgSettings = &e.PgSettings
+	}
+	// Echoed verbatim, including its internal shape: whoever set it is the only
+	// party that knows what it means.
+	if len(e.Extended) > 0 {
+		var ext map[string]any
+		if json.Unmarshal(e.Extended, &ext) == nil {
+			out.ExtendedConfig = &ext
+		}
+	}
+	return out
 }
 
 // Pagination bounds for the list endpoints, matching the spec's limit parameter.

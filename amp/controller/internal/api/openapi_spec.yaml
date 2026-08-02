@@ -451,6 +451,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -931,6 +933,14 @@ components:
           type: string
           nullable: true
           description: The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
+        pg_settings:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Extra PostgreSQL settings applied to every compute on this branch, as
+            `{name: value}`. A fork inherits its ancestor's. An endpoint's own
+            `pg_settings` merge over these and win on a key both define.
         created_at:
           type: string
           format: date-time
@@ -965,10 +975,18 @@ components:
           description: |
             The ancestor LSN to branch at (storage-layer "X/X" form, e.g.
             "0/16ABCD0"). Omit to branch at the parent's latest LSN.
+        pg_settings:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Extra PostgreSQL settings for the new branch, as `{name: value}`.
+            They merge over what the branch inherits from its ancestor and win on
+            a key both define. Omit to inherit unchanged.
 
     Endpoint:
       type: object
-      required: [id, project_id, branch_id, role, address, tailnet_address, created_at]
+      required: [id, project_id, branch_id, role, name, address, tailnet_address, created_at]
       properties:
         id:
           type: string
@@ -984,6 +1002,9 @@ components:
         role:
           type: string
           enum: [read_write, read_only]
+        name:
+          type: string
+          description: 'The caller''s handle for this endpoint, unique among its branch''s endpoints. Empty when the endpoint was created without one.'
         address:
           type: string
           description: 'Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.'
@@ -996,6 +1017,23 @@ components:
             The endpoint's current compute reservation (cpu/memory), as stored in
             its config. Fields are empty for endpoints created before resource
             tracking. Use POST .../resize to change it.
+        extended_config:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: |
+            The `extended_config` this endpoint was created with, verbatim, or
+            `null` if it has none. Opaque — the control plane stores and forwards
+            it without interpreting it.
+        pg_settings:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            This endpoint's OWN extra PostgreSQL settings. The settings its
+            compute actually runs with are its branch's merged with these, these
+            winning on a key both define — so read the branch's too if you want
+            the effective set.
         created_at:
           type: string
           format: date-time
@@ -1016,11 +1054,41 @@ components:
     CreateEndpointRequest:
       type: object
       properties:
+        name:
+          type: string
+          description: |
+            A handle for the endpoint, unique among its branch's endpoints (two
+            branches may each have a `primary`). Optional — an endpoint is always
+            addressable by its `id`. `409` if the name is already taken on the
+            branch.
         role:
           type: string
           enum: [read_write, read_only]
           default: read_write
           description: The endpoint's role. A branch admits at most one read_write endpoint.
+        pg_settings:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Extra PostgreSQL settings for THIS endpoint, as `{name: value}`.
+            They merge over the branch's `pg_settings` and win on a key both
+            define, so this is the per-endpoint override of a branch-wide
+            baseline.
+        extended_config:
+          type: object
+          additionalProperties: true
+          description: |
+            Per-endpoint compute configuration the control plane stores and
+            passes to the deployer **without interpreting**: extra PostgreSQL
+            settings, and for a locally-deployed compute
+            (`--deploy-driver=local`) the ports it binds. Kept verbatim under
+            `config.extended`, nested so a key here can never collide with a
+            field the control plane owns.
+
+            Opaque by design — the control plane makes no promise about what any
+            key means; that is a contract between the caller and whatever
+            deploys the compute.
         disk_type:
           type: string
           enum: [network, local]

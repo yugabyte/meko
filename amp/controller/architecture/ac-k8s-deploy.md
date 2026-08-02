@@ -313,8 +313,7 @@ The deploy is **demo-grade**. What it currently takes for granted:
   stale/missing secret is the usual cause of `ImagePullBackOff`. Images come from
   `amp/controller` + `amp/endpoint` at `454529406029.dkr.ecr.us-west-2.amazonaws.com`.
   Everything lives in a **single namespace** (no cross-namespace deploys).
-- **No authentication.** The controller runs `--dev` (no auth) and the
-  control-plane API + UI are unauthenticated. Mitigated only by **internal
+- **No authentication.** The control-plane API + UI are unauthenticated. Mitigated only by **internal
   LoadBalancers** (private VPC IPs, GKE `…/load-balancer-type: Internal`) — not by
   any authn/authz. Do not expose publicly.
 - **Shared, well-known endpoint credentials.** Every endpoint's compute uses the

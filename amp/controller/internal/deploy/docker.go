@@ -3,6 +3,7 @@ package deploy
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -100,6 +101,15 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		env["SAFEKEEPER_PG_PUB_PORT"] = strconv.Itoa(endpointSKPGPort)
 	} else {
 		env["DEV_PROVISION_SCHEMA"] = "true" // controller-free: the endpoint provisions the schema
+	}
+	// Extra GUCs reach the supervisor the same way the chart delivers them: one
+	// JSON object it appends to the compute spec.
+	if len(spec.PgSettings) > 0 {
+		blob, err := json.Marshal(spec.PgSettings)
+		if err != nil {
+			return Endpoint{}, fmt.Errorf("encode pg_settings for endpoint %s: %w", spec.Name, err)
+		}
+		env["COMPUTE_EXTRA_SETTINGS_JSON"] = string(blob)
 	}
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)

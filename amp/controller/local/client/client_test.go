@@ -3,23 +3,25 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
-
-	"github.com/yugabyte/amp/controller/internal/registry"
 )
 
-// The storage-layer control surface is project-scoped: the branch and endpoint
-// rows it addresses are the control plane's own, and those belong to a project.
-// These pin the exact scoped paths the launcher must hit, so a prefix change that
-// silently broke the contract fails here.
+// Every resource the launcher addresses hangs off a pool, a project and a
+// branch, so its routes are nested all the way down. These pin the exact paths,
+// so a nesting change that silently broke the contract fails here.
 var (
-	testProjectID   = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000001")
-	testProjectBase = "/control/v1/projects/" + testProjectID.String()
+	testPoolID     = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000000")
+	testProjectID  = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000001")
+	testBranchID   = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000002")
+	testBranchBase = "/api/v1/storage-pools/" + testPoolID.String() +
+		"/projects/" + testProjectID.String() +
+		"/branches/" + testBranchID.String()
 )
 
 // capture records what the test server saw for one request.
@@ -54,80 +56,106 @@ func recordingServer(t *testing.T, cap *capture, status int, respBody string) *h
 
 func ptrStr(s string) *string { return &s }
 
-func TestControllerEndpointCreateAndList(t *testing.T) {
+func TestAPIEndpointCreateAndDelete(t *testing.T) {
 	var cap capture
-	rec := recordingServer(t, &cap, http.StatusOK, `null`)
-	c := NewController(rec.URL, testProjectID, nil)
+	epID := uuid.MustParse("2f3a1c00-0000-0000-0000-0000000000ee")
 
-	err := c.EndpointCreate(context.Background(), registry.ComputeEndpoint{
-		EndpointID: "ep-1",
-		BranchID:   "branch-1",
-		Spec:       json.RawMessage(`{"k":"v"}`),
-	})
+	rec := recordingServer(t, &cap, http.StatusAccepted,
+		`{"id":"3f3a1c00-0000-0000-0000-000000000001","kind":"create_endpoint","status":"pending",`+
+			`"target_ref":"`+epID.String()+`","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)
+	c := NewAPI(rec.URL, nil)
+
+	task, err := c.CreateEndpoint(context.Background(), testPoolID, testProjectID, testBranchID,
+		EndpointCreate{
+			Name:       "ep_b1",
+			Extended:   json.RawMessage(`{"pg_port":55432}`),
+			PgSettings: map[string]string{"work_mem": "64MB"},
+		})
 	if err != nil {
-		t.Fatalf("EndpointCreate: %v", err)
+		t.Fatalf("CreateEndpoint: %v", err)
 	}
-	if cap.method != http.MethodPost || cap.path != testProjectBase+"/endpoint" {
+	if cap.method != http.MethodPost || cap.path != testBranchBase+"/endpoints" {
 		t.Fatalf("create hit %s %s", cap.method, cap.path)
 	}
-	var sent registry.ComputeEndpoint
+	// The launcher's whole per-endpoint state rides in this body: the handle as
+	// the row's name, the local run config as extended_config, and the caller's
+	// --pg-setting overrides as pg_settings. A field silently dropped here is a
+	// launcher that cannot find its own endpoint again.
+	var sent struct {
+		Name           *string           `json:"name"`
+		ExtendedConfig map[string]any    `json:"extended_config"`
+		PgSettings     map[string]string `json:"pg_settings"`
+	}
 	if err := json.Unmarshal(cap.body, &sent); err != nil {
-		t.Fatalf("bad endpoint body: %v", err)
+		t.Fatalf("bad create body: %v", err)
 	}
-	if sent.EndpointID != "ep-1" || sent.BranchID != "branch-1" || string(sent.Spec) != `{"k":"v"}` {
-		t.Fatalf("unexpected endpoint body: %+v", sent)
+	if sent.Name == nil || *sent.Name != "ep_b1" {
+		t.Errorf("name = %v, want ep_b1", sent.Name)
 	}
-
-	lst := recordingServer(t, &cap, http.StatusOK,
-		`[{"endpoint_id":"ep-1","branch_id":"branch-1","spec":{"k":"v"}}]`)
-	c2 := NewController(lst.URL, testProjectID, nil)
-	eps, err := c2.EndpointList(context.Background())
-	if err != nil {
-		t.Fatalf("EndpointList: %v", err)
+	if sent.ExtendedConfig["pg_port"] != float64(55432) {
+		t.Errorf("extended_config = %v, want pg_port 55432", sent.ExtendedConfig)
 	}
-	if cap.method != http.MethodGet || cap.path != testProjectBase+"/endpoint" {
-		t.Fatalf("list hit %s %s", cap.method, cap.path)
+	if sent.PgSettings["work_mem"] != "64MB" {
+		t.Errorf("pg_settings = %v, want work_mem 64MB", sent.PgSettings)
 	}
-	if len(eps) != 1 || eps[0].EndpointID != "ep-1" || string(eps[0].Spec) != `{"k":"v"}` {
-		t.Fatalf("unexpected endpoints: %+v", eps)
+	// The controller reports the id it assigned as the task's target, which is how
+	// the launcher learns it without waiting for the task to finish.
+	if task.TargetRef == nil || *task.TargetRef != epID.String() {
+		t.Fatalf("create task target_ref = %v, want %s", task.TargetRef, epID)
 	}
 
-	del := recordingServer(t, &cap, http.StatusOK, `null`)
-	c3 := NewController(del.URL, testProjectID, nil)
-	if err := c3.EndpointDelete(context.Background(), "ep-1"); err != nil {
-		t.Fatalf("EndpointDelete: %v", err)
+	del := recordingServer(t, &cap, http.StatusAccepted,
+		`{"id":"3f3a1c00-0000-0000-0000-000000000002","kind":"delete_endpoint","status":"pending",`+
+			`"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)
+	if _, err := NewAPI(del.URL, nil).DeleteEndpoint(
+		context.Background(), testPoolID, testProjectID, testBranchID, epID); err != nil {
+		t.Fatalf("DeleteEndpoint: %v", err)
 	}
-	if cap.method != http.MethodDelete || cap.path != testProjectBase+"/endpoint/ep-1" {
+	if cap.method != http.MethodDelete || cap.path != testBranchBase+"/endpoints/"+epID.String() {
 		t.Fatalf("delete hit %s %s", cap.method, cap.path)
 	}
 }
 
-func TestControllerReady(t *testing.T) {
+func TestAPIReady(t *testing.T) {
 	var cap capture
-	srv := recordingServer(t, &cap, http.StatusOK, `null`)
-	c := NewController(srv.URL, testProjectID, nil)
-	if err := c.Ready(context.Background()); err != nil {
+	srv := recordingServer(t, &cap, http.StatusOK, `{"status":"ready"}`)
+	if err := NewAPI(srv.URL, nil).Ready(context.Background()); err != nil {
 		t.Fatalf("Ready: %v", err)
 	}
-	if cap.method != http.MethodGet || cap.path != "/ready" {
+	if cap.method != http.MethodGet || cap.path != "/readyz" {
 		t.Fatalf("ready hit %s %s", cap.method, cap.path)
 	}
 }
 
-func TestControllerHTTPError(t *testing.T) {
+func TestAPIHTTPError(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusConflict, `{"message":"nope"}`)
-	c := NewController(srv.URL, testProjectID, nil)
-	_, err := c.EndpointList(context.Background())
+	_, err := NewAPI(srv.URL, nil).CreateEndpoint(
+		context.Background(), testPoolID, testProjectID, testBranchID, EndpointCreate{})
 	if err == nil {
 		t.Fatal("expected error on 409")
 	}
-	he, ok := err.(*HTTPError)
-	if !ok {
+	var he *HTTPError
+	if !errors.As(err, &he) {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if he.Status != http.StatusConflict {
 		t.Fatalf("unexpected status: %d", he.Status)
+	}
+	if IsNotFound(err) {
+		t.Error("a 409 must not read as not-found")
+	}
+}
+
+// IsNotFound is what makes the launcher's teardown idempotent: `endpoint stop
+// --destroy` on a record the controller already dropped has to succeed.
+func TestAPIIsNotFound(t *testing.T) {
+	var cap capture
+	srv := recordingServer(t, &cap, http.StatusNotFound, `{"message":"gone"}`)
+	_, err := NewAPI(srv.URL, nil).DeleteEndpoint(
+		context.Background(), testPoolID, testProjectID, testBranchID, uuid.New())
+	if !IsNotFound(err) {
+		t.Fatalf("IsNotFound(%v) = false, want true", err)
 	}
 }
 

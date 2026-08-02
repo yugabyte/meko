@@ -195,6 +195,23 @@ func TestDeployDockerRequiresImage(t *testing.T) {
 	}
 }
 
+// The local driver launches nothing, so it must load with none of what a launch
+// needs configured: no backing YugabyteDB, no endpoint image, no timeout. That
+// is exactly how yb_amp_local starts its controller.
+func TestDeployLocalDriverNeedsNothingElse(t *testing.T) {
+	c, err := Load([]string{
+		"--database-url", "postgres://localhost/db",
+		"--deploy",
+		"--deploy-driver", "local",
+	})
+	if err != nil {
+		t.Fatalf("--deploy-driver=local should load with no launch config: %v", err)
+	}
+	if !c.Deploy.Enabled || c.Deploy.Driver != DriverLocal {
+		t.Fatalf("deploy = (%v, %q), want (true, %q)", c.Deploy.Enabled, c.Deploy.Driver, DriverLocal)
+	}
+}
+
 func TestDeployRejectsUnknownDriver(t *testing.T) {
 	_, err := Load([]string{
 		"--database-url", "postgres://localhost/db",

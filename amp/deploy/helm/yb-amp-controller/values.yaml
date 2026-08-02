@@ -41,7 +41,7 @@ controller:
   # Container ports.
   ports:
     # -- REST API + UI + storage-layer control surface port (AMP serves /api/v1,
-    # /healthz, /readyz, and /control/v1 here).
+    # /healthz and /readyz here).
     api: 8080
 
   # External exposure of the controller UI/API. The in-cluster ClusterIP Service

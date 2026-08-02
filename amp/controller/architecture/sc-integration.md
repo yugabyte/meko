@@ -51,36 +51,30 @@ metadata health — none are needed in the per-branch topology.
 
 ## HTTP surface
 
-The controller serves the surface on its **API listener** (`:8080`), alongside the
-versioned `/api/v1` product API, implemented in
-`controller/internal/registry` (store + handlers, routed in `handlers.go`):
+There isn't one. Everything the storage layer's control functions touch —
+branches, endpoints — is an `/api/v1` resource, created through the same routes
+any other client uses. `controller/internal/registry` is what remains of the
+surface: an in-process store, no handlers.
 
-| Method + path | Purpose |
-|---|---|
-| `GET /ready` | readiness (DB reachable + migrations applied) — the one unscoped route, so it answers before a project exists |
-| `POST/GET /control/v1/projects/{p}/endpoint`, `DELETE /control/v1/projects/{p}/endpoint/{id}` | launcher endpoint records |
-
-The launcher's endpoint records are all this surface carries; branches are
-ordinary `/api/v1` resources. #516 moves the endpoints there too, leaving
-`/ready`.
-
-The wire shapes match the launcher client DTOs in `controller/local/client`. In
-dev/local the surface is unauthenticated
-(the whole controller is, today — auth is deferred, #189).
+Readiness is `GET /readyz` on the API listener (`:8080`), alongside `/healthz`
+and `/metrics`. In dev/local the controller is unauthenticated (the whole
+controller is, today — auth is deferred, #189).
 
 ## Callers
 
-- **`yb_amp_local`** (the dev harness, `controller/local/`) launches the `controller`
-  binary in place of the old subprocess and drives this surface over HTTP via its
-  controller client (`controller/local/client`) — attach when starting a
-  pageserver, branch register/drop, pending-init record/list/delete,
-  endpoint create/list/delete. The integration harness (`test/integration/compute/`)
-  exercises the same path.
-- **Endpoint pods** (Kubernetes/Docker deploy) make **no** calls to this surface.
-  They are handed `BRANCH_ID` and `CONTROLLER_URL` and need neither: the branch's
-  `amp_storage.branch_state` row is seeded before the pod starts, and the
-  pageserver claims its own generation. (`deploy/endpoint/supervisor.py` has no
-  `/control/v1` client.)
+- **`yb_amp_local`** (the dev harness, `controller/local/`) launches the
+  `controller` binary in place of the old subprocess and drives `/api/v1` over
+  HTTP via `controller/local/client` — its user and pool, its projects, its
+  branches, its endpoints. It starts the controller with
+  `--deploy-driver=local`, so endpoint creates keep the record and launch
+  nothing; the launcher spawns `yb-compute-ctl` itself, and what it needs to do
+  that rides on the endpoint row — its handle as `name`, its GUCs as
+  `pg_settings`, its ports as the opaque `extended_config`. The integration
+  harness (`test/integration/compute/`) exercises the same path.
+- **Endpoint pods** (Kubernetes/Docker deploy) make **no** calls to the
+  controller. They are handed `BRANCH_ID` and `CONTROLLER_URL` and need neither:
+  the branch's `amp_storage.branch_state` row is seeded before the pod starts,
+  and the pageserver claims its own generation.
 - **The controller's own task framework** seeds branch state through the same store
   **in-process** (not over HTTP) — the `RecipeStore` port in
   `controller/internal/task` is satisfied by an in-process adapter, and it passes

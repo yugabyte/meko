@@ -739,3 +739,166 @@ func TestEndpointDeployDisabled(t *testing.T) {
 		t.Fatalf("DeleteEndpoint(deploy off) status = %d, want 501; body = %s", del.StatusCode(), del.Body)
 	}
 }
+
+// TestEndpointLocalDeployer: with --deploy-driver=local the endpoint routes are
+// live and the full create/delete flow works, but nothing is launched — the row
+// is created with no address, and the delete drops it without retiring an
+// instance. This is the path yb_amp_local takes: it spawns its own compute, so
+// the controller must keep the record and stay out of the way.
+func TestEndpointLocalDeployer(t *testing.T) {
+	prov := api.Provisioning{Deployer: deploy.LocalDeployer{}}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "local-pool")
+	projectID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{
+		ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true,
+	})
+
+	rw := api.CreateEndpointRequestRoleReadWrite
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID,
+		api.CreateEndpointRequest{Role: &rw})
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	if created.StatusCode() != http.StatusAccepted {
+		t.Fatalf("CreateEndpoint status = %d, want 202; body = %s", created.StatusCode(), created.Body)
+	}
+	// The launcher reads the id it has to persist off the accepted task, before
+	// the task has run.
+	if created.JSON202.TargetRef == nil {
+		t.Fatal("accepted create task carries no target_ref; the launcher has no endpoint id to record")
+	}
+	targetRef := *created.JSON202.TargetRef
+
+	drainTasks(t, store, backend, prov)
+
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	if err != nil {
+		t.Fatalf("ListEndpoints: %v", err)
+	}
+	if list.StatusCode() != http.StatusOK || list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
+		t.Fatalf("ListEndpoints = %d, body = %s", list.StatusCode(), list.Body)
+	}
+	ep := list.JSON200.Endpoints[0]
+	if ep.Id.String() != targetRef {
+		t.Errorf("endpoint id = %s, want the task's target_ref %s", ep.Id, targetRef)
+	}
+	if ep.Role != api.EndpointRoleReadWrite {
+		t.Errorf("role = %q, want read_write", ep.Role)
+	}
+	// Nothing was deployed, so there is no address to hand out. An address here
+	// would mean the controller thinks it placed a compute it did not.
+	if ep.Address != "" {
+		t.Errorf("address = %q, want empty: the local driver launches nothing", ep.Address)
+	}
+
+	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
+	if err != nil {
+		t.Fatalf("DeleteEndpoint: %v", err)
+	}
+	if del.StatusCode() != http.StatusAccepted {
+		t.Fatalf("DeleteEndpoint status = %d, want 202; body = %s", del.StatusCode(), del.Body)
+	}
+	drainTasks(t, store, backend, prov)
+
+	after, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	if err != nil {
+		t.Fatalf("ListEndpoints after delete: %v", err)
+	}
+	if after.StatusCode() != http.StatusOK || after.JSON200 == nil || len(after.JSON200.Endpoints) != 0 {
+		t.Fatalf("endpoints after delete = %d, body = %s", after.StatusCode(), after.Body)
+	}
+}
+
+// TestEndpointNameAndPgSettings: an endpoint carries a name unique to its
+// branch, and the settings its compute runs with are the branch's merged with
+// its own — its own winning.
+func TestEndpointNameAndPgSettings(t *testing.T) {
+	dep := &fakeDeployer{}
+	prov := api.Provisioning{Deployer: dep}
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
+	ctx := context.Background()
+
+	user := mustCreateUser(t, client, false)
+	pool := mustCreatePool(t, client, user.Id, "named-pool")
+	projectID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{
+		ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true,
+		// The branch-wide baseline. work_mem is the one the endpoint overrides.
+		PgSettings: map[string]string{"work_mem": "16MB", "log_min_duration_statement": "250ms"},
+	})
+
+	rw := api.CreateEndpointRequestRoleReadWrite
+	name := "primary"
+	epSettings := map[string]string{"work_mem": "64MB", "jit": "off"}
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID,
+		api.CreateEndpointRequest{Role: &rw, Name: &name, PgSettings: &epSettings})
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	if created.StatusCode() != http.StatusAccepted {
+		t.Fatalf("CreateEndpoint = %d, want 202; body = %s", created.StatusCode(), created.Body)
+	}
+	drainTasks(t, store, backend, prov)
+
+	ep := mustOneEndpoint(t, client, pool.Id, projectID, branchID)
+	if ep.Name != name {
+		t.Errorf("endpoint name = %q, want %q", ep.Name, name)
+	}
+	// The row keeps only the endpoint's OWN settings; the branch's stay on the
+	// branch, so a later change to the baseline reaches the endpoint.
+	if ep.PgSettings == nil || (*ep.PgSettings)["work_mem"] != "64MB" || len(*ep.PgSettings) != 2 {
+		t.Errorf("endpoint pg_settings = %v, want just its own two", ep.PgSettings)
+	}
+
+	// What the deployer was handed is the merge: the branch's baseline, with the
+	// endpoint's overriding on the key both define.
+	if len(dep.created) != 1 {
+		t.Fatalf("deployer creates = %d, want 1", len(dep.created))
+	}
+	got := dep.created[0].PgSettings
+	want := map[string]string{
+		"work_mem":                   "64MB",  // endpoint wins over the branch's 16MB
+		"log_min_duration_statement": "250ms", // branch-only, inherited
+		"jit":                        "off",   // endpoint-only
+	}
+	if len(got) != len(want) {
+		t.Fatalf("deploy spec pg_settings = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("deploy spec pg_settings[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+
+	// A name already taken on the branch is refused synchronously, so the caller
+	// learns immediately rather than by polling a doomed task.
+	ro := api.CreateEndpointRequestRoleReadOnly
+	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID,
+		api.CreateEndpointRequest{Role: &ro, Name: &name})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(dup name): %v", err)
+	}
+	if dup.StatusCode() != http.StatusConflict {
+		t.Errorf("duplicate name = %d, want 409; body = %s", dup.StatusCode(), dup.Body)
+	}
+}
+
+// mustOneEndpoint returns the branch's single endpoint, failing if there is not
+// exactly one. Tests re-read the endpoint after every task rather than reusing
+// an earlier copy: the row is what the API actually reports, and a stale copy
+// would hide a field the handler forgot to echo.
+func mustOneEndpoint(t *testing.T, client *api.ClientWithResponses, poolID, projectID, branchID uuid.UUID) api.Endpoint {
+	t.Helper()
+	list, err := client.ListEndpointsWithResponse(context.Background(), poolID, projectID, branchID, nil)
+	if err != nil {
+		t.Fatalf("ListEndpoints: %v", err)
+	}
+	if list.StatusCode() != http.StatusOK || list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
+		t.Fatalf("ListEndpoints = %d, want exactly one endpoint; body = %s", list.StatusCode(), list.Body)
+	}
+	return list.JSON200.Endpoints[0]
+}

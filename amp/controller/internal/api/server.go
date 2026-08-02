@@ -20,7 +20,6 @@ import (
 	"github.com/yugabyte/amp/controller/internal/core"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 	"github.com/yugabyte/amp/controller/internal/metrics"
-	"github.com/yugabyte/amp/controller/internal/registry"
 	"github.com/yugabyte/amp/controller/internal/task"
 )
 
@@ -36,7 +35,7 @@ type Server struct {
 
 // NewServer wires middleware, the spec/explorer routes, and the generated,
 // spec-driven API onto an echo server.
-func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, prov Provisioning, regStore *registry.Store, m *metrics.Metrics, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, prov Provisioning, m *metrics.Metrics, logger *slog.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -68,12 +67,6 @@ func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, pr
 		}
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
 	})
-
-	// The storage-layer control surface (the branch/endpoint registries) that
-	// endpoint pods, yb_amp_local, and the integration harness drive. Mounted outside the versioned API and the spec.
-	if regStore != nil {
-		registry.Register(e, regStore)
-	}
 
 	// The OpenAPI document and the interactive explorer.
 	registerDocs(e)

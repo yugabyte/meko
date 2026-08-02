@@ -25,6 +25,9 @@ type CreateEndpointArgs struct {
 	BranchID   uuid.UUID `json:"branch_id"`
 	Role       string    `json:"role"`
 	PgVersion  int       `json:"pg_version"`
+	// Name is the caller's handle for the endpoint, unique among its branch's
+	// endpoints. Empty means unnamed.
+	Name string `json:"name,omitempty"`
 	// CPU and Memory are the pod's compute reservation (Kubernetes quantities,
 	// e.g. "2" / "4Gi"), applied as request == limit for Guaranteed QoS. Carried
 	// in the args so a reclaim/replay deploys the same size. Empty falls back to
@@ -35,6 +38,14 @@ type CreateEndpointArgs struct {
 	// names). The step upserts them onto the branch's durable set before
 	// resolving mounts, so the opt-in survives a recreate and forks inherit it.
 	Extensions []string `json:"extensions,omitempty"`
+	// Extended is per-endpoint compute configuration the control plane passes
+	// through WITHOUT interpreting: extra Postgres settings, and for a locally
+	// deployed compute the ports it binds. Stored under config.extended, nested
+	// so a passthrough key can never collide with a product one.
+	Extended json.RawMessage `json:"extended,omitempty"`
+	// PgSettings are this endpoint's own extra PostgreSQL settings, merged over
+	// its branch's at spec-build time (the endpoint's win).
+	PgSettings map[string]string `json:"pg_settings,omitempty"`
 }
 
 // createEndpointStep records the endpoint, provisions the compute, and records
@@ -107,9 +118,19 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(err)
 	}
-	if err := s.state.EnsureEndpointRecord(ctx, s.EndpointID, s.ProjectID, s.BranchID, s.Role, config); err != nil {
+	settings, err := json.Marshal(orEmptyMap(s.PgSettings))
+	if err != nil {
+		return Fail(fmt.Errorf("encode endpoint pg_settings: %w", err))
+	}
+	if err := s.state.EnsureEndpointRecord(ctx, s.EndpointID, s.ProjectID, s.BranchID, s.Role, s.Name, config, settings); err != nil {
 		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
 	}
+
+	branchSettings, err := s.state.BranchPgSettings(ctx, s.ProjectID, s.BranchID)
+	if err != nil {
+		return Fail(fmt.Errorf("read branch pg_settings: %w", err))
+	}
+	effective := mergePgSettings(branchSettings, s.PgSettings)
 
 	// The deploy spec speaks the storage layer's flat branch id: a branch's id is
 	// the storage branch id verbatim, rendered via hex32 (no enclosing tenant).
@@ -122,6 +143,11 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		CPU:           s.CPU,
 		Memory:        s.Memory,
 		Extensions:    extSpecs,
+		// The compute runs with the branch's settings merged with this
+		// endpoint's, the endpoint's winning. Resolved here rather than stored
+		// pre-merged, so a later change to the branch's baseline reaches the
+		// endpoint on its next (re)deploy.
+		PgSettings: effective,
 	}
 
 	deployed, err := s.deployer.CreateEndpoint(ctx, spec)
@@ -185,6 +211,37 @@ func unionStrings(a, b []string) []string {
 // is the JSON persisted on the endpoint row for (re)creation. extensions is the
 // resolved externalized-extension set (names), recorded so a recreate/audit sees
 // what the endpoint mounted; omitted when empty.
+// mergePgSettings resolves what the compute actually runs with: the branch's
+// baseline with the endpoint's own merged over it, the endpoint's winning on a
+// key both define.
+//
+// This duplicates core.EffectivePgSettings rather than calling it because the
+// task package must not import core (its state dependency is the structural
+// StateStore interface, which is what lets a fake stand in). The rule is small
+// and pinned by tests on both sides.
+func mergePgSettings(branch, endpoint map[string]string) map[string]string {
+	if len(branch) == 0 && len(endpoint) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(branch)+len(endpoint))
+	for k, v := range branch {
+		out[k] = v
+	}
+	for k, v := range endpoint {
+		out[k] = v
+	}
+	return out
+}
+
+// orEmptyMap normalizes a nil map to an empty one so it encodes as `{}` rather
+// than `null` — the column is NOT NULL and readers expect an object.
+func orEmptyMap(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
+}
+
 func endpointConfig(args CreateEndpointArgs, extensions []string) ([]byte, error) {
 	cfg := map[string]any{
 		"project_id": args.ProjectID,
@@ -196,6 +253,9 @@ func endpointConfig(args CreateEndpointArgs, extensions []string) ([]byte, error
 	}
 	if len(extensions) > 0 {
 		cfg["extensions"] = extensions
+	}
+	if len(args.Extended) > 0 {
+		cfg["extended"] = args.Extended
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {

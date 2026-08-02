@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -307,8 +308,9 @@ func (b *PgBackend) CreateBranch(ctx context.Context, poolID, projectID, parentB
 
 func (b *PgBackend) getBranchByID(ctx context.Context, projectID, branchID uuid.UUID) (Branch, error) {
 	row := b.pool.QueryRow(ctx,
-		`SELECT project_id::text, branch_id::text, name, pg_version, is_default, parent_branch_id::text, fork_lsn::text, created_at
-		 FROM amp_registry.branches WHERE project_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL`,
+		`SELECT `+branchColumns+`
+		 FROM amp_registry.branches b
+		 WHERE b.project_id = $1::uuid AND b.branch_id = $2::uuid AND b.dropped_at IS NULL`,
 		projectID.String(), branchID.String())
 	br, err := scanBranch(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -317,10 +319,17 @@ func (b *PgBackend) getBranchByID(ctx context.Context, projectID, branchID uuid.
 	return br, err
 }
 
+// branchColumns is the column list scanBranch reads, in order. Every branch
+// query builds on this ONE constant, and every one of them aliases the table
+// `b`, so a column added to the projection cannot reach one scanBranch caller
+// and miss another — which is exactly how a query and its scanner drift out of
+// step and start answering 500.
+const branchColumns = `b.project_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.pg_settings, b.created_at`
+
 // branchSelect joins branch -> project -> storage_pools so a branch is only
 // visible through the project (and pool) it belongs to. Tombstoned projects are
 // filtered in the join; the branch's own tombstone filter is branchLive.
-const branchSelect = `SELECT b.project_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.created_at
+const branchSelect = `SELECT ` + branchColumns + `
 	FROM amp_registry.branches b
 	JOIN amp_registry.projects p ON p.id = b.project_id AND p.dropped_at IS NULL
 	JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id`
@@ -351,9 +360,10 @@ func (b *PgBackend) ListBranches(ctx context.Context, poolID, projectID uuid.UUI
 		return nil, 0, fmt.Errorf("count branches: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		`SELECT project_id::text, branch_id::text, name, pg_version, is_default, parent_branch_id::text, fork_lsn::text, created_at
-		 FROM amp_registry.branches WHERE project_id = $1::uuid AND dropped_at IS NULL
-		 ORDER BY created_at, branch_id LIMIT $2 OFFSET $3`,
+		`SELECT `+branchColumns+`
+		 FROM amp_registry.branches b
+		 WHERE b.project_id = $1::uuid AND b.dropped_at IS NULL
+		 ORDER BY b.created_at, b.branch_id LIMIT $2 OFFSET $3`,
 		projectID.String(), limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list branches: %w", err)
@@ -463,7 +473,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, projectID, branchID uuid
 // An endpoint has no project_id of its own — it reaches its project through its
 // branch — so every projection joins `branches` to supply it. That join is also
 // what scopes a query to a project.
-const endpointSelect = `SELECT e.id::text, eb.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.created_at
+const endpointSelect = `SELECT e.id::text, eb.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.config->'extended', e.created_at
 	FROM amp_registry.endpoints e
 	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
@@ -660,15 +670,32 @@ func scanProject(r scanRow) (Project, error) {
 	return p, nil
 }
 
+// decodePgSettings turns the stored jsonb object into a map, or nil when it is
+// absent or empty. Nil rather than an empty map so "no settings" is one case.
+func decodePgSettings(raw []byte, what string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode %s pg_settings: %w", what, err)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
 func scanBranch(r scanRow) (Branch, error) {
 	var (
-		projectStr string
-		branchStr  string
-		parentStr  sql.NullString // NULL for the default branch
-		forkLSN    sql.NullString // NULL for the default branch
-		br         Branch
+		projectStr  string
+		branchStr   string
+		parentStr   sql.NullString // NULL for the default branch
+		forkLSN     sql.NullString // NULL for the default branch
+		settingsRaw []byte
+		br          Branch
 	)
-	if err := r.Scan(&projectStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &br.CreatedAt); err != nil {
+	if err := r.Scan(&projectStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &settingsRaw, &br.CreatedAt); err != nil {
 		return Branch{}, err
 	}
 	projectID, err := uuid.Parse(projectStr)
@@ -689,17 +716,21 @@ func scanBranch(r scanRow) (Branch, error) {
 		br.ParentBranchID = &parentID
 	}
 	br.ForkLSN = forkLSN.String // "" when NULL
+	if br.PgSettings, err = decodePgSettings(settingsRaw, "branch"); err != nil {
+		return Branch{}, err
+	}
 	return br, nil
 }
 
 func scanEndpoint(r scanRow) (Endpoint, error) {
 	var (
-		idStr      string
-		projectStr string
-		branchStr  string
-		ep         Endpoint
+		idStr       string
+		projectStr  string
+		branchStr   string
+		settingsRaw []byte
+		ep          Endpoint
 	)
-	if err := r.Scan(&idStr, &projectStr, &branchStr, &ep.Role, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &ep.CreatedAt); err != nil {
+	if err := r.Scan(&idStr, &projectStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &settingsRaw, &ep.Extended, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	id, err := uuid.Parse(idStr)
@@ -717,5 +748,8 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 	ep.ID = id
 	ep.ProjectID = project
 	ep.BranchID = branch
+	if ep.PgSettings, err = decodePgSettings(settingsRaw, "endpoint"); err != nil {
+		return Endpoint{}, err
+	}
 	return ep, nil
 }

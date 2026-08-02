@@ -53,11 +53,6 @@ func NewStore(pool *db.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Ready reports whether the backing database is reachable.
-func (s *Store) Ready(ctx context.Context) error {
-	return s.pool.Healthy(ctx)
-}
-
 // --- branch id rendering ----------------------------------------------------
 
 // branchIDHex is the SQL projection of a branch's uuid as the storage layer's
@@ -96,7 +91,7 @@ func isSerializationAbort(err error) bool {
 
 // mapWriteErr translates the constraint violations a resource-model write can
 // raise into this package's sentinels: a name already taken among live rows, or a
-// second writer on a branch (branches_name_per_project / endpoints_name /
+// second writer on a branch (branches_name_per_project /
 // endpoints_one_writer_per_branch) -> ErrConflict; a missing project or branch
 // (foreign key) -> ErrNotFound.
 func mapWriteErr(what string, err error) error {
@@ -228,14 +223,36 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	// by uuid here — one branch table, one key type — where the flat registry keyed
 	// on the 32-hex rendering. See compute/architecture/extensions.md#branch-fork.
 	inheritedExts := []byte("[]")
+	inheritedSettings := []byte("{}")
 	if ancestorUUID != nil {
-		var raw []byte
+		var exts, settings []byte
 		if err := tx.QueryRow(ctx,
-			`SELECT COALESCE((SELECT extensions FROM amp_registry.branches WHERE branch_id = $1::uuid), '[]'::jsonb)`,
-			*ancestorUUID).Scan(&raw); err != nil {
-			return fmt.Errorf("read ancestor extensions: %w", err)
+			`SELECT COALESCE(extensions, '[]'::jsonb), COALESCE(pg_settings, '{}'::jsonb)
+			   FROM amp_registry.branches WHERE branch_id = $1::uuid`,
+			*ancestorUUID).Scan(&exts, &settings); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read ancestor extensions and settings: %w", err)
+		} else if err == nil {
+			inheritedExts, inheritedSettings = exts, settings
 		}
-		inheritedExts = raw
+	}
+
+	// The caller's settings merge OVER the inherited ones and win on a key both
+	// define, so a fork can override one of its ancestor's without restating the
+	// rest. Merged here rather than in SQL because the inherited side is already
+	// in hand.
+	if len(req.PgSettings) > 0 {
+		merged := map[string]string{}
+		if err := json.Unmarshal(inheritedSettings, &merged); err != nil {
+			return fmt.Errorf("decode ancestor pg_settings: %w", err)
+		}
+		for k, v := range req.PgSettings {
+			merged[k] = v
+		}
+		blob, err := json.Marshal(merged)
+		if err != nil {
+			return fmt.Errorf("encode branch pg_settings: %w", err)
+		}
+		inheritedSettings = blob
 	}
 
 	// is_default is false: a project's default branch is created with the project
@@ -255,21 +272,21 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	if ancestorUUID != nil {
 		tag, err = tx.Exec(ctx,
 			`INSERT INTO amp_registry.branches
-			   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions)
-			 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn, $7::jsonb
+			   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions, pg_settings)
+			 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn, $7::jsonb, $8::jsonb
 			   FROM amp_registry.branches p
 			  WHERE p.branch_id = $5::uuid AND p.project_id = $1::uuid AND p.dropped_at IS NULL
 			 ON CONFLICT (branch_id) DO NOTHING`,
 			projectID.String(), id.String(), req.BranchName, req.PgVersion,
-			ancestorUUID, req.StartLSN, string(inheritedExts))
+			ancestorUUID, req.StartLSN, string(inheritedExts), string(inheritedSettings))
 	} else {
 		tag, err = tx.Exec(ctx,
 			`INSERT INTO amp_registry.branches
-			   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions)
-			 VALUES ($1::uuid, $2::uuid, $3, $4, false, NULL, $5::pg_lsn, $6::jsonb)
+			   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions, pg_settings)
+			 VALUES ($1::uuid, $2::uuid, $3, $4, false, NULL, $5::pg_lsn, $6::jsonb, $7::jsonb)
 			 ON CONFLICT (branch_id) DO NOTHING`,
 			projectID.String(), id.String(), req.BranchName, req.PgVersion,
-			req.StartLSN, string(inheritedExts))
+			req.StartLSN, string(inheritedExts), string(inheritedSettings))
 	}
 	if err != nil {
 		return mapWriteErr(fmt.Sprintf("declare branch %s (%q)", branchID, req.BranchName), err)
@@ -367,124 +384,6 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit record branch: %w", err)
-	}
-	return nil
-}
-
-// --- endpoint registry ----------------------------------------------------
-
-// endpointSpecRole is the role a launcher-created endpoint takes. yb_amp_local
-// only ever creates Primary endpoints (it rejects --lsn), so they are writers —
-// which means endpoints_one_writer_per_branch now enforces the launcher's own
-// single-endpoint-per-branch check at the schema level.
-const endpointSpecRole = "read_write"
-
-// EndpointCreate persists (or replaces) a launcher compute-endpoint record on
-// the project's branch, keyed by its caller-chosen handle.
-//
-// The handle lands in `endpoint.name` and the launcher's opaque config in
-// `endpoint.spec`; the row is otherwise an ordinary endpoint record, so it shows
-// up on the product API alongside deployed ones. The id is minted here — the
-// resource model keys endpoints by uuid — and is not the handle.
-func (s *Store) EndpointCreate(ctx context.Context, projectID uuid.UUID, ep ComputeEndpoint) error {
-	branchUUID, err := ParseBranchID(ep.BranchID)
-	if err != nil {
-		return err
-	}
-	if ep.EndpointID == "" {
-		return fmt.Errorf("%w: endpoint_id is required", ErrInvalid)
-	}
-	// Two independent scopings, both required:
-	//
-	//   - the SELECT scopes the INSERT candidate — a branch outside the project (or
-	//     absent, or dropped) produces no row to insert;
-	//   - the DO UPDATE's own WHERE scopes the *conflict* arm. `endpoints_name` is
-	//     a global unique index (an endpoint carries no project_id to scope by), so
-	//     without it a name already taken in ANOTHER project would resolve the
-	//     conflict against that project's row and silently reparent it here,
-	//     overwriting its spec and reporting success.
-	//
-	// Zero rows therefore means one of: no such live branch in this project, or the
-	// handle belongs to another project. Both are told apart below.
-	tag, err := s.pool.Exec(ctx,
-		`INSERT INTO amp_registry.endpoints (id, branch_id, role, name, spec)
-		 SELECT $1::uuid, b.branch_id, $3::amp_registry.endpoint_role, $4, $5::jsonb
-		   FROM amp_registry.branches b
-		  WHERE b.branch_id = $2::uuid AND b.project_id = $6::uuid AND b.dropped_at IS NULL
-		 ON CONFLICT (name) DO UPDATE
-		    SET branch_id = EXCLUDED.branch_id, spec = EXCLUDED.spec
-		  WHERE EXISTS (
-		      SELECT 1 FROM amp_registry.branches ob
-		       WHERE ob.branch_id = amp_registry.endpoints.branch_id
-		         AND ob.project_id = $6::uuid)`,
-		uuid.New().String(), branchUUID.String(), endpointSpecRole,
-		ep.EndpointID, []byte(ep.Spec), projectID.String())
-	if err != nil {
-		return mapWriteErr(fmt.Sprintf("create endpoint %s on branch %s", ep.EndpointID, ep.BranchID), err)
-	}
-	if tag.RowsAffected() == 0 {
-		var takenElsewhere bool
-		if err := s.pool.QueryRow(ctx,
-			`SELECT EXISTS (
-			    SELECT 1 FROM amp_registry.endpoints e
-			     WHERE e.name = $1
-			       AND NOT EXISTS (
-			           SELECT 1 FROM amp_registry.branches ob
-			            WHERE ob.branch_id = e.branch_id AND ob.project_id = $2::uuid))`,
-			ep.EndpointID, projectID.String()).Scan(&takenElsewhere); err != nil {
-			return fmt.Errorf("classify endpoint create no-op: %w", err)
-		}
-		if takenElsewhere {
-			return fmt.Errorf("%w: endpoint handle %q already belongs to another project",
-				ErrConflict, ep.EndpointID)
-		}
-		return fmt.Errorf("%w: no live branch %s in project %s", ErrNotFound, ep.BranchID, projectID)
-	}
-	return nil
-}
-
-// EndpointList returns the project's launcher endpoint records.
-//
-// Scoped to rows that carry a `spec`: those are the ones this surface owns and
-// the only ones the launcher can deserialize. Endpoints the product API deployed
-// have no spec, and handing them back would fail the launcher's unmarshal.
-func (s *Store) EndpointList(ctx context.Context, projectID uuid.UUID) ([]ComputeEndpoint, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT e.name, `+"replace(e.branch_id::text, '-', '')"+`, e.spec
-		   FROM amp_registry.endpoints e
-		   JOIN amp_registry.branches b ON b.branch_id = e.branch_id
-		  WHERE b.project_id = $1::uuid AND e.spec IS NOT NULL AND e.name IS NOT NULL
-		  ORDER BY e.name`,
-		projectID.String())
-	if err != nil {
-		return nil, fmt.Errorf("list endpoints: %w", err)
-	}
-	defer rows.Close()
-
-	out := []ComputeEndpoint{}
-	for rows.Next() {
-		var ep ComputeEndpoint
-		var spec []byte
-		if err := rows.Scan(&ep.EndpointID, &ep.BranchID, &spec); err != nil {
-			return nil, fmt.Errorf("scan endpoint: %w", err)
-		}
-		ep.Spec = json.RawMessage(spec)
-		out = append(out, ep)
-	}
-	return out, rows.Err()
-}
-
-// EndpointDelete removes a launcher compute-endpoint record by its handle.
-// Idempotent. Scoped to spec-carrying rows so this surface cannot delete an
-// endpoint the product API deployed.
-func (s *Store) EndpointDelete(ctx context.Context, projectID uuid.UUID, endpointID string) error {
-	if _, err := s.pool.Exec(ctx,
-		`DELETE FROM amp_registry.endpoints e
-		  USING amp_registry.branches b
-		  WHERE b.branch_id = e.branch_id AND b.project_id = $1::uuid
-		    AND e.name = $2 AND e.spec IS NOT NULL`,
-		projectID.String(), endpointID); err != nil {
-		return fmt.Errorf("delete endpoint %s: %w", endpointID, err)
 	}
 	return nil
 }

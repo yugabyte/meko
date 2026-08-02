@@ -38,6 +38,12 @@ const (
 // on a pod — so this only has to cover worker pickup plus the transaction.
 const branchTaskTimeout = 60 * time.Second
 
+// endpointTaskTimeout bounds how long an endpoint create/delete task is waited
+// on. With the local driver the step launches nothing — the launcher spawns its
+// own compute — so like a branch task this only has to cover worker pickup plus
+// a couple of row writes.
+const endpointTaskTimeout = 60 * time.Second
+
 // projectCreateTimeout bounds how long EnsureLadder waits for the create-project
 // task. It is a couple of task-worker poll intervals plus the two inserts the
 // task actually does; nothing in it waits on a pod.
@@ -47,8 +53,8 @@ const projectCreateTimeout = 60 * time.Second
 // Returns whether env was mutated, so the caller can persist — nothing to persist
 // today, since both ids are constants.
 //
-// It must run after the controller answers /ready and before anything drives
-// /control/v1. Returns whether env was mutated, so the caller can persist.
+// It must run after the controller answers /readyz and before anything creates
+// a project. Returns whether env was mutated, so the caller can persist.
 func EnsureLadder(ctx context.Context, env *config.LocalEnv) (bool, error) {
 	base, err := controllerBase(env)
 	if err != nil {
@@ -104,58 +110,6 @@ func awaitTask(ctx context.Context, api *client.API, taskID uuid.UUID, timeout t
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
-}
-
-// controllerClientForProject builds a storage-layer client scoped to pid.
-func controllerClientForProject(env *config.LocalEnv, pid uuid.UUID) (*client.Controller, error) {
-	base, err := controllerBase(env)
-	if err != nil {
-		return nil, err
-	}
-	return client.NewController(base, pid, httpClient()), nil
-}
-
-// controllerClientForBranch scopes the client to the project that owns branchID.
-// Endpoint records hang off a branch, and a branch's project is the one its
-// lineage was created in. There is no ambient "current" project to fall back on:
-// a lineage IS a project, so the branch is what says where to look.
-func controllerClientForBranch(ctx context.Context, env *config.LocalEnv, branchID config.BranchID) (*client.Controller, error) {
-	b, err := newBranchAPI(env)
-	if err != nil {
-		return nil, err
-	}
-	branch, err := b.resolveBranch(ctx, branchID)
-	if err != nil {
-		return nil, err
-	}
-	if branch == nil {
-		return nil, fmt.Errorf("no live branch %s in any of the launcher's projects", branchID)
-	}
-	return controllerClientForProject(env, branch.ProjectId)
-}
-
-// eachProjectController calls fn with a client scoped to each of the launcher's
-// projects. Endpoint listing spans them: the launcher's endpoints are spread
-// across however many lineages exist.
-func eachProjectController(ctx context.Context, env *config.LocalEnv, fn func(*client.Controller) error) error {
-	b, err := newBranchAPI(env)
-	if err != nil {
-		return err
-	}
-	projects, err := b.api.ListProjects(ctx, b.poolID)
-	if err != nil {
-		return err
-	}
-	for _, p := range projects {
-		ctrl, err := controllerClientForProject(env, p.Id)
-		if err != nil {
-			return err
-		}
-		if err := fn(ctrl); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // hex32UUID renders a uuid as the storage layer's flat 32-lowercase-hex BranchId,

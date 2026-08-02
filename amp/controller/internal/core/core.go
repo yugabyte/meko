@@ -95,6 +95,31 @@ type Branch struct {
 	// catalog defaults). A fork inherits its parent's set. See
 	// compute/architecture/extensions.md.
 	Extensions []string
+	// PgSettings are extra PostgreSQL settings applied to every compute on this
+	// branch. A fork inherits its parent's, and an endpoint's own settings merge
+	// over these (see Endpoint.PgSettings). Nil when none are set.
+	PgSettings map[string]string
+}
+
+// EffectivePgSettings is the settings an endpoint's compute actually runs with:
+// its branch's baseline with the endpoint's own merged over it. A key the
+// endpoint defines wins, which is what makes branch-wide policy overridable per
+// endpoint (one read replica on a different work_mem than its writer).
+//
+// Returns nil when neither side has any, so a caller can treat "no settings" as
+// one case rather than an empty map.
+func EffectivePgSettings(branch, endpoint map[string]string) map[string]string {
+	if len(branch) == 0 && len(endpoint) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(branch)+len(endpoint))
+	for k, v := range branch {
+		out[k] = v
+	}
+	for k, v := range endpoint {
+		out[k] = v
+	}
+	return out
 }
 
 // Endpoint is the durable record of a compute endpoint on a branch. Address
@@ -107,7 +132,21 @@ type Endpoint struct {
 	ProjectID uuid.UUID
 	BranchID  uuid.UUID
 	Role      string
-	Address   string
+	// Name is the caller's handle for this endpoint, unique among its branch's
+	// endpoints. Empty when the caller did not choose one — an endpoint is always
+	// addressable by ID.
+	Name string
+	// PgSettings are this endpoint's own extra PostgreSQL settings. The
+	// EFFECTIVE set for its compute is the branch's merged with these, with these
+	// winning on a key both define — see EffectivePgSettings. Nil when none are
+	// set.
+	PgSettings map[string]string
+	// Extended is the caller's opaque extended_config, stored and returned
+	// verbatim. The control plane never looks inside it; it exists so whatever
+	// deploys the compute can carry what the API does not model (the ports a
+	// locally-deployed compute binds). Nil when the endpoint has none.
+	Extended []byte
+	Address  string
 	// TailnetAddress is the endpoint's Tailscale (tailnet) connection target,
 	// set alongside Address when the endpoint is exposed on the tailnet; empty
 	// otherwise.

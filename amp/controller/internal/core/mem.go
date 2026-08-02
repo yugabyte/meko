@@ -497,6 +497,22 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, projectID, 
 
 // BranchExtensions returns the branch's opted-in extension names. An absent
 // branch yields an empty slice, not an error (mirrors PgBackend).
+// BranchPgSettings mirrors the Pg arm: the branch's baseline settings, nil for
+// none or an absent branch.
+func (m *MemBackend) BranchPgSettings(_ context.Context, projectID, branchID uuid.UUID) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.branches[branchID]
+	if !ok || b.ProjectID != projectID || len(b.PgSettings) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(b.PgSettings))
+	for k, v := range b.PgSettings {
+		out[k] = v
+	}
+	return out, nil
+}
+
 func (m *MemBackend) BranchExtensions(_ context.Context, projectID, branchID uuid.UUID) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -539,9 +555,9 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, projectID, branchID 
 
 // EnsureEndpointRecord idempotently records an endpoint with the given id on the
 // (projectID, branchID) branch. A repeated id is a no-op; a *second* read_write
-// endpoint (a different id on a branch that already has one) is ErrConflict; a
-// missing branch is ErrNotFound.
-func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, projectID, branchID uuid.UUID, role string, config []byte) error {
+// endpoint (a different id on a branch that already has one) is ErrConflict, as
+// is a name already taken on the branch; a missing branch is ErrNotFound.
+func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, projectID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.endpoints[endpointID]; ok {
@@ -550,6 +566,15 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, project
 	b, ok := m.branches[branchID]
 	if !ok || b.ProjectID != projectID {
 		return ErrNotFound
+	}
+	// Mirror endpoints_name_per_branch. Unnamed endpoints never collide (NULLs
+	// are distinct in the real unique index).
+	if name != "" {
+		for _, ep := range m.endpoints {
+			if ep.BranchID == branchID && ep.Name == name {
+				return ErrConflict
+			}
+		}
 	}
 	if role == RoleReadWrite {
 		k := branchKey{projectID: projectID, branchID: branchID}
@@ -566,14 +591,23 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, project
 	if len(config) > 0 {
 		_ = json.Unmarshal(config, &cfg)
 	}
+	var settings map[string]string
+	if len(pgSettings) > 0 {
+		_ = json.Unmarshal(pgSettings, &settings)
+	}
+	if len(settings) == 0 {
+		settings = nil
+	}
 	m.endpoints[endpointID] = Endpoint{
-		ID:        endpointID,
-		ProjectID: projectID,
-		BranchID:  branchID,
-		Role:      role,
-		CPU:       cfg.CPU,
-		Memory:    cfg.Memory,
-		CreatedAt: m.now(),
+		ID:         endpointID,
+		ProjectID:  projectID,
+		BranchID:   branchID,
+		Role:       role,
+		Name:       name,
+		PgSettings: settings,
+		CPU:        cfg.CPU,
+		Memory:     cfg.Memory,
+		CreatedAt:  m.now(),
 	}
 	return nil
 }

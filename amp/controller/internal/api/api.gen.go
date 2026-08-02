@@ -137,7 +137,12 @@ type Branch struct {
 
 	// ParentBranchId The branch this one was forked from, or null for a project's default branch. Always in the same project.
 	ParentBranchId *openapi_types.UUID `json:"parent_branch_id,omitempty"`
-	PgVersion      int                 `json:"pg_version"`
+
+	// PgSettings Extra PostgreSQL settings applied to every compute on this branch, as
+	// `{name: value}`. A fork inherits its ancestor's. An endpoint's own
+	// `pg_settings` merge over these and win on a key both define.
+	PgSettings *map[string]string `json:"pg_settings,omitempty"`
+	PgVersion  int                `json:"pg_version"`
 
 	// ProjectId The project (control-plane grouping) this branch belongs to.
 	ProjectId openapi_types.UUID `json:"project_id"`
@@ -165,6 +170,11 @@ type CreateBranchRequest struct {
 
 	// ParentBranchId The branch to fork from. Defaults to the project's default branch; set it to branch off another branch.
 	ParentBranchId *openapi_types.UUID `json:"parent_branch_id,omitempty"`
+
+	// PgSettings Extra PostgreSQL settings for the new branch, as `{name: value}`.
+	// They merge over what the branch inherits from its ancestor and win on
+	// a key both define. Omit to inherit unchanged.
+	PgSettings *map[string]string `json:"pg_settings,omitempty"`
 }
 
 // CreateEndpointRequest defines model for CreateEndpointRequest.
@@ -175,6 +185,18 @@ type CreateEndpointRequest struct {
 	// `local` (a node-local instance SSD, typically NVMe) is not yet
 	// supported and is rejected with 400.
 	DiskType *CreateEndpointRequestDiskType `json:"disk_type,omitempty"`
+
+	// ExtendedConfig Per-endpoint compute configuration the control plane stores and
+	// passes to the deployer **without interpreting**: extra PostgreSQL
+	// settings, and for a locally-deployed compute
+	// (`--deploy-driver=local`) the ports it binds. Kept verbatim under
+	// `config.extended`, nested so a key here can never collide with a
+	// field the control plane owns.
+	//
+	// Opaque by design — the control plane makes no promise about what any
+	// key means; that is a contract between the caller and whatever
+	// deploys the compute.
+	ExtendedConfig *map[string]interface{} `json:"extended_config,omitempty"`
 
 	// Extensions Externalized PostgreSQL extensions to opt this endpoint's **branch**
 	// into, by catalog name (e.g. `pgvector`). Enabling is a branch
@@ -187,6 +209,18 @@ type CreateEndpointRequest struct {
 	// rejected when externalized extensions are unavailable (e.g. the Docker
 	// driver). See compute/architecture/extensions.md.
 	Extensions *[]string `json:"extensions,omitempty"`
+
+	// Name A handle for the endpoint, unique among its branch's endpoints (two
+	// branches may each have a `primary`). Optional — an endpoint is always
+	// addressable by its `id`. `409` if the name is already taken on the
+	// branch.
+	Name *string `json:"name,omitempty"`
+
+	// PgSettings Extra PostgreSQL settings for THIS endpoint, as `{name: value}`.
+	// They merge over the branch's `pg_settings` and win on a key both
+	// define, so this is the per-endpoint override of a branch-wide
+	// baseline.
+	PgSettings *map[string]string `json:"pg_settings,omitempty"`
 
 	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
 	// Kubernetes resource quantity and is applied as BOTH the request and the
@@ -257,7 +291,21 @@ type Endpoint struct {
 	// BranchId The branch (storage-layer branch id) this endpoint is bound to.
 	BranchId  openapi_types.UUID `json:"branch_id"`
 	CreatedAt time.Time          `json:"created_at"`
-	Id        openapi_types.UUID `json:"id"`
+
+	// ExtendedConfig The `extended_config` this endpoint was created with, verbatim, or
+	// `null` if it has none. Opaque — the control plane stores and forwards
+	// it without interpreting it.
+	ExtendedConfig *map[string]interface{} `json:"extended_config,omitempty"`
+	Id             openapi_types.UUID      `json:"id"`
+
+	// Name The caller's handle for this endpoint, unique among its branch's endpoints. Empty when the endpoint was created without one.
+	Name string `json:"name"`
+
+	// PgSettings This endpoint's OWN extra PostgreSQL settings. The settings its
+	// compute actually runs with are its branch's merged with these, these
+	// winning on a key both define — so read the branch's too if you want
+	// the effective set.
+	PgSettings *map[string]string `json:"pg_settings,omitempty"`
 
 	// ProjectId The project (control-plane grouping) this endpoint is bound to.
 	ProjectId openapi_types.UUID `json:"project_id"`
@@ -2798,6 +2846,7 @@ type CreateEndpointResponse struct {
 	JSON202      *Accepted
 	JSON400      *BadRequest
 	JSON404      *NotFound
+	JSON409      *Conflict
 	JSON500      *InternalError
 }
 
@@ -3968,6 +4017,13 @@ func ParseCreateEndpointResponse(rsp *http.Response) (*CreateEndpointResponse, e
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -5986,6 +6042,20 @@ func (response CreateEndpoint404JSONResponse) VisitCreateEndpointResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEndpoint409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateEndpoint409JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }

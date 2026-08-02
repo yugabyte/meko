@@ -50,13 +50,17 @@ type StateStore interface {
 	// with the given id, or no-ops if that id already exists. A *second*
 	// read_write endpoint (a different id violating the single-writer index) or a
 	// missing branch is a real error.
-	EnsureEndpointRecord(ctx context.Context, endpointID, projectID, branchID uuid.UUID, role string, config []byte) error
+	EnsureEndpointRecord(ctx context.Context, endpointID, projectID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error
 
 	// BranchExtensions returns the branch's opted-in externalized extension names
 	// (the durable set the create_endpoint step unions with the catalog defaults
 	// to resolve the endpoint's ImageVolume mounts). An absent branch yields an
 	// empty slice, not an error.
 	BranchExtensions(ctx context.Context, projectID, branchID uuid.UUID) ([]string, error)
+
+	// BranchPgSettings returns the branch's baseline PostgreSQL settings (nil for
+	// none / an absent branch). An endpoint's own settings merge over these.
+	BranchPgSettings(ctx context.Context, projectID, branchID uuid.UUID) (map[string]string, error)
 
 	// AddBranchExtensions adds names to the branch's durable extension set (the
 	// createEndpoint opt-in). It is an absolute union — extensions becomes
@@ -123,6 +127,8 @@ type BranchRecipe struct {
 	PgVersion        int
 	AncestorBranchID string
 	StartLSN         string
+	// PgSettings merge over the ancestor's, the caller's winning.
+	PgSettings map[string]string
 }
 
 // RecipeStore seeds the storage-layer state a declared branch needs before any

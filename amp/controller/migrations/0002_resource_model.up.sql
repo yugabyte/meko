@@ -10,10 +10,9 @@
 -- endpoint. A project is purely a control-plane grouping ("a database") that owns
 -- a set of branches; it does NOT map to any storage object.
 --
--- ONE branch table and ONE endpoint table. Both the product API (/api/v1, by
--- uuid) and the storage-layer control surface (/control/v1, by flat 32-hex
--- branch id) read and write these same rows — the two are renderings of one
--- identity, not two registries, so they cannot drift.
+-- ONE branch table and ONE endpoint table, reached through one API (/api/v1).
+-- The storage layer renders the same branch id flat (32-hex) rather than as a
+-- uuid, but that is a rendering of one identity, not a second registry.
 --
 -- Keys are flat. A branch's `branch_id` IS the storage layer's `BranchId`, a
 -- 128-bit id carried here verbatim as `uuid` and globally unique on its own, so
@@ -133,6 +132,13 @@ CREATE TABLE amp_registry.branches (
     -- unions names in; defaults to the empty set.
     extensions          jsonb       NOT NULL DEFAULT '[]'::jsonb,
 
+    -- Extra PostgreSQL settings applied to every compute on this branch, as a
+    -- flat {name: value} object. Like `extensions` it lives on the branch
+    -- identity record so a fork inherits it: RecordBranch copies the ancestor's
+    -- object into the new row. An endpoint's own `pg_settings` merge over these,
+    -- so this is the baseline, not the last word.
+    pg_settings         jsonb       NOT NULL DEFAULT '{}'::jsonb,
+
     created_at          timestamptz NOT NULL DEFAULT now(),
     dropped_at          timestamptz -- tombstone; a branch id is never reused
 );
@@ -162,42 +168,57 @@ CREATE TYPE amp_registry.endpoint_role AS ENUM ('read_write', 'read_only');
 -- An endpoint belongs to a branch and reaches its project through it — there is
 -- no project_id column, so the two can never disagree.
 --
--- Product endpoints are addressed by `id` and have no name; the ones
--- yb_amp_local and the integration harness create carry their caller-chosen
--- handle in `name` and their launcher config in `spec`. One table either way:
--- `role` and the single-writer index apply to both, so the launcher's own
--- conflict check is now backed by the schema.
+-- Every endpoint is created the same way, through the product API, whether the
+-- instance it names is a pod the controller deploys or a local process
+-- yb_amp_local spawns (deploy.LocalDeployer). What differs is only how much of
+-- the row gets filled in: a local compute has no controller-assigned address.
 CREATE TABLE amp_registry.endpoints (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
     branch_id    uuid          NOT NULL REFERENCES amp_registry.branches (branch_id),
     role         amp_registry.endpoint_role NOT NULL,
 
-    name         text,      -- launcher/harness handle; NULL for product endpoints
+    -- A caller-chosen handle, like every other resource in this schema has. It
+    -- is optional: an endpoint is always addressable by `id`, and a caller that
+    -- does not care can leave it unset.
+    name         text,
 
     address         text,      -- connection details returned to users
     tailnet_address text,      -- optional second address: the Tailscale (tailnet)
                                --   URL, populated alongside the LoadBalancer address
                                --   when the endpoint is tailnet-exposed; NULL otherwise
-    config       jsonb,        -- the spec used to (re)create the endpoint
-    spec         jsonb,        -- opaque launcher endpointConf, round-tripped verbatim;
-                               --   NULL for product endpoints. The controller never
-                               --   interprets it (it is yb_amp_local's serde model,
-                               --   mirroring Rust control_plane::endpoint::EndpointConf).
+
+    -- The spec used to (re)create the endpoint: `cpu`, `memory`, `extensions`
+    -- and friends, written by the create_endpoint step. It also carries the
+    -- caller's `extended` object — configuration the control plane stores and
+    -- hands to the deployer WITHOUT interpreting (for a locally-deployed
+    -- compute, the ports it binds). Nested under one key so a passthrough field
+    -- can never collide with a product one.
+    config       jsonb,
+
+    -- This endpoint's own extra PostgreSQL settings, a flat {name: value}
+    -- object. The effective set for the compute is the branch's merged with
+    -- this one, and this one wins on a key both define — branch-wide policy with
+    -- a per-endpoint override, which is what lets one read replica run with a
+    -- different work_mem than its writer.
+    pg_settings  jsonb         NOT NULL DEFAULT '{}'::jsonb,
 
     created_at   timestamptz   NOT NULL DEFAULT now()
 );
 
--- The single-writer rule, enforced in the schema rather than only in code.
+-- The single-writer rule, enforced in the schema rather than only in code. It
+-- covers the launcher's endpoints too, which is why yb_amp_local no longer needs
+-- its own duplicate-primary check to be the only thing standing in the way.
 CREATE UNIQUE INDEX endpoints_one_writer_per_branch
     ON amp_registry.endpoints (branch_id)
     WHERE role = 'read_write';
 
--- A named endpoint is addressable by its handle. Global rather than per-project
--- because an endpoint no longer carries a project_id to scope by, and a plain
--- index is inferrable as an ON CONFLICT target; NULLs are distinct in a unique
--- index, so the unnamed product rows coexist freely.
-CREATE UNIQUE INDEX endpoints_name ON amp_registry.endpoints (name);
+-- A name identifies an endpoint within its branch, the way a branch name does
+-- within its project. Not global: two branches may each have a "primary", which
+-- is the natural thing to call the writer on each of them. NULLs are distinct in
+-- a unique index, so any number of unnamed endpoints coexist.
+CREATE UNIQUE INDEX endpoints_name_per_branch
+    ON amp_registry.endpoints (branch_id, name);
 
 -- "The endpoints of this branch" is the cascade-delete enumeration and the list
 -- endpoint's filter. one_writer_per_branch covers only read_write rows, so

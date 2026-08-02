@@ -8,14 +8,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 
-	"github.com/yugabyte/amp/controller/internal/registry"
+	"github.com/yugabyte/amp/controller/internal/api"
 	"github.com/yugabyte/amp/controller/local/cfg"
 	"github.com/yugabyte/amp/controller/local/client"
 	"github.com/yugabyte/amp/controller/local/config"
@@ -26,10 +28,21 @@ import (
 // ComputeControlPlane::base_port).
 const endpointBasePort uint16 = 55431
 
-// endpointConf is the launcher's persisted compute-endpoint record, stored as
-// the opaque `spec` JSON of the controller's endpoint row. It mirrors Rust
-// `control_plane::endpoint::EndpointConf` field-for-field (JSON), so a mixed
-// old-Rust / new-Go deployment round-trips. Only the Primary path is written.
+// endpointDir is where an endpoint's local process state lives: its pgdata, its
+// co-located daemons' data dirs, its compute_ctl pidfile. `endpoint stop
+// --destroy` removes it wholesale.
+func endpointDir(env *config.LocalEnv, endpointID string) string {
+	return filepath.Join(env.EndpointsPath(), endpointID)
+}
+
+// endpointConf is how to run this endpoint's local compute: which ports to bind,
+// which pg binaries to exec, what to put in the compute spec. The controller has
+// no use for any of it, so it rides in the endpoint's `extended_config` — the
+// product API's opaque per-endpoint passthrough, stored verbatim and never
+// interpreted. Only the Primary path is written.
+//
+// What is NOT here is anything the control plane already models: the endpoint's
+// id and name are the row's, and the branch and pg version come from the branch.
 type endpointConf struct {
 	EndpointID                   string               `json:"endpoint_id"`
 	BranchID                     string               `json:"branch_id"`
@@ -48,28 +61,98 @@ type endpointConf struct {
 	PrivilegedRoleName           *string              `json:"privileged_role_name"`
 	SharedBuffers                *string              `json:"shared_buffers"`
 	LfcSize                      *string              `json:"lfc_size"`
-	PgSettings                   [][2]string          `json:"pg_settings"`
 }
 
-// loadEndpoints fetches all persisted endpoint records from the controller,
-// mirroring Rust `ComputeControlPlane::load`.
-func loadEndpoints(ctx context.Context, env *config.LocalEnv) (map[string]endpointConf, error) {
-	out := map[string]endpointConf{}
-	if err := eachProjectController(ctx, env, func(ctrl *client.Controller) error {
-		records, err := ctrl.EndpointList(ctx)
+// launcherEndpoint is one of the launcher's endpoints: the control plane's row
+// plus the local run config it carries in extended_config.
+type launcherEndpoint struct {
+	// ID is the row's id, the key every product-API call takes.
+	ID uuid.UUID
+	// Pool and Project locate the endpoint's branch, which is what the nested
+	// endpoint routes are addressed by.
+	Pool, Project, Branch uuid.UUID
+	conf                  endpointConf
+	pgSettings            map[string]string
+}
+
+// launcherEndpoints is every endpoint the launcher owns. It keeps the full list
+// as well as the by-name index, because the two answer different questions and
+// only one of them can be keyed by name.
+type launcherEndpoints struct {
+	// all is every launcher endpoint across every project, in load order. Port
+	// allocation reads THIS, not byName: an endpoint left out of the index still
+	// holds its ports, and handing them to a new compute would collide.
+	all []launcherEndpoint
+	// byName resolves the handle the CLI and the harness use. Names are unique
+	// only within a branch (endpoints_name_per_branch), so a name used on two
+	// branches lands here once with the ambiguity recorded below.
+	byName map[string]launcherEndpoint
+	// ambiguous holds the names that appear on more than one branch. Resolving
+	// one is an error rather than a coin flip: `endpoint start ep_b1` naming two
+	// different computes has no right answer, and picking whichever row loaded
+	// last would start (or destroy) the wrong one.
+	ambiguous map[string]int
+}
+
+// lookup resolves a handle, refusing an ambiguous one.
+func (l launcherEndpoints) lookup(name string) (launcherEndpoint, error) {
+	if n := l.ambiguous[name]; n > 1 {
+		return launcherEndpoint{}, fmt.Errorf(
+			"endpoint %q exists on %d different branches; the launcher addresses endpoints by name, so give it a unique one", name, n)
+	}
+	le, ok := l.byName[name]
+	if !ok {
+		return launcherEndpoint{}, fmt.Errorf("endpoint %s not found", name)
+	}
+	return le, nil
+}
+
+// loadEndpoints returns every endpoint the launcher owns. Endpoints span
+// projects (a lineage is a project), so this walks all of them.
+//
+// An endpoint with no extended_config is not the launcher's: something else
+// created it against the same controller. Skipped rather than failing the scan.
+func loadEndpoints(ctx context.Context, env *config.LocalEnv) (launcherEndpoints, error) {
+	out := launcherEndpoints{byName: map[string]launcherEndpoint{}, ambiguous: map[string]int{}}
+	b, err := newBranchAPI(env)
+	if err != nil {
+		return out, err
+	}
+	branches, err := b.allBranches(ctx)
+	if err != nil {
+		return out, err
+	}
+	for _, br := range branches {
+		eps, err := b.api.ListEndpoints(ctx, b.poolID, br.ProjectId, br.BranchId)
 		if err != nil {
-			return fmt.Errorf("listing endpoints from controller: %w", err)
+			return out, err
 		}
-		for _, rec := range records {
-			var conf endpointConf
-			if err := json.Unmarshal(rec.Spec, &conf); err != nil {
-				return fmt.Errorf("deserializing spec for endpoint %s: %w", rec.EndpointID, err)
+		for _, ep := range eps {
+			if ep.Name == "" || ep.ExtendedConfig == nil {
+				continue
 			}
-			out[rec.EndpointID] = conf
+			raw, err := json.Marshal(*ep.ExtendedConfig)
+			if err != nil {
+				return out, fmt.Errorf("re-encoding extended_config for endpoint %s: %w", ep.Name, err)
+			}
+			var conf endpointConf
+			if err := json.Unmarshal(raw, &conf); err != nil {
+				return out, fmt.Errorf("deserializing extended_config for endpoint %s: %w", ep.Name, err)
+			}
+			var settings map[string]string
+			if ep.PgSettings != nil {
+				settings = *ep.PgSettings
+			}
+			le := launcherEndpoint{
+				ID: ep.Id, Pool: b.poolID, Project: br.ProjectId, Branch: br.BranchId,
+				conf: conf, pgSettings: settings,
+			}
+			out.all = append(out.all, le)
+			out.ambiguous[ep.Name]++
+			if _, seen := out.byName[ep.Name]; !seen {
+				out.byName[ep.Name] = le
+			}
 		}
-		return nil
-	}); err != nil {
-		return nil, err
 	}
 	return out, nil
 }
@@ -77,11 +160,13 @@ func loadEndpoints(ctx context.Context, env *config.LocalEnv) (map[string]endpoi
 // nextCandidatePort is the starting point for compute port allocation: one
 // above the highest port any existing endpoint uses (Rust
 // `ComputeControlPlane::next_candidate_port`).
-func nextCandidatePort(endpoints map[string]endpointConf) uint16 {
+func nextCandidatePort(endpoints launcherEndpoints) uint16 {
 	var max uint16
 	found := false
-	for _, ep := range endpoints {
-		for _, p := range []uint16{ep.PgPort, ep.ExternalHTTPPort, ep.InternalHTTPPort} {
+	// Over `all`, not the by-name index: an endpoint whose name collides with
+	// another's is missing from the index but still holds its ports.
+	for _, ep := range endpoints.all {
+		for _, p := range []uint16{ep.conf.PgPort, ep.conf.ExternalHTTPPort, ep.conf.InternalHTTPPort} {
 			if p > max {
 				max = p
 			}
@@ -145,11 +230,19 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		endpointID = "ep-" + string(branchID)
 	}
 
-	// Scope to the project that owns this branch: a lineage is a project, so the
-	// branch is what says which one.
-	ctrl, err := controllerClientForBranch(ctx, env, branchID)
+	// The endpoint hangs off this branch, and the branch says which project and
+	// pool to address it in: a lineage IS a project, so there is nothing ambient
+	// to fall back on.
+	b, err := newBranchAPI(env)
 	if err != nil {
 		return err
+	}
+	branch, err := b.resolveBranch(ctx, branchID)
+	if err != nil {
+		return err
+	}
+	if branch == nil {
+		return fmt.Errorf("no live branch %s in any of the launcher's projects", branchID)
 	}
 
 	// Primary mode only; conflict check unless allow_multiple (not exposed).
@@ -188,7 +281,7 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		if success {
 			return
 		}
-		endpointDir := filepath.Join(env.EndpointsPath(), endpointID)
+		endpointDir := endpointDir(env, endpointID)
 		if esPresent {
 			_ = stopEndpointStorage(env, &esConf, true)
 		}
@@ -212,18 +305,23 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		env.EndpointStorages = append(env.EndpointStorages, esConf)
 	}
 
-	// Record the endpoint (allocate ports + persist spec in the controller).
-	if err := newEndpoint(ctx, env, ctrl, endpoints, endpointID, branchID, args); err != nil {
+	// Record the endpoint: create its controller row, then persist its local
+	// config next to the process it describes.
+	if err := newEndpoint(ctx, env, b, branch, endpoints, endpointID, args); err != nil {
 		return err
 	}
 	success = true
 	return nil
 }
 
-// newEndpoint allocates the endpoint's compute ports, builds its EndpointConf,
-// and persists it via the controller. Mirrors Rust
-// `ComputeControlPlane::new_endpoint`.
-func newEndpoint(ctx context.Context, env *config.LocalEnv, ctrl *client.Controller, endpoints map[string]endpointConf, endpointID string, branchID config.BranchID, args EndpointCreateArgs) error {
+// newEndpoint allocates the endpoint's compute ports, creates its row in the
+// control plane, and writes its local config to disk.
+//
+// The row comes first. It is what claims the branch's single-writer slot, so a
+// duplicate primary is refused by the schema before any local state exists; and
+// it is what mints the endpoint id the config has to carry.
+func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch *api.Branch, endpoints launcherEndpoints, endpointID string, args EndpointCreateArgs) error {
+	branchID := config.BranchID(hex32UUID(branch.BranchId))
 	pgPort, err := resolvePort(args.PgPort, func() (uint16, error) {
 		return findFreePort(nextCandidatePort(endpoints))
 	})
@@ -270,21 +368,81 @@ func newEndpoint(ctx context.Context, env *config.LocalEnv, ctrl *client.Control
 			Jwks: cfg.BuildJWKS(pub),
 			Tls:  nil,
 		},
-		PgSettings: append([][2]string{}, args.PgSettings...),
 	}
 
-	spec, err := json.Marshal(conf)
+	// The row carries everything: the handle as its name, the run config as its
+	// extended_config, and the caller's --pg-setting overrides as its pg_settings.
+	// There is nothing left for the launcher to keep on the side.
+	extended, err := json.Marshal(conf)
 	if err != nil {
 		return fmt.Errorf("serializing endpoint config: %w", err)
 	}
-	if err := ctrl.EndpointCreate(ctx, registry.ComputeEndpoint{
-		EndpointID: endpointID,
-		BranchID:   branchID,
-		Spec:       spec,
-	}); err != nil {
+	task, err := b.api.CreateEndpoint(ctx, b.poolID, branch.ProjectId, branch.BranchId, client.EndpointCreate{
+		Name:       endpointID,
+		Extended:   extended,
+		PgSettings: pgSettingsMap(args.PgSettings),
+	})
+	if err != nil {
 		return fmt.Errorf("creating endpoint in controller: %w", err)
 	}
+	if err := awaitTask(ctx, b.api, task.Id, endpointTaskTimeout); err != nil {
+		return fmt.Errorf("create endpoint %s: %w", endpointID, err)
+	}
 	return nil
+}
+
+// effectivePgSettings resolves what this endpoint's compute actually runs with:
+// its branch's settings merged with its own, its own winning. Sorted by name so
+// the generated postgresql.conf is byte-stable across runs — Go map iteration is
+// not ordered, and an unstable config file would make every diff noise.
+func effectivePgSettings(ctx context.Context, env *config.LocalEnv, le launcherEndpoint) ([][2]string, error) {
+	b, err := newBranchAPI(env)
+	if err != nil {
+		return nil, err
+	}
+	branch, err := b.api.GetBranch(ctx, b.poolID, le.Project, le.Branch)
+	if err != nil {
+		return nil, err
+	}
+	var branchSettings map[string]string
+	if branch.PgSettings != nil {
+		branchSettings = *branch.PgSettings
+	}
+	var endpointSettings map[string]string
+	if le.pgSettings != nil {
+		endpointSettings = le.pgSettings
+	}
+	merged := make(map[string]string, len(branchSettings)+len(endpointSettings))
+	for k, v := range branchSettings {
+		merged[k] = v
+	}
+	for k, v := range endpointSettings {
+		merged[k] = v
+	}
+	names := make([]string, 0, len(merged))
+	for k := range merged {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	out := make([][2]string, 0, len(names))
+	for _, k := range names {
+		out = append(out, [2]string{k, merged[k]})
+	}
+	return out, nil
+}
+
+// pgSettingsMap turns the repeatable --pg-setting flag into the object the API
+// takes. A name given twice keeps the last value, matching how postgresql.conf
+// resolves a repeated setting.
+func pgSettingsMap(pairs [][2]string) map[string]string {
+	if len(pairs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(pairs))
+	for _, kv := range pairs {
+		out[kv[0]] = kv[1]
+	}
+	return out
 }
 
 func resolvePort(explicit *uint16, alloc func() (uint16, error)) (uint16, error) {
@@ -297,9 +455,10 @@ func resolvePort(explicit *uint16, alloc func() (uint16, error)) (uint16, error)
 // checkConflictingEndpoints refuses a duplicate live Primary endpoint on the
 // branch. Mirrors Rust `ComputeControlPlane::check_conflicting_endpoints`
 // (Primary arm). The launcher only creates Primary endpoints.
-func checkConflictingEndpoints(endpoints map[string]endpointConf, branchID config.BranchID) error {
-	for id, ep := range endpoints {
-		if ep.BranchID == branchID && ep.Mode == cfg.ComputeModePrimary {
+func checkConflictingEndpoints(endpoints launcherEndpoints, branchID config.BranchID) error {
+	for _, ep := range endpoints.all {
+		id := ep.conf.EndpointID
+		if ep.conf.BranchID == branchID && ep.conf.Mode == cfg.ComputeModePrimary {
 			return fmt.Errorf(
 				"attempting to create a duplicate primary endpoint on branch %s: endpoint %q exists already", branchID, id)
 		}
@@ -315,9 +474,16 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 	if err != nil {
 		return err
 	}
-	conf, ok := endpoints[endpointID]
-	if !ok {
-		return fmt.Errorf("endpoint %s not found", endpointID)
+	le, err := endpoints.lookup(endpointID)
+	if err != nil {
+		return err
+	}
+	conf := le.conf
+	// The compute's settings are the branch's baseline with this endpoint's own
+	// merged over it — the same rule the deployed path applies (core.EffectivePgSettings).
+	pgSettings, err := effectivePgSettings(ctx, env, le)
+	if err != nil {
+		return err
 	}
 
 	psConf := env.PageserverConfForBranch(conf.BranchID)
@@ -379,7 +545,7 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 		Port:                   conf.PgPort,
 		UseLocalTLS:            env.UseLocalTLS,
 		LfcSize:                conf.LfcSize,
-		PgSettings:             conf.PgSettings,
+		PgSettings:             pgSettings,
 		SafekeeperComputePorts: allSkPorts,
 	})
 
@@ -464,7 +630,7 @@ func computeJWT(env *config.LocalEnv, endpointID string) (string, error) {
 // /status until Running. Mirrors the process-launch half of Rust
 // `Endpoint::start`.
 func spawnComputeCtl(ctx context.Context, env *config.LocalEnv, conf *endpointConf, computeConfig cfg.ComputeConfig, timeout time.Duration) error {
-	endpointDir := filepath.Join(env.EndpointsPath(), conf.EndpointID)
+	endpointDir := endpointDir(env, conf.EndpointID)
 	if err := os.MkdirAll(endpointDir, 0o755); err != nil {
 		return fmt.Errorf("create endpoint dir %q: %w", endpointDir, err)
 	}
@@ -580,11 +746,22 @@ func EndpointStop(ctx context.Context, env *config.LocalEnv, endpointID string, 
 	if err != nil {
 		return err
 	}
-	conf, ok := endpoints[endpointID]
-	if !ok {
-		return fmt.Errorf("postgres endpoint %s is not found", endpointID)
+	le, err := endpoints.lookup(endpointID)
+	if err != nil {
+		return err
 	}
-	endpointDir := filepath.Join(env.EndpointsPath(), endpointID)
+	return stopEndpoint(ctx, env, le, mode, destroy)
+}
+
+// stopEndpoint is EndpointStop on an endpoint the caller has ALREADY resolved.
+// The teardown paths (BranchDrop, StopAll) walk the full endpoint list and must
+// act on each row they hold, so they cannot go back through name resolution —
+// a name shared by two branches is ambiguous, and refusing to tear down the very
+// endpoint you are holding would be absurd.
+func stopEndpoint(ctx context.Context, env *config.LocalEnv, le launcherEndpoint, mode EndpointStopMode, destroy bool) error {
+	conf := le.conf
+	endpointID := conf.EndpointID
+	endpointDir := endpointDir(env, endpointID)
 	pgdata := filepath.Join(endpointDir, "pgdata")
 	started := fileExists(pgdata)
 
@@ -630,15 +807,13 @@ func EndpointStop(ctx context.Context, env *config.LocalEnv, endpointID string, 
 		if err := deprovisionColocatedStorage(env, endpointID); err != nil {
 			return err
 		}
-		if err := os.RemoveAll(endpointDir); err != nil {
-			return fmt.Errorf("remove endpoint dir %q: %w", endpointDir, err)
-		}
-		ctrl, err := controllerClientForBranch(ctx, env, conf.BranchID)
-		if err != nil {
+		// Drop the controller's record before the directory: the directory holds
+		// the endpoint id, so removing it first would strand the row.
+		if err := deleteEndpointRecord(ctx, env, le); err != nil {
 			return err
 		}
-		if err := ctrl.EndpointDelete(ctx, endpointID); err != nil {
-			return fmt.Errorf("delete endpoint from controller: %w", err)
+		if err := os.RemoveAll(endpointDir); err != nil {
+			return fmt.Errorf("remove endpoint dir %q: %w", endpointDir, err)
 		}
 	}
 
@@ -650,13 +825,35 @@ func EndpointStop(ctx context.Context, env *config.LocalEnv, endpointID string, 
 	return nil
 }
 
+// deleteEndpointRecord drops the endpoint's row in the control plane. Idempotent:
+// a record already gone (or one whose branch was dropped out from under it) is
+// not an error — the compute is stopped either way, and `--destroy` must be able
+// to finish cleaning up.
+func deleteEndpointRecord(ctx context.Context, env *config.LocalEnv, le launcherEndpoint) error {
+	b, err := newBranchAPI(env)
+	if err != nil {
+		return err
+	}
+	task, err := b.api.DeleteEndpoint(ctx, le.Pool, le.Project, le.Branch, le.ID)
+	if err != nil {
+		if client.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete endpoint from controller: %w", err)
+	}
+	if err := awaitTask(ctx, b.api, task.Id, endpointTaskTimeout); err != nil {
+		return fmt.Errorf("delete endpoint %s: %w", le.ID, err)
+	}
+	return nil
+}
+
 // deprovisionColocatedStorage stops and drops the pageserver, safekeeper(s) and
 // endpoint_storage instance co-located under an endpoint. Mirrors Rust
 // Endpoint::deprovision_colocated_storage. Best-effort per daemon (logs and
 // continues), then removes the safekeepers/endpoint_storages from config and
 // persists (pageservers are not persisted — rediscovered from disk).
 func deprovisionColocatedStorage(env *config.LocalEnv, endpointID string) error {
-	endpointPath := filepath.Join(env.EndpointsPath(), endpointID)
+	endpointPath := endpointDir(env, endpointID)
 
 	for i := range env.Pageservers {
 		ps := &env.Pageservers[i]

@@ -115,6 +115,10 @@ type DeployConfig struct {
 const (
 	DriverKubernetes = "kubernetes"
 	DriverDocker     = "docker"
+	// DriverLocal keeps endpoint records without launching anything: the compute
+	// runs locally, started by whoever asked for it (yb_amp_local spawns its
+	// own). See deploy.LocalDeployer.
+	DriverLocal = "local"
 )
 
 // Config is the fully-resolved controller configuration.
@@ -122,7 +126,6 @@ type Config struct {
 	ListenAddr     string
 	SigningKeyPath string // optional; controller generates an ephemeral key if unset
 	Metrics        bool   // expose Prometheus /metrics and record instrumentation
-	Dev            bool   // serve the storage-layer control surface (branch/endpoint registries), unauthenticated
 	Log            LogConfig
 	DB             DBConfig
 	Task           TaskConfig
@@ -147,7 +150,6 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&c.Log.Format, "log-format", env("AMP_LOG_FORMAT", "json"), "log format: json|text")
 	fs.StringVar(&c.SigningKeyPath, "signing-key", env("AMP_SIGNING_KEY_PATH", ""), "path to the control-plane signing key (optional)")
 	fs.BoolVar(&c.Metrics, "metrics", envBool("AMP_METRICS", true), "expose the Prometheus /metrics scrape endpoint and record instrumentation")
-	fs.BoolVar(&c.Dev, "dev", envBool("AMP_DEV", false), "serve the storage-layer control surface (branch/endpoint registries) unauthenticated; for yb_amp_local and the integration harness")
 	fs.DurationVar(&c.Task.PollInterval, "task-poll-interval", envDuration("AMP_TASK_POLL_INTERVAL", 2*time.Second), "task worker poll interval")
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
 	fs.DurationVar(&c.Task.RenewInterval, "task-lease-renew-interval", envDuration("AMP_TASK_LEASE_RENEW_INTERVAL", 10*time.Second), "how often the worker renews the lease of a running task (must be < task-lease-ttl)")
@@ -156,7 +158,7 @@ func Load(args []string) (*Config, error) {
 
 	d := &c.Deploy
 	fs.BoolVar(&d.Enabled, "deploy", envBool("AMP_DEPLOY", false), "enable the endpoint deployer (§11, #108)")
-	fs.StringVar(&d.Driver, "deploy-driver", env("AMP_DEPLOY_DRIVER", DriverDocker), "deployer driver: docker (default) or kubernetes (Helm)")
+	fs.StringVar(&d.Driver, "deploy-driver", env("AMP_DEPLOY_DRIVER", DriverDocker), "deployer driver: docker (default), kubernetes (Helm), or local (records only; the compute is started locally by its owner)")
 	fs.StringVar(&d.Namespace, "deploy-namespace", env("AMP_DEPLOY_NAMESPACE", ""), "Kubernetes namespace endpoints are deployed into")
 	fs.StringVar(&d.HelmBin, "helm-bin", env("AMP_HELM_BIN", "helm"), "helm binary: a bare name is resolved on PATH, a path is used verbatim")
 	fs.StringVar(&d.ChartPath, "deploy-chart", env("AMP_DEPLOY_CHART", "deploy/helm/yb-amp-endpoint"), "path to the yb-amp-endpoint Helm chart")
@@ -255,11 +257,16 @@ func validateDeploy(d *DeployConfig) error {
 	if !d.Enabled {
 		return nil
 	}
+	// The local driver launches nothing, so none of what a launch needs — a
+	// timeout to converge in, a backing YugabyteDB to attach, an image — applies.
+	if d.Driver == DriverLocal {
+		return nil
+	}
 	if d.Timeout <= 0 {
 		return fmt.Errorf("deploy timeout must be positive")
 	}
-	// The backing YugabyteDB the endpoints connect to is required for both
-	// drivers (it is what the launched compute attaches).
+	// The backing YugabyteDB the endpoints connect to is required by both
+	// launching drivers (it is what the launched compute attaches).
 	if d.BackingYBHostPorts == "" {
 		return fmt.Errorf("backing YugabyteDB host:port is required when --deploy is set")
 	}
@@ -272,7 +279,8 @@ func validateDeploy(d *DeployConfig) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("invalid deploy driver %q (want %q or %q)", d.Driver, DriverDocker, DriverKubernetes)
+		return fmt.Errorf("invalid deploy driver %q (want %q, %q or %q)",
+			d.Driver, DriverDocker, DriverKubernetes, DriverLocal)
 	}
 }
 

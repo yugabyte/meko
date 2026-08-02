@@ -30,6 +30,9 @@ type fakeStateStore struct {
 	ensureBranchCalls    int
 	endpointRecordCalls  int
 	setAddressCalls      int
+	endpointNames        map[uuid.UUID]string
+	branchPgSettings     map[uuid.UUID]map[string]string
+	endpointPgSettings   map[uuid.UUID]string
 	deleteEndpointCalls  int
 	createdBranches      map[uuid.UUID]struct{} // distinct branch ids created
 	createdEndpoints     map[uuid.UUID]string   // endpoint id -> role
@@ -178,7 +181,20 @@ func (f *fakeStateStore) EnsureBranch(_ context.Context, _, _, branchID uuid.UUI
 	return nil
 }
 
-func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, branchID uuid.UUID, role string, _ []byte) error {
+func (f *fakeStateStore) BranchPgSettings(_ context.Context, _, branchID uuid.UUID) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.branchPgSettings[branchID]) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(f.branchPgSettings[branchID]))
+	for k, v := range f.branchPgSettings[branchID] {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, branchID uuid.UUID, role, name string, _, pgSettings []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.endpointRecordCalls++
@@ -195,6 +211,18 @@ func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, 
 		f.existingWriterBranch[branchID] = endpointID
 	}
 	f.createdEndpoints[endpointID] = role
+	if name != "" {
+		if f.endpointNames == nil {
+			f.endpointNames = map[uuid.UUID]string{}
+		}
+		f.endpointNames[endpointID] = name
+	}
+	if len(pgSettings) > 0 {
+		if f.endpointPgSettings == nil {
+			f.endpointPgSettings = map[uuid.UUID]string{}
+		}
+		f.endpointPgSettings[endpointID] = string(pgSettings)
+	}
 	return nil
 }
 

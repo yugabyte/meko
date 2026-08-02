@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,20 +12,19 @@ import (
 	"github.com/yugabyte/amp/controller/internal/api"
 )
 
-// API is the launcher's client for the controller's *product* REST API
-// (/api/v1), as opposed to Controller which drives the storage-layer control
-// surface (/control/v1).
+// API is the launcher's client for the controller's REST API. Every resource
+// the launcher creates — its user and storage pool, its projects, its branches,
+// its endpoints — is an ordinary row created through the same routes any other
+// client uses, so the integration suite exercises the product's own async task
+// path rather than a surface only the launcher touches.
 //
-// The launcher needs this for exactly one thing: standing up its own resource
-// ladder — a user, a storage pool, and a project — so the branches and endpoints
-// it creates are ordinary rows in the control plane's resource model rather than
-// a parallel registry. Everything after that (declaring branches, recording
-// endpoints) stays on /control/v1, because the launcher runs local processes and
-// cannot use the product endpoint API: with no deployer configured that returns
-// 501.
+// Endpoints work here because the launcher starts its controller with
+// `--deploy-driver=local`: the controller keeps the endpoint record and does not
+// try to launch a compute for it, which is right, since the launcher spawns
+// yb-compute-ctl itself (deploy.LocalDeployer).
 //
-// Auth is Trust-only (--dev): /api/v1 has no auth middleware, matching the
-// launcher's local topology.
+// Auth is Trust-only: /api/v1 has no auth middleware, matching the launcher's
+// local topology.
 type API struct {
 	t transport
 }
@@ -33,6 +33,13 @@ type API struct {
 // either a bare host:port or a full http(s) URL. A nil hc uses http.DefaultClient.
 func NewAPI(base string, hc *http.Client) *API {
 	return &API{t: newTransport(base, hc, "")}
+}
+
+// Ready hits GET /readyz: the controller answers once its database is reachable
+// and its migrations are applied. It takes no project, so it gates startup
+// before the launcher's ladder exists.
+func (c *API) Ready(ctx context.Context) error {
+	return c.t.do(ctx, http.MethodGet, "/readyz", nil, nil)
 }
 
 // EnsureUser creates the user with the given id, or no-ops if it exists.
@@ -166,4 +173,90 @@ func (c *API) DeleteBranch(ctx context.Context, poolID, projectID, branchID uuid
 		return nil, err
 	}
 	return &t, nil
+}
+
+// --- endpoints ---------------------------------------------------------------
+
+// EndpointCreate is what the launcher supplies when creating an endpoint. Role
+// is always read_write (it creates only primaries) and the pg version comes from
+// the branch, so neither is here.
+type EndpointCreate struct {
+	// Name is the handle the CLI and the harness address the endpoint by. It is
+	// the row's name, unique among the branch's endpoints.
+	Name string
+	// Extended is the launcher's local run config (the ports it binds), stored
+	// verbatim as the endpoint's extended_config.
+	Extended json.RawMessage
+	// PgSettings are the caller's --pg-setting overrides for this endpoint.
+	PgSettings map[string]string
+}
+
+// CreateEndpoint starts a create-endpoint task and returns it. Poll it with
+// GetTask; the endpoint is then found by name.
+//
+// The branch's single-writer slot is claimed by the task's step, so a second
+// primary on the same branch surfaces as a failed task, not a rejected POST. A
+// name already taken on the branch IS rejected synchronously, with a 409.
+func (c *API) CreateEndpoint(ctx context.Context, poolID, projectID, branchID uuid.UUID, in EndpointCreate) (*api.Task, error) {
+	body := api.CreateEndpointRequest{}
+	if in.Name != "" {
+		body.Name = &in.Name
+	}
+	if len(in.Extended) > 0 {
+		var ext map[string]any
+		if err := json.Unmarshal(in.Extended, &ext); err != nil {
+			return nil, fmt.Errorf("encode extended_config: %w", err)
+		}
+		body.ExtendedConfig = &ext
+	}
+	if len(in.PgSettings) > 0 {
+		body.PgSettings = &in.PgSettings
+	}
+	var t api.Task
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s/endpoints",
+		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+		url.PathEscape(branchID.String()))
+	if err := c.t.do(ctx, http.MethodPost, path, body, &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// GetBranch returns one branch, which is how the launcher reads its
+// pg_settings baseline before building a compute spec.
+func (c *API) GetBranch(ctx context.Context, poolID, projectID, branchID uuid.UUID) (*api.Branch, error) {
+	var b api.Branch
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s",
+		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+		url.PathEscape(branchID.String()))
+	if err := c.t.do(ctx, http.MethodGet, path, nil, &b); err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// DeleteEndpoint starts a delete-endpoint task and returns it. Poll with GetTask.
+// With the local driver the step retires nothing and just drops the record —
+// the launcher has already stopped the compute by the time it calls this.
+func (c *API) DeleteEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (*api.Task, error) {
+	var t api.Task
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s/endpoints/%s",
+		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+		url.PathEscape(branchID.String()), url.PathEscape(endpointID.String()))
+	if err := c.t.do(ctx, http.MethodDelete, path, nil, &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+// ListEndpoints returns the branch's endpoints.
+func (c *API) ListEndpoints(ctx context.Context, poolID, projectID, branchID uuid.UUID) ([]api.Endpoint, error) {
+	var list api.EndpointList
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s/endpoints?limit=1000",
+		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+		url.PathEscape(branchID.String()))
+	if err := c.t.do(ctx, http.MethodGet, path, nil, &list); err != nil {
+		return nil, err
+	}
+	return list.Endpoints, nil
 }
