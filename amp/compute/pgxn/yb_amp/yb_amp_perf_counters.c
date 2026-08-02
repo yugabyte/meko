@@ -19,7 +19,6 @@
 
 #include "yb_amp.h"
 #include "yb_amp_perf_counters.h"
-#include "walproposer.h"
 
 yb_amp_error_counters *yb_amp_error_counters_shared;
 
@@ -387,10 +386,6 @@ yb_amp_get_perf_counters(PG_FUNCTION_ARGS)
 	yb_amp_per_backend_counters totals = {0};
 	metric_t   *metrics;
 
-	WalproposerShmemState *wp_shmem;
-	uint32 num_safekeepers;
-	uint32 num_active_safekeepers;
-
 	/* We put all the tuples into a tuplestore in one go. */
 	InitMaterializedSRF(fcinfo, 0);
 
@@ -427,34 +422,16 @@ yb_amp_get_perf_counters(PG_FUNCTION_ARGS)
 	}
 
 	/*
-	 * Not ideal, but piggyback the error counters and the safekeeper status
-	 * onto the yb_amp perf counters view so that we don't need to introduce
-	 * yb_amp--1.x+1.sql to add a new view.
-	 *
-	 * Read safekeeper status from walproposer shared memory under its mutex so
-	 * that the total safekeeper count is consistent with the active wal
-	 * acceptors count. Assuming that we don't query this view too often the
-	 * mutex should not be a huge deal.
+	 * Not ideal, but piggyback the error counters onto the yb_amp perf counters
+	 * view so that we don't need to introduce yb_amp--1.x+1.sql to add a new
+	 * view.
 	 */
-	wp_shmem = GetWalpropShmemState();
-	SpinLockAcquire(&wp_shmem->mutex);
-	num_safekeepers = wp_shmem->num_safekeepers;
-	num_active_safekeepers = 0;
-	for (int i = 0; i < num_safekeepers; i++) {
-		if (wp_shmem->safekeeper_status[i] == 1) {
-			num_active_safekeepers++;
-		}
-	}
-	SpinLockRelease(&wp_shmem->mutex);
-
 	{
 		metric_t extra_metrics[] = {
 			{"sql_index_corruption_count", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->index_corruption_count)},
 			{"sql_data_corruption_count", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->data_corruption_count)},
 			{"sql_internal_error_count", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->internal_error_count)},
 			{"ps_corruption_detected", false, 0, (double) pg_atomic_read_u32(&yb_amp_error_counters_shared->ps_corruption_detected)},
-			{"num_active_safekeepers", false, 0.0, (double) num_active_safekeepers},
-			{"num_configured_safekeepers", false, 0.0, (double) num_safekeepers},
 			{NULL, false, 0, 0},
 		};
 		for (int i = 0; extra_metrics[i].name != NULL; i++)

@@ -12,7 +12,6 @@
 #include "yb_amp_walreader.h"
 #include "pagestore_client.h"
 
-#define MAX_SAFEKEEPERS 32
 #define MAX_SEND_SIZE (XLOG_BLCKSZ * 16)	/* max size of a single* WAL
 											 * message */
 /*
@@ -253,10 +252,6 @@ typedef struct WalproposerShmemState
 
 	/* The WAL rate limiter */
 	WalRateLimiter wal_rate_limiter;
-	/* Number of safekeepers in the config */
-	uint32 num_safekeepers;
-	/* Per-safekeeper status flags: 0=inactive, 1=active */
-	uint8 safekeeper_status[MAX_SAFEKEEPERS];
 } WalproposerShmemState;
 
 /*
@@ -292,9 +287,6 @@ typedef struct Safekeeper
 
 	char const *host;
 	char const *port;
-
-	/* index of this safekeeper in the WalProposer array */
-	uint32 index;
 
 	/*
 	 * connection string for connecting/reconnecting.
@@ -544,20 +536,6 @@ typedef struct walproposer_api
 	 */
 	void		(*log_internal) (WalProposer *wp, int level, const char *line);
 
-	/*
-	 * APIs manipulating shared memory state used for Safekeeper quorum health metrics.
-	 */
-
-	/*
-	 * Reset the safekeeper statuses in shared memory for metric purposes.
-	 */
-	void		(*reset_safekeeper_statuses_for_metrics) (WalProposer *wp, uint32 num_safekeepers);
-
-	/*
-	 * Update the safekeeper status in shared memory for metric purposes.
-	 */
-	void		(*update_safekeeper_status_for_metrics) (WalProposer *wp, uint32 sk_index, uint8 status);
-
 } walproposer_api;
 
 /*
@@ -638,10 +616,8 @@ typedef struct WalProposer
 	WalProposerConfig *config;
 	WalProposerState state;
 
-	/* Number of occupied slots in safekeepers[] (exactly 1 in yb-amp). */
-	int			n_safekeepers;
-	/* Safekeepers walproposer is connecting to. */
-	Safekeeper	safekeeper[MAX_SAFEKEEPERS];
+	/* The single safekeeper this walproposer streams to. */
+	Safekeeper	safekeeper;
 
 	/* Current local TimeLineId in use */
 	TimeLineID	localTimeLineID;

@@ -84,6 +84,7 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 	char	   *host;
 	char	   *sep;
 	char	   *port;
+	Safekeeper *sk;
 	WalProposer *wp;
 
 	wp = palloc0(sizeof(WalProposer));
@@ -100,56 +101,57 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 	 */
 	host = wp->config->safekeepers_list;
 
-	for (; host != NULL && *host != '\0'; host = sep)
+	if (host == NULL || *host == '\0')
 	{
-		port = strchr(host, ':');
-		if (port == NULL)
-		{
-			wp_log(FATAL, "port is not specified");
-		}
-		*port++ = '\0';
-		sep = strchr(port, ',');
-		if (sep != NULL)
-			*sep++ = '\0';
-		if (wp->n_safekeepers + 1 >= MAX_SAFEKEEPERS)
-		{
-			wp_log(FATAL, "too many safekeepers");
-		}
-		wp->safekeeper[wp->n_safekeepers].host = host;
-		wp->safekeeper[wp->n_safekeepers].port = port;
-		wp->safekeeper[wp->n_safekeepers].state = SS_OFFLINE;
-		wp->safekeeper[wp->n_safekeepers].active_state = SS_ACTIVE_SEND;
-		wp->safekeeper[wp->n_safekeepers].wp = wp;
-		wp->safekeeper[wp->n_safekeepers].index = wp->n_safekeepers;
-		{
-			Safekeeper *sk = &wp->safekeeper[wp->n_safekeepers];
-			int			written = 0;
-
-			written = snprintf((char *) &sk->conninfo, MAXCONNINFO,
-							   "%s host=%s port=%s dbname=replication options='-c branch_id=%s'",
-							   wp->config->safekeeper_conninfo_options, sk->host, sk->port,
-							   wp->config->branch_id);
-			if (written > MAXCONNINFO || written < 0)
-				wp_log(FATAL, "could not create connection string for safekeeper %s:%s", sk->host, sk->port);
-		}
-
-		initStringInfo(&wp->safekeeper[wp->n_safekeepers].outbuf);
-		wp->safekeeper[wp->n_safekeepers].startStreamingAt = InvalidXLogRecPtr;
-		wp->safekeeper[wp->n_safekeepers].streamingAt = InvalidXLogRecPtr;
-		wp->n_safekeepers += 1;
+		wp_log(FATAL, "safekeeper address is not specified");
 	}
-	if (wp->n_safekeepers < 1)
+
+	port = strchr(host, ':');
+	if (port == NULL)
 	{
-		wp_log(FATAL, "safekeepers addresses are not specified");
+		wp_log(FATAL, "port is not specified");
 	}
+	*port++ = '\0';
+
+	/*
+	 * yb-amp runs exactly one safekeeper per branch; WAL durability comes from
+	 * YugabyteDB rather than a quorum, so there is no consensus to run across
+	 * peers and the commit LSN is simply this safekeeper's flush LSN. Reject a
+	 * multi-entry list rather than silently streaming to several safekeepers
+	 * while acknowledging only the first.
+	 */
+	sep = strchr(port, ',');
+	if (sep != NULL)
+	{
+		wp_log(FATAL, "yb_amp.safekeepers must name exactly one safekeeper");
+	}
+
+	sk = &wp->safekeeper;
+	sk->host = host;
+	sk->port = port;
+	sk->state = SS_OFFLINE;
+	sk->active_state = SS_ACTIVE_SEND;
+	sk->wp = wp;
+	{
+		int			written = 0;
+
+		written = snprintf((char *) &sk->conninfo, MAXCONNINFO,
+						   "%s host=%s port=%s dbname=replication options='-c branch_id=%s'",
+						   wp->config->safekeeper_conninfo_options, sk->host, sk->port,
+						   wp->config->branch_id);
+		if (written > MAXCONNINFO || written < 0)
+			wp_log(FATAL, "could not create connection string for safekeeper %s:%s", sk->host, sk->port);
+	}
+
+	initStringInfo(&sk->outbuf);
+	sk->startStreamingAt = InvalidXLogRecPtr;
+	sk->streamingAt = InvalidXLogRecPtr;
 
 	if (wp->config->proto_version != 3)
 		wp_log(FATAL, "unsupported safekeeper protocol version %d; only v3 is supported",
 			   wp->config->proto_version);
 	wp_log(LOG, "using safekeeper protocol version %d", wp->config->proto_version);
 	
-	wp->api.reset_safekeeper_statuses_for_metrics(wp, wp->n_safekeepers);
-
 	/* Fill the greeting package */
 	wp->greetRequest.pam.tag = 'g';
 	if (!wp->config->branch_id)
@@ -167,13 +169,8 @@ WalProposerCreate(WalProposerConfig *config, walproposer_api api)
 void
 WalProposerFree(WalProposer *wp)
 {
-	for (int i = 0; i < wp->n_safekeepers; i++)
-	{
-		Safekeeper *sk = &wp->safekeeper[i];
-
-		Assert(sk->outbuf.data != NULL);
-		pfree(sk->outbuf.data);
-	}
+	Assert(wp->safekeeper.outbuf.data != NULL);
+	pfree(wp->safekeeper.outbuf.data);
 
 	pfree(wp);
 }
@@ -261,16 +258,13 @@ WalProposerPoll(WalProposer *wp)
 			 * Abandon connection attempts which take too long.
 			 */
 			now = wp->api.get_current_timestamp(wp);
-			for (int i = 0; i < wp->n_safekeepers; i++)
+			sk = &wp->safekeeper;
+			if (TimestampDifferenceExceeds(sk->latestMsgReceivedAt, now,
+										   wp->config->safekeeper_connection_timeout))
 			{
-				sk = &wp->safekeeper[i];
-				if (TimestampDifferenceExceeds(sk->latestMsgReceivedAt, now,
-											   wp->config->safekeeper_connection_timeout))
-				{
-					wp_log(WARNING, "terminating connection to safekeeper '%s:%s' in '%s' state: no messages received during the last %dms or connection attempt took longer than that",
-						   sk->host, sk->port, FormatSafekeeperState(sk), wp->config->safekeeper_connection_timeout);
-					ShutdownConnection(sk);
-				}
+				wp_log(WARNING, "terminating connection to safekeeper '%s:%s' in '%s' state: no messages received during the last %dms or connection attempt took longer than that",
+					   sk->host, sk->port, FormatSafekeeperState(sk), wp->config->safekeeper_connection_timeout);
+				ShutdownConnection(sk);
 			}
 		}
 	}
@@ -280,11 +274,7 @@ void
 WalProposerStart(WalProposer *wp)
 {
 
-	/* Initiate connections to all safekeeper nodes */
-	for (int i = 0; i < wp->n_safekeepers; i++)
-	{
-		ResetConnection(&wp->safekeeper[i]);
-	}
+	ResetConnection(&wp->safekeeper);
 
 	WalProposerLoop(wp);
 }
@@ -303,8 +293,6 @@ ShutdownConnection(Safekeeper *sk)
 {
 	sk->state = SS_OFFLINE;
 	sk->streamingAt = InvalidXLogRecPtr;
-
-	sk->wp->api.update_safekeeper_status_for_metrics(sk->wp, sk->index, 0);
 
 	sk->wp->api.conn_finish(sk);
 	sk->wp->api.rm_safekeeper_event_set(sk);
@@ -410,11 +398,8 @@ ReconnectSafekeepers(WalProposer *wp)
 	if (TimeToReconnect(wp, now) == 0)
 	{
 		wp->last_reconnect_attempt = now;
-		for (int i = 0; i < wp->n_safekeepers; i++)
-		{
-			if (wp->safekeeper[i].state == SS_OFFLINE)
-				ResetConnection(&wp->safekeeper[i]);
-		}
+		if (wp->safekeeper.state == SS_OFFLINE)
+			ResetConnection(&wp->safekeeper);
 	}
 }
 
@@ -880,8 +865,6 @@ StartStreaming(Safekeeper *sk)
 	sk->active_state = SS_ACTIVE_SEND;
 	sk->streamingAt = sk->startStreamingAt;
 
-	sk->wp->api.update_safekeeper_status_for_metrics(sk->wp, sk->index, 1);
-
 	/*
 	 * Donors can only be in SS_ACTIVE state, so we potentially update the
 	 * donor when we switch one to SS_ACTIVE.
@@ -917,9 +900,8 @@ SendMessageToNode(Safekeeper *sk)
 static void
 BroadcastAppendRequest(WalProposer *wp)
 {
-	for (int i = 0; i < wp->n_safekeepers; i++)
-		if (wp->safekeeper[i].state == SS_ACTIVE)
-			SendMessageToNode(&wp->safekeeper[i]);
+	if (wp->safekeeper.state == SS_ACTIVE)
+		SendMessageToNode(&wp->safekeeper);
 }
 
 static void
@@ -1227,7 +1209,7 @@ ParsePageserverFeedbackMessage(WalProposer *wp, StringInfo reply_message, Pagese
 static XLogRecPtr
 GetAcknowledgedWALPosition(WalProposer *wp)
 {
-	Safekeeper *sk = &wp->safekeeper[0];
+	Safekeeper *sk = &wp->safekeeper;
 
 	/*
 	 * Ignore reported LSN until it reaches propStartLsn: before the first
@@ -1247,7 +1229,6 @@ static void
 UpdateDonorShmem(WalProposer *wp)
 {
 	Safekeeper *donor = NULL;
-	int			i;
 	XLogRecPtr	donor_lsn = InvalidXLogRecPtr;
 
 	if (wp->state < WPS_ELECTED)
@@ -1267,20 +1248,12 @@ UpdateDonorShmem(WalProposer *wp)
 		donor_lsn = wp->propStartLsn;
 	}
 
-	/*
-	 * But also check feedbacks from all nodes with live connections and take
-	 * the highest one. Note: if node sends feedbacks it already processed
-	 * elected message so its term is fine.
-	 */
-	for (i = 0; i < wp->n_safekeepers; i++)
+	/* Also take the safekeeper's own feedback if it is further along. */
+	if (wp->safekeeper.state == SS_ACTIVE &&
+		wp->safekeeper.appendResponse.flushLsn > donor_lsn)
 	{
-		Safekeeper *sk = &wp->safekeeper[i];
-
-		if (sk->state == SS_ACTIVE && sk->appendResponse.flushLsn > donor_lsn)
-		{
-			donor = sk;
-			donor_lsn = sk->appendResponse.flushLsn;
-		}
+		donor = &wp->safekeeper;
+		donor_lsn = wp->safekeeper.appendResponse.flushLsn;
 	}
 
 	if (donor == NULL)
@@ -1324,9 +1297,8 @@ HandleSafekeeperResponse(WalProposer *wp, Safekeeper *fromsk)
 	 */
 	if (wp->config->syncSafekeepers)
 	{
-		for (int i = 0; i < wp->n_safekeepers; i++)
 		{
-			Safekeeper *sk = &wp->safekeeper[i];
+			Safekeeper *sk = &wp->safekeeper;
 			/* yb-mode: commitLsn ≡ flushLsn (single safekeeper). */
 			bool		synced = sk->appendResponse.flushLsn >= wp->propStartLsn;
 

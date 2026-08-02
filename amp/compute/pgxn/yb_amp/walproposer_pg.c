@@ -288,63 +288,14 @@ nwp_register_gucs(void)
 }
 
 
-static int
-split_safekeepers_list(char *safekeepers_list, char *safekeepers[])
-{
-	int			n_safekeepers = 0;
-	char	   *curr_sk = safekeepers_list;
-
-	for (char *coma = safekeepers_list; coma != NULL && *coma != '\0'; curr_sk = coma)
-	{
-		if (++n_safekeepers >= MAX_SAFEKEEPERS)
-		{
-			wpg_log(FATAL, "too many safekeepers");
-		}
-
-		coma = strchr(coma, ',');
-		safekeepers[n_safekeepers - 1] = curr_sk;
-
-		if (coma != NULL)
-		{
-			*coma++ = '\0';
-		}
-	}
-
-	return n_safekeepers;
-}
-
 /*
- * Accept two coma-separated strings with list of safekeeper host:port addresses.
- * Split them into arrays and return false if two sets do not match, ignoring the order.
+ * Accept two safekeeper host:port addresses and return true if they match.
+ * yb-amp runs a single safekeeper, so this is a plain string comparison.
  */
 static bool
 safekeepers_cmp(char *old, char *new)
 {
-	char	   *safekeepers_old[MAX_SAFEKEEPERS];
-	char	   *safekeepers_new[MAX_SAFEKEEPERS];
-	int			len_old = 0;
-	int			len_new = 0;
-
-	len_old = split_safekeepers_list(old, safekeepers_old);
-	len_new = split_safekeepers_list(new, safekeepers_new);
-
-	if (len_old != len_new)
-	{
-		return false;
-	}
-
-	qsort(&safekeepers_old, len_old, sizeof(char *), pg_qsort_strcmp);
-	qsort(&safekeepers_new, len_new, sizeof(char *), pg_qsort_strcmp);
-
-	for (int i = 0; i < len_new; i++)
-	{
-		if (strcmp(safekeepers_old[i], safekeepers_new[i]) != 0)
-		{
-			return false;
-		}
-	}
-
-	return true;
+	return strcmp(old, new) == 0;
 }
 
 /*
@@ -369,7 +320,6 @@ assign_yb_amp_safekeepers(const char *newval, void *extra)
 		wpg_log(FATAL, "yb_amp.safekeepers is empty");
 	}
 
-	/* Copy values because we will modify them in split_safekeepers_list() */
 	newval_copy = pstrdup(newval);
 	oldval = pstrdup(wal_acceptors_list);
 
@@ -1669,12 +1619,9 @@ walprop_pg_free_event_set(WalProposer *wp)
 		waitEvents = NULL;
 	}
 
-	for (int i = 0; i < wp->n_safekeepers; i++)
-	{
-		wp->safekeeper[i].eventPos = -1;
-		wp->safekeeper[i].nwrEventPos = -1;
-		wp->safekeeper[i].nwrConnEstablished = false;
-	}
+	wp->safekeeper.eventPos = -1;
+	wp->safekeeper.nwrEventPos = -1;
+	wp->safekeeper.nwrConnEstablished = false;
 }
 
 static void
@@ -1683,23 +1630,20 @@ walprop_pg_init_event_set(WalProposer *wp)
 	if (waitEvents)
 		wpg_log(FATAL, "double-initialization of event set");
 
-	/* for each sk, we have socket plus potentially socket for yb_amp walreader */
+	/* the sk socket plus potentially a socket for the yb_amp walreader */
 #if PG_MAJORVERSION_NUM >= 17
-	waitEvents = CreateWaitEventSet(NULL, 2 + 2 * wp->n_safekeepers);
+	waitEvents = CreateWaitEventSet(NULL, 4);
 #else
-	waitEvents = CreateWaitEventSet(TopMemoryContext, 2 + 2 * wp->n_safekeepers);
+	waitEvents = CreateWaitEventSet(TopMemoryContext, 4);
 #endif
 	AddWaitEventToSet(waitEvents, WL_LATCH_SET, PGINVALID_SOCKET,
 					  MyLatch, NULL);
 	AddWaitEventToSet(waitEvents, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
 					  NULL, NULL);
 
-	for (int i = 0; i < wp->n_safekeepers; i++)
-	{
-		wp->safekeeper[i].eventPos = -1;
-		wp->safekeeper[i].nwrEventPos = -1;
-		wp->safekeeper[i].nwrConnEstablished = false;
-	}
+	wp->safekeeper.eventPos = -1;
+	wp->safekeeper.nwrEventPos = -1;
+	wp->safekeeper.nwrConnEstablished = false;
 }
 
 /* add safekeeper socket to wait event set */
@@ -1837,18 +1781,12 @@ rm_safekeeper_event_set(Safekeeper *to_remove, bool is_sk)
 	wp->api.init_event_set(wp);
 
 	/*
-	 * loop through the existing safekeepers. If they aren't the one we're
-	 * removing, and if they have a socket we can use, re-add the applicable
-	 * events.
+	 * If the safekeeper has a socket we can use, re-add the applicable events,
+	 * except the event requested to remove.
 	 */
-	for (int i = 0; i < wp->n_safekeepers; i++)
 	{
-		Safekeeper *sk = &wp->safekeeper[i];
+		Safekeeper *sk = &wp->safekeeper;
 
-		/*
-		 * If this safekeeper isn't offline, add events for it, except for the
-		 * event requested to remove.
-		 */
 		if (sk->state != SS_OFFLINE)
 		{
 			uint32		sk_events;
@@ -2007,25 +1945,21 @@ CombineHotStanbyFeedbacks(HotStandbyFeedback *hs, WalProposer *wp)
 	hs->xmin = InvalidFullTransactionId;
 	hs->catalog_xmin = InvalidFullTransactionId;
 
-	for (int i = 0; i < wp->n_safekeepers; i++)
+	if (wp->safekeeper.state == SS_ACTIVE)
 	{
+		HotStandbyFeedback *skhs = &wp->safekeeper.appendResponse.hs;
 
-		if (wp->safekeeper[i].state == SS_ACTIVE)
+		if (FullTransactionIdIsNormal(skhs->xmin)
+			&& (!FullTransactionIdIsValid(hs->xmin) || FullTransactionIdPrecedes(skhs->xmin, hs->xmin)))
 		{
-			HotStandbyFeedback *skhs = &wp->safekeeper[i].appendResponse.hs;
-
-			if (FullTransactionIdIsNormal(skhs->xmin)
-				&& (!FullTransactionIdIsValid(hs->xmin) || FullTransactionIdPrecedes(skhs->xmin, hs->xmin)))
-			{
-				hs->xmin = skhs->xmin;
-				hs->ts = skhs->ts;
-			}
-			if (FullTransactionIdIsNormal(skhs->catalog_xmin)
-				&& (!FullTransactionIdIsValid(hs->catalog_xmin) || FullTransactionIdPrecedes(skhs->catalog_xmin, hs->catalog_xmin)))
-			{
-				hs->catalog_xmin = skhs->catalog_xmin;
-				hs->ts = skhs->ts;
-			}
+			hs->xmin = skhs->xmin;
+			hs->ts = skhs->ts;
+		}
+		if (FullTransactionIdIsNormal(skhs->catalog_xmin)
+			&& (!FullTransactionIdIsValid(hs->catalog_xmin) || FullTransactionIdPrecedes(skhs->catalog_xmin, hs->catalog_xmin)))
+		{
+			hs->catalog_xmin = skhs->catalog_xmin;
+			hs->ts = skhs->ts;
 		}
 	}
 }
@@ -2153,26 +2087,6 @@ GetYbAmpCurrentClusterSize(void)
 }
 uint64		GetYbAmpCurrentClusterSize(void);
 
-static void
-walprop_pg_reset_safekeeper_statuses_for_metrics(WalProposer *wp, uint32 num_safekeepers)
-{
-	WalproposerShmemState* shmem = wp->api.get_shmem_state(wp);
-	SpinLockAcquire(&shmem->mutex);
-	shmem->num_safekeepers = num_safekeepers;
-	memset(shmem->safekeeper_status, 0, sizeof(shmem->safekeeper_status));
-	SpinLockRelease(&shmem->mutex);
-}
-
-static void
-walprop_pg_update_safekeeper_status_for_metrics(WalProposer *wp, uint32 sk_index, uint8 status)
-{
-	WalproposerShmemState* shmem = wp->api.get_shmem_state(wp);
-	Assert(sk_index < MAX_SAFEKEEPERS);
-	SpinLockAcquire(&shmem->mutex);
-	shmem->safekeeper_status[sk_index] = status;
-	SpinLockRelease(&shmem->mutex);
-}
-
 static const walproposer_api walprop_pg = {
 	.get_shmem_state = walprop_pg_get_shmem_state,
 	.start_streaming = walprop_pg_start_streaming,
@@ -2205,6 +2119,4 @@ static const walproposer_api walprop_pg = {
 	.finish_sync_safekeepers = walprop_pg_finish_sync_safekeepers,
 	.process_safekeeper_feedback = walprop_pg_process_safekeeper_feedback,
 	.log_internal = walprop_pg_log_internal,
-	.reset_safekeeper_statuses_for_metrics = walprop_pg_reset_safekeeper_statuses_for_metrics,
-	.update_safekeeper_status_for_metrics = walprop_pg_update_safekeeper_status_for_metrics,
 };

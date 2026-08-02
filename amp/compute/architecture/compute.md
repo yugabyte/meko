@@ -390,12 +390,10 @@ optional `PageserverFeedback` block.
 A branch is served by a **single safekeeper**, whose WAL is durably backed by
 YugabyteDB, so there is no election or voting: receiving the acceptor greeting
 elects the proposer directly, and the committed position from
-`GetAcknowledgedWALPosition()` is simply `safekeeper[0].flushLsn`. The
-data structures accommodate more (`MAX_SAFEKEEPERS = 32`, a
-`Safekeeper safekeeper[]` array, and comma-separated parsing of
-`yb_amp.safekeepers`), and `BroadcastAppendRequest` iterates every active
-safekeeper, but production runs exactly one and the multi-safekeeper code paths
-are not exercised.
+`GetAcknowledgedWALPosition()` is simply `safekeeper.flushLsn`. The data
+structures match that: `WalProposer` holds one `Safekeeper safekeeper`, and
+`WalProposerCreate` raises `FATAL` if `yb_amp.safekeepers` names more than one
+address rather than streaming to several while acknowledging only the first.
 
 ### Commit durability and backpressure
 
