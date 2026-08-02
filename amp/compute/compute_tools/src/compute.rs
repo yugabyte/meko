@@ -6,8 +6,8 @@ use compute_api::responses::{
     LfcPrewarmState, PromoteState, TlsConfig,
 };
 use compute_api::spec::{
-    ComputeAudit, ComputeFeature, ComputeMode, ComputeSpec, ExtVersion, GenericOption,
-    PageserverConnectionInfo, PageserverProtocol, PgIdent, Role,
+    ComputeAudit, ComputeFeature, ComputeMode, ComputeSpec, ExtVersion,
+    PageserverConnectionInfo, PageserverProtocol, PgIdent,
 };
 use futures::StreamExt;
 use futures::future::join_all;
@@ -41,7 +41,6 @@ use utils::lsn::Lsn;
 use utils::measured_stream::MeasuredReader;
 use utils::pid_file;
 
-use crate::compute_metrics::COMPUTE_ATTACHED;
 use crate::configurator::launch_configurator;
 use crate::disk_quota::set_disk_quota;
 use crate::installed_extensions::get_installed_extensions;
@@ -131,13 +130,10 @@ pub struct ComputeNodeParams {
 
     /// Interval for installed extensions collection
     pub installed_extensions_collection_interval: Arc<AtomicU64>,
-    /// Trusted-instance ID of the compute node.
-    pub instance_id: Option<String>,
     /// Timeout of PG compute startup in the Init state.
     pub pg_init_timeout: Option<Duration>,
     // Path to the `pg_isready` binary.
     pub pg_isready_bin: String,
-    pub lakebase_mode: bool,
 
     pub build_tag: String,
     pub control_plane_uri: Option<String>,
@@ -433,130 +429,8 @@ struct StartVmMonitorResult {
     vm_monitor: Option<JoinHandle<Result<()>>>,
 }
 
-/// This function creates roles that are used by Databricks.
-/// These roles are not needs to be botostrapped at PG Compute provisioning time.
-/// The auth method for these roles are configured in databricks_pg_hba.conf in universe repository.
-pub(crate) fn create_databricks_roles() -> Vec<String> {
-    let roles = vec![
-        // Role for prometheus_stats_exporter
-        Role {
-            name: "databricks_monitor".to_string(),
-            // This uses "local" connection and auth method for that is "trust", so no password is needed.
-            encrypted_password: None,
-            options: Some(vec![GenericOption {
-                name: "IN ROLE pg_monitor".to_string(),
-                value: None,
-                vartype: "string".to_string(),
-            }]),
-        },
-        // Role for brickstore control plane
-        Role {
-            name: "databricks_control_plane".to_string(),
-            // Certificate user does not need password.
-            encrypted_password: None,
-            options: Some(vec![GenericOption {
-                name: "SUPERUSER".to_string(),
-                value: None,
-                vartype: "string".to_string(),
-            }]),
-        },
-        // Role for brickstore httpgateway.
-        Role {
-            name: "databricks_gateway".to_string(),
-            // Certificate user does not need password.
-            encrypted_password: None,
-            options: None,
-        },
-    ];
-
-    roles
-        .into_iter()
-        .map(|role| {
-            let query = format!(
-                r#"
-                DO $$
-                    BEGIN
-                        IF NOT EXISTS (
-                            SELECT FROM pg_catalog.pg_roles WHERE rolname = '{}')
-                        THEN
-                            CREATE ROLE {} {};
-                        END IF;
-                    END
-                $$;"#,
-                role.name,
-                role.name.pg_quote(),
-                role.to_pg_options(),
-            );
-            query
-        })
-        .collect()
-}
-
-/// Databricks-specific environment variables to be passed to the `postgres` sub-process.
-pub struct DatabricksEnvVars {
-    /// The Databricks "endpoint ID" of the compute instance. Used by `postgres` to check
-    /// the token scopes of internal auth tokens.
-    pub endpoint_id: String,
-    /// Hostname of the Databricks workspace URL this compute instance belongs to.
-    /// Used by postgres to verify Databricks PAT tokens.
-    pub workspace_host: String,
-
-    pub lakebase_mode: bool,
-}
-
-impl DatabricksEnvVars {
-    pub fn new(
-        compute_spec: &ComputeSpec,
-        compute_id: Option<&String>,
-        instance_id: Option<String>,
-        lakebase_mode: bool,
-    ) -> Self {
-        let endpoint_id = if let Some(instance_id) = instance_id {
-            // Use instance_id as endpoint_id if it is set. This code path is for PuPr model.
-            instance_id
-        } else {
-            // Use compute_id as endpoint_id if instance_id is not set. The code path is for PrPr model.
-            // compute_id is a string format of "{endpoint_id}/{compute_idx}"
-            // endpoint_id is a uuid. We only need to pass down endpoint_id to postgres.
-            // Panics if compute_id is not set or not in the expected format.
-            compute_id.unwrap().split('/').next().unwrap().to_string()
-        };
-        let workspace_host = compute_spec
-            .databricks_settings
-            .as_ref()
-            .map(|s| s.databricks_workspace_host.clone())
-            .unwrap_or("".to_string());
-        Self {
-            endpoint_id,
-            workspace_host,
-            lakebase_mode,
-        }
-    }
-
-    /// Constants for the names of Databricks-specific postgres environment variables.
-    const DATABRICKS_ENDPOINT_ID_ENVVAR: &'static str = "DATABRICKS_ENDPOINT_ID";
-    const DATABRICKS_WORKSPACE_HOST_ENVVAR: &'static str = "DATABRICKS_WORKSPACE_HOST";
-
-    /// Convert DatabricksEnvVars to a list of string pairs that can be passed as env vars. Consumes `self`.
-    pub fn to_env_var_list(self) -> Vec<(String, String)> {
-        if !self.lakebase_mode {
-            // In neon env, we don't need to pass down the env vars to postgres.
-            return vec![];
-        }
-        vec![
-            (
-                Self::DATABRICKS_ENDPOINT_ID_ENVVAR.to_string(),
-                self.endpoint_id.clone(),
-            ),
-            (
-                Self::DATABRICKS_WORKSPACE_HOST_ENVVAR.to_string(),
-                self.workspace_host.clone(),
-            ),
-        ]
-    }
-}
-
 impl ComputeNode {
+
     pub fn new(params: ComputeNodeParams, config: ComputeConfig) -> Result<Self> {
         let connstr = params.connstr.as_str();
         let mut conn_conf = postgres::config::Config::from_str(connstr)
@@ -592,11 +466,7 @@ impl ComputeNode {
         let mut new_state = ComputeState::new();
         if let Some(spec) = config.spec {
             let pspec = ParsedSpec::try_from(spec).map_err(|msg| anyhow::anyhow!(msg))?;
-            if params.lakebase_mode {
-                ComputeNode::set_spec(&params, &mut new_state, pspec);
-            } else {
-                new_state.pspec = Some(pspec);
-            }
+            ComputeNode::set_spec(&params, &mut new_state, pspec);
         }
 
         Ok(ComputeNode {
@@ -641,7 +511,6 @@ impl ComputeNode {
             port: this.params.external_http_port,
             config: this.compute_ctl_config.clone(),
             compute_id: this.params.compute_id.clone(),
-            instance_id: this.params.instance_id.clone(),
         }
         .launch(&this);
 
@@ -1237,13 +1106,7 @@ impl ComputeNode {
         // If it is something different then create_dir() will error out anyway.
         let pgdata = &self.params.pgdata;
         let _ok = fs::remove_dir_all(pgdata);
-        if self.params.lakebase_mode {
-            // Ignore creation errors if the directory already exists (e.g. mounting it ahead of time).
-            // If it is something different then PG startup will error out anyway.
-            let _ok = fs::create_dir(pgdata);
-        } else {
-            fs::create_dir(pgdata)?;
-        }
+        fs::create_dir(pgdata)?;
 
         fs::set_permissions(pgdata, fs::Permissions::from_mode(0o700))?;
 
@@ -1506,20 +1369,14 @@ impl ComputeNode {
         let pgdata_path = Path::new(&self.params.pgdata);
 
         let tls_config = self.tls_config(&pspec.spec);
-        let databricks_settings = spec.databricks_settings.as_ref();
-        let postgres_port = self.params.connstr.port();
-
         // Remove/create an empty pgdata directory and put configuration there.
         self.create_pgdata()?;
         config::write_postgres_conf(
             pgdata_path,
             &self.params,
             &pspec.spec,
-            postgres_port,
             self.params.internal_http_port,
             tls_config,
-            databricks_settings,
-            self.params.lakebase_mode,
         )?;
 
         let lsn = match spec.mode {
@@ -1586,28 +1443,8 @@ impl ComputeNode {
         self.get_basebackup(compute_state, lsn)
             .with_context(|| format!("failed to get basebackup@{lsn}"))?;
 
-        if let Some(settings) = databricks_settings {
-            copy_tls_certificates(
-                &settings.pg_compute_tls_settings.key_file,
-                &settings.pg_compute_tls_settings.cert_file,
-                pgdata_path,
-            )?;
-
-            // Update pg_hba.conf received with basebackup including additional databricks settings.
-            update_pg_hba(pgdata_path, Some(&settings.databricks_pg_hba))?;
-            update_pg_ident(pgdata_path, Some(&settings.databricks_pg_ident))?;
-        } else {
-            // Update pg_hba.conf received with basebackup.
-            update_pg_hba(pgdata_path, None)?;
-        }
-
-        if let Some(databricks_settings) = spec.databricks_settings.as_ref() {
-            copy_tls_certificates(
-                &databricks_settings.pg_compute_tls_settings.key_file,
-                &databricks_settings.pg_compute_tls_settings.cert_file,
-                pgdata_path,
-            )?;
-        }
+        // Update pg_hba.conf received with basebackup.
+        update_pg_hba(pgdata_path)?;
 
         // Place pg_dynshmem under /dev/shm. This allows us to use
         // 'dynamic_shared_memory_type = mmap' so that the files are placed in
@@ -1663,11 +1500,6 @@ impl ComputeNode {
 
     /// Start and stop a postgres process to warm up the VM for startup.
     pub fn prewarm_postgres_vm_memory(&self) -> Result<()> {
-        if self.params.lakebase_mode {
-            // Skip prewarming in lakebase mode: it can hit port conflicts and adds little value.
-            info!("Skipping postgres prewarming in lakebase mode");
-            return Ok(());
-        }
         info!("prewarming VM memory");
 
         // Create pgdata
@@ -1725,27 +1557,7 @@ impl ComputeNode {
     pub fn start_postgres(&self, storage_auth_token: Option<String>) -> Result<PostgresHandle> {
         let pgdata_path = Path::new(&self.params.pgdata);
 
-        let env_vars: Vec<(String, String)> = if self.params.lakebase_mode {
-            let databricks_env_vars = {
-                let state = self.state.lock().unwrap();
-                let spec = &state.pspec.as_ref().unwrap().spec;
-                DatabricksEnvVars::new(
-                    spec,
-                    Some(&self.params.compute_id),
-                    self.params.instance_id.clone(),
-                    self.params.lakebase_mode,
-                )
-            };
-
-            info!(
-                "Starting Postgres for databricks endpoint id: {}",
-                &databricks_env_vars.endpoint_id
-            );
-
-            let mut env_vars = databricks_env_vars.to_env_var_list();
-            env_vars.extend(storage_auth_token.map(|t| ("YBAMP_AUTH_TOKEN".to_string(), t)));
-            env_vars
-        } else if let Some(storage_auth_token) = &storage_auth_token {
+        let env_vars: Vec<(String, String)> = if let Some(storage_auth_token) = &storage_auth_token {
             vec![("YBAMP_AUTH_TOKEN".to_owned(), storage_auth_token.to_owned())]
         } else {
             vec![]
@@ -1922,15 +1734,7 @@ impl ComputeNode {
     /// Do initial configuration of the already started Postgres.
     #[instrument(skip_all)]
     pub fn apply_config(&self, compute_state: &ComputeState) -> Result<()> {
-        let mut conf = self.get_tokio_conn_conf(Some("compute_ctl:apply_config"));
-
-        if self.params.lakebase_mode {
-            // Set a 2-minute statement_timeout for the session applying config. The individual SQL statements
-            // used in apply_spec_sql() should not take long (they are just creating users and installing
-            // extensions). If any of them are stuck for an extended period of time it usually indicates a
-            // pageserver connectivity problem and we should bail out.
-            conf.options("-c statement_timeout=2min");
-        }
+        let conf = self.get_tokio_conn_conf(Some("compute_ctl:apply_config"));
 
         let conf = Arc::new(conf);
         let spec = Arc::new(
@@ -2052,16 +1856,12 @@ impl ComputeNode {
 
         // Write new config
         let pgdata_path = Path::new(&self.params.pgdata);
-        let postgres_port = self.params.connstr.port();
         config::write_postgres_conf(
             pgdata_path,
             &self.params,
             &spec,
-            postgres_port,
             self.params.internal_http_port,
             tls_config,
-            spec.databricks_settings.as_ref(),
-            self.params.lakebase_mode,
         )?;
 
         self.pg_reload_conf()?;
@@ -2228,13 +2028,7 @@ impl ComputeNode {
             // NB: Read core dump files from a fixed location outside of
             // the data directory since `compute_ctl` wipes the data directory
             // across container restarts.
-            _ => {
-                if self.params.lakebase_mode {
-                    Path::new("/databricks/logs/brickstore")
-                } else {
-                    Path::new(&self.params.pgdata)
-                }
-            }
+            _ => Path::new(&self.params.pgdata),
         };
 
         // Collect core dump paths if any
@@ -2548,7 +2342,7 @@ LIMIT 100",
         if let Some(libs) = spec.cluster.settings.find("shared_preload_libraries") {
             libs_vec = libs
                 .split(&[',', '\'', ' '])
-                .filter(|s| *s != "yb_amp" && *s != "databricks_auth" && !s.is_empty())
+                .filter(|s| *s != "yb_amp" && !s.is_empty())
                 .map(str::to_string)
                 .collect();
         }
@@ -2567,7 +2361,7 @@ LIMIT 100",
             if let Some(libs) = shared_preload_libraries_line.split("='").nth(1) {
                 preload_libs_vec = libs
                     .split(&[',', '\'', ' '])
-                    .filter(|s| *s != "yb_amp" && *s != "databricks_auth" && !s.is_empty())
+                    .filter(|s| *s != "yb_amp" && !s.is_empty())
                     .map(str::to_string)
                     .collect();
             }
@@ -2746,27 +2540,7 @@ LIMIT 100",
     /// This is the central place where pspec is updated.
     pub fn set_spec(params: &ComputeNodeParams, state: &mut ComputeState, pspec: ParsedSpec) {
         state.pspec = Some(pspec);
-        ComputeNode::update_attached_metric(params, state);
-        let _ = logger::update_ids(&params.instance_id, &Some(params.compute_id.clone()));
-    }
-
-    pub fn update_attached_metric(params: &ComputeNodeParams, state: &mut ComputeState) {
-        // Update the pg_cctl_attached gauge when all identifiers are available.
-        if let Some(instance_id) = &params.instance_id {
-            if let Some(pspec) = &state.pspec {
-                // Clear all values in the metric
-                COMPUTE_ATTACHED.reset();
-
-                // Set new metric value
-                COMPUTE_ATTACHED
-                    .with_label_values(&[
-                        &params.compute_id,
-                        instance_id,
-                        &pspec.branch_id.to_string(),
-                    ])
-                    .set(1);
-            }
-        }
+        let _ = logger::update_ids(&Some(params.compute_id.clone()));
     }
 }
 

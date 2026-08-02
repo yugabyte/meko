@@ -207,10 +207,10 @@ mod tests {
         assert_eq!(rf, rf_parsed);
     }
 
-    // Test that databricks-specific fields added to the PageserverFeedback message are serialized
+    // Test that the corruption_detected field of the PageserverFeedback message is serialized
     // and deserialized correctly, in addition to the existing fields from upstream.
     #[test]
-    fn test_replication_feedback_databricks_fields() {
+    fn test_replication_feedback_corruption_field() {
         let mut rf = PageserverFeedback::empty();
         rf.current_timeline_size = 12345678;
         rf.last_received_lsn = Lsn(23456789);

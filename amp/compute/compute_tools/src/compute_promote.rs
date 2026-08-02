@@ -153,11 +153,7 @@ impl ComputeNode {
             }
 
             tracing::debug!("applied spec: {:#?}", new_pspec.spec);
-            if self.params.lakebase_mode {
-                ComputeNode::set_spec(&self.params, &mut state, new_pspec);
-            } else {
-                state.pspec = Some(new_pspec);
-            }
+            ComputeNode::set_spec(&self.params, &mut state, new_pspec);
         }
 
         info!("applied new spec, reconfiguring as primary");

@@ -12,21 +12,12 @@ fn configurator_main_loop(compute: &Arc<ComputeNode>) {
     loop {
         let mut state = compute.state.lock().unwrap();
 
-        if compute.params.lakebase_mode {
-            while state.status != ComputeStatus::ConfigurationPending
-                && state.status != ComputeStatus::Failed
-            {
-                info!("configurator: compute status: {:?}, sleeping", state.status);
-                state = compute.state_changed.wait(state).unwrap();
-            }
-        } else {
-            // We have to re-check the status after re-acquiring the lock because it could be that
-            // the status has changed while we were waiting for the lock, and we might not need to
-            // wait on the condition variable. Otherwise, we might end up in some soft-/deadlock, i.e.
-            // we are waiting for a condition variable that will never be signaled.
-            if state.status != ComputeStatus::ConfigurationPending {
-                state = compute.state_changed.wait(state).unwrap();
-            }
+        // We have to re-check the status after re-acquiring the lock because it could be that
+        // the status has changed while we were waiting for the lock, and we might not need to
+        // wait on the condition variable. Otherwise, we might end up in some soft-/deadlock, i.e.
+        // we are waiting for a condition variable that will never be signaled.
+        if state.status != ComputeStatus::ConfigurationPending {
+            state = compute.state_changed.wait(state).unwrap();
         }
 
         // Re-check the status after waking up

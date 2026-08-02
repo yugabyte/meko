@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use compute_api::responses::{InstalledExtension, InstalledExtensions};
-use once_cell::sync::Lazy;
 use tokio_postgres::error::Error as PostgresError;
 use tokio_postgres::{Client, Config, NoTls};
 
@@ -119,8 +118,4 @@ pub async fn get_installed_extensions(
     Ok(InstalledExtensions {
         extensions: extensions_map.into_values().collect(),
     })
-}
-
-pub fn initialize_metrics() {
-    Lazy::force(&INSTALLED_EXTENSIONS);
 }

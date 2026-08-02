@@ -113,7 +113,6 @@ type ComputeSpec struct {
 	Autoprewarm               bool                      `json:"autoprewarm"`
 	OffloadLfcIntervalSeconds *uint64                   `json:"offload_lfc_interval_seconds"`
 	SuspendTimeoutSeconds     int64                     `json:"suspend_timeout_seconds"`
-	DatabricksSettings        *json.RawMessage          `json:"databricks_settings"`
 }
 
 // TlsConfig mirrors compute_api::responses::TlsConfig.
@@ -295,7 +294,6 @@ func BuildComputeConfig(p ComputeSpecParams) (ComputeConfig, error) {
 		Autoprewarm:               p.Autoprewarm,
 		OffloadLfcIntervalSeconds: p.OffloadLfcIntervalSeconds,
 		SuspendTimeoutSeconds:     -1,
-		DatabricksSettings:        nil,
 	}
 
 	return ComputeConfig{Spec: spec, ComputeCtlConfig: p.ComputeCtlConfig}, nil

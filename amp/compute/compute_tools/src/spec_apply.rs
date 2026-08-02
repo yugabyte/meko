@@ -13,19 +13,17 @@ use tokio_postgres::Client;
 use tokio_postgres::error::SqlState;
 use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
-use crate::compute::{ComputeNode, ComputeNodeParams, ComputeState, create_databricks_roles};
-use crate::compute_metrics::COMPUTE_CONFIGURE_STATEMENT_TIMEOUT_ERRORS;
+use crate::compute::{ComputeNode, ComputeNodeParams, ComputeState};
 use crate::pg_helpers::{
     DatabaseExt, Escaping, GenericOptionsSearch, RoleExt, get_existing_dbs_async,
     get_existing_roles_async,
 };
 use crate::spec_apply::ApplySpecPhase::{
-    AddDatabricksGrants, AlterDatabricksRoles, CreateAndAlterDatabases, CreateAndAlterRoles,
-    CreateAvailabilityCheck, CreateDatabricksMisc, CreateDatabricksRoles, CreatePgauditExtension,
+    CreateAndAlterDatabases, CreateAndAlterRoles, CreateAvailabilityCheck, CreatePgauditExtension,
     CreatePgauditlogtofileExtension, CreatePrivilegedRole, CreateSchemaYbAmp,
     DisablePostgresDBPgAudit, DropInvalidDatabases, DropRoles, FinalizeDropLogicalSubscriptions,
-    HandleDatabricksAuthExtension, HandleOtherExtensions, HandleYbAmpExtension,
-    RenameAndDeleteDatabases, RenameRoles, RunInEachDatabase,
+    HandleOtherExtensions, HandleYbAmpExtension, RenameAndDeleteDatabases, RenameRoles,
+    RunInEachDatabase,
 };
 use crate::spec_apply::PerDatabasePhase::{
     ChangeSchemaPerms, DeleteDBRoleReferences, DropLogicalSubscriptions,
@@ -168,7 +166,6 @@ impl ComputeNode {
                         concurrency_token.clone(),
                         db,
                         [DropLogicalSubscriptions].to_vec(),
-                        self.params.lakebase_mode,
                     );
 
                     Ok(tokio::spawn(fut))
@@ -189,29 +186,15 @@ impl ComputeNode {
                 };
             }
 
-            let phases = if self.params.lakebase_mode {
-                vec![
-                    CreatePrivilegedRole,
-                CreateDatabricksRoles,
-                AlterDatabricksRoles,
+            let phases = vec![
+                CreatePrivilegedRole,
                 DropInvalidDatabases,
                 RenameRoles,
                 CreateAndAlterRoles,
                 RenameAndDeleteDatabases,
                 CreateAndAlterDatabases,
                 CreateSchemaYbAmp,
-            ]
-            } else {
-                vec![
-                    CreatePrivilegedRole,
-                DropInvalidDatabases,
-                RenameRoles,
-                CreateAndAlterRoles,
-                RenameAndDeleteDatabases,
-                CreateAndAlterDatabases,
-                CreateSchemaYbAmp,
-            ]
-            };
+            ];
 
             for phase in phases {
                 info!("Applying phase {:?}", &phase);
@@ -222,7 +205,6 @@ impl ComputeNode {
                     jwks_roles.clone(),
                     phase,
                     || async { Ok(&client) },
-                    self.params.lakebase_mode,
                 )
                 .await?;
             }
@@ -274,7 +256,6 @@ impl ComputeNode {
                         concurrency_token.clone(),
                         db,
                         phases,
-                        self.params.lakebase_mode,
                     );
 
                     Ok(tokio::spawn(fut))
@@ -286,24 +267,12 @@ impl ComputeNode {
                 handle.await??;
             }
 
-            let mut phases = if self.params.lakebase_mode {
-                vec![
-                HandleOtherExtensions,
-                HandleYbAmpExtension, // This step depends on CreateSchemaYbAmp
-                HandleDatabricksAuthExtension,
-                CreateAvailabilityCheck,
-                DropRoles,
-                AddDatabricksGrants,
-                CreateDatabricksMisc,
-            ]
-            } else {
-                vec![
+            let mut phases = vec![
                 HandleOtherExtensions,
                 HandleYbAmpExtension, // This step depends on CreateSchemaYbAmp
                 CreateAvailabilityCheck,
                 DropRoles,
-            ]
-            };
+            ];
 
             // This step depends on CreateSchemaYbAmp
             if spec.drop_subscriptions_before_start && !drop_subscriptions_done {
@@ -336,7 +305,6 @@ impl ComputeNode {
                     jwks_roles.clone(),
                     phase,
                     || async { Ok(&client) },
-                    self.params.lakebase_mode,
                 )
                 .await?;
             }
@@ -362,7 +330,6 @@ impl ComputeNode {
         concurrency_token: Arc<tokio::sync::Semaphore>,
         db: DB,
         subphases: Vec<PerDatabasePhase>,
-        lakebase_mode: bool,
     ) -> Result<()> {
         let _permit = concurrency_token.acquire().await?;
 
@@ -390,7 +357,6 @@ impl ComputeNode {
                     let client = client_conn.as_ref().unwrap();
                     Ok(client)
                 },
-                lakebase_mode,
             )
             .await?;
         }
@@ -513,8 +479,6 @@ pub enum PerDatabasePhase {
 #[derive(Clone, Debug)]
 pub enum ApplySpecPhase {
     CreatePrivilegedRole,
-    CreateDatabricksRoles,
-    AlterDatabricksRoles,
     DropInvalidDatabases,
     RenameRoles,
     CreateAndAlterRoles,
@@ -527,10 +491,7 @@ pub enum ApplySpecPhase {
     DisablePostgresDBPgAudit,
     HandleOtherExtensions,
     HandleYbAmpExtension,
-    HandleDatabricksAuthExtension,
     CreateAvailabilityCheck,
-    AddDatabricksGrants,
-    CreateDatabricksMisc,
     DropRoles,
     FinalizeDropLogicalSubscriptions,
 }
@@ -566,7 +527,6 @@ pub async fn apply_operations<'a, Fut, F>(
     jwks_roles: Arc<HashSet<String>>,
     apply_spec_phase: ApplySpecPhase,
     client: F,
-    lakebase_mode: bool,
 ) -> Result<()>
 where
     F: FnOnce() -> Fut,
@@ -613,21 +573,6 @@ where
                         },
                         query
                     );
-                    if !lakebase_mode {
-                        return res;
-                    }
-                    if let Err(e) = res.as_ref() {
-                        if let Some(sql_state) = e.code() {
-                            if sql_state.code() == "57014" {
-                                // SQL State 57014 (ERRCODE_QUERY_CANCELED) is used for statement timeouts.
-                                // Increment the counter whenever a statement timeout occurs. Timeouts on
-                                // this configuration path can only occur due to PS connectivity problems that
-                                // Postgres failed to recover from.
-                                COMPUTE_CONFIGURE_STATEMENT_TIMEOUT_ERRORS.inc();
-                            }
-                        }
-                    }
-
                     res
                 }
                 .instrument(inspan)
@@ -666,39 +611,10 @@ async fn get_operations<'a>(
             query: format!(
                 include_str!("sql/create_privileged_role.sql"),
                 privileged_role_name = params.privileged_role_name,
-                privileges = if params.lakebase_mode {
-                    "CREATEDB CREATEROLE NOLOGIN BYPASSRLS"
-                } else {
-                    "CREATEDB CREATEROLE NOLOGIN REPLICATION BYPASSRLS"
-                }
+                privileges = "CREATEDB CREATEROLE NOLOGIN REPLICATION BYPASSRLS"
             ),
             comment: None,
         }))),
-        ApplySpecPhase::CreateDatabricksRoles => {
-            let queries = create_databricks_roles();
-            let operations = queries.into_iter().map(|query| Operation {
-                query,
-                comment: None,
-            });
-            Ok(Box::new(operations))
-        }
-
-        // Backfill existing databricks_reader_* roles with statement timeout from GUC
-        ApplySpecPhase::AlterDatabricksRoles => {
-            let query = String::from(include_str!(
-                "sql/alter_databricks_reader_roles_timeout.sql"
-            ));
-
-            let operations = once(Operation {
-                query,
-                comment: Some(
-                    "Backfill existing databricks_reader_* roles with statement timeout"
-                        .to_string(),
-                ),
-            });
-
-            Ok(Box::new(operations))
-        }
         ApplySpecPhase::DropInvalidDatabases => {
             let mut ctx = ctx.write().await;
             let databases = &mut ctx.dbs;
@@ -1180,26 +1096,6 @@ async fn get_operations<'a>(
 
             Ok(Box::new(operations))
         }
-        // Note: we may want to version the extension someday, but for now we just drop it and recreate it.
-        ApplySpecPhase::HandleDatabricksAuthExtension => {
-            let operations = vec![
-                Operation {
-                    query: String::from("DROP EXTENSION IF EXISTS databricks_auth"),
-                    comment: Some(String::from("dropping existing databricks_auth extension")),
-                },
-                Operation {
-                    query: String::from("CREATE EXTENSION databricks_auth"),
-                    comment: Some(String::from("creating databricks_auth extension")),
-                },
-                Operation {
-                    query: String::from("GRANT SELECT ON databricks_auth_metrics TO pg_monitor"),
-                    comment: Some(String::from("grant select on databricks auth counters")),
-                },
-            ]
-            .into_iter();
-
-            Ok(Box::new(operations))
-        }
         ApplySpecPhase::CreateAvailabilityCheck => Ok(Box::new(once(Operation {
             query: String::from(include_str!("sql/add_availabilitycheck_tables.sql")),
             comment: None,
@@ -1218,58 +1114,6 @@ async fn get_operations<'a>(
             Ok(Box::new(operations))
         }
 
-        //
-        // Grants permissions to roles that are used by Databricks.
-        ApplySpecPhase::AddDatabricksGrants => {
-            let operations = vec![
-                Operation {
-                    query: String::from("GRANT USAGE ON SCHEMA yb_amp TO databricks_monitor"),
-                    comment: Some(String::from(
-                        "Permissions needed to execute yb_amp.* functions (in the postgres database)",
-                    )),
-                },
-                Operation {
-                    query: String::from(
-                        "GRANT SELECT, INSERT, UPDATE ON health_check TO databricks_monitor",
-                    ),
-                    comment: Some(String::from("Permissions needed for read and write probes")),
-                },
-                Operation {
-                    query: String::from(
-                        "GRANT EXECUTE ON FUNCTION pg_ls_dir(text) TO databricks_monitor",
-                    ),
-                    comment: Some(String::from(
-                        "Permissions needed to monitor .snap file counts",
-                    )),
-                },
-                Operation {
-                    query: String::from(
-                        "GRANT SELECT ON yb_amp.yb_amp_perf_counters TO databricks_monitor",
-                    ),
-                    comment: Some(String::from(
-                        "Permissions needed to access yb_amp performance counters view",
-                    )),
-                },
-                Operation {
-                    query: String::from(
-                        "GRANT EXECUTE ON FUNCTION yb_amp.get_perf_counters() TO databricks_monitor",
-                    ),
-                    comment: Some(String::from(
-                        "Permissions needed to execute the underlying performance counters function",
-                    )),
-                },
-            ]
-            .into_iter();
-
-            Ok(Box::new(operations))
-        }
-        // Creates minor objects that are used by Databricks.
-        ApplySpecPhase::CreateDatabricksMisc => Ok(Box::new(once(Operation {
-            query: String::from(include_str!("sql/create_databricks_misc.sql")),
-            comment: Some(String::from(
-                "The function databricks_monitor uses to convert exception to 0 or 1",
-            )),
-        }))),
         ApplySpecPhase::FinalizeDropLogicalSubscriptions => Ok(Box::new(once(Operation {
             query: String::from(include_str!("sql/finalize_drop_subscriptions.sql")),
             comment: None,

@@ -129,13 +129,12 @@ pub fn startup_context_from_env() -> Option<opentelemetry::Context> {
 }
 
 /// Track relevant id's
-const UNKNOWN_IDS: &str = r#""pg_instance_id": "", "pg_compute_id": """#;
+const UNKNOWN_IDS: &str = r#""pg_compute_id": """#;
 static IDS: LazyLock<RwLock<String>> = LazyLock::new(|| RwLock::new(UNKNOWN_IDS.to_string()));
 
-pub fn update_ids(instance_id: &Option<String>, compute_id: &Option<String>) -> anyhow::Result<()> {
+pub fn update_ids(compute_id: &Option<String>) -> anyhow::Result<()> {
     let ids = format!(
-        r#""pg_instance_id": "{}", "pg_compute_id": "{}""#,
-        instance_id.as_ref().map(|s| s.as_str()).unwrap_or_default(),
+        r#""pg_compute_id": "{}""#,
         compute_id.as_ref().map(|s| s.as_str()).unwrap_or_default()
     );
     let mut guard = IDS
@@ -237,7 +236,7 @@ mod test {
                 .with_writer(StaticStringWriter),
         );
 
-        let _ = update_ids(&Some("000".to_string()), &Some("111".to_string()));
+        let _ = update_ids(&Some("111".to_string()));
 
         // Clear any previous test state
         WRITER_OUTPUT.with(|s| s.borrow_mut().clear());
@@ -266,7 +265,7 @@ mod test {
         );
 
         let json_string_shape_regex = regex::Regex::new(
-            r#"\{"timestamp": "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} GMT", "error_severity": "INFO", "file_name": ".+", "backend_type": "compute_ctl_self", "pg_instance_id": "000", "pg_compute_id": "111", "message": ".+"\}"#
+            r#"\{"timestamp": "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} GMT", "error_severity": "INFO", "file_name": ".+", "backend_type": "compute_ctl_self", "pg_compute_id": "111", "message": ".+"\}"#
         ).unwrap();
 
         for (i, expected_message) in messages.iter().enumerate() {

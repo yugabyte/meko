@@ -52,7 +52,7 @@ use compute_tools::extension_server::get_pg_version_string;
 use compute_tools::params::*;
 use compute_tools::pg_isready::get_pg_isready_bin;
 use compute_tools::spec::*;
-use compute_tools::{compute_metrics, installed_extensions, logger::*};
+use compute_tools::logger::*;
 use rlimit::{Resource, setrlimit};
 use signal_hook::consts::{SIGINT, SIGQUIT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -81,14 +81,6 @@ struct Cli {
     /// the neon extension (for installing remote extensions) and local_proxy.
     #[arg(long, default_value_t = 3081)]
     pub internal_http_port: u16,
-
-    /// Backwards-compatible --http-port. Functionally the same as --external-http-port.
-    #[arg(
-        long,
-        conflicts_with = "external_http_port",
-        conflicts_with = "internal_http_port"
-    )]
-    pub http_port: Option<u16>,
 
     #[arg(short = 'D', long, value_name = "DATADIR")]
     pub pgdata: String,
@@ -150,9 +142,6 @@ struct Cli {
 
     #[arg(long)]
     pub pg_init_timeout: Option<u64>,
-
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    pub lakebase_mode: bool,
 }
 
 impl Cli {
@@ -189,24 +178,6 @@ impl Cli {
     }
 }
 
-// Helpers to get compatible compute_ctl http ports from Cli. The old `--http-port` arg acts
-// the same as `--external-http-port`. The internal http port is defined to be http_port + 1.
-fn get_external_http_port(cli: &Cli) -> u16 {
-    if cli.lakebase_mode {
-        return cli.http_port.unwrap_or(cli.external_http_port);
-    }
-    cli.external_http_port
-}
-fn get_internal_http_port(cli: &Cli) -> u16 {
-    if cli.lakebase_mode {
-        return cli
-            .http_port
-            .map(|p| p + 1)
-            .unwrap_or(cli.internal_http_port);
-    }
-    cli.internal_http_port
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -227,27 +198,17 @@ fn main() -> Result<()> {
         tokio::runtime::Handle::current(),
     )]);
 
-    let mut log_dir = None;
-    if cli.lakebase_mode {
-        log_dir = std::env::var("COMPUTE_CTL_LOG_DIRECTORY").ok();
-    }
-
-    let (tracing_provider, _file_logs_guard) = init(cli.dev, log_dir)?;
+    let (tracing_provider, _file_logs_guard) = init(cli.dev, None)?;
 
     // enable core dumping for all child processes
     setrlimit(Resource::CORE, rlimit::INFINITY, rlimit::INFINITY)?;
-
-    if cli.lakebase_mode {
-        installed_extensions::initialize_metrics();
-        compute_metrics::initialize_metrics();
-    }
 
     let connstr = Url::parse(&cli.connstr).context("cannot parse connstr as a URL")?;
 
     let config = get_config(&cli)?;
 
-    let external_http_port = get_external_http_port(&cli);
-    let internal_http_port = get_internal_http_port(&cli);
+    let external_http_port = cli.external_http_port;
+    let internal_http_port = cli.internal_http_port;
 
     let compute_node = ComputeNode::new(
         ComputeNodeParams {
@@ -273,8 +234,6 @@ fn main() -> Result<()> {
             )),
             pg_init_timeout: cli.pg_init_timeout.map(Duration::from_secs),
             pg_isready_bin: get_pg_isready_bin(&cli.pgbin),
-            instance_id: std::env::var("INSTANCE_ID").ok(),
-            lakebase_mode: cli.lakebase_mode,
             build_tag: BUILD_TAG.to_string(),
             control_plane_uri: cli.control_plane_uri,
             config_path_test_only: cli.config,

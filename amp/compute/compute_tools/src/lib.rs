@@ -12,7 +12,6 @@ pub mod http;
 pub mod logger;
 pub mod catalog;
 pub mod compute;
-pub mod compute_metrics;
 pub mod compute_prewarm;
 pub mod compute_promote;
 pub mod disk_quota;

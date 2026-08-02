@@ -16,14 +16,12 @@ use crate::http::JsonResponse;
 #[derive(Clone, Debug)]
 pub(in crate::http) struct Authorize {
     compute_id: String,
-    // Trusted-instance ID. Only set in trusted-instance deployments.
-    instance_id: Option<String>,
     jwks: JwkSet,
     validation: Validation,
 }
 
 impl Authorize {
-    pub fn new(compute_id: String, instance_id: Option<String>, jwks: JwkSet) -> Self {
+    pub fn new(compute_id: String, jwks: JwkSet) -> Self {
         let mut validation = Validation::new(Algorithm::EdDSA);
 
         let use_rsa = jwks.keys.iter().any(|jwk| {
@@ -46,7 +44,6 @@ impl Authorize {
 
         Self {
             compute_id,
-            instance_id,
             jwks,
             validation,
         }
@@ -60,17 +57,10 @@ impl AsyncAuthorizeRequest<Body> for Authorize {
 
     fn authorize(&mut self, mut request: Request<Body>) -> Self::Future {
         let compute_id = self.compute_id.clone();
-        let is_trusted_instance = self.instance_id.is_some();
         let jwks = self.jwks.clone();
         let validation = self.validation.clone();
 
         Box::pin(async move {
-            // In trusted-instance deployments the "external" HTTP endpoint on compute_ctl can only
-            // be accessed by trusted components (enforced by network policy), so bypass auth here.
-            if is_trusted_instance {
-                return Ok(request);
-            }
-
             let TypedHeader(Authorization(bearer)) = request
                 .extract_parts::<TypedHeader<Authorization<Bearer>>>()
                 .await

@@ -76,8 +76,7 @@ raises the core-dump rlimit, constructs `ComputeNode`, and calls `run()`:
 ```
 main()
  └─ ComputeNode::run()
-     ├─ prewarm_postgres_vm_memory()    — only when started without a spec (pooled VM);
-     │                                    skipped in --lakebase-mode
+     ├─ prewarm_postgres_vm_memory()    — only when started without a spec (pooled VM)
      ├─ launch external HTTP server    (--external-http-port, default 3080)
      ├─ launch internal HTTP server    (--internal-http-port, default 3081)
      ├─ wait_spec()                    — block here if no spec yet (status: empty)
@@ -248,7 +247,7 @@ order (later lines win in Postgres, which is the point):
    extension finds the internal API for on-demand extension downloads.
 10. `yb_amp.disable_logical_replication_subscribers` (true iff
     `drop_subscriptions_before_start`), `log_destination='stderr,syslog'` when logs
-    export is on, and (lakebase mode) an explicit `port` plus Databricks settings.
+    export is on.
 11. Last line, always: `include_if_exists = 'compute_ctl_temp_override.conf'`.
 
 That include is the hook for `with_compute_ctl_tmp_override()`: during spec
@@ -280,7 +279,7 @@ knows about these objects):
    `HandleYbAmpExtension` (`CREATE/UPDATE EXTENSION yb_amp` where the spec installs
    it), `CreateAvailabilityCheck` (the `public.health_check` table used by
    `POST /check_writability`), `DropRoles`, then per audit level the pgaudit
-   extension phases. Lakebase mode inserts Databricks-specific role/grant phases.
+   extension phases.
 
 Afterwards `post_apply_config()` spawns a background task that runs
 `ALTER EXTENSION yb_amp UPDATE` — only if the extension is actually installed in the
@@ -309,10 +308,11 @@ end of the list is the only safe way to add one.
   `active_time`/`sessions` deltas (when the `activity_monitor_experimental` feature
   flag is set), client-backend state changes, live walsenders (excluding the
   walproposer), active logical-replication subscriptions, and running autovacuum
-  workers. It exits once the compute reaches a terminal status. In lakebase mode it
-  also enforces `--pg-init-timeout` (default 60 s): if Postgres doesn't reach
-  `running` in time — usually a sign the compute was started against wrong
-  storage — the process exits so it can restart with a fresh spec.
+  workers. It exits once the compute reaches a terminal status. When
+  `--pg-init-timeout` is passed it also enforces that deadline: if Postgres doesn't
+  reach `running` in time — usually a sign the compute was started against wrong
+  storage — the process exits so it can restart with a fresh spec. Without the flag
+  it waits indefinitely.
 - **configurator** (`configurator.rs`) — a thread waiting on the `Condvar` for
   `configuration_pending` (set by `POST /configure`), flips status to
   `configuration`, calls `reconfigure()`, then back to `running` or `failed`.
@@ -327,10 +327,7 @@ end of the list is the only safe way to add one.
 `reconfigure()` (`compute.rs`) rewrites `postgresql.conf`, `pg_ctl reload`s it,
 re-applies the spec SQL (Primary only, unless `skip_pg_catalog_updates`, under the
 `max_cluster_size=-1` override), and refreshes pgbouncer / local_proxy / rsyslog
-config. A reconfiguration that fails with Postgres error 57014 (statement timeout,
-lakebase mode sets `statement_timeout=2min` on the session) increments
-`pg_cctl_configure_statement_timeout_errors_total` — the typical cause is Postgres
-stuck retrying against a pageserver that rejects it.
+config.
 
 ## Termination
 
@@ -422,19 +419,14 @@ yb-compute-ctl \
     --config  <endpoint>/config.json \          # -c; XOR with:
     --control-plane-uri <base_url> \            # -p
     [--external-http-port 3080] [--internal-http-port 3081] \
-    [--http-port <p>] \                         # alias for --external-http-port
     [--remote-ext-base-url <url>] \             # -r
     [--privileged-role-name yb_amp_superuser] \ # ^[a-z_]+$ only
     [--resize-swap-on-bind] [--set-disk-quota-for-fs <mount>] \
     [--installed-extensions-collection-interval 3600] \
-    [--pg-init-timeout <secs>] [--lakebase-mode] [--dev] \
+    [--pg-init-timeout <secs>] [--dev] \
     [--cgroup yb-amp-postgres] [--filecache-connstr <c>] [--vm-monitor-addr 0.0.0.0:10301]
 ```
 
-`--http-port` conflicts with both explicit port flags; it is consulted only in
-`--lakebase-mode`, where it sets the external port and the internal port becomes
-`http_port + 1`. The `INSTANCE_ID` env var marks a trusted-instance deployment
-(bypassing HTTP JWT auth — see [`compute_ctl-apis.md`](compute_ctl-apis.md)), and
 `BUILD_TAG` (compile-time) stamps metrics and remote-extension paths.
 
 In the dev cluster, `yb_amp_local` launches the binary

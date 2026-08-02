@@ -11,7 +11,6 @@ use tracing::{Level, error, info, instrument, span};
 use crate::compute::ComputeNode;
 use crate::metrics::{PG_CURR_DOWNTIME_MS, PG_TOTAL_DOWNTIME_MS};
 
-const PG_DEFAULT_INIT_TIMEOUIT: Duration = Duration::from_secs(60);
 const MONITOR_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Struct to store runtime state of the compute monitor thread.
@@ -353,21 +352,16 @@ impl ComputeMonitor {
 // Hang on condition variable waiting until the compute status is `Running`.
 fn wait_for_postgres_start(compute: &ComputeNode) {
     let mut state = compute.state.lock().unwrap();
-    let pg_init_timeout = compute
-        .params
-        .pg_init_timeout
-        .unwrap_or(PG_DEFAULT_INIT_TIMEOUIT);
 
     while state.status != ComputeStatus::Running {
         info!("compute is not running, waiting before monitoring activity");
-        if !compute.params.lakebase_mode {
-            state = compute.state_changed.wait(state).unwrap();
 
-            if state.status == ComputeStatus::Running {
-                break;
-            }
+        // The startup deadline is opt-in: without --pg-init-timeout we wait
+        // indefinitely for Postgres to come up.
+        let Some(pg_init_timeout) = compute.params.pg_init_timeout else {
+            state = compute.state_changed.wait(state).unwrap();
             continue;
-        }
+        };
 
         if state.pg_start_time.is_some()
             && Utc::now()
@@ -376,11 +370,11 @@ fn wait_for_postgres_start(compute: &ComputeNode) {
                 .unwrap_or_default()
                 > pg_init_timeout
         {
-            // If Postgres isn't up and running with working PS/SK connections within POSTGRES_STARTUP_TIMEOUT, it is
+            // If Postgres isn't up and running with working PS/SK connections within the timeout, it is
             // possible that we started Postgres with a wrong spec (so it is talking to the wrong PS/SK nodes). To prevent
             // deadends we simply exit (panic) the compute node so it can restart with the latest spec.
             //
-            // NB: We skip this check if we have not attempted to start PG yet (indicated by state.pg_start_up == None).
+            // NB: We skip this check if we have not attempted to start PG yet (indicated by state.pg_start_time == None).
             // This is to make sure the more appropriate errors are surfaced if we encounter issues before we even attempt
             // to start PG (e.g., if we can't pull the spec, can't sync safekeepers, or can't get the basebackup).
             error!(

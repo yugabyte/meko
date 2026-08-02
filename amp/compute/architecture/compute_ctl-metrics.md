@@ -1,19 +1,15 @@
 # compute_ctl Prometheus metrics
 
-Source: `compute/compute_tools/src/metrics.rs` (core metrics) and
-`compute/compute_tools/src/compute_metrics.rs` (the `pg_cctl_*` family). See also
+Source: `compute/compute_tools/src/metrics.rs`. See also
 [`compute_ctl-apis.md`](compute_ctl-apis.md) and [`compute_ctl.md`](compute_ctl.md).
 
 All metrics here are exposed as Prometheus text at **`GET /metrics`** on the external
 HTTP server (default port 3080, **unauthenticated**). The handler
-(`http/routes/metrics.rs::get_metrics`) concatenates `metrics::collect()` and
-`compute_metrics::collect()`, filtering out empty metric families before encoding
-(the text encoder errors on empty families).
+(`http/routes/metrics.rs::get_metrics`) returns `metrics::collect()`, filtering out
+empty metric families before encoding (the text encoder errors on empty families).
 
 Everything on `/metrics` is **`compute_ctl`-native** — instrumented inside the
-supervisor itself. The `pg_cctl_*` family is also emitted by `compute_ctl`, but its
-values are *driven by Postgres/attachment events*. Two adjacent surfaces are easy to
-confuse with this one:
+supervisor itself. Two adjacent surfaces are easy to confuse with this one:
 
 - **`GET /autoscaling_metrics`** proxies the `yb_amp` extension's own in-Postgres
   exporter byte-for-byte (over the `yb_amp-communicator.socket` Unix socket in
@@ -50,17 +46,8 @@ confuse with this one:
 | `compute_ctl_lfc_offloads_total` | IntCounter | — | LFC offloads requested (via `POST /lfc/offload` or the `offload_lfc_interval_seconds` loop). |
 | `compute_ctl_lfc_offload_errors_total` | IntCounter | — | LFC offload errors. |
 
-## `pg_cctl_*` (`compute_metrics.rs`)
-
-| Metric | Type | Labels | Meaning |
-|---|---|---|---|
-| `pg_cctl_configure_statement_timeout_errors_total` | IntCounter | — | Reconfigurations that failed with Postgres error 57014 (statement timeout) inside `ComputeNode::reconfigure()`. Usually means Postgres is stuck retrying against a pageserver that rejects its connections (e.g. pointed at the wrong pageserver); check PG and pageserver logs when it moves. |
-| `pg_cctl_attached` | IntGauge vec | `pg_compute_id`, `pg_instance_id`, `branch_id` | Compute attached status (1 if attached). Reset + re-set whenever the spec is (re)loaded (`update_attached_metric` in `compute.rs`). Only emitted when an `instance_id` is configured (the `INSTANCE_ID` env var) — without one the gauge stays empty and is filtered from the exposition. The branch is keyed by the single `branch_id`; there are no shard or tenant/timeline labels anywhere in the metric set. |
-
 Registration is lazy (`once_cell::Lazy`), so a family appears in the exposition only
-after first touch — except in `--lakebase-mode`, where `main()` calls
-`initialize_metrics()` for the `pg_cctl_*` and installed-extensions families to
-force them to exist (at 0) from the first scrape.
+after first touch.
 
 ## Tracing
 

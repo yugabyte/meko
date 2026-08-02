@@ -43,7 +43,6 @@ pub enum Server {
         port: u16,
         config: ComputeCtlConfig,
         compute_id: String,
-        instance_id: Option<String>,
     },
 }
 
@@ -82,7 +81,6 @@ impl From<&Server> for Router<Arc<ComputeNode>> {
             Server::External {
                 config,
                 compute_id,
-                instance_id,
                 ..
             } => {
                 let unauthenticated_router = Router::<Arc<ComputeNode>>::new()
@@ -112,7 +110,6 @@ impl From<&Server> for Router<Arc<ComputeNode>> {
                     .route("/liveness_probe", get(liveness_probe::liveness_probe))
                     .layer(AsyncRequireAuthorizationLayer::new(Authorize::new(
                         compute_id.clone(),
-                        instance_id.clone(),
                         config.jwks.clone(),
                     )));
 
