@@ -19,8 +19,8 @@ const (
 	// restartRows is the row count seeded before the restart and asserted intact
 	// after it.
 	restartRows = 200
-	// restartReadyTimeout bounds waiting for the endpoint's Deployment to become
-	// Available again after the pod is rolled.
+	// restartReadyTimeout bounds waiting for the endpoint's compute workload to
+	// report ready again after the pod is rolled.
 	restartReadyTimeout = 5 * time.Minute
 )
 
@@ -68,7 +68,7 @@ func (a *ampFeatureRun) computeRestart(ctx context.Context) error {
 type podConnector func(ctx context.Context, ip string, ep controller.Endpoint) (sqlConn, error)
 
 // computeRoller is the pod-lifecycle surface the restart test drives: find the
-// endpoint's compute pod, roll it, wait for the Deployment to recover, and
+// endpoint's compute pod, roll it, wait for the workload to recover, and
 // resolve the rescheduled pod's IP. kubeComputeRoller is the live impl; a fake
 // satisfies it in unit tests.
 type computeRoller interface {
@@ -117,7 +117,7 @@ func computeRestartSteps(ctx context.Context, cl ampCtl, proj ampProject, connec
 		return fmt.Errorf("after seeding, table %s has %d rows, want %d (the generate_series seed insert did not produce the expected row count)", restartTable, before, restartRows)
 	}
 
-	// Restart the compute: roll the endpoint pod; its Deployment reschedules one.
+	// Restart the compute: roll the endpoint pod; its workload reschedules one.
 	pod, err := roller.podName(ctx, ep.ID)
 	if err != nil {
 		return fmt.Errorf("find endpoint compute pod: %w", err)
@@ -191,11 +191,10 @@ func (f *flow) ampKube() *k8s.Kubectl {
 	return k8s.New(k8s.Config{Context: acfg.Context, Namespace: f.namespace()})
 }
 
-// endpointDeployName is the controller's deploy/release name for an endpoint
-// (controller EndpointDeployName): the endpoint UUID prefixed with "yb-ep-". The
-// endpoint's Deployment, Service, and pods all carry this name, and the pods
-// carry it as the app.kubernetes.io/instance label.
-func endpointDeployName(endpointID string) string { return "yb-ep-" + endpointID }
+// endpointDeployName is the controller's deploy/release name for an endpoint.
+func endpointDeployName(endpointID string) string {
+	return ampstack.EndpointWorkloadName(endpointID)
+}
 
 // kubeComputeRoller is the live computeRoller: it finds, rolls, and re-resolves an
 // endpoint's compute pod via kubectl in the amp namespace.
@@ -265,9 +264,9 @@ func (r *kubeComputeRoller) deletePod(ctx context.Context, name string) error {
 	return r.kube.Delete(ctx, "pod", name)
 }
 
-// waitReady waits for the endpoint's Deployment to report Available again after
-// the pod was rolled. It is a convergence hint; the true readiness gate is the
-// pg connection (which polls SELECT 1) the caller makes right after.
+// waitReady waits for the endpoint's compute workload to report ready again
+// after the pod was rolled. It is a convergence hint; the true readiness gate is
+// the pg connection (which polls SELECT 1) the caller makes right after.
 func (r *kubeComputeRoller) waitReady(ctx context.Context, endpointID string) error {
-	return r.kube.WaitFor(ctx, "deployment/"+endpointDeployName(endpointID), "condition=Available", r.timeout)
+	return ampstack.WaitEndpointWorkloadReady(ctx, r.kube, endpointID, r.timeout)
 }

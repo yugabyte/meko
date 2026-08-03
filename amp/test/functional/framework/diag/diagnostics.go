@@ -184,7 +184,10 @@ func collect(ctx context.Context, kube Kube, namespace string, sink apps.Artifac
 	}
 
 	if sc.resourcesDir != "" {
-		for _, kind := range []string{"pods", "deployments"} {
+		// replicasets alongside deployments: the endpoint compute workload is a
+		// Deployment today and a bare ReplicaSet after it moves off the rollout
+		// layer, and a missing kind is a quiet best-effort skip either way.
+		for _, kind := range []string{"pods", "deployments", "replicasets"} {
 			if out, err := kube.Wide(ctx, kind); err != nil {
 				logf("diagnostics: get %s -o wide in %s (best-effort): %v", kind, namespace, err)
 			} else {

@@ -44,8 +44,8 @@ const (
 	DefaultNamespacePrefix   = "ampqa-cp"
 	computeUser              = "cloud_admin"
 	computeDB                = "postgres"
-	// computeRestartReadyTimeout bounds waiting for the endpoint's Deployment to
-	// report Available again after its compute pod is rolled.
+	// computeRestartReadyTimeout bounds waiting for the endpoint's compute
+	// workload to report ready again after its pod is rolled.
 	computeRestartReadyTimeout = 5 * time.Minute
 	// provisionRetries is how many extra attempts project/endpoint creation makes
 	// on a transient controller 5xx (concurrent-DDL deadlock, endpoint helm race).
@@ -695,11 +695,45 @@ func (p *Provider) waitControllerReady(ctx context.Context, cl *controller.Clien
 		}
 		select {
 		case <-wctx.Done():
+			p.captureControllerHang(ctx, last)
 			return fmt.Errorf("controller not ready: %w (last: %v)", wctx.Err(), last)
 		case <-time.After(time.Second):
 		}
 	}
 }
+
+// captureControllerHang preserves the evidence of an up-but-hung controller —
+// the state that post-mortem logs cannot show, because they end at the hang.
+// A Go process's only goroutine dump is SIGQUIT, which also exits it; that is
+// the operator's move anyway (the pod is useless and the restart may heal it),
+// and the dump lands in the PREVIOUS container's logs, which every failure
+// collection already gathers. Fires only for a hang: connection-refused means
+// the process is down and its previous logs already tell that story.
+func (p *Provider) captureControllerHang(ctx context.Context, last error) {
+	if p.kube == nil || last == nil || isConnRefused(last) {
+		return
+	}
+	// Detached from the caller's (likely exhausted) context: the capture is the
+	// last useful thing this environment does.
+	cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	p.log("sharedk8s: controller readyz hung (%v) — sending SIGQUIT for a goroutine dump (pod will restart)", last)
+	run := p.kube.ForPod("deployment/"+DefaultControllerService, "")
+	if res, err := run.Run(cctx, "kill -QUIT 1"); err != nil {
+		p.log("sharedk8s: hang capture failed: %v (%s)", err, strings.TrimSpace(res.Stderr))
+		return
+	}
+	// Give the runtime a moment to flush the dump before collection reads
+	// --previous; the restart itself is kubelet's business.
+	select {
+	case <-cctx.Done():
+	case <-time.After(hangDumpFlushDelay):
+	}
+}
+
+// hangDumpFlushDelay is how long the capture waits for the exiting runtime to
+// flush its dump; a var so the unit test does not sleep for real.
+var hangDumpFlushDelay = 3 * time.Second
 
 // ensureUser pins the configured user id (idempotent) or creates a fresh user.
 func (p *Provider) ensureUser(ctx context.Context, cl *controller.Client) (string, error) {
@@ -916,14 +950,13 @@ func (p *Provider) resolvePG(ctx context.Context, ep controller.Endpoint) (pg.Co
 	}
 	// Assert the compute actually came up before port-forwarding to it. The
 	// controller's CreateEndpoint returns once the endpoint RECORD exists, but
-	// its Deployment's pod may not be Ready yet — and `kubectl port-forward
-	// svc/...` exits 1 the instant the Service has no ready backing pod. Waiting
-	// on the Deployment turns a transient start-up race into a bounded wait, and
-	// a genuinely never-Ready compute into a clear failure instead of an opaque
-	// "port-forward not ready". Same assertion the restart path already makes.
-	deploy := "deployment/yb-ep-" + ep.ID
-	if err := p.kube.WaitFor(ctx, deploy, "condition=Available", computeRestartReadyTimeout); err != nil {
-		return pg.ConnInfo{}, nil, fmt.Errorf("endpoint %s compute never became ready (%s): %w", ep.ID, deploy, err)
+	// its pod may not be Ready yet — and `kubectl port-forward svc/...` exits 1
+	// the instant the Service has no ready backing pod. Waiting on the workload
+	// turns a transient start-up race into a bounded wait, and a genuinely
+	// never-Ready compute into a clear failure instead of an opaque "port-forward
+	// not ready". Same assertion the restart path already makes.
+	if err := ampstack.WaitEndpointWorkloadReady(ctx, p.kube, ep.ID, computeRestartReadyTimeout); err != nil {
+		return pg.ConnInfo{}, nil, fmt.Errorf("endpoint %s compute never became ready: %w", ep.ID, err)
 	}
 	local := p.nextLocalPort()
 	pf, err := p.kube.PortForward(ctx, "svc/yb-ep-"+ep.ID, local, port)
@@ -1033,8 +1066,8 @@ func (e *Env) PGEndpoint() pg.ConnInfo { return e.pg }
 // RestartCompute rolls the endpoint's compute pod and blocks until the endpoint
 // serves again — the same compute-restart capability the docker env provides, so
 // the restart regression tests run unchanged here. It deletes the endpoint's
-// compute pod (its Deployment reschedules a fresh one on the shared external
-// YugabyteDB storage), waits for the Deployment to become Available, then
+// compute pod (its workload reschedules a fresh one on the shared external
+// YugabyteDB storage), waits for the workload to report ready, then
 // re-establishes the Service port-forward (the rolled pod's forward is dead and
 // its address changed) so PGEndpoint() points at the live rescheduled pod. Only
 // available in context mode: the compute pods are cluster-internal, so a
@@ -1050,8 +1083,7 @@ func (e *Env) RestartCompute(ctx context.Context) error {
 	if err := e.kube.Delete(ctx, "pod", pod); err != nil {
 		return fmt.Errorf("delete endpoint %s compute pod %s: %w", e.endpointID, pod, err)
 	}
-	deploy := "deployment/yb-ep-" + e.endpointID
-	if err := e.kube.WaitFor(ctx, deploy, "condition=Available", computeRestartReadyTimeout); err != nil {
+	if err := ampstack.WaitEndpointWorkloadReady(ctx, e.kube, e.endpointID, computeRestartReadyTimeout); err != nil {
 		return fmt.Errorf("endpoint %s compute did not recover after restart: %w", e.endpointID, err)
 	}
 

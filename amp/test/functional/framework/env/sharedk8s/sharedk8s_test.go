@@ -997,3 +997,27 @@ func TestRefreshPGEndpointNeedsAProvider(t *testing.T) {
 		t.Errorf("err = %v, want a plain provider error", err)
 	}
 }
+
+// A hung controller (readyz timing out on a live connection) gets one SIGQUIT
+// so its goroutine dump lands in the previous container's logs; a crashed one
+// (connection refused) is left alone — its previous logs already tell the story.
+func TestCaptureControllerHang(t *testing.T) {
+	old := hangDumpFlushDelay
+	hangDumpFlushDelay = time.Millisecond
+	defer func() { hangDumpFlushDelay = old }()
+	rec := &kubeRec{}
+	p := &Provider{}
+	p.kube = k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run)
+
+	p.captureControllerHang(context.Background(), errors.New("connect: connection refused"))
+	if got := strings.Join(rec.calls, "\n"); strings.Contains(got, "kill -QUIT") {
+		t.Fatalf("crashed controller must not be signalled, got calls:\n%s", got)
+	}
+
+	p.captureControllerHang(context.Background(), context.DeadlineExceeded)
+	got := strings.Join(rec.calls, "\n")
+	if !strings.Contains(got, "exec deployment/"+DefaultControllerService) ||
+		!strings.Contains(got, "kill -QUIT 1") {
+		t.Fatalf("hung controller should get kill -QUIT via exec, got calls:\n%s", got)
+	}
+}

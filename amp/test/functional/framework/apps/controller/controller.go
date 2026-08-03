@@ -211,6 +211,14 @@ const (
 type CreateEndpointRequest struct {
 	Role     string `json:"role,omitempty"`
 	DiskType string `json:"disk_type,omitempty"`
+	// Resources is the compute reservation to create the endpoint with. Omitted
+	// (nil) leaves the controller's create-time defaults in place.
+	Resources *EndpointResources `json:"resources,omitempty"`
+	// Extensions opts the endpoint's BRANCH into externalized PostgreSQL
+	// extensions by catalog name (e.g. "pgvector"): each is added to the branch's
+	// durable set, so forks inherit it, and mounted into the pod as a read-only
+	// ImageVolume. Rejected with 400 on a controller without an extension catalog.
+	Extensions []string `json:"extensions,omitempty"`
 }
 
 // EndpointList is a page of endpoints.
@@ -453,6 +461,18 @@ func (c *Client) ResizeEndpoint(ctx context.Context, poolID, projectID, branchID
 	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID+"/resize", req)
 }
 
+// PauseEndpoint plans an async compute pause (202): the compute is stopped while
+// the endpoint record, its branch, and all of its storage stay put.
+func (c *Client) PauseEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID+"/pause", nil)
+}
+
+// ResumeEndpoint plans an async compute resume (202) of a paused endpoint on the
+// same branch.
+func (c *Client) ResumeEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID+"/resume", nil)
+}
+
 // ListAllEndpoints pages through every endpoint bound to a branch.
 func (c *Client) ListAllEndpoints(ctx context.Context, poolID, projectID, branchID string) ([]Endpoint, error) {
 	const page = 100
@@ -637,6 +657,26 @@ func (c *Client) CreateEndpointAndWait(ctx context.Context, poolID, projectID, b
 // error and result), alongside the failure error.
 func (c *Client) ResizeEndpointAndWait(ctx context.Context, poolID, projectID, branchID, endpointID string, req ResizeEndpointRequest) (Task, error) {
 	task, loc, err := c.ResizeEndpoint(ctx, poolID, projectID, branchID, endpointID, req)
+	if err != nil {
+		return Task{}, err
+	}
+	return c.WaitTask(ctx, taskRef(task, loc))
+}
+
+// PauseEndpointAndWait pauses an endpoint's compute and waits for its task to
+// reach a terminal status. The Task is returned even when it failed.
+func (c *Client) PauseEndpointAndWait(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, error) {
+	task, loc, err := c.PauseEndpoint(ctx, poolID, projectID, branchID, endpointID)
+	if err != nil {
+		return Task{}, err
+	}
+	return c.WaitTask(ctx, taskRef(task, loc))
+}
+
+// ResumeEndpointAndWait resumes a paused endpoint and waits for its task to
+// reach a terminal status. The Task is returned even when it failed.
+func (c *Client) ResumeEndpointAndWait(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, error) {
+	task, loc, err := c.ResumeEndpoint(ctx, poolID, projectID, branchID, endpointID)
 	if err != nil {
 		return Task{}, err
 	}

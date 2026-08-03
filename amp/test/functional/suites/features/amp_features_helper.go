@@ -204,6 +204,12 @@ func createProjectOnPool(ctx context.Context, cl ampCtl, poolID, name string, pg
 // branch's now-present endpoint instead of re-creating (the same pattern
 // sharedk8s.createEndpoint uses).
 func createEndpoint(ctx context.Context, cl ampCtl, poolID, projID, branchID string) (controller.Endpoint, error) {
+	return createEndpointReq(ctx, cl, poolID, projID, branchID, controller.CreateEndpointRequest{Role: roleReadWrite})
+}
+
+// createEndpointReq is createEndpoint with the caller's own create request (an
+// extension opt-in, an explicit reservation), carrying the same convergence.
+func createEndpointReq(ctx context.Context, cl ampCtl, poolID, projID, branchID string, req controller.CreateEndpointRequest) (controller.Endpoint, error) {
 	var lastErr error
 	for attempt := 0; attempt <= 4; attempt++ {
 		if attempt > 0 {
@@ -216,7 +222,7 @@ func createEndpoint(ctx context.Context, cl ampCtl, poolID, projID, branchID str
 				return ep, nil
 			}
 		}
-		if _, err := cl.CreateEndpointAndWait(ctx, poolID, projID, branchID, controller.CreateEndpointRequest{Role: roleReadWrite}); err != nil {
+		if _, err := cl.CreateEndpointAndWait(ctx, poolID, projID, branchID, req); err != nil {
 			lastErr = fmt.Errorf("create endpoint on branch %s: %w", branchID, err)
 			if transientEndpointDeploy(err) {
 				continue
