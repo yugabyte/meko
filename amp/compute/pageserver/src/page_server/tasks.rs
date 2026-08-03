@@ -200,20 +200,20 @@ async fn gc_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
             };
             // Run gc
             let IterationResult { output } = iteration
-                .run(tenant.gc_iteration(
-                    None,
-                    gc_horizon,
-                    tenant.get_pitr_interval(),
-                    &cancel,
-                    &ctx,
-                ))
+                .run(tenant.gc_iteration(gc_horizon, tenant.get_pitr_interval(), &cancel, &ctx))
                 .await;
             match output {
                 Ok(_) => {
                     error_run = 0;
                     sleep_duration = period;
                 }
-                Err(crate::page_server::GcError::TenantCancelled) => {
+                // `Timeline::shutdown` is only reached from `PageServer::shutdown`,
+                // which cancels the branch's token before the tenant's, so either
+                // one means this process's branch is going away.
+                Err(
+                    crate::page_server::GcError::TenantCancelled
+                    | crate::page_server::GcError::TimelineCancelled,
+                ) => {
                     return;
                 }
                 Err(e) => {
@@ -224,15 +224,7 @@ async fn gc_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
                     let wait_duration =
                         exponential_backoff_duration(error_run, 1.0, MAX_BACKOFF_SECS);
 
-                    if matches!(e, crate::page_server::GcError::TimelineCancelled) {
-                        // Timeline was cancelled during gc. We might either be in an event
-                        // that affects the entire tenant (tenant deletion, pageserver shutdown),
-                        // or in one that affects the timeline only (timeline deletion).
-                        // Therefore, don't exit the loop.
-                        info!("Gc failed {error_run} times, retrying in {wait_duration:?}: {e:?}");
-                    } else {
-                        error!("Gc failed {error_run} times, retrying in {wait_duration:?}: {e:?}");
-                    }
+                    error!("Gc failed {error_run} times, retrying in {wait_duration:?}: {e:?}");
 
                     sleep_duration = wait_duration;
                 }

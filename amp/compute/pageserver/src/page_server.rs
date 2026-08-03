@@ -461,10 +461,6 @@ pub(crate) enum GcError {
     #[error(transparent)]
     GcCutoffs(PageReconstructError),
 
-    // If GC was invoked for a particular timeline, this error means it didn't exist
-    #[error("timeline not found")]
-    TimelineNotFound,
-
     // A YB read/write in the GC pipeline (cutoff publish, candidate
     // select/dequeue, trim delete) failed. Next tick retries; nothing
     // was dequeued without its action having succeeded.
@@ -907,11 +903,6 @@ impl PageServer {
             // activation happens later, on Tenant::activate
         }
 
-        // Before activation, seed the timeline's GcInfo. Branch children
-        // live in other processes, so there are no in-process branchpoints
-        // to track; cross-process ancestor pins are GC future work (#54).
-        self.initialize_gc_info();
-
         // Resume-deletion path is dead in yb-amp: synth never produces
         // `MaybeDeletedIndexPart::Deleted`, so there's nothing to
         // restart here. If we want crash-safe deletion in yb-amp,
@@ -1015,22 +1006,19 @@ impl PageServer {
             .collect()
     }
 
-    /// perform one garbage collection iteration, removing old data files from disk.
+    /// perform one garbage collection iteration on the branch this process serves.
     /// this function is periodically called by gc task.
     /// also it can be explicitly requested through page server api 'do_gc' command.
     ///
-    /// `target_timeline_id` specifies the timeline to GC, or None for all.
-    ///
     /// The `horizon` an `pitr` parameters determine how much WAL history needs to be retained.
     /// Also known as the retention period, or the GC cutoff point. `horizon` specifies
-    /// the amount of history, as LSN difference from current latest LSN on each timeline.
+    /// the amount of history, as LSN difference from the current latest LSN.
     /// `pitr` specifies the same as a time difference from the current time. The effective
     /// GC cutoff point is determined conservatively by either `horizon` and `pitr`, whichever
     /// requires more history to be retained.
     //
     pub(crate) async fn gc_iteration(
         &self,
-        target_timeline_id: Option<BranchId>,
         horizon: u64,
         pitr: Duration,
         cancel: &CancellationToken,
@@ -1074,8 +1062,7 @@ impl PageServer {
             }
         };
 
-        self.gc_iteration_internal(target_timeline_id, horizon, pitr, cancel, ctx)
-            .await
+        self.gc_iteration_internal(horizon, pitr, cancel, ctx).await
     }
 
     /// Performs periodic housekeeping, via the tenant housekeeping background task.
@@ -1319,7 +1306,6 @@ impl PageServer {
 
     async fn gc_iteration_internal(
         &self,
-        target_timeline_id: Option<BranchId>,
         horizon: u64,
         pitr: Duration,
         cancel: &CancellationToken,
@@ -1328,19 +1314,13 @@ impl PageServer {
         let now = Instant::now();
 
         let gc_timeline = self
-            .refresh_gc_info_internal(target_timeline_id, horizon, pitr, cancel, ctx)
+            .refresh_gc_info_internal(horizon, pitr, cancel, ctx)
             .await?;
 
         failpoint_support::sleep_millis_async!("gc_iteration_internal_after_getting_gc_timelines");
 
         let mut result: GcResult = match gc_timeline {
-            Some(timeline) if !cancel.is_cancelled() => match timeline.gc().await {
-                // A timeline may be shutting down independently of the tenant's lifecycle.
-                Err(GcError::TimelineCancelled) if target_timeline_id.is_none() => {
-                    Default::default()
-                }
-                r => r?,
-            },
+            Some(timeline) if !cancel.is_cancelled() => timeline.gc().await?,
             _ => Default::default(),
         };
 
@@ -1348,52 +1328,16 @@ impl PageServer {
         Ok(result)
     }
 
-    /// Seeds the timeline's `GcInfo`. Branch children live in other
-    /// processes, so there are no in-process branchpoints; cross-process
-    /// ancestor pins are GC future work (#54). The PITR cutoff is set
-    /// later, before GC, by [`Self::refresh_gc_info_internal`].
-    fn initialize_gc_info(&self) {
-        let horizon = self.get_gc_horizon();
-
-        if let Some(timeline) = self.timeline() {
-            let mut target = timeline.gc_info.write().unwrap();
-
-            let space_cutoff = timeline
-                .get_last_record_lsn()
-                .checked_sub(horizon)
-                .unwrap_or(Lsn(0));
-
-            target.cutoffs = GcCutoffs {
-                space: space_cutoff,
-                time: None,
-            };
-        }
-    }
-
     async fn refresh_gc_info_internal(
         &self,
-        target_timeline_id: Option<BranchId>,
         horizon: u64,
         pitr: Duration,
         cancel: &CancellationToken,
         ctx: &RequestContext,
     ) -> Result<Option<Arc<Timeline>>, GcError> {
         let Some(timeline) = self.timeline() else {
-            if target_timeline_id.is_some() {
-                // We were to act on a particular timeline and it wasn't found
-                return Err(GcError::TimelineNotFound);
-            }
-            if self.cancel.is_cancelled() {
-                return Err(GcError::TenantCancelled);
-            }
             return Ok(None);
         };
-
-        if let Some(target) = target_timeline_id.as_ref() {
-            if &timeline.branch_id != target {
-                return Err(GcError::TimelineNotFound);
-            }
-        }
 
         // before taking the gc_info lock, do the heavier weight finding of gc_cutoff points
         let space_cutoff = timeline

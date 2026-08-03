@@ -322,17 +322,12 @@ impl TenantManager {
         fail::fail_point!("immediate_gc_task_pre");
 
         #[allow(unused_mut)]
-        let mut result = tenant
-            .gc_iteration(Some(branch_id), gc_horizon, pitr, &cancel, &ctx)
-            .await;
+        let mut result = tenant.gc_iteration(gc_horizon, pitr, &cancel, &ctx).await;
         // FIXME: `gc_iteration` can return an error for multiple reasons; we should handle it
         // better once the types support it.
 
         result.map_err(|e| match e {
             GcError::TenantCancelled | GcError::TimelineCancelled => ApiError::ShuttingDown,
-            GcError::TimelineNotFound => {
-                ApiError::NotFound(anyhow::anyhow!("Timeline not found").into())
-            }
             other => ApiError::InternalServerError(anyhow::anyhow!(other)),
         })
     }
