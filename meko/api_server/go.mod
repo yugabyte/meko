@@ -12,6 +12,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/marketplacemetering v1.37.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.99.0
 	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.61.0
+	github.com/gabriel-vasile/mimetype v1.4.14
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.18.1
 	github.com/google/uuid v1.6.0

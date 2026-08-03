@@ -957,8 +957,24 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 	g.DELETE("/datapacks/:datapack_id/knowledge-bases/:rag_source_id", kbH.Delete, kbOwnerOrMaintainer...)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-url", kbH.RequestUploadURL, kbOwnerOrMaintainer...)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/upload-complete", kbH.ConfirmUpload, kbOwnerOrMaintainer...)
+	// Direct file upload: single-call alternative to the presigned flow for
+	// programmatic/agentic callers. On dpDirect so a PAT (not just a JWT) works.
+	// There is no BodyLimit middleware on this route: the handler caps the raw
+	// body itself so the limit also covers chunked uploads, which declare no
+	// Content-Length for middleware to inspect.
+	dpDirect.POST("/datapacks/:datapack_id/knowledge-bases/upload", kbH.UploadFile,
+		auth.RequireScope(auth.ScopeWrite),
+		auth.RequireDatapackAccess(reg.dpRepo),
+		auth.RequireDatapackOwnerOrMaintainerGrant(),
+	)
 	g.POST("/datapacks/:datapack_id/knowledge-bases/create", kbH.CreateKB, kbOwnerOrMaintainer...)
 	g.GET("/datapacks/:datapack_id/knowledge-bases/status", kbH.KBStatus, kbOwnerOrMaintainer...)
+	// Single-document status: PAT-reachable so the direct-upload flow can poll a
+	// single file (via the status_url in its 202 response).
+	dpDirect.GET("/datapacks/:datapack_id/knowledge-bases/document-status", kbH.KBDocumentStatus,
+		auth.RequireScope(auth.ScopeRead),
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
 	// Files PUT to S3 via a presigned URL but never registered with dist_rag
 	// (user closed the dialog before clicking Create/Add-to-KB). Owner/maintainer
 	// only — same gate as the upload/create path that produces these orphans.

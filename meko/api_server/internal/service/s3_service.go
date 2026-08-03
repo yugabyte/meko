@@ -242,6 +242,17 @@ func (s *S3Service) DeleteObject(ctx context.Context, key string) error {
 	return nil
 }
 
+// ExistingUploadKeyByHash returns the key of an already-stored object with the
+// given content hash under the user's datapack prefix (any filename), or "" if
+// none exists. Content identity is the hash, so the same bytes under a different
+// name count as already uploaded — the same dedup rule as GenerateUploadURL.
+func (s *S3Service) ExistingUploadKeyByHash(
+	ctx context.Context, userID, datapackID, contentHash string,
+) (string, error) {
+	prefix := fmt.Sprintf("%s/%s/%s/", userID, datapackID, contentHash)
+	return s.firstObjectKeyUnderPrefix(ctx, prefix)
+}
+
 // firstObjectKeyUnderPrefix returns the key of any one object under prefix, or
 // "" if none exist. It requests at most one key (MaxKeys=1), which is all the
 // content-hash dedup check needs: it only cares whether an object with this

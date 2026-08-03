@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -372,4 +373,48 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 	)
 
 	return ps, nil
+}
+
+// GetDocumentStatus returns the pipeline detail for a single document
+// (identified by document_name) within the given sources, or nil if there is no
+// matching document. It is the single-row form of GetPipelineStatus: the
+// document_name filter is pushed into the query so the DB returns just that row
+// instead of the whole datapack's pipeline.
+func (r *RagRepo) GetDocumentStatus(sourceURIs []string, documentName string) (*PipelineDetail, error) {
+	if len(sourceURIs) == 0 {
+		return nil, nil
+	}
+
+	row := r.db.QueryRow(
+		`SELECT DISTINCT ON (document_uri)
+		        schema_name, index_name, source_uri, document_name, document_status,
+		        chunks_processed
+		 FROM dist_rag.vector_index_pipeline_details
+		 WHERE schema_name   = $1
+		   AND index_name    = $2
+		   AND source_uri    = ANY($3::TEXT[])
+		   AND document_name = $4
+		 ORDER BY document_uri,
+		          pipeline_created_at DESC NULLS LAST,
+		          pipeline_id DESC
+		 LIMIT 1`,
+		r.schemaName, r.indexName, pq.Array(sourceURIs), documentName,
+	)
+
+	var (
+		d        PipelineDetail
+		schema   string
+		rawIndex string
+	)
+	if err := row.Scan(
+		&schema, &rawIndex, &d.SourceURI, &d.DocumentName,
+		&d.DocumentStatus, &d.ChunksProcessed,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("scan document status: %w", err)
+	}
+	d.IndexName = schema + "." + rawIndex
+	return &d, nil
 }
