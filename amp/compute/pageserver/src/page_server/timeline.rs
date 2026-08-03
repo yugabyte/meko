@@ -311,9 +311,6 @@ pub(crate) struct GcInfo {
 
     /// Leases granted to particular LSNs.
     pub(crate) leases: BTreeMap<Lsn, LsnLease>,
-
-    /// Whether our branch point is within our ancestor's PITR interval (for cost estimation)
-    pub(crate) within_ancestor_pitr: bool,
 }
 
 impl GcInfo {
@@ -691,19 +688,16 @@ impl Timeline {
         self.ancestor_branch_id
     }
 
-    /// Get the bytes written since the PITR cutoff on this branch, and
-    /// whether this branch's ancestor_lsn is within its parent's PITR.
-    pub(crate) fn get_pitr_history_stats(&self) -> (u64, bool) {
+    /// Get the bytes written since the PITR cutoff on this branch.
+    pub(crate) fn get_pitr_history_size(&self) -> u64 {
         // TODO: for backwards compatibility, we return the full history back to 0 when the PITR
         // cutoff has not yet been initialized. This should return None instead, but this is exposed
         // in external HTTP APIs and callers may not handle a null value.
         let gc_info = self.gc_info.read().unwrap();
-        let history = self
-            .get_last_record_lsn()
+        self.get_last_record_lsn()
             .checked_sub(gc_info.cutoffs.time.unwrap_or_default())
             .unwrap_or_default()
-            .0;
-        (history, gc_info.within_ancestor_pitr)
+            .0
     }
 
     /// Read timeline's GC cutoff: this is the LSN at which GC has started to happen

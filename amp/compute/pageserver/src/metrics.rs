@@ -740,15 +740,6 @@ pub(crate) enum LayerLevel {
     L1,
 }
 
-static TIMELINE_ARCHIVE_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_archive_size",
-        "Timeline's logical size if it is considered eligible for archival (outside PITR window), else zero",
-        &["branch_id"]
-    )
-    .expect("failed to define a metric")
-});
-
 static STANDBY_HORIZON: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "pageserver_standby_horizon",
@@ -2691,7 +2682,6 @@ pub(crate) struct TimelineMetrics {
     pub find_gc_cutoffs_histo: StorageTimeMetrics,
     pub last_record_lsn_gauge: IntGauge,
     pub pitr_history_size: UIntGauge,
-    pub archival_size: UIntGauge,
     #[allow(dead_code)]
     pub standby_horizon_gauge: IntGauge,
     pub resident_physical_size_gauge: UIntGauge,
@@ -2725,10 +2715,6 @@ impl TimelineMetrics {
             .unwrap();
 
         let pitr_history_size = PITR_HISTORY_SIZE
-            .get_metric_with_label_values(&[&branch_id])
-            .unwrap();
-
-        let archival_size = TIMELINE_ARCHIVE_SIZE
             .get_metric_with_label_values(&[&branch_id])
             .unwrap();
 
@@ -2790,7 +2776,6 @@ impl TimelineMetrics {
             find_gc_cutoffs_histo,
             last_record_lsn_gauge,
             pitr_history_size,
-            archival_size,
             standby_horizon_gauge,
             resident_physical_size_gauge,
             current_logical_size_gauge,
@@ -2838,7 +2823,6 @@ impl TimelineMetrics {
             let _ = metric.remove_label_values(&[branch_id]);
         }
 
-        let _ = TIMELINE_ARCHIVE_SIZE.remove_label_values(&[branch_id]);
         let _ = PITR_HISTORY_SIZE.remove_label_values(&[branch_id]);
 
         let _ = LAYERS_PER_READ.remove_label_values(&[branch_id]);

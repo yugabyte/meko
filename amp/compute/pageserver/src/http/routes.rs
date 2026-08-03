@@ -197,7 +197,7 @@ async fn build_timeline_info_common(
 
     let walreceiver_status = timeline.walreceiver_status();
 
-    let (pitr_history_size, within_ancestor_pitr) = timeline.get_pitr_history_stats();
+    let pitr_history_size = timeline.get_pitr_history_size();
 
     // Externally, expose the lowest LSN that can be used to create a branch.
     // Internally we distinguish between the planned GC cutoff (PITR point) and the "applied" GC cutoff (where we
@@ -233,7 +233,6 @@ async fn build_timeline_info_common(
         current_physical_size,
         current_logical_size_non_incremental: None,
         pitr_history_size,
-        within_ancestor_pitr,
         timeline_dir_layer_file_size_sum: None,
         wal_source_connstr,
         last_received_msg_lsn,

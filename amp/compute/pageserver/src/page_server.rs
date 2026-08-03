@@ -219,8 +219,6 @@ pub struct PageServer {
     /// The timeline currently being created, if any.
     timelines_creating: std::sync::Mutex<Option<BranchId>>,
 
-    // This mutex prevents creation of new timelines during GC.
-    gc_cs: tokio::sync::Mutex<()>,
     walredo_mgr: Option<Arc<WalRedoManager>>,
 
     /// Provides access to timeline data sitting in the remote storage.
@@ -1299,7 +1297,6 @@ impl PageServer {
             conf,
             timeline: std::sync::OnceLock::new(),
             timelines_creating: Mutex::new(None),
-            gc_cs: tokio::sync::Mutex::new(()),
             walredo_mgr,
             remote_storage,
             attach_wal_lag_cooldown: Arc::new(std::sync::OnceLock::new()),
@@ -1320,31 +1317,6 @@ impl PageServer {
         }
     }
 
-    //
-    // How garbage collection works:
-    //
-    //                    +--bar------------->
-    //                   /
-    //             +----+-----foo---------------->
-    //            /
-    // ----main--+-------------------------->
-    //                \
-    //                 +-----baz-------->
-    //
-    //
-    // 1. Grab 'gc_cs' mutex to prevent new timelines from being created while Timeline's
-    //    `gc_infos` are being refreshed
-    // 2. Scan collected timelines, and on each timeline, make note of the
-    //    all the points where other timelines have been branched off.
-    //    We will refrain from removing page versions at those LSNs.
-    // 3. For each timeline, scan all layer files on the timeline.
-    //    Remove all files for which a newer file exists and which
-    //    don't cover any branch point LSNs.
-    //
-    // TODO:
-    // - if a relation has a non-incremental persistent layer on a child branch, then we
-    //   don't need to keep that in the parent anymore. But currently
-    //   we do.
     async fn gc_iteration_internal(
         &self,
         target_timeline_id: Option<BranchId>,
@@ -1353,54 +1325,27 @@ impl PageServer {
         cancel: &CancellationToken,
         ctx: &RequestContext,
     ) -> Result<GcResult, GcError> {
-        let mut totals: GcResult = Default::default();
         let now = Instant::now();
 
-        let gc_timelines = self
+        let gc_timeline = self
             .refresh_gc_info_internal(target_timeline_id, horizon, pitr, cancel, ctx)
             .await?;
 
         failpoint_support::sleep_millis_async!("gc_iteration_internal_after_getting_gc_timelines");
 
-        // If there is nothing to GC, we don't want any messages in the INFO log.
-        if !gc_timelines.is_empty() {
-            info!("{} timelines need GC", gc_timelines.len());
-        } else {
-            debug!("{} timelines need GC", gc_timelines.len());
-        }
-
-        // Perform GC for each timeline.
-        //
-        // Note that we don't hold the `PageServer::gc_cs` lock here because we don't want to delay the
-        // branch creation task, which requires the GC lock. A GC iteration can run concurrently
-        // with branch creation.
-        //
-        // See comments in [`PageServer::branch_timeline`] for more information about why branch
-        // creation task can run concurrently with timeline's GC iteration.
-        for timeline in gc_timelines {
-            if cancel.is_cancelled() {
-                // We were requested to shut down. Stop and return with the progress we
-                // made.
-                break;
-            }
-            let result = match timeline.gc().await {
-                Err(GcError::TimelineCancelled) => {
-                    if target_timeline_id.is_some() {
-                        // If we were targetting this specific timeline, surface cancellation to caller
-                        return Err(GcError::TimelineCancelled);
-                    } else {
-                        // A timeline may be shutting down independently of the tenant's lifecycle: we should
-                        // skip past this and proceed to try GC on other timelines.
-                        continue;
-                    }
+        let mut result: GcResult = match gc_timeline {
+            Some(timeline) if !cancel.is_cancelled() => match timeline.gc().await {
+                // A timeline may be shutting down independently of the tenant's lifecycle.
+                Err(GcError::TimelineCancelled) if target_timeline_id.is_none() => {
+                    Default::default()
                 }
                 r => r?,
-            };
-            totals += result;
-        }
+            },
+            _ => Default::default(),
+        };
 
-        totals.elapsed = now.elapsed();
-        Ok(totals)
+        result.elapsed = now.elapsed();
+        Ok(result)
     }
 
     /// Seeds the timeline's `GcInfo`. Branch children live in other
@@ -1432,119 +1377,74 @@ impl PageServer {
         pitr: Duration,
         cancel: &CancellationToken,
         ctx: &RequestContext,
-    ) -> Result<Vec<Arc<Timeline>>, GcError> {
-        // before taking the gc_cs lock, do the heavier weight finding of gc_cutoff points for
-        // currently visible timelines.
-        let timelines = self
-            .timeline()
-            .filter(|tl| match target_timeline_id.as_ref() {
-                Some(target) => &tl.branch_id == target,
-                None => true,
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
+    ) -> Result<Option<Arc<Timeline>>, GcError> {
+        let Some(timeline) = self.timeline() else {
+            if target_timeline_id.is_some() {
+                // We were to act on a particular timeline and it wasn't found
+                return Err(GcError::TimelineNotFound);
+            }
+            if self.cancel.is_cancelled() {
+                return Err(GcError::TenantCancelled);
+            }
+            return Ok(None);
+        };
 
-        if target_timeline_id.is_some() && timelines.is_empty() {
-            // We were to act on a particular timeline and it wasn't found
-            return Err(GcError::TimelineNotFound);
+        if let Some(target) = target_timeline_id.as_ref() {
+            if &timeline.branch_id != target {
+                return Err(GcError::TimelineNotFound);
+            }
         }
 
-        let mut gc_cutoffs: Option<(BranchId, GcCutoffs)> = None;
-
-        // Ensures all timelines use the same start time when computing the time cutoff.
-        let now_ts_for_pitr_calc = SystemTime::now();
-        for timeline in timelines.iter() {
-            let ctx = &ctx.with_scope_timeline(timeline);
-            let cutoff = timeline
-                .get_last_record_lsn()
-                .checked_sub(horizon)
-                .unwrap_or(Lsn(0));
-
-            let cutoffs = timeline
-                .find_gc_cutoffs(now_ts_for_pitr_calc, cutoff, pitr, cancel, ctx)
-                .await?;
-            let old = gc_cutoffs.replace((timeline.branch_id, cutoffs));
-            assert!(old.is_none());
-        }
+        // before taking the gc_info lock, do the heavier weight finding of gc_cutoff points
+        let space_cutoff = timeline
+            .get_last_record_lsn()
+            .checked_sub(horizon)
+            .unwrap_or(Lsn(0));
+        let cutoffs = timeline
+            .find_gc_cutoffs(
+                SystemTime::now(),
+                space_cutoff,
+                pitr,
+                cancel,
+                &ctx.with_scope_timeline(&timeline),
+            )
+            .await?;
 
         if self.cancel.is_cancelled() {
             return Err(GcError::TenantCancelled);
         }
 
-        // grab mutex to prevent new timelines from being created here; avoid doing long operations
-        // because that will stall branch creation.
-        let gc_cs = self.gc_cs.lock().await;
+        {
+            let mut target = timeline.gc_info.write().unwrap();
 
-        // Ok, we now know all the branch points.
-        // Update the GC information for each timeline.
-        let mut gc_timelines = Vec::with_capacity(timelines.len());
-        for timeline in timelines {
-            // We filtered the timeline list above
-            if let Some(target_timeline_id) = target_timeline_id {
-                assert_eq!(target_timeline_id, timeline.branch_id);
+            // Cull any expired leases
+            let now = SystemTime::now();
+            target.leases.retain(|_, lease| !lease.is_expired(&now));
+
+            timeline
+                .metrics
+                .valid_lsn_lease_count_gauge
+                .set(target.leases.len() as u64);
+
+            if let Some(time_cutoff) = target.cutoffs.time {
+                timeline.metrics.pitr_history_size.set(
+                    timeline
+                        .get_last_record_lsn()
+                        .checked_sub(time_cutoff)
+                        .unwrap_or_default()
+                        .0,
+                );
             }
 
-            {
-                let mut target = timeline.gc_info.write().unwrap();
-
-                // Cull any expired leases
-                let now = SystemTime::now();
-                target.leases.retain(|_, lease| !lease.is_expired(&now));
-
-                timeline
-                    .metrics
-                    .valid_lsn_lease_count_gauge
-                    .set(target.leases.len() as u64);
-
-                // Look up parent's PITR cutoff to update the child's knowledge of whether it is within parent's PITR
-                if let Some(ancestor_id) = timeline.get_ancestor_branch_id() {
-                    if let Some((_, ancestor_gc_cutoffs)) =
-                        gc_cutoffs.as_ref().filter(|(id, _)| *id == ancestor_id)
-                    {
-                        target.within_ancestor_pitr =
-                            Some(timeline.get_ancestor_lsn()) >= ancestor_gc_cutoffs.time;
-                    }
-                }
-
-                // Update metrics that depend on GC state
-                timeline
-                    .metrics
-                    .archival_size
-                    .set(if target.within_ancestor_pitr {
-                        timeline.metrics.current_logical_size_gauge.get()
-                    } else {
-                        0
-                    });
-                if let Some(time_cutoff) = target.cutoffs.time {
-                    timeline.metrics.pitr_history_size.set(
-                        timeline
-                            .get_last_record_lsn()
-                            .checked_sub(time_cutoff)
-                            .unwrap_or_default()
-                            .0,
-                    );
-                }
-
-                // Apply the cutoffs we found to the Timeline's GcInfo.  Why might we _not_ have cutoffs for a timeline?
-                // - this timeline was created while we were finding cutoffs
-                // - lsn for timestamp search fails for this timeline repeatedly
-                if let Some((_, cutoffs)) = gc_cutoffs
-                    .as_ref()
-                    .filter(|(id, _)| *id == timeline.branch_id)
-                {
-                    let original_cutoffs = target.cutoffs.clone();
-                    // GC cutoffs should never go back
-                    target.cutoffs = GcCutoffs {
-                        space: cutoffs.space.max(original_cutoffs.space),
-                        time: cutoffs.time.max(original_cutoffs.time),
-                    }
-                }
-            }
-
-            gc_timelines.push(timeline);
+            let original_cutoffs = target.cutoffs.clone();
+            // GC cutoffs should never go back
+            target.cutoffs = GcCutoffs {
+                space: cutoffs.space.max(original_cutoffs.space),
+                time: cutoffs.time.max(original_cutoffs.time),
+            };
         }
-        drop(gc_cs);
-        Ok(gc_timelines)
+
+        Ok(Some(timeline))
     }
 
     /// Get exclusive access to the timeline ID for creation.

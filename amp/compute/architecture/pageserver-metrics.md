@@ -178,7 +178,6 @@ GC metrics live with the GC docs — see
 | `pageserver_resident_physical_size` | UIntGaugeVec | `branch_id` | Bytes of layer files present on the local filesystem for attached locations. Typically 0 (no local layer files). |
 | `pageserver_resident_physical_size_global` | UIntGauge | — | Resident physical size, instance-wide. |
 | `pageserver_pitr_history_size` | UIntGaugeVec | `branch_id` | Data written since the PITR cutoff on this branch. |
-| `pageserver_archive_size` | UIntGaugeVec | `branch_id` | Logical size if the branch is eligible for archival (outside the PITR window), else 0. |
 | `pageserver_standby_horizon` | IntGaugeVec | `branch_id` | Standby apply LSN for which GC is held off. |
 | `pageserver_aux_file_estimated_size` | IntGaugeVec | `branch_id` | Size of all aux files in the aux-file v2 store. |
 | `pageserver_directory_entries_count` | UIntGaugeVec | `branch_id` | Sum of entries in pageserver-stored directory listings. |
