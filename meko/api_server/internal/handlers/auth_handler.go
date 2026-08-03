@@ -678,6 +678,13 @@ func (h *AuthHandler) classifyAuthErr(
 		errors.Is(err, auth.ErrLimitExceeded):
 		return apiError(c, http.StatusTooManyRequests,
 			"RATE_LIMITED", "too many requests, try again later")
+	case errors.Is(err, auth.ErrCognitoInternal),
+		errors.Is(err, auth.ErrCognitoAccessDenied):
+		// Static message, independent of the sentinel's own text — this is
+		// the fallback for AWS-side failures (misconfigured IAM, Cognito
+		// outage), which must never reach the client as err.Error().
+		return apiError(c, http.StatusServiceUnavailable,
+			"SERVICE_UNAVAILABLE", "authentication service is temporarily unavailable, please try again later")
 	case isValidationErr(err):
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", err.Error())

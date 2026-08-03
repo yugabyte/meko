@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -20,7 +21,7 @@ const defaultMaxArtifactSizeBytes int64 = 5 * 1024 * 1024 // 5 MiB
 //	POST /api/v1/datapacks/:datapack_id/artifacts
 //	GET  /api/v1/datapacks/:datapack_id/artifacts/:content_hash
 type ArtifactHandler struct {
-	svc                 *service.ArtifactService
+	svc                  *service.ArtifactService
 	maxArtifactSizeBytes int64
 }
 
@@ -52,13 +53,13 @@ type artifactPutResponse struct {
 
 // artifactGetResponse is the JSON body returned on GET.
 type artifactGetResponse struct {
-	ArtifactID    string `json:"artifact_id"`
-	ContentHash   string `json:"content_hash"`
-	Filename      string `json:"filename"`
-	ContentType   string `json:"content_type"`
-	SizeBytes     int64  `json:"size_bytes"`
-	StoredIn      string `json:"stored_in"`
-	ContentBase64 string `json:"content_base64,omitempty"` // inline (db) artifacts
+	ArtifactID         string `json:"artifact_id"`
+	ContentHash        string `json:"content_hash"`
+	Filename           string `json:"filename"`
+	ContentType        string `json:"content_type"`
+	SizeBytes          int64  `json:"size_bytes"`
+	StoredIn           string `json:"stored_in"`
+	ContentBase64      string `json:"content_base64,omitempty"`       // inline (db) artifacts
 	ContentBase64Large string `json:"content_base64_large,omitempty"` // S3 artifacts returned as base64
 }
 
@@ -115,7 +116,12 @@ func (h *ArtifactHandler) Put(c echo.Context) error {
 		Data:        data,
 	})
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError, "ARTIFACT_PUT_FAILED", err.Error())
+		// Can be a raw S3 SDK error (AccessDenied, throttling, etc.) —
+		// never echo err.Error() to the client.
+		slog.Error("artifact put failed",
+			"datapack_id", dp.ID, "filename", req.Filename, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"ARTIFACT_PUT_FAILED", "failed to store artifact, please try again or contact support")
 	}
 
 	return ok(c, http.StatusCreated, artifactPutResponse{
@@ -163,7 +169,11 @@ func (h *ArtifactHandler) Get(c echo.Context) error {
 		if err.Error() == "artifact expired" {
 			return apiError(c, http.StatusGone, "ARTIFACT_EXPIRED", "artifact has expired")
 		}
-		return apiError(c, http.StatusInternalServerError, "ARTIFACT_GET_FAILED", err.Error())
+		// Can be a raw S3 SDK error — never echo err.Error() to the client.
+		slog.Error("artifact get failed",
+			"datapack_id", dp.ID, "content_hash", contentHash, "error", err)
+		return apiError(c, http.StatusInternalServerError,
+			"ARTIFACT_GET_FAILED", "failed to retrieve artifact, please try again or contact support")
 	}
 	if resp == nil {
 		return apiError(c, http.StatusNotFound, "ARTIFACT_NOT_FOUND", "no artifact with that hash in this datapack")

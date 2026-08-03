@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -73,8 +74,10 @@ func (h *SharingHandler) Invite(c echo.Context) error {
 			return apiError(c, http.StatusConflict,
 				"ALREADY_MEMBER", err.Error())
 		}
+		slog.Error("invite failed",
+			"datapack_id", dp.ID, "recipient_email", req.RecipientEmail, "error", err)
 		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+			"INTERNAL_ERROR", "failed to send invite, please try again or contact support")
 	}
 
 	return ok(c, http.StatusOK, resp)
@@ -240,8 +243,13 @@ func (h *SharingHandler) ResendInvite(c echo.Context) error {
 			return apiError(c, http.StatusNotFound,
 				"NOT_FOUND", err.Error())
 		}
+		// Same rule as Invite above: this path can return a raw Cognito/AWS
+		// SDK error (e.g. AccessDeniedException with IAM ARNs and request
+		// IDs) via ResetTempPassword — never echo err.Error() to the client.
+		slog.Error("resend invite failed",
+			"datapack_id", dp.ID, "invite_id", inviteID, "error", err)
 		return apiError(c, http.StatusInternalServerError,
-			"INTERNAL_ERROR", err.Error())
+			"INTERNAL_ERROR", "failed to resend invite, please try again or contact support")
 	}
 
 	return ok(c, http.StatusOK, map[string]string{

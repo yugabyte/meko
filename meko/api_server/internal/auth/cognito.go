@@ -738,7 +738,7 @@ func (c *CognitoClient) CreateUser(
 			return "", nil
 		}
 		slog.Error("cognito create user failed", "email", email, "error", err)
-		return "", fmt.Errorf("cognito admin create user: %w", err)
+		return "", classifyCognitoErr(err)
 	}
 
 	var sub string
@@ -928,7 +928,7 @@ func (c *CognitoClient) ResetTempPassword(
 	})
 	if err != nil {
 		slog.Error("cognito reset temp password failed", "email", email, "error", err)
-		return fmt.Errorf("cognito admin set user password: %w", err)
+		return classifyCognitoErr(err)
 	}
 	slog.Info("cognito reset temp password succeeded", "email", email)
 	return nil
@@ -1015,12 +1015,20 @@ var (
 	ErrAuthResultNil           = errors.New("authentication result is nil")
 	ErrTooManyRequests         = errors.New("too many requests")
 	ErrLimitExceeded           = errors.New("request limit exceeded")
-	ErrCognitoInternal         = errors.New("cognito internal error")
-	ErrInvalidCognitoParameter = errors.New("invalid cognito request")
+	ErrCognitoInternal         = errors.New("authentication service is temporarily unavailable")
+	ErrInvalidCognitoParameter = errors.New("invalid request")
+	ErrCognitoAccessDenied     = errors.New("authentication service is temporarily unavailable")
 )
 
 // classifyCognitoErr maps AWS Cognito SDK exceptions to sentinel errors.
 func classifyCognitoErr(err error) error {
+	var accessDeniedErr *types.AccessDeniedException
+	if errors.As(err, &accessDeniedErr) {
+		slog.Error("cognito access denied — check IAM policy for the configured credentials",
+			"error", err)
+		return ErrCognitoAccessDenied
+	}
+
 	var usernameExistsErr *types.UsernameExistsException
 	if errors.As(err, &usernameExistsErr) {
 		return ErrUserExists
@@ -1119,13 +1127,15 @@ func classifyCognitoErr(err error) error {
 		if strings.Contains(strings.ToLower(msg), "already confirmed") {
 			return ErrUserAlreadyConfirmed
 		}
-		if msg == "" {
-			return ErrInvalidCognitoParameter
-		}
-		return fmt.Errorf("%w: %s", ErrInvalidCognitoParameter, msg)
+		return ErrInvalidCognitoParameter
 	}
 
-	return fmt.Errorf("cognito error: %w", err)
+	// Anything not explicitly classified above: log the full AWS error for
+	// operators, but never let its raw text (which can include internal
+	// config detail, request IDs, or transport errors) reach a caller that
+	// does err.Error() on the result.
+	slog.Error("unclassified cognito error", "error", err)
+	return ErrCognitoInternal
 }
 
 func strPtr(s string) *string {
