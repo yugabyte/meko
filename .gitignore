@@ -17,7 +17,8 @@ Thumbs.db
 *.swo
 *~
 
-# Claude Code scratch worktrees. This rule has to live at the root because
-# .claude/ is a root directory — in meko/.gitignore it would only match
-# meko/.claude/worktrees/ and silently miss the real one.
+# Claude Code scratch worktrees
 .claude/worktrees/
+
+# goreleaser output
+/dist/
