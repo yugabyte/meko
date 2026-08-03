@@ -4124,6 +4124,12 @@ impl PageStore {
             // exists with our group still NULL means *our* state doesn't yet
             // exist. Callers (preload / attach) key bootstrap-vs-load off this
             // `None`, so it has to mean "no pageserver state", not "no row".
+            //
+            // It is NOT a non-NULL guarantee for the rest of the group: a row
+            // can have `consistent_lsn` set with other pageserver columns still
+            // NULL, so `row_to_branch_state` must deserialize them as nullable
+            // (#531). Don't "fix" a NULL by widening this predicate — that
+            // routes a branch with live data down the bootstrap path.
             "SELECT {} FROM \"{}\".branch_state \
              WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
             BRANCH_STATE_COLUMNS, self.schema
@@ -5003,7 +5009,17 @@ fn serialize_row_aux(row: &BranchStateRow) -> Result<(Option<String>, serde_json
 fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
     let branch_s: String = r.try_get(0)?;
     let consistent_lsn: i64 = r.try_get(1)?;
-    let applied_gc_cutoff_lsn: i64 = r.try_get(2)?;
+    // Nullable on purpose. `get_branch_state`'s presence predicate is
+    // `consistent_lsn IS NOT NULL` alone, so it can hand us a row whose
+    // other pageserver-owned columns are still the controller's NULL seed.
+    // Reading this one as a plain `i64` made that a hard deserialize error
+    // that killed the process during attach — and since attach is retried
+    // forever, a crash-loop (#531). `NULL` means the cutoff was never
+    // stamped, i.e. nothing has been GC'd on this branch yet, so 0 is both
+    // true and safe: it cannot resurrect reclaimed data, and the next
+    // `publish_gc_cutoff` (`GREATEST(applied_gc_cutoff_lsn, …)`, NULL-
+    // tolerant) stamps the real value.
+    let applied_gc_cutoff_lsn: i64 = r.try_get::<_, Option<i64>>(2)?.unwrap_or(0);
     let ancestor_tl: Option<String> = r.try_get(3)?;
     let ancestor_lsn: Option<i64> = r.try_get(4)?;
     let current_generation: i32 = r.try_get(5)?;
@@ -5843,6 +5859,57 @@ mod tests {
         create_branch_state_row(&store, &row).await.unwrap();
         let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got, row);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// #531: `get_branch_state`'s presence predicate is `consistent_lsn IS
+    /// NOT NULL` alone, so it can select a row whose other pageserver-owned
+    /// columns are still the controller's NULL seed. Reading
+    /// `applied_gc_cutoff_lsn` as a non-nullable `i64` turned that into
+    /// "error deserializing column 2: a Postgres value was `NULL`", which
+    /// aborted attach and crash-looped the pageserver. A NULL cutoff means
+    /// nothing has been GC'd yet, so it must read back as 0.
+    #[tokio::test]
+    async fn get_branch_state_tolerates_null_gc_cutoff() {
+        let (store, schema) = make_store("null_cutoff").await;
+        let branch = rand_branch();
+        let row = sample_branch_state_row(branch);
+        create_branch_state_row(&store, &row).await.unwrap();
+
+        store
+            .test_only_execute(&format!(
+                "UPDATE \"{schema}\".branch_state SET applied_gc_cutoff_lsn = NULL \
+                 WHERE branch_id = '{branch}'"
+            ))
+            .await
+            .unwrap();
+
+        let got = store
+            .get_branch_state(branch)
+            .await
+            .expect("a NULL cutoff must not be a deserialize error")
+            .expect("the row is still visible to the presence predicate");
+        assert_eq!(got.applied_gc_cutoff_lsn, Lsn(0));
+        assert_eq!(
+            got.consistent_lsn, row.consistent_lsn,
+            "the rest of the row still deserializes"
+        );
+
+        // And the next cutoff publish stamps the real value over the NULL —
+        // `GREATEST(NULL, x)` is `x` in SQL, so the row self-heals.
+        let published = store
+            .publish_gc_cutoff(
+                branch,
+                utils::generation::Generation::new(row.current_generation as u32),
+                Lsn(80),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            published,
+            PublishGcCutoffOutcome::Published { applied: Lsn(80) }
+        );
+
         drop_schema(&store, &schema).await;
     }
 

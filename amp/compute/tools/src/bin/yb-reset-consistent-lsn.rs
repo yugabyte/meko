@@ -222,7 +222,13 @@ async fn read_timeline_state(client: &YsqlClient, branch: &str) -> anyhow::Resul
         })?;
     let consistent_lsn = Lsn(row.get::<_, i64>(0) as u64);
     let prev_record_lsn = row.get::<_, Option<i64>>(1).map(|v| Lsn(v as u64));
-    let applied_gc_cutoff_lsn = Lsn(row.get::<_, i64>(2) as u64);
+    // Nullable, like the pageserver's own read of this column: the
+    // predicate above only guarantees `consistent_lsn`, so a row seeded by
+    // the controller and only partly filled in by the pageserver still has
+    // a NULL cutoff (#531). `get` would panic on it — and this tool is
+    // exactly what an operator reaches for on a cluster in that state.
+    // NULL means nothing has been GC'd yet, so 0.
+    let applied_gc_cutoff_lsn = Lsn(row.get::<_, Option<i64>>(2).unwrap_or(0) as u64);
     let pg_version = row.get::<_, i32>(3);
     let current_generation = row.get::<_, i32>(4);
     Ok(TimelineState {

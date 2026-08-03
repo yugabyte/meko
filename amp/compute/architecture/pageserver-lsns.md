@@ -269,7 +269,10 @@ pg_xact, truncated relation) poisons the compute for its lifetime.
 ### `applied_gc_cutoff_lsn` — in memory + persisted
 
 **Where:** `Timeline.applied_gc_cutoff_lsn: Rcu<Lsn>` +
-`timeline_state.applied_gc_cutoff_lsn` (NOT NULL column).
+`amp_storage.branch_state.applied_gc_cutoff_lsn` (a NULLable column — the
+controller seeds the row with the pageserver group NULL, so
+`row_to_branch_state` reads it as `Option` and treats NULL as 0, "nothing
+GC'd yet". Reading it as non-nullable crash-looped attach, #531).
 
 **Meaning:** Lowest LSN reads may request. `check_lsn_is_in_scope()` and
 `page_service`'s `effective_request_lsn` reject `lsn <

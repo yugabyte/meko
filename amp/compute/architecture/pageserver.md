@@ -251,12 +251,17 @@ state:
 ```sql
 CREATE TABLE amp_storage.branch_state (
     branch_id              TEXT      NOT NULL,
-    consistent_lsn         BIGINT    NOT NULL,
-    applied_gc_cutoff_lsn  BIGINT    NOT NULL,
+    pg_version             INT       NOT NULL,
+    -- Pageserver-owned group. Every column here is NULLable: the
+    -- controller seeds the row at branch create with the whole group
+    -- NULL, and the pageserver fills it in at first attach. Readers must
+    -- tolerate NULL — `consistent_lsn IS NOT NULL` (the presence
+    -- predicate) says nothing about the others. See #531.
+    consistent_lsn         BIGINT,
+    applied_gc_cutoff_lsn  BIGINT,
     ancestor_branch_id     TEXT,
     ancestor_lsn           BIGINT,
-    current_generation     INT       NOT NULL,
-    pg_version             INT       NOT NULL,
+    current_generation     INT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
     archived_at            TIMESTAMP,

@@ -408,6 +408,14 @@ populated:
 Both first writes are `UPDATE ... WHERE <own discriminator> IS NULL`, so each
 group is filled exactly once and a retry is idempotent.
 
+**The discriminator is not a non-NULL guarantee for the rest of the group.** A
+`SELECT` scoped by `consistent_lsn IS NOT NULL` can still return a row whose
+other pageserver columns are the controller's NULL seed, so every such read has
+to deserialize them as nullable. Reading `applied_gc_cutoff_lsn` as a plain
+`i64` made that a fatal deserialize error during attach — and because attach is
+retried forever, a pageserver crash-loop (#531). Widening the predicate is the
+wrong repair: it would hide a branch with live data behind the *bootstrap* path.
+
 The pageserver group is the page store's durable index record: consistent /
 GC-cutoff / initdb LSNs, ancestry, generation, archive/delete timestamps, and
 rel-size migration state. `current_generation` is the gate that fences a stale
