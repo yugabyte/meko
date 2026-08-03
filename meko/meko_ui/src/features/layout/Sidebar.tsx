@@ -179,7 +179,9 @@ export default function Sidebar() {
     });
     removeSessionItem(PROVISION_STATUS_CACHE_KEY);
     removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
-    dispatchAppEvent(AUTH_LOGOUT_EVENT);
+    // hardRedirect: true shows the "Signing out…" interstitial until the
+    // page unload below (see App.tsx).
+    dispatchAppEvent(AUTH_LOGOUT_EVENT, { hardRedirect: true });
     // Full-page navigation (not an SPA route) to the server federated-logout
     // endpoint: it revokes the Cognito tokens, clears our auth cookies, then
     // 302s the browser through Cognito's /logout to drop the hosted session

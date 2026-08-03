@@ -105,6 +105,8 @@ export default function CompleteNewPasswordPage() {
         await logout();
         removeSessionItem(PROVISION_STATUS_CACHE_KEY);
         removeLocalItem(ONBOARDING_STATUS_CACHE_KEY);
+        // SPA navigation below, not a full-page reload, so leave the
+        // "Signing out…" interstitial opted out (its default).
         dispatchAppEvent(AUTH_LOGOUT_EVENT);
       } catch {
         // Still land on sign-in; user can retry sign-in if cookies were not cleared.

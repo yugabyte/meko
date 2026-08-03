@@ -103,8 +103,15 @@ function AppRouter() {
   // routing guards don't momentarily see `authenticated=true` and redirect
   // through /onboarding before the next bootstrap runs.
   useEffect(() => {
-    const onLogout = () => {
-      setLoggingOut(true);
+    const onLogout = (event: Event) => {
+      // Opt-in: only show the interstitial when a hard page navigation is
+      // coming (that's what clears it). Forgetting the flag just skips it.
+      const detail = (event as CustomEvent<{ hardRedirect?: boolean }>).detail;
+      if (detail?.hardRedirect === true) {
+        setLoggingOut(true);
+        // Safety net in case the expected page unload never happens.
+        window.setTimeout(() => setLoggingOut(false), 5000);
+      }
       // Drop all cached queries so the next user in this tab can't see the
       // previous user's data (query keys aren't scoped per user).
       queryClient.clear();
