@@ -186,7 +186,7 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // branchID (the create_endpoint step's first effect). Re-running with the same id
 // is a no-op (ON CONFLICT (id) DO NOTHING), so the single-writer partial unique
 // index is not violated on replay. A *second* read_write endpoint (a different
-// id) surfaces as ErrConflict; a missing branch as ErrNotFound.
+// id) surfaces as ErrConflict; a missing or dropped branch as ErrNotFound.
 //
 // An empty name is stored as NULL, not "": NULLs are distinct in a unique index,
 // so any number of unnamed endpoints coexist while two named the same on one
@@ -196,6 +196,10 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // its branch, so there is no column for it to disagree with. It stays in the
 // signature (and in the step's persisted args) because the caller plans the whole
 // ladder write-ahead and the branch FK is what validates the pairing.
+//
+// The branch must also be LIVE, and that check is a conditional WRITE of the
+// branch row rather than a read of it, so it serializes against a concurrent drop
+// instead of write-skewing past it (see the interlock comment in the body).
 func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, projectID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
 	_ = projectID // implied by branchID; see the doc comment
 	var cfg any
@@ -210,7 +214,16 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, projec
 	if len(settings) == 0 {
 		settings = []byte("{}")
 	}
-	_, err := b.pool.Exec(ctx,
+
+	// One transaction, so the record and the interlock below commit or roll back
+	// together: a refused endpoint leaves no row behind.
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
 		`INSERT INTO amp_registry.endpoints (id, branch_id, role, name, config, pg_settings)
 		 VALUES ($1::uuid, $2::uuid, $3::amp_registry.endpoint_role, $4, $5::jsonb, $6::jsonb)
 		 ON CONFLICT (id) DO NOTHING`,
@@ -230,7 +243,71 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, projec
 		}
 		return fmt.Errorf("insert endpoint: %w", err)
 	}
+
+	// The branch must still be live, and the FK cannot say so: tombstoning leaves
+	// the branch's row in place, so an endpoint on a dropped branch satisfies it.
+	//
+	// A conditional self-assignment UPDATE is what says it, and a read is not a
+	// substitute — the guard the drop already carries is exactly a read.
+	// DeleteBranch refuses to tombstone a branch that still has endpoints with a
+	// `NOT EXISTS (endpoints)` subquery, while creating an endpoint writes a row in
+	// a different table. Neither side writes what the other reads, so under
+	// snapshot isolation the two miss each other and both commit (time increases
+	// downwards):
+	//
+	//   create an endpoint on B            drop B
+	//   ───────────────────────            ──────
+	//   read B: live (the handler's
+	//   pre-check, and an FK a
+	//   tombstone still satisfies) ✓
+	//                                      read B's endpoints: none ✓
+	//   insert the endpoint row
+	//                                      UPDATE B SET dropped_at = now()
+	//   a live endpoint on a tombstoned branch ✗
+	//
+	// That state is not merely untidy. B is invisible to every
+	// `dropped_at IS NULL` reader — so no cascade enumerates the endpoint to retire
+	// it — while its compute keeps serving, and branch-drop GC then reclaims B's
+	// pages and WAL out from under a running compute. Writing B's row here makes
+	// the two statements conflict, so one of them loses.
+	//
+	// DeleteProject tombstones every branch row in the project, B's included, so it
+	// conflicts here the same way.
+	//
+	// The interlock runs only when the INSERT actually inserted: a replay of the
+	// same endpoint id has to stay an idempotent no-op, and a row already there is
+	// proof the branch was live when it landed, since the drop refuses while an
+	// endpoint remains.
+	if tag.RowsAffected() > 0 {
+		live, err := tx.Exec(ctx,
+			`UPDATE amp_registry.branches SET dropped_at = dropped_at
+			  WHERE branch_id = $1::uuid AND dropped_at IS NULL`,
+			branchID.String())
+		if err != nil {
+			return mapBranchDropRaceErr("validate branch liveness", err)
+		}
+		if live.RowsAffected() == 0 {
+			// Rolled back with the transaction: the endpoint row never lands.
+			return ErrNotFound
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return mapBranchDropRaceErr("commit ensure endpoint record", err)
+	}
 	return nil
+}
+
+// mapBranchDropRaceErr translates the serialization abort the branch interlock
+// provokes by design into a legible, retryable ErrConflict rather than an opaque
+// SQLSTATE 40001 in the task log. A retry after losing to the drop resolves to a
+// clean ErrNotFound.
+func mapBranchDropRaceErr(what string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "40001" { // serialization_failure
+		return fmt.Errorf("%w: %s conflicted with a concurrent drop of the branch — retry: %w",
+			ErrConflict, what, err)
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 // EndpointIDsForBranch returns the ids of every endpoint on the
@@ -307,6 +384,11 @@ func (b *PgBackend) ChildBranchIDs(ctx context.Context, projectID, branchID uuid
 //     the branch would vanish from every reader while its endpoint row, and the
 //     process behind it, lived on with nothing left to enumerate them.
 //
+// Both guards are READS, and a read does not conflict with the writer it is
+// guarding against — an endpoint creation that has not committed yet is invisible
+// here. What closes that window is on the other side: EnsureEndpointRecord writes
+// this same branch row, so the two serialize. See the interlock comment there.
+//
 // It also keeps *MemBackend.DeleteBranch (which reports ErrConflict) honest.
 func (b *PgBackend) DeleteBranch(ctx context.Context, projectID, branchID uuid.UUID) error {
 	tag, err := b.pool.Exec(ctx,
@@ -371,7 +453,10 @@ func (b *PgBackend) DeleteBranch(ctx context.Context, projectID, branchID uuid.U
 // added between the step's enumeration and this transaction replay the task and
 // retire that endpoint's instance before dropping its record — preserving the
 // invariant that an endpoint record is never dropped without retiring its
-// instance.
+// instance. Like the one in DeleteBranch that check is a read, and what makes it
+// hold against an endpoint creation still in flight is the branch-row interlock
+// on the other side (EnsureEndpointRecord): the tombstone below writes every
+// branch row in the project, so the two serialize.
 func (b *PgBackend) DeleteProject(ctx context.Context, projectID uuid.UUID) error {
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {

@@ -162,7 +162,7 @@ double-apply or error.
 | `create_endpoint` | endpoint, project, branch ids, role, pg_version, cpu, memory, ancestor (opt) | Ensure the endpoint record, deploy the compute (with its CPU/memory reservation), record the address, clear the branch recipe. **The shared step** create-project, branch, and scale-up all reuse (§8). | Record insert is id-keyed `ON CONFLICT (id) DO NOTHING` (so the single-writer index is not re-violated on replay); deploy is keyed by the endpoint's stable name (deployer idempotency); address is an absolute `UPDATE`; recipe clear tolerates an already-absent recipe. `cpu`/`memory` are resolved (defaulted to 2 cores / 4Gi) by the API handler and carried in the args, so a reclaim/replay redeploys the same size. |
 | `resize_endpoint` | endpoint id, cpu, memory | Change the endpoint's compute reservation: persist the new size to the endpoint `config`, then resize the **running pod in place** (`internal/task/step_resize_endpoint.go`). Records the in-place outcome on the step result. | Persist-first, then resize: `UpdateEndpointResources` is an absolute jsonb merge and the deployer resize is idempotent, so a replay converges. The DB write lands before the live resize, so even if the in-place step is deferred/infeasible a controller-driven redeploy still lands the new size. The deployer does **not** patch the Deployment template (that would trigger a rollout and recreate the pod — the opposite of in-place); an involuntary recreate before the next redeploy comes back at the old size (durable in DB, converges). **First-writer-wins lock**: the partial unique index `tasks_one_active_resize_per_endpoint` (migration 0004) admits at most one non-terminal `resize_endpoint` per endpoint (`target_ref`); a concurrent one is `ErrResizeInProgress` → `409`. The lock self-releases when the task reaches terminal (a crashed task is reclaimed by its lease, so it can't wedge). |
 | `delete_endpoint` | endpoint id | Retire the running instance, then delete the record. | Both effects tolerate an already-absent target. Order matters: retire the instance *before* deleting the record, so a crash between them leaves a record whose instance can still be retired on replay (never an orphaned instance with no record). |
-| `delete_branch` | project, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct). |
+| `delete_branch` | project, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct), as does an endpoint still on the branch — an endpoint being created *concurrently with* the tombstone is caught by the other side's branch-row interlock (§3, `create_endpoint`). |
 | `delete_project` | project id | Cascade-delete a project: enumerate **all** the project's endpoints, retire each (instance + record), then delete the project — which drops all its branches. | Self-contained, enumerating children at Execute time (`EndpointIDsForProject`). Cascade order is **endpoints → branches → project**; `DeleteProject` nulls the branches' in-project parent pointers before dropping them to sidestep the self-FK `RESTRICT` ordering. Idempotent throughout. |
 
 `delete_branch` and `delete_project` are **single self-contained steps**, not a
@@ -176,6 +176,23 @@ A few invariants worth calling out:
 - **`create_endpoint` records the row before it deploys.** The record claims the
   single-writer slot (a second writer is rejected by the partial unique index
   before any compute is spent) and gives the deploy a stable id.
+- **The record has to land on a *live* branch, and that check is a write.** The
+  FK cannot enforce it — tombstoning leaves the branch's row in place — and a read
+  of `dropped_at` does not hold against a concurrent drop: the drop's own guard
+  (`NOT EXISTS (endpoints)`) is a read too, and neither side writes what the other
+  reads, so under snapshot isolation both commit (write skew) and leave a live
+  endpoint on a tombstoned branch. Nothing then enumerates that endpoint to retire
+  it — every cascade reader filters `dropped_at IS NULL` — while its compute keeps
+  serving, and branch-drop GC reclaims the branch's pages and WAL out from under
+  it. So `EnsureEndpointRecord` runs the insert and a conditional
+  self-assignment **`UPDATE amp_registry.branches SET dropped_at = dropped_at
+  WHERE branch_id = … AND dropped_at IS NULL`** in one transaction: both sides now
+  write the branch row, so they serialize. Zero rows ⇒ the branch was dropped
+  concurrently ⇒ the whole record rolls back and the step fails `ErrNotFound`; a
+  serialization abort is reported as a retryable conflict. The interlock is gated
+  on the insert having actually inserted, so a replay stays an idempotent no-op.
+  `delete_project` tombstones every branch row in the project, so it conflicts the
+  same way. Same shape as the fork↔cutoff interlock in `registry.RecordBranch`.
 - **Fork vs. default branch.** When `create_endpoint`'s args carry an ancestor,
   the endpoint clones from that ancestor at the fork LSN (`Bootstrap` forced off);
   otherwise a default branch runs `initdb` when the deployment's bootstrap flag is

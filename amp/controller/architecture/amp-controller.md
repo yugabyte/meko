@@ -817,6 +817,18 @@ the upstream multi-tenant machinery is dropped.
   indexes are partial on it so a drop frees the name. Projects are tombstoned for
   the same reason — the branch → project FK is RESTRICT, so a project whose
   branches survive as tombstones could never be deleted.
+- **A tombstone trips no foreign key, so the guards around it are explicit — and
+  the racing side's guard is a write.** Stamping `dropped_at` never touches
+  `branch_id`, so neither the child-fork nor the endpoint RESTRICT reference is
+  examined; `DeleteBranch` carries both as `NOT EXISTS` guards of its own. Those
+  guards are *reads*, and a read does not conflict with the writer it is guarding
+  against, so the racing writer interlocks by conditionally **writing the branch
+  row** it depends on (`SET dropped_at = dropped_at WHERE dropped_at IS NULL`)
+  rather than reading it — `EnsureEndpointRecord` before recording an endpoint.
+  Without that, snapshot isolation lets both transactions commit on stale views of
+  each other and leaves a live endpoint on a tombstoned branch: invisible to every
+  cascade, still serving, and with its pages and WAL due to be reclaimed by
+  branch-drop GC.
 
 Generations remain load-bearing in our topology: replacement is the recovery
 primitive (§5.3), so an old and a new pageserver for the same branch can

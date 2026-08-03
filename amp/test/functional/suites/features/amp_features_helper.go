@@ -54,6 +54,14 @@ type ampCtl interface {
 	CreateEndpointAndWait(context.Context, string, string, string, controller.CreateEndpointRequest) (controller.Task, error)
 	ListAllEndpoints(context.Context, string, string, string) ([]controller.Endpoint, error)
 	DeleteEndpointAndWait(context.Context, string, string, string, string) (controller.Task, error)
+
+	// The async trio. Every method above waits out its task, which is what a
+	// feature test wants — but a CONCURRENCY test has to hold two tasks in flight
+	// at once, so it plans them itself (the 202 + Task) and joins on WaitTask
+	// afterwards. See amp_endpoint_drop_race.go.
+	DeleteBranch(context.Context, string, string, string) (controller.Task, string, error)
+	CreateEndpoint(context.Context, string, string, string, controller.CreateEndpointRequest) (controller.Task, string, error)
+	WaitTask(context.Context, string) (controller.Task, error)
 }
 
 // endpointConnector opens a SQL connection to an amp compute endpoint. The live
