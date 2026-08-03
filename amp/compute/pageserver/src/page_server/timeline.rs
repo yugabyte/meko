@@ -9,7 +9,7 @@ use hashlink::LruCache;
 use std::array;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
-use std::ops::{ControlFlow, Deref, Range};
+use std::ops::{ControlFlow, Deref};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
@@ -3176,21 +3176,6 @@ impl TimelineWriter<'_> {
         // open_layer) has no writers anymore — those fields fed the
         // deleted roll-layer trigger heuristic.
         let _ = batch_max_lsn;
-        Ok(())
-    }
-
-    pub(crate) async fn delete_batch(
-        &mut self,
-        _batch: &[(Range<Key>, Lsn)],
-        _ctx: &RequestContext,
-    ) -> anyhow::Result<()> {
-        // yb-amp: deletions of relations / SLRU segments are not
-        // expressed as tombstone keys in the row store; the WAL
-        // record itself (TRUNCATE / DROP RELATION) drives the
-        // appropriate INSERTs into amp_storage.pages via PageWriter.
-        // The layer-file tombstone path that this hook fed into is
-        // gone (Phase 4d).
-        // TODO(gc): retire this no-op + its `pending_deletions` / `self.delete` scaffolding — GC now reclaims dropped objects.
         Ok(())
     }
 

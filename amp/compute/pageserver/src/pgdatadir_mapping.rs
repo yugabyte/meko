@@ -7,7 +7,7 @@
 //! Clarify that)
 //!
 use std::collections::{BTreeSet, HashMap, HashSet, hash_map};
-use std::ops::{ControlFlow, Range};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use crate::walingest::{WalIngestError, WalIngestErrorKind};
@@ -17,10 +17,9 @@ use bytes::{Buf, Bytes, BytesMut};
 use enum_map::Enum;
 use pageserver_api::key::{
     CHECKPOINT_KEY, CONTROLFILE_KEY, CompactKey, DBDIR_KEY, Key, RelDirExists, TWOPHASEDIR_KEY,
-    dbdir_key_range, rel_block_to_key, rel_dir_to_key, rel_key_range, rel_size_to_key,
-    rel_tag_sparse_key, rel_tag_sparse_key_range, relmap_file_key, repl_origin_key,
-    repl_origin_key_range, slru_block_to_key, slru_dir_to_key, slru_segment_key_range,
-    slru_segment_size_to_key, twophase_file_key, twophase_key_range,
+    rel_block_to_key, rel_dir_to_key, rel_size_to_key, rel_tag_sparse_key,
+    rel_tag_sparse_key_range, relmap_file_key, repl_origin_key, repl_origin_key_range,
+    slru_block_to_key, slru_dir_to_key, slru_segment_size_to_key, twophase_file_key,
 };
 use pageserver_api::keyspace::KeySpaceRandomAccum;
 use pageserver_api::models::RelSizeMigration;
@@ -31,7 +30,7 @@ use postgres_ffi_types::{Oid, RepOriginId, TimestampTz};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, info_span, trace, warn};
+use tracing::{debug, info, info_span, warn};
 use utils::bin_ser::{BeSer, DeserializeError};
 use utils::lsn::Lsn;
 use utils::pausable_failpoint;
@@ -201,7 +200,6 @@ impl Timeline {
             pending_lsns: Vec::new(),
             pending_metadata_pages: HashMap::new(),
             pending_data_batch: None,
-            pending_deletions: Vec::new(),
             pending_nblocks: 0,
             pending_directory_entries: Vec::new(),
             pending_gc_drop_shrink_events: Vec::new(),
@@ -220,7 +218,6 @@ impl Timeline {
             pending_lsns: Vec::new(),
             pending_metadata_pages: HashMap::new(),
             pending_data_batch: None,
-            pending_deletions: Vec::new(),
             pending_nblocks: 0,
             pending_directory_entries: Vec::new(),
             pending_gc_drop_shrink_events: Vec::new(),
@@ -1517,7 +1514,6 @@ pub struct DatadirModification<'a> {
     // The put-functions add the modifications here, and they are flushed to the
     // underlying key-value store by the 'finish' function.
     pending_lsns: Vec<Lsn>,
-    pending_deletions: Vec<(Range<Key>, Lsn)>,
     pending_nblocks: i64,
 
     /// Metadata writes, indexed by key so that they can be read from not-yet-committed modifications
@@ -2188,8 +2184,6 @@ impl DatadirModification<'_> {
         // Update logical database size.
         self.pending_nblocks -= total_blocks as i64;
 
-        // Delete all relations and metadata files for the spcnode/dnode
-        self.delete(dbdir_key_range(spcnode, dbnode));
         Ok(())
     }
 
@@ -2515,9 +2509,6 @@ impl DatadirModification<'_> {
 
                     // Remove entry from relation size cache
                     self.tline.remove_cached_rel_size(&rel_tag);
-
-                    // Delete size entry, as well as all blocks; this is currently a no-op because we haven't implemented tombstones in storage.
-                    self.delete(rel_key_range(rel_tag));
                 }
             }
 
@@ -2667,12 +2658,8 @@ impl DatadirModification<'_> {
             Value::Image(Bytes::from(SlruSegmentDirectory::ser(&dir)?)),
         );
 
-        // Delete size entry, as well as all blocks
-        self.delete(slru_segment_key_range(kind, segno));
-
         // GC drop event: reclaim the segment's `slru_pages` rows + size
-        // sentinel once the cutoff passes this truncation. The `delete`
-        // above is a no-op in yb-mode (rows leak at ingest without this);
+        // sentinel once the cutoff passes this truncation.
         // `<= due_lsn` keeps a wraparound-recreated segno alive. The key
         // is the segment's size sentinel (SLRU keyspace).
         self.record_gc_drop_shrink_event(
@@ -2725,11 +2712,8 @@ impl DatadirModification<'_> {
         };
         self.put(TWOPHASEDIR_KEY, Value::Image(newdirbuf));
 
-        // Delete it
-        self.delete(twophase_key_range(xid));
-
         // GC drop event: reclaim the twophase file's meta row once the
-        // cutoff passes this resolve. (`delete` is a no-op in yb-mode.)
+        // cutoff passes this resolve.
         self.record_gc_drop_shrink_event(
             twophase_file_key(xid),
             crate::page_store::GcKind::DropMeta,
@@ -2915,11 +2899,6 @@ impl DatadirModification<'_> {
             writer.put_batch(batch, ctx).await?;
         }
 
-        if !self.pending_deletions.is_empty() {
-            writer.delete_batch(&self.pending_deletions, ctx).await?;
-            self.pending_deletions.clear();
-        }
-
         // Drop/shrink GC events ride the writer's candidate buffer,
         // durable with a window flush like ingest trim candidates: a
         // buffer lost to a crash implies consistent_lsn didn't advance,
@@ -2957,9 +2936,7 @@ impl DatadirModification<'_> {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.pending_metadata_pages.len()
-            + self.pending_data_batch.as_ref().map_or(0, |b| b.len())
-            + self.pending_deletions.len()
+        self.pending_metadata_pages.len() + self.pending_data_batch.as_ref().map_or(0, |b| b.len())
     }
 
     /// Read a page from the Timeline we are writing to.  For metadata pages, this passes through
@@ -2975,9 +2952,6 @@ impl DatadirModification<'_> {
         if !Self::is_data_key(&key) {
             // Have we already updated the same key? Read the latest pending updated
             // version in that case.
-            //
-            // Note: we don't check pending_deletions. It is an error to request a
-            // value that has been removed, deletion only avoids leaking storage.
             if let Some(values) = self.pending_metadata_pages.get(&key.to_compact()) {
                 if let Some((_, _, value)) = values.last() {
                     return if let Value::Image(img) = value {
@@ -3110,11 +3084,6 @@ impl DatadirModification<'_> {
         if key == CHECKPOINT_KEY.to_compact() {
             tracing::debug!("Checkpoint key added to pending with size {val_serialized_size}");
         }
-    }
-
-    fn delete(&mut self, key_range: Range<Key>) {
-        trace!("DELETE {}-{}", key_range.start, key_range.end);
-        self.pending_deletions.push((key_range, self.lsn));
     }
 }
 
