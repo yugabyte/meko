@@ -229,7 +229,6 @@ pub struct ConfigToml {
     pub max_vectored_read_bytes: MaxVectoredReadBytes,
     pub max_get_vectored_keys: MaxGetVectoredKeys,
     pub image_compression: ImageCompressionAlgorithm,
-    pub timeline_offloading: bool,
     pub ephemeral_bytes_per_memory_kb: usize,
     pub l0_flush: Option<crate::models::L0FlushConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -891,7 +890,6 @@ impl Default for ConfigToml {
                 NonZeroUsize::new(DEFAULT_MAX_GET_VECTORED_KEYS).unwrap(),
             )),
             image_compression: (DEFAULT_IMAGE_COMPRESSION),
-            timeline_offloading: true,
             ephemeral_bytes_per_memory_kb: (DEFAULT_EPHEMERAL_BYTES_PER_MEMORY_KB),
             l0_flush: None,
             tenant_config: BranchConfigToml::default(),

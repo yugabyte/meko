@@ -169,9 +169,6 @@ pub struct PageServerConf {
 
     pub image_compression: ImageCompressionAlgorithm,
 
-    /// Whether to offload archived timelines automatically
-    pub timeline_offloading: bool,
-
     /// How many bytes of ephemeral layer content will we allow per kilobyte of RAM.  When this
     /// is exceeded, we start proactively closing ephemeral layers to limit the total amount
     /// of ephemeral data.
@@ -358,7 +355,6 @@ impl PageServerConf {
             max_vectored_read_bytes,
             max_get_vectored_keys,
             image_compression,
-            timeline_offloading,
             ephemeral_bytes_per_memory_kb,
             l0_flush: _,
             tenant_config,
@@ -425,7 +421,6 @@ impl PageServerConf {
             max_vectored_read_bytes,
             max_get_vectored_keys,
             image_compression,
-            timeline_offloading,
             ephemeral_bytes_per_memory_kb,
             page_service_pipelining,
             get_vectored_concurrent_io,

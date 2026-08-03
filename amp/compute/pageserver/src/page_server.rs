@@ -449,13 +449,6 @@ pub enum InitdbError {
     Inner(postgres_initdb::Error),
 }
 
-#[allow(clippy::large_enum_variant, reason = "TODO")]
-enum LoadTimelineCause {
-    Attach,
-    #[allow(dead_code)]
-    Unoffload,
-}
-
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum GcError {
     // The tenant is shutting down
@@ -511,7 +504,6 @@ impl PageServer {
         branch_id: BranchId,
         resources: TimelineResources,
         metadata: TimelineMetadata,
-        cause: LoadTimelineCause,
         ctx: &RequestContext,
     ) -> anyhow::Result<TimelineInitAndSyncResult> {
         let idempotency = if metadata.ancestor_timeline().is_none() {
@@ -564,8 +556,6 @@ impl PageServer {
         if let Some(pw) = timeline.page_writer.as_ref() {
             pw.set_consistent_lsn_slot(timeline.remote_state.consistent_lsn.clone());
         }
-
-        let _ = cause;
 
         // We should never try and load the same timeline twice during startup
         self.timeline
@@ -905,7 +895,6 @@ impl PageServer {
                     branch_id,
                     remote_metadata,
                     self.build_timeline_resources(branch_id),
-                    LoadTimelineCause::Attach,
                     ctx,
                 )
                 .await
@@ -968,7 +957,6 @@ impl PageServer {
         branch_id: BranchId,
         remote_metadata: TimelineMetadata,
         resources: TimelineResources,
-        cause: LoadTimelineCause,
         ctx: &RequestContext,
     ) -> anyhow::Result<TimelineInitAndSyncResult> {
         span::debug_assert_current_span_has_branch_id();
@@ -978,7 +966,7 @@ impl PageServer {
         // Single-timeline pageserver: a branch's ancestor is served by
         // a DIFFERENT pageserver process and is never hosted here; reads
         // below the branch point go through lineage-aware PageStore reads.
-        self.timeline_init_and_sync(branch_id, resources, remote_metadata, cause, ctx)
+        self.timeline_init_and_sync(branch_id, resources, remote_metadata, ctx)
             .await
     }
 
@@ -1573,8 +1561,7 @@ impl PageServer {
         new_branch_id: BranchId,
         idempotency: CreateTimelineIdempotency,
     ) -> Result<StartCreatingTimelineResult, CreateTimelineError> {
-        let allow_offloaded = false;
-        match self.create_timeline_create_guard(new_branch_id, idempotency, allow_offloaded) {
+        match self.create_timeline_create_guard(new_branch_id, idempotency) {
             Ok(create_guard) => {
                 pausable_failpoint!("timeline-creation-after-uninit");
                 Ok(StartCreatingTimelineResult::CreateGuard(create_guard))
@@ -1886,24 +1873,15 @@ impl PageServer {
 
     /// Get a guard that provides exclusive access to the timeline directory, preventing
     /// concurrent attempts to create the same timeline.
-    ///
-    /// The `allow_offloaded` parameter controls whether to tolerate the existence of
-    /// offloaded timelines or not.
     fn create_timeline_create_guard(
         self: &Arc<Self>,
         branch_id: BranchId,
         idempotency: CreateTimelineIdempotency,
-        allow_offloaded: bool,
     ) -> Result<TimelineCreateGuard, TimelineExclusionError> {
         let timeline_path = self.conf.branch_path(&branch_id);
 
-        let create_guard = TimelineCreateGuard::new(
-            self,
-            branch_id,
-            timeline_path.clone(),
-            idempotency,
-            allow_offloaded,
-        )?;
+        let create_guard =
+            TimelineCreateGuard::new(self, branch_id, timeline_path.clone(), idempotency)?;
 
         // At this stage, we have got exclusive access to in-memory state for this branch
         // for creation.

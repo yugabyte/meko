@@ -250,7 +250,6 @@ impl TimelineCreateGuard {
         branch_id: BranchId,
         timeline_path: Utf8PathBuf,
         idempotency: CreateTimelineIdempotency,
-        _allow_offloaded: bool,
     ) -> Result<Self, TimelineExclusionError> {
         let _tenant_gate_guard = owning_tenant
             .gate

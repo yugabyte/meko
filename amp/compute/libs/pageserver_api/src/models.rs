@@ -948,24 +948,6 @@ pub struct TimelinePatchIndexPartRequest {
     pub force_index_update: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TimelinesInfoAndOffloaded {
-    pub timelines: Vec<TimelineInfo>,
-    pub offloaded: Vec<OffloadedTimelineInfo>,
-}
-
-/// Analog of [`TimelineInfo`] for offloaded timelines.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct OffloadedTimelineInfo {
-    pub branch_id: BranchId,
-    /// Whether the timeline has a parent it has been branched off from or not
-    pub ancestor_branch_id: Option<BranchId>,
-    /// Whether to retain the branch lsn at the ancestor or not
-    pub ancestor_retain_lsn: Option<Lsn>,
-    /// The time point when the timeline was archived
-    pub archived_at: chrono::DateTime<chrono::Utc>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RelSizeMigration {
