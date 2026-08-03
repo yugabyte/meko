@@ -511,7 +511,6 @@ impl PageServer {
         branch_id: BranchId,
         resources: TimelineResources,
         metadata: TimelineMetadata,
-        ancestor: Option<Arc<Timeline>>,
         cause: LoadTimelineCause,
         ctx: &RequestContext,
     ) -> anyhow::Result<TimelineInitAndSyncResult> {
@@ -540,7 +539,6 @@ impl PageServer {
         let (timeline, _timeline_ctx) = self.create_timeline_struct(
             branch_id,
             &metadata,
-            ancestor.clone(),
             resources,
             idempotency.clone(),
             None, // rel_size_v2_status — always None in yb-amp
@@ -980,7 +978,7 @@ impl PageServer {
         // Single-timeline pageserver: a branch's ancestor is served by
         // a DIFFERENT pageserver process and is never hosted here; reads
         // below the branch point go through lineage-aware PageStore reads.
-        self.timeline_init_and_sync(branch_id, resources, remote_metadata, None, cause, ctx)
+        self.timeline_init_and_sync(branch_id, resources, remote_metadata, cause, ctx)
             .await
     }
 
@@ -1254,25 +1252,12 @@ impl PageServer {
         &self,
         new_branch_id: BranchId,
         new_metadata: &TimelineMetadata,
-        ancestor: Option<Arc<Timeline>>,
         resources: TimelineResources,
         create_idempotency: CreateTimelineIdempotency,
         rel_size_v2_status: Option<RelSizeMigration>,
         rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
     ) -> anyhow::Result<(Arc<Timeline>, RequestContext)> {
-        let ancestor_id = new_metadata.ancestor_timeline();
-        // If an in-process ancestor Arc is supplied it must match the
-        // metadata; its ABSENCE is fine — branches read their ancestor
-        // through lineage-aware PageStore reads, not an in-process link.
-        if let Some(ancestor) = ancestor.as_ref() {
-            anyhow::ensure!(
-                ancestor_id == Some(ancestor.branch_id),
-                "Timeline's {new_branch_id} ancestor {ancestor_id:?} does not match \
-                 supplied ancestor {}",
-                ancestor.branch_id,
-            );
-        }
         let state = TimelineState::Loading;
 
         let pg_version = new_metadata.pg_version();
@@ -1281,7 +1266,6 @@ impl PageServer {
             self.conf,
             Arc::clone(&self.tenant_conf),
             new_metadata,
-            ancestor,
             new_branch_id,
             self.generation,
             self.walredo_mgr.clone(),
@@ -1440,8 +1424,6 @@ impl PageServer {
 
         if let Some(timeline) = self.timeline() {
             let mut target = timeline.gc_info.write().unwrap();
-
-            target.retain_lsns = Vec::new();
 
             let space_cutoff = timeline
                 .get_last_record_lsn()
@@ -1783,9 +1765,8 @@ impl PageServer {
                 &new_metadata,
                 timeline_create_guard,
                 pgdata_lsn,
-                None,
-                None,
-                None,
+                None, // rel_size_v2_status — always None in yb-amp
+                None, // rel_size_migrated_at — always None in yb-amp
                 ctx,
             )
             .await?;
@@ -1845,7 +1826,6 @@ impl PageServer {
         new_metadata: &TimelineMetadata,
         create_guard: TimelineCreateGuard,
         start_lsn: Lsn,
-        ancestor: Option<Arc<Timeline>>,
         rel_size_v2_status: Option<RelSizeMigration>,
         rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
@@ -1859,7 +1839,6 @@ impl PageServer {
             .create_timeline_struct(
                 new_branch_id,
                 new_metadata,
-                ancestor,
                 resources,
                 create_guard.idempotency.clone(),
                 rel_size_v2_status,

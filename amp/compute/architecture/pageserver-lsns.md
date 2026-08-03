@@ -318,8 +318,11 @@ validates `anc.consistent_lsn >= ancestor_lsn`, and copies the ancestor's
 
 **Read by:**
 - Branch validation (`start_lsn >= applied_gc_cutoff` and planned cutoff).
-- Parent `GcInfo.retain_lsns` — `(Lsn, BranchId)` entries recording child
-  branch points the parent must retain history for.
+- The parent's GC cutoff clamp — `publish_gc_cutoff` applies
+  `min(cutoff, min(ancestor_lsn))` over the parent's child rows in
+  `branch_state`, so a parent never trims below a live child's branch
+  point. The clamp reads the child min inside the same fenced `UPDATE`,
+  which serializes it against a concurrent fork.
 - Lineage reads (below).
 
 **Ancestor reads go through the page store, not process memory.** A
@@ -377,8 +380,10 @@ This bounds the `applied_lsn − consistent_lsn` gap in bytes.
 |-----|---------|----------|
 | `GcCutoffs.space` | `GcInfo` RwLock | `last_record_lsn - gc_horizon` |
 | `GcCutoffs.time` | `GcInfo` (`Option<Lsn>`) | PITR cutoff from `find_gc_cutoffs`; `None` = not yet computed, blocks GC |
-| `retain_lsns` | `GcInfo` | `(Lsn, BranchId)` child branch points |
 | LSN leases | `GcInfo.leases` BTreeMap | Per-LSN GC blockers with expiry |
+
+Child branch points are not held in memory: the parent's cutoff is clamped
+against its child rows in `branch_state` by `publish_gc_cutoff`.
 
 `gc_iteration_internal` (`page_server.rs`) refreshes the cutoffs and calls
 `Timeline::gc()`. With `enable_gc` on for the branch, the tick drains due

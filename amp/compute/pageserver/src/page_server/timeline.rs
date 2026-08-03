@@ -169,11 +169,9 @@ pub struct Timeline {
     applied_lsn: AtomicLsn,
 
     // Parent timeline that this timeline was branched from, and the LSN
-    // of the branch point. The Arc link is best-effort (present only in
-    // multi-timeline test setups); the id comes from the persisted
-    // metadata and is authoritative — a branch's ancestor is served by
-    // a different pageserver process and reached via lineage reads.
-    ancestor_timeline: Option<Arc<Timeline>>,
+    // of the branch point. Both come from the persisted metadata; the
+    // ancestor itself is served by a different pageserver process and
+    // reached via lineage reads.
     ancestor_branch_id: Option<BranchId>,
     ancestor_lsn: Lsn,
 
@@ -308,21 +306,6 @@ pub struct WalReceiverInfo {
 /// Garbage Collection.
 #[derive(Default)]
 pub(crate) struct GcInfo {
-    /// Specific LSNs that are needed.
-    ///
-    /// Currently, this includes all points where child branches have
-    /// been forked off from. In the future, could also include
-    /// explicit user-defined snapshot points.
-    ///
-    /// TODO(cleanup): vestigial in yb-amp — child fork points are
-    /// protected by the clamp inside `publish_gc_cutoff` (min
-    /// `ancestor_lsn` over every child row still present in YB
-    /// `branch_state`); `refresh_gc_info`
-    /// zeroes this and the cutoff (`min_cutoff`) never reads it. The
-    /// `insert_child` / `remove_child_not_offloaded` machinery can go
-    /// once no other consumer remains.
-    pub(crate) retain_lsns: Vec<(Lsn, BranchId)>,
-
     /// The cutoff coordinates, which are combined by selecting the minimum.
     pub(crate) cutoffs: GcCutoffs,
 
@@ -336,26 +319,6 @@ pub(crate) struct GcInfo {
 impl GcInfo {
     pub(crate) fn min_cutoff(&self) -> Lsn {
         self.cutoffs.select_min()
-    }
-
-    pub(super) fn insert_child(&mut self, child_id: BranchId, child_lsn: Lsn) {
-        self.retain_lsns.push((child_lsn, child_id));
-        self.retain_lsns.sort_by_key(|i| i.0);
-    }
-
-    pub(super) fn remove_child_not_offloaded(&mut self, child_id: BranchId) -> bool {
-        // Remove at most one element. Needed for correctness if there is two live `Timeline` objects referencing
-        // the same timeline. Shouldn't but maybe can occur when Arc's live longer than intended.
-        let mut removed = false;
-        self.retain_lsns.retain(|i| {
-            if removed {
-                return true;
-            }
-            let remove = i.1 == child_id;
-            removed |= remove;
-            !remove
-        });
-        removed
     }
 
     pub(crate) fn lsn_covered_by_lease(&self, lsn: Lsn) -> bool {
@@ -1991,7 +1954,6 @@ impl Timeline {
         conf: &'static PageServerConf,
         tenant_conf: Arc<ArcSwap<AttachedTenantConf>>,
         metadata: &TimelineMetadata,
-        ancestor: Option<Arc<Timeline>>,
         branch_id: BranchId,
         generation: Generation,
         walredo_mgr: Option<Arc<super::WalRedoManager>>,
@@ -2013,11 +1975,6 @@ impl Timeline {
         // files, so this never fires. The threshold is still a
         // required constructor arg — use the upstream default (24 h).
         let evictions_low_residence_duration_metric_threshold = Duration::from_secs(24 * 3600);
-
-        if let Some(ancestor) = &ancestor {
-            let mut ancestor_gc_info = ancestor.gc_info.write().unwrap();
-            ancestor_gc_info.insert_child(branch_id, metadata.ancestor_lsn());
-        }
 
         let relsize_snapshot_cache_capacity = {
             let loaded_tenant_conf = tenant_conf.load();
@@ -2195,7 +2152,6 @@ impl Timeline {
                 }),
                 applied_lsn: AtomicLsn::new(disk_consistent_lsn.0),
 
-                ancestor_timeline: ancestor,
                 ancestor_branch_id: metadata.ancestor_timeline(),
                 ancestor_lsn: metadata.ancestor_lsn(),
 
@@ -2935,16 +2891,6 @@ impl Timeline {
 
 impl Drop for Timeline {
     fn drop(&mut self) {
-        if let Some(ancestor) = &self.ancestor_timeline {
-            // This lock should never be poisoned, but in case it is we do a .map() instead of
-            // an unwrap(), to avoid panicking in a destructor and thereby aborting the process.
-            if let Ok(mut gc_info) = ancestor.gc_info.write() {
-                if !gc_info.remove_child_not_offloaded(self.branch_id) {
-                    tracing::error!(branch_id = %self.branch_id,
-                        "Couldn't remove retain_lsn entry from timeline's parent on drop: already removed");
-                }
-            }
-        }
         info!("Timeline {} is being dropped", self.branch_id);
     }
 }
