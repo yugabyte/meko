@@ -15,11 +15,12 @@
 //     phase) even after a reconnect-on-death fix; cluster-internal addresses are
 //     reachable directly from this coordinator over the Yugabyte tailnet — the
 //     same way the amp endpoint's address already is (see foundation's
-//     endpointConnInfo, unchanged).
+//     endpointConnInfo, unchanged). On a cluster whose pod/service ranges are
+//     NOT routable from the coordinator neither address answers, and this mode
+//     then continues over a kubectl port-forward rather than failing the run.
 //   - portforward: the historical kubectl port-forward path (held from Deploy
-//     through Teardown/Close, reconnected on death), kept as an explicit
-//     fallback for clusters where the controller's cluster-internal address
-//     isn't reachable from the coordinator.
+//     through Teardown/Close, reconnected on death), kept for forcing the
+//     forward unconditionally, without the direct probes.
 //
 // It exists so the control-plane lifecycle is an App like everything else the
 // framework drives, not raw kubectl/helm in an ad-hoc script: tasks
@@ -128,10 +129,13 @@ type ControllerReachMode string
 const (
 	// ReachTailnet (the default) resolves the controller's stable
 	// cluster-internal address (Service ClusterIP, falling back to the pod IP)
-	// and talks to it directly — no kubectl port-forward.
+	// and talks to it directly — no kubectl port-forward. When neither address
+	// answers (a cluster whose pod/service ranges aren't routable from the
+	// coordinator) it falls back to a kubectl port-forward.
 	ReachTailnet ControllerReachMode = "tailnet"
-	// ReachPortForward keeps the historical kubectl port-forward path (held
-	// from Deploy through Teardown/Close, reconnected on death).
+	// ReachPortForward forces the kubectl port-forward path (held from Deploy
+	// through Teardown/Close, reconnected on death) without probing the direct
+	// addresses first.
 	ReachPortForward ControllerReachMode = "portforward"
 )
 
@@ -251,10 +255,11 @@ type Config struct {
 
 	// ControllerReach selects how the controller is reached once deployed:
 	// ReachTailnet (default, "" also means tailnet) resolves its cluster-internal
-	// address directly; ReachPortForward keeps the kubectl port-forward path.
+	// address directly and port-forwards only if neither direct address answers;
+	// ReachPortForward always uses the kubectl port-forward path.
 	ControllerReach ControllerReachMode
 
-	LocalPort int // controller port-forward local port (portforward mode only); 0 → ephemeral
+	LocalPort int // controller port-forward local port; 0 → ephemeral
 
 	YBReadyTimeout         time.Duration
 	ControllerReadyTimeout time.Duration
@@ -269,10 +274,10 @@ type StackInfo struct {
 	Namespace         string
 	ControllerService string
 	ControllerPort    int
-	ControllerURL     string // tailnet: the direct address; portforward: via the held forward
+	ControllerURL     string // tailnet: the direct address; portforward (or a tailnet fallback): via the held forward
 	Images            map[string]string
-	Forward           *k8s.PortForward // portforward mode only (owned by the App; released on Close); nil in tailnet mode
-	PortForwardCmd    string           // human hint to re-establish the forward; "" in tailnet mode (no forward)
+	Forward           *k8s.PortForward // owned by the App (released on Close); nil when a direct address was resolved
+	PortForwardCmd    string           // human hint to re-establish the forward; "" when no forward is held
 	Backing           string           // human description of the YB backing store
 }
 
@@ -770,43 +775,59 @@ func (a *App) controllerCrashLogs(ctx context.Context) string {
 
 // reachController establishes how the controller will be reached for the rest
 // of the stack's lifetime: tailnet mode resolves its direct cluster-internal
-// address (no forward at all); portforward mode opens the kubectl forward.
+// address and only port-forwards when neither direct address answers;
+// portforward mode opens the kubectl forward straight away.
 func (a *App) reachController(ctx context.Context) (string, *k8s.PortForward, error) {
 	if a.cfg.ControllerReach == ReachPortForward {
-		pf, err := a.kube.PortForward(ctx, "svc/"+a.cfg.ControllerService, a.cfg.LocalPort, a.cfg.ControllerPort)
-		if err != nil {
-			return "", nil, fmt.Errorf("port-forward controller: %w", err)
-		}
-		return "http://" + pf.LocalAddr(), pf, nil
+		return a.forwardController(ctx)
 	}
-	addr, err := a.resolveControllerAddr(ctx)
+	addr, directErr := a.resolveControllerAddr(ctx)
+	if directErr == nil {
+		return fmt.Sprintf("http://%s:%d", addr, a.cfg.ControllerPort), nil, nil
+	}
+	a.log("ampstack: %v; continuing over a kubectl port-forward", directErr)
+	url, pf, err := a.forwardController(ctx)
 	if err != nil {
-		return "", nil, fmt.Errorf("resolve controller address: %w", err)
+		return "", nil, fmt.Errorf("controller unreachable directly (%v) and the port-forward fallback failed: %w", directErr, err)
 	}
-	return fmt.Sprintf("http://%s:%d", addr, a.cfg.ControllerPort), nil, nil
+	return url, pf, nil
+}
+
+// forwardController opens the kubectl port-forward to the controller Service and
+// returns the local URL plus the handle the caller must hold and Close.
+func (a *App) forwardController(ctx context.Context) (string, *k8s.PortForward, error) {
+	pf, err := a.kube.PortForward(ctx, "svc/"+a.cfg.ControllerService, a.cfg.LocalPort, a.cfg.ControllerPort)
+	if err != nil {
+		return "", nil, fmt.Errorf("port-forward controller: %w", err)
+	}
+	return "http://" + pf.LocalAddr(), pf, nil
 }
 
 // resolveControllerAddr resolves the controller's stable, cluster-internal
 // address for tailnet mode: the controller Service's ClusterIP when it
-// answers /healthz, else the controller pod's IP — pod IPs on this cluster are
-// reachable directly from the coordinator over the tailnet (the same way an
-// amp endpoint's pod IP already is), so the fallback never needs a
-// port-forward either.
+// answers /healthz, else the controller pod's IP — pod IPs on a tailnet-joined
+// cluster are reachable directly from the coordinator (the same way an amp
+// endpoint's pod IP already is). The error names every address tried, because
+// it is what the caller logs before falling back to a port-forward.
 func (a *App) resolveControllerAddr(ctx context.Context) (string, error) {
+	clusterIP := "<unresolved>"
 	if ip, err := a.kube.Get(ctx, "svc", a.cfg.ControllerService, "{.spec.clusterIP}"); err == nil {
-		if ip = strings.TrimSpace(ip); ip != "" && ip != "None" && a.probeDirectHealthz(ctx, ip) {
-			return ip, nil
+		if ip = strings.TrimSpace(ip); ip != "" && ip != "None" {
+			clusterIP = ip
+			if a.probeDirectHealthz(ctx, ip) {
+				return ip, nil
+			}
 		}
 	}
 	podIP, err := a.kube.GetSelector(ctx, "pod", "app="+a.cfg.ControllerName, "{.items[0].status.podIP}")
 	if err != nil {
-		return "", fmt.Errorf("controller ClusterIP unreachable; pod IP lookup failed: %w", err)
+		return "", fmt.Errorf("controller ClusterIP %s unreachable; pod IP lookup failed: %w", clusterIP, err)
 	}
 	if podIP = strings.TrimSpace(podIP); podIP == "" {
-		return "", fmt.Errorf("controller ClusterIP unreachable and no controller pod found (selector app=%s)", a.cfg.ControllerName)
+		return "", fmt.Errorf("controller ClusterIP %s unreachable and no controller pod found (selector app=%s)", clusterIP, a.cfg.ControllerName)
 	}
 	if !a.probeDirectHealthz(ctx, podIP) {
-		return "", fmt.Errorf("controller not reachable at its ClusterIP nor its pod IP %s", podIP)
+		return "", fmt.Errorf("controller not reachable at ClusterIP %s nor pod IP %s on port %d", clusterIP, podIP, a.cfg.ControllerPort)
 	}
 	return podIP, nil
 }
@@ -1167,25 +1188,25 @@ func (a *App) Status(ctx context.Context) (StackStatus, error) {
 	return st, nil
 }
 
-// probeHealthz checks the controller in whichever mode is configured: tailnet
-// hits the resolved direct URL (falling back to a fresh resolve if Deploy
-// hasn't run yet); portforward reuses the held forward when alive, else opens
-// a short-lived one (a probe is a one-off status check, not the long-lived
-// compute-phase path — see ControllerClient for the reconnecting accessor that
-// path uses).
+// probeHealthz checks the controller over whatever reach Deploy settled on: the
+// held forward when there is one (alive, else re-opened for the probe), else the
+// resolved direct URL — and, when no direct address answers, a short-lived
+// forward, the same fallback reachController takes. A probe is a one-off status
+// check, not the long-lived compute-phase path — see ControllerClient for the
+// reconnecting accessor that path uses.
 func (a *App) probeHealthz(ctx context.Context) error {
-	if a.cfg.ControllerReach != ReachPortForward {
-		url, err := a.directControllerURL(ctx)
-		if err != nil {
-			return err
-		}
-		return a.newClient(url).Healthz(ctx)
-	}
 	a.pfMu.Lock()
 	pf := a.pf
 	a.pfMu.Unlock()
-	if pf != nil && pf.Alive() {
+	switch {
+	case pf != nil && pf.Alive():
 		return a.newClient("http://" + pf.LocalAddr()).Healthz(ctx)
+	case pf == nil && a.cfg.ControllerReach != ReachPortForward:
+		url, err := a.directControllerURL(ctx)
+		if err == nil {
+			return a.newClient(url).Healthz(ctx)
+		}
+		a.log("ampstack: %v; probing over a short-lived kubectl port-forward", err)
 	}
 	tmp, err := a.kube.PortForward(ctx, "svc/"+a.cfg.ControllerService, a.cfg.LocalPort, a.cfg.ControllerPort)
 	if err != nil {
@@ -1195,8 +1216,8 @@ func (a *App) probeHealthz(ctx context.Context) error {
 	return a.newClient("http://" + tmp.LocalAddr()).Healthz(ctx)
 }
 
-// directControllerURL returns the tailnet URL Deploy resolved, resolving fresh
-// (ClusterIP → pod-IP fallback) if called before Deploy has run.
+// directControllerURL returns the reach URL Deploy settled on, resolving a fresh
+// direct address (ClusterIP → pod-IP fallback) if called before Deploy has run.
 func (a *App) directControllerURL(ctx context.Context) (string, error) {
 	a.pfMu.Lock()
 	url := a.controllerURL
@@ -1211,10 +1232,11 @@ func (a *App) directControllerURL(ctx context.Context) (string, error) {
 	return fmt.Sprintf("http://%s:%d", addr, a.cfg.ControllerPort), nil
 }
 
-// ControllerClient returns a live controller client for whichever reach mode
-// is configured. In tailnet mode (default) this is the stable direct URL
-// Deploy resolved — a ClusterIP or pod IP, nothing to reconnect. In
-// portforward mode it re-establishes the held forward first if the underlying
+// ControllerClient returns a live controller client for whatever reach Deploy
+// settled on. With a direct address (tailnet mode, the default) this is the
+// stable URL Deploy resolved — a ClusterIP or pod IP, nothing to reconnect.
+// Whenever a forward is held — portforward mode, or tailnet falling back on an
+// unroutable cluster — it re-establishes that forward first if the underlying
 // kubectl process has died (Alive() false); the forward is meant to survive
 // the whole compute phase (Deploy through Teardown), not just Deploy's own
 // health check, since kubectl port-forward is known-flaky over a long-running
@@ -1224,7 +1246,7 @@ func (a *App) directControllerURL(ctx context.Context) (string, error) {
 func (a *App) ControllerClient(ctx context.Context) (*controller.Client, string, error) {
 	a.pfMu.Lock()
 	defer a.pfMu.Unlock()
-	if a.cfg.ControllerReach != ReachPortForward {
+	if a.pf == nil && a.cfg.ControllerReach != ReachPortForward {
 		if a.controllerURL == "" {
 			return nil, "", fmt.Errorf("ampstack: controller address not resolved (Deploy must run first)")
 		}

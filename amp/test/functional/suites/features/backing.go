@@ -515,10 +515,12 @@ func (f *flow) deployAmp(ctx context.Context) error {
 	return nil
 }
 
-// controllerClient returns a live amp controller client. In tailnet mode (the
-// default; see apps/ampstack.ControllerReachMode) this is a stable direct URL
-// with nothing to reconnect. In portforward mode (the fallback) it reconnects
-// the held kubectl port-forward first if it died since the last call — kubectl
+// controllerClient returns a live amp controller client. When a direct
+// cluster-internal address was resolved (tailnet mode, the default; see
+// apps/ampstack.ControllerReachMode) this is a stable URL with nothing to
+// reconnect. When a kubectl port-forward is held instead — portforward mode, or
+// tailnet falling back on a cluster whose ranges aren't routable from here — it
+// reconnects that forward first if it died since the last call — kubectl
 // port-forward proved known-flaky here, and workload_yb_native runs a long
 // time before workload_amp_compute makes its first controller call, giving it
 // plenty of opportunity to die silently in between. Either way, callers must

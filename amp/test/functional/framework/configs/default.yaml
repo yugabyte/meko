@@ -203,11 +203,13 @@ env:
     controller_expose: "none"
     helm_release: "yb-amp-controller"
     # How the controller is reached once deployed:
-    #   tailnet (default) — resolve its cluster-internal address and talk direct
-    #     (no port-forward that can die mid-test).
-    #   portforward — the historical kubectl port-forward (reconnected on death).
+    #   tailnet (default) — resolve its cluster-internal address (ClusterIP, then
+    #     pod IP) and talk direct, no port-forward that can die mid-test; if
+    #     neither answers (cluster ranges not routable from the coordinator) it
+    #     falls back to a kubectl port-forward instead of failing the run.
+    #   portforward — always use the kubectl port-forward (reconnected on death).
     controller_reach: "tailnet"
-    # 0 → kubectl auto-allocates the port-forward local port (portforward only).
+    # 0 → kubectl auto-allocates the port-forward local port.
     local_port: 0
     yb_ready_timeout: 20m
     controller_ready_timeout: 5m
@@ -263,8 +265,8 @@ env:
     helm_release: "amp-controller"
     controller_service: "amp-controller"
     controller_port: 8080
-    # "" inherits apps/ampstack's default (tailnet); "portforward" forces the
-    # legacy kubectl-forward fallback.
+    # "" inherits apps/ampstack's default (tailnet: direct if reachable, else a
+    # port-forward); "portforward" always uses the kubectl forward.
     controller_reach: ""
     local_port_base: 18080
     yb_ready_timeout: 20m

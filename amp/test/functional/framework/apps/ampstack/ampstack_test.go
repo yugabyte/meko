@@ -475,6 +475,91 @@ func TestDeployTailnetFallsBackToPodIPWhenClusterIPUnhealthy(t *testing.T) {
 	}
 }
 
+// TestDeployTailnetFallsBackToPortForwardWhenNoDirectAddress asserts the
+// production case that used to env-fail the whole run (GKE amp-dev: the
+// coordinator has no route to the cluster's pod range nor its services range):
+// neither the ClusterIP nor the pod IP answers, so tailnet mode continues over a
+// kubectl port-forward, holds it for the caller to close, and says so in the log
+// with both addresses it tried.
+func TestDeployTailnetFallsBackToPortForwardWhenNoDirectAddress(t *testing.T) {
+	rec := newRecorder()
+	rec.on("get svc amp-controller", exec.Result{Stdout: "34.118.224.5"})
+	rec.on("get pod -l app=amp-controller", exec.Result{Stdout: "10.21.128.7"})
+	bad := healthzServer(false)
+	defer bad.Close()
+	good := healthzServer(true)
+	defer good.Close()
+
+	a := testApp(Config{HelmShim: false, ControllerReach: ReachTailnet}, rec)
+	a.WithClientFactory(func(url string) *controller.Client {
+		if strings.Contains(url, "127.0.0.1") {
+			return controller.New(good.URL)
+		}
+		return controller.New(bad.URL)
+	})
+	var logged []string
+	a.WithLogf(func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) })
+
+	info, err := a.Deploy(context.Background())
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if info.ControllerURL != "http://127.0.0.1:18080" {
+		t.Errorf("controller url = %q, want the port-forward local address", info.ControllerURL)
+	}
+	if info.Forward == nil {
+		t.Error("the fallback must hand the caller the port-forward to close")
+	}
+	if !hasCall(rec.snapshot(), "port-forward svc/amp-controller") {
+		t.Error("no direct address answering must fall back to kubectl port-forward")
+	}
+	joined := strings.Join(logged, "\n")
+	for _, want := range []string{"34.118.224.5", "10.21.128.7", "port-forward"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("fallback log %q must mention %q", joined, want)
+		}
+	}
+
+	// The held forward is the reach from here on, so a client fetch reconnects
+	// through it rather than handing back an unreachable direct URL.
+	_, url, err := a.ControllerClient(context.Background())
+	if err != nil {
+		t.Fatalf("ControllerClient: %v", err)
+	}
+	if url != "http://127.0.0.1:18080" {
+		t.Errorf("ControllerClient url = %q, want the held forward", url)
+	}
+}
+
+// TestDeployTailnetFallbackErrorCarriesBothFailures asserts that when the
+// port-forward fallback ALSO fails, the single returned error carries both the
+// direct addresses tried and the forward's own failure — triage in one read.
+func TestDeployTailnetFallbackErrorCarriesBothFailures(t *testing.T) {
+	rec := newRecorder()
+	rec.on("get svc amp-controller", exec.Result{Stdout: "34.118.224.5"})
+	rec.on("get pod -l app=amp-controller", exec.Result{Stdout: "10.21.128.7"})
+	bad := healthzServer(false)
+	defer bad.Close()
+
+	a := testApp(Config{HelmShim: false, ControllerReach: ReachTailnet}, rec)
+	a.WithClientFactory(func(string) *controller.Client { return controller.New(bad.URL) })
+	a.WithKube(k8s.New(k8s.Config{Context: "test-ctx", Namespace: "ampqa-test"}).
+		WithRunner(rec.run).
+		WithStarter(func(context.Context, []string) (k8s.Process, error) {
+			return nil, fmt.Errorf("kubectl not permitted here")
+		}))
+
+	_, err := a.Deploy(context.Background())
+	if err == nil {
+		t.Fatal("deploy must fail when neither the direct addresses nor the port-forward work")
+	}
+	for _, want := range []string{"34.118.224.5", "10.21.128.7", "kubectl not permitted here"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must mention %q", err, want)
+		}
+	}
+}
+
 // TestDeployPortforwardModeStillUsesForward asserts the explicit portforward
 // reach mode is unaffected by the tailnet default: it still opens (and holds)
 // the kubectl port-forward, exactly as before this change.

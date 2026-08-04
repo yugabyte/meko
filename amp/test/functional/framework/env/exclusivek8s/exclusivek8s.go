@@ -59,7 +59,8 @@ type Config struct {
 	ControllerPort    int
 	// ControllerReach selects how the per-namespace controller is reached; see
 	// apps/ampstack.ControllerReachMode. "" (the default) inherits ampstack's own
-	// default (tailnet: direct cluster-internal address, no port-forward).
+	// default (tailnet: the direct cluster-internal address when it is reachable,
+	// a kubectl port-forward when it isn't).
 	ControllerReach ampstack.ControllerReachMode
 	LocalPortBase   int
 	YBReadyTimeout  time.Duration
