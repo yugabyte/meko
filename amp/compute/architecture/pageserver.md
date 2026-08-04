@@ -72,8 +72,8 @@ in-protocol wait-for-active. Failure to open is fatal to the process.
   (below).
 - No `branch_state` row at all → fatal: the controller never provisioned the branch.
 
-Attach also pushes the launcher-issued generation into YB via
-`PageStore::cas_bump_generation_on_attach` (see "Generation fencing").
+The generation is claimed before any of this, by `PageStore::claim_generation`
+(see "Generation fencing") — nothing issues it from outside.
 Inbound page-service requests (libpq query string / gRPC metadata) are
 validated against the configured identity and rejected as misrouted on
 mismatch (`MISROUTED_PAGESTREAM_REQUESTS`).
@@ -120,7 +120,7 @@ additionally opens direct-RPC table handles over `libs/yb_thin_client`
 
 The page store's tables live in the `amp_storage` schema inside `yb_storage`:
 `pages` (relation pages), `slru_pages` (SLRU blocks), `meta`
-(everything else), and `timeline_state` (one state row per branch).
+(everything else), and `branch_state` (one state row per branch).
 DDL is owned by the migration
 `controller/migrations/0003_compute_storage.up.sql`; the daemons
 never create their own schema. Per-branch tuning is NOT in YB: the
@@ -296,8 +296,8 @@ CREATE TABLE amp_storage.branch_state (
   walreceiver streams from `consistent_lsn` forward and the in-memory
   value re-derives within seconds.
 - `applied_gc_cutoff_lsn` — reads below this LSN are not supported.
-- `current_generation` — bumped by the launcher/controller on every
-  attach; the fence column (see "Generation fencing").
+- `current_generation` — incremented by the pageserver itself at startup,
+  before the branch is opened; the fence column (see "Generation fencing").
 - `prev_record_lsn` — the `xl_prev` pointer paired with
   `consistent_lsn`, persisted best-effort so restart can hand the
   safekeeper the right value; `COALESCE` on update keeps a good value
@@ -509,7 +509,7 @@ downstream is a walredo PANIC.
 A branch's pre-branch-point rows live in YB under the **ancestor's**
 `branch_id`; nothing is copied at branch time (pages, SLRU, and meta
 alike). At startup the pageserver walks the
-`ancestor_branch_id`/`ancestor_lsn` links in `timeline_state` once
+`ancestor_branch_id`/`ancestor_lsn` links in `branch_state` once
 (`PageStore::load_lineage`; cycle-checked, depth-capped at 64) and
 builds an ordered segment list
 `[(self, MAX), (parent, cap), (grandparent, min(caps)), …]` — static
@@ -914,14 +914,25 @@ Exercised by the `torn_wal_write` integration scenario.
 ## Generation fencing
 
 `current_generation` on the `amp_storage.branch_state` row is the
-fence. The launcher bumps the generation on every spawn and bakes it
-into `pageserver.toml`; the YB-side sequence is:
+fence. **The pageserver is its own generation authority** — nothing
+issues the number from outside, so there is no CAS against an
+externally-chosen value to lose. `pageserver.toml` carries the
+`branch_id` and not the generation. The YB-side sequence is:
 
-1. **Attach:** `PageStore::cas_bump_generation_on_attach` runs
-   `UPDATE ... SET current_generation = $ours WHERE branch_id = $1 AND
-   current_generation < $ours`. Zero rows → probe: stored == ours is an
-   idempotent re-attach; stored > ours means a newer pageserver owns
-   the branch and the attach is refused (fatal at startup).
+1. **Startup:** `PageStore::claim_generation` runs, from
+   `page_server::mgr`, *before* the branch is opened — every write the
+   page store makes is fenced on the result, so it cannot come later:
+   ```sql
+   UPDATE amp_storage.branch_state
+   SET current_generation = COALESCE(current_generation, 0) + 1
+   WHERE branch_id = $1
+   RETURNING current_generation
+   ```
+   One statement increments and returns, so two processes racing to
+   attach necessarily come away with different numbers and the loser's
+   fenced writes stop matching. `COALESCE` because the column is NULL
+   until the pageserver's group exists — a first attach claims 1. Zero
+   rows means the controller never provisioned the branch: fatal.
 2. **Data writes are not individually fenced.** Row INSERTs run as
    independent parallel chunks with no `BEGIN/COMMIT` wrapper. The
    fence is the **subsequent standalone UPDATE** in
@@ -940,9 +951,19 @@ into `pageserver.toml`; the YB-side sequence is:
    pageserver overwrites them with identical upserts) or harmless — the
    damage a stale writer could do is advancing `consistent_lsn` (which
    drives safekeeper truncation), and exactly that write is fenced.
-3. `update_timeline_state` (the metadata-field UPDATE) carries the same
-   `current_generation = $gen` predicate; a fenced call logs and
-   proceeds, leaving the shutdown to the next flush.
+3. **The GC cutoff publish is fenced the same way.**
+   `PageStore::publish_gc_cutoff` carries the same
+   `current_generation = $3` predicate, and it has to: that write is
+   what makes a read floor durable *before* anything is deleted, so a
+   stale pageserver must not move it. Zero rows → the same probe →
+   `PublishGcCutoffOutcome::StaleGeneration`, which surfaces as
+   `GcError::StaleGeneration`. The GC loop treats it as an ordinary
+   error — exponential backoff and retry, no process shutdown; the
+   flush path above is what terminates a fenced-out process.
+
+`advance_consistent_lsn` and `publish_gc_cutoff` are the only two
+gen-fenced statements. `bump_generation` exists on `PageStore` but has
+no production call site (tests only).
 
 Generation state lives entirely in this one column — there is no
 per-file or per-object generation stamping anywhere.
@@ -1061,7 +1082,7 @@ on-demand logical-size calculation:
   `find_gc_cutoffs`), culls expired LSN leases, and updates
   PITR-related metrics. With `enable_gc` on for the branch, each tick
   also persists `applied_gc_cutoff_lsn = max(old, fresh cutoff)` to
-  `timeline_state` (generation-fenced, monotone, durable **before**
+  `branch_state` (generation-fenced, monotone, durable **before**
   anything is deleted) and drains the due `pending_gc` candidates,
   deleting the superseded `pages` rows they name. With `enable_gc` off
   (the default) the tick deletes nothing and superseded deltas and old
