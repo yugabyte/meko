@@ -2704,6 +2704,9 @@ mod tests {
     /// degraded every daemon start on the box. Trade-off: two
     /// simultaneous `cargo test -p safekeeper` invocations on one
     /// cluster would collide — don't do that.
+    ///
+    /// IF-(NOT-)EXISTS on both: `execute` replays on transient errors, and a
+    /// bare CREATE returns `42P07` — #508.
     async fn make_wals_table(client: &YsqlClient, table: &str) {
         let q = quote_relation(table);
         client
@@ -2720,7 +2723,7 @@ mod tests {
         client
             .execute(
                 &format!(
-                    "CREATE TABLE {q} (\
+                    "CREATE TABLE IF NOT EXISTS {q} (\
                        bucket_id        SMALLINT NOT NULL,\
                        branch_id        TEXT     NOT NULL,\
                        segno            BIGINT   NOT NULL,\
@@ -4402,10 +4405,11 @@ mod tests {
         // `bucket_id` (the split boundaries have to be literals, and branch IDs
         // are minted at runtime). The split point is given in key order and
         // deliberately cuts one segno's chunk range in half.
+        // IF NOT EXISTS: replay-safe, as in `make_wals_table` (#508).
         client
             .execute(
                 &format!(
-                    "CREATE TABLE {q} (\
+                    "CREATE TABLE IF NOT EXISTS {q} (\
                        bucket_id        SMALLINT NOT NULL,\
                        branch_id        TEXT     NOT NULL,\
                        segno            BIGINT   NOT NULL,\

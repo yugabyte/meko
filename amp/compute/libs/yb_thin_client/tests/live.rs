@@ -14,6 +14,9 @@
 //! Perform), read_page (read Perform). A signature mismatch at the FFI
 //! boundary would surface here as a crash/failure, so this doubles as an
 //! ABI sanity check for the prebuilt shim.
+//!
+//! Fixture DDL is DROP IF EXISTS + CREATE IF NOT EXISTS: `execute` replays
+//! on transient errors, and a bare CREATE returns `42P07` — #508.
 
 use bytes::Bytes;
 use yb_thin_client::{BindValue, RangeRead, ReadOp, TsClient, TsClientConfig, UpsertRow};
@@ -90,7 +93,7 @@ async fn smoke_connect_open_upsert_read() {
         .unwrap();
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL,
                  lsn BIGINT NOT NULL,
                  seq SMALLINT NOT NULL,
@@ -219,7 +222,7 @@ async fn repro_desc_pk_limit1_newest() {
     // Mirrors amp_storage.meta: hash key + a single `lsn DESC` clustering col.
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, lsn BIGINT NOT NULL, payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, lsn DESC))"
         ),
@@ -289,7 +292,7 @@ async fn repro_concurrent_multikey_reads() {
         .unwrap();
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL, tag BIGINT NOT NULL,
                  PRIMARY KEY ((branch_id, key) HASH, lsn DESC))"
         ),
@@ -384,7 +387,7 @@ async fn repro_real_ckpt_read() {
         .unwrap();
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id, key) HASH, lsn DESC))"
@@ -483,7 +486,7 @@ async fn repro_desc_pk_capped_limit1() {
         .unwrap();
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, lsn BIGINT NOT NULL, payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, lsn DESC))"
         ),
@@ -553,7 +556,7 @@ async fn repro_cross_client_visibility() {
         .unwrap();
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id, key) HASH, lsn DESC))"
@@ -649,7 +652,7 @@ async fn repro_meta_bytea_limit1_newest() {
     // Exactly amp_storage.meta's shape.
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id, key) HASH, lsn DESC))"
@@ -726,7 +729,7 @@ async fn repro_concurrent_read_write() {
         .unwrap();
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, seg BIGINT NOT NULL, off BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, seg, off))"
@@ -831,7 +834,7 @@ async fn repro_wals_covering_read() {
         .unwrap();
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, bucket_id SMALLINT NOT NULL, segno BIGINT NOT NULL,
                  chunk_offset BIGINT NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id, bucket_id) HASH, segno, chunk_offset))"
@@ -1023,7 +1026,7 @@ async fn repro_pages_multipage_scan() {
         .unwrap();
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  bucket_id SMALLINT NOT NULL,
                  branch_id TEXT NOT NULL, spcnode BIGINT NOT NULL, dbnode BIGINT NOT NULL,
                  relnode BIGINT NOT NULL, forknum SMALLINT NOT NULL, blknum BIGINT NOT NULL,
@@ -1278,7 +1281,7 @@ async fn repro_read_after_write_visibility() {
     // A WAL-log-shaped table: latest write = highest lsn for the branch.
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, lsn BIGINT NOT NULL, payload BYTEA NOT NULL,
                  PRIMARY KEY ((branch_id) HASH, lsn DESC))"
         ),
@@ -1422,7 +1425,7 @@ async fn repro_wals_range_sharded() {
     // remaining columns read as -Inf.
     ysql.execute(
         &format!(
-            "CREATE TABLE {TABLE} (
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, bucket_id SMALLINT NOT NULL, segno BIGINT NOT NULL,
                  chunk_offset BIGINT NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
                  PRIMARY KEY (branch_id ASC, bucket_id ASC, segno ASC, chunk_offset ASC))
