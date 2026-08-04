@@ -159,19 +159,28 @@ CREATE TABLE IF NOT EXISTS amp_storage.meta (
 -- **row presence is not a signal**: what tells a daemon whether its own state
 -- exists is whether its group is populated.
 --
---   pageserver present  <=>  consistent_lsn     IS NOT NULL
---   safekeeper present  <=>  timeline_start_lsn IS NOT NULL
+--   pageserver present  <=>  pageserver_initialized
+--   safekeeper present  <=>  safekeeper_initialized
 --
--- Those two predicates are load-bearing. The pageserver decides bootstrap
--- (initdb + import) vs load from its predicate, and the safekeeper decides
--- restore-control-file vs create-on-first-handshake from its own.
+-- Those two flags are load-bearing. The pageserver decides bootstrap (initdb +
+-- import) vs load from its flag, and the safekeeper decides
+-- restore-control-file vs create-on-first-handshake from its own. Each is set
+-- by exactly one statement — that daemon's creation write — in the same
+-- statement that fills its group, so flag and group cannot disagree. A data
+-- column cannot carry this meaning: `consistent_lsn` used to, and another
+-- writer set it first (#552).
 --
 -- The row itself is created by the CONTROLLER at branch-create time
 -- (Store.RecordBranch), before any pageserver, safekeeper, or endpoint
 -- supervisor for the branch starts. Neither daemon creates it: each fills its
--- own group with `UPDATE ... WHERE <own discriminator> IS NULL`, so the write
--- lands exactly once and a retry is idempotent. A daemon that finds no row
--- fails loudly rather than inventing one.
+-- own group once, and a retry is idempotent. A daemon that finds no row fails
+-- loudly rather than inventing one.
+--
+-- NB: the flag columns were added to this migration in place. It is `CREATE
+-- TABLE IF NOT EXISTS` and golang-migrate records 0003 as applied, so a
+-- database provisioned before they existed does NOT get them and every daemon
+-- fails on its first query — recreate it (`yb_amp_local init --force
+-- remove-all-contents`).
 --
 -- `pg_version` is the one shared column, and it holds a full `PgVersionId`
 -- (e.g. 180002), not a major version. What makes a single shared column safe is
@@ -198,6 +207,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
     pg_version             INT         NOT NULL,
 
     -- pageserver-owned group; NULL until the pageserver creates its state.
+    pageserver_initialized BOOLEAN     NOT NULL DEFAULT false,
     consistent_lsn         BIGINT,
     applied_gc_cutoff_lsn  BIGINT,
     ancestor_branch_id     TEXT,
@@ -212,6 +222,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
     lineage                JSONB,
 
     -- safekeeper-owned group; NULL until the safekeeper creates its control file.
+    safekeeper_initialized BOOLEAN     NOT NULL DEFAULT false,
     timeline_start_lsn     BIGINT,
     local_start_lsn        BIGINT,
     remote_consistent_lsn  BIGINT,

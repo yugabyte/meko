@@ -252,11 +252,18 @@ state:
 CREATE TABLE amp_storage.branch_state (
     branch_id              TEXT      NOT NULL,
     pg_version             INT       NOT NULL,
+    -- Set true by `update_branch_initial_state`, its only writer, in the
+    -- same statement that fills the group below. This is the presence
+    -- predicate every reader keys bootstrap-vs-load off. A data column
+    -- can't do the job: `consistent_lsn` held it until #552 and is set
+    -- first on the bootstrap path by `advance_consistent_lsn`.
+    pageserver_initialized BOOLEAN   NOT NULL DEFAULT false,
+
     -- Pageserver-owned group. Every column here is NULLable: the
     -- controller seeds the row at branch create with the whole group
-    -- NULL, and the pageserver fills it in at first attach. Readers must
-    -- tolerate NULL — `consistent_lsn IS NOT NULL` (the presence
-    -- predicate) says nothing about the others. See #531.
+    -- NULL. The flag above says the group was filled, but readers still
+    -- tolerate NULL as defence in depth — the failure mode is a
+    -- crash-loop on attach. See #531.
     consistent_lsn         BIGINT,
     applied_gc_cutoff_lsn  BIGINT,
     ancestor_branch_id     TEXT,

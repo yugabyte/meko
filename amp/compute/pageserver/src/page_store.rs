@@ -3655,7 +3655,7 @@ impl PageStore {
                 // value is informational, not authoritative.
                 let probe_sql = format!(
                     "SELECT current_generation FROM \"{}\".branch_state \
-                     WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
+                     WHERE branch_id = $1 AND pageserver_initialized",
                     self.schema
                 );
                 let row = self
@@ -3942,7 +3942,7 @@ impl PageStore {
     // ------------------- timelines ----------------------------------------
 
     /// Fill in the pageserver's initial column group on the branch's
-    /// `branch_state` row, at timeline creation (Phase 5b's
+    /// `branch_state` row, at branch creation (Phase 5b's
     /// `Timeline::write_timeline_row_to_yb`).
     ///
     /// The row itself is provisioned by the controller at branch-create time
@@ -3951,22 +3951,23 @@ impl PageStore {
     /// UPDATEs — it never creates the row, and it must not disturb the
     /// safekeeper's columns.
     ///
-    /// `WHERE consistent_lsn IS NULL` makes it fill the group in exactly once.
-    /// If it matches nothing, a probe distinguishes the two reasons:
-    /// - our group is already populated → no-op, the live state is the source
-    ///   of truth (a just-created timeline raced with an attach-time replay or
-    ///   similar; either way we shouldn't clobber it).
-    /// - no row at all → the branch was never provisioned; that's a wiring bug
-    ///   (a daemon started before the controller recorded the branch), so bail
-    ///   loudly rather than silently losing the state.
+    /// Sets `pageserver_initialized`, the flag readers key bootstrap-vs-load
+    /// off. This is the flag's only writer and it flips in the same statement
+    /// that fills the group, so the two can't disagree.
     ///
-    /// **Not for incremental updates.** Per-flush UPDATEs of
-    /// `consistent_lsn` go through [`Self::advance_consistent_lsn`] and the
-    /// GC cutoff through [`Self::publish_gc_cutoff`]; both are gen-fenced
-    /// (and the cutoff is additionally monotone and child-pinned there —
-    /// after creation nothing else may write that column). This one isn't fenced,
-    /// because at creation our group by definition isn't populated yet
-    /// (or — race — is populated in a state we shouldn't touch).
+    /// `consistent_lsn` and `prev_record_lsn` are written `COALESCE(col, $n)`
+    /// because [`Self::advance_consistent_lsn`] also writes them and may get
+    /// there first: `UninitializedTimeline::write` spawns the flush loop and
+    /// flushes before `finish_creation` calls us. "Only if absent" is the right
+    /// rule for both — on bootstrap the flush owns them (we pass `None` for
+    /// `prev_record_lsn`, which would otherwise erase a good value), and on a
+    /// fork no flush has run and `create_branch_row` must supply them. The
+    /// other columns have no second writer before creation.
+    ///
+    /// **Not for incremental updates.** Per-flush `consistent_lsn` UPDATEs go
+    /// through `advance_consistent_lsn` and the GC cutoff through
+    /// [`Self::publish_gc_cutoff`]; both are gen-fenced. This one isn't, because
+    /// at creation the group isn't populated yet.
     pub async fn update_branch_initial_state(&self, row: &BranchStateRow) -> Result<()> {
         let sql = format!(
             // Two columns are deliberately absent, each with a single writer
@@ -3976,18 +3977,19 @@ impl PageStore {
             // its owner — the generation especially, since our fenced writes
             // are checked against the claimed value.
             "UPDATE \"{}\".branch_state SET \
-                 consistent_lsn        = $2, \
+                 consistent_lsn        = COALESCE(consistent_lsn, $2), \
+                 prev_record_lsn       = COALESCE(prev_record_lsn, $7), \
                  applied_gc_cutoff_lsn = $3, \
                  ancestor_branch_id    = $4, \
                  ancestor_lsn          = $5, \
                  initdb_lsn            = $6, \
-                 prev_record_lsn       = $7, \
                  archived_at           = $8, \
                  deleted_at            = $9, \
                  rel_size_migration    = $10, \
                  rel_size_migrated_at  = $11, \
-                 lineage               = $12 \
-             WHERE branch_id = $1 AND consistent_lsn IS NULL",
+                 lineage               = $12, \
+                 pageserver_initialized = true \
+             WHERE branch_id = $1",
             self.schema
         );
         let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
@@ -4013,7 +4015,17 @@ impl PageStore {
             .await
             .context("update_branch_initial_state")?;
         if n == 0 {
+            // The predicate is the primary key alone, so zero rows can only
+            // mean the row isn't there — the probe turns that into the "branch
+            // was never provisioned" message. It must not be a silent success
+            // any more: that's what hid the dropped creation write.
             self.assert_branch_state_row_exists(row.branch_id).await?;
+            anyhow::bail!(
+                "update_branch_initial_state matched no row for {} even though \
+                 the row exists — unreachable, branch_state is keyed on \
+                 (branch_id) alone",
+                row.branch_id
+            );
         }
         Ok(())
     }
@@ -4119,19 +4131,23 @@ impl PageStore {
 
     pub async fn get_branch_state(&self, branch_id: BranchId) -> Result<Option<BranchStateRow>> {
         let sql = format!(
-            // `consistent_lsn IS NOT NULL` is the pageserver's presence
-            // predicate: the row is shared with the safekeeper, so a row that
-            // exists with our group still NULL means *our* state doesn't yet
-            // exist. Callers (preload / attach) key bootstrap-vs-load off this
-            // `None`, so it has to mean "no pageserver state", not "no row".
+            // `pageserver_initialized` is the pageserver's presence predicate:
+            // the row is shared with the safekeeper, so a row that exists with
+            // our group unpopulated means *our* state doesn't yet exist.
+            // Callers (preload / attach) key bootstrap-vs-load off this `None`,
+            // so it has to mean "no pageserver state", not "no row".
             //
-            // It is NOT a non-NULL guarantee for the rest of the group: a row
-            // can have `consistent_lsn` set with other pageserver columns still
-            // NULL, so `row_to_branch_state` must deserialize them as nullable
-            // (#531). Don't "fix" a NULL by widening this predicate — that
-            // routes a branch with live data down the bootstrap path.
+            // The flag is written only by `update_branch_initial_state`, in the
+            // same statement that fills the group. A data column can't do this
+            // job: `consistent_lsn` held it until #552, and
+            // `advance_consistent_lsn` sets that column first on the bootstrap
+            // path, so the predicate went true before the group existed.
+            //
+            // The flag says the group was filled, but `row_to_branch_state`
+            // still deserializes it as nullable — defence in depth against a
+            // NULL, whose failure mode is a crash-loop on attach (#531).
             "SELECT {} FROM \"{}\".branch_state \
-             WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
+             WHERE branch_id = $1 AND pageserver_initialized",
             BRANCH_STATE_COLUMNS, self.schema
         );
         let row = self
@@ -4356,7 +4372,7 @@ impl PageStore {
             // SELECT to disambiguate. Only runs on the unhappy path.
             let probe_sql = format!(
                 "SELECT current_generation FROM \"{}\".branch_state \
-                 WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
+                 WHERE branch_id = $1 AND pageserver_initialized",
                 self.schema
             );
             let row = self
@@ -4423,7 +4439,7 @@ impl PageStore {
             // blanked instead of reporting "no pageserver state".
             "UPDATE \"{}\".branch_state \
              SET current_generation = current_generation + 1 \
-             WHERE branch_id = $1 AND consistent_lsn IS NOT NULL \
+             WHERE branch_id = $1 AND pageserver_initialized \
              RETURNING current_generation",
             self.schema
         );
@@ -4439,7 +4455,7 @@ impl PageStore {
     pub async fn read_generation(&self, branch_id: BranchId) -> Result<Option<i32>> {
         let sql = format!(
             "SELECT current_generation FROM \"{}\".branch_state \
-             WHERE branch_id = $1 AND consistent_lsn IS NOT NULL",
+             WHERE branch_id = $1 AND pageserver_initialized",
             self.schema
         );
         let row = self
@@ -5009,10 +5025,11 @@ fn serialize_row_aux(row: &BranchStateRow) -> Result<(Option<String>, serde_json
 fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
     let branch_s: String = r.try_get(0)?;
     let consistent_lsn: i64 = r.try_get(1)?;
-    // Nullable on purpose. `get_branch_state`'s presence predicate is
-    // `consistent_lsn IS NOT NULL` alone, so it can hand us a row whose
-    // other pageserver-owned columns are still the controller's NULL seed.
-    // Reading this one as a plain `i64` made that a hard deserialize error
+    // Nullable on purpose, as defence in depth. `pageserver_initialized` plus
+    // the `COALESCE` creation write mean a bootstrapped branch now always has
+    // this column, but the cost of tolerating a NULL is one `unwrap_or(0)` and
+    // the cost of not tolerating it is a crash-loop, so this stays.
+    // Reading it as a plain `i64` made a NULL a hard deserialize error
     // that killed the process during attach — and since attach is retried
     // forever, a crash-loop (#531). `NULL` means the cutoff was never
     // stamped, i.e. nothing has been GC'd on this branch yet, so 0 is both
@@ -5834,9 +5851,9 @@ mod tests {
 
     #[tokio::test]
     async fn update_branch_initial_state_is_idempotent_once_populated() {
-        // Re-running creation must not clobber live state: the UPDATE is scoped
-        // to `consistent_lsn IS NULL`, so a second call is a no-op rather than a
-        // rewrite, and it must not be mistaken for the missing-row case above.
+        // Re-running creation must not move `consistent_lsn` — that column is
+        // `COALESCE`d because the flush loop co-owns it — and must not be
+        // mistaken for the missing-row case above.
         let (store, schema) = make_store("recreate").await;
         let branch = rand_branch();
         let row = sample_branch_state_row(branch);
@@ -5859,6 +5876,109 @@ mod tests {
         create_branch_state_row(&store, &row).await.unwrap();
         let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got, row);
+        drop_schema(&store, &schema).await;
+    }
+
+    /// #552: the bootstrap write order, reproduced exactly. `claim_generation`
+    /// satisfies the gen fence before the group exists, then the initdb
+    /// import's flush lands `consistent_lsn` via `advance_consistent_lsn` —
+    /// which writes that column and nothing else — and only then does
+    /// `finish_creation` run the creation write. Scoped `WHERE consistent_lsn
+    /// IS NULL` it matched zero rows and silently dropped the whole group;
+    /// per-column `COALESCE` fills in what is still missing.
+    #[tokio::test]
+    async fn creation_write_fills_columns_left_by_a_prior_consistent_lsn() {
+        use utils::generation::Generation;
+
+        let (store, schema) = make_store("creation_after_flush").await;
+        let branch = rand_branch();
+        let row = sample_branch_state_row(branch);
+
+        // 1. Controller seeds the row; 2. the pageserver claims its generation.
+        store
+            .provision_branch_row_for_test(branch, row.pg_version)
+            .await
+            .unwrap();
+        let generation = store.claim_generation(branch).await.unwrap();
+
+        // 3. The bootstrap import's flush sets `consistent_lsn` alone.
+        let flushed = Lsn(row.consistent_lsn.0 + 4096);
+        let outcome = store
+            .advance_consistent_lsn(branch, Generation::new(generation as u32), flushed, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            AdvanceConsistentLsnOutcome::Updated,
+            "the gen fence is satisfied by claim_generation alone — this is the \
+             write that falsifies the old `consistent_lsn IS NULL` predicate"
+        );
+
+        // 4. finish_creation's write must still populate the rest.
+        let mut created = row.clone();
+        created.current_generation = generation;
+        created.initdb_lsn = Some(Lsn(0x2000));
+        store.update_branch_initial_state(&created).await.unwrap();
+
+        let got = store.get_branch_state(branch).await.unwrap().unwrap();
+        assert_eq!(
+            got.consistent_lsn, flushed,
+            "the flushed value is live state and must win"
+        );
+        assert_eq!(got.applied_gc_cutoff_lsn, created.applied_gc_cutoff_lsn);
+        assert_eq!(got.initdb_lsn, created.initdb_lsn);
+        assert_eq!(got.lineage, created.lineage);
+
+        drop_schema(&store, &schema).await;
+    }
+
+    /// The presence predicate is `pageserver_initialized`, not any data column.
+    /// A `consistent_lsn` landed by the bootstrap import's flush must NOT make
+    /// the branch look loadable: the import hasn't finished, so a crash here
+    /// has to re-bootstrap. Under the old `consistent_lsn IS NOT NULL`
+    /// predicate the next attach took the *load* path over a half-imported
+    /// datadir.
+    #[tokio::test]
+    async fn consistent_lsn_alone_does_not_mark_the_branch_initialized() {
+        use utils::generation::Generation;
+
+        let (store, schema) = make_store("init_flag").await;
+        let branch = rand_branch();
+        let row = sample_branch_state_row(branch);
+
+        store
+            .provision_branch_row_for_test(branch, row.pg_version)
+            .await
+            .unwrap();
+        let generation = store.claim_generation(branch).await.unwrap();
+        store
+            .advance_consistent_lsn(
+                branch,
+                Generation::new(generation as u32),
+                Lsn(0x9000),
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            store.get_branch_state(branch).await.unwrap().is_none(),
+            "consistent_lsn is set, but the creation write never ran — attach \
+             must still choose bootstrap"
+        );
+        // Generation reads are scoped the same way, so they agree.
+        assert!(store.read_generation(branch).await.unwrap().is_none());
+
+        // Completing creation flips the flag and the branch becomes loadable.
+        let mut created = row.clone();
+        created.current_generation = generation;
+        store.update_branch_initial_state(&created).await.unwrap();
+        assert!(store.get_branch_state(branch).await.unwrap().is_some());
+        assert_eq!(
+            store.read_generation(branch).await.unwrap(),
+            Some(generation)
+        );
+
         drop_schema(&store, &schema).await;
     }
 

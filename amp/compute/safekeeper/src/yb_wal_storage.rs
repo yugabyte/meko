@@ -4678,4 +4678,84 @@ mod tests {
             "expected the unprovisioned-branch bail, got: {err}"
         );
     }
+
+    /// `safekeeper_initialized` is the safekeeper's presence predicate, and
+    /// `write_row` is its only writer. A controller-seeded row must read back
+    /// as "no control file yet", the creation write must flip the flag, and a
+    /// second create must not rewrite the group.
+    ///
+    /// Mirrors the pageserver's `pageserver_initialized`. The safekeeper's
+    /// group has a single writer, so the old `timeline_start_lsn IS NOT NULL`
+    /// test happened to be sound — the flag removes the dependency on that
+    /// staying true, which is exactly the assumption that broke in #552.
+    #[tokio::test]
+    async fn control_file_presence_is_the_initialized_flag() {
+        use crate::control_file::ControlFileStorage;
+        use postgres_versioninfo::PgVersionId;
+        use safekeeper_api::ServerInfo;
+
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), false)
+                .await
+                .expect("connect"),
+        );
+        let branch_id = BranchId::generate();
+
+        // The controller's seed: the row exists, both groups unpopulated.
+        client
+            .execute(
+                "INSERT INTO amp_storage.branch_state (branch_id, pg_version) \
+                 VALUES ($1, $2) ON CONFLICT (branch_id) DO NOTHING",
+                &[&branch_id.to_string(), &180_002i32],
+            )
+            .await
+            .expect("seed the row");
+
+        assert!(
+            ControlFileStorage::restore_opt(client.clone(), &branch_id)
+                .await
+                .expect("restore must not error on a seeded row")
+                .is_none(),
+            "a seeded row carries no control file yet"
+        );
+
+        let server = ServerInfo {
+            pg_version: PgVersionId::from_full_pg_version(180_002),
+            system_id: 0,
+            wal_seg_size: 16 * 1024 * 1024,
+        };
+        let state = TimelinePersistentState::new(&branch_id, server, Lsn(0x1000)).unwrap();
+        ControlFileStorage::write_initial_state(client.clone(), &branch_id, state.clone())
+            .await
+            .expect("creation write");
+
+        let restored = ControlFileStorage::restore_opt(client.clone(), &branch_id)
+            .await
+            .expect("restore")
+            .expect("the flag is set, so the control file is visible");
+        assert_eq!(restored.timeline_start_lsn, state.timeline_start_lsn);
+
+        // Second create is a no-op — the group is already populated.
+        let mut second = state.clone();
+        second.timeline_start_lsn = Lsn(0x9000);
+        ControlFileStorage::write_initial_state(client.clone(), &branch_id, second)
+            .await
+            .expect("re-create is a no-op, not an error");
+        let again = ControlFileStorage::restore_opt(client.clone(), &branch_id)
+            .await
+            .expect("restore")
+            .expect("still visible");
+        assert_eq!(
+            again.timeline_start_lsn, state.timeline_start_lsn,
+            "the populated group is the source of truth"
+        );
+
+        client
+            .execute(
+                "DELETE FROM amp_storage.branch_state WHERE branch_id = $1",
+                &[&branch_id.to_string()],
+            )
+            .await
+            .ok();
+    }
 }

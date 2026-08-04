@@ -204,14 +204,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn read_timeline_state(client: &YsqlClient, branch: &str) -> anyhow::Result<TimelineState> {
-    // `consistent_lsn IS NOT NULL` scopes the read to a row whose
-    // pageserver-owned columns are populated. The row is shared with the
-    // safekeeper, so without this a branch that has WAL but no page-store
-    // state yet would return a row of NULLs and panic on the gets below.
+    // `pageserver_initialized` scopes the read to a row whose pageserver-owned
+    // columns are populated. The row is shared with the safekeeper, so without
+    // this a branch that has WAL but no page-store state yet would return a row
+    // of NULLs and panic on the gets below.
     let sql = "SELECT consistent_lsn, prev_record_lsn, applied_gc_cutoff_lsn, pg_version, \
                current_generation \
                FROM amp_storage.branch_state \
-               WHERE branch_id = $1 AND consistent_lsn IS NOT NULL";
+               WHERE branch_id = $1 AND pageserver_initialized";
     let params: [&(dyn ToSql + Sync); 1] = [&branch];
     let row = client
         .query_opt(sql, &params)

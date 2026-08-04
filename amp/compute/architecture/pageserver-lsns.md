@@ -145,8 +145,10 @@ continuity from the stream.
 ### `consistent_lsn` — durable, gap-free
 
 **Where:**
-- Source of truth: `amp_storage.branch_state.consistent_lsn` (YB column,
-  NOT NULL).
+- Source of truth: `amp_storage.branch_state.consistent_lsn` (a NULLable YB
+  column — the controller seeds the row with the whole pageserver group
+  NULL; `pageserver_initialized`, not this column, is the presence
+  predicate — see [`yugabyte.md`](yugabyte.md)).
 - In-memory slot: `Timeline.remote_state.consistent_lsn: Arc<AtomicLsn>`
   (`compute/pageserver/src/page_server/timeline/remote_state.rs`).
   `PageWriter` holds a clone (installed via `set_consistent_lsn_slot`) so
@@ -204,9 +206,10 @@ by the `FlushTask`'s final drain pass.
 higher-generation pageserver owns the row; the losing process calls
 `shutdown_for_stale_generation` — a stale writer must not shrink the
 safekeeper truncation bound or overwrite a live writer's progress.
-`bump_generation_on_attach` (a CAS on `timeline_state.current_generation`
-via `cas_bump_generation_on_attach`) establishes "YB column == our
-generation" at attach so the strict fence holds from the first flush.
+`claim_generation` (an atomic increment-and-return on
+`branch_state.current_generation`, run before the branch is opened)
+establishes "YB column == our generation" so the strict fence holds from the
+first flush.
 
 **Read by:**
 - SK feedback: **both** `disk_consistent_lsn` and `remote_consistent_lsn`
@@ -226,8 +229,8 @@ generation" at attach so the strict fence holds from the first flush.
   message already advertises the correct value. The `PageWriter` watermark
   is seeded via `seed_consistent_lsn_watermark` so the first flush doesn't
   redundantly UPDATE a value already in the column.
-- Bootstrap: `write_timeline_row_to_yb` INSERTs the full row
-  (`insert_timeline_at_creation`) with `consistent_lsn = applied_lsn` after
+- Bootstrap: `write_timeline_row_to_yb` fills the controller-provisioned row
+  (`update_branch_initial_state`) with `consistent_lsn = applied_lsn` after
   datadir import, then seeds both the watermark and the slot — without the
   slot seed the walreceiver would read `get_consistent_lsn() == 0` and bail
   with "No previous WAL position".
@@ -278,13 +281,26 @@ GC'd yet". Reading it as non-nullable crash-looped attach, #531).
 `page_service`'s `effective_request_lsn` reject `lsn <
 applied_gc_cutoff_lsn` unless an LSN lease covers it.
 
-**Written to YB by:** `insert_timeline_at_creation` at creation, and by
+**Written to YB by:** `update_branch_initial_state` at creation, and by
 each GC tick (`Timeline::gc_iteration`,
 [`pageserver-gc.md`](pageserver-gc.md)) when `enable_gc` is on: the tick
 persists `applied_gc_cutoff_lsn = max(old, fresh cutoff)` to
-`timeline_state` (generation-fenced, monotone) **before** publishing it
+`branch_state` (generation-fenced, monotone) **before** publishing it
 to the in-memory `Rcu` and deleting anything — the read floor is durable
 before any delete.
+
+Bootstrap sets it to 0 ("nothing GC'd yet"), and `enable_gc` defaults to
+**false**, so no GC tick moves it afterwards — outside the integration
+harness, which sets `enable_gc = true`, it stays 0 for the life of the
+branch. It is still read as `Option`, defaulting to 0, as defence in depth:
+the guarded failure mode is a crash-loop on attach, and the guard costs one
+`unwrap_or(0)`.
+
+*History (#552):* the creation write used to be scoped `WHERE consistent_lsn
+IS NULL`, which the bootstrap import's own flush had already falsified, so it
+matched zero rows and silently no-oped — leaving this column, `initdb_lsn`
+and `lineage` NULL for the life of the branch. That NULL is what crash-looped
+attach in #531. See [`yugabyte.md`](yugabyte.md) for the write order.
 
 **Updated in memory by:** the attach-time load, the GC tick's `Rcu`
 publish (after the persist above), and the HTTP `timeline_patch`
@@ -314,7 +330,7 @@ checks; low traffic otherwise.
 `timeline_state.ancestor_lsn` / `ancestor_branch_id` (nullable columns).
 
 **Meaning:** Branch point. A child branch's row is created with
-`consistent_lsn = ancestor_lsn` (`PageStore::insert_branch_timeline_row`
+`consistent_lsn = ancestor_lsn` (`PageStore::create_branch_row`
 validates `anc.consistent_lsn >= ancestor_lsn`, and copies the ancestor's
 `prev_record_lsn` only when the branch point equals the ancestor's
 `consistent_lsn` exactly).
@@ -549,10 +565,10 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 |-------|------------------|------------------------|
 | `consistent_lsn` | `advance_consistent_lsn` (throttled; forced at shutdown) | Yes |
 | `prev_record_lsn` | same UPDATE (`COALESCE`) | Yes |
-| `applied_gc_cutoff_lsn` | `insert_timeline_at_creation` only | Yes |
-| `ancestor_lsn` / `ancestor_branch_id` | creation INSERT | Yes |
-| `initdb_lsn` | creation INSERT | Yes (falls back to `consistent_lsn`) |
-| `current_generation` | `cas_bump_generation_on_attach` | Yes (fence predicate) |
+| `applied_gc_cutoff_lsn` | `update_branch_initial_state` at creation; `publish_gc_cutoff` on GC ticks | Yes |
+| `ancestor_lsn` / `ancestor_branch_id` | `update_branch_initial_state` (an UPDATE — the controller seeds the row) | Yes |
+| `initdb_lsn` | `update_branch_initial_state` | Yes (falls back to `consistent_lsn`) |
+| `current_generation` | `claim_generation` at startup | Yes (fence predicate) |
 | `applied_lsn` / `last_record_lsn` | never | seeded from `consistent_lsn` (+ persisted `prev`) |
 | `remote_state.consistent_lsn` slot | never | seeded from `consistent_lsn` |
 | Per-page `lsn` | `try_write_rows` (pages / slru_pages / meta INSERTs) | on read |
@@ -574,9 +590,8 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
   `note_record_lsn` / `record_lsn_history`, `flush_horizon_lsn`,
   `await_backpressure`.
 - `compute/pageserver/src/page_store.rs` — `advance_consistent_lsn`,
-  `insert_timeline_at_creation`, `insert_branch_timeline_row`,
-  `cas_bump_generation_on_attach`, `LineageSegment` + `*_lineage` reads,
-  `update_timeline_state` (no call sites).
+  `update_branch_initial_state`, `create_branch_row`, `claim_generation`,
+  `LineageSegment` + `*_lineage` reads.
 - `compute/pageserver/src/page_server/timeline/walreceiver/walreceiver_connection.rs`
   — startpoint selection, ingest loop, feedback assembly, replay-window
   detection.

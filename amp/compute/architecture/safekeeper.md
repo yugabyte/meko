@@ -44,19 +44,39 @@ database, provisioned by
 
 ### Control file: `amp_storage.branch_state`
 
+The row is **shared with the pageserver**, which owns a separate group of
+columns on it (see [`yugabyte.md`](yugabyte.md) for the full DDL). Only the
+safekeeper's own group is shown here; every column in it is NULLable, because
+the controller seeds the row at branch create and the safekeeper fills the
+group in later, on the first walproposer handshake:
+
 ```sql
 CREATE TABLE amp_storage.branch_state (
     branch_id              TEXT        NOT NULL,
-    timeline_start_lsn     BIGINT      NOT NULL,
-    local_start_lsn        BIGINT      NOT NULL,
-    remote_consistent_lsn  BIGINT      NOT NULL,
     pg_version             INT         NOT NULL,
-    system_id              BIGINT      NOT NULL,
-    wal_seg_size           INT         NOT NULL,
-    creation_ts            TIMESTAMPTZ NOT NULL,
+
+    -- "my group exists" — set true by the creation write, in the same
+    -- statement that fills the columns below, and by nothing else.
+    safekeeper_initialized BOOLEAN     NOT NULL DEFAULT false,
+
+    timeline_start_lsn     BIGINT,
+    local_start_lsn        BIGINT,
+    remote_consistent_lsn  BIGINT,
+    system_id              BIGINT,
+    wal_seg_size           INT,
+    creation_ts            TIMESTAMPTZ,
+    -- … pageserver-owned columns …
     PRIMARY KEY ((branch_id) HASH)
 );
 ```
+
+Because the row is shared, its **presence is not the signal** that a control
+file exists — `safekeeper_initialized` is. `restore_opt` scopes its SELECT to
+that flag and reads the six columns as non-nullable, which is sound precisely
+because `write_row` sets the flag and all six together. It used to test
+`timeline_start_lsn IS NOT NULL` instead; that held only because this group has
+a single writer, an assumption the pageserver made about `consistent_lsn` and
+lost (#552).
 
 `compute/safekeeper/src/control_file.rs` defines `YbControlFileStorage`, the
 sole implementation of the control-file `Storage` trait

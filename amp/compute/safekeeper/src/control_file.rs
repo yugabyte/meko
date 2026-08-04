@@ -59,18 +59,25 @@ impl YbControlFileStorage {
     ///
     /// The row is provisioned by the controller at branch-create time and the
     /// pageserver owns a separate group of columns on it, so **row presence is
-    /// not the signal**: `timeline_start_lsn IS NOT NULL` is what says our own
-    /// group is populated. Absence is a normal outcome, not an error — on a
-    /// fresh branch the group is filled by [`Self::write_initial_state`] on the first
+    /// not the signal**: `safekeeper_initialized` is what says our own group is
+    /// populated. Absence is a normal outcome, not an error — on a fresh branch
+    /// the group is filled by [`Self::write_initial_state`] on the first
     /// walproposer handshake, so startup has to tell "not written yet" apart
     /// from a genuine read failure.
+    ///
+    /// The flag replaces a `timeline_start_lsn IS NOT NULL` test. That worked
+    /// only because our group happens to have a single writer — the pageserver
+    /// made the same bet on `consistent_lsn`, which does not, and silently lost
+    /// its creation write (#552). An explicit flag doesn't depend on the bet,
+    /// and it keeps the non-nullable `try_get`s below honest: `write_row` sets
+    /// the flag in the same statement that fills all six columns.
     pub async fn restore_opt(
         client: Arc<YsqlClient>,
         branch_id: &BranchId,
     ) -> Result<Option<YbControlFileStorage>> {
         let sql = format!(
             "SELECT {COLUMNS} FROM amp_storage.branch_state \
-             WHERE branch_id = $1 AND timeline_start_lsn IS NOT NULL"
+             WHERE branch_id = $1 AND safekeeper_initialized"
         );
         let Some(row) = client
             .query_opt(&sql, &[&branch_id.to_string()])
@@ -132,11 +139,13 @@ impl YbControlFileStorage {
         Ok(store)
     }
 
-    /// UPDATE our column group. `create` adds `timeline_start_lsn IS NULL` so
-    /// the first write fills the group exactly once; a later `persist` rewrites
-    /// it unconditionally. Either way the row must already exist — if the
-    /// UPDATE matches nothing on create, we distinguish "already populated"
-    /// (fine) from "no row" (the controller never provisioned this branch).
+    /// UPDATE our column group, flipping `safekeeper_initialized` with it —
+    /// this is that flag's only writer, so it means exactly "these six columns
+    /// are populated". `create` adds `NOT safekeeper_initialized` so the first
+    /// write fills the group exactly once; a later `persist` rewrites it
+    /// unconditionally. Either way the row must already exist — if the UPDATE
+    /// matches nothing on create, we distinguish "already populated" (fine)
+    /// from "no row" (the controller never provisioned this branch).
     async fn write_row(&self, s: &TimelinePersistentState, create: bool) -> Result<()> {
         let creation_ts: DateTime<Utc> = s.creation_ts.into();
 
@@ -161,10 +170,11 @@ impl YbControlFileStorage {
                  remote_consistent_lsn = $4, \
                  system_id             = $5, \
                  wal_seg_size          = $6, \
-                 creation_ts           = $7 \
+                 creation_ts           = $7, \
+                 safekeeper_initialized = true \
              WHERE branch_id           = $1";
         let sql = if create {
-            format!("{set_clause} AND timeline_start_lsn IS NULL")
+            format!("{set_clause} AND NOT safekeeper_initialized")
         } else {
             set_clause.to_string()
         };
@@ -219,13 +229,21 @@ impl AdvisoryPersist {
     /// (`handle_elected`, `map_control_file`): a late-landing advisory
     /// write can never regress the row, and it touches none of the
     /// other columns.
+    ///
+    /// Scoped to `safekeeper_initialized` so it can only ever refine a group
+    /// that exists. Unscoped it was the one write that could put a value into
+    /// our group before the creation write ran — the same shape as the
+    /// pageserver's `advance_consistent_lsn`, which is what dropped that
+    /// daemon's creation write in #552. Here it never falsified the old
+    /// `timeline_start_lsn` discriminator (it doesn't touch that column), so it
+    /// was latent rather than live; the flag closes it either way.
     pub async fn persist_remote_consistent_lsn(&self, lsn: Lsn) -> Result<()> {
         let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
         self.client
             .execute(
                 "UPDATE amp_storage.branch_state \
                  SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2) \
-                 WHERE branch_id = $1",
+                 WHERE branch_id = $1 AND safekeeper_initialized",
                 &[&self.branch_id.to_string(), &(lsn.0 as i64)],
             )
             .await

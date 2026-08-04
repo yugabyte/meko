@@ -402,19 +402,73 @@ populated:
 
 | Daemon | Presence predicate | Decides |
 |---|---|---|
-| pageserver | `consistent_lsn IS NOT NULL` | bootstrap (initdb + import) vs load |
-| safekeeper | `timeline_start_lsn IS NOT NULL` | create control file vs restore it |
+| pageserver | `pageserver_initialized` | bootstrap (initdb + import) vs load |
+| safekeeper | `safekeeper_initialized` | create control file vs restore it |
 
-Both first writes are `UPDATE ... WHERE <own discriminator> IS NULL`, so each
-group is filled exactly once and a retry is idempotent.
+Each flag is a plain `BOOLEAN NOT NULL DEFAULT false`, set by exactly one
+statement — that daemon's creation write — in the same statement that fills its
+group. So the flag and the group can't disagree, and "my state exists" is
+recorded rather than inferred. The creation writes stay idempotent: the
+safekeeper's is scoped `AND NOT safekeeper_initialized`, and the pageserver's
+writes `consistent_lsn` and `prev_record_lsn` as `COALESCE(col, $n)` — the two
+columns the flush path also writes, so whichever lands first wins. Its other
+columns have no second writer before creation and are assigned directly.
 
-**The discriminator is not a non-NULL guarantee for the rest of the group.** A
-`SELECT` scoped by `consistent_lsn IS NOT NULL` can still return a row whose
-other pageserver columns are the controller's NULL seed, so every such read has
-to deserialize them as nullable. Reading `applied_gc_cutoff_lsn` as a plain
-`i64` made that a fatal deserialize error during attach — and because attach is
-retried forever, a pageserver crash-loop (#531). Widening the predicate is the
-wrong repair: it would hide a branch with live data behind the *bootstrap* path.
+### Why a data column can't be the discriminator
+
+The flags replaced `consistent_lsn IS NOT NULL` and `timeline_start_lsn IS NOT
+NULL`. That trick is only sound while the chosen column has exactly one writer,
+and the pageserver's did not — so **on the bootstrap path its creation write
+never landed**:
+
+1. `claim_generation` (`mgr.rs`, before the branch is opened) sets
+   `current_generation` on the controller-seeded row. The gen fence is now
+   satisfied even though the rest of the group is NULL.
+2. Bootstrap imports the initdb datadir. `DatadirModification::commit` calls
+   `finish_write` → `note_record_lsn`, so `record_lsn_history` is non-empty.
+3. `UninitializedTimeline::write` spawns the flush loop and flushes **before**
+   `finish_creation`. That flush sees a non-empty ingest frontier and calls
+   `advance_consistent_lsn`, which is fenced only on `current_generation` — it
+   matches, and **sets `consistent_lsn` alone**.
+4. `finish_creation` → `write_timeline_row_to_yb` → `update_branch_initial_state`
+   was `WHERE consistent_lsn IS NULL`, by then false. It matched zero rows, the
+   existence probe passed, and it **silently no-oped**.
+
+A freshly bootstrapped branch therefore carried `consistent_lsn` and
+`current_generation` and nothing else: `applied_gc_cutoff_lsn`, `initdb_lsn`,
+`rel_size_migration` and `lineage` stayed NULL (#552). `enable_gc` defaults to
+false, so no GC tick stamped the cutoff afterwards either — only the integration
+harness, which sets `enable_gc = true`, converged the row, which is why CI never
+saw it. Observed on a live cluster immediately after bootstrap:
+`consistent_lsn = 22469800` with all four of those columns NULL.
+
+Reads were mis-classified too. A crash between step 3 and step 4 left
+`consistent_lsn` set on a branch whose import never finished, so the next attach
+took the *load* path over a half-imported datadir. The flag is false until the
+import completes, so that retry now re-bootstraps correctly.
+
+The safekeeper's group has a single writer, so its version of the trick happened
+to hold — but `AdvisoryPersist::persist_remote_consistent_lsn` was unscoped and
+could put a value into the group before the creation write ran, the same shape
+one step short of the pageserver's bug. It is now scoped to
+`safekeeper_initialized`.
+
+The flag columns are declared in `0003` rather than added by a follow-on
+migration, so **a database provisioned before them has to be recreated**
+(`yb_amp_local init --force remove-all-contents` locally; the GKE deploy
+rebuilds `yb_storage`). `golang-migrate` records `0003` as applied and never
+re-runs it, so an existing database would otherwise be left without the columns
+and every daemon would fail on its first query.
+
+**A flag is still not a non-NULL guarantee for every column**, and readers keep
+deserializing the group as nullable. Reading `applied_gc_cutoff_lsn` as a plain
+`i64` made a NULL a fatal deserialize error during attach — and because attach
+is retried forever, a pageserver crash-loop (#531). The flag plus the
+`COALESCE` creation write means a freshly bootstrapped branch now gets every
+column, so that is defence in depth rather than a live requirement; keep it,
+because the cost is one `unwrap_or(0)` and the failure mode it guards is a
+crash-loop. Widening a predicate is the wrong repair for a NULL either way: it
+would hide a branch with live data behind the *bootstrap* path.
 
 The pageserver group is the page store's durable index record: consistent /
 GC-cutoff / initdb LSNs, ancestry, generation, archive/delete timestamps, and
@@ -446,6 +500,11 @@ needs no later refinement.
 CREATE TABLE amp_storage.branch_state (
     branch_id              TEXT        NOT NULL,
     pg_version             INT         NOT NULL,
+
+    -- per-daemon "my group exists" flags; each set only by that daemon's
+    -- creation write, in the same statement that fills its group
+    pageserver_initialized BOOLEAN     NOT NULL DEFAULT false,
+    safekeeper_initialized BOOLEAN     NOT NULL DEFAULT false,
 
     -- pageserver-owned; NULL until the pageserver creates its state
     consistent_lsn         BIGINT,
