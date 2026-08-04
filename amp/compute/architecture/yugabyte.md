@@ -450,8 +450,8 @@ never landed**:
    existence probe passed, and it **silently no-oped**.
 
 A freshly bootstrapped branch therefore carried `consistent_lsn` and
-`current_generation` and nothing else: `applied_gc_cutoff_lsn`, `initdb_lsn`,
-`rel_size_migration` and `lineage` stayed NULL (#552). `enable_gc` defaults to
+`current_generation` and nothing else: `applied_gc_cutoff_lsn` and
+`initdb_lsn` stayed NULL (#552). `enable_gc` defaults to
 false, so no GC tick stamped the cutoff afterwards either — only the integration
 harness, which sets `enable_gc = true`, converged the row, which is why CI never
 saw it. Observed on a live cluster immediately after bootstrap:
@@ -486,13 +486,11 @@ crash-loop. Widening a predicate is the wrong repair for a NULL either way: it
 would hide a branch with live data behind the *bootstrap* path.
 
 The pageserver group is the page store's durable index record: consistent /
-GC-cutoff / initdb LSNs, ancestry, generation, archive/delete timestamps, and
-rel-size migration state. `current_generation` is the gate that fences a stale
-pageserver: every flush runs in a transaction that conditionally updates this
-row (`... WHERE current_generation = $expected`), so a pageserver holding an old
-generation cannot clobber state owned by a newer attachment. The `lineage`
-JSONB column is a forward-looking slot for ancestor-detach state (always
-`Default` today).
+GC-cutoff / initdb LSNs, ancestry, and generation. `current_generation` is the
+gate that fences a stale pageserver: every flush runs in a transaction that
+conditionally updates this row (`... WHERE current_generation = $expected`), so
+a pageserver holding an old generation cannot clobber state owned by a newer
+attachment.
 
 The safekeeper group is its control file. Hot-update LSN scalars get their own
 BIGINT columns so a control-file save is a column-scoped UPDATE rather than a
@@ -529,11 +527,6 @@ CREATE TABLE amp_storage.branch_state (
     current_generation     INT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
-    archived_at            TIMESTAMP,
-    deleted_at             TIMESTAMP,
-    rel_size_migration     TEXT,
-    rel_size_migrated_at   BIGINT,
-    lineage                JSONB,
 
     -- safekeeper-owned; NULL until the safekeeper creates its control file
     timeline_start_lsn     BIGINT,

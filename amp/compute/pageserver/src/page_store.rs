@@ -64,10 +64,9 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use futures::stream::{StreamExt, TryStreamExt};
 use pageserver_api::key::{KEY_SIZE, Key, rel_size_to_key};
-use pageserver_api::models::{PayloadCompression, RelSizeMigration};
+use pageserver_api::models::PayloadCompression;
 use pageserver_api::reltag::{RelTag, SlruKind};
 
-use crate::page_server::metadata::Lineage;
 use remote_storage::{YbConnConfig, YsqlClient};
 // We talk to YugabyteDB through the YB smart-driver fork of
 // tokio-postgres; alias it so the type names below (`tokio_postgres::Row`,
@@ -354,27 +353,6 @@ pub struct BranchStateRow {
     /// `XLogCtl->Insert.PrevBytePos` viewpoint). Re-derived on
     /// walreceiver resume, persisted so cold restarts can verify it.
     pub prev_record_lsn: Option<Lsn>,
-    /// `Some(ts)` when the timeline is archived (compute denied);
-    /// `None` while live. Surfaced via the HTTP archive endpoint.
-    pub archived_at: Option<chrono::NaiveDateTime>,
-    /// `Some(ts)` when the timeline is mid-delete; the deletion
-    /// pipeline keys off this so a crash-restart can resume the
-    /// teardown instead of leaving the timeline half-deleted.
-    pub deleted_at: Option<chrono::NaiveDateTime>,
-    /// Rel-size schema migration state (Legacy / Migrating /
-    /// Migrated). `None` is treated as `Legacy` per the upstream
-    /// convention. Read path branches on this; walingest writes here
-    /// when migration progresses.
-    pub rel_size_migration: Option<RelSizeMigration>,
-    /// LSN at which the rel-size migration started; pairs with
-    /// `rel_size_migration` for read-path correctness around the
-    /// migration boundary.
-    pub rel_size_migrated_at: Option<Lsn>,
-    /// Ancestor-detach history. Kept as JSON for forward-compat;
-    /// always `Default` in yb-amp today (detach_ancestor is
-    /// unsupported) but the column is wired up for when the feature
-    /// lands.
-    pub lineage: Lineage,
 }
 
 pub const DEFAULT_SCHEMA: &str = "amp_storage";
@@ -3998,16 +3976,10 @@ impl PageStore {
                  ancestor_branch_id    = $4, \
                  ancestor_lsn          = $5, \
                  initdb_lsn            = $6, \
-                 archived_at           = $8, \
-                 deleted_at            = $9, \
-                 rel_size_migration    = $10, \
-                 rel_size_migrated_at  = $11, \
-                 lineage               = $12, \
                  pageserver_initialized = true \
              WHERE branch_id = $1",
             self.schema
         );
-        let (rel_size_migration_text, lineage_json) = serialize_row_aux(row)?;
         let n = self
             .ysql_client
             .execute(
@@ -4020,11 +3992,6 @@ impl PageStore {
                     &row.ancestor_lsn.map(|l| l.0 as i64),
                     &row.initdb_lsn.map(|l| l.0 as i64),
                     &row.prev_record_lsn.map(|l| l.0 as i64),
-                    &row.archived_at,
-                    &row.deleted_at,
-                    &rel_size_migration_text,
-                    &row.rel_size_migrated_at.map(|l| l.0 as i64),
-                    &lineage_json,
                 ],
             )
             .await
@@ -4248,12 +4215,6 @@ impl PageStore {
         let anc = self.get_branch_state(ancestor).await?.with_context(|| {
             format!("create_branch_row: ancestor {ancestor} has no branch_state row")
         })?;
-        if anc.deleted_at.is_some() {
-            bail!("create_branch_row: ancestor {ancestor} is deleted");
-        }
-        if anc.archived_at.is_some() {
-            bail!("create_branch_row: ancestor {ancestor} is archived");
-        }
         if let Some(anc_anc_lsn) = anc.ancestor_lsn {
             if ancestor_lsn < anc_anc_lsn {
                 bail!(
@@ -4295,13 +4256,6 @@ impl PageStore {
             pg_version: anc.pg_version,
             initdb_lsn: anc.initdb_lsn,
             prev_record_lsn,
-            archived_at: None,
-            deleted_at: None,
-            // A branch reads the ancestor's rows, so it must interpret
-            // relsize keys with the same migration scheme.
-            rel_size_migration: anc.rel_size_migration.clone(),
-            rel_size_migrated_at: anc.rel_size_migrated_at,
-            lineage: Lineage::default(),
         };
         self.update_branch_initial_state(&row).await?;
         Ok(row)
@@ -5016,26 +4970,7 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
 /// `try_get` indices.
 const BRANCH_STATE_COLUMNS: &str = "branch_id, consistent_lsn, \
      applied_gc_cutoff_lsn, ancestor_branch_id, ancestor_lsn, \
-     current_generation, pg_version, initdb_lsn, prev_record_lsn, \
-     archived_at, deleted_at, rel_size_migration, \
-     rel_size_migrated_at, lineage";
-
-/// Convert the two awkwardly-typed `BranchStateRow` fields (the
-/// `RelSizeMigration` enum, persisted as serde-JSON text to match
-/// the upstream `index_part.json` wire shape; and `lineage`,
-/// persisted as a JSONB blob for forward-compat) into the values
-/// the `tokio_postgres::Client::execute` parameter list expects.
-/// Used by `update_branch_initial_state`.
-fn serialize_row_aux(row: &BranchStateRow) -> Result<(Option<String>, serde_json::Value)> {
-    let rel_size_migration_text = row
-        .rel_size_migration
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .context("serialising rel_size_migration")?;
-    let lineage_json = serde_json::to_value(&row.lineage).context("serialising lineage")?;
-    Ok((rel_size_migration_text, lineage_json))
-}
+     current_generation, pg_version, initdb_lsn, prev_record_lsn";
 
 fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
     let branch_s: String = r.try_get(0)?;
@@ -5058,22 +4993,6 @@ fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
     let pg_version: i32 = r.try_get(6)?;
     let initdb_lsn: Option<i64> = r.try_get(7)?;
     let prev_record_lsn: Option<i64> = r.try_get(8)?;
-    let archived_at: Option<chrono::NaiveDateTime> = r.try_get(9)?;
-    let deleted_at: Option<chrono::NaiveDateTime> = r.try_get(10)?;
-    let rel_size_migration_text: Option<String> = r.try_get(11)?;
-    let rel_size_migrated_at: Option<i64> = r.try_get(12)?;
-    let lineage_json: Option<serde_json::Value> = r.try_get(13)?;
-
-    let rel_size_migration = rel_size_migration_text
-        .as_deref()
-        .map(serde_json::from_str)
-        .transpose()
-        .context("parsing rel_size_migration")?;
-    let lineage = lineage_json
-        .map(serde_json::from_value)
-        .transpose()
-        .context("parsing lineage")?
-        .unwrap_or_default();
 
     Ok(BranchStateRow {
         branch_id: branch_s.parse().context("parsing branch_id")?,
@@ -5088,11 +5007,6 @@ fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
         pg_version: pg_version as u32,
         initdb_lsn: initdb_lsn.map(|l| Lsn(l as u64)),
         prev_record_lsn: prev_record_lsn.map(|l| Lsn(l as u64)),
-        archived_at,
-        deleted_at,
-        rel_size_migration,
-        rel_size_migrated_at: rel_size_migrated_at.map(|l| Lsn(l as u64)),
-        lineage,
     })
 }
 
@@ -5837,11 +5751,6 @@ mod tests {
             pg_version: 180_002,
             initdb_lsn: None,
             prev_record_lsn: None,
-            archived_at: None,
-            deleted_at: None,
-            rel_size_migration: None,
-            rel_size_migrated_at: None,
-            lineage: Default::default(),
         }
     }
 
@@ -5942,7 +5851,6 @@ mod tests {
         );
         assert_eq!(got.applied_gc_cutoff_lsn, created.applied_gc_cutoff_lsn);
         assert_eq!(got.initdb_lsn, created.initdb_lsn);
-        assert_eq!(got.lineage, created.lineage);
 
         drop_schema(&store, &schema).await;
     }
@@ -6810,17 +6718,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("own branch point"), "{err}");
-
-        // Deleted ancestor → rejected.
-        let dead = rand_branch();
-        let mut dead_row = sample_branch_state_row(dead);
-        dead_row.deleted_at = Some(chrono::Utc::now().naive_utc());
-        create_branch_state_row(&store, &dead_row).await.unwrap();
-        let err = store
-            .create_branch_row(rand_branch(), dead, Lsn(70), 1)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("deleted"), "{err}");
 
         drop_schema(&store, &schema).await;
     }
@@ -8337,10 +8234,10 @@ mod tests {
     /// Scenario: the fork↔cutoff interlock, GC half. The publish clamps
     /// to min(ancestor_lsn) over child ROWS inside the same UPDATE that
     /// writes the cutoff — so a fork registered before the statement's
-    /// snapshot is never cut past. Every row counts, `deleted_at` set or
-    /// not; only removing the row (what branch-deletion GC will do)
-    /// releases the pin. (The no-children case is the monotone test
-    /// above: its publishes advance unclamped.)
+    /// snapshot is never cut past. The pin is the row's *presence*:
+    /// only removing it (what branch-deletion GC will do) releases the
+    /// pin. (The no-children case is the monotone test above: its
+    /// publishes advance unclamped.)
     #[tokio::test]
     async fn publish_gc_cutoff_clamps_to_child_rows() {
         use utils::generation::Generation;
@@ -8352,13 +8249,12 @@ mod tests {
         row.applied_gc_cutoff_lsn = Lsn(50);
         create_branch_state_row(&store, &row).await.unwrap();
 
-        // Children forked at 110 and 150, and one at 90 that is
-        // mid-deletion (deleted_at stamped, row still present).
-        create_child_row(&store, parent, 110, false).await;
-        create_child_row(&store, parent, 150, false).await;
-        let mid_deletion = create_child_row(&store, parent, 90, true).await;
+        // Children forked at 110, 150 and 90.
+        create_child_row(&store, parent, 110).await;
+        create_child_row(&store, parent, 150).await;
+        let lowest = create_child_row(&store, parent, 90).await;
 
-        // The mid-deletion child still pins: 105 clamps to 90.
+        // The lowest child pins: 105 clamps to 90.
         let out = store
             .publish_gc_cutoff(parent, Generation::new(5), Lsn(105))
             .await
@@ -8369,7 +8265,7 @@ mod tests {
         let delete_sql = format!("DELETE FROM \"{PROD_SCHEMA}\".branch_state WHERE branch_id = $1");
         store
             .ysql_client
-            .execute(&delete_sql, &[&mid_deletion.to_string()])
+            .execute(&delete_sql, &[&lowest.to_string()])
             .await
             .unwrap();
         let out = store
@@ -8387,22 +8283,13 @@ mod tests {
         assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(110) });
     }
 
-    /// A child `branch_state` row of `parent` forked at `lsn`, live or
-    /// mid-deletion (`deleted_at` stamped, row present). Returns the
-    /// child's id.
-    async fn create_child_row(
-        store: &PageStore,
-        parent: BranchId,
-        lsn: u64,
-        deleted: bool,
-    ) -> BranchId {
+    /// A child `branch_state` row of `parent` forked at `lsn`. Returns
+    /// the child's id.
+    async fn create_child_row(store: &PageStore, parent: BranchId, lsn: u64) -> BranchId {
         let child = rand_branch();
         let mut row = sample_branch_state_row(child);
         row.ancestor_branch_id = Some(parent);
         row.ancestor_lsn = Some(Lsn(lsn));
-        if deleted {
-            row.deleted_at = Some(chrono::Utc::now().naive_utc());
-        }
         create_branch_state_row(store, &row).await.unwrap();
         child
     }

@@ -4286,11 +4286,6 @@ mod tests {
                 pg_version: 180_002,
                 initdb_lsn: None,
                 prev_record_lsn: None,
-                archived_at: None,
-                deleted_at: None,
-                rel_size_migration: None,
-                rel_size_migrated_at: None,
-                lineage: Default::default(),
             })
             .await
             .unwrap();

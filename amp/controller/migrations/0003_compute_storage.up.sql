@@ -212,9 +212,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.meta (
 -- so the seeded value needs no later refinement.
 --
 -- The pageserver group carries every load-bearing field from the page-store
--- index: consistent/gc/initdb LSNs, generation, archive/delete flags, rel-size
--- schema-migration state, plus a JSON `lineage` column for future
--- ancestor-detach support (always `Default` in yb-mode today). The safekeeper
+-- index: consistent/gc/initdb LSNs, ancestry, and generation. The safekeeper
 -- group is its control file: hot-update LSN scalars get their own BIGINT
 -- columns so a control-file save is a column-scoped UPDATE rather than a
 -- full-row rewrite. yb-amp runs a single safekeeper per branch with WAL
@@ -233,11 +231,6 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
     current_generation     INT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
-    archived_at            TIMESTAMP,
-    deleted_at             TIMESTAMP,
-    rel_size_migration     TEXT,
-    rel_size_migrated_at   BIGINT,
-    lineage                JSONB,
 
     -- safekeeper-owned group; NULL until the safekeeper creates its control file.
     safekeeper_initialized BOOLEAN     NOT NULL DEFAULT false,

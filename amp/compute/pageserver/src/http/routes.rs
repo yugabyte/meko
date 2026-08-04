@@ -182,18 +182,12 @@ async fn build_timeline_info_common(
     let current_logical_size = timeline.get_current_logical_size(logical_size_task_priority, ctx);
     let current_physical_size = Some(timeline.layer_size_sum().await);
     let state = timeline.current_state();
-    // Report is_archived = false if the timeline is still loading
-    let is_archived = timeline.is_archived().unwrap_or(false);
     let remote_consistent_lsn_projected = timeline
         .get_remote_consistent_lsn_projected()
         .unwrap_or(Lsn(0));
     let remote_consistent_lsn_visible = timeline
         .get_remote_consistent_lsn_visible()
         .unwrap_or(Lsn(0));
-    let is_invisible = timeline
-        .remote_state
-        .invisible
-        .load(std::sync::atomic::Ordering::Relaxed);
 
     let walreceiver_status = timeline.walreceiver_status();
 
@@ -240,10 +234,8 @@ async fn build_timeline_info_common(
         pg_version: timeline.pg_version,
 
         state,
-        is_archived: Some(is_archived),
         rel_size_migration: Some(rel_size_migration),
         rel_size_migrated_at,
-        is_invisible: Some(is_invisible),
 
         walreceiver_status,
         image_consistent_lsn: None,

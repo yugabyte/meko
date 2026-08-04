@@ -3,7 +3,7 @@
 //! `*_initialized` flag.
 //!
 //! `update_branch_initial_state` is the only writer of `initdb_lsn`,
-//! `rel_size_migration`, `lineage` and `pageserver_initialized`, and used to be
+//! `pageserver_initialized`, and used to be
 //! scoped `WHERE consistent_lsn IS NULL`. On the bootstrap path that predicate
 //! is already false by the time it runs — `claim_generation` satisfies the gen
 //! fence before the branch is opened, and the initdb import's flush lands
@@ -12,8 +12,8 @@
 //!
 //! `applied_gc_cutoff_lsn` is deliberately NOT asserted here: the harness runs
 //! with `enable_gc = true`, so a GC tick stamps that column within a second and
-//! would mask the bug. `initdb_lsn` and `lineage` have no second writer, so
-//! they stay NULL for the life of the branch and are the honest signal.
+//! would mask the bug. `initdb_lsn` has no second writer, so it stays NULL
+//! for the life of the branch and is the honest signal.
 //!
 //! This asserts against the shared `main` branch, which the harness bootstraps
 //! at cluster setup — the same code path every branch takes. The safekeeper's
@@ -27,7 +27,7 @@ use crate::db;
 use crate::tee_println;
 
 /// Columns that must be non-NULL once the branch is up.
-const POPULATED: &[&str] = &["initdb_lsn", "lineage", "consistent_lsn", "current_generation"];
+const POPULATED: &[&str] = &["initdb_lsn", "consistent_lsn", "current_generation"];
 
 /// Each daemon's explicit "my group exists" discriminator. These are booleans,
 /// so "present" is not the assertion — `false` is a perfectly non-NULL value

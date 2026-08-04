@@ -298,8 +298,8 @@ the guarded failure mode is a crash-loop on attach, and the guard costs one
 
 *History (#552):* the creation write used to be scoped `WHERE consistent_lsn
 IS NULL`, which the bootstrap import's own flush had already falsified, so it
-matched zero rows and silently no-oped — leaving this column, `initdb_lsn`
-and `lineage` NULL for the life of the branch. That NULL is what crash-looped
+matched zero rows and silently no-oped — leaving this column and
+`initdb_lsn` NULL for the life of the branch. That NULL is what crash-looped
 attach in #531. See [`yugabyte.md`](yugabyte.md) for the write order.
 
 **Updated in memory by:** the attach-time load, the GC tick's `Rcu`
@@ -518,7 +518,7 @@ durable YB with buffer state mid-record and can ship an inconsistent
 | LSN | Persisted? | Notes |
 |-----|------------|-------|
 | `standby_horizon` | In-memory `AtomicLsn` | Initialized to 0; metric gauge wired; no writer |
-| `rel_size_migrated_at` | YB `branch_state` | Rel-size v2 migration boundary (`rel_size_v2_status`) |
+| `rel_size_migrated_at` | In-memory only | Rel-size v2 migration boundary (`rel_size_v2_status`); never persisted |
 | `rel_size_latest_cache` | In-memory `(Lsn, BlockNumber)` per rel | Only trusted at `lsn ≥ rel_size_cache_horizon` |
 | `rel_size_snapshot_cache` | In-memory LRU `(Lsn, RelTag)` | Snapshot-read size cache |
 

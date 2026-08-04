@@ -420,9 +420,9 @@ the branch's ancestor LSN. Find the floor:
   basebackup, a client that never released) pins it at its read LSN; find
   and clear the holder.
 - **Child branch** — every child `branch_state` row pins its parent at
-  its fork point, `deleted_at` set or not (a deleted child can still be
-  read until branch-deletion GC removes its row — until that flow
-  exists, a dropped branch pins its parent indefinitely).
+  its fork point. The pin is the row's presence, so a dropped branch keeps
+  pinning its parent until branch-deletion GC removes the row (#435); that
+  flow does not exist yet.
 - **`consistent_lsn`** — ingestion lagging (safekeeper/walreceiver behind)
   holds the cutoff back; not a GC problem.
 - **Retention** — a large `gc_horizon` / `pitr_interval` is intentional;

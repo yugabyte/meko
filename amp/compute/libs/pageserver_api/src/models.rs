@@ -1030,15 +1030,10 @@ pub struct TimelineInfo {
     // Forward compatibility: a previous version of the pageserver will receive a JSON. serde::Deserialize does
     // not deny unknown fields by default so it's safe to set the field to some value, though it won't be
     // read.
-    /// Whether the timeline is archived.
-    pub is_archived: Option<bool>,
-
     /// The status of the rel_size migration.
     pub rel_size_migration: Option<RelSizeMigration>,
     pub rel_size_migrated_at: Option<Lsn>,
 
-    /// Whether the timeline is invisible in synthetic size calculations.
-    pub is_invisible: Option<bool>,
     // the largest LSN below which all page updates have been included in the image layers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_consistent_lsn: Option<Lsn>,

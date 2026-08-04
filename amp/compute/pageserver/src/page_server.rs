@@ -666,13 +666,6 @@ impl PageServer {
         };
         let timeline = match row {
             Some(row) => {
-                if row.deleted_at.is_some() {
-                    anyhow::bail!(
-                        "timeline {} is marked deleted (deleted_at = {:?}); refusing to open",
-                        row.branch_id,
-                        row.deleted_at,
-                    );
-                }
                 info!(
                     branch_id = %row.branch_id,
                     consistent_lsn = %row.consistent_lsn,
@@ -905,8 +898,10 @@ impl PageServer {
 
         // Resume-deletion path is dead in yb-amp: synth never produces
         // `MaybeDeletedIndexPart::Deleted`, so there's nothing to
-        // restart here. If we want crash-safe deletion in yb-amp,
-        // surface `branch_state.deleted_at` at preload time instead.
+        // restart here. Branch drop tombstones
+        // `amp_registry.branches.dropped_at` and leaves the
+        // `branch_state` row for the GC pass in #435 to remove; crash-safe
+        // deletion, if wanted, keys off that.
 
         // yb-amp is the only path; we never wrote layer files, never
         // created per-timeline dentries, nothing to reconcile. The

@@ -51,8 +51,7 @@ fully-active branch. There is no branch state machine and no
 in-protocol wait-for-active. Failure to open is fatal to the process.
 
 - The pageserver's column group is populated in `amp_storage.branch_state` →
-  open it (restarts are trivially idempotent; the seed is ignored). A row with
-  `deleted_at` set refuses to open.
+  open it (restarts are trivially idempotent; the seed is ignored).
 - Group absent + seed has no ancestor → run initdb + import, then fill in
   the row (`UninitializedTimeline::finish_creation`). If the initdb tar
   for this branch already exists in remote storage it is REUSED —
@@ -272,11 +271,6 @@ CREATE TABLE amp_storage.branch_state (
     current_generation     INT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
-    archived_at            TIMESTAMP,
-    deleted_at             TIMESTAMP,
-    rel_size_migration     TEXT,
-    rel_size_migrated_at   BIGINT,
-    lineage                JSONB,
     PRIMARY KEY ((branch_id) HASH)
 );
 ```
@@ -303,9 +297,6 @@ CREATE TABLE amp_storage.branch_state (
   `consistent_lsn`, persisted best-effort so restart can hand the
   safekeeper the right value; `COALESCE` on update keeps a good value
   when a flush window has no fresh pairing.
-- `lineage` (JSONB) — detach-ancestor bookkeeping, always `Default` in
-  yb-amp; the ancestry chain is derived from `ancestor_branch_id` /
-  `ancestor_lsn`, never from this column.
 
 ### Payload compression
 
@@ -1174,8 +1165,7 @@ The compute opens libpq connections to the pageserver per backend
 - **Multi-branch hosting** — one process, one branch. Branch lifecycle
   (create/delete/migrate) is driven by the launcher and controller, not
   by pageserver HTTP APIs.
-- **Detach-ancestor** — unsupported; the `lineage` JSONB column is
-  always `Default`.
+- **Detach-ancestor** — unsupported; nothing on the row records it.
 - **Consumption metrics / synthetic size workers** — none.
 
 ## Code anchors

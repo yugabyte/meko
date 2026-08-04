@@ -16,14 +16,11 @@
 //!   `disk_consistent_lsn` field. Seeded at attach from the durable
 //!   `branch_state.consistent_lsn` column so it's correct from the
 //!   first feedback.
-//! - **`archived`** — set by the storage_ctl
-//!   "timeline_archival" RPC. While set, the periodic flusher
-//!   skips its YB INSERT (the timeline is offline; no new WAL is
-//!   coming).
-//! - **`invisible`** — set by storage_ctl for tenants pending
-//!   detach. Cosmetic/visibility-only today.
-//! - **`deleting`** — set when a timeline-delete operation is
-//!   in progress. Blocks attach + walreceiver feedback.
+//! - **`shutting_down`** — set by `Timeline::shutdown`, read only by
+//!   `await_initial_logical_size` to skip the computation on a timeline
+//!   that is going away. It was called `deleting`, which it never was:
+//!   every shutdown sets it, and nothing in attach or the walreceiver
+//!   reads it.
 //!
 //! GC blocking reasons stay in `gc_block::GcBlock` (per-tenant
 //! Mutex<HashMap<BranchId, …>>) — that struct already owns the
@@ -40,18 +37,14 @@ pub struct TimelineRemoteState {
     /// clone and bump it without touching this struct on the hot flush
     /// path. See module-level doc for the contract.
     pub consistent_lsn: std::sync::Arc<AtomicLsn>,
-    pub archived: AtomicBool,
-    pub invisible: AtomicBool,
-    pub deleting: AtomicBool,
+    pub shutting_down: AtomicBool,
 }
 
 impl TimelineRemoteState {
     pub fn new() -> Self {
         Self {
             consistent_lsn: std::sync::Arc::new(AtomicLsn::new(0)),
-            archived: AtomicBool::new(false),
-            invisible: AtomicBool::new(false),
-            deleting: AtomicBool::new(false),
+            shutting_down: AtomicBool::new(false),
         }
     }
 }

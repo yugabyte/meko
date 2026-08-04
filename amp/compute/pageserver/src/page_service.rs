@@ -2707,11 +2707,6 @@ impl PageServerHandler {
             .await?;
         let ctx = ctx.with_scope_timeline(&timeline);
 
-        if timeline.is_archived() == Some(true) {
-            tracing::info!("branch {branch_id} is archived, but got basebackup request for it.");
-            return Err(QueryError::NotFound("timeline is archived".into()));
-        }
-
         // #240: never build a tarball from attach-replay-window state. A
         // basebackup taken while the walreceiver is still re-ingesting
         // `(consistent_lsn, wal_end]` can capture pg_xact / relation sizes
@@ -3602,9 +3597,6 @@ impl proto::PageService for GrpcPageServiceHandler {
         let ctx = self.ctx.with_scope_timeline(&timeline);
 
         // Validate the request and decorate the span.
-        if timeline.is_archived() == Some(true) {
-            return Err(tonic::Status::failed_precondition("timeline is archived"));
-        }
         let req: page_api::GetBaseBackupRequest = req.into_inner().try_into()?;
 
         span_record!(lsn=?req.lsn);

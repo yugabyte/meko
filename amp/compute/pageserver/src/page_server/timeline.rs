@@ -111,7 +111,7 @@ pub struct Timeline {
     walredo_mgr: Option<Arc<super::WalRedoManager>>,
 
     /// Per-timeline state previously owned by RemoteTimelineClient
-    /// (rcLsn slot, archived/invisible/deleting bits). The RTC
+    /// (rcLsn slot, the `shutting_down` bit). The RTC
     /// itself was deleted in Phase 4.d chunk 1; this struct is the
     /// minimal residual state callers still care about.
     pub(crate) remote_state: Arc<remote_state::TimelineRemoteState>,
@@ -1223,16 +1223,8 @@ impl Timeline {
             // controller's most recent attach.
             current_generation: self.generation.into().unwrap_or(0) as i32,
             pg_version: self.pg_version.major_version_num(),
-            // index_part.json-derived state — all default at creation
-            // time. archived/deleted/rel-size-migration get set by
-            // the corresponding write paths later.
             initdb_lsn: Some(self.initdb_lsn),
             prev_record_lsn: None,
-            archived_at: None,
-            deleted_at: None,
-            rel_size_migration: None,
-            rel_size_migrated_at: None,
-            lineage: Default::default(),
         };
         pw.fpu_page_store()
             .update_branch_initial_state(&row)
@@ -1667,12 +1659,7 @@ impl Timeline {
             // yb-amp: no in-memory layers to inspect; always issue the
             // flush so PageWriter has a chance to drain its pending row
             // buffer before shutdown.
-            let do_flush = !self
-                .remote_state
-                .archived
-                .load(std::sync::atomic::Ordering::Relaxed);
-
-            if do_flush {
+            {
                 // `force_flush` (not plain `flush`) so the persisted
                 // `disk_consistent_lsn` reflects everything just drained —
                 // otherwise a clean shutdown could leave it up to one upsert
@@ -1710,10 +1697,10 @@ impl Timeline {
         // Ensure Prevent new page service requests from starting.
         self.handles.shutdown();
 
-        // Mark the timeline deleting so the attach path (and any
-        // in-flight ancestor checks) refuse to touch it.
+        // Read only by `await_initial_logical_size`, to skip the
+        // computation on a timeline that is going away.
         self.remote_state
-            .deleting
+            .shutting_down
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
         // yb-amp: there are no `RemoteUploadTask`s spawned, so the
@@ -1768,14 +1755,6 @@ impl Timeline {
 
     pub(crate) fn is_active(&self) -> bool {
         self.current_state() == TimelineState::Active
-    }
-
-    pub(crate) fn is_archived(&self) -> Option<bool> {
-        Some(
-            self.remote_state
-                .archived
-                .load(std::sync::atomic::Ordering::Relaxed),
-        )
     }
 
     pub(crate) fn is_stopping(&self) -> bool {
@@ -2840,10 +2819,10 @@ impl Timeline {
 
         if self
             .remote_state
-            .deleting
+            .shutting_down
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            // The timeline was created in a deletion-resume state, we don't expect logical size to be populated
+            // Going away — no point computing a size nothing will read.
             return;
         }
 
