@@ -62,7 +62,7 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	// A branch's row is created by RecordBranch — the shared choke point both the
 	// controller and yb_amp_local reach. Branches are project-scoped now, so the
 	// project has to exist: the branch -> project FK is what enforces it.
-	projectID := seedExtensionsProject(t, ctx, pool)
+	projectID := seedCoreProject(t, ctx, pool)
 	rootID := uuid.New()
 	rootHex := registry.FormatBranchID(rootID)
 
@@ -156,13 +156,13 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	}
 }
 
-// seedExtensionsProject inserts the user -> pool -> project ladder a branch needs
+// seedCoreProject inserts the user -> pool -> project ladder a branch needs
 // and returns the project id. Names carry the pool id because storage_pool names
 // are unique cluster-wide and this database may be reused across tests.
-func seedExtensionsProject(t *testing.T, ctx context.Context, pool *db.Pool) uuid.UUID {
+func seedCoreProject(t *testing.T, ctx context.Context, pool *db.Pool) uuid.UUID {
 	t.Helper()
 	owner, poolID, projectID := uuid.New(), uuid.New(), uuid.New()
-	name := "core-extensions-test-" + poolID.String()
+	name := "core-test-" + poolID.String()
 	for _, stmt := range []struct {
 		sql  string
 		args []any

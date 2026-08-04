@@ -158,26 +158,28 @@ func FullPgVersionID(major int) (int, error) {
 //
 //   - branch — the branch's identity and creation record (its name, PG version,
 //     and how to create it: a NULL parent means bootstrap, a set one means fork
-//     that ancestor at fork_lsn). On the product path the create_branch step has
-//     already written this row, so the insert converges to a no-op; on the
-//     launcher path this is where the row is born. One row either way.
+//     that ancestor at fork_lsn). This insert is the row's only creator on both
+//     paths: the product path plans record_branch_recipe alone, and create_branch
+//     is registered for task replay but planned by nothing.
 //   - amp_storage.branch_state — the per-branch state row the pageserver and
 //     safekeeper share. Both daemons only ever validate that it exists and
 //     UPDATE their own column group; neither creates it, so it has to be here
 //     before either starts.
 //
-// A fork (AncestorBranchID set) is additionally validated against the ancestor's
-// GC cutoff — ErrInvalid if the fork point's history is already reclaimed — via
-// a write on the ancestor's row that serializes with the ancestor's GC cutoff
-// advance (see the interlock comment in the body).
+// A fork (AncestorBranchID set) is additionally validated twice: the ancestor must
+// still be live, and the fork point must be at or above the ancestor's GC cutoff.
+// Each validation races a writer of that ancestor — a drop of it, or an advance of
+// its cutoff. Both are resolved the same way: the condition is the WHERE clause of
+// an UPDATE of the ancestor's row, so the two transactions conflict on that row
+// instead of both committing. Described per race in the body.
 func (s *Store) RecordBranch(ctx context.Context, projectID uuid.UUID, branchID string, req BranchCreateRecord) error {
 	err := s.recordBranch(ctx, projectID, branchID, req)
-	// The fork interlock write-conflicts with the ancestor's GC cutoff
-	// advance by design; surface the losing side legibly (409, retryable)
-	// instead of a raw serialization abort at HTTP 500.
+	// The validations above write the ancestor's row, so a concurrent drop or
+	// cutoff advance can abort this whole transaction with a serialization failure
+	// (40001). ErrConflict tells the caller to retry.
 	if isSerializationAbort(err) {
 		return fmt.Errorf(
-			"%w: branch registration conflicted with a concurrent GC cutoff advance on the ancestor — retry: %w",
+			"%w: branch registration conflicted with a concurrent GC cutoff advance on, or drop of, the ancestor — retry: %w",
 			ErrConflict, err)
 	}
 	return err
@@ -264,10 +266,11 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	// this row was first written.
 	//
 	// This INSERT is the branch's *only* creator on the fork path: the branch task
-	// is one step so that the row, the branch_state seed, and the interlock below
+	// is one step so that the row, the branch_state seed, and the validation below
 	// all commit or roll back together. A fork therefore selects its parent rather
-	// than naming it, which is what enforces that the parent is LIVE — the FK alone
-	// cannot, since a tombstoned parent's row is still there.
+	// than naming it — the FK alone cannot check liveness, since a tombstoned
+	// parent's row is still there.
+	//
 	var tag pgconn.CommandTag
 	if ancestorUUID != nil {
 		tag, err = tx.Exec(ctx,
@@ -304,6 +307,47 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 		if !exists {
 			return fmt.Errorf("%w: fork parent %s is not a live branch in project %s",
 				ErrNotFound, *req.AncestorBranchID, projectID)
+		}
+	}
+
+	// The parent must still be live, and a plain read cannot establish that: the drop
+	// tombstones the parent's row while checking `NOT EXISTS (live children)`, and
+	// neither side writes what the other reads, so both commit (time increases
+	// downwards):
+	//
+	//   fork a child off P                 drop P
+	//   ──────────────────                 ──────
+	//   read P: dropped_at IS NULL ✓
+	//                                      read P's children: none ✓
+	//   insert the child row
+	//                                      UPDATE P SET dropped_at = now()
+	//   P is tombstoned with a live child ✗
+	//
+	// The child's pre-fork history lives under P's branch_id, so branch-drop GC
+	// would then reclaim it out from under a live branch.
+	//
+	// So make the fork WRITE P's row: both sides then write it, and the write-write
+	// conflict forces the drop's guard to re-run and see the child.
+	//
+	// Deliberately a write, not a row lock. A lock on P orders the drop after the
+	// fork but never refreshes its snapshot, so under REPEATABLE READ the guard
+	// still sees no child and tombstones P -- silently, no error. No lock mode
+	// helps: the child does not exist yet, and a phantom cannot be locked.
+	//
+	// DeleteProject tombstones every branch row in the project, P's included, so it
+	// conflicts here the same way.
+	if req.AncestorBranchID != nil && tag.RowsAffected() == 1 {
+		live, err := tx.Exec(ctx,
+			`UPDATE amp_registry.branches SET dropped_at = dropped_at
+			  WHERE branch_id = $1::uuid AND project_id = $2::uuid AND dropped_at IS NULL`,
+			*ancestorUUID, projectID.String())
+		if err != nil {
+			return fmt.Errorf("validate fork parent %s liveness: %w", *req.AncestorBranchID, err)
+		}
+		if live.RowsAffected() == 0 {
+			// Rolled back with the txn: the child row above never lands.
+			return fmt.Errorf("%w: fork parent %s was dropped concurrently",
+				ErrNotFound, *req.AncestorBranchID)
 		}
 	}
 

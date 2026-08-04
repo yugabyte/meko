@@ -444,6 +444,24 @@ impl Cluster {
         Ok(())
     }
 
+    /// Run a `yb_amp_local` subcommand that is EXPECTED to fail, returning
+    /// whether it succeeded plus its combined output. For asserting a refusal
+    /// and the reason it carries — [`Self::yb`] turns a non-zero exit into an
+    /// error, which is the wrong shape when the refusal is the assertion.
+    pub fn yb_try(&self, args: &[&str]) -> anyhow::Result<(bool, String)> {
+        let out = self
+            .yb_command()
+            .args(args)
+            .output()
+            .with_context(|| format!("spawning yb_amp_local {}", args.join(" ")))?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Ok((out.status.success(), text))
+    }
+
     /// Run a `yb_amp_local` subcommand, ignoring its exit status (for
     /// best-effort cleanup calls).
     pub fn yb_quiet(&self, args: &[&str]) {

@@ -106,6 +106,11 @@ flow, forking an existing branch instead of bootstrapping a fresh one:
    writes a `branch` row under the **same project** with a new branch id (=
    storage-layer `branch_id`), `is_default = false`, `parent_branch_id = parent`,
    the inherited `pg_version`, and `fork_lsn` (`core.Backend.CreateBranch`).
+   The parent must be **live**: `RecordBranch` enforces that with a conditional
+   write on the parent's row rather than a read of it, so the check serializes
+   against a concurrent drop of that parent instead of write-skewing past it
+   (see [`pageserver-gc.md`](../../compute/architecture/pageserver-gc.md), the
+   cutoff-publish step).
 2. The **fork point** defaults to the parent's durable WAL end — the
    `flush_lsn` of the safekeeper co-located with the parent's `read_write`
    endpoint, read directly from that node (`node.Client.TimelineFlushLSN` via

@@ -151,6 +151,21 @@ runs:
    advanced cutoff and the registration rolls back (rejected). A plain
    read on either side would not conflict and both could commit on stale
    views of each other.
+
+   The same shape closes the fork ↔ **drop** race, one row over. A drop
+   tombstones the parent's `amp_registry.branches` row while checking
+   `NOT EXISTS (live children)`, and the fork's liveness check was a read
+   of that row — so both could commit and leave a tombstoned parent with
+   a live child, whose pre-fork history lives under the *parent's*
+   `branch_id` and would then be reclaimed out from under a live branch.
+   So `RecordBranch`'s liveness check is a conditional write of that row too
+   (`WHERE dropped_at IS NULL`, self-assignment SET), which is what makes the
+   two conflict. A row lock would not: it orders the drop after the fork but
+   never refreshes its snapshot, so under repeatable read the drop's
+   `NOT EXISTS (live children)` still sees no child and tombstones the parent
+   — silently, with no serialization error. No lock mode helps, because the
+   child does not exist yet when the fork checks, and a phantom cannot be
+   locked.
 2. **Await readers.** Wait out in-flight reads still holding a guard on
    the *old* cutoff before deleting anything they might need. Reads never
    wait for GC; GC waits for reads.
