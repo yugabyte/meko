@@ -81,7 +81,7 @@ pub struct TimelineResources {
     /// `TenantSharedResources::gc_page_store`).
     pub gc_page_store: Arc<crate::page_store::PageStore>,
     /// Ancestry lineage for lineage-aware PageStore reads, built by
-    /// `PageStore::load_lineage` from the timeline_state row chain.
+    /// `PageStore::load_lineage` from the branch_state row chain.
     /// `None` → the trivial single-segment lineage (fresh bootstrap,
     /// where the row doesn't exist yet; bootstraps have no ancestor).
     pub lineage: Option<Vec<crate::page_store::LineageSegment>>,
@@ -1115,7 +1115,7 @@ impl Timeline {
     /// Durable, gap-free consistency watermark. Advances only after a
     /// successful gen-fenced `advance_consistent_lsn` UPSERT in
     /// `page_writer::flush` — i.e., every record with LSN ≤ this is in
-    /// `amp_storage.pages` AND the `timeline_state` row has been
+    /// `amp_storage.pages` AND the `branch_state` row has been
     /// updated. Use this for SK feedback, restart resume position, and
     /// the HTTP API `disk_consistent_lsn` field.
     pub(crate) fn get_consistent_lsn(&self) -> Lsn {
@@ -2125,7 +2125,7 @@ impl Timeline {
 
                 remote_state: {
                     // Seed the durable consistent_lsn from the persisted
-                    // timeline_state column so the very first walreceiver
+                    // branch_state column so the very first walreceiver
                     // feedback (and any HTTP query before a flush runs)
                     // reports the correct durable LSN rather than 0.
                     let state = Arc::new(remote_state::TimelineRemoteState::new());
@@ -2139,7 +2139,7 @@ impl Timeline {
                 image_materializer_task: std::sync::Mutex::new(image_materializer_task),
 
                 // initialize the eager in-memory 'last_record_lsn' from the
-                // durable 'consistent_lsn' seed loaded from `timeline_state`.
+                // durable 'consistent_lsn' seed loaded from `branch_state`.
                 last_record_lsn: SeqWait::new(RecordLsn {
                     last: disk_consistent_lsn,
                     prev: metadata.prev_record_lsn().unwrap_or(Lsn(0)),
@@ -2823,7 +2823,7 @@ impl Timeline {
         self.metrics.last_record_lsn_gauge.set(new_lsn.0 as i64);
         // Snapshot the current `last` before advancing — that's the
         // record's `prev_record_lsn`. PageWriter will pair it with
-        // `disk_consistent_lsn` when persisting `timeline_state`, so
+        // `disk_consistent_lsn` when persisting `branch_state`, so
         // a restart can hand the safekeeper the correct `xl_prev`.
         let prev_for_new = self.last_record_lsn.load().last;
         self.last_record_lsn.advance(new_lsn);

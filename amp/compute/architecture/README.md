@@ -64,13 +64,14 @@ subsystem has its own page.
                           \               |  yb_thin_client (hot paths, :9100)
                            \              |
                             v             v
-              +---------------------------------------------------+
-              |            YugabyteDB (db: yb_storage)            |
-              |   schema  public      (blobs + blob_namespace)    |
-              |   schema  pageserver  (pages, slru_pages, meta,   |
-              |                        timeline_state)            |
-              |   schema  safekeeper  (timeline_state, wals)      |
-              +---------------------------------------------------+
+              +---------------------------------------------------------------+
+              |                  YugabyteDB (db: yb_storage)                  |
+              |   schema  amp_storage   (pages, slru_pages, meta, wals,       |
+              |                          blobs + blob_namespace, pending_gc,  |
+              |                          branch_state)                        |
+              |   schema  amp_registry  (control-plane resource model)        |
+              |   schema  controller    (write-ahead task log)                |
+              +---------------------------------------------------------------+
 ```
 
 What's on local FS: the compute's `pgdata` and operational files

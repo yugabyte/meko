@@ -512,7 +512,7 @@ impl PageServer {
         };
 
         // Build the ancestry lineage for lineage-aware reads. This is
-        // the open-existing path, so the timeline_state row (and its
+        // the open-existing path, so the branch_state row (and its
         // ancestor chain) is guaranteed to exist.
         let mut resources = resources;
         resources.lineage = Some(
@@ -568,7 +568,7 @@ impl PageServer {
     }
 
     /// Open the configured (tenant, timeline) synchronously: preload the
-    /// timeline_state row, attach (open-existing or create-if-missing per
+    /// branch_state row, attach (open-existing or create-if-missing per
     /// the branch_state seed), and activate. Called from startup BEFORE any
     /// listener accepts traffic; failure is fatal to the process.
     pub(crate) async fn open(
@@ -695,7 +695,7 @@ impl PageServer {
                 // create-if-missing path (bootstrap or branch) off the seed.
                 info!(
                     branch_id = %identity.branch_id,
-                    "preload: no timeline_state row yet; will create at attach if configured"
+                    "preload: no branch_state row yet; will create at attach if configured"
                 );
                 None
             }
@@ -824,7 +824,7 @@ impl PageServer {
                         .await
                         .map_err(|e| anyhow::anyhow!("bootstrap configured timeline: {e}"))?;
                     // finish_creation inserted the timeline into
-                    // self.timelines and wrote the timeline_state row;
+                    // self.timelines and wrote the branch_state row;
                     // activation happens in PageServer::activate.
                     let (CreateTimelineResult::Created(t) | CreateTimelineResult::Idempotent(t)) =
                         result;
@@ -906,7 +906,7 @@ impl PageServer {
         // Resume-deletion path is dead in yb-amp: synth never produces
         // `MaybeDeletedIndexPart::Deleted`, so there's nothing to
         // restart here. If we want crash-safe deletion in yb-amp,
-        // surface `timeline_state.deleted_at` at preload time instead.
+        // surface `branch_state.deleted_at` at preload time instead.
 
         // yb-amp is the only path; we never wrote layer files, never
         // created per-timeline dentries, nothing to reconcile. The

@@ -4300,7 +4300,7 @@ mod tests {
     /// number of `put()` calls. It only advances inside the flush
     /// success path, AFTER `try_write_rows` has landed the rows in YB
     /// AND the gen-fenced `advance_consistent_lsn` UPSERT has updated
-    /// `timeline_state`. Wiring a buffer-write to the slot would
+    /// `branch_state`. Wiring a buffer-write to the slot would
     /// reintroduce the 2026-06 gap-on-crash bug: SK feedback /
     /// restart-resume would see an LSN whose rows aren't actually in
     /// `amp_storage.pages`.
@@ -4457,7 +4457,7 @@ mod tests {
 
     /// End-to-end: walreceiver-style flow notes record_lsn after a
     /// put + flush, the throttled `advance_consistent_lsn` runs,
-    /// and the persisted `timeline_state.prev_record_lsn` reflects
+    /// and the persisted `branch_state.prev_record_lsn` reflects
     /// the noted prev. Restart correctness depends on this column
     /// being non-NULL; the previous shape never wrote it.
     #[tokio::test]
@@ -4630,7 +4630,7 @@ mod tests {
         assert_eq!(row.consistent_lsn, Lsn(0x100));
 
         // Second flush within `policy.max_age`: pages durable, the
-        // timeline_state UPDATE is throttled.
+        // branch_state UPDATE is throttled.
         w.put(&[(k(2), Lsn(0x200), image())]).await.unwrap();
         w.note_record_lsn(Lsn(0x200), Lsn(0x100));
         w.flush().await.unwrap();

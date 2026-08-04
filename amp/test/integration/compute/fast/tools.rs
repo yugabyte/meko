@@ -47,14 +47,14 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
-    step("confirm the branch's timeline_state row exists");
+    step("confirm the branch's branch_state row exists");
     let row = db::query_text(
         &yb,
         &format!("SELECT branch_id FROM amp_storage.branch_state WHERE branch_id='{branch}' LIMIT 1"),
     )
     .await?;
     if row.is_empty() {
-        bail!("no timeline_state row for branch {branch}");
+        bail!("no branch_state row for branch {branch}");
     }
 
     step("yb-dump-wals --summary");

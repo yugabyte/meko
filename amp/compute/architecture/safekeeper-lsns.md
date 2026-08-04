@@ -108,7 +108,7 @@ the persisted clock and a last-*attempt* clock, so a failing YB never
 causes a per-tick retry storm. Why the lock-free design matters: this loop
 is the sole servicer of walsender residence-guard requests, and WAL appends
 need the shared-state write lock — an in-loop UPDATE under lock would
-freeze commits whenever the `timeline_state` UPDATE stalls.
+freeze commits whenever the `branch_state` UPDATE stalls.
 
 **Consensus/membership columns do not exist** in this schema: one
 safekeeper serves each branch and YugabyteDB provides the durability

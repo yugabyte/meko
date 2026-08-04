@@ -53,7 +53,7 @@ router is not kept authoritative.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | PATCH | `/v1/branch/:branch_id/control_file` | Patch control-file fields via JSON diff. Body = `patch_control_file::Request { updates, apply_fields }`; applies only the named fields and persists the row. Returns old + new state. Global scope. |
-| POST | `/v1/branch/:branch_id/checkpoint` | Force-persist the control file (flush in-memory state to the `timeline_state` row). Global scope. |
+| POST | `/v1/branch/:branch_id/checkpoint` | Force-persist the control file (flush in-memory state to the `branch_state` row). Global scope. |
 
 ### Failpoints / global debug dump
 

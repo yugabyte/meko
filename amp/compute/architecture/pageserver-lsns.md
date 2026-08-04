@@ -21,7 +21,7 @@ They answer different questions and must never be substituted for each other:
 | Watermark | Advances when | Answers |
 |---|---|---|
 | **`applied_lsn`** (eager, in-memory) | walreceiver puts a record batch into the `PageWriter` buffer (`put_batch` → `applied_lsn.fetch_max`) | "Can a read at LSN X be served from buffer+YB right now?" Read-path waits (`wait_lsn`, GetPage@LSN, `compute_image_consistent_lsn`) use this so reads never stall behind YB INSERT latency. |
-| **`consistent_lsn`** (durable, gap-free) | a gen-fenced `PageStore::advance_consistent_lsn` UPDATE of `timeline_state.consistent_lsn` succeeds inside `PageWriter::flush` | "What survives a crash?" Everything that leaves the process — safekeeper feedback (`disk_consistent_lsn` and `remote_consistent_lsn` wire fields), the walreceiver `START_REPLICATION` resume position, the HTTP API `disk_consistent_lsn` field — reads this. |
+| **`consistent_lsn`** (durable, gap-free) | a gen-fenced `PageStore::advance_consistent_lsn` UPDATE of `branch_state.consistent_lsn` succeeds inside `PageWriter::flush` | "What survives a crash?" Everything that leaves the process — safekeeper feedback (`disk_consistent_lsn` and `remote_consistent_lsn` wire fields), the walreceiver `START_REPLICATION` resume position, the HTTP API `disk_consistent_lsn` field — reads this. |
 
 `applied_lsn ≥ consistent_lsn` at all times; the gap is exactly the contents
 of the in-RAM `PageWriter` buffer. Advertising `applied_lsn` to the
@@ -39,7 +39,7 @@ flowchart LR
     WR -->|walingest put_batch| AL[applied_lsn<br>#40;in-memory, eager#41;]
     WR -->|put_batch rows| BUF[PageWriter buffer]
     BUF -->|flush INSERT| YB[(YB pages/slru/meta)]
-    BUF -->|gen-fenced UPDATE| TS[timeline_state row<br>consistent_lsn column]
+    BUF -->|gen-fenced UPDATE| TS[branch_state row<br>consistent_lsn column]
     TS -->|publish slot| CL[consistent_lsn<br>#40;remote_state slot#41;]
     AL -->|finish_write| LR[last_record_lsn<br>#40;eager, with prev#41;]
     LR -->|note_record_lsn| PW_HIST[record_lsn_history]
@@ -72,7 +72,7 @@ write, so read-path waits don't block behind the YB INSERT round-trip.
 - The paired `last_record_lsn.last` advance carries the same value into the
   `SeqWait` that `wait_lsn` subscribers block on.
 
-**On restart:** Seeded from the persisted `timeline_state.consistent_lsn`.
+**On restart:** Seeded from the persisted `branch_state.consistent_lsn`.
 Both watermarks start equal; `applied_lsn` then runs ahead as the
 walreceiver ingests.
 
@@ -159,7 +159,7 @@ continuity from the stream.
   distinguish them).
 
 **Meaning:** Every record with LSN ≤ this is **durably in YB** — its rows
-are in `amp_storage.pages` / `slru_pages` / `meta` AND the `timeline_state`
+are in `amp_storage.pages` / `slru_pages` / `meta` AND the `branch_state`
 row claims it. "Durable" here means committed to YugabyteDB; the pageserver
 keeps no durable local state.
 
@@ -180,18 +180,18 @@ keeps no durable local state.
 4. If the frontier moved past `consistent_lsn_watermark` AND at least
    `policy.max_age` (default 5 s) elapsed since the last UPDATE, the
    gen-fenced `PageStore::advance_consistent_lsn` UPDATE writes
-   `timeline_state.consistent_lsn` (and `prev_record_lsn`). On `Updated`,
+   `branch_state.consistent_lsn` (and `prev_record_lsn`). On `Updated`,
    `consistent_lsn_watermark` stores the frontier and
    `publish_consistent_lsn` bumps the in-memory slot.
 
 The two `PageWriter` bookkeeping atomics split the durable state in half:
 - `consistent_lsn_observed` — max LSN durable in the page tables this
   process lifetime (advances on every successful `try_write_rows`).
-- `consistent_lsn_watermark` — max LSN the `timeline_state` column claims
+- `consistent_lsn_watermark` — max LSN the `branch_state` column claims
   (advances only on a successful, throttled UPDATE).
 
 **Invariant:** `consistent_lsn_watermark ≤ consistent_lsn_observed`, and the
-persisted `timeline_state.consistent_lsn` equals the watermark. The gap is
+persisted `branch_state.consistent_lsn` equals the watermark. The gap is
 bounded by the `max_age` throttle window. Why the lag is safe: safekeeper
 WAL truncation is bounded by the *persisted* value, so a lagging column only
 makes the safekeeper retain extra WAL — on restart the walreceiver
@@ -316,7 +316,7 @@ drain.
 
 ### `initdb_lsn` — in memory + persisted (optional)
 
-**Where:** `Timeline.initdb_lsn` + `timeline_state.initdb_lsn` (nullable).
+**Where:** `Timeline.initdb_lsn` + `branch_state.initdb_lsn` (nullable).
 
 **Meaning:** LSN at which initdb/import seeded the timeline. On load, falls
 back to `disk_consistent_lsn` when NULL. Used in pre-initdb-LSN error
@@ -327,7 +327,7 @@ checks; low traffic otherwise.
 ### `ancestor_lsn` — in memory + persisted
 
 **Where:** `Timeline.ancestor_lsn` (+ `ancestor_branch_id`) +
-`timeline_state.ancestor_lsn` / `ancestor_branch_id` (nullable columns).
+`branch_state.ancestor_lsn` / `ancestor_branch_id` (nullable columns).
 
 **Meaning:** Branch point. A child branch's row is created with
 `consistent_lsn = ancestor_lsn` (`PageStore::create_branch_row`
@@ -518,7 +518,7 @@ durable YB with buffer state mid-record and can ship an inconsistent
 | LSN | Persisted? | Notes |
 |-----|------------|-------|
 | `standby_horizon` | In-memory `AtomicLsn` | Initialized to 0; metric gauge wired; no writer |
-| `rel_size_migrated_at` | YB `timeline_state` | Rel-size v2 migration boundary (`rel_size_v2_status`) |
+| `rel_size_migrated_at` | YB `branch_state` | Rel-size v2 migration boundary (`rel_size_v2_status`) |
 | `rel_size_latest_cache` | In-memory `(Lsn, BlockNumber)` per rel | Only trusted at `lsn ≥ rel_size_cache_horizon` |
 | `rel_size_snapshot_cache` | In-memory LRU `(Lsn, RelTag)` | Snapshot-read size cache |
 
@@ -530,7 +530,7 @@ durable YB with buffer state mid-record and can ship an inconsistent
 applied_gc_cutoff_lsn  ≤  every served read LSN        (getpage enforcement)
 
 consistent_lsn (slot) == consistent_lsn_watermark
-                       == persisted timeline_state.consistent_lsn
+                       == persisted branch_state.consistent_lsn
                       ≤  consistent_lsn_observed
       (watermark lags observed by at most the max_age throttle window;
        the slot is published only after the column UPDATE succeeds)

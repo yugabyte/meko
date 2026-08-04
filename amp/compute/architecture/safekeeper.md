@@ -220,7 +220,7 @@ against a future refactor rather than a live race.
 
 - **`fpu_client`** (`safekeeper:yb_wal_fpu`) — the only lane with
   `yb_enable_upsert_mode = true`. Carries the hot-path WAL chunk INSERTs and
-  the one-shot `timeline_state` INSERT of `control_file::create_new` (the
+  the one-shot `branch_state` INSERT of `control_file::create_new` (the
   non-idempotent INSERT needs upsert semantics so the client's
   retry-on-connection-drop loop can blindly replay it without a
   duplicate-key failure).
@@ -254,7 +254,7 @@ round-trip count, is what #139 needs. `hot_path =
 and one-snapshot read semantics (the `read_pages` fan-out becomes one
 `read(&ops)` batch). The direct lane retries across tservers round-robin with no YSQL
 fallback. Control file,
-`timeline_state`, GC, truncation, and rehydration always stay on the YSQL
+`branch_state`, GC, truncation, and rehydration always stay on the YSQL
 lanes. `PGSQL_UPSERT` write ops carry skip-read-before-write semantics
 natively, so the `yb_enable_upsert_mode` GUC has no counterpart on this
 lane.
@@ -582,7 +582,7 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
 - **Creation**: either explicitly via `POST /v1/branch`, or implicitly by
   the first walproposer `START_WAL_PUSH` handshake
   (`allow_timeline_creation`, default true). Creation claims the slot with a
-  `CreationInProgress` marker, writes the `timeline_state` row (`create_new`,
+  `CreationInProgress` marker, writes the `branch_state` row (`create_new`,
   on the upsert lane), then loads the timeline back from it. Claiming the slot
   before the write keeps concurrent creators out; the marker is cleared on
   every failure path.
@@ -605,7 +605,7 @@ Startup rebuilds everything from YB; wiping the safekeeper's local directory
 loses nothing but logs.
 
 1. **Control file**: `SharedState::restore` loads the branch's
-   `timeline_state` row (`YbControlFileStorage::restore_opt`, which returns
+   `branch_state` row (`YbControlFileStorage::restore_opt`, which returns
    `None` when the branch has no row yet).
 2. **End-of-WAL rehydration** (`YbWalStorage::new`):
    - `load_write_lsn` reads the raw end of the byte stream with one

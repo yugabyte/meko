@@ -10,11 +10,11 @@
 //!   `Timeline::get_consistent_lsn()`. `PageWriter` installs it via
 //!   `set_consistent_lsn_slot` and bumps it on every successful
 //!   gen-fenced UPSERT, so every record with LSN ≤ this is durably
-//!   in `amp_storage.pages` AND the `timeline_state` row has been
+//!   in `amp_storage.pages` AND the `branch_state` row has been
 //!   updated. Used for SK feedback (`remote_consistent_lsn` wire
 //!   field), restart resume position, and the HTTP API
 //!   `disk_consistent_lsn` field. Seeded at attach from the durable
-//!   `timeline_state.consistent_lsn` column so it's correct from the
+//!   `branch_state.consistent_lsn` column so it's correct from the
 //!   first feedback.
 //! - **`archived`** — set by the storage_ctl
 //!   "timeline_archival" RPC. While set, the periodic flusher

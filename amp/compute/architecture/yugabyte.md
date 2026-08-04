@@ -108,7 +108,7 @@ yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsc
   `pages`/`slru_pages`/`meta` (see
   [`pageserver.md`](pageserver.md) §"Direct-to-tserver hot
   path"). The direct lanes keep per-op fallback to YSQL at runtime;
-  cold paths (DDL, GC, rehydration, control file, `timeline_state`)
+  cold paths (DDL, GC, rehydration, control file, `branch_state`)
   always use YSQL. A binary that does not know these keys fails to
   parse a config that sets them (`deny_unknown_fields`) — intentional,
   not silently ignored.

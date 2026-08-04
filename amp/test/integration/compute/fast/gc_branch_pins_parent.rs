@@ -5,7 +5,7 @@
 //! byte-for-byte on a COLD read (endpoint restarted, answer from the
 //! store). The child is dropped at the end only as teardown: the drop
 //! does NOT release the pin today (nothing marks the child's
-//! timeline_state deleted), so parent reclaim after a child drop is out
+//! branch_state deleted), so parent reclaim after a child drop is out
 //! of scope here — a separate revision handles that.
 
 use std::time::Duration;
@@ -67,7 +67,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // Tear down the child (branch drop + stop its pageserver) BEFORE
     // asserting, so a checksum mismatch can't leave the child endpoint
     // running. NB: the drop does NOT unpin main — nothing marks the
-    // child's timeline_state deleted yet — so the pin outlives this test.
+    // child's branch_state deleted yet — so the pin outlives this test.
     let _ = c.yb(&["branch", "drop", "--branch-id", &b1]);
     c.yb_quiet(&["pageserver", "stop", "ep_gc_pin", "-m", "immediate"]);
 

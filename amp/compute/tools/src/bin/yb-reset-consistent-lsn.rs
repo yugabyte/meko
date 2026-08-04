@@ -65,7 +65,7 @@ struct Args {
 }
 
 /// The subset of `amp_storage.branch_state` this tool reads.
-struct TimelineState {
+struct BranchState {
     consistent_lsn: Lsn,
     prev_record_lsn: Option<Lsn>,
     applied_gc_cutoff_lsn: Lsn,
@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
 
     let branch = args.branch.to_string();
 
-    let state = read_timeline_state(&client, &branch).await?;
+    let state = read_branch_state(&client, &branch).await?;
     // `branch_state.pg_version` holds a full PgVersionId (e.g. 180002); the
     // major version is the leading component.
     let pg_version = match state.pg_version / 10000 {
@@ -177,7 +177,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "NULL".into())
     );
 
-    let affected = write_timeline_state(
+    let affected = write_branch_state(
         &client,
         &branch,
         consistent,
@@ -203,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn read_timeline_state(client: &YsqlClient, branch: &str) -> anyhow::Result<TimelineState> {
+async fn read_branch_state(client: &YsqlClient, branch: &str) -> anyhow::Result<BranchState> {
     // `pageserver_initialized` scopes the read to a row whose pageserver-owned
     // columns are populated. The row is shared with the safekeeper, so without
     // this a branch that has WAL but no page-store state yet would return a row
@@ -231,7 +231,7 @@ async fn read_timeline_state(client: &YsqlClient, branch: &str) -> anyhow::Resul
     let applied_gc_cutoff_lsn = Lsn(row.get::<_, Option<i64>>(2).unwrap_or(0) as u64);
     let pg_version = row.get::<_, i32>(3);
     let current_generation = row.get::<_, i32>(4);
-    Ok(TimelineState {
+    Ok(BranchState {
         consistent_lsn,
         prev_record_lsn,
         applied_gc_cutoff_lsn,
@@ -240,7 +240,7 @@ async fn read_timeline_state(client: &YsqlClient, branch: &str) -> anyhow::Resul
     })
 }
 
-async fn write_timeline_state(
+async fn write_branch_state(
     client: &YsqlClient,
     branch: &str,
     consistent: Lsn,
@@ -256,7 +256,7 @@ async fn write_timeline_state(
         client
             .execute(sql, &params)
             .await
-            .context("UPDATE timeline_state")
+            .context("UPDATE branch_state")
     } else {
         let sql = "UPDATE amp_storage.branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
                    WHERE branch_id = $1";
@@ -264,7 +264,7 @@ async fn write_timeline_state(
         client
             .execute(sql, &params)
             .await
-            .context("UPDATE timeline_state")
+            .context("UPDATE branch_state")
     }
 }
 
