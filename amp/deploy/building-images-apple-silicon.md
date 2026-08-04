@@ -57,12 +57,14 @@ podman build --platform linux/amd64 -f deploy/endpoint/Dockerfile \
 ```
 
 Notes:
+- The `amp-build-tools` base is a **private** Quay repo, so `podman login quay.io`
+  (or `docker login quay.io`) before building — the endpoint/extension images pull
+  it as their `FROM` base.
 - Requires the `compute/vendor/postgres-v18` submodule checked out
   (`git submodule update --init --recursive compute/vendor/postgres-v18`).
-- The `build-tools` base image contains files owned by a high UID (~197609); the
-  podman machine's `core` user has a subuid range of `100000:1000000`, which covers
-  it, so the rootless build extracts fine. (On a host with a smaller subuid range,
-  that extraction fails — build with rootful podman there instead.)
+- The self-built `amp-build-tools` base runs as `nonroot` (uid 1000), so it needs
+  no unusually large subuid range to extract (unlike the old neon build-tools
+  image, whose files were owned by a high UID ~197609).
 - No arm64 shortcut: the meko-dev nodes are x86-only, so a native arm64 image won't
   run there. Rosetta gives a genuine amd64 image without leaving the Mac.
 

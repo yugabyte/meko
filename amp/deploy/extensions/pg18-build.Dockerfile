@@ -14,9 +14,9 @@
 # Build (from the repo root):
 #   docker build -t amp-pg18-build:local -f deploy/extensions/pg18-build.Dockerfile .
 
-ARG REPOSITORY=ghcr.io/neondatabase
-ARG IMAGE=build-tools
-ARG TAG=pinned
+ARG REPOSITORY=quay.io/yugabyte
+ARG IMAGE=amp-build-tools
+ARG TAG=v1
 
 FROM $REPOSITORY/$IMAGE:$TAG
 WORKDIR /home/nonroot

@@ -150,6 +150,8 @@ jobs:
       # Quay auth for `docker push`. QUAY_AMP_TOKEN is a "robot-user:token" pair; split
       # on the first colon and log in. The same secret builds the in-cluster pull
       # secret in the deploy job (its .dockerconfigjson auth is base64(QUAY_AMP_TOKEN)).
+      # This login also authorizes pulling the PRIVATE quay.io/yugabyte/amp-build-tools
+      # base that the endpoint/extension images build `FROM` (buildx reuses this auth).
       - name: Quay login
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}

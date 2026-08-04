@@ -20,9 +20,9 @@
 #
 # yb-amp is Postgres v18 only (compute/vendor/postgres-v18, POSTGRES_VERSIONS=v18).
 
-ARG REPOSITORY=ghcr.io/neondatabase
-ARG IMAGE=build-tools
-ARG TAG=pinned
+ARG REPOSITORY=quay.io/yugabyte
+ARG IMAGE=amp-build-tools
+ARG TAG=v1
 ARG DEBIAN_VERSION=bookworm
 ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
 

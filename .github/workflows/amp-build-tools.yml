@@ -1,0 +1,145 @@
+name: Amp build-tools base
+
+# Builds, tests, and publishes the self-built build-tools base image
+# (quay.io/yugabyte/amp-build-tools) that the three amp image builds compile
+# against. See amp/build-tools/Dockerfile and amp/deploy/build-tools/build.sh.
+#
+# The base has no COPY from the repo, needs no private submodule, and pulls every
+# input from public sources (FROM debian), so building it needs no pull auth. The
+# published repo is PRIVATE, though, so the QUAY_AMP_TOKEN secret is needed to
+# push it here -- and consumer builds elsewhere `docker login` to pull it.
+#
+# `test` and `build` are mutually exclusive -- exactly one runs per event:
+#   build -- runs when the base image itself must be (re)built: every
+#            workflow_dispatch (which also PUSHES the given immutable tag, guarded
+#            against overwrite) and any PR that touches amp/build-tools/**. A real
+#            build validates more than the stubbed flow test, so `test` steps aside.
+#   test  -- the fast flow tests (amp/deploy/build-tools/test_build.sh): the
+#            publish flow + the lockstep-pin invariant across the base, the three
+#            consumers, build.sh, and this workflow. Runs on a PR ONLY when the
+#            base image is NOT rebuilt (e.g. a pin bump, which touches the
+#            consumers/build.sh but not build-tools/Dockerfile) -- the case the
+#            heavy build skips. No docker daemon needed.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Immutable tag to publish (bump to the next vN when the base changes)'
+        type: string
+        default: v1
+  pull_request:
+    branches: [main]
+    # Broad enough that editing any consumer's pin re-runs `test` (catching a
+    # half-done bump); the heavy `build` is gated separately on the base inputs
+    # via the `changes` filter below.
+    paths:
+      - 'amp/build-tools/**'
+      - 'amp/deploy/build-tools/**'
+      - 'amp/Dockerfile'
+      - 'amp/deploy/endpoint/Dockerfile'
+      - 'amp/deploy/extensions/pg18-build.Dockerfile'
+      - '.github/workflows/amp-build-tools.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: quay.io/yugabyte
+  IMAGE: amp-build-tools
+
+jobs:
+  # Which inputs changed. Always runs (never `if`-skipped) so downstream `needs`
+  # never hits the skipped-dependency trap. On workflow_dispatch there is no PR
+  # diff; `build` ignores this output there and runs unconditionally.
+  changes:
+    name: Amp build-tools -- changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      base: ${{ steps.filter.outputs.base }}
+    steps:
+      - uses: actions/checkout@v7
+      # Only the base Dockerfile + its context determine the built image, so only
+      # those gate the heavy build. A pin bump (consumers/build.sh/workflow) does
+      # NOT rebuild the base -- it leaves base=false, so `test` runs instead.
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            base:
+              - 'amp/build-tools/**'
+
+  test:
+    name: Amp build-tools -- flow tests
+    needs: changes
+    # Only when the base image is NOT being rebuilt (see build.if). `needs:
+    # changes` is skipped on workflow_dispatch, which skips this job too -- the
+    # dispatch build covers that case.
+    if: github.event_name == 'pull_request' && needs.changes.outputs.base != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Flow tests (publish flow + lockstep pin)
+        run: bash amp/deploy/build-tools/test_build.sh
+
+  build:
+    name: Amp build-tools -- build${{ github.event_name == 'workflow_dispatch' && ' + push' || '' }}
+    needs: changes
+    # Dispatch always builds+pushes; a PR builds (no push) only when the base's
+    # own inputs changed. always() so a skipped `changes` (on dispatch) doesn't
+    # skip this job.
+    if: >-
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       needs.changes.outputs.base == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # The base build compiles mold + rust tooling and builds ICU from source;
+      # drop the big preinstalled toolchains to keep disk headroom.
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v7
+
+      # Push path only (workflow_dispatch): auth + immutability guard + push.
+      - name: Quay login
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: echo "${QUAY_TOKEN#*:}" | docker login quay.io -u "${QUAY_TOKEN%%:*}" --password-stdin
+
+      # Immutability guard: refuse to overwrite an already-published tag. A tag is
+      # a committed pin the consumers reference, so re-pushing it would silently
+      # change what old commits build against. `docker manifest inspect` exits
+      # non-zero when the tag is absent (the state we want).
+      - name: Refuse to overwrite an existing tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          TAG='${{ github.event.inputs.tag }}'
+          if docker manifest inspect "$REGISTRY/$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "::error::$REGISTRY/$IMAGE:$TAG already published -- tags are immutable, bump to the next vN." >&2
+            exit 1
+          fi
+          echo "$REGISTRY/$IMAGE:$TAG is free to publish."
+
+      # PR: build only (no login, no push) -- proves the Dockerfile still builds.
+      - name: Build (PR guard)
+        if: github.event_name == 'pull_request'
+        run: amp/deploy/build-tools/build.sh --registry "$REGISTRY" --image "$IMAGE" --tag "pr-${{ github.event.pull_request.number }}"
+
+      # Dispatch: build + push the requested immutable tag.
+      - name: Build + push
+        if: github.event_name == 'workflow_dispatch'
+        run: amp/deploy/build-tools/build.sh --push --registry "$REGISTRY" --image "$IMAGE" --tag "${{ github.event.inputs.tag }}"

@@ -375,8 +375,14 @@ docker build -t yb-amp/neon-endpoint:dev -f deploy/endpoint/Dockerfile .
 ```
 
 This compiles patched Postgres v18, the Rust services, and the `neon`
-extension, so the first build is slow. The `ghcr.io/neondatabase/build-tools`
-base image is required (same as the repo-root Dockerfile).
+extension, so the first build is slow. It builds against the self-built
+`quay.io/yugabyte/amp-build-tools` base (same as the repo-root Dockerfile and the
+extension ABI-anchor base). That base is built and published by
+[`build-tools/build.sh`](build-tools/build.sh) /
+`.github/workflows/amp-build-tools.yml` to a **private** Quay repo, so building
+any consumer needs `docker login quay.io` first (CI logs in with the
+`QUAY_AMP_TOKEN` robot before the endpoint/extension builds; locally, use your
+own Quay login).
 
 The endpoint image ships **only** PG18 + the `yb_amp` extension. Every other
 extension (starting with `pgvector`) is built and shipped separately as an OCI
