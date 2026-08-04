@@ -14,16 +14,25 @@ name: Amp on-demand checks
 #                       unit + fast suites run on every compute PR/push via
 #                       pr-build.yml, so this + that == full coverage.
 #   amp_generate_image    — build the controller container image (deploy/controller)
+#   amp_extensions_local  — the local-deploy extension end-to-end test
+#                       (test/integration/compute/extensions.sh): builds the real
+#                       extension docker image and asserts CREATE EXTENSION against a
+#                       yb_amp_local cluster. Also automatic when the diff touches
+#                       deploy/extensions/ (the pipeline it exercises), and nightly on
+#                       main; the GKE twin is amp_deploy_gke_extensions over in
+#                       amp-control-plane-gke.yml.
 #
 # When it fires:
-#   * the daily `schedule` fires — runs amp_integration_slow + amp_generate_image on
-#     main (default branch).
+#   * the daily `schedule` fires — runs amp_integration_slow + amp_generate_image +
+#     amp_extensions_local on main (default branch). A scheduled run reads no PR
+#     body: `decide` marks every owned suite true, so all three run unconditionally.
 #   * a new commit is pushed (`synchronize`) or the PR opens/reopens — every
 #     directive currently in the body applies, so a persisted `/ci` line re-runs
-#     its suite on each new commit. Likewise if the diff adds or modifies files
-#     under test/integration/compute/slow/, which runs amp_integration_slow with no
-#     `/ci` line needed (the slow suite is what exercises those scenarios, so
-#     changing them should always run it).
+#     its suite on each new commit. Two suites also self-trigger from the diff, no
+#     `/ci` line needed, because each is what exercises the files it watches:
+#     amp_integration_slow when it touches test/integration/compute/slow/, and
+#     amp_extensions_local when it touches deploy/extensions/ (the extension build
+#     pipeline).
 #
 # Description `edited` is deliberately NOT a trigger, so a directive added to a PR
 # that is already up needs a commit to fire — `git commit --allow-empty -m "ci:
@@ -88,9 +97,12 @@ jobs:
       - id: gate
         uses: ./.github/actions/ci-directives
         with:
-          suites: '["amp_integration_slow", "amp_generate_image"]'
+          suites: '["amp_integration_slow", "amp_generate_image", "amp_extensions_local"]'
           auto-paths: |
-            {"amp_integration_slow": "amp/test/integration/compute/slow/"}
+            {
+              "amp_integration_slow": "amp/test/integration/compute/slow/",
+              "amp_extensions_local": "amp/deploy/extensions/"
+            }
 
   integration:
     name: Amp on-demand — integration (slow)
@@ -222,6 +234,144 @@ jobs:
       - name: Build controller image
         run: docker build -t yb-amp/controller:ci -f deploy/controller/Dockerfile .
 
+  # Local-deploy extension end-to-end test: build the real extension docker image
+  # (deploy/extensions/build.sh) and assert CREATE EXTENSION + a query against a
+  # throwaway yb_amp_local cluster. Same build env as the slow integration job
+  # (YugabyteDB + Postgres + Rust bins), plus docker/buildx for the image build.
+  # Runs when a PR carries `/ci amp_extensions_local` OR its diff touches
+  # deploy/extensions/ (see the decide auto-paths), and nightly on main (the daily
+  # `schedule` marks every owned suite true, so it needs no guard). The ABI-anchor
+  # base is the heavy part: ~30 min only when cold, a few minutes once the shared
+  # registry layer cache is warm (--cache, below) — the nightly run keeps that cache
+  # fresh for PRs. The 120-min timeout is headroom for a fully cold first run
+  # (base + Postgres + Rust).
+  amp_extensions_local:
+    name: Amp on-demand — local extension test
+    needs: decide
+    if: >-
+      fromJSON(needs.decide.outputs.suites).amp_extensions_local
+      && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: on-demand-ext-local-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    env:
+      # Keep in sync with the integration job above and scripts/yb-local.sh.
+      YB_IMAGE: yugabytedb/yugabyte:2026.1.0.0-b118
+      # From secrets so the base-image buildx layer cache
+      # (quay.io/.../amp-pg18-build:buildcache, shared with the GKE extensions job)
+      # can be reused. Empty on forks (which get no secrets) → the Quay login below
+      # skips and extensions.sh builds the base cold, without --cache.
+      QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+    defaults:
+      run:
+        working-directory: amp
+    steps:
+      # Runs before checkout, so it must not inherit the job's working-directory:
+      # amp/ does not exist yet at this point.
+      - name: Free up runner disk space
+        working-directory: ${{ github.workspace }}
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v7
+
+      - name: Fetch the PostgreSQL submodule
+        uses: ./.github/actions/fetch-pg-submodule
+        with:
+          private-key: ${{ secrets.AGENTK_PRIVATE_KEY }}
+
+      # docker-container builder so build.sh --cache can export the base layer
+      # cache to the registry (install:false, so plain `docker build` for the
+      # extension image still uses the classic builder and sees the --load'ed base).
+      - uses: docker/setup-buildx-action@v4
+
+      # Optional: reuse the shared base-image layer cache. Skipped with no token
+      # (forks) — `cache` is then unset and extensions.sh runs without --cache.
+      - name: Quay login (base build cache)
+        id: quay
+        if: env.QUAY_TOKEN != ''
+        run: |
+          echo "${QUAY_TOKEN#*:}" | docker login quay.io -u "${QUAY_TOKEN%%:*}" --password-stdin
+          echo "cache=--cache" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: amp/controller/go.mod
+          cache-dependency-path: amp/controller/go.sum
+
+      - name: Start YugabyteDB
+        run: |
+          docker run -d --name yb --network host "$YB_IMAGE" \
+            bin/yugabyted start --advertise_address=127.0.0.1 --background=false
+
+      # postgresql-client for pg_isready; python3-yaml for extensions.sh's manifest parse.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libtool libreadline-dev zlib1g-dev flex bison \
+            libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
+            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
+            postgresql-client python3-yaml
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Parallelize make
+        run: echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: amp
+
+      - name: Compute PostgreSQL cache key
+        id: pgrev
+        run: echo "rev=$(git rev-parse HEAD:amp/compute/vendor/postgres-v18)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache PostgreSQL install
+        uses: actions/cache@v6
+        with:
+          path: amp/pg_install
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
+
+      - name: Wait for YugabyteDB
+        run: |
+          for i in $(seq 1 120); do
+            pg_isready -h 127.0.0.1 -p 5433 -q && exit 0
+            sleep 2
+          done
+          echo "YugabyteDB never became ready" >&2
+          docker logs yb
+          exit 1
+
+      # The storage crates link the prebuilt yb_thin_client shim; fetch it and
+      # make it findable at build (YB_THIN_CLIENT_LIB_DIR) and at runtime for
+      # the daemons the test spawns (LD_LIBRARY_PATH). No stub fallback.
+      - name: Fetch yb_thin_client shim
+        run: |
+          DIR="$(scripts/fetch-yb-thin-client.sh)"
+          echo "YB_THIN_CLIENT_LIB_DIR=$DIR" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      # --cache only when the Quay login above ran (steps.quay.outputs.cache); on a
+      # fork it is empty and the base is built cold. Defaults to pgvector.
+      - name: Local extension test (pgvector)
+        run: test/integration/compute/extensions.sh ${{ steps.quay.outputs.cache }}
+
+      - name: Upload run logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: on-demand-extensions-local-logs-${{ github.run_id }}
+          path: amp/.integration-tests/**/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
+
   # The single required check for this workflow. `decide` always runs and the heavy
   # suites skip unless asked for, so on a PR carrying no `/ci` line this gate is
   # green in ~30s. When a suite IS requested, its failure blocks the merge — which
@@ -234,6 +384,7 @@ jobs:
       - decide
       - integration
       - amp_generate_image
+      - amp_extensions_local
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

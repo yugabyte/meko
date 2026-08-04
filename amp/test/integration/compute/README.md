@@ -173,6 +173,55 @@ See the header of `pg_regress.sh` and issue #119 for details.
 > painfully slow. Honours `YB_HOST`/`YB_PORT`, `INTEGRATION_PORT_BASE`,
 > `YB_AMP_REPO_DIR`, `YB_DBNAME`.
 
+## Local extension test (`extensions.sh`)
+
+`extensions.sh` runs an externalized-extension end-to-end against a **local**
+`yb_amp_local` deploy — the local-deploy twin of the `SMOKE_EXTENSIONS` block in
+[`deploy/smoke-test.sh`](../../../deploy/smoke-test.sh) (which runs the same
+check against a GKE cluster). Local deploy has no Kubernetes ImageVolume, so the
+extension is "mounted" the way the chart's config does it — the two PG18 path
+GUCs — set here via `--pg-setting`:
+
+```sh
+test/integration/compute/extensions.sh                 # pgvector, release
+test/integration/compute/extensions.sh --ext pgvector  # explicit
+test/integration/compute/extensions.sh --debug         # debug cluster build
+test/integration/compute/extensions.sh --registry my   # override image registry
+test/integration/compute/extensions.sh --cache         # layer-cache the base build
+test/integration/compute/extensions.sh --keep          # leave the cluster up
+test/integration/compute/extensions.sh -h              # full help
+```
+
+What it does:
+
+1. Builds the extension image with the real docker pipeline
+   ([`deploy/extensions/build.sh`](../../../deploy/extensions/build.sh) →
+   `quay.io/.../amp-ext-<name>:<version>`, tag resolved from
+   [`extensions.yaml`](../../../deploy/extensions/extensions.yaml)).
+2. Extracts its `FROM scratch` tree (`share/` + `lib/`) to a host temp dir.
+3. Brings up a throwaway `yb_amp_local` cluster and creates an endpoint whose
+   `extension_control_path` / `dynamic_library_path` point at that tree.
+4. `CREATE EXTENSION` + a real query (for pgvector, the nearest-neighbour `<->`
+   assertions from `smoke-test.sh`), then tears the cluster down (`--keep` to
+   leave it up).
+
+The docker-built `.so` loads into the local compute because both compile from
+the same `compute/vendor/postgres-v18` submodule (matching `PG_MODULE_MAGIC`).
+
+> **Requires docker** + `python3`/PyYAML, a YugabyteDB (`YB_HOST`/`YB_PORT`,
+> default `127.0.0.1:5433`), and a built Postgres (`pg_install/v18` — the script
+> runs `./build.sh` if it is missing). Heavy: the first run builds the
+> ABI-anchor PG18 base image in docker (several minutes). Primarily a
+> manual/local driver; it is not part of the per-PR CI, but the opt-in
+> [`/ci amp_extensions_local`](../../../docs/ci-directives.md) suite runs it (with
+> `--cache`, so the base restores from the shared registry layer cache).
+>
+> **Preload caveat:** a preload extension (e.g. `pg_cron`) is also appended to
+> `shared_preload_libraries` (the local base is just `yb_amp`); the library base
+> name is guessed from the extension's `control` name, so a preload extension
+> whose `.so` differs may need that adjusted. pgvector needs no preload, so it
+> is the clean first case.
+
 ## Layout
 
 ```
@@ -180,6 +229,7 @@ test/integration/
   compute/                 this suite (the `integration_tests` crate)
     run.sh                 wrapper: build + run the harness (signal-trap cleanup)
     pg_regress.sh          driver for the FULL upstream pg_regress suite (see above)
+    extensions.sh          driver: externalized extension end-to-end on local deploy (see above)
     regress_yb_expected/   yb-amp expected-output variants for pg_regress.sh
     clean.sh               teardown (kill procs, drop DB, wipe run dir)
     build.rs               auto-registers scenarios from fast/ and slow/

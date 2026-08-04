@@ -164,6 +164,12 @@ Code anchors:
 - Run integration before claiming any corruption-class fix — unit tests don't
   exercise the cross-seam bugs (enforced by the
   `integration-before-corruption-claim` skill).
+- Externalized extensions (ImageVolumes) end-to-end on a **local** deploy:
+  `test/integration/compute/extensions.sh [--ext <name>]` — builds the extension
+  image via the docker pipeline, mounts it into a throwaway `yb_amp_local`
+  compute via the `extension_control_path`/`dynamic_library_path` GUCs, and runs
+  `CREATE EXTENSION` + a real query (the local-deploy twin of `deploy/smoke-test.sh`'s
+  `SMOKE_EXTENSIONS` GKE check). Needs docker.
 
 ## Live dev cluster cheat-sheet
 

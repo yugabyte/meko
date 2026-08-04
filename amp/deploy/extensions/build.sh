@@ -6,18 +6,33 @@
 # a Kubernetes ImageVolume. Run from anywhere; paths resolve to the repo root.
 #
 # Usage:
-#   deploy/extensions/build.sh [--push] [--no-base-push] [--registry REG] [--base-only] [NAME ...]
+#   deploy/extensions/build.sh [--push] [--no-base-push] [--cache] [--registry REG] [--base-only] [NAME ...]
 #
 #   --push         also `docker push` every image built (base + extensions)
 #   --no-base-push with --push, push only the extension images, NOT the
 #                  ABI-anchor base (the base is still built locally to compile
 #                  the extensions — nothing pulls it back from the registry, so
 #                  publishing it is optional). Ignored without --push.
+#   --cache        cache the ~30-min ABI-anchor PG18 base build via a buildx
+#                  registry layer cache (<registry>/<base_image>:buildcache):
+#                  unchanged inputs restore from it in minutes instead of a cold
+#                  rebuild. The base is `--load`ed locally either way, so the
+#                  extension builds still `FROM` it. Only the :buildcache tag is
+#                  pushed (not the base image, even without --no-base-push), so it
+#                  needs a builder that can export registry cache (buildx's
+#                  docker-container driver — `docker buildx create --use` or the
+#                  setup-buildx-action) and registry login for the cache push. CI
+#                  only; a plain local `docker` builder can't export it.
+#                  Cache EXPORT is best-effort (ignore-error=true): the registry
+#                  login must have PUSH access to the <base_image> repo for the
+#                  cache to populate — if it can only pull, the export 401s, the
+#                  build still succeeds, but every run stays cold (no speedup).
 #   --registry REG override the manifest's registry
 #   --base-only    build just the ABI-anchor base image, no extensions
 #   NAME ...       build only these extensions (default: all in the manifest)
 #
-# Requires: docker, python3 with PyYAML (pip install pyyaml).
+# Requires: docker, python3 with PyYAML (pip install pyyaml). --cache also needs
+# a buildx docker-container builder + a registry login.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +42,7 @@ manifest="$here/extensions.yaml"
 push=false
 no_base_push=false
 base_only=false
+cache=false
 registry_override=""
 declare -a only=()
 while [[ $# -gt 0 ]]; do
@@ -34,8 +50,9 @@ while [[ $# -gt 0 ]]; do
     --push) push=true; shift ;;
     --no-base-push) no_base_push=true; shift ;;
     --base-only) base_only=true; shift ;;
+    --cache) cache=true; shift ;;
     --registry) registry_override="${2:?--registry needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
     *) only+=("$1"); shift ;;
   esac
@@ -79,8 +96,28 @@ done < <(read_manifest)
 
 base_local="${base_image}:local"
 echo ">> building ABI-anchor base ${base_local}"
-docker build -t "$base_local" \
-  -f "$here/pg18-build.Dockerfile" "$repo_root"
+if $cache; then
+  # Restore the expensive base build from a registry layer cache and refresh it.
+  # --load lands the image in the local docker store so the extension builds
+  # below (plain `docker build`) can still `FROM` it. Only the :buildcache tag
+  # is written to the registry — the base image itself is not published here.
+  #
+  # ignore-error=true keeps the cache EXPORT best-effort: pushing :buildcache
+  # needs write access to the base repo, and if the registry login can only pull
+  # (or the repo doesn't exist yet) the export 401s — without this that aborts the
+  # whole build. With it, the export just warns and the build still succeeds; the
+  # cache stays empty (every run cold) until the repo is writable. cache-from is
+  # always safe: a missing/unreadable cache is a miss, not an error.
+  base_cache="${registry}/${base_image}:buildcache"
+  docker buildx build --load \
+    --cache-from "type=registry,ref=${base_cache}" \
+    --cache-to "type=registry,ref=${base_cache},mode=max,ignore-error=true" \
+    -t "$base_local" \
+    -f "$here/pg18-build.Dockerfile" "$repo_root"
+else
+  docker build -t "$base_local" \
+    -f "$here/pg18-build.Dockerfile" "$repo_root"
+fi
 
 if $push && ! $no_base_push; then
   base_remote="${registry}/${base_image}:${pg_tag}"

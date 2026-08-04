@@ -106,7 +106,12 @@ extension is tagged and released on its own cadence.
   each extension, and optionally `--push`es them. `--push` publishes the base too
   (for reuse); `--no-base-push` keeps the base local — nothing pulls it back, so
   publishing it is optional — and pushes only the extension images (what the GKE
-  deploy uses).
+  deploy uses). The base is the only expensive build (~30 min cold); `--cache`
+  gives it a buildx registry layer cache (`<registry>/<base_image>:buildcache`,
+  the same pattern as the endpoint image) so unchanged inputs restore in minutes.
+  Only the `:buildcache` tag is pushed — never the base image — so it needs a
+  buildx docker-container builder and a registry login; it is a CI opt-in (the
+  GKE `amp_deploy_gke_extensions` step passes it), not for a plain local build.
 
 ```sh
 # build everything locally
@@ -115,6 +120,8 @@ deploy/extensions/build.sh
 deploy/extensions/build.sh --push pgvector
 # build + push only the extension image(s), not the ABI-anchor base
 deploy/extensions/build.sh --push --no-base-push pgvector
+# CI: same as above, but layer-cache the base build (buildx + registry login)
+deploy/extensions/build.sh --push --no-base-push --cache pgvector
 ```
 
 ## Endpoint wiring (Helm chart)
@@ -232,6 +239,14 @@ audit / recreate.
 3. For a non-default extension, opt an endpoint in by passing
    `extensions: ["<name>"]` to `createEndpoint`; the step persists it onto the
    branch and the fork path inherits it.
+
+Verify a new extension end-to-end on a **local** deploy (no Kubernetes needed)
+with
+[`test/integration/compute/extensions.sh`](../../test/integration/compute/extensions.sh)
+`--ext <name>`: it builds the image via the docker pipeline, extracts the tree,
+and mounts it into a throwaway `yb_amp_local` compute via the two path GUCs, then
+runs `CREATE EXTENSION`. It is the local-deploy twin of `deploy/smoke-test.sh`'s
+`SMOKE_EXTENSIONS` GKE check.
 
 ## Code anchors
 

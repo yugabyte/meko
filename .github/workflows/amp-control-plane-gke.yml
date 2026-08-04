@@ -26,11 +26,12 @@ name: Amp control-plane GKE (itest-dev)
 #     commit to fire — an empty one is enough.
 #   * `/ci amp_deploy_gke_extensions` — a superset of `amp_deploy_gke` (it implies
 #     the deploy) that ALSO builds + pushes the externalized-extension images
-#     (amp/deploy/extensions/build.sh --push: the ABI-anchor PG18 base + pgvector) to
-#     Quay, and runs the smoke test with SMOKE_EXTENSIONS=1 so it exercises the
-#     pgvector ImageVolume opt-in + fork inheritance. Adds a cold PG18 base build
-#     (~30 min) on top of amp_deploy_gke, so it is PR-directive-only: nightly does NOT
-#     rebuild it.
+#     (amp/deploy/extensions/build.sh --push --cache: the ABI-anchor PG18 base +
+#     pgvector) to Quay, and runs the smoke test with SMOKE_EXTENSIONS=1 so it
+#     exercises the pgvector ImageVolume opt-in + fork inheritance. The first run
+#     pays a cold PG18 base build (~30 min) on top of amp_deploy_gke; --cache
+#     (:buildcache) then restores it in minutes, so it is PR-directive-only:
+#     nightly does NOT rebuild it.
 # It touches the itest cluster and needs org secrets (KUBECONFIG_ITEST_DEV,
 # QUAY_AMP_TOKEN), so fork PRs (which get no secrets) are always skipped.
 # Stale ci-pr-* namespaces are swept by control-plane-gke-cleanup.yml.
@@ -208,12 +209,17 @@ jobs:
       # quay.io/yugabyte/amp-ext-<name>:<version> (--no-base-push: nothing pulls
       # the base back, so it isn't published). Version-tagged (not the commit tag),
       # so they're stable and the deployed controller's catalog (ExtensionRegistry
-      # default quay.io/yugabyte) resolves them as-is.
+      # default quay.io/yugabyte) resolves them as-is. --cache gives the base the
+      # same kind of registry layer cache as the endpoint image above (a :buildcache
+      # tag, not the base image), so unchanged inputs skip the ~30-min cold rebuild.
+      # NB: export is best-effort — it only populates once QUAY_AMP_TOKEN has push
+      # access to the amp-pg18-build repo (unlike amp-endpoint, that repo has never
+      # been published, so grant it or the base rebuilds cold every run).
       - name: Extension images (pgvector)
         if: fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true'
         run: |
           python3 -m pip install --user pyyaml
-          amp/deploy/extensions/build.sh --push --no-base-push --registry "$QUAY_NS"
+          amp/deploy/extensions/build.sh --push --no-base-push --cache --registry "$QUAY_NS"
 
   deploy:
     name: Amp GKE — deploy to itest-dev + smoke test

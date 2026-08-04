@@ -90,9 +90,11 @@ fi
 [[ -f "$SCHEDULE" ]] || { echo "schedule not found: $SCHEDULE" >&2; exit 1; }
 
 # 2) Build the binaries yb_amp_local spawns at runtime (it does not build
-#    them itself — a stale one surfaces as baffling runtime mismatches).
-CLUSTER_BINS=(--bin yb_amp_local --bin yb-pageserver
-              --bin yb-safekeeper --bin yb-endpoint-storage --bin yb-compute-ctl)
+#    them itself — a stale one surfaces as baffling runtime mismatches). The
+#    four server binaries are cargo targets; yb_amp_local and the controller are
+#    Go (controller/local/cmd, controller/cmd), built separately below.
+CLUSTER_BINS=(--bin yb-pageserver --bin yb-safekeeper
+              --bin yb-endpoint-storage --bin yb-compute-ctl)
 echo ">>> building cluster binaries ($PROFILE)..."
 if [[ $PROFILE == release ]]; then
     cargo build --release "${CLUSTER_BINS[@]}"
@@ -103,7 +105,8 @@ else
     YB_AMP="$REPO/target/debug/yb_amp_local"
     _PROFILE_DIR=debug
 fi
-# The controller is a Go binary yb_amp_local spawns from beside itself.
+# yb_amp_local and the controller it spawns are Go binaries, not cargo targets.
+( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local )
 ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
 
 # 2b) Build + install the regression suite's C support modules. The core

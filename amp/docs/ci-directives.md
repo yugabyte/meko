@@ -18,9 +18,11 @@ called by [`amp-on-demand-checks.yml`](../../.github/workflows/amp-on-demand-che
   exactly what it decided and why. To run a suite again against the same commit
   without a new one, use *Re-run jobs* in the Actions tab.
 
-`amp_integration_slow` also runs **automatically** — no `/ci` line needed — on any
-PR whose diff adds or modifies files under `amp/test/integration/compute/slow/`. The
-slow suite is what exercises those scenarios, so changing them always runs it.
+Two suites also run **automatically** — no `/ci` line needed — on any PR whose diff
+adds or modifies files under a path they own, because each is what exercises those
+files: `amp_integration_slow` on `amp/test/integration/compute/slow/` (the scenarios
+it runs) and `amp_extensions_local` on `amp/deploy/extensions/` (the extension build
+pipeline it drives).
 
 ## Suites
 
@@ -28,6 +30,7 @@ slow suite is what exercises those scenarios, so changing them always runs it.
 |---|---|---|
 | `amp_integration_slow` | slow integration scenario suite (`test/integration/compute/run.sh slow`) | is correctness-sensitive (see below) |
 | `amp_generate_image` | controller container image build (`deploy/controller/Dockerfile`) | changes the `controller/` deploy surface or `deploy/controller/Dockerfile` |
+| `amp_extensions_local` | local-deploy extension end-to-end test (`test/integration/compute/extensions.sh`): builds the real extension image and asserts `CREATE EXTENSION` + a query against a throwaway `yb_amp_local` cluster ([`amp-on-demand-checks.yml`](../../.github/workflows/amp-on-demand-checks.yml)). Also **automatic** when the diff touches `deploy/extensions/`, and nightly on `main` | want the cheap local proof of an extension-pipeline change without a GKE deploy. The lighter twin of `amp_deploy_gke_extensions`; builds the ABI-anchor PG18 base (~30 min cold, then restored from `build.sh --cache`'s registry layer cache — the nightly run keeps that cache warm). |
 | `amp_deploy_gke` | build + push the four images to Quay and deploy to the itest-dev GKE cluster + smoke test ([`amp-control-plane-gke.yml`](../../.github/workflows/amp-control-plane-gke.yml)) | changes the `deploy/` k8s surface (Helm charts, `up-gke.sh`, Dockerfiles) or the control-plane deploy path. Also runs nightly on `main`. |
 | `amp_deploy_gke_extensions` | a superset of `amp_deploy_gke`: also builds + pushes the externalized-extension images (`deploy/extensions/build.sh --push`: the ABI-anchor PG18 base + pgvector) to Quay, and runs the smoke test with `SMOKE_EXTENSIONS=1` (the pgvector ImageVolume opt-in + fork inheritance) | changes `deploy/extensions/` (the extension build pipeline / manifest) or the endpoint's extension-mount path. Adds a cold PG18 base build (~30 min) on top of `amp_deploy_gke`. |
 
