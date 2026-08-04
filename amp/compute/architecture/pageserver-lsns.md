@@ -388,7 +388,7 @@ reads take the latest row at `lsn ≤ target_lsn` (full overwrite semantics).
 
 **Write backpressure:** `PageWriter::put` blocks in `await_backpressure`
 while `unflushed_bytes + bytes_in_aux_buffers ≥ policy.backpressure_bytes`
-(default 50 MiB; 0 disables); `flush` wakes waiters via `flush_completed`.
+(default 25 MiB; 0 disables); `flush` wakes waiters via `flush_completed`.
 This bounds the `applied_lsn − consistent_lsn` gap in bytes.
 
 ---

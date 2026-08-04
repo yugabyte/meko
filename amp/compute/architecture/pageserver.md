@@ -97,12 +97,12 @@ with its own YSQL connection pool, so compute-facing reads never queue
 behind internal writes:
 
 - **`compute_page_store`** (`application_name =
-  "yb-pageserver:compute_reads"`, pool of 4 × `scale_factor`) — the
+  "yb-pageserver:compute_reads"`, pool of 2 × `scale_factor`) — the
   GetPage hot path (`PageWriter::scan_range` / `read_chain`). Compute
   backends issue parallel prefetches, and each lands on its own YSQL
   connection instead of serialising on one backend.
 - **`fpu_page_store`** (`application_name = "yb-pageserver:fpu"`, pool
-  of 4 × `scale_factor`) — walreceiver flushes, the materialiser's
+  of 2 × `scale_factor`) — walreceiver flushes, the materialiser's
   durable chain reads, and the materialiser's image INSERTs. Each
   connection runs `SET yb_enable_upsert_mode = true`
   (`YsqlClient`, `compute/libs/ysql_client/`), so a chunk retried after
@@ -597,7 +597,7 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    fpu store. Chunks are 500 rows for pages/SLRU (`ROWS_PER_INSERT`;
    bind-parameter budget with `branch_id` baked as a literal) and 2000
    for meta, dispatched in parallel via
-   `stream::iter(...).buffer_unordered(N)` with base N = 4/2/3
+   `stream::iter(...).buffer_unordered(N)` with base N = 2/1/2
    (× `scale_factor`). On the direct-RPC lane the page/SLRU writes run as
    PGSQL_UPSERT batches with per-row response verification (a dropped
    row surfaces as a batch error, not a short count); `put_meta` always
@@ -632,11 +632,11 @@ flush retries.
 `PageWriter::spawn_flusher` runs a periodic task
 (`flush_poll_interval`, default 500 ms) that flushes when either
 trigger crosses threshold: buffer age ≥ `flush_interval` (5 s) or
-buffered bytes ≥ `flush_size_bytes` (25 MiB). It also waits on
+buffered bytes ≥ `flush_size_bytes` (12 MiB). It also waits on
 `materialize_wakeup`: the instant a key's delta tally crosses its
 materialise threshold, the put path pulses the notify and the flusher
 flushes immediately — so materialise dispatch runs within milliseconds
-of the crossing instead of at the next 5 s / 25 MiB cadence.
+of the crossing instead of at the next 5 s / 12 MiB cadence.
 `notify_one` coalesces a burst of crossings, and `put()` never blocks
 on it, so this paces the materialiser without throttling ingest. On
 shutdown the task does a final flush plus the throttle-bypassing
@@ -649,8 +649,8 @@ The walreceiver ingests as fast as the safekeeper sends; two points in
 keeping heap usage bounded:
 
 - **Flush-side.** If `unflushed_bytes + bytes_in_aux_buffers` exceeds
-  `backpressure_bytes` (default 50 MiB), `put` awaits a `Notify` pulsed
-  at the end of every successful flush. The 25 MiB size trigger fires
+  `backpressure_bytes` (default 25 MiB), `put` awaits a `Notify` pulsed
+  at the end of every successful flush. The 12 MiB size trigger fires
   well before the cap, so this path only engages when YB INSERTs slow
   down (CPU contention, network spikes, tablet split). Pre-flush rows
   are pinned in `UnifiedPages` until durable, so without the cap the
@@ -659,7 +659,7 @@ keeping heap usage bounded:
   disables the cap (unbounded growth).
 - **Materialiser-side (queue depth).** The write-time materialise
   dispatch does a **blocking** `mpsc::send` into the materialiser channel
-  (capacity `materialize_queue_capacity`, default 2000). When the
+  (capacity `materialize_queue_capacity`, default 1000). When the
   materialiser cannot drain, the channel fills and the walreceiver blocks
   at the send, bounding in-flight materialisation work. The read-side
   dispatch uses `try_send` instead — GetPage latency must not depend on
@@ -739,7 +739,7 @@ queue in batches of up to `BATCH_DRAIN_LIMIT` (500) jobs through a
 two-phase pipeline:
 
 1. `redo_phase` — on the worker task, up to `redo_concurrency`
-   (8 × `scale_factor`) concurrent `redo_one` futures. Each reads its
+   (4 × `scale_factor`) concurrent `redo_one` futures. Each reads its
    chain from **durable sources only** — `read_chain_durable` for
    relation keys (durable cache rows + YB via the fpu store, pre-flush
    rows excluded), `read_slru_chain_durable` for SLRU keys — then `parse_chain`
@@ -772,7 +772,7 @@ two-phase pipeline:
    GC trim is `branch_id`-scoped, so collapsing ancestor deltas into a
    descendant's image never reclaims the ancestor's rows.
 2. `commit_phase` — spawned onto a separate task (bounded by
-   `BASE_MAX_INFLIGHT_INSERTS` = 4 × `scale_factor`, matching the fpu
+   `BASE_MAX_INFLIGHT_INSERTS` = 2 × `scale_factor`, matching the fpu
    pool so concurrent batches land on distinct YB backends), so batch
    N+1's redo overlaps batch N's INSERT round trip. Relation images go
    to `pages` via `put_pages` and are then offered to the cache;
@@ -1064,7 +1064,7 @@ passes a base image (if any) plus the WAL records to apply over
 stdin/stdout and gets the reconstructed page back. The subprocess drops
 privileges before replaying, so a malicious record cannot escape it.
 `PostgresRedoManager` keeps a per-branch pool of subprocess slots
-(`walredo_pool_size` = 2 × `scale_factor`, round-robin); a single
+(`walredo_pool_size` = 1 × `scale_factor`, round-robin); a single
 request is serialised through one slot's stdin/stdout, but concurrent
 requests pipeline across slots and within a slot's IPC. Requests are
 bounded by `wal_redo_timeout` (default 60 s). Bespoke non-FPI record
@@ -1109,15 +1109,15 @@ the global `scale_factor` (explicitly-set values are used verbatim):
 | Knob | Default | Meaning |
 |---|---:|---|
 | `flush_interval` | 5 s | Time-based flush trigger |
-| `flush_size_bytes` | 25 MiB | Size-based flush trigger (scaled) |
+| `flush_size_bytes` | 12 MiB | Size-based flush trigger (scaled) |
 | `flush_poll_interval` | 500 ms | Background flusher poll cadence |
 | `image_chain_limit` | 20 | Relation-page deltas-since-anchor before a key is queued for materialisation (`0` disables the count trigger) |
 | `image_chain_limit_slru` | 1000 | Same, for SLRU (clog/multixact) blocks; the payload trigger does not apply to SLRU. `0` disables SLRU materialisation |
 | `image_chain_payload_bytes_limit` | 4 KiB | Combined-delta-payload trigger for relation-page materialisation (`0` disables the size trigger) |
-| `materialize_queue_capacity` | 2000 | Bounded mpsc depth (scaled); write-side dispatch **blocks** on it, read-side dispatch uses `try_send` |
+| `materialize_queue_capacity` | 1000 | Bounded mpsc depth (scaled); write-side dispatch **blocks** on it, read-side dispatch uses `try_send` |
 | `materialize_inflight_bytes_limit` | 512 MiB | Hard ceiling on redone-but-not-INSERTed materialiser image bytes (`pageserver_yb_materializer_inflight_bytes`); the worker drains outstanding INSERTs before redoing more, backpressuring the walreceiver. **Not scaled** (memory ceiling); `0` disables |
-| `read_cache_bytes` | 1 GiB | Soft cap on `UnifiedPages.total_bytes` (scaled); whole cold keys are evicted LRU-order, keys with unflushed rows pinned |
-| `backpressure_bytes` | 50 MiB | Hard ceiling on the pre-flush buffer (scaled); `PageWriter::put` blocks above it; `0` disables |
+| `read_cache_bytes` | 512 MiB | Soft cap on `UnifiedPages.total_bytes` (scaled); whole cold keys are evicted LRU-order, keys with unflushed rows pinned |
+| `backpressure_bytes` | 25 MiB | Hard ceiling on the pre-flush buffer (scaled); `PageWriter::put` blocks above it; `0` disables |
 | `meta_cache_entries` | 8192 | In-process LRU for `amp_storage.meta` point reads; `0` disables |
 | `ingest_parallelism` | 4 | Workers for `put_serialized` batch apply; `1` = serial. Same key always lands on one worker |
 | `ingest_parallelism_min_batch` | 256 | Minimum batch size before the parallel apply engages; `1` forces it (tests) |

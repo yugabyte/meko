@@ -46,7 +46,7 @@
 //!
 //! ## API summary
 //!
-//! - [`WalCache::new`] – construct with a byte capacity (e.g. 256 MiB).
+//! - [`WalCache::new`] – construct with a byte capacity (e.g. 128 MiB).
 //! - [`WalCache::insert`] – called by `consumer_main` once a batch of
 //!   chunks has been successfully INSERT'd into `amp_storage.wals`.
 //! - [`WalCache::lookup`] – called by `YbSegmentReader` to find the chunk

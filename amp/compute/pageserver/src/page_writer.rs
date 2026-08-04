@@ -72,8 +72,8 @@ impl Default for FlushPolicy {
     fn default() -> Self {
         Self {
             max_age: Duration::from_secs(5),
-            max_bytes: 25 * 1024 * 1024,
-            backpressure_bytes: 50 * 1024 * 1024,
+            max_bytes: 12 * 1024 * 1024,
+            backpressure_bytes: 25 * 1024 * 1024,
             ingest_parallelism: 1,
             ingest_parallelism_min_batch: 256,
         }
@@ -1986,7 +1986,7 @@ impl PageWriter {
         pending_gc_rows: &[PendingGcRow],
     ) -> Result<()> {
         // All flush writes go via the internal conn. Compute getPage
-        // never queues behind a 25 MiB INSERT.
+        // never queues behind a 12 MiB INSERT.
         if !rel_rows.is_empty() {
             self.fpu_page_store
                 .put_pages(self.branch_id, rel_rows)

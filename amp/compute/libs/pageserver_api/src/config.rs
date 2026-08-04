@@ -27,7 +27,7 @@ use utils::logging::LogFormat;
 use crate::models::{ImageCompressionAlgorithm, LsnLease, PayloadCompression};
 
 /// Default value for the `scale_factor` config knob. 1.0 means "leave
-/// every scale-derived default at its historical value".
+/// every scale-derived default at its baseline value".
 pub const DEFAULT_SCALE_FACTOR: f64 = 1.0;
 
 fn default_scale_factor() -> f64 {
@@ -279,12 +279,11 @@ pub struct ConfigToml {
     pub yb_payload_compression: PayloadCompression,
 
     /// Global multiplier applied to scale-derived defaults across the
-    /// pageserver: YSQL connection pool sizes, tokio worker threads,
-    /// in-flight materialiser concurrency, `YbPageWriterConfig` memory
-    /// budgets, etc. 1.0 preserves the historical sizing; 0.25 fits a
-    /// small dev box; values >1 scale up for beefy hosts. Fields that
-    /// are explicitly set in `pageserver.toml` always win over the
-    /// scaled default.
+    /// pageserver: YSQL connection pool sizes, in-flight materialiser
+    /// concurrency, `YbPageWriterConfig` memory budgets, etc. 1.0 is the
+    /// baseline sizing; 0.25 fits a small dev box; values >1 scale up for
+    /// beefy hosts. Fields that are explicitly set in `pageserver.toml`
+    /// always win over the scaled default.
     #[serde(default = "default_scale_factor")]
     pub scale_factor: f64,
 }
@@ -342,7 +341,7 @@ pub struct YbPageWriterConfig {
     pub flush_interval: Duration,
 
     /// Flush the in-RAM buffer when its estimated size crosses this.
-    /// Default 25 MiB (scaled by `scale_factor`).
+    /// Default 12 MiB (scaled by `scale_factor`).
     pub flush_size_bytes: usize,
 
     /// Period at which the background flusher polls `should_flush()`.
@@ -397,11 +396,11 @@ pub struct YbPageWriterConfig {
     /// is in flight (small-MB scale).
     ///
     /// Sized for **burst absorption**, not sustained overload: at the
-    /// materialiser's ~150 K rows/s INSERT-side drain rate (pool=4 +
-    /// `MAX_INFLIGHT_INSERTS=4`), 2000 slots drain in ~13 ms. So
-    /// 2000 only matters if the walreceiver enqueues >1000 jobs in
+    /// materialiser's ~75 K rows/s INSERT-side drain rate (pool=2 +
+    /// `MAX_INFLIGHT_INSERTS=2`), 1000 slots drain in ~13 ms. So
+    /// 1000 only matters if the walreceiver enqueues >500 jobs in
     /// <7 ms — the steady-state bottleneck (if any) is walredo or
-    /// pool-slot contention, not the queue depth. Default 2000.
+    /// pool-slot contention, not the queue depth. Default 1000.
     pub materialize_queue_capacity: usize,
 
     /// Hard ceiling on the bytes held by redone-but-not-yet-INSERTed
@@ -427,7 +426,7 @@ pub struct YbPageWriterConfig {
     /// post-flush LRU-ish cache). When `total_bytes` exceeds this,
     /// durable entries are evicted FIFO. Pre-flush rows are pinned
     /// regardless, so the cache can transiently exceed this when the
-    /// walreceiver is way ahead of the consumer. Default 1 GiB.
+    /// walreceiver is way ahead of the consumer. Default 512 MiB.
     pub read_cache_bytes: usize,
 
     /// Hard ceiling on `unflushed_bytes + bytes_in_aux_buffers` before
@@ -437,7 +436,7 @@ pub struct YbPageWriterConfig {
     /// stays small. 0 disables backpressure (legacy unbounded
     /// growth). Should be ≥ `flush_size_bytes` so the size-based
     /// flush trigger fires first; recommended 2× `flush_size_bytes`.
-    /// Default 50 MiB.
+    /// Default 25 MiB.
     pub backpressure_bytes: usize,
 
     /// Maximum entries in the in-process LRU cache for `amp_storage.meta`
@@ -469,15 +468,15 @@ impl YbPageWriterConfig {
     pub fn unscaled_defaults() -> Self {
         Self {
             flush_interval: Duration::from_secs(5),
-            flush_size_bytes: 25 * 1024 * 1024,
+            flush_size_bytes: 12 * 1024 * 1024,
             flush_poll_interval: Duration::from_millis(500),
             image_chain_limit: 20,
             image_chain_limit_slru: 1000,
             image_chain_payload_bytes_limit: 4096,
-            materialize_queue_capacity: 2000,
+            materialize_queue_capacity: 1000,
             materialize_inflight_bytes_limit: 512 * 1024 * 1024,
-            read_cache_bytes: 1024 * 1024 * 1024,
-            backpressure_bytes: 50 * 1024 * 1024,
+            read_cache_bytes: 512 * 1024 * 1024,
+            backpressure_bytes: 25 * 1024 * 1024,
             meta_cache_entries: 8192,
             ingest_parallelism: 4,
             ingest_parallelism_min_batch: 256,

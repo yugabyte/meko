@@ -418,7 +418,7 @@ comes from memory or YB. For a read at position `pos` the chain is:
       bound the chunk is dropped and re-acquired.
    2. **`WalCache` lookup** (`compute/safekeeper/src/wal_cache.rs`) — a
       bounded in-memory FIFO cache keyed `(segno, chunk_offset)`, capacity
-      `wal_cache_size_mib` (default 256 MiB, 0 disables). It is populated
+      `wal_cache_size_mib` (default 128 MiB, 0 disables). It is populated
       only with **committed** chunks: by the consumer after a successful
       batch write, and by reader fetches for chunks lying fully below the
       flush frontier at fetch-issue time. Committed WAL is immutable, so a
@@ -697,7 +697,7 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
   [`data` is compressed](#data-is-compressed). Only the safekeeper restart
   is needed to change it; nothing is rewritten.
 - Defaults: `listen_pg` 127.0.0.1:5454, `listen_http` 127.0.0.1:7676,
-  `control_file_save_interval` 300 s, `wal_cache_size_mib` 256 scaled by
+  `control_file_save_interval` 300 s, `wal_cache_size_mib` 128 scaled by
   `scale_factor`, `heartbeat_timeout` 5 s, `yb_wal_compression` `lz4`.
 
 The process runs three additional tokio runtimes (`WAL_SERVICE_RUNTIME`,

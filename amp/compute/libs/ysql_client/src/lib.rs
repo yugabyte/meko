@@ -199,13 +199,13 @@ pub struct YbConnConfig {
     /// packed onto shared connections (see [`Self::tsclient_sessions_per_conn`]),
     /// so this sets concurrency, not the connection count. Used verbatim (no
     /// scale-factor multiplication). When unset, each daemon applies its own
-    /// default: the pageserver `scale_count(4, scale_factor)`, the safekeeper
+    /// default: the pageserver `scale_count(2, scale_factor)`, the safekeeper
     /// WAL lane a fixed 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tsclient_read_sessions: Option<usize>,
     /// Dedicated write-*session* count for the direct-RPC hot-path pool
     /// (server sessions, packed onto shared connections). Used verbatim when
-    /// set. When unset: the pageserver `scale_count(4, scale_factor)`, the
+    /// set. When unset: the pageserver `scale_count(2, scale_factor)`, the
     /// safekeeper WAL lane a fixed 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tsclient_write_sessions: Option<usize>,

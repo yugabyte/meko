@@ -1047,7 +1047,7 @@ pub const GC_BUCKETS: i32 = 10;
 
 /// Concurrent GC action DELETEs per drain tick (scaled); the dedicated
 /// `yb-pageserver:gc` pool is sized to this.
-pub const GC_ACTION_PARALLELISM: usize = 2;
+pub const GC_ACTION_PARALLELISM: usize = 1;
 
 /// Encode a `Key` to its fixed 18-byte wire form — the `pending_gc.key`
 /// (and `meta.key`) bytea.
@@ -1543,15 +1543,15 @@ impl PageStore {
         // Read/write session (connection) counts cap the getpage +
         // put_pages lane fan-out across the discovered tservers. The
         // `yb_storage_conn` config can pin them; otherwise both default to
-        // `scale_count(4, scale_factor)`.
+        // `scale_count(2, scale_factor)`.
         let read_sessions = config
             .yb
             .tsclient_read_sessions
-            .unwrap_or_else(|| pageserver_api::config::scale_count(4, config.scale_factor));
+            .unwrap_or_else(|| pageserver_api::config::scale_count(2, config.scale_factor));
         let write_sessions = config
             .yb
             .tsclient_write_sessions
-            .unwrap_or_else(|| pageserver_api::config::scale_count(4, config.scale_factor));
+            .unwrap_or_else(|| pageserver_api::config::scale_count(2, config.scale_factor));
         let sessions_per_conn = config.yb.tsclient_sessions_per_conn.unwrap_or(4);
         let thinclient = match config.yb.hot_path {
             ysql_client::HotPath::ThinClient => Some(
@@ -1662,7 +1662,7 @@ impl PageStore {
         // Chunks dispatch in parallel — tokio-postgres pipelines them
         // on the shared connection so YB can absorb them concurrently.
         let started = std::time::Instant::now();
-        let parallelism = pageserver_api::config::scale_count(4, self.scale_factor);
+        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
         let pages_full = Arc::clone(&self.baked_sql(branch_id).pages_full);
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
@@ -1809,7 +1809,7 @@ impl PageStore {
         let col_db = pages.col("dbnode")?;
         let col_rel = pages.col("relnode")?;
         let col_fork = pages.col("forknum")?;
-        let parallelism = pageserver_api::config::scale_count(4, self.scale_factor);
+        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
         let branch_s = branch_id.to_string();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
@@ -2393,7 +2393,7 @@ impl PageStore {
         }
 
         let started = std::time::Instant::now();
-        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
+        let parallelism = pageserver_api::config::scale_count(1, self.scale_factor);
         let slru_full = Arc::clone(&self.baked_sql(branch_id).slru_full);
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
@@ -2714,7 +2714,7 @@ impl PageStore {
         // Column metadata is constant for the whole flush — resolve once.
         let col_kind = slru.col("kind")?;
         let col_segno = slru.col("segno")?;
-        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
+        let parallelism = pageserver_api::config::scale_count(1, self.scale_factor);
         let branch_s = branch_id.to_string();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
@@ -2769,7 +2769,7 @@ impl PageStore {
     pub async fn put_meta(&self, branch_id: BranchId, rows: &[MetaRow]) -> Result<()> {
         const COLS: usize = 4;
         const ROWS_PER_INSERT: usize = 2000;
-        let parallelism = pageserver_api::config::scale_count(3, self.scale_factor);
+        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
         let branch_s = branch_id.to_string();
 
         // Meta has no direct-RPC write lane (reads do; see
@@ -6846,8 +6846,8 @@ mod tests {
         let client = yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
             tserver_addrs: vec![tserver],
             // Same write-session fan-out the startup path derives from
-            // scale_count(4, 1.0), so these tests cover pooled writes.
-            write_sessions: 4,
+            // scale_count(2, 1.0), so these tests cover pooled writes.
+            write_sessions: 2,
             ..Default::default()
         })
         .expect("connect thin lane to dev YB; set YB_TEST_TSERVER_RPC to override");

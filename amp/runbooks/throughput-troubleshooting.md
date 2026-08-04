@@ -151,7 +151,7 @@ sudo ss -tnp dst $YB_HOST 2>/dev/null | awk 'NR>1' \
   | grep -oP 'pid=\d+' | sort | uniq -c | sort -rn
 ```
 Cross-reference each pid against `ps -o pid,comm,args -p <pid>`. The yb-pageserver pid's count is
-the YB pool size. With `scale_factor=1.0` (default) it's around 9 — far too few for the typical
+the YB pool size. With `scale_factor=1.0` (default) it's around 5 — far too few for the typical
 ~100 concurrent compute backends doing getpages. The shortage shows up as long
 `yb_client_query_seconds{op=query}` even when YB's own `handler_latency_yb_ysqlserver_SQLProcessor_SelectStmt`
 is ~1–2 ms (the gap is queue wait inside PS).
@@ -160,14 +160,15 @@ is ~1–2 ms (the gap is queue wait inside PS).
 ```toml
 # In pageserver.toml — MUST be at the top level
 # (otherwise PS logs "ignoring unknown configuration item path=yb_page_writer.scale_factor")
-scale_factor    = 6.0
+scale_factor    = 12.0
 page_cache_size = 8192    # explicit override so it isn't scaled along with everything else
 ```
 Then `yb_amp_local pageserver restart --id 1`. Verify:
 - `WARN ignoring unknown configuration item` lines for `scale_factor` are absent from the PS log.
-- The TCP-conn count in the `ss` command above multiplies (e.g. 9 → ~49 at `scale_factor=6.0`).
+- The TCP-conn count in the `ss` command above multiplies (e.g. 5 → ~49 at `scale_factor=12.0`).
 
-**Observed impact at scale_factor=6 on a 4 vCPU / 32 GB tier** (1000 wh TPC-C, 100 conn):
+**Observed impact at the equivalent widening on a 4 vCPU / 32 GB tier** (1000 wh TPC-C, 100 conn;
+measured at `scale_factor=6` before the scale-derived bases were halved, i.e. `scale_factor=12` today):
 TPM-C 6,200 → 12,500 (≈ 2×); per-tx avg latency 430 ms → 138 ms (3×); StockLevel avg 3,286 ms → 763 ms (4.3×);
 Hikari ConnAcq 21,000 ms → 170 ms (125×).
 

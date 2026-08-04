@@ -123,7 +123,7 @@ yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsc
   existing configs parse.) They set request *concurrency* (each
   server session is a serial Perform queue). Used verbatim when set (no
   scale-factor multiplication). When unset, each daemon applies its own
-  default: the **pageserver** `scale_count(4, scale_factor)` for both
+  default: the **pageserver** `scale_count(2, scale_factor)` for both
   (getpage + put_pages fan-out); the **safekeeper** a fixed **1 read / 1
   write** (the WAL lane is low-concurrency — one-batch-at-a-time flush +
   segment reads).

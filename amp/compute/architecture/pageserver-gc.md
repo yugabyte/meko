@@ -264,7 +264,7 @@ runs:
      plus a `(kind, segno)` range prefix); `meta` has no `will_init`/chain,
      so `gc_act_trim_meta` just keeps the newest version `<= cutoff` per
      key. Trims across objects run in parallel (`GC_ACTION_PARALLELISM`,
-     default 2, scaled) — distinct objects are distinct keys / tablets,
+     default 1, scaled) — distinct objects are distinct keys / tablets,
      no ordering constraint.
 
    Every act on `pages` must bind `bucket_id`, the leading column of that

@@ -708,20 +708,21 @@ async fn create_page_store_with_app_name(
 /// exists — we hit it once at startup before the other connection
 /// opens, so this one carries the DDL.
 ///
-/// Pool size 4: compute-side Postgres backends issue prefetch reads in
+/// Pool size 2: compute-side Postgres backends issue prefetch reads in
 /// parallel (`effective_io_concurrency` + the PG18 read_stream API +
 /// pg_neon's prefetch ring), and the pageserver page_service handler
 /// dispatches each one as a concurrent gRPC stream. A single YSQL
 /// connection would serialise them on the YB side (Postgres processes
-/// one statement per backend at a time). With 4 conns + the
-/// prepared-statement cache + the LATERAL→GROUP BY rewrite, four
-/// prefetches overlap on YB instead of queueing.
+/// one statement per backend at a time). With 2 conns + the
+/// prepared-statement cache + the LATERAL→GROUP BY rewrite, two
+/// prefetches overlap on YB instead of queueing; raise `scale_factor`
+/// to widen the fan-out on hosts that can absorb it.
 async fn create_compute_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
-    // Base size of 4 scaled by `scale_factor`; see the function-level
+    // Base size of 2 scaled by `scale_factor`; see the function-level
     // docstring for the parallelism rationale.
-    let pool_size = pageserver_api::config::scale_count(4, conf.scale_factor);
+    let pool_size = pageserver_api::config::scale_count(2, conf.scale_factor);
     // Read-only path — no `yb_enable_upsert_mode` GUC needed.
     let store =
         create_page_store_with_app_name(conf, "yb-pageserver:compute_reads", pool_size, false)
@@ -737,23 +738,23 @@ async fn create_compute_page_store(
 /// materialiser `read_chain_durable` cache miss + materialiser
 /// `put_pages`. Schema already exists by the time this runs.
 ///
-/// Pool size 4: `put_pages` chunks each INSERT into 500-row sub-batches
-/// and dispatches `PARALLELISM = 4` of them at a time (see
+/// Pool size 2: `put_pages` chunks each INSERT into 500-row sub-batches
+/// and dispatches `PARALLELISM = 2` of them at a time (see
 /// `PageStore::put_pages`). tokio-postgres pipelines them on the wire,
 /// but YB serialises any pipeline behind a single backend session —
-/// without independent connections one flush's 4 chunks would run
+/// without independent connections one flush's chunks would run
 /// sequentially even though the round-trip is dominated by YB's tablet
 /// RPC + Raft replicate (~13 ms per ~490-row batch in TPC-C profiles).
-/// 4 connections lets the 4 chunks land on 4 distinct YB backends and
-/// complete in one wall-clock RTT instead of four. The materialiser
+/// 2 connections lets the 2 chunks land on 2 distinct YB backends and
+/// complete in one wall-clock RTT instead of two. The materialiser
 /// shares this pool for its image INSERTs.
 async fn create_fpu_page_store(
     conf: &'static PageServerConf,
 ) -> anyhow::Result<Arc<pageserver::page_store::PageStore>> {
-    // Base size of 4 scaled by `scale_factor`; mirrors the
-    // `PARALLELISM = 4` chunk dispatch in `PageStore::put_pages`,
+    // Base size of 2 scaled by `scale_factor`; mirrors the
+    // `PARALLELISM = 2` chunk dispatch in `PageStore::put_pages`,
     // which scales the same way.
-    let pool_size = pageserver_api::config::scale_count(4, conf.scale_factor);
+    let pool_size = pageserver_api::config::scale_count(2, conf.scale_factor);
     // The fast-upsert pool: `put_pages` + `put_slru_pages` +
     // `put_meta` + the materialiser's image INSERTs all run here and
     // depend on `yb_enable_upsert_mode = true` to skip

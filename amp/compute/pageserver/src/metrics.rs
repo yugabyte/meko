@@ -205,9 +205,9 @@ pub(crate) static PAGEWRITER_BACKPRESSURE_WAITS: Lazy<IntCounterVec> = Lazy::new
 
 /// Current bytes pending durable flush (rel-page UnifiedPages.unflushed +
 /// SLRU/meta aux buffers). Sampled by `PageWriter::stats()` when callers
-/// emit the gauge. Hits `FlushPolicy::backpressure_bytes` (50 MiB default)
+/// emit the gauge. Hits `FlushPolicy::backpressure_bytes` (25 MiB default)
 /// before triggering wait. Spikes well above the size-based flush trigger
-/// (`max_bytes`, 25 MiB default) indicate YB is the bottleneck.
+/// (`max_bytes`, 12 MiB default) indicate YB is the bottleneck.
 pub(crate) static PAGEWRITER_UNFLUSHED_BYTES: Lazy<UIntGauge> = Lazy::new(|| {
     register_uint_gauge!(
         "pageserver_yb_pagewriter_unflushed_bytes",

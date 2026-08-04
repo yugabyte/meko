@@ -55,7 +55,7 @@ pub mod defaults {
 
     /// Capacity (MiB) of the in-memory cache of recently-written WAL chunks
     /// in YB-WAL mode. Set to 0 to disable the cache entirely.
-    pub const DEFAULT_WAL_CACHE_SIZE_MIB: usize = 256;
+    pub const DEFAULT_WAL_CACHE_SIZE_MIB: usize = 128;
 
     /// Default per-timeline disk usage limit is 0 (disabled) — yb-amp has
     /// no local-FS WAL anyway.

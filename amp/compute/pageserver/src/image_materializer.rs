@@ -64,17 +64,17 @@ const BATCH_DRAIN_LIMIT: usize = 500;
 /// drains in a spawned future; this cap bounds how many spawned
 /// INSERT futures can be outstanding at once.
 ///
-/// At 4: each materialiser `put_pages` carries ≤500 rows (one
+/// At 2: each materialiser `put_pages` carries ≤500 rows (one
 /// `ROWS_PER_INSERT` chunk) and therefore uses exactly one slot of
-/// the internal `PageStore` pool. With `INTERNAL_POOL_SIZE = 4` over
-/// in `yb-pageserver.rs`, 4 in-flight INSERTs map to 4 distinct YB
-/// backends and lift the materialiser's INSERT-side throughput from
-/// ~38 K rows/s (1 conn at ~13 ms / 490-row batch) toward ~150 K rows/s.
-/// Raises peak in-flight RAM by ~8 MB (4 × 500 × 8 KB image) over
-/// the prior 2-deep pipeline; small versus the win when the
-/// materialise queue is being driven hard enough to backpressure
-/// the walreceiver. Scaled by `PageServerConf::scale_factor`.
-const BASE_MAX_INFLIGHT_INSERTS: usize = 4;
+/// the internal `PageStore` pool. With the fpu pool's base size of 2
+/// over in `yb-pageserver.rs`, 2 in-flight INSERTs map to 2 distinct YB
+/// backends and roughly double the materialiser's INSERT-side throughput
+/// over a single connection (~38 K rows/s at ~13 ms / 490-row batch).
+/// Peak in-flight RAM is ~8 MB (2 × 500 × 8 KB image). Raise
+/// `scale_factor` to deepen the pipeline (and widen the fpu pool with
+/// it) on hosts that can absorb the concurrency.
+/// Scaled by `PageServerConf::scale_factor`.
+const BASE_MAX_INFLIGHT_INSERTS: usize = 2;
 
 /// Maximum concurrent `redo_one` futures in flight within a single
 /// `materialize_batch`. Each future does an SQL `read_chain_durable`
@@ -86,10 +86,11 @@ const BASE_MAX_INFLIGHT_INSERTS: usize = 4;
 /// subprocess pool, which is a separate change to `PostgresRedoManager`.
 /// But the SQL read and the WAL decode CAN run in parallel, and walredo
 /// pipelines stdin-write of req N+1 with stdout-read of req N inside
-/// the subprocess. So 8-way fan-out captures most of the win at low
-/// risk; raising further hits diminishing returns until walredo itself
-/// is parallelised. Scaled by `PageServerConf::scale_factor`.
-const BASE_REDO_CONCURRENCY: usize = 8;
+/// the subprocess. So 4-way fan-out captures much of the win at low
+/// risk and low CPU footprint; raising it (via `scale_factor`) hits
+/// diminishing returns until walredo itself is parallelised.
+/// Scaled by `PageServerConf::scale_factor`.
+const BASE_REDO_CONCURRENCY: usize = 4;
 
 /// Output of [`ImageMaterializer::redo_phase`] — everything
 /// [`ImageMaterializer::commit_phase`] needs to bulk-INSERT a batch's

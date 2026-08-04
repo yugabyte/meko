@@ -93,7 +93,7 @@ pub struct PageServerConf {
     // How long to wait for WAL redo to complete.
     pub wal_redo_timeout: Duration,
 
-    /// Per-tenant walredo subprocess pool size. Base default 2,
+    /// Per-tenant walredo subprocess pool size. Base default 1,
     /// multiplied by `scale_factor`. Each slot is a separate
     /// long-lived postgres-walredo process; requests round-robin across
     /// them so a single tenant can replay multiple records in parallel.
@@ -382,7 +382,7 @@ impl PageServerConf {
 
         let yb_page_writer = yb_page_writer.resolve(scale_factor);
         let walredo_pool_size =
-            NonZeroUsize::new(pageserver_api::config::scale_count(2, scale_factor))
+            NonZeroUsize::new(pageserver_api::config::scale_count(1, scale_factor))
                 .expect("scale_count clamps to >= 1");
 
         let mut conf = PageServerConf {
