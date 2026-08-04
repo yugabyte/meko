@@ -229,9 +229,10 @@ marker.
 
 SLRU blocks (pg_xact, pg_multixact offsets/members). `kind` is 0=Clog,
 1=MultiXactMembers, 2=MultiXactOffsets (`slru_kind_to_i16`,
-`page_store.rs`). PK: `((branch_id, kind, segno) HASH, blknum,
-lsn DESC, is_image DESC)` — a whole SLRU segment lives on one tablet.
-Same image/delta chain semantics as `pages`.
+`page_store.rs`). PK: `((branch_id) HASH, kind ASC, segno ASC,
+blknum ASC, lsn DESC, is_image DESC)` — a branch's whole SLRU space
+lives on one tablet, with each `(kind, segno)` segment a contiguous
+range inside it. Same image/delta chain semantics as `pages`.
 
 ### `amp_storage.meta`
 
@@ -239,7 +240,7 @@ Everything that is neither a relation page nor an SLRU block: rel-size
 sentinels, directory listings, aux files (`yb_amp.signal`,
 `postgresql.auto.conf`, replication-slot state), two-phase-commit
 files, replication origins, SLRU segment-size sentinels. `key` is the
-18-byte BYTEA Key encoding; PK `((branch_id, key) HASH, lsn DESC)`.
+18-byte BYTEA Key encoding; PK `((branch_id) HASH, key ASC, lsn DESC)`.
 **Full-overwrite semantics**: a read returns the single latest row at
 LSN ≤ target — no chains, no walredo.
 
@@ -467,8 +468,8 @@ the same per-block anchor in a `CROSS JOIN LATERAL` driven by either a
 `SELECT DISTINCT blknum` CTE (contiguous range) or
 `unnest($6::bigint[])` (scattered set), so each block gets the pushdown
 individually. The cross-forknum variant keys the LATERAL on the full
-(spcnode, dbnode, relnode, forknum, blknum) tuple; it scatters across
-hash tablets and is rare in practice.
+(spcnode, dbnode, relnode, forknum, blknum) tuple; it fans out across
+all buckets and is rare in practice.
 
 On the direct-RPC lane (`yb_thin_client`, the default), the single-key
 readers —
@@ -488,8 +489,10 @@ cut short mid-chain drops the base image and reconstructs a partial page
 (the `yb_thin_client` `read_scan` loop stops iff its `on_page` callback
 returns `true`). Cross-forknum
 `scan_range` and multi-key `scan_meta_range` always stay on YSQL — they
-scatter across hash buckets and are not hot. Per-op latency is split by
-lane in `pageserver_yb_store_op_seconds{op,path}`.
+span many keys and are not hot (with `key` a range column,
+`scan_meta_range` is a contiguous scan inside the branch's tablet).
+Per-op latency is split by lane in
+`pageserver_yb_store_op_seconds{op,path}`.
 
 ### Chain invariants
 

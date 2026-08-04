@@ -219,7 +219,9 @@ async fn repro_desc_pk_limit1_newest() {
     ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
-    // Mirrors amp_storage.meta: hash key + a single `lsn DESC` clustering col.
+    // Distills amp_storage.meta's read shape: hash key + trailing `lsn DESC`
+    // (the real table has a `key` range column in between; see
+    // `repro_meta_bytea_limit1_newest` for the exact shape).
     ysql.execute(
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
@@ -294,7 +296,7 @@ async fn repro_concurrent_multikey_reads() {
         &format!(
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL, tag BIGINT NOT NULL,
-                 PRIMARY KEY ((branch_id, key) HASH, lsn DESC))"
+                 PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC))"
         ),
         &[],
     ).await.unwrap();
@@ -326,19 +328,15 @@ async fn repro_concurrent_multikey_reads() {
             let (c, t) = (Arc::clone(&client), Arc::clone(&table));
             handles.push(tokio::spawn(async move {
                 let key = vec![0x03u8, i as u8];
-                let read = RangeRead::new(
-                    &t,
-                    vec![
-                        BindValue::Text("m".into()),
-                        BindValue::Bytes(Bytes::from(key)),
-                    ],
-                )
-                .unwrap()
-                .cond(&t, "lsn", CondOp::Le, BindValue::I64(150))
-                .unwrap()
-                .targets(&t, &["tag"])
-                .unwrap()
-                .limit(1);
+                let read = RangeRead::new(&t, vec![BindValue::Text("m".into())])
+                    .unwrap()
+                    .cond(&t, "key", CondOp::Eq, BindValue::Bytes(Bytes::from(key)))
+                    .unwrap()
+                    .cond(&t, "lsn", CondOp::Le, BindValue::I64(150))
+                    .unwrap()
+                    .targets(&t, &["tag"])
+                    .unwrap()
+                    .limit(1);
                 let got = c
                     .read_page(&t, &read, None)
                     .await
@@ -390,7 +388,7 @@ async fn repro_real_ckpt_read() {
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
-                 PRIMARY KEY ((branch_id, key) HASH, lsn DESC))"
+                 PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC))"
         ),
         &[],
     )
@@ -434,19 +432,15 @@ async fn repro_real_ckpt_read() {
     let mut ck = vec![0u8; 18];
     ck[0] = 0x03;
     ck[17] = 0x01;
-    let read = RangeRead::new(
-        &table,
-        vec![
-            BindValue::Text("m".into()),
-            BindValue::Bytes(Bytes::from(ck)),
-        ],
-    )
-    .unwrap()
-    .cond(&table, "lsn", CondOp::Le, BindValue::I64(22891280))
-    .unwrap()
-    .targets(&table, &["lsn"])
-    .unwrap()
-    .limit(1);
+    let read = RangeRead::new(&table, vec![BindValue::Text("m".into())])
+        .unwrap()
+        .cond(&table, "key", CondOp::Eq, BindValue::Bytes(Bytes::from(ck)))
+        .unwrap()
+        .cond(&table, "lsn", CondOp::Le, BindValue::I64(22891280))
+        .unwrap()
+        .targets(&table, &["lsn"])
+        .unwrap()
+        .limit(1);
     let seen = client
         .read_page(&table, &read, None)
         .await
@@ -559,7 +553,7 @@ async fn repro_cross_client_visibility() {
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
-                 PRIMARY KEY ((branch_id, key) HASH, lsn DESC))"
+                 PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC))"
         ),
         &[],
     )
@@ -597,19 +591,15 @@ async fn repro_cross_client_visibility() {
     })
     .expect("connect B");
     let tb = b.open_table(db_oid, table_oid).expect("open B");
-    let read = RangeRead::new(
-        &tb,
-        vec![
-            BindValue::Text("m".into()),
-            BindValue::Bytes(kbytes.clone()),
-        ],
-    )
-    .unwrap()
-    .cond(&tb, "lsn", CondOp::Le, BindValue::I64(1_000_000))
-    .unwrap()
-    .targets(&tb, &["lsn"])
-    .unwrap()
-    .limit(1);
+    let read = RangeRead::new(&tb, vec![BindValue::Text("m".into())])
+        .unwrap()
+        .cond(&tb, "key", CondOp::Eq, BindValue::Bytes(kbytes.clone()))
+        .unwrap()
+        .cond(&tb, "lsn", CondOp::Le, BindValue::I64(1_000_000))
+        .unwrap()
+        .targets(&tb, &["lsn"])
+        .unwrap()
+        .limit(1);
     let seen = b
         .read_page(&tb, &read, None)
         .await
@@ -633,13 +623,14 @@ async fn repro_cross_client_visibility() {
 
 /// Repro for `PageStore::read_meta` fetching a STALE checkpoint (the
 /// `branch_ancestor` root cause). `read_meta` mirrors the `amp_storage.meta`
-/// table: PK `((branch_id, key) HASH, lsn DESC)`, a BYTEA key, and MANY lsn
-/// versions of one key (the checkpoint's `nextXid` is rewritten on every
-/// xid-advancing WAL record). It relies on a forward `limit(1)` returning the
-/// row with the HIGHEST lsn (newest). If the shim's forward `limit(1)` on this
-/// two-column-hash + BYTEA-key + many-version shape returns an OLDER row, a
-/// branch reads a stale checkpoint → stale `nextXid` → ancestor tuples appear
-/// "in the future" → every user table reads "does not exist".
+/// table: PK `((branch_id) HASH, key ASC, lsn DESC)`, a BYTEA key bound as an
+/// equality cond, and MANY lsn versions of one key (the checkpoint's
+/// `nextXid` is rewritten on every xid-advancing WAL record). It relies on a
+/// forward `limit(1)` returning the row with the HIGHEST lsn (newest). If the
+/// shim's forward `limit(1)` on this BYTEA-range-key + many-version shape
+/// returns an OLDER row, a branch reads a stale checkpoint → stale `nextXid`
+/// → ancestor tuples appear "in the future" → every user table reads "does
+/// not exist".
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_meta_bytea_limit1_newest() {
@@ -655,7 +646,7 @@ async fn repro_meta_bytea_limit1_newest() {
             "CREATE TABLE IF NOT EXISTS {TABLE} (
                  branch_id TEXT NOT NULL, key BYTEA NOT NULL, lsn BIGINT NOT NULL,
                  payload BYTEA NOT NULL,
-                 PRIMARY KEY ((branch_id, key) HASH, lsn DESC))"
+                 PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC))"
         ),
         &[],
     )
@@ -681,24 +672,26 @@ async fn repro_meta_bytea_limit1_newest() {
     .expect("connect");
     let table = client.open_table(db_oid, table_oid).expect("open_table");
 
-    // EXACTLY read_meta_thin's read: hash (branch_id, key), lsn <= huge, limit 1.
-    let read = RangeRead::new(
-        &table,
-        vec![
-            BindValue::Text("m".into()),
+    // EXACTLY read_meta_thin's read: hash (branch_id), key = Eq cond,
+    // lsn <= cap, limit 1.
+    let read = RangeRead::new(&table, vec![BindValue::Text("m".into())])
+        .unwrap()
+        .cond(
+            &table,
+            "key",
+            CondOp::Eq,
             BindValue::Bytes(Bytes::from_static(&[0x03, 0xab, 0xcd, 0x01])),
-        ],
-    )
-    .unwrap()
-    .cond(&table, "lsn", CondOp::Le, BindValue::I64(850))
-    .unwrap()
-    .targets(&table, &["lsn"])
-    .unwrap()
-    .limit(1);
+        )
+        .unwrap()
+        .cond(&table, "lsn", CondOp::Le, BindValue::I64(850))
+        .unwrap()
+        .targets(&table, &["lsn"])
+        .unwrap()
+        .limit(1);
     let page = client.read_page(&table, &read, None).await.expect("read");
     let seen = page.rows.first().map(|r| r[0].as_i64().unwrap());
     println!(
-        "repro meta bytea limit1 (2-col hash + BYTEA key, cap 850): got lsn={seen:?} (want Some(800) newest<=cap; bug=Some(100) oldest)"
+        "repro meta bytea limit1 (branch hash + BYTEA range key, cap 850): got lsn={seen:?} (want Some(800) newest<=cap; bug=Some(100) oldest)"
     );
     ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
         .await
@@ -820,9 +813,10 @@ async fn repro_concurrent_read_write() {
 ///
 /// Kept HASH-sharded deliberately, even though production `wals` is now
 /// all-range: this is the suite's coverage of descending limit-1 on a
-/// hash-keyed table, which `slru_pages` and `meta` still are. The
-/// range-sharded shape of the real `wals`, including the covering arm across
-/// tablet boundaries, is covered by `repro_wals_range_sharded`.
+/// hash-keyed table — the shape `slru_pages` and `meta` reads still use
+/// (a `branch_id` hash prefix plus range-column conds). The range-sharded
+/// shape of the real `wals`, including the covering arm across tablet
+/// boundaries, is covered by `repro_wals_range_sharded`.
 #[tokio::test]
 #[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
 async fn repro_wals_covering_read() {

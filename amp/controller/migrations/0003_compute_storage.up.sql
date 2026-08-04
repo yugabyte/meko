@@ -24,6 +24,13 @@ CREATE SCHEMA IF NOT EXISTS amp_storage;
 -- discriminates between which service a row belongs to; its values name
 -- the writing service, not a schema. (Live WAL chunks live in
 -- `amp_storage.wals`, defined below.)
+--
+-- `branch_id` alone is the hash key — here and on `slru_pages`/`meta`
+-- below — so branch-scoped operations (prefix LIST, branch-drop GC) are
+-- single-tablet and key-bound. One hash value never auto-splits: a hard
+-- per-branch ceiling, safe because per-branch data in these tables is
+-- bounded. `pages`/`wals` are unbounded per branch and lead with a
+-- range `bucket_id` instead.
 -- =====================================================================
 
 -- CREATE TYPE has no IF NOT EXISTS; guard against a pre-existing type.
@@ -43,7 +50,9 @@ CREATE TABLE IF NOT EXISTS amp_storage.blobs (
     etag             TEXT                       NOT NULL,
     last_modified_us BIGINT                     NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((branch_id, key) HASH, namespace, chunk_idx)
+    -- namespace (always equality-bound) before `key` (prefix-scanned):
+    -- a LIST stays inside one service's span; chunks stay adjacent.
+    PRIMARY KEY ((branch_id) HASH, namespace ASC, key ASC, chunk_idx ASC)
 );
 
 -- =====================================================================
@@ -121,8 +130,14 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
 
 -- SLRU pages — pg_xact, pg_multixact_offsets, pg_multixact_members.
 -- `kind` matches `Key::field2` byte ordering: 0=Clog,
--- 1=MultiXactMembers, 2=MultiXactOffsets. Hash partition keeps a
--- whole SLRU segment on one tablet.
+-- 1=MultiXactMembers, 2=MultiXactOffsets.
+--
+-- `branch_id`-only hash (see the `blobs` header). Size is protocol-capped
+-- (2 bits/xact clog; vacuum horizons truncate; the 32-bit xid/mxid spaces
+-- bound the worst case below a tablet), and the hot key is the single
+-- head page per kind — one key, which no bucketing can spread. A
+-- `(kind, segno)` segment stays contiguous; versions `lsn DESC`, image
+-- first on ties (matching `pages`).
 CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
     branch_id    TEXT     NOT NULL,
     kind         SMALLINT NOT NULL,
@@ -132,8 +147,8 @@ CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id, kind, segno) HASH,
-                 blknum, lsn DESC, is_image DESC)
+    PRIMARY KEY ((branch_id) HASH,
+                 kind ASC, segno ASC, blknum ASC, lsn DESC, is_image DESC)
 );
 
 -- Metadata blobs — everything that isn't a relation page or SLRU
@@ -142,12 +157,15 @@ CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
 -- replication-slot state), two-phase commit files, replication
 -- origins, SLRU segment-size sentinels. Full-overwrite semantics:
 -- read = latest row ≤ target_lsn. No walredo, no chains.
+--
+-- `branch_id`-only hash (see the `blobs` header); `key` as a range
+-- column makes `scan_meta_range` contiguous.
 CREATE TABLE IF NOT EXISTS amp_storage.meta (
     branch_id    TEXT     NOT NULL,
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id, key) HASH, lsn DESC)
+    PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC)
 );
 
 -- =====================================================================

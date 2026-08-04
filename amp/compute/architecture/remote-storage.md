@@ -111,19 +111,25 @@ CREATE TABLE amp_storage.blobs (
     etag             TEXT                  NOT NULL,  -- total-object MD5 etag, duplicated per chunk
     last_modified_us BIGINT                NOT NULL,  -- microseconds since Unix epoch
     metadata_json    TEXT,                            -- serialized StorageMetadata, or NULL
-    PRIMARY KEY ((branch_id, key) HASH, namespace, chunk_idx)
+    PRIMARY KEY ((branch_id) HASH, namespace ASC, key ASC, chunk_idx ASC)
 );
 ```
 
 Design points and the constraints behind them:
 
-- **`(branch_id, key)` is the hash part of the primary key.** Hashing on the
-  pair distributes rows across DocDB tablets at per-object granularity, so a
-  branch with many objects does not concentrate on one hot tablet, and an
-  equality predicate on both columns resolves to a single-tablet point
-  lookup. Every point operation (`head_object`, `download`'s metadata read
-  and its chunk-range scan, `delete`, `upload`'s pre-delete, `copy`) supplies
-  `branch_id` and `key` and therefore hits exactly one tablet.
+- **`branch_id` alone is the hash part of the primary key.** One hash value
+  per branch means every branch-scoped operation is key-bound: a prefix
+  `list` is a single-tablet range scan over the `key` range column, and
+  branch-drop GC is one hash-bound DELETE. Point operations
+  (`head_object`, `download`'s metadata read and its chunk-range scan,
+  `delete`, `upload`'s pre-delete, `copy`) supply `branch_id`, `namespace`,
+  and `key` — the full prefix down to the chunk — and seek exactly one row
+  range. The cost is that a branch's blobs share one tablet (a single hash
+  value never auto-splits); that is safe because per-branch blob volume is
+  initdb-archive-scale, not the page firehose. The range columns run
+  coarse-to-fine — `namespace` (always bound with equality; derived from
+  the key's path shape) before the prefix-scanned `key`, so a `list` stays
+  inside one service's contiguous span and an object's chunks are adjacent.
 - **`generation` is its own column, not part of `key`.** Keeping the
   generation out of the hashed key means `WHERE key = '<filename>'` is the
   dominant, LIKE-free query shape; different generations of the same logical
@@ -281,16 +287,19 @@ the connection has since dropped.
   `chunk_idx = 0` (the latter dedupes the chunk rows back to one row per
   object). When a `branch_id` is extractable from the prefix it filters on
   that column too, pinning the scan to the branch's tablet.
-- **Fast path vs. scan.** If the prefix's terminal segment looks like a
-  filename (contains a `.`), it filters `key = $n` — a single-tablet hash
-  lookup — and, when the prefix named a specific generation, matches that
-  generation as well. Otherwise it filters `key LIKE $n ESCAPE '\\'` with the
-  literal fragment escaped by `escape_like`, which is a wider scan. The
-  pageserver's `tenant-manifest` prefix (which arrives without an extension)
-  is rewritten to `tenant-manifest.json` first so it takes the equality fast
-  path rather than a LIKE scan.
-- `ORDER BY branch_id, key, generation`, with an optional `LIMIT` bound to
-  `max_keys`.
+- **Equality vs. prefix scan.** If the prefix's terminal segment looks like
+  a filename (contains a `.`), it filters `key = $n` — an exact seek — and,
+  when the prefix named a specific generation, matches that generation as
+  well. Otherwise it filters `key LIKE $n ESCAPE '\\'` with the literal
+  fragment escaped by `escape_like` — a range scan on the `key` range
+  column, still bounded to the branch's tablet whenever `branch_id` is
+  bound. The pageserver's `tenant-manifest` prefix (which arrives without
+  an extension) is rewritten to `tenant-manifest.json` first so it takes
+  the equality shape.
+- `ORDER BY branch_id, key`, with an optional `LIMIT` bound to `max_keys`.
+  (`key` is unique in the result — `generation` is a non-key column, so
+  generations of one logical file share a row — and key-column ordering
+  lets the scan return in index order.)
 
 Results are rebuilt into `RemotePath`s via `rejoin_key_generation` +
 `reconstruct_key`. In `NoDelimiter` mode every matching row becomes a

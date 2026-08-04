@@ -180,7 +180,7 @@ CREATE TABLE amp_storage.blobs (
     etag             TEXT                  NOT NULL,    -- total-object etag, denormalized
     last_modified_us BIGINT                NOT NULL,
     metadata_json    TEXT,
-    PRIMARY KEY ((branch_id, key) HASH, namespace, chunk_idx)
+    PRIMARY KEY ((branch_id) HASH, namespace ASC, key ASC, chunk_idx ASC)
 );
 ```
 
@@ -204,13 +204,16 @@ The column split is populated at write time by `YbStore::parse_key`
   key; `NULL` for genless files (e.g. the initdb archives). Matched
   explicitly on read (`generation IS NOT DISTINCT FROM $N`).
 
-The PK puts `(branch_id, key)` in the hash partition so every object
-gets its own hash bucket (no hot tablet on big branches) and a
-`key = $x` lookup resolves to one tablet; within a bucket rows sort by
-`(namespace, chunk_idx)`. Generation is a plain column, so multiple
-generations of the same logical file collapse into one row by design —
-newer generations overwrite older ones, and YB's ACID isolation
-prevents split-brain between two writers.
+The PK hashes on `branch_id` alone, so a branch's blobs live on one
+tablet and every branch-scoped operation is key-bound: point lookups
+seek `(namespace, key)` inside the branch's range, a prefix LIST is a
+range scan on the `key` range column, and branch-drop GC is a single
+hash-bound DELETE. Per-branch blob volume is small (initdb-archive
+scale), which is what makes the one-tablet-per-branch bound safe.
+Generation is a plain column, so multiple generations of the same
+logical file collapse into one row by design — newer generations
+overwrite older ones, and YB's ACID isolation prevents split-brain
+between two writers.
 
 **Chunking**: objects are split into rows of `YB_CHUNK_SIZE = 100 MiB`
 (`yb_store.rs`), because YB's RPC layer rejects messages larger than
@@ -232,7 +235,7 @@ FROM blobs
 GROUP BY namespace
 ORDER BY namespace;
 
--- Per-branch breakdown (fast — hits the (branch_id, key) hash partition)
+-- Per-branch breakdown (fast — branch_id binds the hash partition)
 SELECT branch_id,
        namespace,
        count(DISTINCT key) AS objects,
@@ -347,8 +350,15 @@ walredo-applied images to keep it rare.
 SLRU blocks — `pg_xact`, `pg_multixact_offsets`,
 `pg_multixact_members`. `kind` matches the key encoding's `field2`
 ordering: 0 = Clog, 1 = MultiXactMembers, 2 = MultiXactOffsets. Same
-image/delta shape as `pages`; the hash partition keeps a whole SLRU
-segment on one tablet.
+image/delta shape as `pages`. The hash partition is `branch_id` alone,
+so a branch's whole SLRU space lives on one tablet: branch-drop GC is a
+single key-bound DELETE, and a whole-SLRU export is one contiguous
+scan. That bound is safe because SLRU volume is protocol-capped (clog
+is 2 bits per xact and vacuum's freeze horizons force truncation), and
+the write hotspot — the single head page per kind — is one key, which
+no partitioning scheme could spread anyway. Within the branch, the
+range columns keep a `(kind, segno)` segment contiguous with `blknum`
+ordered inside it.
 
 ```sql
 CREATE TABLE amp_storage.slru_pages (
@@ -360,8 +370,8 @@ CREATE TABLE amp_storage.slru_pages (
     lsn          BIGINT   NOT NULL,
     will_init    BOOLEAN  NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id, kind, segno) HASH,
-                 blknum, lsn DESC, is_image DESC)
+    PRIMARY KEY ((branch_id) HASH,
+                 kind ASC, segno ASC, blknum ASC, lsn DESC, is_image DESC)
 );
 ```
 
@@ -374,13 +384,18 @@ replication-slot state), two-phase commit files, replication origins,
 SLRU segment-size sentinels. Full-overwrite semantics: a read is the
 latest row at LSN ≤ target — no walredo, no chains.
 
+Like `slru_pages`, the hash partition is `branch_id` alone — sentinels
+and directory blobs are small, branch-drop GC is one key-bound DELETE,
+and `key` as a range column makes multi-key scans (`scan_meta_range`)
+contiguous.
+
 ```sql
 CREATE TABLE amp_storage.meta (
     branch_id    TEXT     NOT NULL,
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
     payload      BYTEA    NOT NULL,
-    PRIMARY KEY ((branch_id, key) HASH, lsn DESC)
+    PRIMARY KEY ((branch_id) HASH, key ASC, lsn DESC)
 );
 ```
 

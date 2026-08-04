@@ -5,21 +5,11 @@
 //! with Postgres, the same code works against vanilla Postgres for local
 //! development.
 //!
-//! The table is **not** created by this module; the operator is expected to
-//! provision it with the schema below (column names are hard-coded):
-//!
-//! ```sql
-//! CREATE TABLE <table_name> (
-//!     key              TEXT    NOT NULL,
-//!     chunk_idx        INT     NOT NULL,
-//!     data             BYTEA   NOT NULL,
-//!     size_bytes       BIGINT  NOT NULL,    -- total object size, duplicated per chunk
-//!     etag             TEXT    NOT NULL,    -- total-object etag, duplicated per chunk
-//!     last_modified_us BIGINT  NOT NULL,
-//!     metadata_json    TEXT,
-//!     PRIMARY KEY (key HASH, chunk_idx)
-//! );
-//! ```
+//! The table is **not** created by this module — the canonical DDL (whose
+//! column names are hardcoded here) is the controller migration
+//! `amp/controller/migrations/0003_compute_storage.up.sql`. `branch_id`
+//! alone is the hash key, so every query here is single-tablet, bounded
+//! by the range columns `(namespace, key, chunk_idx)`.
 //!
 //! Each object is split into chunks of `YB_CHUNK_SIZE` bytes (100 MiB) and stored
 //! as one row per chunk, ordered by `chunk_idx`. This works around YB's default
@@ -428,20 +418,14 @@ impl RemoteStorage for YbStore {
 
         let full_prefix = self.full_prefix(prefix);
 
-        // Parse the prefix into the new column form. When the prefix
-        // contains a branch id (the common case — pageserver lists by
-        // `branches/<branch_id>/…`), we filter on that column directly so
-        // the query hits a single hash tablet.
+        // Parse the prefix into columns. A branch-id-bearing prefix (the
+        // common case) binds the whole hash key: single-tablet scan.
         let (namespace, branch_id, raw_key_body_prefix) = self.parse_key(&full_prefix);
         let (mut key_body_prefix, requested_gen) = Self::split_key_generation(&raw_key_body_prefix);
 
-        // Pageserver's `remote_tenant_manifest_prefix` returns
-        // `…/tenant-manifest` (no extension) because S3/Azure LIST is
-        // literal-prefix and the stored keys are
-        // `tenant-manifest-<gen>.json`. For YB the storage-layer split
-        // gives us `tenant-manifest.json` as the canonical body, so
-        // rewrite the prefix here to match — turns the LIKE branch
-        // below into an equality lookup on a known filename.
+        // `remote_tenant_manifest_prefix` arrives extensionless (S3-style
+        // literal prefix); the stored body is `tenant-manifest.json`, so
+        // complete it here and take the equality branch below.
         if key_body_prefix
             .rsplit('/')
             .next()
@@ -451,16 +435,10 @@ impl RemoteStorage for YbStore {
             key_body_prefix.push_str(".json");
         }
 
-        // Decide equality vs LIKE based on whether the prefix looks like
-        // a full filename (has a `.<ext>` in its terminal segment) or a
-        // directory/partial prefix. PK is
-        // `((branch_id, key) HASH, namespace, chunk_idx)`,
-        // so equality on `key` resolves to a single tablet; LIKE forces
-        // a full-cluster scan. Filename-shaped callers
-        // (`index_part.json`, `tenant-manifest.json` after the prefix
-        // rewrite above) take the fast path; directory-shaped callers
-        // (`branches/X/`, anything ending in `/`) fall back
-        // to LIKE.
+        // Filename-shaped prefixes (`.<ext>` terminal segment) take the
+        // equality arm (exact seek); directory-shaped ones take LIKE (a
+        // range scan on `key`). Both are single-tablet once branch_id is
+        // bound; only the branchless generic-blob form scans every tablet.
         let key_body_is_filename = !key_body_prefix.is_empty()
             && key_body_prefix
                 .rsplit('/')
@@ -475,8 +453,8 @@ impl RemoteStorage for YbStore {
             bind_params.push(Box::new(branch_id.clone()));
         }
         if key_body_is_filename {
-            // Hash-tablet localised lookup. If the caller named a
-            // specific generation, match it; otherwise return whatever
+            // Exact-key seek. If the caller named a specific
+            // generation, match it; otherwise return whatever
             // generation is stored for that key.
             where_clauses.push(format!("key = ${}", bind_params.len() + 1));
             bind_params.push(Box::new(key_body_prefix.clone()));
@@ -494,10 +472,13 @@ impl RemoteStorage for YbStore {
         }
         where_clauses.push("chunk_idx = 0".to_string());
 
+        // `key` is unique here (generation is a non-key column; namespace
+        // and chunk_idx are equality-bound), so key-column ordering lets
+        // the scan return in index order.
         let mut sql = format!(
             "SELECT branch_id, key, generation, size_bytes, last_modified_us \
              FROM {} WHERE {} \
-             ORDER BY branch_id, key, generation",
+             ORDER BY branch_id, key",
             quote_relation(&self.table_name),
             where_clauses.join(" AND "),
         );
@@ -982,7 +963,7 @@ impl RemoteStorage for YbStore {
         // Each key has its own (namespace, branch, key_body) tuple, so we
         // fan out one DELETE per object pipelined via `execute_raw` +
         // `try_join_all`. Same wire-level batching trick as `upload`; each
-        // DELETE hits one hash tablet directly.
+        // DELETE binds the branch hash key and seeks the exact key range.
         let parsed: Vec<(&'static str, String, String, Option<i32>)> = paths
             .iter()
             .map(|p| {

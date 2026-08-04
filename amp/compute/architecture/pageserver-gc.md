@@ -260,11 +260,12 @@ runs:
      drops rather than shrinks; `meta` isn't shrunk.)
    - **trim** — keep the newest base `<= cutoff` (the anchor) and
      everything above, delete below: rel blocks (`gc_act_trim_blocks`) and
-     SLRU blocks (`gc_act_trim_slru`, one tablet per `(kind, segno)`);
-     `meta` has no `will_init`/chain, so `gc_act_trim_meta` just keeps the
-     newest version `<= cutoff` per key. Trims across objects run in
-     parallel (`GC_ACTION_PARALLELISM`, default 2, scaled) — distinct
-     objects are distinct keys / tablets, no ordering constraint.
+     SLRU blocks (`gc_act_trim_slru`, single-tablet — the branch hash key
+     plus a `(kind, segno)` range prefix); `meta` has no `will_init`/chain,
+     so `gc_act_trim_meta` just keeps the newest version `<= cutoff` per
+     key. Trims across objects run in parallel (`GC_ACTION_PARALLELISM`,
+     default 2, scaled) — distinct objects are distinct keys / tablets,
+     no ordering constraint.
 
    Every act on `pages` must bind `bucket_id`, the leading column of that
    table's all-range key (see [`pageserver.md`](pageserver.md) "Why the
@@ -276,7 +277,9 @@ runs:
    per-block semantics are unchanged), while `gc_act_drop_fork` and
    `gc_act_shrink_fork` cover a whole fork — length unknown at that point —
    and so loop over all `PAGE_BUCKETS`. Each returns the summed row count.
-   `slru_pages` and `meta` are still hash-keyed and unaffected.
+   `slru_pages` and `meta` need no fan-out: `branch_id` is their whole hash
+   key, so binding the branch (which every act does) already bounds the
+   statement to one tablet.
 
    All drops are acted regardless of busy state; the busy-object ones are
    just held back from the **dequeue**, not from the delete.

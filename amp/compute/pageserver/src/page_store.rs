@@ -571,6 +571,33 @@ fn int_bind_thin(col: &yb_thin_client::Column, v: i64) -> yb_thin_client::BindVa
     }
 }
 
+/// The shared prefix of every thin `slru_pages` read: `branch_id` is the
+/// whole hash key; kind/segno are range columns, bound as equality scan
+/// conds. Callers append their own `blknum`/`lsn` conds and targets.
+fn slru_segment_read(
+    slru: &yb_thin_client::TableHandle,
+    branch_s: &str,
+    kind_i: i16,
+    segno_i: i64,
+) -> Result<yb_thin_client::RangeRead> {
+    use yb_thin_client::{BindValue, CondOp, RangeRead};
+    Ok(
+        RangeRead::new(slru, vec![BindValue::Text(branch_s.to_string())])?
+            .cond(
+                slru,
+                "kind",
+                CondOp::Eq,
+                int_bind_thin(slru.col("kind")?, kind_i as i64),
+            )?
+            .cond(
+                slru,
+                "segno",
+                CondOp::Eq,
+                int_bind_thin(slru.col("segno")?, segno_i),
+            )?,
+    )
+}
+
 /// Normalize a chain fetched in DocDB storage order into SQL result
 /// order and trim it to the served prefix.
 ///
@@ -2522,20 +2549,13 @@ impl PageStore {
         blk_i: i64,
         target: i64,
     ) -> Result<Vec<SlruPageRow>> {
-        use yb_thin_client::{BindValue, CondOp, RangeRead};
+        use yb_thin_client::{BindValue, CondOp};
         let slru = &p.slru_pages;
-        let read = RangeRead::new(
-            slru,
-            vec![
-                BindValue::Text(branch_s.to_string()),
-                int_bind_thin(slru.col("kind")?, kind_i as i64),
-                int_bind_thin(slru.col("segno")?, segno_i),
-            ],
-        )?
-        .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk_i))?
-        .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
-        .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
-        .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS);
+        let read = slru_segment_read(slru, branch_s, kind_i, segno_i)?
+            .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk_i))?
+            .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
+            .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
+            .limit(DIRECT_SLRU_CHAIN_PAGE_ROWS);
         let raw = fetch_chain_rows_thin(&p.client, slru, read, 0, 2).await?;
 
         assemble_slru_chain(
@@ -2560,21 +2580,14 @@ impl PageStore {
         blk_hi: i64,
         target: i64,
     ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
-        use yb_thin_client::{BindValue, CondOp, RangeRead};
+        use yb_thin_client::{BindValue, CondOp};
         let slru = &p.slru_pages;
-        let read = RangeRead::new(
-            slru,
-            vec![
-                BindValue::Text(branch_s.to_string()),
-                int_bind_thin(slru.col("kind")?, kind_i as i64),
-                int_bind_thin(slru.col("segno")?, segno_i),
-            ],
-        )?
-        .cond(slru, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
-        .cond(slru, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
-        .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
-        .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
-        .limit(DIRECT_SCAN_PAGE_ROWS);
+        let read = slru_segment_read(slru, branch_s, kind_i, segno_i)?
+            .cond(slru, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
+            .cond(slru, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
+            .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
+            .targets(slru, &["blknum", "lsn", "is_image", "will_init", "payload"])?
+            .limit(DIRECT_SCAN_PAGE_ROWS);
 
         let collector = p
             .client
@@ -2878,16 +2891,17 @@ impl PageStore {
     ) -> Result<Option<MetaRow>> {
         use yb_thin_client::{BindValue, CondOp, RangeRead};
         let meta = &p.meta;
-        let read = RangeRead::new(
-            meta,
-            vec![
-                BindValue::Text(branch_id.to_string()),
+        // `branch_id` is the whole hash key; `key` is an equality cond.
+        let read = RangeRead::new(meta, vec![BindValue::Text(branch_id.to_string())])?
+            .cond(
+                meta,
+                "key",
+                CondOp::Eq,
                 BindValue::Bytes(Bytes::copy_from_slice(key)),
-            ],
-        )?
-        .cond(meta, "lsn", CondOp::Le, BindValue::I64(target_lsn.0 as i64))?
-        .targets(meta, &["lsn", "payload"])?
-        .limit(1);
+            )?
+            .cond(meta, "lsn", CondOp::Le, BindValue::I64(target_lsn.0 as i64))?
+            .targets(meta, &["lsn", "payload"])?
+            .limit(1);
         // The meta PK clusters `lsn DESC`, so the forward scan's first row is the
         // newest version at or below the target — exactly what we want. `on_page`
         // returns `true` to stop as soon as that row is in hand; `read_scan`
@@ -3461,8 +3475,9 @@ impl PageStore {
 
     /// Trim action for one SLRU segment's listed blocks: per block, keep
     /// the newest base (`will_init`) `<= cutoff` plus everything above;
-    /// delete below. Single-tablet (`(branch, kind, segno)` is the full
-    /// hash key). The `slru_pages` analog of [`Self::gc_act_trim_blocks`].
+    /// delete below. Single-tablet (`branch_id` is the hash key and
+    /// `(kind, segno)` a bound range prefix within it). The `slru_pages`
+    /// analog of [`Self::gc_act_trim_blocks`].
     pub async fn gc_act_trim_slru(
         &self,
         branch_id: BranchId,
