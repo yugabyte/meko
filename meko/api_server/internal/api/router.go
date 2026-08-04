@@ -1000,6 +1000,20 @@ func registerDatapackRoutes(g, dpDirect *echo.Group, reg *serviceRegistry, maxAr
 		auth.RequireScope(auth.ScopeRead),
 		auth.RequireDatapackAccess(reg.dpRepo),
 	)
+	// Paginated artifact manifest for the datapack detail Artifacts tile + the
+	// full Artifacts page. Any datapack grant can read this (matches single-GET
+	// semantics).
+	dpDirect.GET("/datapacks/:datapack_id/artifacts", artifactH.List,
+		auth.RequireScope(auth.ScopeRead),
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
+	// Short-lived presigned S3 GET for the browser Download button. Falls
+	// through to the base64 GET path for db-inline artifacts (response has
+	// no URL, storage tier = "db").
+	dpDirect.POST("/datapacks/:datapack_id/artifacts/:content_hash/download-url", artifactH.RequestDownloadURL,
+		auth.RequireScope(auth.ScopeRead),
+		auth.RequireDatapackAccess(reg.dpRepo),
+	)
 
 	slog.Info("datapack routes registered")
 }

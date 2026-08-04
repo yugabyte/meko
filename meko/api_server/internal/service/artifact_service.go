@@ -23,14 +23,18 @@ type ArtifactRepo interface {
 	Insert(ctx context.Context, a *models.Artifact) (*models.Artifact, error)
 	TouchLastAccessed(ctx context.Context, datapackID, hash string) error
 	Reactivate(ctx context.Context, datapackID, hash string) (*models.Artifact, error)
+	ListByDatapack(ctx context.Context, datapackID string, opts repository.ArtifactListOpts) (*repository.ListByDatapackResult, error)
 }
 
 // ArtifactS3 is the S3 subset used by ArtifactService, extracted so tests can
-// substitute a stub without a real S3 bucket.
+// substitute a stub without a real S3 bucket. `GenerateDownloadURL` returns
+// a short-lived presigned GET so browsers can pull S3-stored artifacts
+// without proxying bytes through api_server.
 type ArtifactS3 interface {
 	Enabled() bool
 	UploadObject(ctx context.Context, userID, datapackID, hash, filename, contentType string, data []byte) (string, error)
 	DownloadObject(ctx context.Context, key string) ([]byte, error)
+	GenerateDownloadURL(ctx context.Context, key string) (*PresignedDownload, error)
 }
 
 // ArtifactService handles business logic for artifact upload and retrieval.
@@ -160,4 +164,56 @@ func (s *ArtifactService) Get(ctx context.Context, datapackID, contentHash strin
 	}
 	resp.Content = data
 	return resp, nil
+}
+
+// List returns a paginated slice of artifacts for the datapack.
+// Thin passthrough — pagination + filtering live in the repo query
+// so paging semantics stay consistent with the KB documents endpoint.
+func (s *ArtifactService) List(
+	ctx context.Context, datapackID string, opts repository.ArtifactListOpts,
+) (*repository.ListByDatapackResult, error) {
+	return s.repo.ListByDatapack(ctx, datapackID, opts)
+}
+
+// PresignDownloadURL returns a short-lived S3 presigned GET for an
+// S3-backed artifact. Returns nil, nil when the artifact is stored
+// inline in the DB (the caller should use the base64 GET path
+// instead), and errors when the artifact doesn't exist / has expired
+// / S3 is unavailable. Also refreshes last_accessed_at on the row so
+// artifacts referenced only by downloads don't get eligible for
+// expiry sweeps.
+func (s *ArtifactService) PresignDownloadURL(
+	ctx context.Context, datapackID, contentHash string,
+) (*PresignedDownload, *models.Artifact, error) {
+	a, err := s.repo.FindByHash(ctx, datapackID, contentHash)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find artifact: %w", err)
+	}
+	if a == nil {
+		return nil, nil, nil
+	}
+	if a.ExpiredAt != nil {
+		return nil, a, fmt.Errorf("artifact expired")
+	}
+	// Inline (DB) artifacts have no S3 object to sign; caller falls back.
+	if a.S3Key == "" {
+		return nil, a, nil
+	}
+	if s.s3Svc == nil || !s.s3Svc.Enabled() {
+		return nil, a, fmt.Errorf("S3 not configured; cannot presign download")
+	}
+	// Refresh last_accessed_at best-effort — matches Get() behaviour.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.repo.TouchLastAccessed(ctx, datapackID, contentHash); err != nil {
+			slog.Warn("failed to touch artifact last_accessed_at",
+				"datapack_id", datapackID, "content_hash", contentHash, "error", err)
+		}
+	}()
+	presigned, err := s.s3Svc.GenerateDownloadURL(ctx, a.S3Key)
+	if err != nil {
+		return nil, a, fmt.Errorf("presign download: %w", err)
+	}
+	return presigned, a, nil
 }

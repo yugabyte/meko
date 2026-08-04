@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"meko/api_server/internal/models"
+	"meko/api_server/internal/repository"
 	"meko/api_server/internal/service"
 )
 
@@ -48,6 +49,15 @@ func (r *stubArtifactRepo) Reactivate(_ context.Context, datapackID, hash string
 	return a, nil
 }
 
+// ListByDatapack satisfies the extended ArtifactRepo interface. Tests
+// don't exercise pagination — the empty envelope keeps NewArtifactServiceWithIface
+// happy without adding fixture noise.
+func (r *stubArtifactRepo) ListByDatapack(
+	_ context.Context, _ string, _ repository.ArtifactListOpts,
+) (*repository.ListByDatapackResult, error) {
+	return &repository.ListByDatapackResult{Items: []*models.Artifact{}}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Stub S3
 // ---------------------------------------------------------------------------
@@ -68,6 +78,17 @@ func (s *stubS3) UploadObject(_ context.Context, userID, datapackID, hash, filen
 
 func (s *stubS3) DownloadObject(_ context.Context, key string) ([]byte, error) {
 	return s.uploaded[key], nil
+}
+
+// GenerateDownloadURL satisfies the extended ArtifactS3 interface. Tests
+// don't hit the presign path today, but the interface method must exist
+// or NewArtifactServiceWithIface fails to compile.
+func (s *stubS3) GenerateDownloadURL(_ context.Context, key string) (*service.PresignedDownload, error) {
+	return &service.PresignedDownload{
+		URL:       "https://mock.local/" + key,
+		Key:       key,
+		ExpiresIn: 300,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------

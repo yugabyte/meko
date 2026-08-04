@@ -936,7 +936,7 @@ function DownloadAction({
       type="button"
       disabled={disabled}
       onClick={() => void handleClick()}
-      className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-700 dark:text-blue-300 hover:text-blue-700 dark:text-blue-200 disabled:cursor-not-allowed disabled:opacity-60"
+      className="inline-flex items-center gap-1.5 text-xs font-medium text-brand hover:text-brand/80 disabled:cursor-not-allowed disabled:opacity-60"
     >
       <Download className="h-3.5 w-3.5" aria-hidden />
       {busy ? "Preparing…" : "Download"}

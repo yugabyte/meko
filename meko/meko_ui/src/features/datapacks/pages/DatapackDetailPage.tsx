@@ -62,6 +62,7 @@ import { DatapackDetailAgentsTile } from "@/features/datapacks/components/datapa
 import { DatapackDetailConnectTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailConnectTile";
 import { DatapackDetailClustersTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailClustersTile";
 import { CreateClusterWizard } from "@/features/datapacks/components/datapack-detail/dialogs/CreateClusterWizard";
+import { DatapackDetailArtifactsTile } from "@/features/datapacks/components/datapack-detail/DatapackDetailArtifactsTile";
 import { isAmpEnabled } from "@/lib/amp";
 import {
   DatapackDetailKnowledgeTile,
@@ -595,6 +596,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
           {isAmpEnabled() ? (
             <DatapackDetailClustersTile datapackId={routeDatapackId} />
           ) : null}
+          <DatapackDetailArtifactsTile datapackId={routeDatapackId} />
         </div>
       </main>
     </div>

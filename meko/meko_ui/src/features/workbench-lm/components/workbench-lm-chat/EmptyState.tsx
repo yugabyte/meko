@@ -26,7 +26,7 @@ type Props = {
 export function EmptyState({ disabled, onPick, showSamplePrompts }: Props) {
   return (
     <div className="mx-auto flex h-full w-full max-w-3xl flex-col items-center justify-center px-6 py-10">
-      <div className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-xs text-foreground">
+      <div className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 text-xs text-brand">
         <Sparkles className="h-3.5 w-3.5 text-brand" aria-hidden />
         Try asking about your knowledge base
       </div>

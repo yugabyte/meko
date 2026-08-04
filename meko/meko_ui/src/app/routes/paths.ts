@@ -64,6 +64,7 @@ export const DATAPACK_SUB_ROUTE = {
   members: "members",
   conversations: "conversations",
   clusters: "clusters",
+  artifacts: "artifacts",
 } as const;
 
 /** Default datapack provisioned for new accounts; used from onboarding (“Choose your tool” → configure). */
@@ -207,6 +208,13 @@ export function datapackMembersPath(datapackId: string): string {
  *  Clusters tile. Gated by SHOW_PG_AMP at the call sites. */
 export function datapackClustersPath(datapackId: string): string {
   return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.clusters);
+}
+
+/** Full artifacts page — linked from the "View all" footer on the
+ *  Artifacts tile. Any datapack grant can reach it (BE gates on
+ *  RequireDatapackAccess, no role check). */
+export function datapackArtifactsPath(datapackId: string): string {
+  return datapackSubPath(datapackId, DATAPACK_SUB_ROUTE.artifacts);
 }
 
 /** Full conversation viewer route. When `conversationId` is provided

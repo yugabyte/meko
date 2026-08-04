@@ -1675,6 +1675,117 @@ export type KnowledgeBaseDownloadURL = {
   expires_in: number;
 };
 
+/** One row from GET /datapacks/:id/artifacts. Manifest shape — the
+ *  raw file bytes are NEVER included here; use requestArtifactDownloadURL
+ *  or the legacy GET .../artifacts/:content_hash for the payload.
+ *
+ *  `stored_in` is "db" for small inline artifacts (fetched as base64)
+ *  or "s3" for objects the browser should pull via a presigned URL. */
+export type Artifact = {
+  artifact_id: string;
+  content_hash: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  stored_in: "db" | "s3";
+  created_at: string;
+  last_accessed_at?: string;
+};
+
+/** Paginated envelope returned by GET /datapacks/:id/artifacts. Same shape
+ *  as {@link KnowledgeBaseDocumentsPage} so tables can reuse pagination
+ *  code across surfaces. */
+export type ArtifactsPage = {
+  items: Artifact[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+};
+
+/** GET /datapacks/:datapack_id/artifacts — paginated. Any datapack grant
+ *  can read this. */
+export async function listDatapackArtifacts(
+  datapackId: string,
+  params: { page?: number; page_size?: number; q?: string } = {},
+  options: DatapackRouteOptions = {},
+): Promise<ArtifactsPage> {
+  const qs = new URLSearchParams();
+  if (params.page != null) qs.set("page", String(params.page));
+  if (params.page_size != null) qs.set("page_size", String(params.page_size));
+  if (params.q) qs.set("q", params.q);
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  const resp = await request<ArtifactsPage>(
+    `${datapackRoute(datapackId)}/artifacts${suffix}`,
+    "GET",
+    undefined,
+    options,
+  );
+  return { ...resp, items: resp?.items ?? [] };
+}
+
+/** Wire shape of POST .../artifacts/:content_hash/download-url. For
+ *  s3-stored artifacts `url` + `expires_in` are populated; for db-stored
+ *  the URL is empty and the caller should fall through to the base64
+ *  GET path (GET .../artifacts/:content_hash). */
+export type ArtifactDownloadURL = {
+  url?: string;
+  expires_in?: number;
+  stored_in: "db" | "s3";
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+};
+
+/** POST /datapacks/:datapack_id/artifacts/:content_hash/download-url —
+ *  browser download. For s3-stored artifacts the response carries a
+ *  short-lived presigned URL to open directly; for db-stored the URL is
+ *  empty and the caller should fetch base64 via the legacy GET. */
+export async function requestArtifactDownloadURL(
+  datapackId: string,
+  contentHash: string,
+  options: DatapackRouteOptions = {},
+) {
+  return request<ArtifactDownloadURL>(
+    `${datapackRoute(datapackId)}/artifacts/${encodeURIComponent(contentHash)}/download-url`,
+    "POST",
+    undefined,
+    options,
+  );
+}
+
+/** GET /datapacks/:datapack_id/artifacts/:content_hash — the existing
+ *  single-lookup endpoint, used as the fallback when the artifact is
+ *  stored inline (db) and there's no S3 object to presign.
+ *
+ *  Response body carries either `content_base64` (inline / db) or
+ *  `content_base64_large` (S3 artifact returned as base64). Consumers
+ *  should prefer requestArtifactDownloadURL and only fall back here
+ *  when stored_in === "db". */
+export type ArtifactBase64Response = {
+  artifact_id: string;
+  content_hash: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  stored_in: "db" | "s3";
+  content_base64?: string;
+  content_base64_large?: string;
+};
+
+export async function getArtifactBase64(
+  datapackId: string,
+  contentHash: string,
+  options: DatapackRouteOptions = {},
+) {
+  return request<ArtifactBase64Response>(
+    `${datapackRoute(datapackId)}/artifacts/${encodeURIComponent(contentHash)}`,
+    "GET",
+    undefined,
+    options,
+  );
+}
+
 /** POST /knowledge-bases/download-url — exchange a `document_uri`
  *  (full `s3://...` URI from the documents list) for a presigned GET
  *  URL the browser can navigate to. Server verifies the document

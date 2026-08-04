@@ -64,18 +64,50 @@ export function DatapackDetailKnowledgeTile({
         className,
       )}
     >
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <FileText className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
-        <span className="truncate text-sm font-semibold text-foreground">Knowledge</span>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
-          {countLabel}
-        </span>
-        <Link
-          to={datapackKnowledgePath(datapackId)}
-          className="ml-auto shrink-0 text-xs text-brand hover:text-brand/80 transition-colors"
-        >
-          View all →
-        </Link>
+      {/* Header layout mirrors DatapackDetailMembersTile: identity on
+          the left, top-right action for the write path — here that's
+          "+ Add Knowledge" (Members has "Share"). "View all →" moves
+          to the tile footer so all detail tiles share the same shape. */}
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <FileText className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
+          <span className="truncate text-sm font-semibold text-foreground">Knowledge</span>
+          <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground tabular-nums">
+            {countLabel}
+          </span>
+        </div>
+        {blockedByFreeTier ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <button
+                  type="button"
+                  disabled
+                  className="shrink-0 cursor-not-allowed text-xs font-medium text-muted-foreground/55 opacity-60"
+                >
+                  + Add Knowledge
+                </button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-[280px] text-center">
+              {blockedMessage("knowledgeUpload", currentUser?.user_type)}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          <button
+            type="button"
+            disabled={addDisabled}
+            onClick={onAddSource}
+            className={cn(
+              "shrink-0 text-xs font-medium transition-colors",
+              addDisabled
+                ? "cursor-not-allowed text-muted-foreground/55 opacity-60"
+                : "cursor-pointer text-brand hover:underline",
+            )}
+          >
+            + Add Knowledge
+          </button>
+        )}
       </div>
       <ul className="flex flex-col divide-y divide-border px-2 py-1">
         {documentsError ? (
@@ -104,46 +136,16 @@ export function DatapackDetailKnowledgeTile({
           })
         )}
       </ul>
-      <div className="border-t border-border">
-        {/* Tooltip is only useful when the free-tier cap is hit — the
-            share-grant disabled state has its own meaning (no upload
-            permission) that the tooltip would conflate. So we only
-            wrap in Tooltip when `blockedByFreeTier` is the reason. */}
-        {blockedByFreeTier ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex w-full">
-                <button
-                  type="button"
-                  className={cn(
-                    "w-full py-3 text-center text-sm font-normal transition-colors",
-                    "cursor-not-allowed text-muted-foreground/55 opacity-60 hover:text-muted-foreground/55",
-                  )}
-                  disabled
-                >
-                  + Add Knowledge
-                </button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-[280px] text-center">
-              {blockedMessage("knowledgeUpload", currentUser?.user_type)}
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          <button
-            type="button"
-            className={cn(
-              "w-full py-3 text-center text-sm font-normal transition-colors",
-              addDisabled
-                ? "cursor-not-allowed text-muted-foreground/55 opacity-60 hover:text-muted-foreground/55"
-                : "cursor-pointer text-foreground/90 hover:text-foreground",
-            )}
-            disabled={addDisabled}
-            onClick={onAddSource}
-          >
-            + Add Knowledge
-          </button>
-        )}
+      {/* Footer link → full Shared Knowledge page. Same shape as the
+          Members / Artifacts tile footers so the tile grid reads
+          uniformly. */}
+      <div className="mt-auto border-t border-border">
+        <Link
+          to={datapackKnowledgePath(datapackId)}
+          className="block w-full py-3 text-center text-sm font-normal text-foreground/90 transition-colors hover:text-foreground"
+        >
+          View all →
+        </Link>
       </div>
     </aside>
   );

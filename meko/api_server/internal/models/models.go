@@ -615,11 +615,15 @@ type Artifact struct {
 }
 
 // StoredIn returns "db" when the artifact is inlined, "s3" when it lives in S3.
+// Keyed off S3Key (the authoritative "where does the artifact live?" column)
+// rather than InlineContent length, so the answer stays correct on rows where
+// InlineContent isn't hydrated (e.g. the paginated list endpoint deliberately
+// drops the bytes to keep the manifest lightweight).
 func (a *Artifact) StoredIn() string {
-	if len(a.InlineContent) > 0 {
-		return "db"
+	if a.S3Key != "" {
+		return "s3"
 	}
-	return "s3"
+	return "db"
 }
 
 // MaxInlineBytes is the size threshold below which artifacts are stored inline.

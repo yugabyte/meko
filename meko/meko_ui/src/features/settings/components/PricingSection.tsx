@@ -107,7 +107,7 @@ function TierCard({ column, activeTier }: { column: TierColumn; activeTier: Tier
       className={cn(
         "rounded-lg border p-4",
         column === "standard"
-          ? "border-blue-500/40 bg-blue-500/[0.05]"
+          ? "border-brand/40 bg-brand/[0.05]"
           : "border-border bg-background/40",
       )}
     >
@@ -122,7 +122,7 @@ function TierCard({ column, activeTier }: { column: TierColumn; activeTier: Tier
       <dl
         className={cn(
           "text-sm",
-          column === "standard" ? "divide-y divide-blue-500/15" : "divide-y divide-border/60",
+          column === "standard" ? "divide-y divide-brand/15" : "divide-y divide-border/60",
         )}
       >
         {TIER_ROWS.map((row) => {
@@ -173,7 +173,7 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
   if (isCurrent) {
     const chip = (
       <span
-        className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-700 dark:text-blue-300"
+        className="inline-flex items-center gap-1 rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-brand"
         aria-label="Your current plan"
       >
         <Check className="h-3 w-3" aria-hidden />
@@ -191,7 +191,7 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
             href={AWS_BUYER_SUBSCRIPTIONS_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-0.5 text-[11px] font-medium text-blue-600 hover:underline dark:text-blue-400"
+            className="inline-flex items-center gap-0.5 text-[11px] font-medium text-brand hover:underline"
           >
             Manage in AWS
             <ArrowUpRight className="h-3 w-3" aria-hidden />
@@ -225,7 +225,7 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
         asChild
         type="button"
         size="sm"
-        className="h-7 gap-1 bg-blue-600 px-2.5 text-xs font-medium text-white hover:bg-blue-500 dark:bg-blue-500 dark:hover:bg-blue-400"
+        className="h-7 gap-1 bg-brand px-2.5 text-xs font-medium text-brand-foreground hover:bg-brand/90"
       >
         <a href={AWS_MARKETPLACE_LISTING_URL} target="_blank" rel="noopener noreferrer">
           Upgrade
@@ -240,7 +240,7 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
         asChild
         variant="link"
         size="sm"
-        className="h-auto gap-1 p-0 text-xs font-medium text-blue-600 dark:text-blue-400"
+        className="h-auto gap-1 p-0 text-xs font-medium text-brand hover:text-brand/80"
       >
         <a href={SALES_CONTACT_URL} target="_blank" rel="noopener noreferrer">
           Talk to our team

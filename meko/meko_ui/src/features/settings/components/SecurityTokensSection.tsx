@@ -50,7 +50,7 @@ import {
 import { MekoTokenCreateDialog } from "./MekoTokenCreateDialog";
 
 const STATUS_TONE: Record<MekoTokenStatus, string> = {
-  [MEKO_TOKEN_STATUS.active]: "border-brand/40 bg-brand/10 text-foreground",
+  [MEKO_TOKEN_STATUS.active]: "border-brand/40 bg-brand/10 text-brand",
   [MEKO_TOKEN_STATUS.expired]: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200",
   [MEKO_TOKEN_STATUS.revoked]: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-200",
 };
