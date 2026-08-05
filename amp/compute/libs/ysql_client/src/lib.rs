@@ -1055,15 +1055,20 @@ impl YsqlClient {
     ///   `2D000`, `3B001`, any `42xxx`) and anything else. Returned
     ///   directly.
     ///
-    /// **Idempotency assumption.** All current callers (pageserver
+    /// **Idempotency assumption.** Nearly all callers (pageserver
     /// `PageStore`, safekeeper WAL backup, `YbStore` blob ops, storage
     /// controller) issue idempotent SQL — reads, `INSERT ... ON
     /// CONFLICT` / upserts (we `SET yb_enable_upsert_mode = true` on
     /// connect), gen-fenced metadata updates. That lets the retry loop
     /// replay connection drops blindly even when we can't prove the
-    /// pre-drop statement didn't commit. A future caller adding a bare
-    /// non-idempotent write needs a separate path that returns
-    /// `ConnectionDrop` errors to the caller unretried.
+    /// pre-drop statement didn't commit.
+    ///
+    /// Exception: `PageStore::claim_generation` is a relative increment a
+    /// replay applies twice — safe only because its caller takes the generation
+    /// from `RETURNING` rather than computing it.
+    ///
+    /// A non-idempotent write that can't absorb a double-apply needs a path
+    /// that returns `ConnectionDrop` unretried.
     ///
     /// All YsqlClient public methods (`execute` / `query` /
     /// `query_opt`) go through here, so every caller gets the same

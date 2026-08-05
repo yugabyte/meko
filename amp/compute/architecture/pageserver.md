@@ -925,8 +925,14 @@ externally-chosen value to lose. `pageserver.toml` carries the
    One statement increments and returns, so two processes racing to
    attach necessarily come away with different numbers and the loser's
    fenced writes stop matching. `COALESCE` because the column is NULL
-   until the pageserver's group exists — a first attach claims 1. Zero
-   rows means the controller never provisioned the branch: fatal.
+   until the pageserver's group exists — a first attach *usually* claims
+   1. Only usually: the increment is relative and `YsqlClient` replays a
+   dropped connection, so the statement can run twice and advance the
+   column by two — a first attach then returns 2. Harmless, because it
+   returns whatever it landed on and that is what `mgr.rs` attaches with:
+   the fence needs the returned value to match the persisted one and to
+   move forward, not to be dense (#564). Zero rows means the controller
+   never provisioned the branch: fatal.
 2. **Data writes are not individually fenced.** Row INSERTs run as
    independent parallel chunks with no `BEGIN/COMMIT` wrapper. The
    fence is the **subsequent standalone UPDATE** in
@@ -956,8 +962,9 @@ externally-chosen value to lose. `pageserver.toml` carries the
    flush path above is what terminates a fenced-out process.
 
 `advance_consistent_lsn` and `publish_gc_cutoff` are the only two
-gen-fenced statements. `bump_generation` exists on `PageStore` but has
-no production call site (tests only).
+gen-fenced statements. `claim_generation` is the only writer of the
+column in production: `bump_generation_for_test` is `#[cfg(test)]`, so
+nothing else can move a generation in a shipped build.
 
 Generation state lives entirely in this one column — there is no
 per-file or per-object generation stamping anywhere.

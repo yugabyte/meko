@@ -4267,7 +4267,7 @@ mod tests {
         // The controller provisions the row at branch create; tests stand in
         // for it before the pageserver fills in its own column group. That
         // provisioning is what sets `pg_version`, and the claim below is what
-        // sets `current_generation` to 1 — the row passed to
+        // makes `current_generation` non-NULL — the row passed to
         // update_branch_initial_state carries both only to match, since that
         // call writes neither.
         store
@@ -4275,6 +4275,9 @@ mod tests {
             .await
             .unwrap();
         store.claim_generation(branch).await.unwrap();
+        // Must equal writer()'s hardcoded Generation::new(1); the claim's +1
+        // applies twice if YsqlClient retries it after a dropped connection (#564).
+        store.set_generation_for_test(branch, 1).await.unwrap();
         store
             .update_branch_initial_state(&crate::page_store::BranchStateRow {
                 branch_id: branch,
@@ -4282,7 +4285,7 @@ mod tests {
                 applied_gc_cutoff_lsn: Lsn(0),
                 ancestor_branch_id: None,
                 ancestor_lsn: None,
-                current_generation: 1,
+                current_generation: 1, // inert: not in this UPDATE's SET list
                 pg_version: 180_002,
                 initdb_lsn: None,
                 prev_record_lsn: None,
@@ -4556,8 +4559,8 @@ mod tests {
         let (w, t) = writer(store.clone(), FlushPolicy::default());
         seed_branch_state_row(&store, t).await;
         // Bump the persisted generation past the writer's gen=1.
-        store.bump_generation(t).await.unwrap(); // now 2
-        store.bump_generation(t).await.unwrap(); // now 3
+        store.bump_generation_for_test(t).await.unwrap();
+        store.bump_generation_for_test(t).await.unwrap();
 
         // Install a fresh global shutdown token so we can observe
         // cancellation. The OnceLock `init` no-ops on a re-set, so use

@@ -790,7 +790,7 @@ The reconnect arm replays anyway. **This is only safe if the statement
 is idempotent — re-executing it must produce the same end state whether
 the first attempt applied, half-applied, or did nothing.**
 
-Every YB-talking call site in this codebase satisfies that contract:
+Nearly every YB-talking call site in this codebase satisfies that contract:
 
 - **All reads** — `SELECT` via `query` / `query_opt` / `query_raw` —
   are intrinsically idempotent.
@@ -805,6 +805,15 @@ Every YB-talking call site in this codebase satisfies that contract:
 - **DELETEs** are key-scoped (`DELETE FROM ... WHERE id = $1`); replay
   against an already-deleted row is a no-op.
 
+**One exception**: `PageStore::claim_generation` is the relative increment
+the rules below forbid, and a replayed drop does apply it twice.
+Tolerated, not compliant: its caller consumes the number the statement
+`RETURNING`s, so a skipped number is unobservable — the fence only needs
+"returned == persisted, and monotonic". A caller that hardcodes an
+expected generation is silently fenced instead (#564). The other
+increment, `bump_generation_for_test`, is `#[cfg(test)]` and so is not on
+the production surface at all.
+
 **New code touching YB must keep this invariant.** Concrete rules for
 contributors:
 
@@ -813,13 +822,18 @@ contributors:
   need to distinguish apply from replay).
 - Don't issue `UPDATE foo SET counter = counter + 1`. Replay
   double-counts. Make the update absolute (`SET counter = $new`) with
-  the read-modify-write in the application.
+  the read-modify-write in the application. `claim_generation` above is
+  the standing exception, and only because `RETURNING` makes the
+  double-count invisible to its caller.
 - Don't depend on a `SELECT ... FOR UPDATE` lock surviving a retry —
   a reconnect drops the implicit transaction.
 - If you genuinely need a non-idempotent write through `YsqlClient`,
   add a code path that does **not** retry the connection-drop class
   (the Transient and Fatal branches stay safe — those are
-  server-confirmed no-ops). Nothing needs this today.
+  server-confirmed no-ops). No production path needs this today:
+  `claim_generation` absorbs over-application instead. The case that
+  does want it is bare DDL, where a replay raises `42P07` rather than
+  doing something harmless twice — see #508.
 
 The Prometheus series `yb_client_errors_total{op,class,sqlstate}`,
 `yb_client_retries_exhausted_total{reason}`, and

@@ -4274,7 +4274,7 @@ impl PageStore {
     /// which is a wiring bug worth surfacing.
     ///
     /// Scoped to one column → safe to run concurrently with
-    /// `bump_generation` / `advance_gc_cutoff_lsn` /
+    /// `bump_generation_for_test` / `advance_gc_cutoff_lsn` /
     /// `upsert_timeline`. Each touches disjoint columns.
     ///
     /// **Generation-fenced**: the UPDATE's WHERE clause checks
@@ -4377,6 +4377,10 @@ impl PageStore {
     /// `COALESCE(current_generation, 0) + 1` because the column is NULL until
     /// the pageserver's group exists — a first attach claims generation 1, and
     /// the row itself was provisioned by the controller at branch create.
+    ///
+    /// Returns the new generation — not necessarily previous + 1: the `+ 1`
+    /// applies twice if `YsqlClient` retries the statement after a dropped
+    /// connection.
     pub async fn claim_generation(&self, branch_id: BranchId) -> Result<i32> {
         let sql = format!(
             "UPDATE \"{}\".branch_state \
@@ -4400,7 +4404,10 @@ impl PageStore {
         Ok(row.get::<_, i32>(0))
     }
 
-    pub async fn bump_generation(&self, branch_id: BranchId) -> Result<i32> {
+    /// Test-only: take the next generation the way a rival pageserver's attach
+    /// would, to drive the fencing predicates from the losing side.
+    #[cfg(test)]
+    pub(crate) async fn bump_generation_for_test(&self, branch_id: BranchId) -> Result<i32> {
         let sql = format!(
             // Scoped to rows where our group exists: `current_generation + 1`
             // over a NULL yields NULL, so without this predicate a
@@ -4416,7 +4423,7 @@ impl PageStore {
             .ysql_client
             .query_opt(&sql, &[&branch_id.to_string()])
             .await
-            .context("bump_generation")?
+            .context("bump_generation_for_test")?
             .with_context(|| format!("no timeline row for {branch_id}"))?;
         Ok(row.get::<_, i32>(0))
     }
@@ -6015,12 +6022,18 @@ mod tests {
     async fn bump_generation_is_monotonic() {
         let (store, schema) = make_store("gen").await;
         let branch = rand_branch();
-        create_branch_state_row(&store, &sample_branch_state_row(branch))
-            .await
-            .unwrap();
-        for expected in 2..=5 {
-            let g = store.bump_generation(branch).await.unwrap();
-            assert_eq!(g, expected);
+        let row = sample_branch_state_row(branch);
+        create_branch_state_row(&store, &row).await.unwrap();
+        // Increasing, not consecutive: the `+ 1` applies twice if YsqlClient
+        // retries it after a dropped connection (#564).
+        let mut prev = row.current_generation;
+        for _ in 0..4 {
+            let g = store.bump_generation_for_test(branch).await.unwrap();
+            assert!(
+                g > prev,
+                "bump must advance the generation: got {g} after {prev}"
+            );
+            prev = g;
         }
         drop_schema(&store, &schema).await;
     }
