@@ -160,12 +160,12 @@ runs:
    `branch_id` and would then be reclaimed out from under a live branch.
    So `RecordBranch`'s liveness check is a conditional write of that row too
    (`WHERE dropped_at IS NULL`, self-assignment SET), which is what makes the
-   two conflict. A row lock would not: it orders the drop after the fork but
-   never refreshes its snapshot, so under repeatable read the drop's
-   `NOT EXISTS (live children)` still sees no child and tombstones the parent
-   — silently, with no serialization error. No lock mode helps, because the
-   child does not exist yet when the fork checks, and a phantom cannot be
-   locked.
+   two conflict. A row lock serializes it too under read committed, but the drop
+   would then need `FOR NO KEY UPDATE` as a statement of its own ahead of its
+   guarded `UPDATE` — one extra round trip, where the fork side is a wash
+   (`FOR SHARE` in place of the write). And under repeatable read the drop would
+   not see the newly inserted fork at all: its read time is fixed when it asks for
+   the lock, before the fork commits.
 2. **Await readers.** Wait out in-flight reads still holding a guard on
    the *old* cutoff before deleting anything they might need. Reads never
    wait for GC; GC waits for reads.

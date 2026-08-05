@@ -329,10 +329,13 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	// So make the fork WRITE P's row: both sides then write it, and the write-write
 	// conflict forces the drop's guard to re-run and see the child.
 	//
-	// Deliberately a write, not a row lock. A lock on P orders the drop after the
-	// fork but never refreshes its snapshot, so under REPEATABLE READ the guard
-	// still sees no child and tombstones P -- silently, no error. No lock mode
-	// helps: the child does not exist yet, and a phantom cannot be locked.
+	// Deliberately serialized by writing the same row in both transactions, not by a
+	// row lock. A lock serializes this too under read committed, but the drop would
+	// then need FOR NO KEY UPDATE as a statement of its own ahead of its guarded
+	// UPDATE -- one extra YB round trip. (The fork side is a wash: FOR SHARE in
+	// place of this UPDATE.) And under repeatable read the drop would not see the
+	// newly inserted fork at all: its read time is fixed when it asks for the lock,
+	// before the fork commits.
 	//
 	// DeleteProject tombstones every branch row in the project, P's included, so it
 	// conflicts here the same way.
@@ -398,6 +401,10 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	// NEWLY inserted: a re-record must stay a no-op even after the cutoff
 	// advances. Mirrored by `fork_txn` in
 	// compute/pageserver/src/page_store.rs (tests) — keep in lockstep.
+	//
+	// Serialized by writing the same row rather than by a row lock, as with the drop
+	// interlock above. A lock would cost more here: its extra FOR NO KEY UPDATE would
+	// land on the GC cutoff advance, which runs far more often than a drop.
 	if req.AncestorBranchID != nil && stateRow.RowsAffected() == 1 {
 		touched, err := tx.Exec(ctx,
 			`UPDATE amp_storage.branch_state
