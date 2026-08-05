@@ -172,6 +172,17 @@ fn main() -> anyhow::Result<()> {
     info!(?conf.validate_wal_contiguity, "starting with WAL contiguity validation");
     info!(?conf.page_service_pipelining, "starting with page service pipelining config");
     info!(?conf.get_vectored_concurrent_io, "starting with get_vectored IO concurrency config");
+    // `scale_factor` multiplies the count- and byte-like defaults rather than
+    // being reported anywhere, and nothing exposes the numbers it resolves to —
+    // no metric, no API — so without this line an operator cannot confirm what
+    // sizing a running pageserver came up with. The three YSQL pool sizes get
+    // their own lines as each pool connects ("... PageStore connected"); these
+    // are the input and the one derived value that has none.
+    info!(
+        scale_factor = conf.scale_factor,
+        walredo_pool_size = conf.walredo_pool_size.get(),
+        "starting with scale-derived sizing"
+    );
 
     // The tenants directory contains all the pageserver local disk state.
     // Create if not exists and make sure all the contents are durable before proceeding.

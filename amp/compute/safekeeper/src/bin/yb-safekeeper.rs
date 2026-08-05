@@ -235,6 +235,11 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
 
+    // Captured before the struct literal moves `cfg`'s fields: SafeKeeperConf
+    // keeps only the *derived* wal_cache_size_mib, not the multiplier it came
+    // from, so this is the last point the input is available to log.
+    let scale_factor = cfg.scale_factor;
+
     let conf = Arc::new(SafeKeeperConf {
         workdir,
         listen_pg_addr: cfg.listen_pg,
@@ -271,6 +276,18 @@ async fn main() -> anyhow::Result<()> {
         global_disk_check_interval: cfg.global_disk_check_interval,
         max_global_disk_usage_ratio: cfg.max_global_disk_usage_ratio,
     });
+
+    // Record the scale-derived sizing. `scale_factor` is a multiplier on defaults
+    // rather than a value any component reports, and the resolved numbers are
+    // otherwise invisible from outside the process — no metric or API exposes
+    // them — so a restart's log is the only place an operator can confirm what
+    // this safekeeper actually came up with. See the deployed default in
+    // deploy/endpoint/supervisor.py (scale_factor = the endpoint's vCPU).
+    info!(
+        scale_factor,
+        wal_cache_size_mib = conf.wal_cache_size_mib,
+        "starting with scale-derived sizing"
+    );
 
     start_safekeeper(conf).await
 }

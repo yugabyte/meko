@@ -67,6 +67,19 @@ type PostgresqlConfParams struct {
 	SafekeeperComputePorts []uint16
 }
 
+// Sizing defaults for a local (`yb_amp_local`) compute. The deployed endpoint
+// derives these from the pod's cgroup limits and data volume (see
+// deploy/endpoint/supervisor.py); a local run has no such reservation to read,
+// so it takes fixed values instead. They are deliberately modest but not
+// degenerate: the previous 1MB shared_buffers with the LFC off made local
+// behaviour unrepresentative of a deployed endpoint, where both caches matter.
+// `--shared-buffers` / `--lfc-size` still override; `--lfc-size 0` disables the
+// cache.
+const (
+	defaultLocalSharedBuffers = "100MB"
+	defaultLocalLfcSize       = "1GB"
+)
+
 // BuildPostgresqlConf builds the postgresql.conf string for a Primary
 // compute. Port of Rust `Endpoint::setup_pg_conf` (ComputeMode::Primary
 // arm). The Static/Replica arms are intentionally omitted (out of scope).
@@ -76,7 +89,7 @@ func BuildPostgresqlConf(p PostgresqlConfParams) string {
 	c.append("wal_log_hints", "off")
 	c.append("max_replication_slots", "10")
 	c.append("hot_standby", "on")
-	sharedBuffers := "1MB"
+	sharedBuffers := defaultLocalSharedBuffers
 	if p.SharedBuffers != nil {
 		sharedBuffers = *p.SharedBuffers
 	}
@@ -97,9 +110,13 @@ func BuildPostgresqlConf(p PostgresqlConfParams) string {
 		c.append("yb_amp.safekeeper_conninfo_options", "sslmode=disable")
 	}
 
+	lfcSize := defaultLocalLfcSize
 	if p.LfcSize != nil {
-		c.append("yb_amp.max_file_cache_size", *p.LfcSize)
-		c.append("yb_amp.file_cache_size_limit", *p.LfcSize)
+		lfcSize = *p.LfcSize
+	}
+	if lfcSize != "" && lfcSize != "0" {
+		c.append("yb_amp.max_file_cache_size", lfcSize)
+		c.append("yb_amp.file_cache_size_limit", lfcSize)
 	}
 
 	for _, kv := range p.PgSettings {

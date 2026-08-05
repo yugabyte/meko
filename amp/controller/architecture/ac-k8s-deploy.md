@@ -165,8 +165,11 @@ Service DNS (`--deploy-yb-host-ports`), which may differ from the controller's o
 Each endpoint's `/data` (the compute's `pgdata`, the LFC cache, logs and
 pidfiles) is provisioned from a storage class when `--deploy-storage-class` is
 set: the chart renders a `ReadWriteOnce` **PersistentVolumeClaim** of that class
-(a network block volume — **EBS** on AWS, **Persistent Disk** on GCP) of size
-`--deploy-disk-size` (default `10Gi`) and mounts it at `/data`. Because the
+(a network block volume — **EBS** on AWS, **Persistent Disk** on GCP) and mounts
+it at `/data`. Its size is **proportional to the endpoint's CPU** — 5 GiB per
+vCPU, so the default 2-vCPU endpoint gets the 10 GiB it always had, and a
+4-vCPU one gets 20 GiB — with `--deploy-disk-size` acting as a **floor** rather
+than the size itself. Because the
 ReadWriteOnce volume attaches to one pod at a time, the Deployment switches to the
 **`Recreate`** strategy (stop the old pod before starting the new one). The pod's
 **`podSecurityContext.fsGroup`** (default `1000`, the endpoint image's `yugabyte`
@@ -176,6 +179,21 @@ process — a single source for the fsGroup, applied whether or not a PVC is use
 so `helm uninstall` on retire frees the volume. With the flag **empty**, `/data`
 falls back to the current ephemeral **`emptyDir`** (no persistent volume). All durable state still lives in YugabyteDB; the volume is
 local scratch + cache, so a pod (or PVC) reset is safe.
+
+The `emptyDir` case is sized differently, because it is carved out of the
+**node's** ephemeral storage and every pod on that node shares it: a fixed
+per-vCPU ratio would let a few endpoints oversubscribe the node. Instead the
+controller reads the node's own allocatable `ephemeral-storage ÷ cpu` ratio
+(`nodes: [get, list]`, already held for the NodePort address lookup) and gives
+the endpoint the share matching the CPU it reserves — so an endpoint taking a
+quarter of a node's cores gets a quarter of its disk. The **smallest** ratio
+across Ready nodes is used, since the pod may be scheduled onto any of them.
+This lookup has no safe fallback — a guessed size either oversubscribes the node
+or starves the endpoint — so it is retried and then **fails the endpoint create**
+rather than defaulting.
+
+Both sizes are fixed at create: a PVC and an `emptyDir` `sizeLimit` cannot be
+changed in place, so a later CPU resize does not resize the volume.
 
 `createEndpoint` carries a per-endpoint **`disk_type`** (`network` default,
 `local`). `network` uses the configured storage class above; `local` (a
@@ -289,7 +307,7 @@ Kubernetes driver:
 | `--deploy-service-type` | endpoint Service type: `ClusterIP` (default), `NodePort`, or `LoadBalancer` |
 | `--deploy-service-annotations` | `k=v,k=v` annotations on the endpoint Service (e.g. internal-LB) |
 | `--deploy-storage-class` | storage class for the endpoint `/data` PVC (EBS/PD); empty = ephemeral `emptyDir` |
-| `--deploy-disk-size` | requested size of the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`) |
+| `--deploy-disk-size` | **floor** for the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`); the size itself is 5 GiB × the endpoint's vCPU |
 
 Docker driver: `--deploy-endpoint-image`, `--deploy-network`,
 `--deploy-external-host`, `--deploy-supervisor-path`.

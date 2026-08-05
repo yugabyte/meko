@@ -151,12 +151,23 @@ sudo ss -tnp dst $YB_HOST 2>/dev/null | awk 'NR>1' \
   | grep -oP 'pid=\d+' | sort | uniq -c | sort -rn
 ```
 Cross-reference each pid against `ps -o pid,comm,args -p <pid>`. The yb-pageserver pid's count is
-the YB pool size. With `scale_factor=1.0` (default) it's around 5 — far too few for the typical
-~100 concurrent compute backends doing getpages. The shortage shows up as long
-`yb_client_query_seconds{op=query}` even when YB's own `handler_latency_yb_ysqlserver_SQLProcessor_SelectStmt`
-is ~1–2 ms (the gap is queue wait inside PS).
+the YB pool size, and it scales with `scale_factor` — roughly `5 × scale_factor` (compute-reads and
+fpu at 2 each, plus the GC pool at 1, all × `scale_factor`).
 
-**Fix — bump `scale_factor` in `pageserver.toml`:**
+**Which default applies depends on where the pageserver runs:**
+
+- **Deployed endpoint** (k8s / Docker pod): `scale_factor` is the endpoint's **vCPU**, set by
+  `deploy/endpoint/supervisor.py`, so a 2-vCPU endpoint sits at ~10 connections and a 4-vCPU one at
+  ~20. If that is too few, the lever is the **endpoint's CPU**, not the file: the supervisor
+  **rewrites `pageserver.toml` from scratch on every start**, so a hand-edit there is silently
+  discarded on the next restart.
+- **Local `yb_amp_local`**: `scale_factor` is `1.0` unless set, i.e. ~5 connections — far too few for
+  the typical ~100 concurrent compute backends doing getpages.
+
+The shortage shows up as long `yb_client_query_seconds{op=query}` even when YB's own
+`handler_latency_yb_ysqlserver_SQLProcessor_SelectStmt` is ~1–2 ms (the gap is queue wait inside PS).
+
+**Fix (local) — bump `scale_factor` in `pageserver.toml`:**
 ```toml
 # In pageserver.toml — MUST be at the top level
 # (otherwise PS logs "ignoring unknown configuration item path=yb_page_writer.scale_factor")
@@ -166,6 +177,10 @@ page_cache_size = 8192    # explicit override so it isn't scaled along with ever
 Then `yb_amp_local pageserver restart --id 1`. Verify:
 - `WARN ignoring unknown configuration item` lines for `scale_factor` are absent from the PS log.
 - The TCP-conn count in the `ss` command above multiplies (e.g. 5 → ~49 at `scale_factor=12.0`).
+
+**Fix (deployed) — give the endpoint more CPU**, which raises `scale_factor` with it. The pageserver
+reads `scale_factor` once at startup and builds its pools from it, so this takes effect when the
+pageserver restarts, not at the moment an in-place resize lands.
 
 **Observed impact at the equivalent widening on a 4 vCPU / 32 GB tier** (1000 wh TPC-C, 100 conn;
 measured at `scale_factor=6` before the scale-derived bases were halved, i.e. `scale_factor=12` today):

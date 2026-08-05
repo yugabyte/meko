@@ -57,6 +57,132 @@ def log(msg):
     print(f"[supervisor] {msg}", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# Resource introspection — the inputs every derived setting is sized from.
+#
+# The cgroup is preferred over the env values on purpose: the controller
+# resizes endpoints *in place* (the `pods/resize` subresource, see
+# `classifyResize` in controller/internal/deploy/kubernetes.go), which updates
+# the cgroup limits of a running container without restarting it and without
+# re-rendering the ConfigMap. After such a resize ENDPOINT_CPU / ENDPOINT_MEMORY
+# still carry the values the pod started with, so anything derived from them
+# would silently describe the old size. The env values remain the fallback for
+# environments with no cgroup limit (plain Docker, local runs).
+# ---------------------------------------------------------------------------
+
+CGROUP_ROOT = Path(os.environ.get("CGROUP_ROOT", "/sys/fs/cgroup"))
+
+_MEM_SUFFIXES = {
+    "k": 1000, "K": 1000, "m": 1000**2, "M": 1000**2, "g": 1000**3, "G": 1000**3,
+    "t": 1000**4, "T": 1000**4,
+    "Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4,
+}
+
+
+def parse_memory_quantity(s):
+    """Kubernetes memory quantity ("512Mi", "4Gi", "2G", "1073741824") -> bytes.
+
+    Returns None on anything unparseable so callers can fall back rather than
+    size a cache off a typo.
+    """
+    if s is None:
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    for suffix in ("Ki", "Mi", "Gi", "Ti"):
+        if s.endswith(suffix):
+            try:
+                return int(float(s[: -len(suffix)]) * _MEM_SUFFIXES[suffix])
+            except ValueError:
+                return None
+    if s[-1] in _MEM_SUFFIXES:
+        try:
+            return int(float(s[:-1]) * _MEM_SUFFIXES[s[-1]])
+        except ValueError:
+            return None
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
+
+
+def parse_cpu_quantity(s):
+    """Kubernetes CPU quantity ("2", "1500m", "0.5") -> float cores, or None."""
+    if s is None:
+        return None
+    s = str(s).strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("m"):
+            return float(s[:-1]) / 1000.0
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _read_first_line(path):
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def cgroup_memory_limit_bytes():
+    """The container's memory ceiling from cgroup v2/v1, or None if unlimited.
+
+    cgroup v2 writes the literal "max" when no limit is set; v1 reports a
+    sentinel near 2^63, so anything absurdly large is treated as unlimited.
+    """
+    raw = _read_first_line(CGROUP_ROOT / "memory.max")
+    if raw is None:
+        raw = _read_first_line(CGROUP_ROOT / "memory" / "memory.limit_in_bytes")
+    if raw in (None, "max"):
+        return None
+    try:
+        val = int(raw)
+    except ValueError:
+        return None
+    # Treat the "no limit" sentinels (and anything past a petabyte) as unset.
+    return val if 0 < val < (1 << 50) else None
+
+
+def cgroup_cpu_limit():
+    """The container's CPU quota in cores from cgroup v2/v1, or None."""
+    raw = _read_first_line(CGROUP_ROOT / "cpu.max")
+    if raw is not None:
+        parts = raw.split()
+        if len(parts) == 2 and parts[0] != "max":
+            try:
+                quota, period = int(parts[0]), int(parts[1])
+                if quota > 0 and period > 0:
+                    return quota / period
+            except ValueError:
+                return None
+        return None
+    quota = _read_first_line(CGROUP_ROOT / "cpu" / "cpu.cfs_quota_us")
+    period = _read_first_line(CGROUP_ROOT / "cpu" / "cpu.cfs_period_us")
+    try:
+        if quota is not None and period is not None:
+            q, p = int(quota), int(period)
+            if q > 0 and p > 0:
+                return q / p
+    except ValueError:
+        pass
+    return None
+
+
+def volume_bytes(path):
+    """Total size of the filesystem backing `path`, or None if unavailable."""
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None
+    total = st.f_blocks * st.f_frsize
+    return total if total > 0 else None
+
+
 # YugabyteDB connection (the external durable backend).
 YB_HOST_PORTS = env("YB_HOST_PORTS", "127.0.0.1:5433")
 YB_USER = env("YB_USER", "yugabyte")
@@ -79,6 +205,21 @@ COMPUTE_CTL_HTTP_PORT = env_int("COMPUTE_CTL_HTTP_PORT", 3080)
 COMPUTE_PASSWORD = env("COMPUTE_PASSWORD", "cloud_admin")
 SHARED_PRELOAD_LIBRARIES = env("SHARED_PRELOAD_LIBRARIES", "yb_amp")
 BRANCH_ID = env("BRANCH_ID")
+
+# --- Resources the derived settings are sized from -------------------------
+# ENDPOINT_CPU / ENDPOINT_MEMORY mirror the pod's resource reservation (set by
+# the chart from .Values.endpoint.resources). They are the fallback; the cgroup
+# is the truth — see the note above `CGROUP_ROOT`.
+ENDPOINT_MEMORY_BYTES = cgroup_memory_limit_bytes() or parse_memory_quantity(
+    env("ENDPOINT_MEMORY")
+)
+ENDPOINT_VCPU = cgroup_cpu_limit() or parse_cpu_quantity(env("ENDPOINT_CPU"))
+# The /data budget, from the chart. Unlike memory and CPU this cannot be read
+# from inside the container on the emptyDir path: the kubelet enforces an
+# emptyDir's sizeLimit by watching usage rather than with a filesystem quota, so
+# statvfs reports the whole node filesystem there. Whatever the volume claims,
+# the cache must stay inside this.
+ENDPOINT_DATA_VOLUME_BYTES = parse_memory_quantity(env("ENDPOINT_DATA_VOLUME_SIZE"))
 
 # Internal service ports.
 PAGESERVER_PG_PORT = env_int("PAGESERVER_PG_PORT", 64000)
@@ -225,6 +366,30 @@ def psql(dbname, sql=None, file=None, ignore_errors=False):
 # NOTE: the exact compute spec shape is verified against `yb_amp_local`-generated
 # configs during bring-up testing.
 
+def scale_factor_toml_lines(component):
+    """`scale_factor = <vCPU>` for pageserver.toml / safekeeper.toml.
+
+    Both daemons multiply their count- and byte-like defaults (YSQL pool sizes,
+    write fan-out, walredo slots, materialiser concurrency, the safekeeper's WAL
+    cache) by this. Tying it to the pod's vCPU makes an endpoint's storage-side
+    concurrency track the CPU it actually has, instead of every endpoint sharing
+    one baseline.
+
+    Emitted only when the CPU is known: `scale_factor` has no "unset" value, and
+    writing a wrong one silently mis-sizes every pool. Fractional quotas are
+    passed through as-is — `scale_count` clamps each result to >= 1, so a 500m
+    endpoint gets the baseline sizing rather than zero-sized pools.
+
+    Note this is read once at startup: the pools are constructed from it, so a
+    change needs the daemon restarted, not just re-rendered.
+    """
+    if not ENDPOINT_VCPU:
+        log(f"WARNING: endpoint CPU unknown; leaving {component} scale_factor at its default")
+        return []
+    log(f"derived {component} scale_factor={ENDPOINT_VCPU:g} (endpoint vCPU)")
+    return [f"scale_factor = {ENDPOINT_VCPU:g}"]
+
+
 def write_pageserver_config(datadir):
     datadir.mkdir(parents=True, exist_ok=True)
 
@@ -245,6 +410,7 @@ def write_pageserver_config(datadir):
         f"yb_storage_conn={yb_conn_inline_toml()}",
         f"branch_id='{BRANCH_ID}'",
     ]
+    lines += scale_factor_toml_lines("pageserver")
     (datadir / "pageserver.toml").write_text("\n".join(lines) + "\n")
 
 
@@ -256,6 +422,7 @@ def write_safekeeper_config(datadir):
         f"listen_http = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_HTTP_PORT}')}",
         f"yb_storage_conn = {_toml_quote(yb_conn_inline_toml())}",
     ]
+    lines += scale_factor_toml_lines("safekeeper")
     (datadir / "safekeeper.toml").write_text("\n".join(lines) + "\n")
 
 
@@ -286,6 +453,128 @@ def md5_role_password(password, user):
     return "md5" + hashlib.md5((password + user).encode()).hexdigest()
 
 
+# Postmaster-context ceilings. Both are PGC_POSTMASTER, so they can only change
+# with a Postgres restart — they are deliberately set once, generously, and left
+# alone, so the *live* values beneath them (`max_parallel_workers` USERSET,
+# `autovacuum_max_workers` SIGHUP) can be retuned with a reload instead. This is
+# the same split PG18 itself uses for autovacuum_worker_slots vs
+# autovacuum_max_workers.
+MAX_WORKER_PROCESSES_CEILING = env_int("PG_MAX_WORKER_PROCESSES", 64)
+AUTOVACUUM_WORKER_SLOTS_CEILING = env_int("PG_AUTOVACUUM_WORKER_SLOTS", 16)
+
+# Fraction of the endpoint's memory given to shared_buffers.
+SHARED_BUFFERS_FRACTION = 0.50
+# Fraction of the data volume the LFC may actually occupy. The hard ceiling
+# (`yb_amp.max_file_cache_size`) is the whole volume; this is the live limit, so
+# WAL, logs and the rest of pgdata — which share this volume — keep headroom.
+LFC_VOLUME_FRACTION = 0.90
+# Upper bound on the LFC ceiling. The ceiling is postmaster-context and reserves
+# shared memory for its chunk hash table — one entry per 1 MiB chunk, ~120 B
+# each (file_cache.c: RequestAddinShmemSpace / FILE_CACHE_ENRTY_SIZE). At the
+# volume sizes endpoints actually get (tens of GiB) that is single-digit MiB,
+# but a very large volume would reserve hundreds of MiB of shmem for a cache
+# that big is never useful, so clamp it. 128 GiB => ~16 MiB of shmem.
+LFC_CEILING_MAX_MB = env_int("PG_LFC_CEILING_MAX_MB", 128 * 1024)
+
+
+def derived_pg_settings():
+    """Resource-derived Postgres GUCs, as a list of spec setting dicts.
+
+    Every value here is a *default*: `render_compute_spec` appends
+    COMPUTE_EXTRA_SETTINGS_JSON afterwards, and compute_ctl keeps the last
+    occurrence of a name, so an explicit override always wins.
+    """
+    settings = []
+
+    if ENDPOINT_MEMORY_BYTES:
+        # shared_buffers is PGC_POSTMASTER: this is fixed for the life of the
+        # postmaster. An in-place memory *increase* leaves it merely undersized
+        # (safe); a *decrease* can leave it above what the cgroup now allows,
+        # which is the one case that genuinely requires a Postgres restart.
+        shared_buffers_mb = max(
+            16, int(ENDPOINT_MEMORY_BYTES * SHARED_BUFFERS_FRACTION) // (1024 * 1024)
+        )
+        settings.append(
+            {"name": "shared_buffers", "value": f"{shared_buffers_mb}MB", "vartype": "string"}
+        )
+        log(
+            f"derived shared_buffers={shared_buffers_mb}MB "
+            f"({int(SHARED_BUFFERS_FRACTION * 100)}% of {ENDPOINT_MEMORY_BYTES} bytes)"
+        )
+    else:
+        log("WARNING: endpoint memory unknown (no cgroup limit, no ENDPOINT_MEMORY); "
+            "leaving shared_buffers at the Postgres default")
+
+    # --- Local File Cache -------------------------------------------------
+    # The cache file lives in pgdata on the data volume, so the volume — not
+    # memory — is what bounds it. max_file_cache_size is PGC_POSTMASTER but only
+    # costs shared memory for its chunk hash table (~one entry per MiB, see
+    # RequestAddinShmemSpace in pgxn/yb_amp/file_cache.c), so pinning it to the
+    # whole volume is cheap and means every later resize is a SIGHUP away.
+    # Take the smaller of what the filesystem reports and the budget the chart
+    # declared. On an emptyDir the two differ enormously — statvfs sees the whole
+    # node disk while the kubelet will evict the pod once /data passes
+    # sizeLimit — so the declared budget is what actually bounds the cache.
+    vol = volume_bytes(RUN_DIR)
+    if vol and ENDPOINT_DATA_VOLUME_BYTES and ENDPOINT_DATA_VOLUME_BYTES < vol:
+        log(f"data volume: filesystem reports {vol // (1024 * 1024)}MB but the declared "
+            f"budget is {ENDPOINT_DATA_VOLUME_BYTES // (1024 * 1024)}MB (emptyDir sizeLimit "
+            f"or PVC size); sizing the cache off the budget")
+        vol = ENDPOINT_DATA_VOLUME_BYTES
+    elif vol and not ENDPOINT_DATA_VOLUME_BYTES:
+        log("WARNING: ENDPOINT_DATA_VOLUME_SIZE is unset; sizing the LFC off statvfs, which "
+            "on an emptyDir reports the whole node filesystem and can exceed its sizeLimit")
+    if vol:
+        vol_mb = vol // (1024 * 1024)
+        ceiling_mb = min(vol_mb, LFC_CEILING_MAX_MB)
+        lfc_limit_mb = max(1, min(int(vol_mb * LFC_VOLUME_FRACTION), ceiling_mb))
+        settings.append(
+            {"name": "yb_amp.max_file_cache_size", "value": f"{ceiling_mb}MB",
+             "vartype": "string"}
+        )
+        settings.append(
+            {"name": "yb_amp.file_cache_size_limit", "value": f"{lfc_limit_mb}MB",
+             "vartype": "string"}
+        )
+        log(f"derived LFC: ceiling={ceiling_mb}MB live_limit={lfc_limit_mb}MB "
+            f"({int(LFC_VOLUME_FRACTION * 100)}% of the {vol_mb}MB {RUN_DIR} volume"
+            + (f", ceiling clamped to {LFC_CEILING_MAX_MB}MB)" if ceiling_mb < vol_mb else ")"))
+    else:
+        log(f"WARNING: could not stat the {RUN_DIR} volume; LFC stays disabled")
+
+    # --- Background / parallel workers ------------------------------------
+    # Ceilings are postmaster-context; the values under them are USERSET or
+    # SIGHUP, so they can be retuned without bouncing Postgres.
+    settings.append(
+        {"name": "max_worker_processes", "value": str(MAX_WORKER_PROCESSES_CEILING),
+         "vartype": "integer"}
+    )
+    settings.append(
+        {"name": "autovacuum_worker_slots", "value": str(AUTOVACUUM_WORKER_SLOTS_CEILING),
+         "vartype": "integer"}
+    )
+    if ENDPOINT_VCPU:
+        vcpu = max(1, int(ENDPOINT_VCPU))
+        max_parallel_workers = min(vcpu, MAX_WORKER_PROCESSES_CEILING)
+        per_gather = max(2, vcpu // 2)
+        maintenance = max(2, vcpu // 4)
+        autovacuum = min(8, max(3, vcpu // 2), AUTOVACUUM_WORKER_SLOTS_CEILING)
+        for name, value in (
+            ("max_parallel_workers", max_parallel_workers),
+            ("max_parallel_workers_per_gather", per_gather),
+            ("max_parallel_maintenance_workers", maintenance),
+            ("autovacuum_max_workers", autovacuum),
+        ):
+            settings.append({"name": name, "value": str(value), "vartype": "integer"})
+        log(f"derived workers from {vcpu} vCPU: max_parallel_workers={max_parallel_workers} "
+            f"per_gather={per_gather} maintenance={maintenance} autovacuum={autovacuum}")
+    else:
+        log("WARNING: endpoint CPU unknown (no cgroup quota, no ENDPOINT_CPU); "
+            "leaving the parallel-worker GUCs at their Postgres defaults")
+
+    return settings
+
+
 def render_compute_spec(specfile):
     settings = [
         {"name": "fsync", "value": "off", "vartype": "bool"},
@@ -306,6 +595,12 @@ def render_compute_spec(specfile):
         {"name": "yb_amp.pageserver_connstring",
          "value": f"host={LISTEN_HOST} port={PAGESERVER_PG_PORT}", "vartype": "string"},
     ]
+    # Resource-derived defaults come after the static block and before the
+    # operator overrides: `as_pg_settings` writes these in order into
+    # postgresql.conf, where the last occurrence of a name wins. So the
+    # precedence is static default < derived < COMPUTE_EXTRA_SETTINGS_JSON.
+    settings.extend(derived_pg_settings())
+
     for k, v in json.loads(env("COMPUTE_EXTRA_SETTINGS_JSON", "{}")).items():
         settings.append({"name": k, "value": str(v), "vartype": "string"})
 

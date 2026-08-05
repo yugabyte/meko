@@ -266,6 +266,20 @@ on-disk cache of relation pages that sits between `shared_buffers` and the
 pageserver. It is optional: with the LFC off, every buffer miss goes to the
 pageserver.
 
+**It is on by default on a deployed endpoint.** The supervisor
+([`deploy/endpoint/supervisor.py`](../../deploy/endpoint/supervisor.py)) sizes it
+from the `/data` volume using the two GUCs' **ceiling/live split**:
+`yb_amp.max_file_cache_size` (`PGC_POSTMASTER`, so it can only change with a
+Postgres restart) is pinned to the whole volume and then never has to move,
+while `yb_amp.file_cache_size_limit` (`PGC_SIGHUP`) carries 90 % of the volume
+and can be retuned with a reload. The remaining 10 % is headroom for the WAL,
+the logs and the rest of `pgdata`, which share the same volume. The ceiling is
+cheap to over-provision — it only reserves the chunk hash table, ~120 B per 1 MiB
+chunk (`RequestAddinShmemSpace`) — but is clamped so a very large volume cannot
+reserve hundreds of MiB of shared memory. A local `yb_amp_local` compute has no
+volume reservation to read and instead takes a fixed 1 GB (`--lfc-size`
+overrides; `0` disables).
+
 ### On-disk layout
 
 All blocks of all relations live in a **single file**

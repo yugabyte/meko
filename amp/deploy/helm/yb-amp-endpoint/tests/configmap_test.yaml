@@ -10,6 +10,59 @@ tests:
           path: metadata.name
           value: RELEASE-NAME-yb-amp-endpoint
 
+  # The supervisor sizes shared_buffers, the parallel-worker GUCs and the
+  # pageserver/safekeeper scale_factor from these. They are its FALLBACK — it
+  # prefers the container's cgroup limits, which stay correct across an in-place
+  # resize — so they must keep matching the requests/limits the Deployment
+  # renders from the same values.
+  - it: echoes the endpoint's cpu/memory reservation for derived sizing
+    set:
+      endpoint:
+        resources:
+          cpu: "4"
+          memory: "8Gi"
+    asserts:
+      - equal:
+          path: data.ENDPOINT_CPU
+          value: "4"
+      - equal:
+          path: data.ENDPOINT_MEMORY
+          value: "8Gi"
+
+  - it: defaults the reservation echo to the chart's 2 cores / 4Gi
+    asserts:
+      - equal:
+          path: data.ENDPOINT_CPU
+          value: "2"
+      - equal:
+          path: data.ENDPOINT_MEMORY
+          value: "4Gi"
+
+  # The LFC must stay inside the /data budget. On the emptyDir path statvfs
+  # reports the whole node filesystem (sizeLimit is kubelet-enforced, not a fs
+  # quota), so the budget has to be declared here or the cache grows past
+  # sizeLimit and the pod is evicted for exceeding ephemeral-storage.
+  - it: declares the data-volume budget from the emptyDir sizeLimit by default
+    set:
+      runDir:
+        sizeLimit: 20Gi
+    asserts:
+      - equal:
+          path: data.ENDPOINT_DATA_VOLUME_SIZE
+          value: "20Gi"
+
+  - it: declares the data-volume budget from the PVC size when a storage class is set
+    set:
+      persistence:
+        storageClass: standard-rwo
+        size: 40Gi
+      runDir:
+        sizeLimit: 10Gi
+    asserts:
+      - equal:
+          path: data.ENDPOINT_DATA_VOLUME_SIZE
+          value: "40Gi"
+
   - it: carries the YugabyteDB connection block from values
     set:
       yugabyte:

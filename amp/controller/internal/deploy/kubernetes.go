@@ -143,6 +143,13 @@ var _ Deployer = (*KubernetesDeployer)(nil)
 // fullnameOverride, so the address is a pure function of the name and config.
 func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) (Endpoint, error) {
 	release := spec.Name
+	// The data volume's size is proportional to the endpoint's CPU. For the
+	// emptyDir default that needs the node's allocatable disk and CPU, so it
+	// lives here (I/O, can fail) rather than in the pure values() builder.
+	vals := k.values(spec, release)
+	if err := k.applyDiskSizing(ctx, &vals); err != nil {
+		return Endpoint{}, err
+	}
 	// The deploy namespace is the controller's own namespace (the chart sets
 	// AMP_DEPLOY_NAMESPACE to .Release.Namespace), so it always exists — no
 	// --create-namespace, which would otherwise demand cluster-scoped
@@ -151,7 +158,7 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 		Name:      release,
 		Chart:     k.cfg.ChartPath,
 		Namespace: k.cfg.Namespace,
-		Values:    k.values(spec, release),
+		Values:    vals,
 		Wait:      true,
 		Timeout:   k.cfg.Timeout,
 	}); err != nil {
@@ -677,6 +684,10 @@ type chartValues struct {
 	// Persistence is nil (omitted) for the chart's emptyDir default; set to
 	// provision the endpoint's data volume as a PVC of a storage class.
 	Persistence *persistenceValues `json:"persistence,omitempty"`
+	// RunDir sizes the emptyDir backing /data when no storage class is set. Nil
+	// (omitted) leaves the chart default; applyDiskSizing fills it in from the
+	// node's disk-per-vCPU ratio.
+	RunDir *runDirValues `json:"runDir,omitempty"`
 	// NodeSelector pins the endpoint pod to nodes with these labels (e.g. a
 	// local-NVMe-SSD ephemeral pool); omitted leaves the chart's default (no
 	// selector — schedules anywhere).

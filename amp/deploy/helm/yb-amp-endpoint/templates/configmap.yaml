@@ -20,6 +20,24 @@ data:
   ENDPOINT_PG_VERSION: {{ .Values.endpoint.pgVersion | quote }}
   COMPUTE_PORT: {{ .Values.endpoint.computePort | quote }}
   BRANCH_ID: {{ .Values.endpoint.branchId | quote }}
+  # The pod's resource reservation, echoed so the supervisor can size
+  # shared_buffers, the parallel-worker GUCs and the pageserver/safekeeper
+  # scale_factor from it. These are a FALLBACK: the supervisor prefers the
+  # container's cgroup limits, which stay correct after an in-place resize
+  # (this ConfigMap is not re-read by a running container, and env never
+  # hot-updates). Keep both in sync with the requests/limits the Deployment
+  # renders from the same values.
+  ENDPOINT_CPU: {{ .Values.endpoint.resources.cpu | quote }}
+  ENDPOINT_MEMORY: {{ .Values.endpoint.resources.memory | quote }}
+  # The /data budget the LFC must stay inside. This cannot be discovered from
+  # inside the container on the emptyDir path: an emptyDir's sizeLimit is enforced
+  # by the kubelet watching disk usage, not by a filesystem quota
+  # (LocalStorageCapacityIsolationFSQuotaMonitoring is off by default), so statvfs
+  # there reports the whole node filesystem. Sizing the cache off that would let
+  # it grow past sizeLimit and get the pod evicted for exceeding
+  # ephemeral-storage. A PVC does report its own size, but it is passed for both
+  # so the supervisor has one contract.
+  ENDPOINT_DATA_VOLUME_SIZE: {{ if .Values.persistence.storageClass }}{{ .Values.persistence.size | quote }}{{ else }}{{ .Values.runDir.sizeLimit | quote }}{{ end }}
   {{- /*
     Extensions mounted as ImageVolumes contribute two things:
       * their library name to shared_preload_libraries (preload: true only), and
