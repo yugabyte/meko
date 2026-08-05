@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/golang-migrate/migrate/v4"
 	migratepgx "github.com/golang-migrate/migrate/v4/database/pgx/v5"
@@ -15,11 +16,19 @@ import (
 	"github.com/yugabyte/amp/controller/migrations"
 )
 
-// Migrate applies all embedded migrations to schema, creating the schema first
-// if needed. It is safe to run on every startup: already-applied migrations are
-// skipped.
+// Migrate applies the controller's own embedded migration set to schema,
+// creating the schema first if needed. It is safe to run on every startup:
+// already-applied migrations are skipped.
 func Migrate(ctx context.Context, url, schema string) error {
-	m, sqlDB, err := newMigrator(ctx, url, schema)
+	return MigrateFS(ctx, url, schema, migrations.FS)
+}
+
+// MigrateFS applies an embedded migration set to schema, creating the schema
+// first if needed. It is used for state stores that share the controller's
+// migration machinery but own their own schema (e.g. amp_voyager_control). It is
+// safe to run on every startup: already-applied migrations are skipped.
+func MigrateFS(ctx context.Context, url, schema string, migrationFS fs.FS) error {
+	m, sqlDB, err := newMigrator(ctx, url, schema, migrationFS)
 	if err != nil {
 		return err
 	}
@@ -30,10 +39,10 @@ func Migrate(ctx context.Context, url, schema string) error {
 	return nil
 }
 
-// newMigrator builds a golang-migrate instance over the embedded migrations,
-// bound to schema (created first if needed). The caller owns the returned
-// *sql.DB and must Close it. Shared by Migrate and the up/down round-trip test.
-func newMigrator(ctx context.Context, url, schema string) (*migrate.Migrate, *sql.DB, error) {
+// newMigrator builds a golang-migrate instance over migrationFS, bound to
+// schema (created first if needed). The caller owns the returned *sql.DB and
+// must Close it. Shared by MigrateFS and the up/down round-trip test.
+func newMigrator(ctx context.Context, url, schema string, migrationFS fs.FS) (*migrate.Migrate, *sql.DB, error) {
 	connCfg, err := pgx.ParseConfig(url)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse database url: %w", err)
@@ -68,7 +77,7 @@ func newMigrator(ctx context.Context, url, schema string) (*migrate.Migrate, *sq
 		return nil, nil, fmt.Errorf("ensure schema %q: %w", schema, err)
 	}
 
-	src, err := iofs.New(migrations.FS, ".")
+	src, err := iofs.New(migrationFS, ".")
 	if err != nil {
 		sqlDB.Close()
 		return nil, nil, fmt.Errorf("load embedded migrations: %w", err)

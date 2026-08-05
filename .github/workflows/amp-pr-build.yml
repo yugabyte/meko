@@ -131,6 +131,9 @@ jobs:
               # store logic the in-memory backends cannot exercise (branch
               # extensions, the projections, and the fork-vs-drop race).
               - 'amp/controller/internal/task/**'
+              # The Voyager migration store's live-database tests run in the same
+              # job; its schema is embedded under internal/voyager/migrations.
+              - 'amp/controller/internal/voyager/**'
               - 'amp/controller/internal/core/**'
               - 'amp/controller/internal/registry/**'
               - '.github/workflows/amp-pr-build.yml'
@@ -596,6 +599,16 @@ jobs:
         env:
           AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
         run: go -C amp/controller test ./internal/task/... -run 'TestPg' -v
+
+      # The Voyager migration store's live-database tests (the YbStore TestYbStore*
+      # tests): idempotent write-ahead + read-back, the single-active-run partial
+      # index -> ErrConflict mapping, task_id fencing on the run and target-claim
+      # transitions, and the FK -> ErrNotFound path. Migrates the
+      # amp_voyager_control schema of its own, so it shares the throwaway database.
+      - name: Voyager migration store — live-database tests
+        env:
+          AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
+        run: go -C amp/controller test ./internal/voyager/migration/... -v
 
       # The store logic MemBackend/MemStore cannot exercise, against the real
       # amp_registry tables. Each migrates a schema of its own, so they share the

@@ -56,7 +56,7 @@ func TestMigrateRoundTrip(t *testing.T) {
 	t.Cleanup(unlock)
 
 	const schema = "controller" // the --db-schema default
-	m, sqlDB, err := newMigrator(ctx, scratchURL, schema)
+	m, sqlDB, err := newMigrator(ctx, scratchURL, schema, migrations.FS)
 	if err != nil {
 		t.Fatalf("build migrator: %v", err)
 	}
