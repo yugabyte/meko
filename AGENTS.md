@@ -138,6 +138,7 @@ Pointers only; each skill is the authority on its own subject.
 | `resolve-pr-comments` | closing out a review — resolving addressed threads, and 👍/👎 on bot findings so the reviewer improves |
 | `integration-before-corruption-claim` | claiming data loss or corruption in `amp/` — run the integration suite first |
 | `amp-mcp-tools` | working on the amp controller's MCP tools. A **symlink** to `amp/controller/mcp/skills/amp-mcp-tools`, so it stays in step with the packaged skill bundle |
+| `amp-report-service` | working with the amp QA report portal — triaging runs/results, perf history, known issues, launching runs/builds/fleet deploys via the `yb` CLI or the portal's MCP server |
 
 All skills are repo-wide and live at the root, including the AMP-specific ones — there is
 no per-tree `.claude/`. The two `amp`-scoped entries above only apply when you are editing
