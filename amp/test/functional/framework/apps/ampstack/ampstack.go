@@ -29,10 +29,13 @@
 // ambient-authed binaries (KISS, no client-go), reached through
 // exec/k8s.Kubectl.
 //
-// Namespace-scoped by design: with RBACClusterScoped=false NO cluster-scoped
-// object (ClusterRole/ClusterRoleBinding) is ever created — those docs are both
-// gated off in the chart and filtered out of the rendered manifest here — so
-// the controller runs with only namespace RBAC on a shared cluster. Because the
+// Namespace-scoped by preference, not currently: with RBACClusterScoped=false NO
+// cluster-scoped object (ClusterRole/ClusterRoleBinding) is ever created — those
+// docs are both gated off in the chart and filtered out of the rendered manifest
+// here — so the controller runs with only namespace RBAC on a shared cluster.
+// The default is true today because sizing an endpoint's emptyDir /data reads
+// the node list and fails create_endpoint outright without it (meko#584);
+// revert to false when that read stops being mandatory. Because the
 // currently-deployed controller image predates the fix that stopped passing
 // helm --create-namespace, HelmShim (default on) installs a tiny PATH-wrapper
 // that strips that flag until a controller image built without it ships.
@@ -217,7 +220,7 @@ type Config struct {
 	// never torn down here).
 	Backing Backing
 
-	RBACClusterScoped bool // false → no ClusterRole/ClusterRoleBinding is ever created
+	RBACClusterScoped bool // false → no ClusterRole/ClusterRoleBinding is ever created (see meko#584)
 	HelmShim          bool // true → install the --create-namespace-stripping helm shim
 	MCPEnabled        bool
 	UIEnabled         bool
@@ -361,7 +364,7 @@ func FromConfig(get Getter) Config {
 			SSLMode:        get.GetString("env.ampstack.backing.sslmode", ""),
 			AdminHostPorts: get.GetString("env.ampstack.backing.admin_host_ports", ""),
 		},
-		RBACClusterScoped:         get.GetBool("env.ampstack.rbac_cluster_scoped", false),
+		RBACClusterScoped:         get.GetBool("env.ampstack.rbac_cluster_scoped", true),
 		HelmShim:                  get.GetBool("env.ampstack.helm_shim", true),
 		MCPEnabled:                get.GetBool("env.ampstack.mcp_enabled", false),
 		UIEnabled:                 get.GetBool("env.ampstack.ui_enabled", false),

@@ -26,7 +26,7 @@ var ampstackParams = map[string]string{
 	"env.ampstack.controller_chart":    "path to the yb-amp-controller Helm chart (required for deploy-amp)",
 	"env.ampstack.controller_image":    "controller image ref (default: config / versions.controller)",
 	"env.ampstack.endpoint_image":      "endpoint image ref (default: config / versions.endpoint)",
-	"env.ampstack.rbac_cluster_scoped": "bool: create ClusterRole/ClusterRoleBinding (default false)",
+	"env.ampstack.rbac_cluster_scoped": "bool: create ClusterRole/ClusterRoleBinding (default true; the node read endpoint sizing needs — meko#584)",
 	"env.ampstack.helm_shim":           "bool: install the --create-namespace-stripping helm shim (default true)",
 	"env.ampstack.storage_class":       "endpoint /data PVC storage class (default: emptyDir)",
 	"env.ampstack.yb_storage_class":    "built-in yugabyted PVC storage class (default standard-rwo, a WaitForFirstConsumer class)",
