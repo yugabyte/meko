@@ -1,0 +1,24 @@
+[package]
+name = "endpoint_supervisor"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+# PID 1 of the endpoint pod. Replaces deploy/endpoint/supervisor.py — see
+# `src/main.rs` for why, and for what is and is not ported yet.
+[[bin]]
+name = "yb-endpoint-supervisor"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+camino.workspace = true
+libc.workspace = true
+# The daemons' own config types: rendering is type-checked against what they
+# parse, which is the point of doing this in Rust.
+pageserver_api.workspace = true
+safekeeper_api.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+workspace_hack.workspace = true

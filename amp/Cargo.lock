@@ -1202,6 +1202,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "endpoint_supervisor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "camino",
+ "libc",
+ "pageserver_api",
+ "safekeeper_api",
+ "toml_edit",
+ "tracing",
+ "tracing-subscriber",
+ "workspace_hack",
+]
+
+[[package]]
 name = "enum-map"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
