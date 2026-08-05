@@ -1,0 +1,138 @@
+name: Meko vuln scan
+
+# Per-PR dependency vulnerability scan for the meko tree.
+#
+# Motivation: Dependabot opens PRs for existing vulnerabilities but does
+# nothing to stop a new PR from *introducing* one. This workflow closes
+# that gap by failing the PR when its diff pulls in (or transitively
+# resolves) a HIGH or CRITICAL vulnerable dependency.
+#
+# Components audited:
+#   meko_ui       — npm audit (package-lock.json)
+#   meko_admin    — npm audit (package-lock.json)
+#   api_server    — govulncheck (go.mod + go.sum)
+#
+# Deliberately excluded, for now:
+#   cli_app, meko-provisioner (Go)         — scope decision
+#   inference_gateway (Python)             — needs pip-audit, layer later
+#   amp/**                                 — covered by amp-vuln-scan.yml
+#
+# Runs on every PR — the per-component jobs skip when their manifests /
+# lockfiles didn't change (see the `changes` job below). This shape is
+# deliberate: filtering at the trigger level would leave the required
+# `Meko vuln scan gate` check stuck on "Expected — Waiting for status to
+# be reported" for code-only PRs, mirroring the trap the AMP gates hit
+# in July 2026. Runs are cheap when they skip — just the `changes` job.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # dorny/paths-filter uses `pulls/{n}/files` on pull_request events;
+  # without pull-requests:read it fails "Resource not accessible by
+  # integration" and the whole workflow reports failure.
+  pull-requests: read
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      meko_ui: ${{ steps.filter.outputs.meko_ui }}
+      meko_admin: ${{ steps.filter.outputs.meko_admin }}
+      api_server: ${{ steps.filter.outputs.api_server }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            meko_ui:
+              - 'meko/meko_ui/package.json'
+              - 'meko/meko_ui/package-lock.json'
+            meko_admin:
+              - 'meko/meko_admin/package.json'
+              - 'meko/meko_admin/package-lock.json'
+            api_server:
+              - 'meko/api_server/go.mod'
+              - 'meko/api_server/go.sum'
+
+  meko_ui:
+    name: meko_ui — npm audit
+    needs: changes
+    if: needs.changes.outputs.meko_ui == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # --audit-level=high covers HIGH + CRITICAL; MODERATE / LOW don't
+      # break the build. --omit=dev drops devDependencies (tooling that
+      # never ships to users). npm audit exits non-zero when it finds
+      # anything at/above the audit level, which fails this job.
+      - name: npm audit (high + critical, prod only)
+        working-directory: meko/meko_ui
+        run: npm audit --audit-level=high --omit=dev
+
+  meko_admin:
+    name: meko_admin — npm audit
+    needs: changes
+    if: needs.changes.outputs.meko_admin == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: npm audit (high + critical, prod only)
+        working-directory: meko/meko_admin
+        run: npm audit --audit-level=high --omit=dev
+
+  api_server:
+    name: api_server — govulncheck
+    needs: changes
+    if: needs.changes.outputs.api_server == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: meko/api_server/go.mod
+          cache-dependency-path: meko/api_server/go.sum
+      # govulncheck already restricts to *callable* vulnerabilities — a
+      # dep can carry an OSV record but not be reachable from api_server's
+      # actual code, and govulncheck won't flag those. That prunes the
+      # noise the Go OSV database would otherwise produce, so any finding
+      # here corresponds to a real reachable risk. Exits 3 when it finds
+      # one, which fails the job.
+      - name: govulncheck (callable vulns only)
+        working-directory: meko/api_server
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  # Single required check — the meko-vuln-scan equivalent of the AMP CI
+  # gate. Every per-component job above must be in `needs`; the
+  # ci-gate composite action verifies that at run time so this list
+  # cannot silently rot.
+  meko_vuln_scan_gate:
+    name: Meko vuln scan gate
+    if: always()
+    needs:
+      - changes
+      - meko_ui
+      - meko_admin
+      - api_server
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}

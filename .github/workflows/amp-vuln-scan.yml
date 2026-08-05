@@ -1,0 +1,100 @@
+name: Amp vuln scan
+
+# Per-PR dependency vulnerability scan for the amp tree. Sibling of
+# meko-vuln-scan.yml — same shape, same threshold (HIGH + CRITICAL),
+# scoped to the amp components. Split into two workflows so the meko
+# and amp gates can be required independently on branch protection.
+#
+# Components audited:
+#   amp_ui         — npm audit (package-lock.json)
+#   amp/controller — govulncheck (go.mod + go.sum)
+#
+# Deliberately excluded, for now:
+#   amp/**/*.rs, amp/Cargo.{toml,lock}   — Rust; cargo-audit is a separate
+#                                          tool + not requested yet
+#   amp/deploy/**/pyproject.toml         — Python; add pip-audit later
+# Runs on every PR — see the note on the meko sibling for why the
+# trigger isn't path-filtered (required-check safety).
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # dorny/paths-filter uses `pulls/{n}/files` on pull_request events;
+  # see the meko sibling for why this line is required.
+  pull-requests: read
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      amp_ui: ${{ steps.filter.outputs.amp_ui }}
+      amp_controller: ${{ steps.filter.outputs.amp_controller }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            amp_ui:
+              - 'amp/amp_ui/package.json'
+              - 'amp/amp_ui/package-lock.json'
+            amp_controller:
+              - 'amp/controller/go.mod'
+              - 'amp/controller/go.sum'
+
+  amp_ui:
+    name: amp_ui — npm audit
+    needs: changes
+    if: needs.changes.outputs.amp_ui == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # See meko-vuln-scan for the flag rationale — same threshold /
+      # dev-omit convention so the two vuln workflows report identically.
+      - name: npm audit (high + critical, prod only)
+        working-directory: amp/amp_ui
+        run: npm audit --audit-level=high --omit=dev
+
+  amp_controller:
+    name: amp/controller — govulncheck
+    needs: changes
+    if: needs.changes.outputs.amp_controller == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: amp/controller/go.mod
+          cache-dependency-path: amp/controller/go.sum
+      # See meko-vuln-scan / api_server job for the govulncheck
+      # rationale — callable-vulns only, exits 3 on a finding.
+      - name: govulncheck (callable vulns only)
+        working-directory: amp/controller
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  amp_vuln_scan_gate:
+    name: Amp vuln scan gate
+    if: always()
+    needs:
+      - changes
+      - amp_ui
+      - amp_controller
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}
