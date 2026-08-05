@@ -20,6 +20,12 @@ data:
   ENDPOINT_PG_VERSION: {{ .Values.endpoint.pgVersion | quote }}
   COMPUTE_PORT: {{ .Values.endpoint.computePort | quote }}
   BRANCH_ID: {{ .Values.endpoint.branchId | quote }}
+  {{- if .Values.endpoint.endpointId }}
+  # This endpoint's amp_registry.endpoints row, so the supervisor can read its
+  # override columns (pg_settings / pageserver_settings / safekeeper_settings)
+  # from the registry at start. Unset => derived defaults only, no lookup.
+  ENDPOINT_ID: {{ .Values.endpoint.endpointId | quote }}
+  {{- end }}
   # The pod's resource reservation, echoed so the supervisor can size
   # shared_buffers, the parallel-worker GUCs and the pageserver/safekeeper
   # scale_factor from it. These are a FALLBACK: the supervisor prefers the
@@ -49,7 +55,15 @@ data:
     pass .../share/postgresql, NOT .../share/postgresql/extension.
   */ -}}
   {{- $preload := .Values.endpoint.sharedPreloadLibraries }}
-  {{- $extra := deepCopy .Values.endpoint.extraSettings }}
+  {{- /*
+    User GUCs are NOT carried here. They live on the endpoint's and its
+    branch's `pg_settings` in amp_registry, which the supervisor reads at
+    start, so a change does not need the chart re-rendered. This dict holds
+    only what the chart itself derives: the extension paths below, which
+    depend on the ImageVolumes this release mounted and are therefore not
+    knowable from the database.
+  */ -}}
+  {{- $extra := dict }}
   {{- if .Values.endpoint.extensions }}
   {{- $ctrlPaths := list "$system" }}
   {{- $libPaths := list "$libdir" }}

@@ -27,6 +27,13 @@ type YBConn struct {
 type EndpointSpec struct {
 	// Name is a stable, unique handle (the container/pod name).
 	Name string
+	// EndpointID is this endpoint's `amp_registry.endpoints.id`, handed to the
+	// pod so the supervisor can read the endpoint's own override columns
+	// (pg_settings / pageserver_settings / safekeeper_settings) straight from the
+	// registry. It is recoverable from Name (which is "yb-ep-<id>"), but is
+	// passed explicitly so the pod never has to parse its release name. Empty =>
+	// the pod runs on derived defaults with no override lookup.
+	EndpointID string
 	// BranchID is the storage-layer branch id this compute serves: 32 lowercase
 	// hex digits, no dashes (the flat single-id storage contract — no tenant).
 	BranchID  string
@@ -49,12 +56,6 @@ type EndpointSpec struct {
 	// for Preload entries) from them; the Docker deployer does not support
 	// ImageVolumes and ignores this.
 	Extensions []Extension
-	// PgSettings are extra PostgreSQL settings for this compute, already resolved
-	// to the EFFECTIVE set (the branch's merged with the endpoint's own — see
-	// core.EffectivePgSettings). Both drivers hand them to the endpoint's
-	// supervisor, which appends each to the compute spec, so they win over the
-	// supervisor's own defaults. Nil for none.
-	PgSettings map[string]string
 }
 
 // Extension is one externalized extension to mount into an endpoint: its name

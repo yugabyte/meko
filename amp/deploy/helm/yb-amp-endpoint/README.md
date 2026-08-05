@@ -65,7 +65,7 @@ replication. For query-level metrics, enable the `stat_statements` collector
 | `endpoint.computePort` | `55433` | compute Postgres port (exposed by the Service) |
 | `endpoint.branchId` | _(empty)_ | serve an existing branch; empty ⇒ bootstrap |
 | `endpoint.sharedPreloadLibraries` | `yb_amp` | compute `shared_preload_libraries` |
-| `endpoint.extraSettings` | `{}` | extra Postgres GUCs (`name: value`) |
+| `endpoint.endpointId` | _(empty)_ | the endpoint's `amp_registry.endpoints` id; lets the supervisor read its own and its branch's `pg_settings` (and the pageserver/safekeeper override columns) from the registry. Empty ⇒ derived defaults only |
 | `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `4Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS |
 | `service.type` | `ClusterIP` | Service type |
 | `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper/endpoint_storage HTTP |

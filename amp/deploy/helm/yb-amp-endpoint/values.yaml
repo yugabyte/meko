@@ -48,13 +48,14 @@ endpoint:
   computePort: 55433
   # -- Branch id to serve. Empty => the pod bootstraps a fresh branch on first start.
   branchId: ""
+  # -- This endpoint's `amp_registry.endpoints.id`. Set by the controller; lets
+  # the supervisor read the endpoint's own override columns (pg_settings /
+  # pageserver_settings / safekeeper_settings) from the registry at start. Empty
+  # => no override lookup, derived defaults only.
+  endpointId: ""
   # -- Postgres shared_preload_libraries for the compute. Extensions with
   # `preload: true` below are appended to this automatically.
   sharedPreloadLibraries: "yb_amp"
-  # -- Extra Postgres GUCs, as a name: value map. extension_control_path and
-  # dynamic_library_path are derived from `extensions` below and merged in;
-  # setting them here is overridden by the derived value.
-  extraSettings: {}
   # -- Externalized extensions to mount as read-only Kubernetes ImageVolumes
   # (built from deploy/extensions). Each mounts at /extensions/<name>, and its
   # share/ + lib/ subdirs are appended to extension_control_path /

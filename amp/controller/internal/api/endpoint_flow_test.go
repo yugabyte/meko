@@ -814,8 +814,10 @@ func TestEndpointLocalDeployer(t *testing.T) {
 }
 
 // TestEndpointNameAndPgSettings: an endpoint carries a name unique to its
-// branch, and the settings its compute runs with are the branch's merged with
-// its own — its own winning.
+// branch, and its own pg_settings are persisted on its row (the branch's stay on
+// the branch). The two are no longer merged here — the endpoint's supervisor
+// reads both rows and merges them itself — so what the deployer must be handed
+// is the endpoint id it needs to find them.
 func TestEndpointNameAndPgSettings(t *testing.T) {
 	dep := &fakeDeployer{}
 	prov := api.Provisioning{Deployer: dep}
@@ -854,24 +856,16 @@ func TestEndpointNameAndPgSettings(t *testing.T) {
 		t.Errorf("endpoint pg_settings = %v, want just its own two", ep.PgSettings)
 	}
 
-	// What the deployer was handed is the merge: the branch's baseline, with the
-	// endpoint's overriding on the key both define.
+	// The merge is not resolved here any more: the supervisor reads the branch's
+	// and the endpoint's pg_settings from amp_registry and merges them in SQL, so
+	// a change is a registry write rather than a redeploy. What the deploy spec
+	// must carry is the endpoint id the supervisor looks both rows up by —
+	// without it the compute silently comes up on derived defaults alone.
 	if len(dep.created) != 1 {
 		t.Fatalf("deployer creates = %d, want 1", len(dep.created))
 	}
-	got := dep.created[0].PgSettings
-	want := map[string]string{
-		"work_mem":                   "64MB",  // endpoint wins over the branch's 16MB
-		"log_min_duration_statement": "250ms", // branch-only, inherited
-		"jit":                        "off",   // endpoint-only
-	}
-	if len(got) != len(want) {
-		t.Fatalf("deploy spec pg_settings = %v, want %v", got, want)
-	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("deploy spec pg_settings[%q] = %q, want %q", k, got[k], v)
-		}
+	if got := dep.created[0].EndpointID; got != ep.Id.String() {
+		t.Errorf("deploy spec EndpointID = %q, want the endpoint's id %q", got, ep.Id)
 	}
 
 	// A name already taken on the branch is refused synchronously, so the caller

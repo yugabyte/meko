@@ -10,6 +10,22 @@ tests:
           path: metadata.name
           value: RELEASE-NAME-yb-amp-endpoint
 
+  - it: passes the endpoint id through so overrides can be looked up
+    set:
+      endpoint:
+        endpointId: 3f2b1c4e-0000-4000-8000-000000000001
+    asserts:
+      - equal:
+          path: data.ENDPOINT_ID
+          value: "3f2b1c4e-0000-4000-8000-000000000001"
+
+  # Without an id the supervisor must not attempt a lookup at all, so the key is
+  # omitted rather than set empty.
+  - it: omits the endpoint id when unset
+    asserts:
+      - notExists:
+          path: data.ENDPOINT_ID
+
   # The supervisor sizes shared_buffers, the parallel-worker GUCs and the
   # pageserver/safekeeper scale_factor from these. They are its FALLBACK — it
   # prefers the container's cgroup limits, which stay correct across an in-place
@@ -116,9 +132,6 @@ tests:
         computePort: 5599
         branchId: "deadbeefdeadbeefdeadbeefdeadbeef"
         sharedPreloadLibraries: "yb_amp,pg_stat_statements"
-        extraSettings:
-          max_connections: "200"
-          work_mem: "16MB"
     asserts:
       - equal:
           path: data.ENDPOINT_PG_VERSION
@@ -132,9 +145,12 @@ tests:
       - equal:
           path: data.SHARED_PRELOAD_LIBRARIES
           value: "yb_amp,pg_stat_statements"
-      - matchRegex:
+      # User GUCs are NOT carried by the chart: they live on the endpoint's and
+      # its branch's pg_settings in amp_registry, which the supervisor reads at
+      # start. Only chart-derived extension paths may appear here.
+      - equal:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
-          pattern: '"max_connections":"200"'
+          value: "{}"
 
   - it: leaves preload + settings untouched when no extensions are mounted
     asserts:
@@ -148,8 +164,6 @@ tests:
   - it: derives extension_control_path and dynamic_library_path from mounted extensions
     set:
       endpoint:
-        extraSettings:
-          work_mem: "16MB"
         extensions:
           - name: vector
             image: quay.io/yugabyte/amp-ext-pgvector:0.8.2
@@ -166,10 +180,6 @@ tests:
       - matchRegex:
           path: data.COMPUTE_EXTRA_SETTINGS_JSON
           pattern: '"dynamic_library_path":"\$libdir:/extensions/vector/lib/postgresql"'
-      # Pre-existing extraSettings survive the merge.
-      - matchRegex:
-          path: data.COMPUTE_EXTRA_SETTINGS_JSON
-          pattern: '"work_mem":"16MB"'
 
   - it: appends preload extensions (using library override) to shared_preload_libraries
     set:

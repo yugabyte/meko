@@ -126,16 +126,11 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
 	}
 
-	branchSettings, err := s.state.BranchPgSettings(ctx, s.ProjectID, s.BranchID)
-	if err != nil {
-		return Fail(fmt.Errorf("read branch pg_settings: %w", err))
-	}
-	effective := mergePgSettings(branchSettings, s.PgSettings)
-
 	// The deploy spec speaks the storage layer's flat branch id: a branch's id is
 	// the storage branch id verbatim, rendered via hex32 (no enclosing tenant).
 	spec := deploy.EndpointSpec{
 		Name:          EndpointDeployName(s.EndpointID),
+		EndpointID:    s.EndpointID.String(),
 		BranchID:      hex32(s.BranchID),
 		PgVersion:     s.PgVersion,
 		YB:            s.yb,
@@ -143,11 +138,10 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		CPU:           s.CPU,
 		Memory:        s.Memory,
 		Extensions:    extSpecs,
-		// The compute runs with the branch's settings merged with this
-		// endpoint's, the endpoint's winning. Resolved here rather than stored
-		// pre-merged, so a later change to the branch's baseline reaches the
-		// endpoint on its next (re)deploy.
-		PgSettings: effective,
+		// No pg_settings here: the endpoint's supervisor reads the branch's and
+		// the endpoint's straight from amp_registry and merges them itself, so a
+		// change is a registry write rather than a redeploy. EndpointID above is
+		// what it needs to find them.
 	}
 
 	deployed, err := s.deployer.CreateEndpoint(ctx, spec)
@@ -211,27 +205,6 @@ func unionStrings(a, b []string) []string {
 // is the JSON persisted on the endpoint row for (re)creation. extensions is the
 // resolved externalized-extension set (names), recorded so a recreate/audit sees
 // what the endpoint mounted; omitted when empty.
-// mergePgSettings resolves what the compute actually runs with: the branch's
-// baseline with the endpoint's own merged over it, the endpoint's winning on a
-// key both define.
-//
-// This duplicates core.EffectivePgSettings rather than calling it because the
-// task package must not import core (its state dependency is the structural
-// StateStore interface, which is what lets a fake stand in). The rule is small
-// and pinned by tests on both sides.
-func mergePgSettings(branch, endpoint map[string]string) map[string]string {
-	if len(branch) == 0 && len(endpoint) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(branch)+len(endpoint))
-	for k, v := range branch {
-		out[k] = v
-	}
-	for k, v := range endpoint {
-		out[k] = v
-	}
-	return out
-}
 
 // orEmptyMap normalizes a nil map to an empty one so it encodes as `{}` rather
 // than `null` — the column is NOT NULL and readers expect an object.

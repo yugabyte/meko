@@ -732,6 +732,10 @@ type endpointValues struct {
 	PgVersion   string `json:"pgVersion"`
 	ComputePort int    `json:"computePort"`
 	BranchId    string `json:"branchId"`
+	// EndpointId lets the supervisor find this endpoint's row in
+	// amp_registry.endpoints and read its override columns. Omitted => no
+	// override lookup, derived defaults only.
+	EndpointId string `json:"endpointId,omitempty"`
 	// Resources is the pod's CPU + memory reservation. The chart renders each
 	// value as both a request and a limit, so the pod gets Guaranteed QoS.
 	Resources resourceValues `json:"resources"`
@@ -739,11 +743,6 @@ type endpointValues struct {
 	// chart renders one volume per entry and derives the extension GUCs from
 	// them. Omitted (empty) leaves the chart's no-extensions default.
 	Extensions []extensionValues `json:"extensions,omitempty"`
-	// ExtraSettings are the endpoint's extra PostgreSQL GUCs. The chart merges
-	// them with the extension-derived paths into COMPUTE_EXTRA_SETTINGS_JSON,
-	// which the supervisor appends to the compute spec. Omitted leaves the
-	// chart's empty default.
-	ExtraSettings map[string]string `json:"extraSettings,omitempty"`
 }
 
 // extensionValues mirrors an entry of the chart's endpoint.extensions list: the
@@ -794,12 +793,12 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 			Dbname:    spec.YB.DBName,
 		},
 		Endpoint: endpointValues{
-			PgVersion:     strconv.Itoa(pgVersion),
-			ComputePort:   k.cfg.ComputePort,
-			BranchId:      spec.BranchID,
-			Resources:     resourceValues{CPU: cpu, Memory: memory},
-			Extensions:    extensionValuesFor(spec.Extensions),
-			ExtraSettings: spec.PgSettings,
+			PgVersion:   strconv.Itoa(pgVersion),
+			ComputePort: k.cfg.ComputePort,
+			BranchId:    spec.BranchID,
+			EndpointId:  spec.EndpointID,
+			Resources:   resourceValues{CPU: cpu, Memory: memory},
+			Extensions:  extensionValuesFor(spec.Extensions),
 		},
 		Controller: controllerValues{URL: spec.ControllerURL},
 		Service:    serviceValues{Type: k.cfg.ServiceType, Annotations: k.cfg.ServiceAnnotations},

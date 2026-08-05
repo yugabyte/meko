@@ -528,6 +528,16 @@ jobs:
           pipx install ruff==0.11.2
           ruff check deploy/
 
+      # The supervisor derives every endpoint's Postgres sizing and merges its
+      # operator overrides, so a wrong answer here is a mis-sized compute or a
+      # daemon that will not parse its own config. pytest-timeout is required:
+      # amp/pytest.ini sets `timeout`, and without the plugin pytest aborts with
+      # an INTERNALERROR instead of collecting anything.
+      - name: Test the endpoint supervisor (pytest)
+        run: |
+          python3 -m pip install --quiet pytest==8.3.5 pytest-timeout==2.3.1
+          python3 -m pytest deploy/endpoint/tests -q
+
   # The controller's live-database Go tests, on a real YugabyteDB (0002/0003 use
   # YB-specific HASH / SPLIT DDL, so plain Postgres can't run them):
   #   * each migration up/down/up in turn — the per-migration re-up catches a

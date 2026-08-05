@@ -32,6 +32,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -206,6 +207,33 @@ COMPUTE_PASSWORD = env("COMPUTE_PASSWORD", "cloud_admin")
 SHARED_PRELOAD_LIBRARIES = env("SHARED_PRELOAD_LIBRARIES", "yb_amp")
 BRANCH_ID = env("BRANCH_ID")
 
+
+def _valid_uuid(s):
+    """`s` if it is a well-formed UUID, else None.
+
+    The endpoint id is interpolated into a `psql -c` statement (which takes no
+    bind parameters), so it is checked before use rather than trusted.
+    """
+    if not s:
+        return None
+    try:
+        return str(uuid.UUID(str(s)))
+    except (ValueError, AttributeError, TypeError):
+        log(f"WARNING: ENDPOINT_ID {s!r} is not a UUID; ignoring it")
+        return None
+
+
+# This endpoint's row in `amp_registry.endpoints`, the source of operator
+# overrides. Absent in a standalone dev container, which then runs on derived
+# defaults only.
+ENDPOINT_ID = _valid_uuid(env("ENDPOINT_ID"))
+
+# Operator overrides for the three config surfaces, filled in by `main` from
+# `fetch_overrides()` before any config file is rendered. Module-level and
+# mutable rather than fetched at import time, so importing this module (tests,
+# tooling) performs no database I/O.
+OVERRIDES = {"pg": {}, "pageserver": {}, "safekeeper": {}}
+
 # --- Resources the derived settings are sized from -------------------------
 # ENDPOINT_CPU / ENDPOINT_MEMORY mirror the pod's resource reservation (set by
 # the chart from .Values.endpoint.resources). They are the fallback; the cgroup
@@ -336,8 +364,11 @@ def wait_for(desc, predicate, timeout, interval=0.5):
     raise TimeoutError(f"timed out waiting for {desc} ({timeout}s)")
 
 
-def psql(dbname, sql=None, file=None, ignore_errors=False):
-    """Run psql against the external YugabyteDB using the bundled client."""
+def psql(dbname, sql=None, file=None, ignore_errors=False, args=None):
+    """Run psql against the external YugabyteDB using the bundled client.
+
+    `args` appends extra psql flags (e.g. ["-t", "-A"] for a bare single value).
+    """
     cmd = [
         str(PG_BIN / "psql"),
         "-h", YB_HOST_PORTS.split(",")[0].split(":")[0],
@@ -347,6 +378,8 @@ def psql(dbname, sql=None, file=None, ignore_errors=False):
         "-v", "ON_ERROR_STOP=1",
         "--no-psqlrc",
     ]
+    if args:
+        cmd += list(args)
     if sql is not None:
         cmd += ["-c", sql]
     if file is not None:
@@ -365,6 +398,150 @@ def psql(dbname, sql=None, file=None, ignore_errors=False):
 # ---------------------------------------------------------------------------
 # NOTE: the exact compute spec shape is verified against `yb_amp_local`-generated
 # configs during bring-up testing.
+
+def fetch_overrides():
+    """Read this endpoint's operator overrides from YugabyteDB.
+
+    Returns `{"pg": {...}, "pageserver": {...}, "safekeeper": {...}}`, empty
+    objects when there is nothing to apply.
+
+    The overrides live in `amp_registry.endpoints` — the row the controller
+    already owns for this endpoint — rather than being baked into the pod's
+    ConfigMap, because a ConfigMap is not re-read by a running container and env
+    never hot-updates. Reading them from the database is what lets a later change
+    be applied without recreating the pod.
+
+    Failure is not fatal. An endpoint that cannot reach the registry (or has no
+    ENDPOINT_ID plumbed, as in a standalone dev container) must still start on its
+    derived defaults; refusing to boot because an override *might* exist would
+    turn a registry blip into an outage.
+
+    Narrow by design: one row, three columns, keyed by primary key. `amp_registry`
+    is the controller's own schema and the pod only reaches it because both
+    connect as the same superuser today — so the less of it this depends on, the
+    cheaper a future least-privilege role is to introduce.
+    """
+    empty = {"pg": {}, "pageserver": {}, "safekeeper": {}}
+    if not ENDPOINT_ID:
+        log("no ENDPOINT_ID; skipping the override lookup (derived defaults only)")
+        return empty
+    # ENDPOINT_ID is validated as a UUID at parse time (see ENDPOINT_ID above), so
+    # it is safe to inline here — psql's -c takes no bind parameters.
+    # Two rows, one query. The branch carries the settings every compute on it
+    # gets; the endpoint carries its own. `||` on jsonb takes the RIGHT operand
+    # for a key both define, which is the precedence the schema documents — "an
+    # endpoint's own pg_settings merge over these". LEFT JOIN so a missing branch
+    # row still yields the endpoint's settings rather than nothing at all.
+    #
+    # This is the only carrier for user GUCs: the chart no longer ships them (it
+    # keeps only the extension-derived paths it computes from the ImageVolumes it
+    # mounted), so a failed read means the compute comes up on derived defaults
+    # alone. That is logged loudly below rather than being fatal — an endpoint
+    # that cannot reach the registry should still start.
+    sql = (
+        "SELECT jsonb_build_object("
+        "'pg', coalesce(b.pg_settings,'{}'::jsonb) || coalesce(e.pg_settings,'{}'::jsonb),"
+        "'pageserver', coalesce(e.pageserver_settings,'{}'::jsonb),"
+        "'safekeeper', coalesce(e.safekeeper_settings,'{}'::jsonb)) "
+        "FROM amp_registry.endpoints e "
+        "LEFT JOIN amp_registry.branches b ON b.branch_id = e.branch_id "
+        f"WHERE e.id = '{ENDPOINT_ID}'"
+    )
+    try:
+        # -t (tuples only) -A (unaligned) so stdout is exactly the JSON document.
+        res = psql(YB_DBNAME, sql=sql, ignore_errors=True, args=["-t", "-A"])
+    except Exception as e:  # noqa: BLE001 - any failure falls back to defaults
+        log(f"WARNING: override lookup failed ({e}); using derived defaults only")
+        return empty
+    if res.returncode != 0:
+        log(f"WARNING: override lookup failed ({res.stderr.strip()}); "
+            "using derived defaults only")
+        return empty
+    raw = res.stdout.strip()
+    if not raw:
+        log(f"no endpoints row for {ENDPOINT_ID}; using derived defaults only")
+        return empty
+    try:
+        doc = json.loads(raw)
+    except ValueError as e:
+        log(f"WARNING: override row is not valid JSON ({e}); using derived defaults only")
+        return empty
+    out = {
+        "pg": doc.get("pg") or {},
+        "pageserver": doc.get("pageserver") or {},
+        "safekeeper": doc.get("safekeeper") or {},
+    }
+    for surface in ("pg", "pageserver", "safekeeper"):
+        if out[surface]:
+            log(f"overrides[{surface}]: {sorted(out[surface])}")
+    return out
+
+
+def toml_scalar(v):
+    """Render a JSON scalar as a toml value.
+
+    Numbers and booleans go in bare (a quoted `scale_factor` would fail to
+    deserialize as f64); everything else is quoted as a string. Nested
+    objects/arrays are refused rather than half-rendered — the override columns
+    are documented as flat `{key: value}` maps of top-level toml keys.
+    """
+    # bool first: it is a subclass of int, and `true` is not `1` in toml.
+    # Separate checks rather than isinstance(v, (int, float)) or the 3.10+
+    # `int | float` union: the tuple form trips ruff's UP038, and the union form
+    # is a TypeError on any interpreter older than 3.10 — which breaks running
+    # this module outside the image (bookworm ships 3.11; dev boxes vary).
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return repr(v)
+    if isinstance(v, float):
+        return repr(v)
+    if isinstance(v, str):
+        return _toml_quote(v)
+    return None
+
+
+# Keys an override may never touch: they are the pod's identity and wiring, not
+# tuning. Overriding `branch_id` would point the endpoint at another branch's
+# data; overriding a listen address or the YB connection would unbind it from the
+# rest of the pod. Tuning knobs are open by design — this is the short deny-list.
+PROTECTED_TOML_KEYS = {
+    "branch_id", "pg_distrib_dir", "listen_pg_addr", "listen_http_addr",
+    "listen_grpc_addr", "listen_pg", "listen_http", "safekeeper_pg_addr",
+    "control_plane_api", "yb_storage_conn",
+}
+
+
+def merge_toml(component, base):
+    """Merge derived config with operator overrides into ordered toml lines.
+
+    `base` is an ordered list of `(key, rendered_value)` pairs the supervisor
+    derived. Overrides replace a key's value in place rather than being appended:
+    **toml forbids a duplicated key** (`toml_edit`, which both daemons parse
+    with, rejects the document), so emitting `scale_factor` twice would stop the
+    daemon from starting rather than letting the last one win. That is the
+    difference from postgresql.conf, where appending really does override.
+    """
+    merged = list(base)
+    index = {k: i for i, (k, _) in enumerate(merged)}
+    for key, value in sorted(OVERRIDES.get(component, {}).items()):
+        if key in PROTECTED_TOML_KEYS:
+            log(f"WARNING: refusing {component} override {key!r}: "
+                "identity/wiring keys are not overridable")
+            continue
+        rendered = toml_scalar(value)
+        if rendered is None:
+            log(f"WARNING: ignoring {component} override {key!r}: "
+                "only scalar values are supported")
+            continue
+        if key in index:
+            log(f"override {component}.{key} = {rendered} (replaces the derived value)")
+            merged[index[key]] = (key, rendered)
+        else:
+            log(f"override {component}.{key} = {rendered}")
+            merged.append((key, rendered))
+    return [f"{k} = {v}" for k, v in merged]
+
 
 def scale_factor_toml_lines(component):
     """`scale_factor = <vCPU>` for pageserver.toml / safekeeper.toml.
@@ -387,7 +564,7 @@ def scale_factor_toml_lines(component):
         log(f"WARNING: endpoint CPU unknown; leaving {component} scale_factor at its default")
         return []
     log(f"derived {component} scale_factor={ENDPOINT_VCPU:g} (endpoint vCPU)")
-    return [f"scale_factor = {ENDPOINT_VCPU:g}"]
+    return [("scale_factor", f"{ENDPOINT_VCPU:g}")]
 
 
 def write_pageserver_config(datadir):
@@ -398,31 +575,33 @@ def write_pageserver_config(datadir):
     # and the pageserver reads its init mode off that row (a NULL
     # `ancestor_branch_id` means initdb + import, a set one means fork that
     # ancestor at `ancestor_lsn`).
-    lines = [
-        f"pg_distrib_dir='{PG_DISTRIB_DIR}'",
-        f"listen_pg_addr='{BIND_HOST}:{PAGESERVER_PG_PORT}'",
-        f"listen_http_addr='{BIND_HOST}:{PAGESERVER_HTTP_PORT}'",
-        f"listen_grpc_addr='{BIND_HOST}:{PAGESERVER_GRPC_PORT}'",
+    base = [
+        ("pg_distrib_dir", f"'{PG_DISTRIB_DIR}'"),
+        ("listen_pg_addr", f"'{BIND_HOST}:{PAGESERVER_PG_PORT}'"),
+        ("listen_http_addr", f"'{BIND_HOST}:{PAGESERVER_HTTP_PORT}'"),
+        ("listen_grpc_addr", f"'{BIND_HOST}:{PAGESERVER_GRPC_PORT}'"),
         # The local safekeeper this pageserver streams WAL from is always reached
         # over loopback inside the pod, regardless of the public bind address.
-        f"safekeeper_pg_addr='{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}'",
-        f"control_plane_api='{CONTROLLER_URL or CONTROL_PLANE_API}'",
-        f"yb_storage_conn={yb_conn_inline_toml()}",
-        f"branch_id='{BRANCH_ID}'",
+        ("safekeeper_pg_addr", f"'{LISTEN_HOST}:{SAFEKEEPER_PG_PORT}'"),
+        ("control_plane_api", f"'{CONTROLLER_URL or CONTROL_PLANE_API}'"),
+        ("yb_storage_conn", yb_conn_inline_toml()),
+        ("branch_id", f"'{BRANCH_ID}'"),
     ]
-    lines += scale_factor_toml_lines("pageserver")
+    base += scale_factor_toml_lines("pageserver")
+    lines = merge_toml("pageserver", base)
     (datadir / "pageserver.toml").write_text("\n".join(lines) + "\n")
 
 
 def write_safekeeper_config(datadir):
     datadir.mkdir(parents=True, exist_ok=True)
-    lines = [
-        f"branch_id = {_toml_quote(BRANCH_ID)}",
-        f"listen_pg = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_PG_PORT}')}",
-        f"listen_http = {_toml_quote(f'{BIND_HOST}:{SAFEKEEPER_HTTP_PORT}')}",
-        f"yb_storage_conn = {_toml_quote(yb_conn_inline_toml())}",
+    base = [
+        ("branch_id", _toml_quote(BRANCH_ID)),
+        ("listen_pg", _toml_quote(f"{BIND_HOST}:{SAFEKEEPER_PG_PORT}")),
+        ("listen_http", _toml_quote(f"{BIND_HOST}:{SAFEKEEPER_HTTP_PORT}")),
+        ("yb_storage_conn", _toml_quote(yb_conn_inline_toml())),
     ]
-    lines += scale_factor_toml_lines("safekeeper")
+    base += scale_factor_toml_lines("safekeeper")
+    lines = merge_toml("safekeeper", base)
     (datadir / "safekeeper.toml").write_text("\n".join(lines) + "\n")
 
 
@@ -596,13 +775,24 @@ def render_compute_spec(specfile):
          "value": f"host={LISTEN_HOST} port={PAGESERVER_PG_PORT}", "vartype": "string"},
     ]
     # Resource-derived defaults come after the static block and before the
-    # operator overrides: `as_pg_settings` writes these in order into
-    # postgresql.conf, where the last occurrence of a name wins. So the
-    # precedence is static default < derived < COMPUTE_EXTRA_SETTINGS_JSON.
+    # operator settings: `as_pg_settings` writes these in order into
+    # postgresql.conf, where the last occurrence of a name wins. Full precedence:
+    #   static default < derived < chart extension paths < branch < endpoint
+    # the last two both arriving from the registry (see fetch_overrides).
     settings.extend(derived_pg_settings())
 
     for k, v in json.loads(env("COMPUTE_EXTRA_SETTINGS_JSON", "{}")).items():
         settings.append({"name": k, "value": str(v), "vartype": "string"})
+
+    # User GUCs, read live from the registry, land last of all: this is the
+    # branch's baseline with the endpoint's own layered over it (fetch_overrides
+    # merges the two rows with `||`, the endpoint winning, as the schema
+    # documents). COMPUTE_EXTRA_SETTINGS_JSON above no longer carries any user
+    # settings — the chart reduced it to the extension paths it derives from the
+    # ImageVolumes it mounted — so nothing here is competing with a second copy.
+    for k, v in sorted(OVERRIDES.get("pg", {}).items()):
+        settings.append({"name": k, "value": str(v), "vartype": "string"})
+        log(f"override pg.{k} = {v}")
 
     spec = {
         "format_version": 1.0,
@@ -777,6 +967,10 @@ def main():
     ps_dir = RUN_DIR / "pageserver"
     compute_pgdata = RUN_DIR / "pgdata"
     keydir = RUN_DIR / "keys"
+
+    # Operator overrides, before anything is rendered: they feed all three
+    # config surfaces (compute spec, pageserver.toml, safekeeper.toml).
+    OVERRIDES.update(fetch_overrides())
 
     # 1. endpoint_storage
     pem = generate_jwt_keypair(keydir)

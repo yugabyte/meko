@@ -203,6 +203,21 @@ CREATE TABLE amp_registry.endpoints (
     -- different work_mem than its writer.
     pg_settings  jsonb         NOT NULL DEFAULT '{}'::jsonb,
 
+    -- The same idea for the two storage daemons that run in the endpoint's pod.
+    -- Each is a flat {key: value} object of top-level toml keys, e.g.
+    --   {"scale_factor": 8, "wal_cache_size_mib": 512}
+    -- written verbatim into pageserver.toml / safekeeper.toml by
+    -- deploy/endpoint/supervisor.py, so they beat every resource-derived default
+    -- it computes — the same precedence an explicitly-set toml value already has
+    -- over a scale_factor-derived one inside the pageserver.
+    --
+    -- Two columns rather than one blob: the daemons have separate config surfaces
+    -- and separate reload semantics (a scale_factor change restarts the
+    -- pageserver, a wal_cache_size_mib change restarts the safekeeper), so the
+    -- diff that decides what to restart is per-daemon.
+    pageserver_settings jsonb  NOT NULL DEFAULT '{}'::jsonb,
+    safekeeper_settings jsonb  NOT NULL DEFAULT '{}'::jsonb,
+
     created_at   timestamptz   NOT NULL DEFAULT now()
 );
 
