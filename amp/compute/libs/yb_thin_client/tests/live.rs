@@ -197,7 +197,7 @@ async fn smoke_connect_open_upsert_read() {
         batch.used_read_time_ht
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
 }
@@ -265,7 +265,7 @@ async fn repro_desc_pk_limit1_newest() {
     println!(
         "repro desc-pk limit1: forward read of ((k) HASH, lsn DESC) limit 1 -> lsn={seen:?} (want Some(30), the NEWEST)"
     );
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
     assert_eq!(
@@ -361,7 +361,7 @@ async fn repro_concurrent_multikey_reads() {
         "repro concurrent multikey: {wrong} wrong results across {} reads",
         N * 20
     );
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
     assert_eq!(
@@ -451,7 +451,7 @@ async fn repro_real_ckpt_read() {
     println!(
         "repro real ckpt: lsn<=22891280 limit1 -> {seen:?} (want Some(22889880); bug=Some(22469680))"
     );
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
     assert_eq!(
@@ -521,7 +521,7 @@ async fn repro_desc_pk_capped_limit1() {
     println!(
         "repro capped desc-pk limit1: lsn<=850 limit 1 -> {seen:?} (want Some(800) newest<=cap; bug=Some(100) oldest)"
     );
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
     assert_eq!(
@@ -610,7 +610,7 @@ async fn repro_cross_client_visibility() {
     println!(
         "repro cross-client: A wrote up to lsn=1600; fresh client B reads lsn={seen:?} (want 1600)"
     );
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
     assert_eq!(
@@ -693,7 +693,7 @@ async fn repro_meta_bytea_limit1_newest() {
     println!(
         "repro meta bytea limit1 (branch hash + BYTEA range key, cap 850): got lsn={seen:?} (want Some(800) newest<=cap; bug=Some(100) oldest)"
     );
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
     assert_eq!(
@@ -800,7 +800,7 @@ async fn repro_concurrent_read_write() {
         r.unwrap()
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
 }
@@ -982,7 +982,7 @@ async fn repro_wals_covering_read() {
         "large data payload truncated/corrupted"
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
 }
@@ -1245,7 +1245,7 @@ async fn repro_pages_multipage_scan() {
     assert!(rwill_init, "will_init wrong after thin write→read");
     assert_eq!(rpayload, b"pg", "payload wrong after thin write→read");
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
 }
@@ -1372,7 +1372,7 @@ async fn repro_read_after_write_visibility() {
          {stale} reads did NOT immediately see the committed write; worst lag {max_lag:?} at lsn={worst}"
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
 
@@ -1697,7 +1697,7 @@ async fn repro_wals_range_sharded() {
         "one-Perform upsert did not land one row in each of the three tablets"
     );
 
-    ysql.execute(&format!("DROP TABLE {TABLE}"), &[])
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
         .await
         .unwrap();
 }
