@@ -21,10 +21,10 @@
 # pgxn (the yb_amp extension), and libs — the whole storage/compute engine.
 !compute/
 !control_plane/
-# The endpoint image bakes the controller's DB migrations (the optional
-# DEV_PROVISION_SCHEMA path). Only migrations/ is needed, so keep the rest of the
-# Go controller out of the build context — unrelated controller changes then
-# don't bust the Rust build stage's `COPY . .` cache.
+# Keep the Go controller out of the build context — unrelated controller changes
+# then don't bust the Rust build stage's `COPY . .` cache. migrations/ is the
+# exception: `controller/migrations/embed.go` go:embeds the .sql files, so the
+# CONTROLLER image needs them to compile. The endpoint image does not use them.
 !controller/
 controller/*
 !controller/migrations/

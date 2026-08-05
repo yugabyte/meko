@@ -685,9 +685,9 @@ capacity, the rest wait.
 
 ### 5.3 Single-container environment — a whole amp in one docker container
 The endpoint image already packs the full data path (endpoint_storage,
-safekeeper, pageserver, compute_ctl + Postgres) into a single container, and
-with `DEV_PROVISION_SCHEMA=true` it self-provisions its schema against any
-YugabyteDB. That makes the cheapest possible environment: **one docker container
+safekeeper, pageserver, compute_ctl + Postgres) into a single container and runs
+against a YugabyteDB whose `amp_storage` schema already exists. That
+makes the cheapest possible environment: **one docker container
 per test** (plus a shared or per-test YB), no k8s at all — running on a
 **remote docker host** (a test-instance VM or a CI runner's docker), driven
 over SSH; the operator's machine only coordinates. Each functional test can

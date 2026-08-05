@@ -63,11 +63,11 @@ by the controller's migrations on controller startup
 ([`controller/migrations/`](../../controller/migrations/), applied by
 `db.Migrate`). No service self-creates its tables — the daemons bind
 hardcoded schema/table names at startup. So the `yb_storage` database +
-schemas must exist before the pod starts; in production the controller
-provisions them. For standalone testing the supervisor can do it itself:
-`DEV_PROVISION_SCHEMA=true` makes it `CREATE DATABASE`, check whether
-`amp_storage.pages` already exists, and if not apply the bundled
-`*_provision_yb_storage.up.sql` migration with `psql`.
+schemas must exist before the pod starts, and the **controller** provisions
+them — it is the only thing that does. A pod never provisions its own: serving a
+branch needs `amp_registry` (which the endpoint reads its overrides from), the
+`amp_storage` schema, and a seeded `branch_state` row for the pageserver to read
+its init mode off, all of which the controller writes at branch-create time.
 
 ### Bootstrap/attach run in the pod
 
@@ -130,8 +130,7 @@ at `CONTROLLER_URL`.
 yb-amp is currently Postgres v18 only (`POSTGRES_VERSIONS = v18`,
 [`compute/vendor/postgres-v18`](../vendor/)); the multi-stage
 [`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile) builds
-patched Postgres, the Rust daemons, and the `yb_amp` extension, and
-ships the migrations for `DEV_PROVISION_SCHEMA`. The Postgres-family
+patched Postgres, the Rust daemons, and the `yb_amp` extension. The Postgres-family
 binaries and the compute's walredo child link against
 `pg_install/v18/lib` (`libpq.so.5`), so `LD_LIBRARY_PATH` is set
 image-wide (the supervisor also prepends it for everything it spawns,

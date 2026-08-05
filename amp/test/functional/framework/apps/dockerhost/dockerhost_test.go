@@ -61,7 +61,7 @@ func TestRunContainerCommandConstruction(t *testing.T) {
 		Name:   "ep-1",
 		Image:  "amp/endpoint:tag",
 		Detach: true,
-		Env:    map[string]string{"COMPUTE_PORT": "55440", "DEV_PROVISION_SCHEMA": "true"},
+		Env:    map[string]string{"COMPUTE_PORT": "55440", "YB_USER": "yugabyte"},
 		Ports:  []dockerhost.PortMap{{Host: 55440, Container: 55433}},
 	})
 	if err != nil {
@@ -77,7 +77,6 @@ func TestRunContainerCommandConstruction(t *testing.T) {
 		"--name 'ep-1'",
 		"-p 55440:55433",
 		"-e 'COMPUTE_PORT=55440'",
-		"-e 'DEV_PROVISION_SCHEMA=true'",
 		"'amp/endpoint:tag'",
 	}
 	for _, p := range wantParts {
@@ -85,7 +84,10 @@ func TestRunContainerCommandConstruction(t *testing.T) {
 			t.Errorf("command missing %q:\n%s", p, got)
 		}
 	}
-	if idxPort, idxImage := strings.Index(got, "COMPUTE_PORT"), strings.Index(got, "DEV_PROVISION"); idxPort > idxImage {
+	// Two keys, so the ordering assertion has something to compare: env is emitted
+	// sorted by name, so COMPUTE_PORT must precede YB_USER. With one key the check is
+	// worse than vacuous -- a missing key indexes to -1 and the comparison inverts.
+	if idxPort, idxUser := strings.Index(got, "COMPUTE_PORT"), strings.Index(got, "YB_USER"); idxPort > idxUser {
 		t.Errorf("env keys not sorted deterministically: %s", got)
 	}
 }

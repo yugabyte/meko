@@ -55,9 +55,8 @@ must have run before the pageserver/safekeeper/endpoint_storage start.
 
 The `yb_storage` **database** itself is created outside the migrations:
 `yb_amp_local` does it on controller start (`ensureExternalDatabase` in
-`controller/local/launch/nodes.go`), `deploy/up.sh` does it during
-cluster bring-up, and a standalone endpoint pod can do it itself with
-`DEV_PROVISION_SCHEMA=true` (see
+`controller/local/launch/nodes.go`), and `deploy/up.sh` does it during
+cluster bring-up. An endpoint pod never provisions its own schema (see
 [`single-container-endpoint.md`](single-container-endpoint.md)).
 
 ## Connection paths

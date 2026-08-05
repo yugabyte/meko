@@ -361,10 +361,9 @@ schema — is a
 **shared, cluster-level** concern owned by the `controller`. It is **not** part of
 the endpoint pod. The pod talks only to YugabyteDB.
 
-A consequence: the `yb_storage` schema must already exist. In production, the
-controller provisions it (all schemas) on startup. For standalone testing, set
-`DEV_PROVISION_SCHEMA=true` and the supervisor will create the database and apply
-the bundled provisioning migration itself.
+A consequence: the `yb_storage` schema must already exist before the pod starts.
+The controller provisions it (all schemas) on startup, and is the only thing that
+does — an endpoint never provisions its own.
 
 ## Building the image
 
@@ -421,7 +420,6 @@ a ConfigMap + Secret):
 | `COMPUTE_PASSWORD` | `cloud_admin` | password for the `cloud_admin` role |
 | `SHARED_PRELOAD_LIBRARIES` | `neon` | compute `shared_preload_libraries` |
 | `TENANT_ID` / `TIMELINE_ID` | _(unset)_ | serve an existing tenant; unset ⇒ bootstrap a fresh one |
-| `DEV_PROVISION_SCHEMA` | `false` | create DB + apply migrations (test only) |
 
 Internal ports (`PAGESERVER_PG_PORT`, `PAGESERVER_HTTP_PORT`,
 `PAGESERVER_GRPC_PORT`, `SAFEKEEPER_PG_PORT`, `SAFEKEEPER_HTTP_PORT`,
@@ -436,7 +434,6 @@ docker run --rm --name yb-endpoint \
   --network host \
   -e YB_HOST_PORTS=127.0.0.1:5433 \
   -e YB_USER=yugabyte -e YB_PASSWORD=yugabyte \
-  -e DEV_PROVISION_SCHEMA=true \
   yb-amp/neon-endpoint:dev
 
 # then, from the host:

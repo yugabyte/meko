@@ -93,13 +93,10 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		// container name on the shared network, at their internal ports.
 		env["CONTROLLER_URL"] = spec.ControllerURL
 		env["CONTROLLER_REACHABLE_HOST"] = spec.Name
-		env["DEV_PROVISION_SCHEMA"] = "false" // the controller already provisioned it
 		env["PAGESERVER_HTTP_PUB_PORT"] = strconv.Itoa(endpointPSHTTPPort)
 		env["PAGESERVER_PG_PUB_PORT"] = strconv.Itoa(endpointPSPGPort)
 		env["SAFEKEEPER_HTTP_PUB_PORT"] = strconv.Itoa(safekeeperHTTPPort)
 		env["SAFEKEEPER_PG_PUB_PORT"] = strconv.Itoa(endpointSKPGPort)
-	} else {
-		env["DEV_PROVISION_SCHEMA"] = "true" // controller-free: the endpoint provisions the schema
 	}
 	// User GUCs are not passed here: the supervisor reads them from the endpoint's
 	// and its branch's `pg_settings` in amp_registry, so it needs the endpoint id

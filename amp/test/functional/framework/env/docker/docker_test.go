@@ -122,7 +122,6 @@ func TestProvisionSharedHappyPath(t *testing.T) {
 	// Endpoint command carries the required contract env vars.
 	epRun := findCmd(cmds, "docker run -d --name 'ampqa-ep-tkn-0'")
 	for _, want := range []string{
-		"DEV_PROVISION_SCHEMA=true",
 		"COMPUTE_PORT=55433",
 		"YB_HOST_PORTS=host.docker.internal:5433",
 		"-p 55433:55433",

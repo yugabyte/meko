@@ -31,8 +31,8 @@ const (
 	computeUser            = "cloud_admin"
 	computeDB              = "postgres"
 	ybUser                 = "yugabyte"
-	// ybStorageDB is the database the endpoint's DEV_PROVISION_SCHEMA path
-	// creates and puts the `amp_storage` schema in (supervisor.py's YB_DBNAME
+	// ybStorageDB is the database the controller provisions the `amp_storage`
+	// schema in, and that the endpoint then connects to (supervisor.py's YB_DBNAME
 	// default). The provider passes no YB_DBNAME, so the image default holds.
 	ybStorageDB = "yb_storage"
 	// computeReadyTimeout bounds waiting for the endpoint's Postgres to serve
@@ -194,7 +194,7 @@ func (p *Provider) alloc() allocation {
 }
 
 // Provision connects to the docker host, ensures YugabyteDB is up, starts the
-// endpoint with DEV_PROVISION_SCHEMA, and waits until psql answers.
+// endpoint, and waits until psql answers.
 func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
 	if p.cfg.EndpointImage == "" {
 		return nil, fmt.Errorf("env.docker.endpoint_image is required")
@@ -234,11 +234,10 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		ExtraArgs: []string{"--add-host", hostGateway},
 		Ports:     []dockerhost.PortMap{{Host: a.computePort, Container: a.computePort}},
 		Env: map[string]string{
-			"YB_HOST_PORTS":        ybHostPorts,
-			"YB_USER":              ybUser,
-			"DEV_PROVISION_SCHEMA": "true",
-			"COMPUTE_PORT":         fmt.Sprintf("%d", a.computePort),
-			"COMPUTE_PASSWORD":     computePassword,
+			"YB_HOST_PORTS":    ybHostPorts,
+			"YB_USER":          ybUser,
+			"COMPUTE_PORT":     fmt.Sprintf("%d", a.computePort),
+			"COMPUTE_PASSWORD": computePassword,
 		},
 	}); err != nil {
 		return fail(err)

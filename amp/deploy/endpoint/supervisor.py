@@ -13,9 +13,8 @@ Services (in start order):
 
 No control plane runs here: it is a shared, cluster-level service
 plane that lives in the controller layer. This container assumes the `yb_storage`
-schema already exists (the controller provisions it on startup). For
-standalone testing set DEV_PROVISION_SCHEMA=true to have the supervisor
-create the database + apply the migrations itself.
+schema already exists: the controller provisions it on startup, and it is the
+only thing that does. There is no self-provisioning mode.
 
 Config comes from environment variables (delivered via a ConfigMap + Secret
 in the Helm chart). See the chart's values.yaml / README for the contract.
@@ -283,8 +282,6 @@ RESTART_BACKOFF = env_int("SUPERVISOR_RESTART_BACKOFF_SECONDS", 2)
 MAX_RESTARTS = env_int("SUPERVISOR_MAX_RESTARTS", 5)
 RESTART_WINDOW = env_int("SUPERVISOR_RESTART_WINDOW_SECONDS", 180)
 
-DEV_PROVISION_SCHEMA = env("DEV_PROVISION_SCHEMA", "false").lower() in ("1", "true", "yes")
-MIGRATIONS_DIR = Path(env("YB_AMP_MIGRATIONS_DIR", "/usr/local/share/yb-amp/migrations"))
 
 PG_BIN = Path(PG_DISTRIB_DIR) / f"v{PG_VERSION}" / "bin"
 PG_LIB = Path(PG_DISTRIB_DIR) / f"v{PG_VERSION}" / "lib"
@@ -926,25 +923,6 @@ class Supervisor:
 # Bring-up
 # ---------------------------------------------------------------------------
 
-def provision_schema():
-    log("DEV_PROVISION_SCHEMA: ensuring database + schema in YugabyteDB")
-    psql("yugabyte", sql=f'CREATE DATABASE "{YB_DBNAME}"', ignore_errors=True)
-    # Already provisioned? (amp_storage.pages is created by the migration.)
-    check = psql(
-        YB_DBNAME,
-        sql="SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema='amp_storage' AND table_name='pages'",
-        ignore_errors=True,
-    )
-    if check.returncode == 0 and "1 row" in (check.stdout or ""):
-        log("schema already present; skipping migrations")
-        return
-    # The amp_storage schema the daemons bind is provisioned by the single
-    # schema-qualified provisioning migration.
-    for mig in sorted(MIGRATIONS_DIR.glob("*_compute_storage.up.sql")):
-        log(f"applying migration {mig.name}")
-        psql(YB_DBNAME, file=mig)
-
 
 def main():
     global BRANCH_ID
@@ -958,9 +936,6 @@ def main():
         log(f"no BRANCH_ID supplied; using fresh branch {BRANCH_ID}")
     else:
         log(f"serving branch {BRANCH_ID}")
-
-    if DEV_PROVISION_SCHEMA:
-        provision_schema()
 
     es_dir = RUN_DIR / "endpoint_storage"
     sk_dir = RUN_DIR / "safekeeper"

@@ -10,10 +10,9 @@
 # order, and monitors/restarts the children.
 #
 # No control plane runs in this image: it is a shared, cluster-level service
-# that lives in the AMP layer. The endpoint assumes the `yb_storage` schema
-# already exists (the controller provisions it on startup). For standalone
-# testing, the supervisor can provision the schema itself
-# (DEV_PROVISION_SCHEMA=true) by applying the bundled provisioning migration.
+# that lives in the AMP layer. The endpoint requires the `yb_storage` schema to
+# already exist; the controller provisions it on startup and is the only thing
+# that does.
 #
 # Build (from the repo root):
 #   docker build -t yb-amp/yb-amp-endpoint:dev -f deploy/endpoint/Dockerfile .
@@ -151,9 +150,6 @@ COPY --from=yb-thin-client /home/nonroot/yb_thin_client/lib/libyb_thin_client.so
 # Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
-# Schema migrations, for the optional DEV_PROVISION_SCHEMA path.
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/controller/migrations /usr/local/share/yb-amp/migrations
-
 # The supervisor.
 COPY --chown=yugabyte:yugabyte deploy/endpoint/supervisor.py /usr/local/bin/yb-endpoint-supervisor
 RUN chmod +x /usr/local/bin/yb-endpoint-supervisor
@@ -164,7 +160,6 @@ RUN chmod +x /usr/local/bin/yb-endpoint-supervisor
 # stage would silently drop whichever path it omits, and the storage binaries
 # (DT_NEEDED on libyb_thin_client.so, no rpath) would fail to exec.
 ENV PG_DISTRIB_DIR=/usr/local \
-    YB_AMP_MIGRATIONS_DIR=/usr/local/share/yb-amp/migrations \
     LD_LIBRARY_PATH=/usr/local/v18/lib:/opt/yb_thin_client/lib \
     PATH=/usr/local/bin:/usr/local/v18/bin:$PATH
 
