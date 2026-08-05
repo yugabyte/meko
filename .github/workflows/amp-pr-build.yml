@@ -238,7 +238,7 @@ jobs:
         run: ./run_clippy.sh
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2.85.3
+        uses: taiki-e/install-action@v2.85.6
         with:
           tool: cargo-nextest
 
