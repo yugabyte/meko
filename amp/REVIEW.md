@@ -12,13 +12,18 @@ Weight these by what the diff touches.
 **Compute / storage engine** (`compute/` — pageserver, safekeeper, compute_ctl,
 endpoint_storage). Correctness is the dominant concern here:
 
-- **Every YB write must be idempotent.** `YsqlClient` retries dropped
-  connections and can replay an in-flight write whose commit status is unknown.
-  New write paths need `INSERT ... ON CONFLICT` (or `yb_enable_upsert_mode`),
-  absolute `UPDATE`s (never `SET col = col + 1`), generation-fenced `UPDATE`s, or
-  `WHERE`-keyed `DELETE`s. A non-idempotent write is a latent corruption bug even
-  if it passes tests. See
+- **Every YB statement must be idempotent**, DDL included. `YsqlClient` retries
+  dropped connections and can replay an in-flight statement whose commit status
+  is unknown. New write paths need `INSERT ... ON CONFLICT` (or
+  `yb_enable_upsert_mode`), absolute `UPDATE`s (never `SET col = col + 1`),
+  generation-fenced `UPDATE`s, `WHERE`-keyed `DELETE`s, and `IF NOT EXISTS` on
+  DDL. A non-idempotent statement is a latent corruption bug even if it passes
+  tests. See
   [`compute/architecture/yugabyte.md`](compute/architecture/yugabyte.md#client-side-retry-contract--every-yb-query-must-be-idempotent).
+  This holds for **test SQL too** — fixtures go through the same client and the
+  same replay. A statement that can't be made replay-safe at the call site means
+  `YsqlClient` needs a non-retrying path; flag that rather than approving a
+  local workaround.
 - **Corruption / WAL / data-loss / flush fixes** need more than a green
   `cargo build` and unit tests to believe. Confirm the author ran the integration
   suite (`test/integration/compute/run.sh fast`, and `slow` for sustained-write
