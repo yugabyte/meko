@@ -379,3 +379,28 @@ tests:
           content:
             resourceName: memory
             restartPolicy: RestartContainer
+
+  # ephemeral-storage is the emptyDir's scheduler-visible reservation: sizeLimit
+  # alone is an eviction ceiling that reserves nothing, so without the request a
+  # node can be given more endpoints than its disk can back.
+  - it: requests and limits ephemeral-storage when the controller sets it
+    template: templates/deployment.yaml
+    set:
+      endpoint.resources.ephemeralStorage: "20Gi"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.ephemeral-storage
+          value: "20Gi"
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.ephemeral-storage
+          value: "20Gi"
+
+  # A PVC is its own device, so claiming it against the node's ephemeral budget
+  # would reserve the same bytes twice; the controller leaves the field empty.
+  - it: omits ephemeral-storage when unset
+    template: templates/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].resources.requests.ephemeral-storage
+      - notExists:
+          path: spec.template.spec.containers[0].resources.limits.ephemeral-storage

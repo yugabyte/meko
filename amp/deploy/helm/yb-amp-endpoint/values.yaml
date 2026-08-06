@@ -76,6 +76,12 @@ endpoint:
     cpu: "2"
     # -- Memory (request == limit). e.g. "4Gi", "512Mi".
     memory: "4Gi"
+    # -- Ephemeral storage for the emptyDir /data (request == limit), e.g. "10Gi".
+    # The controller sets it to the same figure as runDir.sizeLimit, which is an
+    # eviction ceiling only: this request is what the scheduler accounts against
+    # the node's disk. Leave empty for a PVC-backed endpoint — that volume is its
+    # own device — and empty requests no ephemeral storage at all.
+    ephemeralStorage: ""
   # -- In-place vertical resize policy for the endpoint container (k8s 1.33+
   # InPlacePodVerticalScaling). Per-resource `restartPolicy` for a live resize
   # the controller applies via the pod's `resize` subresource. `NotRequired`

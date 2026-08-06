@@ -81,6 +81,11 @@ type DeployConfig struct {
 	// emptyDir (no persistent volume). DiskSize is that PVC's requested size.
 	StorageClass string
 	DiskSize     string
+	// DiskGiBPerVCPU sizes the endpoint data volume per vCPU. Node-type
+	// dependent (local-NVMe pools carry far more disk per core), and the
+	// controller cannot inspect nodes without cluster-scoped RBAC — so the
+	// installer, who knows the node type, passes it. 0 = built-in default.
+	DiskGiBPerVCPU int
 
 	// --- Docker runtime ---
 	EndpointImage  string // single-container endpoint image to run
@@ -176,6 +181,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.TailnetSuffix, "deploy-tailnet-suffix", env("AMP_DEPLOY_TAILNET_SUFFIX", ""), "k8s: Tailscale MagicDNS suffix (e.g. tail5955.ts.net) for deriving each endpoint's tailnet address when its Service is tailnet-exposed (tailscale.com/expose=true); empty = disabled")
 	fs.StringVar(&d.StorageClass, "deploy-storage-class", env("AMP_DEPLOY_STORAGE_CLASS", ""), "k8s: storage class for the endpoint data volume — provisions a PersistentVolumeClaim (EBS/PD). Empty = ephemeral emptyDir (no persistent volume)")
 	fs.StringVar(&d.DiskSize, "deploy-disk-size", env("AMP_DEPLOY_DISK_SIZE", "10Gi"), "k8s: requested size of the endpoint data volume when --deploy-storage-class is set")
+	fs.IntVar(&d.DiskGiBPerVCPU, "deploy-disk-gib-per-vcpu", envInt("AMP_DEPLOY_DISK_GIB_PER_VCPU", 0), "k8s: GiB of endpoint data volume per vCPU (node-type dependent; 0 = built-in default)")
 	fs.StringVar(&d.BackingYBHostPorts, "deploy-yb-host-ports", env("AMP_DEPLOY_YB_HOST_PORTS", ""), "backing YugabyteDB host:port[,...] as the deployed pods reach it")
 	fs.StringVar(&d.BackingYBUser, "deploy-yb-user", env("AMP_DEPLOY_YB_USER", "yugabyte"), "backing YugabyteDB user for deployed endpoints")
 	fs.StringVar(&d.BackingYBDBName, "deploy-yb-dbname", env("AMP_DEPLOY_YB_DBNAME", "yb_storage"), "backing YugabyteDB database for deployed endpoints")

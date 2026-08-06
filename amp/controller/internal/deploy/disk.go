@@ -1,42 +1,57 @@
 package deploy
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
-// Disk sizing. An endpoint's data volume is backed one of two ways, and the two
-// are bounded by different things, so they are sized differently:
+// Disk sizing. Both backings of an endpoint's data volume get the same
+// CPU-proportional size, and the difference between them is who enforces it:
 //
-//   - **PVC** (a storage class is configured): network-backed (PD/EBS). The node
-//     the pod lands on is irrelevant, so the size is a straight ratio of the
-//     endpoint's CPU.
+//   - **PVC** (a storage class is configured): network-backed (PD/EBS). The
+//     volume is its own device, so the size is simply what was asked for.
 //   - **emptyDir** (the chart default, no storage class): carved out of the
-//     *node's* ephemeral storage, which every pod on that node shares. Sizing it
-//     from a fixed ratio would let a few endpoints oversubscribe the node, so it
-//     gets the node's own disk-per-vCPU ratio instead: an endpoint asking for N
-//     vCPU of the node's CPU gets the matching share of the node's disk.
+//     *node's* ephemeral storage, which every pod on that node shares. The size
+//     becomes both the volume's sizeLimit and an `ephemeral-storage` request, so
+//     the SCHEDULER refuses to place more endpoints on a node than its disk can
+//     back. That is what keeps co-tenants from oversubscribing it.
+//
+// Deliberately no node inspection. Deriving the size from the node's own
+// disk-per-vCPU ratio needs a cluster-scoped `nodes` read, which BYOC customers
+// will not grant (#584) — and it could only ever be an estimate, because the
+// controller knows neither which node the pod will land on nor who else will
+// land there later. The scheduler knows both, and `ephemeral-storage` is how it
+// is told. A declared request is stronger than a measured guess.
 const (
-	// GiB of PVC per vCPU. 5 keeps the default 2-vCPU endpoint at the 10Gi it
-	// had before disk became CPU-proportional.
-	diskGiBPerVCPU = 5
-
-	// The node lookup is a hard dependency of the emptyDir path: without it the
-	// size would have to be guessed, and a guess either oversubscribes the node
-	// or silently under-provisions the endpoint. Retry a transient API blip,
-	// then fail the create.
-	nodeQueryAttempts = 3
-	nodeQueryBackoff  = 500 * time.Millisecond
+	// GiB of data volume per vCPU when the installer passes no ratio
+	// (--deploy-disk-gib-per-vcpu). The right value depends on the node type —
+	// a local-NVMe pool has far more disk per core than a boot-disk one — and
+	// only the installer knows which nodes it bought, so this is a floor-ish
+	// default, not a policy.
+	defaultDiskGiBPerVCPU = 20
 )
 
 // runDirValues mirrors the chart's `runDir` block, which sizes the emptyDir
 // backing /data when no storage class is set.
 type runDirValues struct {
 	SizeLimit string `json:"sizeLimit,omitempty"`
+}
+
+// diskBytesFor returns the data volume size for an endpoint reserving vcpu
+// cores: the installer's per-vCPU ratio (or the built-in default), floored by
+// --deploy-disk-size so an existing deployment never gets a smaller volume
+// than it asked for.
+func (k *KubernetesDeployer) diskBytesFor(vcpu float64) float64 {
+	ratio := k.cfg.DiskGiBPerVCPU
+	if ratio <= 0 {
+		ratio = defaultDiskGiBPerVCPU
+	}
+	want := float64(ratio) * vcpu * float64(1<<30)
+	if floor, err := parseByteQuantity(k.cfg.DiskSize); err == nil && float64(floor) > want {
+		want = float64(floor)
+	}
+	return want
 }
 
 // parseCPUQuantity parses a Kubernetes CPU quantity ("2", "1500m", "0.5") into
@@ -91,91 +106,6 @@ func parseByteQuantity(s string) (int64, error) {
 	return int64(v), nil
 }
 
-// nodeDiskPerVCPU returns the smallest allocatable-ephemeral-storage-per-
-// allocatable-cpu ratio (bytes per core) across Ready nodes.
-//
-// The minimum, not the average: the pod can be scheduled onto any of them, and
-// sizing off a roomier node would let it ask for more of a smaller node's disk
-// than that node can back.
-func parseNodeDiskPerVCPU(body []byte) (float64, error) {
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Allocatable map[string]string `json:"allocatable"`
-				Conditions  []struct {
-					Type   string `json:"type"`
-					Status string `json:"status"`
-				} `json:"conditions"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
-		return 0, fmt.Errorf("decode NodeList: %w", err)
-	}
-	best := 0.0
-	for _, n := range list.Items {
-		ready := false
-		for _, c := range n.Status.Conditions {
-			if c.Type == "Ready" && c.Status == "True" {
-				ready = true
-				break
-			}
-		}
-		if !ready {
-			continue
-		}
-		cpuStr, ephStr := n.Status.Allocatable["cpu"], n.Status.Allocatable["ephemeral-storage"]
-		if cpuStr == "" || ephStr == "" {
-			continue
-		}
-		cpu, err := parseCPUQuantity(cpuStr)
-		if err != nil || cpu <= 0 {
-			continue
-		}
-		eph, err := parseByteQuantity(ephStr)
-		if err != nil || eph <= 0 {
-			continue
-		}
-		ratio := float64(eph) / cpu
-		if best == 0 || ratio < best {
-			best = ratio
-		}
-	}
-	if best == 0 {
-		return 0, fmt.Errorf("no Ready node reported both allocatable cpu and ephemeral-storage")
-	}
-	return best, nil
-}
-
-// nodeDiskPerVCPU queries the API for the node ratio, retrying a transient
-// failure before giving up.
-func (k *KubernetesDeployer) nodeDiskPerVCPU(ctx context.Context) (float64, error) {
-	var lastErr error
-	for attempt := 1; attempt <= nodeQueryAttempts; attempt++ {
-		body, ok := k.k8sAPIGet(ctx, "/api/v1/nodes")
-		if ok {
-			ratio, err := parseNodeDiskPerVCPU(body)
-			if err == nil {
-				return ratio, nil
-			}
-			lastErr = err
-		} else {
-			lastErr = fmt.Errorf("node list unavailable (not in-cluster, or the API rejected the request)")
-		}
-		if attempt < nodeQueryAttempts {
-			select {
-			case <-ctx.Done():
-				return 0, ctx.Err()
-			case <-time.After(nodeQueryBackoff):
-			}
-		}
-	}
-	return 0, fmt.Errorf("after %d attempts: %w", nodeQueryAttempts, lastErr)
-}
-
 // gibString rounds bytes up to whole GiB, floored at 1Gi, as a k8s quantity.
 func gibString(bytes float64) string {
 	const gib = float64(1 << 30)
@@ -187,12 +117,11 @@ func gibString(bytes float64) string {
 }
 
 // applyDiskSizing fills in the data volume's size on the rendered values, from
-// the endpoint's CPU. Mutates v; returns an error only for the emptyDir path,
-// whose node lookup has no safe fallback.
+// the endpoint's CPU. Mutates v.
 //
 // v.Endpoint.Resources.CPU is the already-defaulted value values() resolved, so
 // this never has to re-apply defaultEndpointCPU.
-func (k *KubernetesDeployer) applyDiskSizing(ctx context.Context, v *chartValues) error {
+func (k *KubernetesDeployer) applyDiskSizing(v *chartValues) error {
 	vcpu, err := parseCPUQuantity(v.Endpoint.Resources.CPU)
 	if err != nil {
 		return fmt.Errorf("disk sizing: %w", err)
@@ -200,26 +129,19 @@ func (k *KubernetesDeployer) applyDiskSizing(ctx context.Context, v *chartValues
 	if vcpu <= 0 {
 		return fmt.Errorf("disk sizing: endpoint cpu %q is not positive", v.Endpoint.Resources.CPU)
 	}
+	size := gibString(k.diskBytesFor(vcpu))
 
 	if v.Persistence != nil {
-		// PVC: network-backed, so a flat ratio. --deploy-disk-size acts as a
-		// floor so an existing deployment never gets a smaller volume than it
-		// asked for.
-		want := float64(diskGiBPerVCPU) * vcpu * float64(1<<30)
-		if floor, err := parseByteQuantity(k.cfg.DiskSize); err == nil && float64(floor) > want {
-			want = float64(floor)
-		}
-		v.Persistence.Size = gibString(want)
+		// A PVC is its own device: the size is the claim, and nothing on the node
+		// is being shared.
+		v.Persistence.Size = size
 		return nil
 	}
 
-	// emptyDir: a share of the node's own disk, proportional to the share of the
-	// node's CPU this endpoint reserves.
-	ratio, err := k.nodeDiskPerVCPU(ctx)
-	if err != nil {
-		return fmt.Errorf("disk sizing: cannot read node allocatable to size the endpoint's "+
-			"emptyDir /data: %w", err)
-	}
-	v.RunDir = &runDirValues{SizeLimit: gibString(ratio * vcpu)}
+	// emptyDir: the sizeLimit is only an eviction ceiling — it reserves nothing —
+	// so the same figure is declared as an ephemeral-storage request/limit, which
+	// is what the scheduler accounts against the node's capacity.
+	v.RunDir = &runDirValues{SizeLimit: size}
+	v.Endpoint.Resources.EphemeralStorage = size
 	return nil
 }

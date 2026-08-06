@@ -1,7 +1,6 @@
 package deploy
 
 import (
-	"context"
 	"testing"
 )
 
@@ -67,47 +66,6 @@ func TestParseByteQuantity(t *testing.T) {
 	}
 }
 
-// The emptyDir share must come off the *smallest* node ratio: the pod can land
-// on any Ready node, and sizing off a roomier one would over-promise on a
-// smaller node's disk. NotReady nodes are ignored entirely.
-func TestParseNodeDiskPerVCPU(t *testing.T) {
-	body := []byte(`{"items":[
-	  {"metadata":{"name":"big"},"status":{
-	     "allocatable":{"cpu":"8","ephemeral-storage":"80Gi"},
-	     "conditions":[{"type":"Ready","status":"True"}]}},
-	  {"metadata":{"name":"small"},"status":{
-	     "allocatable":{"cpu":"8","ephemeral-storage":"40Gi"},
-	     "conditions":[{"type":"Ready","status":"True"}]}},
-	  {"metadata":{"name":"tiny-but-notready"},"status":{
-	     "allocatable":{"cpu":"8","ephemeral-storage":"8Gi"},
-	     "conditions":[{"type":"Ready","status":"False"}]}}
-	]}`)
-	got, err := parseNodeDiskPerVCPU(body)
-	if err != nil {
-		t.Fatalf("parseNodeDiskPerVCPU: %v", err)
-	}
-	want := float64(40<<30) / 8 // the "small" Ready node: 5 GiB per core
-	if got != want {
-		t.Fatalf("ratio = %v, want %v (min across Ready nodes)", got, want)
-	}
-	if s := gibString(got * 4); s != "20Gi" {
-		t.Fatalf("4 vCPU at 5GiB/core = %s, want 20Gi", s)
-	}
-}
-
-func TestParseNodeDiskPerVCPUErrors(t *testing.T) {
-	for name, body := range map[string]string{
-		"no nodes":            `{"items":[]}`,
-		"none ready":          `{"items":[{"status":{"allocatable":{"cpu":"8","ephemeral-storage":"80Gi"},"conditions":[{"type":"Ready","status":"False"}]}}]}`,
-		"no ephemeral field":  `{"items":[{"status":{"allocatable":{"cpu":"8"},"conditions":[{"type":"Ready","status":"True"}]}}]}`,
-		"unparseable numbers": `{"items":[{"status":{"allocatable":{"cpu":"x","ephemeral-storage":"y"},"conditions":[{"type":"Ready","status":"True"}]}}]}`,
-	} {
-		if _, err := parseNodeDiskPerVCPU([]byte(body)); err == nil {
-			t.Errorf("%s: want error, got nil", name)
-		}
-	}
-}
-
 func TestGibStringRoundsUp(t *testing.T) {
 	for _, tc := range []struct {
 		in   float64
@@ -129,21 +87,22 @@ func TestGibStringRoundsUp(t *testing.T) {
 func TestApplyDiskSizingPVC(t *testing.T) {
 	for _, tc := range []struct {
 		name, cpu, floor, want string
+		ratio                  int
 	}{
-		{name: "default 2 vCPU keeps 10Gi", cpu: "2", floor: "10Gi", want: "10Gi"},
-		{name: "4 vCPU doubles", cpu: "4", floor: "10Gi", want: "20Gi"},
-		{name: "8 vCPU", cpu: "8", floor: "10Gi", want: "40Gi"},
-		{name: "floor wins for a small endpoint", cpu: "1", floor: "10Gi", want: "10Gi"},
-		{name: "no floor configured", cpu: "4", floor: "", want: "20Gi"},
-		{name: "fractional cpu rounds up", cpu: "1500m", floor: "", want: "8Gi"},
+		{name: "default 2 vCPU at 20 GiB/vCPU", cpu: "2", floor: "10Gi", want: "40Gi"},
+		{name: "4 vCPU doubles", cpu: "4", floor: "10Gi", want: "80Gi"},
+		{name: "floor wins for a small endpoint", cpu: "1", floor: "30Gi", want: "30Gi"},
+		{name: "no floor configured", cpu: "4", floor: "", want: "80Gi"},
+		{name: "fractional cpu rounds up", cpu: "1500m", floor: "", want: "30Gi"},
+		{name: "installer ratio wins over the default", cpu: "2", floor: "", ratio: 100, want: "200Gi"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: tc.floor, StorageClass: "std"}}
+			k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: tc.floor, StorageClass: "std", DiskGiBPerVCPU: tc.ratio}}
 			v := chartValues{
 				Endpoint:    endpointValues{Resources: resourceValues{CPU: tc.cpu}},
 				Persistence: &persistenceValues{StorageClass: "std"},
 			}
-			if err := k.applyDiskSizing(context.Background(), &v); err != nil {
+			if err := k.applyDiskSizing(&v); err != nil {
 				t.Fatalf("applyDiskSizing: %v", err)
 			}
 			if v.Persistence.Size != tc.want {
@@ -156,19 +115,77 @@ func TestApplyDiskSizingPVC(t *testing.T) {
 	}
 }
 
-// The emptyDir path has no safe fallback: out of cluster the node lookup fails,
-// and the create must fail rather than guess a size.
-func TestApplyDiskSizingEmptyDirFailsWithoutNodes(t *testing.T) {
+// The emptyDir path takes the SAME flat ratio as the PVC path, and needs no
+// cluster access at all — that dependency is what #584 was about. It also
+// declares the size as an ephemeral-storage request, which is what makes the
+// scheduler account the volume against the node.
+func TestApplyDiskSizingEmptyDir(t *testing.T) {
+	// Deliberately out of cluster: sizing must not consult the API server.
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")
-	k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: "10Gi"}}
-	v := chartValues{Endpoint: endpointValues{Resources: resourceValues{CPU: "2"}}}
-	err := k.applyDiskSizing(context.Background(), &v)
-	if err == nil {
-		t.Fatal("want an error when node allocatable cannot be read, got nil")
+	for _, tc := range []struct {
+		name, cpu, floor, want string
+		ratio                  int
+	}{
+		{name: "default 2 vCPU at 20 GiB/vCPU", cpu: "2", floor: "10Gi", want: "40Gi"},
+		{name: "4 vCPU doubles", cpu: "4", floor: "10Gi", want: "80Gi"},
+		{name: "floor wins for a small endpoint", cpu: "1", floor: "30Gi", want: "30Gi"},
+		{name: "no floor configured", cpu: "1", floor: "", want: "20Gi"},
+		{name: "installer ratio wins over the default", cpu: "1", floor: "", ratio: 40, want: "40Gi"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: tc.floor, DiskGiBPerVCPU: tc.ratio}}
+			v := chartValues{Endpoint: endpointValues{Resources: resourceValues{CPU: tc.cpu}}}
+			if err := k.applyDiskSizing(&v); err != nil {
+				t.Fatalf("applyDiskSizing: %v", err)
+			}
+			if v.RunDir == nil || v.RunDir.SizeLimit != tc.want {
+				t.Errorf("emptyDir sizeLimit = %+v, want %s", v.RunDir, tc.want)
+			}
+			if v.Endpoint.Resources.EphemeralStorage != tc.want {
+				t.Errorf("ephemeral-storage request = %q, want %s",
+					v.Endpoint.Resources.EphemeralStorage, tc.want)
+			}
+			if v.Persistence != nil {
+				t.Errorf("emptyDir path must not set persistence, got %+v", v.Persistence)
+			}
+		})
 	}
-	if v.RunDir != nil {
-		t.Errorf("runDir must stay unset on failure, got %+v", v.RunDir)
+}
+
+// A PVC is not ephemeral storage, so claiming it against the node's disk budget
+// would reserve the same bytes twice.
+func TestApplyDiskSizingPVCRequestsNoEphemeralStorage(t *testing.T) {
+	k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: "10Gi", StorageClass: "std"}}
+	v := chartValues{
+		Endpoint:    endpointValues{Resources: resourceValues{CPU: "4"}},
+		Persistence: &persistenceValues{StorageClass: "std"},
+	}
+	if err := k.applyDiskSizing(&v); err != nil {
+		t.Fatalf("applyDiskSizing: %v", err)
+	}
+	if v.Endpoint.Resources.EphemeralStorage != "" {
+		t.Errorf("ephemeral-storage = %q, want empty for a PVC-backed endpoint",
+			v.Endpoint.Resources.EphemeralStorage)
+	}
+}
+
+// Both backings agree: the size is a function of CPU alone.
+func TestApplyDiskSizingSameSizeBothBackings(t *testing.T) {
+	k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: "10Gi"}}
+	empty := chartValues{Endpoint: endpointValues{Resources: resourceValues{CPU: "8"}}}
+	pvc := chartValues{
+		Endpoint:    endpointValues{Resources: resourceValues{CPU: "8"}},
+		Persistence: &persistenceValues{StorageClass: "std"},
+	}
+	if err := k.applyDiskSizing(&empty); err != nil {
+		t.Fatalf("emptyDir: %v", err)
+	}
+	if err := k.applyDiskSizing(&pvc); err != nil {
+		t.Fatalf("pvc: %v", err)
+	}
+	if empty.RunDir.SizeLimit != pvc.Persistence.Size {
+		t.Errorf("emptyDir %s != pvc %s", empty.RunDir.SizeLimit, pvc.Persistence.Size)
 	}
 }
 
@@ -176,7 +193,7 @@ func TestApplyDiskSizingRejectsBadCPU(t *testing.T) {
 	k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: "10Gi"}}
 	for _, cpu := range []string{"", "abc", "0", "-1"} {
 		v := chartValues{Endpoint: endpointValues{Resources: resourceValues{CPU: cpu}}}
-		if err := k.applyDiskSizing(context.Background(), &v); err == nil {
+		if err := k.applyDiskSizing(&v); err == nil {
 			t.Errorf("cpu %q: want error, got nil", cpu)
 		}
 	}

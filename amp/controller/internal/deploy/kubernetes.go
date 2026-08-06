@@ -105,6 +105,11 @@ type KubernetesConfig struct {
 	// size DiskSize, instead of an ephemeral emptyDir. Empty = emptyDir.
 	StorageClass string
 	DiskSize     string
+	// DiskGiBPerVCPU is the data-volume size per endpoint vCPU. The right value
+	// depends on the node type underneath (a local-NVMe pool has far more disk
+	// per core than a boot-disk one), which the controller cannot see — so the
+	// installer, who knows the node type, passes it. 0 = the built-in default.
+	DiskGiBPerVCPU int
 
 	// Optional: deliver the backing YugabyteDB password from a pre-existing
 	// Secret in the namespace instead of inline (keeps the plaintext off the
@@ -143,11 +148,9 @@ var _ Deployer = (*KubernetesDeployer)(nil)
 // fullnameOverride, so the address is a pure function of the name and config.
 func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) (Endpoint, error) {
 	release := spec.Name
-	// The data volume's size is proportional to the endpoint's CPU. For the
-	// emptyDir default that needs the node's allocatable disk and CPU, so it
-	// lives here (I/O, can fail) rather than in the pure values() builder.
+	// The data volume's size is proportional to the endpoint's CPU.
 	vals := k.values(spec, release)
-	if err := k.applyDiskSizing(ctx, &vals); err != nil {
+	if err := k.applyDiskSizing(&vals); err != nil {
 		return Endpoint{}, err
 	}
 	// The deploy namespace is the controller's own namespace (the chart sets
@@ -686,7 +689,7 @@ type chartValues struct {
 	Persistence *persistenceValues `json:"persistence,omitempty"`
 	// RunDir sizes the emptyDir backing /data when no storage class is set. Nil
 	// (omitted) leaves the chart default; applyDiskSizing fills it in from the
-	// node's disk-per-vCPU ratio.
+	// endpoint's CPU.
 	RunDir *runDirValues `json:"runDir,omitempty"`
 	// NodeSelector pins the endpoint pod to nodes with these labels (e.g. a
 	// local-NVMe-SSD ephemeral pool); omitted leaves the chart's default (no
@@ -754,12 +757,17 @@ type extensionValues struct {
 	Preload bool   `json:"preload"`
 }
 
-// resourceValues is the endpoint container's compute reservation. cpu and memory
-// are Kubernetes resource quantities that the chart applies as BOTH requests and
+// resourceValues is the endpoint container's reservation. cpu and memory are
+// Kubernetes resource quantities that the chart applies as BOTH requests and
 // limits (Guaranteed QoS).
 type resourceValues struct {
 	CPU    string `json:"cpu"`
 	Memory string `json:"memory"`
+	// EphemeralStorage is the emptyDir /data reservation, set only for that
+	// backing (a PVC is not ephemeral storage). It is what makes the scheduler
+	// account the volume against the node's disk, so co-tenant endpoints cannot
+	// oversubscribe it. Empty => the chart requests no ephemeral storage.
+	EphemeralStorage string `json:"ephemeralStorage,omitempty"`
 }
 
 // values builds the per-endpoint Helm values. With spec.ControllerURL set the

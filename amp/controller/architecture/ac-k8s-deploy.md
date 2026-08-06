@@ -166,10 +166,13 @@ Each endpoint's `/data` (the compute's `pgdata`, the LFC cache, logs and
 pidfiles) is provisioned from a storage class when `--deploy-storage-class` is
 set: the chart renders a `ReadWriteOnce` **PersistentVolumeClaim** of that class
 (a network block volume — **EBS** on AWS, **Persistent Disk** on GCP) and mounts
-it at `/data`. Its size is **proportional to the endpoint's CPU** — 5 GiB per
-vCPU, so the default 2-vCPU endpoint gets the 10 GiB it always had, and a
-4-vCPU one gets 20 GiB — with `--deploy-disk-size` acting as a **floor** rather
-than the size itself. Because the
+it at `/data`. Its size is **proportional to the endpoint's CPU** — 20 GiB per
+vCPU by default, so a 2-vCPU endpoint gets 40 GiB — with `--deploy-disk-size`
+acting as a **floor** rather than the size itself. The right ratio depends on
+the node type (a local-NVMe pool carries far more disk per core than a
+boot-disk one), and only the installer knows which nodes it bought, so
+`--deploy-disk-gib-per-vcpu` / `AMP_DEPLOY_DISK_GIB_PER_VCPU` overrides it
+per deployment. Because the
 ReadWriteOnce volume attaches to one pod at a time, the Deployment switches to the
 **`Recreate`** strategy (stop the old pod before starting the new one). The pod's
 **`podSecurityContext.fsGroup`** (default `1000`, the endpoint image's `yugabyte`
@@ -180,17 +183,24 @@ so `helm uninstall` on retire frees the volume. With the flag **empty**, `/data`
 falls back to the current ephemeral **`emptyDir`** (no persistent volume). All durable state still lives in YugabyteDB; the volume is
 local scratch + cache, so a pod (or PVC) reset is safe.
 
-The `emptyDir` case is sized differently, because it is carved out of the
-**node's** ephemeral storage and every pod on that node shares it: a fixed
-per-vCPU ratio would let a few endpoints oversubscribe the node. Instead the
-controller reads the node's own allocatable `ephemeral-storage ÷ cpu` ratio
-(`nodes: [get, list]`, already held for the NodePort address lookup) and gives
-the endpoint the share matching the CPU it reserves — so an endpoint taking a
-quarter of a node's cores gets a quarter of its disk. The **smallest** ratio
-across Ready nodes is used, since the pod may be scheduled onto any of them.
-This lookup has no safe fallback — a guessed size either oversubscribes the node
-or starves the endpoint — so it is retried and then **fails the endpoint create**
-rather than defaulting.
+The `emptyDir` case takes the **same** per-vCPU size, and differs only in who
+enforces it. It is carved out of the **node's** ephemeral storage, which every
+pod on that node shares, so the size is declared twice: as the volume's
+`sizeLimit`, and as an `ephemeral-storage` **request/limit** on the endpoint
+container. The `sizeLimit` is only an eviction ceiling — it reserves nothing —
+whereas the request is what the **scheduler** accounts against the node's
+capacity, so it will not place more endpoints on a node than its disk can back.
+That is what keeps co-tenants from oversubscribing it.
+
+The controller deliberately does **not** inspect nodes to size this. Deriving
+the ratio from a node's own allocatable disk needs a cluster-scoped
+`nodes: [get, list]` read, which BYOC deployments will not grant (#584), and it
+could only ever be an estimate: the controller knows neither which node the pod
+will land on nor which endpoints will land there afterwards. The scheduler knows
+both, and `ephemeral-storage` is how it is told. Reading it from inside a pod is
+no better — an `emptyDir`'s `sizeLimit` is enforced by the kubelet watching disk
+usage rather than by a filesystem quota, so `statvfs` there reports the whole
+node filesystem.
 
 Both sizes are fixed at create: a PVC and an `emptyDir` `sizeLimit` cannot be
 changed in place, so a later CPU resize does not resize the volume.

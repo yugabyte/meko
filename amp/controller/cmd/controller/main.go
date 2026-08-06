@@ -144,6 +144,7 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				TailnetSuffix:              cfg.Deploy.TailnetSuffix,
 				StorageClass:               cfg.Deploy.StorageClass,
 				DiskSize:                   cfg.Deploy.DiskSize,
+				DiskGiBPerVCPU:             cfg.Deploy.DiskGiBPerVCPU,
 				BackingYBExistingSecret:    cfg.Deploy.BackingYBExistingSecret,
 				BackingYBExistingSecretKey: cfg.Deploy.BackingYBExistingSecretKey,
 				Timeout:                    cfg.Deploy.Timeout,

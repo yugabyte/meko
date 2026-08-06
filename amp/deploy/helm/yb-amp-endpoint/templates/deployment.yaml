@@ -117,13 +117,24 @@ spec:
           # the Guaranteed QoS class (kubelet never evicts it under node pressure
           # and it can't burst past its reservation). NB: every OTHER container in
           # this pod must ALSO set request == limit or the pod drops to Burstable.
+          # ephemeralStorage is set only for the emptyDir backing: sizeLimit is an
+          # eviction ceiling that reserves nothing, so the request is what makes
+          # the scheduler count this volume against the node's disk and stop
+          # co-tenants oversubscribing it. A PVC leaves it unset — that disk is
+          # its own device, not the node's.
           resources:
             requests:
               cpu: {{ .cpu | quote }}
               memory: {{ .memory | quote }}
+              {{- with .ephemeralStorage }}
+              ephemeral-storage: {{ . | quote }}
+              {{- end }}
             limits:
               cpu: {{ .cpu | quote }}
               memory: {{ .memory | quote }}
+              {{- with .ephemeralStorage }}
+              ephemeral-storage: {{ . | quote }}
+              {{- end }}
           {{- end }}
           {{- end }}
           {{- with .Values.endpoint.resizePolicy }}
