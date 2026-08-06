@@ -27,7 +27,7 @@ func init() {
 func runDeltaChain(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)

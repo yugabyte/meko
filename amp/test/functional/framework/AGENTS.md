@@ -31,7 +31,7 @@ quietly.
   suites under `suites/`). It imports **nothing** from
   `controller/`, `libs/`, or any other product code, and no product code imports
   it. `go build ./...` must succeed with the rest of the repo absent.
-- Talk to the product only **over the wire**: REST, psql, SSH, kubectl/docker.
+- Talk to the product only **over the wire**: REST, psql, SSH, kubectl.
   The controller client is **generated from the OpenAPI spec**, not imported.
 
 ## 3. Parallel by design — from the first line
@@ -45,7 +45,7 @@ quietly.
 ## 4. Nothing runs on the operator's machine
 - The framework only **coordinates**: it issues CLI/API calls to remote
   instances, pods, and clusters. Environments are always remote — even the dev
-  loop (docker envs run on a remote docker host over SSH).
+  loop (a bare kube-context self-builds a control plane on the cluster).
 - Never buffer logs/metrics unbounded in memory — **stream** everything. This is
   what keeps a CI agent from OOMing.
 
@@ -105,7 +105,7 @@ quietly.
 ## 11. Dependencies — minimal and proven
 - Prefer stdlib. Add a dependency only when genuinely warranted, and only a
   proven, mainstream one (cobra, yaml.v3, pgx, `golang.org/x/...`, official cloud
-  SDKs). No obscure or single-maintainer libraries. `kubectl`/`helm`/`docker` are
+  SDKs). No obscure or single-maintainer libraries. `kubectl`/`helm` are
   shelled binaries (ambient-authed), not linked SDKs.
 
 ## 12. Every change is verified and self-tested

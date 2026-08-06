@@ -13,7 +13,7 @@ control plane**, so we lean on the product's own API to create test
 environments instead of provisioning cloud VMs over SSH.
 
 > **Implementation status** (`test/functional/framework/`, as tracked in git):
-> the engine, env providers (fake, docker, shared/exclusive k8s, cloud VM,
+> the engine, env providers (fake, shared/exclusive k8s, cloud VM,
 > standalone universe), the apps layer, the chaos engine, the perf tier
 > (benchmark harness + baselines + run-history), workload drivers
 > (sample-app/benchbase/pgbench/sysbench/workloadgen), failure-diagnostics
@@ -68,7 +68,7 @@ environments instead of provisioning cloud VMs over SSH.
 - **Nothing heavy runs on the orchestrator.** The framework process only
   *coordinates* — but, exactly like the stress framework, it does so over
   **whatever transport reaches the target**: the controller REST API, **SSH into
-  VMs and pods**, `kubectl`/`docker exec`, libpq, and running arbitrary
+  VMs and pods**, `kubectl exec`, libpq, and running arbitrary
   apps/commands remotely (starting/stopping/inspecting sample apps, workload
   generators, `yb` tools, log & core collection). It never runs the load itself;
   all load, all DB work, all workloads run **inside the target stack and in
@@ -144,7 +144,7 @@ each mapping to environment shapes (§5) and executors (§8):
 
 | Category | What runs there | Environment shapes | Executor |
 |---|---|---|---|
-| **1. OneBox** — a single machine | Lots of fast, short tests: unit tests (unit = a file), integration tests of one full component, e2e tests of interactions between components. | single-container amp (§5.3), `yb_amp_local` | GitHub Actions / Jenkins |
+| **1. OneBox** — a single machine | Lots of fast, short tests: unit tests (unit = a file), integration tests of one full component, e2e tests of interactions between components. | `yb_amp_local` | GitHub Actions / Jenkins |
 | **2. Integration** — real k8s clusters | Fewer, slower tests that need many machines and external infra (e.g. an NLB): e2e on the full stack, perf, long-running (LRU-style), nemesis/chaos. | `SHARED` / `EXCLUSIVE` / `PERSISTENT` (§5.1, §5.2, §5.5) | Jenkins |
 | **3. Manual** — spec → standing system | Start the system with a given spec and hand it over to a human or agent — PoC and evaluation cases. On-demand, rare. | provision-only standing env (no scheduled checks, TTL/reaper) | local / Jenkins |
 
@@ -228,7 +228,7 @@ The flow, top to bottom:
    - **yb-amp stack(s)** — controller + controller + pageserver/safekeeper
      + compute endpoints, backed by YugabyteDB — over REST (controller API) + libpq.
      *(the product under test)*
-   - **Client pod(s)** — the workload runners — over kubectl/docker.
+   - **Client pod(s)** — the workload runners — over kubectl.
    - **Report portal** — Go API + Postgres, Go files service, Victoria Metrics,
      Web UI (list / detail / perf tab) — over HTTP.
 
@@ -239,7 +239,7 @@ work actually happens.
 remote-execution toolkit, not just an API client**. The controller REST API is
 simply the cleanest way to *create* environments; everything else about running
 a test uses the same machinery the stress framework relies on — **SSH into VMs
-and pods**, `kubectl`/`docker exec`, libpq, and **starting / stopping /
+and pods**, `kubectl exec`, libpq, and **starting / stopping /
 inspecting any app or command** on a node or pod (sample apps, workload
 generators, `yb` tools, log & core collection). Any transport that reaches the
 target is fair game.
@@ -260,8 +260,8 @@ with the API by construction. Building a Go framework introduces nothing foreign
   mirroring the stress layout (`src/main` / `src/apps` / `src/tasks` / `src/suites`):
   - `core/` — Suite/Test/Task interfaces, lifecycle, options, seeds, results
   - `sched/` — packing scheduler, worker pool, Resource Lease Manager
-  - `exec/` — remote-execution transports: SSH, kubectl/k8s, docker
-  - `env/` — environment providers: single-container amp (docker), shared
+  - `exec/` — remote-execution transports: SSH, kubectl/k8s
+  - `env/` — environment providers: shared
     control plane (project-per-test), exclusive namespace stack, remote attach;
     plus the standing-env registry
   - `apps/` — the atomic primitives, everything that talks to the product or
@@ -295,7 +295,7 @@ any test, task, or check.
 own Go module with **no cross-imports in either direction** — it never links
 `controller/` or any other product code (the controller client is generated
 from the OpenAPI spec file, not imported), and talks to the product only over
-the wire: REST, psql, SSH, kubectl/docker. It builds standalone without the
+the wire: REST, psql, SSH, kubectl. It builds standalone without the
 rest of the repo, evolves at its own pace, and can be lifted into its own repo
 at any point.
 
@@ -312,7 +312,7 @@ existing `test/integration/` (Rust) and `controller/…_test.go` are untouched n
     alongside other `SHARED` tests) or `EXCLUSIVE` (this test needs an
     environment to itself and runs alone on it).
   - **shape** — what kind of stack + weight: a project on a shared control plane,
-    a single-container amp, or a whole dedicated stack with pod-kill access
+    or a whole dedicated stack with pod-kill access
     (see §5).
   This is the crux of the parallelism model: **not every test uses
   multitenancy.** A batch of functional tests declares `SHARED` and packs onto
@@ -342,7 +342,7 @@ existing `test/integration/` (Rust) and `controller/…_test.go` are untouched n
   `Step` context manager and maps 1:1 to the portal's `step` rows. This is the
   unit of live progress the portal shows.
 - **Environment** — a handle to a running yb-amp target: a controller URL, a
-  project/branch/endpoint set, connection strings, and the k8s/docker handles
+  project/branch/endpoint set, connection strings, and the k8s handles
   needed for chaos. Produced by an **Env Provider**. A `SHARED` environment may
   host **many** co-tenant tests over its lifetime (each in its own project for
   data isolation); an `EXCLUSIVE` environment hosts exactly one test then is torn
@@ -489,7 +489,7 @@ interface:
   core changes.
 - **Env Providers** — add a new way to get a stack (e.g. a bare-metal lab)
   without touching tests.
-- **Exec transports** — SSH / kubectl / docker today; anything that can reach
+- **Exec transports** — SSH / kubectl today; anything that can reach
   a target is one more transport.
 - **Workload drivers** — add a new load generator (see §6).
 - **Chaos actions** — add a new fault (see §5.6).
@@ -633,7 +633,7 @@ needs it — the stress `SetupPortalTask` / `SetupK8SYugawareTask` pattern:
 SSH, via the cloud apps) and **create custom k8s namespaces, pods, secrets,
 and services from specs** — arbitrary objects, not only the amp Helm chart.
 Env providers and tasks compose these primitives, and every environment is
-remote (a VM, a docker host, a cluster) — never the operator's machine.
+remote (a VM, a cluster) — never the operator's machine.
 
 A test's **EnvSpec** (§4.2) picks one of these; **the choice is per test — not
 all tests use multitenancy**, only the ones that opt into `SHARED`.
@@ -678,26 +678,17 @@ For tests that must kill a pageserver, partition safekeeper↔compute, degrade t
 backing store, or need guaranteed perf isolation. Each such test gets its **own
 isolated stack** — its own k8s namespace (own YugabyteDB StatefulSet + own
 controller + endpoints), stood up by the same `deploy/up.sh` path parameterized
-by namespace (or a docker-compose stack for a single-box run). One environment
+by namespace. One environment
 lease each; runs alone on it; torn down entirely at the end. This is where "10
 tests create 10 environments for themselves" happens — bounded by lease
 capacity, the rest wait.
 
-### 5.3 Single-container environment — a whole amp in one docker container
-The endpoint image already packs the full data path (endpoint_storage,
-safekeeper, pageserver, compute_ctl + Postgres) into a single container and runs
-against a YugabyteDB whose `amp_storage` schema already exists. That
-makes the cheapest possible environment: **one docker container
-per test** (plus a shared or per-test YB), no k8s at all — running on a
-**remote docker host** (a test-instance VM or a CI runner's docker), driven
-over SSH; the operator's machine only coordinates. Each functional test can
-get its own disposable amp in parallel — or several tests can share one. This
-is the default shape for the functional bulk and for pre-commit checks.
-
-It is not a substitute for the real thing: control-plane behaviour (controller,
-deploy driver, endpoint lifecycle) and anything k8s-specific still needs the
-full stack on a real k8s cluster with all parts deployed (§5.1/§5.2) — because
-that is how the product actually runs. The EnvSpec shape decides per test.
+### 5.3 — withdrawn
+There was a single-container environment here: one endpoint container per test on
+a remote docker host, no k8s. It could not serve a branch — with no controller in
+the shape, nothing seeded the `branch_state` row the pageserver's attach path
+reads, and nothing provisioned `amp_registry` — so it was removed rather than
+repaired. The numbering is kept so the §5.x references elsewhere still resolve.
 
 ### 5.4 Remote / pre-existing stack (attach, don't provision)
 Point the framework at an already-deployed stack (staging, a dev's `deploy/up.sh`,
@@ -708,8 +699,8 @@ the `remote_cluster` opt-in marker the legacy pytest runner already uses.
 
 > There is a `yb_amp_local` "cluster-in-a-box" binary — it stays a
 > product-developer tool for hand-driven loops. The framework itself never
-> hosts environments on the operator's machine: even its cheapest shape runs
-> on a remote docker host, and CI uses the shared/exclusive k8s environments.
+> hosts environments on the operator's machine: every shape runs on remote
+> infrastructure, and CI uses the shared/exclusive k8s environments.
 
 ### 5.4a Universe target — a YugabyteDB cluster as the environment (`Universe`)
 Not every target is a yb-amp stack. A YugabyteDB cluster itself can be the
@@ -943,8 +934,8 @@ trigger it and pass parameters — the framework owns parallelism — so the
 orchestration below is deliberately thin. Two CI lanes, split by weight:
 
 - **GitHub Actions — the commit lanes.** A **pre-commit (PR) pipeline**:
-  build/lint/unit plus a functional slice on single-container environments
-  (§5.3), and a **post-commit pipeline** on merge with a fuller set. For
+  build/lint/unit plus a functional slice on the shared k8s environment
+  (§5.1), and a **post-commit pipeline** on merge with a fuller set. For
   OneBox-scale parallelism the workflow spawns child GH Actions jobs; when a
   change needs the heavy tiers, GH Actions **invokes Jenkins** for that part.
   Runners are **provisioned, not free-tier** — free compute doesn't survive
@@ -1020,7 +1011,7 @@ later.
 
 Selection knobs mirror the stress framework: run **all** matching tests, capped
 by `--parallel` (ambition) and the lease manager (reality). Nightly = the full
-suite; pre-commit = a fast functional smoke tag on single-container envs;
+suite; pre-commit = a fast functional smoke tag on the shared k8s env;
 on-demand = arbitrary regex/tag + params.
 
 ### 8.1 A separate scheduled pipeline for long-running health checks
@@ -1106,7 +1097,7 @@ persisted/shared across runs.
 - MCP parity: every UI/API surface has a corresponding MCP tool — trigger,
   analyze, and reporting.
 - Per-test `EnvSpec` (sharing policy + shape): `SHARED` co-tenant vs `EXCLUSIVE`
-  dedicated, plus single-container (docker), remote-attach, and **Universe** (a
+  dedicated, plus remote-attach and **Universe** (a
   YugabyteDB cluster as the target) — behind one Env Provider interface.
 - YugabyteDB cluster provisioning as atomic apps: a **YBA app** (universe
   create/manage, the stress `yugaware_app` equivalent) and a **yugabyted app**
@@ -1211,7 +1202,8 @@ persisted/shared across runs.
   into this portal (one dashboard), or stay in GitHub Actions only? yb-amp's
   Actions are currently mostly disabled, so there is room to define this.
 - **Pre-commit scope** — how large a functional smoke subset is acceptable on
-  PRs given environment cost (single-container envs make this much cheaper, but
+  PRs given environment cost (project-per-test on one shared control plane
+  makes this much cheaper, but
   the budget still needs a number).
 - **One system with Meko?** Meko needs integration-test automation (it has eval
   frameworks, not an e2e framework). Whether Meko adopts this framework + portal
@@ -1229,8 +1221,7 @@ persisted/shared across runs.
 ## 12. Suggested phasing
 
 - **Phase 0 — skeleton.** Go module `test/functional/framework`, core interfaces (Test/Suite/
-  Step/Env/Reporter), controller-client wrapper, the single-container docker
-  provider (cheapest env, local + CI), a stdout reporter, 2–3 `SHARED` co-tenant
+  Step/Env/Reporter), controller-client wrapper, a stdout reporter, 2–3 `SHARED` co-tenant
   functional tests on a shared control plane. Prove per-project isolation +
   teardown.
 - **Phase 1 — parallelism + portal MVP.** Worker pool + lease manager; portal
@@ -1238,7 +1229,7 @@ persisted/shared across runs.
   its portal-read/write subcommands) + Postgres + reused files service;
   runs/tests list + test detail. Wire the portal reporter.
 - **Phase 2 — CI.** GitHub Actions pre-/post-commit lanes on provisioned runners
-  (functional smoke on single-container envs) + Jenkins nightly and on-demand;
+  (functional smoke on the shared k8s env) + Jenkins nightly and on-demand;
   Slack summary; reaper for leaked envs.
 - **Phase 3 — stress + long-running.** `EXCLUSIVE` dedicated stacks, chaos
   engine + nemesis loop, long soak (Mode 1); then the `PERSISTENT` env registry +

@@ -12,7 +12,7 @@
 // workspace, where the baseline gate can only establish and WARN.
 //
 // WHERE it measures: the amp COMPUTE ENDPOINT the env provider hands the test
-// (the pgEndpointEnv capability — docker single-container, sharedk8s, and
+// (the pgEndpointEnv capability — sharedk8s and
 // universe envs all serve it), NOT a tserver. The rest of the perf tier
 // self-provisions a co-located YB-in-k8s backing and connects to its tserver
 // YSQL port, so amp is not in the request path there and an amp-layer
@@ -97,7 +97,7 @@ func microbenchParamsFromConfig(c *core.Config) microbenchParams {
 
 // pgEndpointEnv is the capability this test needs: an env that serves an amp
 // compute endpoint's Postgres. Declared locally (like the features suite does)
-// so the test runs on any env able to hand out an endpoint — docker
+// so the test runs on any env able to hand out an endpoint — sharedk8s
 // single-container, sharedk8s project-per-test, or a universe env — and skips
 // cleanly on one that cannot (e.g. --fake-env).
 type pgEndpointEnv interface {
@@ -129,7 +129,7 @@ func runMicrobench(t *core.T) error {
 
 	env, ok := t.Env.(pgEndpointEnv)
 	if !ok {
-		t.Skip("perf/microbench measures the amp compute endpoint: needs an env that serves one (docker / sharedk8s / universe)")
+		t.Skip("perf/microbench measures the amp compute endpoint: needs an env that serves one (sharedk8s / universe)")
 		return nil
 	}
 

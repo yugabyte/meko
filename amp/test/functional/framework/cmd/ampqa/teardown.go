@@ -56,7 +56,7 @@ func ampstackNSPlan(entry registry.Entry) (*reap.Plan, error) {
 //     an entry has no serialized plan (a pre-reap-plan setup), reap its recorded
 //     namespace directly — the same managed-by-guarded delete ampstack.Reap does.
 //  4. Provider Attach + Teardown: rebuild the named provider from config and
-//     reap the ref (fake / attach_yba / docker), for shapes whose provider can
+//     reap the ref (fake / attach_yba), for shapes whose provider can
 //     reconstruct an environment from a ref.
 func reapStandingEnv(ctx context.Context, entry registry.Entry, cfg *core.Config, secrets *core.Secrets, masker *core.Masker, providerOverride string, detected core.DetectedVersions, force bool) error {
 	plan, err := reap.FromJSON(entry.Data["reap_plan"])

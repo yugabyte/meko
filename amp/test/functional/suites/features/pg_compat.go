@@ -68,7 +68,7 @@ const copyRows = 2000
 func runCopy(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -174,7 +174,7 @@ func runCopy(t *core.T) error {
 func runPreparedStatements(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -248,7 +248,7 @@ func runPreparedStatements(t *core.T) error {
 func runSavepoints(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -350,7 +350,7 @@ const toastRowCount = 6
 func runToastLargeValues(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -425,7 +425,7 @@ func runToastLargeValues(t *core.T) error {
 func runSequences(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -529,7 +529,7 @@ func runSequences(t *core.T) error {
 func runPartitionedTables(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -656,7 +656,7 @@ const (
 func runConcurrentWriters(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)

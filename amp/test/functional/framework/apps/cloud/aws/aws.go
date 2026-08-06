@@ -1,6 +1,6 @@
 // Package aws is the EC2 instance-lifecycle app: it launches, waits on,
 // describes, connects to, and terminates AWS instances by shelling the
-// ambient-authed `aws` CLI — the same design choice as the kubectl/helm/docker
+// ambient-authed `aws` CLI — the same design choice as the kubectl/helm
 // transports (no aws-sdk-go dependency in this standalone module). The local
 // os/exec here is coordination only (issuing API calls to AWS), not running any
 // workload on the operator's machine.

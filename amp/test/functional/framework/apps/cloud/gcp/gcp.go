@@ -2,7 +2,7 @@
 // describes, connects to, and terminates GCE instances by shelling the
 // `gcloud` CLI — the same design choice as apps/cloud/aws (no
 // google-cloud-compute SDK dependency in this standalone module) and the
-// kubectl/helm/docker transports.
+// kubectl/helm transports.
 //
 // Auth is the one place gcp genuinely differs from aws: aws instances are
 // ambient-authed by default (the aws CLI's own credential chain). GCE needs an

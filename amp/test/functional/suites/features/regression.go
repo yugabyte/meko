@@ -13,7 +13,7 @@ import (
 // index-page reconstruction, the cold read path (forcing Pageserver GetPage
 // rather than a Local File Cache hit), and catalog+index durability across a
 // compute restart. Each asserts a real invariant against a Go-computed
-// expected value; all skip cleanly on a non-docker env via the same type
+// expected value; all skip cleanly on an env without the capability via the same type
 // assertion the rest of the package uses.
 
 func init() {
@@ -90,7 +90,7 @@ func init() {
 func runMutations(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -161,7 +161,7 @@ func runMutations(t *core.T) error {
 func runTransaction(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -267,7 +267,7 @@ func runTransaction(t *core.T) error {
 func runIndex(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -333,7 +333,7 @@ const coldRows = 5000
 func runReadColdCache(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -406,7 +406,7 @@ func runReadColdCache(t *core.T) error {
 func runDDLSurvivesRestart(t *core.T) error {
 	env, ok := t.Env.(computeRestarter)
 	if !ok {
-		t.Skip("requires an env with compute-restart capability (docker or sharedk8s)")
+		t.Skip("requires an env with compute-restart capability (sharedk8s)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -507,7 +507,7 @@ func runDDLSurvivesRestart(t *core.T) error {
 func runMultiDBWorkload(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	admin, err := connect(t, env)

@@ -113,6 +113,10 @@ const (
 	// CREATE DATABASE connects to (yb_storage may not exist yet).
 	ybMaintenanceDB = "yugabyte"
 
+	// ybPGPort is YugabyteDB's YSQL port, the same on the built-in yugabyted and
+	// on every external backing this framework has met.
+	ybPGPort = 5433
+
 	// controllerProbeRetries/controllerProbeDelay bound the quick readiness
 	// check resolveControllerAddr runs against a candidate direct address: just
 	// enough to ride out the brief gap between the Deployment reporting

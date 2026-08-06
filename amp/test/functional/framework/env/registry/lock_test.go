@@ -83,7 +83,7 @@ func TestConcurrentAddNoLostEntry(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := r.Add(Entry{Shape: "docker", Provider: "docker"}); err != nil {
+			if _, err := r.Add(Entry{Shape: "yb_k8s", Provider: "ampstack"}); err != nil {
 				t.Errorf("Add: %v", err)
 				return
 			}

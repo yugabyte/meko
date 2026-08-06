@@ -23,7 +23,7 @@ type RunOptions struct {
 	Masker *Masker
 	// ProviderUnavailableReason, when Provider is nil, makes every test skip
 	// cleanly with this reason instead of reporting env_failed — used when no
-	// real environment is configured (e.g. "env.docker not configured").
+	// real environment is configured (e.g. "env.sharedk8s not configured").
 	ProviderUnavailableReason string
 	// Attempt places this execution in a retry chain; zero → newResult stamps 1.
 	Attempt AttemptInfo

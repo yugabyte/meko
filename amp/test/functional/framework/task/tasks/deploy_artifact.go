@@ -7,8 +7,20 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/artifact"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
+	sshx "github.com/yugabyte/amp/test/functional/framework/exec/ssh"
 	"github.com/yugabyte/amp/test/functional/framework/task"
 )
+
+// sshTransport is what deploy-artifact needs from a connection:
+// exec.RemoteExecutor plus Close. *ssh.Client satisfies it.
+type sshTransport interface {
+	exec.RemoteExecutor
+	Close() error
+}
+
+func defaultDial(ctx context.Context, host, user, keyPath string) (sshTransport, error) {
+	return sshx.Dial(ctx, sshx.Config{Host: host, User: user, KeyPath: keyPath})
+}
 
 var deployArtifactTask = task.Task{
 	Name: "deploy-artifact",

@@ -1,6 +1,6 @@
 // Package universe is the YB-cluster-as-target environment provider
 // (architecture: a YugabyteDB universe/cluster used directly as the test
-// TARGET, not the amp control plane). Unlike the docker/sharedk8s/exclusivek8s
+// TARGET, not the amp control plane). Unlike the sharedk8s/exclusivek8s
 // providers — which stand up amp — this one exposes a plain YSQL endpoint so pg
 // and workloadgen tests run against a real YugabyteDB.
 //
@@ -25,7 +25,7 @@
 //     wired via WithProvisionYBA (apps.ybastack.* / apps.yba.* + a secret
 //     resolver).
 //
-// The env implements the PGEndpoint accessor convention (docker/sharedk8s) so
+// The env implements the PGEndpoint accessor convention (sharedk8s) so
 // pg-based tests type-assert to it; there is no amp controller, so
 // ControllerURL() is "".
 package universe
@@ -1188,7 +1188,7 @@ func (e *Env) ProvisionedHandles() ProvisionedHandles {
 // attach mode that merely points at something already running.
 func (e *Env) Mode() string { return e.mode }
 
-// PGEndpoint lets pg-based tests reach the universe (docker env's convention).
+// PGEndpoint lets pg-based tests reach the universe.
 func (e *Env) PGEndpoint() pg.ConnInfo { return e.pg }
 
 // NodeAddrs lists every tserver host:port the target exposes.

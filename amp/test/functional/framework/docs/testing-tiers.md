@@ -33,15 +33,15 @@ not by tier.
 Fast, deterministic, each asserting a distinct core guarantee. Env-portable: the
 tests depend on env *capabilities* (`pgEnv` to reach the endpoint's Postgres, plus
 `computeRestarter` for the restart tests), not a concrete env — so the same tests
-run on either:
+run against a self-built or a standing control plane alike:
 
 ```
 # self-building k8s (default): stands up its own amp control plane off a bare
 # kube-context, project-per-test, tears it all down. No config needed.
 ampqa run --tag regression
 
-# docker env on a remote host (e.g. a GH Actions VM), no k8s
-ampqa run --tag regression --env-provider docker -c <docker-env.yaml>
+# an already-standing control plane, project-per-test against it
+ampqa run --tag regression -c <standing-cp.yaml>
 ```
 
 Under `--fake-env` every regression test skips cleanly.

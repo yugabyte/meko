@@ -89,7 +89,7 @@ func TestPrepareProviderRetriesOff(t *testing.T) {
 	}
 }
 
-// Providers with no Prepare seam (docker, universe, fake) are untouched.
+// Providers with no Prepare seam (universe, fake) are untouched.
 func TestPrepareProviderPassesThroughWithoutPrepare(t *testing.T) {
 	p := &fake.Provider{}
 	got, err := prepareProvider(context.Background(), p, zeroBackoff(t), func() (core.EnvProvider, error) {

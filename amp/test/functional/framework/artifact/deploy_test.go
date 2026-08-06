@@ -15,7 +15,7 @@ import (
 
 // scriptExec is a scripted fake exec.RemoteExecutor + Fetch: it records every
 // command/copy/fetch call and returns canned results matched by substring (in
-// registration order). Mirrors apps/dockerhost's test double.
+// registration order). The same scripted-fake convention used across apps/*.
 type scriptExec struct {
 	mu       sync.Mutex
 	commands []string

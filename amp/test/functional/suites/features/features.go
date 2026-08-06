@@ -1,5 +1,5 @@
 // Package functional registers real functional tests. The light tests here run
-// against a single-container amp environment (env/docker) and skip cleanly via
+// against any env that serves an amp compute endpoint, and skip cleanly via
 // a type-assert on the environment when none is provisioned (dry-run/fake). The
 // heavier amp-on-backing tests (backing.go) are end-to-end: for one YugabyteDB
 // backing store they provision the cluster, run a YB-native workload (layer 1),
@@ -24,7 +24,7 @@ import (
 )
 
 // pgEnv is the accessor a test needs to reach the endpoint's Postgres. Both the
-// docker single-container env and the sharedk8s project-per-test env implement
+// the sharedk8s project-per-test env implements
 // it; core stays untouched. The non-restart regression tests depend only on this
 // capability, so they run identically on either env (and any future env that can
 // serve an endpoint's Postgres).
@@ -35,7 +35,7 @@ type pgEnv interface {
 // computeRestarter is the capability the restart tests depend on: restart the
 // amp compute and block until it serves again. Depending on this capability
 // (rather than a concrete env) is what makes the restart tests env-portable —
-// the docker env restarts its endpoint container, the sharedk8s env rolls the
+// the sharedk8s env rolls the
 // endpoint's compute pod and re-resolves the connection. After RestartCompute
 // returns, PGEndpoint() points at a live endpoint again.
 type computeRestarter interface {
@@ -89,7 +89,7 @@ func init() {
 func runRoundtrip(t *core.T) error {
 	env, ok := t.Env.(pgEnv)
 	if !ok {
-		t.Skip("requires a docker single-container env")
+		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -138,7 +138,7 @@ func runRoundtrip(t *core.T) error {
 func runRestartCompute(t *core.T) error {
 	env, ok := t.Env.(computeRestarter)
 	if !ok {
-		t.Skip("requires an env with compute-restart capability (docker or sharedk8s)")
+		t.Skip("requires an env with compute-restart capability (sharedk8s)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -205,7 +205,7 @@ func isolationRun(tag string) func(*core.T) error {
 	return func(t *core.T) error {
 		env, ok := t.Env.(pgEnv)
 		if !ok {
-			t.Skip("requires a docker single-container env")
+			t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 			return nil
 		}
 		client, err := connect(t, env)

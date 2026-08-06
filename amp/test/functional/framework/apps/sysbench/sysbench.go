@@ -3,7 +3,7 @@
 // coordinator). It shells `sysbench <script> ... prepare` / `... run` with the
 // pgsql driver against the bundled oltp_* lua workloads and parses
 // tps/latency out of the captured output — no sysbench SDK exists, this is the
-// same shelling-out approach pgbench and dockerhost use for their CLIs.
+// same shelling-out approach pgbench uses for its CLI.
 //
 // Unlike pgbench (delivered from the YB release tarball), sysbench is a distro
 // package: EnsureInstalled installs it from apt on the (Debian/Ubuntu-family)

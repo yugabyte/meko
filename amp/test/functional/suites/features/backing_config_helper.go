@@ -42,7 +42,7 @@ const (
 	DefaultConcurrency  = 4
 	DefaultPgVersion    = 0 // 0 → let the controller choose the endpoint's PG version
 
-	// DefaultEndpointUser/Password/DB: every amp compute endpoint (docker
+	// DefaultEndpointUser/Password/DB: every amp compute endpoint (sharedk8s
 	// single-container and controller-created alike) provisions the same
 	// cloud_admin superuser with this default password (deploy/README.md,
 	// deploy/endpoint/supervisor.py COMPUTE_PASSWORD) — the controller API

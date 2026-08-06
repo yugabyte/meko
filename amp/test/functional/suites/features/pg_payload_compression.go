@@ -24,9 +24,15 @@ import (
 // lives) and run a command inside the container hosting the pageserver, whose
 // management HTTP port is never published. The compute endpoint's own Postgres
 // cannot see either.
+//
+// YBStorage takes a context and can fail because reaching the backing store is
+// real work — a cluster-internal one needs a port-forward, and an environment
+// attached to a standing control plane cannot name its backing at all. A test
+// that cannot reach it must skip on the returned reason, not fail: the
+// capability is missing, not broken.
 type storageEnv interface {
 	pgEnv
-	YBStorage() pg.ConnInfo
+	YBStorage(ctx context.Context) (pg.ConnInfo, error)
 	ExecInEndpoint(ctx context.Context, script string) (string, error)
 }
 
@@ -221,7 +227,7 @@ func runPayloadCompressionRoundtrip(t *core.T) error {
 func runPayloadCompressionSurvivesRestart(t *core.T) error {
 	env, ok := t.Env.(computeRestarter)
 	if !ok {
-		t.Skip("requires an env with compute-restart capability (docker or sharedk8s)")
+		t.Skip("requires an env with compute-restart capability (sharedk8s)")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -384,10 +390,27 @@ func checkEnvelope(st envelopeStats, rel string) error {
 	return nil
 }
 
-func runPayloadCompressionEnvelope(t *core.T) error {
+// storageCapable gates the storage-side assertions. Two things can be missing,
+// and both are skips rather than failures: the env may not expose the capability
+// at all, or it may expose it but be unable to reach the backing store (an
+// attached standing control plane cannot name its own backing). Resolving here
+// also fails fast, before a workload has been written.
+func storageCapable(t *core.T) (storageEnv, bool) {
 	env, ok := t.Env.(storageEnv)
 	if !ok {
 		t.Skip("requires an env exposing the backing amp storage database and the pageserver's container")
+		return nil, false
+	}
+	if _, err := env.YBStorage(t); err != nil {
+		t.Skip("env cannot reach the backing amp storage database: " + err.Error())
+		return nil, false
+	}
+	return env, true
+}
+
+func runPayloadCompressionEnvelope(t *core.T) error {
+	env, ok := storageCapable(t)
+	if !ok {
 		return nil
 	}
 	client, err := connect(t, env)
@@ -485,9 +508,8 @@ func runPayloadCompressionEnvelope(t *core.T) error {
 }
 
 func runPayloadCompressionSavesSpace(t *core.T) error {
-	env, ok := t.Env.(storageEnv)
+	env, ok := storageCapable(t)
 	if !ok {
-		t.Skip("requires an env exposing the backing amp storage database and the pageserver's container")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -623,7 +645,10 @@ func branchAndDatabase(t *core.T, client *pg.Client) (string, int64, error) {
 const storageReadyTimeout = time.Minute
 
 func connectStorage(t *core.T, env storageEnv) (*pg.Client, error) {
-	ci := env.YBStorage()
+	ci, err := env.YBStorage(t)
+	if err != nil {
+		return nil, fmt.Errorf("reach the backing amp storage database: %w", err)
+	}
 	if err := pg.WaitReady(t, ci, storageReadyTimeout); err != nil {
 		return nil, fmt.Errorf("backing amp storage database %s never answered: %w", ci.Addr(), err)
 	}

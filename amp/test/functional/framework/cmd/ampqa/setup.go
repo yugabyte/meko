@@ -140,7 +140,7 @@ ls' and tear one down with 'ampqa env rm <id>'.`,
 	cmd.Flags().StringArrayVarP(&configFiles, "config", "c", nil, "YAML/HOCON config file, deep-merged in order (repeatable)")
 	cmd.Flags().StringArrayVar(&jsonConfigs, "jc", nil, "JSON config file, merged after -c (repeatable)")
 	cmd.Flags().StringArrayVarP(&overrides, "option", "o", nil, "key=value override with typed prefixes (repeatable)")
-	cmd.Flags().StringVar(&envProvider, "env-provider", "auto", "environment provider: fake|docker|sharedk8s|exclusivek8s|universe|auto")
+	cmd.Flags().StringVar(&envProvider, "env-provider", "auto", "environment provider: fake|sharedk8s|exclusivek8s|universe|auto")
 	cmd.Flags().BoolVar(&fakeEnv, "fake-env", false, "use the fake env provider — NOTE: self-provisioning tests still stand up real infra in their body")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "DEPRECATED alias of --fake-env")
 	_ = cmd.Flags().MarkDeprecated("dry-run", "use --fake-env instead")

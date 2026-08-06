@@ -195,7 +195,7 @@ available), distinct from a genuine all-pass.`,
 			}
 
 			// Provider selection. --env-provider forces one; otherwise auto picks by
-			// config with precedence universe > sharedk8s > exclusivek8s > docker,
+			// config with precedence universe > sharedk8s > exclusivek8s,
 			// and — when only a kube-context is discoverable — self-building k8s
 			// (sharedk8s deploy mode). --fake-env always means the fake provider (no
 			// infrastructure). A configured-but-unavailable provider leaves
@@ -344,7 +344,7 @@ available), distinct from a genuine all-pass.`,
 	cmd.Flags().BoolVar(&fakeEnv, "fake-env", false, "use the fake env provider — NOTE: self-provisioning tests still stand up real infra in their body")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "DEPRECATED alias of --fake-env")
 	_ = cmd.Flags().MarkDeprecated("dry-run", "use --fake-env instead")
-	cmd.Flags().StringVar(&envProvider, "env-provider", "auto", "environment provider: fake|docker|sharedk8s|exclusivek8s|universe|auto")
+	cmd.Flags().StringVar(&envProvider, "env-provider", "auto", "environment provider: fake|sharedk8s|exclusivek8s|universe|auto")
 	cmd.Flags().StringVar(&envID, "env", "", "attach to a standing environment from the registry by id (forces the matching provider; conflicts with --fake-env/--env-provider)")
 	cmd.Flags().StringVar(&envMode, "env-mode", "build", "environment lifecycle: build (provision, run, tear down) | keep (provision, run, RECORD the env, skip teardown) | keep-failed (tear down when green, keep+record when anything failed) | attach (attach to --env, run, skip teardown)")
 	cmd.Flags().BoolVar(&setupOnly, "setup-only", false, "stand each selected test's environment up and skip its body, leaving it recorded and running (forces keep); folds the deprecated `ampqa setup`")

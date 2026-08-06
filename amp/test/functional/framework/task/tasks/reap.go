@@ -1,51 +1,30 @@
 // Package tasks holds the built-in ops routines (architecture §4.2 Task,
-// implementation §3 M3): reap, collect-logs, deploy-artifact. Each registers
-// itself in task's default registry via init() — blank-import this package to
-// pull them all in (cmd/ampqa does).
+// implementation §3 M3): reap and deploy-artifact. Each registers itself in
+// task's default registry via init() — blank-import this package to pull them
+// all in (cmd/ampqa does).
 package tasks
 
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/cloud"
-	"github.com/yugabyte/amp/test/functional/framework/apps/dockerhost"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/env/reap"
 	"github.com/yugabyte/amp/test/functional/framework/env/registry"
-	"github.com/yugabyte/amp/test/functional/framework/exec"
-	sshx "github.com/yugabyte/amp/test/functional/framework/exec/ssh"
 	"github.com/yugabyte/amp/test/functional/framework/task"
 )
 
 func init() {
 	task.Register(reapTask)
-	task.Register(collectLogsTask)
 	task.Register(deployArtifactTask)
-}
-
-// sshTransport is what reap/collect-logs need from a connection:
-// exec.RemoteExecutor plus Close. *ssh.Client satisfies it; tests inject a
-// scripted fake.
-type sshTransport interface {
-	exec.RemoteExecutor
-	Close() error
-}
-
-// dialFunc dials an ssh host; overridden in tests to avoid real networking.
-type dialFunc func(ctx context.Context, host, user, keyPath string) (sshTransport, error)
-
-func defaultDial(ctx context.Context, host, user, keyPath string) (sshTransport, error) {
-	return sshx.Dial(ctx, sshx.Config{Host: host, User: user, KeyPath: keyPath})
 }
 
 // ReapOptions parameterizes one reap pass; dependency-injected so unit tests
 // run with no real network or wall-clock dependence.
 type ReapOptions struct {
 	Now    func() time.Time
-	Dial   dialFunc
 	DryRun bool
 	Logf   func(format string, args ...any)
 	// Execute runs a recorded reap.Plan (k8s namespaces + cloud tag-reap) — the
@@ -71,19 +50,14 @@ type ReapResult struct {
 // infrastructure, then removes the record ONLY when the reclaim succeeded. For
 // every expired entry it runs the strongest teardown the record supports —
 // a recorded reap.Plan (k8s namespaces + cloud tag-reap) via opts.Execute, else
-// a `docker`-shape ssh StopRm, else a bare cloud tag-reap via opts.CloudReap —
-// and KEEPS the record with a loud error on any failure, so a leak is never
-// dropped from the registry. An entry that records no infrastructure handle at
-// all (no plan, no docker host, no run tag) has nothing to reclaim and its stale
-// record is removed.
+// a bare cloud tag-reap via opts.CloudReap — and KEEPS the record with a loud
+// error on any failure, so a leak is never dropped from the registry. An entry
+// that records no infrastructure handle at all (no plan, no run tag) has nothing
+// to reclaim and its stale record is removed.
 func Reap(ctx context.Context, reg *registry.Registry, opts ReapOptions) (ReapResult, error) {
 	now := time.Now
 	if opts.Now != nil {
 		now = opts.Now
-	}
-	dial := dialFunc(defaultDial)
-	if opts.Dial != nil {
-		dial = opts.Dial
 	}
 	logf := func(string, ...any) {}
 	if opts.Logf != nil {
@@ -104,7 +78,7 @@ func Reap(ctx context.Context, reg *registry.Registry, opts ReapOptions) (ReapRe
 		if opts.DryRun {
 			continue
 		}
-		if terr := reclaim(ctx, e, dial, opts); terr != nil {
+		if terr := reclaim(ctx, e, opts); terr != nil {
 			// A failed reclaim means the infrastructure may still be alive: KEEP
 			// the record so the leak stays discoverable and a later pass retries.
 			res.TeardownErrs[e.ID] = terr
@@ -127,7 +101,7 @@ func Reap(ctx context.Context, reg *registry.Registry, opts ReapOptions) (ReapRe
 // (record may be removed). An entry that carries a plan/tag but no executor is a
 // failure — the reaper cannot honor its own no-leak guarantee, so the record is
 // kept rather than silently dropped.
-func reclaim(ctx context.Context, e registry.Entry, dial dialFunc, opts ReapOptions) error {
+func reclaim(ctx context.Context, e registry.Entry, opts ReapOptions) error {
 	plan, err := reap.FromJSON(e.Data["reap_plan"])
 	if err != nil {
 		return fmt.Errorf("decode reap plan: %w", err)
@@ -138,8 +112,6 @@ func reclaim(ctx context.Context, e registry.Entry, dial dialFunc, opts ReapOpti
 			return fmt.Errorf("entry carries a reap plan but no plan executor is configured")
 		}
 		return opts.Execute(ctx, plan)
-	case e.Provider == "docker" && e.Data["host"] != "":
-		return teardownDocker(ctx, e, dial)
 	case e.Data["run_tag"] != "" && (e.Data["cloud"] == "aws" || e.Data["cloud"] == "gcp"):
 		if opts.CloudReap == nil {
 			return fmt.Errorf("entry carries a cloud run tag but no cloud reaper is configured")
@@ -149,31 +121,6 @@ func reclaim(ctx context.Context, e registry.Entry, dial dialFunc, opts ReapOpti
 		// No recorded infrastructure handle: nothing to reclaim, safe to drop.
 		return nil
 	}
-}
-
-func teardownDocker(ctx context.Context, e registry.Entry, dial dialFunc) error {
-	host := e.Data["host"]
-	if host == "" {
-		return fmt.Errorf("docker entry %s: no host in data", e.ID)
-	}
-	tr, err := dial(ctx, host, e.Data["ssh_user"], e.Data["ssh_key"])
-	if err != nil {
-		return fmt.Errorf("dial %s: %w", host, err)
-	}
-	defer tr.Close()
-	dh := dockerhost.New(tr)
-
-	var firstErr error
-	for _, raw := range strings.Split(e.Data["containers"], ",") {
-		name := strings.TrimSpace(raw)
-		if name == "" {
-			continue
-		}
-		if err := dh.StopRm(ctx, name); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
 }
 
 // reapTask is the registry-TTL enforcement entrypoint, reachable as
@@ -193,7 +140,7 @@ func teardownDocker(ctx context.Context, e registry.Entry, dial dialFunc) error 
 // entirely is a separate net: `ampqa env reap --tag/--stale`.)
 var reapTask = task.Task{
 	Name: "reap",
-	Doc:  "Reclaim standing-registry entries past their TTL (docker/k8s/cloud teardown), then drop the record. NOT automatic — schedule it (cron/systemd/CI); nothing sweeps expired envs on its own.",
+	Doc:  "Reclaim standing-registry entries past their TTL (k8s/cloud teardown), then drop the record. NOT automatic — schedule it (cron/systemd/CI); nothing sweeps expired envs on its own.",
 	Params: map[string]string{
 		"task.registry": "registry file path (default ~/.ampqa/envs.json)",
 		"task.dry_run":  "bool: list what would be reaped without removing (default false)",

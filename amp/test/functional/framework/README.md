@@ -30,7 +30,7 @@ code). In brief:
 2. **Standalone module — no product coupling.** `test/functional` imports no
    product code and none imports it; `go build ./...` works with the rest of the
    repo absent. The product is reached only over the wire (REST / psql / SSH /
-   kubectl / docker); the controller client is generated from the OpenAPI spec.
+   kubectl); the controller client is generated from the OpenAPI spec.
 3. **Parallel by design.** Tests are atomic and independent — own env, no shared
    mutable state, no ordering. `--parallel N` is first-class; **sequential is
    just pool size 1**, never a separate path. No fixed ports or shared temp
@@ -63,7 +63,7 @@ code). In brief:
     differences are handled inside apps (check the live version), never with
     hand-rolled `if version < X` in test bodies.
 11. **Dependencies — minimal and proven.** Prefer stdlib; add only mainstream,
-    proven libraries. `kubectl` / `helm` / `docker` are shelled ambient-authed
+    proven libraries. `kubectl` / `helm` are shelled ambient-authed
     binaries, not linked SDKs.
 12. **Every change is verified.** Before done: `go build ./...`, `go vet ./...`,
     `gofmt -l .` (empty), `go test -race ./...` (green). Unit tests use
@@ -153,7 +153,6 @@ against a different provider/backing without changing test code.
 | Provider | What it does |
 |---|---|
 | `fake` | in-process, no real infra — canary tests, dev loops |
-| `docker` | containers on a remote docker host (over SSH) |
 | `sharedk8s` | one amp control plane, a project + endpoint carved **per test** out of it (co-tenant `shared` tests packed, bounded by `--per-env-parallelism`). Two modes — see lifecycle below |
 | `exclusivek8s` | a dedicated namespace + stack per `exclusive` test |
 | `universe` | attaches to / provisions a YugabyteDB **universe** directly (not amp) as the target |
@@ -164,11 +163,10 @@ YBA (`apps/yba` / `apps/ybastack`) — on k8s, GCE, or AWS
 provisioned together) to keep runs cheap.
 
 **Provider selection.** `--env-provider auto` (the default) picks the first
-*configured* provider in precedence `universe > sharedk8s > exclusivek8s >
-docker`, and falls back to **self-building `sharedk8s`** when none are configured
-but a kube-context is discoverable. "Everything other than k8s is a parameter":
-`--env-provider docker|universe|exclusivek8s|fake` targets the same tests
-elsewhere.
+*configured* provider in precedence `universe > sharedk8s > exclusivek8s`, and
+falls back to **self-building `sharedk8s`** when none are configured but a
+kube-context is discoverable. "Everything other than k8s is a parameter":
+`--env-provider universe|exclusivek8s|fake` targets the same tests elsewhere.
 
 **Lifecycle — `--env-mode build|attach|keep`.** Every `run` provisions an
 environment, runs the selected tests, and (by default) tears it down. The mode
@@ -241,7 +239,7 @@ Verified against `--help` on each command.
 ```
 ampqa run        --suite <re> --test <exact-name> --testr <re> --tag <t>
                  [--parallel N] [--per-env-parallelism N] [--seed S]
-                 [--env-provider fake|docker|sharedk8s|exclusivek8s|universe|auto]
+                 [--env-provider fake|sharedk8s|exclusivek8s|universe|auto]
                  [--env-mode build|attach|keep] [--env <id>] [--setup-only]
                  [--env-name label] [--ttl duration]
                  [-c file.yaml] [--jc file.json] [-o key=value]

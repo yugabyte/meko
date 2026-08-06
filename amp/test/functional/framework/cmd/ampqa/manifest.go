@@ -122,7 +122,7 @@ func buildFullManifest(root *cobra.Command) (manifest, error) {
 }
 
 // flattenConfig turns the nested default config into dotted-key → default-value
-// leaves (env.docker.yb_image → "yugabytedb/yugabyte:latest"), so an agent can
+// leaves (env.sharedk8s.controller_service → "amp-controller"), so an agent can
 // discover every configurable knob and its default. Empty maps are kept as leaf
 // values so a documented-but-empty section (e.g. secrets) still surfaces.
 func flattenConfig(prefix string, node map[string]any, out map[string]any) {

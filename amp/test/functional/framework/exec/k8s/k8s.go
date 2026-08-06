@@ -1,6 +1,6 @@
 // Package k8s is the Kubernetes transport. It shells out to the ambient-authed
-// `kubectl` binary — the same design choice as the docker transport shelling
-// `docker` over SSH — rather than importing client-go (a very large dependency
+// `kubectl` binary — the same design choice as the ssh transport shelling its
+// own client — rather than importing client-go (a very large dependency
 // tree) into this standalone module. kubectl is itself a CLI client using the
 // standard kubeconfig resolution, so ambient-auth "just works" and the local
 // os/exec here is coordination only (issuing CLI calls to a remote cluster), not
@@ -9,7 +9,7 @@
 // Kubectl provides cluster operations (Apply/Delete/Get/namespaces/wait/logs/
 // port-forward). A Kubectl bound to a pod+container also implements
 // exec.RemoteExecutor via `kubectl exec`, so it drops into the same env contract
-// the SSH and docker transports satisfy.
+// the SSH transport also satisfies.
 package k8s
 
 import (

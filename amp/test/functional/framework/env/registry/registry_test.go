@@ -14,7 +14,7 @@ import (
 func TestAddGetRoundTrip(t *testing.T) {
 	reg := registry.New(filepath.Join(t.TempDir(), "envs.json"))
 	stored, err := reg.Add(registry.Entry{
-		Name: "soak-1", Shape: "docker", Provider: "docker", TTL: time.Hour,
+		Name: "soak-1", Shape: "yb_k8s", Provider: "ampstack", TTL: time.Hour,
 		Data: map[string]string{"host": "1.2.3.4", "containers": "ep,yb"},
 	})
 	if err != nil {
@@ -34,7 +34,7 @@ func TestAddGetRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("Get: entry %s not found", stored.ID)
 	}
-	if got.Name != "soak-1" || got.Provider != "docker" || got.TTL != time.Hour {
+	if got.Name != "soak-1" || got.Provider != "ampstack" || got.TTL != time.Hour {
 		t.Errorf("round-tripped entry wrong: %+v", got)
 	}
 	if got.Data["host"] != "1.2.3.4" {

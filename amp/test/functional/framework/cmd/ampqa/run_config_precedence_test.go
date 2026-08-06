@@ -183,7 +183,7 @@ func TestRunAllSkippedEndToEndExits4(t *testing.T) {
 	// canary/fail-env would fail; use canary/pass but force no provider via a
 	// non-fake, unconfigured env-provider so the fake isn't selected and the test
 	// skips with ProviderUnavailableReason.
-	root.SetArgs([]string{"run", "--json", "--suite", "canary", "--test", "canary/pass", "--env-provider", "docker"})
+	root.SetArgs([]string{"run", "--json", "--suite", "canary", "--test", "canary/pass", "--env-provider", "universe"})
 	err := root.Execute()
 	if err == nil {
 		t.Fatalf("want all-skipped exit error, got nil. output: %s", out.String())

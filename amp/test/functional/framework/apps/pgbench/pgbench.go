@@ -2,7 +2,7 @@
 // exec.RemoteExecutor (the client-pod rule: pgbench never runs on the
 // coordinator). It shells `pgbench -i` / `pgbench -c -j -T ...` on the target
 // and parses tps/latency out of the captured output — no pgbench SDK exists,
-// this is the same shelling-out approach dockerhost and ssh use for their
+// this is the same shelling-out approach kubectl and ssh use for their
 // respective CLIs.
 package pgbench
 

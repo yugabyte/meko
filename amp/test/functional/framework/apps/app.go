@@ -43,7 +43,7 @@ func (s AppSignal) String() string {
 // App is the atomic reuse unit: one deployable/runnable thing behind a
 // uniform lifecycle, reused across tests, nemesis, tasks, and manual envs.
 // Concrete Apps (client pods, workload drivers) implement this however they
-// reach their target — docker over ssh, kubectl, a direct pg connection.
+// reach their target — kubectl, ssh, a direct pg connection.
 type App interface {
 	WaitReady(ctx context.Context) error
 	Signal(ctx context.Context, sig AppSignal) error

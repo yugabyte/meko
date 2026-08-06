@@ -44,6 +44,10 @@ const (
 	DefaultNamespacePrefix   = "ampqa-cp"
 	computeUser              = "cloud_admin"
 	computeDB                = "postgres"
+	// endpointContainer is the endpoint pod's amp container, named explicitly
+	// because the pod also carries a postgres-exporter sidecar — an unqualified
+	// `kubectl exec` would be ambiguous.
+	endpointContainer = "endpoint"
 	// computeRestartReadyTimeout bounds waiting for the endpoint's compute
 	// workload to report ready again after its pod is rolled.
 	computeRestartReadyTimeout = 5 * time.Minute
@@ -317,6 +321,19 @@ func (cc *controllerConn) ensureAppLocked(ctx context.Context) error {
 	p.kube = app.Kube()
 	p.log("sharedk8s: control plane ready in namespace %s", p.ampCfg.Namespace)
 	return nil
+}
+
+// storageAccess reports how to reach the control plane's backing amp storage
+// database. Only deploy mode can answer: this provider then owns the stack and
+// knows its backing, whereas an attached standing control plane is reached
+// through the controller API alone and its backing is not ours to name.
+func (p *Provider) storageAccess() (ampstack.StorageAccess, error) {
+	p.ctrl.mu.Lock()
+	defer p.ctrl.mu.Unlock()
+	if !p.deploy || p.app == nil {
+		return ampstack.StorageAccess{}, fmt.Errorf("env.sharedk8s in attach mode does not know the standing control plane's backing YugabyteDB")
+	}
+	return p.app.StorageAccess(), nil
 }
 
 // New builds a Provider from cfg.
@@ -1052,6 +1069,15 @@ type Env struct {
 	// and call ConnectEndpoint concurrently; all are closed in Teardown.
 	extraMu  sync.Mutex
 	extraPFs []*k8s.PortForward
+
+	// Memoized backing-storage access (see YBStorage). Resolving it may open a
+	// port-forward, so co-tenant tests must not each open their own; the result —
+	// including a failure — is computed once. Any forward is registered with
+	// addExtraPF, so Teardown closes it with the rest.
+	storageMu   sync.Mutex
+	storageCI   pg.ConnInfo
+	storageErr  error
+	storageDone bool
 }
 
 // addExtraPF records a port-forward ConnectEndpoint opened, so Teardown closes it.
@@ -1122,12 +1148,76 @@ func (e *Env) ConnectEndpoint(ctx context.Context, ep controller.Endpoint) (*pg.
 	return client, nil
 }
 
-// PGAccessor lets pg-based tests reach the endpoint (docker env's convention).
+// PGEndpoint is connection info for the endpoint's compute Postgres.
 func (e *Env) PGEndpoint() pg.ConnInfo { return e.pg }
 
+// YBStorage is connection info for the backing YugabyteDB's amp storage database
+// — the one holding the `amp_storage` schema the data path writes. Tests that
+// assert on what actually landed in storage need it; the endpoint's own compute
+// Postgres (PGEndpoint) cannot see it.
+//
+// A built-in yugabyted answers only inside the cluster, so reaching it opens a
+// port-forward; an external backing is dialled directly. Either way the result
+// is memoized, so co-tenant tests sharing this Env resolve it once. Any forward
+// is owned by the Env and closes in Teardown.
+func (e *Env) YBStorage(ctx context.Context) (pg.ConnInfo, error) {
+	e.storageMu.Lock()
+	defer e.storageMu.Unlock()
+	if e.storageDone {
+		return e.storageCI, e.storageErr
+	}
+	e.storageDone = true
+	e.storageCI, e.storageErr = e.resolveStorage(ctx)
+	return e.storageCI, e.storageErr
+}
+
+// resolveStorage does the work behind YBStorage, caller holding storageMu.
+func (e *Env) resolveStorage(ctx context.Context) (pg.ConnInfo, error) {
+	access, err := e.prov.storageAccess()
+	if err != nil {
+		return pg.ConnInfo{}, err
+	}
+	if access.ForwardTarget == "" {
+		return access.Conn, nil
+	}
+	if e.kube == nil {
+		return pg.ConnInfo{}, fmt.Errorf("reaching the built-in yugabyted needs a kube context (it is cluster-internal)")
+	}
+	pf, err := e.kube.PortForward(ctx, access.ForwardTarget, e.prov.nextLocalPort(), access.RemotePort)
+	if err != nil {
+		return pg.ConnInfo{}, fmt.Errorf("port-forward backing store %s: %w", access.ForwardTarget, err)
+	}
+	e.addExtraPF(pf)
+	ci := access.Conn
+	ci.Host, ci.Port = "127.0.0.1", pf.LocalPort()
+	return ci, nil
+}
+
+// ExecInEndpoint runs a shell command inside the endpoint's amp container and
+// returns its stdout. The storage daemons' management HTTP ports are
+// container-local in every shape amp ships and are never published, so reaching
+// them needs an in-container hop.
+func (e *Env) ExecInEndpoint(ctx context.Context, script string) (string, error) {
+	if e.kube == nil {
+		return "", fmt.Errorf("sharedk8s ExecInEndpoint requires a kube context (endpoint pods are cluster-internal)")
+	}
+	pod, err := e.computePodName(ctx)
+	if err != nil {
+		return "", fmt.Errorf("find endpoint %s compute pod: %w", e.endpointID, err)
+	}
+	res, err := e.kube.ForPod(pod, endpointContainer).Run(ctx, script)
+	if err != nil {
+		return "", fmt.Errorf("exec in endpoint %s pod %s: %w", e.endpointID, pod, err)
+	}
+	if res.ExitCode != 0 {
+		return "", fmt.Errorf("exec in endpoint %s pod %s exited %d: %s", e.endpointID, pod, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return res.Stdout, nil
+}
+
 // RestartCompute rolls the endpoint's compute pod and blocks until the endpoint
-// serves again — the same compute-restart capability the docker env provides, so
-// the restart regression tests run unchanged here. It deletes the endpoint's
+// serves again — the compute-restart capability the restart regression tests
+// gate on. It deletes the endpoint's
 // compute pod (its workload reschedules a fresh one on the shared external
 // YugabyteDB storage), waits for the workload to report ready, then
 // re-establishes the Service port-forward (the rolled pod's forward is dead and

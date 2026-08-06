@@ -1,9 +1,11 @@
 // Package clientpod is the client-pod mechanic (architecture §6): launching a
 // workload image next to the environment under test, never on the
-// coordinator. Two shapes share one interface — Docker (a detached container
-// on a remote docker host) and K8s (a bare Pod on a cluster) — so a workload
-// driver or test can address either uniformly. Stop always collects logs
-// before killing (apps.StopWithCollect — the report_kill lesson).
+// coordinator — as a bare Pod on a cluster, reached through kubectl. Stop always
+// collects logs before killing (apps.StopWithCollect — the report_kill lesson).
+//
+// ClientPod stays an interface even with one shape: workload drivers and tests
+// address it rather than K8s directly, so a second shape is an addition here
+// rather than a change at every call site.
 package clientpod
 
 import (
@@ -15,7 +17,6 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
-	"github.com/yugabyte/amp/test/functional/framework/apps/dockerhost"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -54,62 +55,6 @@ func followLines(logs string, cb func(line string)) error {
 		cb(sc.Text())
 	}
 	return sc.Err()
-}
-
-// --- Docker shape ---
-
-// Docker runs a client-pod workload as a detached container on a docker host
-// reached over a RemoteExecutor (env/docker's shape).
-type Docker struct {
-	host *dockerhost.Host
-	name string
-}
-
-// NewDocker binds a client pod to a docker host.
-func NewDocker(host *dockerhost.Host) *Docker { return &Docker{host: host} }
-
-// Start launches spec as a detached container.
-func (d *Docker) Start(ctx context.Context, spec Spec) error {
-	if spec.Name == "" {
-		return fmt.Errorf("clientpod docker: spec.Name is required")
-	}
-	d.name = spec.Name
-	_, err := d.host.RunContainer(ctx, dockerhost.ContainerSpec{
-		Name:    spec.Name,
-		Image:   spec.Image,
-		Detach:  true,
-		Env:     spec.Env,
-		Command: spec.Command,
-	})
-	if err != nil {
-		return fmt.Errorf("start client pod %s: %w", spec.Name, err)
-	}
-	return nil
-}
-
-// Follow reads the container's current logs and calls cb per line.
-func (d *Docker) Follow(ctx context.Context, cb func(line string)) error {
-	logs, err := d.host.Logs(ctx, d.name, 0)
-	if err != nil {
-		return fmt.Errorf("follow %s: %w", d.name, err)
-	}
-	return followLines(logs, cb)
-}
-
-// CollectInto fetches the container's full logs into into.
-func (d *Docker) CollectInto(ctx context.Context, into apps.ArtifactSink) error {
-	logs, err := d.host.Logs(ctx, d.name, 0)
-	if err != nil {
-		return fmt.Errorf("collect %s: %w", d.name, err)
-	}
-	return into.Add(d.name+"/clientpod.log", "log", []byte(logs))
-}
-
-// Stop always collects logs first, then removes the container.
-func (d *Docker) Stop(ctx context.Context, into apps.ArtifactSink) error {
-	return apps.StopWithCollect(ctx, into, d.CollectInto, func(ctx context.Context) error {
-		return d.host.StopRm(ctx, d.name)
-	})
 }
 
 // --- K8s shape ---

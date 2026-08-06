@@ -6,7 +6,7 @@
 #
 # Every default the code reads lives here (core/defaults_test.go asserts this).
 # A commented-out key, or a struct field with no key, has no sensible default:
-# the owning provider/task requires the caller to set it (e.g. env.docker.host).
+# the owning provider/task requires the caller to set it (e.g. env.sharedk8s.context).
 # --no-default-config skips this file entirely (debugging only).
 
 # owner is stamped as the yb_owner ownership tag/label on every cloud resource
@@ -79,16 +79,6 @@ env:
   # itself for that branch. A framework-wide yba_provisioned default is wrong
   # here — it would force a doomed YBA attempt on runs that carry no YBA creds.
   yb_deploy: ""
-
-  # env/docker: single-container amp on a remote docker host.
-  # host/ssh_user/ssh_key/ssh_port/endpoint_image/name_token: no default —
-  # Configured() is true only once host is set.
-  docker:
-    yb_image: "yugabytedb/yugabyte:latest"
-    compute_port_base: 55433
-    yb_port_base: 5433
-    # true → one shared YugabyteDB container per host; false → one per test.
-    yb_shared: true
 
   # env/sharedk8s: project-per-test on a control plane.
   # controller_url/context/namespace/user_id/pool_id: no default —
@@ -1205,8 +1195,8 @@ perf:
   # microbench is the phase-timed workload (perf/microbench): labelled DDL/bulk-DML
   # statements, each one timed Exec, each a `microbench.<phase>` datapoint in ms.
   # Unlike the rest of the tier it needs NO backing of its own and NO client pod —
-  # it measures the amp COMPUTE ENDPOINT the env provider serves (docker /
-  # sharedk8s / universe), which is the layer the tserver-connected workloads
+  # it measures the amp COMPUTE ENDPOINT the env provider serves (sharedk8s /
+  # universe), which is the layer the tserver-connected workloads
   # cannot see. Its gate is an intra-run RATIO, so it asserts on the first run
   # with no stored baseline.
   microbench:

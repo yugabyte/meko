@@ -498,7 +498,7 @@ func TestProvisionForwardDeathSurfacesClearError(t *testing.T) {
 // TestRestartComputeRollsPodAndReresolves: RestartCompute finds the endpoint's
 // compute pod, deletes it, waits for the Deployment to become Available again,
 // then re-establishes the Service port-forward and repoints PGEndpoint at it —
-// the compute-restart capability, mirroring the docker env's container restart.
+// the compute-restart capability the restart regression tests gate on.
 func TestRestartComputeRollsPodAndReresolves(t *testing.T) {
 	f := newFakeCtl()
 	defer f.close()
@@ -552,6 +552,147 @@ func TestRestartComputeRequiresKubeContext(t *testing.T) {
 	if err := e.RestartCompute(context.Background()); err == nil {
 		t.Fatal("RestartCompute must error when no kube context is configured")
 	}
+}
+
+// TestExecInEndpointNamesTheAmpContainer: the endpoint pod also carries a
+// postgres-exporter sidecar, so the exec MUST name the amp container — an
+// unqualified `kubectl exec` would land in whichever container the API server
+// picks first, and the pageserver's port only answers in one of them.
+func TestExecInEndpointNamesTheAmpContainer(t *testing.T) {
+	rec := &execRec{stdout: "metrics-payload"}
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run)
+	e := &Env{kube: kube, endpointID: "ep-1"}
+
+	out, err := e.ExecInEndpoint(context.Background(), "echo hi")
+	if err != nil {
+		t.Fatalf("ExecInEndpoint: %v", err)
+	}
+	if out != "metrics-payload" {
+		t.Errorf("stdout = %q, want the command's output", out)
+	}
+	if !hasSub(rec.recorded(), "exec yb-ep-ep-1-pod0 -c "+endpointContainer+" -- sh -c echo hi") {
+		t.Errorf("exec must target the %q container of the endpoint's pod, got: %v", endpointContainer, rec.recorded())
+	}
+}
+
+// TestExecInEndpointSurfacesNonZeroExit: k8s.Run reports a non-zero exit in its
+// Result rather than as an error, so ExecInEndpoint has to check it — otherwise a
+// failed in-container probe reads as empty output and the caller silently
+// concludes there were no rows.
+func TestExecInEndpointSurfacesNonZeroExit(t *testing.T) {
+	rec := &execRec{exit: 7, stderr: "python3: not found"}
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run)
+	e := &Env{kube: kube, endpointID: "ep-1"}
+
+	_, err := e.ExecInEndpoint(context.Background(), "python3 -c pass")
+	if err == nil {
+		t.Fatal("ExecInEndpoint must error on a non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "python3: not found") {
+		t.Errorf("error must carry the command's stderr, got: %v", err)
+	}
+}
+
+func TestExecInEndpointRequiresKubeContext(t *testing.T) {
+	e := &Env{endpointID: "ep-1"} // no kube
+	if _, err := e.ExecInEndpoint(context.Background(), "echo hi"); err == nil {
+		t.Fatal("ExecInEndpoint must error when no kube context is configured")
+	}
+}
+
+// TestYBStorageBuiltinForwardsOnce: the built-in yugabyted is cluster-internal,
+// so YBStorage must forward to it and hand back the LOCAL end. It also has to
+// memoize: co-tenant tests share one Env, and a forward per caller would leak
+// one kubectl process per storage assertion.
+func TestYBStorageBuiltinForwardsOnce(t *testing.T) {
+	rec := &execRec{}
+	st := &autoStarter{}
+	p := New(Config{Deploy: true, DeployTimeout: time.Minute, AmpStack: ampstack.Config{Namespace: "amp", Context: "x"}})
+	p.logf = nil
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run).WithStarter(st.start)
+	p.kube = kube
+	p.app = ampstack.New(ampstack.Config{Namespace: "amp"}).WithKube(kube)
+	e := &Env{prov: p, kube: kube, endpointID: "ep-1"}
+
+	ci, err := e.YBStorage(context.Background())
+	if err != nil {
+		t.Fatalf("YBStorage: %v", err)
+	}
+	if ci.Host != "127.0.0.1" || ci.Port == 0 {
+		t.Errorf("conn = %s:%d, want the local end of a forward", ci.Host, ci.Port)
+	}
+	if ci.Database != ampstack.DefaultDBName {
+		t.Errorf("database = %q, want %q", ci.Database, ampstack.DefaultDBName)
+	}
+	if got := st.requestedSpecs(); len(got) != 1 {
+		t.Fatalf("opened %d forwards, want 1: %v", len(got), got)
+	}
+
+	// Second call: same answer, no second forward.
+	ci2, err := e.YBStorage(context.Background())
+	if err != nil {
+		t.Fatalf("YBStorage (second call): %v", err)
+	}
+	if ci2 != ci {
+		t.Errorf("second call = %+v, want the memoized %+v", ci2, ci)
+	}
+	if got := st.requestedSpecs(); len(got) != 1 {
+		t.Errorf("second call opened another forward (%d total), want the first reused: %v", len(got), got)
+	}
+	// The forward is the Env's, so Teardown closes it.
+	if len(e.takeExtraPFs()) != 1 {
+		t.Error("the storage forward must be registered on the Env so Teardown closes it")
+	}
+}
+
+// TestYBStorageAttachModeReportsWhy: attached to a standing control plane, the
+// provider cannot know the backing. It must say so, because the caller turns that
+// into a skip — a bare failure would read as a product bug.
+func TestYBStorageAttachModeReportsWhy(t *testing.T) {
+	p := New(Config{ControllerURL: "http://cp.example:8080"}) // attach mode
+	p.logf = nil
+	e := &Env{prov: p, endpointID: "ep-1"}
+
+	_, err := e.YBStorage(context.Background())
+	if err == nil {
+		t.Fatal("YBStorage must error in attach mode")
+	}
+	if !strings.Contains(err.Error(), "attach mode") {
+		t.Errorf("error must name attach mode as the reason, got: %v", err)
+	}
+}
+
+// execRec is a scripted kubectl Runner for the exec paths: it answers the pod
+// name/phase selector queries and scripts the exec's own result.
+type execRec struct {
+	mu     sync.Mutex
+	calls  []string
+	stdout string
+	stderr string
+	exit   int
+}
+
+func (r *execRec) run(_ context.Context, _ io.Reader, argv []string) (execpkg.Result, error) {
+	joined := strings.Join(argv, " ")
+	r.mu.Lock()
+	r.calls = append(r.calls, joined)
+	r.mu.Unlock()
+	switch {
+	case strings.Contains(joined, "metadata.name"):
+		return execpkg.Result{Stdout: "yb-ep-ep-1-pod0\n"}, nil
+	case strings.Contains(joined, "status.phase"):
+		return execpkg.Result{Stdout: "Running\n"}, nil
+	default:
+		return execpkg.Result{Stdout: r.stdout, Stderr: r.stderr, ExitCode: r.exit}, nil
+	}
+}
+
+func (r *execRec) recorded() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.calls))
+	copy(out, r.calls)
+	return out
 }
 
 // kubeRec is a scripted kubectl Runner: it records each invocation and answers

@@ -5,14 +5,14 @@ package core_test
 //
 //  1. Every config-reading call site in the framework that has a genuine
 //     default (as opposed to a required, project-specific value like
-//     env.docker.host) finds that default in the embedded file — not just in
+//     env.sharedk8s.context) finds that default in the embedded file — not just in
 //     its own inline fallback constant. This is the "registry of knobs":
 //     extend it whenever a new default.yaml key is added.
 //  2. The load precedence — embedded → -c → -jc → -o, and the
 //     --no-default-config escape hatch — behaves as documented.
 //
 // It lives in core_test (not core) so it can import the leaf provider
-// packages (docker, sharedk8s, exclusivek8s, sched) that themselves import
+// packages (sharedk8s, exclusivek8s, sched) that themselves import
 // core, without an import cycle.
 
 import (
@@ -37,7 +37,6 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/artifact"
 	"github.com/yugabyte/amp/test/functional/framework/chaos"
 	"github.com/yugabyte/amp/test/functional/framework/core"
-	"github.com/yugabyte/amp/test/functional/framework/env/docker"
 	"github.com/yugabyte/amp/test/functional/framework/env/exclusivek8s"
 	"github.com/yugabyte/amp/test/functional/framework/env/sharedk8s"
 	"github.com/yugabyte/amp/test/functional/framework/env/universe"
@@ -124,21 +123,6 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if got := ybdeploy.Resolve(cfg, core.EnvSpec{}); got != ybdeploy.ModeBuiltin {
 		t.Errorf("ybdeploy.Resolve(defaults, no-pref) = %q, want %q", got, ybdeploy.ModeBuiltin)
-	}
-
-	// --- env.docker ---
-	dcfg := docker.FromConfig(cfg)
-	if dcfg.YBImage != docker.DefaultYBImage {
-		t.Errorf("docker YBImage = %q, want %q", dcfg.YBImage, docker.DefaultYBImage)
-	}
-	if dcfg.ComputePortBase != docker.DefaultComputePortBase {
-		t.Errorf("docker ComputePortBase = %d, want %d", dcfg.ComputePortBase, docker.DefaultComputePortBase)
-	}
-	if dcfg.YBPortBase != docker.DefaultYBPortBase {
-		t.Errorf("docker YBPortBase = %d, want %d", dcfg.YBPortBase, docker.DefaultYBPortBase)
-	}
-	if !dcfg.YBShared {
-		t.Errorf("docker YBShared = false, want true")
 	}
 
 	// --- env.sharedk8s ---

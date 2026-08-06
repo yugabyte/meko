@@ -1,12 +1,12 @@
 // Package exec defines the remote-execution contract. Concrete transports
-// (SSH, kubectl, docker) arrive in later milestones; M0 ships the interface
+// (SSH, kubectl) arrive in later milestones; M0 ships the interface
 // only so the environment contract can reference it.
 package exec
 
 import "context"
 
 // RemoteExecutor runs commands and copies files on a remote target — an SSH
-// host, a k8s pod, or a docker container. Every environment exposes one.
+// host or a k8s pod. Every environment exposes one.
 type RemoteExecutor interface {
 	Run(ctx context.Context, cmd string) (Result, error)
 	Copy(ctx context.Context, localPath, remotePath string) error

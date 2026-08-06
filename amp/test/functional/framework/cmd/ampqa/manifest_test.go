@@ -83,7 +83,7 @@ func TestManifestSurfacesConfigKeys(t *testing.T) {
 	m := decodeManifest(t)
 	for _, key := range []string{
 		"sched.capacity",
-		"env.docker.yb_image",
+		"env.sharedk8s.controller_service",
 		"functional.enabled",
 		"apps.yba.provider_type",
 		"versions.yugabytedb",
@@ -94,8 +94,8 @@ func TestManifestSurfacesConfigKeys(t *testing.T) {
 		}
 	}
 	// A known scalar default must round-trip.
-	if got := m.Data.Config["env.docker.yb_image"]; got != "yugabytedb/yugabyte:latest" {
-		t.Errorf("env.docker.yb_image = %v, want the default image", got)
+	if got := m.Data.Config["env.sharedk8s.controller_service"]; got != "amp-controller" {
+		t.Errorf("env.sharedk8s.controller_service = %v, want the default service name", got)
 	}
 }
 

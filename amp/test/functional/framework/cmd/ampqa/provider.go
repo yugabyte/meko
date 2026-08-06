@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
-	"github.com/yugabyte/amp/test/functional/framework/env/docker"
 	"github.com/yugabyte/amp/test/functional/framework/env/exclusivek8s"
 	"github.com/yugabyte/amp/test/functional/framework/env/fake"
 	"github.com/yugabyte/amp/test/functional/framework/env/sharedk8s"
@@ -19,7 +18,7 @@ import (
 
 // resolveProviderName maps the requested --env-provider (possibly "" / "auto")
 // to a concrete provider name, using the same config-driven precedence run uses
-// (universe > sharedk8s > exclusivek8s > docker); fakeEnv forces "fake". When
+// (universe > sharedk8s > exclusivek8s); fakeEnv forces "fake". When
 // nothing is configured but a kube-context is discoverable (ambient
 // `kubectl config current-context`, apps.ybk8s.kubecontext, or
 // env.sharedk8s.context), it defaults to self-building k8s (sharedk8s in deploy
@@ -40,8 +39,6 @@ func resolveProviderName(name string, cfg *core.Config, fakeEnv bool) string {
 		return "sharedk8s"
 	case exclusivek8s.FromConfig(cfg).Configured():
 		return "exclusivek8s"
-	case docker.FromConfig(cfg).Configured():
-		return "docker"
 	case discoverKubeContext(cfg) != "":
 		// Only an ambient/ybk8s kube-context: self-build on k8s.
 		return "sharedk8s"
@@ -75,11 +72,6 @@ func buildProvider(name string, cfg *core.Config, secrets *core.Secrets, masker 
 	switch name {
 	case "fake":
 		return &fake.Provider{Versions: detected, FailLabelSubstr: canary.EnvFailSubstr}, "", nil
-	case "docker":
-		if dcfg := docker.FromConfig(cfg); dcfg.Configured() {
-			return docker.New(dcfg), "", nil
-		}
-		return nil, "env.docker not configured", nil
 	case "sharedk8s":
 		scfg := sharedk8s.FromConfig(cfg)
 		// Deploy mode auto-selected off a bare ambient/ybk8s context: inject it so
@@ -107,8 +99,8 @@ func buildProvider(name string, cfg *core.Config, secrets *core.Secrets, masker 
 		}
 		return nil, "env.universe not configured (set env.universe.mode)", nil
 	case "none":
-		return nil, "no environment provider configured (set env.docker/env.sharedk8s/env.exclusivek8s/env.universe, or use --fake-env)", nil
+		return nil, "no environment provider configured (set env.sharedk8s/env.exclusivek8s/env.universe, or use --fake-env)", nil
 	default:
-		return nil, "", fmt.Errorf("unknown --env-provider %q (want fake|docker|sharedk8s|exclusivek8s|universe|auto)", name)
+		return nil, "", fmt.Errorf("unknown --env-provider %q (want fake|sharedk8s|exclusivek8s|universe|auto)", name)
 	}
 }
