@@ -1,16 +1,13 @@
 // Package cfg writes the per-daemon config files the yb-amp launcher
 // materializes under `.yb_amp/endpoints/<id>/` before spawning each storage
-// daemon. It is the Go port of the file-writing halves of the Rust
-// `control_plane` launcher:
+// daemon:
 //
 //   - pageserver.toml / metadata.json
-//     (control_plane/src/pageserver.rs)
-//   - safekeeper.toml (control_plane/src/safekeeper.rs, whose shape is
-//     safekeeper_api::config::SafekeeperConfigToml)
-//   - endpoint_storage.json (control_plane/src/endpoint_storage.rs)
-//   - the compute's config.json + in-spec postgresql.conf
-//     (control_plane/src/endpoint.rs, whose shapes are
-//     compute_api::spec::ComputeSpec / responses::ComputeConfig)
+//   - safekeeper.toml, whose shape is
+//     safekeeper_api::config::SafekeeperConfigToml
+//   - endpoint_storage.json
+//   - the compute's config.json + in-spec postgresql.conf, whose shapes are
+//     compute_api::spec::ComputeSpec / responses::ComputeConfig
 //
 // These files are parsed by the Rust daemons, so field names, TOML/JSON
 // types and nesting must match the Rust structs exactly — a wrong key or a

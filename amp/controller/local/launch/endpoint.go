@@ -494,16 +494,6 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 	// Trust path: no storage auth token for the compute→pageserver link.
 	var storageAuthToken *string
 
-	// Mint the endpoint_storage token (valid 24h).
-	esToken, err := env.GenerateAuthToken(jwt.MapClaims{
-		"branch_id":   conf.BranchID,
-		"endpoint_id": endpointID,
-		"exp":         time.Now().Add(24 * time.Hour).Unix(),
-	})
-	if err != nil {
-		return fmt.Errorf("mint endpoint_storage token: %w", err)
-	}
-
 	// Point the compute at this endpoint's own endpoint_storage (fallback to
 	// the template addr when none was provisioned, e.g. a compat test).
 	esAddr := env.EndpointStorage.ListenAddr
@@ -550,7 +540,6 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 	})
 
 	esAddrCopy := esAddr
-	esTokenCopy := esToken
 	computeConfig, err := cfg.BuildComputeConfig(cfg.ComputeSpecParams{
 		PostgresqlConf:               pgConf,
 		CreateTestUser:               false,
@@ -565,7 +554,6 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 		DropSubscriptionsBeforeStart: conf.DropSubscriptionsBeforeStart,
 		ReconfigureConcurrency:       conf.ReconfigureConcurrency,
 		EndpointStorageAddr:          &esAddrCopy,
-		EndpointStorageToken:         &esTokenCopy,
 		Features:                     nil,
 		ComputeCtlConfig:             conf.ComputeCtlConfig,
 	})

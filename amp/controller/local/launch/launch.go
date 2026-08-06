@@ -1,8 +1,6 @@
-// Package launch is the lifecycle-orchestration layer of the Go yb_amp_local
-// launcher: the Go port of the command handlers in
-// control_plane/src/bin/yb_amp_local.rs plus the node-level start/provision
-// helpers they call (control_plane/src/{pageserver,safekeeper,controller,
-// endpoint,endpoint_storage}.rs).
+// Package launch is the lifecycle-orchestration layer of the yb_amp_local
+// launcher: the command handlers plus the node-level start/provision helpers
+// they call.
 //
 // It sits on top of the lower layers:
 //

@@ -9,7 +9,7 @@ import (
 // ComputeCtl is the launcher's client for an endpoint's compute_ctl HTTP API.
 // Base URL is http://<external_http_address>. Unlike the storage daemons this
 // API is JWT-authenticated: the caller passes the already-minted bearer token.
-// It ports the /status and /terminate calls in control_plane/src/endpoint.rs.
+// It covers the /status and /terminate calls.
 type ComputeCtl struct {
 	t transport
 }

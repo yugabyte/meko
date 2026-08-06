@@ -2,8 +2,7 @@
 // yb-amp deployment (pageserver, safekeeper, controller, endpoint_storage),
 // applying the common log-file and pidfile conventions to each.
 //
-// It is a focused Go port of control_plane/src/background_process.rs. The
-// launcher does not itself stay running, so it records each spawned process by
+// The launcher does not itself stay running, so it records each spawned process by
 // storing its pid in a "<name>.pid" file. Depending on the binary, that file is
 // either written by the child itself (PidExpect) or created and locked by the
 // launcher and inherited by the child (PidCreate). The stored pid is later used

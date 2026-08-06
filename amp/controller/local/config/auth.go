@@ -110,8 +110,7 @@ func SignAuthToken(privateKeyPath string, claims jwt.Claims) (string, error) {
 }
 
 // GenerateAuthToken signs an EdDSA JWT with this env's private key, used to
-// mint compute + endpoint_storage tokens. Mirrors Rust
-// `LocalEnv::generate_auth_token`.
+// mint the compute_ctl tokens.
 func (e *LocalEnv) GenerateAuthToken(claims jwt.Claims) (string, error) {
 	return SignAuthToken(e.GetPrivateKeyPath(), claims)
 }

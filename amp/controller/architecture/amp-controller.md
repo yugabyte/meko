@@ -297,8 +297,7 @@ Per-endpoint configuration that amp-controller owns and tracks includes (non-exh
 - TLS state (enabled/disabled) and the certificates backing it (§7);
 - software version (for upgrades, §7);
 - otel configuration;
-- the placement group's endpoint_storage address and the endpoint-scoped access
-  token for it (§11.5).
+- the placement group's endpoint_storage address (§11.5).
 
 ### 5.4 Endpoints are self-contained blobs
 
@@ -317,7 +316,7 @@ The unit of deployment, scheduling, replacement, and upgrade is the whole endpoi
 amp-controller is the source of every endpoint's spec. It assembles the spec from its
 state store (§5.3, §10) — YBDB connection, the branch binding (carried to the endpoint
 image as the flat `BRANCH_ID`, §5.6), role,
-version, TLS/cert references, otel config, the endpoint_storage address + scoped token
+version, TLS/cert references, otel config, the endpoint_storage address
 (§11.5) — and hands it to that endpoint's compute_ctl, the single point of contact (§5.2).
 compute_ctl accepts a spec by three transports that all carry the **same payload** (one
 config object: the spec plus the TLS material and the JWKS used to authenticate its own
@@ -440,8 +439,7 @@ corner on any of them:
   Rotation of these client-facing TLS credentials is a requirement, not an
   option: connections *to* endpoints must survive cert turnover.
 - **Internal token rotation** — the machine-plane JWTs amp-controller mints (§9.4)
-  expire and must be rotatable without recreating endpoints — the
-  endpoint_storage access token (§11.5) in particular. Like certificate
+  expire and must be rotatable without recreating endpoints. Like certificate
   rotation above, this is a requirement of the model; the mechanism is
   deliberately not designed yet.
 - **Multi-cloud, multi-runtime** — endpoints on VMs (via ybops + node-agent) and on
@@ -856,11 +854,12 @@ universe like everything else (by default colocated in the same blob storage
 the pageserver uses).
 
 It is not optional plumbing: every compute spec amp-controller builds carries the
-endpoint_storage address plus an access token scoped to that endpoint's
-(branch, endpoint), so provisioning an endpoint implies a reachable
-endpoint_storage. amp-controller owns both halves: it runs the service, and it
-mints the scoped tokens, signed with the control-plane key (§9.4); their
-rotation is a stated requirement (§7), not yet designed.
+endpoint_storage address, so provisioning an endpoint implies a reachable
+endpoint_storage. The service serves one endpoint's pod on its own loopback and
+confines every object to a `{branch, endpoint}` prefix, which is what scopes a
+compute to its own data; an instance reachable beyond that pod would need
+request authentication added first (see
+[`endpoint-storage-apis.md`](../../compute/architecture/endpoint-storage-apis.md)).
 
 Its contents are performance state, not correctness state — losing them costs
 cache warmth, nothing else — so it inherits the replacement-is-recovery posture

@@ -6,9 +6,8 @@ import (
 	"strings"
 )
 
-// unquotedGUCRe matches values that need no quoting in postgresql.conf. A
-// verbatim port of the Rust `UNQUOTED_RE`
-// (control_plane/src/postgresql_conf.rs): the first alternative is the
+// unquotedGUCRe matches values that need no quoting in postgresql.conf:
+// the first alternative is the
 // INTEGER rule ("123", "-10kB"), the second the single-word UNQUOTED_STRING
 // rule ("off", "posix"). Everything else is quoted.
 var unquotedGUCRe = regexp.MustCompile(`(^[-+]?[0-9]+[a-zA-Z]*$)|(^[a-zA-Z][a-zA-Z0-9]*$)`)
@@ -39,9 +38,8 @@ func (c *postgresConf) appendLine(line string) {
 
 func (c *postgresConf) String() string { return c.b.String() }
 
-// PostgresqlConfParams is the input to BuildPostgresqlConf — the fields Rust
-// `Endpoint::setup_pg_conf` reads (control_plane/src/endpoint.rs ~464-610),
-// restricted to the Primary-mode path the harness uses.
+// PostgresqlConfParams is the input to BuildPostgresqlConf, restricted to the
+// Primary-mode path the harness uses.
 type PostgresqlConfParams struct {
 	// SharedBuffers overrides the default "1MB" (`--shared-buffers`).
 	SharedBuffers *string

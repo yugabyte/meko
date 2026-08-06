@@ -602,27 +602,15 @@ def write_safekeeper_config(datadir):
     (datadir / "safekeeper.toml").write_text("\n".join(lines) + "\n")
 
 
-def write_endpoint_storage_config(datadir, pemfile):
+def write_endpoint_storage_config(datadir):
     datadir.mkdir(parents=True, exist_ok=True)
     cfg = {
         "listen": f"{LISTEN_HOST}:{ENDPOINT_STORAGE_HTTP_PORT}",
-        "pemfile": str(pemfile),
         "yb_storage_conn": yb_conn_typed_json(),
     }
     path = datadir / "endpoint_storage.json"
     path.write_text(json.dumps(cfg))
     return path
-
-
-def generate_jwt_keypair(keydir):
-    """EdDSA keypair: public PEM used by endpoint_storage to verify tokens."""
-    keydir.mkdir(parents=True, exist_ok=True)
-    priv = keydir / "auth_private_key.pem"
-    pub = keydir / "auth_public_key.pem"
-    if not pub.exists():
-        subprocess.run(["openssl", "genpkey", "-algorithm", "ed25519", "-out", str(priv)], check=True)
-        subprocess.run(["openssl", "pkey", "-in", str(priv), "-pubout", "-out", str(pub)], check=True)
-    return pub
 
 
 def md5_role_password(password, user):
@@ -941,15 +929,13 @@ def main():
     sk_dir = RUN_DIR / "safekeeper"
     ps_dir = RUN_DIR / "pageserver"
     compute_pgdata = RUN_DIR / "pgdata"
-    keydir = RUN_DIR / "keys"
 
     # Operator overrides, before anything is rendered: they feed all three
     # config surfaces (compute spec, pageserver.toml, safekeeper.toml).
     OVERRIDES.update(fetch_overrides())
 
     # 1. endpoint_storage
-    pem = generate_jwt_keypair(keydir)
-    es_cfg = write_endpoint_storage_config(es_dir, pem)
+    es_cfg = write_endpoint_storage_config(es_dir)
     es = Service(
         "endpoint_storage",
         [BIN_DIR / "yb-endpoint-storage", es_cfg],

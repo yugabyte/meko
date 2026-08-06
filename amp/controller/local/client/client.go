@@ -1,8 +1,6 @@
 // Package client holds the thin HTTP clients the Go yb_amp_local launcher uses
 // to drive the controller and the co-located storage daemons (pageserver,
-// safekeeper) plus each endpoint's compute_ctl. They are straight ports of the
-// reqwest-based clients in control_plane/src/{controller,pageserver,safekeeper,
-// endpoint}.rs: same paths, methods, and JSON wire types. LSNs travel as
+// safekeeper) plus each endpoint's compute_ctl. LSNs travel as
 // "X/Y" hex strings on the wire, so they are modeled as Go strings here.
 package client
 

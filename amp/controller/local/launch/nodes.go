@@ -185,10 +185,8 @@ func endpointStorageInit(env *config.LocalEnv, conf *config.EndpointStorageConf)
 		return fmt.Errorf("create endpoint_storage datadir %q: %w", dataDir, err)
 	}
 	params := cfg.EndpointStorageParams{
-		Listen:            conf.ListenAddr,
-		Pemfile:           env.GetPublicKeyPath(),
-		RemoteStorageJSON: conf.RemoteStorageJSON,
-		YbConn:            env.Controller.Yb,
+		Listen: conf.ListenAddr,
+		YbConn: env.Controller.Yb,
 	}
 	return cfg.WriteEndpointStorageJSON(filepath.Join(dataDir, "endpoint_storage.json"), params)
 }

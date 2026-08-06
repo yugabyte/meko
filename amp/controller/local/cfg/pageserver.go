@@ -13,9 +13,8 @@ import (
 )
 
 // PageserverParams is the input to WritePageserverToml: the init-time
-// pageserver template plus the per-node overrides the Rust
-// `pageserver_init_make_toml` injects (control_plane/src/pageserver.rs
-// ~90-186). The written pageserver.toml carries ONLY these keys — it is not
+// pageserver template plus the per-node overrides.
+// The written pageserver.toml carries ONLY these keys — it is not
 // a full pageserver_api::config::ConfigToml; the daemon fills every other
 // field from its own defaults.
 type PageserverParams struct {
@@ -123,9 +122,8 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 	// merged (top-level keys) into the generated pageserver.toml, so a
 	// pageserver can be BORN with extra config — the integration harness
 	// sets GC on here (editing the toml after boot would need a restart,
-	// which bumps the generation and fences the RW compute). Mirrors the
-	// Rust control_plane seam (`config_toml.insert(key, item)` per fragment
-	// top-level key). Unset in production.
+	// which bumps the generation and fences the RW compute). The fragment's
+	// top-level keys are merged one by one. Unset in production.
 	if extra := strings.TrimSpace(os.Getenv("YB_PAGESERVER_TEST_EXTRA_TOML")); extra != "" {
 		var frag map[string]any
 		if err := toml.Unmarshal([]byte(extra), &frag); err != nil {

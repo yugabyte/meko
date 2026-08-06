@@ -179,9 +179,8 @@ func allocateEndpointStorageConf(env *config.LocalEnv, endpointID string) (confi
 		return config.EndpointStorageConf{}, err
 	}
 	return config.EndpointStorageConf{
-		ListenAddr:        addr,
-		RemoteStorageJSON: env.EndpointStorage.RemoteStorageJSON,
-		EndpointID:        endpointID,
+		ListenAddr: addr,
+		EndpointID: endpointID,
 	}, nil
 }
 

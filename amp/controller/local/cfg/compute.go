@@ -109,7 +109,6 @@ type ComputeSpec struct {
 	AuditLogLevel             string                    `json:"audit_log_level"`
 	LogsExportHost            *string                   `json:"logs_export_host"`
 	EndpointStorageAddr       *string                   `json:"endpoint_storage_addr"`
-	EndpointStorageToken      *string                   `json:"endpoint_storage_token"`
 	Autoprewarm               bool                      `json:"autoprewarm"`
 	OffloadLfcIntervalSeconds *uint64                   `json:"offload_lfc_interval_seconds"`
 	SuspendTimeoutSeconds     int64                     `json:"suspend_timeout_seconds"`
@@ -175,9 +174,8 @@ func BuildJWKS(pub ed25519.PublicKey) JwkSet {
 	}
 }
 
-// ComputeSpecParams is the input to BuildComputeConfig — the values the Rust
-// `Endpoint::start` threads into the ComputeSpec (control_plane/src/endpoint.rs
-// ~785-876) for the Primary path. Fields the minimal launcher always fixes
+// ComputeSpecParams is the input to BuildComputeConfig — the values threaded
+// into the ComputeSpec for the Primary path. Fields the minimal launcher always fixes
 // (format_version, suspend_timeout, audit level, and the many null options)
 // are filled by BuildComputeConfig, not exposed here.
 type ComputeSpecParams struct {
@@ -209,7 +207,6 @@ type ComputeSpecParams struct {
 	// ReconfigureConcurrency defaults to 1 when zero.
 	ReconfigureConcurrency    int
 	EndpointStorageAddr       *string
-	EndpointStorageToken      *string
 	Autoprewarm               bool
 	OffloadLfcIntervalSeconds *uint64
 	// Features is usually empty; serialized as [].
@@ -290,7 +287,6 @@ func BuildComputeConfig(p ComputeSpecParams) (ComputeConfig, error) {
 		AuditLogLevel:             ComputeAuditDisabled,
 		LogsExportHost:            nil,
 		EndpointStorageAddr:       p.EndpointStorageAddr,
-		EndpointStorageToken:      p.EndpointStorageToken,
 		Autoprewarm:               p.Autoprewarm,
 		OffloadLfcIntervalSeconds: p.OffloadLfcIntervalSeconds,
 		SuspendTimeoutSeconds:     -1,

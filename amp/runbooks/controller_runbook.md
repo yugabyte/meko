@@ -123,7 +123,7 @@ Error: unknown configuration item(s) in pageserver.toml: …                    
 ```
 
 How far it got is diagnostic: "endpoint_storage + safekeeper healthy, pageserver fails" means the
-backing YB and JWT/keys are fine and you've narrowed it to the pageserver's config or binary.
+backing YB is fine and you've narrowed it to the pageserver's config or binary.
 
 ### 5. Confirm pre-existing vs. your change, then fix at the authoritative layer
 

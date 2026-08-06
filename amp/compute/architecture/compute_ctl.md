@@ -197,7 +197,7 @@ keep working:
 | `pageserver_conninfo` | `pageserver_connection_info` | `pageserver_connstring` field, then `yb_amp.pageserver_connstring` GUC |
 | `safekeeper_connstrings` | `safekeeper_connstrings` | `yb_amp.safekeepers` GUC (required, non-empty, unique entries — Primary only) |
 | `storage_auth_token` | `storage_auth_token` | — (bearer auth to PS/SK when set; exported to Postgres as `YBAMP_AUTH_TOKEN`) |
-| `endpoint_storage_addr` / `_token` | spec fields | `yb_amp.endpoint_storage_addr` / `_token` GUCs (used for LFC prewarm/offload) |
+| `endpoint_storage_addr` | `endpoint_storage_addr` | `yb_amp.endpoint_storage_addr` GUC (used for LFC prewarm/offload) |
 
 The compute is **single-shard and branch-scoped**: storage is addressed by a single
 `BranchId`, with no shard or tenant/timeline identifiers anywhere in the spec or the
@@ -376,8 +376,8 @@ The Local File Cache's contents can be saved to and restored from
 **endpoint_storage** (see [`endpoint-storage-apis.md`](endpoint-storage-apis.md)),
 whose blobs persist in YugabyteDB via the `YbStore` remote-storage backend — losing
 that store costs only cache warmth, never durability. The object key is
-`{endpoint_storage_addr}/{branch_id}/{endpoint_id}/lfc_state`, authorized by the
-spec's `endpoint_storage_token`.
+`{endpoint_storage_addr}/{branch_id}/{endpoint_id}/lfc_state`, with the spec's
+`endpoint_storage_addr` locating the service.
 
 - **Prewarm** (`POST /lfc/prewarm`, or automatically at startup when
   `spec.autoprewarm`): GET the state (404 ⇒ `skipped` — normal on first start),
@@ -444,11 +444,11 @@ on `compute_ctl` in a few concrete places:
   `POST /terminate` to retire, `POST /promote` for write-endpoint cut-over.
 - **The spec is the durable artifact (§5.3).** Statelessness works because
   everything needed to recreate a compute lives in the spec: storage connection
-  info, the `branch_id` binding, mode, TLS/JWKS, endpoint_storage address + token.
+  info, the `branch_id` binding, mode, TLS/JWKS, the endpoint_storage address.
   `compute_ctl` holds none of this durably itself; durable state lives in
   YugabyteDB behind the pageserver/safekeeper.
 - **endpoint_storage (§11.5).** The LFC prewarm/offload path is the live consumer
-  of the endpoint_storage address + scoped token minted into every spec.
+  of the endpoint_storage address carried in every spec.
 - **Control-plane signing key (§9.4).** The external API verifies JWTs against the
   JWKS embedded in `compute_ctl_config` — the public half of the controller's key.
 - **Single-writer invariant (§4.4 / §7).** At most one Primary per branch; upgrades

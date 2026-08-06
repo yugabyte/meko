@@ -7,8 +7,8 @@ import (
 )
 
 // Pageserver is the launcher's client for a pageserver's management HTTP API.
-// Base URL is http://<listen_http_addr>. It ports the subset of
-// pageserver_client::mgmt_api used by control_plane/src/pageserver.rs.
+// Base URL is http://<listen_http_addr>. It covers the subset of
+// pageserver_client::mgmt_api the launcher needs.
 type Pageserver struct {
 	t transport
 }

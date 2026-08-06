@@ -1,6 +1,5 @@
-// Package config is the Go port of the yb-amp launcher's on-disk config
-// model and environment helpers, originally Rust
-// `control_plane/src/local_env.rs`. It owns the `.yb_amp/config` (TOML)
+// Package config is the yb-amp launcher's on-disk config model and
+// environment helpers. It owns the `.yb_amp/config` (TOML)
 // schema, the primitive id/auth types shared across the launcher, the
 // repo-layout path helpers, and the ed25519 keypair + JWT signing used
 // to mint storage-daemon tokens.

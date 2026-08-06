@@ -37,7 +37,7 @@ A crashed service is restarted with backoff (default 2 s); more than
 Kubernetes replaces it.
 
 All durable state is in YugabyteDB; the pod's `/data` volume holds only
-configs, logs, keys, and the compute's ephemeral `pgdata`, so the pod
+configs, logs, and the compute's ephemeral `pgdata`, so the pod
 is stateless — a `Deployment`, not a `StatefulSet`. The volume is an
 `emptyDir` by default; setting `persistence.storageClass` in the chart
 swaps it for a PVC (useful to keep `pgdata` warm across restarts, not

@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use axum::body::{Body, Bytes};
 use axum::response::{IntoResponse, Response};
 use axum::{Router, http::StatusCode};
-use endpoint_storage::{PrefixS3Path, S3Path, Storage, bad_request, internal_error, not_found, ok};
+use endpoint_storage::{S3Path, Storage, bad_request, internal_error, not_found, ok};
 use remote_storage::TimeoutOrCancel;
 use remote_storage::{DownloadError, DownloadOpts};
 use std::sync::Arc;
@@ -10,17 +10,11 @@ use tracing::info;
 use utils::backoff::retry;
 
 pub fn app(state: Arc<Storage>) -> Router<()> {
-    use axum::routing::{delete as _delete, get as _get};
-    let delete_prefix = _delete(delete_prefix);
+    use axum::routing::get as _get;
     // NB: On any changes do not forget to update the OpenAPI spec
     // in /endpoint_storage/src/openapi_spec.yml.
     Router::new()
-        .route(
-            "/{branch_id}/{endpoint_id}/{*path}",
-            _get(get).put(set).delete(delete),
-        )
-        .route("/{branch_id}/{endpoint_id}", delete_prefix.clone())
-        .route("/{branch_id}", delete_prefix)
+        .route("/{branch_id}/{endpoint_id}/{*path}", _get(get).put(set))
         .route("/metrics", _get(metrics))
         .route("/status", _get(async || StatusCode::OK.into_response()))
         .with_state(state)
@@ -109,40 +103,6 @@ async fn set(S3Path { path }: S3Path, state: State, bytes: Bytes) -> Result {
     .await
     .unwrap_or(Err(anyhow!("uploading cancelled")))
     .map_err(|e| internal_error(e, path, "reading response"))?;
-    Ok(ok())
-}
-
-async fn delete(S3Path { path }: S3Path, state: State) -> Result {
-    info!(%path, "deleting");
-    let cancel = state.cancel.clone();
-    retry(
-        async || state.storage.delete(&path, &cancel).await,
-        TimeoutOrCancel::caused_by_cancel,
-        WARN_THRESHOLD,
-        MAX_RETRIES,
-        "deleting",
-        &cancel,
-    )
-    .await
-    .unwrap_or(Err(anyhow!("deleting cancelled")))
-    .map_err(|e| internal_error(e, path, "deleting"))?;
-    Ok(ok())
-}
-
-async fn delete_prefix(PrefixS3Path { path }: PrefixS3Path, state: State) -> Result {
-    info!(%path, "deleting prefix");
-    let cancel = state.cancel.clone();
-    retry(
-        async || state.storage.delete_prefix(&path, &cancel).await,
-        TimeoutOrCancel::caused_by_cancel,
-        WARN_THRESHOLD,
-        MAX_RETRIES,
-        "deleting prefix",
-        &cancel,
-    )
-    .await
-    .unwrap_or(Err(anyhow!("deleting prefix cancelled")))
-    .map_err(|e| internal_error(e, path, "deleting prefix"))?;
     Ok(ok())
 }
 

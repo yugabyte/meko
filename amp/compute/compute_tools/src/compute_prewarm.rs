@@ -12,36 +12,26 @@ use tokio::{io::AsyncReadExt, select, spawn};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-/// A pair of url and a token to query endpoint storage for LFC prewarm-related tasks
-struct EndpointStoragePair {
-    url: String,
-    token: String,
-}
-
 const KEY: &str = "lfc_state";
-impl EndpointStoragePair {
-    /// endpoint_id is set to None while prewarming from other endpoint, see compute_promote.rs
-    /// If not None, takes precedence over pspec.spec.endpoint_id
-    fn from_spec_and_endpoint(
-        pspec: &crate::compute::ParsedSpec,
-        endpoint_id: Option<String>,
-    ) -> Result<Self> {
-        let endpoint_id = endpoint_id.as_ref().or(pspec.spec.endpoint_id.as_ref());
-        let Some(ref endpoint_id) = endpoint_id else {
-            bail!("pspec.endpoint_id missing, other endpoint_id not provided")
-        };
-        let Some(ref base_uri) = pspec.endpoint_storage_addr else {
-            bail!("pspec.endpoint_storage_addr missing")
-        };
-        let branch_id = pspec.branch_id;
 
-        let url = format!("http://{base_uri}/{branch_id}/{endpoint_id}/{KEY}");
-        let Some(ref token) = pspec.endpoint_storage_token else {
-            bail!("pspec.endpoint_storage_token missing")
-        };
-        let token = token.clone();
-        Ok(EndpointStoragePair { url, token })
-    }
+/// The endpoint storage URL for this endpoint's LFC state.
+///
+/// endpoint_id is set to None while prewarming from other endpoint, see compute_promote.rs
+/// If not None, takes precedence over pspec.spec.endpoint_id
+fn endpoint_storage_url(
+    pspec: &crate::compute::ParsedSpec,
+    endpoint_id: Option<String>,
+) -> Result<String> {
+    let endpoint_id = endpoint_id.as_ref().or(pspec.spec.endpoint_id.as_ref());
+    let Some(ref endpoint_id) = endpoint_id else {
+        bail!("pspec.endpoint_id missing, other endpoint_id not provided")
+    };
+    let Some(ref base_uri) = pspec.endpoint_storage_addr else {
+        bail!("pspec.endpoint_storage_addr missing")
+    };
+    let branch_id = pspec.branch_id;
+
+    Ok(format!("http://{base_uri}/{branch_id}/{endpoint_id}/{KEY}"))
 }
 
 impl ComputeNode {
@@ -90,9 +80,9 @@ impl ComputeNode {
     }
 
     /// from_endpoint: None for endpoint managed by this compute_ctl
-    fn endpoint_storage_pair(&self, from_endpoint: Option<String>) -> Result<EndpointStoragePair> {
+    fn endpoint_storage_url(&self, from_endpoint: Option<String>) -> Result<String> {
         let state = self.state.lock().unwrap();
-        EndpointStoragePair::from_spec_and_endpoint(state.pspec.as_ref().unwrap(), from_endpoint)
+        endpoint_storage_url(state.pspec.as_ref().unwrap(), from_endpoint)
     }
 
     /// Request LFC state from endpoint storage and load corresponding pages into Postgres.
@@ -101,17 +91,14 @@ impl ComputeNode {
         from_endpoint: Option<String>,
         token: CancellationToken,
     ) -> Result<LfcPrewarmState> {
-        let EndpointStoragePair {
-            url,
-            token: storage_token,
-        } = self.endpoint_storage_pair(from_endpoint)?;
+        let url = self.endpoint_storage_url(from_endpoint)?;
 
         #[cfg(feature = "testing")]
         fail::fail_point!("compute-prewarm", |_| bail!("compute-prewarm failpoint"));
 
         info!(%url, "requesting LFC state from endpoint storage");
         let mut now = Instant::now();
-        let request = Client::new().get(&url).bearer_auth(storage_token);
+        let request = Client::new().get(&url);
         let response = select! {
             _ = token.cancelled() => return Ok(LfcPrewarmState::Cancelled),
             response = request.send() => response
@@ -227,7 +214,7 @@ impl ComputeNode {
     }
 
     async fn offload_lfc_impl(&self) -> Result<LfcOffloadState> {
-        let EndpointStoragePair { url, token } = self.endpoint_storage_pair(None)?;
+        let url = self.endpoint_storage_url(None)?;
         info!(%url, "requesting LFC state from Postgres");
 
         let mut now = Instant::now();
@@ -258,7 +245,7 @@ impl ComputeNode {
         let compressed_len = compressed.len();
         info!(%url, "downloaded LFC state, compressed size {compressed_len}");
 
-        let request = Client::new().put(url).bearer_auth(token).body(compressed);
+        let request = Client::new().put(url).body(compressed);
         let response = request
             .send()
             .await

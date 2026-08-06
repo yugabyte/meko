@@ -10,8 +10,7 @@ import (
 // RepoLock is an flock-based guard over the yb-amp repository directory (the
 // ".yb_amp/" dir). yb-amp stores its state in a collection of plain files, so
 // it is not safe to run multiple commands concurrently; callers take this lock
-// for the duration of a command. Mirrors the RepoLock in
-// control_plane/src/bin/yb_amp_local.rs.
+// for the duration of a command.
 //
 // The lock is an advisory exclusive flock held for as long as the directory
 // descriptor is open; Close releases it.

@@ -13,7 +13,6 @@ paths:
     description: Healthcheck endpoint
     get:
       description: Healthcheck
-      security: []
       responses:
         "200":
           description: OK
@@ -46,9 +45,9 @@ paths:
                 type: string
                 format: binary
         "400":
+          description: Key escapes its branch/endpoint prefix
+        "404":
           description: File was not found
-        "403":
-          description: JWT does not authorize request to this route
     put:
       description: Insert file into blob storage. If file exists, override it
       requestBody:
@@ -60,57 +59,5 @@ paths:
       responses:
         "200":
           description: File was inserted successfully
-        "403":
-          description: JWT does not authorize request to this route
-    delete:
-      description: Delete file from blob storage
-      responses:
-        "200":
-          description: File was successfully deleted or not found
-        "403":
-          description: JWT does not authorize request to this route
-
-  /{branch_id}/{endpoint_id}:
-    parameters:
-      - name: branch_id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: endpoint_id
-        in: path
-        required: true
-        schema:
-          type: string
-    delete:
-      description: Delete endpoint data from blob storage
-      responses:
-        "200":
-          description: Endpoint data was deleted
-        "403":
-          description: JWT does not authorize request to this route
-
-  /{branch_id}:
-    parameters:
-      - name: branch_id
-        in: path
-        required: true
-        schema:
-          type: string
-    delete:
-      description: Delete branch data from blob storage
-      responses:
-        "200":
-          description: Branch data was deleted
-        "403":
-          description: JWT does not authorize request to this route
-
-components:
-  securitySchemes:
-    JWT:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-
-security:
-  - JWT: []
+        "400":
+          description: Key escapes its branch/endpoint prefix, or the body exceeds the size limit

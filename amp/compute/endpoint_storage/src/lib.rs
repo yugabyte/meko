@@ -1,13 +1,7 @@
-pub mod claims;
-use crate::claims::{DeletePrefixClaims, EndpointStorageClaims};
-use anyhow::Result;
 use axum::extract::{FromRequestParts, Path};
 use axum::response::{IntoResponse, Response};
 use axum::{RequestPartsExt, http::StatusCode, http::request::Parts};
-use axum_extra::TypedHeader;
-use axum_extra::headers::{Authorization, authorization::Bearer};
 use camino::Utf8PathBuf;
-use jsonwebtoken::{DecodingKey, Validation};
 use remote_storage::{GenericRemoteStorage, RemotePath};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -16,26 +10,6 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 use utils::id::{BranchId, EndpointId};
-
-// simplified version of utils::auth::JwtAuth
-pub struct JwtAuth {
-    decoding_key: DecodingKey,
-    validation: Validation,
-}
-
-pub const VALIDATION_ALGO: jsonwebtoken::Algorithm = jsonwebtoken::Algorithm::EdDSA;
-impl JwtAuth {
-    pub fn new(key: &[u8]) -> Result<Self> {
-        Ok(Self {
-            decoding_key: DecodingKey::from_ed_pem(key)?,
-            validation: Validation::new(VALIDATION_ALGO),
-        })
-    }
-
-    pub fn decode<T: serde::de::DeserializeOwned>(&self, token: &str) -> Result<T> {
-        Ok(jsonwebtoken::decode(token, &self.decoding_key, &self.validation).map(|t| t.claims)?)
-    }
-}
 
 fn normalize_key(key: &str) -> StdResult<Utf8PathBuf, String> {
     let key = clean_utf8(&Utf8PathBuf::from(key));
@@ -75,7 +49,6 @@ fn clean_utf8(path: &camino::Utf8Path) -> Utf8PathBuf {
 }
 
 pub struct Storage {
-    pub auth: JwtAuth,
     pub storage: GenericRemoteStorage,
     pub cancel: CancellationToken,
     pub max_upload_file_limit: usize,
@@ -86,12 +59,6 @@ struct KeyRequest {
     branch_id: BranchId,
     endpoint_id: EndpointId,
     path: String,
-}
-
-#[derive(Deserialize, Serialize, PartialEq)]
-struct PrefixKeyRequest {
-    branch_id: BranchId,
-    endpoint_id: Option<EndpointId>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -114,11 +81,6 @@ impl TryFrom<&KeyRequest> for S3Path {
     }
 }
 
-fn unauthorized(route: impl Display, claims: impl Display) -> Response {
-    debug!(%route, %claims, "route doesn't match claims");
-    StatusCode::UNAUTHORIZED.into_response()
-}
-
 pub fn bad_request(err: impl Display, desc: &'static str) -> Response {
     debug!(%err, desc);
     (StatusCode::BAD_REQUEST, err.to_string()).into_response()
@@ -137,92 +99,22 @@ pub fn not_found(key: impl ToString) -> Response {
     (StatusCode::NOT_FOUND, key.to_string()).into_response()
 }
 
+/// The route is the whole request: `{branch_id}/{endpoint_id}` is the prefix a
+/// key is confined to, and [`normalize_key`] keeps the rest of the path from
+/// escaping it.
 impl FromRequestParts<Arc<Storage>> for S3Path {
     type Rejection = Response;
     async fn from_request_parts(
         parts: &mut Parts,
-        state: &Arc<Storage>,
+        _state: &Arc<Storage>,
     ) -> Result<Self, Self::Rejection> {
         let Path(path): Path<KeyRequest> = parts
             .extract()
             .await
             .map_err(|e| bad_request(e, "invalid route"))?;
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|e| bad_request(e, "invalid token"))?;
-        let claims: EndpointStorageClaims = state
-            .auth
-            .decode(bearer.token())
-            .map_err(|e| bad_request(e, "decoding token"))?;
-
-        // Read paths may have different endpoint ids. For readonly -> readwrite replica
-        // prewarming, endpoint must read other endpoint's data.
-        let endpoint_id = if parts.method == axum::http::Method::GET {
-            claims.endpoint_id.clone()
-        } else {
-            path.endpoint_id.clone()
-        };
-
-        let route = EndpointStorageClaims {
-            branch_id: path.branch_id,
-            endpoint_id,
-            exp: claims.exp,
-        };
-        if route != claims {
-            return Err(unauthorized(route, claims));
-        }
         (&path)
             .try_into()
             .map_err(|e| bad_request(e, "invalid route"))
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub struct PrefixS3Path {
-    pub path: RemotePath,
-}
-
-impl From<&DeletePrefixClaims> for PrefixS3Path {
-    fn from(path: &DeletePrefixClaims) -> Self {
-        let endpoint_id = path
-            .endpoint_id
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or("".to_string());
-        let path = Utf8PathBuf::from(path.branch_id.to_string()).join(endpoint_id);
-        let path = RemotePath::new(&path).unwrap(); // unwrap() because the path is already relative
-        PrefixS3Path { path }
-    }
-}
-
-impl FromRequestParts<Arc<Storage>> for PrefixS3Path {
-    type Rejection = Response;
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &Arc<Storage>,
-    ) -> Result<Self, Self::Rejection> {
-        let Path(path) = parts
-            .extract::<Path<PrefixKeyRequest>>()
-            .await
-            .map_err(|e| bad_request(e, "invalid route"))?;
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|e| bad_request(e, "invalid token"))?;
-        let claims: DeletePrefixClaims = state
-            .auth
-            .decode(bearer.token())
-            .map_err(|e| bad_request(e, "invalid token"))?;
-        let route = DeletePrefixClaims {
-            branch_id: path.branch_id,
-            endpoint_id: path.endpoint_id,
-            exp: claims.exp,
-        };
-        if route != claims {
-            return Err(unauthorized(route, claims));
-        }
-        Ok((&route).into())
     }
 }
 
@@ -253,49 +145,24 @@ mod tests {
 
     #[test]
     fn s3_path() {
-        let auth = EndpointStorageClaims {
-            branch_id: BRANCH_ID,
-            endpoint_id: ENDPOINT_ID.into(),
-            exp: u64::MAX,
-        };
         let s3_path = |key| {
             let path = &format!("{BRANCH_ID}/{ENDPOINT_ID}/{key}");
             let path = RemotePath::from_string(path).unwrap();
             S3Path { path }
         };
 
-        let path = "cache_key".to_string();
         let mut key_path = KeyRequest {
-            path,
-            branch_id: auth.branch_id,
-            endpoint_id: auth.endpoint_id,
+            branch_id: BRANCH_ID,
+            endpoint_id: ENDPOINT_ID.into(),
+            path: "cache_key".to_string(),
         };
         assert_eq!(S3Path::try_from(&key_path).unwrap(), s3_path(key_path.path));
 
         key_path.path = "we/can/have/nested/paths".to_string();
         assert_eq!(S3Path::try_from(&key_path).unwrap(), s3_path(key_path.path));
 
+        // A key cannot climb out of its endpoint's prefix.
         key_path.path = "../error/hello/../".to_string();
         assert!(S3Path::try_from(&key_path).is_err());
-    }
-
-    #[test]
-    fn prefix_s3_path() {
-        let mut path = DeletePrefixClaims {
-            branch_id: BRANCH_ID,
-            endpoint_id: None,
-            exp: 0,
-        };
-        let prefix_path = |s: String| RemotePath::from_string(&s).unwrap();
-        assert_eq!(
-            PrefixS3Path::from(&path).path,
-            prefix_path(format!("{BRANCH_ID}"))
-        );
-
-        path.endpoint_id = Some(ENDPOINT_ID.into());
-        assert_eq!(
-            PrefixS3Path::from(&path).path,
-            prefix_path(format!("{BRANCH_ID}/{ENDPOINT_ID}"))
-        );
     }
 }

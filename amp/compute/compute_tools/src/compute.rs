@@ -6,8 +6,8 @@ use compute_api::responses::{
     LfcPrewarmState, PromoteState, TlsConfig,
 };
 use compute_api::spec::{
-    ComputeAudit, ComputeFeature, ComputeMode, ComputeSpec, ExtVersion,
-    PageserverConnectionInfo, PageserverProtocol, PgIdent,
+    ComputeAudit, ComputeFeature, ComputeMode, ComputeSpec, ExtVersion, PageserverConnectionInfo,
+    PageserverProtocol, PgIdent,
 };
 use futures::StreamExt;
 use futures::future::join_all;
@@ -266,7 +266,6 @@ pub struct ParsedSpec {
     pub storage_auth_token: Option<String>,
     /// k8s dns name and port
     pub endpoint_storage_addr: Option<String>,
-    pub endpoint_storage_token: Option<String>,
 }
 
 impl ParsedSpec {
@@ -368,10 +367,6 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
             .endpoint_storage_addr
             .clone()
             .or_else(|| spec.cluster.settings.find("yb_amp.endpoint_storage_addr"));
-        let endpoint_storage_token = spec
-            .endpoint_storage_token
-            .clone()
-            .or_else(|| spec.cluster.settings.find("yb_amp.endpoint_storage_token"));
 
         let res = ParsedSpec {
             spec,
@@ -380,7 +375,6 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
             storage_auth_token,
             branch_id,
             endpoint_storage_addr,
-            endpoint_storage_token,
         };
 
         // Now check validity of the parsed specification
@@ -430,7 +424,6 @@ struct StartVmMonitorResult {
 }
 
 impl ComputeNode {
-
     pub fn new(params: ComputeNodeParams, config: ComputeConfig) -> Result<Self> {
         let connstr = params.connstr.as_str();
         let mut conn_conf = postgres::config::Config::from_str(connstr)
@@ -1557,7 +1550,8 @@ impl ComputeNode {
     pub fn start_postgres(&self, storage_auth_token: Option<String>) -> Result<PostgresHandle> {
         let pgdata_path = Path::new(&self.params.pgdata);
 
-        let env_vars: Vec<(String, String)> = if let Some(storage_auth_token) = &storage_auth_token {
+        let env_vars: Vec<(String, String)> = if let Some(storage_auth_token) = &storage_auth_token
+        {
             vec![("YBAMP_AUTH_TOKEN".to_owned(), storage_auth_token.to_owned())]
         } else {
             vec![]

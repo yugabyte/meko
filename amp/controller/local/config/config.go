@@ -44,28 +44,23 @@ func DefaultYbAmpControllerConf() YbAmpControllerConf {
 	}
 }
 
-// EndpointStorageConf mirrors Rust `EndpointStorageConf`.
+// EndpointStorageConf is the `[endpoint_storage]` stanza of .yb_amp/config.
 type EndpointStorageConf struct {
 	// ListenAddr is a socket address ("host:port"), default 127.0.0.1:9993.
 	ListenAddr string `toml:"listen_addr"`
-	// RemoteStorageJSON, if set, is written verbatim as the `storage_kind`
-	// block of endpoint_storage.json.
-	RemoteStorageJSON *string `toml:"remote_storage_json,omitempty"`
 	// EndpointID is the endpoint whose folder holds this instance's
 	// datadir. Empty for the init-time template (skipped when empty).
 	EndpointID string `toml:"endpoint_id,omitempty"`
 }
 
-// endpointStorageDefaultAddr reproduces Rust
-// `ENDPOINT_STORAGE_DEFAULT_ADDR`.
+// endpointStorageDefaultAddr is the address an absent `listen_addr` selects.
 const endpointStorageDefaultAddr = "127.0.0.1:9993"
 
-// DefaultEndpointStorageConf reproduces Rust `EndpointStorageConf::default`.
+// DefaultEndpointStorageConf is the stanza an absent `[endpoint_storage]` means.
 func DefaultEndpointStorageConf() EndpointStorageConf {
 	return EndpointStorageConf{
-		ListenAddr:        endpointStorageDefaultAddr,
-		RemoteStorageJSON: nil,
-		EndpointID:        "",
+		ListenAddr: endpointStorageDefaultAddr,
+		EndpointID: "",
 	}
 }
 

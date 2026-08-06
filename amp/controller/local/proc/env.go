@@ -7,8 +7,7 @@ import (
 
 // envAllowlist is the set of parent-environment variables that are forwarded to
 // a spawned child. Everything else in the launcher's environment is scrubbed;
-// see buildChildEnv. Mirrors fill_rust_env_vars in
-// control_plane/src/background_process.rs.
+// see buildChildEnv.
 var envAllowlist = []string{
 	"LLVM_PROFILE_FILE",
 	"FAILPOINTS",

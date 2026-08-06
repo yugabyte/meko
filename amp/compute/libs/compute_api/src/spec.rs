@@ -180,8 +180,6 @@ pub struct ComputeSpec {
 
     /// Address of endpoint storage service
     pub endpoint_storage_addr: Option<String>,
-    /// JWT for authorizing requests to endpoint storage service
-    pub endpoint_storage_token: Option<String>,
 
     #[serde(default)]
     /// Download LFC state from endpoint storage and pass it to Postgres on compute startup
@@ -195,7 +193,6 @@ pub struct ComputeSpec {
     ///
     /// We use this value to derive other values, such as the installed extensions metric.
     pub suspend_timeout_seconds: i64,
-
 }
 
 /// Feature flag to signal `compute_ctl` to enable certain experimental functionality.

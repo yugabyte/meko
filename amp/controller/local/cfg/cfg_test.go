@@ -27,7 +27,6 @@ const (
 	goldControlPlane = "http://127.0.0.1:30000/upcall/v1/"
 	goldSafekeeperPg = "127.0.0.1:30100"
 	goldYbInlineConn = `{ host_ports = "127.0.0.1:5433", user = "yugabyte", dbname = "amp_golden" }`
-	goldPemfile      = "/tmp/claude-2206/-net-dev-server-hsunder-share-code-amp/bca88cc9-be37-4760-9c1f-bbfa36b6fbac/scratchpad/goldenrepo/.yb_amp/auth_public_key.pem"
 	goldEndpointID   = "ep-main"
 	goldComputePort  = 55432
 )
@@ -186,8 +185,7 @@ func TestSafekeeperTomlGolden(t *testing.T) {
 func TestEndpointStorageJSONGolden(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "endpoint_storage.json")
 	p := EndpointStorageParams{
-		Listen:  "127.0.0.1:30600",
-		Pemfile: goldPemfile,
+		Listen: "127.0.0.1:30600",
 		YbConn: &config.YbConnConfig{
 			HostPorts: "127.0.0.1:5433",
 			User:      "yugabyte",
@@ -254,10 +252,6 @@ func TestConfigJSONGolden(t *testing.T) {
 	golden := decodeJSON(t, readGolden(t, "config.json")).(map[string]any)
 	goldenSpec := golden["spec"].(map[string]any)
 
-	// endpoint_storage_token is an opaque passthrough JWT (time-dependent);
-	// feed the golden's value back so the compare covers structure, not the
-	// signature.
-	token := goldenSpec["endpoint_storage_token"].(string)
 	pgConf := goldenSpec["cluster"].(map[string]any)["postgresql_conf"].(string)
 
 	pub := readEd25519PublicKeyPEM(t, goldenPath("auth_public_key.pem"))
@@ -279,7 +273,6 @@ func TestConfigJSONGolden(t *testing.T) {
 		SafekeeperConnstrings: []string{"127.0.0.1:30100"},
 		SkipPgCatalogUpdates:  true,
 		EndpointStorageAddr:   strPtr("127.0.0.1:30600"),
-		EndpointStorageToken:  &token,
 		ComputeCtlConfig:      ComputeCtlConfig{Jwks: BuildJWKS(pub)},
 	})
 	if err != nil {
@@ -330,20 +323,6 @@ func TestSafekeeperTomlRoundTrip(t *testing.T) {
 		if _, ok := m[k]; !ok {
 			t.Errorf("expected key %q present", k)
 		}
-	}
-}
-
-func TestEndpointStorageVerbatimJSON(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "es.json")
-	raw := `{"type":"YbStore","host_ports":"h:1","user":"u","dbname":"d"}`
-	p := EndpointStorageParams{Listen: "127.0.0.1:9993", Pemfile: "/k.pem", RemoteStorageJSON: &raw}
-	if err := WriteEndpointStorageJSON(path, p); err != nil {
-		t.Fatal(err)
-	}
-	m := decodeJSON(t, mustRead(t, path)).(map[string]any)
-	sk := m["yb_storage_conn"].(map[string]any)
-	if sk["type"] != "YbStore" || sk["host_ports"] != "h:1" {
-		t.Errorf("verbatim storage kind wrong: %#v", sk)
 	}
 }
 

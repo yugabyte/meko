@@ -32,7 +32,6 @@ struct Args {
 struct Config {
     #[serde(default = "listen")]
     listen: std::net::SocketAddr,
-    pemfile: camino::Utf8PathBuf,
     /// The YB connection (and storage kind) this service writes blobs to —
     /// a nested block named `yb_storage_conn`, matching the key the
     /// pageserver and safekeeper use.
@@ -69,11 +68,6 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("Supply either config file path or --config=inline-config");
     };
 
-    info!("Reading pemfile from {}", config.pemfile.clone());
-    let pemfile = std::fs::read(config.pemfile.clone())?;
-    info!("Loading public key from {}", config.pemfile.clone());
-    let auth = endpoint_storage::JwtAuth::new(&pemfile)?;
-
     let listener = tokio::net::TcpListener::bind(config.listen).await.unwrap();
     info!("listening on {}", listener.local_addr().unwrap());
 
@@ -82,7 +76,6 @@ async fn main() -> anyhow::Result<()> {
     let cancel = tokio_util::sync::CancellationToken::new();
 
     let proxy = std::sync::Arc::new(endpoint_storage::Storage {
-        auth,
         storage,
         cancel: cancel.clone(),
         max_upload_file_limit: config.max_upload_file_limit,
