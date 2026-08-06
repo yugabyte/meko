@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
-# PID 1 of the endpoint pod. Replaces deploy/endpoint/supervisor.py — see
-# `src/main.rs` for why, and for what is and is not ported yet.
+# PID 1 of the endpoint pod: renders the daemons' config and supervises them.
+# See `src/main.rs` for the module layout.
 [[bin]]
 name = "yb-endpoint-supervisor"
 path = "src/main.rs"
@@ -13,12 +13,25 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 camino.workspace = true
+# Only to type-check the rendered compute spec against what compute_ctl reads.
+compute_api.workspace = true
 libc.workspace = true
+md5.workspace = true
+serde_json.workspace = true
 # The daemons' own config types: rendering is type-checked against what they
 # parse, which is the point of doing this in Rust.
 pageserver_api.workspace = true
+# The daemons' HTTP control plane: their readiness endpoints, and the
+# safekeeper's branch create.
+reqwest = { workspace = true, features = ["blocking", "json"] }
 safekeeper_api.workspace = true
 toml_edit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 workspace_hack.workspace = true
+
+[dev-dependencies]
+# The rendered endpoint_storage config is deserialized into the type that
+# service parses it with, so a wrong shape fails here rather than at its startup.
+remote_storage.workspace = true
+serde = { workspace = true, features = ["derive"] }

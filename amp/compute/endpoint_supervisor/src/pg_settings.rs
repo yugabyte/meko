@@ -41,13 +41,26 @@ pub const AUTOVACUUM_WORKER_SLOTS: u32 = 16;
 pub struct Setting {
     pub name: String,
     pub value: String,
+    /// The compute spec's `vartype`. It must match the GUC's real type —
+    /// compute_ctl passes it through to the spec it validates, so declaring an
+    /// integer GUC like the worker counts as a string is rejected there.
+    pub vartype: &'static str,
 }
 
 impl Setting {
-    fn new(name: &str, value: impl Into<String>) -> Self {
+    fn string(name: &str, value: impl Into<String>) -> Self {
         Self {
             name: name.to_string(),
             value: value.into(),
+            vartype: "string",
+        }
+    }
+
+    fn integer(name: &str, value: impl Into<String>) -> Self {
+        Self {
+            name: name.to_string(),
+            value: value.into(),
+            vartype: "integer",
         }
     }
 }
@@ -74,7 +87,7 @@ pub fn derive(res: &Resources) -> (Vec<Setting>, Skipped) {
     match res.memory_bytes {
         Some(mem) => {
             let mb = ((mem as f64 * SHARED_BUFFERS_FRACTION) as u64 / (1024 * 1024)).max(16);
-            out.push(Setting::new("shared_buffers", format!("{mb}MB")));
+            out.push(Setting::string("shared_buffers", format!("{mb}MB")));
         }
         None => skipped.memory_unknown = true,
     }
@@ -86,11 +99,11 @@ pub fn derive(res: &Resources) -> (Vec<Setting>, Skipped) {
             let live_mb = (((vol_mb as f64) * LFC_VOLUME_FRACTION) as u64)
                 .min(ceiling_mb)
                 .max(1);
-            out.push(Setting::new(
+            out.push(Setting::string(
                 "yb_amp.max_file_cache_size",
                 format!("{ceiling_mb}MB"),
             ));
-            out.push(Setting::new(
+            out.push(Setting::string(
                 "yb_amp.file_cache_size_limit",
                 format!("{live_mb}MB"),
             ));
@@ -100,11 +113,11 @@ pub fn derive(res: &Resources) -> (Vec<Setting>, Skipped) {
 
     // Ceilings are unconditional: they do not depend on the resources, and they
     // are what make the values below reload-only.
-    out.push(Setting::new(
+    out.push(Setting::integer(
         "max_worker_processes",
         MAX_WORKER_PROCESSES.to_string(),
     ));
-    out.push(Setting::new(
+    out.push(Setting::integer(
         "autovacuum_worker_slots",
         AUTOVACUUM_WORKER_SLOTS.to_string(),
     ));
@@ -121,7 +134,7 @@ pub fn derive(res: &Resources) -> (Vec<Setting>, Skipped) {
                 ("max_parallel_maintenance_workers", maintenance),
                 ("autovacuum_max_workers", autovacuum),
             ] {
-                out.push(Setting::new(name, v.to_string()));
+                out.push(Setting::integer(name, v.to_string()));
             }
         }
         None => skipped.cpu_unknown = true,
