@@ -74,7 +74,11 @@ func runTPCC(t *core.T) (err error) {
 	// perf.compare.mode picks the strategy over that ordered variant list: "all"
 	// benchmarks every variant (the N-way comparison), "bisect" binary-searches
 	// them for the first regressed one.
-	if cmp := compareConfigFromConfig(t.Options); len(cmp.Variants) > 0 {
+	cmp, err := compareConfigFromConfig(t.Options)
+	if err != nil {
+		return err
+	}
+	if len(cmp.Variants) > 0 {
 		logf := t.Masker().Logf(log.Printf)
 		sink := attachSink{t: t, logf: logf}
 		deliver := func(ctx context.Context, podExec exec.RemoteExecutor) error {

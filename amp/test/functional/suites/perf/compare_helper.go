@@ -42,12 +42,67 @@ type compareConfig struct {
 	BisectThresholdPct float64
 }
 
+// Shorthand-variant translation targets. yb_version sets versions.yb — the
+// run-level YB version ybk8s.ChartVersion resolves (and the chart image tag falls
+// back to), which is the key the run pipeline itself uses for the primary arm, so
+// it provably changes the backing a variant deploys. image_version sets the amp
+// image refs the same way the pipeline does: quay.io/yugabyte/amp-<component>:<tag>.
+const (
+	variantYBVersionKey       = "versions.yb"
+	variantControllerImageKey = "env.ampstack.controller_image"
+	variantEndpointImageKey   = "env.ampstack.endpoint_image"
+	ampImageRepo              = "quay.io/yugabyte/amp-"
+
+	// primaryVariantLabel is the injected reference arm for an all-shorthand
+	// variant list: the run's OWN configuration, no overrides applied.
+	primaryVariantLabel = "primary"
+)
+
 // compareConfigFromConfig reads perf.compare.* into a compareConfig. Variants is
-// a structured list (GetMapSlice) of {label, overrides}, so it is supplied via a
-// -c YAML file, a -jc JSON file, or a json_text override.
-func compareConfigFromConfig(c *core.Config) compareConfig {
+// a structured list (GetMapSlice) supplied via a -c YAML file, a -jc JSON file,
+// or a json_text override, in one of two shapes — never mixed in one list:
+//
+//	{label, overrides}                  full form: an explicit label plus the
+//	                                    dotted config keys that make this arm
+//	                                    differ. Used verbatim; the list is the
+//	                                    complete set of arms (>=2 required).
+//	{image_version, yb_version}         shorthand (what the report portal sends):
+//	                                    versions translated to config keys, the
+//	                                    version strings auto-labelled, and the
+//	                                    run's own configuration prepended as the
+//	                                    "primary" reference arm.
+func compareConfigFromConfig(c *core.Config) (compareConfig, error) {
+	vs, err := variantsFromMaps(c.GetMapSlice("perf.compare.variants", nil))
+	if err != nil {
+		return compareConfig{}, err
+	}
+	return compareConfig{
+		Variants:           vs,
+		FailOnRegression:   c.GetBool("perf.compare.fail_on_regression", false),
+		Mode:               c.GetString("perf.compare.mode", CompareModeAll),
+		BisectMetric:       c.GetString("perf.compare.bisect.metric", DefaultBisectMetric),
+		BisectThresholdPct: c.GetFloat("perf.compare.bisect.threshold_pct", DefaultBisectThresholdPct),
+	}, nil
+}
+
+// variantsFromMaps turns the raw perf.compare.variants elements into Variants.
+// An all-shorthand list is translated, auto-labelled, and gets the "primary"
+// reference arm prepended (the run's own config is the thing the extra versions
+// are being compared against). An all-full-form list passes through untouched.
+// Mixing the two shapes in one list is ambiguous and rejected.
+func variantsFromMaps(ms []map[string]any) ([]Variant, error) {
 	var vs []Variant
-	for _, m := range c.GetMapSlice("perf.compare.variants", nil) {
+	shorthand := 0
+	for i, m := range ms {
+		if isShorthandVariant(m) {
+			v, err := shorthandVariant(m)
+			if err != nil {
+				return nil, fmt.Errorf("perf.compare.variants[%d]: %w", i, err)
+			}
+			vs = append(vs, v)
+			shorthand++
+			continue
+		}
 		label, _ := m["label"].(string)
 		v := Variant{Label: strings.TrimSpace(label), Overrides: map[string]string{}}
 		if ov, ok := m["overrides"].(map[string]any); ok {
@@ -57,13 +112,92 @@ func compareConfigFromConfig(c *core.Config) compareConfig {
 		}
 		vs = append(vs, v)
 	}
-	return compareConfig{
-		Variants:           vs,
-		FailOnRegression:   c.GetBool("perf.compare.fail_on_regression", false),
-		Mode:               c.GetString("perf.compare.mode", CompareModeAll),
-		BisectMetric:       c.GetString("perf.compare.bisect.metric", DefaultBisectMetric),
-		BisectThresholdPct: c.GetFloat("perf.compare.bisect.threshold_pct", DefaultBisectThresholdPct),
+	if shorthand == 0 {
+		return vs, nil
 	}
+	if shorthand != len(vs) {
+		return nil, fmt.Errorf("perf.compare.variants mixes the {image_version, yb_version} shorthand with the {label, overrides} form (%d of %d shorthand) — use one shape for the whole list", shorthand, len(vs))
+	}
+	dedupVariantLabels(vs, primaryVariantLabel)
+	return append([]Variant{{Label: primaryVariantLabel, Overrides: map[string]string{}}}, vs...), nil
+}
+
+// isShorthandVariant reports whether an element is in the portal's version
+// shorthand: no label and no overrides, but a version key (either may be empty —
+// shorthandVariant decides whether the pair is usable).
+func isShorthandVariant(m map[string]any) bool {
+	if _, ok := m["label"]; ok {
+		return false
+	}
+	if _, ok := m["overrides"]; ok {
+		return false
+	}
+	_, hasImage := m["image_version"]
+	_, hasYB := m["yb_version"]
+	return hasImage || hasYB
+}
+
+// shorthandVariant translates one shorthand element into a labelled Variant.
+//
+// An image_version WITHOUT a yb_version is refused: every comparison workload
+// (perf/tpcc, perf/pgbench, perf/sysbench) benchmarks the raw YugabyteDB backing
+// the variant provisioner deploys — no amp control plane is in the loop — so an
+// amp image alone would produce an arm identical to the reference and report its
+// own noise as a delta.
+func shorthandVariant(m map[string]any) (Variant, error) {
+	image := mapString(m, "image_version")
+	ybVersion := mapString(m, "yb_version")
+	switch {
+	case image == "" && ybVersion == "":
+		return Variant{}, fmt.Errorf("shorthand variant sets neither image_version nor yb_version")
+	case ybVersion == "":
+		return Variant{}, fmt.Errorf("image_version %q without a yb_version: the perf comparison benchmarks the YugabyteDB backing directly (no amp control plane is provisioned), so an amp image alone yields an arm identical to the reference — add a yb_version, or use the {label, overrides} form", image)
+	}
+	v := Variant{
+		Label:     shorthandLabel(image, ybVersion),
+		Overrides: map[string]string{variantYBVersionKey: ybVersion},
+	}
+	if image != "" {
+		v.Overrides[variantControllerImageKey] = ampImageRepo + "controller:" + image
+		v.Overrides[variantEndpointImageKey] = ampImageRepo + "endpoint:" + image
+	}
+	return v, nil
+}
+
+// shorthandLabel names a shorthand arm by the versions it pins — readable in the
+// comparison table and on every per-variant datapoint.
+func shorthandLabel(image, ybVersion string) string {
+	if image == "" {
+		return ybVersion
+	}
+	return image + "+" + ybVersion
+}
+
+// dedupVariantLabels makes auto-generated labels unique in place (a numeric
+// suffix per collision), keeping reserved labels — the injected primary arm —
+// unclaimable.
+func dedupVariantLabels(vs []Variant, reserved ...string) {
+	seen := map[string]bool{}
+	for _, r := range reserved {
+		seen[r] = true
+	}
+	for i := range vs {
+		label := vs[i].Label
+		for n := 2; seen[label]; n++ {
+			label = fmt.Sprintf("%s-%d", vs[i].Label, n)
+		}
+		seen[label] = true
+		vs[i].Label = label
+	}
+}
+
+// mapString reads a string field out of a raw config map (absent/nil → "").
+func mapString(m map[string]any, key string) string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(v))
 }
 
 // VariantMetric is one variant's value for one metric in the comparison: its

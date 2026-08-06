@@ -1254,10 +1254,25 @@ perf:
   # delta is a real signal, not a config artifact. Empty variants → the test runs
   # the normal single-run path.
   compare:
-    # variants is a list of {label, overrides}. overrides are config KEYS applied
-    # on top of the base config for that variant only (e.g. apps.ybk8s.image_tag,
-    # apps.ybk8s.image_registry, env.ampstack.controller_image). Supply via a -c
-    # YAML file, a -jc JSON file, or a json_text override. Default: none.
+    # variants accepts two shapes (never mixed in one list). Supply via a -c YAML
+    # file, a -jc JSON file, or a json_text override. Default: none.
+    #
+    #   {label, overrides} — the full form. overrides are config KEYS applied on
+    #     top of the base config for that variant only (e.g. apps.ybk8s.image_tag,
+    #     apps.ybk8s.image_registry, env.ampstack.controller_image). The list is
+    #     the complete set of arms; at least 2 are required and variant[0] is the
+    #     reference.
+    #
+    #   {image_version, yb_version} — the version shorthand the report portal
+    #     sends. yb_version becomes versions.yb (the deployed backing's version);
+    #     image_version becomes the amp image refs
+    #     (quay.io/yugabyte/amp-{controller,endpoint}:<tag>). Each arm is labelled
+    #     by its versions, and the run's OWN configuration is prepended as the
+    #     "primary" reference arm — so one shorthand variant already makes a
+    #     2-arm comparison. An image_version WITHOUT a yb_version is rejected: the
+    #     comparison benchmarks the YugabyteDB backing directly, with no amp
+    #     control plane in the loop, so an amp image alone cannot make an arm
+    #     differ from the reference.
     variants: []
     # fail_on_regression turns a SIGNIFICANT regression vs the reference variant
     # (delta beyond combined noise, in the metric's worse direction) into a test
