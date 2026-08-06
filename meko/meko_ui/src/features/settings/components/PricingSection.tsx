@@ -7,8 +7,17 @@
 // user_type from /auth/me. Every row value matches the caps enforced
 // by lib/freeTier.ts on the FE and api_server/internal/service/free_tier.go on the BE.
 
+import { useState } from "react";
 import { ArrowUpRight, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -202,11 +211,10 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
     return chip;
   }
   if (column === "standard") {
-    // Direct AWS Marketplace redirect. If the URL isn't wired yet,
-    // disable the button instead of shipping a link that reloads the
-    // current page. Tile visibility is a separate flag
-    // (STANDARD_TIER_ENABLED) so the tile can render for UI testing
-    // before the real listing URL lands.
+    // If the URL isn't wired yet, disable the button instead of
+    // shipping a link that reloads the current page. Tile visibility
+    // is a separate flag (STANDARD_TIER_ENABLED) so the tile can
+    // render for UI testing before the real listing URL lands.
     if (!AWS_MARKETPLACE_LISTING_URL) {
       return (
         <Button
@@ -220,19 +228,12 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
         </Button>
       );
     }
-    return (
-      <Button
-        asChild
-        type="button"
-        size="sm"
-        className="h-7 gap-1 bg-brand px-2.5 text-xs font-medium text-brand-foreground hover:bg-brand/90"
-      >
-        <a href={AWS_MARKETPLACE_LISTING_URL} target="_blank" rel="noopener noreferrer">
-          Upgrade
-          <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
-        </a>
-      </Button>
-    );
+    // Show a dialog before deep-linking to AWS so users understand
+    // the two-step flow (subscribe on AWS, then click "Set up your
+    // account" to activate the entitlement in Meko). Without this
+    // primer, buyers routinely subscribe, close the AWS tab, and
+    // wonder why their tier hasn't changed.
+    return <UpgradeToStandardButton />;
   }
   if (column === "pro") {
     return (
@@ -250,4 +251,78 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
     );
   }
   return null;
+}
+
+// Standard-tile Upgrade CTA. Opens a primer dialog before deep-linking
+// to AWS Marketplace so users know what to expect on the other side:
+// the AWS subscribe step alone does NOT activate their tier -- they
+// have to explicitly click "Set up your account" on AWS's confirmation
+// page for AWS to POST the fulfillment token to our /marketplace/register
+// handler. Without this primer, buyers subscribe, close the AWS tab,
+// and are surprised their tier is still Free.
+function UpgradeToStandardButton() {
+  const [open, setOpen] = useState(false);
+
+  const handleContinue = () => {
+    // Open in a new tab so users can flip back to Meko without losing
+    // the settings page they were on. Same-tab would work too but is
+    // more disorienting.
+    window.open(AWS_MARKETPLACE_LISTING_URL, "_blank", "noopener,noreferrer");
+    setOpen(false);
+  };
+
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        onClick={() => setOpen(true)}
+        className="h-7 gap-1 bg-brand px-2.5 text-xs font-medium text-brand-foreground hover:bg-brand/90"
+      >
+        Upgrade
+        <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+      </Button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upgrade to Standard on AWS Marketplace</DialogTitle>
+            <DialogDescription>
+              Meko Standard is billed through AWS Marketplace. You'll finish signup on AWS in a new
+              tab, then come back here.
+            </DialogDescription>
+          </DialogHeader>
+
+          <ol className="ml-5 list-decimal space-y-2 text-sm text-foreground">
+            <li>
+              We'll open the Meko listing on AWS Marketplace. Sign in with the AWS account you want
+              to bill.
+            </li>
+            <li>Accept the contract to subscribe.</li>
+            <li>
+              <span className="font-semibold text-foreground">Important:</span> after AWS shows the
+              purchase confirmation, click{" "}
+              <span className="font-semibold">&ldquo;Set up your account&rdquo;</span> to activate
+              your Standard tier in Meko. Without this step your plan stays on Free.
+            </li>
+          </ol>
+
+          <p className="text-xs text-muted-foreground">
+            You can close and reopen this dialog if you need to. Your Meko session stays signed in
+            in this tab.
+          </p>
+
+          <DialogFooter className="gap-2 sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleContinue} className="gap-1">
+              Continue to AWS Marketplace
+              <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
