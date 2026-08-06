@@ -359,9 +359,25 @@ jobs:
           echo "LD_LIBRARY_PATH=$DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       # --cache only when the Quay login above ran (steps.quay.outputs.cache); on a
-      # fork it is empty and the base is built cold. Defaults to pgvector.
+      # fork it is empty and the base is built cold. extensions.sh tests one
+      # extension per run (--ext, default pgvector), so run each manifest
+      # extension explicitly: the ABI-anchor base is built once (the second run
+      # reuses it), then each brings up its own throwaway yb_amp_local cluster.
+      # pg_cron exercises the preload + scheduled-job path (see its block in
+      # extensions.sh), which pgvector does not.
+      # The two runs share one job and run sequentially, so pin each to a distinct
+      # port block (each spans base..base+700): extensions.sh's pick_base probes
+      # only base/+300/+400/+700, not the safekeeper sub-ports (+100/+200), so a
+      # shared base collides on a still-draining SK socket from the first run.
       - name: Local extension test (pgvector)
-        run: test/integration/compute/extensions.sh ${{ steps.quay.outputs.cache }}
+        env:
+          INTEGRATION_PORT_BASE: "53000"
+        run: test/integration/compute/extensions.sh --ext pgvector ${{ steps.quay.outputs.cache }}
+
+      - name: Local extension test (pg_cron)
+        env:
+          INTEGRATION_PORT_BASE: "55000"
+        run: test/integration/compute/extensions.sh --ext pg_cron ${{ steps.quay.outputs.cache }}
 
       - name: Upload run logs
         if: failure()

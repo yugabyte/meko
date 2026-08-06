@@ -58,16 +58,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# The manifest is the source of truth; python emits shell-safe, tab-separated
-# rows so bash never has to parse YAML itself.
+# The manifest is the source of truth; python emits shell-safe rows so bash never
+# has to parse YAML itself. Fields are joined with the ASCII Unit Separator (0x1f),
+# NOT a tab: tab is an IFS *whitespace* char, so `read` collapses consecutive tabs
+# and drops trailing ones — an extension with empty patch+prep (e.g. pg_cron) would
+# have those fields swallowed and everything after them shift left. 0x1f is
+# non-whitespace, so `read` preserves empty fields positionally.
 read_manifest() {
   python3 - "$manifest" <<'PY'
 import sys, yaml
+US = "\x1f"
 with open(sys.argv[1]) as f:
     m = yaml.safe_load(f)
-print("REGISTRY\t%s" % m.get("registry", ""))
-print("BASE_IMAGE\t%s" % m.get("base_image", "amp-pg18-build"))
-print("PG_TAG\t%s" % m.get("pg_tag", "v18"))
+print("REGISTRY" + US + m.get("registry", ""))
+print("BASE_IMAGE" + US + m.get("base_image", "amp-pg18-build"))
+print("PG_TAG" + US + m.get("pg_tag", "v18"))
 def norm(v):
     if v is None:
         return ""
@@ -77,13 +82,13 @@ def norm(v):
 for e in m.get("extensions", []):
     fields = [norm(e.get(k)) for k in
               ("name","version","url","sha256","patch","prep","trusted","dockerfile")]
-    print("EXT\t" + "\t".join(f.replace("\t"," ") for f in fields))
+    print("EXT" + US + US.join(f.replace(US, " ") for f in fields))
 PY
 }
 
 registry=""; base_image=""; pg_tag=""
 declare -a ext_rows=()
-while IFS=$'\t' read -r tag rest; do
+while IFS=$'\x1f' read -r tag rest; do
   case "$tag" in
     REGISTRY)   registry="$rest" ;;
     BASE_IMAGE) base_image="$rest" ;;
@@ -137,7 +142,7 @@ want() {
 }
 
 for row in "${ext_rows[@]}"; do
-  IFS=$'\t' read -r name version url sha256 patch prep trusted dockerfile <<<"$row"
+  IFS=$'\x1f' read -r name version url sha256 patch prep trusted dockerfile <<<"$row"
   want "$name" || continue
 
   image="${registry}/amp-ext-${name}:${version}"

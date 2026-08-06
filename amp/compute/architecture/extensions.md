@@ -4,7 +4,7 @@ This page describes how yb-amp ships PostgreSQL extensions **outside** the
 endpoint image — each extension is built into its own tiny OCI image and mounted
 into the endpoint pod as a Kubernetes **ImageVolume**, with PostgreSQL pointed at
 it via `extension_control_path` / `dynamic_library_path` (both PG18 features).
-`pgvector` is the first extension delivered this way; the pipeline is generic so
+`pgvector` and `pg_cron` are delivered this way; the pipeline is generic so
 adding another is a manifest row plus a catalog entry.
 
 ## Why not bake them into the endpoint image
@@ -52,6 +52,10 @@ name (`pgvector` ships `vector.control`, so `CREATE EXTENSION vector`).
 `shared_preload_libraries`. It must contain **only** libraries that are actually
 mounted, or the postmaster fails to start — so the controller/chart only add a
 preload entry for an extension it is also mounting.
+
+`pg_cron`'s scheduler binds to one database via `cron.database_name` (default
+`postgres`, which every endpoint serves, so opting in needs no extra config); a
+non-default database is set through the endpoint's `pg_settings`.
 
 ## Build pipeline (`deploy/extensions/`)
 
@@ -151,11 +155,13 @@ the feature is additive.
   `Preload`, `Default`). `Resolve(names)` maps names to pinned image references
   (`<registry>/amp-ext-<name>:<version>`, registry from
   `--extension-registry` / `AMP_EXTENSION_REGISTRY`), skipping unknown names so a
-  stale entry can't wedge a deploy. `DefaultNames()` is the always-mounted set
-  (currently **empty** — pgvector is registered but off by default, so nothing is
-  auto-mounted; opting in is a **branch** property, requested via `createEndpoint`
-  and persisted onto the branch, so it is inherited by forks and picked up by
-  every endpoint on that branch). `Has(name)` is the API validation gate. Keep
+  stale entry can't wedge a deploy.   `DefaultNames()` is the always-mounted set
+  (currently **empty** — All extensions are registered but off by
+  default, so nothing is auto-mounted; opting in is a **branch** property,
+  requested via `createEndpoint` and persisted onto the branch, so it is
+  inherited by forks and picked up by every endpoint on that branch). `pg_cron`
+  is `Preload: true`, so `Resolve` carries that flag through and the chart adds
+  it to `shared_preload_libraries`. `Has(name)` is the API validation gate. Keep
   versions in lockstep with `extensions.yaml`.
 - **Endpoint spec** — the create_endpoint step
   ([`step_create_endpoint.go`](../../controller/internal/task/step_create_endpoint.go))
@@ -240,13 +246,29 @@ audit / recreate.
    `extensions: ["<name>"]` to `createEndpoint`; the step persists it onto the
    branch and the fork path inherits it.
 
-Verify a new extension end-to-end on a **local** deploy (no Kubernetes needed)
-with
-[`test/integration/compute/extensions.sh`](../../test/integration/compute/extensions.sh)
-`--ext <name>`: it builds the image via the docker pipeline, extracts the tree,
-and mounts it into a throwaway `yb_amp_local` compute via the two path GUCs, then
-runs `CREATE EXTENSION`. It is the local-deploy twin of `deploy/smoke-test.sh`'s
-`SMOKE_EXTENSIONS` GKE check.
+## Testing
+
+- **Controller unit tests** cover the catalog (`Has`/`Resolve`, preload flag
+  threaded through), the create_endpoint step (opt-in mount + branch
+  persistence + fork inheritance), and the API (`extensions[]` → 202/400, deploy
+  spec, persistence) — see `controller/internal/extensions`,
+  `controller/internal/task`, `controller/internal/api`.
+- **Image build** — `deploy/extensions/test-build.sh [--docker] <name>` validates
+  the manifest and, with `--docker`, builds the image and asserts its
+  `control` / `--<version>.sql` / `.so` tree.
+- **Local deploy (no Kubernetes)** —
+  [`test/integration/compute/extensions.sh`](../../test/integration/compute/extensions.sh)
+  `--ext <name>` builds the real image via the docker pipeline, extracts the tree,
+  and mounts it into a throwaway `yb_amp_local` compute via the two path GUCs
+  (appending a preload extension to `shared_preload_libraries`), then asserts the
+  extension end-to-end. For `pg_cron` it goes past `CREATE EXTENSION` and
+  schedules a sub-minute job, waiting for `cron.job_run_details` to report a
+  succeeded run — so the background-worker scheduler is exercised, not just
+  registration. The opt-in `amp_extensions_local` CI suite runs it, and it fires
+  automatically when a diff touches `deploy/extensions/`. It is the local-deploy
+  twin of `deploy/smoke-test.sh`'s `SMOKE_EXTENSIONS` GKE check.
+- **Smoke test** — `deploy/smoke-test.sh` with `SMOKE_EXTENSIONS=1` exercises the
+  real K8s ImageVolume path for both pgvector and pg_cron end-to-end.
 
 ## Code anchors
 

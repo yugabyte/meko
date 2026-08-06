@@ -276,6 +276,30 @@ func TestEndpointExtensions(t *testing.T) {
 	if len(persisted) != 1 || persisted[0] != "pgvector" {
 		t.Errorf("branch extensions = %v, want [pgvector] persisted", persisted)
 	}
+
+	// A preload extension (pg_cron) opts in the same way and is mounted with
+	// Preload:true so the chart can extend shared_preload_libraries. Use a fresh
+	// branch so its set is independent of the pgvector one above.
+	cronProjectID, cronBranchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ProjectID: cronProjectID, BranchID: cronBranchID, Name: "main", PgVersion: 18, IsDefault: true})
+	cron := []string{"pg_cron"}
+	cok, err := client.CreateEndpointWithResponse(ctx, pool.Id, cronProjectID, cronBranchID, api.CreateEndpointRequest{Role: &rw, Extensions: &cron})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(pg_cron): %v", err)
+	}
+	if cok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("pg_cron status = %d, want 202; body = %s", cok.StatusCode(), cok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	last := dep.created[len(dep.created)-1].Extensions
+	if len(last) != 1 || last[0].Name != "pg_cron" ||
+		last[0].Image != "quay.io/yugabyte/amp-ext-pg_cron:1.6.7" || !last[0].Preload {
+		t.Fatalf("deploy spec extensions = %+v, want the pinned pg_cron with Preload:true", last)
+	}
+	cronPersisted, _ := backend.BranchExtensions(ctx, cronProjectID, cronBranchID)
+	if len(cronPersisted) != 1 || cronPersisted[0] != "pg_cron" {
+		t.Errorf("branch extensions = %v, want [pg_cron] persisted", cronPersisted)
+	}
 }
 
 // TestEndpointExtensionsUnsupported: requesting extensions when the controller

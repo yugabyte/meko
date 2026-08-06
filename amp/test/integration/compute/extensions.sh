@@ -308,6 +308,56 @@ SQL
         echo "$out" >&2
         exit 1
     fi
+elif [[ "$EXT_NAME" == pg_cron ]]; then
+    # pg_cron is a preload extension, so extensions.sh has already appended it to
+    # shared_preload_libraries above (PRELOAD=true from the manifest) and the
+    # background-worker scheduler is running. Assert the full functional path, not
+    # just registration: CREATE EXTENSION, schedule a sub-minute job, and wait for
+    # cron's own bookkeeping to report a succeeded run. The scheduler binds to one
+    # db via cron.database_name (default "postgres", which this endpoint serves) —
+    # the same db we connect to — so the marker row the job writes is visible here.
+    out=$("${PSQL[@]}" <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+SELECT 'CRONDB:'||current_setting('cron.database_name');
+DROP TABLE IF EXISTS cron_marker;
+CREATE TABLE cron_marker (id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now());
+SELECT 'JOBID:'||cron.schedule('amp_pgcron_probe', '5 seconds', $$INSERT INTO cron_marker DEFAULT VALUES$$);
+SQL
+)
+    if ! echo "$out" | grep -q '^CRONDB:postgres$'; then
+        echo ">>> FAIL pg_cron: cron.database_name is not the default postgres; output:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+    if ! echo "$out" | grep -qE '^JOBID:[0-9]+$'; then
+        echo ">>> FAIL pg_cron: cron.schedule did not return a job id; output:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+    # Poll cron.job_run_details (keyed by jobid — it has NO jobname column) for a
+    # completed run: the definitive "scheduler picked the job up and the command
+    # succeeded" signal. Seconds-granularity scheduling (pg_cron >= 1.5; we ship
+    # 1.6.7) keeps this well under a cron minute.
+    jobid=$(echo "$out" | sed -n 's/^JOBID:\([0-9]*\)$/\1/p')
+    deadline=$(( $(date +%s) + 120 ))
+    fired=0
+    while (( $(date +%s) < deadline )); do
+        succeeded=$("${PSQL[@]}" -c "SELECT count(*) FROM cron.job_run_details WHERE jobid=${jobid:-0} AND status='succeeded'" 2>/dev/null || echo 0)
+        if [[ "${succeeded:-0}" -gt 0 ]]; then
+            fired=$("${PSQL[@]}" -c "SELECT count(*) FROM cron_marker" 2>/dev/null || echo 0)
+            break
+        fi
+        sleep 2
+    done
+    # Best-effort unschedule so a --keep cluster isn't left with a firing job.
+    "${PSQL[@]}" -c "SELECT cron.unschedule('amp_pgcron_probe')" >/dev/null 2>&1 || true
+    if [[ "${fired:-0}" -gt 0 ]]; then
+        echo ">>> PASS pg_cron: preload + CREATE EXTENSION + scheduled job fired ($fired run(s))"
+    else
+        echo ">>> FAIL pg_cron: job never completed a succeeded run within 120s" >&2
+        echo "$out" >&2
+        exit 1
+    fi
 else
     # Generic smoke: create the extension and confirm it registered.
     out=$("${PSQL[@]}" <<SQL 2>&1

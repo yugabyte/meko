@@ -112,14 +112,22 @@ tree="$(docker export "$cid" | tar -tf -)"
 
 # Assert the control, a versioned SQL file, and the shared object all landed in
 # the two GUC-referenced subdirs (extension_control_path / dynamic_library_path).
+# The control file and .so are named for the control basename, but the base SQL
+# file's version is the extension's own (e.g. vector--0.8.2.sql), which need NOT
+# equal the image version (pg_cron ships pg_cron--1.0.sql + upgrade scripts, not
+# pg_cron--1.6.7.sql) — so match any versioned SQL rather than a pinned name.
 want=(
   "share/postgresql/extension/${control}.control"
-  "share/postgresql/extension/${control}--${version}.sql"
   "lib/postgresql/${control}.so"
 )
 for w in "${want[@]}"; do
   grep -qx "$w" <<<"$tree" || fail "image ${image} is missing ${w}"
   echo "   ok: ${w}"
 done
+if grep -qE "^share/postgresql/extension/${control}--[0-9].*\.sql$" <<<"$tree"; then
+  echo "   ok: share/postgresql/extension/${control}--<version>.sql"
+else
+  fail "image ${image} has no ${control}--<version>.sql install script"
+fi
 
 echo "docker build + tree assertions passed for ${image}"

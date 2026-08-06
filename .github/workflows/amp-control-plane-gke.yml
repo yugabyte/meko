@@ -27,8 +27,9 @@ name: Amp control-plane GKE (itest-dev)
 #   * `/ci amp_deploy_gke_extensions` — a superset of `amp_deploy_gke` (it implies
 #     the deploy) that ALSO builds + pushes the externalized-extension images
 #     (amp/deploy/extensions/build.sh --push --cache: the ABI-anchor PG18 base +
-#     pgvector) to Quay, and runs the smoke test with SMOKE_EXTENSIONS=1 so it
-#     exercises the pgvector ImageVolume opt-in + fork inheritance. The first run
+#     every manifest extension) to Quay, and runs the smoke test with
+#     SMOKE_EXTENSIONS=1 so it exercises each extension's ImageVolume opt-in +
+#     fork inheritance. The first run
 #     pays a cold PG18 base build (~30 min) on top of amp_deploy_gke; --cache
 #     (:buildcache) then restores it in minutes, so it is PR-directive-only:
 #     nightly does NOT rebuild it.
@@ -47,7 +48,7 @@ on:
   workflow_dispatch:
     inputs:
       push_extensions:
-        description: 'Also build+push the extension images (pgvector) and run the extension smoke checks'
+        description: 'Also build+push the extension images and run the extension smoke checks'
         type: boolean
         default: false
   pull_request:
@@ -205,7 +206,7 @@ jobs:
 
       # Externalized-extension images (amp_deploy_gke_extensions only): builds the
       # ABI-anchor PG18 base locally (~30 min cold, to compile against) and pushes
-      # ONLY each manifest extension (pgvector) to Quay under
+      # ONLY each manifest extension to Quay under
       # quay.io/yugabyte/amp-ext-<name>:<version> (--no-base-push: nothing pulls
       # the base back, so it isn't published). Version-tagged (not the commit tag),
       # so they're stable and the deployed controller's catalog (ExtensionRegistry
@@ -215,7 +216,7 @@ jobs:
       # NB: export is best-effort — it only populates once QUAY_AMP_TOKEN has push
       # access to the amp-pg18-build repo (unlike amp-endpoint, that repo has never
       # been published, so grant it or the base rebuilds cold every run).
-      - name: Extension images (pgvector)
+      - name: Extension images
         if: fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true'
         run: |
           python3 -m pip install --user pyyaml
@@ -279,7 +280,7 @@ jobs:
           amp/deploy/up-gke.sh
 
       # With amp_deploy_gke_extensions, the extension images were pushed above and
-      # the controller's catalog resolves pgvector — so exercise the ImageVolume
+      # the controller's catalog resolves them — so exercise the ImageVolume
       # opt-in + fork inheritance (SMOKE_EXTENSIONS=1). Requires the cluster's
       # ImageVolume feature gate to be enabled on itest-dev.
       - name: Smoke test (amp/deploy/smoke-test.sh)

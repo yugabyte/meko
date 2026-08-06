@@ -19,8 +19,22 @@ func TestCatalogHasKnownAndUnknown(t *testing.T) {
 	if !c.Has("pgvector") {
 		t.Fatal("Has(pgvector) = false, want true (a known catalog extension)")
 	}
+	if !c.Has("pg_cron") {
+		t.Fatal("Has(pg_cron) = false, want true (a known catalog extension)")
+	}
 	if c.Has("totally-unknown-ext") {
 		t.Fatal("Has(totally-unknown-ext) = true, want false")
+	}
+}
+
+func TestCatalogResolvePreloadExtension(t *testing.T) {
+	// pg_cron carries Preload through Resolve so the deployer/chart can extend
+	// shared_preload_libraries.
+	c := NewCatalog("quay.io/yugabyte")
+	got := c.Resolve([]string{"pg_cron"})
+	want := []Resolved{{Name: "pg_cron", Image: "quay.io/yugabyte/amp-ext-pg_cron:1.6.7", Preload: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Resolve(pg_cron) = %+v, want %+v", got, want)
 	}
 }
 

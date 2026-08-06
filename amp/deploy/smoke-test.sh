@@ -29,10 +29,14 @@
 # endpoint that opts into pgvector (extensions:["pgvector"]), assert the
 # ImageVolume mounted at /extensions/pgvector, `CREATE EXTENSION vector`, store
 # real vector rows and read them back with a nearest-neighbour (`<->`) query.
-# (The fork-inheritance sub-test is commented out pending #440 — a pre-existing
-# pageserver attach bug crash-loops the fork endpoint; see the block near the
-# end of the SMOKE_EXTENSIONS section.) Requires the cluster's ImageVolume
-# feature gate and images pushed by deploy/extensions/build.sh.
+# Then the preload path: an endpoint that opts into pg_cron (extensions:
+# ["pg_cron"]), assert the ImageVolume mounted at /extensions/pg_cron, pg_cron is
+# in shared_preload_libraries, `CREATE EXTENSION pg_cron`, and a scheduled job
+# runs to success. (The pgvector fork-inheritance sub-test is commented out
+# pending #440 — a pre-existing pageserver attach bug crash-loops the fork
+# endpoint; see the block in the SMOKE_EXTENSIONS section.) Requires the
+# cluster's ImageVolume feature gate and images pushed by
+# deploy/extensions/build.sh.
 #
 # It cleans up everything it creates (its project is torn down by the cascade
 # delete it exercises; the pool/user rows and any stray endpoint Helm releases are
@@ -276,6 +280,83 @@ SQL
   { echo "$out" | grep -q '^2|1.732$' && echo "$out" | grep -q '^5.196$'; } \
     && ok "pgvector data I/O: NN([3,3,3])=id2 dist=1.732 + literal <-> =5.196" \
     || bad "pgvector data query (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+
+  hdr "externalized extensions: pg_cron opt-in preloads, CREATE EXTENSION, a scheduled job runs"
+
+  # Its own project so this is independent of the pgvector section above.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects" '{"name":"cronproj"}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron project created" || bad "pg_cron project task=$st"
+  CPROJ=$(curl -sf "$BASE/storage-pools/$POOL/projects" | jq -r '.projects[]|select(.name=="cronproj")|.id')
+  CDEF=$(curl -sf "$BASE/storage-pools/$POOL/projects/$CPROJ" | jq -r '.default_branch.branch_id')
+  [ -n "$CPROJ" ] && [ -n "$CDEF" ] && ok "pg_cron project materialized ($CPROJ / $CDEF)" || bad "pg_cron project not materialized"
+
+  # Opt into pg_cron. It is a preload extension, so the chart appends it to
+  # shared_preload_libraries and the pod comes up with the scheduler running.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$CPROJ/branches/$CDEF/endpoints" '{"role":"read_write","extensions":["pg_cron"]}')
+  [ "$code" = 202 ] && ok "createEndpoint(extensions:[pg_cron]) 202" || bad "createEndpoint(pg_cron) code=$code"
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(pg_cron) succeeded" || bad "create_endpoint(pg_cron) task=$st"
+  CEP=$(curl -sf "$BASE/storage-pools/$POOL/projects/$CPROJ/branches/$CDEF/endpoints" | jq -r '.endpoints[0].id')
+  CPOD=$(wait_ready_pod "$CEP")
+  [ -n "$CPOD" ] && ok "pg_cron endpoint pod Ready ($CPOD)" || bad "pg_cron endpoint pod not Ready"
+
+  kubectl -n "$NS" exec "$CPOD" -- test -f /extensions/pg_cron/share/postgresql/extension/pg_cron.control \
+    && ok "pg_cron ImageVolume mounted (/extensions/pg_cron)" || bad "pg_cron ImageVolume not mounted"
+
+  # The preload entry must be present, else CREATE EXTENSION errors and no job runs.
+  spl=$(psql_pod "$CPOD" 127.0.0.1 55433 <<<'SHOW shared_preload_libraries;' 2>&1)
+  if echo "$spl" | grep -q 'pg_cron'; then
+    ok "shared_preload_libraries includes pg_cron ($spl)"
+  else
+    bad "pg_cron not in shared_preload_libraries (got: $spl)"
+  fi
+
+  # CREATE EXTENSION + schedule a seconds-granularity job that stamps a marker
+  # row. cron.database_name defaults to postgres (the db we connect to), so the
+  # job's write is visible here. Capture the jobid: cron.job_run_details is keyed
+  # by jobid and has NO jobname column, and the cron.unschedule below drops the
+  # cron.job row (so a name->jobid join wouldn't survive it either).
+  out=$(psql_pod "$CPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+DROP TABLE IF EXISTS cron_marker;
+CREATE TABLE cron_marker (id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now());
+SELECT 'JOBID:'||cron.schedule('amp_pgcron_probe', '5 seconds', $$INSERT INTO cron_marker DEFAULT VALUES$$);
+SQL
+)
+  jobid=$(printf '%s\n' "$out" | sed -n 's/^JOBID:\([0-9]*\)$/\1/p')
+  [ -n "$jobid" ] \
+    && ok "CREATE EXTENSION pg_cron + cron.schedule (jobid=$jobid)" \
+    || bad "pg_cron CREATE EXTENSION / schedule failed (got: $(echo "$out" | tr '\n' ' '))"
+
+  # Poll cron's own bookkeeping (by jobid) for a completed run.
+  ran=0
+  for ((i=0; i<40; i++)); do
+    n=$(psql_pod "$CPOD" 127.0.0.1 55433 <<<"SELECT count(*) FROM cron.job_run_details WHERE jobid=${jobid:-0} AND status='succeeded';" 2>/dev/null | tr -d '[:space:]')
+    if [ "${n:-0}" -gt 0 ] 2>/dev/null; then ran=1; break; fi
+    sleep 3
+  done
+  if [ "$ran" = 1 ]; then
+    ok "pg_cron scheduled job ran to success"
+  else
+    # No succeeded run — dump why: whether the scheduler fired the job at all
+    # (cron.job_run_details rows + status/return_message), where it tried to
+    # connect (cron.job.nodename:nodeport), and the endpoint's cron log lines.
+    echo "--- pg_cron diagnostics (no succeeded run within ~120s) ---"
+    psql_pod "$CPOD" 127.0.0.1 55433 <<<"SELECT jobid, schedule, active, database, username, nodename, nodeport FROM cron.job WHERE jobid=${jobid:-0};" 2>&1 || true
+    psql_pod "$CPOD" 127.0.0.1 55433 <<<"SELECT runid, status, return_message, start_time, end_time FROM cron.job_run_details WHERE jobid=${jobid:-0} ORDER BY runid;" 2>&1 || true
+    kubectl -n "$NS" logs "$CPOD" -c endpoint --tail=200 2>&1 | grep -iE 'cron|background worker|fatal|error' || true
+    echo "--- end pg_cron diagnostics ---"
+    bad "pg_cron job never completed within ~120s"
+  fi
+
+  psql_pod "$CPOD" 127.0.0.1 55433 <<<"SELECT cron.unschedule('amp_pgcron_probe');" >/dev/null 2>&1
+
+  # KEEP=1 leaves the pg_cron project/endpoint up for hands-on inspection.
+  if [ -n "${KEEP:-}" ]; then
+    echo "  KEEP set: leaving pg_cron project $CPROJ (endpoint pod $CPOD) up for inspection"
+  else
+    IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/projects/$CPROJ")
+    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron project cascade deleted" || bad "pg_cron project delete task=$st"
+  fi
 
   # --- fork-inheritance sub-test: DISABLED pending #440 ----------------------
   # https://github.com/yugabyte/amp/issues/440

@@ -41,3 +41,22 @@ extensions:
     # Empty => build with the generic extension.Dockerfile. Set to a path
     # (relative to repo root) for a complex extension needing its own recipe.
     dockerfile: ""
+
+  - name: pg_cron
+    # 1.6.6 is the first release with Postgres 18 support (PG18 dropped the
+    # run_once arg from PortalRun, which 1.6.4 still passed); 1.6.7 adds fixes for
+    # -Werror on newer GCC, which this pipeline compiles with. Pure PGXS, so the
+    # generic extension.Dockerfile builds it with no patch/prep.
+    version: "1.6.7"
+    url: https://github.com/citusdata/pg_cron/archive/refs/tags/v1.6.7.tar.gz
+    sha256: d950bc29155f31017567e23a31d268ff672e98276c0e9d062512fb7870351f03
+    patch: ""
+    # The extension's lead .control basename (CREATE EXTENSION pg_cron).
+    control: pg_cron
+    # trusted => a non-superuser can CREATE EXTENSION (legacy image did this).
+    trusted: true
+    # pg_cron runs a background-worker scheduler, so its library must be in
+    # shared_preload_libraries — adding it to a live endpoint needs a restart.
+    preload: true
+    prep: ""
+    dockerfile: ""

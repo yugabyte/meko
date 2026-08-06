@@ -135,6 +135,33 @@ func TestCreateEndpointStepOptInMountsAndPersists(t *testing.T) {
 	}
 }
 
+func TestCreateEndpointStepOptInPreloadExtension(t *testing.T) {
+	// A preload extension (pg_cron) is resolved to its pinned image with
+	// Preload:true carried onto the spec (so the chart extends
+	// shared_preload_libraries) AND persisted onto the branch.
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	deps := endpointDeps(state, newFakeRecipeStore(), dep)
+	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	epID, projectID, branchID := uuid.New(), uuid.New(), uuid.New()
+	step := NewCreateEndpointStep(CreateEndpointArgs{
+		EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: "read_write", PgVersion: 18,
+		Extensions: []string{"pg_cron"},
+	}, deps)
+
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	exts := dep.created[0].Extensions
+	if len(exts) != 1 || exts[0].Name != "pg_cron" ||
+		exts[0].Image != "quay.io/yugabyte/amp-ext-pg_cron:1.6.7" || !exts[0].Preload {
+		t.Fatalf("spec.Extensions = %+v, want the opted-in pg_cron with Preload:true", exts)
+	}
+	persisted, _ := state.BranchExtensions(t.Context(), projectID, branchID)
+	if len(persisted) != 1 || persisted[0] != "pg_cron" {
+		t.Fatalf("branch extensions = %v, want [pg_cron] persisted", persisted)
+	}
+}
+
 func TestCreateEndpointStepInheritsBranchExtensions(t *testing.T) {
 	// A branch that opted into an extra extension (e.g. inherited across a fork)
 	// mounts it in addition to the catalog defaults, de-duplicated and ordered

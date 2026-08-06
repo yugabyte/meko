@@ -55,6 +55,13 @@ var builtin = []Extension{
 	// No preload needed. The image ships vector.control / vector*.sql (the SQL
 	// name is "vector").
 	{Name: "pgvector", Version: "0.8.2", Default: false, Preload: false},
+	// pg_cron: a background-worker job scheduler. Opt-in per branch like
+	// pgvector, but Preload: true — its library must be in
+	// shared_preload_libraries (the chart appends it), so an endpoint that opts
+	// in needs a postmaster restart. Its scheduler binds to one database via the
+	// cron.database_name GUC (default "postgres", which every endpoint serves);
+	// a non-default database is set through the endpoint's pg_settings.
+	{Name: "pg_cron", Version: "1.6.7", Default: false, Preload: true},
 }
 
 // NewCatalog returns the built-in catalog with images under registry (e.g.
