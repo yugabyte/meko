@@ -280,7 +280,6 @@ func (p *Provider) ampstackConfig(ns string) (ampstack.Config, error) {
 		ExtraHelmSet:              p.cfg.HelmValues,
 		YBImage:                   p.cfg.YBImage,
 		YBStorage:                 p.cfg.YBStorage,
-		RBACClusterScoped:         true,
 		HelmShim:                  false,
 		ECRRegistry:               "", // exclusivek8s uses a pre-encoded secret, never mints via ECR
 		PullSecretName:            p.cfg.PullSecretName,

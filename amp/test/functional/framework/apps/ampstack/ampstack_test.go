@@ -18,9 +18,8 @@ import (
 )
 
 // renderedChart is a canned `helm template` output: a ServiceAccount + Role +
-// RoleBinding + Deployment plus the cluster-scoped ClusterRole/ClusterRoleBinding
-// the chart emits when rbac.clusterScoped is on — so a test can assert the
-// cluster-scoped docs are filtered out on a namespace-scoped install.
+// RoleBinding + Deployment plus a cluster-scoped ClusterRole/ClusterRoleBinding,
+// so a test can assert every rendered doc is applied as the chart wrote it.
 const renderedChart = `apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -582,38 +581,23 @@ func TestDeployPortforwardModeStillUsesForward(t *testing.T) {
 	}
 }
 
-func TestDeployFiltersClusterScopedRBACWhenNamespaceScoped(t *testing.T) {
+func TestDeployAppliesTheChartAsRendered(t *testing.T) {
 	rec := newRecorder()
-	a := testApp(Config{RBACClusterScoped: false, HelmShim: false}, rec)
+	a := testApp(Config{HelmShim: false}, rec)
 	if _, err := a.Deploy(context.Background()); err != nil {
 		t.Fatalf("deploy: %v", err)
 	}
 	applied := appliedManifests(rec.snapshot())
-	if anyContains(applied, "kind: ClusterRole") {
-		t.Error("ClusterRole/ClusterRoleBinding must be filtered out when rbac_cluster_scoped=false")
-	}
-	// The namespace-scoped Role and the Deployment must survive.
 	if !anyContains(applied, "kind: Role") || !anyContains(applied, "kind: Deployment") {
-		t.Error("namespace-scoped Role and the controller Deployment must still be applied")
+		t.Error("the rendered Role and controller Deployment must be applied")
 	}
-	// And helm was told clusterScoped=false.
-	if !hasCall(rec.snapshot(), "rbac.clusterScoped=false") {
-		t.Error("helm template must set rbac.clusterScoped=false")
+	// Nothing is edited out and nothing is overridden: whether the install is
+	// cluster-scoped is the chart's call, and rbac.clusterScoped is never set.
+	if !anyContains(applied, "kind: ClusterRole") {
+		t.Error("docs the chart rendered must be applied as rendered, not filtered")
 	}
-}
-
-func TestDeployKeepsClusterScopedRBACWhenClusterScoped(t *testing.T) {
-	rec := newRecorder()
-	a := testApp(Config{RBACClusterScoped: true, HelmShim: false}, rec)
-	if _, err := a.Deploy(context.Background()); err != nil {
-		t.Fatalf("deploy: %v", err)
-	}
-	applied := appliedManifests(rec.snapshot())
-	if !anyContains(applied, "kind: ClusterRole") || !anyContains(applied, "kind: ClusterRoleBinding") {
-		t.Error("ClusterRole/ClusterRoleBinding must be applied when rbac_cluster_scoped=true")
-	}
-	if !hasCall(rec.snapshot(), "rbac.clusterScoped=true") {
-		t.Error("helm template must set rbac.clusterScoped=true")
+	if hasCall(rec.snapshot(), "rbac.clusterScoped") {
+		t.Error("helm template must not set rbac.clusterScoped at all")
 	}
 }
 
@@ -1087,22 +1071,6 @@ func TestHelmEscape(t *testing.T) {
 	}
 	if strings.Count(escaped, `\,`) != 1 {
 		t.Errorf("expected exactly one escaped comma in %q", escaped)
-	}
-}
-
-func TestFilterManifestsRobustSplit(t *testing.T) {
-	// A doc whose body merely mentions ClusterRole in a comment must survive;
-	// only a top-level kind: ClusterRole is dropped.
-	in := "kind: ConfigMap\ndata:\n  note: mentions ClusterRole here\n---\nkind: ClusterRole\nmetadata:\n  name: x\n"
-	out := filterManifests(in, true)
-	if !strings.Contains(out, "ConfigMap") {
-		t.Error("ConfigMap doc must survive")
-	}
-	if strings.Contains(out, "kind: ClusterRole") {
-		t.Error("ClusterRole doc must be dropped")
-	}
-	if strings.Contains(out, "mentions ClusterRole") == false {
-		t.Error("the ConfigMap's ClusterRole mention must be preserved")
 	}
 }
 

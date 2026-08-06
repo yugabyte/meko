@@ -197,9 +197,6 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if acfg.Backing.User != "" || acfg.Backing.DBName != "" || acfg.Backing.Password != "" || acfg.Backing.SSLMode != "" || acfg.Backing.AdminHostPorts != "" {
 		t.Errorf("ampstack Backing external fields should default empty, got %+v", acfg.Backing)
 	}
-	if !acfg.RBACClusterScoped {
-		t.Errorf("ampstack RBACClusterScoped = false, want true (endpoint disk sizing needs the node read — meko#584; revert to the namespace-scoped default when that dependency is gone)")
-	}
 	if !acfg.HelmShim {
 		t.Errorf("ampstack HelmShim = false, want true (default on until fixed image ships)")
 	}

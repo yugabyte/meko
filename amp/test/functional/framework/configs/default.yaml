@@ -184,15 +184,6 @@ env:
       password: ""
       sslmode: ""
       admin_host_ports: ""
-    # true → the chart's ClusterRole/ClusterRoleBinding are created, granting the
-    # controller the cluster-scoped `nodes: [get, list]` read it needs to size an
-    # endpoint's emptyDir /data (meko#584: without it create_endpoint fails
-    # outright — there is no fallback). Both objects are named
-    # "<namespace>-<controller>-namespaces", so parallel runs in their own
-    # namespaces cannot clobber each other's binding.
-    # Set back to false — the shared-cluster default this framework prefers —
-    # once the product stops making that read mandatory.
-    rbac_cluster_scoped: true
     # true → install the helm shim that strips --create-namespace (needed until
     # a controller image built without that flag ships).
     helm_shim: true

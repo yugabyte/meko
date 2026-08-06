@@ -21,18 +21,17 @@ func init() {
 // ampstackParams documents the -o keys the amp-stack tasks read (a subset of
 // env.ampstack.*, plus task.registry / task.env_id).
 var ampstackParams = map[string]string{
-	"env.ampstack.namespace":           "target namespace (required)",
-	"env.ampstack.context":             "kube-context (default: current)",
-	"env.ampstack.controller_chart":    "path to the yb-amp-controller Helm chart (required for deploy-amp)",
-	"env.ampstack.controller_image":    "controller image ref (default: config / versions.controller)",
-	"env.ampstack.endpoint_image":      "endpoint image ref (default: config / versions.endpoint)",
-	"env.ampstack.rbac_cluster_scoped": "bool: create ClusterRole/ClusterRoleBinding (default true; the node read endpoint sizing needs — meko#584)",
-	"env.ampstack.helm_shim":           "bool: install the --create-namespace-stripping helm shim (default true)",
-	"env.ampstack.storage_class":       "endpoint /data PVC storage class (default: emptyDir)",
-	"env.ampstack.yb_storage_class":    "built-in yugabyted PVC storage class (default standard-rwo, a WaitForFirstConsumer class)",
-	"env.ampstack.pull_secret_b64":     "pre-encoded .dockerconfigjson; empty → mint via aws ecr get-login-password",
-	"task.registry":                    "registry file path (default ~/.ampqa/envs.json)",
-	"task.env_id":                      "registry entry id (teardown-amp; default: match by namespace)",
+	"env.ampstack.namespace":        "target namespace (required)",
+	"env.ampstack.context":          "kube-context (default: current)",
+	"env.ampstack.controller_chart": "path to the yb-amp-controller Helm chart (required for deploy-amp)",
+	"env.ampstack.controller_image": "controller image ref (default: config / versions.controller)",
+	"env.ampstack.endpoint_image":   "endpoint image ref (default: config / versions.endpoint)",
+	"env.ampstack.helm_shim":        "bool: install the --create-namespace-stripping helm shim (default true)",
+	"env.ampstack.storage_class":    "endpoint /data PVC storage class (default: emptyDir)",
+	"env.ampstack.yb_storage_class": "built-in yugabyted PVC storage class (default standard-rwo, a WaitForFirstConsumer class)",
+	"env.ampstack.pull_secret_b64":  "pre-encoded .dockerconfigjson; empty → mint via aws ecr get-login-password",
+	"task.registry":                 "registry file path (default ~/.ampqa/envs.json)",
+	"task.env_id":                   "registry entry id (teardown-amp; default: match by namespace)",
 }
 
 // registryFor opens the registry at task.registry, or the default path.

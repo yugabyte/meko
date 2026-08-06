@@ -29,13 +29,10 @@
 // ambient-authed binaries (KISS, no client-go), reached through
 // exec/k8s.Kubectl.
 //
-// Namespace-scoped by preference, not currently: with RBACClusterScoped=false NO
-// cluster-scoped object (ClusterRole/ClusterRoleBinding) is ever created — those
-// docs are both gated off in the chart and filtered out of the rendered manifest
-// here — so the controller runs with only namespace RBAC on a shared cluster.
-// The default is true today because sizing an endpoint's emptyDir /data reads
-// the node list and fails create_endpoint outright without it (meko#584);
-// revert to false when that read stops being mandatory. Because the
+// The chart is deployed as the chart wrote it: nothing here overrides
+// rbac.clusterScoped or edits the rendered docs, so a run installs the RBAC a
+// real install would get — namespace-scoped by the chart's own default, which is
+// what BYOC grants (meko#602). Because the
 // currently-deployed controller image predates the fix that stopped passing
 // helm --create-namespace, HelmShim (default on) installs a tiny PATH-wrapper
 // that strips that flag until a controller image built without it ships.
@@ -220,10 +217,9 @@ type Config struct {
 	// never torn down here).
 	Backing Backing
 
-	RBACClusterScoped bool // false → no ClusterRole/ClusterRoleBinding is ever created (see meko#584)
-	HelmShim          bool // true → install the --create-namespace-stripping helm shim
-	MCPEnabled        bool
-	UIEnabled         bool
+	HelmShim   bool // true → install the --create-namespace-stripping helm shim
+	MCPEnabled bool
+	UIEnabled  bool
 
 	// Registry picks where bare image refs resolve and which auth the pull
 	// secret carries: RegistryQuay (default), RegistryECR or RegistryGHCR.
@@ -364,7 +360,6 @@ func FromConfig(get Getter) Config {
 			SSLMode:        get.GetString("env.ampstack.backing.sslmode", ""),
 			AdminHostPorts: get.GetString("env.ampstack.backing.admin_host_ports", ""),
 		},
-		RBACClusterScoped:         get.GetBool("env.ampstack.rbac_cluster_scoped", true),
 		HelmShim:                  get.GetBool("env.ampstack.helm_shim", true),
 		MCPEnabled:                get.GetBool("env.ampstack.mcp_enabled", false),
 		UIEnabled:                 get.GetBool("env.ampstack.ui_enabled", false),
@@ -968,9 +963,8 @@ func (a *App) createStorageDB(ctx context.Context) error {
 	return nil
 }
 
-// deployController renders the chart (helm template), filters cluster-scoped
-// RBAC when RBACClusterScoped is false, and applies the result — or applies a
-// raw ControllerManifest verbatim when one is set.
+// deployController renders the chart (helm template) and applies it as rendered —
+// or applies a raw ControllerManifest verbatim when one is set.
 func (a *App) deployController(ctx context.Context) error {
 	if a.cfg.ControllerManifest != "" {
 		if err := a.kube.Apply(ctx, a.cfg.ControllerManifest); err != nil {
@@ -985,7 +979,7 @@ func (a *App) deployController(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	manifest := filterManifests(rendered, !a.cfg.RBACClusterScoped)
+	manifest := rendered
 	if strings.TrimSpace(manifest) == "" {
 		return nil
 	}
@@ -1041,7 +1035,6 @@ func (a *App) helmTemplateArgs() []string {
 		"controller.endpoint.service.type":     a.cfg.EndpointServiceType,
 		"controller.endpoint.storageClass":     a.cfg.StorageClass,
 		"controller.service.type":              a.cfg.ControllerExpose,
-		"rbac.clusterScoped":                   boolStr(a.cfg.RBACClusterScoped),
 		"mcp.enabled":                          boolStr(a.cfg.MCPEnabled),
 		"ui.enabled":                           boolStr(a.cfg.UIEnabled),
 	}
@@ -1413,56 +1406,6 @@ func (a *App) pollHealthz(ctx context.Context, cl *controller.Client, timeout ti
 }
 
 // --- pure helpers ---
-
-// filterManifests optionally drops ClusterRole/ClusterRoleBinding docs (robust
-// `---`-split + top-level kind check), so no cluster-scoped object is ever
-// applied on a namespace-scoped install.
-func filterManifests(rendered string, dropClusterScoped bool) string {
-	if !dropClusterScoped {
-		return rendered
-	}
-	docs := splitYAMLDocs(rendered)
-	kept := make([]string, 0, len(docs))
-	for _, d := range docs {
-		if strings.TrimSpace(d) == "" {
-			continue
-		}
-		switch manifestKind(d) {
-		case "ClusterRole", "ClusterRoleBinding":
-			continue
-		}
-		kept = append(kept, strings.TrimSpace(d))
-	}
-	if len(kept) == 0 {
-		return ""
-	}
-	return strings.Join(kept, "\n---\n") + "\n"
-}
-
-// splitYAMLDocs splits a multi-doc manifest on lines that are exactly "---".
-func splitYAMLDocs(s string) []string {
-	var docs []string
-	var cur []string
-	for _, line := range strings.Split(s, "\n") {
-		if strings.TrimSpace(line) == "---" {
-			docs = append(docs, strings.Join(cur, "\n"))
-			cur = nil
-			continue
-		}
-		cur = append(cur, line)
-	}
-	return append(docs, strings.Join(cur, "\n"))
-}
-
-// manifestKind returns the top-level (column-0) kind of one YAML doc, or "".
-func manifestKind(doc string) string {
-	for _, line := range strings.Split(doc, "\n") {
-		if strings.HasPrefix(line, "kind:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "kind:"))
-		}
-	}
-	return ""
-}
 
 // withRegistry prefixes a bare "repo[:tag]" (no registry host) with registry.
 // A ref that already has a registry host (a dot or colon before the first
