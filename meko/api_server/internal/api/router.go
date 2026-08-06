@@ -217,7 +217,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	// YCP fleet registry (BYOC control plane). Enabled only in control-plane mode.
 	var envSvc *service.EnvironmentService
 	if cfg.ControlPlaneMode {
-		envSvc = service.NewEnvironmentService(repository.NewEnvironmentRepo(cfg.SystemDB))
+		envSvc = service.NewEnvironmentService(repository.NewEnvironmentRepo(cfg.SystemDB), cfg.BootstrapDefaults)
 		slog.Info("control-plane mode enabled (YCP fleet + agent routes)")
 	}
 
@@ -376,12 +376,19 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	// enrollment token (enroll) and env-scoped status token (status/desired-state).
 	if reg.envSvc != nil {
 		envH := handlers.NewEnvironmentHandler(reg.envSvc)
+		// The secret the console page carries, if this deployment opted in. Empty
+		// otherwise, and the console asks for it in-page as before.
+		consoleSecret := ""
+		if cfg.ConsoleEmbedAdminSecret {
+			consoleSecret = cfg.AdminAPIKey
+		}
 		fleet := v1.Group("", auth.RequireAdminSecret(cfg.AdminAPIKey))
 		fleet.GET("/environments", envH.List)
 		fleet.POST("/environments", envH.Register)
 		fleet.GET("/environments/:id", envH.Get)
 		fleet.PATCH("/environments/:id", envH.Action)
 		fleet.DELETE("/environments/:id", envH.Deregister)
+		fleet.GET("/environments/:id/desired", envH.GetDesired)
 		fleet.POST("/environments/:id/desired", envH.SetDesired)
 		fleet.GET("/entitlements", envH.Entitlements)
 		agentGroup := v1.Group("/agent")
@@ -397,9 +404,9 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		//
 		// Under a base path both /ycp/ and /ycp serve the console: a person
 		// types the latter, and Echo treats the two as distinct routes.
-		root.GET("/", handlers.ConsoleHandler())
+		root.GET("/", handlers.ConsoleHandler(consoleSecret))
 		if basePath != "" {
-			e.GET(basePath, handlers.ConsoleHandler())
+			e.GET(basePath, handlers.ConsoleHandler(consoleSecret))
 		}
 	}
 

@@ -43,7 +43,7 @@ Meko is a polyglot monorepo. Each top-level directory is an independently-built 
 | Path | Language | What it is |
 |------|----------|-----------|
 | `cli_app/` | Go (cobra + bubbletea TUI) | The `meko` CLI binary — entry point for end users. Talks to `api_server`. |
-| `api_server/` | Go (net/http + Swagger) | REST API on `:25433`. Owns datapacks/agents/knowledge-bases, Cognito auth, Langfuse provisioning, S3 uploads, RAG indexing. Runs migrations on boot. |
+| `api_server/` | Go (net/http + Swagger) | REST API on `:25433`. Owns datapacks/agents/knowledge-bases, Cognito auth, Langfuse provisioning, S3 uploads, RAG indexing. Migrations are a **separate invocation** (`-migrate-only`), not part of serving — see Database below. |
 | `inference_gateway/` | Python 3.11+ (FastAPI + LangChain) | Playground chat backend on `:8088`. Wires LLM (OpenAI / Bedrock) → Meko MCP server for memory + conversations. |
 | `meko-provisioner/` | Go (Kubebuilder operator) | K8s operator that reconciles `MekoUserAccount` CRs into per-tenant namespaces (MCP server, RAG worker, Langfuse). See `meko-provisioner/AGENTS.md` for kubebuilder rules. |
 | `meko_ui/` | TypeScript (React 19 + Vite + Tailwind + Drizzle) + Node Express server | Web UI; Express server in `meko_ui/server/` proxies to `api_server`. |
@@ -135,7 +135,14 @@ Note `formatters.settings.goimports.local-prefixes: [meko]` — local imports go
 
 ## Database
 
-YugabyteDB YSQL (PostgreSQL-wire-compatible) on `:5433`. The `api_server` runs migrations on every startup against the system schema. Tenant data lives under `meko_system.*` (registries) plus per-datapack databases (`account_id_<datapack-name>`).
+YugabyteDB YSQL (PostgreSQL-wire-compatible) on `:5433`. Tenant data lives under `meko_system.*` (registries) plus per-datapack databases (`account_id_<datapack-name>`).
+
+**Migrations are a separate run, not part of serving.** `api_server` migrates only when `-migrate-only` (or one of the `-only-*-migrate` scoping flags) is passed; started without one it serves against whatever schema is already there. So every deployment needs its own migrate step — both the YCP control plane and the data-plane stack use an init container for it. Skip it and the api-server comes up healthy, answers `/api/v1/health` with 200, and fails every real request with `relation "meko_system.users" does not exist`.
+
+```bash
+(cd api_server && go run . -migrate-only)          # both sets: meko_system + data-plane
+(cd api_server && go run . -only-system-migrate)   # one set; implies -migrate-only
+```
 
 Reset system tables for a clean slate:
 
@@ -151,6 +158,7 @@ Reset system tables for a clean slate:
 - **Cognito is optional.** When `--cognito-*` flags are unset, `/api/v1/datapacks` accepts unauthenticated calls. Production always sets them; `/success` is the OAuth2 callback.
 - **Langfuse split.** `api_server` uses Langfuse's admin API for provisioning *and* connects directly to Langfuse Postgres (read-only) for observability endpoints. Without `--langfuse-db-*`, those endpoints return 503.
 - **The mount point is configurable.** `--base-path` / `MEKO_YCP_BASE_PATH` moves every route under a URL prefix (console, `/api/v1`, swagger, the OAuth2 callback) for deployments fronted at a subpath of a shared domain — YCP at `https://devcloud.yugabyte.com/ycp/`. Unset (the default) serves at the domain root, unchanged. It must be a plain path prefix, not a URL: anything else fails startup rather than mounting somewhere unreachable. `GET /api/v1/health` answers at the domain root either way, since container probes bypass the proxy that supplies the prefix.
+- **The BYOC data plane is deployed from its enrollment.** `POST /api/v1/environments` takes a *name*; the control plane resolves the whole Meko release (pinned in `api_server/internal/service/dataplane_release.go`) and the enroll response hands it to the agent, which deploys YugabyteDB with the `mage`/`pg_dist_rag` extensions plus `api-server`, `mcp-server`, `rag-worker`, `inference-gateway` and `ui` — one `meko-stack` resource. The agent persists the stack beside its status token, so a restart needs no control-plane call. `POST /api/v1/environments/{id}/desired` still replaces what an environment runs afterwards (kinds: `meko-stack`, `database`, `mcp-server`, `rag-worker`); nothing is merged, and a withdrawn resource is garbage-collected. Specs carry Secret *names*, never values. An environment is the unit: datapacks are created inside Meko through its own api-server, not modelled by YCP. See `ycp/DEPLOY.md` for the field reference.
 - **No streaming yet.** `inference_gateway` returns full LLM replies in one response; session history is in-memory (lost on restart, not shared across instances).
 
 ## Auto-Generated Files (do not edit)

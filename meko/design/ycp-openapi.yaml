@@ -442,9 +442,6 @@ components:
         agent_version: { type: string }
         applied_revision: { type: integer }
         components: { type: array, items: { $ref: '#/components/schemas/Component' } }
-        datapack_phases:
-          type: array
-          items: { type: object, properties: { id: { type: string }, phase: { type: string } } }
 
     Entitlement:
       type: object

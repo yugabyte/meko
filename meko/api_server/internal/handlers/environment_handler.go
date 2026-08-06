@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -62,16 +63,11 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
-	// The previous hint named a `meko/meko-agent` chart in a `meko` Helm repo.
-	// Neither exists: the agent is a component of the `meko` chart in meko-devops,
-	// the token goes in a Secret rather than on the command line, and the other
-	// components have to be switched off explicitly. Point at the real thing
-	// instead of printing a command that cannot work.
-	hint := "kubectl -n <ns> create secret generic meko-agent-enrollment --from-literal=enrollment-token=" + token +
-		" && helm upgrade --install meko-agent charts/meko -n <ns> --set agent.enabled=true" +
-		" --set agent.ycpUrl=<this control plane> --set agent.envName=" + e.ID +
-		" (see charts/meko/README.md in meko-devops for the full command)"
-	return ok(c, http.StatusCreated, map[string]any{"environment": e, "enrollment_token": token, "install_hint": hint})
+	return ok(c, http.StatusCreated, map[string]any{
+		"environment":      e,
+		"enrollment_token": token,
+		"install_hint":     installHint(c, e.ID, token),
+	})
 }
 
 // SetDesired replaces the environment's desired resource set.
@@ -90,6 +86,31 @@ func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
 	}
 	return c.NoContent(http.StatusAccepted)
+}
+
+// GetDesired returns the environment's desired resource set.
+//
+// The agent-facing GET is bearer-authed with an env-scoped status token, which an
+// operator does not have — so without this, desired state was write-only from the
+// console: you could send a command and never read back what an environment had
+// been told to run.
+func (h *EnvironmentHandler) GetDesired(c echo.Context) error {
+	envID := c.Param("id")
+	e, err := h.svc.Get(envID)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	if e == nil {
+		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
+	}
+	res, err := h.svc.Desired(envID)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	if res == nil {
+		res = []models.DesiredResource{}
+	}
+	return ok(c, http.StatusOK, map[string]any{"resources": res})
 }
 
 // Action applies an operator lifecycle action (suspend|resume|drain|deregister).
@@ -175,9 +196,21 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	if !valid {
 		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "invalid or already-used enrollment token")
 	}
-	return ok(c, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"environment_id": e.ID, "status_token": statusToken, "mcp_base_url": e.MCPBaseURL,
-	})
+	}
+	// The stack comes back with the token, so an agent that enrolls can deploy the whole
+	// data plane from this one response — no second call, and nothing for an operator to
+	// command. A failure to read it is logged and omitted rather than failing the
+	// enrollment: the status token is returned exactly once, and losing it to a
+	// transient read error would leave an environment no agent can attach to.
+	if stack, err := h.svc.EnrolledStack(e.ID); err != nil {
+		slog.Warn("could not read the stack to hand the enrolling agent",
+			"environment", e.ID, "error", err)
+	} else if len(stack) > 0 {
+		body["stack"] = stack
+	}
+	return ok(c, http.StatusOK, body)
 }
 
 // AgentDesiredState returns the generic desired-state resources (bearer-authed).

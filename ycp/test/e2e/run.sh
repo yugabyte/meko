@@ -13,19 +13,40 @@
 #      alias that the kubelet probe uses,
 #   3. the fleet API rejects an unauthenticated call and accepts the admin secret,
 #   4. registering an environment mints an enrollment token,
-#   5. the agent enrolls with that token and reports itself READY with real
-#      cluster facts,
+#   4b. a registration with nothing but a name seeds the WHOLE Meko stack: one
+#      meko-stack resource carrying all six pinned images, the MAGE-enabled YugabyteDB
+#      among them,
+#   5. the agent enrolls with that token and reports real cluster facts,
+#   5b. registration ALONE bootstraps Meko: the environment was seeded with desired
+#      state when it was registered, so the agent brings up the database and reaches
+#      READY without anyone sending it a command,
 #   6. the agent survives a restart WITHOUT re-enrolling, because the status token
-#      it got at (5) was persisted on both sides.
+#      it got at (5) was persisted on both sides,
+#   7. an operator COMMANDS the environment (POST /environments/{id}/desired) to add a
+#      second database, and the agent brings it up and reports it as a component with
+#      real replica counts,
+#   8. withdrawing it garbage-collects that database and leaves the first one alone.
 #
 # (6) is the assertion that matters most. The enrollment token is a 30-minute
 # bootstrap credential, so an agent that re-enrolls on every restart works in a
 # demo and then locks itself out an hour later. Nothing caught that before.
 #
+# (5b) and (7) are what make the loop closed rather than half-built: desired state
+# was readable by the agent long before anything could act on it, so an environment
+# could be registered, or commanded, and quietly do nothing.
+#
 # There is no seed path here on purpose: the environment is registered through the
 # real POST /api/v1/environments, so the token the agent uses is one the API
 # actually minted. That is why this script is a sequence rather than a single
 # `kubectl apply` -- the agent's Secret cannot exist until the control plane is up.
+#
+# What this canNOT cover: the full Meko stack actually running. Every image in the
+# pinned release is private (ECR, no anonymous pull) and this cluster has no
+# credentials, so (4b) asserts what registration SEEDS on a throwaway environment and
+# the agent at (5) is pointed at a database with a public image instead. Standing the
+# real stack up -- YugabyteDB with mage and pg_dist_rag, api-server, MCP server, RAG
+# worker, gateway, UI -- is test/local/meko-stack.sh, which needs AWS credentials and
+# so cannot run in CI.
 #
 # Coverage this gives beyond `go test`: image build, image start, flag names
 # (a renamed flag crash-loops the pod), the portable control-plane migration set
@@ -130,6 +151,11 @@ diagnose() {
     echo "--- logs: deploy/$d ---"
     k -n "$NS" logs "deploy/$d" --tail=40 --all-containers --prefix 2>&1 | head -60 || true
   done
+  # The stack the agent was told to bring up. Created mid-run, so absent on an early
+  # failure, and that is fine.
+  echo "--- stack (declared as desired state) ---"
+  k -n "$NS" get statefulsets,deployments,svc,cm -l meko.dev/stack=true 2>&1 || true
+  k -n "$NS" logs statefulset/meko --tail=20 2>&1 | head -25 || true
   echo "--- events ---"
   k -n "$NS" get events --sort-by=.lastTimestamp 2>&1 | tail -25 || true
 }
@@ -137,6 +163,7 @@ diagnose() {
 cleanup() {
   rc=$?
   if [ -n "${PF_PID:-}" ]; then kill "$PF_PID" 2>/dev/null || true; fi
+  if [ -n "${DP_PF_PID:-}" ]; then kill "$DP_PF_PID" 2>/dev/null || true; fi
   if [ -n "${TMPDIR_E2E:-}" ]; then rm -rf "$TMPDIR_E2E"; fi
   [ "$rc" -ne 0 ] && diagnose
   if [ "$KEEP" = "1" ]; then
@@ -192,11 +219,6 @@ API_IMG="${IMG_PREFIX}meko-api-server:$TAG"
 AGENT_IMG="${IMG_PREFIX}meko-agent:$TAG"
 "$ENGINE" build -f "$MEKO_DIR/api_server/Dockerfile" -t "$API_IMG"   "$MEKO_DIR/api_server"
 "$ENGINE" build -f "$YCP_DIR/Dockerfile.agent"       -t "$AGENT_IMG" "$YCP_DIR"
-# dpmcp is built but not loaded or deployed: this run provisions no datapacks, so
-# nothing would pull it. Building it here is what keeps a broken Dockerfile.dpmcp
-# from merging green and then failing ycp-images.yml on main, where the only
-# symptom is a per-datapack MCP pod stuck in ImagePullBackOff.
-"$ENGINE" build -f "$YCP_DIR/Dockerfile.dpmcp"       -t "${IMG_PREFIX}dpmcp:$TAG" "$YCP_DIR"
 
 log "creating kind cluster $CLUSTER"
 kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
@@ -271,8 +293,17 @@ if [ -n "$BASE" ]; then
   log "checking the $BASE subpath mount"
   code="$(status_of "$BASE/")"
   [ "$code" = "200" ] || die "GET $BASE/ (console) returned $code, want 200"
-  curl -fsS "http://127.0.0.1:$PORT$BASE/" | grep -q "Yugabyte Control Plane" ||
-    die "GET $BASE/ did not serve the console HTML"
+  # Read the body, THEN match it — never `curl | grep -q` under `set -o pipefail`.
+  # grep -q exits the moment it matches, and the marker is in the <title> at byte 8, so
+  # it closes the pipe while curl still has ~42 KB to write. curl then dies with
+  # "(23) Failure writing output to destination" and pipefail fails the pipeline even
+  # though the grep succeeded. It passed for as long as the page was small enough for
+  # curl to finish writing first; growing the console by 6 KB made it deterministic.
+  console="$(curl -fsS "http://127.0.0.1:$PORT$BASE/")"
+  case "$console" in
+    *"Yugabyte Control Plane"*) ;;
+    *) die "GET $BASE/ did not serve the console HTML" ;;
+  esac
   code="$(status_of "$BASE")"
   [ "$code" = "200" ] || die "GET $BASE (no trailing slash) returned $code, want 200"
   code="$(status_of /api/v1/environments)"
@@ -299,9 +330,48 @@ echo "    unauthenticated -> 401, authenticated -> 200"
 
 # 4. Register the environment and take the one-time enrollment token from the
 #    response. This is the operator step from YCP-RUNBOOK.md §4.
+# 4a. First, what a plain registration seeds, over the real API: one meko-stack
+#     resource carrying the pinned release. This is the contract the whole
+#     deploy-on-enroll path rests on — a caller sends a name and the control plane
+#     resolves everything a data plane needs.
+#
+#     Checked on a THROWAWAY environment that no agent ever attaches to, because every
+#     image in the pinned release is private: this cluster has no registry credentials,
+#     so an agent told to run that stack would sit in ImagePullBackOff. What the seed
+#     contains is assertable here; that the images pull is not, and pretending otherwise
+#     is what test/local/meko-stack.sh exists for (it has ECR access). See the note at
+#     the top of this file.
+log "checking a plain registration seeds the whole Meko stack"
+api POST /api/v1/environments -H 'content-type: application/json' \
+  -d '{"name":"seed-check","account_id":"e2e","placement":"cloud","region":"local"}' >/dev/null ||
+  die "registering seed-check failed"
+seed="$(api GET /api/v1/environments/seed-check/desired)"
+python3 - "$seed" <<'PY' || die "a plain registration did not seed a full meko-stack"
+import json, sys
+res = json.loads(sys.argv[1])["data"]["resources"]
+if len(res) != 1 or res[0]["kind"] != "meko-stack":
+    print("    seeded %s, want exactly one meko-stack" % [r["kind"] for r in res], file=sys.stderr)
+    sys.exit(1)
+images = res[0]["spec"].get("images", {})
+want = {"database", "api_server", "mcp_server", "rag_worker", "inference_gateway", "ui"}
+missing = sorted(w for w in want if not images.get(w))
+if missing:
+    print("    seeded stack has no image for %s" % ", ".join(missing), file=sys.stderr)
+    sys.exit(1)
+if "ybdb-meko-release" not in images["database"]:
+    print("    database image %s is not the MAGE-enabled build" % images["database"], file=sys.stderr)
+    sys.exit(1)
+print("    seeded one meko-stack with all six images pinned")
+PY
+api DELETE /api/v1/environments/seed-check >/dev/null 2>&1 || true
+
+# 4b. The environment the agent actually attaches to. Its desired state is declared
+#     explicitly, with public images, because this cluster cannot pull the private ones.
+#     That still exercises what matters here: enrol, reconcile, report, GC.
 log "registering environment $ENV_NAME"
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
-  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"e2e\",\"placement\":\"cloud\",\"region\":\"local\"}")"
+  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"e2e\",\"placement\":\"cloud\",\"region\":\"local\",
+       \"desired\":[{\"kind\":\"database\",\"name\":\"meko\",\"spec\":{}}]}")"
 TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
 [ -n "$TOKEN" ] || die "no enrollment_token in the register response: ${reg:0:200}"
 case "$TOKEN" in
@@ -333,6 +403,37 @@ printf '    %s\n' "$enrolled"
 # READY + live + a real node count together are the signal the whole chain works:
 # the agent authenticated with its status token, read cluster facts, and the
 # control plane persisted them.
+# 5b. Registration ALONE has to be enough. Nobody has sent a command yet, so
+#     everything below comes from the desired state this environment was registered
+#     with: an agent that enrolls brings Meko up rather than idling until an operator
+#     remembers to declare something. (4a asserted that a registration with no
+#     `desired` at all seeds the full stack; this one declared a database, because the
+#     stack's images are private and unpullable here.)
+log "checking registration alone seeded desired state"
+seeded="$(api GET "/api/v1/environments/$ENV_NAME/desired")"
+python3 - "$seeded" <<'PY' || die "registration did not seed desired state - an enrolled agent would sit idle"
+import json, sys
+res = json.loads(sys.argv[1])["data"]["resources"]
+kinds = sorted(r["kind"] for r in res)
+if "database" not in kinds:
+    print("    seeded %s, want a database among them" % kinds, file=sys.stderr)
+    sys.exit(1)
+print("    seeded at registration: %s" % kinds)
+PY
+
+log "waiting for the database the agent was never explicitly told to run"
+for _ in $(seq 1 60); do
+  k -n "$NS" get statefulset meko >/dev/null 2>&1 && break
+  sleep 2
+done
+k -n "$NS" get statefulset meko >/dev/null 2>&1 ||
+  die "no database StatefulSet: the agent enrolled but did not act on the seeded desired state"
+k -n "$NS" rollout status statefulset/meko --timeout="$TIMEOUT" ||
+  die "the seeded database never became ready"
+k -n "$NS" get secret meko-database >/dev/null 2>&1 ||
+  die "the agent did not create the meko-database Secret holding the generated password"
+echo "    database up from registration alone, password Secret created by the agent"
+
 log "checking the fleet API reports it READY"
 for _ in $(seq 1 60); do
   envs="$(api GET /api/v1/environments 2>/dev/null || true)"
@@ -353,10 +454,20 @@ if e["state"] != "READY":        problems.append(f"state={e['state']}")
 if not e.get("live"):            problems.append("live=false")
 if e.get("node_count", 0) < 1:   problems.append("node_count=0")
 if not e.get("k8s_version"):     problems.append("k8s_version empty")
+# READY is derived from component health now, so it means the seeded database really
+# is running -- not that three ticks have gone by.
+comps = {c["name"]: c for c in (e.get("components") or [])}
+pg = comps.get("postgres")
+if pg is None:
+    problems.append("no postgres component (got %s)" % sorted(comps))
+elif pg["total"] < 1 or pg["healthy"] != pg["total"]:
+    problems.append("postgres %d/%d" % (pg["healthy"], pg["total"]))
 if problems:
     print("    " + ", ".join(problems), file=sys.stderr)
     sys.exit(1)
-print(f"    {e['id']}: state=READY live=true nodes={e['node_count']} k8s={e['k8s_version']}")
+summary = ", ".join("%s %d/%d" % (c["name"], c["healthy"], c["total"]) for c in e["components"])
+print("    %s: state=READY live=true nodes=%s k8s=%s | %s" % (
+    e["id"], e["node_count"], e["k8s_version"], summary))
 PY
 
 # 6. Restart the agent. It must come back on the persisted status token and NOT
@@ -384,4 +495,106 @@ if k -n "$NS" logs deploy/meko-agent --tail=-1 | grep -q "enrolled: environment_
 fi
 echo "    agent resumed on the persisted status token, no re-enrollment"
 
-log "PASS — build and deploy verified against api_server --control-plane-mode"
+# ------------------------------------------------------------- commands & bootstrap
+
+# 7. The operator gives the environment a command, and the agent bootstraps Meko
+#    from it. This is the step that makes the whole loop closed: before it, desired
+#    state was write-only in practice — the agent could pull it, but with nothing
+#    declared and no database it could only ever create empty namespaces.
+#
+#    Both specs are empty on purpose. An operator declaring nothing but a kind and a
+#    name has to get a working component, and this is the assertion that keeps that
+#    true — including the image the agent defaults to, which is the one a real
+#    bring-up gets. Pinning something cheaper here would test a path nobody runs and
+#    leave the default untested.
+log "commanding a second database (the first is already running from registration)"
+api POST "/api/v1/environments/$ENV_NAME/desired" -H 'content-type: application/json' -d '{
+  "resources": [
+    {"kind":"database","name":"meko","spec":{}},
+    {"kind":"database","name":"analytics","spec":{}}
+  ]
+}' >/dev/null || die "POST /environments/$ENV_NAME/desired failed"
+
+# The operator's read-back. The agent's own GET is authed with a status token no
+# console has, so without this route desired state could be set and never inspected.
+desired="$(api GET "/api/v1/environments/$ENV_NAME/desired")"
+python3 - "$desired" <<'PY' || die "GET /environments/{id}/desired did not return what was just set"
+import json, sys
+res = json.loads(sys.argv[1])["data"]["resources"]
+got = sorted((r["kind"], r["name"]) for r in res)
+want = [("database", "analytics"), ("database", "meko")]
+if got != want:
+    print("    desired state reads back as %s, want %s" % (got, want), file=sys.stderr)
+    sys.exit(1)
+print("    desired state reads back: %s" % got)
+PY
+
+log "waiting for the database the operator just declared"
+for _ in $(seq 1 45); do
+  k -n "$NS" get statefulset analytics >/dev/null 2>&1 && break
+  sleep 2
+done
+k -n "$NS" get statefulset analytics >/dev/null 2>&1 ||
+  die "the agent never created the analytics StatefulSet — it did not act on the command"
+k -n "$NS" rollout status statefulset/analytics --timeout="$TIMEOUT" ||
+  die "the commanded database never became ready"
+echo "    analytics is running, from a command alone"
+
+# The fleet view has to reflect it: components are read back from the API server by
+# the agent, so a green row here means something is genuinely running. Poll on the
+# whole condition — the fleet view is whatever the agent last reported, so for up to
+# one tick after a workload is ready it still says 0/1.
+log "checking the fleet API reports both databases"
+for _ in $(seq 1 45); do
+  envs="$(api GET /api/v1/environments 2>/dev/null || true)"
+  printf '%s' "$envs" | grep -q '"state":"READY"' && break
+  sleep 2
+done
+python3 - "$ENV_NAME" "${envs:-}" <<'PY' || die "the fleet API never reported both databases healthy"
+import json, sys
+items = json.loads(sys.argv[2] or "{}").get("data", {}).get("items") or []
+e = next((x for x in items if x["id"] == sys.argv[1]), None)
+if e is None:
+    sys.exit("    %s not in the fleet" % sys.argv[1])
+comps = e.get("components") or []
+# Both databases report under the engine name, so there are two `postgres` rows.
+pg = [c for c in comps if c["name"] == "postgres"]
+problems = []
+if len(pg) != 2:
+    problems.append("%d postgres components, want 2" % len(pg))
+for c in pg:
+    if c["total"] < 1 or c["healthy"] != c["total"]:
+        problems.append("postgres %d/%d" % (c["healthy"], c["total"]))
+if e["state"] != "READY":
+    problems.append("state=%s" % e["state"])
+if problems:
+    print("    " + ", ".join(problems), file=sys.stderr)
+    sys.exit(1)
+summary = ", ".join("%s %d/%d" % (c["name"], c["healthy"], c["total"]) for c in comps)
+print("    components: %s | state=READY" % summary)
+PY
+
+# 8. Withdraw it. GC is the half of reconciliation that deletes, and it is the half
+#    that is dangerous — an agent that garbage-collects on a bad tick takes data with
+#    it. Asserting removal on an EXPLICIT withdrawal is what makes the guard against
+#    doing it on a transient error meaningful.
+log "withdrawing the second database — the agent must garbage-collect it"
+api POST "/api/v1/environments/$ENV_NAME/desired" -H 'content-type: application/json' -d '{
+  "resources": [
+    {"kind":"database","name":"meko","spec":{}}
+  ]
+}' >/dev/null || die "POST /desired (withdrawing analytics) failed"
+
+gone=""
+for _ in $(seq 1 45); do
+  k -n "$NS" get statefulset analytics >/dev/null 2>&1 || { gone=yes; break; }
+  sleep 2
+done
+[ "$gone" = "yes" ] || die "the analytics StatefulSet still exists after being withdrawn — GC did not run"
+# The first database was NOT withdrawn, so it must still be standing. A GC that takes
+# the rest of the stack with it is the failure mode worth guarding.
+k -n "$NS" get statefulset meko >/dev/null 2>&1 ||
+  die "GC deleted the meko database, which was still declared"
+echo "    analytics collected, the still-declared meko database untouched"
+
+log "PASS — build, deploy, command and bootstrap verified against api_server --control-plane-mode"

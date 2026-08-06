@@ -28,7 +28,10 @@ Each level is a superset of the one above it. Don't set up a registry to answer
 | Level | What it proves | Needs | Time |
 |-------|----------------|-------|------|
 | **1 — laptop** | It compiles and the unit tests pass | Go 1.25+ | ~1 min |
-| **2 — throwaway cluster** | Images build; the control plane migrates, serves and enrolls an agent; the agent survives a restart | + `kind`, `kubectl`, `curl`, `python3`, and docker **or** podman | ~5 min |
+| **2 — throwaway cluster** | Images build; the control plane migrates, serves and enrolls an agent; the agent survives a restart; a commanded environment brings up what it is told to | + `kind`, `kubectl`, `curl`, `python3`, and docker **or** podman | ~5 min |
+| **2.5 — the real stack, locally** | The same, with the private `meko-mcp-server` image customers run | + AWS credentials for the Meko ECR | ~15 min (image pull) |
+| **2.75 — the operator path** | Register in YCP, run the Helm command YCP prints, and Meko comes up on its own | + `helm`, a meko-devops checkout | ~15 min |
+| **2.9 — on a real cluster** | The same, two namespaces on a cluster you already have (`itest-dev`, `meko-dev-eks`), images pulled from ECR | + a cluster and ECR push access | ~20 min |
 | **3 — a real cluster** | A shared, reachable YCP other people can use | + a registry, image publishing, a cluster | ~1 hr first time |
 
 ## Level 1 — on your laptop
@@ -55,9 +58,15 @@ It builds the api-server and agent images from source, loads them into a `kind`
 cluster it creates, and drives the whole bring-up: the control-plane migrations run
 against a plain Postgres, `/api/v1/health` comes up, the fleet API refuses an
 unauthenticated call, an environment is registered through the real API, the agent
-enrolls with the token that mints, reaches `READY` with real cluster facts, and then
-restarts **without re-enrolling**. Then it deletes the cluster (`YCP_E2E_KEEP=1` to
-keep it and poke around).
+enrolls with the token that mints, reaches `READY` with real cluster facts, and
+restarts **without re-enrolling**. Then it *commands* the environment — one POST of
+desired state — and asserts the agent acts on it: it brings up a second declared
+database, reports it back as a component, and garbage-collects it when withdrawn.
+Then it deletes the cluster (`YCP_E2E_KEEP=1` to keep it and poke around).
+
+Everything it runs uses public images, so it needs no registry credentials. That is
+also its limit: it never starts `meko-mcp-server`, which is private. For that, see
+level 2.5.
 
 It pins every `kubectl` call to the `kind-ycp-e2e` context and refuses to run if
 that context isn't the cluster it just created, so it cannot touch whatever your
@@ -65,6 +74,161 @@ kubeconfig currently points at.
 
 If this passes, the code and manifests are fine and anything that fails at level 3
 is environmental.
+
+## Level 2.5 — the real Meko stack, locally
+
+Level 2 proves the loop with images built from this repo. This proves it with the
+images customers actually run — `meko-mcp-server` over a database the agent
+provisions — on the same throwaway cluster:
+
+```bash
+YCP_E2E_KEEP=1 ./test/e2e/run.sh          # leaves the cluster up
+AWS_PROFILE=meko-dev ./test/local/meko-stack.sh
+```
+
+It creates an ECR pull Secret from your AWS credentials, writes `OPENAI_API_KEY`
+into a data-plane Secret if you have one exported, then declares the stack as
+desired state and waits for it: a `database` and an `mcp-server`. Add
+`MEKO_RAG_IMAGE=…` to declare a `rag-worker` too. When it finishes it prints the
+port-forwards for the console and the MCP endpoint.
+
+Nothing in the script deploys anything itself — it makes one `POST` of desired
+state and watches the agent do the work, which is the point.
+
+Two things to know:
+
+- **The MCP image is large** (~11 GB uncompressed), so the first pull dominates
+  the run. It is pulled by the node from ECR rather than side-loaded, because
+  `kind load` would write it twice.
+- **The ECR token lasts ~12 hours.** A cluster kept longer needs the script
+  re-run (it only refreshes the Secret) before the next image pull.
+
+Without AWS credentials this level is not available, and level 2 is the honest
+check — see [`ARCHITECTURE.md`](./ARCHITECTURE.md#what-the-agent-runs)
+for what else can be declared.
+
+## Level 2.6 — the whole stack, from a registration and nothing else
+
+Level 2.5 *commands* a stack, the way an operator used to have to. This one registers
+an environment with a name and lets enrollment do the rest, which is the path a
+customer actually takes:
+
+```bash
+YCP_E2E_KEEP=1 ./test/e2e/run.sh          # leaves the cluster up
+AWS_PROFILE=meko-dev OPENAI_API_KEY=sk-… ./test/local/full-stack.sh
+```
+
+No desired state is POSTed anywhere in it. It patches the control plane with the two
+data-plane Secret names, registers `full-stack`, deploys a second agent into its own
+namespace, and waits while the agent brings up YugabyteDB with `mage` and
+`pg_dist_rag`, then api-server, mcp-server, rag-worker, inference-gateway and ui.
+
+It asserts the things that would otherwise be believed rather than checked: that
+registration seeded all six images, that the agent was *handed* a stack at enrollment
+and persisted it (so a restart needs no control-plane call), that both extensions and
+the `dist_rag` schema really exist in the `meko` database, and that every component
+reports healthy to the fleet API.
+
+Beyond level 2.5's two caveats (large image, 12-hour ECR token):
+
+- **`OPENAI_API_KEY` is not optional for the gateway.** It builds its LangChain client
+  at startup, so without a key it exits rather than degrades. The script says so and
+  drops it from the assertions rather than reporting a red component for missing
+  configuration — but then the environment stays `PROVISIONING`, correctly, because a
+  declared component is not running.
+- **It needs real capacity.** YugabyteDB alone requests 2Gi.
+
+## Level 2.75 — the operator path, end to end
+
+Levels 2 and 2.5 drive the API directly. This one does what an operator does and
+nothing else: stand up YCP, register an environment in it, and run the Helm
+command YCP printed. The agent enrolls itself and brings Meko up from the desired
+state registration seeded — no `kubectl apply`, no POST of desired state.
+
+```bash
+AWS_PROFILE=meko-dev ./test/local/ycp-helm-bootstrap.sh
+```
+
+It needs a **meko-devops checkout** for the chart (`MEKO_DEVOPS=…`, default
+`~/code/meko-devops`), because that is where the `meko` chart lives. It creates
+its own kind cluster (`ycp-helm`), so it does not disturb the e2e's.
+
+It also tests the install hint, which is the one instruction an operator is given:
+a hint that has drifted from the chart is not cosmetic, it is a support question.
+
+What it proves, in order:
+
+```
+--------- the install command YCP printed (install_hint) ---------
+...
+    seeded at registration: database/meko, mcp-server/mcp
+==> helm upgrade --install meko-agent (chart: .../charts/meko)
+    enrolled: environment_id=helm-cell (status token acquired)
+==> waiting for the database the agent was never told to run
+    /ping -> {"status":"ok"}
+    /mcp initialize -> Meko MCP 3.2.4
+    state=READY components: meko-agent 1/1, postgres 1/1, mcp-server 1/1
+```
+
+The chart needs the widened agent RBAC (`patch`, `statefulsets`, `configmaps`) —
+without it the agent enrolls and then 403s on everything it tries to reconcile.
+
+## Level 2.9 — the same flow on a real cluster, two namespaces
+
+No kind. One namespace for the control plane, one for the data plane, on a cluster
+you already have — `itest-dev`, `itest-mcs`, `meko-dev-eks`:
+
+```bash
+# once per code change: build amd64 images and push them to ECR
+export AWS_PROFILE=meko-dev
+TAG="bootstrap-$(git rev-parse --short HEAD)"
+ECR=161908593886.dkr.ecr.us-east-2.amazonaws.com
+for spec in meko/api_server/Dockerfile:meko/api_server:meko-api-server \
+            ycp/Dockerfile.agent:ycp:meko-agent; do
+  df="${spec%%:*}"; r="${spec#*:}"; ctx="${r%%:*}"; name="${r#*:}"
+  podman build --platform linux/amd64 -f "$df" -t "$ECR/meko/$name:$TAG" "$ctx"
+  podman push "$ECR/meko/$name:$TAG"
+done
+
+# then install both halves. --all is required: the script refuses to guess a stage,
+# because registering an environment and attaching an agent to it are two deliberate
+# acts. --storage-class is needed wherever the cloud preset's default is absent (the
+# gcp preset asks for pd-ssd; check `kubectl get storageclass`).
+./test/local/ycp-on-cluster.sh \
+  --context gke_yugabyte_us-west1_itest-dev \
+  --all --env-name itest-dev \
+  --ycp-ns ycp --meko-ns meko \
+  --storage-class standard-rwo \
+  --tag "$TAG"
+
+# and afterwards — --delete alone removes the data plane only
+./test/local/ycp-on-cluster.sh --context <ctx> --ycp-ns ycp --meko-ns meko --all --delete
+```
+
+**[`BYOC-ON-GKE.md`](./BYOC-ON-GKE.md) is this level written out end to end**, with the
+verification steps and everything that bit on a real run — the migrate step, the internal
+LoadBalancers, re-runnability, and the failure modes worth recognising.
+
+`--platform linux/amd64` is not optional from an Apple-silicon laptop: the nodes
+are amd64 and an arm64 image fails with `exec format error` after a pull that looks
+successful. The Dockerfiles cross-compile, so this builds natively rather than
+running the Go toolchain under emulation.
+
+Three things differ from kind, all of them the cluster's doing rather than YCP's:
+
+- **Images come from ECR**, so they must be pushed first. The tag names the *code*;
+  rebuild it after changing anything Go.
+- **Both namespaces need an ECR pull Secret** (`ecr-registry-creds`), because GKE
+  has no AWS IAM — including the namespace the *agent* creates workloads in, which
+  is why the control plane is told the Secret's name
+  (`apiServer.dataplane.imagePullSecret`) and passes it in the seeded desired state.
+  ECR tokens last ~12 h; re-running the script refreshes them.
+- **The storage class** comes from the cloud preset (`pd-ssd` on GKE) rather than
+  kind's local-path provisioner.
+
+The script refuses to install into a namespace it did not create, so it cannot walk
+over somebody else's release on a shared cluster. `--delete` removes only what it
+made, including the `ycp-dp-*` namespaces the agent created.
 
 ---
 
@@ -86,14 +250,13 @@ Meko uses ECR at `161908593886.dkr.ecr.us-east-2.amazonaws.com` under `meko/`:
 | Repository | Binary | Dockerfile | Published by |
 |---|---|---|---|
 | `meko/meko-agent` | BYOC pull agent | `ycp/Dockerfile.agent` | `ycp-images.yml` |
-| `meko/dpmcp` | per-datapack MCP server | `ycp/Dockerfile.dpmcp` | `ycp-images.yml` |
-| `meko/meko-api-server` | the control plane | `api_server/Dockerfile` | **nobody — hand-built** |
+| `meko/meko-api-server` | the control plane | `meko/api_server/Dockerfile` | **nobody — hand-built** |
 
 **ECR does not create repositories on push** — unlike most registries. Create them
 first, once per account:
 
 ```bash
-for r in meko/meko-agent meko/dpmcp meko/meko-api-server; do
+for r in meko/meko-agent meko/meko-api-server; do
   aws ecr create-repository --region us-east-2 --repository-name "$r" \
     --image-tag-mutability MUTABLE
 done
@@ -105,7 +268,7 @@ time, which `IMMUTABLE` rejects.
 ## B. Publishing images
 
 [`.github/workflows/ycp-images.yml`](../.github/workflows/ycp-images.yml) builds
-and pushes the agent and dpmcp images on every merge to `main` that touches
+and pushes the agent image on every merge to `main` that touches
 `ycp/**`, tagging each with the commit SHA and `latest`. PRs build but never push.
 You can also trigger it by hand with `gh workflow run ycp-images.yml --ref main`.
 
@@ -156,7 +319,7 @@ which keeps PR branches and forks out:
    "ecr:UploadLayerPart","ecr:CompleteLayerUpload","ecr:PutImage","ecr:BatchGetImage",
    "ecr:DescribeRepositories","ecr:DescribeImages"],
   "Resource":["arn:aws:ecr:us-east-2:161908593886:repository/meko/meko-agent",
-              "arn:aws:ecr:us-east-2:161908593886:repository/meko/dpmcp"]}]}
+              "arn:aws:ecr:us-east-2:161908593886:repository/meko/meko-agent"]}]}
 ```
 
 Until the role exists the workflow builds the images and **skips the push with a
@@ -169,7 +332,7 @@ aws ecr get-login-password --region us-east-2 \
   | docker login --username AWS --password-stdin 161908593886.dkr.ecr.us-east-2.amazonaws.com
 R=161908593886.dkr.ecr.us-east-2.amazonaws.com/meko
 TAG=$(date +%Y%m%d)
-docker build --platform linux/amd64 -f api_server/Dockerfile -t $R/meko-api-server:$TAG api_server
+docker build --platform linux/amd64 -f meko/api_server/Dockerfile -t $R/meko-api-server:$TAG meko/api_server
 docker push $R/meko-api-server:$TAG
 ```
 
@@ -295,20 +458,12 @@ Its ServiceAccount is missing `get`/`create`/`update` on secrets in its own
 namespace. Both are deliberately fatal — see DEPLOY.md.
 
 **`kubectl exec` into a pod gives no shell**
-Expected for the agent and dpmcp: `gcr.io/distroless/static:nonroot`, no shell, no
+Expected for the agent: `gcr.io/distroless/static:nonroot`, no shell, no
 package manager. Debug via logs and port-forward. (The api-server image is Alpine
 and does have one.)
 
-**Datapack pods can't pull `dpmcp`**
-Known gap. The agent creates those Deployments itself and sets no
-`imagePullSecrets`, and the credential refresher only visits a fixed namespace
-list — so the dynamically created `ycp-dp-*` namespaces have no credentials.
-`DPMCP_IMAGE` therefore still defaults to a public placeholder.
-
 ## Known gaps
 
-- **`dpmcp` from a private registry** — as above; needs pull-secret plumbing in the
-  datapack namespaces, or a publicly pullable copy (which real BYOC needs anyway).
 - **No CI build for the control-plane image** — `meko/meko-api-server` is the one
   YCP image nothing publishes automatically.
 - **No console authentication** beyond the admin secret on the fleet routes. Keep it

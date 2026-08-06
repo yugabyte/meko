@@ -2,8 +2,8 @@
 // in-cluster Kubernetes API (no client-go — just the service-account token),
 // completes the enrollment-token handshake with YCP, then on each tick:
 //   - pulls desired state (bearer-authed),
-//   - reconciles desired datapacks into labeled namespaces,
-//   - reports status (real facts + discovered + managed datapacks).
+//   - reconciles the desired Meko stack into its own namespace,
+//   - reports status (real cluster facts + observed component health).
 //
 // All traffic is outbound: agent -> k8s API, agent -> YCP.
 package main
@@ -22,7 +22,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -57,6 +56,13 @@ const (
 	// ENV_NAME is detectable — otherwise the persisted id silently wins and
 	// re-pointing an agent at another environment does nothing.
 	envNameKey = "environment-name"
+	// stackKey stores the meko-stack spec the agent enrolled with, so a restart can
+	// bring the data plane back without asking the control plane anything.
+	stackKey = "stack"
+	// desiredKey stores the last desired state the agent read, so an outage that spans a
+	// restart still reconciles toward what it was last told rather than what it was
+	// registered with.
+	desiredKey = "desired"
 )
 
 func env(k, def string) string {
@@ -140,6 +146,11 @@ type nsItem struct {
 		Name   string            `json:"name"`
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
+	// Status.Phase is "Terminating" for a namespace already being deleted. Only
+	// namespaces carry it; it stays empty for everything else nsItem decodes.
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
 }
 type nameList struct {
 	Items []nsItem `json:"items"`
@@ -248,6 +259,22 @@ type agentState struct {
 	envName string
 	token   string
 	envID   string
+	// stack is the meko-stack spec this agent enrolled with. Persisted alongside the
+	// token for the same reason the token is: an agent that had to re-enrol to remember
+	// what to run would depend on a 30-minute bootstrap credential forever. With it
+	// here, a restart brings the whole data plane back with no control-plane call in the
+	// path at all — the reconcile loop can begin before the first successful request.
+	stack json.RawMessage
+	// desired is the last desired state the agent successfully read, as the JSON array
+	// of resources. It is what the agent reconciles toward when the control plane is
+	// unreachable, and it is persisted so that a RESTART during an outage does not lose
+	// it and fall back to the far staler enrolled stack.
+	//
+	// That is not theoretical. An agent ran for two and a half days after its control
+	// plane's namespace was deleted, holding six components up on the in-memory copy; a
+	// single eviction in that window would have silently reverted the environment to
+	// whatever it was registered with, weeks of edits ago.
+	desired json.RawMessage
 }
 
 // loadState reads the persisted state. The three cases are deliberately distinct:
@@ -289,6 +316,19 @@ func (k *k8s) loadState(ns string) (*agentState, error) {
 		return strings.TrimSpace(string(raw))
 	}
 	st := &agentState{envName: dec(envNameKey), token: dec(statusTokenKey), envID: dec(envIDKey)}
+	if raw := dec(desiredKey); raw != "" && json.Valid([]byte(raw)) {
+		st.desired = json.RawMessage(raw)
+	}
+	if raw := dec(stackKey); raw != "" {
+		// A stack that will not parse is dropped rather than carried: reconciling a
+		// half-decoded spec would apply a stack with fields silently missing. Without it
+		// the agent falls back to whatever desired state offers, and says so.
+		if json.Valid([]byte(raw)) {
+			st.stack = json.RawMessage(raw)
+		} else {
+			log.Printf("persisted stack in %s/%s is not valid JSON — ignoring it", ns, stateSecret)
+		}
+	}
 	// A token without the id it is scoped to is unusable — every agent call carries
 	// ?envId=. Treat a partial write as absent rather than half-trusting it.
 	if st.token == "" || st.envID == "" {
@@ -302,9 +342,18 @@ func (k *k8s) loadState(ns string) (*agentState, error) {
 // creating it or replacing its contents. Failure is logged, not fatal — the agent
 // still works for this lifetime; it just cannot survive a restart, which is the
 // behaviour before any of this existed.
-func (k *k8s) saveState(ns, envName, token, envID string) error {
+func (k *k8s) saveState(ns string, st agentState) error {
 	if ns == "" {
 		return fmt.Errorf("own namespace unknown (no %s)", nsPath)
+	}
+	data := map[string]string{
+		envNameKey: st.envName, statusTokenKey: st.token, envIDKey: st.envID,
+	}
+	if len(st.stack) > 0 {
+		data[stackKey] = string(st.stack)
+	}
+	if len(st.desired) > 0 {
+		data[desiredKey] = string(st.desired)
 	}
 	obj := map[string]any{
 		"apiVersion": "v1", "kind": "Secret",
@@ -312,7 +361,7 @@ func (k *k8s) saveState(ns, envName, token, envID string) error {
 			"name": stateSecret, "namespace": ns,
 			"labels": map[string]string{"app.kubernetes.io/managed-by": "meko-agent"},
 		},
-		"stringData": map[string]string{envNameKey: envName, statusTokenKey: token, envIDKey: envID},
+		"stringData": data,
 	}
 	body, _ := json.Marshal(obj)
 	code, b, err := k.do("POST", "/api/v1/namespaces/"+ns+"/secrets", body)
@@ -334,60 +383,6 @@ func (k *k8s) saveState(ns, envName, token, envID string) error {
 		}
 	}
 	return fmt.Errorf("save state secret -> %d: %s", code, truncate(b))
-}
-
-// applyDatapackWorkload provisions the per-datapack service: a Secret with the
-// datapack DB URI and a Deployment + Service running the real MCP server (dpmcp)
-// over that database. (In production this is the meko-mcp-server image.)
-func (k *k8s) applyDatapackWorkload(ns, dbURI, image string) error {
-	const port = 3000
-	labels := map[string]string{"app": "mcp", "app.kubernetes.io/managed-by": "meko-agent"}
-
-	if err := k.ensure("/api/v1/namespaces/"+ns+"/secrets", map[string]any{
-		"apiVersion": "v1", "kind": "Secret",
-		"metadata":   map[string]any{"name": "datapack-db", "namespace": ns},
-		"stringData": map[string]string{"uri": dbURI},
-	}); err != nil {
-		return err
-	}
-
-	if err := k.ensure("/apis/apps/v1/namespaces/"+ns+"/deployments", map[string]any{
-		"apiVersion": "apps/v1", "kind": "Deployment",
-		"metadata": map[string]any{"name": "mcp", "namespace": ns, "labels": labels},
-		"spec": map[string]any{
-			"replicas": 1,
-			"selector": map[string]any{"matchLabels": map[string]string{"app": "mcp"}},
-			"template": map[string]any{
-				"metadata": map[string]any{"labels": labels},
-				"spec": map[string]any{
-					"containers": []any{map[string]any{
-						"name":  "mcp",
-						"image": image,
-						"ports": []any{map[string]any{"containerPort": port}},
-						"env": []any{
-							map[string]any{"name": "DP_DB_URL", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "datapack-db", "key": "uri"}}},
-						},
-						"readinessProbe": map[string]any{
-							"httpGet":       map[string]any{"path": "/healthz", "port": port},
-							"periodSeconds": 5,
-						},
-						"resources": map[string]any{"requests": map[string]string{"cpu": "25m", "memory": "32Mi"}, "limits": map[string]string{"cpu": "250m", "memory": "128Mi"}},
-					}},
-				},
-			},
-		},
-	}); err != nil {
-		return err
-	}
-
-	return k.ensure("/api/v1/namespaces/"+ns+"/services", map[string]any{
-		"apiVersion": "v1", "kind": "Service",
-		"metadata": map[string]any{"name": "mcp", "namespace": ns, "labels": labels},
-		"spec": map[string]any{
-			"selector": map[string]string{"app": "mcp"},
-			"ports":    []any{map[string]any{"name": "http", "port": port, "targetPort": port}},
-		},
-	})
 }
 
 // ---- YCP client ----
@@ -474,20 +469,22 @@ func decodeBody(r io.Reader, out any) error {
 	return json.Unmarshal(env.Data, out)
 }
 
-// enroll performs the token handshake and records the returned status token.
-func (m *ycp) enroll(name, placement, enrollToken string, f api.ClusterFacts) (string, error) {
+// enroll performs the token handshake and records the returned status token. It
+// returns the environment id and the stack the control plane says this environment
+// runs — everything needed to bring Meko up, in one response.
+func (m *ycp) enroll(name, placement, enrollToken string, f api.ClusterFacts) (string, json.RawMessage, error) {
 	var er api.EnrollResponse
 	code, err := m.req("POST", "/api/v1/agent/enroll", api.EnrollRequest{
 		Name: name, Placement: placement, EnrollmentToken: enrollToken, ClusterFacts: f,
 	}, &er)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if code != 200 {
-		return "", fmt.Errorf("enroll -> %d", code)
+		return "", nil, fmt.Errorf("enroll -> %d", code)
 	}
 	m.token = er.StatusToken
-	return er.EnvironmentID, nil
+	return er.EnvironmentID, er.Stack, nil
 }
 
 func main() {
@@ -502,9 +499,6 @@ func main() {
 	envName := env("ENV_NAME", "itest-mcs")
 	placement := env("ENV_PLACEMENT", "cloud")
 	enrollToken := os.Getenv("ENROLLMENT_TOKEN")
-	managedPrefix := env("MANAGED_NS_PREFIX", "ycp-dp-")
-	dpDBURL := os.Getenv("DP_DB_URL")
-	mcpImage := env("DPMCP_IMAGE", "postgrest/postgrest:v12.2.3")
 	agentVer := env("AGENT_VERSION", "v1.4.2")
 	interval := 10 * time.Second
 
@@ -518,20 +512,9 @@ func main() {
 		log.Fatalf("k8s init: %v", err)
 	}
 
-	// Data-plane database: where per-datapack databases are provisioned (the customer's
-	// YugabyteDB in production). Without it, datapacks reconcile to a namespace only.
-	var dp *dpdb
-	if dpDBURL != "" {
-		d, err := newDPDB(dpDBURL)
-		if err != nil {
-			log.Fatalf("data-plane db: %v", err)
-		}
-		dp = d
-		defer dp.close()
-		log.Printf("data-plane db connected")
-	} else {
-		log.Printf("DP_DB_URL empty — per-datapack databases will not be provisioned")
-	}
+	// One connection cache for the reconcilers that need a database.
+	dpPool := &dbPool{}
+	defer dpPool.close()
 
 	m := &ycp{base: ycpURL, http: &http.Client{Timeout: 15 * time.Second}}
 
@@ -555,7 +538,15 @@ func main() {
 		log.Fatalf("cannot read agent state: %v", err)
 	}
 
+	// envID and stack are what the agent needs to do its job: who it is, and what it
+	// runs. Both come from enrollment and both are persisted, so neither is fetched
+	// again on a restart.
 	var envID string
+	var stack json.RawMessage
+	// resumedDesired is the persisted fallback, and only for the identity we resumed.
+	// Re-pointing an agent at a different environment must not leave it reconciling the
+	// previous environment's resources when the control plane is unreachable.
+	var resumedDesired json.RawMessage
 	switch {
 	case st != nil && st.envName != envName:
 		// ENV_NAME changed under us: the operator is re-pointing this agent. The
@@ -563,15 +554,15 @@ func main() {
 		// than silently continuing to serve the old one.
 		log.Printf("ENV_NAME changed (%q -> %q) — discarding persisted state and re-enrolling", st.envName, envName)
 	case st != nil:
-		m.token, envID = st.token, st.envID
+		m.token, envID, stack, resumedDesired = st.token, st.envID, st.stack, st.desired
 		log.Printf("resuming as env=%s with the persisted status token; not enrolling", envID)
 	}
 
 	if envID == "" {
 		for {
-			id, eerr := m.enroll(envName, placement, enrollToken, facts)
+			id, s, eerr := m.enroll(envName, placement, enrollToken, facts)
 			if eerr == nil {
-				envID = id
+				envID, stack = id, s
 				break
 			}
 			log.Printf("enroll failed (%v), retrying in 3s", eerr)
@@ -582,182 +573,172 @@ func main() {
 		// restart and then silently stops reporting — the exact failure this whole
 		// change exists to remove. Crash-looping makes a missing RBAC grant obvious
 		// while the enrollment token is still valid and reusable.
-		if serr := kc.saveState(ns, envName, m.token, envID); serr != nil {
+		if serr := kc.saveState(ns, agentState{envName: envName, token: m.token, envID: envID, stack: stack}); serr != nil {
 			log.Fatalf("enrolled but could not persist agent state: %v "+
 				"(the ServiceAccount needs get/create/update on secrets in %s)", serr, ns)
 		}
 	}
+	if len(stack) > 0 {
+		log.Printf("enrolled with a Meko stack to run; deploying it on every tick")
+	} else {
+		log.Printf("no stack came with enrollment — this environment runs only what desired state declares")
+	}
 
-	states := []api.EnvState{api.StateProvisioning, api.StateValidating, api.StateReady}
-	i := 0
+	// wasReady distinguishes "still coming up" from "was up and broke", which is the
+	// difference between PROVISIONING and DEGRADED. The state used to be a fixed
+	// three-tick walk to READY regardless of what was running; with real components
+	// to report there is no reason to narrate a lifecycle instead of observing one.
+	wasReady := false
+	// lastGood is the newest desired state the agent has actually read. See
+	// resourcesToApply: it is what the agent falls back to during a control-plane
+	// outage, so that an outage cannot rewind the data plane to what the environment
+	// was registered with. Seeded from the state Secret, so an outage that spans a
+	// restart keeps it.
+	var lastGood []api.DesiredResource
+	// persistedDesired is what is currently in the Secret, so the write below happens
+	// when desired state CHANGES rather than on every tick. A Secret write every ten
+	// seconds, forever, is a lot of API traffic and audit noise for a value that changes
+	// when an operator does something.
+	var persistedDesired json.RawMessage
+	lastGood, persistedDesired = resumeDesired(resumedDesired)
+	if lastGood != nil {
+		log.Printf("resuming with the last desired state read before restart (%d resources)", len(lastGood))
+	}
 	for {
-		// 1) pull desired state (bearer-authed)
+		// 1) Desired state, which is where the stack was written at registration and where
+		//    an operator's later changes go. When it can be read it is authoritative —
+		//    including when it is empty, which is how an environment is told to run
+		//    nothing. When it cannot, the stack the agent enrolled with stands: that is
+		//    what carrying it in the enroll response buys, a data plane the agent can
+		//    deploy from something it already holds, on its first tick and after every
+		//    restart, with no successful request in the path.
 		var ds api.DesiredState
 		dcode, derr := m.req("GET", "/api/v1/agent/desired-state?envId="+envID, nil, &ds)
-		if dcode == 401 || dcode == 404 {
+		desiredRead := derr == nil && dcode >= 200 && dcode <= 299
+		switch {
+		case dcode == 401 || dcode == 404:
 			// The status token was rejected — revoked, rotated, or the environment
 			// was re-registered. Re-enrolling needs an enrollment token that is still
 			// valid; past its TTL an operator has to issue a new one.
+			//
+			// Not a `continue`: the stack below is reconciled anyway. An environment
+			// whose token went stale should not have its data plane left to rot while
+			// somebody mints a new one.
 			log.Printf("desired-state %d — re-enrolling", dcode)
-			if id, err := m.enroll(envName, placement, enrollToken, facts); err == nil {
+			if id, s, err := m.enroll(envName, placement, enrollToken, facts); err == nil {
 				envID = id
-				if err := kc.saveState(ns, envName, m.token, envID); err != nil {
+				if len(s) > 0 {
+					stack = s
+				}
+				if err := kc.saveState(ns, agentState{
+					envName: envName, token: m.token, envID: envID, stack: stack, desired: persistedDesired,
+				}); err != nil {
 					log.Printf("WARNING could not persist the new agent state: %v", err)
 				}
 			}
-			time.Sleep(interval)
-			continue
+		case !desiredRead:
+			log.Printf("desired-state unavailable (code=%d err=%v) — holding what we last read and changing nothing else", dcode, derr)
 		}
-		// Any other failure must NOT fall through. An error or non-2xx leaves ds
-		// zero-valued, and an empty ds.Resources is indistinguishable from "the
-		// control plane wants no datapacks" — so reconcileDatapacks would delete
-		// every managed namespace and drop every per-datapack database. A 500 or a
-		// timeout is not an instruction to destroy the data plane.
-		if derr != nil || dcode < 200 || dcode > 299 {
-			log.Printf("desired-state unavailable (code=%d err=%v) — leaving the data plane untouched this tick", dcode, derr)
-			time.Sleep(interval)
-			continue
-		}
-
-		// 2) reconcile datapacks to match desired state (create missing, GC removed),
-		//    provisioning a real per-datapack namespace + database. dps is the ACTUAL
-		//    provisioned state reported back — never invented from unrelated resources.
-		var desired []string
-		for _, res := range ds.Resources {
-			if res.Kind == "datapack" {
-				desired = append(desired, res.Name)
-			} else {
-				log.Printf("no reconciler for kind %q — skipping %q", res.Kind, res.Name)
+		if desiredRead {
+			// Non-nil even when empty: "" and "nothing" are different answers, and an
+			// empty slice is the one that means the operator withdrew everything.
+			lastGood = ds.Resources
+			if lastGood == nil {
+				lastGood = []api.DesiredResource{}
+			}
+			// Persist it, but only when it changed — see persistedDesired.
+			if raw, merr := json.Marshal(lastGood); merr == nil && string(raw) != string(persistedDesired) {
+				if serr := kc.saveState(ns, agentState{
+					envName: envName, token: m.token, envID: envID, stack: stack, desired: raw,
+				}); serr != nil {
+					// Not fatal: the agent works for this lifetime, it just loses the
+					// fallback if it restarts mid-outage. That is where it was before.
+					log.Printf("WARNING could not persist desired state: %v", serr)
+				} else {
+					persistedDesired = raw
+				}
 			}
 		}
-		dps := reconcileDatapacks(kc, dp, managedPrefix, mcpImage, desired)
+		resources := resourcesToApply(desiredRead, ds.Resources, lastGood, stack)
 
-		state := api.StateReady
-		if i < len(states) {
-			state = states[i]
+		// 2) Reconcile. Each resource goes to the reconciler for its Kind: meko-stack
+		//    (the whole data plane, in mekostack.go) or one of the individual kinds in
+		//    stack.go. A kind with no reconciler is logged and skipped — an older agent
+		//    must ignore what a newer control plane sends, not die on it.
+		var stackRes []api.DesiredResource
+		for _, res := range resources {
+			if stackKinds[res.Kind] {
+				stackRes = append(stackRes, res)
+				continue
+			}
+			log.Printf("no reconciler for kind %q — skipping %q", res.Kind, res.Name)
 		}
-		// Only report components this agent actually runs. (mcp-server / rag-worker /
-		// yugabytedb / langfuse are not yet deployed by this demo agent, so we don't
-		// fabricate them.)
-		comps := []api.Component{
+
+		sk := newStack(kc, ns, dpPool)
+		sk.reconcile(stackRes)
+		// GC only when desired state was actually read. It deletes what is no longer
+		// declared, and on a tick where the control plane could not be reached the agent
+		// does not know what is no longer declared — it knows only what it enrolled with.
+		// Collecting against that would delete every resource an operator had added.
+		if desiredRead {
+			sk.gc()
+		}
+
+		// Components are read back from the API server, never assumed. A fleet view
+		// that shows what was requested rather than what is running is worse than one
+		// that shows nothing.
+		comps := append([]api.Component{
 			{Name: "meko-agent", Healthy: 1, Total: 1, Version: agentVer},
-		}
+		}, sk.report()...)
+		state := stateFor(comps, &wasReady)
 
 		scode, err := m.req("POST", "/api/v1/agent/status?envId="+envID, api.StatusReport{
 			EnvironmentState: state, AgentVersion: agentVer, AppliedRevision: ds.Revision,
-			ClusterFacts: facts, Components: comps, DatapackPhases: dps,
+			ClusterFacts: facts, Components: comps,
 		}, nil)
 		switch {
 		case err != nil:
 			log.Printf("status error: %v", err)
 		case scode == 401 || scode == 404:
 			log.Printf("status %d — re-enrolling", scode)
-			if id, e := m.enroll(envName, placement, enrollToken, facts); e == nil {
+			if id, s, e := m.enroll(envName, placement, enrollToken, facts); e == nil {
 				envID = id
+				if len(s) > 0 {
+					stack = s
+				}
 				// Persist here too. Without it the rotated token lives only in
 				// memory and the next restart resumes with the dead one — the agent
 				// then 401s from the very first call.
-				if e := kc.saveState(ns, envName, m.token, envID); e != nil {
+				if e := kc.saveState(ns, agentState{
+					envName: envName, token: m.token, envID: envID, stack: stack, desired: persistedDesired,
+				}); e != nil {
 					log.Printf("WARNING could not persist the rotated agent state: %v", e)
 				}
 			}
 		default:
-			log.Printf("status: state=%s datapacks=%d desired=%d rev=%d -> %d", state, len(dps), len(ds.Resources), ds.Revision, scode)
-		}
-		if i < len(states) {
-			i++
+			log.Printf("status: state=%s components=[%s] declared=%d rev=%d -> %d",
+				state, summarize(comps), len(stackRes), ds.Revision, scode)
 		}
 		time.Sleep(interval)
 	}
 }
 
-// nonAlnum collapses a datapack name into a safe identifier base used for both the
-// namespace suffix and the database name.
+// ---- data-plane database ----
+//
+// What remains of the database code after datapacks were retired: creating the
+// database a declared workload runs against. The per-datapack machinery that used to
+// live here — starter schemas, dropping databases, listing them for GC — went with
+// the datapack layer, since an environment is now the unit and Meko manages its own
+// tenants inside it.
+
+// baseName collapses a name into a safe SQL identifier.
 var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
 func baseName(name string) string { return nonAlnum.ReplaceAllString(strings.ToLower(name), "") }
 
-// reconcileDatapacks converges the cluster to exactly the desired datapack set:
-// each desired datapack gets a namespace + a real database; anything managed but no
-// longer desired is garbage-collected. Returns the ACTUAL provisioned state.
-func reconcileDatapacks(kc *k8s, dp *dpdb, managedPrefix, mcpImage string, desired []string) []api.DatapackPhase {
-	want := map[string]string{} // base -> display name
-	var order []string
-	for _, n := range desired {
-		b := baseName(n)
-		if b == "" {
-			continue
-		}
-		if _, ok := want[b]; !ok {
-			order = append(order, b)
-		}
-		want[b] = n
-	}
-
-	var reported []api.DatapackPhase
-	for _, b := range order {
-		ns, dbName := managedPrefix+b, "dp_"+b
-		phase, errStr, dbField, endpoint := "Active", "", "", ""
-		fail := func(err error) { phase, errStr = "Error", err.Error() }
-
-		if _, err := kc.ensureNamespace(ns, want[b]); err != nil {
-			fail(err)
-		}
-		if phase != "Error" && dp != nil {
-			if err := dp.ensureDatabase(dbName); err != nil {
-				fail(err)
-			} else if err := dp.ensureSchema(dbName); err != nil {
-				fail(err)
-			} else {
-				dbField = dbName
-				// provision the per-datapack service over its database
-				if err := kc.applyDatapackWorkload(ns, dp.urlFor(dbName), mcpImage); err != nil {
-					fail(err)
-				} else {
-					endpoint = fmt.Sprintf("http://mcp.%s.svc.cluster.local:3000", ns)
-				}
-			}
-		}
-		reported = append(reported, api.DatapackPhase{ID: ns, Name: want[b], Phase: phase, DB: dbField, Endpoint: endpoint, Error: errStr})
-	}
-
-	// GC namespaces no longer desired
-	if items, err := kc.namespaces(); err == nil {
-		for _, n := range items {
-			if strings.HasPrefix(n.Metadata.Name, managedPrefix) {
-				if _, ok := want[strings.TrimPrefix(n.Metadata.Name, managedPrefix)]; !ok {
-					if err := kc.deleteNamespace(n.Metadata.Name); err != nil {
-						log.Printf("gc namespace %s: %v", n.Metadata.Name, err)
-					} else {
-						log.Printf("GC: deleted namespace %s", n.Metadata.Name)
-					}
-				}
-			}
-		}
-	}
-	// GC databases no longer desired
-	if dp != nil {
-		if dbs, err := dp.listDatabases("dp_"); err == nil {
-			for _, dbn := range dbs {
-				if _, ok := want[strings.TrimPrefix(dbn, "dp_")]; !ok {
-					if err := dp.dropDatabase(dbn); err != nil {
-						log.Printf("gc database %s: %v", dbn, err)
-					} else {
-						log.Printf("GC: dropped database %s", dbn)
-					}
-				}
-			}
-		}
-	}
-	sort.Slice(reported, func(i, j int) bool { return reported[i].ID < reported[j].ID })
-	return reported
-}
-
-// ---- data-plane database (per-datapack DB provisioning) ----
-
 type dpdb struct {
 	pool    *pgxpool.Pool
-	baseURL string // DSN to the admin ("postgres") database; per-datapack DSNs swap the path
+	baseURL string // DSN to the admin database; per-database DSNs swap the path
 }
 
 func newDPDB(dsn string) (*dpdb, error) {
@@ -774,7 +755,7 @@ func newDPDB(dsn string) (*dpdb, error) {
 	return &dpdb{pool: pool, baseURL: dsn}, nil
 }
 
-// urlFor returns the DSN pointing at a specific datapack database.
+// urlFor returns the DSN pointing at a specific database.
 func (d *dpdb) urlFor(dbName string) string {
 	u, err := url.Parse(d.baseURL)
 	if err != nil {
@@ -784,30 +765,14 @@ func (d *dpdb) urlFor(dbName string) string {
 	return u.String()
 }
 
-// ensureSchema connects to a datapack database and creates the starter schema
-// (a memories table) so its per-datapack service has something real to serve.
-func (d *dpdb) ensureSchema(dbName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	conn, err := pgx.Connect(ctx, d.urlFor(dbName))
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx)
-	_, err = conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS memories (
-		id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-		text       text NOT NULL,
-		created_at timestamptz NOT NULL DEFAULT now()
-	)`)
-	return err
-}
-
 func (d *dpdb) close() {
 	if d != nil {
 		d.pool.Close()
 	}
 }
 
+// ensureDatabase creates a database if it is not already there. CREATE DATABASE
+// cannot run from a connection to the database being created, hence the admin DSN.
 func (d *dpdb) ensureDatabase(name string) error {
 	ctx := context.Background()
 	var one int
@@ -818,29 +783,106 @@ func (d *dpdb) ensureDatabase(name string) error {
 	if err != pgx.ErrNoRows {
 		return err
 	}
-	// db name is a sanitized identifier (baseName), safe to interpolate.
+	// name is a sanitized identifier (baseName), safe to interpolate.
 	_, err = d.pool.Exec(ctx, `CREATE DATABASE "`+name+`"`)
 	return err
 }
 
-func (d *dpdb) dropDatabase(name string) error {
-	_, err := d.pool.Exec(context.Background(), `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`)
+// createExtension installs an extension into the database this connection is for.
+//
+// CASCADE because the extensions Meko needs have their own dependencies — pg_dist_rag
+// pulls in `vector` — and installing them in the wrong order otherwise fails with a
+// missing-dependency error that reads like the extension itself is unavailable.
+//
+// IF NOT EXISTS because this runs on every tick. It is not free the first time (mage
+// and pg_dist_rag each create a schema), but on a database that already has them it is
+// a catalogue lookup.
+//
+// name is validated by validExtensionName before it reaches here; it cannot be a bind
+// parameter, since CREATE EXTENSION takes an identifier rather than a value.
+func (d *dpdb) createExtension(name string) error {
+	_, err := d.pool.Exec(context.Background(), `CREATE EXTENSION IF NOT EXISTS "`+name+`" CASCADE`)
 	return err
 }
 
-func (d *dpdb) listDatabases(prefix string) ([]string, error) {
-	rows, err := d.pool.Query(context.Background(), `SELECT datname FROM pg_database WHERE datname LIKE $1`, prefix+"%")
+// dbPool caches one connection per DSN, for the reconcilers that need one.
+//
+// Keyed rather than a single slot: nothing here is known at startup — a `database`
+// resource may be declared on any tick, and its Service takes a while to answer — so
+// a failure to connect is a logged skip and a retry next tick, never fatal.
+type dbPool struct {
+	conns map[string]*dpdb
+	// warned suppresses the repeated log for a DSN that is still unreachable, not the
+	// retry itself. A database that is starting fails every tick for the first half
+	// minute, and that should not bury everything else in the log.
+	warned map[string]bool
+	// said is the same idea for the reconcilers' own messages, keyed by caller. It lives
+	// on the pool because the pool is the one thing that survives a tick — the stack is
+	// rebuilt from scratch each time round the loop.
+	said map[string]string
+}
+
+// logOnce logs msg only when it differs from the last message logged under key.
+//
+// A YugabyteDB takes about ninety seconds to come up and the loop ticks every ten, so
+// each reconciler waiting on it would otherwise print the same line nine times, three
+// reconcilers deep. What an operator watching a bring-up needs to see is the transitions,
+// and those are exactly what repetition hides.
+func (p *dbPool) logOnce(key, msg string) {
+	if p.said[key] == msg {
+		return
+	}
+	if p.said == nil {
+		p.said = map[string]string{}
+	}
+	p.said[key] = msg
+	log.Print(msg)
+}
+
+func (p *dbPool) use(dsn string) *dpdb {
+	if dsn == "" {
+		return nil
+	}
+	if d, ok := p.conns[dsn]; ok {
+		return d
+	}
+	// Retry on every tick while unconnected: a database declared this tick is not
+	// accepting connections yet, so the first attempt failing is the normal case.
+	d, err := newDPDB(dsn)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			return nil, err
+		if !p.warned[dsn] {
+			log.Printf("data-plane db not reachable yet (%v) — retrying each tick", err)
+			if p.warned == nil {
+				p.warned = map[string]bool{}
+			}
+			p.warned[dsn] = true // suppress the repeat, not the retry
 		}
-		out = append(out, n)
+		return nil
 	}
-	return out, rows.Err()
+	if p.conns == nil {
+		p.conns = map[string]*dpdb{}
+	}
+	p.conns[dsn] = d
+	delete(p.warned, dsn)
+	log.Printf("data-plane db connected (%s)", redactDSN(dsn))
+	return d
+}
+
+func (p *dbPool) close() {
+	for dsn, d := range p.conns {
+		d.close()
+		delete(p.conns, dsn)
+	}
+}
+
+// redactDSN strips the password before a DSN reaches the log.
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "(unparseable dsn)"
+	}
+	if _, hasPW := u.User.Password(); hasPW {
+		u.User = url.UserPassword(u.User.Username(), "xxxxx")
+	}
+	return u.Redacted()
 }

@@ -32,21 +32,37 @@ can't be recovered; use a file, or an old SHA (all pre-move SHAs still resolve).
 ## `ycp/` — shared, top-level
 
 The BYOC **data plane** for YCP (Yugabyte Control Plane): the pull agent
-(`cmd/agent`), the per-datapack MCP server (`cmd/dpmcp`), the wire types both sides
-share (`internal/api`), and the kind e2e. Its own `go.mod`. The control plane itself
-is `meko/api_server --control-plane-mode`.
+(`cmd/agent`), the wire types both sides share (`internal/api`), and the kind e2e. Its
+own `go.mod`. The control plane itself is `meko/api_server --control-plane-mode`.
 
 It lives at the root rather than under `meko/` because it is shared with amp.
+
+An **environment** is the unit YCP manages — one namespace running a Meko stack.
+Registering one is the whole operator step: the control plane resolves the Meko release
+(pinned in `meko/api_server/internal/service/dataplane_release.go`) and the enroll
+response hands it to the agent, which deploys YugabyteDB with the `mage`/`pg_dist_rag`
+extensions plus `api-server`, `mcp-server`, `rag-worker`, `inference-gateway` and `ui` —
+one `meko-stack` resource. Datapacks are Meko's own concern, created through that
+api-server once it is up, and are not modelled here. See
+[`ycp/ARCHITECTURE.md`](ycp/ARCHITECTURE.md) and [`ycp/DEPLOY.md`](ycp/DEPLOY.md), and
+[`ycp/BYOC-ON-GKE.md`](ycp/BYOC-ON-GKE.md) to stand one up on a real cluster.
 
 ```bash
 # unit tests need nothing running
 (cd ycp && go test ./...)
 
 # build + deploy end-to-end: builds the api-server and agent images, stands the
-# control plane up on a throwaway kind cluster, and asserts
-# register -> enroll -> READY -> restart-without-re-enrolling.
-# Needs kind + docker or podman.
+# control plane up on a throwaway kind cluster, and asserts register -> enroll ->
+# READY -> restart-without-re-enrolling -> command -> bootstrap -> GC. Needs kind +
+# docker or podman; no registry credentials.
 (cd ycp && ./test/e2e/run.sh)
+
+# the same loop with the private meko-mcp-server image, on a cluster the e2e left up
+# (YCP_E2E_KEEP=1). Needs AWS credentials for the Meko ECR.
+(cd ycp && AWS_PROFILE=meko-dev ./test/local/meko-stack.sh)
+# the whole Meko stack from a registration and nothing else. Same cluster and
+# credentials; OPENAI_API_KEY too, or the inference gateway will not start.
+(cd ycp && AWS_PROFILE=meko-dev ./test/local/full-stack.sh)
 ```
 
 Images publish to the platform ECR registry on merge to `main`

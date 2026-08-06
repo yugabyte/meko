@@ -22,9 +22,19 @@ type Environment struct {
 	CertFingerprint string          `json:"cert_fingerprint,omitempty"`
 	Components      json.RawMessage `json:"components,omitempty"`
 	NodeCount       int             `json:"node_count,omitempty"`
-	Datapacks       int             `json:"datapacks"`
 	MaxDatapacks    int             `json:"max_datapacks,omitempty"`
 	Live            bool            `json:"live"`
+
+	// Datapacks is no longer reported. Nothing can compute it: YCP stopped modelling
+	// datapacks, so the agent does not count them and ApplyStatus has nothing to set it
+	// from — it would be 0 for every environment registered from here on, and whatever
+	// the last pre-change status report left for the rest. A field that is always 0 is
+	// worse than an absent one, so it stops being serialized.
+	//
+	// The column stays for now, defaulted to 0 by 000001. Dropping it means renumbering
+	// a shipped twenty-parameter upsert, where an off-by-one is silent data corruption,
+	// and that is worth its own change rather than riding along here.
+	Datapacks int `json:"-"`
 
 	// Auth material -- persisted hashed, never serialized to clients. The enrollment
 	// token is TTL-based and reusable until it expires (kubeadm-style bootstrap

@@ -63,6 +63,43 @@ func TestEnvironmentRepo_Get_NotFound(t *testing.T) {
 	}
 }
 
+// ListDesired feeds two callers with the same rows: the agent, which reconciles
+// them, and the console, which shows an operator what an environment was told to
+// run. The spec has to come back as the JSON it went in as — a spec that decodes to
+// nothing is an agent that deploys a defaulted workload instead of the declared one.
+func TestEnvironmentRepo_ListDesired(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	repo := NewEnvironmentRepo(db)
+
+	spec := `{"image":"registry/meko-mcp-server:2.1.0","image_pull_secret":"meko-ecr"}`
+	mock.ExpectQuery(`SELECT kind, name, COALESCE\(spec::text, '\{\}'\) FROM meko_system\.environment_desired_resources`).
+		WithArgs("acme").
+		WillReturnRows(sqlmock.NewRows([]string{"kind", "name", "spec"}).
+			AddRow("database", "meko", "{}").
+			AddRow("mcp-server", "mcp", spec))
+
+	got, err := repo.ListDesired("acme")
+	if err != nil {
+		t.Fatalf("ListDesired err = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListDesired returned %d resources, want 2", len(got))
+	}
+	if got[0].Kind != "database" || got[0].Name != "meko" {
+		t.Errorf("first resource = %s/%s, want database/meko", got[0].Kind, got[0].Name)
+	}
+	if string(got[1].Spec) != spec {
+		t.Errorf("spec round-trip = %s, want %s", got[1].Spec, spec)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestEnvironmentRepo_ReplaceDesired(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

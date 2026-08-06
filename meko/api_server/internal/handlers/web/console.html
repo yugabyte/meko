@@ -188,6 +188,21 @@
   .note { font-size: 12px; color: var(--ink-soft); background: var(--aeon-soft); border: 1px solid color-mix(in srgb, var(--aeon) 24%, transparent); border-radius: 9px; padding: 10px 12px; margin-top: 12px; }
   .note b { color: var(--aeon); }
 
+  /* ---- desired-state editor ---- */
+  .ovl { position: fixed; inset: 0; background: rgba(15,20,28,.55); display: grid; place-items: center; z-index: 50; padding: 20px; }
+  /* `display: grid` above is an AUTHOR style, and author styles beat the browser's
+     `[hidden] { display: none }`. So setting el.hidden = true put the attribute on the
+     element and left the overlay on screen: entering a valid admin secret stored it,
+     refreshed the fleet, and never dismissed the dialog covering it. The same trap was
+     already patched for [data-view] below, one selector at a time; this closes it for
+     every overlay, so a new one cannot inherit the bug. */
+  .ovl[hidden] { display: none; }
+  .ovl .card { background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px; padding: 20px; width: min(720px, 100%); max-height: 90vh; overflow-y: auto; }
+  .ovl h3 { font-size: 15px; margin-bottom: 4px; }
+  .ovl .desc { font-size: 12px; color: var(--ink-faint); margin-bottom: 14px; }
+  .ovl textarea { width: 100%; min-height: 280px; resize: vertical; padding: 12px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--rail); color: #d7e0ec; font-family: var(--mono); font-size: 12px; line-height: 1.6; }
+  .ovl .err { font-size: 12px; color: var(--crit); margin-top: 10px; font-family: var(--mono); }
+
   .stub { display: grid; place-items: center; min-height: 300px; text-align: center; color: var(--ink-faint); }
   .stub .big { font-size: 15px; font-weight: 600; color: var(--ink-soft); margin-bottom: 4px; }
 
@@ -200,7 +215,7 @@
     <div class="glyph">M</div>
     <div><h1>Yugabyte Control Plane</h1><div class="sub">Fleet management · YCP</div></div>
   </div>
-  <div class="search"><span>⌕</span><input placeholder="Search environments, datapacks, accounts…" aria-label="Search" /></div>
+  <div class="search"><span>⌕</span><input placeholder="Search environments, accounts…" aria-label="Search" /></div>
   <div class="top-right">
     <span class="aeon-chip">● YBM Aeon · us-east-1</span>
     <div class="user"><div class="avatar">AN</div><div><div class="nm">A. Nijhawan</div><div class="rl">via YBM Aeon OIDC</div></div></div>
@@ -211,7 +226,6 @@
   <nav class="rail">
     <div class="grp">Operate</div>
     <button class="nav active" data-nav="fleet"><span class="ic">▦</span> Fleet <span class="badge" id="navFleetCount"></span></button>
-    <button class="nav" data-nav="datapacks"><span class="ic">◈</span> Datapacks <span class="badge" id="navDpCount"></span></button>
     <button class="nav" data-nav="onboard"><span class="ic">＋</span> Register</button>
     <div class="foot">YCP · control plane<br/>state in Postgres</div>
   </nav>
@@ -228,7 +242,6 @@
       <div class="kstrip" style="grid-template-columns:repeat(3,1fr)">
         <div class="kcard"><div class="l">Environments</div><div class="v" id="kEnvs">—</div></div>
         <div class="kcard"><div class="l">Ready</div><div class="v" id="kReady">—</div></div>
-        <div class="kcard"><div class="l">Datapacks (reported)</div><div class="v" id="kDatapacks">—</div></div>
       </div>
 
       <div class="toolbar" id="filters">
@@ -242,7 +255,7 @@
       <div class="fleet-grid">
         <div class="panel tablewrap">
           <table>
-            <thead><tr><th>Environment</th><th>Region</th><th>Placement</th><th>State</th><th>Datapacks</th><th>Agent</th><th>Heartbeat</th><th>Capacity</th></tr></thead>
+            <thead><tr><th>Environment</th><th>Region</th><th>Placement</th><th>State</th><th>Agent</th><th>Heartbeat</th></tr></thead>
             <tbody id="envRows"></tbody>
           </table>
         </div>
@@ -281,24 +294,57 @@
       </div>
     </section>
 
-    <!-- ============ DATAPACKS (real) ============ -->
-    <section data-view="datapacks" hidden>
-      <div class="phead"><div><h2>Datapacks</h2><div class="desc">Reported by agents on each status tick. Metadata only — data lives in each customer cloud.</div></div></div>
-      <div class="panel tablewrap">
-        <table>
-          <thead><tr><th>Datapack</th><th>Environment</th><th>Database</th><th>Endpoint</th><th>Phase</th></tr></thead>
-          <tbody id="dpRows"></tbody>
-        </table>
-      </div>
-    </section>
-
   </main>
 </div>
+
+<!-- ============ ADMIN SECRET (in-page, never window.prompt) ============ -->
+<div class="ovl" id="authModal" hidden>
+  <div class="card" style="width:min(460px,100%)">
+    <h3>Admin secret required</h3>
+    <div class="desc">
+      The fleet API and this console are gated by <code>X-Meko-Admin-Secret</code>. It is the
+      <code>meko-admin-api-key</code> Secret in the control plane's namespace:
+      <div class="code" style="margin-top:8px;white-space:pre-wrap;font-size:11px">kubectl -n &lt;ycp-namespace&gt; get secret meko-admin-api-key \
+  -o jsonpath='{.data.admin-api-key}' | base64 -d</div>
+    </div>
+    <div class="fgroup">
+      <label for="authInput">Admin secret</label>
+      <input id="authInput" type="password" autocomplete="off" spellcheck="false"
+             placeholder="paste the admin secret" />
+    </div>
+    <div class="err" id="authMsg" hidden></div>
+    <div class="dactions">
+      <button class="btn primary" onclick="saveSecret()">Continue</button>
+    </div>
+    <div class="note" style="margin-top:14px">
+      Kept in this tab's <b>sessionStorage</b> only — never written to disk, and gone when the
+      tab closes.
+    </div>
+  </div>
+</div>
+
+<!--
+  There is no desired-state editor. Registering an environment is the only way to
+  tell an agent what to run: registration seeds the stack, with the image this
+  control plane was configured with, and the agent brings it up on its first tick.
+
+  The editor that used to live here was a JSON textarea that REPLACED the whole
+  resource set. Two things follow from that, and both happened: opening it before
+  the buffer had loaded and pressing Apply deleted a running database and
+  mcp-server, and its stack template offered `<registry>/meko/meko-mcp-server:<tag>`
+  placeholders the browser had no way to fill, which one click turned into a
+  workload that could never pull an image. Neither is a bug you fix with more
+  guardrails — the operator was being handed a control surface whose correct value
+  the control plane already knows.
+
+  Desired state is still readable (GET /environments/{id}/desired, shown under
+  Desired state) and still writable over the API for anything that genuinely needs
+  it. It is simply not something this console asks a human to hand-edit.
+-->
 
 <script>
   // ================= LIVE console — every value comes from the YCP API =================
   let ENVS = [];
-  let DPS = [];
   let currentFilter = "all";
   let selectedId = null;
   const STATE_CLASS = { READY:"ready", DEGRADED:"degraded", SUSPENDED:"suspended", DRAINING:"suspended", DEREGISTERED:"suspended", PROVISIONING:"prov", CLUSTER_PROVISIONING:"prov", ENROLLING:"prov", ATTESTING:"prov", VALIDATING:"prov", PENDING:"prov" };
@@ -316,10 +362,9 @@
     return Math.round(s/3600)+"h";
   }
   function mapEnv(a) {
-    const cap = a.max_datapacks ? Math.round((a.datapacks/a.max_datapacks)*100) : 0;
-    return { id:a.id, region:a.region||"—", place:a.placement, state:a.state, dp:a.datapacks||0,
+    return { id:a.id, region:a.region||"—", place:a.placement, state:a.state,
       agent:a.agent_version||"—", hb:rel(a.last_heartbeat_at), stale:a.last_heartbeat_at && (Date.now()-new Date(a.last_heartbeat_at).getTime())>90000,
-      cap, live:a.live, components:a.components||null, mcp:a.mcp_base_url||"—", cert:a.cert_fingerprint||"—",
+      live:a.live, components:a.components||null, mcp:a.mcp_base_url||"—", cert:a.cert_fingerprint||"—",
       k8s:a.k8s_version, nodes:a.node_count, provider:a.provider };
   }
   // ---- API access -------------------------------------------------------
@@ -349,15 +394,48 @@
   // (per-user auth on the fleet routes, a short-lived token) has to come from the
   // server; until then, treat this secret as exposed to the whole domain.
   const ADMIN_KEY = "ycp.adminSecret";
-  function adminSecret() { return sessionStorage.getItem(ADMIN_KEY) || ""; }
-  function promptForSecret(msg) {
-    const v = window.prompt((msg ? msg + "\n\n" : "") + "Admin secret (X-Meko-Admin-Secret):", adminSecret());
-    if (v === null) return false;
-    sessionStorage.setItem(ADMIN_KEY, v.trim());
+
+  // A secret the SERVER wrote into this page (--console-embed-admin-secret). When it is
+  // set the console never asks for one: the overlay below stays hidden and every call
+  // is authenticated from the first paint. See ConsoleHandler for when that is an
+  // appropriate thing to switch on — it makes the console itself the trust boundary.
+  // Empty (the default) leaves the ask-and-remember behaviour untouched.
+  const EMBEDDED_SECRET = "__EMBEDDED_ADMIN_SECRET__";
+  function adminSecret() { return EMBEDDED_SECRET || sessionStorage.getItem(ADMIN_KEY) || ""; }
+
+  // The secret is asked for with an in-page form, never window.prompt().
+  //
+  // This used to be a prompt(), and the fleet view polls every 4 seconds: with no
+  // secret (or a rejected one) that produced a native modal dialog every 4 seconds,
+  // which blocks the whole page and cannot be got past — and once the browser offers
+  // "prevent this page from creating additional dialogs", the console is dead. You
+  // could not even reach Register. An overlay shows once, waits, and blocks nothing
+  // else.
+  let AUTH_OPEN = false;
+  function askForSecret(msg) {
+    // Nothing to ask for when the server embedded one. A 401 then means the embedded
+    // secret is wrong, and an overlay the operator cannot act on — they did not type it
+    // — would just cover the error they need to read.
+    if (EMBEDDED_SECRET) { console.error("fleet API rejected the embedded admin secret:", msg || ""); return; }
+    if (AUTH_OPEN) return;              // one at a time, however many calls 401
+    AUTH_OPEN = true;
+    el("authMsg").textContent = msg || "";
+    el("authMsg").hidden = !msg;
+    el("authInput").value = adminSecret();
+    el("authModal").hidden = false;
+    el("authInput").focus();
+    el("authInput").select();
+  }
+  function saveSecret() {
+    const v = (el("authInput").value || "").trim();
+    if (!v) { el("authMsg").textContent = "Paste the admin secret to continue."; el("authMsg").hidden = false; return; }
+    sessionStorage.setItem(ADMIN_KEY, v);
     // Drop any copy an older build of this console left in localStorage, which
     // outlives the tab and is readable by every page on the domain.
     try { localStorage.removeItem(ADMIN_KEY); } catch (e) { /* storage disabled */ }
-    return true;
+    AUTH_OPEN = false;
+    el("authModal").hidden = true;
+    refresh();
   }
   async function api(path, opts) {
     opts = opts || {};
@@ -366,8 +444,10 @@
     if (key) headers["X-Meko-Admin-Secret"] = key;
     const r = await fetch(BASE_PATH + path, Object.assign({}, opts, { headers }));
     if (r.status === 401 || r.status === 403) {
-      if (promptForSecret("The control plane rejected that admin secret.")) return api(path, opts);
-      throw new Error("unauthorized");
+      // Ask, and fail this call. No retry-on-prompt recursion: the caller decides
+      // what to do, and the user is not holding the page hostage while they find it.
+      askForSecret("That admin secret was rejected by the control plane.");
+      throw new Error("unauthorized — enter the admin secret");
     }
     if (r.status === 503) throw new Error("fleet API disabled (no admin secret configured server-side)");
     return r;
@@ -386,26 +466,25 @@
   function items(d) { return Array.isArray(d) ? d : ((d && d.items) || []); }
 
   async function refresh() {
-    if (!adminSecret() && !promptForSecret("This control plane requires an admin secret to read the fleet.")) return;
+    // Never poll while the auth overlay is up — the poll is what turned a missing
+    // secret into an unusable page.
+    if (AUTH_OPEN) return;
+    if (!adminSecret()) {
+      askForSecret("This control plane needs its admin secret to read the fleet.");
+      return;
+    }
     try {
-      // Environments only. This control plane exposes no datapacks API — the
-      // per-datapack view is served elsewhere — so the pane stays empty rather
-      // than the console 404ing and dropping the fleet list with it.
       const er = await api("/api/v1/environments");
       ENVS = items(await unwrap(er)).map(mapEnv);
-      DPS = [];
     } catch (e) { return; /* keep last view */ }
     renderRows(currentFilter);
-    renderDatapacks();
     updateKpis();
   }
   function updateKpis() {
     const ready = ENVS.filter(e => e.state==="READY").length;
     el("kEnvs").textContent = ENVS.length;
     el("kReady").textContent = ready;
-    el("kDatapacks").textContent = DPS.length;
     el("navFleetCount").textContent = ENVS.length || "";
-    el("navDpCount").textContent = DPS.length || "";
   }
 
   function renderRows(filter) {
@@ -420,20 +499,41 @@
         <td>${e.region}</td>
         <td><span class="place"><span class="pdot ${e.place}"></span>${e.place==="cloud"?"Cloud":"On-prem"}</span></td>
         <td>${chip(e.state)}</td>
-        <td class="num">${e.dp||"—"}</td>
         <td class="mono" style="font-size:11.5px">${e.agent}</td>
         <td class="mono" style="font-size:11.5px;color:${e.stale?"var(--warn)":"var(--ink-soft)"}">${e.hb}</td>
-        <td>${e.cap?`<span class="cap"><span class="track"><span class="fill ${e.cap>75?"hot":""}" style="width:${Math.min(100,e.cap)}%"></span></span><span>${e.cap}%</span></span>`:"—"}</td>
       </tr>`).join("");
     rowsEl.querySelectorAll("tr").forEach(tr => tr.onclick = () => selectEnv(tr.dataset.id));
     let pick = selectedId && list.some(e=>e.id===selectedId) ? selectedId : list[0].id;
     selectEnv(pick);
   }
+  // Why an environment is not READY, in the terms the agent decides it: every declared
+  // component with all replicas ready. Without this the console
+  // showed "components all green, state PROVISIONING" and the only explanation lived in
+  // agent logs, in a cluster the person reading the console may not have access to.
+  function blockers(e) {
+    const out = [];
+    for (const c of e.components || []) {
+      if (!c.total || c.healthy < c.total) {
+        out.push(`${c.name} ${c.healthy}/${c.total}` + (c.error ? ` — ${c.error}` : ""));
+      }
+    }
+    return out;
+  }
+  function blockerRows(e) {
+    if (e.state === "READY" || e.state === "SUSPENDED" || e.state === "DEREGISTERED") return "";
+    const b = blockers(e);
+    if (!b.length) return "";
+    return `<div class="sect-l">Waiting on</div>` + b.map(x =>
+      `<div style="font-size:12px;color:var(--warn);padding:3px 0;word-break:break-word">${x}</div>`).join("");
+  }
   function compRows(e) {
     if (e.components && e.components.length) {
       return e.components.map(c => {
         const bad = c.healthy < c.total || c.total===0;
-        return `<div class="comp"><span class="sd ${bad?"warn":""}"></span><span class="cn">${c.name}</span><span class="cc ${bad?"warn":""}">${c.healthy}/${c.total} up</span></div>`;
+        // The agent says why when it can — a refused spec, a rejected apply. Showing
+        // it here is the difference between "0/1, no idea" and a fixable command.
+        const why = c.error ? `<div style="font-size:11px;color:var(--crit);margin:0 0 6px 15px;word-break:break-word">${c.error}</div>` : "";
+        return `<div class="comp"><span class="sd ${bad?"warn":""}"></span><span class="cn">${c.name}</span><span class="cc ${bad?"warn":""}">${c.healthy}/${c.total} up</span></div>${why}`;
       }).join("");
     }
     return `<div style="color:var(--ink-faint);font-size:12px">No components reported yet.</div>`;
@@ -452,12 +552,13 @@
     const factLine = e.live ? `<div class="dmeta" style="color:var(--data)">● live agent · ${e.provider||""} · k8s ${e.k8s||"?"} · ${e.nodes||0} nodes</div>` : "";
     el("detail").innerHTML = `
       <div class="dh"><span class="en">${e.id}</span>${chip(e.state)}</div>
-      <div class="dmeta">${e.region} · ${e.place==="cloud"?"cloud":"on-prem"} · ${e.dp} datapacks</div>
+      <div class="dmeta">${e.region} · ${e.place==="cloud"?"cloud":"on-prem"}</div>
       ${factLine}${banner}
       <div class="sect-l">Lifecycle state</div>
       <div class="steps">${stepsHtml}</div>
       <div class="sect-l">Components</div>
       ${compRows(e)}
+      ${blockerRows(e)}
       <div class="sect-l">Metadata</div>
       <dl class="kv">
         <dt>agent</dt><dd>${e.agent}</dd>
@@ -465,37 +566,56 @@
         <dt>mcp base</dt><dd>${e.mcp}</dd>
         <dt>cert</dt><dd>${e.cert}</dd>
       </dl>
+      <div class="sect-l">Desired state</div>
+      <div id="desiredBox"><div style="color:var(--ink-faint);font-size:12px">Loading…</div></div>
       <div class="dactions">
-        <button class="btn sm primary" onclick="provisionDP()">Set datapacks</button>
         <button class="btn sm" onclick="act('suspend')">Suspend</button>
         <button class="btn sm" onclick="act('resume')">Resume</button>
         <button class="btn sm" onclick="act('drain')">Drain</button>
         <button class="btn sm danger" onclick="dereg()">Deregister</button>
       </div>`;
+    loadDesired(e.id);
   }
   async function act(a) { if (!selectedId) return; await api(`/api/v1/environments/${selectedId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:a})}); refresh(); }
   async function dereg() { if (!selectedId) return; if(!confirm("Deregister "+selectedId+"?")) return; await api(`/api/v1/environments/${selectedId}`,{method:"DELETE"}); refresh(); }
-  async function provisionDP() {
-    // No datapacks API on this control plane. Desired state can still be set
-    // generically via POST /environments/{id}/desired with kind "datapack".
-    alert("Setting datapacks is not available on this control plane.");
+  // ---- desired state: read-only ----
+  //
+  // What the agent was told to run — a database, an mcp-server, a rag-worker — as
+  // seeded by registration. The agent reconciles it and reports back what it
+  // actually got up, which is the Components list above; this is the instruction,
+  // that is the outcome, and showing both is how you tell "not asked for" from
+  // "asked for and failing".
+  //
+  // null means "not known yet" and stays deliberately distinct from []. [] is a real
+  // answer — an environment told to run nothing — and a reader that conflates them
+  // reports an empty stack for a failed request.
+  let DESIRED = null;
+
+  async function fetchDesired(id) {
+    const d = await unwrap(await api(`/api/v1/environments/${id}/desired`));
+    return (d && d.resources) || [];
   }
 
-  // ---- datapacks view ----
-  function renderDatapacks() {
-    const t = el("dpRows");
-    if (!t) return;
-    if (!DPS.length) { t.innerHTML = `<tr><td colspan="5" style="color:var(--ink-faint);padding:20px">No datapacks — this control plane does not expose a datapacks API.</td></tr>`; return; }
-    t.innerHTML = DPS.map(d => {
-      const ph = d.phase || "Active";
-      const cls = ph==="Active"?"ready":ph==="Error"?"suspended":"prov";
-      return `<tr>
-      <td class="mono">${d.name}</td>
-      <td class="mono" style="font-size:11.5px">${d.environment_id}</td>
-      <td class="mono" style="font-size:11.5px">${d.db||"—"}</td>
-      <td class="mono" style="font-size:10.5px;color:var(--ink-faint)">${d.endpoint||"—"}</td>
-      <td><span class="chip ${cls}">${ph}</span>${d.error?` <span style="color:var(--crit);font-size:11px">${d.error}</span>`:""}</td>
-    </tr>`; }).join("");
+  async function loadDesired(id) {
+    const box = el("desiredBox");
+    try {
+      const res = await fetchDesired(id);
+      // Only adopt it if this is still the selected environment: a slow response for
+      // the previous selection must not become the cached state of this one.
+      if (id !== selectedId) return;
+      DESIRED = res;
+    } catch (e) {
+      if (id === selectedId) DESIRED = null;   // unknown, not empty
+      if (box) box.innerHTML = `<div style="color:var(--warn);font-size:12px">could not read desired state: ${e.message}</div>`;
+      return;
+    }
+    if (!box || id !== selectedId) return;   // selection moved on while we were fetching
+    if (!DESIRED || !DESIRED.length) {
+      box.innerHTML = `<div style="color:var(--ink-faint);font-size:12px">Nothing declared — this agent has been told to run nothing.</div>`;
+      return;
+    }
+    box.innerHTML = DESIRED.map(r =>
+      `<div class="comp"><span class="sd"></span><span class="cn">${r.kind}/${r.name}</span></div>`).join("");
   }
 
   document.querySelectorAll("#filters .fchip").forEach(b => b.onclick = () => {
@@ -545,5 +665,9 @@
 
   // init + poll
   refresh();
+  // Enter submits. A form you cannot submit from the keyboard is the other half of
+  // "the popup blocks everything".
+  el("authInput").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); saveSecret(); } });
+
   setInterval(refresh, 4000);
 </script>

@@ -36,9 +36,7 @@ The e2e in `test/e2e/` now runs `api_server --control-plane-mode`.
 
 | Path | Binary | Role |
 |------|--------|------|
-| `cmd/agent` | `meko-agent` | Per-environment pull agent. Reads cluster facts from the in-cluster k8s API, enrolls, reconciles desired datapacks, reports status. |
-| `cmd/dpmcp` | `dpmcp` | Per-datapack MCP server (JSON-RPC 2.0 over HTTP). One instance per datapack; the agent provisions it. |
-| `internal/mcp` | — | The MCP protocol server + its memory store (`MemStore` / `PgStore`). |
+| `cmd/agent` | `meko-agent` | Per-environment pull agent. Reads cluster facts from the in-cluster k8s API, enrolls, reconciles the environment's declared stack, reports status. |
 | `internal/api` | — | Wire types + lifecycle states; JSON tags mirror the OpenAPI. The agent's half of the contract `api_server` implements. |
 | `test/e2e` | — | Build-and-deploy smoke test on kind against `api_server --control-plane-mode`. |
 
@@ -63,8 +61,9 @@ console), `internal/db/migrations/controlplane/` (its schema).
   │  │ Postgres / YugabyteDB│  │status       │ provisions   in-cluster      │
   │  │ (fleet registry)     │  │   │         ▼              k8s API         │
   │  └──────────────────────┘  │   │   ┌────────────┐                       │
-  └────────────────────────────┘   │   │ dpmcp ×N   │  (one per datapack)   │
-                                    │   │ cmd/dpmcp  │                       │
+  └────────────────────────────┘   │   │ Meko stack │  (one per environment)│
+                                    │   │ (database, │                       │
+                                    │   │  mcp-server│                       │
                                     │   └────────────┘                       │
                                     └────────────────────────────────────────┘
 ```
@@ -74,24 +73,104 @@ agent → YCP. YCP never dials into a customer cluster.
 
 ## The pull loop
 
-1. **Register** — an operator `POST`s `/api/v1/environments`. YCP mints an
-   **enrollment token** (kubeadm-style bootstrap token, 30-min TTL) and returns
-   it once, along with an install hint. Only the token *hash* is persisted.
+1. **Register** — an operator `POST`s `/api/v1/environments` with a **name**. That is
+   the whole input. YCP resolves the Meko release the data plane should run (six image
+   references, pinned in `meko/api_server/internal/service/dataplane_release.go`), stores it
+   as that environment's desired state, mints an **enrollment token** (kubeadm-style
+   bootstrap token, 30-min TTL) and returns it once with an install hint. Only the
+   token *hash* is persisted.
 2. **Enroll** — `meko-agent` starts in the customer cluster, reads its
    service-account token + cluster facts, and `POST`s `/api/v1/agent/enroll`
-   with the enrollment token. YCP validates it and mints a long-lived env-scoped
-   **status token** (returned once, hash persisted). The environment moves to
-   `ATTESTING`.
-3. **Reconcile** — on each tick the agent `GET`s `/api/v1/agent/desired-state`
-   (bearer: status token). Desired state is a generic, resource-typed set
-   (`{kind, name, spec}`); the agent dispatches each resource to a reconciler
-   for its `Kind` (today: `datapack` → a labeled namespace running a `dpmcp`).
-4. **Report** — the agent `POST`s `/api/v1/agent/status` with real facts,
-   component health, and per-datapack phases. This drives the fleet registry and
-   the console's live view.
+   with the enrollment token. YCP validates it, mints a long-lived env-scoped
+   **status token**, and returns it **together with the stack** the environment runs.
+   The environment moves to `ATTESTING`.
+3. **Deploy** — the agent has everything it needs in that one response, so it deploys
+   the whole data plane on its first tick. It persists the stack beside the status
+   token, which means a restart brings Meko back with no control-plane call in the path
+   at all. Nothing has to be commanded, and a control plane that is down cannot stop an
+   already-enrolled agent from reconciling.
+4. **Reconcile** — on each tick the agent `GET`s `/api/v1/agent/desired-state` (bearer:
+   status token). Desired state is a generic, resource-typed set (`{kind, name, spec}`);
+   it is where registration wrote the stack and where an operator's later changes go, so
+   **when it can be read it is authoritative** — including when it is empty, which is how
+   an environment is told to run nothing. **When it cannot be read the enrolled stack
+   stands**, and the tick proceeds: an unreachable control plane no longer leaves the
+   data plane untouched. Garbage collection is the one thing that needs a desired state
+   that was actually read — the agent cannot know what an operator withdrew from a
+   response it never got.
+5. **Report** — the agent `POST`s `/api/v1/agent/status` with real facts,
+   component health. This drives the fleet registry and the console's live view.
 
 Because desired state is resource-typed, adding a new managed resource needs
 only a new agent-side reconciler — no protocol change.
+
+`POST /environments` still accepts `"desired": [...]` to declare an environment's
+resources explicitly — including `[]` for one that runs nothing until told — and
+`--no-bootstrap-defaults` turns seeding off fleet-wide. An agent that enrolls into an
+environment with no stack runs only what desired state declares, which is the behaviour
+that predates this.
+
+### What the agent runs
+
+| Kind | What the agent does | Where |
+|------|--------------------|-------|
+| `meko-stack` | **The whole data plane, as one resource.** What registration seeds and enrollment hands over. YugabyteDB with the `mage` and `pg_dist_rag` extensions, then Meko's `api-server`, `mcp-server`, `rag-worker`, `inference-gateway` and `ui` over it. | `cmd/agent/mekostack.go` |
+| `database` | Runs the data-plane database itself (StatefulSet + Service + a password Secret it generates), or resolves an external one the operator points it at. Everything else derives its DSN from this. | `cmd/agent/stack.go` |
+| `mcp-server` | Deploys `meko-mcp-server` over that database — the tenant-facing MCP endpoint on `:8000`. | `cmd/agent/stack.go` |
+| `rag-worker` | Deploys the RAG indexing worker over the same database. | `cmd/agent/stack.go` |
+
+`meko-stack` is built **on** the other three rather than beside them: it resolves its
+database through the same code path as kind `database`, and delegates the MCP server and
+RAG worker to their own reconcilers, lending them its database and its GC key. So
+there is one env contract per workload rather than two that drift — `meko-mcp-server`'s
+alone is fourteen variables split across a ConfigMap, a composed-DSN Secret and an
+`envFrom`.
+
+### One ordering constraint is real
+
+The extensions have to exist before the api-server starts. `api_server` runs its
+migrations on boot and the data set references `dist_rag.vector_indexes` and the
+`dist_rag` enum types, so an api-server that reaches a database without `pg_dist_rag`
+fails its own migration and crash-loops. The reconciler therefore goes: database →
+`CREATE DATABASE meko` → `CREATE EXTENSION mage, pg_dist_rag CASCADE` → everything else.
+
+Everything else is deployed whether or not that succeeded, for the same reason the
+mcp-server reconciler already worked that way: a workload that is declared and retrying
+is visible and diagnosable, and an empty namespace while the agent waits for a database
+to accept connections is not.
+
+`mage` additionally needs the `ysql_yb_enable_mage=true` gflag on both the master and
+the tserver — a start-time flag, so the agent renders it into the `yugabyted` command
+rather than issuing SQL. And the image matters: `mage` and `pg_dist_rag` are in
+Yugabyte's Meko build (`yugabyte-db/ybdb-meko-release`), not in the public `yugabytedb`
+image, so `images.database` has no default. A guessed public tag produces a database
+that starts perfectly and then cannot install a single extension the schema needs.
+
+Two properties the specs hold to:
+
+- **Secret values never travel in desired state**, only Secret *names*. Operator
+  credentials (`OPENAI_API_KEY`, AWS keys) reach a workload by `envFrom`
+  secretRef, so the control plane never stores them and the agent never copies
+  them. The one exception is a composed connection string that cannot be
+  assembled from `secretKeyRef`s, which the agent writes into a Secret beside the
+  password it derives from.
+- **Every spec field is optional.** `{"kind":"database","name":"meko"}` with no
+  spec brings up a working database; an unknown field from a newer control plane
+  is ignored rather than fatal. The exception is a private image: `mcp-server`
+  and `rag-worker` refuse to deploy without `spec.image`, because a guessed tag
+  fails minutes later as `ImagePullBackOff` instead of immediately as a bad spec.
+
+Applies are **server-side apply**, not create-if-absent: a changed image in
+desired state has to actually roll out, and the earlier "POST and treat 409 as
+success" was create-once.
+
+### Environment state is observed, not narrated
+
+The reported state comes from the components the agent read back from its own
+API server: `READY` when every declared component has all replicas ready,
+`PROVISIONING` while a stack is still coming up, `DEGRADED` once it has been
+`READY` and something since failed. It used to be a fixed three-tick walk to
+`READY` regardless of what was running.
 
 ## State machine
 
@@ -128,7 +207,12 @@ Plaintext tokens are returned to the caller exactly once and never persisted.
 own namespace, and resumes from it on restart. That is what keeps the enrollment
 token a genuine first-contact-only credential: an agent that re-enrolled on
 every restart would work for 30 minutes and then lock itself out. `test/e2e`
-asserts the restart path for exactly this reason. Remaining gaps — CA pinning,
+asserts the restart path for exactly this reason.
+
+The same Secret holds the **stack** the agent enrolled with, for the same reason: an
+agent that had to re-enroll in order to remember what to run would depend on a
+30-minute bootstrap credential forever. With it persisted, a restarted agent begins
+reconciling before its first request succeeds. Remaining gaps — CA pinning,
 status-token rotation — are tracked in
 [meko#401](https://github.com/yugabyte/meko/issues/401).
 
@@ -142,10 +226,9 @@ ycp/test/e2e/run.sh           # build + deploy on kind; needs docker + kind
 - `cmd/agent` — decoding of both response envelopes, including the case that
   broke the agent: a `{"data":…}` wrapper decoded straight into the payload
   struct, yielding zero values instead of an error.
-- `internal/mcp` — end-to-end MCP protocol test (initialize → tools/list →
   tools/call) plus the unknown-method error path.
 - `test/e2e` — builds the api-server and agent images, stands them up on a
-  throwaway kind cluster, and drives register → enroll → READY → restart. This is
+  throwaway kind cluster, and drives register → bootstrap → command → GC. This is
   the only test that exercises the real images, the real migrations, RBAC and the
   token handshake over the wire; see the header comment in `test/e2e/run.sh`.
 

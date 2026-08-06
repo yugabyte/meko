@@ -27,6 +27,7 @@ import (
 	"meko/api_server/internal/api"
 	"meko/api_server/internal/db"
 	"meko/api_server/internal/repository"
+	"meko/api_server/internal/service"
 )
 
 func run() error {
@@ -72,12 +73,16 @@ func run() error {
 		"run only the YCP fleet-registry migrations against the system DB (implies -migrate-only). "+
 			"The only set that runs on plain Postgres; the system set needs YugabyteDB.")
 
-	// Cognito configuration
-	cognitoRegion := flag.String("cognito-region", "", "AWS region for Cognito User Pool")
-	cognitoPoolID := flag.String("cognito-pool-id", "", "Cognito User Pool ID")
-	cognitoClientID := flag.String("cognito-client-id", "", "Cognito App Client ID")
-	cognitoClientSecret := flag.String("cognito-client-secret", "", "Cognito App Client secret")
-	cognitoDomain := flag.String("cognito-domain", "", "Cognito hosted UI domain (e.g. myapp.auth.us-east-2.amazoncognito.com)")
+	// Cognito configuration. The env fallbacks are what makes this configurable from a
+	// Kubernetes Secret: a data plane the YCP agent deploys wires credentials in with
+	// envFrom-secretRef and never as flags, since a flag value is visible in the pod
+	// spec to anyone with read access to the namespace. The names match the ones
+	// LOCAL_DEV_SETUP.md already documents.
+	cognitoRegion := flag.String("cognito-region", envOrDefault("COGNITO_REGION", ""), "AWS region for Cognito User Pool")
+	cognitoPoolID := flag.String("cognito-pool-id", envOrDefault("COGNITO_POOL_ID", ""), "Cognito User Pool ID")
+	cognitoClientID := flag.String("cognito-client-id", envOrDefault("COGNITO_CLIENT_ID", ""), "Cognito App Client ID")
+	cognitoClientSecret := flag.String("cognito-client-secret", envOrDefault("COGNITO_CLIENT_SECRET", ""), "Cognito App Client secret")
+	cognitoDomain := flag.String("cognito-domain", envOrDefault("COGNITO_DOMAIN", ""), "Cognito hosted UI domain (e.g. myapp.auth.us-east-2.amazoncognito.com)")
 
 	// Kubernetes namespace for MekoUserAccount CRDs
 	crdNamespace := flag.String("crd-namespace", "meko-tenants", "Kubernetes namespace for MekoUserAccount CRDs")
@@ -123,6 +128,29 @@ func run() error {
 	// YCP control-plane mode (BYOC). Gates the fleet registry + agent API.
 	controlPlaneMode := flag.Bool("control-plane-mode", envBoolOrDefault("CONTROL_PLANE_MODE", false), "enable YCP fleet registry + agent API (control plane)")
 
+	// What a newly registered environment is told to run, so an enrolling agent
+	// bootstraps Meko instead of idling until somebody sends it a command. That is the
+	// whole Meko stack — YugabyteDB with MAGE and dist_rag, api-server, MCP server, RAG
+	// worker, inference gateway, UI — at the release pinned in
+	// internal/service/dataplane_release.go. Registering takes a name and nothing else;
+	// the versions are the control plane's business.
+	noBootstrapDefaults := flag.Bool("no-bootstrap-defaults", envBoolOrDefault("MEKO_NO_BOOTSTRAP_DEFAULTS", false),
+		"register environments with empty desired state (they then run nothing until explicitly commanded)")
+	dataplaneRegistry := flag.String("dataplane-registry", envOrDefault("MEKO_DATAPLANE_REGISTRY", service.DefaultDataPlaneRegistry),
+		"registry the pinned data-plane images are pulled from")
+	var dataplaneImages imageOverrides
+	flag.Var(&dataplaneImages, "dataplane-image",
+		"override one component of the pinned release, as component=image "+
+			"(database, api_server, mcp_server, rag_worker, inference_gateway, ui). Repeatable.")
+	// Kept because the chart and the local scripts set it, and because it predates the
+	// release manifest. It is the mcp_server override by another name.
+	dataplaneMCPImage := flag.String("dataplane-mcp-image", os.Getenv("MEKO_DATAPLANE_MCP_IMAGE"),
+		"override the meko-mcp-server image in the pinned release (equivalent to -dataplane-image mcp_server=...)")
+	dataplanePullSecret := flag.String("dataplane-image-pull-secret", os.Getenv("MEKO_DATAPLANE_IMAGE_PULL_SECRET"),
+		"name of a docker-registry Secret in the agent's namespace, for pulling the images above")
+	dataplaneSecretRef := flag.String("dataplane-secret-ref", os.Getenv("MEKO_DATAPLANE_SECRET_REF"),
+		"name of a Secret in the agent's namespace holding data-plane credentials (OPENAI_API_KEY, AWS keys)")
+
 	// Subpath mount. Set when a fronting proxy passes a prefix through instead
 	// of stripping it — YCP is served at https://devcloud.yugabyte.com/ycp/, on
 	// the same domain as YBM so browser auth tokens and session storage carry
@@ -138,6 +166,11 @@ func run() error {
 	adminAPIKey := flag.String("admin-api-key",
 		os.Getenv("ADMIN_API_KEY"),
 		"Shared secret gating the /admin/* metrics endpoints (X-Meko-Admin-Secret). Empty disables them (503).")
+	consoleEmbedAdminSecret := flag.Bool("console-embed-admin-secret",
+		envBoolOrDefault("MEKO_CONSOLE_EMBED_ADMIN_SECRET", false),
+		"write the admin secret into the YCP console page so it never asks for one. "+
+			"Hands the fleet-admin credential to anyone who can load the console, so only for "+
+			"a control plane whose console is already the trust boundary (internal LB, tailnet).")
 
 	ybaAPIToken := flag.String("yba-api-token",
 		os.Getenv("YBA_API_TOKEN"),
@@ -372,6 +405,49 @@ func run() error {
 		slog.Info("ses invite emails enabled", "from", *sesFromAddress, "region", resolvedSESRegion, "app_url", appURL)
 	}
 
+	dataplaneRelease := service.DefaultDataPlaneRelease(*dataplaneRegistry)
+	if *dataplaneMCPImage != "" {
+		dataplaneImages = append(dataplaneImages, imageOverride{"mcp_server", *dataplaneMCPImage})
+	}
+	for _, o := range dataplaneImages {
+		if err := dataplaneRelease.SetImage(o.component, o.image); err != nil {
+			// Fatal rather than ignored: a misspelt component name silently deploys the
+			// pinned image instead of the one the operator meant, and the mismatch is
+			// only visible as a version string in a console row nobody is reading.
+			return fmt.Errorf("-dataplane-image: %w", err)
+		}
+	}
+
+	// Assembled here rather than inline below so ServerConfig stays a flat list of
+	// one-line fields: a nested literal in the middle of it splits gofmt's alignment
+	// group and rewrites the whitespace of every surrounding line.
+	bootstrapDefaults := service.BootstrapDefaults{
+		Enabled:         !*noBootstrapDefaults,
+		Release:         dataplaneRelease,
+		ImagePullSecret: *dataplanePullSecret,
+		SecretRef:       *dataplaneSecretRef,
+	}
+	if bootstrapDefaults.Enabled && *controlPlaneMode {
+		slog.Info("registered environments will be seeded with the full Meko stack",
+			"database", bootstrapDefaults.Release.Database,
+			"api_server", bootstrapDefaults.Release.APIServer,
+			"mcp_server", bootstrapDefaults.Release.MCPServer,
+			"rag_worker", bootstrapDefaults.Release.RAGWorker,
+			"inference_gateway", bootstrapDefaults.Release.InferenceGateway,
+			"ui", bootstrapDefaults.Release.UI)
+		if ok, missing := bootstrapDefaults.Release.Complete(); !ok {
+			slog.Warn("some data-plane components have no image and will be reported as failed by the agent",
+				"missing", strings.Join(missing, ", "))
+		}
+		if bootstrapDefaults.ImagePullSecret == "" {
+			// Every image in the release is private. Without pull credentials in the
+			// agent's namespace the whole stack lands in ImagePullBackOff, which reads
+			// as a broken agent rather than as missing configuration.
+			slog.Warn("no --dataplane-image-pull-secret configured: the seeded stack is all private images, " +
+				"so every workload will fail to pull unless the agent's namespace already has credentials")
+		}
+	}
+
 	return api.Run(api.ServerConfig{
 		DB:                        dataConn,
 		SystemDB:                  systemConn,
@@ -399,6 +475,7 @@ func run() error {
 		DeployEnv:                 repository.ParseDeployEnv(*deployEnv),
 		MCPInternalSecret:         *mcpInternalSecret,
 		AdminAPIKey:               *adminAPIKey,
+		ConsoleEmbedAdminSecret:   *consoleEmbedAdminSecret,
 		YBAAPIToken:               *ybaAPIToken,
 		MCPPATFlushInterval:       *mcpPATFlushInterval,
 		PATRateLimitPerMin:        *patRateLimitPerMin,
@@ -415,6 +492,7 @@ func run() error {
 		ShowPGAMP:                 *showPGAMP,
 		EnableConversationSearch:  *enableConversationSearch,
 		ControlPlaneMode:          *controlPlaneMode,
+		BootstrapDefaults:         bootstrapDefaults,
 		BasePath:                  *basePath,
 		AWSMarketplaceProductCode: *awsMarketplaceProductCode,
 		AWSMarketplaceRegion:      *awsMarketplaceRegion,
@@ -428,6 +506,35 @@ func main() {
 		slog.Error("fatal", "error", err)
 		os.Exit(1)
 	}
+}
+
+// imageOverride is one -dataplane-image component=image pair.
+type imageOverride struct{ component, image string }
+
+// imageOverrides collects repeated -dataplane-image flags.
+//
+// One repeatable flag rather than one flag per component: the release has six
+// components and will grow, and six flags plus six env vars plus six chart values is a
+// lot of surface for something almost nobody sets — the pinned release is the answer
+// for every deployment that is not testing a single new image.
+type imageOverrides []imageOverride
+
+func (o *imageOverrides) String() string {
+	parts := make([]string, 0, len(*o))
+	for _, v := range *o {
+		parts = append(parts, v.component+"="+v.image)
+	}
+	return strings.Join(parts, ",")
+}
+
+func (o *imageOverrides) Set(v string) error {
+	component, image, ok := strings.Cut(v, "=")
+	component, image = strings.TrimSpace(component), strings.TrimSpace(image)
+	if !ok || component == "" || image == "" {
+		return fmt.Errorf("want component=image, got %q", v)
+	}
+	*o = append(*o, imageOverride{component, image})
+	return nil
 }
 
 func envOrDefault(key, fallback string) string {

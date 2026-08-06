@@ -25,7 +25,7 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db))
+	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
 	const plain = "mko_enr_deadbeef"
 	tokenHash := hashToken(plain)

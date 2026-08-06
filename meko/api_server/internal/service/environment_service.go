@@ -24,12 +24,54 @@ const enrollTokenTTL = 30 * time.Minute
 // EnvironmentService owns the YCP fleet-registry logic: enrollment-token
 // handshake, status ingestion, and generic desired-state. Control-plane mode only.
 type EnvironmentService struct {
-	repo *repository.EnvironmentRepo
+	repo      *repository.EnvironmentRepo
+	bootstrap BootstrapDefaults
+}
+
+// BootstrapDefaults is the stack a newly registered environment is told to run, so
+// that an agent bootstraps Meko as soon as it enrolls rather than sitting idle until
+// somebody remembers to send it a command.
+//
+// Registering an environment is already a statement of intent — nobody registers a
+// data plane in order to run nothing in it — so the default desired state is written
+// at registration. A caller can still override it per request, and an operator can
+// replace it at any time through POST /environments/{id}/desired.
+//
+// What gets seeded is the whole Meko data plane, as one `meko-stack` resource: the
+// MAGE-enabled YugabyteDB with the mage and pg_dist_rag extensions, Meko's own
+// api-server over it, the MCP server, the RAG worker, the inference gateway and the
+// web UI. The images come from the pinned release in dataplane_release.go, because the
+// control plane is what knows which versions go together — see the comment there.
+type BootstrapDefaults struct {
+	// Enabled is false when --no-bootstrap-defaults is set: registration then seeds
+	// nothing and every environment waits for an explicit command.
+	Enabled bool
+	// Release is the image set the seeded stack runs.
+	Release DataPlaneRelease
+	// ImagePullSecret and SecretRef are Secret NAMES in the agent's namespace: the
+	// registry credentials, and the operator's own Secret holding OPENAI_API_KEY, the
+	// AWS keys and the Cognito client secret. The control plane never learns either
+	// value — desired state carries no secret material.
+	ImagePullSecret string
+	SecretRef       string
+}
+
+// mekoStackSpec mirrors the agent's kind "meko-stack" spec (ycp/cmd/agent/mekostack.go).
+// Only the fields the control plane sets are here; the agent defaults the rest, so an
+// older control plane and a newer agent still agree.
+//
+// Not shared as a package: ycp is a separate Go module, and the wire types between the
+// two sides are duplicated rather than imported throughout (models.DesiredResource is
+// the same story). The JSON tags are the contract.
+type mekoStackSpec struct {
+	Images          DataPlaneRelease `json:"images"`
+	ImagePullSecret string           `json:"image_pull_secret,omitempty"`
+	SecretRef       string           `json:"secret_ref,omitempty"`
 }
 
 // NewEnvironmentService constructs the service.
-func NewEnvironmentService(repo *repository.EnvironmentRepo) *EnvironmentService {
-	return &EnvironmentService{repo: repo}
+func NewEnvironmentService(repo *repository.EnvironmentRepo, bootstrap BootstrapDefaults) *EnvironmentService {
+	return &EnvironmentService{repo: repo, bootstrap: bootstrap}
 }
 
 // ---- request DTOs ----
@@ -48,13 +90,11 @@ type EnvComponent struct {
 	Healthy int    `json:"healthy"`
 	Total   int    `json:"total"`
 	Version string `json:"version,omitempty"`
-}
-
-// DatapackPhase is a per-datapack status line.
-type DatapackPhase struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Phase string `json:"phase"`
+	// Error is why a declared component is not running, when the agent could say.
+	// A rejected spec (a private image with no tag, a missing Secret) otherwise shows
+	// up only as 0/1 in the console and as a line in agent logs the operator who sent
+	// the command usually cannot read.
+	Error string `json:"error,omitempty"`
 }
 
 // ClusterSpec requests a new cluster (provision mode).
@@ -70,6 +110,11 @@ type RegisterEnvironmentRequest struct {
 	Placement   string       `json:"placement"`
 	Region      string       `json:"region"`
 	ClusterSpec *ClusterSpec `json:"cluster_spec,omitempty"`
+
+	// Desired overrides the desired state this environment starts with. An explicit
+	// empty array registers an environment that runs nothing until commanded; omitted,
+	// the server's bootstrap defaults apply.
+	Desired *[]models.DesiredResource `json:"desired,omitempty"`
 }
 
 // EnrollRequest is the agent's enrollment body.
@@ -82,12 +127,11 @@ type EnrollRequest struct {
 
 // StatusReport is the agent's heartbeat + phases.
 type StatusReport struct {
-	EnvironmentState string          `json:"environment_state"`
-	AgentVersion     string          `json:"agent_version"`
-	AppliedRevision  int             `json:"applied_revision"`
-	ClusterFacts     ClusterFacts    `json:"cluster_facts"`
-	Components       []EnvComponent  `json:"components"`
-	DatapackPhases   []DatapackPhase `json:"datapack_phases"`
+	EnvironmentState string         `json:"environment_state"`
+	AgentVersion     string         `json:"agent_version"`
+	AppliedRevision  int            `json:"applied_revision"`
+	ClusterFacts     ClusterFacts   `json:"cluster_facts"`
+	Components       []EnvComponent `json:"components"`
 }
 
 // ---- token helpers ----
@@ -142,7 +186,45 @@ func (s *EnvironmentService) Register(req RegisterEnvironmentRequest) (*models.E
 	if err := s.repo.Upsert(e); err != nil {
 		return nil, "", err
 	}
+	// Desired state comes with the registration, so the agent has something to do the
+	// moment it enrolls. Failing to write it must not fail the registration: the
+	// enrollment token has already been minted and is returned exactly once, so
+	// discarding it here would leave an environment nobody can attach an agent to.
+	// A desired-state write can always be retried; a token cannot.
+	if res := s.initialDesired(req); res != nil {
+		if err := s.repo.ReplaceDesired(e.ID, res); err != nil {
+			return e, plain, nil //nolint:nilerr // see above: the token must survive
+		}
+	}
 	return e, plain, nil
+}
+
+// initialDesired resolves what a newly registered environment should be running:
+// whatever the caller asked for, else the server's bootstrap defaults, else nothing.
+func (s *EnvironmentService) initialDesired(req RegisterEnvironmentRequest) []models.DesiredResource {
+	if req.Desired != nil {
+		return *req.Desired
+	}
+	if !s.bootstrap.Enabled {
+		return nil
+	}
+	// One resource, because the stack is one thing. The agent orders the components
+	// within it and knows which of them depends on which — that ordering is a property
+	// of the data plane, not of a control-plane payload, and six resources here would
+	// mean six specs that all have to keep agreeing about the same database, registry
+	// and Secrets.
+	spec, err := json.Marshal(mekoStackSpec{
+		Images:          s.bootstrap.Release,
+		ImagePullSecret: s.bootstrap.ImagePullSecret,
+		SecretRef:       s.bootstrap.SecretRef,
+	})
+	if err != nil {
+		return nil
+	}
+	// No datapack: a datapack is a customer's own artifact, created through the Meko
+	// api-server this stack runs, once it is up. Seeding a placeholder would provision
+	// one nobody asked for and then need explaining.
+	return []models.DesiredResource{{Kind: "meko-stack", Name: "meko", Spec: spec}}
 }
 
 // EnrollWithToken validates and consumes an enrollment token, mints a status token,
@@ -214,7 +296,6 @@ func (s *EnvironmentService) ApplyStatus(envID string, r StatusReport) (bool, er
 	if comps, err := json.Marshal(r.Components); err == nil {
 		e.Components = comps
 	}
-	e.Datapacks = len(r.DatapackPhases)
 	if err := s.repo.Upsert(e); err != nil {
 		return false, err
 	}
@@ -236,6 +317,31 @@ func (s *EnvironmentService) SetState(envID, state string) (bool, error) {
 // is wired; kept here so the handler has no policy in it.
 func (s *EnvironmentService) Entitlement() models.Entitlement {
 	return models.Entitlement{Plan: "enterprise", Source: "ybm-aeon"}
+}
+
+// EnrolledStack is the meko-stack spec an enrolling agent is handed: everything it
+// needs to deploy the Meko data plane, in the enroll response.
+//
+// It is read out of the environment's stored resources rather than recomposed from the
+// bootstrap defaults, so that the stack an agent is given is the one this environment
+// was actually registered with — including a `desired` override passed at registration,
+// and any replacement an operator has POSTed since. One source of truth, whichever way
+// the agent asks for it.
+//
+// Returns nil when the environment has no stack: --no-bootstrap-defaults, or a
+// registration that declared individual resources instead. The agent then runs whatever
+// desired state declares, which is the behaviour that predates this.
+func (s *EnvironmentService) EnrolledStack(envID string) (json.RawMessage, error) {
+	res, err := s.repo.ListDesired(envID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range res {
+		if r.Kind == "meko-stack" {
+			return r.Spec, nil
+		}
+	}
+	return nil, nil
 }
 
 // SetDesired replaces the desired resource set. ok=false ⇒ unknown environment.

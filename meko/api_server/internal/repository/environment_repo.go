@@ -31,7 +31,8 @@ func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, 
 	var componentsText string
 	if err := row.Scan(&e.ID, &accountID, &e.Placement, &region, &e.State, &k8sVersion, &e.NodeCount, &provider,
 		&e.Datapacks, &e.MaxDatapacks, &agentVersion, &lastHeartbeat, &mcpBaseURL, &certFingerprint,
-		&componentsText, &e.Live, &e.EnrollTokenHash, &enrollExpires, &e.StatusTokenHash, &e.CreatedAt); err != nil {
+		&componentsText, &e.Live, &e.EnrollTokenHash, &enrollExpires, &e.StatusTokenHash,
+		&e.CreatedAt); err != nil {
 		return nil, err
 	}
 	if enrollExpires.Valid {

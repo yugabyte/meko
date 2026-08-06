@@ -8,7 +8,7 @@ import (
 )
 
 func TestRegisterEnvironment_RequiresValidName(t *testing.T) {
-	svc := service.NewEnvironmentService(nil) // validation happens before any repo call
+	svc := service.NewEnvironmentService(nil, service.BootstrapDefaults{}) // validation happens before any repo call
 	for _, name := range []string{"", "ab"} {
 		_, _, err := svc.Register(service.RegisterEnvironmentRequest{Name: name})
 		if !errors.Is(err, service.ErrValidation) {
@@ -18,7 +18,7 @@ func TestRegisterEnvironment_RequiresValidName(t *testing.T) {
 }
 
 func TestEnrollWithToken_RequiresToken(t *testing.T) {
-	svc := service.NewEnvironmentService(nil)
+	svc := service.NewEnvironmentService(nil, service.BootstrapDefaults{})
 	_, _, ok, err := svc.EnrollWithToken("", "cloud", service.ClusterFacts{})
 	if ok {
 		t.Fatal("empty token should not enroll")

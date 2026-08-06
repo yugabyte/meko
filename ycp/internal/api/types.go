@@ -30,6 +30,10 @@ type Component struct {
 	Healthy int    `json:"healthy"`
 	Total   int    `json:"total"`
 	Version string `json:"version,omitempty"`
+	// Error is why a declared component is not running, when the agent can say —
+	// a spec it refused, or an apply the API server rejected. Without it a bad
+	// command reads as 0/1 in the console and the reason lives only in agent logs.
+	Error string `json:"error,omitempty"`
 }
 
 // ClusterFacts are the read-only facts the agent reports about its cluster.
@@ -96,11 +100,23 @@ type EnrollRequest struct {
 	ClusterFacts    ClusterFacts `json:"cluster_facts"`
 }
 
-// EnrollResponse hands the agent its (mock) identity + endpoints.
+// EnrollResponse hands the agent its identity, its endpoints, and the stack to run.
 type EnrollResponse struct {
 	EnvironmentID string `json:"environment_id"`
 	StatusToken   string `json:"status_token"`
 	MCPBaseURL    string `json:"mcp_base_url"`
+	// Stack is the meko-stack spec this environment runs, resolved by the control plane
+	// when the environment was registered.
+	//
+	// It comes back with enrollment rather than being fetched, so bringing Meko up needs
+	// no second call and no command: an agent that enrolls has, in that one response,
+	// everything it needs to deploy the whole data plane. The agent persists it beside
+	// its status token, which means a restart does not need the control plane either.
+	//
+	// json.RawMessage on purpose — the agent owns the shape of the spec (see
+	// cmd/agent/mekostack.go), so a newer control plane can send richer fields to an
+	// older agent, and this package does not have to know about either.
+	Stack json.RawMessage `json:"stack,omitempty"`
 }
 
 // DesiredState is the generic, resource-typed set the agent reconciles toward.
@@ -123,25 +139,13 @@ type DesiredResource struct {
 	Spec json.RawMessage `json:"spec,omitempty"`
 }
 
-// DatapackPhase is a per-datapack status line in a StatusReport: what the agent
-// actually provisioned for a declared datapack.
-type DatapackPhase struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Phase    string `json:"phase"`              // Provisioning | Active | Error
-	DB       string `json:"db,omitempty"`       // provisioned database name
-	Endpoint string `json:"endpoint,omitempty"` // MCP endpoint (set once the server is up)
-	Error    string `json:"error,omitempty"`
-}
-
 // StatusReport is the agent's heartbeat + phases (drives the fleet registry).
 type StatusReport struct {
-	EnvironmentState EnvState        `json:"environment_state"`
-	AgentVersion     string          `json:"agent_version"`
-	AppliedRevision  int             `json:"applied_revision"`
-	ClusterFacts     ClusterFacts    `json:"cluster_facts"`
-	Components       []Component     `json:"components"`
-	DatapackPhases   []DatapackPhase `json:"datapack_phases"`
+	EnvironmentState EnvState     `json:"environment_state"`
+	AgentVersion     string       `json:"agent_version"`
+	AppliedRevision  int          `json:"applied_revision"`
+	ClusterFacts     ClusterFacts `json:"cluster_facts"`
+	Components       []Component  `json:"components"`
 }
 
 // BootstrapProgress is the pre-agent installer's outbound report.

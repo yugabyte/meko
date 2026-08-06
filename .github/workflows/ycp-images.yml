@@ -4,7 +4,6 @@ name: YCP Images
 # platform (161908593886.dkr.ecr.us-east-2.amazonaws.com/meko/*, alongside
 # meko-mcp-server, rag-agent, meko-provisioner and inference-gateway):
 #   meko/meko-agent  — the BYOC pull agent (Dockerfile.agent)
-#   meko/dpmcp       — the per-datapack MCP server (Dockerfile.dpmcp)
 #
 # The control plane is NOT here: it is api_server run with --control-plane-mode,
 # and nothing in CI builds that image yet (see ycp/STATUS.md). There used to be a
@@ -34,7 +33,6 @@ name: YCP Images
 #
 # ECR does not create repositories on push. Before the first run:
 #   aws ecr create-repository --region us-east-2 --repository-name meko/meko-agent
-#   aws ecr create-repository --region us-east-2 --repository-name meko/dpmcp
 on:
   push:
     branches: [main]
@@ -58,7 +56,7 @@ env:
   # Assumed via OIDC. Safe to keep in the clear: the account ID is already
   # committed elsewhere in this repo, the role is assumable only by
   # repo:yugabyte/meko:ref:refs/heads/main, and its only permission is pushing
-  # the meko/{meko-agent,dpmcp} repos.
+  # the meko/meko-agent repo.
   DEFAULT_AWS_ROLE_ARN: arn:aws:iam::161908593886:role/meko-github-actions-ecr-push
 
 jobs:
@@ -72,8 +70,6 @@ jobs:
         include:
           - image: meko-agent
             dockerfile: Dockerfile.agent
-          - image: dpmcp
-            dockerfile: Dockerfile.dpmcp
     steps:
       - uses: actions/checkout@v7
 

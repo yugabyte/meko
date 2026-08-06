@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"meko/api_server/internal/repository"
+	"meko/api_server/internal/service"
 )
 
 // ServerConfig holds the configuration for the API server.
@@ -66,6 +67,14 @@ type ServerConfig struct {
 	// meko_admin (X-Meko-Admin-Secret header). When empty, those
 	// endpoints return 503.
 	AdminAPIKey string
+
+	// ConsoleEmbedAdminSecret writes AdminAPIKey into the YCP console page, so the
+	// console never asks for it. Off by default: it hands the fleet-admin credential
+	// to anyone who can load the page, which is only reasonable where the console is
+	// already the trust boundary (a dev control plane on an internal LoadBalancer or a
+	// tailnet) and not where it is fronted at a shared public domain. See
+	// handlers.ConsoleHandler.
+	ConsoleEmbedAdminSecret bool
 
 	// YBAAPIToken authenticates read-only calls to YugabyteDB Anywhere
 	// (X-AUTH-YW-API-TOKEN) for the admin Data Plane tab. When empty, the
@@ -153,6 +162,11 @@ type ServerConfig struct {
 	// plane). Off by default; when set, /api/v1/environments and /api/v1/agent/*
 	// are registered against meko_system.environments.
 	ControlPlaneMode bool
+
+	// BootstrapDefaults is the stack a newly registered environment is told to run,
+	// so an enrolling agent has something to do immediately instead of waiting for a
+	// separate command. Control-plane mode only; see service.BootstrapDefaults.
+	BootstrapDefaults service.BootstrapDefaults
 
 	// BasePath mounts every route under a URL prefix (e.g. "/ycp") for
 	// deployments fronted at a subpath of a shared domain instead of their own

@@ -6,8 +6,7 @@ directory. What lives here is the data-plane half of that contract:
 
 - **`cmd/agent`** — `meko-agent`: reads real cluster facts from the in-cluster
   Kubernetes REST API (no client-go), enrolls the environment into YCP, reconciles
-  desired datapacks, and reports status on an interval. All traffic is outbound.
-- **`cmd/dpmcp`** — the per-datapack MCP server the agent provisions.
+  the environment's declared stack, and reports status on an interval. All traffic is outbound.
 - **`internal/api`** — the wire types and lifecycle states both sides share.
 - **`test/e2e`** — build-and-deploy smoke test on kind, against the real control
   plane.
@@ -39,5 +38,6 @@ Dockerfile builds which image, how the agent is configured, and how it is
 operated once attached.
 
 > **See also:** [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the pull-loop design
-> and the token model, and [`STATUS.md`](./STATUS.md) for what works today and
-> what is still open.
+> and the token model, [`BYOC-ON-GKE.md`](./BYOC-ON-GKE.md) to stand a whole data
+> plane up on a real cluster start to finish, and [`STATUS.md`](./STATUS.md) for
+> what works today and what is still open.

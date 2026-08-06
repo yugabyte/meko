@@ -22,16 +22,18 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "create", "delete"]
-  # services/secrets covers both the per-datapack workloads the agent provisions
-  # and its own meko-agent-state Secret. update is what lets it replace the stored
-  # status token in place; without it the agent cannot survive a restart, which is
-  # one of the things this e2e is here to prove.
+  # services/secrets/configmaps cover the Meko stack (database, mcp-server,
+  # rag-worker) and the agent's own meko-agent-state Secret.
+  # update is what lets it replace the stored status token in place; without it the
+  # agent cannot survive a restart, which is one of the things this e2e is here to
+  # prove. patch is server-side apply, which is how the stack reconcilers converge —
+  # without it a declared component is created once and never updated again.
   - apiGroups: [""]
-    resources: ["services", "secrets"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    resources: ["services", "secrets", "configmaps"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "create", "delete"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
