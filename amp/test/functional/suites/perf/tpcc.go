@@ -79,7 +79,7 @@ func runTPCC(t *core.T) (err error) {
 		deliver := func(ctx context.Context, podExec exec.RemoteExecutor) error {
 			return deliverBenchbase(ctx, t, cfg, podExec)
 		}
-		mk := func(conn pg.ConnInfo) Workload { return tpccWorkloadFor(cfg, conn) }
+		mk := func(tgt backingTarget) Workload { return tpccWorkloadFor(cfg, tgt) }
 		if cmp.Mode == CompareModeBisect {
 			return runBisectSuite(t, bisectSpec{
 				perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
@@ -148,22 +148,16 @@ type perfRun struct {
 	logf    func(string, ...any)
 	sink    apps.ArtifactSink
 
-	info          ybk8s.Info
-	kube          *k8s.Kubectl
-	inClusterHost string
-	inClusterPort int
-	benchbaseDir  string
-	podExec       exec.RemoteExecutor
+	info         ybk8s.Info
+	kube         *k8s.Kubectl
+	target       backingTarget
+	benchbaseDir string
+	podExec      exec.RemoteExecutor
 
 	benchResult BenchResult
 }
 
 func (r *perfRun) suffix() string { return r.t.ResourceSuffix() }
-
-// conn is the in-cluster YSQL target reached through the tserver Service.
-func (r *perfRun) conn() pg.ConnInfo {
-	return pg.ConnInfo{Host: r.inClusterHost, Port: r.inClusterPort, User: r.info.User, Database: r.info.User, SSLMode: "disable"}
-}
 
 // provisionBacking deploys a co-located YugabyteDB cluster in k8s (RF forced up
 // to cfg.RF), registers its teardown, and resolves the connection path plus a
@@ -175,7 +169,7 @@ func (r *perfRun) provisionBacking(ctx context.Context) error {
 	}
 	r.info = info
 	r.kube = kube
-	r.inClusterHost, r.inClusterPort = ybk8s.FirstHostPort(info.InClusterHostPorts)
+	r.target = targetFor(info)
 	return nil
 }
 
@@ -214,12 +208,13 @@ func deliverBenchbase(ctx context.Context, t *core.T, cfg perfConfig, podExec ex
 	return nil
 }
 
-// tpccWorkloadFor builds the TPC-C workload bound to conn at the shared load
+// tpccWorkloadFor builds the TPC-C workload bound to tgt at the shared load
 // (warehouses/terminals/heap). Shared by the single-run path and each variant.
-func tpccWorkloadFor(cfg perfConfig, conn pg.ConnInfo) Workload {
+func tpccWorkloadFor(cfg perfConfig, tgt backingTarget) Workload {
 	return &tpccWorkload{
 		runDir:     path.Join(cfg.RemoteDir, benchbase.DefaultSubdir),
-		conn:       conn,
+		conn:       tgt.Conn,
+		addrs:      tgt.benchAddrs(cfg.ConnectMode),
 		benchmark:  benchbase.Benchmark(cfg.Benchmark),
 		warehouses: cfg.Warehouses,
 		terminals:  cfg.Terminals,
@@ -245,7 +240,8 @@ func (r *perfRun) waitReady(ctx context.Context) error {
 func (r *perfRun) runBenchmark(ctx context.Context) error {
 	wl := &tpccWorkload{
 		runDir:     r.benchbaseDir,
-		conn:       r.conn(),
+		conn:       r.target.Conn,
+		addrs:      r.target.benchAddrs(r.cfg.ConnectMode),
 		warehouses: r.cfg.Warehouses,
 		terminals:  r.cfg.Terminals,
 		maxHeap:    r.cfg.MaxHeap,
@@ -265,12 +261,15 @@ func (r *perfRun) runBenchmark(ctx context.Context) error {
 
 // tpccWorkload adapts the benchbase TPC-C driver to the harness Workload: the
 // benchmark's create+load is the one-time Prepare, each timed execute is a
-// RunOnce. It connects directly through the tserver Service (LoadBalance=false)
-// — the smart driver's topology discovery returns node addresses a client pod
-// cannot route to.
+// RunOnce. The smart driver's own cluster-aware balancing stays OFF
+// (LoadBalance=false) because its topology discovery returns node addresses a
+// client pod cannot route to; addrs instead names every tserver in the JDBC URL,
+// which spreads the connections without any discovery. Empty addrs → the single
+// Service address in conn.
 type tpccWorkload struct {
 	runDir     string
 	conn       pg.ConnInfo
+	addrs      []string
 	benchmark  benchbase.Benchmark
 	warehouses int
 	terminals  int
@@ -285,6 +284,7 @@ func (w *tpccWorkload) baseSpec() benchbase.RunSpec {
 		RunDir:      w.runDir,
 		Benchmark:   w.benchmark,
 		Conn:        w.conn,
+		Addrs:       w.addrs,
 		Warehouses:  w.warehouses,
 		Terminals:   w.terminals,
 		MaxHeap:     w.maxHeap,

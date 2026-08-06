@@ -1144,6 +1144,7 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"perf.remote_dir":    perf.DefaultRemoteDir,
 		"perf.max_heap":      perf.DefaultMaxHeap,
 		"perf.baseline_path": perf.DefaultBaselinePath,
+		"perf.connect_mode":  perf.DefaultConnectMode,
 	}
 	for key, want := range perfStrs {
 		if got := cfg.GetString(key, "__MISSING__"); got != want {

@@ -126,6 +126,55 @@ func TestBuildSedsLoadBalanceToggle(t *testing.T) {
 	}
 }
 
+func TestBuildSedsMultiHostURL(t *testing.T) {
+	// Every named tserver lands in the JDBC URL as a pgjdbc multi-host authority,
+	// and the driver's own cluster-aware balancing (which discovers addresses via
+	// yb_servers()) is replaced by pgjdbc's per-connection host shuffle.
+	s := spec()
+	s.Addrs = []string{"yb-tserver-0.yb-tservers.ns.svc.cluster.local:5433", "yb-tserver-1.yb-tservers.ns.svc.cluster.local:5433"}
+	s.LoadBalance = benchbase.Ptr(false)
+	seds := strings.Join(benchbase.BuildSeds(s), "\n")
+	for _, want := range []string{
+		"s|localhost:5433|yb-tserver-0.yb-tservers.ns.svc.cluster.local:5433,yb-tserver-1.yb-tservers.ns.svc.cluster.local:5433|g",
+		`s|load-balance=true|load-balance=false\&amp;loadBalanceHosts=true|g`,
+	} {
+		if !strings.Contains(seds, want) {
+			t.Errorf("seds missing %q:\n%s", want, seds)
+		}
+	}
+	// Conn's single address must not also be written into the URL.
+	if strings.Contains(seds, "s|localhost:5433|10.0.0.9:5433|g") {
+		t.Errorf("Addrs should replace Conn's single address in the URL:\n%s", seds)
+	}
+}
+
+func TestBuildSedsSingleAddrKeepsSingleHostURLShape(t *testing.T) {
+	// A one-element Addrs must produce EXACTLY the URL a plain Conn target does —
+	// no comma list, no loadBalanceHosts (stored baselines assume that shape).
+	s := spec()
+	s.Addrs = []string{"10.0.0.9:5433"}
+	s.LoadBalance = benchbase.Ptr(false)
+	seds := strings.Join(benchbase.BuildSeds(s), "\n")
+	if !strings.Contains(seds, "s|localhost:5433|10.0.0.9:5433|g") {
+		t.Errorf("single Addrs entry should render the plain address:\n%s", seds)
+	}
+	if strings.Contains(seds, "loadBalanceHosts") {
+		t.Errorf("a single host needs no loadBalanceHosts:\n%s", seds)
+	}
+}
+
+func TestBuildSedsMultiHostKeepsSmartBalancingWhenAsked(t *testing.T) {
+	// LoadBalance=true is an explicit ask for the smart driver's own cluster-aware
+	// balancing; loadBalanceHosts is pgjdbc's alternative to it, never an addition.
+	s := spec()
+	s.Addrs = []string{"h1:5433", "h2:5433"}
+	s.LoadBalance = benchbase.Ptr(true)
+	seds := strings.Join(benchbase.BuildSeds(s), "\n")
+	if !strings.Contains(seds, "s|load-balance=true|load-balance=true|g") || strings.Contains(seds, "loadBalanceHosts") {
+		t.Errorf("LoadBalance=true should leave smart balancing on and add nothing:\n%s", seds)
+	}
+}
+
 func TestScalefactorPrefersExplicitOverWarehouses(t *testing.T) {
 	s := spec()
 	s.Scalefactor = 10 // explicit wins over Warehouses=2

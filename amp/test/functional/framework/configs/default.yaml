@@ -1041,6 +1041,19 @@ perf:
   # Timeouts.
   ready_timeout: "5m"
   health_timeout: "5m"
+  # connect_mode is how a multi-host-capable benchmark driver targets the backing:
+  #   all_tservers — name EVERY tserver's own in-cluster DNS in the connection URL
+  #                  (default), so the connections demonstrably spread over the
+  #                  whole cluster and the report says which hosts were used.
+  #   service      — use the tserver Service address alone. It also spreads (k8s
+  #                  load-balances per TCP connection), but opaquely and
+  #                  unverifiably; kept as the fallback.
+  # Only BenchBase (perf/tpcc) can act on this: pgbench (YB's ysql_bench, pre-16
+  # libpq) and sysbench (one --pgsql-host) have no per-connection host balancing,
+  # so they always use the Service. The mode feeds perf/tpcc's load signature —
+  # changing it makes existing tpcc baselines incomparable (re-bless with
+  # perf.update_baseline).
+  connect_mode: "all_tservers"
   # bench is the multi-iteration benchmark HARNESS shared by every perf workload
   # (perf/tpcc, perf/pgbench). A workload is prepared ONCE (schema + initial
   # load), then driven for a discarded warmup + N measured iterations; the kept

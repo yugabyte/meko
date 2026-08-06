@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -136,7 +137,7 @@ func TestApplyDefaultsClampsReplicasToRF(t *testing.T) {
 
 func TestDeployRF1DefaultBuildsBothPaths(t *testing.T) {
 	chart := makeChartTGZ(t)
-	rr := &recordRunner{podIPs: "10.1.2.3", nsLabel: ManagedByValue}
+	rr := &recordRunner{podIPs: "10.1.2.3", podNames: "yb-tserver-0", nsLabel: ManagedByValue}
 
 	cfg := FromConfig(fakeGet{m: map[string]any{}})
 	cfg.ChartVersion = "2025.2.1.0-b141"
@@ -158,6 +159,11 @@ func TestDeployRF1DefaultBuildsBothPaths(t *testing.T) {
 	// (b) tailnet endpoint for the framework — the tserver pod IP on :5433.
 	if len(info.TailnetAddrs) != 1 || info.TailnetAddrs[0] != "10.1.2.3:5433" {
 		t.Errorf("TailnetAddrs = %v, want [10.1.2.3:5433]", info.TailnetAddrs)
+	}
+	// (c) per-tserver in-cluster DNS — the explicit all-tservers target list.
+	wantTS := []string{"yb-tserver-0.yb-tservers.ampqa-yb-run7.svc.cluster.local:5433"}
+	if !reflect.DeepEqual(info.TserverHostPorts, wantTS) {
+		t.Errorf("TserverHostPorts = %v, want %v", info.TserverHostPorts, wantTS)
 	}
 	if info.Namespace != "ampqa-yb-run7" || info.HelmRelease != "ampqa-yb-run7" {
 		t.Errorf("namespace/release = %q/%q", info.Namespace, info.HelmRelease)
@@ -187,7 +193,7 @@ func TestDeployRF1DefaultBuildsBothPaths(t *testing.T) {
 
 func TestDeployRF3SetsThreeReplicas(t *testing.T) {
 	chart := makeChartTGZ(t)
-	rr := &recordRunner{podIPs: "10.1.2.3 10.1.2.4 10.1.2.5", nsLabel: ManagedByValue}
+	rr := &recordRunner{podIPs: "10.1.2.3 10.1.2.4 10.1.2.5", podNames: "yb-tserver-0 yb-tserver-1 yb-tserver-2", nsLabel: ManagedByValue}
 
 	cfg := FromConfig(fakeGet{m: map[string]any{"apps.ybk8s.replication_factor": 3}})
 	cfg.ChartVersion = "2025.2.1.0-b141"
@@ -204,6 +210,15 @@ func TestDeployRF3SetsThreeReplicas(t *testing.T) {
 	if len(info.TailnetAddrs) != 3 {
 		t.Errorf("TailnetAddrs = %v, want 3 tserver addresses", info.TailnetAddrs)
 	}
+	// One stable per-pod DNS entry per tserver, in pod order.
+	wantTS := []string{
+		"yb-tserver-0.yb-tservers.ampqa-yb-run7.svc.cluster.local:5433",
+		"yb-tserver-1.yb-tservers.ampqa-yb-run7.svc.cluster.local:5433",
+		"yb-tserver-2.yb-tservers.ampqa-yb-run7.svc.cluster.local:5433",
+	}
+	if !reflect.DeepEqual(info.TserverHostPorts, wantTS) {
+		t.Errorf("TserverHostPorts = %v, want %v", info.TserverHostPorts, wantTS)
+	}
 	helm := rr.find("helm", "install")
 	joined := strings.Join(helm, " ")
 	for _, want := range []string{"replicas.master=3", "replicas.tserver=3", "gflags.master.replication_factor=3"} {
@@ -214,6 +229,48 @@ func TestDeployRF3SetsThreeReplicas(t *testing.T) {
 	// The readiness wait targets the tserver statefulset at 3 ready replicas.
 	if w := rr.find("wait", "statefulset/yb-tserver"); w == nil || !strings.Contains(strings.Join(w, " "), "readyReplicas}=3") {
 		t.Errorf("readiness wait not at 3 replicas; calls: %v", rr.calls)
+	}
+}
+
+func TestDeployRequiresTserverPodNames(t *testing.T) {
+	// Pod IPs resolve but the pod list is empty: the all-tservers target list
+	// cannot be built, and Deploy must say so rather than hand back an empty one.
+	chart := makeChartTGZ(t)
+	rr := &recordRunner{podIPs: "10.1.2.3", podNames: "", nsLabel: ManagedByValue}
+
+	cfg := FromConfig(fakeGet{m: map[string]any{}})
+	cfg.ChartVersion = "2025.2.1.0-b141"
+
+	_, err := New(cfg, "run7").
+		WithKube(k8s.New(k8s.Config{Namespace: "ampqa-yb-run7"}).WithRunner(rr.run)).
+		WithHelmRunner(rr.run).
+		WithDownload(func(context.Context, string, string) (string, error) { return chart, nil }).
+		WithLogf(nil).
+		Deploy(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no tserver pods") {
+		t.Fatalf("err = %v, want a 'no tserver pods' failure", err)
+	}
+}
+
+func TestDeployTserverHostPortsUseConfiguredYSQLPort(t *testing.T) {
+	chart := makeChartTGZ(t)
+	rr := &recordRunner{podIPs: "10.1.2.3", podNames: "yb-tserver-0", nsLabel: ManagedByValue}
+
+	cfg := FromConfig(fakeGet{m: map[string]any{"apps.ybk8s.ysql_port": 6543}})
+	cfg.ChartVersion = "2025.2.1.0-b141"
+
+	info, err := New(cfg, "run7").
+		WithKube(k8s.New(k8s.Config{Namespace: "ampqa-yb-run7"}).WithRunner(rr.run)).
+		WithHelmRunner(rr.run).
+		WithDownload(func(context.Context, string, string) (string, error) { return chart, nil }).
+		WithLogf(nil).
+		Deploy(context.Background())
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	want := []string{"yb-tserver-0.yb-tservers.ampqa-yb-run7.svc.cluster.local:6543"}
+	if !reflect.DeepEqual(info.TserverHostPorts, want) {
+		t.Errorf("TserverHostPorts = %v, want %v", info.TserverHostPorts, want)
 	}
 }
 
@@ -275,7 +332,7 @@ func TestDockerConfigJSONB64(t *testing.T) {
 // into the namespace, and points the chart at it via Image.pullSecretName.
 func TestDeployAppliesPullSecretWhenConfigured(t *testing.T) {
 	chart := makeChartTGZ(t)
-	rr := &recordRunner{podIPs: "10.1.2.3", nsLabel: ManagedByValue}
+	rr := &recordRunner{podIPs: "10.1.2.3", podNames: "yb-tserver-0", nsLabel: ManagedByValue}
 
 	cfg := FromConfig(fakeGet{m: map[string]any{
 		"apps.ybk8s.image_pull_secret": "quay_images",
@@ -322,7 +379,7 @@ func TestDeployAppliesPullSecretWhenConfigured(t *testing.T) {
 // registry the token authenticates are driven by config.
 func TestDeployPullSecretNameAndRegistryConfigurable(t *testing.T) {
 	chart := makeChartTGZ(t)
-	rr := &recordRunner{podIPs: "10.1.2.3", nsLabel: ManagedByValue}
+	rr := &recordRunner{podIPs: "10.1.2.3", podNames: "yb-tserver-0", nsLabel: ManagedByValue}
 
 	cfg := FromConfig(fakeGet{m: map[string]any{
 		"apps.ybk8s.image_pull_secret":      "reg_token",
@@ -360,7 +417,7 @@ func TestDeployPullSecretNameAndRegistryConfigurable(t *testing.T) {
 // even when a resolver is wired.
 func TestDeployNoPullSecretByDefault(t *testing.T) {
 	chart := makeChartTGZ(t)
-	rr := &recordRunner{podIPs: "10.1.2.3", nsLabel: ManagedByValue}
+	rr := &recordRunner{podIPs: "10.1.2.3", podNames: "yb-tserver-0", nsLabel: ManagedByValue}
 
 	cfg := FromConfig(fakeGet{m: map[string]any{}})
 	cfg.ChartVersion = "2025.2.1.0-b141"
@@ -392,7 +449,7 @@ func TestDeployNoPullSecretByDefault(t *testing.T) {
 // resolver wired is a clear Deploy error (not a silent public-image fallback).
 func TestDeployPullSecretRequiresResolver(t *testing.T) {
 	chart := makeChartTGZ(t)
-	rr := &recordRunner{podIPs: "10.1.2.3", nsLabel: ManagedByValue}
+	rr := &recordRunner{podIPs: "10.1.2.3", podNames: "yb-tserver-0", nsLabel: ManagedByValue}
 
 	cfg := FromConfig(fakeGet{m: map[string]any{"apps.ybk8s.image_pull_secret": "quay_images"}})
 	cfg.ChartVersion = "2026.1.1.0-b48"
@@ -508,12 +565,13 @@ func (g fakeGet) GetDuration(key string, def time.Duration) time.Duration {
 // names by selector); everything else (apply, helm, wait, delete) succeeds with
 // empty output.
 type recordRunner struct {
-	mu      sync.Mutex
-	calls   [][]string
-	stdins  []string // stdin body per call (parallel to calls); "" when none
-	podIPs  string   // space-separated tserver pod IPs
-	nsLabel string
-	pvcs    string // space-separated PVC names returned for the release selector
+	mu       sync.Mutex
+	calls    [][]string
+	stdins   []string // stdin body per call (parallel to calls); "" when none
+	podIPs   string   // space-separated tserver pod IPs
+	podNames string   // space-separated tserver pod names
+	nsLabel  string
+	pvcs     string // space-separated PVC names returned for the release selector
 }
 
 func (r *recordRunner) run(_ context.Context, stdin io.Reader, argv []string) (execpkg.Result, error) {
@@ -530,6 +588,8 @@ func (r *recordRunner) run(_ context.Context, stdin io.Reader, argv []string) (e
 	switch {
 	case strings.Contains(j, " get pod ") && strings.Contains(j, "status.podIP"):
 		return execpkg.Result{Stdout: r.podIPs, ExitCode: 0}, nil
+	case strings.Contains(j, " get pod ") && strings.Contains(j, "metadata.name"):
+		return execpkg.Result{Stdout: r.podNames, ExitCode: 0}, nil
 	case strings.Contains(j, " get pvc ") && strings.Contains(j, "release="):
 		return execpkg.Result{Stdout: r.pvcs, ExitCode: 0}, nil
 	case strings.Contains(j, " get namespace "):

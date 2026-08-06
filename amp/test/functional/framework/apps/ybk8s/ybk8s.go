@@ -8,11 +8,15 @@
 //
 // It exists for the cheapest fully-GCP co-located mode: YugabyteDB and the amp
 // control plane run in ONE GKE cluster, so amp↔YB traffic never leaves the
-// cluster (no tailnet hop, no cross-cloud egress). Deploy exposes TWO paths:
+// cluster (no tailnet hop, no cross-cloud egress). Deploy exposes these paths:
 //
 //   - InClusterHostPorts — the tserver Service's cluster-internal DNS
 //     ("<service>.<ns>.svc.cluster.local:5433"). This is the co-located path
 //     the amp controller + endpoints (in-cluster pods) connect at.
+//   - TserverHostPorts — the per-pod stable DNS of EVERY tserver
+//     ("yb-tserver-<i>.yb-tservers.<ns>.svc.cluster.local:5433"), for an
+//     in-cluster client that wants to name each tserver explicitly instead of
+//     letting the Service pick one per connection.
 //   - TailnetAddrs — the tserver pod IPs on :5433, reachable directly from this
 //     coordinator over the Yugabyte tailnet (the same way ybastack reaches a
 //     pod IP). This is the path the FRAMEWORK's own layer-1 workload — and the
@@ -87,6 +91,10 @@ const (
 	masterStatefulSet  = "yb-master"
 	tserverStatefulSet = "yb-tserver"
 	tserverPodSelector = "app=yb-tserver"
+	// tserverHeadlessService is the chart's HEADLESS tserver Service (clusterIP:
+	// None) and the tserver StatefulSet's serviceName, which is what gives each
+	// pod its stable DNS "<pod>.<headless>.<ns>.svc.cluster.local".
+	tserverHeadlessService = "yb-tservers"
 )
 
 // ReachMode selects how the deployed cluster's tailnet endpoint is resolved for
@@ -280,6 +288,12 @@ type Info struct {
 	// ("<service>.<ns>.svc.cluster.local:<port>") — the co-located path the amp
 	// controller + endpoints connect at.
 	InClusterHostPorts string
+	// TserverHostPorts is EVERY tserver's own stable in-cluster DNS host:port
+	// ("<pod>.<headless-svc>.<ns>.svc.cluster.local:<port>"). InClusterHostPorts
+	// fronts the same pods with a Service, which spreads connections but only
+	// per-TCP-connection and opaquely; this list lets an in-cluster client name
+	// (and verify) every tserver it talks to.
+	TserverHostPorts []string
 	// TailnetAddrs are the tserver pod IPs on :<port>, reachable from this
 	// coordinator over the tailnet — the path the framework's layer-1 workload
 	// and the one-shot amp storage-DB create use.
@@ -428,8 +442,13 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 		return Info{}, fmt.Errorf("tserver statefulset never became ready: %w", err)
 	}
 
-	// 5. resolve the coordinator-reachable (tailnet) tserver addresses.
+	// 5. resolve the coordinator-reachable (tailnet) tserver addresses and the
+	// per-pod in-cluster DNS of every tserver.
 	tailnet, err := d.resolveTailnetAddrs(ctx)
+	if err != nil {
+		return Info{}, err
+	}
+	tservers, err := d.resolveTserverHostPorts(ctx)
 	if err != nil {
 		return Info{}, err
 	}
@@ -442,6 +461,7 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 		YSQLPort:           d.cfg.YSQLPort,
 		User:               DefaultUser,
 		InClusterHostPorts: d.inClusterHostPorts(),
+		TserverHostPorts:   tservers,
 		TailnetAddrs:       tailnet,
 	}, nil
 }
@@ -450,6 +470,25 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 // the co-located path amp connects at.
 func (d *Deployer) inClusterHostPorts() string {
 	return fmt.Sprintf("%s.%s.svc.cluster.local:%d", d.cfg.ServiceName, d.ns, d.cfg.YSQLPort)
+}
+
+// resolveTserverHostPorts returns every tserver's stable per-pod in-cluster DNS
+// host:port. It reads the LIVE pod names rather than deriving them from the
+// configured replica count, so the list is what is actually running.
+func (d *Deployer) resolveTserverHostPorts(ctx context.Context) ([]string, error) {
+	out, err := d.kube.GetSelector(ctx, "pod", tserverPodSelector, "{.items[*].metadata.name}")
+	if err != nil {
+		return nil, fmt.Errorf("list tserver pod names: %w", err)
+	}
+	var addrs []string
+	for _, name := range strings.Fields(out) {
+		addrs = append(addrs, fmt.Sprintf("%s.%s.%s.svc.cluster.local:%d",
+			name, tserverHeadlessService, d.ns, d.cfg.YSQLPort))
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("no tserver pods for selector %s", tserverPodSelector)
+	}
+	return addrs, nil
 }
 
 // resolveTailnetAddrs returns every tserver pod IP on the YSQL port — the

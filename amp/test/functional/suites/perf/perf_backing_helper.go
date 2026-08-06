@@ -21,6 +21,35 @@ import (
 // pod, wait for YSQL, and gate datapoints against the baseline. Kept as plain
 // functions (not a shared base struct) so each workload owns its own run state.
 
+// backingTarget is how a workload reaches the co-located backing: the
+// single-host ConnInfo through the tserver Service (what every driver
+// understands), plus every tserver's own in-cluster host:port for a driver that
+// can spread its connections across all of them explicitly.
+type backingTarget struct {
+	Conn     pg.ConnInfo
+	Tservers []string
+}
+
+// targetFor builds the backingTarget of a deploy.
+func targetFor(info ybk8s.Info) backingTarget {
+	host, port := ybk8s.FirstHostPort(info.InClusterHostPorts)
+	return backingTarget{
+		Conn:     pg.ConnInfo{Host: host, Port: port, User: info.User, Database: info.User, SSLMode: "disable"},
+		Tservers: info.TserverHostPorts,
+	}
+}
+
+// benchAddrs is the address list a multi-host-capable driver should target under
+// mode: every tserver explicitly (ConnectAllTservers), or nil — meaning "use the
+// single ConnInfo host", the tserver Service. An empty tserver list (an older
+// deploy path that did not resolve one) also falls back to the Service.
+func (tgt backingTarget) benchAddrs(mode string) []string {
+	if mode != ConnectAllTservers || len(tgt.Tservers) == 0 {
+		return nil
+	}
+	return tgt.Tservers
+}
+
 // deployYBBacking deploys a co-located YugabyteDB cluster in k8s (RF forced up
 // to rf), registers its teardown on td, and returns the deploy Info plus a
 // namespace-scoped kubectl. The client pod lives in the same namespace, so the

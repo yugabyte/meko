@@ -7,7 +7,6 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
-	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
@@ -40,12 +39,12 @@ type variantResult struct {
 // always returns a non-nil teardown — even on error — so a partially-provisioned
 // variant is still reclaimed. Faked in tests.
 type variantProvisioner interface {
-	Provision(ctx context.Context, v resolvedVariant) (exec.RemoteExecutor, pg.ConnInfo, func(context.Context) error, error)
+	Provision(ctx context.Context, v resolvedVariant) (exec.RemoteExecutor, backingTarget, func(context.Context) error, error)
 }
 
-// workloadFactory builds the SAME workload bound to a variant's connection —
+// workloadFactory builds the SAME workload bound to a variant's backing target —
 // the shared load held constant across variants.
-type workloadFactory func(conn pg.ConnInfo) Workload
+type workloadFactory func(tgt backingTarget) Workload
 
 // runComparison provisions each variant, runs the SAME workload at the SAME
 // shared bench config, tears the variant down (guaranteed, before the next),
@@ -68,7 +67,7 @@ func runComparison(ctx context.Context, variants []resolvedVariant, prov variant
 // harness, and tears the variant down on its own budget before returning
 // (guaranteed LIFO per variant, regardless of outcome).
 func runOneVariant(ctx context.Context, v resolvedVariant, prov variantProvisioner, mk workloadFactory, bc BenchConfig, sink apps.ArtifactSink, logf func(string, ...any)) (variantResult, error) {
-	ex, conn, teardown, err := prov.Provision(ctx, v)
+	ex, tgt, teardown, err := prov.Provision(ctx, v)
 	if teardown != nil {
 		defer func() {
 			tctx, cancel := context.WithTimeout(context.Background(), perfTeardownBudget)
@@ -82,7 +81,7 @@ func runOneVariant(ctx context.Context, v resolvedVariant, prov variantProvision
 		return variantResult{Identity: v.Identity}, err
 	}
 
-	res, err := RunBenchmark(ctx, ex, mk(conn), bc)
+	res, err := RunBenchmark(ctx, ex, mk(tgt), bc)
 	if sink != nil {
 		attachBenchSamples(sink, res, "compare-"+sanitizeLabel(v.Label))
 	}
@@ -250,30 +249,28 @@ type liveProvisioner struct {
 	sink      apps.ArtifactSink
 }
 
-func (p *liveProvisioner) Provision(ctx context.Context, v resolvedVariant) (exec.RemoteExecutor, pg.ConnInfo, func(context.Context) error, error) {
+func (p *liveProvisioner) Provision(ctx context.Context, v resolvedVariant) (exec.RemoteExecutor, backingTarget, func(context.Context) error, error) {
 	td := &teardownStack{}
 	teardown := func(tc context.Context) error { return td.run(tc, p.logf) }
 
 	info, kube, err := deployYBBackingCfg(ctx, p.t, v.YBK8s, td, p.logf)
 	if err != nil {
-		return nil, pg.ConnInfo{}, teardown, err
+		return nil, backingTarget{}, teardown, err
 	}
 	podName := fmt.Sprintf("%s-%s-%s", p.podPrefix, sanitizeLabel(v.Label), p.t.ResourceSuffix())
 	podExec, err := startPerfClientPod(ctx, kube, p.sink, td, podName, p.perf.ClientImage, p.perf.ClientPullSecret)
 	if err != nil {
-		return nil, pg.ConnInfo{}, teardown, err
+		return nil, backingTarget{}, teardown, err
 	}
 	if p.deliver != nil {
 		if err := p.deliver(ctx, podExec); err != nil {
-			return nil, pg.ConnInfo{}, teardown, err
+			return nil, backingTarget{}, teardown, err
 		}
 	}
 	if err := waitBackingYSQL(ctx, kube, info, p.perf.RF, p.perf.ReadyTimeout); err != nil {
-		return nil, pg.ConnInfo{}, teardown, err
+		return nil, backingTarget{}, teardown, err
 	}
-	host, port := ybk8s.FirstHostPort(info.InClusterHostPorts)
-	conn := pg.ConnInfo{Host: host, Port: port, User: info.User, Database: info.User, SSLMode: "disable"}
-	return podExec, conn, teardown, nil
+	return podExec, targetFor(info), teardown, nil
 }
 
 // sanitizeLabel renders a variant label as a DNS-1123-safe, bounded token for a

@@ -112,7 +112,7 @@ func runSysbench(t *core.T) (err error) {
 		deliver := func(ctx context.Context, podExec exec.RemoteExecutor) error {
 			return sysbench.EnsureInstalled(ctx, podExec)
 		}
-		mk := func(conn pg.ConnInfo) Workload { return sysbenchWorkloadFor(params, conn) }
+		mk := func(tgt backingTarget) Workload { return sysbenchWorkloadFor(params, tgt) }
 		if cmp.Mode == CompareModeBisect {
 			return runBisectSuite(t, bisectSpec{
 				perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
@@ -183,11 +183,10 @@ type sysbenchRun struct {
 	logf    func(string, ...any)
 	sink    apps.ArtifactSink
 
-	info          ybk8s.Info
-	kube          *k8s.Kubectl
-	inClusterHost string
-	inClusterPort int
-	podExec       exec.RemoteExecutor
+	info    ybk8s.Info
+	kube    *k8s.Kubectl
+	target  backingTarget
+	podExec exec.RemoteExecutor
 
 	benchResult BenchResult
 }
@@ -203,7 +202,7 @@ func (r *sysbenchRun) provisionBacking(ctx context.Context) error {
 	}
 	r.info = info
 	r.kube = kube
-	r.inClusterHost, r.inClusterPort = ybk8s.FirstHostPort(info.InClusterHostPorts)
+	r.target = targetFor(info)
 	return nil
 }
 
@@ -218,11 +217,12 @@ func (r *sysbenchRun) deployClientPod(ctx context.Context) error {
 	return sysbench.EnsureInstalled(ctx, r.podExec)
 }
 
-// sysbenchWorkloadFor builds the sysbench workload bound to conn at the shared
+// sysbenchWorkloadFor builds the sysbench workload bound to tgt at the shared
 // load (script/tables/table_size/threads). Shared by the single-run path and
-// each comparison variant.
-func sysbenchWorkloadFor(params sysbenchParams, conn pg.ConnInfo) Workload {
-	return &sysbenchWorkload{conn: conn, params: params}
+// each comparison variant. sysbench takes a single --pgsql-host, so it always
+// uses tgt's Service address — see sysbenchWorkload.
+func sysbenchWorkloadFor(params sysbenchParams, tgt backingTarget) Workload {
+	return &sysbenchWorkload{conn: tgt.Conn, params: params}
 }
 
 // waitReady blocks until the backing serves YSQL.
@@ -230,16 +230,11 @@ func (r *sysbenchRun) waitReady(ctx context.Context) error {
 	return waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout)
 }
 
-// conn is the in-cluster YSQL target reached through the tserver Service.
-func (r *sysbenchRun) conn() pg.ConnInfo {
-	return pg.ConnInfo{Host: r.inClusterHost, Port: r.inClusterPort, User: r.info.User, Database: r.info.User, SSLMode: "disable"}
-}
-
 // runBenchmark drives sysbench through the harness: load the dataset ONCE, then
 // a discarded warmup + N measured runs, aggregated with robust statistics. Every
 // run's captured output is attached for triage regardless of parse/gate outcome.
 func (r *sysbenchRun) runBenchmark(ctx context.Context) error {
-	wl := sysbenchWorkloadFor(r.params, r.conn())
+	wl := sysbenchWorkloadFor(r.params, r.target)
 	res, err := RunBenchmark(ctx, r.podExec, wl, r.bc)
 	attachBenchSamples(r.sink, res, "sysbench")
 	if err != nil {
@@ -270,6 +265,11 @@ func (r *sysbenchRun) gateBaseline(_ context.Context) error {
 // `sysbench run` is a RunOnce. When a sample interval is requested it passes
 // --report-interval so sysbench reports periodic progress, parsed into the
 // Sample's time series.
+//
+// It targets the tserver SERVICE, not the individual tservers: sysbench's pgsql
+// driver takes ONE --pgsql-host and offers no per-connection host balancing. The
+// Service already spreads connections across tservers per TCP connection, so it
+// is the honest spread here.
 type sysbenchWorkload struct {
 	conn   pg.ConnInfo
 	params sysbenchParams

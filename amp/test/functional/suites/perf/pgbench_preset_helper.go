@@ -72,8 +72,7 @@ func StandUpPgbenchClient(t *core.T) (*core.SetupResult, error) {
 		return fail(err)
 	}
 
-	host, port := ybk8s.FirstHostPort(info.InClusterHostPorts)
-	conn := pg.ConnInfo{Host: host, Port: port, User: info.User, Database: info.User, SSLMode: "disable"}
+	conn := targetFor(info).Conn
 	// Load the pgbench schema so the standing env is immediately loadable.
 	if err := pgbench.Init(t.Context, podExec, pgbench.InitOptions{Conn: conn, Scale: params.Scale}); err != nil {
 		return fail(fmt.Errorf("pgbench schema init on standing env: %w", err))

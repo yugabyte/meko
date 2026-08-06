@@ -68,6 +68,13 @@ type RunSpec struct {
 
 	Conn pg.ConnInfo
 
+	// Addrs is the FULL list of target "host:port"s to write into the JDBC URL,
+	// which the driver accepts in pgjdbc's multi-host form
+	// ("jdbc:yugabytedb://h1:p,h2:p,h3:p/db"). Empty → Conn's single address, the
+	// exact URL shape a single-target run has always produced. More than one entry
+	// additionally turns loadBalanceHosts on (see BuildSeds).
+	Addrs []string
+
 	// Scalefactor is the benchmark's scale. For TPC-C it is the WAREHOUSE count;
 	// 0 → Warehouses (below), then DefaultWarehouses.
 	Scalefactor int
@@ -106,6 +113,16 @@ func (s RunSpec) configPath() string {
 		return s.ConfigPath
 	}
 	return fmt.Sprintf("config/yugabyte/sample_%s_config.xml", s.benchmark())
+}
+
+// urlTarget is what replaces the sample config's "localhost:5433" in the JDBC
+// URL: every address in Addrs (comma-joined, the pgjdbc multi-host authority),
+// else Conn's single address.
+func (s RunSpec) urlTarget() string {
+	if len(s.Addrs) > 0 {
+		return strings.Join(s.Addrs, ",")
+	}
+	return s.Conn.Addr()
 }
 
 func (s RunSpec) scalefactor() int {
@@ -183,7 +200,7 @@ func BuildSeds(spec RunSpec) []string {
 	// interpolated values land in sed REPLACEMENT position, so their sed
 	// metacharacters (delimiter |, & = matched text, \ = escape) must be escaped
 	// or a value like a password containing one corrupts the whole expression.
-	add(fmt.Sprintf("s|localhost:5433|%s|g", sedReplace(spec.Conn.Addr())))
+	add(fmt.Sprintf("s|localhost:5433|%s|g", sedReplace(spec.urlTarget())))
 	// DB name: the sample url is …/yugabyte?sslmode=…; swap the db, keep the query.
 	if db := spec.Conn.Database; db != "" && db != "yugabyte" {
 		add(fmt.Sprintf("s|yugabyte?sslmode|%s?sslmode|g", sedReplace(db)))
@@ -199,7 +216,18 @@ func BuildSeds(spec RunSpec) []string {
 	add(fmt.Sprintf("s|<time>.*</time>|<time>%d</time>|", int(spec.duration().Round(time.Second)/time.Second)))
 	add(fmt.Sprintf("s|<rate>.*</rate>|<rate>%s</rate>|", spec.rate()))
 	if spec.LoadBalance != nil {
-		add(fmt.Sprintf("s|load-balance=true|load-balance=%t|g", *spec.LoadBalance))
+		repl := fmt.Sprintf("load-balance=%t", *spec.LoadBalance)
+		// Several hosts in the URL with the smart driver's own cluster-aware
+		// balancing off: switch on pgjdbc's loadBalanceHosts, which shuffles the
+		// URL's host list per connection (MultiHostChooser) — so connections spread
+		// over exactly the hosts we named, with no yb_servers() topology discovery of
+		// addresses the client may not be able to route to. `&` is the sed
+		// matched-text metachar, and the XML escapes the query separator, hence
+		// the literal `\&amp;`.
+		if !*spec.LoadBalance && len(spec.Addrs) > 1 {
+			repl += `\&amp;loadBalanceHosts=true`
+		}
+		add(fmt.Sprintf("s|load-balance=true|%s|g", repl))
 	}
 	return seds
 }

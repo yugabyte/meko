@@ -34,6 +34,14 @@ const (
 	DefaultRemoteDir   = "/opt/ampqa"
 	DefaultMaxHeap     = "2g" // java -Xmx; small TPC-C needs little, fits a modest pod
 
+	// Connect modes (perf.connect_mode) for a driver that can target more than one
+	// address: name every tserver explicitly (default), or use the tserver Service
+	// alone. The Service does spread connections, but only per-TCP-connection,
+	// opaquely and unverifiably — so the explicit list is the default.
+	ConnectAllTservers = "all_tservers"
+	ConnectService     = "service"
+	DefaultConnectMode = ConnectAllTservers
+
 	DefaultBaselinePath      = "baselines/perf.json"
 	DefaultThroughputDropPct = 20.0
 	DefaultLatencyRisePct    = 35.0
@@ -56,6 +64,10 @@ type perfConfig struct {
 	LatencyRisePct    float64
 	ReadyTimeout      time.Duration
 	HealthTimeout     time.Duration
+	// ConnectMode is how a multi-host-capable driver targets the backing:
+	// ConnectAllTservers | ConnectService. It feeds the load signature, since
+	// connection distribution moves the numbers.
+	ConnectMode string
 	// Benchmark is the BenchBase workload the perf/tpcc test runs
 	// (apps.benchbase.benchmark: tpcc | tpch | ycsb | smallbank | …); default
 	// tpcc. Lets a different BenchBase benchmark run config-only, no code change.
@@ -78,6 +90,7 @@ func perfFromConfig(c *core.Config) perfConfig {
 		LatencyRisePct:    c.GetFloat("perf.latency_rise_pct", DefaultLatencyRisePct),
 		ReadyTimeout:      c.GetDuration("perf.ready_timeout", DefaultReadyTimeout),
 		HealthTimeout:     c.GetDuration("perf.health_timeout", DefaultHealthTimeout),
+		ConnectMode:       c.GetString("perf.connect_mode", DefaultConnectMode),
 		Benchmark:         c.GetString("apps.benchbase.benchmark", "tpcc"),
 	}
 }

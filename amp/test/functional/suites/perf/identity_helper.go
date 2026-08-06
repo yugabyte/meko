@@ -55,6 +55,11 @@ type LoadFields struct {
 	// keeps the signature of the workloads that leave them zero unchanged.
 	Rows   int `json:"rows,omitempty"`
 	Cycles int `json:"cycles,omitempty"`
+	// ConnectMode is how the driver targeted the backing (perf.connect_mode).
+	// Connection distribution moves the numbers, so a baseline taken under one
+	// mode is not comparable to the other. omitempty leaves the signature of a
+	// workload that cannot vary it unchanged.
+	ConnectMode string `json:"connect_mode,omitempty"`
 }
 
 // LoadSignature is a deterministic short hash of the load config. Encoding a
@@ -66,8 +71,9 @@ func LoadSignature(f LoadFields) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-// loadFieldsTPCC is the perf/tpcc load: the shared bench cadence plus RF and the
-// TPC-C warehouse scalefactor.
+// loadFieldsTPCC is the perf/tpcc load: the shared bench cadence plus RF, the
+// TPC-C warehouse scalefactor and the connect mode (BenchBase is the one driver
+// whose targeting perf.connect_mode actually changes).
 func loadFieldsTPCC(bc BenchConfig, cfg perfConfig) LoadFields {
 	return LoadFields{
 		Iterations:    bc.Iterations,
@@ -75,6 +81,7 @@ func loadFieldsTPCC(bc BenchConfig, cfg perfConfig) LoadFields {
 		MeasurementMS: bc.MeasurementDuration.Milliseconds(),
 		RF:            cfg.RF,
 		Warehouses:    cfg.Warehouses,
+		ConnectMode:   cfg.ConnectMode,
 	}
 }
 

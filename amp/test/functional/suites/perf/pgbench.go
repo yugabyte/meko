@@ -134,7 +134,7 @@ func runPgbench(t *core.T) (err error) {
 		deliver := func(ctx context.Context, podExec exec.RemoteExecutor) error {
 			return deliverPgbenchArtifact(ctx, t, cfg, podExec)
 		}
-		mk := func(conn pg.ConnInfo) Workload { return pgbenchWorkloadFor(params, conn) }
+		mk := func(tgt backingTarget) Workload { return pgbenchWorkloadFor(params, tgt) }
 		if cmp.Mode == CompareModeBisect {
 			return runBisectSuite(t, bisectSpec{
 				perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
@@ -205,11 +205,10 @@ type pgbenchRun struct {
 	logf    func(string, ...any)
 	sink    apps.ArtifactSink
 
-	info          ybk8s.Info
-	kube          *k8s.Kubectl
-	inClusterHost string
-	inClusterPort int
-	podExec       exec.RemoteExecutor
+	info    ybk8s.Info
+	kube    *k8s.Kubectl
+	target  backingTarget
+	podExec exec.RemoteExecutor
 
 	benchResult BenchResult
 }
@@ -225,7 +224,7 @@ func (r *pgbenchRun) provisionBacking(ctx context.Context) error {
 	}
 	r.info = info
 	r.kube = kube
-	r.inClusterHost, r.inClusterPort = ybk8s.FirstHostPort(info.InClusterHostPorts)
+	r.target = targetFor(info)
 	return nil
 }
 
@@ -254,10 +253,12 @@ func deliverPgbenchArtifact(ctx context.Context, t *core.T, cfg perfConfig, podE
 	return nil
 }
 
-// pgbenchWorkloadFor builds the pgbench workload bound to conn at the shared
-// load (scale/clients/jobs). Shared by the single-run path and each variant.
-func pgbenchWorkloadFor(params pgbenchParams, conn pg.ConnInfo) Workload {
-	return &pgbenchWorkload{conn: conn, scale: params.Scale, clients: params.Clients, jobs: params.Jobs}
+// pgbenchWorkloadFor builds the pgbench workload bound to tgt at the shared load
+// (scale/clients/jobs). Shared by the single-run path and each variant. pgbench
+// takes a single host, so it always uses tgt's Service address — see
+// pgbenchWorkload.
+func pgbenchWorkloadFor(params pgbenchParams, tgt backingTarget) Workload {
+	return &pgbenchWorkload{conn: tgt.Conn, scale: params.Scale, clients: params.Clients, jobs: params.Jobs}
 }
 
 // waitReady blocks until the backing serves YSQL.
@@ -265,17 +266,12 @@ func (r *pgbenchRun) waitReady(ctx context.Context) error {
 	return waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout)
 }
 
-// conn is the in-cluster YSQL target reached through the tserver Service.
-func (r *pgbenchRun) conn() pg.ConnInfo {
-	return pg.ConnInfo{Host: r.inClusterHost, Port: r.inClusterPort, User: r.info.User, Database: r.info.User, SSLMode: "disable"}
-}
-
 // runBenchmark drives pgbench through the harness: load the schema ONCE, then a
 // discarded warmup + N measured runs, aggregated with robust statistics. Every
 // run's captured output is attached for triage regardless of parse/gate outcome.
 func (r *pgbenchRun) runBenchmark(ctx context.Context) error {
 	wl := &pgbenchWorkload{
-		conn:    r.conn(),
+		conn:    r.target.Conn,
 		scale:   r.params.Scale,
 		clients: r.params.Clients,
 		jobs:    r.params.Jobs,
@@ -309,6 +305,13 @@ func (r *pgbenchRun) gateBaseline(_ context.Context) error {
 // -i` (schema load) is the one-time Prepare, each `pgbench -c -j -T` is a
 // RunOnce. When a sample interval is requested it passes `-P <sec>` so pgbench
 // reports periodic progress, parsed into the Sample's time series.
+//
+// It targets the tserver SERVICE, not the individual tservers: this is YB's
+// ysql_bench, which links the release tarball's own libpq. libpq only gained
+// per-connection host balancing (load_balance_hosts=random) in PostgreSQL 16 —
+// a multi-host conninfo below that is a FAILOVER order, every connection landing
+// on the first host. The Service already spreads connections across tservers per
+// TCP connection, so it is the honest spread here.
 type pgbenchWorkload struct {
 	conn    pg.ConnInfo
 	scale   int
