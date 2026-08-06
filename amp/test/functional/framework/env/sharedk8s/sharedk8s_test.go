@@ -559,6 +559,9 @@ func TestRestartComputeRequiresKubeContext(t *testing.T) {
 type kubeRec struct {
 	mu    sync.Mutex
 	calls []string
+	// podIP is what a status.podIP lookup answers (the hang capture's
+	// staleness check); empty means the lookup finds no pod.
+	podIP string
 }
 
 func (r *kubeRec) run(_ context.Context, _ io.Reader, argv []string) (execpkg.Result, error) {
@@ -567,6 +570,8 @@ func (r *kubeRec) run(_ context.Context, _ io.Reader, argv []string) (execpkg.Re
 	r.calls = append(r.calls, joined)
 	r.mu.Unlock()
 	switch {
+	case strings.Contains(joined, "status.podIP"):
+		return execpkg.Result{Stdout: r.podIP + "\n"}, nil
 	case strings.Contains(joined, "metadata.name"):
 		return execpkg.Result{Stdout: "yb-ep-ep-1-pod0\n"}, nil
 	case strings.Contains(joined, "status.phase"):
@@ -1019,5 +1024,49 @@ func TestCaptureControllerHang(t *testing.T) {
 	if !strings.Contains(got, "exec deployment/"+DefaultControllerService) ||
 		!strings.Contains(got, "kill -QUIT 1") {
 		t.Fatalf("hung controller should get kill -QUIT via exec, got calls:\n%s", got)
+	}
+}
+
+// The SIGQUIT targets the deployment's CURRENT pod, so it is only evidence
+// capture when the address that failed still belongs to that pod. A dialed
+// pod IP that no longer matches any live pod is a stale address — killing the
+// (healthy) current pod would manufacture the unreadiness being diagnosed.
+func TestCaptureControllerHangSkipsStaleAddress(t *testing.T) {
+	old := hangDumpFlushDelay
+	hangDumpFlushDelay = time.Millisecond
+	defer func() { hangDumpFlushDelay = old }()
+
+	kill := func(rec *kubeRec) bool {
+		return strings.Contains(strings.Join(rec.calls, "\n"), "kill -QUIT")
+	}
+	newP := func(dialed, podIP string) (*Provider, *kubeRec) {
+		rec := &kubeRec{podIP: podIP}
+		p := &Provider{}
+		p.kube = k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run)
+		p.ctrl.p = p
+		p.ctrl.url = dialed
+		return p, rec
+	}
+
+	// Dialed pod IP != live pod IP: stale address, no kill.
+	p, rec := newP("http://10.181.37.15:8080", "10.181.99.4")
+	p.captureControllerHang(context.Background(), context.DeadlineExceeded)
+	if kill(rec) {
+		t.Fatalf("stale address must not be signalled, got calls:\n%s", strings.Join(rec.calls, "\n"))
+	}
+
+	// Dialed host IS the live pod: confirmed hang, keep the dump.
+	p, rec = newP("http://10.181.37.15:8080", "10.181.37.15")
+	p.captureControllerHang(context.Background(), context.DeadlineExceeded)
+	if !kill(rec) {
+		t.Fatalf("confirmed hang should be signalled, got calls:\n%s", strings.Join(rec.calls, "\n"))
+	}
+
+	// Loopback = our own port-forward, which targets the live pod by
+	// construction: no staleness concept, keep the dump.
+	p, rec = newP("http://127.0.0.1:53412", "")
+	p.captureControllerHang(context.Background(), context.DeadlineExceeded)
+	if !kill(rec) {
+		t.Fatalf("forwarded hang should be signalled, got calls:\n%s", strings.Join(rec.calls, "\n"))
 	}
 }

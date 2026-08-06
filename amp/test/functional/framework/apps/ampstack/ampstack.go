@@ -1270,6 +1270,32 @@ func (a *App) ControllerClient(ctx context.Context) (*controller.Client, string,
 	return a.newClient(url), url, nil
 }
 
+// ReconnectController drops the cached controller address and re-establishes it
+// with Deploy's own resolve-then-forward chain. A direct address can be a pod
+// IP (the chart's Service may not be routable from outside the cluster), and a
+// pod replacement silently invalidates it — run #213 kept dialing a dead pod IP
+// for twenty minutes while a healthy replacement served traffic. Reaching the
+// stack has to survive that, not stay pinned to a pod that no longer exists.
+func (a *App) ReconnectController(ctx context.Context) (*controller.Client, string, error) {
+	a.pfMu.Lock()
+	if a.pf != nil {
+		_ = a.pf.Close()
+		a.pf = nil
+	}
+	a.controllerURL = ""
+	a.pfMu.Unlock()
+
+	url, pf, err := a.reachController(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("reconnect controller: %w", err)
+	}
+	a.pfMu.Lock()
+	a.pf = pf
+	a.controllerURL = url
+	a.pfMu.Unlock()
+	return a.newClient(url), url, nil
+}
+
 // Collect gathers the controller and yugabyted logs, best-effort.
 func (a *App) Collect(ctx context.Context, into apps.ArtifactSink) error {
 	targets := []struct{ name, target, container string }{

@@ -256,6 +256,34 @@ func (cc *controllerConn) reset() {
 	}
 }
 
+// reconnect drops whatever address the connection is pinned to and
+// re-establishes it. In deploy mode that is the app's resolve-then-forward
+// chain (a direct address can be a pod IP, which a pod replacement silently
+// invalidates); a fixed ControllerURL has nothing to re-resolve; otherwise the
+// shared forward is reopened.
+func (cc *controllerConn) reconnect(ctx context.Context) (*controller.Client, string, error) {
+	p := cc.p
+	cc.mu.Lock()
+	if p.deploy && p.app != nil {
+		defer cc.mu.Unlock()
+		cl, url, err := p.app.ReconnectController(ctx)
+		if err == nil {
+			cc.cl, cc.url = cl, url
+		}
+		return cl, url, err
+	}
+	if p.cfg.ControllerURL != "" {
+		defer cc.mu.Unlock()
+		return cc.cl, cc.url, nil
+	}
+	if cc.pf != nil {
+		_ = cc.pf.Close()
+		cc.pf, cc.cl, cc.url = nil, nil, ""
+	}
+	cc.mu.Unlock()
+	return cc.get(ctx)
+}
+
 // currentURL is the controller URL as of the live forward ("" before first use).
 func (cc *controllerConn) currentURL() string {
 	cc.mu.Lock()
@@ -689,9 +717,25 @@ func (p *Provider) waitControllerReady(ctx context.Context, cl *controller.Clien
 	wctx, cancel := context.WithTimeout(ctx, p.cfg.ReadyTimeout)
 	defer cancel()
 	var last error
+	started := time.Now()
+	reconnected := false
 	for {
 		if last = cl.Readyz(wctx); last == nil {
 			return nil
+		}
+		// A pod replacement silently invalidates a direct (pod-IP) controller
+		// address, and polling the dead IP for the whole budget reads exactly
+		// like a hang. Halfway through, re-resolve the address once and keep
+		// polling whatever answers — in run #213 the replacement pod was healthy
+		// within a minute while the old address stayed black-holed for twenty.
+		if !reconnected && time.Since(started) >= p.cfg.ReadyTimeout/2 {
+			reconnected = true
+			if ncl, nurl, err := p.ctrl.reconnect(ctx); err != nil {
+				p.log("sharedk8s: controller unreachable (%v) and re-resolving its address failed: %v", last, err)
+			} else {
+				p.log("sharedk8s: controller unreachable (%v) — address re-resolved to %s", last, nurl)
+				cl = ncl
+			}
 		}
 		select {
 		case <-wctx.Done():
@@ -707,8 +751,15 @@ func (p *Provider) waitControllerReady(ctx context.Context, cl *controller.Clien
 // A Go process's only goroutine dump is SIGQUIT, which also exits it; that is
 // the operator's move anyway (the pod is useless and the restart may heal it),
 // and the dump lands in the PREVIOUS container's logs, which every failure
-// collection already gathers. Fires only for a hang: connection-refused means
-// the process is down and its previous logs already tell that story.
+// collection already gathers.
+//
+// Fires only for a CONFIRMED hang. Connection-refused means the process is
+// down and its previous logs already tell that story. And an unreachable
+// address is only a hang if it still belongs to the live pod: the exec targets
+// the deployment's CURRENT pod, while the client may be dialing the previous
+// one — in run #213 a pod replacement left the framework dialing a dead pod IP,
+// and this function SIGQUIT'd the healthy replacement twenty times, each kill
+// manufacturing the very unreadiness it was diagnosing.
 func (p *Provider) captureControllerHang(ctx context.Context, last error) {
 	if p.kube == nil || last == nil || isConnRefused(last) {
 		return
@@ -717,6 +768,17 @@ func (p *Provider) captureControllerHang(ctx context.Context, last error) {
 	// last useful thing this environment does.
 	cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// The staleness check needs both sides: the host the client dialed and the
+	// live pod's IP. A loopback host is our own port-forward, which targets the
+	// live pod by construction; anything unknown keeps the dump (diagnostics
+	// beat silence), anything provably stale skips the kill.
+	if host := urlHost(p.ctrl.currentURL()); host != "" && !isLoopbackURL(p.ctrl.currentURL()) {
+		podIP, err := p.kube.GetSelector(cctx, "pod", "app="+DefaultControllerService, "{.items[0].status.podIP}")
+		if err == nil && podIP != "" && podIP != host {
+			p.log("sharedk8s: controller unreachable at %s but the live pod is %s — a stale address, not a hang; skipping the SIGQUIT", host, podIP)
+			return
+		}
+	}
 	p.log("sharedk8s: controller readyz hung (%v) — sending SIGQUIT for a goroutine dump (pod will restart)", last)
 	run := p.kube.ForPod("deployment/"+DefaultControllerService, "")
 	if res, err := run.Run(cctx, "kill -QUIT 1"); err != nil {
@@ -1289,6 +1351,15 @@ func isConnRefused(err error) bool {
 // isLoopbackURL reports whether rawURL points at the local loopback interface
 // (127.0.0.0/8, ::1, or "localhost") — i.e. a process-local kubectl
 // port-forward that no other process can reach.
+// urlHost is the bare host of a URL ("" when unparseable or empty).
+func urlHost(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
 func isLoopbackURL(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
