@@ -300,6 +300,14 @@ pub(super) async fn handle_walreceiver_connection(
             _ => WalReceiverError::Other(e.into()),
         })?;
 
+    // Set when a record is skipped. "maybe" because a skip only proves the frontier
+    // moved past the seed point, not that any skipped record dirtied the checkpoint —
+    // most do not — so this is a conservative trigger for the re-read, not a
+    // detection. Lives with `walingest`, not per batch: a batch can end in the middle
+    // of a skip run, and the re-read is still owed to the next batch's first applied
+    // record.
+    let mut maybe_checkpoint_stale = false;
+
     let PostgresClientProtocol::Interpreted {
         format,
         compression,
@@ -441,6 +449,39 @@ pub(super) async fn handle_walreceiver_connection(
                 }
 
                 for interpreted in records {
+                    // Skip already-durable records: at or below consistent_lsn they
+                    // are applied and persisted in YB, so there is nothing to redo —
+                    // and redoing one can read purged history:
+                    //
+                    // - applying a record reads state as of next_record_lsn - 1;
+                    // - so for a record with next_record_lsn <= consistent_lsn, that
+                    //   read lsn is below consistent_lsn;
+                    // - a read must be at an lsn >= the GC cutoff;
+                    // - the GC cutoff is min(retention, leases, consistent_lsn);
+                    // - so when retention and leases are above consistent_lsn, the
+                    //   cutoff equals consistent_lsn, which is above the read lsn, and
+                    //   the read fails.
+                    //
+                    // Re-read the frontier per record: an in-flight flush can raise it
+                    // mid-batch, which is how a replay ends up behind it. #588.
+                    //
+                    // The check and the record's own apply are not atomic, so a flush
+                    // can still raise the frontier past a record that already passed
+                    // here, leaving a one-record window of the same failure open.
+                    if interpreted.next_record_lsn <= timeline.get_consistent_lsn() {
+                        WAL_INGEST.records_skipped_durable.inc();
+                        maybe_checkpoint_stale = true;
+                        continue;
+                    }
+
+                    if maybe_checkpoint_stale {
+                        walingest
+                            .reload_checkpoint(&timeline, &ctx)
+                            .await
+                            .context("reload checkpoint after skipping durable records")?;
+                        maybe_checkpoint_stale = false;
+                    }
+
                     if matches!(interpreted.flush_uncommitted, FlushUncommittedRecords::Yes)
                         && uncommitted_records > 0
                     {

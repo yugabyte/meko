@@ -2383,6 +2383,7 @@ pub(crate) struct WalIngestMetrics {
     pub(crate) bytes_received: IntCounter,
     pub(crate) records_received: IntCounter,
     pub(crate) records_observed: IntCounter,
+    pub(crate) records_skipped_durable: IntCounter,
     pub(crate) records_committed: IntCounter,
     pub(crate) values_committed_metadata_images: IntCounter,
     pub(crate) values_committed_metadata_deltas: IntCounter,
@@ -2432,6 +2433,11 @@ pub(crate) static WAL_INGEST: Lazy<WalIngestMetrics> = Lazy::new(|| {
     records_observed: register_int_counter!(
         "pageserver_wal_ingest_records_observed",
         "Number of WAL records observed from safekeepers. These are metadata only records for shard 0."
+    )
+    .expect("failed to define a metric"),
+    records_skipped_durable: register_int_counter!(
+        "pageserver_yb_wal_ingest_records_skipped_durable",
+        "WAL records not applied because they end at or below consistent_lsn (already durable). Non-zero means a connection rewound below the durable frontier."
     )
     .expect("failed to define a metric"),
     records_committed: register_int_counter!(

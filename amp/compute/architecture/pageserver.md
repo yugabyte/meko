@@ -843,8 +843,34 @@ them after one slow read.
 
 The walreceiver resumes from durable `consistent_lsn`, so after a crash
 (or a safekeeper reconnect under a live pageserver) it re-applies a
-window of WAL whose effects are already partly in YB. Three rules keep
+window of WAL whose effects are already partly in YB. Five rules keep
 that window from corrupting state:
+
+**Replay never applies at or below the durable frontier.** A record whose
+`next_record_lsn` is at or below `consistent_lsn` is already applied and
+persisted in YB, so the walreceiver skips it
+(`pageserver_yb_wal_ingest_records_skipped_durable` counts them). Redoing one
+can read purged history:
+
+- applying a record reads state as of `next_record_lsn - 1`;
+- so for a record with `next_record_lsn <= consistent_lsn`, that read LSN is
+  below `consistent_lsn`;
+- a read must be at an LSN `>=` the GC cutoff;
+- the GC cutoff is `min(retention, leases, consistent_lsn)`;
+- so when retention and leases are above `consistent_lsn`, the cutoff equals
+  `consistent_lsn`, which is above the read LSN, and the read fails — trim
+  keeps only each key's newest version at or below the cutoff, and ingest reads
+  hold no GC guard, so nothing else stops it.
+
+The frontier is re-read per record because it moves *during* the stream: the
+resume point is the frontier as it stood at connect, and the in-flight flush of
+the pre-crash in-memory tail lands afterwards, carrying the frontier — and the
+cutoff — past the replay position. A lost flush instead leaves the frontier
+below those records, so the gap-filling re-apply still happens. Without this
+rule: `could not ingest record at <lsn>` / `could not find data for key`, then
+a walreceiver reconnect loop and a stalled `consistent_lsn`
+([#588](https://github.com/yugabyte/meko/issues/588)). Regression test:
+`test/integration/compute/fast/gc_catchup_cutoff_race.rs`.
 
 **Replay reads pre-record state exclusively.** Rows the first pass
 already upserted — including `rel_size_to_key` values written *at the

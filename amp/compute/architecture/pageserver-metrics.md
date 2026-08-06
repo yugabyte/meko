@@ -94,6 +94,7 @@ per-branch variants add `branch_id`.
 | `pageserver_wal_ingest_records_received` | IntCounter | — | WAL records received from safekeepers. |
 | `pageserver_wal_ingest_records_observed` | IntCounter | — | Metadata-only records observed (shard 0). |
 | `pageserver_wal_ingest_records_committed` | IntCounter | — | WAL records that resulted in writes to storage. |
+| `pageserver_yb_wal_ingest_records_skipped_durable` | IntCounter | — | WAL records NOT applied because they end at or below `consistent_lsn` — already applied and durable. Zero in steady state; non-zero means a walreceiver connection rewound below the durable frontier (a reconnect whose in-flight flush landed afterwards), which is the state GC is allowed to reclaim under. Rising while ingest makes no progress is the shape of [#588](https://github.com/yugabyte/meko/issues/588) regressing. |
 | `pageserver_wal_ingest_values_committed` | IntCounterVec | `class`, `kind` | Values committed to storage. `class` ∈ `metadata`, `data`; `kind` ∈ `image`, `delta`. |
 | `pageserver_gap_blocks_zeroed_on_rel_extend` | IntCounter | — | Zero gap blocks written on relation extends. |
 | `pageserver_timeline_wal_records_received` | IntCounterVec | `branch_id` | WAL records received, per branch. |

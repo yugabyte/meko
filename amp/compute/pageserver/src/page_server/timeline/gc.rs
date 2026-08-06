@@ -82,11 +82,17 @@ impl Timeline {
     }
 
     /// This drain's target cutoff: the min over the retention floor,
-    /// live leases, and consistent_lsn (post-crash replay reads below
-    /// it; the cutoff must never pass it), then floored at our own fork
+    /// live leases, and consistent_lsn, then floored at our own fork
     /// point. Child fork points are deliberately absent — their pin is
     /// the clamp inside
     /// [`crate::page_store::PageStore::publish_gc_cutoff`].
+    ///
+    /// GC deletes below the returned cutoff, so no unguarded read may happen
+    /// there. Compute getpage holds the `applied_gc_cutoff` RCU guard, so GC
+    /// waits for it; WAL ingest skips already-durable records so it does not
+    /// read below `consistent_lsn` (the pageserver's durable frontier), except
+    /// for a one-record window where a flush raises the frontier past a record
+    /// mid-apply (#588); materialiser folds tolerate a missing row.
     fn compute_gc_cutoff(&self) -> Lsn {
         let (retention_min, lease_min) = {
             let gc_info = self.gc_info.read().unwrap();

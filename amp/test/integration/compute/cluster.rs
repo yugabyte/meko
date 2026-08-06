@@ -85,7 +85,10 @@ pub const MARKERS: &str = "MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specifi
 /// timeout. The safekeeper's interpreted-WAL-reader decode panic
 /// (`critical_timeline!`) is the prime case: it aborts the WAL sender, the
 /// PS then loops forever in `wait_lsn` and the test silently stalls (#61).
-pub const FATAL_MARKERS: &str = r"interpreted wal reader: failed to decode|invalid xlog page header|panicked at|thread '[^']*' panicked";
+/// `panic\{thread`: the panic hook logs inside `error_span!("panic", %thread, …)`,
+/// so a caught worker panic contains neither "panicked at" nor
+/// "thread '…' panicked" (#588).
+pub const FATAL_MARKERS: &str = r"interpreted wal reader: failed to decode|invalid xlog page header|panicked at|thread '[^']*' panicked|panic\{thread";
 
 /// Print a step banner to stdout and the run log.
 pub fn step(msg: &str) {
@@ -614,6 +617,29 @@ impl Cluster {
             bail!("endpoint create {ep_name} failed:\n{text}");
         }
         self.yb(&["endpoint", "start", ep_name])?;
+        Ok(())
+    }
+
+    /// SIGKILL the holder of `pidfile`. No handler runs, so nothing drains or
+    /// flushes; SIGTERM and `-m immediate` (SIGQUIT) both let the pageserver run
+    /// its shutdown drain.
+    pub fn kill9(&self, pidfile: &Path, what: &str) -> anyhow::Result<()> {
+        let contents = std::fs::read_to_string(pidfile)
+            .with_context(|| format!("reading {what} pidfile {}", pidfile.display()))?;
+        // First line only: a postmaster.pid carries the data directory and more on
+        // the lines after the pid.
+        let pid = contents.lines().next().unwrap_or_default().trim();
+        if pid.is_empty() {
+            bail!("{what} pidfile {} is empty", pidfile.display());
+        }
+        let status = std::process::Command::new("kill")
+            .args(["-9", pid])
+            .status()
+            .with_context(|| format!("kill -9 {pid} ({what})"))?;
+        if !status.success() {
+            bail!("kill -9 {pid} ({what}) exited with {status}");
+        }
+        tee_println!("  killed {what} pid {pid} (SIGKILL)");
         Ok(())
     }
 

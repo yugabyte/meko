@@ -72,7 +72,11 @@ async fn child_state_rows(yb: &str, ancestor: &str) -> anyhow::Result<i64> {
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
-    let pg_port = c.compute_port() + 300;
+    // N must keep compute_port + N inside this run's reserved block: the compute lane
+    // is base+700 and the block ends at base+900, so N <= 200. N = 300 lands on
+    // base+1000 — the next block's base, which bring-up never probed for freeness. CI
+    // failed there: postgres could not bind port 12000 (base 11000), five retries.
+    let pg_port = c.compute_port() + 200;
 
     // The parent needs an endpoint to be forkable at all: `branch create` reads
     // the default fork point from the safekeeper co-located with the parent's

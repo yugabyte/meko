@@ -130,6 +130,15 @@ runs:
    (generation-fenced, monotone), then publish it to the in-memory
    `Rcu<Lsn>`.
 
+   The `consistent_lsn` term is load-bearing for **correctness**, not just
+   keep-up. GC deletes history below the cutoff, and the WAL ingest path reads
+   below its own apply position with no GC guard — so the cutoff must not pass
+   that position. The matching ingest-side rule (records at or below
+   `consistent_lsn` are skipped, so ingest never reads under the cutoff) is in
+   [pageserver.md](pageserver.md#replay-correctness-rules); dropping either
+   half lets a replay read reclaimed history
+   ([#588](https://github.com/yugabyte/meko/issues/588)).
+
    **Child fork points** pin the cutoff too, but they are folded in only
    *inside the persist UPDATE itself*, which clamps to `min(ancestor_lsn)`
    over every child row still present. A deleted child can still be read

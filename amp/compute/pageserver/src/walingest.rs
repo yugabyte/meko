@@ -222,6 +222,26 @@ impl WalIngest {
         })
     }
 
+    /// Re-read the in-memory checkpoint from durable state.
+    ///
+    /// Callers must not have a dirty checkpoint: a pending mutation would be lost.
+    pub async fn reload_checkpoint(
+        &mut self,
+        timeline: &Timeline,
+        ctx: &RequestContext,
+    ) -> Result<(), WalIngestError> {
+        assert!(!self.checkpoint_modified);
+        let checkpoint_bytes = timeline
+            .get_checkpoint(timeline.get_consistent_lsn(), ctx)
+            .await?;
+        let pgversion = timeline.pg_version;
+        self.checkpoint = dispatch_pgversion!(pgversion, {
+            let checkpoint = pgv::CheckPoint::decode(&checkpoint_bytes)?;
+            <pgv::CheckPoint as Into<CheckPoint>>::into(checkpoint)
+        });
+        Ok(())
+    }
+
     /// Ingest an interpreted PostgreSQL WAL record by doing writes to the underlying key value
     /// storage of a given timeline.
     ///
