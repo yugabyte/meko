@@ -8,6 +8,7 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/apps/clientpod"
+	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/baseline"
@@ -150,6 +151,47 @@ func freshTserverConn(ctx context.Context, kube *k8s.Kubectl, info ybk8s.Info) (
 		return pg.ConnInfo{}, fmt.Errorf("no live tserver pod IPs")
 	}
 	return pg.ConnInfo{Host: ips[0], Port: info.YSQLPort, User: info.User, Database: info.User, SSLMode: "disable"}, nil
+}
+
+// startMetricsSampler starts the background YB server-metrics sampler over the
+// backing's namespace and registers its drain on td, so whatever it collected
+// reaches the report even when the benchmark fails. It returns nil when
+// apps.metrics.enabled is false or the sampler could not start — collection is
+// observability, never a reason to fail a perf run — and every caller treats a
+// nil sampler as "nothing to emit".
+func startMetricsSampler(ctx context.Context, t *core.T, kube *k8s.Kubectl, td *teardownStack, logf func(string, ...any)) *metrics.Sampler {
+	cfg := metrics.FromConfig(t.Options)
+	if !cfg.Enabled {
+		return nil
+	}
+	s := metrics.New(kube, cfg).WithLogf(logf)
+	if err := s.Start(ctx); err != nil {
+		logf("perf: metrics sampler not started (best-effort): %v", err)
+		return nil
+	}
+	td.push("drain metrics sampler (emit collected series)", func(context.Context) error {
+		emitMetricSeries(t, s)
+		return nil
+	})
+	return s
+}
+
+// emitMetricSeries stops the sampler and emits one metric per collected key,
+// carrying the per-pod series. Sampler.Stop yields the series once, so calling
+// this on the success path and again from teardown emits nothing twice.
+func emitMetricSeries(t *core.T, s *metrics.Sampler) {
+	if s == nil {
+		return
+	}
+	for _, ser := range s.Stop() {
+		t.MetricSeries(core.Metric{
+			Key:      ser.Key,
+			Value:    ser.Average(),
+			Unit:     ser.Unit,
+			RoundVal: ser.Round,
+			Series:   ser.Pairs(),
+		})
+	}
 }
 
 // emitAndGate loads the baseline, runs the pure gate (gatePerf) on the gated

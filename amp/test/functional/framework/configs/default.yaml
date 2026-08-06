@@ -721,6 +721,53 @@ apps:
     scalefactor: 0
     rate: "unlimited"
 
+  # apps/metrics: the background server-metrics sampler. Any test holding a
+  # namespace-scoped kubectl can start it; the perf tier (tpcc/pgbench/sysbench)
+  # starts it once the backing serves YSQL and emits the collected series on the
+  # result. ON by default — a test that does not compose the app is unaffected.
+  #
+  # Every sample_interval it reads, per yb-tserver / yb-master pod:
+  #   - container CPU + memory from the cgroup (v2 and v1 both handled) in one
+  #     exec; CPU is a counter, reported as cores used over wall-clock.
+  #   - /prometheus-metrics on tserver_port / master_port, keeping only the
+  #     metric names matching `include`.
+  # max_points caps each line (drop-oldest): 15s over 1h is 240 points, so 2000
+  # is generous headroom for a soak.
+  #
+  # include is a list of REGEX patterns matched against the bare metric name
+  # (labels stripped, same-name lines summed). The default set is compaction and
+  # flush volume, WAL append/sync, RPC queue depth and inbound call rate, the
+  # tserver read/write op counters, SST footprint, the root memory tracker, and
+  # process CPU time. Replace the list to collect a different set — no code
+  # change.
+  #
+  # counters declares which of the kept series are COUNTERS, reported as
+  # per-second rates from their delta. Names ending _count/_sum always are.
+  # Everything else is a gauge and passes through: mem_tracker and
+  # total_sst_files_size also rise under load, and reporting them as bytes/s
+  # would be wrong — so this is declared, never inferred from the values.
+  metrics:
+    enabled: true
+    sample_interval: "15s"
+    max_points: 2000
+    tserver_port: 9000
+    master_port: 7000
+    include:
+      - "^rocksdb_(compact|flush)_[a-z_]*bytes$"
+      - "^log_(append|sync)_latency_(count|sum)$"
+      - "^log_bytes_logged$"
+      - "^rpc_inbound_calls_created$"
+      - "^rpcs_in_queue_yb_(tserver|master)_"
+      - "^handler_latency_yb_tserver_TabletServerService_(Read|Write)_(count|sum)$"
+      - "^total_sst_files_size$"
+      - "^mem_tracker$"
+      - "^cpu_(utime|stime)$"
+    counters:
+      - "^rocksdb_(compact|flush)_"
+      - "^log_bytes_logged$"
+      - "^rpc_inbound_calls_created$"
+      - "^cpu_(utime|stime)$"
+
 # --- Artifacts (artifact/artifact.go, artifact/deploy.go) ---
 artifact:
   # Local download cache dir. Empty (default) → ~/.ampqa/artifacts at use.

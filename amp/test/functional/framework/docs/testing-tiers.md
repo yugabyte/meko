@@ -89,7 +89,11 @@ once). The extended-only tests (beyond regression) are:
   chaos/nemesis against an exclusive universe) and `load_sustain` (workloadgen
   soak).
 - **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench` and `sysbench`,
-  baseline-gated, with version/image comparison + bisect + history/trend.
+  baseline-gated, with version/image comparison + bisect + history/trend. All
+  three also sample the backing's own numbers while the benchmark runs
+  (`apps/metrics`: per-pod CPU/memory plus the `apps.metrics.include` prometheus
+  set) and report them as series metrics — set `apps.metrics.enabled=bool:false`
+  to turn that off.
 
 Example (one env at a time):
 

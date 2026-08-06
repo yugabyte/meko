@@ -145,7 +145,12 @@ func (t *T) AttachBytes(name, kind string, content []byte) {
 
 // Metric records a metric point on the result and emits it.
 func (t *T) Metric(key string, value float64, unit string) {
-	m := Metric{Key: key, Value: value, Unit: unit}
+	t.MetricSeries(Metric{Key: key, Value: value, Unit: unit})
+}
+
+// MetricSeries records an already-formed metric — including one carrying a
+// per-line time series and a display precision — and emits it.
+func (t *T) MetricSeries(m Metric) {
 	t.mu.Lock()
 	if t.maxMetrics > 0 && len(t.result.Metrics) >= t.maxMetrics {
 		drop := len(t.result.Metrics) - t.maxMetrics + 1

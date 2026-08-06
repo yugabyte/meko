@@ -11,6 +11,7 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/apps/benchbase"
+	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/artifact"
@@ -153,6 +154,7 @@ type perfRun struct {
 	target       backingTarget
 	benchbaseDir string
 	podExec      exec.RemoteExecutor
+	sampler      *metrics.Sampler
 
 	benchResult BenchResult
 }
@@ -228,9 +230,14 @@ func tpccWorkloadFor(cfg perfConfig, tgt backingTarget) Workload {
 // create phase connects ONCE with no retry (unlike the sample-app's connect
 // loop), so it must wait for YSQL to accept — proven via a live tserver pod IP
 // over the coordinator's tailnet — before running, plus a short settle so the
-// Service endpoints the in-pod benchmark connects through are stable.
+// Service endpoints the in-pod benchmark connects through are stable. Once it is
+// serving, the backing's pods are known and the metrics sampler starts.
 func (r *perfRun) waitReady(ctx context.Context) error {
-	return waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout)
+	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout); err != nil {
+		return err
+	}
+	r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)
+	return nil
 }
 
 // runBenchmark drives BenchBase TPC-C through the harness: load ONCE, then a
@@ -256,6 +263,7 @@ func (r *perfRun) runBenchmark(ctx context.Context) error {
 	}
 	r.benchResult = res
 	emitBenchCharts(r.t, res)
+	emitMetricSeries(r.t, r.sampler)
 	return nil
 }
 

@@ -18,6 +18,7 @@ package core_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/benchbase"
 	awscloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/aws"
 	gcpcloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/gcp"
+	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/sampleapp"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
@@ -935,6 +937,30 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if bbcfg.Rate != benchbase.DefaultRate {
 		t.Errorf("benchbase Rate = %q, want %q", bbcfg.Rate, benchbase.DefaultRate)
+	}
+
+	// --- apps.metrics (background server-metrics sampler) ---
+	mcfg := metrics.FromConfig(cfg)
+	if !mcfg.Enabled {
+		t.Errorf("metrics Enabled = false, want true (collection defaults on)")
+	}
+	if mcfg.SampleInterval != metrics.DefaultSampleInterval {
+		t.Errorf("metrics SampleInterval = %s, want %s", mcfg.SampleInterval, metrics.DefaultSampleInterval)
+	}
+	if mcfg.MaxPoints != metrics.DefaultMaxPoints {
+		t.Errorf("metrics MaxPoints = %d, want %d", mcfg.MaxPoints, metrics.DefaultMaxPoints)
+	}
+	if mcfg.TServerPort != metrics.DefaultTServerPort || mcfg.MasterPort != metrics.DefaultMasterPort {
+		t.Errorf("metrics tserver/master port = %d/%d, want %d/%d",
+			mcfg.TServerPort, mcfg.MasterPort, metrics.DefaultTServerPort, metrics.DefaultMasterPort)
+	}
+	// The include list is the whole point of the app being config-driven: the
+	// embedded default must BE the code default, not merely non-empty.
+	if !slices.Equal(mcfg.Include, metrics.DefaultInclude) {
+		t.Errorf("metrics Include = %q, want %q", mcfg.Include, metrics.DefaultInclude)
+	}
+	if !slices.Equal(mcfg.Counters, metrics.DefaultCounters) {
+		t.Errorf("metrics Counters = %q, want %q", mcfg.Counters, metrics.DefaultCounters)
 	}
 
 	// --- artifacts.sampleapp: byte-checks the resolved github_release matches

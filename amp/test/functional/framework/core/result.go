@@ -76,9 +76,15 @@ type Attachment struct {
 	Path string
 }
 
-// Metric is a single named measurement emitted during a test.
+// Metric is a single named measurement emitted during a test. Series carries the
+// optional sampled shape behind that measurement — a line per source (e.g. one
+// pod), each point [unix_ms, value] — with Value then holding the overall
+// average so a reader that only understands scalar metrics still gets a number.
+// RoundVal is the display precision (decimal places) for those values.
 type Metric struct {
-	Key   string
-	Value float64
-	Unit  string
+	Key      string
+	Value    float64
+	Unit     string
+	RoundVal int                     `json:"round_val,omitempty"`
+	Series   map[string][][2]float64 `json:"series,omitempty"`
 }

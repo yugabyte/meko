@@ -28,6 +28,7 @@ import (
 	"strconv"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/sysbench"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
@@ -187,6 +188,7 @@ type sysbenchRun struct {
 	kube    *k8s.Kubectl
 	target  backingTarget
 	podExec exec.RemoteExecutor
+	sampler *metrics.Sampler
 
 	benchResult BenchResult
 }
@@ -225,9 +227,14 @@ func sysbenchWorkloadFor(params sysbenchParams, tgt backingTarget) Workload {
 	return &sysbenchWorkload{conn: tgt.Conn, params: params}
 }
 
-// waitReady blocks until the backing serves YSQL.
+// waitReady blocks until the backing serves YSQL, then starts the metrics
+// sampler over the now-known backing pods.
 func (r *sysbenchRun) waitReady(ctx context.Context) error {
-	return waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout)
+	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout); err != nil {
+		return err
+	}
+	r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)
+	return nil
 }
 
 // runBenchmark drives sysbench through the harness: load the dataset ONCE, then
@@ -245,6 +252,7 @@ func (r *sysbenchRun) runBenchmark(ctx context.Context) error {
 	}
 	r.benchResult = res
 	emitBenchCharts(r.t, res)
+	emitMetricSeries(r.t, r.sampler)
 	return nil
 }
 

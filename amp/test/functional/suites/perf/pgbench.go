@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pgbench"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
@@ -209,6 +210,7 @@ type pgbenchRun struct {
 	kube    *k8s.Kubectl
 	target  backingTarget
 	podExec exec.RemoteExecutor
+	sampler *metrics.Sampler
 
 	benchResult BenchResult
 }
@@ -261,9 +263,14 @@ func pgbenchWorkloadFor(params pgbenchParams, tgt backingTarget) Workload {
 	return &pgbenchWorkload{conn: tgt.Conn, scale: params.Scale, clients: params.Clients, jobs: params.Jobs}
 }
 
-// waitReady blocks until the backing serves YSQL.
+// waitReady blocks until the backing serves YSQL, then starts the metrics
+// sampler over the now-known backing pods.
 func (r *pgbenchRun) waitReady(ctx context.Context) error {
-	return waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout)
+	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout); err != nil {
+		return err
+	}
+	r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)
+	return nil
 }
 
 // runBenchmark drives pgbench through the harness: load the schema ONCE, then a
@@ -286,6 +293,7 @@ func (r *pgbenchRun) runBenchmark(ctx context.Context) error {
 	}
 	r.benchResult = res
 	emitBenchCharts(r.t, res)
+	emitMetricSeries(r.t, r.sampler)
 	return nil
 }
 

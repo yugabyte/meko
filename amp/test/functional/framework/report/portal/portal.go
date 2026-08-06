@@ -288,9 +288,16 @@ func (s *Sink) metric(ev core.ResultEvent) {
 	if rid == "" || ev.Metric == nil {
 		return
 	}
-	_ = s.call(http.MethodPost, "/api/v1/results/"+rid+"/metrics", []map[string]any{{
-		"key": ev.Metric.Key, "value": ev.Metric.Value, "unit": ev.Metric.Unit,
-	}}, nil)
+	item := map[string]any{"key": ev.Metric.Key, "value": ev.Metric.Value, "unit": ev.Metric.Unit}
+	// The portal stores the item verbatim, so what is marshalled here is exactly
+	// what the UI reads back for a series metric.
+	if ev.Metric.RoundVal > 0 {
+		item["round_val"] = ev.Metric.RoundVal
+	}
+	if len(ev.Metric.Series) > 0 {
+		item["series"] = ev.Metric.Series
+	}
+	_ = s.call(http.MethodPost, "/api/v1/results/"+rid+"/metrics", []map[string]any{item}, nil)
 }
 
 func (s *Sink) datapoint(ev core.ResultEvent) {

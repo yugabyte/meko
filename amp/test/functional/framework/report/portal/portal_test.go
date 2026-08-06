@@ -319,3 +319,46 @@ func TestSinkStreamsRetryAttemptMetadata(t *testing.T) {
 		}
 	}
 }
+
+// A series metric's POST body is the portal contract: the portal stores the item
+// verbatim, so this JSON is exactly what the UI reads back.
+func TestSinkSeriesMetricPostsSeriesVerbatim(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "perf/tpcc", Result: &core.Result{}})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventMetric, TestName: "perf/tpcc", Metric: &core.Metric{
+		Key: "[yb tserver] CPU", Value: 1.515, Unit: "cores", RoundVal: 2,
+		Series: map[string][][2]float64{"yb-tserver-0": {{1730000000000, 1.42}, {1730000015000, 1.61}}},
+	}})
+
+	raw := fp.has(t, "POST /api/v1/results/res-1/metrics")
+	want := `[{"key":"[yb tserver] CPU","round_val":2,"series":{"yb-tserver-0":[[1730000000000,1.42],[1730000015000,1.61]]},"unit":"cores","value":1.515}]`
+	if got := string(raw); got != want {
+		t.Errorf("metrics POST body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A plain scalar metric carries neither field — old readers see the same body as
+// before the series extension.
+func TestSinkScalarMetricOmitsSeriesFields(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{})
+	_ = s.RunStarted(core.RunInfo{StartedAt: time.Now()})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "x", Result: &core.Result{}})
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventMetric, TestName: "x",
+		Metric: &core.Metric{Key: "rows", Value: 42, Unit: "count"}})
+
+	var body []map[string]json.RawMessage
+	if err := json.Unmarshal(fp.has(t, "POST /api/v1/results/res-1/metrics"), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 1 {
+		t.Fatalf("posted %d items, want 1", len(body))
+	}
+	for _, absent := range []string{"series", "round_val"} {
+		if _, ok := body[0][absent]; ok {
+			t.Errorf("scalar metric POST carried %q: %v", absent, body[0])
+		}
+	}
+}
