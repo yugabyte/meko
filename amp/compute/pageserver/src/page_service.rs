@@ -1809,7 +1809,7 @@ impl PageServerHandler {
             .take()
             .expect("implementation error: timeline_handles should not be locked");
 
-        // yb-pageserver doesn't run GC (no on-disk layer files to evict).
+        // pageserver doesn't run GC (no on-disk layer files to evict).
         // Always hold the gc-cutoff guard — the original toggle existed
         // to escape a Neon-specific bottleneck that has no analogue here.
         let hold_gc_cutoff_guard = HoldAppliedGcCutoffGuard::Yes;

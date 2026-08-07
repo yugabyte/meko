@@ -1,4 +1,4 @@
-// Package pageserver drives the yb-pageserver's management HTTP API from a
+// Package pageserver drives the pageserver's management HTTP API from a
 // test: scraping its Prometheus metrics and forcing a flush of a branch's
 // buffered pages down to YugabyteDB. Both routes are on the pageserver's
 // allowlist, so no token is involved.

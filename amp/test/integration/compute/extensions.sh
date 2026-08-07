@@ -4,7 +4,7 @@
 # deploy — the local-deploy twin of the SMOKE_EXTENSIONS block in
 # deploy/smoke-test.sh (which runs the same check against a GKE cluster).
 #
-# Local deploy runs the compute as a bare PG18 process (yb-compute-ctl), so
+# Local deploy runs the compute as a bare PG18 process (compute-ctl), so
 # there is no Kubernetes ImageVolume: the Docker/local deployers ignore
 # endpoint.extensions (compute/architecture/extensions.md). But the "mount" is
 # only two PG18 GUCs, and `yb_amp_local endpoint create` already accepts
@@ -14,7 +14,7 @@
 #   1. Build the extension image with the real docker pipeline
 #      (deploy/extensions/build.sh -> quay.io/.../amp-ext-<name>:<version>).
 #   2. Extract its FROM-scratch tree (share/ + lib/) to a host temp dir.
-#   3. Bring up a throwaway yb_amp_local cluster (compute -> yb-pageserver /
+#   3. Bring up a throwaway yb_amp_local cluster (compute -> pageserver /
 #      safekeeper -> YugabyteDB).
 #   4. Create an endpoint whose extension_control_path / dynamic_library_path
 #      point at the extracted tree, start it.
@@ -151,8 +151,8 @@ docker rm "$CID" >/dev/null
 #    itself — a stale one surfaces as baffling runtime mismatches). The four
 #    server binaries are cargo targets; yb_amp_local and the controller are Go
 #    (controller/local/cmd, controller/cmd), built separately below. Mirrors run.sh.
-CLUSTER_BINS=(--bin yb-pageserver --bin yb-safekeeper
-              --bin yb-compute-ctl)
+CLUSTER_BINS=(--bin pageserver --bin safekeeper
+              --bin compute-ctl)
 echo ">>> building cluster binaries ($PROFILE)..."
 if [[ $PROFILE == release ]]; then
     cargo build --release "${CLUSTER_BINS[@]}"

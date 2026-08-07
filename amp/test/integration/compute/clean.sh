@@ -3,8 +3,8 @@
 # Tear down any integration cluster state from a previous run so the next
 # `yb_amp_local init + start` is a clean slate:
 #
-# - Kill the integration cluster's neon-stack processes (yb-pageserver,
-#   yb-safekeeper, controller, yb-compute-ctl). Kills
+# - Kill the integration cluster's neon-stack processes (pageserver,
+#   safekeeper, controller, compute-ctl). Kills
 #   are SCOPED to THIS run — anchored on `$YB_AMP_REPO_DIR` (a unique
 #   `run_<id>/`, services) and the ephemeral `$YB_DBNAME` (controller) —
 #   so a concurrently-running integration cluster (its own port block + run dir +

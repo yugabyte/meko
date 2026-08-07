@@ -67,7 +67,7 @@ const BATCH_DRAIN_LIMIT: usize = 500;
 /// At 2: each materialiser `put_pages` carries ≤500 rows (one
 /// `ROWS_PER_INSERT` chunk) and therefore uses exactly one slot of
 /// the internal `PageStore` pool. With the fpu pool's base size of 2
-/// over in `yb-pageserver.rs`, 2 in-flight INSERTs map to 2 distinct YB
+/// over in `pageserver.rs`, 2 in-flight INSERTs map to 2 distinct YB
 /// backends and roughly double the materialiser's INSERT-side throughput
 /// over a single connection (~38 K rows/s at ~13 ms / 490-row batch).
 /// Peak in-flight RAM is ~8 MB (2 × 500 × 8 KB image). Raise

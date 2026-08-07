@@ -503,7 +503,7 @@ fn start_pageserver(
         shutdown_pageserver.child_token(),
     );
 
-    // Disk-usage eviction is gone (Phase 4d.2). yb-pageserver has no
+    // Disk-usage eviction is gone (Phase 4d.2). pageserver has no
     // local layer files to evict — all storage is in YB.
 
     // Start up the service to handle HTTP mgmt API request. We created the
@@ -688,7 +688,7 @@ fn start_pageserver(
 /// Open a `PageStore` against the configured YB cluster with the
 /// given Postgres `application_name` and `pool_size` independent YSQL
 /// connections. Fails if the pageserver isn't configured with a
-/// `YbStore` remote_storage backend — yb-pageserver requires it.
+/// `YbStore` remote_storage backend — pageserver requires it.
 async fn create_page_store_with_app_name(
     conf: &'static PageServerConf,
     application_name: &str,
@@ -699,7 +699,7 @@ async fn create_page_store_with_app_name(
     let rs_cfg = conf
         .remote_storage_config
         .as_ref()
-        .context("yb-pageserver requires `yb_storage_conn` configured")?;
+        .context("pageserver requires `yb_storage_conn` configured")?;
     let RemoteStorageKind::YbStore(yb_cfg) = &rs_cfg.storage;
     let ps_cfg = pageserver::page_store::PageStoreConfig::new(yb_cfg.clone())
         .with_scale_factor(conf.scale_factor)
@@ -736,8 +736,7 @@ async fn create_compute_page_store(
     let pool_size = pageserver_api::config::scale_count(2, conf.scale_factor);
     // Read-only path — no `yb_enable_upsert_mode` GUC needed.
     let store =
-        create_page_store_with_app_name(conf, "yb-pageserver:compute_reads", pool_size, false)
-            .await?;
+        create_page_store_with_app_name(conf, "pageserver:compute_reads", pool_size, false).await?;
     // No schema bootstrap here — the controller's
     // migrations are the single source of truth for `amp_storage.*`
     // tables. Tests still call `store.ensure_schema()` directly.
@@ -770,7 +769,7 @@ async fn create_fpu_page_store(
     // `put_meta` + the materialiser's image INSERTs all run here and
     // depend on `yb_enable_upsert_mode = true` to skip
     // read-before-write on partial-chunk retries.
-    let store = create_page_store_with_app_name(conf, "yb-pageserver:fpu", pool_size, true).await?;
+    let store = create_page_store_with_app_name(conf, "pageserver:fpu", pool_size, true).await?;
     info!(pool_size, "Internal PageStore connected");
     Ok(store)
 }
@@ -785,7 +784,7 @@ async fn create_gc_page_store(
         pageserver::page_store::GC_ACTION_PARALLELISM,
         conf.scale_factor,
     );
-    let store = create_page_store_with_app_name(conf, "yb-pageserver:gc", pool_size, false).await?;
+    let store = create_page_store_with_app_name(conf, "pageserver:gc", pool_size, false).await?;
     info!(pool_size, "GC PageStore connected");
     Ok(store)
 }

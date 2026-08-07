@@ -759,7 +759,7 @@ and endpoints are ordinary rows the product API lists like any other.
 Endpoints work for it because it starts its controller with
 `--deploy-driver=local` (`deploy.LocalDeployer`). The controller keeps the
 endpoint record — the row, the single-writer slot, the branch it hangs off — and
-launches nothing, which is right: the launcher spawns `yb-compute-ctl` itself,
+launches nothing, which is right: the launcher spawns `compute-ctl` itself,
 and a controller that also tried to deploy would fight it for the same endpoint.
 What that local process needs in order to run rides on the endpoint row itself,
 so the launcher keeps nothing on the side. Its handle is the row's `name`, its

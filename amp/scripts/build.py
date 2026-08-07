@@ -67,18 +67,18 @@ PG_BUILD_TYPE = "release"
 
 # Binaries launched by yb_amp_local (see control_plane local_env.rs).
 DAEMON_BINS = [
-    "yb-pageserver",
+    "pageserver",
     "yb_amp_local",
     # yb_amp_local execs a sibling `controller` binary (see
     # local_env.rs::controller_bin / localenv.go::ControllerBin), so it must be
     # staged next to it.
     "controller",
-    "yb-safekeeper",
-    "yb-compute-ctl",
+    "safekeeper",
+    "compute-ctl",
 ]
 # Operator-side diagnostic tools (the `tools` crate, compute/tools/); they
 # share the YbConnArgs connection flags and work against no-TLS and TLS clusters.
-DIAG_TOOLS = ["yb-dump-pages", "yb-dump-wals", "yb-reset-consistent-lsn"]
+DIAG_TOOLS = ["dump-pages", "dump-wals", "reset-consistent-lsn"]
 # Crates that produce the binaries above.
 BUILD_CRATES = [
     "pageserver",
@@ -256,7 +256,7 @@ def stage_and_package(target_dir):
         f"Commit:     {head}\n"
         f"Subject:    {subject}\n"
         f"PG commit:  {pg_commit}\n\n"
-        "yb_amp_local launches yb-pageserver (see local_env.rs::pageserver_bin).\n"
+        "yb_amp_local launches pageserver (see local_env.rs::pageserver_bin).\n"
     )
 
     say("Bundle staged:")
@@ -376,7 +376,7 @@ def main():
         say("--pg-only: PostgreSQL is current; skipping Rust + extension build.")
         return
 
-    say(f"Building {mode} binaries (yb-pageserver + supporting bins)...")
+    say(f"Building {mode} binaries (pageserver + supporting bins)...")
     cargo = ["cargo", "build"] + (["--release"] if build_type == "release" else [])
     for crate in BUILD_CRATES:
         cargo += ["-p", crate]

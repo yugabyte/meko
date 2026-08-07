@@ -611,7 +611,7 @@ pub fn shutdown_token() -> CancellationToken {
 
 /// Global "I want the whole pageserver to exit cleanly" trigger.
 /// Mirrors the cancellation that the SIGTERM/SIGINT signal handler
-/// arms in `bin/yb-pageserver.rs`. Populated once at startup by
+/// arms in `bin/pageserver.rs`. Populated once at startup by
 /// `init_global_shutdown_token` before any task that might call
 /// `request_global_shutdown` is spawned.
 static GLOBAL_SHUTDOWN_TOKEN: std::sync::OnceLock<CancellationToken> = std::sync::OnceLock::new();

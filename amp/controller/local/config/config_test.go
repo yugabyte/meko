@@ -285,10 +285,10 @@ func TestDataDirHelpers(t *testing.T) {
 	if got := env.PgLibDir(18); got != "/pg/v18/lib" {
 		t.Errorf("PgLibDir: %q", got)
 	}
-	if got := env.PageserverBin(); got != "/yb-amp/yb-pageserver" {
+	if got := env.PageserverBin(); got != "/yb-amp/pageserver" {
 		t.Errorf("PageserverBin: %q", got)
 	}
-	if got := env.SafekeeperBin(); got != "/yb-amp/yb-safekeeper" {
+	if got := env.SafekeeperBin(); got != "/yb-amp/safekeeper" {
 		t.Errorf("SafekeeperBin: %q", got)
 	}
 }

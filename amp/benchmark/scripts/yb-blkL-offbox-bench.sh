@@ -2,7 +2,7 @@
 # G-battery for the LAYERED pageserver, run OFF-BOX (isolated) on the 16-vCPU host
 # 172.151.20.28, with the compute on the 2-core box ybAmp (172.151.29.184).
 #
-# This is the apples-to-apples peer of the FIXED 8k-direct yb-pageserver off-box
+# This is the apples-to-apples peer of the FIXED 8k-direct pageserver off-box
 # run (same topology, dataset, micro-battery, RSS/CPU sampling), but with the
 # layered engine given a SMALL self-managed local layer cache: an 8GB RAM
 # page_cache (matching the 8k build's 8GiB read cache) plus a bounded

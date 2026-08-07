@@ -3,7 +3,7 @@
 //!
 //! [`RemoteStorage`] trait a CRUD-like generic abstraction over external storages:
 //!   * [`yb_store`] uses a YugabyteDB table over the Postgres wire protocol
-//!     (the only production / dev backend for yb-pageserver)
+//!     (the only production / dev backend for pageserver)
 //!
 //! Cloud-storage backends (S3, Azure Blob, GCS) were removed in lane E
 //! along with their integration tests and SDK dependencies — yb-amp

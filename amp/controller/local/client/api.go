@@ -21,7 +21,7 @@ import (
 // Endpoints work here because the launcher starts its controller with
 // `--deploy-driver=local`: the controller keeps the endpoint record and does not
 // try to launch a compute for it, which is right, since the launcher spawns
-// yb-compute-ctl itself (deploy.LocalDeployer).
+// compute-ctl itself (deploy.LocalDeployer).
 //
 // Auth is Trust-only: /api/v1 has no auth middleware, matching the launcher's
 // local topology.

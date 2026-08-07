@@ -66,7 +66,7 @@ A yb-amp install is:
   against a pageserver endpoint and a safekeeper. The `yb_amp` smgr
   extension routes every `smgr_read` to a pageserver GetPage request
   and every WAL flush to the safekeeper via the walproposer.
-- **Pageserver (`yb-pageserver`)**: the row-store gateway. Two YSQL
+- **Pageserver (`pageserver`)**: the row-store gateway. Two YSQL
   connection pools:
   - `compute_page_store`: serves compute reads, running image-anchored
     LSN-chain reconstruction over `amp_storage.pages` /
@@ -78,7 +78,7 @@ A yb-amp install is:
   With `hot_path = "yb_thin_client"` (the default) the page read/write hot
   paths run over the direct-to-tserver RPC client instead of YSQL; the
   YSQL pools carry the cold paths.
-- **Safekeeper (`yb-safekeeper`)**: stateless WAL ingress. Receives
+- **Safekeeper (`safekeeper`)**: stateless WAL ingress. Receives
   the WAL stream from the compute, batches it into
   `amp_storage.wals` rows, and ACKs a commit only once its bytes are
   durable in YB. No local WAL, no quorum, no leader election —
@@ -111,9 +111,9 @@ A yb-amp install is:
 | Component | Role | Process binary |
 |---|---|---|
 | Compute | User-facing Postgres backend. Speaks the Postgres wire protocol to clients. | `pg_install/v18/bin/postgres` (with smgr patches) |
-| `compute_ctl` | Supervisor for the compute: applies the spec, starts/stops PG, runs catalog migrations. | `target/debug/yb-compute-ctl` |
-| Safekeeper | WAL durability gateway: receives WAL from the compute, persists it to `amp_storage.wals`, streams interpreted WAL to the pageserver. **One instance per branch** — YB provides the replication. | `target/debug/yb-safekeeper` |
-| Pageserver | Materializes pages from WAL into `amp_storage.*` rows and serves them to the compute on demand. | `target/debug/yb-pageserver` |
+| `compute_ctl` | Supervisor for the compute: applies the spec, starts/stops PG, runs catalog migrations. | `target/debug/compute-ctl` |
+| Safekeeper | WAL durability gateway: receives WAL from the compute, persists it to `amp_storage.wals`, streams interpreted WAL to the pageserver. **One instance per branch** — YB provides the replication. | `target/debug/safekeeper` |
+| Pageserver | Materializes pages from WAL into `amp_storage.*` rows and serves them to the compute on demand. | `target/debug/pageserver` |
 | Controller | Control plane: generation fencing, node/branch/endpoint registries, endpoint provisioning, schema migrations. | `controller` (Go, `controller/cmd/controller`) |
 | YugabyteDB | Durable storage backend for everything yb-amp-internal. | external (`yugabyted`) |
 
@@ -238,11 +238,11 @@ yb-amp processes
   controller --database-url postgresql://yugabyte@127.0.0.1:5433/yb_storage \
              --listen 127.0.0.1:1234 --deploy --deploy-driver local
                                                (control_plane_api http://127.0.0.1:1234/upcall/v1/)
-  yb-pageserver      (endpoints/<ep>/pageserver/pageserver.toml;
+  pageserver      (endpoints/<ep>/pageserver/pageserver.toml;
                       defaults :64000 pg, :9898 http, :51051 grpc — +2 per extra node)
-  yb-safekeeper      (endpoints/<ep>/safekeeper/safekeeper.toml;
+  safekeeper      (endpoints/<ep>/safekeeper/safekeeper.toml;
                       defaults :5454 pg, :7676 http — +2 per extra node)
-  yb-compute-ctl --pgdata .yb_amp/endpoints/main/pgdata ...
+  compute-ctl --pgdata .yb_amp/endpoints/main/pgdata ...
     +-- postgres (+ yb_amp patches)      ports allocated from 55432 up
 ```
 

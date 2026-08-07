@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.blobs (
 );
 
 -- =====================================================================
--- Page-store tables — written and read by yb-pageserver.
+-- Page-store tables — written and read by pageserver.
 -- =====================================================================
 
 -- Relation pages only: keys where `Key::is_rel_block_key()` holds
@@ -273,7 +273,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
 ) SPLIT INTO 3 TABLETS;
 
 -- =====================================================================
--- WAL mirror — written and read by yb-safekeeper.
+-- WAL mirror — written and read by safekeeper.
 -- =====================================================================
 
 -- Live WAL chunks the safekeeper mirrors into YB — the durable copy of the WAL

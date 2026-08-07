@@ -3,7 +3,7 @@
 Source: `compute/compute_tools/src/http/server.rs` (router),
 `compute/compute_tools/src/http/routes/*` (handlers),
 `compute/compute_tools/src/http/middleware/authorize.rs` (auth),
-`compute/compute_tools/src/bin/yb-compute-ctl.rs` (ports),
+`compute/compute_tools/src/bin/compute-ctl.rs` (ports),
 `compute/libs/compute_api/src/{requests,responses}.rs` (payload types). See also
 [`compute_ctl.md`](compute_ctl.md).
 

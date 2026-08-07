@@ -9,10 +9,10 @@ extension, and their supporting Rust libraries. The control plane lives in
 
 | Path | What |
 |---|---|
-| [`pageserver/`](pageserver/) | `yb-pageserver` — serves pages from YugabyteDB; LSN-chain reconstruction + image materialiser |
-| [`safekeeper/`](safekeeper/) | `yb-safekeeper` — stateless WAL ingress backed by YugabyteDB |
-| [`tools/`](tools/) | operator diagnostic bins (`yb-dump-pages`, `yb-dump-wals`, `yb-reset-consistent-lsn`, below) |
-| [`compute_tools/`](compute_tools/) | `yb-compute-ctl` — compute supervisor (config, start/stop, catalog migrations) |
+| [`pageserver/`](pageserver/) | `pageserver` — serves pages from YugabyteDB; LSN-chain reconstruction + image materialiser |
+| [`safekeeper/`](safekeeper/) | `safekeeper` — stateless WAL ingress backed by YugabyteDB |
+| [`tools/`](tools/) | operator diagnostic bins (`dump-pages`, `dump-wals`, `reset-consistent-lsn`, below) |
+| [`compute_tools/`](compute_tools/) | `compute-ctl` — compute supervisor (config, start/stop, catalog migrations) |
 | [`pgxn/`](pgxn/) | Postgres extensions, including the `yb_amp` smgr extension and its walredo/rmgr/test helpers |
 | [`libs/`](libs/) | shared Rust crates (`ysql_client`, `yb_thin_client`, `remote_storage`, `pageserver_api`, `safekeeper_api`, …) |
 | [`image/`](image/) | compute image build — Dockerfile, patches, vm-image specs |
@@ -81,7 +81,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
 (`--sslmode require`). `build.sh --release-tar` stages them into
 `${BUNDLE}/tools/` so they ship to deploy hosts alongside the daemons.
 
-- [`yb-dump-pages`](tools/src/bin/yb-dump-pages.rs) — dump or decode
+- [`dump-pages`](tools/src/bin/dump-pages.rs) — dump or decode
   `amp_storage.pages` rows for one (rel, fork) tuple. Renders the LSN as
   `H/L` hex and forknum as `main`/`fsm`/`vm`/`init`, and projects the
   placement `bucket` so you can see where a row landed. Required key columns:
@@ -99,7 +99,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   `offnum`, and flags a GAP when a delta's `offnum` exceeds the running
   max+1 — the signature of a chain walredo can't fold and of a base image
   too small for the deltas above it (see issue #22).
-- [`yb-dump-wals`](tools/src/bin/yb-dump-wals.rs) — dump `amp_storage.wals`
+- [`dump-wals`](tools/src/bin/dump-wals.rs) — dump `amp_storage.wals`
   rows (the safekeeper's WAL chunks in YB). Required key columns:
   `--tenant --timeline`. Range filters: `--segno` (or
   `--segno-from/--segno-to`), `--chunk-offset` (or its `-from/-to`
@@ -108,7 +108,7 @@ against both a local no-TLS cluster (default) and a TLS-required one
   `--summary` swaps the row dump for a per-segno health view
   (`min/max LSN, total_bytes, gap_bytes`) — the fastest way to spot a WAL
   hole during an incident.
-- [`yb-reset-consistent-lsn`](tools/src/bin/yb-reset-consistent-lsn.rs)
+- [`reset-consistent-lsn`](tools/src/bin/reset-consistent-lsn.rs)
   — find (and optionally rewind) `amp_storage.branch_state.consistent_lsn`
   to a real WAL record boundary. Given `--tenant --timeline --target-lsn
   X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder
@@ -124,19 +124,19 @@ Sample invocations (use the bundle's `tools/` copy on a deploy host, or
 `cargo run --bin <tool> --` locally):
 
 ```sh
-yb-dump-wals  --tenant <hex> --timeline <hex> --summary
-yb-dump-wals  --tenant <hex> --timeline <hex> \
+dump-wals  --tenant <hex> --timeline <hex> --summary
+dump-wals  --tenant <hex> --timeline <hex> \
               --lsn-from 0/1545000 --lsn-to 0/15A0000 --limit 5
-yb-dump-pages --tenant <hex> --timeline <hex> \
+dump-pages --tenant <hex> --timeline <hex> \
               --spc 1663 --db 5 --rel 16384 --fork 0 --blknum 0 --limit 3
 # decode one block's chain and check it folds (offnum gaps = landmine)
-yb-dump-pages --decode --tenant <hex> --timeline <hex> \
+dump-pages --decode --tenant <hex> --timeline <hex> \
               --spc 1663 --db 16384 --rel 16414 --fork 0 --blknum 1456384
 # dry run: print the max valid consistent_lsn <= target, then rewind to it
-yb-reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000
-yb-reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000 --set
+reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000
+reset-consistent-lsn --tenant <hex> --timeline <hex> --target-lsn 22/63000000 --set
 # remote TLS cluster (e.g. AWS): add --sslmode (and --sslrootcert to verify)
-yb-dump-wals  --host-ports <host:port> --sslmode require --password-env PGPASSWORD \
+dump-wals  --host-ports <host:port> --sslmode require --password-env PGPASSWORD \
               --tenant <hex> --timeline <hex> --summary
 ```
 

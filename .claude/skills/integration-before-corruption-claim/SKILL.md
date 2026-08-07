@@ -30,7 +30,7 @@ works, you must run it end-to-end.
 
 Fire when you're about to:
 
-- Mark a task with `area: yb-pageserver` or `safekeeper` as
+- Mark a task with `area: pageserver` or `safekeeper` as
   `status: done` if the change touched any of: WAL ingest, WAL
   storage, flush loop, page writer, generation fence, restart /
   catch-up path, walreceiver, walsender, `consistent_lsn` or

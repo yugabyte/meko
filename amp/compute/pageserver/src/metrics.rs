@@ -532,7 +532,7 @@ pub(crate) static UNIFIED_PAGES_BY_KEY_ENTRIES: Lazy<UIntGauge> = Lazy::new(|| {
 
 // Per-process memory gauges (VmRSS, VmData, RssAnon, RssFile, RssShmem)
 // are emitted as `libmetrics_process_status_*_bytes` by the
-// `more_process_metrics::Collector` registered in `bin/yb-pageserver.rs`;
+// `more_process_metrics::Collector` registered in `bin/pageserver.rs`;
 // see `libs/metrics/src/more_process_metrics.rs`.
 //
 // jemalloc-specific gauges (allocated/active/resident/mapped/dirty/muzzy)
@@ -3054,7 +3054,7 @@ pub(crate) trait MeasureRemoteOp<O, E>: Sized + Future<Output = Result<O, E>> {
 impl<Fut, O, E> MeasureRemoteOp<O, E> for Fut where Fut: Sized + Future<Output = Result<O, E>> {}
 
 /// jemalloc stats exposed as Prometheus gauges. Registered alongside
-/// the libmetrics process collector in `bin/yb-pageserver.rs` so each
+/// the libmetrics process collector in `bin/pageserver.rs` so each
 /// scrape pulls fresh values from the allocator.
 ///
 /// The values come from the `tikv-jemalloc-ctl::stats::*` mibs. They

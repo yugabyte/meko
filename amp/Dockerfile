@@ -1,4 +1,4 @@
-### Creates a storage Docker image with postgres, yb-pageserver and yb-safekeeper binaries.
+### Creates a storage Docker image with postgres, pageserver and safekeeper binaries.
 ### The image itself is mainly used as a container for the binaries and for starting e2e tests with custom parameters.
 ### By default, the binaries inside the image have some mock parameters and can start, but are not intended to be used
 ### inside this image in the real deployments.
@@ -117,11 +117,11 @@ RUN  set -e \
     fi \
     && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes --cfg tokio_unstable --cfg tokio_taskdump ${ADDITIONAL_RUSTFLAGS}" cargo auditable build \
       --features $CARGO_FEATURES \
-      --bin yb-pageserver  \
-      --bin yb-safekeeper  \
-      --bin yb-dump-pages \
-      --bin yb-dump-wals \
-      --bin yb-reset-consistent-lsn \
+      --bin pageserver  \
+      --bin safekeeper  \
+      --bin dump-pages \
+      --bin dump-wals \
+      --bin reset-consistent-lsn \
       --locked --release \
     && mold -run make -j $(nproc) -s yb-amp-pg-ext
 
@@ -155,12 +155,12 @@ RUN set -e \
     && useradd -d /data yb_amp \
     && chown -R yb_amp:yb_amp /data
 
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-pageserver       /usr/local/bin
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-safekeeper       /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/pageserver           /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/safekeeper           /usr/local/bin
 # Operator diagnostic tools (the tools crate): dump the page store / WAL, reset the consistent LSN.
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-dump-pages          /usr/local/bin
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-dump-wals           /usr/local/bin
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-reset-consistent-lsn /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/dump-pages           /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/dump-wals            /usr/local/bin
+COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/reset-consistent-lsn /usr/local/bin
 # The storage binaries link libyb_thin_client.so (a DT_NEEDED) but carry no
 # rpath for it, so ship it at a fixed path and put that on the loader search
 # path via LD_LIBRARY_PATH (distro-agnostic — the base's default lib dir
@@ -191,4 +191,4 @@ USER yb_amp
 EXPOSE 6400
 EXPOSE 9898
 
-CMD ["/usr/local/bin/yb-pageserver", "-D", "/data/.yb_amp"]
+CMD ["/usr/local/bin/pageserver", "-D", "/data/.yb_amp"]

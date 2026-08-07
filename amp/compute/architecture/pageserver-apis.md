@@ -1,10 +1,10 @@
-# yb-pageserver APIs
+# pageserver APIs
 
 The pageserver exposes three surfaces:
 
 1. the **management HTTP API** — router in `make_router`
    (`compute/pageserver/src/http/routes.rs`), wired up in
-   `compute/pageserver/src/bin/yb-pageserver.rs`
+   `compute/pageserver/src/bin/pageserver.rs`
    (`start_pageserver` → `http::make_router`);
 2. the **compute-facing gRPC page service** —
    `GrpcPageServiceHandler` (`compute/pageserver/src/page_service.rs`)

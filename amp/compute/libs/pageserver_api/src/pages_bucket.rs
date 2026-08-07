@@ -3,7 +3,7 @@
 //!
 //! Lives here, rather than in the pageserver's `page_store`, because it is
 //! shared: the pageserver computes it on every write and binds it on every
-//! read, and the operator tools (`yb-dump-pages`) must compute the same value
+//! read, and the operator tools (`dump-pages`) must compute the same value
 //! to pin their queries. Two copies of a frozen key function is how rows go
 //! missing, so there is exactly one.
 

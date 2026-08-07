@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# G-battery for the NEW yb-pageserver (8k-page direct, no layers/compaction),
+# G-battery for the NEW pageserver (8k-page direct, no layers/compaction),
 # run OFF-BOX (isolated) on the 16-vCPU host 172.151.20.28, with the compute on
 # the 2-core box ybAmp (172.151.29.184). This is the apples-to-apples peer of
 # the prior off-box BLK battery (same topology, dataset, micro-battery), and it
@@ -42,12 +42,12 @@ SUMMARY="$OUT/SUMMARY.md"
 pq() { $PSQL -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$1" -v ON_ERROR_STOP=1 "${@:2}"; }
 log() { echo "[$(date +%T)] $*" | tee -a "$OUT/run.log"; }
 
-log "=== YB8K-OFFBOX battery label=$LABEL out=$OUT (new yb-pageserver, 8k-direct, OFF-BOX) ==="
+log "=== YB8K-OFFBOX battery label=$LABEL out=$OUT (new pageserver, 8k-direct, OFF-BOX) ==="
 
 # Start the off-box PS resource sampler for the WHOLE run (load is where peak
 # RSS shows up). Sampler runs locally on this box where the PS lives.
 PSLOG="$OUT/ps-resource.log"
-PSSP=$(start_local_proc_sampler "$PSLOG" "yb-pageserver -D /mnt/ps/pageserver_yb4")
+PSSP=$(start_local_proc_sampler "$PSLOG" "pageserver -D /mnt/ps/pageserver_yb4")
 
 # ---- A. schema + load --------------------------------------------------------
 log "A. (re)create db + schema"
@@ -147,9 +147,9 @@ read -r PS_CPU_BATT PS_RSS_BATT PS_RSS_PEAK < <(awk '
 # ---- E. summary --------------------------------------------------------------
 log "E. writing $SUMMARY"
 {
-  echo "# YB8K-OFFBOX battery — label=$LABEL (NEW yb-pageserver, 8k-direct, OFF-BOX)"
+  echo "# YB8K-OFFBOX battery — label=$LABEL (NEW pageserver, 8k-direct, OFF-BOX)"
   echo
-  echo "- Topology: compute on ybAmp 172.151.29.184 (2 vCPU, SB=100MB, LFC off); yb-pageserver OFF-BOX on 172.151.20.28 (16 vCPU)."
+  echo "- Topology: compute on ybAmp 172.151.29.184 (2 vCPU, SB=100MB, LFC off); pageserver OFF-BOX on 172.151.20.28 (16 vCPU)."
   echo "- Apples-to-apples peer of the prior off-box BLK battery (same topology, 5M-row dataset, G1-G6 micro-battery)."
   echo "- Tenant $TENANT / timeline $TIMELINE."
   echo "- Dataset: $ROWCOUNT rows, total relation $HEAP."
@@ -180,7 +180,7 @@ log "E. writing $SUMMARY"
   echo "- off-box PS avg CPU during battery: ${PS_CPU_BATT}% (single-core %)."
   echo "- off-box PS avg RSS during battery: ${PS_RSS_BATT}MB (peak ${PS_RSS_PEAK}MB)."
   echo "- off-box PS peak RSS during load:  ${PS_RSS_LOAD}MB."
-  echo "- NOTE: this build is the fixed 8k-direct yb-pageserver (git 5f806d17): query #1 GROUP BY rewrite + image materializer + [yb_page_writer] read_cache_bytes=8GiB, materialize_queue_capacity=5000. See ps-resource.log + compute-cpu.log."
+  echo "- NOTE: this build is the fixed 8k-direct pageserver (git 5f806d17): query #1 GROUP BY rewrite + image materializer + [yb_page_writer] read_cache_bytes=8GiB, materialize_queue_capacity=5000. See ps-resource.log + compute-cpu.log."
   echo
   echo "## pg_stat delta"
   echo '```'

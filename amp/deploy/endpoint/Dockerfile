@@ -1,7 +1,7 @@
 # yb-amp single-container endpoint image.
 #
 # Ships, in one image, every process that makes up a yb-amp endpoint:
-#   - yb-pageserver        (page service, backed by YugabyteDB)
+#   - pageserver        (page service, backed by YugabyteDB)
 #   - safekeeper           (WAL, backed by YugabyteDB)
 #   - compute_ctl + postgres v18 + the `yb_amp` extension (the compute)
 #   - yb-endpoint-supervisor (PID 1 under tini) that renders each service's
@@ -83,21 +83,21 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
     set -e \
     && RUSTFLAGS="-Clinker=clang -Clink-arg=-fuse-ld=mold -Clink-arg=-Wl,--no-rosegment -Cforce-frame-pointers=yes" \
        cargo build --locked --release \
-         --bin yb-pageserver \
-         --bin yb-safekeeper \
-         --bin yb-compute-ctl \
+         --bin pageserver \
+         --bin safekeeper \
+         --bin compute-ctl \
          --bin yb-endpoint-supervisor \
-         --bin yb-dump-pages \
-         --bin yb-dump-wals \
-         --bin yb-reset-consistent-lsn \
+         --bin dump-pages \
+         --bin dump-wals \
+         --bin reset-consistent-lsn \
     && mkdir -p /home/nonroot/out \
-    && cp target/release/yb-pageserver \
-          target/release/yb-safekeeper \
-          target/release/yb-compute-ctl \
+    && cp target/release/pageserver \
+          target/release/safekeeper \
+          target/release/compute-ctl \
           target/release/yb-endpoint-supervisor \
-          target/release/yb-dump-pages \
-          target/release/yb-dump-wals \
-          target/release/yb-reset-consistent-lsn \
+          target/release/dump-pages \
+          target/release/dump-wals \
+          target/release/reset-consistent-lsn \
           /home/nonroot/out/ \
     && mold -run make -j "$(nproc)" -s yb-amp-pg-ext
 
@@ -130,15 +130,15 @@ RUN set -e \
 # Storage + control-plane binaries (copied out of the cache-mounted target dir
 # into /home/nonroot/out by the build stage). The supervisor is copied further
 # down, next to the ENTRYPOINT that runs it.
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver      /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl         /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/pageserver           /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/safekeeper           /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/compute-ctl          /usr/local/bin/
 
 # Operator diagnostic tools (the tools crate): dump the YB-backed page store /
 # WAL, reset the consistent LSN. On PATH so an operator can `docker exec` and run them.
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-dump-pages          /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-dump-wals           /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-reset-consistent-lsn /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/dump-pages           /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/dump-wals            /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/reset-consistent-lsn /usr/local/bin/
 # The storage binaries link libyb_thin_client.so (a DT_NEEDED) but carry no
 # rpath for it, so ship it at a fixed path and put that on the loader search
 # path via LD_LIBRARY_PATH (distro-agnostic — the base's default lib dir

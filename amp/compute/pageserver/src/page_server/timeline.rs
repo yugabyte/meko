@@ -116,7 +116,7 @@ pub struct Timeline {
     /// minimal residual state callers still care about.
     pub(crate) remote_state: Arc<remote_state::TimelineRemoteState>,
 
-    /// yb-pageserver row-per-page writer. `Some` enables dual-write at
+    /// pageserver row-per-page writer. `Some` enables dual-write at
     /// `TimelineWriter::put_batch`: every `(Key, LSN, Value)` digested
     /// by walingest is also forwarded to `PageStore` via the 10-delta
     /// rule. `None` is upstream layer-file-only behaviour.
@@ -876,21 +876,21 @@ impl Timeline {
             return Ok(BTreeMap::default());
         }
 
-        // yb-pageserver read path: every range goes through the row
+        // pageserver read path: every range goes through the row
         // store. Inside `get_vectored_via_page_writer` we classify each
         // range by its start key:
         //   - rel-page  → amp_storage.pages    (chain + walredo)
         //   - slru-block → amp_storage.slru_pages (chain + walredo)
         //   - else      → amp_storage.meta     (single payload, no walredo)
         //
-        // Production yb-pageserver always has `page_writer = Some(_)`;
+        // Production pageserver always has `page_writer = Some(_)`;
         // the legacy LayerMap traversal that used to fall through here
         // is gone (Phase 4d). If page_writer is None at this point the
         // tenant is misconfigured — surface that as a clear error
         // rather than a panic from `expect`.
         let Some(page_writer) = self.page_writer.clone() else {
             return Err(GetVectoredError::Other(anyhow::anyhow!(
-                "Timeline has no PageWriter — yb-pageserver mode requires both \
+                "Timeline has no PageWriter — pageserver mode requires both \
                  compute_page_store and fpu_page_store to be configured"
             )));
         };
@@ -898,7 +898,7 @@ impl Timeline {
             .await
     }
 
-    /// yb-pageserver row-per-page read path. Replaces the LayerMap
+    /// pageserver row-per-page read path. Replaces the LayerMap
     /// traversal: per requested key at its target LSN, read the chain
     /// from `PageWriter::scan_range` (which blends in-RAM buffered
     /// rows with `amp_storage.pages`), decode into walredo's
@@ -1504,16 +1504,16 @@ impl Timeline {
         Ok(lease)
     }
 
-    /// yb-pageserver durability checkpoint: drain the `PageWriter`
+    /// pageserver durability checkpoint: drain the `PageWriter`
     /// row-INSERT buffer into YugabyteDB.
     ///
     /// Replaces the original Neon freeze-inmem-layer → flush-to-disk
-    /// pipeline (delta + image layer files). yb-pageserver never opens an
+    /// pipeline (delta + image layer files). pageserver never opens an
     /// in-memory layer — writes go straight into the `PageWriter` row
     /// buffer — so there is nothing to *freeze*; "make pending writes
     /// durable" is just flushing that buffer, and YB's Raft replication
     /// takes it from there. No-op if there's no `PageWriter` (a
-    /// yb-pageserver with no page stores wouldn't accept writes anyway).
+    /// pageserver with no page stores wouldn't accept writes anyway).
     #[instrument(skip(self), fields(branch_id=%self.branch_id))]
     pub(crate) async fn flush(&self) -> Result<(), FlushLayerError> {
         if let Some(pw) = &self.page_writer {
@@ -1543,7 +1543,7 @@ impl Timeline {
     }
 
     /// yb-amp: no-op. In Neon this background task closes open
-    /// ephemeral InMemoryLayers when idle / oversized. yb-pageserver
+    /// ephemeral InMemoryLayers when idle / oversized. pageserver
     /// never opens an InMemoryLayer (writes go straight into
     /// `PageWriter`'s row buffer and through to YB), so there is
     /// nothing to roll. The `PageWriter` has its own size + age
@@ -3137,7 +3137,7 @@ impl TimelineWriter<'_> {
         // without a PageWriter has nowhere to put the data.
         let page_writer = self.tl.page_writer.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
-                "Timeline has no PageWriter — yb-pageserver mode requires both \
+                "Timeline has no PageWriter — pageserver mode requires both \
                  compute_page_store and fpu_page_store to be configured"
             )
         })?;

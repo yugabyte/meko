@@ -1,4 +1,4 @@
-# yb-pageserver
+# pageserver
 
 The pageserver materialises the WAL stream into pages and serves them
 to compute Postgres. Its storage model is **one YugabyteDB row per page
@@ -16,12 +16,12 @@ scratch space only (initdb tarball, basebackup cache, pid file) and is
 never authoritative.
 
 The crate is `compute/pageserver/`; the shipped binary is named
-`yb-pageserver` so the storage backend is obvious in `ps`, logs, and
-deployments. Build with `cargo build -p pageserver --bin yb-pageserver`.
+`pageserver` so the storage backend is obvious in `ps`, logs, and
+deployments. Build with `cargo build -p pageserver --bin pageserver`.
 
 ## Single-branch process model
 
-One yb-pageserver process serves exactly **one `branch_id` for its
+One pageserver process serves exactly **one `branch_id` for its
 entire lifetime**. The identity is baked into `pageserver.toml` by the
 launcher before spawn:
 
@@ -91,16 +91,16 @@ inventory is in [`pageserver-apis.md`](pageserver-apis.md).
 
 ## Connections to YugabyteDB
 
-`bin/yb-pageserver.rs` opens two `PageStore` handles at startup, each
+`bin/pageserver.rs` opens two `PageStore` handles at startup, each
 with its own YSQL connection pool, so compute-facing reads never queue
 behind internal writes:
 
 - **`compute_page_store`** (`application_name =
-  "yb-pageserver:compute_reads"`, pool of 2 × `scale_factor`) — the
+  "pageserver:compute_reads"`, pool of 2 × `scale_factor`) — the
   GetPage hot path (`PageWriter::scan_range` / `read_chain`). Compute
   backends issue parallel prefetches, and each lands on its own YSQL
   connection instead of serialising on one backend.
-- **`fpu_page_store`** (`application_name = "yb-pageserver:fpu"`, pool
+- **`fpu_page_store`** (`application_name = "pageserver:fpu"`, pool
   of 2 × `scale_factor`) — walreceiver flushes, the materialiser's
   durable chain reads, and the materialiser's image INSERTs. Each
   connection runs `SET yb_enable_upsert_mode = true`
@@ -392,7 +392,7 @@ high `raw_incompressible` share on the image path means the data is
 already compressed upstream (e.g. Postgres `wal_compression`) and the
 CPU is being spent for nothing.
 
-**Inspection.** `yb-dump-pages` decodes client-side and reports the
+**Inspection.** `dump-pages` decodes client-side and reports the
 codec tag, stored length, decoded length, and a hex head of the decoded
 payload; a row it cannot decode is printed as `<undecodable: …>` rather
 than aborting the dump. Server-side `octet_length(payload)` or
@@ -1170,7 +1170,7 @@ The compute opens libpq connections to the pageserver per backend
 | Reconnect attempts before erroring to the query | `max_reconnect_attempts` | 60 (1 s backoff each) | A hard-down pageserver surfaces to the compute query in roughly 30 s + 60 × 1 s ≈ 90 s |
 | Pageserver-side activation wait | none | — | The branch opens synchronously before listeners start; until then computes get ECONNREFUSED and retry via the loop above |
 
-## What yb-pageserver does not do
+## What pageserver does not do
 
 - **Compaction** — none. Image creation is the async background
   materialiser; there is no L0/L1 layer work because there are no
@@ -1222,7 +1222,7 @@ The compute opens libpq connections to the pageserver per backend
   the replay-quarantine latch, `force_flush`.
 - `compute/pageserver/src/page_server/timeline/walreceiver/` —
   safekeeper connection management and interpreted-WAL ingest.
-- `compute/pageserver/src/bin/yb-pageserver.rs` — process wiring:
+- `compute/pageserver/src/bin/pageserver.rs` — process wiring:
   config load, listeners, the two PageStore pools, synchronous open.
 - `compute/libs/pageserver_api/src/config.rs` — `ConfigToml`,
   `YbPageWriterConfig`, `TimelineInitConfig`, `scale_factor` helpers.

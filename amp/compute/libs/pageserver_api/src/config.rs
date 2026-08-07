@@ -140,8 +140,8 @@ impl Display for NodeMetadata {
 ///
 /// yb-amp note: although `ConfigToml` itself still ignores unknown fields at
 /// the serde layer (this struct has no `deny_unknown_fields`), the yb-amp
-/// `yb-pageserver` binary treats any ignored field as fatal and refuses to
-/// start (see `bin/yb-pageserver.rs`, which diffs the on-disk TOML against the
+/// `pageserver` binary treats any ignored field as fatal and refuses to
+/// start (see `bin/pageserver.rs`, which diffs the on-disk TOML against the
 /// re-serialized config). The upstream rollout/rollback rationale above does
 /// not apply here: yb-amp's `pageserver.toml` is launcher-generated against
 /// the same build, so a stray key is an operator mistake, not a fleet-skew
@@ -262,14 +262,14 @@ pub struct ConfigToml {
     /// the historical value.
     pub s3_upload_limit_bytes: u64,
 
-    /// yb-pageserver row-per-page writer tunables. The upstream
+    /// pageserver row-per-page writer tunables. The upstream
     /// `pageserver` binary ignores these — they only take effect when
     /// `yb_storage_conn.kind = "YbStore"` and the binary is
-    /// `yb-pageserver`.
+    /// `pageserver`.
     #[serde(default)]
     pub yb_page_writer: YbPageWriterConfigToml,
 
-    /// Codec the yb-pageserver compresses `BYTEA` payload columns with
+    /// Codec the pageserver compresses `BYTEA` payload columns with
     /// (`amp_storage.pages`, `amp_storage.slru_pages`, `amp_storage.meta`).
     /// Write-side only: the read path decodes whatever tag each row carries,
     /// so changing this and restarting needs no migration — new rows use the

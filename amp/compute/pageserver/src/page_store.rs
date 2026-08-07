@@ -1,6 +1,6 @@
 //! `PageStore` — YugabyteDB row store for **relation pages only**.
 //!
-//! This is yb-pageserver's replacement for the upstream layer-file
+//! This is pageserver's replacement for the upstream layer-file
 //! machinery, but **only for relation-page keys** — i.e. keys where
 //! `Key::is_rel_block_key()` holds (`field1 == 0x00`, `field4 != 0`,
 //! `field6 != 0xffffffff`). Non-page keys (SLRUs, metadata, dir
@@ -1024,7 +1024,7 @@ const ROWS_PER_INSERT: usize = 500;
 pub const GC_BUCKETS: i32 = 10;
 
 /// Concurrent GC action DELETEs per drain tick (scaled); the dedicated
-/// `yb-pageserver:gc` pool is sized to this.
+/// `pageserver:gc` pool is sized to this.
 pub const GC_ACTION_PARALLELISM: usize = 1;
 
 /// Encode a `Key` to its fixed 18-byte wire form — the `pending_gc.key`
@@ -1054,7 +1054,7 @@ pub fn gc_bucket_id(key: &Key) -> i32 {
 }
 
 /// The `amp_storage.pages` placement bucket, shared with the operator tools
-/// (`yb-dump-pages` pins its queries with the same function). Defined once in
+/// (`dump-pages` pins its queries with the same function). Defined once in
 /// `pageserver_api` — a second copy of a frozen key function is how rows go
 /// missing.
 pub use pageserver_api::pages_bucket::{

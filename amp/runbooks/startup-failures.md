@@ -7,7 +7,7 @@ the conventions below.
 
 ## Conventions (fill these in for your deployment)
 ```bash
-export PS_HOST=...        export PS_HTTP_PORT=...      # yb-pageserver
+export PS_HOST=...        export PS_HTTP_PORT=...      # pageserver
 export SC_BASE=http://<sc-host>:<sc-port>             # controller
 export SK_HOST=...        export SK_PG_PORT=...        # safekeeper PG listen
 export COMPUTE_HOST=...   export COMPUTE_PORT=...      # yb-amp compute

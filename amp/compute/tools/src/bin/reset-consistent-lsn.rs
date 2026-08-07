@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
     let seg = WAL_SEGMENT_SIZE as u64;
 
     let cfg = args.conn.into_config();
-    let client = YsqlClient::from_yb_config(&cfg, "yb-reset-consistent-lsn", false)
+    let client = YsqlClient::from_yb_config(&cfg, "reset-consistent-lsn", false)
         .await
         .context("connecting to yb_storage")?;
 

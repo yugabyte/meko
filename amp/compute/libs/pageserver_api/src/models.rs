@@ -758,7 +758,7 @@ impl Display for ImageCompressionAlgorithm {
     }
 }
 
-/// Codec the yb-pageserver compresses `BYTEA` payload columns with before
+/// Codec the pageserver compresses `BYTEA` payload columns with before
 /// binding them — `amp_storage.pages.payload`, `amp_storage.slru_pages.payload`
 /// and `amp_storage.meta.payload`.
 ///

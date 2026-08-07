@@ -275,7 +275,7 @@ pub fn services(l: &Layout) -> Vec<Service> {
         Service::new(
             "safekeeper",
             vec![
-                l.bin_dir.join("yb-safekeeper").to_string(),
+                l.bin_dir.join("safekeeper").to_string(),
                 "-D".into(),
                 l.sk_datadir().to_string(),
             ],
@@ -285,14 +285,14 @@ pub fn services(l: &Layout) -> Vec<Service> {
         Service::new(
             "pageserver",
             vec![
-                l.bin_dir.join("yb-pageserver").to_string(),
+                l.bin_dir.join("pageserver").to_string(),
                 "-D".into(),
                 l.ps_datadir().to_string(),
             ],
         )
         .cwd(l.ps_datadir())
         .health(status_probe(l.pageserver_http_port, "/v1/status")),
-        // Every flag here is one `yb-compute-ctl` actually declares. The spec file
+        // Every flag here is one `compute-ctl` actually declares. The spec file
         // is `--config`; `--compute-id` is a required `String` with no default, so
         // omitting it fails clap parsing and the process exits before it does
         // anything. `--dev` skips the VM-specific operations that have no meaning
@@ -300,7 +300,7 @@ pub fn services(l: &Layout) -> Vec<Service> {
         Service::new(
             "compute_ctl",
             vec![
-                l.bin_dir.join("yb-compute-ctl").to_string(),
+                l.bin_dir.join("compute-ctl").to_string(),
                 "--pgdata".into(),
                 l.pgdata().to_string(),
                 "--connstr".into(),
@@ -378,7 +378,7 @@ mod tests {
         assert_eq!(pgbin, "/usr/local/v18/bin/postgres", "{argv:?}");
     }
 
-    /// Every flag in the compute's argv must be one `yb-compute-ctl` declares, and
+    /// Every flag in the compute's argv must be one `compute-ctl` declares, and
     /// the required ones must be present. A wrong flag name or a missing
     /// `--compute-id` fails clap parsing, so the process exits before it does any
     /// work and the pod crash-loops — invisible to a test that only checks the

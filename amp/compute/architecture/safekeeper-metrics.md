@@ -1,7 +1,7 @@
 # Safekeeper Prometheus Metrics
 
 Source: `compute/safekeeper/src/metrics.rs` (definitions),
-`compute/safekeeper/src/bin/yb-safekeeper.rs` (`TimelineCollector`
+`compute/safekeeper/src/bin/safekeeper.rs` (`TimelineCollector`
 registration + the forced-collection ticker).
 
 Metrics are exposed at `GET /metrics` (auth-exempt; see

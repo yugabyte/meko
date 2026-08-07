@@ -346,7 +346,7 @@ runs:
    the queue keeps draining instead of the whole branch wedging.
 
 The whole drain (select, actions, dequeue) runs on a dedicated
-**`yb-pageserver:gc` connection pool** sized to the action width, so a
+**`pageserver:gc` connection pool** sized to the action width, so a
 backlogged drain never contends with the ingest/materialiser lanes or
 compute reads. Candidate *inserts* stay on the fpu pool — they need its
 upsert mode for replay dedup, and their volume is a rounding error.

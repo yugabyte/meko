@@ -2,7 +2,7 @@
 //! position, by replaying the real [`WalStreamDecoder`] over raw WAL
 //! bytes.
 //!
-//! Both the pageserver (`yb-reset-consistent-lsn`) and the safekeeper
+//! Both the pageserver (`reset-consistent-lsn`) and the safekeeper
 //! (rehydrating its end-of-WAL on restart) need this: the raw "max byte
 //! offset" persisted in `wals` can land **mid-record** when an
 //! ungraceful compute shutdown leaves a torn trailing page. Treating that

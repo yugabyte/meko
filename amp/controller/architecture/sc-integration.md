@@ -67,7 +67,7 @@ controller is, today — auth is deferred, #189).
   HTTP via `controller/local/client` — its user and pool, its projects, its
   branches, its endpoints. It starts the controller with
   `--deploy-driver=local`, so endpoint creates keep the record and launch
-  nothing; the launcher spawns `yb-compute-ctl` itself, and what it needs to do
+  nothing; the launcher spawns `compute-ctl` itself, and what it needs to do
   that rides on the endpoint row — its handle as `name`, its GUCs as
   `pg_settings`, its ports as the opaque `extended_config`. The integration
   harness (`test/integration/compute/`) exercises the same path.

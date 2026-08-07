@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
     if seg <= 0 {
         bail!("--wal-seg-size must be positive");
     }
-    let client = YsqlClient::from_yb_config(&args.conn.into_config(), "yb-dump-wals", false)
+    let client = YsqlClient::from_yb_config(&args.conn.into_config(), "dump-wals", false)
         .await
         .context("connecting to yb_storage")?;
 

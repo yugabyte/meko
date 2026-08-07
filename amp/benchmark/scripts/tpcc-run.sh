@@ -89,7 +89,7 @@ for phase in "${phases[@]}"; do
       cpu_pid=$(start_server_cpu_sampler "$outdir/server-cpu.log")
       io_pid=$(start_server_io_sampler  "$outdir/server-io.log" nvme1n1)
       # Off-box pageserver runs on this harness host (16-core box) in split mode.
-      ps_pid=$(start_local_proc_sampler "$outdir/ps-cpu-rss.log" yb-pageserver)
+      ps_pid=$(start_local_proc_sampler "$outdir/ps-cpu-rss.log" pageserver)
       snapshot_ps_metrics "$outdir/ps-metrics-start.txt"
       snapshot_pg_stat tpcc "$outdir/pg-stat-start.raw"
       mark_timestamp "$outdir" "START"

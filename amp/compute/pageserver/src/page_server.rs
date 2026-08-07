@@ -559,7 +559,7 @@ impl PageServer {
             });
         timeline.maybe_spawn_flush_loop();
 
-        // yb-pageserver: page data lives in amp_storage.pages /
+        // pageserver: page data lives in amp_storage.pages /
         // slru_pages / meta, never in layer files. A timeline with
         // no ancestor and no layer files is the normal post-restart
         // state.

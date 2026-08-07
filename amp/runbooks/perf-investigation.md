@@ -10,7 +10,7 @@ Topology-agnostic: components may be co-located or split across boxes. Fill in t
 
 ## Conventions
 ```bash
-export PS_HOST=...   export PS_HTTP_PORT=...     # yb-pageserver metrics/HTTP
+export PS_HOST=...   export PS_HTTP_PORT=...     # pageserver metrics/HTTP
 export COMPUTE_HOST=... export COMPUTE_PORT=...   # yb-amp compute
 export PSQL=<path-to>/psql
 export C="host=$COMPUTE_HOST port=$COMPUTE_PORT user=cloud_admin dbname=tpcc sslmode=disable"
@@ -73,7 +73,7 @@ $M | grep -E '^pageserver_yb_pagewriter_delta_counts_entries|^pageserver_yb_mate
 ## 4. Pageserver memory / RSS
 PS RSS can look alarming; decide leak vs. cache vs. genuine live heap before acting.
 ```bash
-ps -o rss,comm -C yb-pageserver
+ps -o rss,comm -C pageserver
 $M | grep -E '^pageserver_yb_.*bytes'          # in-flight write/read buffers
 curl -s http://$PS_HOST:$PS_HTTP_PORT/profile/heap   # jemalloc heap profile (allocated vs mapped)
 ```
@@ -109,7 +109,7 @@ After a PS restart, watch whether it replays a large WAL backlog before serving:
 # wherever compute / safekeeper / SC run:
 top -bn1 -w 200 | head -15
 # wherever the pageserver runs:
-ps -o %cpu,rss,comm -C yb-pageserver
+ps -o %cpu,rss,comm -C pageserver
 ```
 Interpret relative to core count:
 - compute near full core count → genuinely compute CPU-bound (loader threads won't help).
@@ -139,7 +139,7 @@ spending time on a tuning theory.
 | getpage mean latency | `$M \| awk '…get_page_at_lsn…'` (§2) |
 | delta backlog growing? | `$M \| grep delta_counts_entries` (§3) |
 | materializer keeping up? | `$M \| grep yb_materializer_` (§3) |
-| PS RSS | `ps -o rss,comm -C yb-pageserver` |
+| PS RSS | `ps -o rss,comm -C pageserver` |
 | PS heap (leak vs cache) | `curl …/profile/heap` |
 | WAL rate | `pg_wal_lsn_diff` over 4 s (throughput runbook §2) |
 | backend waits | `pg_stat_activity` loop (throughput runbook §1) |

@@ -26,7 +26,7 @@ starts the services in order, and monitors/restarts them:
 ```
  tini ─ yb-endpoint-supervisor
           ├─ safekeeper            (WAL → amp_storage.wals)
-          ├─ yb-pageserver         (page service → amp_storage.* ; initdb on bootstrap)
+          ├─ pageserver            (page service → amp_storage.* ; initdb on bootstrap)
           └─ compute_ctl ─ postgres + yb_amp extension   (the compute)
 ```
 

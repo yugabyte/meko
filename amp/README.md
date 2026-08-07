@@ -356,18 +356,18 @@ same `make` targets directly if you prefer: `make -j$(nproc) -s` for debug,
 laid out as:
 
 ```
-yb-pageserver            # the binary yb_amp_local launches
+pageserver               # the binary yb_amp_local launches
 yb_amp_local
-yb-safekeeper
+safekeeper
 controller
-yb-compute-ctl
-tools/                   # yb-dump-pages, yb-dump-wals, yb-reset-consistent-lsn
+compute-ctl
+tools/                   # dump-pages, dump-wals, reset-consistent-lsn
 lib/                     # libssl/libcrypto 1.1 + libicu 60 (not on stock RHEL 9)
 pg_install/v18/          # patched PG + extensions + the same runtime libs
 REVISION.txt             # build host / date / commit
 ```
 
-`yb_amp_local` launches `yb-pageserver` from `yb_amp_distrib_dir`
+`yb_amp_local` launches `pageserver` from `yb_amp_distrib_dir`
 (set in `~/.yb_amp/config`).
 
 ## Tests
@@ -421,7 +421,7 @@ and chaos through it, and reports what happened. See
 ## Operator tools
 
 `cargo build -p tools` builds three row-store inspection binaries —
-`yb-dump-pages`, `yb-dump-wals`, and `yb-reset-consistent-lsn` — for reading
+`dump-pages`, `dump-wals`, and `reset-consistent-lsn` — for reading
 and repairing the YB tables during an incident. `build.sh --release-tar` ships
 them under `${BUNDLE}/tools/`. See
 [`compute/README.md`](compute/README.md#operator-tools) for the per-tool flags

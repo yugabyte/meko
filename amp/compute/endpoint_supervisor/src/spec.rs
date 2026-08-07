@@ -104,7 +104,7 @@ pub fn render_compute_spec(
     }
 
     // The file compute_ctl reads is a ComputeConfig -- `{ spec, compute_ctl_config }`
-    // (`compute_api::responses::ComputeConfig`, read by bin/yb-compute-ctl.rs) --
+    // (`compute_api::responses::ComputeConfig`, read by bin/compute-ctl.rs) --
     // NOT a bare spec. Emitting the spec fields at the top level produces a file
     // it cannot deserialize, so the compute never starts.
     json!({

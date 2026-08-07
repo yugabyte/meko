@@ -95,7 +95,7 @@ done
 # from a previous build, which surfaces as baffling runtime mismatches
 # (e.g. a fresh launcher sending a request shape an old controller
 # can't parse). Keep this list in sync with the binaries `yb_amp_local`
-# spawns: controller, yb-pageserver, safekeeper,
+# spawns: controller, pageserver, safekeeper,
 # compute_ctl.
 #
 # The diagnostic tools are compiled bins too; the `tools` scenario shells
@@ -107,11 +107,11 @@ done
 # `pkg/feature` form scopes it to the pageserver crate only; untriggered
 # failpoints cost a single atomic load per site.
 CLUSTER_BINS=(
-    --bin yb-pageserver
-    --bin yb-safekeeper
-    --bin yb-compute-ctl
+    --bin pageserver
+    --bin safekeeper
+    --bin compute-ctl
 )
-TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)
+TOOL_BINS=(--bin dump-pages --bin dump-wals --bin reset-consistent-lsn)
 
 # Preflight: every suite needs a YugabyteDB reachable at YB_HOST:YB_PORT — the
 # harness connects to it but never starts it. Check before the (multi-minute)

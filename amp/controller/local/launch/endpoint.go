@@ -440,7 +440,7 @@ func checkConflictingEndpoints(endpoints launcherEndpoints, branchID config.Bran
 	return nil
 }
 
-// EndpointStart builds the compute config, spawns yb-compute-ctl, and waits
+// EndpointStart builds the compute config, spawns compute-ctl, and waits
 // for the compute to reach Running. Mirrors the `EndpointCmd::Start` arm of
 // Rust `handle_endpoint` + `Endpoint::start`.
 func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string, timeout time.Duration) error {
@@ -579,7 +579,7 @@ func computeJWT(env *config.LocalEnv, endpointID string) (string, error) {
 	})
 }
 
-// spawnComputeCtl writes config.json, launches yb-compute-ctl (hand-rolled
+// spawnComputeCtl writes config.json, launches compute-ctl (hand-rolled
 // pidfile, full inherited env — unlike the storage daemons), and polls
 // /status until Running. Mirrors the process-launch half of Rust
 // `Endpoint::start`.
@@ -621,7 +621,7 @@ func spawnComputeCtl(ctx context.Context, env *config.LocalEnv, conf *endpointCo
 		args = append(args, "--privileged-role-name", *conf.PrivilegedRoleName)
 	}
 
-	cmd := exec.Command(filepath.Join(env.YbAmpDistribDir, "yb-compute-ctl"), args...)
+	cmd := exec.Command(filepath.Join(env.YbAmpDistribDir, "compute-ctl"), args...)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -630,7 +630,7 @@ func spawnComputeCtl(ctx context.Context, env *config.LocalEnv, conf *endpointCo
 	cmd.Env = os.Environ()
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("spawn yb-compute-ctl: %w", err)
+		return fmt.Errorf("spawn compute-ctl: %w", err)
 	}
 	pid := cmd.Process.Pid
 

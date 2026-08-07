@@ -7,7 +7,7 @@
 # this drives the FULL upstream suite straight from the vendored Postgres
 # source (compute/vendor/postgres-v18/src/test/regress) via the stock pg_regress
 # binary. It brings up a throwaway yb_amp_local cluster (compute ->
-# yb-pageserver/safekeeper -> YugabyteDB), creates the `regression`
+# pageserver/safekeeper -> YugabyteDB), creates the `regression`
 # database, runs the parallel schedule, and tears the cluster down.
 #
 # Defaults to RELEASE: the full suite is ~200 tests with getpage/WAL
@@ -93,8 +93,8 @@ fi
 #    them itself — a stale one surfaces as baffling runtime mismatches). The
 #    four server binaries are cargo targets; yb_amp_local and the controller are
 #    Go (controller/local/cmd, controller/cmd), built separately below.
-CLUSTER_BINS=(--bin yb-pageserver --bin yb-safekeeper
-              --bin yb-compute-ctl)
+CLUSTER_BINS=(--bin pageserver --bin safekeeper
+              --bin compute-ctl)
 echo ">>> building cluster binaries ($PROFILE)..."
 if [[ $PROFILE == release ]]; then
     cargo build --release "${CLUSTER_BINS[@]}"

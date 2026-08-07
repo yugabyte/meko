@@ -13,16 +13,16 @@ license.workspace = true
 # and a hand-copied formula that drifted would make these tools silently
 # report fewer rows than exist.
 [[bin]]
-name = "yb-dump-pages"
-path = "src/bin/yb-dump-pages.rs"
+name = "dump-pages"
+path = "src/bin/dump-pages.rs"
 
 [[bin]]
-name = "yb-dump-wals"
-path = "src/bin/yb-dump-wals.rs"
+name = "dump-wals"
+path = "src/bin/dump-wals.rs"
 
 [[bin]]
-name = "yb-reset-consistent-lsn"
-path = "src/bin/yb-reset-consistent-lsn.rs"
+name = "reset-consistent-lsn"
+path = "src/bin/reset-consistent-lsn.rs"
 
 [dependencies]
 anyhow.workspace = true

@@ -37,7 +37,7 @@ use std::sync::atomic::Ordering;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-/// Configure jemalloc — same tuning as `yb-pageserver`:
+/// Configure jemalloc — same tuning as `pageserver`:
 ///
 /// - `prof:true,prof_active:true,lg_prof_sample:21` — heap profile,
 ///   sample every 2 MiB (~3% allocator overhead).

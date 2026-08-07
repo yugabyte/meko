@@ -8,7 +8,7 @@ import "context"
 // the branch it hangs off — but the process that row names is not its to place,
 // so every method here is a no-op that reports success.
 //
-// yb_amp_local is the only such topology: it spawns yb-compute-ctl itself, with
+// yb_amp_local is the only such topology: it spawns compute-ctl itself, with
 // its own ports and data directory, and a controller that also tried to deploy
 // would be fighting it for the same endpoint. Selecting this driver is what lets
 // the launcher use the product endpoint API (§11) instead of a second surface.

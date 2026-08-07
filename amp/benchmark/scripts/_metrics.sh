@@ -64,7 +64,7 @@ stop_local_proc_sampler() {
 summarize_proc_sampler() {
   local logfile="$1"
   awk '
-    /yb-pageserver/ {
+    /pageserver/ {
       c=""; r=""
       if (match($0, /cpu=[[:space:]]*[0-9.]+/)) { c=substr($0,RSTART,RLENGTH); gsub(/[^0-9.]/,"",c) }
       if (match($0, /rss=[[:space:]]*[0-9.]+/)) { r=substr($0,RSTART,RLENGTH); gsub(/[^0-9.]/,"",r) }
@@ -78,7 +78,7 @@ summarize_proc_sampler() {
     }' "$logfile"
 }
 
-# Fetch the yb-pageserver backpressure/queue Prometheus metrics from the off-box
+# Fetch the pageserver backpressure/queue Prometheus metrics from the off-box
 # PS HTTP endpoint into $1. Captures the new backpressure counters/gauges so we
 # can see whether backpressure engaged during a run.
 snapshot_ps_metrics() {

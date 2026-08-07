@@ -2,7 +2,7 @@
 
 Source: `compute/safekeeper/src/http/routes.rs` (router + handlers),
 `compute/safekeeper/src/http/mod.rs` (HTTP/HTTPS servers),
-`compute/safekeeper/src/bin/yb-safekeeper.rs` (listener wiring),
+`compute/safekeeper/src/bin/safekeeper.rs` (listener wiring),
 `compute/libs/safekeeper_api/src/lib.rs` (port defaults).
 
 The safekeeper exposes a small JSON/HTTP control-and-observability surface.
@@ -12,7 +12,7 @@ speaks (WAL push/stream); see
 
 ## Binary, listen address, auth
 
-- **Binary**: `yb-safekeeper`. The HTTP router is built by `make_router()`
+- **Binary**: `safekeeper`. The HTTP router is built by `make_router()`
   and served on the listener bound to `listen_http` from `safekeeper.toml`
   (default `127.0.0.1:7676`; `DEFAULT_HTTP_LISTEN_PORT = 7676` in
   `compute/libs/safekeeper_api/src/lib.rs`). An optional HTTPS listener is

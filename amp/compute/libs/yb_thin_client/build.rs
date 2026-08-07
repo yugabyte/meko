@@ -231,7 +231,7 @@ fn main() {
     // their OWN rpath. Requires `links = "yb_thin_client"` in Cargo.toml;
     // cargo then exposes this to every direct dependent's build script as
     // `DEP_YB_THIN_CLIENT_LIB_DIR`. The daemon crates read it and emit their
-    // own `-Wl,-rpath`, so `yb-pageserver` / `yb-safekeeper` and their test
+    // own `-Wl,-rpath`, so `pageserver` / `safekeeper` and their test
     // binaries resolve the shim unaided — no `LD_LIBRARY_PATH` needed for a
     // bare `cargo test` or a hand-launched `yb_amp_local`.
     //

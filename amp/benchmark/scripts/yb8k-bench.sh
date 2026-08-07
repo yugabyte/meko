@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# G-battery for the NEW yb-pageserver (8k-page direct, no layers/compaction),
+# G-battery for the NEW pageserver (8k-page direct, no layers/compaction),
 # CO-LOCATED with the compute on the 2-core box ybAmp (172.151.29.184).
 # Client/orchestration runs on 172.151.20.28 (same as the prior off-box BLK
 # battery), so the pgbench client path is identical for a fair comparison.
@@ -37,7 +37,7 @@ SUMMARY="$OUT/SUMMARY.md"
 pq() { $PSQL -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$1" -v ON_ERROR_STOP=1 "${@:2}"; }
 log() { echo "[$(date +%T)] $*" | tee -a "$OUT/run.log"; }
 
-log "=== YB8K battery label=$LABEL out=$OUT (new yb-pageserver, 8k-direct, co-located) ==="
+log "=== YB8K battery label=$LABEL out=$OUT (new pageserver, 8k-direct, co-located) ==="
 
 # ---- A. schema + load --------------------------------------------------------
 log "A. (re)create db + schema"
@@ -78,7 +78,7 @@ log "B. pages=$PAGES slru=$SLRU logical=$PAGE_LOGICAL last_record_lsn=$LAST"
 
 # ---- C. full-scan timing (NO PS restart) ------------------------------------
 # SB=100MB + LFC off means the ~1.27 GB table cannot be cached, so each scan
-# re-fetches 8k pages from the co-located yb-pageserver (-> YB).
+# re-fetches 8k pages from the co-located pageserver (-> YB).
 log "C. full-scan timing (no PS restart)"
 timed() { local t0 t1; t0=$(date +%s.%N); pq "$DBNAME" -tAc "SELECT count(*),sum(val) FROM big_table" >/dev/null; t1=$(date +%s.%N); awk "BEGIN{printf \"%.2f\", $t1-$t0}"; }
 COLD=$(timed)
@@ -120,9 +120,9 @@ CPU_PS=$(awk -F'cpu=' '/pageserver/{gsub(/%.*/,"",$2); s+=$2; n++} END{if(n)prin
 # ---- E. summary --------------------------------------------------------------
 log "E. writing $SUMMARY"
 {
-  echo "# YB8K battery — label=$LABEL (NEW yb-pageserver, 8k-direct, no layers)"
+  echo "# YB8K battery — label=$LABEL (NEW pageserver, 8k-direct, no layers)"
   echo
-  echo "- Topology: compute + yb-pageserver CO-LOCATED on 172.151.29.184 (2 vCPU, SB=100MB, LFC off)."
+  echo "- Topology: compute + pageserver CO-LOCATED on 172.151.29.184 (2 vCPU, SB=100MB, LFC off)."
   echo "- Client/pgbench on 172.151.20.28 (same client path as prior off-box BLK battery)."
   echo "- Tenant $TENANT / timeline $TIMELINE."
   echo "- Dataset: $ROWCOUNT rows, total relation $HEAP."
@@ -149,7 +149,7 @@ log "E. writing $SUMMARY"
   echo
   echo "## CPU (co-located, single-core %)"
   echo "- postgres compute avg CPU: ${CPU_POSTGRES}%"
-  echo "- yb-pageserver avg CPU:    ${CPU_PS}%"
+  echo "- pageserver avg CPU:    ${CPU_PS}%"
   echo "- see compute-cpu.log for the full per-process trace."
   echo
   echo "## pg_stat delta"

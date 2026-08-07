@@ -1,7 +1,7 @@
 # compute_ctl
 
 `compute_ctl` (the `compute/compute_tools/` crate; the binary is built from
-`src/bin/yb-compute-ctl.rs` and ships as `yb-compute-ctl`) is the **per-endpoint
+`src/bin/compute-ctl.rs` and ships as `compute-ctl`) is the **per-endpoint
 supervisor**. One `compute_ctl` process runs alongside every compute: it acquires the
 endpoint's spec, generates `postgresql.conf`, reads the durable LSN from the safekeeper,
 pulls a basebackup from the pageserver, starts Postgres, applies the spec (roles /
@@ -69,7 +69,7 @@ re-points the `compute_ctl_up{build_tag,status}` gauge.
 
 ## Startup sequence
 
-`main()` (`bin/yb-compute-ctl.rs`) parses CLI args, builds a multi-thread tokio
+`main()` (`bin/compute-ctl.rs`) parses CLI args, builds a multi-thread tokio
 runtime, initializes tracing/logging, loads the config (file or control plane),
 raises the core-dump rlimit, constructs `ComputeNode`, and calls `run()`:
 
@@ -416,7 +416,7 @@ over `GET /lfc/prewarm` / `GET /lfc/offload` and count attempts/errors in the
 ## CLI reference
 
 ```
-yb-compute-ctl \
+compute-ctl \
     --pgdata <endpoint>/pgdata \                # -D
     --connstr 'postgresql://cloud_admin@.../postgres' \   # -C
     --pgbin   <pg_install>/bin/postgres \       # -b, env POSTGRES_PATH
@@ -462,7 +462,7 @@ on `compute_ctl` in a few concrete places:
 
 ## Where the code lives
 
-- `compute/compute_tools/src/bin/yb-compute-ctl.rs` — binary entry, CLI, `main()`.
+- `compute/compute_tools/src/bin/compute-ctl.rs` — binary entry, CLI, `main()`.
 - `compute/compute_tools/src/compute.rs` — `ComputeNode` / `ComputeState` /
   `ParsedSpec`, startup, basebackup, reconfigure, shutdown.
 - `compute/compute_tools/src/config.rs` — `postgresql.conf` generation.

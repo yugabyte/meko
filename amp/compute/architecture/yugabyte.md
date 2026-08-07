@@ -310,7 +310,7 @@ compression envelope, not bare page bytes: a codec tag byte followed by
 on read; YSQL only ever sees an opaque `BYTEA`. Consequently ad-hoc SQL
 against these columns measures *stored* bytes — `octet_length(payload)`
 is the compressed length and `substring(payload, 1, n)` slices envelope
-bytes — so use `yb-dump-pages`, which decodes client-side. See
+bytes — so use `dump-pages`, which decodes client-side. See
 [`pageserver.md`](pageserver.md) "Payload compression" for the format,
 the `yb_payload_compression` knob, and why compressing above DocDB
 (which does not TOAST these values) pays.
@@ -572,7 +572,7 @@ byte followed by (by default) an LZ4 block, encoded and decoded by the
 Rust layer. `chunk_size` stays the **logical** (decoded) length, because
 `chunk_offset + chunk_size` is LSN-space arithmetic; so
 `octet_length(data)` is *not* `chunk_size`, and `substring(data, …)`
-slices envelope bytes. Use `yb-dump-wals`, which decodes client-side.
+slices envelope bytes. Use `dump-wals`, which decodes client-side.
 See [`safekeeper.md`](safekeeper.md) "`data` is compressed" for the
 `yb_wal_compression` knob and why the whole coalesced run is compressed
 rather than each chunk.
@@ -613,7 +613,7 @@ GROUP BY segno
 ORDER BY segno;
 ```
 
-(`yb-dump-wals --summary` renders the same view with gap detection —
+(`dump-wals --summary` renders the same view with gap detection —
 see [`../README.md`](../README.md) §"Operator tools".)
 
 ### `amp_storage.pending_gc`

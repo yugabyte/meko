@@ -26,7 +26,7 @@ suspend-point backtrace of **every task on every runtime**. It runs on its own
 dedicated thread, so it works even when the service runtimes are wedged.
 
 ```sh
-pgrep -a yb-pageserver              # or yb-safekeeper / yb-compute-ctl / ...
+pgrep -a pageserver          # or safekeeper / compute-ctl / ...
 kill -USR2 <pid>                    # dump goes to the process log AND stderr
 grep -A5000 "TOKIO TASK DUMP (SIGUSR2) BEGIN" <logfile> | less
 ```

@@ -1,6 +1,6 @@
 //! Smoke-test the operator diagnostic tools end-to-end against the live
-//! (no-TLS) cluster: `yb-dump-wals`, `yb-dump-pages` (list + decode), and
-//! `yb-reset-consistent-lsn`. This exercises the shared `YbConnArgs`
+//! (no-TLS) cluster: `dump-wals`, `dump-pages` (list + decode), and
+//! `reset-consistent-lsn`. This exercises the shared `YbConnArgs`
 //! connection path (the no-TLS arm) and each tool's basic behaviour, so a
 //! regression in a tool — or in the shared connection handling that used to
 //! drift between them — fails CI here instead of only surfacing on a remote
@@ -57,10 +57,10 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         bail!("no branch_state row for branch {branch}");
     }
 
-    step("yb-dump-wals --summary");
-    let wals = c.run_tool("yb-dump-wals", &["--branch", &branch, "--summary"])?;
+    step("dump-wals --summary");
+    let wals = c.run_tool("dump-wals", &["--branch", &branch, "--summary"])?;
     if !wals.contains("segno") {
-        bail!("yb-dump-wals --summary missing 'segno' header:\n{wals}");
+        bail!("dump-wals --summary missing 'segno' header:\n{wals}");
     }
 
     step("pick an existing (rel, fork, blk) from amp_storage.pages");
@@ -90,31 +90,31 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
     let (spc, dbn, rel, fork, blk) = (f[0], f[1], f[2], f[3], f[4]);
 
-    step("yb-dump-pages (list)");
+    step("dump-pages (list)");
     let list = c.run_tool(
-        "yb-dump-pages",
+        "dump-pages",
         &[
             "--branch", &branch, "--spc", spc, "--db", dbn, "--rel", rel,
             "--fork", fork, "--blknum", blk,
         ],
     )?;
     if !list.contains("blknum") || !list.contains("lsn") {
-        bail!("yb-dump-pages list missing expected header:\n{list}");
+        bail!("dump-pages list missing expected header:\n{list}");
     }
 
-    step("yb-dump-pages --decode (chain decode + gap check)");
+    step("dump-pages --decode (chain decode + gap check)");
     let dec = c.run_tool(
-        "yb-dump-pages",
+        "dump-pages",
         &[
             "--decode", "--branch", &branch, "--spc", spc, "--db", dbn,
             "--rel", rel, "--fork", fork, "--blknum", blk,
         ],
     )?;
     if !dec.contains("rows for rel") || !(dec.contains("offnum gaps") || dec.contains("GAP")) {
-        bail!("yb-dump-pages --decode produced unexpected output:\n{dec}");
+        bail!("dump-pages --decode produced unexpected output:\n{dec}");
     }
 
-    step("yb-reset-consistent-lsn (dry run — read-only)");
+    step("reset-consistent-lsn (dry run — read-only)");
     let cur = db::query_text(
         &yb,
         &format!(
@@ -129,19 +129,19 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // shared YbConnArgs no-TLS path works for this tool too. A connection
     // failure would carry the `connecting to yb_storage` context instead.
     let (ok, out, err) = c.run_tool_capture(
-        "yb-reset-consistent-lsn",
+        "reset-consistent-lsn",
         &["--branch", &branch, "--target-lsn", &cur],
     )?;
     if err.contains("connecting to yb_storage") {
-        bail!("yb-reset-consistent-lsn failed to connect:\n{err}");
+        bail!("reset-consistent-lsn failed to connect:\n{err}");
     }
     let reached_wal = ok || err.contains("WAL") || out.contains("WAL");
     if !reached_wal {
-        bail!("yb-reset-consistent-lsn neither succeeded nor reached the WAL stage:\nstdout={out}\nstderr={err}");
+        bail!("reset-consistent-lsn neither succeeded nor reached the WAL stage:\nstdout={out}\nstderr={err}");
     }
 
     tee_println!(
-        "  yb-dump-wals + yb-dump-pages (list & decode) + yb-reset-consistent-lsn \
+        "  dump-wals + dump-pages (list & decode) + reset-consistent-lsn \
          all ran against the no-TLS cluster"
     );
 

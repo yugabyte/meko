@@ -85,8 +85,8 @@ the `controller` field of the `GET /api/v1/version` response.
 
 ## Compute / endpoint binaries
 
-The compute image's Rust binaries — `yb-pageserver`, `yb-safekeeper`,
-`yb-compute-ctl` — report the **same** version from the
+The compute image's Rust binaries — `pageserver`, `safekeeper`,
+`compute-ctl` — report the **same** version from the
 same `VERSION` file, so the endpoint image and the controller never disagree. A
 `build.rs` in the shared `utils` crate stamps the `VERSION` semver into the
 `AMP_VERSION` compile-time constant (via `cargo:rustc-env` +
@@ -94,7 +94,7 @@ same `VERSION` file, so the endpoint image and the controller never disagree. A
 BuildKit `target` cache mount), and `utils::amp_version()` combines it with the
 build's git commit into `<VERSION>-<short-commit>` (e.g. `0.260722.0-1bc8b3d`,
 with `-dirty` for a modified tree) — the same shape as the controller stamp
-above. Every binary logs it at startup; `yb-pageserver`/`yb-safekeeper` also
+above. Every binary logs it at startup; `pageserver`/`safekeeper` also
 surface it through `--version`.
 
 The commit still comes from the `GIT_VERSION` env (passed by the image build)

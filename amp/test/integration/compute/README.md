@@ -25,7 +25,7 @@ test/integration/compute/run.sh -h              # full help
 ```
 
 `run.sh` is a thin wrapper: it `cargo build`s the harness + the Rust
-cluster server binaries `yb_amp_local` spawns (`yb-pageserver`,
+cluster server binaries `yb_amp_local` spawns (`pageserver`,
 `safekeeper`, `compute_ctl`) + the diagnostic tools,
 and `go build`s the Go binaries (`yb_amp_local` and `controller`) —
 incremental, a no-op when nothing changed — then execs the harness. Building the server binaries here is

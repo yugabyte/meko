@@ -1,9 +1,9 @@
-# yb-pageserver Prometheus metrics
+# pageserver Prometheus metrics
 
-Reference for the Prometheus metrics that `yb-pageserver` exposes. Most metric
+Reference for the Prometheus metrics that `pageserver` exposes. Most metric
 definitions live in [`compute/pageserver/src/metrics.rs`](../pageserver/src/metrics.rs);
 the process/allocator/runtime collectors are registered in
-[`bin/yb-pageserver.rs`](../pageserver/src/bin/yb-pageserver.rs) via
+[`bin/pageserver.rs`](../pageserver/src/bin/pageserver.rs) via
 `metrics::register_internal`. See also the component overview in
 [`pageserver.md`](./pageserver.md), the HTTP surface in
 [`pageserver-apis.md`](./pageserver-apis.md), and the storage back end in
@@ -29,7 +29,7 @@ The handler gathers the default Prometheus registry through `METRICS_COLLECTOR`.
 
 ## Label cardinality
 
-Metrics labelled `branch_id` are per-branch. A `yb-pageserver` process serves
+Metrics labelled `branch_id` are per-branch. A `pageserver` process serves
 exactly one `branch_id`, so these series are effectively single-series per
 process (the label is still present so series aggregate cleanly across
 processes). Per-branch series are dropped when a branch shuts down

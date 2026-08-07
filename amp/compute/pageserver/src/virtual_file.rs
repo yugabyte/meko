@@ -1,5 +1,5 @@
 //! Originally a layer-file FD cache (the `VirtualFile` clock-LRU pool)
-//! plus a full async read/write API. The yb-pageserver fork moved
+//! plus a full async read/write API. The pageserver fork moved
 //! every page to YugabyteDB, so the layer stack is gone. The remaining
 //! on-disk artifacts (initdb tarballs, basebackup cache) are written
 //! through plain `tokio::fs`; this module exposes only a crash-safe
@@ -18,7 +18,7 @@
 use camino::Utf8PathBuf;
 use tokio_epoll_uring::{BoundedBuf, IoBuf};
 
-/// Size of a Postgres page. yb-pageserver does not use the legacy
+/// Size of a Postgres page. pageserver does not use the legacy
 /// page cache, but this constant still parameterises a few walredo
 /// alignment / capacity calls.
 pub const PAGE_SZ: usize = 8192;

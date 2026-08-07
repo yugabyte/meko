@@ -18,10 +18,11 @@ import (
 // native crypto/ed25519 keypair marshaled as PKCS#8 (private) / PKIX
 // (public) yields byte-identical key formats to those openssl commands.
 //
-// IMPORTANT: the Rust side reads the *public* PEM via
-// jsonwebtoken's `DecodingKey::from_ed_pem`, which requires a standard
-// SPKI-encoded ed25519 public key. MarshalPKIXPublicKey produces exactly
-// that, so the public PEM stays interoperable with the Rust daemons.
+// IMPORTANT: the pageserver and safekeeper read the *public* PEM through
+// `utils::auth::JwtAuth::from_key_path`, i.e. jsonwebtoken's
+// `DecodingKey::from_ed_pem`, which requires a standard SPKI-encoded
+// ed25519 public key. MarshalPKIXPublicKey produces exactly that, so the
+// public PEM stays interoperable with the Rust daemons.
 func GenerateAuthKeys(privateKeyPath, publicKeyPath string) error {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

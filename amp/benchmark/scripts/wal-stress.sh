@@ -170,7 +170,7 @@ one_run() {
 
   local cpu_pid ps_pid
   cpu_pid=$(start_server_cpu_sampler "$outdir/server-cpu.log")
-  ps_pid=$(start_local_proc_sampler "$outdir/ps-cpu-rss.log" yb-pageserver)
+  ps_pid=$(start_local_proc_sampler "$outdir/ps-cpu-rss.log" pageserver)
 
   local w0 w1 gp0 gp1 skf0 skf1
   w0=$(wal_snapshot); gp0=$(ps_getpage_count); skf0=$(sk_flush_lsn)

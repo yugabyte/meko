@@ -345,7 +345,7 @@ PID 1:
 | Service          | Role                                   | Backed by   |
 |------------------|----------------------------------------|-------------|
 | `safekeeper`       | WAL                                  | YugabyteDB  |
-| `yb-pageserver`    | page service                         | YugabyteDB  |
+| `pageserver`    | page service                         | YugabyteDB  |
 | `compute_ctl`      | supervises Postgres v18 + `neon` ext | (compute)   |
 
 The supervisor renders each service's config from environment variables,

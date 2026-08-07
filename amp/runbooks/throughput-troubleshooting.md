@@ -1,7 +1,7 @@
 # Runbook: Troubleshooting throughput issues (yb-amp)
 
 Diagnoses low throughput (TPC-C load or execute, or any OLTP workload) on the **yb-amp** stack:
-a Postgres compute, a yb-pageserver, a safekeeper, a controller, and a YugabyteDB backing
+a Postgres compute, a pageserver, a safekeeper, a controller, and a YugabyteDB backing
 store. The components may be co-located on one box or spread across boxes — this runbook does not
 assume a particular topology. Substitute the conventions below for your deployment.
 
@@ -18,7 +18,7 @@ export COMPUTE_USER=cloud_admin
 export COMPUTE_DB=tpcc         # or whatever DB the workload uses
 export PGPASSWORD=...          # compute password
 
-# --- yb-pageserver (wherever it runs) ---
+# --- pageserver (wherever it runs) ---
 export PS_HOST=...             # pageserver host
 export PS_HTTP_PORT=...        # pageserver HTTP/metrics port
 
@@ -150,7 +150,7 @@ side blows up to seconds-to-tens-of-seconds even at "modest" connection counts (
 sudo ss -tnp dst $YB_HOST 2>/dev/null | awk 'NR>1' \
   | grep -oP 'pid=\d+' | sort | uniq -c | sort -rn
 ```
-Cross-reference each pid against `ps -o pid,comm,args -p <pid>`. The yb-pageserver pid's count is
+Cross-reference each pid against `ps -o pid,comm,args -p <pid>`. The pageserver pid's count is
 the YB pool size, and it scales with `scale_factor` — roughly `5 × scale_factor` (compute-reads and
 fpu at 2 each, plus the GC pool at 1, all × `scale_factor`).
 
@@ -211,7 +211,7 @@ all of them; if split across boxes, check each box.
 # On the box hosting the compute / safekeeper / SC:
 top -bn1 -w 200 | head -15
 # On the box hosting the pageserver:
-ps -o %cpu,rss,comm -C yb-pageserver
+ps -o %cpu,rss,comm -C pageserver
 ```
 Interpret CPU **relative to that box's core count** (a process near `N*100%` on an N-core box is
 saturated):

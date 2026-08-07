@@ -70,15 +70,15 @@ func BasePath() (string, error) {
 
 // --- binary path helpers ---
 
-// PageserverBin is the yb-pageserver binary (the process carries the yb-
-// prefix; the crate/folder are bare `pageserver`).
+// PageserverBin is the pageserver binary; process, crate and folder all
+// share the bare `pageserver` name.
 func (e *LocalEnv) PageserverBin() string {
-	return filepath.Join(e.YbAmpDistribDir, "yb-pageserver")
+	return filepath.Join(e.YbAmpDistribDir, "pageserver")
 }
 
-// SafekeeperBin is the yb-safekeeper binary.
+// SafekeeperBin is the safekeeper binary.
 func (e *LocalEnv) SafekeeperBin() string {
-	return filepath.Join(e.YbAmpDistribDir, "yb-safekeeper")
+	return filepath.Join(e.YbAmpDistribDir, "safekeeper")
 }
 
 // ControllerBin is the `controller` binary, always run from the same

@@ -178,7 +178,7 @@ and leaves the other open:
   `safekeeper_api::config::SafekeeperConfigToml`) before writing it, so a key the daemon no longer
   accepts fails in the supervisor with a clear error — and in the crate's unit tests — instead of at
   daemon startup. The historical instance was `availability_zone='local'`, which the current
-  `yb-pageserver` rejects: `Error: unknown configuration item(s) in pageserver.toml:
+  `pageserver` rejects: `Error: unknown configuration item(s) in pageserver.toml:
   availability_zone … Aborting start up`. Same class as `startup-failures.md` §A/§K.
 - **Binary-name and argv skew is still open.** Children are spawned by path and flag *strings*
   (`boot::services`), so a renamed binary or a changed flag is not a compile error. The historical
@@ -187,7 +187,7 @@ and leaves the other open:
   `compute_ctl`'s argv during the Rust port: `--spec-path` for what is really `--config`, plus a
   missing required `--compute-id`, which fails clap parsing before the process does any work.
 
-`boot::tests` pins the compute's argv against the flags `yb-compute-ctl` declares, so a regression *in
+`boot::tests` pins the compute's argv against the flags `compute-ctl` declares, so a regression *in
 the supervisor* is caught. It cannot catch a change to the other binary's own flags — only running a
 fresh image does.
 

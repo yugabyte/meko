@@ -219,7 +219,7 @@ pub struct PageServerConf {
     /// See `pageserver_api::config::ConfigToml::s3_upload_limit_bytes`.
     pub s3_upload_limit_bytes: u64,
 
-    /// yb-pageserver row-per-page writer tunables.
+    /// pageserver row-per-page writer tunables.
     pub yb_page_writer: pageserver_api::config::YbPageWriterConfig,
 
     /// Codec used when writing the YB `BYTEA` payload columns. Write-side

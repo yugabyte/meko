@@ -4,7 +4,7 @@
 //! `yb_thin_client`'s own build script cannot do this for us: a build script's
 //! `cargo:rustc-link-arg` applies only to its own package's link products, and
 //! cargo does not propagate link args to a dependent's binaries. So without
-//! this file, `yb-pageserver` and `cargo test -p pageserver` link against
+//! this file, `pageserver` and `cargo test -p pageserver` link against
 //! `libyb_thin_client.so` with no way to find it at run time, and fail with
 //! `error while loading shared libraries` unless the caller exports
 //! `LD_LIBRARY_PATH`.

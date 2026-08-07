@@ -19,7 +19,7 @@ import (
 
 // --- pageserver ---
 
-// startPageserver spawns yb-pageserver. The process claims its own generation
+// startPageserver spawns pageserver. The process claims its own generation
 // from `amp_storage.branch_state` at startup, so there is nothing to arrange
 // here first.
 func startPageserver(ctx context.Context, env *config.LocalEnv, conf *config.PageServerConf, timeout time.Duration) error {
@@ -27,7 +27,7 @@ func startPageserver(ctx context.Context, env *config.LocalEnv, conf *config.Pag
 	return startPageserverNode(env, conf, timeout)
 }
 
-// startPageserverNode spawns yb-pageserver (no attach), mirroring Rust
+// startPageserverNode spawns pageserver (no attach), mirroring Rust
 // `PageServerNode::start_node`.
 func startPageserverNode(env *config.LocalEnv, conf *config.PageServerConf, timeout time.Duration) error {
 	statusCheck := func() error {
@@ -74,7 +74,7 @@ func safekeeperControlFileSaveInterval() (*time.Duration, error) {
 	return &dur, nil
 }
 
-// startSafekeeper writes safekeeper.toml then spawns yb-safekeeper, mirroring
+// startSafekeeper writes safekeeper.toml then spawns safekeeper, mirroring
 // Rust `SafekeeperNode::start`. It does NOT create the timeline (provisioning
 // does that separately).
 func startSafekeeper(env *config.LocalEnv, conf *config.SafekeeperConf, timeout time.Duration) error {
@@ -165,7 +165,7 @@ func startController(ctx context.Context, env *config.LocalEnv, instanceID uint8
 		return err
 	}
 	// --deploy-driver=local: the controller keeps endpoint records but launches
-	// nothing, because the launcher spawns yb-compute-ctl itself. Without it the
+	// nothing, because the launcher spawns compute-ctl itself. Without it the
 	// product endpoint API answers 501 (deploy.LocalDeployer).
 	args := []string{
 		"--database-url", dbURL, "--listen", listen,

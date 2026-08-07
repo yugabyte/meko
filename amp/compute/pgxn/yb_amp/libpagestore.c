@@ -82,7 +82,7 @@ static int	max_sockets;
 static int pageserver_response_log_timeout = 10000;
 /*
  * 30 s. Below the kernel's default TCP-retransmit ceiling on purpose:
- * yb-pageserver is a same-DC, low-latency hop, so a stuck request is far
+ * pageserver is a same-DC, low-latency hop, so a stuck request is far
  * more likely a pageserver-side stall than transient packet loss, and
  * we want the compute to drop+reopen the socket quickly rather than wait
  * out an arbitrarily long TCP retry sequence.

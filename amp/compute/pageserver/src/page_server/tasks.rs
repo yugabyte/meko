@@ -111,7 +111,7 @@ pub(crate) async fn acquire_concurrency_permit(
 
 /// Start per tenant background loops: GC + ingest housekeeping.
 ///
-/// yb-pageserver does not run compaction. The 10-delta image rule was
+/// pageserver does not run compaction. The 10-delta image rule was
 /// a write-time invariant; with the image-anchored read path it's gone,
 /// and image-layer / L0→L1 work has nothing to do against
 /// `amp_storage.pages`. A background image materialiser (Phase 3e) will

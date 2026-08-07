@@ -118,7 +118,7 @@ fn fmt_lsn(v: u64) -> String {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let client = YsqlClient::from_yb_config(&args.conn.into_config(), "yb-dump-pages", false)
+    let client = YsqlClient::from_yb_config(&args.conn.into_config(), "dump-pages", false)
         .await
         .context("connecting to yb_storage")?;
     if args.decode {

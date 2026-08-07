@@ -420,7 +420,7 @@ fn default_yb_dbname() -> String {
 pub const DEFAULT_YB_PORT: u16 = 5433;
 
 /// Shared connection CLI args for the `yb_storage` diagnostic tools
-/// (`yb-dump-pages`, `yb-dump-wals`, `yb-reset-consistent-lsn`).
+/// (`dump-pages`, `dump-wals`, `reset-consistent-lsn`).
 ///
 /// This is the SINGLE source of truth for those flags — every tool
 /// `#[command(flatten)]`s it, so the connection surface (and TLS support)

@@ -184,7 +184,7 @@ Two things are specific to the WAL path:
   `truncate_wals_above` both do LSN arithmetic with
   `chunk_offset + chunk_size`, so it is LSN-space, not a description of
   what DocDB holds. `octet_length(data)` in ad-hoc SQL is therefore *not*
-  `chunk_size`; use `yb-dump-wals`, which decodes client-side and reports
+  `chunk_size`; use `dump-wals`, which decodes client-side and reports
   codec / stored / decoded length separately.
 - **The whole coalesced run is compressed, not each chunk.** With
   `full_page_writes = off` the WAL carries no full-page images, so it is a
@@ -651,8 +651,8 @@ loses nothing but logs.
 
 ## Run / configure
 
-The binary is `yb-safekeeper`
-(`compute/safekeeper/src/bin/yb-safekeeper.rs`). All configuration lives in
+The binary is `safekeeper`
+(`compute/safekeeper/src/bin/safekeeper.rs`). All configuration lives in
 `<datadir>/safekeeper.toml`
 (`compute/libs/safekeeper_api/src/config.rs::SafekeeperConfigToml`), written
 by the launcher (`SafekeeperNode::start` in yb_amp_local) and read once at
@@ -660,7 +660,7 @@ startup. The schema is `deny_unknown_fields`: a misspelled or stale key
 aborts startup instead of being silently ignored. The only CLI flags are:
 
 ```
-yb-safekeeper -D <datadir> [--init]
+safekeeper -D <datadir> [--init]
 ```
 
 `--init` parses config, logs, and exits. The control file is the branch's
@@ -747,7 +747,7 @@ Deleting the whole directory and restarting rebuilds everything from YB.
   manager (control-file saves, WAL GC, guard issuance).
 - `compute/safekeeper/src/timelines_global_map.rs` — the single-slot
   `GlobalTimelines` registry.
-- `compute/safekeeper/src/bin/yb-safekeeper.rs` — entry point; reads
+- `compute/safekeeper/src/bin/safekeeper.rs` — entry point; reads
   `safekeeper.toml` into `SafeKeeperConf`.
 - `compute/libs/safekeeper_api/src/config.rs` — `SafekeeperConfigToml`, the
   on-disk schema shared by the binary and yb_amp_local.
