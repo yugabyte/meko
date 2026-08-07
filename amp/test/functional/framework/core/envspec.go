@@ -1,5 +1,7 @@
 package core
 
+import "fmt"
+
 // Sharing is how an environment may be shared across tests (architecture §4.2).
 type Sharing int
 
@@ -23,6 +25,12 @@ func (s Sharing) String() string {
 }
 
 // Shape is the kind of stack an environment provides.
+//
+// This framework tests amp. Every shape except Universe puts an amp endpoint in
+// the request path, and Universe exists only so a test can deploy amp ON that
+// cluster (the amp_on_* E2Es) or drive amp's own workloads against it — never
+// to test raw YugabyteDB itself, which other frameworks own. That is why the
+// universe provider refuses every other shape instead of serving its raw YSQL.
 type Shape int
 
 const (
@@ -48,6 +56,21 @@ func (s Shape) String() string {
 	default:
 		return "unknown"
 	}
+}
+
+// UnsupportedShapeError is a provision refusal that is a capability gap, not a
+// failure: the run's provider cannot serve the test's declared shape. The
+// lifecycle maps it to a skip, so a test whose shape needs an amp endpoint can
+// never silently run — and pass — against something else.
+type UnsupportedShapeError struct {
+	Provider string
+	Shape    Shape
+	Why      string
+}
+
+func (e *UnsupportedShapeError) Error() string {
+	return fmt.Sprintf("env provider %q cannot serve a %s-shaped test: %s",
+		e.Provider, e.Shape, e.Why)
 }
 
 // EnvSpec declares the environment a test needs and how it may be shared.

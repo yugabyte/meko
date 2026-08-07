@@ -3,6 +3,7 @@ package universe
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -100,7 +101,7 @@ func TestAttachYBATeardownNoOpUnlessOwned(t *testing.T) {
 
 	cfg := Config{Mode: ModeAttachYBA, YBAURL: srv.URL, YBACustomer: "c1", YBAToken: "tok", UniverseRef: "prod-uni", Owned: false}
 	p := providerWithYBA(cfg, srv)
-	env, err := p.Provision(context.Background(), core.EnvSpec{}, nil)
+	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, nil)
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestAttachYBATeardownDeletesWhenOwned(t *testing.T) {
 
 	cfg := Config{Mode: ModeAttachYBA, YBAURL: srv.URL, YBACustomer: "c1", YBAToken: "tok", UniverseRef: "prod-uni", Owned: true}
 	p := providerWithYBA(cfg, srv)
-	env, err := p.Provision(context.Background(), core.EnvSpec{}, nil)
+	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, nil)
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestAttachYBATeardownDeletesWhenOwned(t *testing.T) {
 func TestAttachAddressStaticTarget(t *testing.T) {
 	cfg := Config{Mode: ModeAttachAddress, Addresses: []string{"db1.example:5433", "db2.example"}}
 	p := New(cfg)
-	env, err := p.Provision(context.Background(), core.EnvSpec{}, nil)
+	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, nil)
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -780,7 +781,7 @@ func TestProvisionK8sTeardownUsesNamespaceBackstop(t *testing.T) {
 	pr := &fakeProvisioner{ev: ev, universe: liveUniverse(), universeID: "u-1"}
 	p := provisionK8sYBAProvider(st, pr)
 
-	env, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true))
+	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true))
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -818,7 +819,7 @@ func TestProvisionK8sReapFailureKeepsYBAUp(t *testing.T) {
 	}
 	p := provisionK8sYBAProvider(st, pr)
 
-	if _, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true)); err == nil {
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true)); err == nil {
 		t.Fatalf("expected provision error")
 	}
 	if pr.nsReaps != 1 {
@@ -905,7 +906,7 @@ func TestProvisionYBATeardownDeletesUniverseThenYBA(t *testing.T) {
 	pr := &fakeProvisioner{ev: ev, universe: liveUniverse(), universeID: "u-1"}
 	p := provisionYBAProvider(st, pr)
 
-	env, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true))
+	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true))
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
@@ -934,7 +935,7 @@ func TestProvisionYBAPartialFailureTearsYBADown(t *testing.T) {
 	pr := &fakeProvisioner{ev: ev, universeID: "u-1", createErr: fmt.Errorf("boom: universe create failed")}
 	p := provisionYBAProvider(st, pr)
 
-	env, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true))
+	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true))
 	if err == nil {
 		t.Fatalf("expected provision error")
 	}
@@ -959,7 +960,7 @@ func TestProvisionYBADeployFailureTearsStackDown(t *testing.T) {
 	pr := &fakeProvisioner{ev: ev, universeID: "u-1"}
 	p := provisionYBAProvider(st, pr)
 
-	if _, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true)); err == nil {
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true)); err == nil {
 		t.Fatalf("expected provision error")
 	}
 	if st.teardowns != 1 {
@@ -980,7 +981,7 @@ func TestProvisionYBACreateTaskFailureReapsNodes(t *testing.T) {
 	pr := &fakeProvisioner{ev: ev, universeID: "u-1", waitErr: fmt.Errorf("pinging yb-controller: exceeded max retries")}
 	p := provisionYBAProvider(st, pr)
 
-	env, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true))
+	env, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true))
 	if err == nil {
 		t.Fatalf("expected provision error")
 	}
@@ -1012,7 +1013,7 @@ func TestProvisionYBADeleteFailureStillReapsThenTearsDown(t *testing.T) {
 	}
 	p := provisionYBAProvider(st, pr)
 
-	if _, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true)); err == nil {
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true)); err == nil {
 		t.Fatalf("expected provision error")
 	}
 	if pr.reaps != 1 {
@@ -1040,7 +1041,7 @@ func TestProvisionYBAReapFailureKeepsYBAUp(t *testing.T) {
 	}
 	p := provisionYBAProvider(st, pr)
 
-	if _, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true)); err == nil {
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true)); err == nil {
 		t.Fatalf("expected provision error")
 	}
 	if pr.reaps != 1 {
@@ -1061,7 +1062,7 @@ func TestProvisionYBAEmptyUUIDResolvesByNameAndReaps(t *testing.T) {
 		waitErr: fmt.Errorf("create task failed after launching nodes")}
 	p := provisionYBAProvider(st, pr)
 
-	if _, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true)); err == nil {
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true)); err == nil {
 		t.Fatalf("expected provision error")
 	}
 	// Resolved by name (liveUniverse UUID) → force-deleted; and the tag sweep ran.
@@ -1084,7 +1085,7 @@ func TestProvisionYBAGetUniverseFailureCleansUpBoth(t *testing.T) {
 	pr := &fakeProvisioner{ev: ev, universeID: "u-1", getErr: fmt.Errorf("universe details unavailable")}
 	p := provisionYBAProvider(st, pr)
 
-	if _, err := p.Provision(context.Background(), core.EnvSpec{}, core.NewRunSeed(7, true)); err == nil {
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, core.NewRunSeed(7, true)); err == nil {
 		t.Fatalf("expected provision error")
 	}
 	if pr.deletes != 1 {
@@ -1111,7 +1112,7 @@ func indexOf(ss []string, want string) int {
 
 func TestUnknownModeErrors(t *testing.T) {
 	p := New(Config{Mode: "bogus"})
-	if _, err := p.Provision(context.Background(), core.EnvSpec{}, nil); err == nil {
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, nil); err == nil {
 		t.Fatalf("expected error for unknown mode")
 	}
 }
@@ -1141,5 +1142,21 @@ func TestDetectYBVersionFallsBackOnConnectFailure(t *testing.T) {
 	got := detectYBVersion(context.Background(), pg.ConnInfo{Host: "127.0.0.1", Port: port})
 	if got != "" {
 		t.Errorf("detectYBVersion against a closed port = %q, want empty (fall back cleanly)", got)
+	}
+}
+
+// The universe env is the raw backing database — serving any other shape would
+// let an amp-endpoint test run against plain YugabyteDB and pass.
+func TestProvisionRefusesNonUniverseShapes(t *testing.T) {
+	p := New(Config{Mode: ModeAttachAddress, Addresses: []string{"10.0.0.1:5433"}})
+	for _, shape := range []core.Shape{core.SingleContainer, core.SharedControlPlane, core.DedicatedStack, core.Remote} {
+		_, err := p.Provision(context.Background(), core.EnvSpec{Shape: shape}, nil)
+		var refused *core.UnsupportedShapeError
+		if !errors.As(err, &refused) {
+			t.Errorf("shape %s: err = %v, want UnsupportedShapeError", shape, err)
+		}
+	}
+	if _, err := p.Provision(context.Background(), core.EnvSpec{Shape: core.Universe}, nil); err != nil {
+		t.Errorf("shape universe must stay served: %v", err)
 	}
 }

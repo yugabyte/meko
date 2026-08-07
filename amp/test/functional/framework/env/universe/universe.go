@@ -391,6 +391,15 @@ func (p *Provider) defaultBuildGCPUniverseSpec() (yba.UniverseSpec, error) {
 
 // Provision stands up (or attaches to) the target per the configured mode.
 func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
+	// This env's PGEndpoint is the raw backing database. Serving it to a test
+	// that declared any other shape would let an amp-endpoint test run — and
+	// pass — against plain YugabyteDB.
+	if spec.Shape != core.Universe {
+		return nil, &core.UnsupportedShapeError{
+			Provider: "universe", Shape: spec.Shape,
+			Why: "the universe env is raw YugabyteDB; this test needs an amp endpoint",
+		}
+	}
 	switch p.cfg.Mode {
 	case ModeAttachYBA:
 		return p.provisionAttachYBA(ctx, p.cfg.UniverseRef)

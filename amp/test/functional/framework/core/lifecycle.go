@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -171,6 +172,16 @@ func RunOne(ctx context.Context, test Test, opts RunOptions) *Result {
 	env, err := opts.Provider.Provision(pctx, test.Env, seed.Fork("env"))
 	pcancel()
 	if err != nil {
+		// A shape the provider cannot serve is a capability gap: skipping keeps
+		// the mismatch visible without failing the run, and refusing (rather
+		// than provisioning what the provider does have) keeps a test that
+		// needs an amp endpoint from silently passing against raw YB.
+		var shape *UnsupportedShapeError
+		if errors.As(err, &shape) {
+			result.Status = StatusSkipped
+			result.SkipReason = err.Error()
+			return result
+		}
 		result.Status = StatusEnvFailed
 		result.ErrorSummary = err.Error()
 		return result

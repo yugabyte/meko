@@ -3,6 +3,7 @@ package core_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,26 @@ func TestLifecycleProvisionFailIsEnvFailed(t *testing.T) {
 	}
 	if p.TeardownCount() != 0 {
 		t.Errorf("teardown must NOT run when provisioning failed, ran %d", p.TeardownCount())
+	}
+}
+
+// A provider refusing the test's shape is a capability gap, not a failure: the
+// universe provider refuses amp-endpoint shapes so those tests can never
+// silently pass against raw YugabyteDB.
+func TestLifecycleUnsupportedShapeSkips(t *testing.T) {
+	p := &fake.Provider{FailProvision: true, ProvisionErr: &core.UnsupportedShapeError{
+		Provider: "universe", Shape: core.SharedControlPlane,
+		Why: "the universe env is raw YugabyteDB; this test needs an amp endpoint",
+	}}
+	r := runOne(t, core.Test{Name: "t", Run: func(*core.T) error { return nil }}, p, core.DetectedVersions{})
+	if r.Status != core.StatusSkipped {
+		t.Errorf("status = %s, want skipped", r.Status)
+	}
+	if !strings.Contains(r.SkipReason, "amp endpoint") {
+		t.Errorf("skip reason %q must name why the shape was refused", r.SkipReason)
+	}
+	if p.TeardownCount() != 0 {
+		t.Errorf("teardown must NOT run for a refused shape, ran %d", p.TeardownCount())
 	}
 }
 

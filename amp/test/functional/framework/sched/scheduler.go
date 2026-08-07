@@ -2,6 +2,7 @@ package sched
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -259,6 +260,11 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 			lease, env, provErr = s.provisionShared(ctx, envN, s.tests[i].Env)
 		}
 		if env == nil {
+			var shape *core.UnsupportedShapeError
+			if errors.As(provErr, &shape) {
+				s.results[i] = core.ReportResult(s.tests[i], s.opts.RunOptions, core.StatusSkipped, provErr.Error())
+				continue
+			}
 			msg := "shared environment unavailable"
 			if provErr != nil {
 				msg = provErr.Error()
