@@ -5,7 +5,10 @@
 //
 // The port is container-local in every shape amp ships, so the client talks to
 // it through an injected in-container command runner rather than dialling it
-// directly. python3 is in the endpoint image; curl is not.
+// directly. The endpoint image is bare Debian: no curl, no wget, no python3 —
+// bash is the one tool guaranteed present, so requests go over its /dev/tcp
+// (the same idiom the metrics sampler's scrape uses). The response status line
+// is checked in-container: /dev/tcp happily returns a 404 body as stdout.
 package pageserver
 
 import (
@@ -39,10 +42,7 @@ func New(run ExecFunc, port int) *Client {
 
 // Metrics scrapes and parses /metrics.
 func (c *Client) Metrics(ctx context.Context) (Samples, error) {
-	script := fmt.Sprintf(
-		`python3 -c 'import sys,urllib.request; sys.stdout.write(urllib.request.urlopen("http://127.0.0.1:%d/metrics", timeout=60).read().decode())'`,
-		c.port)
-	out, err := c.run(ctx, script)
+	out, err := c.run(ctx, httpScript("GET", c.port, "/metrics"))
 	if err != nil {
 		return nil, fmt.Errorf("scrape pageserver metrics: %w", err)
 	}
@@ -54,14 +54,29 @@ func (c *Client) Metrics(ctx context.Context) (Samples, error) {
 // pg_current_wal_flush_lsn()). Without this a test would have to wait out the
 // pageserver's periodic flush interval before storage reflects its writes.
 func (c *Client) FlushBranch(ctx context.Context, branchID, lsn string) error {
-	url := fmt.Sprintf("http://127.0.0.1:%d/v1/branch/%s/flush?lsn=%s", c.port, branchID, lsn)
-	script := fmt.Sprintf(
-		`python3 -c 'import urllib.request; urllib.request.urlopen(urllib.request.Request("%s", method="PUT"), timeout=300)'`,
-		url)
-	if _, err := c.run(ctx, script); err != nil {
+	path := fmt.Sprintf("/v1/branch/%s/flush?lsn=%s", branchID, lsn)
+	if _, err := c.run(ctx, httpScript("PUT", c.port, path)); err != nil {
 		return fmt.Errorf("force-flush branch %s at %s: %w", branchID, lsn, err)
 	}
 	return nil
+}
+
+// httpScript is one HTTP request over bash's /dev/tcp against the container's
+// loopback: send the request, split headers from body at the first blank line,
+// fail loudly on a non-2xx status (stdout would otherwise carry an error body
+// that a parser happily reads as an empty exposition), and print the body.
+func httpScript(method string, port int, path string) string {
+	return fmt.Sprintf(`bash -c '
+exec 3<>/dev/tcp/127.0.0.1/%d || exit 7
+printf "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3
+resp=$(cat <&3)
+status=$(printf "%%s" "$resp" | head -1)
+case "$status" in
+  HTTP/*" 2"*) ;;
+  *) printf "%%s\n" "$status" >&2; exit 22 ;;
+esac
+printf "%%s" "$resp" | sed "1,/^\r\{0,1\}$/d"
+'`, port, method, path)
 }
 
 // Sample is one Prometheus sample: a metric name, its labels, its value.

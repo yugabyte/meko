@@ -53,10 +53,24 @@ func TestMetricsAndFlushScripts(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("ran %d commands, want 2", len(got))
 	}
-	if !strings.Contains(got[0], "127.0.0.1:9898/metrics") {
-		t.Fatalf("metrics script does not target the default port: %s", got[0])
+	// The endpoint image is bare Debian — the request must need nothing beyond
+	// bash (/dev/tcp), and must check the status line rather than pass an error
+	// body to the parser.
+	for i, script := range got {
+		if strings.Contains(script, "python3") || strings.Contains(script, "curl") || strings.Contains(script, "wget") {
+			t.Fatalf("script %d needs a tool the endpoint image lacks: %s", i, script)
+		}
+		if !strings.Contains(script, "/dev/tcp/127.0.0.1/9898") {
+			t.Fatalf("script %d does not target the default port over /dev/tcp: %s", i, script)
+		}
+		if !strings.Contains(script, "exit 22") {
+			t.Fatalf("script %d does not fail on a non-2xx status: %s", i, script)
+		}
 	}
-	if !strings.Contains(got[1], "/v1/branch/b1/flush?lsn=0/16B3748") || !strings.Contains(got[1], `method="PUT"`) {
+	if !strings.Contains(got[0], "GET /metrics HTTP/1.0") {
+		t.Fatalf("metrics script is not a GET of /metrics: %s", got[0])
+	}
+	if !strings.Contains(got[1], "PUT /v1/branch/b1/flush?lsn=0/16B3748 HTTP/1.0") {
 		t.Fatalf("flush script is not a PUT at the branch flush route: %s", got[1])
 	}
 }
