@@ -8,8 +8,7 @@ PARALLEL UNSAFE;
 
 CREATE FUNCTION backpressure_lsns(
     OUT received_lsn pg_lsn,
-    OUT disk_consistent_lsn pg_lsn,
-    OUT remote_consistent_lsn pg_lsn
+    OUT disk_consistent_lsn pg_lsn
 )
 RETURNS record
 AS 'MODULE_PATHNAME', 'backpressure_lsns'

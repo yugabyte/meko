@@ -182,13 +182,6 @@ async fn build_timeline_info_common(
     let current_logical_size = timeline.get_current_logical_size(logical_size_task_priority, ctx);
     let current_physical_size = Some(timeline.layer_size_sum().await);
     let state = timeline.current_state();
-    let remote_consistent_lsn_projected = timeline
-        .get_remote_consistent_lsn_projected()
-        .unwrap_or(Lsn(0));
-    let remote_consistent_lsn_visible = timeline
-        .get_remote_consistent_lsn_visible()
-        .unwrap_or(Lsn(0));
-
     let walreceiver_status = timeline.walreceiver_status();
 
     let pitr_history_size = timeline.get_pitr_history_size();
@@ -211,8 +204,6 @@ async fn build_timeline_info_common(
         // but populated with the durable `consistent_lsn` (gap-free, post-flush).
         // `applied_lsn` is exposed separately via `last_record_lsn`.
         disk_consistent_lsn: timeline.get_consistent_lsn(),
-        remote_consistent_lsn: remote_consistent_lsn_projected,
-        remote_consistent_lsn_visible,
         initdb_lsn,
         last_record_lsn,
         prev_record_lsn: Some(timeline.get_prev_record_lsn()),

@@ -419,20 +419,19 @@ YugabyteDB, its durable store). The walproposer
 registers with `synchronous_standby_names` under application name `walproposer`.
 `PageserverFeedback` LSNs are recorded in shared memory and read back by
 `replication_feedback_get_lsns()` (surfaced through the `backpressure_lsns()` SQL
-function as `received_lsn` / `disk_consistent_lsn` / `remote_consistent_lsn`).
+function as `received_lsn` / `disk_consistent_lsn`).
 
 Backpressure throttles backends when the pageserver or safekeeper falls behind:
 `backpressure_lag_impl()` compares the local flush pointer against the feedback
-LSNs using `max_replication_write_lag` / `max_replication_flush_lag` /
-`max_replication_apply_lag`, and `backpressure_throttling_impl()` sleeps backends
-and accumulates the delay (readable via `backpressure_throttling_time()`). A
+LSNs using `max_replication_write_lag` and `max_replication_flush_lag`, and
+`backpressure_throttling_impl()` sleeps backends and accumulates the delay
+(readable via `backpressure_throttling_time()`). A
 send-side WAL rate limiter (`WalRateLimiter`, GUCs `yb_amp.max_wal_mb_per_second`
 and `yb_amp.throttled_max_wal_bytes_per_second`) bounds broadcast throughput.
 
-All three `max_replication_*_lag` GUCs default to `-1`, which disables
-backpressure. `yb_amp_local` sets `max_replication_write_lag = 15MB` and
-`max_replication_flush_lag = 10GB`; a **deployed** endpoint sets none, so
-backpressure does nothing there yet — see
+Both GUCs default to `-1`, which disables backpressure. `yb_amp_local` sets
+`max_replication_write_lag = 15MB` and `max_replication_flush_lag = 10GB`; a
+**deployed** endpoint sets neither, so backpressure does nothing there yet — see
 [#651](https://github.com/yugabyte/meko/issues/651).
 
 The safekeeper connection GUCs (from `nwp_register_gucs`):

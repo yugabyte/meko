@@ -714,23 +714,20 @@ backpressure_lsns(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	writePtr;
 	XLogRecPtr	flushPtr;
-	XLogRecPtr	applyPtr;
-	Datum		values[3];
-	bool		nulls[3];
+	Datum		values[2];
+	bool		nulls[2];
 	TupleDesc	tupdesc;
 
-	replication_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
+	replication_feedback_get_lsns(&writePtr, &flushPtr);
 
-	tupdesc = CreateTemplateTupleDesc(3);
+	tupdesc = CreateTemplateTupleDesc(2);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "received_lsn", PG_LSNOID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "disk_consistent_lsn", PG_LSNOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "remote_consistent_lsn", PG_LSNOID, -1, 0);
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	MemSet(nulls, 0, sizeof(nulls));
 	values[0] = LSNGetDatum(writePtr);
 	values[1] = LSNGetDatum(flushPtr);
-	values[2] = LSNGetDatum(applyPtr);
 
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }

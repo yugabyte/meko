@@ -34,7 +34,7 @@ pub struct TimelinePersistentState {
     pub local_start_lsn: Lsn,
     /// LSN of the oldest known checkpoint made by pageserver. We don't
     /// remove WAL beyond it. The pageserver advertises this via
-    /// `PageserverFeedback.remote_consistent_lsn`.
+    /// `PageserverFeedback.disk_consistent_lsn`.
     pub remote_consistent_lsn: Lsn,
     pub creation_ts: SystemTime,
 }

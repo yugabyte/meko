@@ -21,12 +21,9 @@ pub struct PageserverFeedback {
     pub current_timeline_size: u64,
     /// LSN last received and ingested by the pageserver. Controls backpressure.
     pub last_received_lsn: Lsn,
-    /// LSN up to which data is persisted by the pageserver to its local disc.
-    /// Controls backpressure.
+    /// LSN up to which the pageserver has made data durable. Controls
+    /// backpressure, and bounds the WAL a safekeeper may remove.
     pub disk_consistent_lsn: Lsn,
-    /// LSN up to which data is persisted by the pageserver on s3; safekeepers
-    /// consider WAL before it can be removed.
-    pub remote_consistent_lsn: Lsn,
     // Serialize with RFC3339 format.
     #[serde(with = "serde_systemtime")]
     pub replytime: SystemTime,
@@ -40,7 +37,6 @@ impl PageserverFeedback {
         PageserverFeedback {
             current_timeline_size: 0,
             last_received_lsn: Lsn::INVALID,
-            remote_consistent_lsn: Lsn::INVALID,
             disk_consistent_lsn: Lsn::INVALID,
             replytime: *PG_EPOCH,
             corruption_detected: false,
@@ -78,11 +74,6 @@ impl PageserverFeedback {
         buf.put_slice(b"ps_flushlsn\0");
         buf.put_i32(8);
         buf.put_u64(self.disk_consistent_lsn.0);
-
-        nkeys += 1;
-        buf.put_slice(b"ps_applylsn\0");
-        buf.put_i32(8);
-        buf.put_u64(self.remote_consistent_lsn.0);
 
         let timestamp = self
             .replytime
@@ -127,11 +118,6 @@ impl PageserverFeedback {
                     let len = buf.get_i32();
                     assert_eq!(len, 8);
                     rf.disk_consistent_lsn = Lsn(buf.get_u64());
-                }
-                b"ps_applylsn" => {
-                    let len = buf.get_i32();
-                    assert_eq!(len, 8);
-                    rf.remote_consistent_lsn = Lsn(buf.get_u64());
                 }
                 b"ps_replytime" => {
                     let len = buf.get_i32();
@@ -215,7 +201,6 @@ mod tests {
         rf.current_timeline_size = 12345678;
         rf.last_received_lsn = Lsn(23456789);
         rf.disk_consistent_lsn = Lsn(34567890);
-        rf.remote_consistent_lsn = Lsn(45678901);
         rf.replytime = *PG_EPOCH + Duration::from_secs(100_000_000);
         rf.corruption_detected = true;
 

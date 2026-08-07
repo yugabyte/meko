@@ -162,7 +162,7 @@ func TestAPIIsNotFound(t *testing.T) {
 func TestPageserverTimelineInfo(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusOK,
-		`{"branch_id":"b1","last_record_lsn":"0/16B3E10","disk_consistent_lsn":"0/16B3D00","remote_consistent_lsn":"0/0"}`)
+		`{"branch_id":"b1","last_record_lsn":"0/16B3E10","disk_consistent_lsn":"0/16B3D00"}`)
 	p := NewPageserver(srv.URL, nil)
 
 	info, err := p.TimelineInfo(context.Background(), "b1")

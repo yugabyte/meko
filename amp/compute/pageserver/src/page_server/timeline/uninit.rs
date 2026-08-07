@@ -140,7 +140,7 @@ impl<'t> UninitializedTimeline<'t> {
         // Hand the timeline's `remote_state.consistent_lsn` slot to
         // PageWriter so its flush success path can advance it directly.
         // That slot feeds Timeline::get_consistent_lsn(), which the
-        // walreceiver uses for the SK `remote_consistent_lsn` field and
+        // walreceiver uses for the SK `disk_consistent_lsn` field and
         // for START_REPLICATION resume position.
         {
             let tl = &self.raw_timeline.as_ref().expect("checked above").0;

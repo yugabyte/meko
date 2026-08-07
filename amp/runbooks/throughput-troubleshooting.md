@@ -121,16 +121,16 @@ PGPASSWORD="$PGPASSWORD" $PSQL "$C" -c \
 since postmaster start, so compare two samples rather than reading it absolutely.
 
 **If `throttle_us` stays 0 while the lag is large, backpressure is off, not satisfied.** Check the
-`max_replication_*_lag` GUCs: all three default to `-1` (disabled), and only `yb_amp_local` sets
-them — a deployed endpoint sets none, so backpressure does nothing there yet (#651). An unbounded
-lag is worse than a throttle: it is paid back later, synchronously, inside the next compute start's
-basebackup.
+`max_replication_write_lag` / `max_replication_flush_lag` GUCs: both default to `-1` (disabled),
+and only `yb_amp_local` sets them — a deployed endpoint sets neither, so backpressure does nothing
+there yet (#651). An unbounded lag is worse than a throttle: it is paid back later, synchronously,
+inside the next compute start's basebackup.
 
 **Levers:**
 - Raise pageserver ingest capacity — `scale_factor` (Step 3a) widens the write fan-out into YB too.
 - Raise `max_replication_write_lag` to let a burst run further ahead. It buys burst tolerance, not
   throughput, and every byte of extra lag is replay time on the next restart.
-- Do **not** set the `max_replication_*_lag` GUCs to `-1` to make a benchmark look faster. That
+- Do **not** set the two `max_replication_*_lag` GUCs to `-1` to make a benchmark look faster. That
   disables the bound rather than raising it, and the WAL still has to be ingested eventually.
 
 ---

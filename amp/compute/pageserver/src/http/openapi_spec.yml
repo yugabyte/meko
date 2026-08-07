@@ -923,12 +923,6 @@ components:
         disk_consistent_lsn:
           type: string
           format: hex
-        remote_consistent_lsn:
-          type: string
-          format: hex
-        remote_consistent_lsn_visible:
-          type: string
-          format: hex
         ancestor_branch_id:
           type: string
           format: hex

@@ -199,7 +199,6 @@ typedef struct PageserverFeedback
 	/* standby_status_update fields that safekeeper received from pageserver */
 	XLogRecPtr	last_received_lsn;
 	XLogRecPtr	disk_consistent_lsn;
-	XLogRecPtr	remote_consistent_lsn;
 	TimestampTz replytime;
 	/* true if the pageserver has detected data corruption in the timeline */
 	bool		corruption_detected;

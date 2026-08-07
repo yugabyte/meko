@@ -268,7 +268,6 @@ whose only writers are the `RemoteTimelineClientMetrics` code paths. Those paths
 are inactive, so the statics are never forced, never register, and do not appear
 in `/metrics` output: `pageserver_remote_physical_size`,
 `pageserver_remote_physical_size_global`,
-`pageserver_projected_remote_consistent_lsn`,
 `pageserver_remote_timeline_client_calls_started`,
 `pageserver_remote_timeline_client_calls_finished`, and
 `pageserver_remote_timeline_client_seconds_global`.

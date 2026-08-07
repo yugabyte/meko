@@ -60,7 +60,7 @@ extern void pg_init_walproposer(void);
 extern uint64 BackpressureThrottlingTime(void);
 extern void SetYbAmpCurrentClusterSize(uint64 size);
 extern uint64 GetYbAmpCurrentClusterSize(void);
-extern void replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn);
+extern void replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn);
 
 extern PGDLLEXPORT void WalProposerSync(int argc, char *argv[]);
 extern PGDLLEXPORT void WalProposerMain(Datum main_arg);

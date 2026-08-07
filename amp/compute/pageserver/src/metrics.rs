@@ -694,16 +694,6 @@ static LAST_RECORD_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-#[allow(dead_code)]
-pub(crate) static PROJECTED_REMOTE_CONSISTENT_LSN: Lazy<UIntGaugeVec> = Lazy::new(|| {
-    register_uint_gauge_vec!(
-        "pageserver_projected_remote_consistent_lsn",
-        "Projected remote consistent LSN grouped by timeline",
-        &["branch_id"]
-    )
-    .expect("failed to define a metric")
-});
-
 static PITR_HISTORY_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_pitr_history_size",
@@ -2914,7 +2904,6 @@ pub(crate) struct RemoteTimelineClientMetrics {
     branch_id: String,
     pub(crate) remote_physical_size_gauge: PerTimelineRemotePhysicalSizeGauge,
     calls: Mutex<HashMap<(&'static str, &'static str), IntCounterPair>>,
-    pub(crate) projected_remote_consistent_lsn_gauge: UIntGauge,
 }
 
 impl RemoteTimelineClientMetrics {
@@ -2924,15 +2913,10 @@ impl RemoteTimelineClientMetrics {
 
         let remote_physical_size_gauge = PerTimelineRemotePhysicalSizeGauge::new();
 
-        let projected_remote_consistent_lsn_gauge = PROJECTED_REMOTE_CONSISTENT_LSN
-            .get_metric_with_label_values(&[&branch_id_str])
-            .unwrap();
-
         RemoteTimelineClientMetrics {
             branch_id: branch_id_str,
             calls: Mutex::new(HashMap::default()),
             remote_physical_size_gauge,
-            projected_remote_consistent_lsn_gauge,
         }
     }
 
@@ -3011,7 +2995,6 @@ impl Drop for RemoteTimelineClientMetrics {
             branch_id,
             remote_physical_size_gauge,
             calls,
-            projected_remote_consistent_lsn_gauge,
         } = self;
         for ((a, b), _) in calls.get_mut().unwrap().drain() {
             let mut res = [Ok(()), Ok(())];
@@ -3021,10 +3004,6 @@ impl Drop for RemoteTimelineClientMetrics {
         {
             let _ = remote_physical_size_gauge; // use to avoid 'unused' warning in desctructuring above
             let _ = REMOTE_PHYSICAL_SIZE.remove_label_values(&[branch_id]);
-        }
-        {
-            let _ = projected_remote_consistent_lsn_gauge;
-            let _ = PROJECTED_REMOTE_CONSISTENT_LSN.remove_label_values(&[branch_id]);
         }
     }
 }

@@ -1171,12 +1171,6 @@ ParsePageserverFeedbackMessage(WalProposer *wp, StringInfo reply_message, Pagese
 			ps_feedback->disk_consistent_lsn = pq_getmsgint64(reply_message);
 			psfeedback_log("%X/%X", key, LSN_FORMAT_ARGS(ps_feedback->disk_consistent_lsn));
 		}
-		else if ((strcmp(key, "ps_applylsn") == 0) || (strcmp(key, "remote_consistent_lsn") == 0))
-		{
-			Assert(value_len == sizeof(int64));
-			ps_feedback->remote_consistent_lsn = pq_getmsgint64(reply_message);
-			psfeedback_log("%X/%X", key, LSN_FORMAT_ARGS(ps_feedback->remote_consistent_lsn));
-		}
 		else if ((strcmp(key, "ps_replytime") == 0) || (strcmp(key, "replytime") == 0))
 		{
 			Assert(value_len == sizeof(int64));

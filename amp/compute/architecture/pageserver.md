@@ -1072,11 +1072,10 @@ applied frontier and notes `(last_record_lsn → prev_record_lsn)` for
 the flush path's `prev_record_lsn` pairing.
 
 The periodic feedback message (`PageserverFeedback`) reports the wire
-field `disk_consistent_lsn` populated with the durable
-`consistent_lsn`, and `remote_consistent_lsn` from the slot that
-`PageWriter` bumps after every successful generation-fenced
-`advance_consistent_lsn` — that value bounds safekeeper WAL truncation,
-and it only ever echoes a fact already durable in YB.
+field `disk_consistent_lsn` from the slot that `PageWriter` bumps after
+every successful generation-fenced `advance_consistent_lsn` — that value
+bounds safekeeper WAL truncation, and it only ever echoes a fact already
+durable in YB.
 `validate_wal_contiguity` optionally cross-checks the raw-WAL start/end
 LSNs of each batch against the expected stream position.
 

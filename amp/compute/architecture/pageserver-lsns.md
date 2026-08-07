@@ -21,7 +21,7 @@ They answer different questions and must never be substituted for each other:
 | Watermark | Advances when | Answers |
 |---|---|---|
 | **`applied_lsn`** (eager, in-memory) | walreceiver puts a record batch into the `PageWriter` buffer (`put_batch` → `applied_lsn.fetch_max`) | "Can a read at LSN X be served from buffer+YB right now?" Read-path waits (`wait_lsn`, GetPage@LSN, `compute_image_consistent_lsn`) use this so reads never stall behind YB INSERT latency. |
-| **`consistent_lsn`** (durable, gap-free) | a gen-fenced `PageStore::advance_consistent_lsn` UPDATE of `branch_state.consistent_lsn` succeeds inside `PageWriter::flush` | "What survives a crash?" Everything that leaves the process — safekeeper feedback (`disk_consistent_lsn` and `remote_consistent_lsn` wire fields), the walreceiver `START_REPLICATION` resume position, the HTTP API `disk_consistent_lsn` field — reads this. |
+| **`consistent_lsn`** (durable, gap-free) | a gen-fenced `PageStore::advance_consistent_lsn` UPDATE of `branch_state.consistent_lsn` succeeds inside `PageWriter::flush` | "What survives a crash?" Everything that leaves the process — safekeeper feedback (the `disk_consistent_lsn` wire field), the walreceiver `START_REPLICATION` resume position, the HTTP API `disk_consistent_lsn` field — reads this. |
 
 `applied_lsn ≥ consistent_lsn` at all times; the gap is exactly the contents
 of the in-RAM `PageWriter` buffer. Advertising `applied_lsn` to the
@@ -154,9 +154,6 @@ continuity from the stream.
   `PageWriter` holds a clone (installed via `set_consistent_lsn_slot`) so
   the flush success path can bump it without touching `Timeline`.
 - Accessor: `Timeline::get_consistent_lsn()`.
-  `get_remote_consistent_lsn_projected` / `_visible` read the same slot
-  (they are one `AtomicLsn`; there is no separate upload pipeline to
-  distinguish them).
 
 **Meaning:** Every record with LSN ≤ this is **durably in YB** — its rows
 are in `amp_storage.pages` / `slru_pages` / `meta` AND the `branch_state`
@@ -212,10 +209,8 @@ establishes "YB column == our generation" so the strict fence holds from the
 first flush.
 
 **Read by:**
-- SK feedback: **both** `disk_consistent_lsn` and `remote_consistent_lsn`
-  in `PageserverFeedback` are populated from
-  `Timeline::get_consistent_lsn()`, so the two wire fields carry the same
-  value (see the feedback table below).
+- SK feedback: `disk_consistent_lsn` in `PageserverFeedback` is populated
+  from `Timeline::get_consistent_lsn()` (see the feedback table below).
 - Walreceiver `START_REPLICATION` startpoint
   (`walreceiver_connection.rs`) — plus record-boundary padding and
   `normalize_lsn(_, WAL_SEGMENT_SIZE)` page-header normalization.
@@ -235,12 +230,12 @@ first flush.
   slot seed the walreceiver would read `get_consistent_lsn() == 0` and bail
   with "No previous WAL position".
 
-**Safekeeper behavior:** `send_wal.rs` feeds only
-`ps_feedback.remote_consistent_lsn` into `update_remote_consistent_lsn`
-(the WAL-retention bound). `disk_consistent_lsn` and `last_received_lsn`
-from feedback are used for metrics and walsender-laggard clamping, not
-truncation. Since both LSN fields carry the durable `consistent_lsn`, the
-truncation bound is correct by construction.
+**Safekeeper behavior:** `send_wal.rs` feeds
+`ps_feedback.disk_consistent_lsn` into `update_remote_consistent_lsn`
+(the WAL-retention bound); `last_received_lsn` from feedback is used for
+metrics and walsender-laggard clamping, not truncation. Since
+`disk_consistent_lsn` carries the durable `consistent_lsn`, the truncation
+bound is correct by construction.
 
 ---
 
@@ -438,29 +433,29 @@ makes the format extensible.
 | Wire key | Struct field | Source | Safekeeper use |
 |----------|--------------|--------|----------------|
 | `ps_writelsn` | `last_received_lsn` | end of last ingested record | Backpressure relay to compute; walsender laggard clamp for WAL removal; `safekeeper_ps_last_received_lsn` metric |
-| `ps_flushlsn` | `disk_consistent_lsn` | `Timeline::get_consistent_lsn()` | Relayed to compute (backpressure + standby slot apply position); metrics. Not a truncation input. |
-| `ps_applylsn` | `remote_consistent_lsn` | `Timeline::get_consistent_lsn()` | **WAL truncation bound** — `update_remote_consistent_lsn` |
+| `ps_flushlsn` | `disk_consistent_lsn` | `Timeline::get_consistent_lsn()` | Relayed to compute (backpressure + standby slot apply position); metrics; **WAL truncation bound** — `update_remote_consistent_lsn` |
 | `ps_replytime` | `replytime` | send time | staleness checks |
 | `current_timeline_size` | `current_timeline_size` | logical size calc | relayed to compute for size limiting |
 | `corruption_detected` | `corruption_detected` | `Timeline.corruption_detected: AtomicBool` (latched by walingest failures) | relayed to compute so walproposer + postgres stop sending WAL |
 
-Both LSN durability fields carry the same value on the wire, by design:
-each is a projection of the single durable watermark, so no consumer can
-pick the wrong one.
+`disk_consistent_lsn` is the only durability field on the wire, and it serves
+both consumers: compute backpressure and safekeeper WAL truncation. It is
+durable and gap-free — every record at or below it is in `amp_storage.pages`
+with `branch_state.consistent_lsn` updated — which is what makes it safe as a
+truncation bound.
 
 **Backpressure (compute side):** the walproposer parses these fields
 (`ParsePageserverFeedbackMessage`, `compute/pgxn/yb_amp/walproposer.c`) and
 stores them in shared memory (`record_pageserver_feedback`,
 `walproposer_pg.c`). `backpressure_lag_impl` reads them via
 `replication_feedback_get_lsns` — `writePtr = last_received_lsn`,
-`flushPtr = disk_consistent_lsn`, `applyPtr = remote_consistent_lsn` — and
+`flushPtr = disk_consistent_lsn` — and
 throttles backends when the compute's own flush position exceeds
-`writePtr + max_replication_write_lag`, `flushPtr +
-max_replication_flush_lag`, or `applyPtr + max_replication_apply_lag`.
-This is what stops the compute from running unboundedly ahead of durable
-page state in YB. All three GUCs default to `-1`, which disables backpressure,
-and a deployed endpoint sets none of them, so it does nothing there yet
-([#651](https://github.com/yugabyte/meko/issues/651)).
+`writePtr + max_replication_write_lag` or `flushPtr +
+max_replication_flush_lag`. This is what stops the compute from running
+unboundedly ahead of durable page state in YB. Both GUCs default to `-1`,
+which disables backpressure, and a deployed endpoint sets neither, so it does
+nothing there yet ([#651](https://github.com/yugabyte/meko/issues/651)).
 
 ---
 
@@ -546,7 +541,7 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 
 **Why each invariant matters:**
 - *slot ≤ durable column state*: the slot feeds
-  `PageserverFeedback.remote_consistent_lsn`, the safekeeper's only
+  `PageserverFeedback.disk_consistent_lsn`, the safekeeper's only
   truncation input. If the slot ever ran ahead of YB, the safekeeper could
   delete WAL whose pages exist only in RAM; a pageserver crash would then
   lose them with no replay source.

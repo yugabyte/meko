@@ -591,23 +591,14 @@ pub(super) async fn handle_walreceiver_connection(
         }
 
         if let Some(last_lsn) = status_update {
-            let timeline_remote_consistent_lsn = timeline
-                .get_remote_consistent_lsn_visible()
-                .unwrap_or(Lsn(0));
-
             // The last LSN we processed. It is not guaranteed to survive pageserver crash.
             let last_received_lsn = last_lsn;
             // Wire field name kept as `disk_consistent_lsn` for SK
             // protocol compat, but semantically this is `consistent_lsn`
             // (durable, gap-free). Do NOT report `applied_lsn` here —
             // SK / restart logic must see a value that's actually in
-            // `amp_storage.pages`. In yb-amp this is the same value as
-            // `remote_consistent_lsn` below; both fields are kept for
-            // wire compat. TODO: drop one in a future protocol bump.
+            // `amp_storage.pages`: safekeepers remove WAL preceding it.
             let disk_consistent_lsn = timeline.get_consistent_lsn();
-            // The last LSN that is synced to remote storage and is guaranteed to survive pageserver crash
-            // Used by safekeepers to remove WAL preceding `remote_consistent_lsn`.
-            let remote_consistent_lsn = timeline_remote_consistent_lsn;
             let ts = SystemTime::now();
 
             // Update the status about what we just received. This is shown in the mgmt API.
@@ -635,7 +626,6 @@ pub(super) async fn handle_walreceiver_connection(
                 current_timeline_size,
                 last_received_lsn,
                 disk_consistent_lsn,
-                remote_consistent_lsn,
                 replytime: ts,
                 corruption_detected: timeline
                     .corruption_detected

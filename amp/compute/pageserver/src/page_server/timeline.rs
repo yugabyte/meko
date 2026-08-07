@@ -1242,22 +1242,6 @@ impl Timeline {
         Ok(())
     }
 
-    /// `consistent_lsn` from the perspective of the tenant's current generation.
-    /// In yb-amp the slot is driven directly by `PageWriter` (no upload
-    /// pipeline), so projected and visible are the same single `AtomicLsn`.
-    /// Kept as `remote_consistent_lsn` in HTTP/wire field names for back-compat.
-    pub(crate) fn get_remote_consistent_lsn_projected(&self) -> Option<Lsn> {
-        let lsn = self.remote_state.consistent_lsn.load();
-        (lsn != Lsn(0)).then_some(lsn)
-    }
-
-    /// `consistent_lsn` which the tenant is guaranteed not to go backward from.
-    /// See [`Self::get_remote_consistent_lsn_projected`].
-    pub(crate) fn get_remote_consistent_lsn_visible(&self) -> Option<Lsn> {
-        let lsn = self.remote_state.consistent_lsn.load();
-        (lsn != Lsn(0)).then_some(lsn)
-    }
-
     /// yb-amp: no layer files exist, so the sum is always 0.
     pub(crate) async fn layer_size_sum(&self) -> u64 {
         0

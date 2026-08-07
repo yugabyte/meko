@@ -390,23 +390,21 @@ static uint64 yb_amp_backpressure_lag_impl(void)
 static uint64
 backpressure_lag_impl(void)
 {
-	if (max_replication_apply_lag > 0 || max_replication_flush_lag > 0 || max_replication_write_lag > 0)
+	if (max_replication_flush_lag > 0 || max_replication_write_lag > 0)
 	{
 		XLogRecPtr	writePtr;
 		XLogRecPtr	flushPtr;
-		XLogRecPtr	applyPtr;
 #if PG_VERSION_NUM >= 150000
 		XLogRecPtr	myFlushLsn = GetFlushRecPtr(NULL);
 #else
 		XLogRecPtr	myFlushLsn = GetFlushRecPtr();
 #endif
-		replication_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
+		replication_feedback_get_lsns(&writePtr, &flushPtr);
 
-		elog(DEBUG2, "current flushLsn %X/%X PageserverFeedback: write %X/%X flush %X/%X apply %X/%X",
+		elog(DEBUG2, "current flushLsn %X/%X PageserverFeedback: write %X/%X flush %X/%X",
 			 LSN_FORMAT_ARGS(myFlushLsn),
 			 LSN_FORMAT_ARGS(writePtr),
-			 LSN_FORMAT_ARGS(flushPtr),
-			 LSN_FORMAT_ARGS(applyPtr));
+			 LSN_FORMAT_ARGS(flushPtr));
 
 		if ((writePtr != InvalidXLogRecPtr && max_replication_write_lag > 0 && myFlushLsn > writePtr + max_replication_write_lag * MB))
 		{
@@ -416,11 +414,6 @@ backpressure_lag_impl(void)
 		if ((flushPtr != InvalidXLogRecPtr && max_replication_flush_lag > 0 && myFlushLsn > flushPtr + max_replication_flush_lag * MB))
 		{
 			return (myFlushLsn - flushPtr - max_replication_flush_lag * MB);
-		}
-
-		if ((applyPtr != InvalidXLogRecPtr && max_replication_apply_lag > 0 && myFlushLsn > applyPtr + max_replication_apply_lag * MB))
-		{
-			return (myFlushLsn - applyPtr - max_replication_apply_lag * MB);
 		}
 	}
 	return 0;
@@ -627,12 +620,11 @@ record_pageserver_feedback(PageserverFeedback *ps_feedback)
 }
 
 void
-replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn)
+replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn)
 {
 	SpinLockAcquire(&walprop_shared->mutex);
 	*writeLsn = walprop_shared->min_ps_feedback.last_received_lsn;
 	*flushLsn = walprop_shared->min_ps_feedback.disk_consistent_lsn;
-	*applyLsn = walprop_shared->min_ps_feedback.remote_consistent_lsn;
 	SpinLockRelease(&walprop_shared->mutex);
 }
 

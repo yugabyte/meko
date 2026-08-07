@@ -303,9 +303,9 @@ pub struct PageWriter {
     /// — same as before this tracker existed; the walreceiver
     /// re-derives prev on restart.
     record_lsn_history: std::sync::Mutex<std::collections::BTreeMap<Lsn, Lsn>>,
-    /// `Arc<AtomicLsn>` of the timeline's `visible_remote_consistent_lsn`
-    /// — the value the walreceiver loop forwards to the safekeeper as
-    /// `remote_consistent_lsn` in `PageserverFeedback`, which drives
+    /// `Arc<AtomicLsn>` of the timeline's `consistent_lsn` — the value
+    /// the walreceiver loop forwards to the safekeeper as
+    /// `disk_consistent_lsn` in `PageserverFeedback`, which drives
     /// safekeeper WAL truncation. Bumped on every successful
     /// generation-gated `advance_consistent_lsn`. Set lazily
     /// after `init_upload_queue` runs (PageWriter is constructed
@@ -1931,7 +1931,7 @@ impl PageWriter {
                             // Publish the just-advanced LSN as the
                             // safekeeper-truncation bound. The walreceiver
                             // loop forwards this slot to the safekeeper
-                            // in PageserverFeedback.remote_consistent_lsn,
+                            // in PageserverFeedback.disk_consistent_lsn,
                             // bounding `truncate_lsn` / `peer_horizon_lsn`.
                             // The gen-fenced UPDATE above is the
                             // durability commit point — this publish

@@ -990,12 +990,6 @@ pub struct TimelineInfo {
 
     pub disk_consistent_lsn: Lsn,
 
-    /// The LSN that we have succesfully uploaded to remote storage
-    pub remote_consistent_lsn: Lsn,
-
-    /// The LSN that we are advertizing to safekeepers
-    pub remote_consistent_lsn_visible: Lsn,
-
     /// The LSN from the start of the root timeline (never changes)
     pub initdb_lsn: Lsn,
 

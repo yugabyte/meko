@@ -32,7 +32,7 @@ flowchart LR
     FL -->|commit_lsn watch| WS[walsender]
     PS[Pageserver] -->|START_REPLICATION start_pos| WS
     WS -->|InterpretedWalRecords| PS
-    PS -->|PageserverFeedback ps_applylsn| SK_FB[update_remote_consistent_lsn]
+    PS -->|PageserverFeedback ps_flushlsn| SK_FB[update_remote_consistent_lsn]
     SK_FB -->|inmem, then advisory persist| RCS[remote_consistent_lsn]
     RCS -->|calc_horizon_lsn| GC[remove_up_to WAL GC]
 ```
@@ -78,7 +78,7 @@ the advisory single-column path (below). The current column list is
 |--------|---------|
 | `timeline_start_lsn` | Earliest LSN the timeline conceptually covers (branch/bootstrap point). Set on the first `ProposerElected` if still zero. |
 | `local_start_lsn` | Earliest LSN this safekeeper has contiguous WAL from. Set to `start_streaming_at` on the first election. Floors the restart record-boundary back-walk (below). |
-| `remote_consistent_lsn` | Oldest checkpoint the pageserver has durably ingested into YB page storage — WAL at or above this must be retained. Fed by `PageserverFeedback.remote_consistent_lsn`. Seeded to `max(current, timeline_start_lsn)` at election so a fresh timeline doesn't pin the horizon at 0. |
+| `remote_consistent_lsn` | Oldest checkpoint the pageserver has durably ingested into YB page storage — WAL at or above this must be retained. Fed by `PageserverFeedback.disk_consistent_lsn`. Seeded to `max(current, timeline_start_lsn)` at election so a fresh timeline doesn't pin the horizon at 0. |
 | `pg_version`, `system_id`, `wal_seg_size` | Server info, set at creation; immutable. |
 | `creation_ts` | Row insert time. |
 
@@ -297,17 +297,16 @@ walsender slot, and applies exactly one field to retention:
 
 | Field (wire key) | Safekeeper use |
 |------------------|----------------|
-| `remote_consistent_lsn` (`ps_applylsn`) | **`update_remote_consistent_lsn`** — the WAL retention bound. |
+| `disk_consistent_lsn` (`ps_flushlsn`) | **`update_remote_consistent_lsn`** — the WAL retention bound. Also relayed to the compute (slot apply position, backpressure); metrics. |
 | `last_received_lsn` (`ps_writelsn`) | `laggard_lsn()` clamp for WAL removal (min across pageserver walsenders); `safekeeper_ps_last_received_lsn` metric. |
-| `disk_consistent_lsn` (`ps_flushlsn`) | Relayed to the compute (slot apply position, backpressure); metrics. Not a truncation input. |
 | `current_timeline_size`, `replytime`, `corruption_detected` | Relayed to the compute via `AppendResponse.pageserver_feedback`. |
 
-The pageserver populates both `remote_consistent_lsn` and
-`disk_consistent_lsn` from its single durable watermark
-(`Timeline::get_consistent_lsn()`), so the two wire fields carry the same
-value and the truncation bound is durable by construction.
+The pageserver populates `disk_consistent_lsn` from its single durable
+watermark (`Timeline::get_consistent_lsn()`), so the truncation bound is
+durable by construction. The safekeeper's own state field is still named
+`remote_consistent_lsn` (it is the `branch_state` column name).
 
-`should_walsender_stop(reported_remote_consistent_lsn)` terminates an
+`should_walsender_stop(reported_disk_consistent_lsn)` terminates an
 inactive walsender once the reported value reaches `flush_lsn` — nothing
 left to stream, nothing left to wait for.
 
@@ -409,7 +408,7 @@ truncate_wal end_pos ≤ durable_lsn    (refused otherwise)
 4. Pageserver ingests; its applied frontier races ahead at WAL speed while
    its durable slot waits for flushes.
 5. After each successful gen-fenced `advance_consistent_lsn`, the
-   pageserver's next `PageserverFeedback.remote_consistent_lsn` advances.
+   pageserver's next `PageserverFeedback.disk_consistent_lsn` advances.
 6. Safekeeper bumps inmem `remote_consistent_lsn` immediately; the advisory
    save persists it within the save interval; `calc_horizon_lsn` then
    allows WAL removal up to it.
