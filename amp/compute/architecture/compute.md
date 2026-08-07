@@ -102,13 +102,13 @@ both a correctness and a performance requirement:
 
 ### SQL-visible functions
 
-The extension exposes utility functions (declared across
-[`yb_amp--*.sql`](../pgxn/yb_amp) and created in every database):
-`pg_cluster_size()`, `backpressure_lsns()`, `backpressure_throttling_time()`,
-`approximate_working_set_size()` / `approximate_working_set_size_seconds()`,
-`yb_amp_get_lfc_stats()`, `local_cache_pages()` (with the `local_cache` view),
-and the prewarm functions `get_local_cache_state()`, `prewarm_local_cache()`,
-`get_prewarm_info()` (extension version 1.6).
+The extension exposes utility functions (declared in
+[`yb_amp--1.0.sql`](../pgxn/yb_amp/yb_amp--1.0.sql) and created in every
+database): `pg_cluster_size()`, `backpressure_lsns()`,
+`backpressure_throttling_time()`, `approximate_working_set_size()` /
+`approximate_working_set_size_seconds()`, `yb_amp_get_lfc_stats()`,
+`local_cache_pages()` (with the `local_cache` view), and the prewarm functions
+`get_local_cache_state()`, `prewarm_local_cache()`, `get_prewarm_info()`.
 
 Supporting subsystems initialized alongside these: the **communicator process**
 ([`communicator_process.c`](../pgxn/yb_amp/communicator_process.c)), a background
@@ -533,7 +533,8 @@ and runs `get_basebackup`), then `start_postgres()` launches
 `yb-amp-postgres` cgroup when autoscaling). After Postgres is up, a primary runs
 `configure_as_primary`, reports installed extensions, and moves to the `Running`
 state. `post_apply_config` runs `ALTER EXTENSION yb_amp UPDATE` when the extension
-is present so the installed SQL definitions track `default_version`.
+is present so the installed SQL definitions track `default_version`; the extension
+ships a single version, so this finds no upgrade path to apply.
 
 ## Where the code lives
 

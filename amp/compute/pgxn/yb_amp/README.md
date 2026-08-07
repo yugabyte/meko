@@ -14,7 +14,7 @@ yb_amp extension consists of several parts:
 
 - relsize_cache: Relation size cache for better yb_amp performance.
 
-### SQL functions in `yb_amp--*.sql`
+### SQL functions in `yb_amp--1.0.sql`
 
 Utility functions to expose yb_amp specific information to user and metrics collection.
 This extension is created in all databases in the cluster by default.

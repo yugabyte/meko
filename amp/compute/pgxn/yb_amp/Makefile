@@ -40,20 +40,7 @@ ifeq ($(UNAME_S), Darwin)
 endif
 
 EXTENSION = yb_amp
-DATA = \
-	yb_amp--1.0.sql \
-	yb_amp--1.0--1.1.sql \
-	yb_amp--1.1--1.2.sql \
-	yb_amp--1.2--1.3.sql \
-	yb_amp--1.3--1.4.sql \
-	yb_amp--1.4--1.5.sql \
-	yb_amp--1.5--1.6.sql \
-	yb_amp--1.6--1.5.sql \
-	yb_amp--1.5--1.4.sql \
-	yb_amp--1.4--1.3.sql \
-	yb_amp--1.3--1.2.sql \
-	yb_amp--1.2--1.1.sql \
-	yb_amp--1.1--1.0.sql
+DATA = yb_amp--1.0.sql
 PGFILEDESC = "yb_amp - cloud storage for PostgreSQL"
 
 EXTRA_CLEAN = \
