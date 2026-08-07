@@ -38,7 +38,16 @@ runs:
         # Fetch only the submodule with the App token via an insteadOf rewrite.
         # The global rule also covers build.py's own `git submodule update`
         # re-syncs later in the job.
+        #
+        # .gitmodules pins the SSH URL (see the comment there — Netlify needs
+        # it), which runners have no key for, so the SSH form is what actually
+        # has to be rewritten. The HTTPS form is kept as a second rule so a
+        # checkout whose .git/config still caches the old relative-resolved
+        # HTTPS URL keeps working without a `git submodule sync`.
         git config --global \
+          url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
+          "git@github.com:yugabyte/amp-postgres"
+        git config --global --add \
           url."https://x-access-token:${TOKEN}@github.com/yugabyte/amp-postgres".insteadOf \
           "https://github.com/yugabyte/amp-postgres"
         # A freshly-minted App token can briefly 404 ("Repository not found")

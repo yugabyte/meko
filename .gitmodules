@@ -1,4 +1,12 @@
+# The URL is absolute SSH rather than relative (`../amp-postgres.git`) on
+# purpose: Netlify builds docs/ from this repo and always checks submodules out
+# (it has no opt-out), but its clone token only covers yugabyte/meko, so a
+# relative URL resolved against its HTTPS clone 404s on the internal
+# amp-postgres and fails the deploy before the build command ever runs. Netlify
+# applies its deploy key only to SSH remotes, so the URL has to be SSH here.
+# CI doesn't use SSH — .github/actions/fetch-pg-submodule rewrites this back to
+# HTTPS with an App token; keep the two in sync if this URL ever changes.
 [submodule "amp/compute/vendor/postgres-v18"]
 	path = amp/compute/vendor/postgres-v18
-	url = ../amp-postgres.git
+	url = git@github.com:yugabyte/amp-postgres.git
 	branch = REL_18_STABLE_amp
