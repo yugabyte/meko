@@ -515,7 +515,6 @@ durable YB with buffer state mid-record and can ship an inconsistent
 | LSN | Persisted? | Notes |
 |-----|------------|-------|
 | `standby_horizon` | In-memory `AtomicLsn` | Initialized to 0; metric gauge wired; no writer |
-| `rel_size_migrated_at` | In-memory only | Rel-size v2 migration boundary (`rel_size_v2_status`); never persisted |
 | `rel_size_latest_cache` | In-memory `(Lsn, BlockNumber)` per rel | Only trusted at `lsn ≥ rel_size_cache_horizon` |
 | `rel_size_snapshot_cache` | In-memory LRU `(Lsn, RelTag)` | Snapshot-read size cache |
 

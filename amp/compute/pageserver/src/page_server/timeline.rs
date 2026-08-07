@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use pageserver_api::config::tenant_conf_defaults::DEFAULT_PITR_INTERVAL;
 use pageserver_api::key::{Key, METADATA_KEY_BEGIN_PREFIX, METADATA_KEY_END_PREFIX};
-use pageserver_api::models::{LsnLease, PageTraceEvent, RelSizeMigration, TimelineState};
+use pageserver_api::models::{LsnLease, PageTraceEvent, TimelineState};
 use pageserver_api::reltag::{BlockNumber, RelTag};
 use postgres_connection::PgConnectionConfig;
 use postgres_ffi::v18::xlog_utils;
@@ -284,8 +284,6 @@ pub struct Timeline {
 
     /// If Some, collects GetPage metadata for an ongoing PageTrace.
     pub(crate) page_trace: ArcSwapOption<Sender<PageTraceEvent>>,
-
-    pub(crate) rel_size_v2_status: ArcSwap<(Option<RelSizeMigration>, Option<Lsn>)>,
 
     wait_lsn_log_slow: tokio::sync::Semaphore,
 
@@ -1887,22 +1885,6 @@ impl Timeline {
         }
     }
 
-    /// Returns `true` if the rel_size_v2 config is enabled. NOTE: the write path and read path
-    /// should look at `get_rel_size_v2_status()` to get the actual status of the timeline. It is
-    /// possible that the index part persists the state while the config doesn't get persisted.
-    pub(crate) fn get_rel_size_v2_enabled(&self) -> bool {
-        let tenant_conf = self.tenant_conf.load();
-        tenant_conf
-            .tenant_conf
-            .rel_size_v2_enabled
-            .unwrap_or(self.conf.default_tenant_conf.rel_size_v2_enabled)
-    }
-
-    pub(crate) fn get_rel_size_v2_status(&self) -> (RelSizeMigration, Option<Lsn>) {
-        let (status, migrated_at) = self.rel_size_v2_status.load().as_ref().clone();
-        (status.unwrap_or(RelSizeMigration::Legacy), migrated_at)
-    }
-
     /// Open a Timeline handle.
     ///
     /// Loads the metadata for the timeline into memory, but not the layer map.
@@ -1919,8 +1901,6 @@ impl Timeline {
         state: TimelineState,
         attach_wal_lag_cooldown: Arc<OnceLock<WalLagCooldown>>,
         create_idempotency: crate::page_server::CreateTimelineIdempotency,
-        rel_size_v2_status: Option<RelSizeMigration>,
-        rel_size_migrated_at: Option<Lsn>,
         cancel: CancellationToken,
     ) -> Arc<Self> {
         let disk_consistent_lsn = metadata.disk_consistent_lsn();
@@ -2170,11 +2150,6 @@ impl Timeline {
 
                 page_trace: Default::default(),
 
-                rel_size_v2_status: ArcSwap::from_pointee((
-                    rel_size_v2_status,
-                    rel_size_migrated_at,
-                )),
-
                 wait_lsn_log_slow: tokio::sync::Semaphore::new(1),
 
                 basebackup_cache: resources.basebackup_cache,
@@ -2196,21 +2171,6 @@ impl Timeline {
     /// into YB rows), so spawning the loop is wasted. Kept as a stub
     /// so callers in tenant.rs / uninit.rs don't have to change.
     pub(super) fn maybe_spawn_flush_loop(self: &Arc<Self>) {}
-
-    pub(crate) fn update_rel_size_v2_status(
-        &self,
-        rel_size_v2_status: RelSizeMigration,
-        rel_size_migrated_at: Option<Lsn>,
-    ) -> anyhow::Result<()> {
-        self.rel_size_v2_status.store(Arc::new((
-            Some(rel_size_v2_status.clone()),
-            rel_size_migrated_at,
-        )));
-        // yb-amp: status lives in `self.rel_size_v2_status` (set
-        // above) only; no index_part.json to upload.
-        let _ = (rel_size_v2_status, rel_size_migrated_at);
-        Ok(())
-    }
 
     /// Creates and starts the wal receiver.
     ///

@@ -2428,7 +2428,6 @@ impl PageServerHandler {
                     effective_lsn: lsn,
                     request_lsn: req.hdr.request_lsn,
                 }),
-                None,
                 allow_missing,
                 ctx,
             )

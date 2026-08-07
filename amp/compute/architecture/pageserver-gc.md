@@ -224,9 +224,10 @@ runs:
    object is *dead*, and nearly every `meta` key is live state for something —
    a size sentinel (owned by `Drop{Pages,Slru}`, which delete it with the
    object), a dbdir, the twophase *directory* (whose key is
-   `twophase_file_key(0)`). So `DropMeta` accepts exactly the four shapes its
-   emitters produce — relmap, rel-dir, sparse-reldir entry, twophase file —
-   and adding an emitter means adding its shape. `TrimMeta` needs no
+   `twophase_file_key(0)`). So `DropMeta` accepts exactly the three shapes
+   its emitters produce — relmap, sparse-reldir entry, twophase file — and
+   adding an emitter means adding its shape. (The rel-dir shape went with
+   the v1 keyspace; nothing emits it.) `TrimMeta` needs no
    allowlist: every `meta` row is self-contained (an image, or a `will_init`
    record that fully replaces the key), so keeping the newest `<= cutoff`
    cannot lose readable state for any key.

@@ -377,8 +377,8 @@ CREATE TABLE amp_storage.slru_pages (
 ### `amp_storage.meta`
 
 Metadata blobs — everything that is neither a relation page nor an SLRU
-block: relsize sentinels, directory listings (TenantDir / DbDir /
-RelDir / SlruDir), aux files (`yb_amp.signal`, `postgresql.auto.conf`,
+block: relsize sentinels, per-relation reldir markers, directory listings
+(TenantDir / DbDir / SlruDir), aux files (`yb_amp.signal`, `postgresql.auto.conf`,
 replication-slot state), two-phase commit files, replication origins,
 SLRU segment-size sentinels. Full-overwrite semantics: a read is the
 latest row at LSN ≤ target — no walredo, no chains.

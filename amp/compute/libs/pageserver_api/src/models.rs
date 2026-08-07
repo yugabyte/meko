@@ -427,8 +427,6 @@ pub struct BranchConfigPatch {
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub lsn_lease_length_for_ts: FieldPatch<String>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
-    pub rel_size_v2_enabled: FieldPatch<bool>,
-    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub sampling_ratio: FieldPatch<Option<Ratio>>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub relsize_snapshot_cache_capacity: FieldPatch<usize>,
@@ -490,9 +488,6 @@ pub struct BranchConfig {
     pub lsn_lease_length_for_ts: Option<Duration>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rel_size_v2_enabled: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling_ratio: Option<Option<Ratio>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -534,7 +529,6 @@ impl BranchConfig {
             mut timeline_get_throttle,
             mut lsn_lease_length,
             mut lsn_lease_length_for_ts,
-            mut rel_size_v2_enabled,
             mut sampling_ratio,
             mut relsize_snapshot_cache_capacity,
             mut basebackup_cache_enabled,
@@ -575,7 +569,6 @@ impl BranchConfig {
             .lsn_lease_length_for_ts
             .map(|v| humantime::parse_duration(&v))?
             .apply(&mut lsn_lease_length_for_ts);
-        patch.rel_size_v2_enabled.apply(&mut rel_size_v2_enabled);
         patch.sampling_ratio.apply(&mut sampling_ratio);
         patch
             .relsize_snapshot_cache_capacity
@@ -605,7 +598,6 @@ impl BranchConfig {
             timeline_get_throttle,
             lsn_lease_length,
             lsn_lease_length_for_ts,
-            rel_size_v2_enabled,
             sampling_ratio,
             relsize_snapshot_cache_capacity,
             basebackup_cache_enabled,
@@ -645,9 +637,6 @@ impl BranchConfig {
             lsn_lease_length_for_ts: self
                 .lsn_lease_length_for_ts
                 .unwrap_or(global_conf.lsn_lease_length_for_ts),
-            rel_size_v2_enabled: self
-                .rel_size_v2_enabled
-                .unwrap_or(global_conf.rel_size_v2_enabled),
             sampling_ratio: self.sampling_ratio.unwrap_or(global_conf.sampling_ratio),
             relsize_snapshot_cache_capacity: self
                 .relsize_snapshot_cache_capacity
@@ -940,27 +929,10 @@ pub enum TimelineVisibilityState {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct TimelinePatchIndexPartRequest {
-    pub rel_size_migration: Option<RelSizeMigration>,
-    pub rel_size_migrated_at: Option<Lsn>,
     pub gc_compaction_last_completed_lsn: Option<Lsn>,
     pub applied_gc_cutoff_lsn: Option<Lsn>,
     #[serde(default)]
     pub force_index_update: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RelSizeMigration {
-    /// The tenant is using the old rel_size format.
-    /// Note that this enum is persisted as `Option<RelSizeMigration>` in the index part, so
-    /// `None` is the same as `Some(RelSizeMigration::Legacy)`.
-    Legacy,
-    /// The tenant is migrating to the new rel_size format. Both old and new rel_size format are
-    /// persisted in the storage. The read path will read both formats and validate them.
-    Migrating,
-    /// The tenant has migrated to the new rel_size format. Only the new rel_size format is persisted
-    /// in the storage, and the read path will not read the old format.
-    Migrated,
 }
 
 /// This represents the output of the "timeline_detail" and "timeline_list" API calls.
@@ -1024,10 +996,6 @@ pub struct TimelineInfo {
     // Forward compatibility: a previous version of the pageserver will receive a JSON. serde::Deserialize does
     // not deny unknown fields by default so it's safe to set the field to some value, though it won't be
     // read.
-    /// The status of the rel_size migration.
-    pub rel_size_migration: Option<RelSizeMigration>,
-    pub rel_size_migrated_at: Option<Lsn>,
-
     // the largest LSN below which all page updates have been included in the image layers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_consistent_lsn: Option<Lsn>,
@@ -1414,7 +1382,6 @@ mod tests {
         let config = BranchConfigPatch {
             gc_horizon: FieldPatch::Remove,
             pitr_interval: FieldPatch::Upsert("30 days".to_string()),
-            rel_size_v2_enabled: FieldPatch::Noop,
             ..BranchConfigPatch::default()
         };
 
@@ -1429,14 +1396,12 @@ mod tests {
         let base = BranchConfig {
             gc_horizon: Some(100),
             pitr_interval: Some(Duration::from_secs(7 * 24 * 3600)),
-            rel_size_v2_enabled: Some(true),
             ..Default::default()
         };
 
         let expected = BranchConfig {
             gc_horizon: None,
             pitr_interval: Some(Duration::from_secs(30 * 24 * 3600)),
-            rel_size_v2_enabled: Some(true),
             ..Default::default()
         };
 

@@ -442,7 +442,13 @@ pub struct YbPageWriterConfig {
     /// Maximum entries in the in-process LRU cache for `amp_storage.meta`
     /// point reads. Writes populate the cache (write-through) so a read
     /// at any LSN ≥ the write LSN hits the cache without a YB round-trip.
-    /// 0 disables the cache. Default 8192.
+    /// 0 disables the cache. Default 16384.
+    ///
+    /// Doubled from 8192 when reldir moved to one key per relation: a fork
+    /// now has an exists marker alongside its size sentinel, so the same
+    /// entry budget reached about half as many relations. The entries are
+    /// tiny (a 5-byte marker vs the old whole-directory blob), so the
+    /// memory cost of the increase is negligible.
     pub meta_cache_entries: usize,
 
     /// Number of parallel workers used to deserialize WAL values and build
@@ -477,7 +483,7 @@ impl YbPageWriterConfig {
             materialize_inflight_bytes_limit: 512 * 1024 * 1024,
             read_cache_bytes: 512 * 1024 * 1024,
             backpressure_bytes: 25 * 1024 * 1024,
-            meta_cache_entries: 8192,
+            meta_cache_entries: 16384,
             ingest_parallelism: 4,
             ingest_parallelism_min_batch: 256,
         }
@@ -977,9 +983,6 @@ pub struct BranchConfigToml {
     /// LSN-lease length for implicit `get_lsn_by_timestamp` leases.
     #[serde(with = "humantime_serde")]
     pub lsn_lease_length_for_ts: Duration,
-    /// Enable rel_size_v2 for this tenant. Once on, the tenant
-    /// persists this; the migration is one-way.
-    pub rel_size_v2_enabled: bool,
     /// Sampling ratio for trace-collected page requests; `Some(None)`
     /// disables, `Some(Some(r))` enables with ratio `r`.
     pub sampling_ratio: Option<Ratio>,
@@ -1048,7 +1051,6 @@ impl Default for BranchConfigToml {
             timeline_get_throttle: crate::models::ThrottleConfig::disabled(),
             lsn_lease_length: LsnLease::DEFAULT_LENGTH,
             lsn_lease_length_for_ts: LsnLease::DEFAULT_LENGTH_FOR_TS,
-            rel_size_v2_enabled: false,
             sampling_ratio: None,
             relsize_snapshot_cache_capacity: DEFAULT_RELSIZE_SNAPSHOT_CACHE_CAPACITY,
             basebackup_cache_enabled: false,

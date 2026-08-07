@@ -133,8 +133,6 @@ pub enum WalIngestErrorKind {
     LogicalError(anyhow::Error),
     #[error(transparent)]
     EncodeAuxFileError(anyhow::Error),
-    #[error(transparent)]
-    MaybeRelSizeV2Error(anyhow::Error),
 
     #[error("timeline shutting down")]
     Cancelled,

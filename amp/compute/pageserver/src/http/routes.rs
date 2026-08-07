@@ -194,8 +194,6 @@ async fn build_timeline_info_common(
         *timeline.get_applied_gc_cutoff_lsn(),
     );
 
-    let (rel_size_migration, rel_size_migrated_at) = timeline.get_rel_size_v2_status();
-
     let info = TimelineInfo {
         branch_id: timeline.branch_id,
         ancestor_branch_id,
@@ -225,8 +223,6 @@ async fn build_timeline_info_common(
         pg_version: timeline.pg_version,
 
         state,
-        rel_size_migration: Some(rel_size_migration),
-        rel_size_migrated_at,
 
         walreceiver_status,
         image_consistent_lsn: None,

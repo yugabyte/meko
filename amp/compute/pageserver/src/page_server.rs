@@ -23,7 +23,6 @@ use arc_swap::ArcSwap;
 use camino::{Utf8Path, Utf8PathBuf};
 use once_cell::sync::Lazy;
 pub use pageserver_api::models::BranchState;
-use pageserver_api::models::RelSizeMigration;
 use pageserver_api::models::TimelineState;
 use postgres_ffi::PgMajorVersion;
 use remote_storage::{DownloadError, GenericRemoteStorage, TimeoutOrCancel};
@@ -522,15 +521,8 @@ impl PageServer {
                 .context("load timeline lineage")?,
         );
 
-        let (timeline, _timeline_ctx) = self.create_timeline_struct(
-            branch_id,
-            &metadata,
-            resources,
-            idempotency.clone(),
-            None, // rel_size_v2_status — always None in yb-amp
-            None, // rel_size_migrated_at — always None in yb-amp
-            ctx,
-        )?;
+        let (timeline, _timeline_ctx) =
+            self.create_timeline_struct(branch_id, &metadata, resources, idempotency.clone(), ctx)?;
         let consistent_lsn_seed = timeline.get_applied_lsn();
 
         if !consistent_lsn_seed.is_valid() {
@@ -1148,13 +1140,6 @@ impl PageServer {
             .merge(self.conf.default_tenant_conf.clone())
     }
 
-    pub fn get_rel_size_v2_enabled(&self) -> bool {
-        let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
-        tenant_conf
-            .rel_size_v2_enabled
-            .unwrap_or(self.conf.default_tenant_conf.rel_size_v2_enabled)
-    }
-
     pub fn get_gc_horizon(&self) -> u64 {
         let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
         tenant_conf
@@ -1222,8 +1207,6 @@ impl PageServer {
         new_metadata: &TimelineMetadata,
         resources: TimelineResources,
         create_idempotency: CreateTimelineIdempotency,
-        rel_size_v2_status: Option<RelSizeMigration>,
-        rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
     ) -> anyhow::Result<(Arc<Timeline>, RequestContext)> {
         let state = TimelineState::Loading;
@@ -1242,8 +1225,6 @@ impl PageServer {
             state,
             self.attach_wal_lag_cooldown.clone(),
             create_idempotency,
-            rel_size_v2_status,
-            rel_size_migrated_at,
             self.cancel.child_token(),
         );
 
@@ -1591,8 +1572,6 @@ impl PageServer {
                 &new_metadata,
                 timeline_create_guard,
                 pgdata_lsn,
-                None, // rel_size_v2_status — always None in yb-amp
-                None, // rel_size_migrated_at — always None in yb-amp
                 ctx,
             )
             .await?;
@@ -1652,14 +1631,12 @@ impl PageServer {
         new_metadata: &TimelineMetadata,
         create_guard: TimelineCreateGuard,
         start_lsn: Lsn,
-        rel_size_v2_status: Option<RelSizeMigration>,
-        rel_size_migrated_at: Option<Lsn>,
         ctx: &RequestContext,
     ) -> anyhow::Result<(UninitializedTimeline<'a>, RequestContext)> {
         let branch_id = self.id;
 
         let resources = self.build_timeline_resources(new_branch_id);
-        let _ = (new_metadata, &rel_size_v2_status, rel_size_migrated_at);
+        let _ = new_metadata;
 
         let (timeline_struct, timeline_ctx) = self
             .create_timeline_struct(
@@ -1667,8 +1644,6 @@ impl PageServer {
                 new_metadata,
                 resources,
                 create_guard.idempotency.clone(),
-                rel_size_v2_status,
-                rel_size_migrated_at,
                 ctx,
             )
             .context("Failed to create timeline data structure")?;

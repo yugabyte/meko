@@ -576,7 +576,7 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    and never serialise on a global lock.
 5. SLRU and meta rows sit in simpler `Vec` buffers behind a small
    `parking_lot::Mutex<AuxBuffers>`. Meta writes also populate a
-   write-through per-key LRU (`meta_cache`, default 8192 entries) that
+   write-through per-key LRU (`meta_cache`, default 16384 entries) that
    serves single-key `scan_meta_range` hits without a YB round trip.
 6. **Flush** (`PageWriter::flush`, serialised end-to-end by
    `flush_serialize` so the aux snapshot and its count-based drain see
@@ -1141,7 +1141,7 @@ the global `scale_factor` (explicitly-set values are used verbatim):
 | `materialize_inflight_bytes_limit` | 512 MiB | Hard ceiling on redone-but-not-INSERTed materialiser image bytes (`pageserver_yb_materializer_inflight_bytes`); the worker drains outstanding INSERTs before redoing more, backpressuring the walreceiver. **Not scaled** (memory ceiling); `0` disables |
 | `read_cache_bytes` | 512 MiB | Soft cap on `UnifiedPages.total_bytes` (scaled); whole cold keys are evicted LRU-order, keys with unflushed rows pinned |
 | `backpressure_bytes` | 25 MiB | Hard ceiling on the pre-flush buffer (scaled); `PageWriter::put` blocks above it; `0` disables |
-| `meta_cache_entries` | 8192 | In-process LRU for `amp_storage.meta` point reads; `0` disables |
+| `meta_cache_entries` | 16384 | In-process LRU for `amp_storage.meta` point reads; `0` disables |
 | `ingest_parallelism` | 4 | Workers for `put_serialized` batch apply; `1` = serial. Same key always lands on one worker |
 | `ingest_parallelism_min_batch` | 256 | Minimum batch size before the parallel apply engages; `1` forces it (tests) |
 

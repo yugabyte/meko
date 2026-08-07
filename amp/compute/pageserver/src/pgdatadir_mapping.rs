@@ -17,12 +17,11 @@ use bytes::{Buf, Bytes, BytesMut};
 use enum_map::Enum;
 use pageserver_api::key::{
     CHECKPOINT_KEY, CONTROLFILE_KEY, CompactKey, DBDIR_KEY, Key, RelDirExists, TWOPHASEDIR_KEY,
-    rel_block_to_key, rel_dir_to_key, rel_size_to_key, rel_tag_sparse_key,
-    rel_tag_sparse_key_range, relmap_file_key, repl_origin_key, repl_origin_key_range,
-    slru_block_to_key, slru_dir_to_key, slru_segment_size_to_key, twophase_file_key,
+    rel_block_to_key, rel_size_to_key, rel_tag_sparse_key, rel_tag_sparse_key_range,
+    relmap_file_key, repl_origin_key, repl_origin_key_range, slru_block_to_key, slru_dir_to_key,
+    slru_segment_size_to_key, twophase_file_key,
 };
 use pageserver_api::keyspace::KeySpaceRandomAccum;
-use pageserver_api::models::RelSizeMigration;
 use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
 use postgres_ffi::{BLCKSZ, TransactionId};
 use postgres_ffi_types::forknum::{FSM_FORKNUM, VISIBILITYMAP_FORKNUM};
@@ -204,7 +203,6 @@ impl Timeline {
             pending_directory_entries: Vec::new(),
             pending_gc_drop_shrink_events: Vec::new(),
             pending_metadata_bytes: 0,
-            is_importing_pgdata: false,
             lsn,
         }
     }
@@ -222,7 +220,6 @@ impl Timeline {
             pending_directory_entries: Vec::new(),
             pending_gc_drop_shrink_events: Vec::new(),
             pending_metadata_bytes: 0,
-            is_importing_pgdata: true,
             lsn,
         }
     }
@@ -491,14 +488,9 @@ impl Timeline {
             return Ok(0);
         }
 
-        // Pre-deserialize the rel directory to avoid duplicated work in `get_relsize_cached`.
-        let reldir_key = rel_dir_to_key(spcnode, dbnode);
-        let buf = version.get(self, reldir_key, ctx).await?;
-        let reldir = RelDirectory::des(&buf)?;
-
         for rel in rels {
             let n_blocks = self
-                .get_rel_size_in_reldir(rel, version, Some((reldir_key, &reldir)), false, ctx)
+                .get_rel_size_in_reldir(rel, version, false, ctx)
                 .await?
                 .expect("allow_missing=false");
             total_blocks += n_blocks as usize;
@@ -517,7 +509,7 @@ impl Timeline {
         ctx: &RequestContext,
     ) -> Result<BlockNumber, PageReconstructError> {
         Ok(self
-            .get_rel_size_in_reldir(tag, version, None, false, ctx)
+            .get_rel_size_in_reldir(tag, version, false, ctx)
             .await?
             .expect("allow_missing=false"))
     }
@@ -527,12 +519,10 @@ impl Timeline {
     ///
     /// INVARIANT: never returns None if `allow_missing=false`.
     ///
-    /// See [`Self::get_rel_exists_in_reldir`] on why we need `deserialized_reldir_v1`.
     pub(crate) async fn get_rel_size_in_reldir(
         &self,
         tag: RelTag,
         version: Version<'_>,
-        deserialized_reldir_v1: Option<(Key, &RelDirectory)>,
         allow_missing: bool,
         ctx: &RequestContext,
     ) -> Result<Option<BlockNumber>, PageReconstructError> {
@@ -546,18 +536,12 @@ impl Timeline {
             return Ok(Some(nblocks));
         }
 
-        if allow_missing
-            && !self
-                .get_rel_exists_in_reldir(tag, version, deserialized_reldir_v1, ctx)
-                .await?
-        {
+        if allow_missing && !self.get_rel_exists_in_reldir(tag, version, ctx).await? {
             return Ok(None);
         }
 
         if (tag.forknum == FSM_FORKNUM || tag.forknum == VISIBILITYMAP_FORKNUM)
-            && !self
-                .get_rel_exists_in_reldir(tag, version, deserialized_reldir_v1, ctx)
-                .await?
+            && !self.get_rel_exists_in_reldir(tag, version, ctx).await?
         {
             // FIXME: Postgres sometimes calls smgrcreate() to create
             // FSM, and smgrnblocks() on it immediately afterwards,
@@ -603,32 +587,7 @@ impl Timeline {
         version: Version<'_>,
         ctx: &RequestContext,
     ) -> Result<bool, PageReconstructError> {
-        self.get_rel_exists_in_reldir(tag, version, None, ctx).await
-    }
-
-    async fn get_rel_exists_in_reldir_v1(
-        &self,
-        tag: RelTag,
-        version: Version<'_>,
-        deserialized_reldir_v1: Option<(Key, &RelDirectory)>,
-        ctx: &RequestContext,
-    ) -> Result<bool, PageReconstructError> {
-        let key = rel_dir_to_key(tag.spcnode, tag.dbnode);
-        if let Some((cached_key, dir)) = deserialized_reldir_v1 {
-            if cached_key == key {
-                return Ok(dir.rels.contains(&(tag.relnode, tag.forknum)));
-            } else if cfg!(test) || cfg!(feature = "testing") {
-                panic!("cached reldir key mismatch: {cached_key} != {key}");
-            } else {
-                warn!("cached reldir key mismatch: {cached_key} != {key}");
-            }
-            // Fallback to reading the directory from the datadir.
-        }
-
-        let buf = version.get(self, key, ctx).await?;
-
-        let dir = RelDirectory::des(&buf)?;
-        Ok(dir.rels.contains(&(tag.relnode, tag.forknum)))
+        self.get_rel_exists_in_reldir(tag, version, ctx).await
     }
 
     async fn get_rel_exists_in_reldir_v2(
@@ -650,17 +609,15 @@ impl Timeline {
         Ok(exists_v2)
     }
 
-    /// Does the relation exist? With a cached deserialized `RelDirectory`.
+    /// Does the relation exist?
     ///
-    /// There are some cases where the caller loops across all relations. In that specific case,
-    /// the caller should obtain the deserialized `RelDirectory` first and then call this function
-    /// to avoid duplicated work of deserliazation. This is a hack and should be removed by introducing
-    /// a new API (e.g., `get_rel_exists_batched`).
+    /// One sparse key per relation, so this is a point read: there is no
+    /// directory to deserialize, and nothing for a caller looping over
+    /// relations to hoist.
     pub(crate) async fn get_rel_exists_in_reldir(
         &self,
         tag: RelTag,
         version: Version<'_>,
-        deserialized_reldir_v1: Option<(Key, &RelDirectory)>,
         ctx: &RequestContext,
     ) -> Result<bool, PageReconstructError> {
         if tag.relnode == 0 {
@@ -681,70 +638,7 @@ impl Timeline {
             return Ok(false);
         }
 
-        let (v2_status, migrated_lsn) = self.get_rel_size_v2_status();
-
-        match v2_status {
-            RelSizeMigration::Legacy => {
-                let v1_exists = self
-                    .get_rel_exists_in_reldir_v1(tag, version, deserialized_reldir_v1, ctx)
-                    .await?;
-                Ok(v1_exists)
-            }
-            RelSizeMigration::Migrating | RelSizeMigration::Migrated
-                if version.get_lsn() < migrated_lsn.unwrap_or(Lsn(0)) =>
-            {
-                // For requests below the migrated LSN, we still use the v1 read path.
-                let v1_exists = self
-                    .get_rel_exists_in_reldir_v1(tag, version, deserialized_reldir_v1, ctx)
-                    .await?;
-                Ok(v1_exists)
-            }
-            RelSizeMigration::Migrating => {
-                let v1_exists = self
-                    .get_rel_exists_in_reldir_v1(tag, version, deserialized_reldir_v1, ctx)
-                    .await?;
-                let v2_exists_res = self.get_rel_exists_in_reldir_v2(tag, version, ctx).await;
-                match v2_exists_res {
-                    Ok(v2_exists) if v1_exists == v2_exists => {}
-                    Ok(v2_exists) => {
-                        tracing::warn!(
-                            "inconsistent v1/v2 reldir keyspace for rel {}: v1_exists={}, v2_exists={}",
-                            tag,
-                            v1_exists,
-                            v2_exists
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("failed to get rel exists in v2: {e}");
-                    }
-                }
-                Ok(v1_exists)
-            }
-            RelSizeMigration::Migrated => {
-                let v2_exists = self.get_rel_exists_in_reldir_v2(tag, version, ctx).await?;
-                Ok(v2_exists)
-            }
-        }
-    }
-
-    async fn list_rels_v1(
-        &self,
-        spcnode: Oid,
-        dbnode: Oid,
-        version: Version<'_>,
-        ctx: &RequestContext,
-    ) -> Result<HashSet<RelTag>, PageReconstructError> {
-        let key = rel_dir_to_key(spcnode, dbnode);
-        let buf = version.get(self, key, ctx).await?;
-        let dir = RelDirectory::des(&buf)?;
-        let rels_v1: HashSet<RelTag> =
-            HashSet::from_iter(dir.rels.iter().map(|(relnode, forknum)| RelTag {
-                spcnode,
-                dbnode,
-                relnode: *relnode,
-                forknum: *forknum,
-            }));
-        Ok(rels_v1)
+        self.get_rel_exists_in_reldir_v2(tag, version, ctx).await
     }
 
     async fn list_rels_v2(
@@ -797,6 +691,20 @@ impl Timeline {
             let did_not_contain = rels.insert(tag);
             debug_assert!(did_not_contain, "duplicate reltag in v2");
         }
+        // Overlay this modification's uncommitted markers; the scan above
+        // reads the Timeline and cannot see them.
+        if let Version::Modified(modification) = version {
+            for (tag, marker) in modification.pending_reldir_markers(spcnode, dbnode) {
+                match marker {
+                    RelDirExists::Exists => {
+                        rels.insert(tag);
+                    }
+                    RelDirExists::Removed => {
+                        rels.remove(&tag);
+                    }
+                }
+            }
+        }
         Ok(rels)
     }
 
@@ -815,45 +723,7 @@ impl Timeline {
         version: Version<'_>,
         ctx: &RequestContext,
     ) -> Result<HashSet<RelTag>, PageReconstructError> {
-        let (v2_status, migrated_lsn) = self.get_rel_size_v2_status();
-
-        match v2_status {
-            RelSizeMigration::Legacy => {
-                let rels_v1 = self.list_rels_v1(spcnode, dbnode, version, ctx).await?;
-                Ok(rels_v1)
-            }
-            RelSizeMigration::Migrating | RelSizeMigration::Migrated
-                if version.get_lsn() < migrated_lsn.unwrap_or(Lsn(0)) =>
-            {
-                // For requests below the migrated LSN, we still use the v1 read path.
-                let rels_v1 = self.list_rels_v1(spcnode, dbnode, version, ctx).await?;
-                Ok(rels_v1)
-            }
-            RelSizeMigration::Migrating => {
-                let rels_v1 = self.list_rels_v1(spcnode, dbnode, version, ctx).await?;
-                let rels_v2_res = self.list_rels_v2(spcnode, dbnode, version, ctx).await;
-                match rels_v2_res {
-                    Ok(rels_v2) if rels_v1 == rels_v2 => {}
-                    Ok(rels_v2) => {
-                        tracing::warn!(
-                            "inconsistent v1/v2 reldir keyspace for db {} {}: v1_rels.len()={}, v2_rels.len()={}",
-                            spcnode,
-                            dbnode,
-                            rels_v1.len(),
-                            rels_v2.len()
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("failed to list rels in v2: {e}");
-                    }
-                }
-                Ok(rels_v1)
-            }
-            RelSizeMigration::Migrated => {
-                let rels_v2 = self.list_rels_v2(spcnode, dbnode, version, ctx).await?;
-                Ok(rels_v2)
-            }
-        }
+        self.list_rels_v2(spcnode, dbnode, version, ctx).await
     }
 
     /// Get the whole SLRU segment
@@ -1536,9 +1406,6 @@ pub struct DatadirModification<'a> {
 
     /// An **approximation** of how many metadata bytes will be written to the EphemeralFile.
     pending_metadata_bytes: usize,
-
-    /// Whether we are importing a pgdata directory.
-    is_importing_pgdata: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1549,14 +1416,6 @@ pub enum MetricsUpdate {
     Add(u64),
     /// Decrement the metrics by this value
     Sub(u64),
-}
-
-/// Controls the behavior of the reldir keyspace.
-pub struct RelDirMode {
-    // Whether we can read the v2 keyspace or not.
-    current_status: RelSizeMigration,
-    // Whether we should initialize the v2 keyspace or not.
-    initialize: bool,
 }
 
 impl DatadirModification<'_> {
@@ -1575,6 +1434,88 @@ impl DatadirModification<'_> {
             .as_ref()
             .map_or(0, |b| b.buffer_size())
             + self.pending_metadata_bytes
+    }
+
+    /// Every sparse-reldir key present for a database, `Removed` tombstones
+    /// included, as `(RelTag, marker)`.
+    ///
+    /// `list_rels` deliberately hides `Removed`, which is right for callers
+    /// asking "what exists" but wrong for the two callers that must reason
+    /// about the keys themselves: GC at DROP DATABASE (the tombstones are
+    /// keys too and leak otherwise) and the reset at CREATE DATABASE.
+    async fn all_reldir_markers(
+        &self,
+        spcnode: Oid,
+        dbnode: Oid,
+        ctx: &RequestContext,
+    ) -> Result<Vec<(RelTag, RelDirExists)>, PageReconstructError> {
+        let range = rel_tag_sparse_key_range(spcnode, dbnode);
+        let results = self
+            .tline
+            .scan(KeySpace::single(range), self.lsn, ctx)
+            .await?;
+        let mut out = Vec::new();
+        for (key, val) in results {
+            let Ok(marker) = RelDirExists::decode(&val?) else {
+                continue;
+            };
+            out.push((
+                RelTag {
+                    spcnode,
+                    dbnode,
+                    relnode: key.field4,
+                    forknum: key.field5,
+                },
+                marker,
+            ));
+        }
+        // Pending markers from this modification shadow the scan.
+        for (tag, marker) in self.pending_reldir_markers(spcnode, dbnode) {
+            out.retain(|(t, _)| *t != tag);
+            out.push((tag, marker));
+        }
+        Ok(out)
+    }
+
+    /// Sparse-reldir markers written by *this* modification and not yet
+    /// committed, for one database.
+    ///
+    /// `list_rels_v2` scans the Timeline, which cannot see pending writes.
+    /// The v1 directory read went through [`Version::get`] → [`Self::get`]
+    /// and so picked them up for free; this restores that. Without it a
+    /// batch containing `XLOG_SMGR_CREATE` followed by `XLOG_DBASE_DROP`
+    /// on the same database loses the new relation: `drop_dbdir` reads at
+    /// `Version::Modified` and would not see it, so its size never leaves
+    /// `pending_nblocks` and `record_gc_drop_db_keys` never queues its keys.
+    pub(crate) fn pending_reldir_markers(
+        &self,
+        spcnode: Oid,
+        dbnode: Oid,
+    ) -> Vec<(RelTag, RelDirExists)> {
+        let range = rel_tag_sparse_key_range(spcnode, dbnode);
+        let mut out = Vec::new();
+        for (compact, values) in &self.pending_metadata_pages {
+            let key = Key::from_compact(*compact);
+            if key < range.start || key >= range.end {
+                continue;
+            }
+            let Some((_, _, Value::Image(img))) = values.last() else {
+                continue;
+            };
+            let Ok(marker) = RelDirExists::decode(img) else {
+                continue;
+            };
+            out.push((
+                RelTag {
+                    spcnode,
+                    dbnode,
+                    relnode: key.field4,
+                    forknum: key.field5,
+                },
+                marker,
+            ));
+        }
+        out
     }
 
     pub(crate) fn has_dirty_data(&self) -> bool {
@@ -1907,54 +1848,6 @@ impl DatadirModification<'_> {
         Ok(())
     }
 
-    /// Returns `true` if the rel_size_v2 write path is enabled. If it is the first time that
-    /// we enable it, we also need to persist it in `index_part.json` (initialize is true).
-    ///
-    /// As this function is only used on the write path, we do not need to read the migrated_at
-    /// field.
-    pub fn maybe_enable_rel_size_v2(&mut self, is_create: bool) -> anyhow::Result<RelDirMode> {
-        // TODO: define the behavior of the tenant-level config flag and use feature flag to enable this feature
-
-        let (status, _) = self.tline.get_rel_size_v2_status();
-        let config = self.tline.get_rel_size_v2_enabled();
-        match (config, status) {
-            (false, RelSizeMigration::Legacy) => {
-                // tenant config didn't enable it and we didn't write any reldir_v2 key yet
-                Ok(RelDirMode {
-                    current_status: RelSizeMigration::Legacy,
-                    initialize: false,
-                })
-            }
-            (false, status @ RelSizeMigration::Migrating | status @ RelSizeMigration::Migrated) => {
-                // index_part already persisted that the timeline has enabled rel_size_v2
-                Ok(RelDirMode {
-                    current_status: status,
-                    initialize: false,
-                })
-            }
-            (true, RelSizeMigration::Legacy) => {
-                // The first time we enable it, we need to persist it in `index_part.json`
-                // The caller should update the reldir status once the initialization is done.
-                //
-                // Only initialize the v2 keyspace on new relation creation. No initialization
-                // during `timeline_create` (TODO: fix this, we should allow, but currently it
-                // hits consistency issues).
-                Ok(RelDirMode {
-                    current_status: RelSizeMigration::Legacy,
-                    initialize: is_create && !self.is_importing_pgdata,
-                })
-            }
-            (true, status @ RelSizeMigration::Migrating | status @ RelSizeMigration::Migrated) => {
-                // index_part already persisted that the timeline has enabled rel_size_v2
-                // and we don't need to do anything
-                Ok(RelDirMode {
-                    current_status: status,
-                    initialize: false,
-                })
-            }
-        }
-    }
-
     /// Store a relmapper file (pg_filenode.map) in the repository
     pub async fn put_relmap_file(
         &mut self,
@@ -1963,10 +1856,6 @@ impl DatadirModification<'_> {
         img: Bytes,
         ctx: &RequestContext,
     ) -> Result<(), WalIngestError> {
-        let v2_mode = self
-            .maybe_enable_rel_size_v2(false)
-            .map_err(WalIngestErrorKind::MaybeRelSizeV2Error)?;
-
         // Add it to the directory (if it doesn't exist already)
         let buf = self.get(DBDIR_KEY, ctx).await?;
         let mut dbdir = DbDirectory::des(&buf)?;
@@ -1980,23 +1869,27 @@ impl DatadirModification<'_> {
             self.put(DBDIR_KEY, Value::Image(buf.into()));
         }
         if r.is_none() {
-            if v2_mode.current_status != RelSizeMigration::Legacy {
-                self.pending_directory_entries
-                    .push((DirectoryKind::RelV2, MetricsUpdate::Set(0)));
-            }
-
-            // Create RelDirectory in v1 keyspace. TODO: if we have fully migrated to v2, no need to create this directory.
-            // Some code path relies on this directory to be present. We should remove it once we starts to set tenants to
-            // `RelSizeMigration::Migrated` state (currently we don't, all tenants will have `RelSizeMigration::Migrating`).
-            let buf = RelDirectory::ser(&RelDirectory {
-                rels: HashSet::new(),
-            })?;
             self.pending_directory_entries
-                .push((DirectoryKind::Rel, MetricsUpdate::Set(0)));
-            self.put(
-                rel_dir_to_key(spcnode, dbnode),
-                Value::Image(Bytes::from(buf)),
-            );
+                .push((DirectoryKind::RelV2, MetricsUpdate::Set(0)));
+
+            // A fresh dbdir entry means this database is new — but Postgres
+            // reuses OIDs, so the sparse-reldir range may still hold markers
+            // from a previous database with the same oid. Their removal is
+            // queued asynchronously at DROP DATABASE and gated on the GC
+            // cutoff (and `enable_gc` is off by default), so they can easily
+            // still be here. v1 got this reset for free: it wrote an *empty*
+            // RelDirectory, which replaced the old set wholesale. Per-relation
+            // keys have no such single point, so tombstone the survivors
+            // explicitly — otherwise `get_rel_exists` resurrects relations
+            // that do not exist and basebackup emits them.
+            for (tag, marker) in self.all_reldir_markers(spcnode, dbnode, ctx).await? {
+                if marker == RelDirExists::Exists {
+                    self.put(
+                        rel_tag_sparse_key(tag.spcnode, tag.dbnode, tag.relnode, tag.forknum),
+                        Value::Image(RelDirExists::Removed.encode()),
+                    );
+                }
+            }
         }
 
         self.put(relmap_file_key(spcnode, dbnode), Value::Image(img));
@@ -2105,37 +1998,34 @@ impl DatadirModification<'_> {
     }
 
     /// Queue GC drop candidates for a dropped database: per rel its
-    /// rel-size sentinel and v2 sparse-reldir tombstone, then the db-level
-    /// rel-dir and relmap keys. The caller removes the DbDir entry, which
+    /// rel-size sentinel and sparse-reldir tombstone, then the db-level
+    /// relmap key. The caller removes the DbDir entry, which
     /// shadows the sparse keys from readers — so deleting the tombstones is
     /// safe (unlike a single rel drop).
     fn record_gc_drop_db_keys(
         &mut self,
-        rels: impl IntoIterator<Item = RelTag>,
+        markers: impl IntoIterator<Item = (RelTag, RelDirExists)>,
         spcnode: Oid,
         dbnode: Oid,
     ) {
-        for rel in rels {
-            // The fork's pages + rel-size sentinel — a rel fork drop.
-            self.record_gc_drop_shrink_event(
-                rel_size_to_key(rel),
-                crate::page_store::GcKind::DropPages,
-                None,
-            );
-            // The v2 sparse-reldir tombstone (a meta key). A no-op DELETE
-            // if the db uses v1 (no sparse keys written).
+        for (rel, marker) in markers {
+            // Only a live rel still owns pages and a size sentinel; a
+            // tombstone's were queued when it was dropped.
+            if marker == RelDirExists::Exists {
+                self.record_gc_drop_shrink_event(
+                    rel_size_to_key(rel),
+                    crate::page_store::GcKind::DropPages,
+                    None,
+                );
+            }
+            // The sparse-reldir key itself, live marker or tombstone alike.
             self.record_gc_drop_shrink_event(
                 rel_tag_sparse_key(rel.spcnode, rel.dbnode, rel.relnode, rel.forknum),
                 crate::page_store::GcKind::DropMeta,
                 None,
             );
         }
-        // The db-level dir + relmap meta keys.
-        self.record_gc_drop_shrink_event(
-            rel_dir_to_key(spcnode, dbnode),
-            crate::page_store::GcKind::DropMeta,
-            None,
-        );
+        // The db-level relmap meta key.
         self.record_gc_drop_shrink_event(
             relmap_file_key(spcnode, dbnode),
             crate::page_store::GcKind::DropMeta,
@@ -2157,11 +2047,13 @@ impl DatadirModification<'_> {
         // Record GC drop candidates for the db's keys while the reldir can
         // still be enumerated (the DbDir entry is removed just below).
         if self.gc_enabled() {
-            let rels = self
-                .tline
-                .list_rels(spcnode, dbnode, Version::Modified(self), ctx)
-                .await?;
-            self.record_gc_drop_db_keys(rels, spcnode, dbnode);
+            // Enumerate the raw markers rather than `list_rels`: the latter
+            // hides `Removed`, so every tombstone left by an earlier DROP
+            // TABLE would leak in `amp_storage.meta` forever. Dropping them
+            // is only safe here, where removing the DbDir entry shadows the
+            // whole range from readers.
+            let markers = self.all_reldir_markers(spcnode, dbnode, ctx).await?;
+            self.record_gc_drop_db_keys(markers, spcnode, dbnode);
         }
 
         // Remove entry from dbdir
@@ -2187,108 +2079,28 @@ impl DatadirModification<'_> {
         Ok(())
     }
 
-    async fn initialize_rel_size_v2_keyspace(
-        &mut self,
-        ctx: &RequestContext,
-        dbdir: &DbDirectory,
-    ) -> Result<(), WalIngestError> {
-        // Copy everything from relv1 to relv2; TODO: check if there's any key in the v2 keyspace, if so, abort.
-        tracing::info!("initializing rel_size_v2 keyspace");
-        let mut rel_cnt = 0;
-        // relmap_exists (the value of dbdirs hashmap) does not affect the migration: we need to copy things over anyways
-        for &(spcnode, dbnode) in dbdir.dbdirs.keys() {
-            let rel_dir_key = rel_dir_to_key(spcnode, dbnode);
-            let rel_dir = RelDirectory::des(&self.get(rel_dir_key, ctx).await?)?;
-            for (relnode, forknum) in rel_dir.rels {
-                let sparse_rel_dir_key = rel_tag_sparse_key(spcnode, dbnode, relnode, forknum);
-                self.put(
-                    sparse_rel_dir_key,
-                    Value::Image(RelDirExists::Exists.encode()),
-                );
-                tracing::info!(
-                    "migrated rel_size_v2: {}",
-                    RelTag {
-                        spcnode,
-                        dbnode,
-                        relnode,
-                        forknum
-                    }
-                );
-                rel_cnt += 1;
-            }
-        }
-        tracing::info!(
-            "initialized rel_size_v2 keyspace at lsn {}: migrated {} relations",
-            self.lsn,
-            rel_cnt
-        );
-        self.tline
-            .update_rel_size_v2_status(RelSizeMigration::Migrating, Some(self.lsn))
-            .map_err(WalIngestErrorKind::MaybeRelSizeV2Error)?;
-        Ok::<_, WalIngestError>(())
-    }
-
-    async fn put_rel_creation_v1(
-        &mut self,
-        rel: RelTag,
-        dbdir_exists: bool,
-        ctx: &RequestContext,
-    ) -> Result<(), WalIngestError> {
-        // Reldir v1 write path
-        let rel_dir_key = rel_dir_to_key(rel.spcnode, rel.dbnode);
-        let mut rel_dir = if !dbdir_exists {
-            // Create the RelDirectory
-            RelDirectory::default()
-        } else {
-            // reldir already exists, fetch it
-            RelDirectory::des(&self.get(rel_dir_key, ctx).await?)?
-        };
-
-        // Add the new relation to the rel directory entry, and write
-        // it back. Idempotent replay: if the rel is already in the
-        // directory (because a prior PS lifetime's flush landed in YB
-        // before `amp_storage.branch_state.consistent_lsn` was
-        // advanced past this LSN — throttle is by design), `insert`
-        // is a no-op and we still rewrite the same image. Subsequent
-        // page/size records in the replay window re-apply too; once
-        // walreceiver catches up the final keyspace state is
-        // identical to the pre-crash one.
-        // See `pageserver/src/page_writer.rs::tests::
-        // consistent_lsn_lag_under_throttle_is_expected` for the
-        // window this protects.
-        let newly_inserted = rel_dir.rels.insert((rel.relnode, rel.forknum));
-        if !dbdir_exists {
-            self.pending_directory_entries
-                .push((DirectoryKind::Rel, MetricsUpdate::Set(0)))
-        }
-        if newly_inserted {
-            self.pending_directory_entries
-                .push((DirectoryKind::Rel, MetricsUpdate::Add(1)));
-        }
-        self.put(
-            rel_dir_key,
-            Value::Image(Bytes::from(RelDirectory::ser(&rel_dir)?)),
-        );
-        Ok(())
-    }
-
-    async fn put_rel_creation_v2(
-        &mut self,
-        rel: RelTag,
-        dbdir_exists: bool,
-        ctx: &RequestContext,
-    ) -> Result<(), WalIngestError> {
-        // Reldir v2 write path
+    /// Mark a relation as existing in the reldir keyspace.
+    ///
+    /// Write-only and infallible: one idempotent upsert, no read.
+    fn put_rel_creation_v2(&mut self, rel: RelTag, dbdir_exists: bool) {
         let sparse_rel_dir_key =
             rel_tag_sparse_key(rel.spcnode, rel.dbnode, rel.relnode, rel.forknum);
-        // check if the rel_dir_key exists in v2
-        // Idempotent replay: same window as put_rel_creation_v1 —
-        // rewriting the same `Exists` marker is a no-op. Subsequent
-        // page records re-apply, so the final state is identical.
-        let val = self.sparse_get(sparse_rel_dir_key, ctx).await?;
-        let val = RelDirExists::decode_option(val)
-            .map_err(|_| WalIngestErrorKind::InvalidRelDirKey(sparse_rel_dir_key))?;
-        let already_exists = val == RelDirExists::Exists;
+
+        // Write the marker unconditionally — no read first.
+        //
+        // This used to `sparse_get` the key to learn whether the relation
+        // already existed. With one key per relation that read is a
+        // guaranteed meta-cache miss (the key does not exist yet) and so a
+        // YB round trip *per relation created*, where v1 re-read one hot
+        // directory key that the cache and the pending modification served.
+        // On a create-heavy workload it put ingest far enough behind that
+        // `oid-overflow` timed out waiting for WAL to land.
+        //
+        // It is not needed. The write is an idempotent upsert of the same
+        // `Exists` image, and every caller has already established the
+        // relation is absent — `create_relation_if_required` does its own
+        // `get_rel_exists` immediately before, and the bootstrap-import and
+        // dbase-create paths are populating a fresh database.
         self.put(
             sparse_rel_dir_key,
             Value::Image(RelDirExists::Exists.encode()),
@@ -2297,11 +2109,13 @@ impl DatadirModification<'_> {
             self.pending_directory_entries
                 .push((DirectoryKind::RelV2, MetricsUpdate::Set(0)));
         }
-        if !already_exists {
-            self.pending_directory_entries
-                .push((DirectoryKind::RelV2, MetricsUpdate::Add(1)));
-        }
-        Ok(())
+        // Approximate: without the read we cannot tell a fresh create from a
+        // replayed one, so a replay below the durable horizon can double
+        // count. This feeds `TimelineInfo.directory_entries_counts` only —
+        // nothing keys off it — and an exact count is not worth a round trip
+        // per relation.
+        self.pending_directory_entries
+            .push((DirectoryKind::RelV2, MetricsUpdate::Add(1)));
     }
 
     /// Create a relation fork.
@@ -2337,32 +2151,7 @@ impl DatadirModification<'_> {
                 true
             };
 
-        let mut v2_mode = self
-            .maybe_enable_rel_size_v2(true)
-            .map_err(WalIngestErrorKind::MaybeRelSizeV2Error)?;
-
-        if v2_mode.initialize {
-            if let Err(e) = self.initialize_rel_size_v2_keyspace(ctx, &dbdir).await {
-                tracing::warn!("error initializing rel_size_v2 keyspace: {}", e);
-                // TODO: circuit breaker so that it won't retry forever
-            } else {
-                v2_mode.current_status = RelSizeMigration::Migrating;
-            }
-        }
-
-        if v2_mode.current_status != RelSizeMigration::Migrated {
-            self.put_rel_creation_v1(rel, dbdir_exists, ctx).await?;
-        }
-
-        if v2_mode.current_status != RelSizeMigration::Legacy {
-            let write_v2_res = self.put_rel_creation_v2(rel, dbdir_exists, ctx).await;
-            if let Err(e) = write_v2_res {
-                if v2_mode.current_status == RelSizeMigration::Migrated {
-                    return Err(e);
-                }
-                tracing::warn!("error writing rel_size_v2 keyspace: {}", e);
-            }
-        }
+        self.put_rel_creation_v2(rel, dbdir_exists);
 
         // Put size
         let size_key = rel_size_to_key(rel);
@@ -2462,63 +2251,6 @@ impl DatadirModification<'_> {
         Ok(())
     }
 
-    async fn put_rel_drop_v1(
-        &mut self,
-        drop_relations: HashMap<(u32, u32), Vec<RelTag>>,
-        ctx: &RequestContext,
-    ) -> Result<BTreeSet<RelTag>, WalIngestError> {
-        let mut dropped_rels = BTreeSet::new();
-        for ((spc_node, db_node), rel_tags) in drop_relations {
-            let dir_key = rel_dir_to_key(spc_node, db_node);
-            let buf = self.get(dir_key, ctx).await?;
-            let mut dir = RelDirectory::des(&buf)?;
-
-            let mut dirty = false;
-            for rel_tag in rel_tags {
-                let found = if dir.rels.remove(&(rel_tag.relnode, rel_tag.forknum)) {
-                    self.pending_directory_entries
-                        .push((DirectoryKind::Rel, MetricsUpdate::Sub(1)));
-                    dirty = true;
-                    dropped_rels.insert(rel_tag);
-                    true
-                } else {
-                    false
-                };
-
-                if found {
-                    // update logical size
-                    let size_key = rel_size_to_key(rel_tag);
-                    // #36: a torn-recovery reldir can list an FSM/VM fork whose
-                    // rel-size key is absent at this LSN (the directory write
-                    // landed but the first size write did not). FSM/VM are
-                    // advisory (rebuilt by VACUUM), so treat a missing size as 0
-                    // rather than letting `MissingKey` wedge the walreceiver on
-                    // the drop. Same spirit as the get_rel_size tolerance; a
-                    // missing MAIN-fork size still surfaces as an error.
-                    let old_size = match self.get(size_key, ctx).await {
-                        Ok(mut buf) => buf.get_u32_le(),
-                        Err(PageReconstructError::MissingKey(_))
-                            if rel_tag.forknum == FSM_FORKNUM
-                                || rel_tag.forknum == VISIBILITYMAP_FORKNUM =>
-                        {
-                            0
-                        }
-                        Err(e) => return Err(e.into()),
-                    };
-                    self.pending_nblocks -= old_size as i64;
-
-                    // Remove entry from relation size cache
-                    self.tline.remove_cached_rel_size(&rel_tag);
-                }
-            }
-
-            if dirty {
-                self.put(dir_key, Value::Image(Bytes::from(RelDirectory::ser(&dir)?)));
-            }
-        }
-        Ok(dropped_rels)
-    }
-
     async fn put_rel_drop_v2(
         &mut self,
         drop_relations: HashMap<(u32, u32), Vec<RelTag>>,
@@ -2536,6 +2268,34 @@ impl DatadirModification<'_> {
                         .push((DirectoryKind::RelV2, MetricsUpdate::Sub(1)));
                     // put tombstone
                     self.put(key, Value::Image(RelDirExists::Removed.encode()));
+
+                    // Size bookkeeping. This lived only in the v1 drop path
+                    // while v1 was the source of truth and v2 was written for
+                    // comparison; with v2 as the only path it has to happen
+                    // here or the logical size drifts and a dropped rel keeps
+                    // a stale cached size — which `create_relation_if_required`
+                    // consults *before* `get_rel_exists`, so it would hand back
+                    // a block count for a relation that no longer exists.
+                    let size_key = rel_size_to_key(rel_tag);
+                    // #36: a torn-recovery reldir can list an FSM/VM fork whose
+                    // rel-size key is absent at this LSN (the exists marker
+                    // landed but the first size write did not). FSM/VM are
+                    // advisory (rebuilt by VACUUM), so treat a missing size as 0
+                    // rather than letting `MissingKey` wedge the walreceiver on
+                    // the drop. A missing MAIN-fork size still surfaces as an
+                    // error.
+                    let old_size = match self.get(size_key, ctx).await {
+                        Ok(mut buf) => buf.get_u32_le(),
+                        Err(PageReconstructError::MissingKey(_))
+                            if rel_tag.forknum == FSM_FORKNUM
+                                || rel_tag.forknum == VISIBILITYMAP_FORKNUM =>
+                        {
+                            0
+                        }
+                        Err(e) => return Err(e.into()),
+                    };
+                    self.pending_nblocks -= old_size as i64;
+                    self.tline.remove_cached_rel_size(&rel_tag);
                 }
             }
         }
@@ -2548,32 +2308,7 @@ impl DatadirModification<'_> {
         drop_relations: HashMap<(u32, u32), Vec<RelTag>>,
         ctx: &RequestContext,
     ) -> Result<(), WalIngestError> {
-        let v2_mode = self
-            .maybe_enable_rel_size_v2(false)
-            .map_err(WalIngestErrorKind::MaybeRelSizeV2Error)?;
-        let dropped_rels = match v2_mode.current_status {
-            RelSizeMigration::Legacy => self.put_rel_drop_v1(drop_relations, ctx).await?,
-            RelSizeMigration::Migrating => {
-                let dropped_rels_v1 = self.put_rel_drop_v1(drop_relations.clone(), ctx).await?;
-                let dropped_rels_v2_res = self.put_rel_drop_v2(drop_relations, ctx).await;
-                match dropped_rels_v2_res {
-                    Ok(dropped_rels_v2) => {
-                        if dropped_rels_v1 != dropped_rels_v2 {
-                            tracing::warn!(
-                                "inconsistent v1/v2 rel drop: dropped_rels_v1.len()={}, dropped_rels_v2.len()={}",
-                                dropped_rels_v1.len(),
-                                dropped_rels_v2.len()
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("error dropping rels: {}", e);
-                    }
-                }
-                dropped_rels_v1
-            }
-            RelSizeMigration::Migrated => self.put_rel_drop_v2(drop_relations, ctx).await?,
-        };
+        let dropped_rels = self.put_rel_drop_v2(drop_relations, ctx).await?;
         // Queue GC drop events for the forks that actually existed (the
         // incoming map is speculative — every fork of every xnode).
         for rel in dropped_rels {
@@ -3212,15 +2947,6 @@ struct TwoPhaseDirectoryV17 {
     xids: HashSet<u64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub(crate) struct RelDirectory {
-    // Set of relations that exist. (relfilenode, forknum)
-    //
-    // TODO: Store it as a btree or radix tree or something else that spans multiple
-    // key-value pairs, if you have a lot of relations
-    pub(crate) rels: HashSet<(Oid, u8)>,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct RelSizeEntry {
     nblocks: u32,
@@ -3237,7 +2963,6 @@ pub(crate) struct SlruSegmentDirectory {
 pub(crate) enum DirectoryKind {
     Db,
     TwoPhase,
-    Rel,
     AuxFiles,
     SlruSegment(SlruKind),
     RelV2,
