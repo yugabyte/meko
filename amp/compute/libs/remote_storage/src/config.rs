@@ -69,9 +69,10 @@ pub enum RemoteStorageKind {
 }
 
 /// Version of `RemoteStorageKind` that deserializes via an external
-/// `type:` tag. Used by services (endpoint_storage) that load their
-/// storage backend from a JSON config file at startup.
-#[derive(Deserialize)]
+/// `type:` tag. Used where the storage backend arrives as a JSON object at
+/// startup — `compute_ctl` reads one out of its compute spec for the LFC state
+/// blob. Round-trippable, since the spec it lives in is both written and read.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum TypedRemoteStorageKind {
     YbStore(ysql_client::YbConnConfig),

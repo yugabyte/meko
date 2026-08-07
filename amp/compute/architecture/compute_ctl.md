@@ -197,7 +197,7 @@ keep working:
 | `pageserver_conninfo` | `pageserver_connection_info` | `pageserver_connstring` field, then `yb_amp.pageserver_connstring` GUC |
 | `safekeeper_connstrings` | `safekeeper_connstrings` | `yb_amp.safekeepers` GUC (required, non-empty, unique entries — Primary only) |
 | `storage_auth_token` | `storage_auth_token` | — (bearer auth to PS/SK when set; exported to Postgres as `YBAMP_AUTH_TOKEN`) |
-| `endpoint_storage_addr` | `endpoint_storage_addr` | `yb_amp.endpoint_storage_addr` GUC (used for LFC prewarm/offload) |
+| `yb_storage_conn` | `yb_storage_conn` | the YB blob store LFC prewarm/offload reads and writes |
 
 The compute is **single-shard and branch-scoped**: storage is addressed by a single
 `BranchId`, with no shard or tenant/timeline identifiers anywhere in the spec or the
@@ -372,21 +372,26 @@ same in-flight attempt and receive its final `PromoteState`
 
 ## LFC prewarm / offload (`compute_prewarm.rs`)
 
-The Local File Cache's contents can be saved to and restored from
-**endpoint_storage** (see [`endpoint-storage-apis.md`](endpoint-storage-apis.md)),
-whose blobs persist in YugabyteDB via the `YbStore` remote-storage backend — losing
-that store costs only cache warmth, never durability. The object key is
-`{endpoint_storage_addr}/{branch_id}/{endpoint_id}/lfc_state`, with the spec's
-`endpoint_storage_addr` locating the service.
+The Local File Cache's contents can be saved to and restored from **YugabyteDB**,
+read and written by `compute_ctl` itself through `remote_storage`'s `YbStore`
+backend — no separate service in the path. Losing that store costs only cache
+warmth, never durability. The object key is
+`{branch_id}/{endpoint_id}/lfc_state`, and the spec's `yb_storage_conn` carries
+the connection.
+
+Both ids are validated before they reach the key: `?from_endpoint=` arrives from
+a query parameter, so an id containing `/` or `..` would otherwise address a key
+outside the endpoint's own prefix.
 
 - **Prewarm** (`POST /lfc/prewarm`, or automatically at startup when
-  `spec.autoprewarm`): GET the state (404 ⇒ `skipped` — normal on first start),
-  zstd-decompress, feed it to `yb_amp.prewarm_local_cache()`, then report
-  `yb_amp.get_prewarm_info()` counts. Cancellable via `DELETE /lfc/prewarm`.
-  `?from_endpoint=<id>` prewarms from another endpoint's saved state (the
-  readonly→readwrite flow).
+  `spec.autoprewarm`): read the state (absent ⇒ `skipped` — normal on first
+  start), zstd-decompress, feed it to `yb_amp.prewarm_local_cache()`, then report
+  `yb_amp.get_prewarm_info()` counts. Cancellable via `DELETE /lfc/prewarm`; the
+  store's own retries honour the cancellation token, so a cancel during a retry
+  backoff is not held until the budget runs out. `?from_endpoint=<id>` prewarms
+  from another endpoint's saved state (the readonly→readwrite flow).
 - **Offload** (`POST /lfc/offload`, or every `offload_lfc_interval_seconds`): read
-  `yb_amp.get_local_cache_state()`, zstd-compress, PUT it back. The periodic loop
+  `yb_amp.get_local_cache_state()`, zstd-compress, write it back. The periodic loop
   skips offloading while a prewarm is incomplete — uploading a half-warm state
   would overwrite the last complete snapshot, and a restart would then prewarm from
   the truncated state.
@@ -444,11 +449,11 @@ on `compute_ctl` in a few concrete places:
   `POST /terminate` to retire, `POST /promote` for write-endpoint cut-over.
 - **The spec is the durable artifact (§5.3).** Statelessness works because
   everything needed to recreate a compute lives in the spec: storage connection
-  info, the `branch_id` binding, mode, TLS/JWKS, the endpoint_storage address.
+  info, the `branch_id` binding, mode, TLS/JWKS, the LFC state store.
   `compute_ctl` holds none of this durably itself; durable state lives in
   YugabyteDB behind the pageserver/safekeeper.
-- **endpoint_storage (§11.5).** The LFC prewarm/offload path is the live consumer
-  of the endpoint_storage address carried in every spec.
+- **The LFC state blob (§11.5).** Prewarm and offload read and write it in YB
+  directly, over the `yb_storage_conn` every spec carries.
 - **Control-plane signing key (§9.4).** The external API verifies JWTs against the
   JWKS embedded in `compute_ctl_config` — the public half of the controller's key.
 - **Single-writer invariant (§4.4 / §7).** At most one Primary per branch; upgrades

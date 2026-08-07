@@ -1,10 +1,11 @@
 use crate::compute::ComputeNode;
+use crate::lfc_storage::LfcStorage;
 use anyhow::{Context, Result, bail};
 use async_compression::tokio::bufread::{ZstdDecoder, ZstdEncoder};
+use bytes::Bytes;
 use compute_api::responses::LfcOffloadState;
 use compute_api::responses::LfcPrewarmState;
-use http::StatusCode;
-use reqwest::Client;
+use remote_storage::RemotePath;
 use std::mem::replace;
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,26 +13,19 @@ use tokio::{io::AsyncReadExt, select, spawn};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-const KEY: &str = "lfc_state";
-
-/// The endpoint storage URL for this endpoint's LFC state.
+/// The blob key for an endpoint's LFC state.
 ///
 /// endpoint_id is set to None while prewarming from other endpoint, see compute_promote.rs
 /// If not None, takes precedence over pspec.spec.endpoint_id
-fn endpoint_storage_url(
+fn lfc_state_key(
     pspec: &crate::compute::ParsedSpec,
     endpoint_id: Option<String>,
-) -> Result<String> {
+) -> Result<RemotePath> {
     let endpoint_id = endpoint_id.as_ref().or(pspec.spec.endpoint_id.as_ref());
-    let Some(ref endpoint_id) = endpoint_id else {
+    let Some(endpoint_id) = endpoint_id else {
         bail!("pspec.endpoint_id missing, other endpoint_id not provided")
     };
-    let Some(ref base_uri) = pspec.endpoint_storage_addr else {
-        bail!("pspec.endpoint_storage_addr missing")
-    };
-    let branch_id = pspec.branch_id;
-
-    Ok(format!("http://{base_uri}/{branch_id}/{endpoint_id}/{KEY}"))
+    LfcStorage::key(&pspec.branch_id.to_string(), endpoint_id)
 }
 
 impl ComputeNode {
@@ -80,9 +74,27 @@ impl ComputeNode {
     }
 
     /// from_endpoint: None for endpoint managed by this compute_ctl
-    fn endpoint_storage_url(&self, from_endpoint: Option<String>) -> Result<String> {
+    fn lfc_state_key(&self, from_endpoint: Option<String>) -> Result<RemotePath> {
         let state = self.state.lock().unwrap();
-        endpoint_storage_url(state.pspec.as_ref().unwrap(), from_endpoint)
+        lfc_state_key(state.pspec.as_ref().unwrap(), from_endpoint)
+    }
+
+    /// The LFC state blob store, from the connection the spec carries.
+    ///
+    /// Built per call rather than held: prewarm and offload are rare, and a
+    /// long-lived connection to YB for a blob written every few minutes is a
+    /// connection to keep alive for nothing.
+    async fn lfc_storage(&self) -> Result<LfcStorage> {
+        let kind = {
+            let state = self.state.lock().unwrap();
+            let pspec = state.pspec.as_ref().context("spec not set")?;
+            pspec
+                .spec
+                .yb_storage_conn
+                .clone()
+                .context("spec.yb_storage_conn missing; LFC prewarm needs the blob store")?
+        };
+        LfcStorage::new(kind).await
     }
 
     /// Request LFC state from endpoint storage and load corresponding pages into Postgres.
@@ -91,35 +103,32 @@ impl ComputeNode {
         from_endpoint: Option<String>,
         token: CancellationToken,
     ) -> Result<LfcPrewarmState> {
-        let url = self.endpoint_storage_url(from_endpoint)?;
+        let key = self.lfc_state_key(from_endpoint)?;
 
         #[cfg(feature = "testing")]
         fail::fail_point!("compute-prewarm", |_| bail!("compute-prewarm failpoint"));
 
-        info!(%url, "requesting LFC state from endpoint storage");
+        info!(%key, "reading LFC state");
         let mut now = Instant::now();
-        let request = Client::new().get(&url);
-        let response = select! {
-            _ = token.cancelled() => return Ok(LfcPrewarmState::Cancelled),
-            response = request.send() => response
-        }
-        .context("querying endpoint storage")?;
+        let storage = self.lfc_storage().await?;
 
-        match response.status() {
-            StatusCode::OK => (),
-            StatusCode::NOT_FOUND => return Ok(LfcPrewarmState::Skipped),
-            status => bail!("{status} querying endpoint storage"),
+        // The store's own retries honour this token, so a cancel during a retry
+        // sleep is not held until the budget runs out.
+        let downloaded = select! {
+            _ = token.cancelled() => return Ok(LfcPrewarmState::Cancelled),
+            res = storage.download(&key, &token) => res
         }
+        .context("reading LFC state")?;
+
+        // Nothing stored: this endpoint has never offloaded, which is the normal
+        // first-start case rather than a failure.
+        let Some(lfc_state) = downloaded else {
+            return Ok(LfcPrewarmState::Skipped);
+        };
         let state_download_time_ms = now.elapsed().as_millis() as u32;
         now = Instant::now();
 
         let mut uncompressed = Vec::new();
-        let lfc_state = select! {
-            _ = token.cancelled() => return Ok(LfcPrewarmState::Cancelled),
-            lfc_state = response.bytes() => lfc_state
-        }
-        .context("getting request body from endpoint storage")?;
-
         let mut decoder = ZstdDecoder::new(lfc_state.iter().as_slice());
         select! {
             _ = token.cancelled() => return Ok(LfcPrewarmState::Cancelled),
@@ -130,7 +139,7 @@ impl ComputeNode {
         now = Instant::now();
 
         let uncompressed_len = uncompressed.len();
-        info!(%url, "downloaded LFC state, uncompressed size {uncompressed_len}");
+        info!(%key, "read LFC state, uncompressed size {uncompressed_len}");
 
         // Client connection and prewarm info querying are fast and therefore don't need
         // cancellation
@@ -214,8 +223,8 @@ impl ComputeNode {
     }
 
     async fn offload_lfc_impl(&self) -> Result<LfcOffloadState> {
-        let url = self.endpoint_storage_url(None)?;
-        info!(%url, "requesting LFC state from Postgres");
+        let key = self.lfc_state_key(None)?;
+        info!(%key, "requesting LFC state from Postgres");
 
         let mut now = Instant::now();
         let row = ComputeNode::get_maintenance_client(&self.tokio_conn_conf)
@@ -228,7 +237,7 @@ impl ComputeNode {
             .try_get::<usize, Option<&[u8]>>(0)
             .context("deserializing LFC state")?;
         let Some(state) = state else {
-            info!(%url, "empty LFC state, not exporting");
+            info!(%key, "empty LFC state, not exporting");
             return Ok(LfcOffloadState::Skipped);
         };
         let state_query_time_ms = now.elapsed().as_millis() as u32;
@@ -243,18 +252,16 @@ impl ComputeNode {
         now = Instant::now();
 
         let compressed_len = compressed.len();
-        info!(%url, "downloaded LFC state, compressed size {compressed_len}");
+        info!(%key, "read LFC state from Postgres, compressed size {compressed_len}");
 
-        let request = Client::new().put(url).body(compressed);
-        let response = request
-            .send()
-            .await
-            .context("writing to endpoint storage")?;
+        // Offload is not user-facing, so it is not cancellable: a token here would
+        // only ever be cancelled by shutdown, at which point the upload is moot.
+        let cancel = CancellationToken::new();
+        self.lfc_storage()
+            .await?
+            .upload(&key, Bytes::from(compressed), &cancel)
+            .await?;
         let state_upload_time_ms = now.elapsed().as_millis() as u32;
-        let status = response.status();
-        if status != StatusCode::OK {
-            bail!("request to endpoint storage failed: {status}");
-        }
 
         Ok(LfcOffloadState::Completed {
             compress_time_ms,

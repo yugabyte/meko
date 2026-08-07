@@ -17,6 +17,7 @@ pub mod compute_promote;
 pub mod disk_quota;
 pub mod extension_server;
 pub mod installed_extensions;
+pub mod lfc_storage;
 pub mod local_proxy;
 pub mod lsn_lease;
 pub mod metrics;

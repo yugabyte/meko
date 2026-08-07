@@ -93,10 +93,10 @@ require a specific compute status return **412 Precondition Failed** with
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/lfc/prewarm` | Current `LfcPrewarmState` (`not_prewarmed` / `prewarming` / `completed {counts, timings}` / `skipped` / `failed` / `cancelled`). |
-| POST | `/lfc/prewarm` | Start an LFC prewarm from endpoint_storage. Optional `?from_endpoint=<id>` to prewarm from another endpoint's saved state. 202 Accepted, or 429 if a prewarm is already running. |
+| POST | `/lfc/prewarm` | Start an LFC prewarm from the saved state in YB. Optional `?from_endpoint=<id>` to prewarm from another endpoint's saved state. 202 Accepted, or 429 if a prewarm is already running. |
 | DELETE | `/lfc/prewarm` | Cancel an in-progress prewarm. 202. |
 | GET | `/lfc/offload` | Current `LfcOffloadState`. |
-| POST | `/lfc/offload` | Save LFC state to endpoint_storage. 202, or 429 if an offload is already running. |
+| POST | `/lfc/offload` | Save LFC state to YB. 202, or 429 if an offload is already running. |
 
 ## Internal server routes
 
@@ -114,7 +114,7 @@ Called by local processes (the `yb_amp` extension finds this port via the
 
 The spec payloads carried by `/configure` and `/promote` address storage with a
 single **`BranchId`** (no shard or tenant/timeline identifiers) and carry the
-YB-backed pageserver/safekeeper connection info, the endpoint_storage address +
+YB-backed pageserver/safekeeper connection info, the LFC state store +
 token for LFC state, and the JWKS this very auth layer verifies against. Because
 the single safekeeper's WAL is durable in YugabyteDB the moment it is flushed,
 `/terminate` has no flush-LSN handshake to perform — hence the always-`null` `lsn`

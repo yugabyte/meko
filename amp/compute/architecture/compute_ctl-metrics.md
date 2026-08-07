@@ -42,7 +42,7 @@ supervisor itself. Two adjacent surfaces are easy to confuse with this one:
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `compute_ctl_lfc_prewarms_total` | IntCounter | — | LFC prewarms requested (via `POST /lfc/prewarm` or the `autoprewarm` spec option). |
-| `compute_ctl_lfc_prewarm_errors_total` | IntCounter | — | LFC prewarm attempts that ended in `failed` (a 404 from endpoint_storage counts as `skipped`, not an error). |
+| `compute_ctl_lfc_prewarm_errors_total` | IntCounter | — | LFC prewarm attempts that ended in `failed` (no saved state counts as `skipped`, not an error). |
 | `compute_ctl_lfc_offloads_total` | IntCounter | — | LFC offloads requested (via `POST /lfc/offload` or the `offload_lfc_interval_seconds` loop). |
 | `compute_ctl_lfc_offload_errors_total` | IntCounter | — | LFC offload errors. |
 

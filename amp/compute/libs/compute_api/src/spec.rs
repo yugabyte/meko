@@ -181,6 +181,12 @@ pub struct ComputeSpec {
     /// Address of endpoint storage service
     pub endpoint_storage_addr: Option<String>,
 
+    /// The YugabyteDB blob store holding this endpoint's LFC state, as the
+    /// externally tagged `{"type": "YbStore", ...}` object. `compute_ctl` reads
+    /// and writes that blob directly, so prewarm needs no separate service.
+    #[serde(default)]
+    pub yb_storage_conn: Option<remote_storage::TypedRemoteStorageKind>,
+
     #[serde(default)]
     /// Download LFC state from endpoint storage and pass it to Postgres on compute startup
     pub autoprewarm: bool,
