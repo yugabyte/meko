@@ -176,7 +176,7 @@ func TestRunPhases(t *testing.T) {
 	phases := microbenchPhases("t1", microbenchParams{Rows: 10, TruncateCycles: 1})
 
 	ex := &fakeExecer{}
-	results, err := runPhases(context.Background(), ex, phases, nil)
+	results, err := runPhases(context.Background(), ex, phases, nil, nil)
 	if err != nil {
 		t.Fatalf("runPhases: %v", err)
 	}
@@ -190,12 +190,57 @@ func TestRunPhases(t *testing.T) {
 	}
 
 	ex = &fakeExecer{failOn: "TRUNCATE"}
-	results, err = runPhases(context.Background(), ex, phases, nil)
+	results, err = runPhases(context.Background(), ex, phases, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "phase truncate_1") {
 		t.Fatalf("err = %v, want it to name the failing phase", err)
 	}
 	if len(results) != 2 {
 		t.Errorf("kept %d results, want the 2 phases that completed", len(results))
+	}
+}
+
+// TestRunPhasesSteps: with a stepper, every phase is wrapped in a step of its own
+// named after the phase and carrying its group and timing; a failing phase's step
+// is the last one opened and the error still propagates.
+func TestRunPhasesSteps(t *testing.T) {
+	phases := microbenchPhases("t1", microbenchParams{Rows: 10, TruncateCycles: 1})
+
+	type opened struct {
+		name  string
+		props map[string]any
+	}
+	var steps []opened
+	stepper := func(name string, fn func(set func(string, any)) error) error {
+		s := opened{name: name, props: map[string]any{}}
+		err := fn(func(k string, v any) { s.props[k] = v })
+		steps = append(steps, s)
+		return err
+	}
+
+	if _, err := runPhases(context.Background(), &fakeExecer{}, phases, nil, stepper); err != nil {
+		t.Fatalf("runPhases: %v", err)
+	}
+	if len(steps) != len(phases) {
+		t.Fatalf("opened %d steps, want one per phase (%d)", len(steps), len(phases))
+	}
+	for i, ph := range phases {
+		if steps[i].name != ph.Name {
+			t.Errorf("step %d named %q, want the phase label %q", i, steps[i].name, ph.Name)
+		}
+		if steps[i].props["group"] != ph.Group {
+			t.Errorf("step %s group = %v, want %q", ph.Name, steps[i].props["group"], ph.Group)
+		}
+		if _, ok := steps[i].props["ms"]; !ok {
+			t.Errorf("step %s recorded no ms property", ph.Name)
+		}
+	}
+
+	steps = nil
+	if _, err := runPhases(context.Background(), &fakeExecer{failOn: "TRUNCATE"}, phases, nil, stepper); err == nil {
+		t.Fatal("failing phase returned no error")
+	}
+	if n := len(steps); n != 3 || steps[n-1].name != "truncate_1" {
+		t.Errorf("steps = %+v, want the failing phase to be the last one opened", steps)
 	}
 }
 

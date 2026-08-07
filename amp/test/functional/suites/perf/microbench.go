@@ -120,8 +120,8 @@ func init() {
 }
 
 // runMicrobench is the live body: connect to the endpoint the env serves → time
-// each phase → emit the phase datapoints (baseline-gated) plus the intra-run
-// ratio → assert the ratio.
+// each phase (each one a child step of run_phases) → emit the phase datapoints
+// (baseline-gated) plus the intra-run ratio → assert the ratio.
 func runMicrobench(t *core.T) error {
 	cfg := perfFromConfig(t.Options)
 	params := microbenchParamsFromConfig(t.Options)
@@ -166,7 +166,10 @@ func runMicrobench(t *core.T) error {
 				_, _ = client.Exec(context.WithoutCancel(t.Context), "DROP TABLE IF EXISTS "+table)
 			}
 		}()
-		r, err := runPhases(t.Context, client, phases, logf)
+		stepper := func(name string, fn func(set func(string, any)) error) error {
+			return s.Step(name, func(h *core.StepHandle) error { return fn(h.Set) })
+		}
+		r, err := runPhases(t.Context, client, phases, logf, stepper)
 		results = r
 		s.Set("phases", len(results))
 		s.Set("rows", params.Rows)
@@ -239,17 +242,37 @@ type pgExecer interface {
 	Exec(ctx context.Context, sql string, args ...any) (int64, error)
 }
 
+// phaseStepper wraps one phase's timed execution in a reported step named after
+// the phase, so the portal's timeline draws a span per phase; set records
+// properties on it. A nil stepper runs the phases unwrapped (unit tests).
+type phaseStepper func(name string, fn func(set func(string, any)) error) error
+
 // runPhases executes each phase in order and records its wall time. It returns
 // the phases completed so far alongside any error, so a partial run still
 // reports its evidence.
-func runPhases(ctx context.Context, client pgExecer, phases []phase, logf func(string, ...any)) ([]phaseResult, error) {
+func runPhases(ctx context.Context, client pgExecer, phases []phase, logf func(string, ...any), stepper phaseStepper) ([]phaseResult, error) {
 	results := make([]phaseResult, 0, len(phases))
 	for _, ph := range phases {
-		start := time.Now()
-		if _, err := client.Exec(ctx, ph.SQL); err != nil {
+		var ms float64
+		// The timing stays inside the step body: the step's span is the measured
+		// window, not a second measurement of it.
+		run := func(set func(string, any)) error {
+			start := time.Now()
+			_, err := client.Exec(ctx, ph.SQL)
+			ms = float64(time.Since(start).Microseconds()) / 1000
+			set("group", ph.Group)
+			set("ms", fmt.Sprintf("%.1f", ms))
+			return err
+		}
+		var err error
+		if stepper != nil {
+			err = stepper(ph.Name, run)
+		} else {
+			err = run(func(string, any) {})
+		}
+		if err != nil {
 			return results, fmt.Errorf("phase %s: %w", ph.Name, err)
 		}
-		ms := float64(time.Since(start).Microseconds()) / 1000
 		results = append(results, phaseResult{Name: ph.Name, Group: ph.Group, MS: ms})
 		if logf != nil {
 			logf("microbench: phase %s took %.1f ms", ph.Name, ms)
