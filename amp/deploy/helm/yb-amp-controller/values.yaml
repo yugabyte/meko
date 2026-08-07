@@ -61,6 +61,11 @@ controller:
   # Config the controller hands to each endpoint it deploys. This chart only ever
   # deploys on Kubernetes, so the deploy driver is fixed to "kubernetes" in the
   # template — there is no driver knob here.
+  # How long the controller waits for an endpoint deploy/retire to converge
+  # (helm --wait → AMP_DEPLOY_TIMEOUT). Empty = the binary's own default (10m).
+  # A multi-node or cold-cache cluster can need more: the first endpoint pull
+  # alone can exceed 10m there.
+  deployTimeout: ""
   endpoint:
     image:
       # -- Endpoint image repository (AMP_ENDPOINT_IMAGE_REPO).

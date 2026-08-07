@@ -14,8 +14,17 @@ const (
 	DefaultTeardownTimeout    = 5 * time.Minute
 	// DefaultProvisionTimeout bounds EnvProvider.Provision: a provision that waits
 	// on a pod pays a node add + image pull, which 5m turned into an env_failed.
+	// The single-node budget. A multi-node yb_k8s backing scales past it — see
+	// ResolveProvisionTimeout — so a bigger store buys headroom without making a
+	// stuck single-node provision take twice as long to detect.
 	DefaultProvisionTimeout = 10 * time.Minute
-	DefaultCollectTimeout   = 2 * time.Minute
+
+	// ProvisionPerExtraNode extends the provision budget per store node beyond
+	// the first when env.yb_deploy=yb_k8s: pods start in parallel, but a cold
+	// node's image pull and PVC bind serialize behind the autoscaler, and the
+	// chart rolls the StatefulSets in order. 1 node = 10m, 3 = 15m, 6 = 22m30s.
+	ProvisionPerExtraNode = 150 * time.Second
+	DefaultCollectTimeout = 2 * time.Minute
 )
 
 // CategoryDefaultTimeout is the hard-coded fallback test timeout for a
@@ -62,13 +71,27 @@ func ResolveCategoryTimeout(c Category, cfg *Config) time.Duration {
 	return cfg.GetDuration(categoryTimeoutKey(c), def)
 }
 
-// ResolveProvisionTimeout resolves timeouts.provision from cfg, else
-// DefaultProvisionTimeout. cfg may be nil.
+// ResolveProvisionTimeout resolves timeouts.provision from cfg, else a default
+// scaled to the backing the run deploys: the base covers a single-node store,
+// and a multi-node yb_k8s backing adds ProvisionPerExtraNode per node beyond
+// the first. An explicit timeouts.provision always wins verbatim. cfg may be
+// nil.
 func ResolveProvisionTimeout(cfg *Config) time.Duration {
 	if cfg == nil {
 		return DefaultProvisionTimeout
 	}
-	return cfg.GetDuration("timeouts.provision", DefaultProvisionTimeout)
+	const unset = time.Duration(-1)
+	if d := cfg.GetDuration("timeouts.provision", unset); d != unset {
+		return d
+	}
+	base := DefaultProvisionTimeout
+	if cfg.GetString("env.yb_deploy", "") != "yb_k8s" {
+		return base
+	}
+	rf := cfg.GetInt("apps.ybk8s.replication_factor", 1)
+	nodes := max(cfg.GetInt("apps.ybk8s.tserver_replicas", 0),
+		cfg.GetInt("apps.ybk8s.master_replicas", 0), rf, 1)
+	return base + time.Duration(nodes-1)*ProvisionPerExtraNode
 }
 
 // ResolveTeardownTimeout resolves timeouts.teardown from cfg, else

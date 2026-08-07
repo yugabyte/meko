@@ -90,7 +90,6 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"timeouts.stress":       core.DefaultStressTimeout,
 		"timeouts.perf":         core.DefaultPerfTimeout,
 		"timeouts.long_running": core.DefaultLongRunningTimeout,
-		"timeouts.provision":    core.DefaultProvisionTimeout,
 		"timeouts.teardown":     core.DefaultTeardownTimeout,
 		"timeouts.collect":      core.DefaultCollectTimeout,
 	}
@@ -99,6 +98,16 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 			t.Errorf("%s = %s, want %s", key, got, want)
 		}
 	}
+	// timeouts.provision is deliberately NOT supplied by the embedded defaults:
+	// unset is what lets ResolveProvisionTimeout scale it with the yb_k8s store
+	// size, while a value set anywhere overrides the scaling verbatim.
+	if got := cfg.GetDuration("timeouts.provision", -1); got != -1 {
+		t.Errorf("timeouts.provision = %s, want unset (the scaled default must apply)", got)
+	}
+	if got := core.ResolveProvisionTimeout(cfg); got != core.DefaultProvisionTimeout {
+		t.Errorf("ResolveProvisionTimeout(defaults) = %s, want %s", got, core.DefaultProvisionTimeout)
+	}
+
 	// And through the resolution helpers actually used by lifecycle/scheduler.
 	for _, cat := range []core.Category{core.Functional, core.Stress, core.Perf, core.LongRunning} {
 		if got, want := core.ResolveCategoryTimeout(cat, cfg), core.CategoryDefaultTimeout(cat); got != want {

@@ -48,6 +48,10 @@ spec:
               value: "kubernetes"
             - name: AMP_DEPLOY_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            {{- with .Values.controller.deployTimeout }}
+            - name: AMP_DEPLOY_TIMEOUT
+              value: {{ . | quote }}
+            {{- end }}
             - name: AMP_ENDPOINT_IMAGE_REPO
               value: {{ .Values.controller.endpoint.image.repository | quote }}
             - name: AMP_ENDPOINT_IMAGE_TAG

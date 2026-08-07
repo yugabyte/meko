@@ -221,6 +221,11 @@ type Config struct {
 	// never torn down here).
 	Backing Backing
 
+	// DeployTimeout is the controller's own endpoint helm --wait budget
+	// (AMP_DEPLOY_TIMEOUT). Empty = the binary default (10m), which a multi-node
+	// backing's first endpoint (node scale-up + image pull) does not fit.
+	DeployTimeout string
+
 	HelmShim   bool // true → install the --create-namespace-stripping helm shim
 	MCPEnabled bool
 	UIEnabled  bool
@@ -364,6 +369,7 @@ func FromConfig(get Getter) Config {
 			SSLMode:        get.GetString("env.ampstack.backing.sslmode", ""),
 			AdminHostPorts: get.GetString("env.ampstack.backing.admin_host_ports", ""),
 		},
+		DeployTimeout:             get.GetString("env.ampstack.deploy_timeout", "20m"),
 		HelmShim:                  get.GetBool("env.ampstack.helm_shim", true),
 		MCPEnabled:                get.GetBool("env.ampstack.mcp_enabled", false),
 		UIEnabled:                 get.GetBool("env.ampstack.ui_enabled", false),
@@ -1030,6 +1036,7 @@ func (a *App) helmTemplateArgs() []string {
 
 	sets := map[string]string{
 		"imagePullSecrets[0].name":             a.cfg.PullSecretName,
+		"controller.deployTimeout":             a.cfg.DeployTimeout,
 		"controller.image.repository":          ctrlRepo,
 		"controller.image.tag":                 ctrlTag,
 		"controller.endpoint.image.repository": epRepo,

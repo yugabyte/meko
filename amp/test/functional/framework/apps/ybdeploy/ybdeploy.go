@@ -129,7 +129,12 @@ func provisionYBK8s(ctx context.Context, cfg *core.Config, runTag string, logf f
 		SSLMode:  "disable",
 	}
 	teardown := func(ctx context.Context) error { return d.Teardown(ctx) }
-	return ybbacking.FromYBK8s(conn, info.TailnetAddrs, []string{info.InClusterHostPorts}), teardown, nil
+	// The endpoint's thin client dials the tserver RPC port (9100) on the SAME
+	// host it gets for YSQL. The tserver Service does not carry that port —
+	// kube-proxy blackholes ClusterIP:9100 and the endpoint crash-loops on a
+	// heartbeat timeout — so the controller must get the per-pod stable DNS
+	// names, where every port answers, never the Service.
+	return ybbacking.FromYBK8s(conn, info.TailnetAddrs, info.TserverHostPorts), teardown, nil
 }
 
 // provisionYBPod stands up a yugabyted-in-pod from the release TARBALL (apps/ybpod)

@@ -572,6 +572,8 @@ type recordRunner struct {
 	podNames string   // space-separated tserver pod names
 	nsLabel  string
 	pvcs     string // space-separated PVC names returned for the release selector
+	pods     string
+	events   string
 }
 
 func (r *recordRunner) run(_ context.Context, stdin io.Reader, argv []string) (execpkg.Result, error) {
@@ -594,6 +596,10 @@ func (r *recordRunner) run(_ context.Context, stdin io.Reader, argv []string) (e
 		return execpkg.Result{Stdout: r.pvcs, ExitCode: 0}, nil
 	case strings.Contains(j, " get namespace "):
 		return execpkg.Result{Stdout: r.nsLabel, ExitCode: 0}, nil
+	case strings.Contains(j, " get pods "):
+		return execpkg.Result{Stdout: r.pods, ExitCode: 0}, nil
+	case strings.Contains(j, " get events "):
+		return execpkg.Result{Stdout: r.events, ExitCode: 0}, nil
 	default:
 		return execpkg.Result{ExitCode: 0}, nil
 	}
@@ -697,5 +703,26 @@ func TestDockerConfigJSONPassthrough(t *testing.T) {
 	}
 	if _, err := dockerConfigJSONB64("quay.io", "no-colon-token"); err == nil {
 		t.Error("a value that is neither user:pass nor a dockerconfigjson must be rejected")
+	}
+}
+
+// A failed start must name its cause: the diagnosis carries pod states and the
+// namespace's Warning events, so ImagePullBackOff/FailedScheduling reach the
+// error instead of a bare timeout.
+func TestDiagnoseNamespaceNamesTheCause(t *testing.T) {
+	rr := &recordRunner{
+		pods:   "yb-tserver-0 phase=Pending yb-tserver=ready:false ImagePullBackOff",
+		events: "LAST SEEN   TYPE      REASON   MESSAGE\n10s   Warning   Failed   Failed to pull image: unauthorized",
+	}
+	cfg := FromConfig(fakeGet{m: map[string]any{}})
+	cfg.ChartVersion = "2025.2.1.0-b141"
+	d := New(cfg, "run7").
+		WithKube(k8s.New(k8s.Config{Namespace: "ampqa-yb-run7"}).WithRunner(rr.run)).
+		WithLogf(nil)
+	got := d.diagnoseNamespace(context.Background())
+	for _, want := range []string{"ImagePullBackOff", "unauthorized", "diagnosis"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("diagnosis missing %q in %q", want, got)
+		}
 	}
 }

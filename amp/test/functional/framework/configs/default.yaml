@@ -48,7 +48,13 @@ timeouts:
   perf: 60m
   long_running: 24h
   # EnvProvider.Provision deadline (a pod wait pays a node add + image pull).
-  provision: 10m
+  # Single-node budget. Left UNSET-equivalent on purpose: when
+  # env.yb_deploy=yb_k8s the effective default scales with the store's node
+  # count (10m base + 2m30s per node beyond the first — 3 nodes 15m, 6 nodes
+  # 22m30s), because a 3-node store + control plane + endpoint died at exactly
+  # 10m00s while a stuck single-node run should still fail fast. Setting a
+  # value here overrides the scaling verbatim.
+  # provision: 10m
   # EnvProvider.Teardown deadline (runs even after a body timeout, own budget).
   teardown: 5m
   # Environment.Collect deadline (best-effort, before teardown).
@@ -174,6 +180,11 @@ env:
       password: ""
       sslmode: ""
       admin_host_ports: ""
+    # The controller's own endpoint deploy budget (AMP_DEPLOY_TIMEOUT, helm
+    # --wait). The binary default is 10m — sized for a warm single-node cluster;
+    # a multi-node backing's first endpoint (node scale-up + multi-GB pull)
+    # needs more. Empty = leave the binary default.
+    deploy_timeout: 20m
     # true → install the helm shim that strips --create-namespace (needed until
     # a controller image built without that flag ships).
     helm_shim: true

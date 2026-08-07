@@ -384,6 +384,43 @@ func (d *Deployer) WithDownload(f func(ctx context.Context, s3URL, destDir strin
 // error; the default public-image path needs no resolver.
 func (d *Deployer) WithSecretResolver(f SecretResolver) *Deployer { d.resolveSecret = f; return d }
 
+// diagnoseNamespace reads what Kubernetes itself says about the deploy — pod
+// phases with container waiting reasons, and the recent Warning events — so a
+// failed or slow start names its cause (ImagePullBackOff on bad registry creds,
+// FailedScheduling while the autoscaler adds a node, an unbound PVC) instead of
+// surfacing as a bare timeout or "connection refused". Best-effort: diagnosis
+// must never mask the error it explains.
+func (d *Deployer) diagnoseNamespace(ctx context.Context) string {
+	var b strings.Builder
+	pods := []string{"kubectl"}
+	if d.cfg.KubeContext != "" {
+		pods = append(pods, "--context", d.cfg.KubeContext)
+	}
+	pods = append(pods, "-n", d.ns, "get", "pods",
+		"-o", `jsonpath={range .items[*]}{.metadata.name} phase={.status.phase}{range .status.containerStatuses[*]}{" "}{.name}=ready:{.ready}{.state.waiting.reason}{end}{"\n"}{end}`)
+	if res, err := d.kube.Runner()(ctx, nil, pods); err == nil && res.ExitCode == 0 {
+		b.WriteString("pods:\n" + strings.TrimSpace(res.Stdout) + "\n")
+	}
+	ev := []string{"kubectl"}
+	if d.cfg.KubeContext != "" {
+		ev = append(ev, "--context", d.cfg.KubeContext)
+	}
+	ev = append(ev, "-n", d.ns, "get", "events",
+		"--field-selector", "type=Warning", "--sort-by", ".lastTimestamp")
+	if res, err := d.kube.Runner()(ctx, nil, ev); err == nil && res.ExitCode == 0 {
+		lines := strings.Split(strings.TrimSpace(res.Stdout), "\n")
+		if len(lines) > 12 {
+			lines = lines[len(lines)-12:]
+		}
+		b.WriteString("recent warnings:\n" + strings.Join(lines, "\n"))
+	}
+	out := strings.TrimSpace(b.String())
+	if out == "" {
+		return ""
+	}
+	return "\nnamespace " + d.ns + " diagnosis:\n" + out
+}
+
 // WithLogf overrides the logger (nil silences).
 func (d *Deployer) WithLogf(f func(format string, args ...any)) *Deployer {
 	d.logf = f
@@ -436,10 +473,23 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 		return Info{}, err
 	}
 
-	// 4. wait the tserver StatefulSet Ready (YSQL is serving once its pods are).
+	// 4. wait the tserver StatefulSet Ready.
+	//
+	// The jsonpath wait alone does NOT gate: `kubectl wait --for=jsonpath=
+	// {.status.readyReplicas}=N` reports "condition met" immediately against a
+	// freshly-created StatefulSet whose `.status.readyReplicas` does not exist
+	// yet. Observed on a 3-node deploy: helm install and this wait both
+	// completed 18s after the install started, and the caller then got
+	// `connection refused` on :5433 because nothing was up.
+	//
+	// So the jsonpath wait is kept (it is right once the field exists) and
+	// backed by an explicit rollout wait plus a real YSQL probe.
 	want := fmt.Sprintf("jsonpath={.status.readyReplicas}=%d", d.cfg.TServerReplicas)
 	if err := d.kube.WaitFor(ctx, "statefulset/"+tserverStatefulSet, want, d.cfg.HelmTimeout); err != nil {
-		return Info{}, fmt.Errorf("tserver statefulset never became ready: %w", err)
+		return Info{}, fmt.Errorf("tserver statefulset never became ready: %w%s", err, d.diagnoseNamespace(ctx))
+	}
+	if err := d.waitRolloutAndYSQL(ctx); err != nil {
+		return Info{}, err
 	}
 
 	// 5. resolve the coordinator-reachable (tailnet) tserver addresses and the
@@ -494,6 +544,79 @@ func (d *Deployer) resolveTserverHostPorts(ctx context.Context) ([]string, error
 // resolveTailnetAddrs returns every tserver pod IP on the YSQL port — the
 // coordinator reaches these directly over the tailnet (a ClusterIP is not
 // routable from here, so the pod IP is the reliable path — see ReachTailnet).
+// waitRolloutAndYSQL is the readiness gate the jsonpath wait cannot provide:
+// first `kubectl rollout status`, which does block on a StatefulSet actually
+// reaching its replica count, then a real YSQL probe until :5433 answers a
+// query.
+//
+// Both halves are needed. The rollout wait proves the pods exist and are Ready;
+// the YSQL probe proves the SQL port is listening, which lags pod-Ready (the
+// perf tier's own waitBackingYSQL documents the same gap). Callers get a
+// connection string only once it is actually connectable.
+func (d *Deployer) waitRolloutAndYSQL(ctx context.Context) error {
+	argv := []string{"kubectl"}
+	if d.cfg.KubeContext != "" {
+		argv = append(argv, "--context", d.cfg.KubeContext)
+	}
+	argv = append(argv, "-n", d.ns, "rollout", "status",
+		"statefulset/"+tserverStatefulSet,
+		"--timeout", strconv.Itoa(int(d.cfg.HelmTimeout.Seconds()))+"s")
+	// Through the Kubectl's own runner, not OSRun: the runner is injectable
+	// (WithRunner) and shelling out directly would bypass every test's fake.
+	if d.logf != nil {
+		d.logf("ybk8s: waiting for statefulset/%s rollout (%d replicas)", tserverStatefulSet, d.cfg.TServerReplicas)
+	}
+	if res, err := d.kube.Runner()(ctx, nil, argv); err != nil || res.ExitCode != 0 {
+		return fmt.Errorf("tserver statefulset rollout never completed: %v (exit %d) %s%s",
+			err, res.ExitCode, strings.TrimSpace(res.Stderr), d.diagnoseNamespace(ctx))
+	}
+
+	// One attempt per iteration, retried by the loop below — an inner `until`
+	// would turn a wrong ysqlsh path into a silent HelmTimeout-long hang.
+	// Exit 127 means the binary was not found anywhere we look, which is a
+	// permanent condition and is failed immediately rather than retried.
+	probe := fmt.Sprintf(
+		`for b in ysqlsh /home/yugabyte/bin/ysqlsh /home/yugabyte/postgres/bin/ysqlsh; do `+
+			`command -v "$b" >/dev/null 2>&1 && exec "$b" -h 127.0.0.1 -p %d -U %s -d %s -c 'select 1'; `+
+			`done; exit 127`,
+		d.cfg.YSQLPort, DefaultUser, DefaultUser)
+
+	if d.logf != nil {
+		d.logf("ybk8s: probing YSQL on %s-0:%d", tserverStatefulSet, d.cfg.YSQLPort)
+	}
+	pod := tserverStatefulSet + "-0"
+	deadline := time.Now().Add(d.cfg.HelmTimeout)
+	attempts := 0
+	for {
+		attempts++
+		// Slow starts get a periodic state dump, so a console reader (human or
+		// bot) watches ImagePullBackOff/FailedScheduling happen instead of
+		// staring at silence until the deadline.
+		if attempts%6 == 0 && d.logf != nil {
+			d.logf("ybk8s: still waiting for YSQL (attempt %d)%s", attempts, d.diagnoseNamespace(ctx))
+		}
+		res, err := d.kube.ForPod(pod, "").Run(ctx, probe)
+		if err == nil && res.ExitCode == 0 {
+			if d.logf != nil {
+				d.logf("ybk8s: YSQL answering on %s (attempt %d)", pod, attempts)
+			}
+			return nil
+		}
+		if err == nil && res.ExitCode == 127 {
+			return fmt.Errorf("no ysqlsh in %s: cannot verify YSQL readiness", pod)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("tserver YSQL never accepted a connection within %s%s",
+				d.cfg.HelmTimeout, d.diagnoseNamespace(ctx))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 func (d *Deployer) resolveTailnetAddrs(ctx context.Context) ([]string, error) {
 	out, err := d.kube.GetSelector(ctx, "pod", tserverPodSelector, "{.items[*].status.podIP}")
 	if err != nil {
@@ -592,7 +715,10 @@ func (d *Deployer) helmInstall(ctx context.Context, chartDir string) error {
 		return fmt.Errorf("helm install: %w", err)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("helm install exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+		// helm --wait timing out IS the interesting case: the reason lives in
+		// the pods' events, not in helm's own stderr.
+		return fmt.Errorf("helm install exited %d: %s%s",
+			res.ExitCode, strings.TrimSpace(res.Stderr), d.diagnoseNamespace(ctx))
 	}
 	return nil
 }
