@@ -442,7 +442,7 @@ pub struct PageStore {
     baked: Arc<DashMap<BranchId, Arc<BakedSql>>>,
     /// Direct-RPC lane (`hot_path = "yb_thin_client"`, the default):
     /// `yb_thin_client` handles over the `libyb_thin_client` C++ shim for the
-    /// three tables this store owns, batching reads/writes into one Perform
+    /// tables this store owns, batching reads/writes into one Perform
     /// per call. `None` on the YSQL path; when set, per-op dispatch takes this
     /// lane and falls back to YSQL. Populated and health-checked at startup.
     pub thinclient: Option<Arc<ThinClientTables>>,
@@ -455,6 +455,10 @@ pub struct ThinClientTables {
     pub pages: Arc<yb_thin_client::TableHandle>,
     pub slru_pages: Arc<yb_thin_client::TableHandle>,
     pub meta: Arc<yb_thin_client::TableHandle>,
+    /// Candidate *inserts* only. The GC drain's select/delete/dequeue
+    /// stay on YSQL — they run on their own `pageserver:gc` pool and
+    /// have no thin lane.
+    pub pending_gc: Arc<yb_thin_client::TableHandle>,
 }
 
 /// Per-block chain accumulation over a multi-block clustered range
@@ -942,9 +946,12 @@ impl ThinClientTables {
         write_sessions: usize,
         sessions_per_conn: usize,
     ) -> Result<Arc<ThinClientTables>> {
-        let (db_oid, oids) =
-            ysql_client::lookup_table_oids(ysql_client, schema, &["pages", "slru_pages", "meta"])
-                .await?;
+        let (db_oid, oids) = ysql_client::lookup_table_oids(
+            ysql_client,
+            schema,
+            &["pages", "slru_pages", "meta", "pending_gc"],
+        )
+        .await?;
         let tserver_addrs = yb.effective_tserver_rpc_addrs();
         let tserver_count = tserver_addrs.len();
         let client = yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
@@ -964,10 +971,11 @@ impl ThinClientTables {
             pages: open("pages")?,
             slru_pages: open("slru_pages")?,
             meta: open("meta")?,
+            pending_gc: open("pending_gc")?,
             client,
         });
         tracing::info!(
-            "yb_thin_client hot path ready: {schema}.pages/slru_pages/meta opened \
+            "yb_thin_client hot path ready: {schema}.pages/slru_pages/meta/pending_gc opened \
              ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
              connection, across {tserver_count} configured tserver(s))",
         );
@@ -1018,6 +1026,13 @@ fn columns_to_key_bytes(sp: i64, db: i64, rel: i64, fork: i16, blk: i64) -> Byte
 /// Chunks dispatch in parallel — tokio-postgres pipelines them on the
 /// shared connection so YB absorbs them concurrently.
 const ROWS_PER_INSERT: usize = 500;
+
+/// Rows per chunk in `put_meta`, on both lanes. Larger than
+/// [`ROWS_PER_INSERT`] because meta binds only 4 params/row (2000×4 =
+/// 8000, still well under PostgreSQL's 65535 cap) and its payloads are
+/// mostly tiny rel-size sentinels. Shared by the YSQL and direct-RPC
+/// lanes so a batch splits identically on both.
+const META_ROWS_PER_INSERT: usize = 2000;
 
 /// Placement buckets in `amp_storage.pending_gc`'s hash key; must match
 /// the drain's per-bucket fan-out.
@@ -2746,21 +2761,29 @@ impl PageStore {
 
     pub async fn put_meta(&self, branch_id: BranchId, rows: &[MetaRow]) -> Result<()> {
         const COLS: usize = 4;
-        const ROWS_PER_INSERT: usize = 2000;
+        // Encode once, ahead of the lane split: EVERY lane binds these bytes
+        // (same discipline as `put_pages`). Most meta payloads — rel-size
+        // sentinels are 4 bytes — fall under `MIN_COMPRESS_BYTES` and stay
+        // raw; directory listings and aux files are the ones that benefit.
+        let (encoded, tally) = self.encode_payloads("meta", rows.iter().map(|r| &r.payload));
+        if let Some(p) = &self.thinclient {
+            let started = std::time::Instant::now();
+            self.put_meta_thin(p, branch_id, rows, &encoded).await?;
+            crate::metrics::YB_STORE_OP_SECONDS
+                .with_label_values(&["put_meta", "yb_thin_client"])
+                .observe(started.elapsed().as_secs_f64());
+            tally.record();
+            return Ok(());
+        }
+
+        let started = std::time::Instant::now();
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
         let branch_s = branch_id.to_string();
 
-        // Meta has no direct-RPC write lane (reads do; see
-        // `read_meta_thin`), so this is the only encode site for the
-        // table. Most meta payloads — rel-size sentinels are 4 bytes — fall
-        // under `MIN_COMPRESS_BYTES` and stay raw; directory listings and
-        // aux files are the ones that benefit.
-        let (encoded, tally) = self.encode_payloads("meta", rows.iter().map(|r| &r.payload));
-
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for (chunk, enc_chunk) in rows
-            .chunks(ROWS_PER_INSERT)
-            .zip(encoded.chunks(ROWS_PER_INSERT))
+            .chunks(META_ROWS_PER_INSERT)
+            .zip(encoded.chunks(META_ROWS_PER_INSERT))
         {
             if chunk.is_empty() {
                 continue;
@@ -2815,7 +2838,81 @@ impl PageStore {
             .buffer_unordered(parallelism)
             .try_collect::<Vec<_>>()
             .await?;
+        crate::metrics::YB_STORE_OP_SECONDS
+            .with_label_values(&["put_meta", "ysql"])
+            .observe(started.elapsed().as_secs_f64());
         tally.record();
+        Ok(())
+    }
+
+    /// Direct-RPC lane for [`PageStore::put_meta`].
+    ///
+    /// `key_values` are in PRIMARY KEY order — `((branch_id) HASH, key
+    /// ASC, lsn DESC)` — not declaration order; `payload` is the lone
+    /// non-key column. Meta's hash key is `branch_id` alone, so unlike
+    /// `pages`/`slru_pages` there is no bucket column to compute here.
+    ///
+    /// The write is an upsert, matching what the YSQL lane gets from
+    /// `yb_enable_upsert_mode`: a row replayed by the ingest window's
+    /// re-flush overwrites in place instead of failing on duplicate PK.
+    async fn put_meta_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_id: BranchId,
+        rows: &[MetaRow],
+        encoded: &[Bytes],
+    ) -> Result<()> {
+        use yb_thin_client::{BindValue, UpsertRow};
+        let meta = &p.meta;
+        let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
+        let branch_s = branch_id.to_string();
+
+        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        for (chunk, enc_chunk) in rows
+            .chunks(META_ROWS_PER_INSERT)
+            .zip(encoded.chunks(META_ROWS_PER_INSERT))
+        {
+            if chunk.is_empty() {
+                continue;
+            }
+            let mut batch = Vec::with_capacity(chunk.len());
+            for (i, (row, enc)) in chunk.iter().zip(enc_chunk).enumerate() {
+                // Same length guard the YSQL lane applies. Nothing is
+                // dispatched yet (the futures below are only polled by
+                // `buffer_unordered`), so a bad key fails the whole batch
+                // before any chunk reaches YB — fail-fast, as on that lane.
+                if row.key.len() != KEY_SIZE {
+                    bail!(
+                        "put_meta row {i}: key bytes wrong length ({})",
+                        row.key.len()
+                    );
+                }
+                batch.push(UpsertRow::new(
+                    meta,
+                    vec![
+                        BindValue::Text(branch_s.clone()),
+                        BindValue::Bytes(row.key.clone()),
+                        BindValue::I64(row.lsn.0 as i64),
+                    ],
+                    &[("payload", BindValue::Bytes(enc.clone()))],
+                )?);
+            }
+            let client = Arc::clone(&p.client);
+            let chunk_rows = batch.len();
+            futs.push(Box::pin(async move {
+                // Full retry budget inside `upsert`, no session rotation
+                // (see put_pages' thin lane).
+                client.upsert(&batch).await.with_context(|| {
+                    format!("put_meta(yb_thin_client) branch={branch_id} chunk_rows={chunk_rows}")
+                })?;
+                Ok(())
+            }));
+        }
+
+        futures::stream::iter(futs)
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>()
+            .await?;
         Ok(())
     }
 
@@ -2974,6 +3071,16 @@ impl PageStore {
         if rows.is_empty() {
             return Ok(());
         }
+        if let Some(p) = &self.thinclient {
+            let started = std::time::Instant::now();
+            self.gc_enqueue_candidates_thin(p, branch_id, rows).await?;
+            crate::metrics::YB_STORE_OP_SECONDS
+                .with_label_values(&["gc_enqueue_candidates", "yb_thin_client"])
+                .observe(started.elapsed().as_secs_f64());
+            return Ok(());
+        }
+
+        let started = std::time::Instant::now();
         const COLS: usize = 6;
         let branch_s = branch_id.to_string();
         // Sequential by design: candidate volume is tiny (a buffered
@@ -3026,6 +3133,88 @@ impl PageStore {
                     .with_context(|| {
                         format!("gc_enqueue_candidates branch={branch_id} chunk_rows={chunk_rows}")
                     })?;
+                Ok(())
+            }));
+        }
+
+        futures::stream::iter(futs)
+            .buffer_unordered(parallelism)
+            .try_collect::<Vec<_>>()
+            .await?;
+        crate::metrics::YB_STORE_OP_SECONDS
+            .with_label_values(&["gc_enqueue_candidates", "ysql"])
+            .observe(started.elapsed().as_secs_f64());
+        Ok(())
+    }
+
+    /// Direct-RPC lane for [`PageStore::gc_enqueue_candidates`].
+    ///
+    /// `key_values` are in PRIMARY KEY order — `((branch_id, bucket_id)
+    /// HASH, due_lsn, key, gc_kind)` — which is NOT the declaration order
+    /// the YSQL INSERT's column list uses; `relsize` is the lone non-key
+    /// column, and it is nullable (set on shrink candidates only), so a
+    /// `None` binds as `BindValue::Null` rather than being omitted.
+    ///
+    /// `bucket_id` is computed here by `gc_bucket_id`, exactly as on the
+    /// YSQL lane — it is placement only, deliberately not a generated
+    /// column precisely so this lane can write the table. Unlike `pages`,
+    /// `pending_gc` carries no bucket CHECK constraint, so nothing is lost
+    /// by bypassing YSQL; a mis-computed bucket here would hide a
+    /// candidate from the drain's per-bucket fan-out (a missed candidate,
+    /// not a lost page).
+    ///
+    /// The upsert matches the YSQL lane's `yb_enable_upsert_mode` INSERT:
+    /// a replayed candidate overwrites in place, and since `relsize` is
+    /// fixed by the PK identity the overwrite stays byte-identical.
+    async fn gc_enqueue_candidates_thin(
+        &self,
+        p: &ThinClientTables,
+        branch_id: BranchId,
+        rows: &[PendingGcRow],
+    ) -> Result<()> {
+        use yb_thin_client::{BindValue, UpsertRow};
+        let pending_gc = &p.pending_gc;
+        // Column metadata is constant for the batch — resolve once.
+        let col_bucket = pending_gc.col("bucket_id")?;
+        let col_kind = pending_gc.col("gc_kind")?;
+        // Sequential, matching the YSQL lane: candidate volume is a
+        // rounding error next to the page writes it trails.
+        let parallelism = 1;
+        let branch_s = branch_id.to_string();
+
+        let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
+        for chunk in rows.chunks(ROWS_PER_INSERT) {
+            let mut batch = Vec::with_capacity(chunk.len());
+            for row in chunk {
+                batch.push(UpsertRow::new(
+                    pending_gc,
+                    vec![
+                        BindValue::Text(branch_s.clone()),
+                        int_bind_thin(col_bucket, gc_bucket_id(&row.key) as i64),
+                        BindValue::I64(row.due_lsn.0 as i64),
+                        BindValue::Bytes(Bytes::from(key_to_bytes(&row.key))),
+                        int_bind_thin(col_kind, row.gc_kind.to_i16() as i64),
+                    ],
+                    &[(
+                        "relsize",
+                        match row.relsize {
+                            Some(n) => BindValue::I64(n),
+                            None => BindValue::Null,
+                        },
+                    )],
+                )?);
+            }
+            let client = Arc::clone(&p.client);
+            let chunk_rows = batch.len();
+            futs.push(Box::pin(async move {
+                // Full retry budget inside `upsert`, no session rotation
+                // (see put_pages' thin lane).
+                client.upsert(&batch).await.with_context(|| {
+                    format!(
+                        "gc_enqueue_candidates(yb_thin_client) branch={branch_id} \
+                         chunk_rows={chunk_rows}"
+                    )
+                })?;
                 Ok(())
             }));
         }
@@ -6747,7 +6936,7 @@ mod tests {
         let (db_oid, oids) = ysql_client::lookup_table_oids(
             &store.ysql_client,
             PROD_SCHEMA,
-            &["pages", "slru_pages", "meta"],
+            &["pages", "slru_pages", "meta", "pending_gc"],
         )
         .await
         .expect("lookup pageserver table OIDs");
@@ -6772,6 +6961,7 @@ mod tests {
             pages: open("pages"),
             slru_pages: open("slru_pages"),
             meta: open("meta"),
+            pending_gc: open("pending_gc"),
             client,
         }));
         store
@@ -6807,6 +6997,7 @@ mod tests {
             "scan_range",
             "read_slru_chain",
             "scan_slru_range",
+            "put_meta",
             "read_meta",
         ];
         let before: Vec<u64> = ops.iter().map(|op| thin_op_count(op)).collect();
@@ -6899,10 +7090,11 @@ mod tests {
         assert_eq!(via_pg, via_ysql, "scan_slru_range");
         assert_eq!(via_pg.len(), 2);
 
-        // Meta: writes stay on YSQL (put_meta has no hot-path lane);
-        // the single-key read runs on the lane.
+        // Meta: written through the lane, read back on both. The second
+        // row shares nothing but the key, so the `lsn DESC` clustering
+        // has to place them for the targeted reads below to differ.
         let mk = meta_key(7);
-        ysql.put_meta(
+        pg.put_meta(
             branch,
             &[
                 MetaRow {
@@ -6988,6 +7180,60 @@ mod tests {
         assert!(
             thin_op_count("read_chain") > read_before,
             "read_chain did not run on the thin lane"
+        );
+    }
+
+    /// GC candidates enqueued on the direct-RPC lane must be exactly what
+    /// the YSQL drain then finds. This is the cross-lane contract that
+    /// matters for `pending_gc`: the writer computes the placement
+    /// `bucket_id` client-side (`gc_bucket_id`) and the drain fans out
+    /// per bucket, so a lane that bucketed differently would leave
+    /// candidates invisible — silently, since a missed candidate just
+    /// looks like an empty queue. Covers both `relsize` states: `None`
+    /// (trim, binds NULL) and `Some` (shrink), the nullable non-key
+    /// column being the one thing the upsert encoding could drop.
+    #[tokio::test]
+    async fn thin_lane_gc_enqueue_matches_ysql_drain() {
+        let pg = thin_store().await;
+        let (ysql, _) = make_store("thin_gc_ysql").await;
+        let branch = rand_branch();
+        let before = thin_op_count("gc_enqueue_candidates");
+
+        // Spread across keys so the batch spans several `gc_bucket_id`
+        // buckets — a single-bucket batch would pass even if the lane
+        // hard-coded one.
+        let mut batch: Vec<PendingGcRow> = (0..24i64)
+            .map(|i| gc_cand(16401 + i, 0, i, 100 + i as u64))
+            .collect();
+        // One shrink candidate, the only kind carrying a relsize.
+        batch.push(PendingGcRow {
+            relsize: Some(7),
+            ..gc_cand(16999, 0, -1, 300)
+        });
+        pg.gc_enqueue_candidates(branch, &batch).await.unwrap();
+
+        // The YSQL drain sees every row, relsize included.
+        let mut found = all_pending(&ysql, branch).await;
+        let mut want = batch.clone();
+        let by_id = |r: &PendingGcRow| (r.due_lsn, key_to_bytes(&r.key), r.gc_kind.to_i16());
+        found.sort_by_key(by_id);
+        want.sort_by_key(by_id);
+        assert_eq!(
+            found, want,
+            "thin-lane candidates as seen by the YSQL drain"
+        );
+
+        // Replay dedups on the lane too: same PK, upsert overwrites.
+        pg.gc_enqueue_candidates(branch, &batch).await.unwrap();
+        assert_eq!(
+            all_pending(&ysql, branch).await.len(),
+            batch.len(),
+            "replayed thin-lane inserts must dedup on the PK"
+        );
+
+        assert!(
+            thin_op_count("gc_enqueue_candidates") > before,
+            "gc_enqueue_candidates did not run on the thin lane"
         );
     }
 

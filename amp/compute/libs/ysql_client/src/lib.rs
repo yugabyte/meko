@@ -127,7 +127,7 @@ impl<'de> serde::Deserialize<'de> for HostPorts {
 /// deserializes, and what the diagnostic tools build from their CLI flags. Connection only: which
 /// YB to talk to, as whom, over what TLS. It deliberately carries NO
 /// table/schema — each component hardcodes the table(s) it owns
-/// (pageserver → amp_storage.pages/slru_pages/meta, safekeeper →
+/// (pageserver → amp_storage.pages/slru_pages/meta/pending_gc, safekeeper →
 /// amp_storage.wals, compute_ctl → amp_storage.blobs).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]

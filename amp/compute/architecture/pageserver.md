@@ -106,14 +106,23 @@ behind internal writes:
   connection runs `SET yb_enable_upsert_mode = true`
   (`YsqlClient`, `compute/libs/ysql_client/`), so a chunk retried after
   a partial-flush failure upserts instead of PK-conflicting.
+  Under the default `hot_path` the flush's four writes — pages, SLRU,
+  meta, and the `pending_gc` candidates that trail them — all take the
+  direct-RPC lane below, and these connections are their fallback. What
+  still goes out over YSQL from this pool is everything with no lane of
+  its own: the meta *range* scans, branch-state CRUD, and the lineage
+  walks.
 
 With `hot_path = "yb_thin_client"` in the shared connection block — **the
 default** (`YbConnConfig::hot_path`, `HotPath::ThinClient`) — `PageStore`
 additionally opens direct-RPC table handles over `libs/yb_thin_client`
 (`PageStore::thinclient`, the batch-first client over the
 `libyb_thin_client` C++ shim — routing stays server-side) to
-`pages`/`slru_pages`/`meta` at startup with a fail-fast health check. Set
-`hot_path = "ysql"` to run everything over the Postgres wire instead.
+`pages`/`slru_pages`/`meta`/`pending_gc` at startup with a fail-fast
+health check. Set `hot_path = "ysql"` to run everything over the Postgres
+wire instead. `pending_gc` is a write-only handle on this lane — the GC
+drain's select/delete/dequeue stay on YSQL (see
+[`pageserver-gc.md`](pageserver-gc.md)).
 
 ## Schema
 
@@ -587,13 +596,16 @@ image synthesis, just serialise-and-buffer (`page_writer.rs`):
    INSERTs against `amp_storage.pages` / `slru_pages` / `meta` on the
    fpu store. Chunks are 500 rows for pages/SLRU (`ROWS_PER_INSERT`;
    bind-parameter budget with `branch_id` baked as a literal) and 2000
-   for meta, dispatched in parallel via
+   for meta (`META_ROWS_PER_INSERT`), dispatched in parallel via
    `stream::iter(...).buffer_unordered(N)` with base N = 2/1/2
-   (× `scale_factor`). On the direct-RPC lane the page/SLRU writes run as
-   PGSQL_UPSERT batches with per-row response verification (a dropped
-   row surfaces as a batch error, not a short count); `put_meta` always
-   stays on YSQL. Because every connection runs in upsert mode, a retry
-   after partial-chunk success cannot PK-conflict.
+   (× `scale_factor`), then the `pending_gc` candidates the batch
+   produced. On the direct-RPC lane all four writes — `put_pages`,
+   `put_slru_pages`, `put_meta`, `gc_enqueue_candidates` — run as
+   PGSQL_UPSERT batches with per-row response verification (a dropped row
+   surfaces as a batch error, not a short count), chunked exactly as the
+   YSQL lane chunks them. Because the lane upserts and every
+   YSQL connection runs in upsert mode, a retry after partial-chunk
+   success cannot PK-conflict on either lane.
 7. On success, `mark_flushed` flips the snapshot's rows from unflushed
    → durable in place (the rows do NOT move; they stay cached for
    reads), `evict_to_capacity` sheds cold keys if `total_bytes` exceeds

@@ -349,8 +349,23 @@ runs:
 The whole drain (select, actions, dequeue) runs on a dedicated
 **`pageserver:gc` connection pool** sized to the action width, so a
 backlogged drain never contends with the ingest/materialiser lanes or
-compute reads. Candidate *inserts* stay on the fpu pool — they need its
-upsert mode for replay dedup, and their volume is a rounding error.
+compute reads. Candidate *inserts* take whichever lane `hot_path` selects,
+alongside the page writes they trail: under the default they are
+PGSQL_UPSERT batches on the direct-RPC lane
+(`gc_enqueue_candidates_thin`), and under `hot_path = "ysql"` they run on
+the fpu pool, whose upsert mode gives them the same replay dedup. Either
+way their volume is a rounding error next to the page writes. The drain
+itself has no thin lane — select, actions and dequeue are YSQL only.
+
+`bucket_id` is why the lane split is safe here: it is placement only and
+**writer-computed** (`page_store::gc_bucket_id`), deliberately not a
+generated column, so both lanes derive it identically from the key.
+Unlike `pages`, `pending_gc` carries no bucket CHECK constraint, so the
+direct-RPC lane bypasses no enforcement. A lane that bucketed differently
+would write rows the drain's per-bucket fan-out never looks at — an
+invisible candidate, not a lost page — which is what
+`thin_lane_gc_enqueue_matches_ysql_drain` pins down by enqueuing on the
+lane and draining over YSQL.
 
 ## Config
 
