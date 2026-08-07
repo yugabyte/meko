@@ -168,8 +168,26 @@ for ((i=0; i<60; i++)); do
   sleep 3
 done
 POD="${POD#pod/}"
-[ -n "$POD" ] && [ "$(kubectl -n "$NS" get "pod/$POD" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" = true ] \
-  && ok "endpoint pod Ready ($POD)" || bad "endpoint pod not Ready"
+if [ -n "$POD" ] && [ "$(kubectl -n "$NS" get "pod/$POD" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" = true ]; then
+  ok "endpoint pod Ready ($POD)"
+else
+  bad "endpoint pod not Ready"
+  # Dump the endpoint's own state here, while the pod still exists: later
+  # scenarios delete the project, which retires it, and the workflow's
+  # end-of-job dump then has nothing left to look at. The supervisor's log is
+  # the only place that says which child failed to come up.
+  echo "---- endpoint pod state (${POD:-<none>}) ----"
+  kubectl -n "$NS" get pods -o wide 2>&1 | sed 's/^/    /' || true
+  if [ -n "$POD" ]; then
+    kubectl -n "$NS" describe "pod/$POD" 2>&1 | sed -n '/Events:/,$p' | sed 's/^/    /' || true
+    echo "---- supervisor log (current) ----"
+    kubectl -n "$NS" logs "pod/$POD" -c endpoint --tail=200 2>&1 | sed 's/^/    /' || true
+    echo "---- supervisor log (previous container, if it restarted) ----"
+    kubectl -n "$NS" logs "pod/$POD" -c endpoint --previous --tail=200 2>&1 | sed 's/^/    /' || true
+  fi
+  echo "---- namespace events ----"
+  kubectl -n "$NS" get events --sort-by=.lastTimestamp 2>&1 | tail -40 | sed 's/^/    /' || true
+fi
 
 hdr "endpoint is USABLE: write + read real data via psql"
 # (a) loopback (pg_hba trusts loopback): full DDL/DML + CHECKPOINT (forces the

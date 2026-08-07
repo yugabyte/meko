@@ -88,10 +88,9 @@ type DeployConfig struct {
 	DiskGiBPerVCPU int
 
 	// --- Docker runtime ---
-	EndpointImage  string // single-container endpoint image to run
-	Network        string // shared Docker network for the controller + its endpoints
-	ExternalHost   string // host a client uses to reach a published compute port
-	SupervisorPath string // dev-only: bind-mount a host supervisor.py into endpoints (empty = bundled)
+	EndpointImage string // single-container endpoint image to run
+	Network       string // shared Docker network for the controller + its endpoints
+	ExternalHost  string // host a client uses to reach a published compute port
 
 	// ControllerURL is the URL deployed endpoints use to reach the
 	// controller-managed controller (e.g. http://host.docker.internal:50051).
@@ -193,7 +192,6 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.EndpointImage, "deploy-endpoint-image", env("AMP_DEPLOY_ENDPOINT_IMAGE", "yb-amp/neon-endpoint:dev"), "docker: single-container endpoint image to run")
 	fs.StringVar(&d.Network, "deploy-network", env("AMP_DEPLOY_NETWORK", ""), "docker: shared network for the controller + its endpoints (so they reach each other by name)")
 	fs.StringVar(&d.ExternalHost, "deploy-external-host", env("AMP_DEPLOY_EXTERNAL_HOST", "127.0.0.1"), "docker: host a client uses to reach a published compute port")
-	fs.StringVar(&d.SupervisorPath, "deploy-supervisor-path", env("AMP_DEPLOY_SUPERVISOR_PATH", ""), "docker: dev-only host path to supervisor.py to bind-mount into endpoints (empty = bundled)")
 	fs.StringVar(&d.ControllerURL, "deploy-controller-url", env("AMP_DEPLOY_CONTROLLER_URL", ""), "URL deployed endpoints use to reach the controller; empty = endpoint runs controller-free (Kubernetes: typically the controller's in-cluster Service URL, e.g. http://amp-controller.<ns>.svc.cluster.local:8080)")
 
 	if err := fs.Parse(args); err != nil {

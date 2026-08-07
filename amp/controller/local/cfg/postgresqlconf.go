@@ -67,7 +67,7 @@ type PostgresqlConfParams struct {
 
 // Sizing defaults for a local (`yb_amp_local`) compute. The deployed endpoint
 // derives these from the pod's cgroup limits and data volume (see
-// deploy/endpoint/supervisor.py); a local run has no such reservation to read,
+// compute/endpoint_supervisor); a local run has no such reservation to read,
 // so it takes fixed values instead. They are deliberately modest but not
 // degenerate: the previous 1MB shared_buffers with the LFC off made local
 // behaviour unrepresentative of a deployed endpoint, where both caches matter.

@@ -267,7 +267,7 @@ pageserver. It is optional: with the LFC off, every buffer miss goes to the
 pageserver.
 
 **It is on by default on a deployed endpoint.** The supervisor
-([`deploy/endpoint/supervisor.py`](../../deploy/endpoint/supervisor.py)) sizes it
+([`compute/endpoint_supervisor`](../endpoint_supervisor)) sizes it
 from the `/data` volume using the two GUCs' **ceiling/live split**:
 `yb_amp.max_file_cache_size` (`PGC_POSTMASTER`, so it can only change with a
 Postgres restart) is pinned to the whole volume and then never has to move,

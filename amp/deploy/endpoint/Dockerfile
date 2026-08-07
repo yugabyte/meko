@@ -5,9 +5,9 @@
 #   - safekeeper           (WAL, backed by YugabyteDB)
 #   - endpoint_storage     (LFC scratch blobs, backed by YugabyteDB)
 #   - compute_ctl + postgres v18 + the `yb_amp` extension (the compute)
-# plus a small Python supervisor (PID 1 under tini) that renders each
-# service's config from environment variables, brings the stack up in
-# order, and monitors/restarts the children.
+#   - yb-endpoint-supervisor (PID 1 under tini) that renders each service's
+#                          config from environment variables, brings the stack
+#                          up in order, and monitors/restarts the children
 #
 # No control plane runs in this image: it is a shared, cluster-level service
 # that lives in the AMP layer. The endpoint requires the `yb_storage` schema to
@@ -74,9 +74,9 @@ ENV YB_THIN_CLIENT_LIB_DIR=/opt/yb_thin_client/lib
 # control-plane tools used for (optional) schema provisioning.
 #
 # The cargo target dir + registry are BuildKit cache mounts (uid/gid match
-# the build image's `nonroot` user), so unrelated context changes (e.g.
-# editing supervisor.py, which busts the `COPY . .` layer) trigger only an
-# incremental recompile rather than a full one. Cache mounts are not part of
+# the build image's `nonroot` user), so a context change that busts the
+# `COPY . .` layer triggers only an incremental recompile rather than a full
+# one. Cache mounts are not part of
 # the image layer, so the built binaries are copied out to /home/nonroot/out
 # (a real dir) before the mount is unmounted; the final stage copies from there.
 RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
@@ -88,6 +88,7 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
          --bin yb-safekeeper \
          --bin yb-endpoint-storage \
          --bin yb-compute-ctl \
+         --bin yb-endpoint-supervisor \
          --bin yb-dump-pages \
          --bin yb-dump-wals \
          --bin yb-reset-consistent-lsn \
@@ -96,6 +97,7 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
           target/release/yb-safekeeper \
           target/release/yb-endpoint-storage \
           target/release/yb-compute-ctl \
+          target/release/yb-endpoint-supervisor \
           target/release/yb-dump-pages \
           target/release/yb-dump-wals \
           target/release/yb-reset-consistent-lsn \
@@ -121,7 +123,6 @@ RUN set -e \
         libzstd1 \
         libossp-uuid16 \
         tini \
-        python3 \
         netcat-openbsd \
         procps \
     && rm -f /etc/apt/apt.conf.d/80-retries \
@@ -130,7 +131,8 @@ RUN set -e \
     && chown -R yugabyte:yugabyte /data
 
 # Storage + control-plane binaries (copied out of the cache-mounted target dir
-# into /home/nonroot/out by the build stage).
+# into /home/nonroot/out by the build stage). The supervisor is copied further
+# down, next to the ENTRYPOINT that runs it.
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver      /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
@@ -150,9 +152,8 @@ COPY --from=yb-thin-client /home/nonroot/yb_thin_client/lib/libyb_thin_client.so
 # Postgres v18 install (binaries + the `yb_amp` extension installed by yb-amp-pg-ext).
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
-# The supervisor.
-COPY --chown=yugabyte:yugabyte deploy/endpoint/supervisor.py /usr/local/bin/yb-endpoint-supervisor
-RUN chmod +x /usr/local/bin/yb-endpoint-supervisor
+# The supervisor — PID 1 under tini (see the ENTRYPOINT below).
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-supervisor /usr/local/bin/
 
 # NB: LD_LIBRARY_PATH carries BOTH the Postgres v18 libs and the
 # yb_thin_client shim dir (copied above). `ENV` assigns rather than appends, so

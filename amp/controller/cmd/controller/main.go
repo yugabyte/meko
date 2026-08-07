@@ -163,11 +163,10 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 				"controller_url", prov.ControllerURL)
 		default: // config.DriverDocker
 			prov.Deployer = deploy.NewDockerDeployer(deploy.DockerConfig{
-				EndpointImage:  cfg.Deploy.EndpointImage,
-				Network:        cfg.Deploy.Network,
-				ExternalHost:   cfg.Deploy.ExternalHost,
-				SupervisorPath: cfg.Deploy.SupervisorPath,
-				ReadyTimeout:   cfg.Deploy.Timeout,
+				EndpointImage: cfg.Deploy.EndpointImage,
+				Network:       cfg.Deploy.Network,
+				ExternalHost:  cfg.Deploy.ExternalHost,
+				ReadyTimeout:  cfg.Deploy.Timeout,
 			}, logger)
 			logger.Info("docker endpoint deployer enabled",
 				"image", cfg.Deploy.EndpointImage, "network", cfg.Deploy.Network,

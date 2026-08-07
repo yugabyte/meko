@@ -56,7 +56,7 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          # The image ENTRYPOINT is `tini -- python3 .../supervisor.py`.
+          # The image ENTRYPOINT is `tini -- /usr/local/bin/yb-endpoint-supervisor`.
           envFrom:
             - configMapRef:
                 name: {{ include "yb-amp-endpoint.fullname" . }}

@@ -29,6 +29,9 @@ pub struct Layout {
     pub endpoint_storage_http_port: u16,
     /// `compute_ctl`'s own HTTP surface. Its internal port is this plus one.
     pub compute_ctl_http_port: u16,
+    /// Postgres major version. The install is version-qualified inside
+    /// `pg_distrib_dir`, so this is needed to find `bin/` and `lib/`.
+    pub pg_version_major: u32,
     /// `0.0.0.0` when the controller must reach in, loopback otherwise.
     pub bind_host: String,
     pub control_plane_api: String,
@@ -55,6 +58,26 @@ impl Layout {
     pub fn pgdata(&self) -> Utf8PathBuf {
         self.run_dir.join("pgdata")
     }
+    /// The Postgres binaries: `<pg_distrib_dir>/v<major>/bin`.
+    ///
+    /// Version-qualified, because that is how the image lays the install out —
+    /// `pg_distrib_dir` itself holds one directory per major version. Flattening
+    /// this to `<pg_distrib_dir>/bin` finds nothing, and the failure is indirect:
+    /// `compute_ctl` panics on a missing `pg_config` and the registry read cannot
+    /// find `psql`.
+    pub fn pg_bin(&self) -> Utf8PathBuf {
+        self.pg_distrib_dir
+            .join(format!("v{}", self.pg_version_major))
+            .join("bin")
+    }
+
+    /// The matching `lib/`, which the daemons and the compute load Postgres from.
+    pub fn pg_lib(&self) -> Utf8PathBuf {
+        self.pg_distrib_dir
+            .join(format!("v{}", self.pg_version_major))
+            .join("lib")
+    }
+
     pub fn pageserver_connstring(&self) -> String {
         format!("host={LISTEN_HOST} port={}", self.pageserver_pg_port)
     }
@@ -300,7 +323,7 @@ pub fn services(l: &Layout, es_config: &Utf8Path) -> Vec<Service> {
                     l.compute_port
                 ),
                 "--pgbin".into(),
-                l.pg_distrib_dir.join("bin/postgres").to_string(),
+                l.pg_bin().join("postgres").to_string(),
                 "--compute-id".into(),
                 COMPUTE_ID.into(),
                 "--config".into(),
@@ -335,6 +358,7 @@ mod tests {
             safekeeper_http_port: 7676,
             endpoint_storage_http_port: 9993,
             compute_ctl_http_port: 3080,
+            pg_version_major: 18,
             bind_host: "0.0.0.0".into(),
             control_plane_api: "http://localhost:6666".into(),
         }
@@ -354,6 +378,27 @@ mod tests {
                 "compute_ctl"
             ]
         );
+    }
+
+    /// The image lays Postgres out under `<pg_distrib_dir>/v<major>`, so every
+    /// path derived from it must carry the version. Flattening it to
+    /// `<pg_distrib_dir>/bin` produced a pod that crash-looped: `compute_ctl`
+    /// panicked on a missing `pg_config` and the registry read could not find
+    /// `psql`. Neither failure names the path, so this is pinned here.
+    #[test]
+    fn the_postgres_paths_are_version_qualified() {
+        let l = layout();
+        assert_eq!(l.pg_bin(), "/usr/local/v18/bin");
+        assert_eq!(l.pg_lib(), "/usr/local/v18/lib");
+        // The daemons' own `pg_distrib_dir` stays the *parent*: the pageserver
+        // appends the version itself.
+        assert_eq!(l.pg_distrib_dir, "/usr/local");
+
+        let s = services(&l, Utf8Path::new("/data/endpoint_storage/cfg.json"));
+        let compute = s.iter().find(|x| x.name == "compute_ctl").unwrap();
+        let argv = compute.argv_for_test();
+        let pgbin = argv[argv.iter().position(|a| a == "--pgbin").unwrap() + 1].clone();
+        assert_eq!(pgbin, "/usr/local/v18/bin/postgres", "{argv:?}");
     }
 
     /// Every flag in the compute's argv must be one `yb-compute-ctl` declares, and

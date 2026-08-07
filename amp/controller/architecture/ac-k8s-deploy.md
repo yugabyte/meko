@@ -320,7 +320,7 @@ Kubernetes driver:
 | `--deploy-disk-size` | **floor** for the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`); the size itself is 5 GiB × the endpoint's vCPU |
 
 Docker driver: `--deploy-endpoint-image`, `--deploy-network`,
-`--deploy-external-host`, `--deploy-supervisor-path`.
+`--deploy-external-host`.
 
 `--deploy` requires helm ≥ 3.13 on `PATH`.
 

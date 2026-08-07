@@ -68,12 +68,9 @@ it once with
 exit. `branch_lineage` brings up four endpoint containers (main + b1 + b2 + b3),
 so it needs enough headroom for four single-container computes at once.
 
-`run-controller.sh` bind-mounts the repo's current `deploy/endpoint/supervisor.py`
-into every endpoint (`AMP_DEPLOY_SUPERVISOR_PATH`), so the endpoint image's
-*supervisor* never goes stale between rebuilds — but its **binaries**
-(pageserver/safekeeper/compute) are still whatever was baked in. If a test fails
-because an endpoint's pageserver/safekeeper lacks a feature the supervisor or
-controller now drives, rebuild the image:
+Every endpoint runs the supervisor and the storage binaries baked into
+`$ENDPOINT_IMAGE`, which this script does not rebuild. If a test fails because an
+endpoint lacks a feature the controller now drives, rebuild the image:
 `docker build -t yb-amp/neon-endpoint:dev -f deploy/endpoint/Dockerfile .`.
 
 ## Layout

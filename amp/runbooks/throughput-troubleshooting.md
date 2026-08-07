@@ -157,7 +157,8 @@ fpu at 2 each, plus the GC pool at 1, all × `scale_factor`).
 **Which default applies depends on where the pageserver runs:**
 
 - **Deployed endpoint** (k8s / Docker pod): `scale_factor` is the endpoint's **vCPU**, set by
-  `deploy/endpoint/supervisor.py`, so a 2-vCPU endpoint sits at ~10 connections and a 4-vCPU one at
+  the endpoint supervisor (`compute/endpoint_supervisor`), so a 2-vCPU endpoint sits at ~10
+  connections and a 4-vCPU one at
   ~20. If that is too few, the lever is the **endpoint's CPU**, not the file: the supervisor
   **rewrites `pageserver.toml` from scratch on every start**, so a hand-edit there is silently
   discarded on the next restart.

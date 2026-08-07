@@ -18,13 +18,13 @@ surrounding stack (namespace, YB, controller) from nothing.
 
 ## What runs in the pod
 
-A small Python supervisor
-([`deploy/endpoint/supervisor.py`](../../deploy/endpoint/supervisor.py),
-PID 1 under `tini`) renders each service's config from environment
-variables, starts the services in order, and monitors/restarts them:
+A supervisor
+([`compute/endpoint_supervisor`](../endpoint_supervisor), PID 1 under
+`tini`) renders each service's config from environment variables,
+starts the services in order, and monitors/restarts them:
 
 ```
- tini ─ supervisor.py
+ tini ─ yb-endpoint-supervisor
           ├─ endpoint_storage      (HTTP; LFC scratch blobs → amp_storage.blobs)
           ├─ safekeeper            (WAL → amp_storage.wals)
           ├─ yb-pageserver         (page service → amp_storage.* ; initdb on bootstrap)
@@ -98,12 +98,13 @@ The supervisor materializes the branch itself:
   `g#1:` membership prefix, from `safekeepers_generation: 1`) /
   `yb_amp.branch_id` (from the spec's `storage_branch_id`) point at the
   co-located services over `localhost`. It fetches a basebackup from
-  the pageserver and starts Postgres. A background thread then sets the
-  `cloud_admin` password over the loopback trust connection so
-  non-loopback clients can authenticate (the spec sets
+  the pageserver and starts Postgres. The supervisor then sets the
+  `cloud_admin` password over the loopback trust connection, on its own
+  thread, so non-loopback clients can authenticate (the spec sets
   `skip_pg_catalog_updates`, so the password in the spec is never
   applied by `compute_ctl` itself); the controller's Docker deployer
-  waits for that log line as the readiness signal.
+  waits for that log line as the readiness signal
+  (`remote_auth::READY_MARKER`).
 
 ## GENERATION
 

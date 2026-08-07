@@ -207,7 +207,7 @@ CREATE TABLE amp_registry.endpoints (
     -- Each is a flat {key: value} object of top-level toml keys, e.g.
     --   {"scale_factor": 8, "wal_cache_size_mib": 512}
     -- written verbatim into pageserver.toml / safekeeper.toml by
-    -- deploy/endpoint/supervisor.py, so they beat every resource-derived default
+    -- the endpoint supervisor, so they beat every resource-derived default
     -- it computes — the same precedence an explicitly-set toml value already has
     -- over a scale_factor-derived one inside the pageserver.
     --

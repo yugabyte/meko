@@ -255,6 +255,49 @@ impl Default for Policy {
     }
 }
 
+impl Policy {
+    /// The default, with the three knobs the chart exposes applied. A malformed
+    /// value keeps the default rather than failing the pod: these are tuning, and
+    /// an endpoint that will not start is worse than one running the defaults.
+    pub fn from_env() -> Self {
+        let mut p = Self::default();
+        if let Some(v) = env_secs("SUPERVISOR_RESTART_BACKOFF_SECONDS") {
+            p.backoff = v;
+        }
+        if let Some(v) = env_usize("SUPERVISOR_MAX_RESTARTS") {
+            p.max_restarts = v;
+        }
+        if let Some(v) = env_secs("SUPERVISOR_RESTART_WINDOW_SECONDS") {
+            p.window = v;
+        }
+        p
+    }
+}
+
+fn env_str(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+fn env_secs(name: &str) -> Option<Duration> {
+    match env_str(name)?.parse() {
+        Ok(n) => Some(Duration::from_secs(n)),
+        Err(_) => {
+            tracing::warn!(name, "not a number of seconds; keeping the default");
+            None
+        }
+    }
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+    match env_str(name)?.parse() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            tracing::warn!(name, "not a number; keeping the default");
+            None
+        }
+    }
+}
+
 /// Why the monitor loop returned. `BudgetExceeded` is the one the caller must
 /// turn into a non-zero exit, so the kubelet recreates the pod.
 #[derive(Debug, PartialEq, Eq)]
@@ -502,6 +545,34 @@ mod tests {
                 assert!(restarts > fast_policy().max_restarts, "restarts={restarts}");
             }
             other => panic!("expected the budget to trip, got {other:?}"),
+        }
+    }
+
+    /// The chart sets these three, so ignoring them would silently discard
+    /// operator tuning — which is what happened until the GKE run surfaced it.
+    #[test]
+    fn the_policy_reads_the_knobs_the_chart_sets() {
+        // SAFETY: single-threaded test; names are unique to it.
+        unsafe {
+            std::env::set_var("SUPERVISOR_RESTART_BACKOFF_SECONDS", "7");
+            std::env::set_var("SUPERVISOR_MAX_RESTARTS", "9");
+            std::env::set_var("SUPERVISOR_RESTART_WINDOW_SECONDS", "600");
+        }
+        let p = Policy::from_env();
+        assert_eq!(p.backoff, Duration::from_secs(7));
+        assert_eq!(p.max_restarts, 9);
+        assert_eq!(p.window, Duration::from_secs(600));
+
+        // A malformed value must not take the pod down over a tuning knob.
+        unsafe { std::env::set_var("SUPERVISOR_MAX_RESTARTS", "lots") };
+        assert_eq!(
+            Policy::from_env().max_restarts,
+            Policy::default().max_restarts
+        );
+        unsafe {
+            std::env::remove_var("SUPERVISOR_RESTART_BACKOFF_SECONDS");
+            std::env::remove_var("SUPERVISOR_MAX_RESTARTS");
+            std::env::remove_var("SUPERVISOR_RESTART_WINDOW_SECONDS");
         }
     }
 

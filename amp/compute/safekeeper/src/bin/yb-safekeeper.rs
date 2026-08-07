@@ -282,7 +282,7 @@ async fn main() -> anyhow::Result<()> {
     // otherwise invisible from outside the process — no metric or API exposes
     // them — so a restart's log is the only place an operator can confirm what
     // this safekeeper actually came up with. See the deployed default in
-    // deploy/endpoint/supervisor.py (scale_factor = the endpoint's vCPU).
+    // compute/endpoint_supervisor (scale_factor = the endpoint's vCPU).
     info!(
         scale_factor,
         wal_cache_size_mib = conf.wal_cache_size_mib,

@@ -114,7 +114,7 @@ ports:
   endpointStorageHttp: 9993
   computeCtlHttp: 3080
 
-# Supervisor (the in-pod Python process manager) behaviour.
+# Supervisor (the in-pod process manager, PID 1 under tini) behaviour.
 supervisor:
   # -- Seconds to back off before restarting a crashed service.
   restartBackoffSeconds: 2

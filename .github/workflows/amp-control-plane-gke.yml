@@ -292,6 +292,14 @@ jobs:
         if: failure()
         run: |
           kubectl -n "$NS" get all || true
+          # Events outlive the pods the smoke test deletes, so they are the only
+          # record of a container that crash-looped earlier in the run.
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp || true
+          for p in $(kubectl -n "$NS" get pods -o name | grep yb-ep- || true); do
+            kubectl -n "$NS" describe "$p" || true
+            kubectl -n "$NS" logs "$p" -c endpoint --tail=200 || true
+            kubectl -n "$NS" logs "$p" -c endpoint --previous --tail=200 || true
+          done
           kubectl -n "$NS" logs deploy/amp-controller --tail=200 || true
 
       - name: Teardown

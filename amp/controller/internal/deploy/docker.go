@@ -22,11 +22,6 @@ type DockerConfig struct {
 	// ExternalHost is the host a *client* uses to reach a published port (the
 	// compute). For a host-run integration this is 127.0.0.1.
 	ExternalHost string
-	// SupervisorPath, when set, bind-mounts a host supervisor.py over the
-	// endpoint image's bundled one. Dev-only affordance for when the image
-	// hasn't been rebuilt with supervisor changes baked in; the daemon resolves
-	// the path on the Docker host. Leave empty in production / k8s.
-	SupervisorPath string
 	// ReadyTimeout bounds how long CreateEndpoint waits for the compute.
 	ReadyTimeout time.Duration
 }
@@ -70,11 +65,6 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		"--add-host", "host.docker.internal:host-gateway",
 		"-p", fmt.Sprintf("0:%d", endpointComputePort),
 	)
-	if d.cfg.SupervisorPath != "" {
-		args = append(args, "-v",
-			d.cfg.SupervisorPath+":/usr/local/bin/yb-endpoint-supervisor:ro")
-	}
-
 	env := map[string]string{
 		"YB_HOST_PORTS":       spec.YB.HostPorts,
 		"YB_USER":             spec.YB.User,
@@ -156,11 +146,12 @@ func (d *DockerDeployer) EndpointSafekeeperURL(id string) string {
 // waitReady blocks until the endpoint's supervisor reports the compute is up and
 // its password is set (the marker it logs once Postgres accepts remote auth).
 func (d *DockerDeployer) waitReady(ctx context.Context, name string) error {
-	// LOAD-BEARING CONTRACT: this string must stay in sync with the line the
-	// endpoint's deploy/endpoint/supervisor.py logs once the compute is up and
-	// its password is set. We wait on the password-set marker (not just a TCP
-	// accept) because clients connect with md5 auth. If you change either side,
-	// change both — otherwise this silently times out and tears the endpoint down.
+	// LOAD-BEARING CONTRACT: this string must stay in sync with
+	// remote_auth::READY_MARKER in compute/endpoint_supervisor, which the
+	// supervisor logs once the compute is up and its password is set. We wait on
+	// the password-set marker (not just a TCP accept) because clients connect
+	// with md5 auth. If you change either side, change both — otherwise this
+	// silently times out and tears the endpoint down.
 	const marker = "set cloud_admin password for remote auth"
 	deadline := time.Now().Add(d.cfg.ReadyTimeout)
 	for time.Now().Before(deadline) {

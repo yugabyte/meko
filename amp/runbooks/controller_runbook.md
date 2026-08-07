@@ -33,7 +33,7 @@ not an HTTP 5xx in your client. Always start there.
 
 ## Endpoint create/deploy task fails — the debugging flow
 
-This is the worked example behind the "supervisor.py issues" section below, generalized into a
+This is the worked example behind the "supervisor ↔ binary skew" section below, generalized into a
 repeatable process. The specific bug matters less than the **order of operations**: each step narrows
 the failure by one layer and tells you whether to go deeper or stop.
 
@@ -111,26 +111,36 @@ kubectl -n "$NS" logs "$POD" --previous --tail=80
 
 ### 4. Read the supervisor's failure as a layer in a known sequence
 
-The endpoint supervisor (`deploy/endpoint/supervisor.py`, PID 1) brings services up in a **fixed
-order**, and it logs each one: `endpoint_storage → safekeeper → yb-pageserver → compute_ctl`. The line
-*before* the crash tells you which layer failed:
+The endpoint supervisor (`compute/endpoint_supervisor`, PID 1) brings services up in a **fixed
+order**, and logs each transition with a `service=` field:
+`endpoint_storage → safekeeper → pageserver → compute_ctl`. The last line *before* the crash tells you
+which layer failed:
 
 ```
-[supervisor] starting endpoint_storage: /usr/local/bin/yb-endpoint-storage …   ← if this is the last line, endpoint_storage failed
-[supervisor] endpoint_storage is healthy
-[supervisor] starting yb-pageserver: /usr/local/bin/yb-pageserver -D /data/pageserver
-Error: unknown configuration item(s) in pageserver.toml: …                       ← pageserver rejected its config
+INFO ...supervise: started service=endpoint_storage pid=14     ← last line ⇒ endpoint_storage failed
+INFO ...supervise: healthy service=endpoint_storage
+INFO ...supervise: started service=pageserver pid=31
+Error: unknown configuration item(s) in pageserver.toml: …      ← pageserver rejected its config
 ```
+
+Between the pageserver becoming healthy and the compute starting there is one more step, which logs
+`branch_id=`: the supervisor waits for the pageserver's branch to reach `Active`, reads its
+`last_record_lsn`, and creates the branch on the safekeeper. A stall at
+`waiting for the pageserver branch` means the pageserver is up but its timeline is not — look at the
+pageserver's own log, not the supervisor's.
 
 How far it got is diagnostic: "endpoint_storage + safekeeper healthy, pageserver fails" means the
 backing YB is fine and you've narrowed it to the pageserver's config or binary.
+
+Raise the supervisor's own verbosity with `RUST_LOG=debug` on the pod/container if the `info` lines
+aren't enough.
 
 ### 5. Confirm pre-existing vs. your change, then fix at the authoritative layer
 
 Before "fixing" anything, decide whether you broke it:
 ```bash
-git status deploy/endpoint/            # pristine ⇒ not your change
-git log --oneline -- deploy/endpoint/supervisor.py deploy/endpoint/Dockerfile   # find the skew-introducing commit
+git status compute/endpoint_supervisor deploy/endpoint/   # pristine ⇒ not your change
+git log --oneline -- compute/endpoint_supervisor deploy/endpoint/Dockerfile   # find the skew-introducing commit
 ```
 **The freshly-built binary is authoritative** — it defines the binary names that exist and the config
 keys it accepts. If the supervisor and the binary disagree, fix the supervisor to match the binary
@@ -153,43 +163,49 @@ file the rest separately.
 
 ---
 
-## "supervisor.py issues": supervisor ↔ binary version skew
+## Supervisor ↔ binary skew
 
 The recurring class the flow above exists to catch. The endpoint image bakes in **two things that must
-agree**: the Python `supervisor.py` (which renders configs and spawns processes) and the
-freshly-compiled Rust/PG binaries it spawns. When a refactor renames a binary or changes a config
-schema but only one side is updated, the image builds fine and crash-loops at runtime — invisible to
-`cargo build`/`go build`/unit tests; it only shows up when a **fresh image is actually run**.
+agree**: the supervisor (which renders configs and spawns processes) and the binaries it spawns. When a
+refactor renames a binary or changes a config schema but only one side is updated, the image builds
+fine and crash-loops at runtime.
 
-Two concrete instances found while bringing up a fresh build (both fixed in `supervisor.py`):
+The supervisor is now Rust in the same cargo workspace as the binaries, which closes one half of this
+and leaves the other open:
 
-1. **Binary-name skew.** The cargo bins + Dockerfile install `yb-endpoint-storage`, `yb-safekeeper`,
-   `yb-compute-ctl` (the `yb-` prefix landed in commits like `1d60bbfd6 "prefix compute_ctl binary
-   with yb-"`), but `supervisor.py` still spawned the bare names `endpoint_storage` / `safekeeper` /
-   `compute_ctl` (only `yb-pageserver` had been updated). Symptom: instant exit,
-   `FileNotFoundError: '/usr/local/bin/endpoint_storage'`. Detection: compare
-   `docker run --entrypoint ls <img> /usr/local/bin/` against `grep 'BIN_DIR /' supervisor.py`.
+- **Config-schema skew is largely closed.** `config::render` deserializes each rendered document into
+  the daemon's own type (`pageserver_api::config::ConfigToml`,
+  `safekeeper_api::config::SafekeeperConfigToml`) before writing it, so a key the daemon no longer
+  accepts fails in the supervisor with a clear error — and in the crate's unit tests — instead of at
+  daemon startup. The historical instance was `availability_zone='local'`, which the current
+  `yb-pageserver` rejects: `Error: unknown configuration item(s) in pageserver.toml:
+  availability_zone … Aborting start up`. Same class as `startup-failures.md` §A/§K.
+- **Binary-name and argv skew is still open.** Children are spawned by path and flag *strings*
+  (`boot::services`), so a renamed binary or a changed flag is not a compile error. The historical
+  instance was the `yb-` prefix landing on the binaries (e.g. `1d60bbfd6`) while the supervisor still
+  spawned the bare names — symptom: instant exit, "No such file or directory". The same shape bit
+  `compute_ctl`'s argv during the Rust port: `--spec-path` for what is really `--config`, plus a
+  missing required `--compute-id`, which fails clap parsing before the process does any work.
 
-2. **Config-schema skew.** `supervisor.py`'s `write_pageserver_config()` emitted
-   `availability_zone='local'`, which the current `yb-pageserver` no longer accepts. Symptom:
-   `Error: unknown configuration item(s) in pageserver.toml: availability_zone … Aborting start up`.
-   This is the same class as `startup-failures.md` §A/§K — the binary is strict about unknown config
-   keys. Fix: drop the key from the rendered config.
+`boot::tests` pins the compute's argv against the flags `yb-compute-ctl` declares, so a regression *in
+the supervisor* is caught. It cannot catch a change to the other binary's own flags — only running a
+fresh image does.
 
 **Generalize, don't memorize the specific keys.** Any time you build a fresh endpoint image:
-`docker run` it once and watch the supervisor walk its start order. If a binary is missing, it's a
-name skew (compare `ls /usr/local/bin` to the `BIN_DIR / "<name>"` spawns). If a process rejects its
-config, it's a schema skew (the binary is authoritative — `<bin> --help` / the error names the bad
-key). Either way the fix is in `supervisor.py`, and you verify it with another local `docker run`
-before redeploying.
+`docker run` it once and watch the supervisor walk its start order. A missing binary or a rejected flag
+is name/argv skew — compare `docker run --entrypoint ls <img> /usr/local/bin/` and the child's
+`--help` against `boot::services`. A process rejecting its config is schema skew, and the binary is
+authoritative (`<bin> --help`, or the error names the bad key). Either way the fix is in
+`compute/endpoint_supervisor`, and you verify it with another local `docker run` before redeploying.
 
-> Note on rebuilds: changing `supervisor.py` busts the Dockerfile's `COPY . .` layer, which re-triggers
-> the Rust build stage. On a *warm* BuildKit cache that incremental Rust build can fail to regenerate
+> Note on rebuilds: the supervisor is a cargo bin in the endpoint image's build stage, so changing it
+> re-triggers the Rust build. On a *warm* BuildKit cache that incremental build can fail to regenerate
 > `communicator/communicator_bindings.h` (a cbindgen build-script output) → `yb-amp-pg-ext` then can't
-> find it. A clean build (`--no-cache`, or fresh cache) is unaffected. To iterate quickly without a
-> cold rebuild, layer the supervisor fix onto the last good image
-> (`FROM <good-image>` + `COPY … supervisor.py` + `chmod +x`) — `supervisor.py` is the final COPY in
-> the full Dockerfile, so the result is identical to a from-scratch build with the fix.
+> find it. A clean build (`--no-cache`, or fresh cache) is unaffected. To iterate without a full image
+> rebuild, build the binary alone
+> (`cargo build --release --bin yb-endpoint-supervisor`) and layer it onto the last good image
+> (`FROM <good-image>` + `COPY target/release/yb-endpoint-supervisor /usr/local/bin/`) — it is the last
+> binary COPY in the full Dockerfile, so the result matches a from-scratch build with the fix.
 
 ---
 

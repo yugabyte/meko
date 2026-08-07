@@ -22,9 +22,10 @@ name: Amp CI
 #                upstream PostgreSQL report differently (#400). Runs on
 #                migration / db-runner / task-store changes.
 #   ui         — amp_ui: `npm ci`, `tsc --noEmit` (npm run check), vite build.
-#   deploy     — Helm charts + endpoint supervisor: `helm lint` and
-#                `helm unittest` on both charts, the Guaranteed-QoS guardrail,
-#                and `ruff` on deploy/ Python. Renders/validates without a cluster.
+#   deploy     — Helm charts: `helm lint` and `helm unittest` on both charts
+#                plus the Guaranteed-QoS guardrail. Renders/validates without a
+#                cluster. The endpoint supervisor is a Rust crate, so its tests
+#                run in the compute job with the rest of the workspace.
 #
 # Unit-test results are published as PR checks (dorny/test-reporter) from
 # the JUnit XML that nextest/gotestsum emit, so failures show up as a
@@ -493,7 +494,7 @@ jobs:
         run: npm run build
 
   deploy:
-    name: Amp Deploy — helm charts & supervisor lint
+    name: Amp Deploy — helm charts
     needs: amp_changes
     if: needs.amp_changes.outputs.deploy == 'true'
     runs-on: ubuntu-latest
@@ -524,22 +525,6 @@ jobs:
       - name: helm unittest (controller chart)
         run: helm unittest deploy/helm/yb-amp-controller
 
-      # The endpoint supervisor is the only Python in deploy/; lint it with the
-      # repo's ruff config (scripts/reformat only covers controller + scripts).
-      - name: Lint deploy Python (ruff)
-        run: |
-          pipx install ruff==0.11.2
-          ruff check deploy/
-
-      # The supervisor derives every endpoint's Postgres sizing and merges its
-      # operator overrides, so a wrong answer here is a mis-sized compute or a
-      # daemon that will not parse its own config. pytest-timeout is required:
-      # amp/pytest.ini sets `timeout`, and without the plugin pytest aborts with
-      # an INTERNALERROR instead of collecting anything.
-      - name: Test the endpoint supervisor (pytest)
-        run: |
-          python3 -m pip install --quiet pytest==8.3.5 pytest-timeout==2.3.1
-          python3 -m pytest deploy/endpoint/tests -q
 
   # The controller's live-database Go tests, on a real YugabyteDB (0002/0003 use
   # YB-specific HASH / SPLIT DDL, so plain Postgres can't run them):

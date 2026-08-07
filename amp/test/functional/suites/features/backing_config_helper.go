@@ -45,7 +45,7 @@ const (
 	// DefaultEndpointUser/Password/DB: every amp compute endpoint (sharedk8s
 	// single-container and controller-created alike) provisions the same
 	// cloud_admin superuser with this default password (deploy/README.md,
-	// deploy/endpoint/supervisor.py COMPUTE_PASSWORD) — the controller API
+	// the supervisor's COMPUTE_PASSWORD) — the controller API
 	// neither sets nor returns endpoint credentials, so this is the real
 	// default, not a placeholder.
 	DefaultEndpointUser     = "cloud_admin"

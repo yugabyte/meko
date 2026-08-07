@@ -105,11 +105,8 @@ echo "==> Starting controller ($AMP_NAME) on port $AMP_HOST_PORT (docker runtime
 # the endpoints join $NET so controller and the client can reach them. The controller
 # owns cluster control in-process (generation authority + registries, served on :8080)
 # and provisions its own DB's schemas on startup — no separate controller.
-# AMP_DEPLOY_SUPERVISOR_PATH bind-mounts the repo's current supervisor.py into
-# each endpoint (the controller passes it to `docker run -v`, resolved by the
-# host daemon). The pre-built endpoint image is only rebuilt by hand, so its
-# baked supervisor goes stale; without this, a supervisor predating branch
-# support (#134) ignores ANCESTOR_TIMELINE_ID and branch endpoints come up empty.
+# The endpoint image supplies its own supervisor. Rebuild the image to pick up
+# supervisor changes — $ENDPOINT_IMAGE is not rebuilt by this script.
 docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     --user root \
     -p "${AMP_HOST_PORT}:8080" \
@@ -124,7 +121,6 @@ docker run -d --name "$AMP_NAME" --hostname "$AMP_NAME" --network "$NET" \
     -e AMP_DEPLOY_EXTERNAL_HOST=127.0.0.1 \
     -e AMP_DEPLOY_YB_HOST_PORTS=host.docker.internal:5433 \
     -e AMP_DEPLOY_YB_DBNAME="$DB" \
-    -e AMP_DEPLOY_SUPERVISOR_PATH="$REPO/deploy/endpoint/supervisor.py" \
     "$AMP_IMAGE" >/dev/null
 
 echo "==> Waiting for controller to be ready"

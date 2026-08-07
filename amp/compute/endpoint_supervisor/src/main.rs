@@ -28,6 +28,9 @@
 //! - [`boot`] — the shape of the pod: ports, paths, the base config keys, the
 //!   four services, and waiting for YugabyteDB before starting them.
 //! - [`spec`] — the compute spec and the `endpoint_storage` config.
+//! - [`remote_auth`] — the `cloud_admin` password, without which only loopback
+//!   clients can authenticate. Its success line is the readiness signal the
+//!   controller's Docker deployer waits for.
 //!
 //! # Startup order
 //!
@@ -54,6 +57,7 @@ pub mod config;
 pub mod coordinate;
 pub mod pg_settings;
 pub mod registry;
+pub mod remote_auth;
 pub mod resources;
 pub mod retry;
 pub mod spec;
@@ -93,9 +97,6 @@ struct Env {
     yb_sslrootcert: Option<String>,
     yb_password_env: Option<String>,
     endpoint_id: Option<String>,
-    /// Major version only. The controller sets this from the branch's recorded
-    /// version, so it is trusted rather than re-read from the branch row.
-    pg_version_major: u32,
     compute_password: String,
     shared_preload_libraries: String,
     /// Extension paths and the like, computed by the chart from the ImageVolumes
@@ -131,6 +132,9 @@ impl Env {
             safekeeper_http_port: env_port("SAFEKEEPER_HTTP_PORT", 7676)?,
             endpoint_storage_http_port: env_port("ENDPOINT_STORAGE_HTTP_PORT", 9993)?,
             compute_ctl_http_port: env_port("COMPUTE_CTL_HTTP_PORT", 3080)?,
+            pg_version_major: env_or("ENDPOINT_PG_VERSION", "18")
+                .parse()
+                .context("ENDPOINT_PG_VERSION is not a major version number")?,
             bind_host: bind_host.to_string(),
             control_plane_api: env_or("CONTROL_PLANE_API", "http://localhost:6666"),
         };
@@ -161,9 +165,6 @@ impl Env {
             yb_sslrootcert: env_opt("YB_SSLROOTCERT"),
             yb_password_env: env_opt("YB_PASSWORD_ENV"),
             endpoint_id,
-            pg_version_major: env_or("ENDPOINT_PG_VERSION", "18")
-                .parse()
-                .context("ENDPOINT_PG_VERSION is not a major version number")?,
             compute_password: env_or("COMPUTE_PASSWORD", "cloud_admin"),
             shared_preload_libraries: env_or("SHARED_PRELOAD_LIBRARIES", "yb_amp"),
             chart_settings: chart_settings()?,
@@ -290,7 +291,7 @@ fn run() -> Result<std::process::ExitCode> {
     }
 
     // The daemons and the compute load the bundled Postgres libraries.
-    prepend_ld_library_path(&l.pg_distrib_dir.join("lib"));
+    prepend_ld_library_path(&l.pg_lib());
 
     for dir in [
         l.run_dir.clone(),
@@ -382,7 +383,7 @@ fn run() -> Result<std::process::ExitCode> {
         compute.name
     );
 
-    let mut sup = Supervisor::new(Policy::default());
+    let mut sup = Supervisor::new(Policy::from_env());
     for svc in services {
         sup.add(svc);
     }
@@ -404,7 +405,7 @@ fn run() -> Result<std::process::ExitCode> {
             boot::LISTEN_HOST,
             l.safekeeper_http_port,
             &l.branch_id,
-            env.pg_version_major,
+            l.pg_version_major,
             &start_lsn,
         )?;
         Ok(start_lsn)
@@ -417,6 +418,17 @@ fn run() -> Result<std::process::ExitCode> {
     sup.add(compute);
     // Skips the three that are already running.
     sup.start_all()?;
+
+    // On its own thread: this waits for Postgres to answer queries, and blocking
+    // here would stop the monitor loop from restarting a sibling that crashed
+    // meanwhile. The controller's Docker deployer treats the line it logs as the
+    // endpoint's readiness signal — see remote_auth::READY_MARKER.
+    remote_auth::spawn(
+        &l.pg_bin().join("psql"),
+        l.compute_port,
+        &env.compute_password,
+    );
+
     tracing::info!("all services are up");
 
     match sup.run(std::time::Duration::from_millis(500))? {
@@ -446,7 +458,7 @@ fn fetch_overrides(env: &Env) -> registry::Overrides {
         return registry::Overrides::default();
     };
     let target = registry::PsqlTarget {
-        psql: env.layout.pg_distrib_dir.join("bin/psql"),
+        psql: env.layout.pg_bin().join("psql"),
         host,
         port: port.to_string(),
         user: env.yb_user.clone(),
@@ -594,6 +606,7 @@ mod tests {
                 safekeeper_http_port: 7676,
                 endpoint_storage_http_port: 9993,
                 compute_ctl_http_port: 3080,
+                pg_version_major: 18,
                 bind_host: "127.0.0.1".into(),
                 control_plane_api: "http://localhost:6666".into(),
             },
@@ -604,7 +617,6 @@ mod tests {
             yb_sslrootcert: None,
             yb_password_env: None,
             endpoint_id: None,
-            pg_version_major: 18,
             compute_password: "cloud_admin".into(),
             shared_preload_libraries: "yb_amp".into(),
             chart_settings: BTreeMap::new(),
