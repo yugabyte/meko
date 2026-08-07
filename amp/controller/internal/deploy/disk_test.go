@@ -95,6 +95,11 @@ func TestApplyDiskSizingPVC(t *testing.T) {
 		{name: "no floor configured", cpu: "4", floor: "", want: "80Gi"},
 		{name: "fractional cpu rounds up", cpu: "1500m", floor: "", want: "30Gi"},
 		{name: "installer ratio wins over the default", cpu: "2", floor: "", ratio: 100, want: "200Gi"},
+		// #602: the ratio holds all the way up. A 32-vCPU perf endpoint asks for
+		// the full 640Gi; nothing clamps it to a "reasonable" ceiling, because a
+		// pool that cannot back the ratio should fail to schedule rather than
+		// quietly under-provision the endpoint.
+		{name: "32 vCPU perf endpoint is uncapped", cpu: "32", floor: "10Gi", want: "640Gi"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: tc.floor, StorageClass: "std", DiskGiBPerVCPU: tc.ratio}}
@@ -132,6 +137,9 @@ func TestApplyDiskSizingEmptyDir(t *testing.T) {
 		{name: "floor wins for a small endpoint", cpu: "1", floor: "30Gi", want: "30Gi"},
 		{name: "no floor configured", cpu: "1", floor: "", want: "20Gi"},
 		{name: "installer ratio wins over the default", cpu: "1", floor: "", ratio: 40, want: "40Gi"},
+		// #602: same uncapped ratio on the emptyDir side, where the 640Gi is also
+		// the ephemeral-storage request the scheduler accounts against the node.
+		{name: "32 vCPU perf endpoint is uncapped", cpu: "32", floor: "10Gi", want: "640Gi"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: tc.floor, DiskGiBPerVCPU: tc.ratio}}

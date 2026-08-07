@@ -105,10 +105,12 @@ type KubernetesConfig struct {
 	// size DiskSize, instead of an ephemeral emptyDir. Empty = emptyDir.
 	StorageClass string
 	DiskSize     string
-	// DiskGiBPerVCPU is the data-volume size per endpoint vCPU. The right value
-	// depends on the node type underneath (a local-NVMe pool has far more disk
-	// per core than a boot-disk one), which the controller cannot see — so the
-	// installer, who knows the node type, passes it. 0 = the built-in default.
+	// DiskGiBPerVCPU is the data-volume size per endpoint vCPU. 0 = the built-in
+	// 20 GiB/vCPU policy, which every pool is expected to be provisioned to
+	// honour; set it only for a pool built to a deliberately different
+	// disk-per-core shape. The controller cannot check the figure against the
+	// nodes it will schedule onto (#584), so a ratio the pool cannot back
+	// surfaces as an unschedulable endpoint rather than an error here.
 	DiskGiBPerVCPU int
 
 	// Optional: deliver the backing YugabyteDB password from a pre-existing

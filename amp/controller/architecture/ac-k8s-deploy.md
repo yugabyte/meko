@@ -166,13 +166,19 @@ Each endpoint's `/data` (the compute's `pgdata`, the LFC cache, logs and
 pidfiles) is provisioned from a storage class when `--deploy-storage-class` is
 set: the chart renders a `ReadWriteOnce` **PersistentVolumeClaim** of that class
 (a network block volume — **EBS** on AWS, **Persistent Disk** on GCP) and mounts
-it at `/data`. Its size is **proportional to the endpoint's CPU** — 20 GiB per
-vCPU by default, so a 2-vCPU endpoint gets 40 GiB — with `--deploy-disk-size`
-acting as a **floor** rather than the size itself. The right ratio depends on
-the node type (a local-NVMe pool carries far more disk per core than a
-boot-disk one), and only the installer knows which nodes it bought, so
-`--deploy-disk-gib-per-vcpu` / `AMP_DEPLOY_DISK_GIB_PER_VCPU` overrides it
-per deployment. Because the
+it at `/data`. Its size is **proportional to the endpoint's CPU** — **20 GiB per
+vCPU**, so a 2-vCPU endpoint gets 40 GiB — with `--deploy-disk-size`
+acting as a **floor** rather than the size itself.
+
+That ratio is the **policy**, and it is **uncapped**: a 32-vCPU perf endpoint asks
+for the full 640 GiB. Nothing clamps it, because the failure mode of a ratio a
+pool cannot back belongs to the scheduler — the pod stays `Pending` and says so —
+rather than to the controller quietly handing an endpoint less disk than its CPU
+allocation will fill. The corollary is a **provisioning requirement**: whatever
+backs `/data` has to be able to supply 20 GiB per vCPU for the largest endpoint
+the deployment intends to run, or that endpoint never schedules.
+`--deploy-disk-gib-per-vcpu` / `AMP_DEPLOY_DISK_GIB_PER_VCPU` overrides the ratio
+for a pool deliberately built to a different disk-per-core shape. Because the
 ReadWriteOnce volume attaches to one pod at a time, the Deployment switches to the
 **`Recreate`** strategy (stop the old pod before starting the new one). The pod's
 **`podSecurityContext.fsGroup`** (default `1000`, the endpoint image's `yugabyte`
@@ -191,6 +197,18 @@ container. The `sizeLimit` is only an eviction ceiling — it reserves nothing �
 whereas the request is what the **scheduler** accounts against the node's
 capacity, so it will not place more endpoints on a node than its disk can back.
 That is what keeps co-tenants from oversubscribing it.
+
+This is also where the 20 GiB/vCPU provisioning requirement lands in practice.
+When the endpoint pool is a GKE node pool created with
+`--ephemeral-storage-local-ssd` (the `cloud.google.com/gke-ephemeral-storage-local-ssd`
+label `--deploy-node-selector` pins endpoints to), the node's local NVMe SSDs
+*are* its ephemeral storage — so the local-SSD count has to be sized against the
+pool's vCPU count, not left at whatever the machine type defaults to. A 32-vCPU
+node needs **2 local SSDs** (750 GiB raw) to seat one 32-vCPU endpoint; a single
+375 GiB SSD leaves the pod `Pending`. It also means the volume is local NVMe
+rather than network-attached, which is why `emptyDir` is the right backing for
+this pool and a PVC/generic-ephemeral volume — provisioned by a CSI driver
+against a storage class — would silently move `/data` onto a network disk.
 
 The controller deliberately does **not** inspect nodes to size this. Deriving
 the ratio from a node's own allocatable disk needs a cluster-scoped

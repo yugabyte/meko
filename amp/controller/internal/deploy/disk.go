@@ -24,11 +24,15 @@ import (
 // land there later. The scheduler knows both, and `ephemeral-storage` is how it
 // is told. A declared request is stronger than a measured guess.
 const (
-	// GiB of data volume per vCPU when the installer passes no ratio
-	// (--deploy-disk-gib-per-vcpu). The right value depends on the node type —
-	// a local-NVMe pool has far more disk per core than a boot-disk one — and
-	// only the installer knows which nodes it bought, so this is a floor-ish
-	// default, not a policy.
+	// GiB of data volume per vCPU. This is the policy, not a fallback: an
+	// endpoint's /data is a function of its CPU alone, at 20 GiB per vCPU, so a
+	// 32-vCPU perf endpoint gets 640 GiB (#602).
+	//
+	// Deliberately uncapped. A pool that cannot honour the ratio is a pool that
+	// was provisioned too small, and the right failure for that is the scheduler
+	// leaving the pod Pending — not silently handing the endpoint a volume that
+	// its CPU allocation will overrun. --deploy-disk-gib-per-vcpu overrides the
+	// ratio for a pool built to a deliberately different disk-per-core shape.
 	defaultDiskGiBPerVCPU = 20
 )
 
