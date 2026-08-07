@@ -29,7 +29,14 @@ const (
 	// The endpoint's compute Postgres role/database, as the endpoint image
 	// bootstraps them (deploy/README.md; the same pair sharedk8s connects with).
 	endpointComputeUser = "cloud_admin"
-	endpointComputeDB   = "postgres"
+	// endpointComputePassword is what the compute's supervisor sets for
+	// cloud_admin over its loopback trust connection so REMOTE clients can
+	// authenticate (endpoint_supervisor remote_auth.rs; the value is
+	// env_or("COMPUTE_PASSWORD", "cloud_admin") and the chart does not override
+	// it). sharedk8s never needed it because a port-forward arrives on loopback,
+	// where pg_hba trusts; this client pod is a remote peer.
+	endpointComputePassword = "cloud_admin"
+	endpointComputeDB       = "postgres"
 	// endpointComputePort is the chart's endpoint.computePort — the port the
 	// endpoint Service publishes for compute Postgres. Used only when the
 	// controller reports an endpoint address without one.
@@ -93,6 +100,7 @@ func endpointConn(namespace, endpointID, reportedAddr string) pg.ConnInfo {
 		Host:     fmt.Sprintf("%s.%s.svc.cluster.local", ampstack.EndpointWorkloadName(endpointID), namespace),
 		Port:     addrPort(reportedAddr, endpointComputePort),
 		User:     endpointComputeUser,
+		Password: endpointComputePassword,
 		Database: endpointComputeDB,
 		SSLMode:  "disable",
 	}

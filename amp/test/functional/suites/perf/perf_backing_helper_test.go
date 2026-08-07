@@ -68,6 +68,9 @@ func TestAmpBackingUsesPerPodTserverDNS(t *testing.T) {
 // taken from that address.
 func TestEndpointConnUsesStableServiceDNS(t *testing.T) {
 	ci := endpointConn("ampqa-perf-cp-run7", "abc123", "10.9.9.9:55433")
+	if ci.Password != endpointComputePassword {
+		t.Errorf("Password = %q, want %q — remote clients hit md5, not loopback trust", ci.Password, endpointComputePassword)
+	}
 	if ci.Host != "yb-ep-abc123.ampqa-perf-cp-run7.svc.cluster.local" {
 		t.Errorf("Host = %q, want the endpoint Service DNS", ci.Host)
 	}
