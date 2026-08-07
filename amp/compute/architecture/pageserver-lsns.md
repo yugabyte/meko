@@ -458,7 +458,9 @@ throttles backends when the compute's own flush position exceeds
 `writePtr + max_replication_write_lag`, `flushPtr +
 max_replication_flush_lag`, or `applyPtr + max_replication_apply_lag`.
 This is what stops the compute from running unboundedly ahead of durable
-page state in YB.
+page state in YB. All three GUCs default to `-1`, which disables backpressure,
+and a deployed endpoint sets none of them, so it does nothing there yet
+([#651](https://github.com/yugabyte/meko/issues/651)).
 
 ---
 

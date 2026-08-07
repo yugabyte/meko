@@ -99,6 +99,42 @@ Cross-check the safekeeper is idle (low CPU) in Step 5. If SK CPU is low and WAL
 
 ---
 
+## Step 2a — Backpressure throttling (writes capped at the pageserver's ingest rate)
+The other write-path stall, and the one that looks like nothing. When the pageserver's ingest falls
+behind, `backpressure_throttling_impl()` sleeps writing backends 10 ms at a time
+(`BACK_PRESSURE_DELAY`) until the lag is back under `max_replication_write_lag`. The sleep is a plain
+`pg_usleep` with no wait event, so `pg_stat_activity` shows the backend **active with no
+`wait_event`** — Step 1 will not point at it. The `ps` title is the only live tell:
+`backpressure throttling: lag <bytes>`.
+
+This is not a fault. It means write throughput is correctly pinned to what the pageserver can make
+durable in YB, and the lever is pageserver ingest capacity, not the throttle.
+
+**Confirm:**
+```bash
+PGPASSWORD="$PGPASSWORD" $PSQL "$C" -c \
+  "select pg_current_wal_flush_lsn() as compute_flush, (backpressure_lsns()).*,
+          backpressure_throttling_time() as throttle_us;"
+```
+`compute_flush - received_lsn` is the write lag. Healthy is at or just above
+`max_replication_write_lag` (local default `15MB`); `throttle_us` is cumulative across all backends
+since postmaster start, so compare two samples rather than reading it absolutely.
+
+**If `throttle_us` stays 0 while the lag is large, backpressure is off, not satisfied.** Check the
+`max_replication_*_lag` GUCs: all three default to `-1` (disabled), and only `yb_amp_local` sets
+them — a deployed endpoint sets none, so backpressure does nothing there yet (#651). An unbounded
+lag is worse than a throttle: it is paid back later, synchronously, inside the next compute start's
+basebackup.
+
+**Levers:**
+- Raise pageserver ingest capacity — `scale_factor` (Step 3a) widens the write fan-out into YB too.
+- Raise `max_replication_write_lag` to let a burst run further ahead. It buys burst tolerance, not
+  throughput, and every byte of extra lag is replay time on the next restart.
+- Do **not** set the `max_replication_*_lag` GUCs to `-1` to make a benchmark look faster. That
+  disables the bound rather than raising it, and the WAL still has to be ingested eventually.
+
+---
+
 ## Step 3 — getpage read latency (`Extension/YbAmp/PS_ReadIO`)
 Each shared-buffers + LFC miss fetches the page from the pageserver. The 8k-direct PS does a
 **per-page YB fetch on miss** (~100–180 ms each when cold, more if the PS is off-box from YB). With
@@ -285,6 +321,7 @@ not a stall. Confirm with the WAL-rate and wait-event checks above before declar
 | Symptom | First thing to look at |
 |---|---|
 | Load crawling, everything idle | Step 2 — WAL rate + SyncRep |
+| Writers `active` with **no** `wait_event`, WAL rate flat | Step 2a — backpressure throttling |
 | Throughput dropped vs a prior run | Step 7 — delta_counts net-growing? + Step 3 getpage mean |
 | Run aborted early | Step 6 — connection-pool timeout in `execute.log` |
 | One PS core at 100%, rest idle | Step 7 — materializer lock starvation |

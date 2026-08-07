@@ -343,11 +343,6 @@ static uint64 yb_amp_backpressure_lag_impl(void)
 	struct WalproposerShmemState* state = NULL;
 	uint64 lag = 0;
 
-	if(max_cluster_size < 0){
-		// if max cluster size is not set, then we don't apply backpressure because we're reconfiguring PG
-		return 0;
-	}
-
 	lag = backpressure_lag_impl();
 	state = GetWalpropShmemState();
 	if ( state != NULL && yb_amp_max_wal_mb_per_second != -1 )

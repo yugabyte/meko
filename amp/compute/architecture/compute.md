@@ -429,6 +429,12 @@ and accumulates the delay (readable via `backpressure_throttling_time()`). A
 send-side WAL rate limiter (`WalRateLimiter`, GUCs `yb_amp.max_wal_mb_per_second`
 and `yb_amp.throttled_max_wal_bytes_per_second`) bounds broadcast throughput.
 
+All three `max_replication_*_lag` GUCs default to `-1`, which disables
+backpressure. `yb_amp_local` sets `max_replication_write_lag = 15MB` and
+`max_replication_flush_lag = 10GB`; a **deployed** endpoint sets none, so
+backpressure does nothing there yet — see
+[#651](https://github.com/yugabyte/meko/issues/651).
+
 The safekeeper connection GUCs (from `nwp_register_gucs`):
 
 | GUC | Context | Default | Purpose |
