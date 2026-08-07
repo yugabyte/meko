@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"meko/api_server/internal/api"
@@ -37,6 +38,19 @@ func TestAPIResponse_SuccessEnvelope(t *testing.T) {
 	}
 	if apiResp.Error != nil {
 		t.Errorf("expected nil error, got %+v", apiResp.Error)
+	}
+}
+
+// Decoding into APIResponse cannot tell an omitted error from an explicit null,
+// so assert on the serialized form: clients that treat the key's presence as the
+// failure signal depend on it being absent here.
+func TestAPIResponse_SuccessOmitsErrorKey(t *testing.T) {
+	body, err := json.Marshal(handlers.APIResponse{Data: []string{"env-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "\"error\"") {
+		t.Errorf("success envelope must omit the error key, got %s", body)
 	}
 }
 

@@ -7,10 +7,12 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// APIResponse is the standard envelope for all API responses.
+// APIResponse is the standard envelope for all API responses. Error is omitted on
+// success rather than serialized as null, so its presence in a response is a
+// reliable failure signal.
 type APIResponse struct {
 	Data  any       `json:"data"`
-	Error *APIError `json:"error"`
+	Error *APIError `json:"error,omitempty"`
 }
 
 // APIError represents a structured error in the API response.
