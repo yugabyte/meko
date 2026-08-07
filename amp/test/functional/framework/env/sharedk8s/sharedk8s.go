@@ -1255,11 +1255,19 @@ func (e *Env) RestartCompute(ctx context.Context) error {
 	return nil
 }
 
+// EndpointPodSelector is the label selector matching this env's endpoint pods —
+// the app.kubernetes.io/instance label the endpoint's Deployment stamps on them.
+// Exported so a test can point a pod-level app (e.g. apps/metrics) at the
+// endpoint without knowing how the chart labels it.
+func (e *Env) EndpointPodSelector() string {
+	return "app.kubernetes.io/instance=yb-ep-" + e.endpointID
+}
+
 // computePodName returns the endpoint's Running compute pod (falling back to the
 // first pod during a reschedule), matched by the app.kubernetes.io/instance
 // label the endpoint's Deployment stamps on its pods.
 func (e *Env) computePodName(ctx context.Context) (string, error) {
-	sel := "app.kubernetes.io/instance=yb-ep-" + e.endpointID
+	sel := e.EndpointPodSelector()
 	names, err := e.kube.GetSelector(ctx, "pod", sel, "{.items[*].metadata.name}")
 	if err != nil {
 		return "", err

@@ -294,6 +294,14 @@ func (s *Sink) metric(ev core.ResultEvent) {
 	if ev.Metric.RoundVal > 0 {
 		item["round_val"] = ev.Metric.RoundVal
 	}
+	// Unknown keys pass through the portal untouched and the UI ignores them, so
+	// the provenance rides along without the key having to carry it.
+	if len(ev.Metric.Raw) > 0 {
+		item["raw"] = ev.Metric.Raw
+	}
+	if ev.Metric.Desc != "" {
+		item["desc"] = ev.Metric.Desc
+	}
 	if len(ev.Metric.Series) > 0 {
 		item["series"] = ev.Metric.Series
 	}

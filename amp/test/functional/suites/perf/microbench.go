@@ -147,6 +147,13 @@ func runMicrobench(t *core.T) error {
 	}
 	defer client.Close()
 
+	// This test measures the ENDPOINT, so the pod worth sampling is the endpoint's
+	// — there is no self-provisioned YB backing here. Best-effort: an env that
+	// cannot serve it samples nothing.
+	if sampler := startEndpointMetricsSampler(t.Context, t, logf); sampler != nil {
+		defer emitMetricSeries(t, sampler)
+	}
+
 	table := "mb_" + t.ResourceSuffix()
 	phases := microbenchPhases(table, params)
 	var results []phaseResult

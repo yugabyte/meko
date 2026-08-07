@@ -713,50 +713,133 @@ apps:
 
   # apps/metrics: the background server-metrics sampler. Any test holding a
   # namespace-scoped kubectl can start it; the perf tier (tpcc/pgbench/sysbench)
-  # starts it once the backing serves YSQL and emits the collected series on the
-  # result. ON by default — a test that does not compose the app is unaffected.
+  # starts it over the YB backing, and perf/microbench over the amp compute
+  # endpoint pod. ON by default — a test that does not compose the app is
+  # unaffected.
   #
-  # Every sample_interval it reads, per yb-tserver / yb-master pod:
+  # Every sample_interval it reads, per sampled pod:
   #   - container CPU + memory from the cgroup (v2 and v1 both handled) in one
-  #     exec; CPU is a counter, reported as cores used over wall-clock.
-  #   - /prometheus-metrics on tserver_port / master_port, keeping only the
-  #     metric names matching `include`.
+  #     exec; CPU is a counter, reported as cores used over wall-clock. These are
+  #     emitted as "[<section>] CPU" / "[<section>] Memory" and need no entry.
+  #   - the pod's prometheus exposition — /prometheus-metrics on tserver_port /
+  #     master_port for YB, /metrics on endpoint_port for the endpoint's
+  #     pageserver — keeping only what `collect` / `endpoint_collect` declare.
   # max_points caps each line (drop-oldest): 15s over 1h is 240 points, so 2000
   # is generous headroom for a soak.
   #
-  # include is a list of REGEX patterns matched against the bare metric name
-  # (labels stripped, same-name lines summed). The default set is compaction and
-  # flush volume, WAL append/sync, RPC queue depth and inbound call rate, the
-  # tserver read/write op counters, SST footprint, the root memory tracker, and
-  # process CPU time. Replace the list to collect a different set — no code
-  # change.
+  # collect / endpoint_collect are the SET, and they carry the DISPLAY METADATA:
+  # every emitted key is "[<section>] <title>" — never a raw prometheus name.
+  # The raw names ride along on the metric's `raw` field instead. Replace either
+  # list to collect a different set — no code change. Per entry:
+  #   match         REGEX over the bare metric name (labels stripped, same-name
+  #                 lines summed). Required.
+  #   title         the human name in the key. Required.
+  #   kind          gauge (default) | counter | latency
+  #                   gauge   — value passes through
+  #                   counter — per-second rate of the delta
+  #                   latency — the entry matches a histogram's _count AND _sum
+  #                             and yields TWO series: `title` = rate(count),
+  #                             and `latency_title` = delta(sum)/delta(count),
+  #                             the MEAN LATENCY, emitted in ms. This is the
+  #                             point of the structured list: two raw rates
+  #                             ("sum per second") tell a reader nothing.
+  #   unit          display unit; defaults to "/s" for counter and latency
+  #   divide_by     divides the emitted value (1048576 for bytes → MiB)
+  #   round         display decimals, default 2 (a derived latency uses 3)
+  #   latency_title name of the derived mean-latency series; default
+  #                 "<title> latency"
+  #   sum_unit      time unit of the histogram _sum: ns | us | ms | s. Default
+  #                 us — YB handler latencies are microseconds.
   #
-  # counters declares which of the kept series are COUNTERS, reported as
-  # per-second rates from their delta. Names ending _count/_sum always are.
-  # Everything else is a gauge and passes through: mem_tracker and
-  # total_sst_files_size also rise under load, and reporting them as bytes/s
-  # would be wrong — so this is declared, never inferred from the values.
+  # cpu_utime / cpu_stime are deliberately absent: "[<section>] CPU" from the
+  # cgroup already measures the container's CPU in cores, counting every thread.
   metrics:
     enabled: true
     sample_interval: "15s"
     max_points: 2000
     tserver_port: 9000
     master_port: 7000
-    include:
-      - "^rocksdb_(compact|flush)_[a-z_]*bytes$"
-      - "^log_(append|sync)_latency_(count|sum)$"
-      - "^log_bytes_logged$"
-      - "^rpc_inbound_calls_created$"
-      - "^rpcs_in_queue_yb_(tserver|master)_"
-      - "^handler_latency_yb_tserver_TabletServerService_(Read|Write)_(count|sum)$"
-      - "^total_sst_files_size$"
-      - "^mem_tracker$"
-      - "^cpu_(utime|stime)$"
-    counters:
-      - "^rocksdb_(compact|flush)_"
-      - "^log_bytes_logged$"
-      - "^rpc_inbound_calls_created$"
-      - "^cpu_(utime|stime)$"
+    endpoint_port: 9898
+    collect:
+      - match: "^handler_latency_yb_tserver_TabletServerService_Read_(count|sum)$"
+        title: "Read RPCs"
+        kind: "latency"
+        latency_title: "Read latency"
+        sum_unit: "us"
+      - match: "^handler_latency_yb_tserver_TabletServerService_Write_(count|sum)$"
+        title: "Write RPCs"
+        kind: "latency"
+        latency_title: "Write latency"
+        sum_unit: "us"
+      - match: "^log_append_latency_(count|sum)$"
+        title: "WAL appends"
+        kind: "latency"
+        latency_title: "WAL append latency"
+        sum_unit: "us"
+      - match: "^log_sync_latency_(count|sum)$"
+        title: "WAL syncs"
+        kind: "latency"
+        latency_title: "WAL sync latency"
+        sum_unit: "us"
+      - match: "^log_bytes_logged$"
+        title: "WAL bytes"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^rocksdb_compact_read_bytes$"
+        title: "Compactions read"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^rocksdb_compact_write_bytes$"
+        title: "Compactions written"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^rocksdb_flush_write_bytes$"
+        title: "Flushes written"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^rpc_inbound_calls_created$"
+        title: "Inbound RPCs"
+        kind: "counter"
+      - match: "^rpcs_in_queue_yb_(tserver|master)_"
+        title: "RPC queue depth"
+        unit: "rpcs"
+      - match: "^total_sst_files_size$"
+        title: "SST files size"
+        unit: "MiB"
+        divide_by: 1048576
+      - match: "^mem_tracker$"
+        title: "Memory tracker"
+        unit: "MiB"
+        divide_by: 1048576
+    # The amp compute endpoint pod's pageserver (/metrics on endpoint_port). The
+    # pod also contributes cgroup CPU + Memory, which need no entry.
+    endpoint_collect:
+      - match: "^pageserver_smgr_query_seconds_(count|sum)$"
+        title: "Page requests"
+        kind: "latency"
+        latency_title: "Page request latency"
+        sum_unit: "s"
+      - match: "^pageserver_wait_lsn_seconds_(count|sum)$"
+        title: "LSN waits"
+        kind: "latency"
+        latency_title: "LSN wait latency"
+        sum_unit: "s"
+      - match: "^pageserver_replayed_wal_records_total$"
+        title: "WAL records replayed"
+        kind: "counter"
+      - match: "^pageserver_io_operations_bytes_total$"
+        title: "Pageserver I/O"
+        kind: "counter"
+        unit: "MiB/s"
+        divide_by: 1048576
+      - match: "^pageserver_resident_physical_size$"
+        title: "Resident layer size"
+        unit: "MiB"
+        divide_by: 1048576
 
 # --- Artifacts (artifact/artifact.go, artifact/deploy.go) ---
 artifact:

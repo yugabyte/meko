@@ -80,11 +80,17 @@ type Attachment struct {
 // optional sampled shape behind that measurement — a line per source (e.g. one
 // pod), each point [unix_ms, value] — with Value then holding the overall
 // average so a reader that only understands scalar metrics still gets a number.
-// RoundVal is the display precision (decimal places) for those values.
+// RoundVal is the display precision (decimal places) for those values. Raw
+// names the underlying source series (e.g. the prometheus metric names a sampled
+// key was derived from), so a human-readable Key never costs the provenance.
 type Metric struct {
 	Key      string
 	Value    float64
 	Unit     string
-	RoundVal int                     `json:"round_val,omitempty"`
-	Series   map[string][][2]float64 `json:"series,omitempty"`
+	RoundVal int `json:"round_val,omitempty"`
+	// Desc is the producing server's own description of the metric (verbatim
+	// from its exposition # HELP line), for a UI to surface on demand.
+	Desc   string                  `json:"desc,omitempty"`
+	Raw    []string                `json:"raw,omitempty"`
+	Series map[string][][2]float64 `json:"series,omitempty"`
 }

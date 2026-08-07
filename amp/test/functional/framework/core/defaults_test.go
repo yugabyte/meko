@@ -938,13 +938,17 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		t.Errorf("metrics tserver/master port = %d/%d, want %d/%d",
 			mcfg.TServerPort, mcfg.MasterPort, metrics.DefaultTServerPort, metrics.DefaultMasterPort)
 	}
-	// The include list is the whole point of the app being config-driven: the
-	// embedded default must BE the code default, not merely non-empty.
-	if !slices.Equal(mcfg.Include, metrics.DefaultInclude) {
-		t.Errorf("metrics Include = %q, want %q", mcfg.Include, metrics.DefaultInclude)
+	if mcfg.EndpointPort != metrics.DefaultEndpointPort {
+		t.Errorf("metrics EndpointPort = %d, want %d", mcfg.EndpointPort, metrics.DefaultEndpointPort)
 	}
-	if !slices.Equal(mcfg.Counters, metrics.DefaultCounters) {
-		t.Errorf("metrics Counters = %q, want %q", mcfg.Counters, metrics.DefaultCounters)
+	// The collect lists are the whole point of the app being config-driven, and
+	// they carry the display titles: the embedded default must BE the code
+	// default, field for field, not merely non-empty.
+	if !slices.Equal(mcfg.Collect, metrics.DefaultCollect) {
+		t.Errorf("metrics Collect = %+v, want %+v", mcfg.Collect, metrics.DefaultCollect)
+	}
+	if !slices.Equal(mcfg.EndpointCollect, metrics.DefaultEndpointCollect) {
+		t.Errorf("metrics EndpointCollect = %+v, want %+v", mcfg.EndpointCollect, metrics.DefaultEndpointCollect)
 	}
 
 	// --- artifacts.sampleapp: byte-checks the resolved github_release matches

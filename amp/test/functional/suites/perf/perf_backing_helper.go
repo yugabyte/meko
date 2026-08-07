@@ -176,6 +176,41 @@ func startMetricsSampler(ctx context.Context, t *core.T, kube *k8s.Kubectl, td *
 	return s
 }
 
+// endpointPodsEnv is the capability endpoint-side sampling needs: an env that
+// hands out its namespace-scoped kubectl and the selector matching its endpoint
+// pods. Declared structurally (like storageEnv) so the sampling is simply
+// skipped on an env that cannot serve it.
+type endpointPodsEnv interface {
+	AmpKube() *k8s.Kubectl
+	EndpointPodSelector() string
+}
+
+// startEndpointMetricsSampler starts the sampler over the amp COMPUTE ENDPOINT
+// pods instead of a YB backing — the only server in the request path of a test
+// that runs against an endpoint (perf/microbench). Best-effort in every
+// direction: an env without the capability, a disabled app, or a failed start
+// all return nil, and the caller emits nothing.
+func startEndpointMetricsSampler(ctx context.Context, t *core.T, logf func(string, ...any)) *metrics.Sampler {
+	env, ok := t.Env.(endpointPodsEnv)
+	if !ok {
+		return nil
+	}
+	kube := env.AmpKube()
+	if kube == nil {
+		return nil
+	}
+	cfg := metrics.FromConfig(t.Options)
+	if !cfg.Enabled {
+		return nil
+	}
+	s := metrics.NewEndpoint(kube, cfg, env.EndpointPodSelector()).WithLogf(logf)
+	if err := s.Start(ctx); err != nil {
+		logf("perf: endpoint metrics sampler not started (best-effort): %v", err)
+		return nil
+	}
+	return s
+}
+
 // emitMetricSeries stops the sampler and emits one metric per collected key,
 // carrying the per-pod series. Sampler.Stop yields the series once, so calling
 // this on the success path and again from teardown emits nothing twice.
@@ -189,6 +224,8 @@ func emitMetricSeries(t *core.T, s *metrics.Sampler) {
 			Value:    ser.Average(),
 			Unit:     ser.Unit,
 			RoundVal: ser.Round,
+			Raw:      ser.Raw,
+			Desc:     ser.Desc,
 			Series:   ser.Pairs(),
 		})
 	}

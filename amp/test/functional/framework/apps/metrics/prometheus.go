@@ -3,11 +3,18 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+)
+
+// The exposition paths the two sampled server families serve:
+// YugabyteDB on its webserver port, the amp pageserver on its HTTP port
+// (compute/pageserver/src/http/routes.rs).
+const (
+	ybPromPath         = "/prometheus-metrics"
+	pageserverPromPath = "/metrics"
 )
 
 // promSample is the previous reading of one prometheus series on one pod.
@@ -16,20 +23,62 @@ type promSample struct {
 	at    time.Time
 }
 
-// promCmd fetches the exposition text over the pod's own loopback. The YB image
-// is not guaranteed to carry curl, so busybox wget is the fallback; the comment
-// lines are dropped in-pod so they never cross the exec.
-func promCmd(port int) string {
-	url := fmt.Sprintf("http://localhost:%d/prometheus-metrics", port)
-	return fmt.Sprintf("(curl -sf %s || wget -qO- %s) 2>/dev/null | grep -v '^#'", url, url)
+// promCmd fetches the exposition text over the pod's own loopback. The YB images
+// carry curl and busybox images carry wget, but the amp endpoint image is bare
+// Debian with neither binary (libcurl4 is the library, not the tool) — there the
+// last resort is bash's /dev/tcp, with the HTTP headers stripped at the first
+// blank line. Comment lines are KEPT: # HELP carries the server's own metric
+// description and # TYPE its counter/gauge kind, both worth reading.
+func promCmd(port int, path string) string {
+	url := fmt.Sprintf("http://localhost:%d%s", port, path)
+	devTCP := fmt.Sprintf(
+		"bash -c 'exec 3<>/dev/tcp/localhost/%d && printf \"GET %s HTTP/1.0\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && cat <&3' | sed '1,/^\\r\\{0,1\\}$/d'",
+		port, path)
+	return fmt.Sprintf("(curl -sf %s || wget -qO- %s || %s) 2>/dev/null", url, url, devTCP)
+}
+
+// promMeta is what the exposition's comment lines say about a metric: the
+// server's own description (# HELP) and whether it is a counter (# TYPE).
+type promMeta struct {
+	desc    string
+	counter bool
+}
+
+// parseExpositionMeta reads the # HELP / # TYPE lines for the matched entries.
+func parseExpositionMeta(text string, entries []compiledEntry) map[string]promMeta {
+	out := map[string]promMeta{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, "# HELP ")
+		if ok {
+			if name, desc, found := strings.Cut(rest, " "); found {
+				if _, want := matchEntry(name, entries); want {
+					m := out[name]
+					m.desc = strings.TrimSpace(desc)
+					out[name] = m
+				}
+			}
+			continue
+		}
+		if rest, ok = strings.CutPrefix(line, "# TYPE "); ok {
+			if name, typ, found := strings.Cut(rest, " "); found {
+				if _, want := matchEntry(name, entries); want {
+					m := out[name]
+					m.counter = strings.TrimSpace(typ) == "counter"
+					out[name] = m
+				}
+			}
+		}
+	}
+	return out
 }
 
 // parseExposition parses prometheus exposition lines into name → value, keeping
-// only names matching one of include. Label dimensions are aggregated away by
+// only names matched by one of entries. Label dimensions are aggregated away by
 // summing every line sharing a name (a YB server reports one line per
 // tablet/table); the per-pod split is what the caller keeps. Unparsable lines
 // and non-finite values are skipped.
-func parseExposition(text string, include []*regexp.Regexp) map[string]float64 {
+func parseExposition(text string, entries []compiledEntry) map[string]float64 {
 	out := map[string]float64{}
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
@@ -40,7 +89,10 @@ func parseExposition(text string, include []*regexp.Regexp) map[string]float64 {
 		if i := strings.IndexAny(line, "{ "); i >= 0 {
 			name = line[:i]
 		}
-		if name == "" || !matchAny(name, include) {
+		if name == "" {
+			continue
+		}
+		if _, ok := matchEntry(name, entries); !ok {
 			continue
 		}
 		rest := line[len(name):]
@@ -64,44 +116,72 @@ func parseExposition(text string, include []*regexp.Regexp) map[string]float64 {
 	return out
 }
 
-func matchAny(name string, patterns []*regexp.Regexp) bool {
-	for _, re := range patterns {
-		if re.MatchString(name) {
-			return true
+// matchEntry returns the first entry whose regex matches name.
+func matchEntry(name string, entries []compiledEntry) (Entry, bool) {
+	for _, ce := range entries {
+		if ce.re.MatchString(name) {
+			return ce.entry, true
 		}
 	}
-	return false
+	return Entry{}, false
 }
 
-// isCounter decides how a series is reported: a counter as a per-second rate from
-// its delta, anything else as a gauge passed through. Prometheus histogram and
-// summary components (_count/_sum) always count; the rest is declared by
-// apps.metrics.counters, NOT guessed from whether the value grows — a YB gauge
-// like mem_tracker or total_sst_files_size also rises under load, and reporting
-// one of those as bytes/s would be a lie.
-func isCounter(name string, counters []*regexp.Regexp) bool {
-	if strings.HasSuffix(name, "_count") || strings.HasSuffix(name, "_sum") {
-		return true
+// splitHist splits a histogram component name into its base and _count/_sum
+// suffix. A latency entry that matches anything else contributes nothing —
+// there is no pair to derive from a lone value.
+func splitHist(name string) (base, suffix string, ok bool) {
+	for _, s := range []string{"_count", "_sum"} {
+		if b, cut := strings.CutSuffix(name, s); cut {
+			return b, s, true
+		}
 	}
-	return matchAny(name, counters)
+	return "", "", false
 }
 
-// samplePrometheus scrapes one pod's /prometheus-metrics and converts the kept
-// values into readings.
+// sumToMS converts a histogram _sum's time unit into milliseconds. An unknown
+// unit is treated as microseconds — the YB handler-latency convention and this
+// field's documented default.
+func sumToMS(unit string) float64 {
+	switch unit {
+	case "ns":
+		return 1e-6
+	case "ms":
+		return 1
+	case "s":
+		return 1e3
+	default:
+		return 1e-3
+	}
+}
+
+// histPair accumulates one latency entry's _count and _sum for one scrape.
+type histPair struct {
+	entry     Entry
+	countName string
+	sumName   string
+	count     float64
+	sum       float64
+	haveCount bool
+	haveSum   bool
+}
+
+// samplePrometheus scrapes one pod's exposition endpoint and converts the kept
+// values into readings, each already named by its human title.
 func samplePrometheus(
-	ctx context.Context, ex runner, port int,
-	include, counters []*regexp.Regexp, st *podState, now time.Time, logf func(string, ...any),
+	ctx context.Context, ex runner, port int, path string,
+	entries []compiledEntry, st *podState, now time.Time, logf func(string, ...any),
 ) []reading {
-	res, err := ex.Run(ctx, promCmd(port))
+	res, err := ex.Run(ctx, promCmd(port, path))
 	if err != nil {
-		logf("metrics: prometheus probe :%d failed: %v", port, err)
+		logf("metrics: prometheus probe :%d%s failed: %v", port, path, err)
 		return nil
 	}
 	if strings.TrimSpace(res.Stdout) == "" {
-		logf("metrics: prometheus probe :%d returned nothing (neither curl nor wget produced output)", port)
+		logf("metrics: prometheus probe :%d%s returned nothing (neither curl nor wget produced output)", port, path)
 		return nil
 	}
-	values := parseExposition(res.Stdout, include)
+	values := parseExposition(res.Stdout, entries)
+	meta := parseExpositionMeta(res.Stdout, entries)
 	names := make([]string, 0, len(values))
 	for name := range values {
 		names = append(names, name)
@@ -109,22 +189,58 @@ func samplePrometheus(
 	sort.Strings(names)
 
 	out := make([]reading, 0, len(names))
+	pairs := map[string]*histPair{}
+	var pairOrder []string
 	for _, name := range names {
-		if rd, ok := derive(name, values[name], isCounter(name, counters), now, st); ok {
+		e, ok := matchEntry(name, entries)
+		if !ok {
+			continue
+		}
+		if e.Kind == KindLatency {
+			base, suffix, ok := splitHist(name)
+			if !ok {
+				continue
+			}
+			p := pairs[base]
+			if p == nil {
+				p = &histPair{entry: e}
+				pairs[base] = p
+				pairOrder = append(pairOrder, base)
+			}
+			if suffix == "_count" {
+				p.count, p.countName, p.haveCount = values[name], name, true
+			} else {
+				p.sum, p.sumName, p.haveSum = values[name], name, true
+			}
+			continue
+		}
+		// The server says what it is: a # TYPE counter beats guessing, so a plain
+		// entry the config did not classify still gets rate-converted.
+		if e.Kind == KindGauge && meta[name].counter {
+			e.Kind = KindCounter
+		}
+		if rd, ok := derive(name, values[name], e, now, st); ok {
+			rd.desc = meta[name].desc
 			out = append(out, rd)
 		}
+	}
+	for _, base := range pairOrder {
+		out = append(out, derivePair(pairs[base], now, st)...)
 	}
 	return out
 }
 
-// derive turns one scraped value into a reading, updating the pod's memory of the
-// series. A counter yields a per-second rate, so it produces nothing on its first
-// sample or across a reset (the value went backwards); a gauge passes through.
-func derive(name string, v float64, counter bool, now time.Time, st *podState) (reading, bool) {
+// derive turns one scraped gauge or counter value into a reading, updating the
+// pod's memory of the series. A counter yields a per-second rate, so it produces
+// nothing on its first sample or across a reset (the value went backwards); a
+// gauge passes through.
+func derive(name string, v float64, e Entry, now time.Time, st *podState) (reading, bool) {
 	prev, seen := st.prom[name]
 	st.prom[name] = promSample{value: v, at: now}
-	if !counter {
-		return reading{name: name, round: 2, value: v, at: now}, true
+	rd := reading{name: e.Title, unit: e.Unit, round: e.Round, at: now, raw: []string{name}}
+	if e.Kind != KindCounter {
+		rd.value = v / e.DivideBy
+		return rd, true
 	}
 	if !seen {
 		return reading{}, false
@@ -134,5 +250,46 @@ func derive(name string, v float64, counter bool, now time.Time, st *podState) (
 	if dt <= 0 || delta < 0 {
 		return reading{}, false
 	}
-	return reading{name: name, unit: "/s", round: 2, value: delta / dt, at: now}, true
+	rd.value = (delta / dt) / e.DivideBy
+	return rd, true
+}
+
+// derivePair turns a histogram's _count/_sum into the two series a human
+// actually reads: throughput = Δcount/Δt, and MEAN LATENCY = Δsum/Δcount
+// converted to milliseconds. Reporting the two raw rates instead (what a naive
+// include list does) hands the reader a "sum per second" that means nothing.
+// Both need a delta, so the first scrape only seeds the baselines; a counter
+// reset or an idle interval (no calls) yields no latency point rather than a
+// division by zero.
+func derivePair(p *histPair, now time.Time, st *podState) []reading {
+	if p == nil || !p.haveCount || !p.haveSum {
+		return nil
+	}
+	prevCount, seenCount := st.prom[p.countName]
+	prevSum, seenSum := st.prom[p.sumName]
+	st.prom[p.countName] = promSample{value: p.count, at: now}
+	st.prom[p.sumName] = promSample{value: p.sum, at: now}
+	if !seenCount || !seenSum {
+		return nil
+	}
+	dt := now.Sub(prevCount.at).Seconds()
+	dCount := p.count - prevCount.value
+	dSum := p.sum - prevSum.value
+	if dt <= 0 || dCount < 0 || dSum < 0 {
+		return nil
+	}
+	e := p.entry
+	raw := []string{p.countName, p.sumName}
+	sort.Strings(raw)
+	out := []reading{{
+		name: e.Title, unit: e.Unit, round: e.Round,
+		value: (dCount / dt) / e.DivideBy, at: now, raw: raw,
+	}}
+	if dCount > 0 {
+		out = append(out, reading{
+			name: e.LatencyTitle, unit: "ms", round: latencyRound,
+			value: (dSum / dCount) * sumToMS(e.SumUnit), at: now, raw: raw,
+		})
+	}
+	return out
 }
