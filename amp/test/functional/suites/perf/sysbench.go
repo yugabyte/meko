@@ -1,7 +1,8 @@
 // sysbench is the PERFORMANCE tier's sysbench workload. It stands up the same
-// co-located YugabyteDB-in-k8s backing + in-cluster client pod as perf/tpcc and
-// perf/pgbench, but drives sysbench's bundled oltp_* lua workloads over the
-// pgsql driver instead of BenchBase/pgbench.
+// co-located YugabyteDB-in-k8s backing + amp control plane + compute endpoint +
+// in-cluster client pod as perf/tpcc and perf/pgbench, but drives sysbench's
+// bundled oltp_* lua workloads over the pgsql driver instead of
+// BenchBase/pgbench.
 //
 // sysbench is not delivered from an artifact: it is a distro package, installed
 // idempotently into the (Debian/Ubuntu-family) client pod via apt at deploy
@@ -28,6 +29,7 @@ import (
 	"strconv"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/sysbench"
@@ -76,16 +78,16 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
 		Tags:        []string{"perf", "nightly"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Run sysbench (pgsql driver, bundled oltp_* lua workloads) on a co-located YB-in-k8s backing and gate tps + latency against a stored baseline.",
-		Params:      []string{"perf", "apps.ybk8s"},
+		Description: "Run sysbench (pgsql driver, bundled oltp_* lua workloads) through an amp compute endpoint backed by a co-located YB-in-k8s cluster, and gate tps + latency against a stored baseline.",
+		Params:      []string{"perf", "apps.ybk8s", "env.ampstack"},
 		Run:         runSysbench,
 	})
 }
 
 // runSysbench is the live body: gate → provision the co-located YB backing →
-// deploy the client pod + install sysbench → wait for YSQL → run sysbench
-// prepare + timed runs → parse tps/latency → gate against the baseline →
-// guaranteed teardown.
+// stand the amp control plane + compute endpoint on it → deploy the client pod +
+// install sysbench → run sysbench prepare + timed runs through the endpoint →
+// parse tps/latency → gate against the baseline → guaranteed teardown.
 func runSysbench(t *core.T) (err error) {
 	cfg := perfFromConfig(t.Options)
 	if reason, ok := perfGate(t.Options, cfg); !ok {
@@ -93,6 +95,10 @@ func runSysbench(t *core.T) (err error) {
 		return nil
 	}
 	if reason, ok := gateNoDoubleProvision(t.Env); !ok {
+		t.Skip(reason)
+		return nil
+	}
+	if reason, ok := ampEndpointGate(t.Options); !ok {
 		t.Skip(reason)
 		return nil
 	}
@@ -117,7 +123,7 @@ func runSysbench(t *core.T) (err error) {
 		deliver := func(ctx context.Context, podExec exec.RemoteExecutor) error {
 			return sysbench.EnsureInstalled(ctx, podExec)
 		}
-		mk := func(tgt backingTarget) Workload { return sysbenchWorkloadFor(params, tgt) }
+		mk := func(conn pg.ConnInfo) Workload { return sysbenchWorkloadFor(params, conn) }
 		if cmp.Mode == CompareModeBisect {
 			return runBisectSuite(t, bisectSpec{
 				perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
@@ -161,8 +167,9 @@ func runSysbench(t *core.T) (err error) {
 		fn   func(context.Context) error
 	}{
 		{"provision_backing", r.provisionBacking},
+		{"wait_backing_ready", r.waitReady},
+		{"provision_amp_endpoint", r.provisionEndpoint},
 		{"deploy_client_pod", r.deployClientPod},
-		{"wait_ready", r.waitReady},
 		{"run_sysbench", r.runBenchmark},
 		{"gate_baseline", r.gateBaseline},
 	}
@@ -188,11 +195,12 @@ type sysbenchRun struct {
 	logf    func(string, ...any)
 	sink    apps.ArtifactSink
 
-	info    ybk8s.Info
-	kube    *k8s.Kubectl
-	target  backingTarget
-	podExec exec.RemoteExecutor
-	sampler *metrics.Sampler
+	info      ybk8s.Info
+	kube      *k8s.Kubectl
+	endpoint  ampEndpoint
+	podExec   exec.RemoteExecutor
+	sampler   *metrics.Sampler
+	epSampler *metrics.Sampler
 
 	benchResult BenchResult
 }
@@ -208,7 +216,18 @@ func (r *sysbenchRun) provisionBacking(ctx context.Context) error {
 	}
 	r.info = info
 	r.kube = kube
-	r.target = targetFor(info)
+	return nil
+}
+
+// provisionEndpoint stands the amp control plane + one compute endpoint on the
+// running backing and starts the endpoint-pod metrics sampler.
+func (r *sysbenchRun) provisionEndpoint(ctx context.Context) error {
+	ep, err := provisionAmpEndpoint(ctx, r.t, ampstack.FromConfig(r.t.Options), ybk8s.FromConfig(r.t.Options), r.info, r.suffix(), r.sink, r.td, r.logf)
+	if err != nil {
+		return err
+	}
+	r.endpoint = ep
+	r.epSampler = startEndpointSampler(ctx, r.t, ep, r.td, r.logf)
 	return nil
 }
 
@@ -223,12 +242,11 @@ func (r *sysbenchRun) deployClientPod(ctx context.Context) error {
 	return sysbench.EnsureInstalled(ctx, r.podExec)
 }
 
-// sysbenchWorkloadFor builds the sysbench workload bound to tgt at the shared
+// sysbenchWorkloadFor builds the sysbench workload bound to conn at the shared
 // load (script/tables/table_size/threads). Shared by the single-run path and
-// each comparison variant. sysbench takes a single --pgsql-host, so it always
-// uses tgt's Service address — see sysbenchWorkload.
-func sysbenchWorkloadFor(params sysbenchParams, tgt backingTarget) Workload {
-	return &sysbenchWorkload{conn: tgt.Conn, params: params}
+// each comparison variant.
+func sysbenchWorkloadFor(params sysbenchParams, conn pg.ConnInfo) Workload {
+	return &sysbenchWorkload{conn: conn, params: params}
 }
 
 // waitReady blocks until the backing serves YSQL, then starts the metrics
@@ -245,7 +263,7 @@ func (r *sysbenchRun) waitReady(ctx context.Context) error {
 // a discarded warmup + N measured runs, aggregated with robust statistics. Every
 // run's captured output is attached for triage regardless of parse/gate outcome.
 func (r *sysbenchRun) runBenchmark(ctx context.Context) error {
-	wl := sysbenchWorkloadFor(r.params, r.target)
+	wl := sysbenchWorkloadFor(r.params, r.endpoint.Conn)
 	res, err := RunBenchmark(ctx, r.podExec, wl, r.bc)
 	attachBenchSamples(r.sink, res, "sysbench")
 	if err != nil {
@@ -257,6 +275,7 @@ func (r *sysbenchRun) runBenchmark(ctx context.Context) error {
 	r.benchResult = res
 	emitBenchCharts(r.t, res)
 	emitMetricSeries(r.t, r.sampler)
+	emitMetricSeries(r.t, r.epSampler)
 	return nil
 }
 
@@ -278,10 +297,8 @@ func (r *sysbenchRun) gateBaseline(_ context.Context) error {
 // --report-interval so sysbench reports periodic progress, parsed into the
 // Sample's time series.
 //
-// It targets the tserver SERVICE, not the individual tservers: sysbench's pgsql
-// driver takes ONE --pgsql-host and offers no per-connection host balancing. The
-// Service already spreads connections across tservers per TCP connection, so it
-// is the honest spread here.
+// It targets the amp compute endpoint, which is also all its pgsql driver can
+// take: ONE --pgsql-host, with no per-connection host balancing.
 type sysbenchWorkload struct {
 	conn   pg.ConnInfo
 	params sysbenchParams

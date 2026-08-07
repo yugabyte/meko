@@ -72,7 +72,7 @@ func StandUpPgbenchClient(t *core.T) (*core.SetupResult, error) {
 		return fail(err)
 	}
 
-	conn := targetFor(info).Conn
+	conn := backingConn(info)
 	// Load the pgbench schema so the standing env is immediately loadable.
 	if err := pgbench.Init(t.Context, podExec, pgbench.InitOptions{Conn: conn, Scale: params.Scale}); err != nil {
 		return fail(fmt.Errorf("pgbench schema init on standing env: %w", err))

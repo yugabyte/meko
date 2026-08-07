@@ -55,11 +55,6 @@ type LoadFields struct {
 	// keeps the signature of the workloads that leave them zero unchanged.
 	Rows   int `json:"rows,omitempty"`
 	Cycles int `json:"cycles,omitempty"`
-	// ConnectMode is how the driver targeted the backing (perf.connect_mode).
-	// Connection distribution moves the numbers, so a baseline taken under one
-	// mode is not comparable to the other. omitempty leaves the signature of a
-	// workload that cannot vary it unchanged.
-	ConnectMode string `json:"connect_mode,omitempty"`
 }
 
 // LoadSignature is a deterministic short hash of the load config. Encoding a
@@ -71,9 +66,10 @@ func LoadSignature(f LoadFields) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-// loadFieldsTPCC is the perf/tpcc load: the shared bench cadence plus RF, the
-// TPC-C warehouse scalefactor and the connect mode (BenchBase is the one driver
-// whose targeting perf.connect_mode actually changes).
+// loadFieldsTPCC is the perf/tpcc load: the shared bench cadence plus RF and the
+// TPC-C warehouse scalefactor. There is no connection-shape field: every
+// workload drives ONE host, the compute endpoint, so nothing about the
+// connection can vary between two runs of the same load.
 func loadFieldsTPCC(bc BenchConfig, cfg perfConfig) LoadFields {
 	return LoadFields{
 		Iterations:    bc.Iterations,
@@ -81,7 +77,6 @@ func loadFieldsTPCC(bc BenchConfig, cfg perfConfig) LoadFields {
 		MeasurementMS: bc.MeasurementDuration.Milliseconds(),
 		RF:            cfg.RF,
 		Warehouses:    cfg.Warehouses,
-		ConnectMode:   cfg.ConnectMode,
 	}
 }
 
@@ -115,8 +110,8 @@ func buildIdentity(variant string, ybCfg ybk8s.Config, ampCtrl, ampEndpoint, com
 }
 
 // identityFromConfig resolves the single-run identity from a config: the ybk8s
-// image/version and the configured amp images (recorded even though the perf
-// path benchmarks the backing directly — the identity is self-describing).
+// image/version of the backing and the amp controller/endpoint images the run
+// measures through.
 func identityFromConfig(c *core.Config, variant, commit, loadSig string) Identity {
 	amp := ampstack.FromConfig(c)
 	return buildIdentity(variant, ybk8s.FromConfig(c), amp.ControllerImage, amp.EndpointImage, commit, loadSig)

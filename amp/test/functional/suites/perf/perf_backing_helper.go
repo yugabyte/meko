@@ -17,38 +17,23 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
-// The backing glue shared by every perf workload (perf/tpcc, perf/pgbench) and
-// the pgbench standing-env preset: deploy the co-located YB, launch the client
-// pod, wait for YSQL, and gate datapoints against the baseline. Kept as plain
-// functions (not a shared base struct) so each workload owns its own run state.
+// The backing glue shared by every perf workload (perf/tpcc, perf/pgbench,
+// perf/sysbench) and the pgbench standing-env preset: deploy the co-located YB,
+// launch the client pod, wait for YSQL, and gate datapoints against the
+// baseline. Kept as plain functions (not a shared base struct) so each workload
+// owns its own run state.
+//
+// The benchmark workloads do NOT connect here — they run through the amp
+// compute endpoint this backing stands behind (perf_endpoint_helper.go). The
+// direct backing ConnInfo below serves the setup-only pgbench preset, which is
+// a hand-driven YSQL load env with no amp in the picture.
 
-// backingTarget is how a workload reaches the co-located backing: the
-// single-host ConnInfo through the tserver Service (what every driver
-// understands), plus every tserver's own in-cluster host:port for a driver that
-// can spread its connections across all of them explicitly.
-type backingTarget struct {
-	Conn     pg.ConnInfo
-	Tservers []string
-}
-
-// targetFor builds the backingTarget of a deploy.
-func targetFor(info ybk8s.Info) backingTarget {
+// backingConn is the co-located backing's own YSQL target: the tserver Service
+// address, which every driver understands and which k8s spreads across tservers
+// per TCP connection.
+func backingConn(info ybk8s.Info) pg.ConnInfo {
 	host, port := ybk8s.FirstHostPort(info.InClusterHostPorts)
-	return backingTarget{
-		Conn:     pg.ConnInfo{Host: host, Port: port, User: info.User, Database: info.User, SSLMode: "disable"},
-		Tservers: info.TserverHostPorts,
-	}
-}
-
-// benchAddrs is the address list a multi-host-capable driver should target under
-// mode: every tserver explicitly (ConnectAllTservers), or nil — meaning "use the
-// single ConnInfo host", the tserver Service. An empty tserver list (an older
-// deploy path that did not resolve one) also falls back to the Service.
-func (tgt backingTarget) benchAddrs(mode string) []string {
-	if mode != ConnectAllTservers || len(tgt.Tservers) == 0 {
-		return nil
-	}
-	return tgt.Tservers
+	return pg.ConnInfo{Host: host, Port: port, User: info.User, Database: info.User, SSLMode: "disable"}
 }
 
 // deployYBBacking deploys a co-located YugabyteDB cluster in k8s (RF forced up
@@ -170,6 +155,28 @@ func startMetricsSampler(ctx context.Context, t *core.T, kube *k8s.Kubectl, td *
 		return nil
 	}
 	td.push("drain metrics sampler (emit collected series)", func(context.Context) error {
+		emitMetricSeries(t, s)
+		return nil
+	})
+	return s
+}
+
+// startEndpointSampler starts the background sampler over the amp COMPUTE
+// ENDPOINT pod of this run's own control plane and registers its drain on td.
+// Every heavy perf run now measures through that endpoint, so its pod is as
+// much a part of the request path as the backing tservers are. Best-effort in
+// every direction, exactly like startMetricsSampler.
+func startEndpointSampler(ctx context.Context, t *core.T, ep ampEndpoint, td *teardownStack, logf func(string, ...any)) *metrics.Sampler {
+	cfg := metrics.FromConfig(t.Options)
+	if !cfg.Enabled || ep.Kube == nil {
+		return nil
+	}
+	s := metrics.NewEndpoint(ep.Kube, cfg, ep.podSelector()).WithLogf(logf)
+	if err := s.Start(ctx); err != nil {
+		logf("perf: endpoint metrics sampler not started (best-effort): %v", err)
+		return nil
+	}
+	td.push("drain endpoint metrics sampler (emit collected series)", func(context.Context) error {
 		emitMetricSeries(t, s)
 		return nil
 	})

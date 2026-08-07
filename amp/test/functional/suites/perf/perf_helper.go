@@ -1,9 +1,16 @@
 // Package perf is the PERFORMANCE tier: tests that provision a real backing,
-// drive a benchmark workload over a client pod, parse throughput + latency, and
-// gate those numbers against a stored baseline (a regression fails the test).
-// It reuses the same live pieces as the combined stress scenario — apps/ybk8s
-// (backing + teardown), apps/clientpod (the in-cluster workload pod), and
-// apps/benchbase (the TPC-C driver) — plus the baseline package for the gate.
+// stand an amp control plane + compute endpoint on it, drive a benchmark
+// workload over a client pod THROUGH that endpoint, parse throughput + latency,
+// and gate those numbers against a stored baseline (a regression fails the
+// test). It reuses the same live pieces as the combined stress scenario —
+// apps/ybk8s (backing + teardown), apps/ampstack (the control plane),
+// apps/clientpod (the in-cluster workload pod), and apps/benchbase (the TPC-C
+// driver) — plus the baseline package for the gate.
+//
+// The product under test is amp, so the full amp path (compute → pageserver →
+// YB) is in every measured request. The co-located YugabyteDB is provisioned
+// exactly as before, but purely as the control plane's backing store — no
+// workload connects to it directly.
 //
 // Perf tests self-provision real infrastructure (a k8s cluster + a chart), so
 // they SKIP cleanly unless perf.enabled and the config gate are satisfied.
@@ -34,14 +41,6 @@ const (
 	DefaultRemoteDir   = "/opt/ampqa"
 	DefaultMaxHeap     = "2g" // java -Xmx; small TPC-C needs little, fits a modest pod
 
-	// Connect modes (perf.connect_mode) for a driver that can target more than one
-	// address: name every tserver explicitly (default), or use the tserver Service
-	// alone. The Service does spread connections, but only per-TCP-connection,
-	// opaquely and unverifiably — so the explicit list is the default.
-	ConnectAllTservers = "all_tservers"
-	ConnectService     = "service"
-	DefaultConnectMode = ConnectAllTservers
-
 	DefaultBaselinePath      = "baselines/perf.json"
 	DefaultThroughputDropPct = 20.0
 	DefaultLatencyRisePct    = 35.0
@@ -64,10 +63,6 @@ type perfConfig struct {
 	LatencyRisePct    float64
 	ReadyTimeout      time.Duration
 	HealthTimeout     time.Duration
-	// ConnectMode is how a multi-host-capable driver targets the backing:
-	// ConnectAllTservers | ConnectService. It feeds the load signature, since
-	// connection distribution moves the numbers.
-	ConnectMode string
 	// Benchmark is the BenchBase workload the perf/tpcc test runs
 	// (apps.benchbase.benchmark: tpcc | tpch | ycsb | smallbank | …); default
 	// tpcc. Lets a different BenchBase benchmark run config-only, no code change.
@@ -90,7 +85,6 @@ func perfFromConfig(c *core.Config) perfConfig {
 		LatencyRisePct:    c.GetFloat("perf.latency_rise_pct", DefaultLatencyRisePct),
 		ReadyTimeout:      c.GetDuration("perf.ready_timeout", DefaultReadyTimeout),
 		HealthTimeout:     c.GetDuration("perf.health_timeout", DefaultHealthTimeout),
-		ConnectMode:       c.GetString("perf.connect_mode", DefaultConnectMode),
 		Benchmark:         c.GetString("apps.benchbase.benchmark", "tpcc"),
 	}
 }
@@ -113,6 +107,20 @@ func perfGate(c *core.Config, cfg perfConfig) (string, bool) {
 	}
 	if chartVersion(c) == "" {
 		return "perf needs a YB version: set apps.ybk8s.chart_version, versions.yb or versions.yugabytedb", false
+	}
+	return "", true
+}
+
+// ampEndpointGate returns a skip reason (and false) when the run has no way to
+// deploy an amp control plane. The heavy benchmarks measure THROUGH a compute
+// endpoint, so without the controller chart there is nothing to measure — and
+// falling back to the raw backing would silently produce numbers that are not
+// comparable with anything this tier reports. The setup-only pgbench preset,
+// which drives YSQL by hand, does not call this.
+func ampEndpointGate(c *core.Config) (string, bool) {
+	if c.GetString("env.ampstack.controller_chart", "") == "" &&
+		c.GetString("env.ampstack.controller_manifest", "") == "" {
+		return "perf runs through an amp compute endpoint: set env.ampstack.controller_chart (path to the yb-amp-controller Helm chart)", false
 	}
 	return "", true
 }

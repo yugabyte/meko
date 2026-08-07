@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/benchbase"
 	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
@@ -45,15 +46,16 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe},
 		Tags:        []string{"perf", "nightly"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Run BenchBase TPC-C at a fixed scale on a co-located RF3 YB-in-k8s backing and gate tps + latency against a stored baseline.",
-		Params:      []string{"perf", "apps.ybk8s"},
+		Description: "Run BenchBase TPC-C at a fixed scale through an amp compute endpoint backed by a co-located RF3 YB-in-k8s cluster, and gate tps + latency against a stored baseline.",
+		Params:      []string{"perf", "apps.ybk8s", "env.ampstack"},
 		Run:         runTPCC,
 	})
 }
 
-// runTPCC is the live body: gate → provision the co-located YB backing → deploy
-// the client pod + benchbase → run TPC-C → parse tps/latency → gate against the
-// baseline → guaranteed teardown.
+// runTPCC is the live body: gate → provision the co-located YB backing → stand
+// the amp control plane + compute endpoint on it → deploy the client pod +
+// benchbase → run TPC-C through the endpoint → parse tps/latency → gate against
+// the baseline → guaranteed teardown.
 func runTPCC(t *core.T) (err error) {
 	cfg := perfFromConfig(t.Options)
 	if reason, ok := perfGate(t.Options, cfg); !ok {
@@ -61,6 +63,10 @@ func runTPCC(t *core.T) (err error) {
 		return nil
 	}
 	if reason, ok := gateNoDoubleProvision(t.Env); !ok {
+		t.Skip(reason)
+		return nil
+	}
+	if reason, ok := ampEndpointGate(t.Options); !ok {
 		t.Skip(reason)
 		return nil
 	}
@@ -84,7 +90,7 @@ func runTPCC(t *core.T) (err error) {
 		deliver := func(ctx context.Context, podExec exec.RemoteExecutor) error {
 			return deliverBenchbase(ctx, t, cfg, podExec)
 		}
-		mk := func(tgt backingTarget) Workload { return tpccWorkloadFor(cfg, tgt) }
+		mk := func(conn pg.ConnInfo) Workload { return tpccWorkloadFor(cfg, conn) }
 		if cmp.Mode == CompareModeBisect {
 			return runBisectSuite(t, bisectSpec{
 				perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
@@ -127,8 +133,9 @@ func runTPCC(t *core.T) (err error) {
 		fn   func(context.Context) error
 	}{
 		{"provision_backing", r.provisionBacking},
+		{"wait_backing_ready", r.waitReady},
+		{"provision_amp_endpoint", r.provisionEndpoint},
 		{"deploy_client_pod", r.deployClientPod},
-		{"wait_ready", r.waitReady},
 		{"run_tpcc", r.runBenchmark},
 		{"gate_baseline", r.gateBaseline},
 	}
@@ -155,10 +162,11 @@ type perfRun struct {
 
 	info         ybk8s.Info
 	kube         *k8s.Kubectl
-	target       backingTarget
+	endpoint     ampEndpoint
 	benchbaseDir string
 	podExec      exec.RemoteExecutor
 	sampler      *metrics.Sampler
+	epSampler    *metrics.Sampler
 
 	benchResult BenchResult
 }
@@ -175,7 +183,19 @@ func (r *perfRun) provisionBacking(ctx context.Context) error {
 	}
 	r.info = info
 	r.kube = kube
-	r.target = targetFor(info)
+	return nil
+}
+
+// provisionEndpoint stands the amp control plane + one compute endpoint on the
+// running backing and starts the endpoint-pod metrics sampler. The workload
+// connects here, so the amp compute + pageserver are in every measured request.
+func (r *perfRun) provisionEndpoint(ctx context.Context) error {
+	ep, err := provisionAmpEndpoint(ctx, r.t, ampstack.FromConfig(r.t.Options), ybk8s.FromConfig(r.t.Options), r.info, r.suffix(), r.sink, r.td, r.logf)
+	if err != nil {
+		return err
+	}
+	r.endpoint = ep
+	r.epSampler = startEndpointSampler(ctx, r.t, ep, r.td, r.logf)
 	return nil
 }
 
@@ -214,13 +234,12 @@ func deliverBenchbase(ctx context.Context, t *core.T, cfg perfConfig, podExec ex
 	return nil
 }
 
-// tpccWorkloadFor builds the TPC-C workload bound to tgt at the shared load
+// tpccWorkloadFor builds the TPC-C workload bound to conn at the shared load
 // (warehouses/terminals/heap). Shared by the single-run path and each variant.
-func tpccWorkloadFor(cfg perfConfig, tgt backingTarget) Workload {
+func tpccWorkloadFor(cfg perfConfig, conn pg.ConnInfo) Workload {
 	return &tpccWorkload{
 		runDir:     path.Join(cfg.RemoteDir, benchbase.DefaultSubdir),
-		conn:       tgt.Conn,
-		addrs:      tgt.benchAddrs(cfg.ConnectMode),
+		conn:       conn,
 		benchmark:  benchbase.Benchmark(cfg.Benchmark),
 		warehouses: cfg.Warehouses,
 		terminals:  cfg.Terminals,
@@ -230,12 +249,9 @@ func tpccWorkloadFor(cfg perfConfig, tgt backingTarget) Workload {
 
 // waitReady blocks until the backing actually serves YSQL. Pod-Ready is
 // necessary but NOT sufficient: the tserver readiness probe gates the tserver
-// RPC port, while YSQL (postgres on :5433) comes up slightly later. BenchBase's
-// create phase connects ONCE with no retry (unlike the sample-app's connect
-// loop), so it must wait for YSQL to accept — proven via a live tserver pod IP
-// over the coordinator's tailnet — before running, plus a short settle so the
-// Service endpoints the in-pod benchmark connects through are stable. Once it is
-// serving, the backing's pods are known and the metrics sampler starts.
+// RPC port, while YSQL (postgres on :5433) comes up slightly later — and the
+// control plane deployed next creates its yb_storage database over YSQL. Once
+// it is serving, the backing's pods are known and the metrics sampler starts.
 func (r *perfRun) waitReady(ctx context.Context) error {
 	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout); err != nil {
 		return err
@@ -251,8 +267,7 @@ func (r *perfRun) waitReady(ctx context.Context) error {
 func (r *perfRun) runBenchmark(ctx context.Context) error {
 	wl := &tpccWorkload{
 		runDir:     r.benchbaseDir,
-		conn:       r.target.Conn,
-		addrs:      r.target.benchAddrs(r.cfg.ConnectMode),
+		conn:       r.endpoint.Conn,
 		warehouses: r.cfg.Warehouses,
 		terminals:  r.cfg.Terminals,
 		maxHeap:    r.cfg.MaxHeap,
@@ -268,20 +283,20 @@ func (r *perfRun) runBenchmark(ctx context.Context) error {
 	r.benchResult = res
 	emitBenchCharts(r.t, res)
 	emitMetricSeries(r.t, r.sampler)
+	emitMetricSeries(r.t, r.epSampler)
 	return nil
 }
 
 // tpccWorkload adapts the benchbase TPC-C driver to the harness Workload: the
 // benchmark's create+load is the one-time Prepare, each timed execute is a
-// RunOnce. The smart driver's own cluster-aware balancing stays OFF
-// (LoadBalance=false) because its topology discovery returns node addresses a
-// client pod cannot route to; addrs instead names every tserver in the JDBC URL,
-// which spreads the connections without any discovery. Empty addrs → the single
-// Service address in conn.
+// RunOnce. It drives ONE host — the amp compute endpoint's Service DNS — so the
+// JDBC URL takes the single-host path and the smart driver's cluster-aware
+// balancing stays OFF (LoadBalance=false): the endpoint is the only server the
+// client may talk to, and the topology it would discover behind amp is not its
+// to spread over.
 type tpccWorkload struct {
 	runDir     string
 	conn       pg.ConnInfo
-	addrs      []string
 	benchmark  benchbase.Benchmark
 	warehouses int
 	terminals  int
@@ -296,7 +311,6 @@ func (w *tpccWorkload) baseSpec() benchbase.RunSpec {
 		RunDir:      w.runDir,
 		Benchmark:   w.benchmark,
 		Conn:        w.conn,
-		Addrs:       w.addrs,
 		Warehouses:  w.warehouses,
 		Terminals:   w.terminals,
 		MaxHeap:     w.maxHeap,

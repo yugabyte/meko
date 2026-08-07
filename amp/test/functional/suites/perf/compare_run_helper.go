@@ -7,23 +7,28 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 )
 
 // The comparison ORCHESTRATION: for each variant, provision its own
-// image/version-overridden backing, run the SAME workload at the SAME shared
-// load, tear the variant down (guaranteed, LIFO, BEFORE the next variant), then
+// image/version-overridden backing AND its own amp control plane + compute
+// endpoint, run the SAME workload at the SAME shared load THROUGH that
+// endpoint, tear the variant down (guaranteed, LIFO, BEFORE the next), then
 // compute the pure comparison and emit the report. It is deliberately thin glue
 // around RunBenchmark (the real harness) and compareVariants (the pure stats),
 // so it is unit-testable with a fake provisioner + fake workload — no infra.
 
 // resolvedVariant is a variant with its overrides applied: a resolved ybk8s
-// Config (its own image/version) and the self-describing Identity.
+// Config (its own backing image/version), a resolved ampstack Config (its own
+// controller/endpoint images — the arm a branch-vs-main amp comparison actually
+// varies), and the self-describing Identity.
 type resolvedVariant struct {
 	Label    string
 	YBK8s    ybk8s.Config
+	Amp      ampstack.Config
 	Identity Identity
 }
 
@@ -33,18 +38,19 @@ type variantResult struct {
 	Result   BenchResult
 }
 
-// variantProvisioner stands up the backing + client pod for one variant and
-// returns the executor to drive the workload over, the in-cluster YSQL target,
-// and a teardown to run (its own budget, LIFO) before the next variant. It
-// always returns a non-nil teardown — even on error — so a partially-provisioned
-// variant is still reclaimed. Faked in tests.
+// variantProvisioner stands up the backing + amp control plane + endpoint +
+// client pod for one variant and returns the executor to drive the workload
+// over, the endpoint's compute connection, and a teardown to run (its own
+// budget, LIFO) before the next variant. It always returns a non-nil teardown —
+// even on error — so a partially-provisioned variant is still reclaimed. Faked
+// in tests.
 type variantProvisioner interface {
-	Provision(ctx context.Context, v resolvedVariant) (exec.RemoteExecutor, backingTarget, func(context.Context) error, error)
+	Provision(ctx context.Context, v resolvedVariant) (exec.RemoteExecutor, pg.ConnInfo, func(context.Context) error, error)
 }
 
-// workloadFactory builds the SAME workload bound to a variant's backing target —
-// the shared load held constant across variants.
-type workloadFactory func(tgt backingTarget) Workload
+// workloadFactory builds the SAME workload bound to a variant's compute endpoint
+// — the shared load held constant across variants.
+type workloadFactory func(conn pg.ConnInfo) Workload
 
 // runComparison provisions each variant, runs the SAME workload at the SAME
 // shared bench config, tears the variant down (guaranteed, before the next),
@@ -67,7 +73,7 @@ func runComparison(ctx context.Context, variants []resolvedVariant, prov variant
 // harness, and tears the variant down on its own budget before returning
 // (guaranteed LIFO per variant, regardless of outcome).
 func runOneVariant(ctx context.Context, v resolvedVariant, prov variantProvisioner, mk workloadFactory, bc BenchConfig, sink apps.ArtifactSink, logf func(string, ...any)) (variantResult, error) {
-	ex, tgt, teardown, err := prov.Provision(ctx, v)
+	ex, conn, teardown, err := prov.Provision(ctx, v)
 	if teardown != nil {
 		defer func() {
 			tctx, cancel := context.WithTimeout(context.Background(), perfTeardownBudget)
@@ -81,7 +87,7 @@ func runOneVariant(ctx context.Context, v resolvedVariant, prov variantProvision
 		return variantResult{Identity: v.Identity}, err
 	}
 
-	res, err := RunBenchmark(ctx, ex, mk(tgt), bc)
+	res, err := RunBenchmark(ctx, ex, mk(conn), bc)
 	if sink != nil {
 		attachBenchSamples(sink, res, "compare-"+sanitizeLabel(v.Label))
 	}
@@ -129,7 +135,7 @@ func resolveVariantList(t *core.T, base perfConfig, variants []Variant, loadSig,
 		ybCfg := clampBackingRF(ybk8s.FromConfig(derived), base.RF)
 		amp := ampstack.FromConfig(derived)
 		id := buildIdentity(v.Label, ybCfg, amp.ControllerImage, amp.EndpointImage, commit, loadSig)
-		out = append(out, resolvedVariant{Label: v.Label, YBK8s: ybCfg, Identity: id})
+		out = append(out, resolvedVariant{Label: v.Label, YBK8s: ybCfg, Amp: amp, Identity: id})
 	}
 	return out, nil
 }
@@ -236,10 +242,12 @@ func variantDatapoints(r variantResult) []core.Datapoint {
 	return dps
 }
 
-// liveProvisioner is the production variantProvisioner: it deploys the variant's
-// own backing (its overridden ybk8s Config), launches the client pod, delivers
-// the driver, and waits for YSQL — the same glue the single-run path uses, per
-// variant, each on its own teardown stack.
+// liveProvisioner is the production variantProvisioner: per variant it deploys
+// that variant's own backing (its overridden ybk8s Config), waits for YSQL,
+// stands that variant's own amp control plane + compute endpoint on it (its
+// overridden controller/endpoint images — this is what a branch-vs-main amp
+// comparison varies), launches the client pod and delivers the driver. Same glue
+// the single-run path uses, each variant on its own teardown stack.
 type liveProvisioner struct {
 	t         *core.T
 	perf      perfConfig
@@ -249,28 +257,32 @@ type liveProvisioner struct {
 	sink      apps.ArtifactSink
 }
 
-func (p *liveProvisioner) Provision(ctx context.Context, v resolvedVariant) (exec.RemoteExecutor, backingTarget, func(context.Context) error, error) {
+func (p *liveProvisioner) Provision(ctx context.Context, v resolvedVariant) (exec.RemoteExecutor, pg.ConnInfo, func(context.Context) error, error) {
 	td := &teardownStack{}
 	teardown := func(tc context.Context) error { return td.run(tc, p.logf) }
+	suffix := sanitizeLabel(v.Label) + "-" + p.t.ResourceSuffix()
 
 	info, kube, err := deployYBBackingCfg(ctx, p.t, v.YBK8s, td, p.logf)
 	if err != nil {
-		return nil, backingTarget{}, teardown, err
+		return nil, pg.ConnInfo{}, teardown, err
 	}
-	podName := fmt.Sprintf("%s-%s-%s", p.podPrefix, sanitizeLabel(v.Label), p.t.ResourceSuffix())
-	podExec, err := startPerfClientPod(ctx, kube, p.sink, td, podName, p.perf.ClientImage, p.perf.ClientPullSecret)
+	if err := waitBackingYSQL(ctx, kube, info, p.perf.RF, p.perf.ReadyTimeout); err != nil {
+		return nil, pg.ConnInfo{}, teardown, err
+	}
+	ep, err := provisionAmpEndpoint(ctx, p.t, v.Amp, v.YBK8s, info, suffix, p.sink, td, p.logf)
 	if err != nil {
-		return nil, backingTarget{}, teardown, err
+		return nil, pg.ConnInfo{}, teardown, err
+	}
+	podExec, err := startPerfClientPod(ctx, kube, p.sink, td, p.podPrefix+"-"+suffix, p.perf.ClientImage, p.perf.ClientPullSecret)
+	if err != nil {
+		return nil, pg.ConnInfo{}, teardown, err
 	}
 	if p.deliver != nil {
 		if err := p.deliver(ctx, podExec); err != nil {
-			return nil, backingTarget{}, teardown, err
+			return nil, pg.ConnInfo{}, teardown, err
 		}
 	}
-	if err := waitBackingYSQL(ctx, kube, info, p.perf.RF, p.perf.ReadyTimeout); err != nil {
-		return nil, backingTarget{}, teardown, err
-	}
-	return podExec, targetFor(info), teardown, nil
+	return podExec, ep.Conn, teardown, nil
 }
 
 // sanitizeLabel renders a variant label as a DNS-1123-safe, bounded token for a
