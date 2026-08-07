@@ -644,15 +644,30 @@ func branchAndDatabase(t *core.T, client *pg.Client) (string, int64, error) {
 // the budget only covers a cold connection.
 const storageReadyTimeout = time.Minute
 
+// storageProbeBudget is one WaitReady slice within storageReadyTimeout. The
+// route to a built-in backing is a port-forward resolved at the capability
+// check; a tunnel that broke while idle is only discovered by dialing it, and
+// that first dial is what kills the forward's process. Short slices give the
+// env a chance to notice the dead forward and re-establish it (YBStorage does)
+// instead of one long wait spending the whole budget on a corpse.
+const storageProbeBudget = 15 * time.Second
+
 func connectStorage(t *core.T, env storageEnv) (*pg.Client, error) {
-	ci, err := env.YBStorage(t)
-	if err != nil {
-		return nil, fmt.Errorf("reach the backing amp storage database: %w", err)
+	deadline := time.Now().Add(storageReadyTimeout)
+	for {
+		ci, err := env.YBStorage(t)
+		if err != nil {
+			return nil, fmt.Errorf("reach the backing amp storage database: %w", err)
+		}
+		wait := min(time.Until(deadline), storageProbeBudget)
+		err = pg.WaitReady(t, ci, wait)
+		if err == nil {
+			return pg.Connect(t, ci)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("backing amp storage database %s never answered: %w", ci.Addr(), err)
+		}
 	}
-	if err := pg.WaitReady(t, ci, storageReadyTimeout); err != nil {
-		return nil, fmt.Errorf("backing amp storage database %s never answered: %w", ci.Addr(), err)
-	}
-	return pg.Connect(t, ci)
 }
 
 func dropTables(t *core.T, client *pg.Client, tables ...string) {

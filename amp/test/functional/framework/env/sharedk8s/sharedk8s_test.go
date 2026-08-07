@@ -645,6 +645,45 @@ func TestYBStorageBuiltinForwardsOnce(t *testing.T) {
 	}
 }
 
+// TestYBStorageRevivesDeadForward: the memoized forward can be dropped by the
+// cluster while idle between the capability check and the storage phase that
+// dials it. YBStorage must notice the dead process and re-establish the forward
+// instead of handing out a port nothing listens on.
+func TestYBStorageRevivesDeadForward(t *testing.T) {
+	rec := &execRec{}
+	st := &autoStarter{}
+	p := New(Config{Deploy: true, DeployTimeout: time.Minute, AmpStack: ampstack.Config{Namespace: "amp", Context: "x"}})
+	p.logf = nil
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run).WithStarter(st.start)
+	p.kube = kube
+	p.app = ampstack.New(ampstack.Config{Namespace: "amp"}).WithKube(kube)
+	e := &Env{prov: p, kube: kube, endpointID: "ep-1"}
+
+	ci, err := e.YBStorage(context.Background())
+	if err != nil {
+		t.Fatalf("YBStorage: %v", err)
+	}
+
+	_ = e.storagePF.Close()
+	if !waitUntil(func() bool { return !e.storagePF.Alive() }, time.Second) {
+		t.Fatal("closed forward never reported dead")
+	}
+
+	ci2, err := e.YBStorage(context.Background())
+	if err != nil {
+		t.Fatalf("YBStorage after forward death: %v", err)
+	}
+	if got := st.requestedSpecs(); len(got) != 2 {
+		t.Fatalf("opened %d forwards, want a second one replacing the dead first: %v", len(got), got)
+	}
+	if ci2.Port == ci.Port {
+		t.Errorf("revived forward reused port %d of the dead one", ci.Port)
+	}
+	if !e.storagePF.Alive() {
+		t.Error("the revived forward must be the live one")
+	}
+}
+
 // TestYBStorageAttachModeReportsWhy: attached to a standing control plane, the
 // provider cannot know the backing. It must say so, because the caller turns that
 // into a skip — a bare failure would read as a product bug.

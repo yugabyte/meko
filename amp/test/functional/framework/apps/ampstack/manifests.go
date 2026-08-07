@@ -38,7 +38,10 @@ func yugabytedManifest(namespace, image, storage, storageClass, masterGflags, ts
 	if storageClass != "" {
 		sc = fmt.Sprintf("\n        storageClassName: %s", storageClass)
 	}
-	tflags := "ysql_enable_auth=false"
+	// YSQL binds the advertise address (the pod FQDN) by default, which makes it
+	// unreachable over kubectl port-forward — the storage-inspecting tests dial
+	// the pod's loopback. 0.0.0.0 keeps the FQDN reachable and adds loopback.
+	tflags := "ysql_enable_auth=false,pgsql_proxy_bind_address=0.0.0.0:5433"
 	if tserverGflags != "" {
 		tflags += "," + tserverGflags
 	}

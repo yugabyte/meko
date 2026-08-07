@@ -1078,6 +1078,11 @@ type Env struct {
 	storageCI   pg.ConnInfo
 	storageErr  error
 	storageDone bool
+	// storagePF is the memoized result's forward (nil when the backing is dialled
+	// directly). An idle forward can be dropped by the cluster's proxy path
+	// between the capability check at test start and the storage phase that
+	// actually dials it, so YBStorage re-resolves instead of returning a dead one.
+	storagePF *k8s.PortForward
 }
 
 // addExtraPF records a port-forward ConnectEndpoint opened, so Teardown closes it.
@@ -1163,8 +1168,11 @@ func (e *Env) PGEndpoint() pg.ConnInfo { return e.pg }
 func (e *Env) YBStorage(ctx context.Context) (pg.ConnInfo, error) {
 	e.storageMu.Lock()
 	defer e.storageMu.Unlock()
-	if e.storageDone {
+	if e.storageDone && (e.storagePF == nil || e.storagePF.Alive()) {
 		return e.storageCI, e.storageErr
+	}
+	if e.storageDone {
+		e.log("sharedk8s: storage port-forward %s died, re-establishing", e.storageCI.Addr())
 	}
 	e.storageDone = true
 	e.storageCI, e.storageErr = e.resolveStorage(ctx)
@@ -1173,6 +1181,7 @@ func (e *Env) YBStorage(ctx context.Context) (pg.ConnInfo, error) {
 
 // resolveStorage does the work behind YBStorage, caller holding storageMu.
 func (e *Env) resolveStorage(ctx context.Context) (pg.ConnInfo, error) {
+	e.storagePF = nil
 	access, err := e.prov.storageAccess()
 	if err != nil {
 		return pg.ConnInfo{}, err
@@ -1188,6 +1197,7 @@ func (e *Env) resolveStorage(ctx context.Context) (pg.ConnInfo, error) {
 		return pg.ConnInfo{}, fmt.Errorf("port-forward backing store %s: %w", access.ForwardTarget, err)
 	}
 	e.addExtraPF(pf)
+	e.storagePF = pf
 	ci := access.Conn
 	ci.Host, ci.Port = "127.0.0.1", pf.LocalPort()
 	return ci, nil

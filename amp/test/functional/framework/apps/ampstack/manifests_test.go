@@ -10,7 +10,7 @@ import (
 func TestYugabytedManifestGflags(t *testing.T) {
 	m := yugabytedManifest("ns", "img", "10Gi", "",
 		"enable_load_balancing=false", "yb_num_shards_per_tserver=4", "")
-	if !strings.Contains(m, `--tserver_flags="ysql_enable_auth=false,yb_num_shards_per_tserver=4"`) {
+	if !strings.Contains(m, `--tserver_flags="ysql_enable_auth=false,pgsql_proxy_bind_address=0.0.0.0:5433,yb_num_shards_per_tserver=4"`) {
 		t.Errorf("tserver flags not merged with the auth default:\n%s", m)
 	}
 	if !strings.Contains(m, `--master_flags="enable_load_balancing=false"`) {
@@ -18,7 +18,7 @@ func TestYugabytedManifestGflags(t *testing.T) {
 	}
 
 	m = yugabytedManifest("ns", "img", "10Gi", "", "", "", "")
-	if !strings.Contains(m, `--tserver_flags="ysql_enable_auth=false"`) || strings.Contains(m, "--master_flags") {
+	if !strings.Contains(m, `--tserver_flags="ysql_enable_auth=false,pgsql_proxy_bind_address=0.0.0.0:5433"`) || strings.Contains(m, "--master_flags") {
 		t.Errorf("no-gflags manifest changed the historical start line:\n%s", m)
 	}
 }
