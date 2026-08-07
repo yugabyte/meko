@@ -43,7 +43,6 @@
     "drop_subscriptions_before_start": false,
     "audit_log_level": "Disabled",
     "logs_export_host": null,
-    "endpoint_storage_addr": "127.0.0.1:30600",
     "autoprewarm": false,
     "offload_lfc_interval_seconds": null,
     "suspend_timeout_seconds": -1

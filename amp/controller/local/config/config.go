@@ -44,26 +44,6 @@ func DefaultYbAmpControllerConf() YbAmpControllerConf {
 	}
 }
 
-// EndpointStorageConf is the `[endpoint_storage]` stanza of .yb_amp/config.
-type EndpointStorageConf struct {
-	// ListenAddr is a socket address ("host:port"), default 127.0.0.1:9993.
-	ListenAddr string `toml:"listen_addr"`
-	// EndpointID is the endpoint whose folder holds this instance's
-	// datadir. Empty for the init-time template (skipped when empty).
-	EndpointID string `toml:"endpoint_id,omitempty"`
-}
-
-// endpointStorageDefaultAddr is the address an absent `listen_addr` selects.
-const endpointStorageDefaultAddr = "127.0.0.1:9993"
-
-// DefaultEndpointStorageConf is the stanza an absent `[endpoint_storage]` means.
-func DefaultEndpointStorageConf() EndpointStorageConf {
-	return EndpointStorageConf{
-		ListenAddr: endpointStorageDefaultAddr,
-		EndpointID: "",
-	}
-}
-
 // PageServerConf mirrors Rust `PageServerConf`: the subset of pageserver
 // config the launcher tracks. It is never serialized into `.yb_amp/config`
 // (the OnDiskConfig `pageservers` field is skip-serializing and rejected
@@ -224,7 +204,6 @@ func (c *YbAmpLocalInitPageserverConf) UnmarshalTOML(data []byte) error {
 // round-trip, including the skip rules:
 //   - `pageservers` is never serialized and is rejected on load (the
 //     pageserver.toml files are authoritative);
-//   - `endpoint_storages` is omitted when empty;
 //   - `use_local_tls` is omitted when false;
 //   - the humantime durations in `controller` serialize as strings.
 //
@@ -239,8 +218,6 @@ type OnDiskConfig struct {
 	Safekeepers                []SafekeeperConf               `toml:"safekeepers"`
 	PageserverTemplates        []YbAmpLocalInitPageserverConf `toml:"pageserver_templates"`
 	SafekeeperTemplates        []SafekeeperConf               `toml:"safekeeper_templates"`
-	EndpointStorage            EndpointStorageConf            `toml:"endpoint_storage"`
-	EndpointStorages           []EndpointStorageConf          `toml:"endpoint_storages,omitempty"`
 	ControlPlaneAPI            *string                        `toml:"control_plane_api,omitempty"`
 	ControlPlaneHooksAPI       *string                        `toml:"control_plane_hooks_api,omitempty"`
 	ControlPlaneComputeHookAPI *string                        `toml:"control_plane_compute_hook_api,omitempty"`
@@ -250,11 +227,10 @@ type OnDiskConfig struct {
 // defaultOnDiskConfig returns an OnDiskConfig pre-populated with the same
 // field defaults serde applies via `#[serde(default)]`. Load decodes into
 // this so that keys absent from the file keep their non-zero defaults
-// (notably the controller durations and the endpoint_storage listen addr).
+// (notably the controller durations).
 func defaultOnDiskConfig() OnDiskConfig {
 	return OnDiskConfig{
-		Controller:      DefaultYbAmpControllerConf(),
-		EndpointStorage: DefaultEndpointStorageConf(),
+		Controller: DefaultYbAmpControllerConf(),
 	}
 }
 

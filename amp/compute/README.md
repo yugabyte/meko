@@ -13,7 +13,6 @@ extension, and their supporting Rust libraries. The control plane lives in
 | [`safekeeper/`](safekeeper/) | `yb-safekeeper` — stateless WAL ingress backed by YugabyteDB |
 | [`tools/`](tools/) | operator diagnostic bins (`yb-dump-pages`, `yb-dump-wals`, `yb-reset-consistent-lsn`, below) |
 | [`compute_tools/`](compute_tools/) | `yb-compute-ctl` — compute supervisor (config, start/stop, catalog migrations) |
-| [`endpoint_storage/`](endpoint_storage/) | `yb-endpoint-storage` — per-endpoint scratch-blob service (LFC prewarm state) |
 | [`pgxn/`](pgxn/) | Postgres extensions, including the `yb_amp` smgr extension and its walredo/rmgr/test helpers |
 | [`libs/`](libs/) | shared Rust crates (`ysql_client`, `yb_thin_client`, `remote_storage`, `pageserver_api`, `safekeeper_api`, …) |
 | [`image/`](image/) | compute image build — Dockerfile, patches, vm-image specs |
@@ -54,7 +53,7 @@ Per-component deep dives:
 
 Per-service HTTP API + Prometheus metrics reference (one `-apis.md` and
 one `-metrics.md` per service): the compute-engine services (pageserver,
-safekeeper, compute_ctl, endpoint_storage) are indexed in
+safekeeper, compute_ctl) are indexed in
 [`architecture/README.md`](architecture/README.md) — e.g.
 [`architecture/pageserver-apis.md`](architecture/pageserver-apis.md),
 [`architecture/safekeeper-metrics.md`](architecture/safekeeper-metrics.md);

@@ -3,8 +3,8 @@
 //! `VERSION` is the single source of truth for the product's semantic version
 //! (hybrid CalVer, e.g. `0.260714.0`) — the same file the Go controller reads
 //! via `scripts/version.sh`. Reading it here, in the `utils` crate that every
-//! compute binary depends on, lets the pageserver/safekeeper/compute-ctl/
-//! endpoint-storage all report the same version as the controller.
+//! compute binary depends on, lets the pageserver, safekeeper and compute-ctl
+//! all report the same version as the controller.
 //!
 //! Using `cargo:rustc-env` + `cargo:rerun-if-changed` means the value is
 //! re-stamped whenever `VERSION` changes, with no dependency on a build arg or

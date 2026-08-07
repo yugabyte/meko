@@ -178,9 +178,6 @@ pub struct ComputeSpec {
     /// Example: config-shy-breeze-123-collector-monitoring.neon-telemetry.svc.cluster.local:10514
     pub logs_export_host: Option<String>,
 
-    /// Address of endpoint storage service
-    pub endpoint_storage_addr: Option<String>,
-
     /// The YugabyteDB blob store holding this endpoint's LFC state, as the
     /// externally tagged `{"type": "YbStore", ...}` object. `compute_ctl` reads
     /// and writes that blob directly, so prewarm needs no separate service.

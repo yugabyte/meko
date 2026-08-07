@@ -124,16 +124,14 @@ func safekeepersForTimeline(env *config.LocalEnv, branchID config.BranchID) []co
 // Rust's `original_env != env` guard in `main`. Pageservers are intentionally
 // omitted: they are never serialized (rediscovered from pageserver.toml).
 type mutableState struct {
-	safekeepers  []config.SafekeeperConf
-	endpointStgs []config.EndpointStorageConf
+	safekeepers []config.SafekeeperConf
 }
 
 // SnapshotMutable records the persisted-mutable state of env before a command
 // runs.
 func SnapshotMutable(env *config.LocalEnv) any {
 	s := mutableState{
-		safekeepers:  append([]config.SafekeeperConf(nil), env.Safekeepers...),
-		endpointStgs: append([]config.EndpointStorageConf(nil), env.EndpointStorages...),
+		safekeepers: append([]config.SafekeeperConf(nil), env.Safekeepers...),
 	}
 	return s
 }
@@ -159,7 +157,7 @@ func pgLibEnv(env *config.LocalEnv) map[string]string {
 	}
 }
 
-// fileExists reports whether path exists (used to skip endpoint_storage in
+// fileExists reports whether path exists (used to skip a component in
 // compatibility tests where the binary is absent).
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

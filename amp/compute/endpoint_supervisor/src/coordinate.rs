@@ -197,7 +197,7 @@ mod tests {
     }
 
     /// The path is per-service, so it has to reach the request rather than being
-    /// hardcoded: endpoint_storage serves `/status`, not `/v1/status`.
+    /// hardcoded, since a service could serve `/status` rather than `/v1/status`.
     #[test]
     fn the_probe_requests_the_path_it_is_given() {
         let (port, rx) = serve(vec![(200, "{}".into())]);

@@ -135,62 +135,6 @@ func stopSafekeeper(env *config.LocalEnv, conf *config.SafekeeperConf, immediate
 	return proc.StopProcess("safekeeper", env.SafekeeperDataDir(conf.EndpointID), mode)
 }
 
-// --- endpoint_storage ---
-
-// startEndpointStorage spawns yb-endpoint-storage for one provisioned
-// instance, mirroring Rust `EndpointStorage::start`. config.json is written at
-// `endpoint create` (endpointStorageInit). RUST_LOG=debug + PidCreate (the
-// binary does not manage its own pidfile).
-func startEndpointStorage(env *config.LocalEnv, conf *config.EndpointStorageConf, timeout time.Duration) error {
-	dataDir := env.EndpointStorageDataDir(conf.EndpointID)
-	configPath := filepath.Join(dataDir, "endpoint_storage.json")
-	listen := conf.ListenAddr
-	statusCheck := func() error {
-		resp, err := httpClient().Get("http://" + listen + "/metrics")
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return fmt.Errorf("endpoint_storage /metrics: http %d", resp.StatusCode)
-		}
-		return nil
-	}
-	return proc.StartProcess(
-		"endpoint_storage",
-		dataDir,
-		env.EndpointStorageBin(),
-		[]string{configPath},
-		map[string]string{"RUST_LOG": "debug"},
-		proc.PidCreate,
-		statusCheck,
-		timeout,
-	)
-}
-
-// stopEndpointStorage signals an endpoint_storage instance to stop.
-func stopEndpointStorage(env *config.LocalEnv, conf *config.EndpointStorageConf, immediate bool) error {
-	mode := proc.StopFast
-	if immediate {
-		mode = proc.StopImmediate
-	}
-	return proc.StopProcess("endpoint_storage", env.EndpointStorageDataDir(conf.EndpointID), mode)
-}
-
-// endpointStorageInit writes endpoint_storage.json for a provisioned instance,
-// mirroring Rust `EndpointStorage::init`.
-func endpointStorageInit(env *config.LocalEnv, conf *config.EndpointStorageConf) error {
-	dataDir := env.EndpointStorageDataDir(conf.EndpointID)
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return fmt.Errorf("create endpoint_storage datadir %q: %w", dataDir, err)
-	}
-	params := cfg.EndpointStorageParams{
-		Listen: conf.ListenAddr,
-		YbConn: env.Controller.Yb,
-	}
-	return cfg.WriteEndpointStorageJSON(filepath.Join(dataDir, "endpoint_storage.json"), params)
-}
-
 // --- controller ---
 
 // startController provisions the external YB database, spawns the controller

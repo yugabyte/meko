@@ -1,6 +1,6 @@
 yb-amp-endpoint "{{ .Release.Name }}" deployed.
 
-This pod runs a full yb-amp endpoint (pageserver + safekeeper + endpoint_storage
+This pod runs a full yb-amp endpoint (pageserver + safekeeper
 + Postgres compute), backed by the external YugabyteDB at:
 
     {{ .Values.yugabyte.hostPorts }}  (db: {{ .Values.yugabyte.dbname }}, user: {{ .Values.yugabyte.user }})

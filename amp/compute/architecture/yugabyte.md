@@ -1,7 +1,7 @@
 # YugabyteDB as the durable layer
 
 Every durable byte in yb-amp lives in YugabyteDB. The pageserver,
-safekeeper, endpoint_storage, and controller are stateless daemons that
+safekeeper, and controller are stateless daemons that
 write their state to YB tables and can be killed and restarted at any
 point; durability, replication, and fault tolerance come from YB's own
 storage layer (DocDB tablets under Raft), not from anything the daemons
@@ -51,7 +51,7 @@ table. The schema/table names are **hardcoded** by the daemons
 `compute/safekeeper/src/yb_wal_storage.rs` `amp_storage.wals`,
 `compute/libs/remote_storage/src/yb_store.rs` `blobs`) and bound at
 daemon startup — no service creates its own tables, so the controller
-must have run before the pageserver/safekeeper/endpoint_storage start.
+must have run before the pageserver/safekeeper start.
 
 The `yb_storage` **database** itself is created outside the migrations:
 `yb_amp_local` does it on controller start (`ensureExternalDatabase` in
@@ -68,7 +68,7 @@ There are two ways yb-amp code reaches YB:
   `tokio_postgres` speaking the Postgres wire protocol to a tserver's
   YSQL port (5433). Every component's SQL goes through it: the
   pageserver's `PageStore` and `YbStore`, the safekeeper's WAL mirror
-  and control file, endpoint_storage. `from_yb_config_pooled` opens N
+  and control file. `from_yb_config_pooled` opens N
   independent connections round-robined per call for hot paths that
   benefit from parallel execution. `YbConnConfig` is the one canonical
   connection block (TOML `{ host_ports = "...", user = "...", dbname =
@@ -158,7 +158,7 @@ object-shaped storage:
   The pageserver runs `initdb` once when a branch is created, ships the
   tarball here, and later branch creations download it instead of
   paying the `initdb` cost again.
-- **endpoint_storage**: endpoint-scoped scratch blobs (LFC prewarm
+- **compute_ctl**: endpoint-scoped scratch blobs (LFC prewarm
   state) that the compute and control plane read/write over its HTTP
   API.
 

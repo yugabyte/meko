@@ -206,9 +206,9 @@ type EndpointCreateArgs struct {
 }
 
 // EndpointCreate provisions the branch's pageserver + safekeeper pair and this
-// endpoint's endpoint_storage, then records the endpoint in the controller.
+// endpoint's daemons, then records the endpoint in the controller.
 // Mirrors the `EndpointCmd::Create` arm of Rust `handle_endpoint`. The pair +
-// endpoint_storage are started sequentially here (the Rust concurrency is a
+// pair members are started sequentially here (the Rust concurrency is a
 // latency optimization, not a correctness requirement).
 func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCreateArgs) error {
 	if args.LSN != "" {
@@ -250,21 +250,6 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		return err
 	}
 
-	// Reserve this endpoint's endpoint_storage instance, init its config.
-	esConf, err := allocateEndpointStorageConf(env, endpointID)
-	if err != nil {
-		return err
-	}
-	esPresent := fileExists(env.EndpointStorageBin())
-	if esPresent {
-		fmt.Printf("Provisioning endpoint_storage (%s) for endpoint '%s'\n", esConf.ListenAddr, endpointID)
-		if err := endpointStorageInit(env, &esConf); err != nil {
-			return fmt.Errorf("endpoint_storage init: %w", err)
-		}
-	} else {
-		fmt.Printf("%s binary not found; skipping endpoint_storage provisioning (ignore if this is a compatibility test)\n", env.EndpointStorageBin())
-	}
-
 	// Provision the branch's pair (consumes the pending init). On its own
 	// failure it cleans up the daemons it started (provisionBootstrap/Branch);
 	// on success they are recorded in env below.
@@ -274,7 +259,7 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 
 	// The pair is committed to env now. On any failure past this point the
 	// config mutation is discarded and a retry reuses these ports, so stop the
-	// co-located daemons (pair + endpoint_storage) to avoid orphans. stop* on a
+	// co-located daemons (the pair) to avoid orphans. stop* on a
 	// not-yet-started daemon is a no-op.
 	success := false
 	defer func() {
@@ -282,9 +267,6 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 			return
 		}
 		endpointDir := endpointDir(env, endpointID)
-		if esPresent {
-			_ = stopEndpointStorage(env, &esConf, true)
-		}
 		for i := range env.Safekeepers {
 			if env.Safekeepers[i].EndpointID == endpointID {
 				_ = stopSafekeeper(env, &env.Safekeepers[i], true)
@@ -296,14 +278,6 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 			}
 		}
 	}()
-
-	// Start endpoint_storage after a successful pair provisioning.
-	if esPresent {
-		if err := startEndpointStorage(env, &esConf, 30*time.Second); err != nil {
-			return fmt.Errorf("start endpoint_storage: %w", err)
-		}
-		env.EndpointStorages = append(env.EndpointStorages, esConf)
-	}
 
 	// Record the endpoint: create its controller row, then persist its local
 	// config next to the process it describes.
@@ -494,16 +468,6 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 	// Trust path: no storage auth token for the compute→pageserver link.
 	var storageAuthToken *string
 
-	// Point the compute at this endpoint's own endpoint_storage (fallback to
-	// the template addr when none was provisioned, e.g. a compat test).
-	esAddr := env.EndpointStorage.ListenAddr
-	for _, es := range env.EndpointStorages {
-		if es.EndpointID == endpointID {
-			esAddr = es.ListenAddr
-			break
-		}
-	}
-
 	connInfo, err := pageserverConnInfo(psConf, conf.Grpc, env.UseLocalTLS)
 	if err != nil {
 		return err
@@ -539,7 +503,6 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 		SafekeeperComputePorts: allSkPorts,
 	})
 
-	esAddrCopy := esAddr
 	computeConfig, err := cfg.BuildComputeConfig(cfg.ComputeSpecParams{
 		PostgresqlConf:               pgConf,
 		CreateTestUser:               false,
@@ -553,9 +516,12 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 		SkipPgCatalogUpdates:         conf.SkipPgCatalogUpdates,
 		DropSubscriptionsBeforeStart: conf.DropSubscriptionsBeforeStart,
 		ReconfigureConcurrency:       conf.ReconfigureConcurrency,
-		EndpointStorageAddr:          &esAddrCopy,
-		Features:                     nil,
-		ComputeCtlConfig:             conf.ComputeCtlConfig,
+		// The LFC state store, so a prewarming compute can address its blob.
+		// Passed unconditionally: BuildComputeConfig only derives the store when
+		// prewarm is actually enabled.
+		YbConn:           env.Controller.Yb,
+		Features:         nil,
+		ComputeCtlConfig: conf.ComputeCtlConfig,
 	})
 	if err != nil {
 		return err
@@ -785,7 +751,7 @@ func stopEndpoint(ctx context.Context, env *config.LocalEnv, le launcherEndpoint
 		}
 	}
 
-	// --destroy: tear down the co-located pageserver/safekeeper/endpoint_storage,
+	// --destroy: tear down the co-located pageserver/safekeeper,
 	// remove the endpoint directory, and drop the endpoint from the controller.
 	// Mirrors Rust Endpoint::stop(destroy=true) + deprovision_colocated_storage.
 	// Load-bearing for the suite: e.g. branch_ancestor cleans up its fork
@@ -836,9 +802,9 @@ func deleteEndpointRecord(ctx context.Context, env *config.LocalEnv, le launcher
 }
 
 // deprovisionColocatedStorage stops and drops the pageserver, safekeeper(s) and
-// endpoint_storage instance co-located under an endpoint. Mirrors Rust
+// instances co-located under an endpoint. Mirrors Rust
 // Endpoint::deprovision_colocated_storage. Best-effort per daemon (logs and
-// continues), then removes the safekeepers/endpoint_storages from config and
+// continues), then removes the safekeepers from config and
 // persists (pageservers are not persisted — rediscovered from disk).
 func deprovisionColocatedStorage(env *config.LocalEnv, endpointID string) error {
 	endpointPath := endpointDir(env, endpointID)
@@ -863,19 +829,7 @@ func deprovisionColocatedStorage(env *config.LocalEnv, endpointID string) error 
 		keptSK = append(keptSK, sk)
 	}
 
-	var keptES []config.EndpointStorageConf
-	for _, es := range env.EndpointStorages {
-		if es.EndpointID == endpointID {
-			if err := proc.StopProcess("endpoint_storage", env.EndpointStorageDataDir(es.EndpointID), proc.StopImmediate); err != nil {
-				fmt.Fprintf(os.Stderr, "endpoint_storage for endpoint %s stop failed: %v\n", endpointID, err)
-			}
-			continue
-		}
-		keptES = append(keptES, es)
-	}
-
 	env.Safekeepers = keptSK
-	env.EndpointStorages = keptES
 	return env.PersistConfig()
 }
 

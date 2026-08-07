@@ -42,7 +42,7 @@ Read in this order:
 
 For per-service HTTP API and Prometheus metrics, see the per-service
 `-apis.md` / `-metrics.md` references: the compute-engine services
-(pageserver, safekeeper, compute_ctl, endpoint_storage) are under
+(pageserver, safekeeper, compute_ctl) are under
 `compute/architecture/` (indexed in `compute/architecture/README.md`); the
 controller's are under `controller/architecture/`.
 

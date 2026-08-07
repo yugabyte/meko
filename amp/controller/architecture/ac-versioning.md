@@ -86,7 +86,7 @@ the `controller` field of the `GET /api/v1/version` response.
 ## Compute / endpoint binaries
 
 The compute image's Rust binaries — `yb-pageserver`, `yb-safekeeper`,
-`yb-compute-ctl`, `yb-endpoint-storage` — report the **same** version from the
+`yb-compute-ctl` — report the **same** version from the
 same `VERSION` file, so the endpoint image and the controller never disagree. A
 `build.rs` in the shared `utils` crate stamps the `VERSION` semver into the
 `AMP_VERSION` compile-time constant (via `cargo:rustc-env` +

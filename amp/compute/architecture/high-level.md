@@ -94,9 +94,6 @@ A yb-amp install is:
   lives in the same YB database (`amp_registry` + `controller` schemas),
   and it applies all schema migrations on startup. Documented under
   [`../../controller/architecture/`](../../controller/architecture/).
-- **Endpoint storage (`yb-endpoint-storage`)**: a small per-endpoint
-  HTTP service for endpoint-scoped scratch blobs (LFC prewarm state),
-  backed by `amp_storage.blobs`.
 - **YugabyteDB cluster**: the durable storage tier for everything
   above.
 
@@ -118,7 +115,6 @@ A yb-amp install is:
 | Safekeeper | WAL durability gateway: receives WAL from the compute, persists it to `amp_storage.wals`, streams interpreted WAL to the pageserver. **One instance per branch** — YB provides the replication. | `target/debug/yb-safekeeper` |
 | Pageserver | Materializes pages from WAL into `amp_storage.*` rows and serves them to the compute on demand. | `target/debug/yb-pageserver` |
 | Controller | Control plane: generation fencing, node/branch/endpoint registries, endpoint provisioning, schema migrations. | `controller` (Go, `controller/cmd/controller`) |
-| Endpoint storage | Per-endpoint scratch-blob service (LFC prewarm state). One instance **per endpoint**. | `target/debug/yb-endpoint-storage` |
 | YugabyteDB | Durable storage backend for everything yb-amp-internal. | external (`yugabyted`) |
 
 ## Write path (one INSERT from a client)
@@ -193,7 +189,7 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Safekeeper control file | YB `amp_storage.branch_state` | one row per branch, typed columns |
 | Live WAL | YB `amp_storage.wals` | `(bucket_id, branch_id, segno, chunk_offset)` all-range, pre-split into 6 |
 | initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
-| Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | written via endpoint_storage's HTTP API |
+| Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | `{branch_id}/{endpoint_id}/lfc_state`, written by `compute_ctl` |
 | Control-plane resource model | YB `amp_registry` schema | users, pools, projects, grants, and the single `branch` / `endpoint` tables both the product API and the storage-layer surface read |
 | Task log | YB `controller` schema | `task`, `task_step` |
 | Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on `endpoint create`, removed on destroy |
@@ -208,22 +204,22 @@ The launcher is `yb_amp_local`
 ([`controller/local/cmd/yb_amp_local`](../../controller/local/cmd/yb_amp_local)),
 a Go CLI that materializes a `.yb_amp/` repo (`init`) and drives the
 local environment (`start`, `branch`, `endpoint`, `pageserver`,
-`safekeeper`, `endpoint_storage`, `controller` subcommands). It targets
+`safekeeper`, `controller` subcommands). It targets
 an external YugabyteDB (`controller.yb` config block) — external YB is
 the only supported path — and `CREATE DATABASE`s `yb_storage` before
 starting the controller, which then applies every schema migration.
 
 Topology: single host, single YB instance, one controller, one
 pageserver + one safekeeper **per branch**, co-located under the
-endpoint that owns the branch, plus one endpoint_storage **per
-endpoint**. The PS+SK pair is provisioned at `endpoint create` —
+endpoint that owns the branch. The PS+SK pair is provisioned at
+`endpoint create` —
 Branch creation only records the branch's init recipe (branch id,
 branch name, pg version, optional ancestor + start LSN) in the
 controller's `amp_registry.branches` row; the pair comes up
 under `endpoints/<endpoint>/{pageserver,safekeeper}` when the first
 endpoint for that branch is created, which reads the recipe back and
 deletes the pending row. Sibling endpoints on the same branch share the
-PS+SK pair but each gets its own endpoint_storage.
+PS+SK pair.
 
 ```
 yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RPC)
@@ -246,8 +242,6 @@ yb-amp processes
                       defaults :64000 pg, :9898 http, :51051 grpc — +2 per extra node)
   yb-safekeeper      (endpoints/<ep>/safekeeper/safekeeper.toml;
                       defaults :5454 pg, :7676 http — +2 per extra node)
-  yb-endpoint-storage (endpoints/<ep>/endpoint_storage/endpoint_storage.json;
-                      one per endpoint, ports 9993 + 2k)
   yb-compute-ctl --pgdata .yb_amp/endpoints/main/pgdata ...
     +-- postgres (+ yb_amp patches)      ports allocated from 55432 up
 ```

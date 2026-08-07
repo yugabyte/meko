@@ -52,7 +52,6 @@ func fullConfig() OnDiskConfig {
 		SafekeeperTemplates: []SafekeeperConf{{
 			PgPort: 5454, HTTPPort: 7676, EndpointID: "",
 		}},
-		EndpointStorage: DefaultEndpointStorageConf(),
 		ControlPlaneAPI: strPtr("http://127.0.0.1:1234/upcall/v1/"),
 	}
 }
@@ -131,9 +130,6 @@ func TestSkipRules(t *testing.T) {
 	if strings.Contains(string(data), "use_local_tls") {
 		t.Error("use_local_tls should be omitted when false")
 	}
-	if strings.Contains(string(data), "endpoint_storages") {
-		t.Error("endpoint_storages should be omitted when empty")
-	}
 	// bool fields with no skip rule are always emitted, even false.
 	if !strings.Contains(string(data), "use_https_pageserver_api = false") {
 		t.Errorf("use_https_pageserver_api should always be emitted:\n%s", data)
@@ -145,13 +141,9 @@ func TestSkipRules(t *testing.T) {
 	}
 
 	cfg.UseLocalTLS = true
-	cfg.EndpointStorages = []EndpointStorageConf{DefaultEndpointStorageConf()}
 	data, _ = cfg.marshal()
 	if !strings.Contains(string(data), "use_local_tls = true") {
 		t.Error("use_local_tls should be emitted when true")
-	}
-	if !strings.Contains(string(data), "endpoint_storages") {
-		t.Error("endpoint_storages should be emitted when non-empty")
 	}
 }
 
@@ -207,10 +199,6 @@ max_offline = "42s"
 	}
 	if !cfg.Controller.UseLocalComputeNotifications {
 		t.Error("use_local_compute_notifications default (true) not applied")
-	}
-	// endpoint_storage listen addr default.
-	if cfg.EndpointStorage.ListenAddr != endpointStorageDefaultAddr {
-		t.Errorf("endpoint_storage default addr not applied: %q", cfg.EndpointStorage.ListenAddr)
 	}
 }
 
@@ -291,9 +279,6 @@ func TestDataDirHelpers(t *testing.T) {
 	if got := env.SafekeeperDataDir("ep_b1"); got != "/tmp/repo/endpoints/ep_b1/safekeeper" {
 		t.Errorf("SafekeeperDataDir: %q", got)
 	}
-	if got := env.EndpointStorageDataDir("main"); got != "/tmp/repo/endpoints/main/endpoint_storage" {
-		t.Errorf("EndpointStorageDataDir: %q", got)
-	}
 	if got := env.PgBinDir(18); got != "/pg/v18/bin" {
 		t.Errorf("PgBinDir: %q", got)
 	}
@@ -305,9 +290,6 @@ func TestDataDirHelpers(t *testing.T) {
 	}
 	if got := env.SafekeeperBin(); got != "/yb-amp/yb-safekeeper" {
 		t.Errorf("SafekeeperBin: %q", got)
-	}
-	if got := env.EndpointStorageBin(); got != "/yb-amp/yb-endpoint-storage" {
-		t.Errorf("EndpointStorageBin: %q", got)
 	}
 }
 

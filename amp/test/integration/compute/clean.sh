@@ -4,7 +4,7 @@
 # `yb_amp_local init + start` is a clean slate:
 #
 # - Kill the integration cluster's neon-stack processes (yb-pageserver,
-#   yb-safekeeper, yb-endpoint-storage, controller, yb-compute-ctl). Kills
+#   yb-safekeeper, controller, yb-compute-ctl). Kills
 #   are SCOPED to THIS run — anchored on `$YB_AMP_REPO_DIR` (a unique
 #   `run_<id>/`, services) and the ephemeral `$YB_DBNAME` (controller) —
 #   so a concurrently-running integration cluster (its own port block + run dir +
@@ -47,7 +47,7 @@ step "Stop integration cluster processes (scoped — leaves a developer's .yb_am
 #
 # Every process for THIS run carries the unique run dir ($YB_AMP_REPO_DIR)
 # in its argv, so one path anchor reaps them all (pageserver, safekeeper,
-# endpoint_storage, compute_ctl, compute postgres), scoped to this run.
+# compute_ctl, compute postgres), scoped to this run.
 pkill -9 -f "${YB_AMP_REPO_DIR}" 2>/dev/null || true
 
 # The controller has no run dir in argv; anchor on this run's ephemeral db name
@@ -69,7 +69,7 @@ PGPASSWORD=yugabyte psql -h "$YB_HOST" -p "$YB_PORT" -U yugabyte -d yugabyte \
 
 # On a failed run the harness sets INTEGRATION_KEEP_LOGS=1: the cluster is stopped
 # and the db dropped above, but this run's *.log files (harness +
-# compute/pageserver/safekeeper/controller/endpoint_storage) are
+# compute/pageserver/safekeeper/controller) are
 # preserved for postmortem and CI artifact upload — everything else (pgdata,
 # sockets, config, ...) is dropped. Otherwise remove the whole run dir so the
 # next init starts fresh.

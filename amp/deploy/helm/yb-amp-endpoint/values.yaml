@@ -111,8 +111,15 @@ ports:
   pageserverGrpc: 51051
   safekeeperPg: 5454
   safekeeperHttp: 7676
-  endpointStorageHttp: 9993
   computeCtlHttp: 3080
+
+# LFC prewarm: compute_ctl saves the local file cache's contents to YugabyteDB
+# and loads them back on start, so a restarted endpoint is not cold.
+lfc:
+  # -- Load the previously saved LFC state when the compute starts.
+  autoprewarm: false
+  # -- Save the LFC state this often, in seconds. Empty = never save.
+  offloadIntervalSeconds: ""
 
 # Supervisor (the in-pod process manager, PID 1 under tini) behaviour.
 supervisor:
@@ -125,7 +132,7 @@ supervisor:
 
 # Metrics: expose the compute's Postgres stats for the amp metrics pipeline
 # (controller/architecture/ac-metrics.md). The Neon-derived services in this pod
-# (pageserver/safekeeper/endpoint_storage/compute_ctl) already serve Prometheus
+# (pageserver/safekeeper/compute_ctl) already serve Prometheus
 # on their HTTP ports; this adds the one missing source — Postgres itself.
 metrics:
   # postgres_exporter runs as a sidecar, connecting to the compute's Postgres
@@ -185,7 +192,7 @@ service:
   # -- Annotations for the Service. For an internal LoadBalancer on GKE, set e.g.
   # networking.gke.io/load-balancer-type: Internal (+ ...allow-global-access).
   annotations: {}
-  # -- Also publish the internal HTTP APIs (pageserver/safekeeper/endpoint_storage) on the Service.
+  # -- Also publish the internal HTTP APIs (pageserver/safekeeper) on the Service.
   exposeInternalHttp: false
 
 # Endpoint data volume (/data: the compute's pgdata, the LFC cache, logs and

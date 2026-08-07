@@ -78,9 +78,6 @@ func TestInitRoundTrip(t *testing.T) {
 	if st.PgPort != 20100 || st.HTTPPort != 20200 { // base + 100 / + 200
 		t.Errorf("sk template ports = pg %d http %d, want 20100/20200", st.PgPort, st.HTTPPort)
 	}
-	if p, _ := portOf(env.EndpointStorage.ListenAddr); p != 20600 { // base + 600
-		t.Errorf("endpoint_storage port = %d, want 20600", p)
-	}
 	if env.Controller.Yb == nil {
 		t.Fatal("controller.yb should be set (external YB)")
 	}
@@ -91,10 +88,10 @@ func TestInitRoundTrip(t *testing.T) {
 		t.Errorf("controller.yb host_ports = %q, want 10.0.0.1:5433", env.Controller.Yb.HostPorts)
 	}
 
-	// No pageserver/safekeeper/endpoint_storage instances provisioned yet.
-	if len(env.Pageservers) != 0 || len(env.Safekeepers) != 0 || len(env.EndpointStorages) != 0 {
-		t.Errorf("expected no provisioned nodes, got ps=%d sk=%d es=%d",
-			len(env.Pageservers), len(env.Safekeepers), len(env.EndpointStorages))
+	// No pageserver/safekeeper instances provisioned yet.
+	if len(env.Pageservers) != 0 || len(env.Safekeepers) != 0 {
+		t.Errorf("expected no provisioned nodes, got ps=%d sk=%d",
+			len(env.Pageservers), len(env.Safekeepers))
 	}
 
 	// Re-init with must-not-exist should now fail (dir exists).

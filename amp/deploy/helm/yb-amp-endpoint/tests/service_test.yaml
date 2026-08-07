@@ -29,10 +29,20 @@ tests:
     set:
       service.exposeInternalHttp: true
     asserts:
+      # The compute plus the two daemons that serve HTTP. There is no
+      # endpoint_storage port: compute_ctl reads and writes LFC state in YB
+      # directly, so nothing in the pod serves that surface.
       - lengthEqual:
           path: spec.ports
-          count: 4
+          count: 3
       - contains:
+          path: spec.ports
+          content:
+            name: sk-http
+            port: 7676
+            targetPort: sk-http
+            protocol: TCP
+      - notContains:
           path: spec.ports
           content:
             name: es-http

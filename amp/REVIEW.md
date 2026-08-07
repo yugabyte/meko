@@ -9,8 +9,8 @@ amp-specific layer: the traps and checks particular to this codebase, organized 
 
 Weight these by what the diff touches.
 
-**Compute / storage engine** (`compute/` — pageserver, safekeeper, compute_ctl,
-endpoint_storage). Correctness is the dominant concern here:
+**Compute / storage engine** (`compute/` — pageserver, safekeeper,
+compute_ctl). Correctness is the dominant concern here:
 
 - **Every YB statement must be idempotent**, DDL included. `YsqlClient` retries
   dropped connections and can replay an in-flight statement whose commit status

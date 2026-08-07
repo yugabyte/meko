@@ -228,3 +228,28 @@ tests:
       - equal:
           path: data.SUPERVISOR_RESTART_WINDOW_SECONDS
           value: "120"
+
+  - it: leaves LFC prewarm off by default and omits the offload interval
+    asserts:
+      - equal:
+          path: data.AUTOPREWARM
+          value: "false"
+      - notExists:
+          path: data.OFFLOAD_LFC_INTERVAL_SECONDS
+
+  - it: renders the LFC prewarm knobs when set
+    set:
+      lfc.autoprewarm: true
+      lfc.offloadIntervalSeconds: 300
+    asserts:
+      - equal:
+          path: data.AUTOPREWARM
+          value: "true"
+      - equal:
+          path: data.OFFLOAD_LFC_INTERVAL_SECONDS
+          value: "300"
+
+  - it: no longer carries an endpoint_storage port
+    asserts:
+      - notExists:
+          path: data.ENDPOINT_STORAGE_HTTP_PORT

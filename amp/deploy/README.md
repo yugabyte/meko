@@ -344,13 +344,12 @@ PID 1:
 
 | Service          | Role                                   | Backed by   |
 |------------------|----------------------------------------|-------------|
-| `endpoint_storage` | LFC pre-warm scratch blobs           | YugabyteDB  |
 | `safekeeper`       | WAL                                  | YugabyteDB  |
 | `yb-pageserver`    | page service                         | YugabyteDB  |
 | `compute_ctl`      | supervises Postgres v18 + `neon` ext | (compute)   |
 
 The supervisor renders each service's config from environment variables,
-brings the stack up in order (endpoint_storage → safekeeper → pageserver →
+brings the stack up in order (safekeeper → pageserver →
 compute), creates the safekeeper timeline, then monitors the children and
 restarts them with backoff; if a service exceeds its restart budget the
 supervisor exits non-zero so the pod is recreated.
@@ -424,7 +423,8 @@ a ConfigMap + Secret):
 
 Internal ports (`PAGESERVER_PG_PORT`, `PAGESERVER_HTTP_PORT`,
 `PAGESERVER_GRPC_PORT`, `SAFEKEEPER_PG_PORT`, `SAFEKEEPER_HTTP_PORT`,
-`ENDPOINT_STORAGE_HTTP_PORT`, `COMPUTE_CTL_HTTP_PORT`) and supervisor knobs
+`COMPUTE_CTL_HTTP_PORT`), the LFC prewarm knobs (`AUTOPREWARM`,
+`OFFLOAD_LFC_INTERVAL_SECONDS`) and the supervisor knobs
 (`SUPERVISOR_RESTART_BACKOFF_SECONDS`, `SUPERVISOR_MAX_RESTARTS`,
 `SUPERVISOR_RESTART_WINDOW_SECONDS`) have sensible defaults.
 

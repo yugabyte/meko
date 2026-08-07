@@ -77,21 +77,6 @@ func SafekeeperRestart(env *config.LocalEnv, endpointID string, immediate bool, 
 	return fmt.Errorf("could not find safekeeper for endpoint %q", endpointID)
 }
 
-// EndpointStorageStart starts every provisioned endpoint_storage instance.
-// Mirrors the `Start` arm of Rust `handle_endpoint_storage`.
-func EndpointStorageStart(env *config.LocalEnv, timeout time.Duration) error {
-	for i := range env.EndpointStorages {
-		if !fileExists(env.EndpointStorageBin()) {
-			fmt.Printf("%s binary not found. Ignore if this is a compatibility test\n", env.EndpointStorageBin())
-			return nil
-		}
-		if err := startEndpointStorage(env, &env.EndpointStorages[i], timeout); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // ControllerStart starts a controller instance (external-YB path). Mirrors the
 // `ControllerCmd::Start` arm of Rust `handle_controller`.
 func ControllerStart(ctx context.Context, env *config.LocalEnv, instanceID uint8, timeout time.Duration) error {

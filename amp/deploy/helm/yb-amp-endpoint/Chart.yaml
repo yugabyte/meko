@@ -1,7 +1,7 @@
 apiVersion: v2
 name: yb-amp-endpoint
 description: >-
-  A yb-amp endpoint as a single pod: pageserver, safekeeper, endpoint_storage,
+  A yb-amp endpoint as a single pod: pageserver, safekeeper,
   and a Postgres compute (compute_ctl) supervised in one container, backed by an
   external YugabyteDB. Connection config is passed in via a ConfigMap.
 type: application

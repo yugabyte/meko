@@ -119,7 +119,6 @@ RUN  set -e \
       --features $CARGO_FEATURES \
       --bin yb-pageserver  \
       --bin yb-safekeeper  \
-      --bin yb-endpoint-storage \
       --bin yb-dump-pages \
       --bin yb-dump-wals \
       --bin yb-reset-consistent-lsn \
@@ -158,7 +157,6 @@ RUN set -e \
 
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-pageserver       /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-safekeeper       /usr/local/bin
-COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-endpoint-storage /usr/local/bin
 # Operator diagnostic tools (the tools crate): dump the page store / WAL, reset the consistent LSN.
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-dump-pages          /usr/local/bin
 COPY --from=build --chown=yb_amp:yb_amp /home/nonroot/target/release/yb-dump-wals           /usr/local/bin

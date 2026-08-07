@@ -1,6 +1,6 @@
 // Command yb_amp_local is the Go port of the Rust `yb_amp_local` launcher: it
 // creates and drives a local yb-amp environment (controller + pageservers +
-// safekeepers + endpoint_storage + computes) for integration testing. It is a
+// safekeepers + computes) for integration testing. It is a
 // drop-in replacement for the Rust binary, exposing the same subcommands and
 // flags the integration harness depends on.
 //
@@ -41,7 +41,6 @@ func main() {
 		endpointCmd(),
 		pageserverCmd(),
 		safekeeperCmd(),
-		endpointStorageCmd(),
 		controllerCmd(),
 	)
 
@@ -284,7 +283,7 @@ func endpointStopCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mode, "mode", "fast", "stop mode: fast | immediate | immediate-terminate")
-	cmd.Flags().BoolVar(&destroy, "destroy", false, "also deprovision the co-located pageserver/safekeeper/endpoint_storage and remove the endpoint")
+	cmd.Flags().BoolVar(&destroy, "destroy", false, "also deprovision the co-located pageserver/safekeeper and remove the endpoint")
 	return cmd
 }
 
@@ -405,29 +404,6 @@ func safekeeperStartCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, posArgs []string) error {
 			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
 				return launch.SafekeeperStart(env, endpointOrMain(posArgs), timeout)
-			})
-		},
-	}
-	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", 10*time.Second, "start timeout")
-	return cmd
-}
-
-// --- endpoint-storage ---
-
-func endpointStorageCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "endpoint-storage", Short: "Manage object storage"}
-	cmd.AddCommand(endpointStorageStartCmd())
-	return cmd
-}
-
-func endpointStorageStartCmd() *cobra.Command {
-	var timeout time.Duration
-	cmd := &cobra.Command{
-		Use:   "start",
-		Short: "Start all provisioned endpoint_storage instances",
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.EndpointStorageStart(env, timeout)
 			})
 		},
 	}

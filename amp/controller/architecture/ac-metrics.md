@@ -22,7 +22,6 @@ sidecar); the collector (step 2) is the remaining deployment step.
  │ compute pod                    │ ├──scrape┤ OTel         ├──►│ VictoriaMetrics├──►│ Grafana │
  │   pageserver        :9898      │ │        │ Collector    │   │ (remote-write) │   │         │
  │   safekeeper        :7676      │ │        │ (Operator)   │   └──────────────┘   └─────────┘
- │   endpoint_storage  :9993      │ │        └──────────────┘
  │   compute_ctl       :3080      │ │
  │   postgres_exporter :9187      │─┘
  └───────────────────────────────┘
@@ -119,7 +118,7 @@ Implementation notes learned deploying this on EKS:
   "different value, same timestamp" warnings (those samples are dropped).
 
 Note on the endpoint pod's internal services: **pageserver (`:9898`), safekeeper
-(`:7676`), endpoint_storage (`:9993`), and compute_ctl (`:3080`) already serve
+(`:7676`) and compute_ctl (`:3080`) already serve
 `/metrics`**, but their container ports are only exposed when
 `service.exposeInternalHttp=true` or the endpoint is SC-coordinated. To scrape
 them, the Collector's pod service-discovery must target those ports (the

@@ -5,7 +5,6 @@
 //   - pageserver.toml / metadata.json
 //   - safekeeper.toml, whose shape is
 //     safekeeper_api::config::SafekeeperConfigToml
-//   - endpoint_storage.json
 //   - the compute's config.json + in-spec postgresql.conf, whose shapes are
 //     compute_api::spec::ComputeSpec / responses::ComputeConfig
 //

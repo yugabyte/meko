@@ -680,7 +680,7 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
 
 - `yb_storage_conn` is the single YB connection block (a string-encoded
   inline TOML table, the same `[*.yb]` shape the pageserver and
-  endpoint_storage consume) used for both `amp_storage.branch_state` and
+  compute_ctl consume) used for both `amp_storage.branch_state` and
   `amp_storage.wals` — same DB, two tables; the WAL table name is not
   configurable. Setting it is what puts the safekeeper in YB-WAL mode
   (`SafeKeeperConf::is_yb_wal_mode`); the deployment always sets it.

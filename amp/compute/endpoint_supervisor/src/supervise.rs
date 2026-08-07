@@ -1,6 +1,6 @@
 //! Process supervision: the PID 1 behaviour.
 //!
-//! Four children are started **in order**, each gated on a health probe before
+//! Children are started **in order**, each gated on a health probe before
 //! the next begins, because the dependency chain is real: `compute_ctl`'s first
 //! act is to fetch a basebackup from the pageserver, and the pageserver streams
 //! WAL from the safekeeper. Starting them concurrently produces a compute that
@@ -35,7 +35,7 @@ extern "C" fn on_term(_sig: libc::c_int) {
 /// instead of having them killed out from under their datadirs.
 ///
 /// Failure is an error, not a warning: without a handler a pod delete would kill
-/// this process outright and leave four children running against a datadir nobody
+/// this process outright and leave its children running against a datadir nobody
 /// is closing. For PID 1 that is the whole point of installing them.
 pub fn install_signal_handlers() -> Result<()> {
     for sig in [libc::SIGTERM, libc::SIGINT] {

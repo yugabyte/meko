@@ -975,7 +975,6 @@ impl Cluster {
         let sc = r.join("controller_1/controller.pid");
         let ps = r.join("endpoints/main/pageserver/pageserver.pid");
         let sk = r.join("endpoints/main/safekeeper/safekeeper.pid");
-        let es = r.join("endpoints/main/endpoint_storage/endpoint_storage.pid");
 
         if !is_running(&sc) {
             step("restart controller (prior test left it down)");
@@ -988,10 +987,6 @@ impl Cluster {
         if !is_running(&sk) {
             step("restart safekeeper (prior test left it down)");
             self.yb(&["safekeeper", "start"])?;
-        }
-        if !is_running(&es) {
-            step("restart endpoint_storage (prior test left it down)");
-            self.yb(&["endpoint-storage", "start"])?;
         }
 
         // The pid check above can pass while the PS serves nothing — a
@@ -1266,7 +1261,7 @@ fn env_or(keys: &[&str], default: &str) -> String {
 /// Is the process named in `pidfile` alive? (Linux `/proc/<pid>` check.)
 /// Is the component that owns `pidfile` still running?
 ///
-/// Each component (pageserver, safekeeper, endpoint_storage,
+/// Each component (pageserver, safekeeper,
 /// controller) holds an exclusive advisory `flock` on its pidfile
 /// for its entire lifetime (see `utils::pid_file` / `utils::lock_file`).
 /// So liveness == "the lock is still held": we probe by trying to take it

@@ -1,6 +1,6 @@
 //! `yb-endpoint-supervisor` — PID 1 of the endpoint pod.
 //!
-//! An endpoint pod runs four processes: `endpoint_storage`, the safekeeper, the
+//! An endpoint pod runs three processes: the safekeeper, the
 //! pageserver, and `compute_ctl` with Postgres. This binary renders their config
 //! and supervises them.
 //!
@@ -26,8 +26,8 @@
 //! - [`supervise`] — the PID 1 behaviour: ordered, health-gated startup, restart
 //!   with a rolling budget, and reverse-order shutdown.
 //! - [`boot`] — the shape of the pod: ports, paths, the base config keys, the
-//!   four services, and waiting for YugabyteDB before starting them.
-//! - [`spec`] — the compute spec and the `endpoint_storage` config.
+//!   three services, and waiting for YugabyteDB before starting them.
+//! - [`spec`] — the compute spec.
 //! - [`remote_auth`] — the `cloud_admin` password, without which only loopback
 //!   clients can authenticate. Its success line is the readiness signal the
 //!   controller's Docker deployer waits for.
@@ -87,6 +87,24 @@ fn env_port(name: &str, default: u16) -> Result<u16> {
     }
 }
 
+/// A boolean the chart may render as `true`/`false`; anything else is false, so a
+/// blank ConfigMap value means "off" rather than a boot failure.
+fn env_bool(name: &str) -> bool {
+    env_opt(name).is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
+}
+
+/// An optional count of seconds. A malformed value is an error: silently not
+/// offloading is the kind of thing nobody notices until the cache is cold.
+fn env_u64(name: &str) -> Result<Option<u64>> {
+    match env_opt(name) {
+        None => Ok(None),
+        Some(v) => v
+            .parse()
+            .map(Some)
+            .with_context(|| format!("{name}={v:?} is not a number of seconds")),
+    }
+}
+
 /// The environment contract, as the chart's ConfigMap and Secret deliver it.
 struct Env {
     layout: boot::Layout,
@@ -98,6 +116,10 @@ struct Env {
     yb_password_env: Option<String>,
     endpoint_id: Option<String>,
     compute_password: String,
+    /// Load the previous LFC state on compute startup.
+    autoprewarm: bool,
+    /// Save the LFC state this often. `None` means never.
+    offload_lfc_interval_seconds: Option<u64>,
     shared_preload_libraries: String,
     /// Extension paths and the like, computed by the chart from the ImageVolumes
     /// it mounted. Not derivable here and not in the database.
@@ -130,7 +152,6 @@ impl Env {
             pageserver_grpc_port: env_port("PAGESERVER_GRPC_PORT", 51051)?,
             safekeeper_pg_port: env_port("SAFEKEEPER_PG_PORT", 5454)?,
             safekeeper_http_port: env_port("SAFEKEEPER_HTTP_PORT", 7676)?,
-            endpoint_storage_http_port: env_port("ENDPOINT_STORAGE_HTTP_PORT", 9993)?,
             compute_ctl_http_port: env_port("COMPUTE_CTL_HTTP_PORT", 3080)?,
             pg_version_major: env_or("ENDPOINT_PG_VERSION", "18")
                 .parse()
@@ -166,6 +187,8 @@ impl Env {
             yb_password_env: env_opt("YB_PASSWORD_ENV"),
             endpoint_id,
             compute_password: env_or("COMPUTE_PASSWORD", "cloud_admin"),
+            autoprewarm: env_bool("AUTOPREWARM"),
+            offload_lfc_interval_seconds: env_u64("OFFLOAD_LFC_INTERVAL_SECONDS")?,
             shared_preload_libraries: env_or("SHARED_PRELOAD_LIBRARIES", "yb_amp"),
             chart_settings: chart_settings()?,
         })
@@ -183,7 +206,7 @@ impl Env {
     }
 
     /// The same connection as a JSON object, which is the shape
-    /// `endpoint_storage` parses: `remote_storage::TypedRemoteStorageKind` is an
+    /// `compute_ctl` parses: `remote_storage::TypedRemoteStorageKind` is an
     /// externally tagged enum (`#[serde(tag = "type")]`), so the discriminator is
     /// a sibling of the connection fields, not a wrapper around them.
     fn yb_conn_typed_json(&self) -> serde_json::Value {
@@ -255,7 +278,7 @@ fn main() -> std::process::ExitCode {
 
 fn run() -> Result<std::process::ExitCode> {
     // First, so a delete arriving mid-startup is honoured rather than killing this
-    // process with four children already running.
+    // process with its children already running.
     supervise::install_signal_handlers()?;
 
     let env = Env::read()?;
@@ -293,12 +316,7 @@ fn run() -> Result<std::process::ExitCode> {
     // The daemons and the compute load the bundled Postgres libraries.
     prepend_ld_library_path(&l.pg_lib());
 
-    for dir in [
-        l.run_dir.clone(),
-        l.ps_datadir(),
-        l.sk_datadir(),
-        l.es_datadir(),
-    ] {
+    for dir in [l.run_dir.clone(), l.ps_datadir(), l.sk_datadir()] {
         std::fs::create_dir_all(&dir).with_context(|| format!("create {dir}"))?;
     }
 
@@ -342,13 +360,6 @@ fn run() -> Result<std::process::ExitCode> {
         .context("rendering safekeeper.toml")?;
     write(&l.sk_datadir().join("safekeeper.toml"), &sk_toml)?;
 
-    let es_config = l.es_datadir().join("endpoint_storage.json");
-    let es = spec::endpoint_storage_config(
-        &format!("{}:{}", boot::LISTEN_HOST, l.endpoint_storage_http_port),
-        env.yb_conn_typed_json(),
-    );
-    write(&es_config, &serde_json::to_string(&es)?)?;
-
     let compute_spec = spec::render_compute_spec(
         &spec::ComputeSpecParams {
             compute_port: l.compute_port,
@@ -360,6 +371,10 @@ fn run() -> Result<std::process::ExitCode> {
                 &env.compute_password,
                 "cloud_admin",
             ),
+            endpoint_id: env.endpoint_id.as_deref(),
+            yb_storage_conn: env.yb_conn_typed_json(),
+            autoprewarm: env.autoprewarm,
+            offload_lfc_interval_seconds: env.offload_lfc_interval_seconds,
         },
         &settings,
         &env.chart_settings,
@@ -373,7 +388,7 @@ fn run() -> Result<std::process::ExitCode> {
     // The compute starts last, after the pageserver/safekeeper handshake: the
     // safekeeper only learns about the branch over its HTTP API, and the LSN to
     // create it at comes from the pageserver once its branch is Active.
-    let mut services = boot::services(l, &es_config);
+    let mut services = boot::services(l);
     let compute = services
         .pop()
         .context("boot::services must include a compute")?;
@@ -389,7 +404,7 @@ fn run() -> Result<std::process::ExitCode> {
     }
     sup.start_all()?;
 
-    // Wrapped so a failure — or a SIGTERM landing mid-handshake — stops the three
+    // Wrapped so a failure — or a SIGTERM landing mid-handshake — stops the two
     // daemons that are already up. Returning straight out would leave them running
     // against datadirs nobody is closing, which is the situation the signal
     // handlers exist to prevent, and `Supervisor` does not reap on drop.
@@ -416,7 +431,7 @@ fn run() -> Result<std::process::ExitCode> {
     }
 
     sup.add(compute);
-    // Skips the three that are already running.
+    // Skips the two that are already running.
     sup.start_all()?;
 
     // On its own thread: this waits for Postgres to answer queries, and blocking
@@ -604,7 +619,6 @@ mod tests {
                 pageserver_grpc_port: 51051,
                 safekeeper_pg_port: 5454,
                 safekeeper_http_port: 7676,
-                endpoint_storage_http_port: 9993,
                 compute_ctl_http_port: 3080,
                 pg_version_major: 18,
                 bind_host: "127.0.0.1".into(),
@@ -618,6 +632,8 @@ mod tests {
             yb_password_env: None,
             endpoint_id: None,
             compute_password: "cloud_admin".into(),
+            autoprewarm: false,
+            offload_lfc_interval_seconds: None,
             shared_preload_libraries: "yb_amp".into(),
             chart_settings: BTreeMap::new(),
         }
@@ -631,42 +647,19 @@ mod tests {
         assert_eq!(got, registry::Overrides::default());
     }
 
-    /// `endpoint_storage` parses this field as `TypedRemoteStorageKind`, an
+    /// `compute_ctl` parses `yb_storage_conn` as `TypedRemoteStorageKind`, an
     /// externally tagged enum. Deserializing into the real type is the only way to
-    /// know the shape is right — a JSON string or a nested object both look
+    /// know the shape is right — a JSON string and a nested object both look
     /// plausible and neither one loads.
     #[test]
-    fn the_endpoint_storage_config_deserializes_as_its_own_type() {
+    fn the_specs_storage_connection_deserializes_as_its_own_type() {
         let mut env = test_env();
         env.yb_sslmode = Some("require".into());
         env.yb_password_env = Some("YB_PASSWORD".into());
-        let cfg = spec::endpoint_storage_config("127.0.0.1:9993", env.yb_conn_typed_json());
-
-        // Mirrors endpoint_storage's own Config, including `deny_unknown_fields`:
-        // a key it does not know is a startup failure, not an ignored extra. That
-        // is why `pemfile` must not be written — the field no longer exists there.
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct EsConfig {
-            #[allow(dead_code)]
-            listen: String,
-            #[allow(dead_code)]
-            yb_storage_conn: remote_storage::TypedRemoteStorageKind,
-            #[allow(dead_code)]
-            max_upload_file_limit: Option<usize>,
-        }
-        let json = serde_json::to_string(&cfg).unwrap();
-        serde_json::from_str::<EsConfig>(&json)
-            .unwrap_or_else(|e| panic!("endpoint_storage could not parse {json}: {e}"));
-
-        // And prove the mirror is strict: an extra key must fail, so this test
-        // would catch a field endpoint_storage cannot accept.
-        let mut extra = cfg.clone();
-        extra["pemfile"] = serde_json::Value::from("/data/keys/auth_public_key.pem");
-        assert!(
-            serde_json::from_str::<EsConfig>(&serde_json::to_string(&extra).unwrap()).is_err(),
-            "an unknown key must be rejected"
-        );
+        let conn = env.yb_conn_typed_json();
+        let json = serde_json::to_string(&conn).unwrap();
+        serde_json::from_str::<remote_storage::TypedRemoteStorageKind>(&json)
+            .unwrap_or_else(|e| panic!("compute_ctl could not parse {json}: {e}"));
     }
 
     /// The optional connection fields are omitted rather than emitted as null,

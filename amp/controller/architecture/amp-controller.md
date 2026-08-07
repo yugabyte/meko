@@ -192,8 +192,8 @@ hardware.
 Every process in a running placement group belongs to exactly one of two tiers:
 
 - **Placement-group-global services** (§5.1) — one of each per placement group,
-  deployed once and shared by every endpoint: amp-controller itself, the storage
-  controller, and endpoint_storage. This is the control-plane tier; none of it serves
+  deployed once and shared by every endpoint: amp-controller itself and the
+  storage controller. This is the control-plane tier; none of it serves
   data-plane traffic.
 - **Per-endpoint services** (§5.2) — the YB Amp stack that makes up a single
   endpoint, deployed once per endpoint: compute/pg, safekeeper, pageserver,
@@ -203,8 +203,7 @@ Every process in a running placement group belongs to exactly one of two tiers:
 Placement group
 ├── Global services (one of each, §5.1)
 │   ├── amp-controller    — the control plane (this doc)
-│   ├── controller    — storage-layer registry + generation fencing (§11.1)
-│   └── endpoint_storage      — endpoint-scoped scratch store (§11.5)
+│   └── controller        — storage-layer registry + generation fencing (§11.1)
 └── Endpoints (0+)            — one self-contained blob each (§5.4)
     └── per endpoint (§5.2):
         ├── compute / pg      — the Postgres users connect to
@@ -234,15 +233,16 @@ Exactly one of each runs per placement group (§1):
   owns this **in-process** (§11.1), and it reads and writes the *same* `branch` and
   `endpoint` tables the product API does — there is no separate registry to drift
   from. See [`sc-integration.md`](sc-integration.md).
-- **endpoint_storage** — YB Amp's small standalone store for endpoint-scoped scratch
-  data (LFC prewarm/offload state today). Also a managed service (§11.5); its contents
-  are performance state, not correctness state.
+Endpoint-scoped scratch data — LFC prewarm/offload state — needs no service of its
+own: `compute_ctl` reads and writes it in `amp_storage.blobs` directly. Its contents
+are performance state, not correctness state, so losing them costs cache warmth and
+nothing else.
 
-All three persist to the placement group's universe over YSQL, so the global tier adds
-no external dependency beyond the universe itself (principle 2). The controller
-and endpoint_storage are *managed* by amp-controller — it deploys, supervises, and
-fronts them; §11 covers what that posture means, what of the controller is
-reused versus left inert, and the open questions.
+Both persist to the placement group's universe over YSQL, so the global tier adds
+no external dependency beyond the universe itself (principle 2). The controller is
+*managed* by amp-controller — it deploys, supervises, and fronts it; §11 covers what
+that posture means, what of it is reused versus left inert, and the open
+questions.
 
 ### 5.2 Per-endpoint services
 
@@ -297,7 +297,7 @@ Per-endpoint configuration that amp-controller owns and tracks includes (non-exh
 - TLS state (enabled/disabled) and the certificates backing it (§7);
 - software version (for upgrades, §7);
 - otel configuration;
-- the placement group's endpoint_storage address (§11.5).
+- the YB connection the compute reads and writes its LFC state blob over.
 
 ### 5.4 Endpoints are self-contained blobs
 
@@ -316,7 +316,7 @@ The unit of deployment, scheduling, replacement, and upgrade is the whole endpoi
 amp-controller is the source of every endpoint's spec. It assembles the spec from its
 state store (§5.3, §10) — YBDB connection, the branch binding (carried to the endpoint
 image as the flat `BRANCH_ID`, §5.6), role,
-version, TLS/cert references, otel config, the endpoint_storage address
+version, TLS/cert references, otel config, the LFC state store's connection
 (§11.5) — and hands it to that endpoint's compute_ctl, the single point of contact (§5.2).
 compute_ctl accepts a spec by three transports that all carry the **same payload** (one
 config object: the spec plus the TLS material and the JWKS used to authenticate its own
@@ -608,7 +608,7 @@ storage pools.
 ### 9.4 Control-plane signing key
 
 amp-controller is the sole issuer of the machine-plane tokens: the JWTs verified
-by compute_ctl, endpoint_storage (§11.5), and the controller (§11.1),
+by compute_ctl and the controller (§11.1),
 and the data-plane tokens where pageserver/safekeeper auth is enabled. The
 private signing key is **deployment configuration, provided as a file path** —
 the same shape on every runtime: a file on a VM's disk, a mounted Secret on
@@ -722,14 +722,13 @@ in API-layer validation (full DDL lives with the code and its migrations):
    children is a constraint violation; teardown happens top-down through tasks,
    never via `ON DELETE CASCADE` surprises.
 
-## 11. Storage-layer control + endpoint_storage
+## 11. Storage-layer control
 
 Cluster control for the storage layer — the branch / endpoint registries and
-provisioning of the `yb_storage` schemas — is owned by
-amp-controller **in-process** (§11.1). The one service that still rides along is
-**endpoint_storage** (§11.5), the other global service (§5.1): a standalone app
-amp-controller fronts, persisting to the universe over YSQL, so it adds no new
-external dependency (principle 2).
+provisioning of the `yb_storage` schemas — is owned by amp-controller
+**in-process** (§11.1). No separate service rides along: everything the storage
+layer needs is either in-process here or in the endpoint's own pod, so this adds
+no new external dependency (principle 2).
 
 ### 11.1 The storage layer's view of the resource model
 
@@ -844,26 +843,6 @@ one from corrupting storage state.
   count, with register/deregister churn at create/destroy and scale-to-zero —
   inverted from upstream's assumption of a small fleet of long-lived
   pageservers. Registry growth needs validation.
-
-### 11.5 endpoint_storage
-
-The second managed service. endpoint_storage is yb-amp's small standalone
-store for endpoint-scoped scratch data (today: LFC prewarm/offload state), and
-it stays a standalone app — one instance per placement group, persisting to the
-universe like everything else (by default colocated in the same blob storage
-the pageserver uses).
-
-It is not optional plumbing: every compute spec amp-controller builds carries the
-endpoint_storage address, so provisioning an endpoint implies a reachable
-endpoint_storage. The service serves one endpoint's pod on its own loopback and
-confines every object to a `{branch, endpoint}` prefix, which is what scopes a
-compute to its own data; an instance reachable beyond that pod would need
-request authentication added first (see
-[`endpoint-storage-apis.md`](../../compute/architecture/endpoint-storage-apis.md)).
-
-Its contents are performance state, not correctness state — losing them costs
-cache warmth, nothing else — so it inherits the replacement-is-recovery posture
-(§5.3) unconditionally.
 
 ## 12. Out of scope (for now)
 

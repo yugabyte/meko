@@ -149,7 +149,7 @@ Two distinct network paths:
     require a firewall rule allowing the node-port range to the nodes. Reading node
     IPs needs the cluster-scoped `nodes` get/list grant in the controller's
     ClusterRole (`redeploy.sh`). NB: a NodePort Service applies to *all* its ports,
-    so with SC coordination on (the default) the pageserver/safekeeper/endpoint_storage
+    so with SC coordination on (the default) the pageserver/safekeeper
     HTTP ports are exposed on node ports too — demo-grade, like the rest of this path;
   - `ClusterIP` → the **pod IP** `<podIP>:<computePort>` (connect in-cluster).
 

@@ -26,8 +26,4 @@ spec:
       port: {{ .Values.ports.safekeeperHttp }}
       targetPort: sk-http
       protocol: TCP
-    - name: es-http
-      port: {{ .Values.ports.endpointStorageHttp }}
-      targetPort: es-http
-      protocol: TCP
     {{- end }}

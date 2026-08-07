@@ -43,7 +43,7 @@ use yb_tokio_postgres::types::ToSql;
 
 use ysql_client::YbConnConfig;
 
-/// The YB table the endpoint_storage blob store lives in. Hardcoded — the
+/// The YB table the blob store lives in. Hardcoded — the
 /// connection config carries no table name (every yb-amp component owns
 /// a fixed table).
 const BLOBS_TABLE: &str = "amp_storage.blobs";

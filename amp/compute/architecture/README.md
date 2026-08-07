@@ -43,7 +43,6 @@ subsystem has its own page.
 | Pageserver | [`pageserver-apis.md`](pageserver-apis.md) | [`pageserver-metrics.md`](pageserver-metrics.md) |
 | Safekeeper | [`safekeeper-apis.md`](safekeeper-apis.md) | [`safekeeper-metrics.md`](safekeeper-metrics.md) |
 | compute_ctl | [`compute_ctl-apis.md`](compute_ctl-apis.md) | [`compute_ctl-metrics.md`](compute_ctl-metrics.md) |
-| Endpoint storage | [`endpoint-storage-apis.md`](endpoint-storage-apis.md) | [`endpoint-storage-metrics.md`](endpoint-storage-metrics.md) |
 
 ## Quick mental model
 

@@ -32,7 +32,6 @@ func envWithTemplates() *config.LocalEnv {
 			HTTPPort:      7676,
 			YbStorageConn: ptrStr("{ host = 'h' }"),
 		}},
-		EndpointStorage: config.EndpointStorageConf{ListenAddr: "127.0.0.1:9993"},
 		ControlPlaneAPI: "http://127.0.0.1:1234/upcall/v1/",
 	}
 }
@@ -114,60 +113,6 @@ func TestSecondSafekeeperGetsNextPortDelta(t *testing.T) {
 	}
 }
 
-func TestFirstEndpointStorageReusesTemplatePort(t *testing.T) {
-	env := envWithTemplates()
-	conf, err := allocateEndpointStorageConf(env, "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p, _ := portOf(conf.ListenAddr); p != 9993 {
-		t.Errorf("port = %d, want 9993", p)
-	}
-	if conf.EndpointID != "main" {
-		t.Errorf("endpoint_id = %q, want main", conf.EndpointID)
-	}
-}
-
-func TestSecondEndpointStorageGetsNextFreePort(t *testing.T) {
-	env := envWithTemplates()
-	first, err := allocateEndpointStorageConf(env, "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	env.EndpointStorages = append(env.EndpointStorages, first)
-	conf, err := allocateEndpointStorageConf(env, "ep_b1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Lowest free port of the form base + 2k → 9995.
-	if p, _ := portOf(conf.ListenAddr); p != 9995 {
-		t.Errorf("port = %d, want 9995", p)
-	}
-}
-
-func TestEndpointStorageReusesFreedPortAfterDeprovision(t *testing.T) {
-	env := envWithTemplates()
-	a, _ := allocateEndpointStorageConf(env, "main")
-	env.EndpointStorages = append(env.EndpointStorages, a)
-	b, _ := allocateEndpointStorageConf(env, "ep_b1")
-	env.EndpointStorages = append(env.EndpointStorages, b)
-	// Drop the first endpoint's instance (port 9993 freed).
-	var kept []config.EndpointStorageConf
-	for _, e := range env.EndpointStorages {
-		if e.EndpointID != "main" {
-			kept = append(kept, e)
-		}
-	}
-	env.EndpointStorages = kept
-	conf, err := allocateEndpointStorageConf(env, "ep_b2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p, _ := portOf(conf.ListenAddr); p != 9993 {
-		t.Errorf("port = %d, want 9993 (reused)", p)
-	}
-}
-
 func TestPageserverInitConfPreservesTemplateYbStorageConn(t *testing.T) {
 	env := envWithTemplates()
 	allocated, err := allocatePageserverConf(env, "main")
@@ -235,12 +180,5 @@ func TestMutableChanged(t *testing.T) {
 	env.Safekeepers = append(env.Safekeepers, config.SafekeeperConf{EndpointID: "main"})
 	if !MutableChanged(before, env) {
 		t.Error("appending a safekeeper should report changed")
-	}
-	// Appending an endpoint_storage is a persisted mutation too.
-	env2 := envWithTemplates()
-	before2 := SnapshotMutable(env2)
-	env2.EndpointStorages = append(env2.EndpointStorages, config.EndpointStorageConf{EndpointID: "main"})
-	if !MutableChanged(before2, env2) {
-		t.Error("appending an endpoint_storage should report changed")
 	}
 }

@@ -123,13 +123,12 @@ impl<'de> serde::Deserialize<'de> for HostPorts {
 }
 
 /// The one canonical YugabyteDB connection config — the TOML
-/// `[*.yb]` block every yb-amp daemon (pageserver, safekeeper,
-/// endpoint_storage, controller) deserializes, and what the
-/// diagnostic tools build from their CLI flags. Connection only: which
+/// `[*.yb]` block every yb-amp daemon (pageserver, safekeeper, controller)
+/// deserializes, and what the diagnostic tools build from their CLI flags. Connection only: which
 /// YB to talk to, as whom, over what TLS. It deliberately carries NO
 /// table/schema — each component hardcodes the table(s) it owns
 /// (pageserver → amp_storage.pages/slru_pages/meta, safekeeper →
-/// amp_storage.wals, endpoint_storage → amp_storage.blobs).
+/// amp_storage.wals, compute_ctl → amp_storage.blobs).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct YbConnConfig {
@@ -296,7 +295,7 @@ impl YbConnConfig {
     /// Render as a TOML inline table (`{ key = "val", ... }`) — the wire
     /// form the safekeeper (`yb_storage_conn`) and controller
     /// (`--yb-config`) accept on the command line, and the block the
-    /// pageserver `remote_storage` / endpoint_storage configs embed. The
+    /// pageserver `remote_storage` configs embed. The
     /// inverse of the `Deserialize` impl; identical across all consumers.
     pub fn to_inline_toml(&self) -> String {
         fn q(s: &str) -> String {

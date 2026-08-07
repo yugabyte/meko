@@ -3,7 +3,6 @@
 # Ships, in one image, every process that makes up a yb-amp endpoint:
 #   - yb-pageserver        (page service, backed by YugabyteDB)
 #   - safekeeper           (WAL, backed by YugabyteDB)
-#   - endpoint_storage     (LFC scratch blobs, backed by YugabyteDB)
 #   - compute_ctl + postgres v18 + the `yb_amp` extension (the compute)
 #   - yb-endpoint-supervisor (PID 1 under tini) that renders each service's
 #                          config from environment variables, brings the stack
@@ -86,7 +85,6 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
        cargo build --locked --release \
          --bin yb-pageserver \
          --bin yb-safekeeper \
-         --bin yb-endpoint-storage \
          --bin yb-compute-ctl \
          --bin yb-endpoint-supervisor \
          --bin yb-dump-pages \
@@ -95,7 +93,6 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
     && mkdir -p /home/nonroot/out \
     && cp target/release/yb-pageserver \
           target/release/yb-safekeeper \
-          target/release/yb-endpoint-storage \
           target/release/yb-compute-ctl \
           target/release/yb-endpoint-supervisor \
           target/release/yb-dump-pages \
@@ -135,7 +132,6 @@ RUN set -e \
 # down, next to the ENTRYPOINT that runs it.
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-pageserver      /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-safekeeper          /usr/local/bin/
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-storage    /usr/local/bin/
 COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-compute-ctl         /usr/local/bin/
 
 # Operator diagnostic tools (the tools crate): dump the YB-backed page store /
@@ -168,7 +164,7 @@ USER yugabyte
 
 # Compute Postgres port (overridable via COMPUTE_PORT / chart values).
 EXPOSE 55433
-# pageserver / safekeeper / endpoint_storage HTTP.
-EXPOSE 9898 7676 9993
+# pageserver / safekeeper HTTP.
+EXPOSE 9898 7676
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/yb-endpoint-supervisor"]

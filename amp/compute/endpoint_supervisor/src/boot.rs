@@ -1,12 +1,12 @@
 //! Assembling the pod: what to render, and what to start in what order.
 //!
 //! Everything that decides the shape of the endpoint — the ports, the paths, the
-//! four services and their health probes. Separate from `main` so it is testable
+//! three services and their health probes. Separate from `main` so it is testable
 //! without spawning anything.
 
 use std::time::Duration;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use toml_edit::{InlineTable, Value};
 
 use crate::supervise::{HealthCheck, Service};
@@ -26,7 +26,6 @@ pub struct Layout {
     pub pageserver_grpc_port: u16,
     pub safekeeper_pg_port: u16,
     pub safekeeper_http_port: u16,
-    pub endpoint_storage_http_port: u16,
     /// `compute_ctl`'s own HTTP surface. Its internal port is this plus one.
     pub compute_ctl_http_port: u16,
     /// Postgres major version. The install is version-qualified inside
@@ -51,9 +50,6 @@ impl Layout {
     }
     pub fn sk_datadir(&self) -> Utf8PathBuf {
         self.run_dir.join("safekeeper")
-    }
-    pub fn es_datadir(&self) -> Utf8PathBuf {
-        self.run_dir.join("endpoint_storage")
     }
     pub fn pgdata(&self) -> Utf8PathBuf {
         self.run_dir.join("pgdata")
@@ -164,8 +160,8 @@ pub fn safekeeper_base(l: &Layout, yb_conn_str: String) -> Vec<(&'static str, Va
 /// service start against a dependency that is not ready — and for the pageserver
 /// it would report ready before its branch exists at all.
 ///
-/// The path differs by service: the safekeeper and pageserver serve `/v1/status`,
-/// `endpoint_storage` serves `/status`.
+/// The path is per-service; the safekeeper and pageserver both serve
+/// `/v1/status`.
 pub fn status_probe(port: u16, path: &'static str) -> HealthCheck {
     Box::new(move || crate::coordinate::http_ok(LISTEN_HOST, port, path))
 }
@@ -264,7 +260,7 @@ fn probe_addr(host: &str, port: u16) -> bool {
         .any(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_millis(500)).is_ok())
 }
 
-/// The four services, in the order they must start.
+/// The three services, in the order they must start.
 ///
 /// The order is a real dependency chain, not a preference: `compute_ctl`'s first
 /// act is to fetch a basebackup from the pageserver, and the pageserver streams
@@ -272,20 +268,10 @@ fn probe_addr(host: &str, port: u16) -> bool {
 ///
 /// `compute_ctl` is deliberately **last**, because the pageserver/safekeeper
 /// handshake in [`crate::coordinate`] has to run between the pageserver coming up
-/// and the compute starting. The caller starts the first three, coordinates, then
+/// and the compute starting. The caller starts the first two, coordinates, then
 /// starts the compute.
-pub fn services(l: &Layout, es_config: &Utf8Path) -> Vec<Service> {
+pub fn services(l: &Layout) -> Vec<Service> {
     vec![
-        Service::new(
-            "endpoint_storage",
-            vec![
-                l.bin_dir.join("yb-endpoint-storage").to_string(),
-                es_config.to_string(),
-            ],
-        )
-        .cwd(l.es_datadir())
-        .env("RUST_LOG", "info")
-        .health(status_probe(l.endpoint_storage_http_port, "/status")),
         Service::new(
             "safekeeper",
             vec![
@@ -356,7 +342,6 @@ mod tests {
             pageserver_grpc_port: 51051,
             safekeeper_pg_port: 5454,
             safekeeper_http_port: 7676,
-            endpoint_storage_http_port: 9993,
             compute_ctl_http_port: 3080,
             pg_version_major: 18,
             bind_host: "0.0.0.0".into(),
@@ -367,17 +352,9 @@ mod tests {
     /// The order is the dependency chain; a reshuffle here breaks compute startup.
     #[test]
     fn services_start_in_dependency_order() {
-        let s = services(&layout(), Utf8Path::new("/data/endpoint_storage/cfg.json"));
+        let s = services(&layout());
         let names: Vec<&str> = s.iter().map(|x| x.name.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "endpoint_storage",
-                "safekeeper",
-                "pageserver",
-                "compute_ctl"
-            ]
-        );
+        assert_eq!(names, ["safekeeper", "pageserver", "compute_ctl"]);
     }
 
     /// The image lays Postgres out under `<pg_distrib_dir>/v<major>`, so every
@@ -394,7 +371,7 @@ mod tests {
         // appends the version itself.
         assert_eq!(l.pg_distrib_dir, "/usr/local");
 
-        let s = services(&l, Utf8Path::new("/data/endpoint_storage/cfg.json"));
+        let s = services(&l);
         let compute = s.iter().find(|x| x.name == "compute_ctl").unwrap();
         let argv = compute.argv_for_test();
         let pgbin = argv[argv.iter().position(|a| a == "--pgbin").unwrap() + 1].clone();
@@ -409,7 +386,7 @@ mod tests {
     #[test]
     fn the_compute_argv_matches_the_flags_compute_ctl_declares() {
         let l = layout();
-        let s = services(&l, Utf8Path::new("/data/endpoint_storage/cfg.json"));
+        let s = services(&l);
         let compute = s.iter().find(|x| x.name == "compute_ctl").unwrap();
         let argv = compute.argv_for_test();
 

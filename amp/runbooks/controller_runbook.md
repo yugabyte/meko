@@ -113,12 +113,12 @@ kubectl -n "$NS" logs "$POD" --previous --tail=80
 
 The endpoint supervisor (`compute/endpoint_supervisor`, PID 1) brings services up in a **fixed
 order**, and logs each transition with a `service=` field:
-`endpoint_storage → safekeeper → pageserver → compute_ctl`. The last line *before* the crash tells you
+`safekeeper → pageserver → compute_ctl`. The last line *before* the crash tells you
 which layer failed:
 
 ```
-INFO ...supervise: started service=endpoint_storage pid=14     ← last line ⇒ endpoint_storage failed
-INFO ...supervise: healthy service=endpoint_storage
+INFO ...supervise: started service=safekeeper pid=14           ← last line ⇒ safekeeper failed
+INFO ...supervise: healthy service=safekeeper
 INFO ...supervise: started service=pageserver pid=31
 Error: unknown configuration item(s) in pageserver.toml: …      ← pageserver rejected its config
 ```
@@ -129,7 +129,7 @@ Between the pageserver becoming healthy and the compute starting there is one mo
 `waiting for the pageserver branch` means the pageserver is up but its timeline is not — look at the
 pageserver's own log, not the supervisor's.
 
-How far it got is diagnostic: "endpoint_storage + safekeeper healthy, pageserver fails" means the
+How far it got is diagnostic: "safekeeper healthy, pageserver fails" means the
 backing YB is fine and you've narrowed it to the pageserver's config or binary.
 
 Raise the supervisor's own verbosity with `RUST_LOG=debug` on the pod/container if the `info` lines

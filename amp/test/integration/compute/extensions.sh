@@ -152,7 +152,7 @@ docker rm "$CID" >/dev/null
 #    server binaries are cargo targets; yb_amp_local and the controller are Go
 #    (controller/local/cmd, controller/cmd), built separately below. Mirrors run.sh.
 CLUSTER_BINS=(--bin yb-pageserver --bin yb-safekeeper
-              --bin yb-endpoint-storage --bin yb-compute-ctl)
+              --bin yb-compute-ctl)
 echo ">>> building cluster binaries ($PROFILE)..."
 if [[ $PROFILE == release ]]; then
     cargo build --release "${CLUSTER_BINS[@]}"
@@ -185,7 +185,7 @@ export POSTGRES_DISTRIB_DIR="$REPO/pg_install"
 export LD_LIBRARY_PATH="$PGINST/lib:${LD_LIBRARY_PATH:-}"
 
 # Pick a free port block (base..base+700): SC=base, PS pg/http/grpc=+300/+400/+500,
-# SK=+100/+200, endpoint_storage=+600, compute=+700.
+# SK=+100/+200, compute=+700.
 pick_base() {
     local b
     for b in "${INTEGRATION_PORT_BASE:-53000}" 54000 55000 56000 57000 58000; do

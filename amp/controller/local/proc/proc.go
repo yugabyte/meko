@@ -1,5 +1,5 @@
 // Package proc spawns and stops the background processes that make up a local
-// yb-amp deployment (pageserver, safekeeper, controller, endpoint_storage),
+// yb-amp deployment (pageserver, safekeeper, controller),
 // applying the common log-file and pidfile conventions to each.
 //
 // The launcher does not itself stay running, so it records each spawned process by

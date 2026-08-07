@@ -1,7 +1,7 @@
 # `RemoteStorage` and the `YbStore` backend
 
 `RemoteStorage` is the CRUD-style abstraction the pageserver (and the
-`endpoint_storage` service) use to read and write durable byte-blobs to
+`compute_ctl` for LFC state) use to read and write durable byte-blobs to
 "somewhere that is not the local disk". The trait lives in
 [`compute/libs/remote_storage/src/lib.rs`](../libs/remote_storage/src/lib.rs);
 its one production implementation, `YbStore`, keeps every object as one or
@@ -375,7 +375,7 @@ re-serialized form is missing a key it expects.
 `storage` is a `RemoteStorageKind`, an `#[serde(untagged)]` enum whose only
 variant is `YbStore(YbConnConfig)` (`config.rs:63`). `TypedRemoteStorageKind`
 is the `#[serde(tag = "type")]` sibling used by services such as
-`endpoint_storage` that load their backend from a JSON file at startup.
+`compute_ctl` that load their backend from a JSON document at startup.
 `RemoteStorageConfig::from_toml` / `from_toml_str` parse the pageserver's TOML.
 
 The connection block is the shared `ysql_client::YbConnConfig` (re-exported as

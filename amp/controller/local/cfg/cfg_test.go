@@ -180,25 +180,6 @@ func TestSafekeeperTomlGolden(t *testing.T) {
 	assertEqualTree(t, "safekeeper.toml", decodeTOML(t, got), decodeTOML(t, readGolden(t, "safekeeper.toml")))
 }
 
-// --- endpoint_storage.json ---
-
-func TestEndpointStorageJSONGolden(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "endpoint_storage.json")
-	p := EndpointStorageParams{
-		Listen: "127.0.0.1:30600",
-		YbConn: &config.YbConnConfig{
-			HostPorts: "127.0.0.1:5433",
-			User:      "yugabyte",
-			Dbname:    "amp_golden",
-		},
-	}
-	if err := WriteEndpointStorageJSON(path, p); err != nil {
-		t.Fatalf("WriteEndpointStorageJSON: %v", err)
-	}
-	got, _ := os.ReadFile(path)
-	assertEqualTree(t, "endpoint_storage.json", decodeJSON(t, got), decodeJSON(t, readGolden(t, "endpoint_storage.json")))
-}
-
 // --- config.json (compute spec) + jwks + postgresql.conf ---
 
 func readEd25519PublicKeyPEM(t *testing.T, path string) ed25519.PublicKey {
@@ -272,7 +253,6 @@ func TestConfigJSONGolden(t *testing.T) {
 		PageserverConnstring:  strPtr("postgres://no_user@127.0.0.1:30300?sslmode=disable"),
 		SafekeeperConnstrings: []string{"127.0.0.1:30100"},
 		SkipPgCatalogUpdates:  true,
-		EndpointStorageAddr:   strPtr("127.0.0.1:30600"),
 		ComputeCtlConfig:      ComputeCtlConfig{Jwks: BuildJWKS(pub)},
 	})
 	if err != nil {
@@ -333,4 +313,55 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// The LFC state store is only derived when prewarm is on, and prewarm without a
+// YB block is refused rather than silently producing a spec compute_ctl cannot
+// prewarm from.
+func TestComputeConfigLfcStore(t *testing.T) {
+	base := func() ComputeSpecParams {
+		return ComputeSpecParams{
+			Mode:                 ComputeModePrimary,
+			SkipPgCatalogUpdates: true,
+		}
+	}
+
+	// Off by default: no store, and no error for a missing YB block.
+	cfg, err := BuildComputeConfig(base())
+	if err != nil {
+		t.Fatalf("BuildComputeConfig: %v", err)
+	}
+	if cfg.Spec.YbStorageConn != nil {
+		t.Errorf("store derived without prewarm: %v", cfg.Spec.YbStorageConn)
+	}
+
+	// Prewarm on, YB block present: the store carries the YbStore tag.
+	p := base()
+	p.Autoprewarm = true
+	p.YbConn = &config.YbConnConfig{HostPorts: "h:5433", User: "yugabyte", Dbname: "yb_storage"}
+	cfg, err = BuildComputeConfig(p)
+	if err != nil {
+		t.Fatalf("BuildComputeConfig with prewarm: %v", err)
+	}
+	if got := cfg.Spec.YbStorageConn["type"]; got != "YbStore" {
+		t.Errorf("type = %v, want YbStore", got)
+	}
+	if got := cfg.Spec.YbStorageConn["host_ports"]; got != "h:5433" {
+		t.Errorf("host_ports = %v", got)
+	}
+
+	// Prewarm on, no YB block: refused.
+	p = base()
+	p.Autoprewarm = true
+	if _, err := BuildComputeConfig(p); err == nil {
+		t.Fatal("expected an error when prewarm is enabled without a YB block")
+	}
+
+	// The offload timer alone is enough to need the store.
+	p = base()
+	n := uint64(300)
+	p.OffloadLfcIntervalSeconds = &n
+	if _, err := BuildComputeConfig(p); err == nil {
+		t.Fatal("expected an error when offload is enabled without a YB block")
+	}
 }

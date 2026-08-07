@@ -192,7 +192,7 @@ repo root from its own location, so it works from any working directory
 
 ```sh
 ./yb_amp_local init                          # writes the .yb_amp repo dir
-./yb_amp_local start                         # controller, safekeeper, pageserver, endpoint_storage
+./yb_amp_local start                         # controller, safekeeper, pageserver
 ./yb_amp_local project create main           # a lineage; prints its root branch id
 ./yb_amp_local endpoint create main --branch-id <branch-id>
 ./yb_amp_local endpoint start main
@@ -361,7 +361,6 @@ yb_amp_local
 yb-safekeeper
 controller
 yb-compute-ctl
-yb-endpoint-storage
 tools/                   # yb-dump-pages, yb-dump-wals, yb-reset-consistent-lsn
 lib/                     # libssl/libcrypto 1.1 + libicu 60 (not on stock RHEL 9)
 pg_install/v18/          # patched PG + extensions + the same runtime libs

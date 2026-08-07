@@ -4,7 +4,7 @@
 -- pageserver and the safekeeper.
 --
 -- These schema/table names are HARDCODED by the pageserver/safekeeper/
--- endpoint_storage daemons (e.g. compute/pageserver/src/page_store.rs
+-- storage daemons (e.g. compute/pageserver/src/page_store.rs
 -- DEFAULT_SCHEMA="amp_storage", compute/safekeeper/src/yb_wal_storage.rs
 -- "amp_storage.wals") and bound immediately at daemon startup — they never create
 -- their own schema. So this migration must run before those daemons start.

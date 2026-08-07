@@ -38,7 +38,6 @@ members = [
     "compute/libs/proxy/postgres-types2",
     "compute/libs/proxy/subzero_core",
     "compute/libs/proxy/tokio-postgres2",
-    "compute/endpoint_storage",
     "compute/tools",
     "compute/pgxn/yb_amp/communicator",
     "test/integration/compute",
@@ -256,7 +255,6 @@ yb-postgres-rustls = "0.14.0-yb-1-beta.1"
 ## Local libraries
 compute_api = { version = "0.1", path = "./compute/libs/compute_api/" }
 desim = { version = "0.1", path = "./compute/libs/desim" }
-endpoint_storage = { version = "0.0.1", path = "./compute/endpoint_storage/" }
 http-utils = { version = "0.1", path = "./compute/libs/http-utils/" }
 metrics = { version = "0.1", path = "./compute/libs/metrics/" }
 neon-shmem = { version = "0.1", path = "./compute/libs/neon-shmem/" }

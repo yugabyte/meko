@@ -95,7 +95,7 @@ done
 # from a previous build, which surfaces as baffling runtime mismatches
 # (e.g. a fresh launcher sending a request shape an old controller
 # can't parse). Keep this list in sync with the binaries `yb_amp_local`
-# spawns: controller, yb-pageserver, safekeeper, endpoint_storage,
+# spawns: controller, yb-pageserver, safekeeper,
 # compute_ctl.
 #
 # The diagnostic tools are compiled bins too; the `tools` scenario shells
@@ -109,7 +109,6 @@ done
 CLUSTER_BINS=(
     --bin yb-pageserver
     --bin yb-safekeeper
-    --bin yb-endpoint-storage
     --bin yb-compute-ctl
 )
 TOOL_BINS=(--bin yb-dump-pages --bin yb-dump-wals --bin yb-reset-consistent-lsn)

@@ -68,7 +68,7 @@ replication. For query-level metrics, enable the `stat_statements` collector
 | `endpoint.endpointId` | _(empty)_ | the endpoint's `amp_registry.endpoints` id; lets the supervisor read its own and its branch's `pg_settings` (and the pageserver/safekeeper override columns) from the registry. Empty ⇒ derived defaults only |
 | `endpoint.resources.cpu` / `endpoint.resources.memory` | `2` / `4Gi` | compute reserved for the pod; rendered as request == limit ⇒ Guaranteed QoS |
 | `service.type` | `ClusterIP` | Service type |
-| `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper/endpoint_storage HTTP |
+| `service.exposeInternalHttp` | `false` | also publish pageserver/safekeeper HTTP |
 | `metrics.postgresExporter.enabled` | `true` | run the `postgres_exporter` sidecar (`:9187`) |
 | `metrics.postgresExporter.image.tag` | `v0.17.1` | exporter image tag |
 | `metrics.postgresExporter.extraArgs` | `[]` | extra exporter flags (e.g. `--collector.stat_statements`) |

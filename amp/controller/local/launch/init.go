@@ -33,7 +33,6 @@ const (
 	defaultPageserverHTTPPort uint16 = 9898
 	defaultPageserverGrpcPort uint16 = 51051
 	defaultControlPlanePort   uint16 = 1234
-	defaultEndpointStgPort    uint16 = 9993
 )
 
 const (
@@ -123,7 +122,6 @@ func Init(ctx context.Context, args InitArgs) error {
 	psPg := defaultPageserverPgPort
 	psHTTP := defaultPageserverHTTPPort
 	psGrpc := defaultPageserverGrpcPort
-	esPort := defaultEndpointStgPort
 	cplanePort := defaultControlPlanePort
 	if args.PortBase != nil {
 		b := *args.PortBase
@@ -132,7 +130,6 @@ func Init(ctx context.Context, args InitArgs) error {
 		psPg = b + 300
 		psHTTP = b + 400
 		psGrpc = b + 500
-		esPort = b + 600
 		cplanePort = b
 	}
 	controlPlaneAPI := fmt.Sprintf("http://127.0.0.1:%d/upcall/v1/", cplanePort)
@@ -157,11 +154,6 @@ func Init(ctx context.Context, args InitArgs) error {
 		PgPort:        skPg,
 		HTTPPort:      skHTTP,
 		YbStorageConn: &inlineCopyS,
-	}
-
-	esAddr, err := setAddrPort("127.0.0.1:0", esPort)
-	if err != nil {
-		return err
 	}
 
 	// distrib dirs: pg from POSTGRES_DISTRIB_DIR (or $cwd/pg_install);
@@ -202,11 +194,7 @@ func Init(ctx context.Context, args InitArgs) error {
 		Safekeepers:         []config.SafekeeperConf{},
 		PageserverTemplates: []config.YbAmpLocalInitPageserverConf{psTemplate},
 		SafekeeperTemplates: []config.SafekeeperConf{skTemplate},
-		EndpointStorage: config.EndpointStorageConf{
-			ListenAddr: esAddr,
-		},
-		EndpointStorages: nil,
-		ControlPlaneAPI:  &cplaneAPI,
+		ControlPlaneAPI:     &cplaneAPI,
 	}
 
 	// endpoints dir (the PS+SK pairs are provisioned under it at

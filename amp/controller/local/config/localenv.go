@@ -38,9 +38,6 @@ type LocalEnv struct {
 	PageserverTemplates []YbAmpLocalInitPageserverConf
 	SafekeeperTemplates []SafekeeperConf
 
-	EndpointStorage  EndpointStorageConf
-	EndpointStorages []EndpointStorageConf
-
 	// ControlPlaneAPI is required (Rust unwraps the Option on load).
 	ControlPlaneAPI      string
 	ControlPlaneHooksAPI *string
@@ -72,12 +69,6 @@ func BasePath() (string, error) {
 }
 
 // --- binary path helpers ---
-
-// EndpointStorageBin is the yb-endpoint-storage binary in the yb-amp
-// distribution dir.
-func (e *LocalEnv) EndpointStorageBin() string {
-	return filepath.Join(e.YbAmpDistribDir, "yb-endpoint-storage")
-}
 
 // PageserverBin is the yb-pageserver binary (the process carries the yb-
 // prefix; the crate/folder are bare `pageserver`).
@@ -146,11 +137,6 @@ func (e *LocalEnv) SafekeeperDataDir(endpointID string) string {
 	return filepath.Join(e.EndpointsPath(), endpointID, "safekeeper")
 }
 
-// EndpointStorageDataDir is `endpoints/<endpointID>/endpoint_storage`.
-func (e *LocalEnv) EndpointStorageDataDir(endpointID string) string {
-	return filepath.Join(e.EndpointsPath(), endpointID, "endpoint_storage")
-}
-
 // --- key path helpers ---
 
 // GetPrivateKeyPath resolves the private key path (relative paths are
@@ -199,8 +185,6 @@ func LoadConfig(repopath string) (*LocalEnv, error) {
 		Safekeepers:          onDisk.Safekeepers,
 		PageserverTemplates:  onDisk.PageserverTemplates,
 		SafekeeperTemplates:  onDisk.SafekeeperTemplates,
-		EndpointStorage:      onDisk.EndpointStorage,
-		EndpointStorages:     onDisk.EndpointStorages,
 		ControlPlaneAPI:      *onDisk.ControlPlaneAPI,
 		ControlPlaneHooksAPI: onDisk.ControlPlaneHooksAPI,
 		UseLocalTLS:          onDisk.UseLocalTLS,
@@ -229,8 +213,6 @@ func (e *LocalEnv) toOnDisk() OnDiskConfig {
 		Safekeepers:                e.Safekeepers,
 		PageserverTemplates:        e.PageserverTemplates,
 		SafekeeperTemplates:        e.SafekeeperTemplates,
-		EndpointStorage:            e.EndpointStorage,
-		EndpointStorages:           e.EndpointStorages,
 		ControlPlaneAPI:            &api,
 		ControlPlaneHooksAPI:       e.ControlPlaneHooksAPI,
 		ControlPlaneComputeHookAPI: nil,

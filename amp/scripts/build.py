@@ -75,7 +75,6 @@ DAEMON_BINS = [
     "controller",
     "yb-safekeeper",
     "yb-compute-ctl",
-    "yb-endpoint-storage",
 ]
 # Operator-side diagnostic tools (the `tools` crate, compute/tools/); they
 # share the YbConnArgs connection flags and work against no-TLS and TLS clusters.
@@ -85,7 +84,6 @@ BUILD_CRATES = [
     "pageserver",
     "safekeeper",
     "compute_tools",
-    "endpoint_storage",
     "tools",
 ]
 # Runtime libs not present on stock AlmaLinux/RHEL 9 (OpenSSL 1.1, ICU 60).

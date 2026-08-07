@@ -83,35 +83,38 @@ type PageserverConnectionInfo struct {
 // omitempty). Vec fields become `[]` when empty (non-nil slices). Field
 // order matches the Rust struct.
 type ComputeSpec struct {
-	FormatVersion             float64                   `json:"format_version"`
-	OperationUUID             *string                   `json:"operation_uuid"`
-	Features                  []ComputeFeature          `json:"features"`
-	SwapSizeBytes             *uint64                   `json:"swap_size_bytes"`
-	DiskQuotaBytes            *uint64                   `json:"disk_quota_bytes"`
-	DisableLfcResizing        *bool                     `json:"disable_lfc_resizing"`
-	Cluster                   Cluster                   `json:"cluster"`
-	DeltaOperations           *json.RawMessage          `json:"delta_operations"`
-	SkipPgCatalogUpdates      bool                      `json:"skip_pg_catalog_updates"`
-	StorageBranchID           *config.BranchID          `json:"storage_branch_id"`
-	PageserverConnectionInfo  *PageserverConnectionInfo `json:"pageserver_connection_info"`
-	PageserverConnstring      *string                   `json:"pageserver_connstring"`
-	ProjectID                 *string                   `json:"project_id"`
-	BranchID                  *string                   `json:"branch_id"`
-	EndpointID                *string                   `json:"endpoint_id"`
-	SafekeeperConnstrings     []string                  `json:"safekeeper_connstrings"`
-	Mode                      string                    `json:"mode"`
-	StorageAuthToken          *string                   `json:"storage_auth_token"`
-	RemoteExtensions          *json.RawMessage          `json:"remote_extensions"`
-	PgbouncerSettings         *json.RawMessage          `json:"pgbouncer_settings"`
-	LocalProxyConfig          *json.RawMessage          `json:"local_proxy_config"`
-	ReconfigureConcurrency    int                       `json:"reconfigure_concurrency"`
-	DropSubscriptionsBefore   bool                      `json:"drop_subscriptions_before_start"`
-	AuditLogLevel             string                    `json:"audit_log_level"`
-	LogsExportHost            *string                   `json:"logs_export_host"`
-	EndpointStorageAddr       *string                   `json:"endpoint_storage_addr"`
-	Autoprewarm               bool                      `json:"autoprewarm"`
-	OffloadLfcIntervalSeconds *uint64                   `json:"offload_lfc_interval_seconds"`
-	SuspendTimeoutSeconds     int64                     `json:"suspend_timeout_seconds"`
+	FormatVersion            float64                   `json:"format_version"`
+	OperationUUID            *string                   `json:"operation_uuid"`
+	Features                 []ComputeFeature          `json:"features"`
+	SwapSizeBytes            *uint64                   `json:"swap_size_bytes"`
+	DiskQuotaBytes           *uint64                   `json:"disk_quota_bytes"`
+	DisableLfcResizing       *bool                     `json:"disable_lfc_resizing"`
+	Cluster                  Cluster                   `json:"cluster"`
+	DeltaOperations          *json.RawMessage          `json:"delta_operations"`
+	SkipPgCatalogUpdates     bool                      `json:"skip_pg_catalog_updates"`
+	StorageBranchID          *config.BranchID          `json:"storage_branch_id"`
+	PageserverConnectionInfo *PageserverConnectionInfo `json:"pageserver_connection_info"`
+	PageserverConnstring     *string                   `json:"pageserver_connstring"`
+	ProjectID                *string                   `json:"project_id"`
+	BranchID                 *string                   `json:"branch_id"`
+	EndpointID               *string                   `json:"endpoint_id"`
+	SafekeeperConnstrings    []string                  `json:"safekeeper_connstrings"`
+	Mode                     string                    `json:"mode"`
+	StorageAuthToken         *string                   `json:"storage_auth_token"`
+	RemoteExtensions         *json.RawMessage          `json:"remote_extensions"`
+	PgbouncerSettings        *json.RawMessage          `json:"pgbouncer_settings"`
+	LocalProxyConfig         *json.RawMessage          `json:"local_proxy_config"`
+	ReconfigureConcurrency   int                       `json:"reconfigure_concurrency"`
+	DropSubscriptionsBefore  bool                      `json:"drop_subscriptions_before_start"`
+	AuditLogLevel            string                    `json:"audit_log_level"`
+	LogsExportHost           *string                   `json:"logs_export_host"`
+	// YbStorageConn is the YB blob store compute_ctl reads and writes LFC
+	// state in. Without it prewarm has nowhere to address, so it is required
+	// whenever Autoprewarm or OffloadLfcIntervalSeconds is set.
+	YbStorageConn             map[string]any `json:"yb_storage_conn,omitempty"`
+	Autoprewarm               bool           `json:"autoprewarm"`
+	OffloadLfcIntervalSeconds *uint64        `json:"offload_lfc_interval_seconds"`
+	SuspendTimeoutSeconds     int64          `json:"suspend_timeout_seconds"`
 }
 
 // TlsConfig mirrors compute_api::responses::TlsConfig.
@@ -205,8 +208,9 @@ type ComputeSpecParams struct {
 	SkipPgCatalogUpdates         bool
 	DropSubscriptionsBeforeStart bool
 	// ReconfigureConcurrency defaults to 1 when zero.
-	ReconfigureConcurrency    int
-	EndpointStorageAddr       *string
+	ReconfigureConcurrency int
+	// YbConn is the controller.yb block the LFC state store is derived from.
+	YbConn                    *config.YbConnConfig
 	Autoprewarm               bool
 	OffloadLfcIntervalSeconds *uint64
 	// Features is usually empty; serialized as [].
@@ -252,6 +256,18 @@ func BuildComputeConfig(p ComputeSpecParams) (ComputeConfig, error) {
 	endpointID := p.EndpointID
 	connInfo := p.PageserverConnInfo
 
+	// Only computes that actually prewarm need the store; deriving it
+	// unconditionally would make a YB block mandatory for every local compute.
+	var ybStorageConn map[string]any
+	if p.Autoprewarm || p.OffloadLfcIntervalSeconds != nil {
+		if p.YbConn == nil {
+			return ComputeConfig{}, fmt.Errorf(
+				"compute spec: LFC prewarm is enabled but YbConn is unset; " +
+					"cannot derive the LFC state store")
+		}
+		ybStorageConn = ybConnToStoreJSON(p.YbConn)
+	}
+
 	spec := &ComputeSpec{
 		FormatVersion:      1.0,
 		OperationUUID:      nil,
@@ -286,7 +302,7 @@ func BuildComputeConfig(p ComputeSpecParams) (ComputeConfig, error) {
 		DropSubscriptionsBefore:   p.DropSubscriptionsBeforeStart,
 		AuditLogLevel:             ComputeAuditDisabled,
 		LogsExportHost:            nil,
-		EndpointStorageAddr:       p.EndpointStorageAddr,
+		YbStorageConn:             ybStorageConn,
 		Autoprewarm:               p.Autoprewarm,
 		OffloadLfcIntervalSeconds: p.OffloadLfcIntervalSeconds,
 		SuspendTimeoutSeconds:     -1,
@@ -303,4 +319,48 @@ func WriteComputeConfigJSON(path string, c ComputeConfig) error {
 		return fmt.Errorf("serialize config.json: %w", err)
 	}
 	return writeFile(path, data)
+}
+
+// defaultHotPath mirrors the Rust `HotPath::default()` (and
+// `launch.DefaultYbHotPath`): the lane an absent `hot_path` key selects, so it
+// is never rendered. Duplicated rather than imported because `launch` already
+// imports this package.
+const defaultHotPath = "yb_thin_client"
+
+// ybConnToStoreJSON serializes a YbConnConfig to the JSON object
+// `remote_storage::TypedRemoteStorageKind` deserializes, adding the
+// `type = "YbStore"` discriminator. compute_ctl reads it out of the compute
+// spec to reach the LFC state blob. The field names + skip rules match the Rust
+// `ysql_client::YbConnConfig` serde impl (skip when None / false / default).
+func ybConnToStoreJSON(c *config.YbConnConfig) map[string]any {
+	// serde serializes user/dbname unconditionally (their `default` only
+	// applies on deserialize); emit the raw field values.
+	obj := map[string]any{
+		"host_ports": c.HostPorts,
+		"user":       c.User,
+		"dbname":     c.Dbname,
+	}
+	if c.PasswordEnv != nil {
+		obj["password_env"] = *c.PasswordEnv
+	}
+	if c.Sslmode != nil {
+		obj["sslmode"] = *c.Sslmode
+	}
+	if c.Sslrootcert != nil {
+		obj["sslrootcert"] = *c.Sslrootcert
+	}
+	if c.DisableTransactionalWrites {
+		obj["disable_transactional_writes"] = true
+	}
+	// Only a non-default lane is emitted, mirroring `launch.ybInlineTOML`.
+	// The blob path talks YSQL regardless — it holds no hot-path client — but
+	// the key stays in the shared connection block, so the renderers agree.
+	if c.HotPath != nil && *c.HotPath != defaultHotPath {
+		obj["hot_path"] = *c.HotPath
+	}
+	if c.TserverRPCAddrs != nil {
+		obj["tserver_rpc_addrs"] = *c.TserverRPCAddrs
+	}
+	obj["type"] = "YbStore"
+	return obj
 }

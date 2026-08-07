@@ -18,7 +18,7 @@ import (
 // native crypto/ed25519 keypair marshaled as PKCS#8 (private) / PKIX
 // (public) yields byte-identical key formats to those openssl commands.
 //
-// IMPORTANT: yb-endpoint-storage (Rust) reads the *public* PEM via
+// IMPORTANT: the Rust side reads the *public* PEM via
 // jsonwebtoken's `DecodingKey::from_ed_pem`, which requires a standard
 // SPKI-encoded ed25519 public key. MarshalPKIXPublicKey produces exactly
 // that, so the public PEM stays interoperable with the Rust daemons.

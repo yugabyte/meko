@@ -12,13 +12,13 @@ export SC_BASE=http://<sc-host>:<sc-port>             # controller
 export SK_HOST=...        export SK_PG_PORT=...        # safekeeper PG listen
 export COMPUTE_HOST=...   export COMPUTE_PORT=...      # yb-amp compute
 export YB_HOST=...  export YB_PORT=...  export YB_DB=...   # YugabyteDB backing store
-export YB_STORAGE_PASSWORD=...                            # YB password, used by PS/SK/endpoint-storage
+export YB_STORAGE_PASSWORD=...                            # YB password, used by PS/SK/compute_ctl
 export PSQL=<path-to>/psql
 ```
 Component config locations vary by deployment but typically:
-`pageserver.toml` + `identity.toml` in the PS data dir; the safekeeper/SC/endpoint-storage start
+`pageserver.toml` + `identity.toml` in the PS data dir; the safekeeper/SC start
 scripts; the yb_amp_local repo dir (`.yb_amp/config`, `.yb_amp/endpoints/<ep>/` — which
-holds that endpoint's `pageserver/`, `safekeeper/`, and `endpoint_storage/`).
+holds that endpoint's `pageserver/` and `safekeeper/`).
 
 ---
 
@@ -28,8 +28,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 
 1. **controller** → checkpoint: `curl $SC_BASE/control/v1/node` returns (even if `[]`).
 2. **safekeeper** → checkpoint: its HTTP `/v1/status` (or process up + port listening).
-3. **endpoint_storage** (if used) → checkpoint: process up, no TLS errors in its log.
-4. **pageserver** — *single-branch model (#16)*: the process refuses to start unless
+3. **pageserver** — *single-branch model (#16)*: the process refuses to start unless
    `pageserver.toml` carries `branch_id`. On a fresh repo this is
    normal: `yb_amp_local start` prints `Skipping pageserver …: no timeline identity yet` and
    branch creation bakes the identity in and starts the pageserver itself. Manual
@@ -38,13 +37,13 @@ before moving on — a silent half-failure here surfaces as a confusing error th
    refuse to start if that row is missing (the controller provisions it at branch
    create). How to create the branch comes from the same row, not the toml.
    Checkpoint once started: `curl http://$PS_HOST:$PS_HTTP_PORT/v1/status` returns OK.
-5. **Register SK with the SC** (see "Manual registration"). The pageserver needs no
+4. **Register SK with the SC** (see "Manual registration"). The pageserver needs no
    registration step — it claims its generation itself on every start.
-6. **Create the branch** (via `yb_amp_local project create` for a new lineage, or
+5. **Create the branch** (via `yb_amp_local project create` for a new lineage, or
    `branch create --ancestor-branch-id` to fork one; that seeds
    `amp_storage.branch_state`, and the pageserver bootstraps from it — a NULL ancestor means
    initdb + import, a set one means branch off it — then the branch is created on the safekeeper).
-7. **Create + start the compute endpoint** → checkpoint: `psql … 'SELECT 1'`.
+6. **Create + start the compute endpoint** → checkpoint: `psql … 'SELECT 1'`.
 
 ---
 
@@ -54,7 +53,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | `yb_amp_local init` panics / serde error on the config TOML | init config schema mismatch | **A** |
 | SC: `Migration error: no schema has been selected to create in` | backing DB missing the schema | **B** |
 | SK: `unexpected argument '--<flag>'` | flag removed/renamed in this build | **C** |
-| endpoint_storage / PS: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
+| PS/SK/compute_ctl: `no pg_hba.conf entry … no encryption` | client connected to YB without TLS | **D** |
 | SC node list empty after PS starts; PS log `register: None` | PS didn't auto-register | **E** |
 | PS exits at startup: `pageserver.toml must set branch_id/generation` | single-branch identity missing — launcher hasn't assigned one (run `project create` / `branch create`, or write the identity into pageserver.toml) | — |
 | PS exits at startup: `timeline … has no branch_state row` | the controller never provisioned the branch (wiped YB DB, or the pageserver started without `branch create`) | — |
@@ -80,9 +79,8 @@ by adding the missing/retyped key:
   not `yb_storage_conn={…}`. It carries no `table_name` (each component hardcodes its tables).
 - Missing top-level keys it requires: `default_branch_id`, `generate_local_ssl_certs`,
   `control_plane_api`. A config-load failure in `controller/local/config` on init usually means `control_plane_api` is absent.
-- `[endpoint_storage]` stanza must be present.
-- endpoint_storage `YbStore` derivation needs the `[controller.yb]` block (the shared
-  `host_ports`/`user`/`dbname` connection block) to be present.
+- The `[controller.yb]` block (the shared `host_ports`/`user`/`dbname` connection
+  block) must be present: every component's YB connection is derived from it.
 
 Fix by adding each missing key and re-running init. After a successful init, the generated
 `.yb_amp/config` may **drop the `[[pageservers]]` stanza** when the PS is off-box / self-registering —
@@ -111,9 +109,9 @@ and `--control-file-backend`. Run `<build>/safekeeper --help` and diff against t
 
 ## D. "no pg_hba.conf entry … no encryption" (TLS to YB)
 A client opened a **non-TLS** connection to YugabyteDB, which requires TLS. Seen when the
-endpoint_storage `YbStore` config derived `sslmode:None`. Fix the relevant config to force TLS and
-supply the password env, e.g. in `.yb_amp/endpoints/<ep>/endpoint_storage/endpoint_storage.json` add
-`"sslmode":"require"` and `"password_env":"YB_STORAGE_PASSWORD"`. Any component talking to YB
+a `YbStore` config derived `sslmode:None`. Fix the relevant config to force TLS and
+supply the password env — add `"sslmode":"require"` and
+`"password_env":"YB_STORAGE_PASSWORD"` to the connection block. Any component talking to YB
 (`pageserver.toml yb_storage_conn`, safekeeper `yb_storage_conn`, SC `--database-url`) must specify
 `sslmode=require`/`sslmode="require"`.
 
@@ -175,13 +173,13 @@ If the PS can't pull WAL / find the SK, confirm that key is present and points a
 advertised PG address. There is no `broker_endpoint` in these builds.
 
 ## K. A process refuses to start on a bad config item
-Config is **fail-fast across every process** (pageserver, safekeeper, endpoint_storage,
-controller, and the `yb_amp_local` on-disk config): a config item that is wrong is
+Config is **fail-fast across every process** (pageserver, safekeeper, controller,
+and the `yb_amp_local` on-disk config): a config item that is wrong is
 refused at startup rather than logged and ignored. The classes that abort start-up:
 
 - **Unknown / misspelled / stale key** — e.g. `unknown configuration item(s) in pageserver.toml:
   yb_page_writer.scale_factor`, or serde `unknown field \`foo\``. The pageserver names the offending
-  paths; the safekeeper / endpoint_storage / `--yb-config` (`YbConnConfig`) report the serde field.
+  paths; the safekeeper / `--yb-config` (`YbConnConfig`) report the serde field.
 - **Wrong type / out-of-range value / duplicate key** — already failed at deserialize; unchanged.
 
 A silently-ignored key used to be the trap (the value you intended had no effect). Now it's loud.

@@ -179,7 +179,7 @@ whether it needs updating in this commit:
 | `amp/compute/safekeeper/**`, `amp/compute/libs/safekeeper_api/**`, `amp/compute/libs/walproposer/**` | `amp/compute/architecture/safekeeper.md`, `safekeeper-lsns.md` |
 | `amp/compute/pageserver/**` | `amp/compute/architecture/pageserver.md`, `pageserver-lsns.md`, `pageserver-gc.md` |
 | `amp/controller/internal/registry/**`, `amp/controller/internal/core/**` | `amp/controller/architecture/sc-integration.md` |
-| `amp/compute/endpoint_storage/**`, `amp/compute/libs/remote_storage/**` | `amp/compute/architecture/remote-storage.md` |
+| `amp/compute/libs/remote_storage/**` | `amp/compute/architecture/remote-storage.md` |
 | `amp/compute/pgxn/**`, `amp/compute/compute_tools/**`, `amp/compute/image/**` | `amp/compute/architecture/compute.md`, `compute_ctl.md` |
 | `amp/controller/migrations/**/*.sql`, anything creating/altering `yb_storage` tables | `amp/compute/architecture/yugabyte.md` + the per-subsystem doc owning the table |
 | A binary's CLI surface (clap `Args` structs in `amp/*/src/bin/*.rs`) | the "Run / configure" block in the matching subsystem doc |

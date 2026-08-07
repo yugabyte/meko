@@ -92,13 +92,21 @@ data:
   CONTROLLER_URL: {{ .Values.controller.url | quote }}
   {{- end }}
 
+  # --- LFC prewarm ---
+  # compute_ctl saves and restores the local file cache's contents itself, in YB,
+  # over the YB_* connection above — there is no separate service to address.
+  # Independent of the controller, so this sits outside that block.
+  AUTOPREWARM: {{ .Values.lfc.autoprewarm | quote }}
+  {{- with .Values.lfc.offloadIntervalSeconds }}
+  OFFLOAD_LFC_INTERVAL_SECONDS: {{ . | quote }}
+  {{- end }}
+
   # --- Internal service ports ---
   PAGESERVER_PG_PORT: {{ .Values.ports.pageserverPg | quote }}
   PAGESERVER_HTTP_PORT: {{ .Values.ports.pageserverHttp | quote }}
   PAGESERVER_GRPC_PORT: {{ .Values.ports.pageserverGrpc | quote }}
   SAFEKEEPER_PG_PORT: {{ .Values.ports.safekeeperPg | quote }}
   SAFEKEEPER_HTTP_PORT: {{ .Values.ports.safekeeperHttp | quote }}
-  ENDPOINT_STORAGE_HTTP_PORT: {{ .Values.ports.endpointStorageHttp | quote }}
   COMPUTE_CTL_HTTP_PORT: {{ .Values.ports.computeCtlHttp | quote }}
 
   # --- Supervisor behaviour ---

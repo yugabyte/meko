@@ -1,5 +1,4 @@
-//! The files the supervisor writes before it starts anything: the
-//! `endpoint_storage` config and the compute spec `compute_ctl` consumes.
+//! The compute spec `compute_ctl` consumes, written before anything starts.
 //!
 //! The compute spec's setting order is load-bearing and is the one thing to be
 //! careful about when reading this: `compute_ctl` writes the settings into
@@ -24,18 +23,6 @@ pub fn md5_role_password(password: &str, user: &str) -> String {
     format!("md5{digest:x}")
 }
 
-/// The `endpoint_storage` config: where it listens, and how it reaches YB.
-///
-/// No `pemfile`: the service does not authenticate requests, so there is no key
-/// to verify against. Its config type still accepts the field for endpoints
-/// provisioned earlier, but a new one has no reason to write it.
-pub fn endpoint_storage_config(listen: &str, yb_conn: Value) -> Value {
-    json!({
-        "listen": listen,
-        "yb_storage_conn": yb_conn,
-    })
-}
-
 /// Everything the compute spec needs that is not a Postgres setting.
 pub struct ComputeSpecParams<'a> {
     pub compute_port: u16,
@@ -45,6 +32,16 @@ pub struct ComputeSpecParams<'a> {
     pub shared_preload_libraries: &'a str,
     /// Already md5-hashed; see [`md5_role_password`].
     pub cloud_admin_password_md5: &'a str,
+    /// This endpoint's id, which the LFC state blob is keyed by. Without it
+    /// `compute_ctl` cannot address its own state and prewarm is unavailable.
+    pub endpoint_id: Option<&'a str>,
+    /// The YB blob store `compute_ctl` reads and writes LFC state in, as the
+    /// externally tagged object its spec field deserializes.
+    pub yb_storage_conn: Value,
+    /// Load the previous LFC state on startup.
+    pub autoprewarm: bool,
+    /// Save the LFC state this often. `None` means never.
+    pub offload_lfc_interval_seconds: Option<u64>,
 }
 
 /// Renders the compute spec, layering settings in precedence order.
@@ -119,6 +116,13 @@ pub fn render_compute_spec(
             // serde default, so omitting it fails deserialization outright.
             // -1 means never suspend, which is what a pod-per-endpoint wants.
             "suspend_timeout_seconds": -1,
+            // LFC prewarm: compute_ctl reads and writes the state blob in YB
+            // itself, so the store's connection travels in the spec. endpoint_id
+            // keys the blob; without it there is nothing to address.
+            "endpoint_id": p.endpoint_id,
+            "yb_storage_conn": p.yb_storage_conn,
+            "autoprewarm": p.autoprewarm,
+            "offload_lfc_interval_seconds": p.offload_lfc_interval_seconds,
             "cluster": {
                 "cluster_id": p.branch_id,
                 "name": "compute",
@@ -149,6 +153,11 @@ mod tests {
             pageserver_connstring: "host=127.0.0.1 port=64000",
             shared_preload_libraries: "yb_amp",
             cloud_admin_password_md5: "md5deadbeef",
+            endpoint_id: Some("3f2b1c4e-0000-4000-8000-000000000001"),
+            yb_storage_conn: json!({"type": "YbStore", "host_ports": "h:5433",
+                                    "user": "yugabyte", "dbname": "yb_storage"}),
+            autoprewarm: false,
+            offload_lfc_interval_seconds: None,
         }
     }
 
@@ -261,15 +270,5 @@ mod tests {
             .find(|s| s.name == "max_worker_processes")
             .expect("max_worker_processes");
         assert_eq!(wp.vartype, "integer");
-    }
-
-    #[test]
-    fn endpoint_storage_config_shape() {
-        let cfg =
-            endpoint_storage_config("127.0.0.1:9993", json!({"host_ports": "127.0.0.1:5433"}));
-        assert_eq!(cfg["listen"], "127.0.0.1:9993");
-        assert_eq!(cfg["yb_storage_conn"]["host_ports"], "127.0.0.1:5433");
-        // No key is written or referenced: the service authenticates nothing.
-        assert!(cfg.get("pemfile").is_none(), "{cfg}");
     }
 }

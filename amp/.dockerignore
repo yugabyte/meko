@@ -17,7 +17,7 @@
 # Directories
 !.cargo/
 !.config/
-# compute/ now holds pageserver, safekeeper, endpoint_storage, compute_tools,
+# compute/ now holds pageserver, safekeeper, compute_tools,
 # pgxn (the yb_amp extension), and libs — the whole storage/compute engine.
 !compute/
 !control_plane/

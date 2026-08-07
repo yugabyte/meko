@@ -154,36 +154,6 @@ func allocateSafekeeperConf(env *config.LocalEnv, endpointID string, branchID co
 	return conf, nil
 }
 
-// allocateEndpointStorageConf allocates the endpoint_storage conf for
-// endpointID: the lowest free port of the form template_base + 2k. Mirrors
-// Rust `allocate_endpoint_storage_conf`.
-func allocateEndpointStorageConf(env *config.LocalEnv, endpointID string) (config.EndpointStorageConf, error) {
-	base, err := portOf(env.EndpointStorage.ListenAddr)
-	if err != nil {
-		return config.EndpointStorageConf{}, err
-	}
-	used := map[uint16]bool{}
-	for _, e := range env.EndpointStorages {
-		p, err := portOf(e.ListenAddr)
-		if err != nil {
-			return config.EndpointStorageConf{}, err
-		}
-		used[p] = true
-	}
-	port := base
-	for used[port] {
-		port += 2
-	}
-	addr, err := setAddrPort(env.EndpointStorage.ListenAddr, port)
-	if err != nil {
-		return config.EndpointStorageConf{}, err
-	}
-	return config.EndpointStorageConf{
-		ListenAddr: addr,
-		EndpointID: endpointID,
-	}, nil
-}
-
 // ancestorDurableLSN reads the ancestor branch's durable WAL end (flush_lsn)
 // from its safekeeper — the authoritative branch point. Mirrors Rust
 // `ancestor_durable_lsn`.

@@ -1,7 +1,7 @@
 # Single-container endpoint
 
 A **yb-amp endpoint** is a set of co-located per-endpoint services
-(pageserver, safekeeper, endpoint_storage, the compute). The
+(pageserver, safekeeper, the compute). The
 single-container endpoint packages all of them into **one container
 image** so an endpoint deploys as a single Kubernetes pod (or Docker
 container), backed by an external YugabyteDB.
@@ -25,7 +25,6 @@ starts the services in order, and monitors/restarts them:
 
 ```
  tini ─ yb-endpoint-supervisor
-          ├─ endpoint_storage      (HTTP; LFC scratch blobs → amp_storage.blobs)
           ├─ safekeeper            (WAL → amp_storage.wals)
           ├─ yb-pageserver         (page service → amp_storage.* ; initdb on bootstrap)
           └─ compute_ctl ─ postgres + yb_amp extension   (the compute)

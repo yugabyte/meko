@@ -264,8 +264,6 @@ pub struct ParsedSpec {
     pub pageserver_conninfo: PageserverConnectionInfo,
     pub safekeeper_connstrings: Vec<String>,
     pub storage_auth_token: Option<String>,
-    /// k8s dns name and port
-    pub endpoint_storage_addr: Option<String>,
 }
 
 impl ParsedSpec {
@@ -363,18 +361,12 @@ impl TryFrom<ComputeSpec> for ParsedSpec {
             BranchId::from_str(&guc).context(anyhow::anyhow!("invalid branch id"))?
         };
 
-        let endpoint_storage_addr: Option<String> = spec
-            .endpoint_storage_addr
-            .clone()
-            .or_else(|| spec.cluster.settings.find("yb_amp.endpoint_storage_addr"));
-
         let res = ParsedSpec {
             spec,
             pageserver_conninfo,
             safekeeper_connstrings,
             storage_auth_token,
             branch_id,
-            endpoint_storage_addr,
         };
 
         // Now check validity of the parsed specification
