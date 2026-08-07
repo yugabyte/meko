@@ -9,8 +9,11 @@ description: >-
   surface (`meko/LOCAL_DEV_SETUP.md`, `meko/DEVELOPMENT.md`, migrations), and
   (5) for `amp/**`, the `amp/*/architecture/*.md` docs and `amp/runbooks/*.md`.
   For each, decide whether the change makes it wrong or missing, and update it in
-  the same commit. Also, run the formatter and linter for every language the commit
-  touches before committing — including `cargo fmt` and `cargo clippy` for Rust,
+  the same commit. Then cut the editorial prose the change added — comments that
+  restate the code, doc and runbook paragraphs that say the same thing twice —
+  because reviewers spend their review budget deleting it. Also, run the formatter
+  and linter for every language the commit touches before committing — including
+  `cargo fmt` and `cargo clippy` for Rust,
   which nothing else enforces. Use for `git commit`, `git add`-then-commit,
   `/commit-commands:commit`, `/commit-commands:commit-push-pr`, or any flow that
   ends in a commit.
@@ -29,6 +32,10 @@ So: every commit that touches a subsystem covered by one of these companions mus
 keep that companion accurate, **in the same commit**. Not "follow-up", not
 "TODO" — same commit. If the change doesn't affect a given companion, that's
 fine; you still have to look.
+
+Accurate is not the same as long. The commit is also where you cut the prose the
+change added (Step 3) — a companion nobody will read because it's padded fails the
+same way a stale one does.
 
 ## When to fire
 
@@ -194,7 +201,43 @@ polls, or a startup precondition it diagnoses. **A runbook step that sends an
 operator to the wrong place is actively harmful during an incident**, which is why
 this is a commit-time gate and not a follow-up.
 
-## Step 3 — format and lint clean
+## Step 3 — cut the prose the change added
+
+You have just written or touched comments, docs, arch docs and runbooks. Re-read
+that **text** in the staged diff and delete what a reader doesn't need. Editorial
+prose sends reviewers into deleting text instead of checking the change — to the
+point where architecture-doc diffs stop getting reviewed at all — and each spare
+sentence is one more claim that has to stay true later. The rule is
+[`AGENTS.md > Prose discipline`](../../../AGENTS.md#prose-discipline--write-for-the-reader-not-for-volume);
+it's a gate here because it's easy to hold at the start of a task and gone by the
+end of one, and this is the last point where cutting is free.
+
+```
+git diff --cached -- '*.md'    # the doc/runbook prose; also skim added comments
+```
+
+Cut:
+
+- Comments that restate the line below them, caption an obvious block, or narrate
+  the change ("now we also handle the empty case") — the diff and the commit
+  message already say that.
+- Doc or runbook filler: "In other words…", a recap of context the section already
+  gave, the history of what the code used to do.
+- Any sentence a reader who knows this repo could skip without doing or believing
+  anything differently.
+
+Keep: invariants, ordering constraints, a workaround and its cause, units,
+anything that stops the next reader from making a wrong change. **Motivation is
+not filler** — why a design is the way it is is exactly what a reader can't
+recover from the code, in a doc or a PR description alike. What's being cut is
+text that says the same thing twice, not text that explains.
+
+Don't over-correct. The goal is *fewer, load-bearing* words — not stripped docs.
+Deleting a section that describes live behavior is a worse outcome than leaving it
+wordy, and this applies to **your own diff**, not a cleanup tour of files you
+didn't touch.
+
+## Step 4 — format and lint clean
 
 If the commit touches code, it lands **formatted and lint-clean** for every
 language it touches — same as the companions above, this is part of "landing
@@ -275,7 +318,7 @@ your change, leave those out of this commit.
 Skip this step only when nothing staged is code (pure meko/docs/config commits). It is
 **not** optional just because the warnings are pre-existing.
 
-## Step 4 — update in the same commit
+## Step 5 — update in the same commit
 
 Edit the companions that apply. Do **not** split into a separate "meko/docs/tests
 follow-up" commit — if the code lands and a companion still says the old thing,
@@ -326,6 +369,11 @@ The subject describes the **code** change; companion updates (docs, tests,
 generated files) ride along silently — don't enumerate them in the subject. Call
 out a companion in the body only if it's large or load-bearing.
 
+The body carries the **why** — the constraint, the failure it fixes, the decision
+a reader would otherwise have to reverse-engineer. It is not a file-by-file
+retelling of the diff (`git show` does that better), and a commit whose reasoning
+is obvious from the subject needs no body at all.
+
 ### No agent attribution — message *or* authorship
 
 This is repo policy: **do not mention any AI assistant in commit messages, PR
@@ -366,7 +414,7 @@ across *all* outgoing commits as a last line of defense (for commits that never
 passed through this skill — cherry-picks, rebases, external tools), but the fix
 is cheapest here, at commit time.
 
-## Step 5 — reference and close the tracked ticket
+## Step 6 — reference and close the tracked ticket
 
 If this commit advances or completes a tracked ticket or GitHub issue:
 
@@ -411,6 +459,10 @@ minor." If you can't categorize the skip, default to checking.
 - **Cargo-culting.** Don't add a ceremonial test or a changelog paragraph for
   every commit. Many commits just edit an existing section / extend an existing
   test. Volume is not progress.
+- **Padding the companion instead of updating it.** A doc or runbook edit that
+  adds three paragraphs of framing around the one sentence that actually changed
+  makes the reviewer's job harder, not easier — and it is why architecture-doc
+  diffs go unreviewed. Same for comments that narrate the diff.
 - **Committing with a red linter** because the warnings were already there.
 - **Splitting a companion update into a separate PR** when the underlying code
   change is on this branch. Code and its companions travel together.

@@ -117,6 +117,36 @@ ImageVolume work:
 Old `yugabyte/amp` issue URLs redirect to the new location, so prefer pasting a full URL
 over a bare `#N`.
 
+### Prose discipline — write for the reader, not for volume
+
+AI-written text runs long: PR descriptions that narrate the diff, comments that restate
+the line below them, architecture docs and runbooks padded with editorial framing. It
+reads as thorough and costs real review time — reviewers spend their budget deleting it
+instead of checking the change, and some have stopped reviewing architecture-doc diffs
+altogether. Every extra sentence is also one more claim that has to stay true as the code
+moves, which is why the long version is the *harder* one to maintain.
+
+There are no word counts here. Judge each piece by what a reader who already knows this
+repo needs:
+
+- **Code comments** — the *why*, when it isn't obvious from the code: an invariant, an
+  ordering constraint, a workaround and its cause. Not a restatement of the line below,
+  not section captions, not narration of the change you just made.
+- **PR descriptions** — the motivation (a reviewer who doesn't know why is the expensive
+  case), a high-level summary sized to the change, roughly a line per file, and whatever
+  the reader must *act* on: new config variables, deploy or migration steps. Not a
+  paragraph per file, not a narration of the diff.
+- **Architecture docs and runbooks** — how the system is wired today, why it's built that
+  way, and what an operator does. Cut restated context and the history of what the code
+  used to do.
+- **Commit messages** — subject, plus the why when the why isn't obvious.
+
+The test for a sentence: would a reader who knows this repo do or believe anything
+differently without it? If not, cut it.
+
+The `commit` skill re-checks this at commit time — guidance that lives only here is
+remembered at the start of a task and gone by the end of one.
+
 ### Reviewing
 
 [`REVIEW.md`](REVIEW.md) routes to the right guide — [`amp/REVIEW.md`](amp/REVIEW.md)
@@ -146,7 +176,7 @@ Pointers only; each skill is the authority on its own subject.
 
 | Skill | Read it before |
 |---|---|
-| `commit` | any commit — it gates the companions (docs, tests, generated files, setup) that must travel in the same commit |
+| `commit` | any commit — it gates the companions (docs, tests, generated files, setup) that must travel in the same commit, and the prose trim above |
 | `git-push` | pushing a branch, or refreshing an existing PR |
 | `open-pr` | opening a new PR |
 | `merge-pr` | merging |

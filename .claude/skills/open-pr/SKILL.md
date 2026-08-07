@@ -88,7 +88,12 @@ Use these sections. Drop one only when it truly doesn't apply, and say so:
 - **Deploy notes** — only when runtime setup changes: migrations, required env,
   ordering. Any new `meko/api_server/internal/db/migrations/**` file belongs here.
 
-Keep it crisp. Link related PRs/issues with **full URLs**, never bare `#123`.
+Keep it crisp — size the Summary to the change and hold Files changed to a line
+each. Say **why**, always: a reviewer who has to reverse-engineer the motivation is
+the expensive case. What wastes their time is the other stuff — a description that
+narrates the diff, or a paragraph where a line would do
+([`AGENTS.md > Prose discipline`](../../../AGENTS.md#prose-discipline--write-for-the-reader-not-for-volume)).
+Link related PRs/issues with **full URLs**, never bare `#123`.
 Add `Closes <full issue URL>` when the PR completes a tracked GitHub issue so the
 merge auto-closes it.
 

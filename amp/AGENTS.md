@@ -93,7 +93,9 @@ Code anchors:
   user-facing copy in `src/lib/messages.ts`. Don't add new monolithic pages.
 - **No comments unless the *why* is non-obvious.** Identifiers should
   carry meaning. Don't reference the task/PR/issue in code comments —
-  rot.
+  rot. The same discipline applies to architecture docs, runbooks and PR
+  descriptions, which is where padding hurts most here: see
+  [`AGENTS.md > Prose discipline`](../AGENTS.md#prose-discipline--write-for-the-reader-not-for-volume).
 - **Architecture changes go in the matching `*/architecture/*.md` docs**
   (`compute/architecture/` for the storage/compute engine,
   `controller/architecture/` for the control plane). Code change without doc

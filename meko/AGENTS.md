@@ -178,6 +178,14 @@ you're touching:
 - `api_server/AGENTS.md` — Go REST API (handler → service → repository layering).
 - `meko-provisioner/AGENTS.md` — kubebuilder operator.
 
+## Prose discipline
+
+Comment the *why* when it isn't obvious; keep docs and PR descriptions to what the
+reader needs and must act on. Padding costs reviewers real time and rots — the full
+rule, and the reasoning, is in
+[`AGENTS.md > Prose discipline`](../AGENTS.md#prose-discipline--write-for-the-reader-not-for-volume);
+the `commit` skill re-checks it at commit time.
+
 ## Branch naming
 
 Branches are **`<username>/<kebab-topic>`** — `<username>` is your short handle
@@ -221,7 +229,7 @@ relevant one rather than assuming; nothing here restates their contents.
 
 | Skill | Read it before |
 |---|---|
-| `commit` | any commit — it gates the companions (docs, tests, generated files, setup) that must travel in the same commit, and the subject format |
+| `commit` | any commit — it gates the companions (docs, tests, generated files, setup) that must travel in the same commit, the prose trim, and the subject format |
 | `git-push` | pushing a branch, or refreshing an existing PR |
 | `open-pr` | opening a new PR — title convention and the body sections |
 | `merge-pr` | merging |
