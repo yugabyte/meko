@@ -203,8 +203,8 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
 > `communicator/communicator_bindings.h` (a cbindgen build-script output) → `yb-amp-pg-ext` then can't
 > find it. A clean build (`--no-cache`, or fresh cache) is unaffected. To iterate without a full image
 > rebuild, build the binary alone
-> (`cargo build --release --bin yb-endpoint-supervisor`) and layer it onto the last good image
-> (`FROM <good-image>` + `COPY target/release/yb-endpoint-supervisor /usr/local/bin/`) — it is the last
+> (`cargo build --release --bin endpoint-supervisor`) and layer it onto the last good image
+> (`FROM <good-image>` + `COPY target/release/endpoint-supervisor /usr/local/bin/`) — it is the last
 > binary COPY in the full Dockerfile, so the result matches a from-scratch build with the fix.
 
 ---

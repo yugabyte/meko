@@ -10,7 +10,7 @@ deploy/
   up-gke.sh         # the GKE/GCR-native sibling of up.sh (no aws/ECR; see "GKE / GCR bring-up")
   endpoint/
     Dockerfile      # builds the single-container endpoint image; PID 1 is
-                    # yb-endpoint-supervisor (compute/endpoint_supervisor)
+                    # endpoint-supervisor (compute/endpoint_supervisor)
   controller/
     Dockerfile      # the controller layer: the Go controller (see deploy/controller/README.md, #94)
     redeploy.sh     # (re-)deploy the controller via the yb-amp-controller chart (assumes ns/YB/pull-secret exist)
@@ -339,7 +339,7 @@ task that fails), see [`../runbooks/controller_runbook.md`](../runbooks/controll
 ## What's in the container
 
 One image runs every process that makes up an endpoint, supervised by
-`yb-endpoint-supervisor` (`compute/endpoint_supervisor`) started by `tini` as
+`endpoint-supervisor` (`compute/endpoint_supervisor`) started by `tini` as
 PID 1:
 
 | Service          | Role                                   | Backed by   |

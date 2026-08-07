@@ -4,7 +4,7 @@
 #   - pageserver        (page service, backed by YugabyteDB)
 #   - safekeeper           (WAL, backed by YugabyteDB)
 #   - compute_ctl + postgres v18 + the `yb_amp` extension (the compute)
-#   - yb-endpoint-supervisor (PID 1 under tini) that renders each service's
+#   - endpoint-supervisor (PID 1 under tini) that renders each service's
 #                          config from environment variables, brings the stack
 #                          up in order, and monitors/restarts the children
 #
@@ -86,7 +86,7 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
          --bin pageserver \
          --bin safekeeper \
          --bin compute-ctl \
-         --bin yb-endpoint-supervisor \
+         --bin endpoint-supervisor \
          --bin dump-pages \
          --bin dump-wals \
          --bin reset-consistent-lsn \
@@ -94,7 +94,7 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
     && cp target/release/pageserver \
           target/release/safekeeper \
           target/release/compute-ctl \
-          target/release/yb-endpoint-supervisor \
+          target/release/endpoint-supervisor \
           target/release/dump-pages \
           target/release/dump-wals \
           target/release/reset-consistent-lsn \
@@ -149,7 +149,7 @@ COPY --from=yb-thin-client /home/nonroot/yb_thin_client/lib/libyb_thin_client.so
 COPY --from=build /home/nonroot/pg_install/v18 /usr/local/v18/
 
 # The supervisor — PID 1 under tini (see the ENTRYPOINT below).
-COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/yb-endpoint-supervisor /usr/local/bin/
+COPY --from=build --chown=yugabyte:yugabyte /home/nonroot/out/endpoint-supervisor /usr/local/bin/
 
 # NB: LD_LIBRARY_PATH carries BOTH the Postgres v18 libs and the
 # yb_thin_client shim dir (copied above). `ENV` assigns rather than appends, so
@@ -167,4 +167,4 @@ EXPOSE 55433
 # pageserver / safekeeper HTTP.
 EXPOSE 9898 7676
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/yb-endpoint-supervisor"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/endpoint-supervisor"]

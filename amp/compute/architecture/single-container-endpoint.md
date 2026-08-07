@@ -24,7 +24,7 @@ A supervisor
 starts the services in order, and monitors/restarts them:
 
 ```
- tini ─ yb-endpoint-supervisor
+ tini ─ endpoint-supervisor
           ├─ safekeeper            (WAL → amp_storage.wals)
           ├─ pageserver            (page service → amp_storage.* ; initdb on bootstrap)
           └─ compute_ctl ─ postgres + yb_amp extension   (the compute)

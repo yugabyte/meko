@@ -1,4 +1,4 @@
-//! `yb-endpoint-supervisor` — PID 1 of the endpoint pod.
+//! `endpoint-supervisor` — PID 1 of the endpoint pod.
 //!
 //! An endpoint pod runs three processes: the safekeeper, the
 //! pageserver, and `compute_ctl` with Postgres. This binary renders their config

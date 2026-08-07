@@ -305,7 +305,7 @@ An endpoint is packaged and deployed as a single, self-contained software blob �
 compute, safekeeper, pageserver, compute_ctl, and the otel collector travel together.
 On **Docker** (the first implemented runtime, §5.6) this is **one container** — the
 single-container endpoint image (`deploy/endpoint`), whose processes are brought up
-and supervised by `yb-endpoint-supervisor` under tini. On **Kubernetes** the same
+and supervised by `endpoint-supervisor` under tini. On **Kubernetes** the same
 blob is **one pod per endpoint**; on VMs, a handful of processes on the host.
 
 The unit of deployment, scheduling, replacement, and upgrade is the whole endpoint
