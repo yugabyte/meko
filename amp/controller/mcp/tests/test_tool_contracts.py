@@ -18,7 +18,7 @@ from helpers import RecordingHandler
 # Path fragments for the nested resource ladder, mirroring the controller's
 # /api/v1 routes. Ids here match the kwargs used in the cases below.
 P = "/api/v1/storage-pools/p1"
-PR = f"{P}/projects/pr1"
+PR = f"{P}/clusters/pr1"
 B = f"{PR}/branches/b1"
 E = f"{B}/endpoints/e1"
 
@@ -54,35 +54,35 @@ CASES = [
     ("list_storage_pools", {}, "GET", "/api/v1/storage-pools",
      {"storage_pools": [], "total": 0, "count": 0}),
     ("get_storage_pool", {"pool_id": "p1"}, "GET", P, {"id": "p1"}),
-    ("create_project", {"pool_id": "p1", "name": "db"}, "POST",
-     f"{P}/projects", (202, TASK)),
-    ("list_projects", {"pool_id": "p1"}, "GET", f"{P}/projects",
-     {"projects": [], "total": 0, "count": 0}),
-    ("get_project", {"pool_id": "p1", "project_id": "pr1"}, "GET", PR,
+    ("create_cluster", {"pool_id": "p1", "name": "db"}, "POST",
+     f"{P}/clusters", (202, TASK)),
+    ("list_clusters", {"pool_id": "p1"}, "GET", f"{P}/clusters",
+     {"clusters": [], "total": 0, "count": 0}),
+    ("get_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, "GET", PR,
      {"id": "pr1"}),
-    ("delete_project", {"pool_id": "p1", "project_id": "pr1"}, "DELETE", PR,
+    ("delete_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, "DELETE", PR,
      (202, TASK)),
-    ("create_branch", {"pool_id": "p1", "project_id": "pr1", "name": "f"},
+    ("create_branch", {"pool_id": "p1", "cluster_id": "pr1", "name": "f"},
      "POST", f"{PR}/branches", (202, TASK)),
-    ("list_branches", {"pool_id": "p1", "project_id": "pr1"}, "GET",
+    ("list_branches", {"pool_id": "p1", "cluster_id": "pr1"}, "GET",
      f"{PR}/branches", {"branches": [], "total": 0, "count": 0}),
-    ("get_branch", {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1"},
+    ("get_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
      "GET", B, {"branch_id": "b1"}),
-    ("delete_branch", {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1"},
+    ("delete_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
      "DELETE", B, (202, TASK)),
     ("create_endpoint",
-     {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1"}, "POST",
+     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"}, "POST",
      f"{B}/endpoints", (202, TASK)),
-    ("list_endpoints", {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1"},
+    ("list_endpoints", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
      "GET", f"{B}/endpoints", {"endpoints": [], "total": 0, "count": 0}),
     ("get_endpoint",
-     {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1",
+     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
       "endpoint_id": "e1"}, "GET", E, {"id": "e1"}),
     ("delete_endpoint",
-     {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1",
+     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
       "endpoint_id": "e1"}, "DELETE", E, (202, TASK)),
     ("resize_endpoint",
-     {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1",
+     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
       "endpoint_id": "e1", "cpu": "4"}, "POST", f"{E}/resize", (202, TASK)),
     ("list_tasks", {}, "GET", "/api/v1/tasks",
      {"tasks": [], "total": 0, "count": 0}),
@@ -112,30 +112,30 @@ def test_create_storage_pool_body(wire):
     assert handler.last_json() == {"name": "n", "owner_user_id": "u9"}
 
 
-def test_create_project_includes_pg_version_when_set(wire):
-    handler = wire({f"POST {P}/projects": (202, TASK)})
-    tools.create_project(pool_id="p1", name="db", pg_version=18)
+def test_create_cluster_includes_pg_version_when_set(wire):
+    handler = wire({f"POST {P}/clusters": (202, TASK)})
+    tools.create_cluster(pool_id="p1", name="db", pg_version=18)
     assert handler.last_json() == {"name": "db", "pg_version": 18}
 
 
-def test_create_project_omits_pg_version_when_none(wire):
+def test_create_cluster_omits_pg_version_when_none(wire):
     # Locks the happy path: with no version we send only {name}, so the
     # controller applies its own default (18) — the "17" doc trap can't recur.
-    handler = wire({f"POST {P}/projects": (202, TASK)})
-    tools.create_project(pool_id="p1", name="db")
+    handler = wire({f"POST {P}/clusters": (202, TASK)})
+    tools.create_cluster(pool_id="p1", name="db")
     assert handler.last_json() == {"name": "db"}
 
 
 def test_create_branch_omits_optional_fields(wire):
     handler = wire({f"POST {PR}/branches": (202, TASK)})
-    tools.create_branch(pool_id="p1", project_id="pr1", name="f")
+    tools.create_branch(pool_id="p1", cluster_id="pr1", name="f")
     assert handler.last_json() == {"name": "f"}
 
 
 def test_create_branch_includes_optional_fields(wire):
     handler = wire({f"POST {PR}/branches": (202, TASK)})
     tools.create_branch(
-        pool_id="p1", project_id="pr1", name="f",
+        pool_id="p1", cluster_id="pr1", name="f",
         parent_branch_id="b0", fork_point_lsn="0/16ABCD0",
     )
     assert handler.last_json() == {
@@ -147,7 +147,7 @@ def test_create_endpoint_nests_cpu_and_memory_under_resources(wire):
     # The controller expects a nested `resources` object, NOT flat cpu/memory.
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
     tools.create_endpoint(
-        pool_id="p1", project_id="pr1", branch_id="b1",
+        pool_id="p1", cluster_id="pr1", branch_id="b1",
         role="read_only", disk_type="network", cpu="2", memory="4Gi",
     )
     assert handler.last_json() == {
@@ -159,13 +159,13 @@ def test_create_endpoint_nests_cpu_and_memory_under_resources(wire):
 
 def test_create_endpoint_omits_empty_body_and_resources(wire):
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
-    tools.create_endpoint(pool_id="p1", project_id="pr1", branch_id="b1")
+    tools.create_endpoint(pool_id="p1", cluster_id="pr1", branch_id="b1")
     assert handler.last_json() == {}
 
 
 def test_create_endpoint_partial_resources(wire):
     handler = wire({f"POST {B}/endpoints": (202, TASK)})
-    tools.create_endpoint(pool_id="p1", project_id="pr1", branch_id="b1", cpu="1500m")
+    tools.create_endpoint(pool_id="p1", cluster_id="pr1", branch_id="b1", cpu="1500m")
     assert handler.last_json() == {"resources": {"cpu": "1500m"}}
 
 
@@ -179,17 +179,17 @@ def test_list_omits_pagination_when_unset(wire):
 
 def test_list_sends_pagination_when_set(wire):
     handler = wire({f"GET {PR}/branches": {"branches": []}})
-    tools.list_branches(pool_id="p1", project_id="pr1", limit=50, offset=10)
+    tools.list_branches(pool_id="p1", cluster_id="pr1", limit=50, offset=10)
     assert dict(handler.last.url.params) == {"limit": "50", "offset": "10"}
 
 
 def test_list_tasks_sends_filters(wire):
     handler = wire({"GET /api/v1/tasks": {"tasks": []}})
-    tools.list_tasks(status="failed", kind="create_branch", project_id="pr1")
+    tools.list_tasks(status="failed", kind="create_branch", cluster_id="pr1")
     params = dict(handler.last.url.params)
     assert params["status"] == "failed"
     assert params["kind"] == "create_branch"
-    assert params["project_id"] == "pr1"
+    assert params["cluster_id"] == "pr1"
 
 
 # ---- Sync vs. async contract ----
@@ -206,20 +206,20 @@ def test_create_storage_pool_is_synchronous(wire):
 @pytest.mark.parametrize(
     "name,kwargs,path,method",
     [
-        ("create_project", {"pool_id": "p1", "name": "db"}, f"{P}/projects", "POST"),
-        ("create_branch", {"pool_id": "p1", "project_id": "pr1", "name": "f"},
+        ("create_cluster", {"pool_id": "p1", "name": "db"}, f"{P}/clusters", "POST"),
+        ("create_branch", {"pool_id": "p1", "cluster_id": "pr1", "name": "f"},
          f"{PR}/branches", "POST"),
         ("create_endpoint",
-         {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1"},
+         {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
          f"{B}/endpoints", "POST"),
-        ("delete_project", {"pool_id": "p1", "project_id": "pr1"}, PR, "DELETE"),
-        ("delete_branch", {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1"},
+        ("delete_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, PR, "DELETE"),
+        ("delete_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
          B, "DELETE"),
         ("delete_endpoint",
-         {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1", "endpoint_id": "e1"},
+         {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "endpoint_id": "e1"},
          E, "DELETE"),
         ("resize_endpoint",
-         {"pool_id": "p1", "project_id": "pr1", "branch_id": "b1", "endpoint_id": "e1",
+         {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1", "endpoint_id": "e1",
           "cpu": "4"},
          f"{E}/resize", "POST"),
     ],
@@ -233,7 +233,7 @@ def test_async_tools_return_task_body(wire, name, kwargs, path, method):
 def test_resize_endpoint_nests_cpu_and_memory_under_resources(wire):
     handler = wire({f"POST {E}/resize": (202, TASK)})
     tools.resize_endpoint(
-        pool_id="p1", project_id="pr1", branch_id="b1", endpoint_id="e1",
+        pool_id="p1", cluster_id="pr1", branch_id="b1", endpoint_id="e1",
         cpu="4", memory="8Gi",
     )
     assert handler.last_json() == {"resources": {"cpu": "4", "memory": "8Gi"}}

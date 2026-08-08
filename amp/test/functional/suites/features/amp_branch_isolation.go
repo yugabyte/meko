@@ -29,7 +29,7 @@ func init() {
 
 // runAmpBranchIsolation proves amp's headline branching guarantee — copy-on-write
 // isolation. On a stood-up amp control plane it seeds a known row through an
-// endpoint on the project's default (base) branch, forks a CHILD branch off it,
+// endpoint on the cluster's default (base) branch, forks a CHILD branch off it,
 // and asserts: the child SEES the base's pre-branch data (copy-on-write from the
 // fork point) AND writes on either side are invisible to the other (the branches
 // diverge — a child write never appears on the base, and a base write made after
@@ -55,7 +55,7 @@ func (a *ampFeatureRun) branchIsolation(ctx context.Context) error {
 // branchIsolationSteps drives the copy-on-write assertions over the ampCtl +
 // endpoint-connector seams, so the whole feature (fork, divergent writes,
 // bidirectional isolation) is unit-testable with fakes.
-func branchIsolationSteps(ctx context.Context, cl ampCtl, proj ampProject, childName string, connect endpointConnector) error {
+func branchIsolationSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector) error {
 	// Seed a known row on the base (default) branch.
 	baseEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {

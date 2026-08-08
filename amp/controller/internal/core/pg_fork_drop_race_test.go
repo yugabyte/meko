@@ -74,11 +74,11 @@ func TestPgForkVsDropSerializes(t *testing.T) {
 
 	store := registry.NewStore(pool)
 	b := NewPgBackend(pool)
-	projectID := seedCoreProject(t, ctx, pool)
+	clusterID := seedCoreCluster(t, ctx, pool)
 
 	recordRoot := func(id uuid.UUID, name string) {
 		t.Helper()
-		if err := store.RecordBranch(ctx, projectID, registry.FormatBranchID(id), registry.BranchCreateRecord{
+		if err := store.RecordBranch(ctx, clusterID, registry.FormatBranchID(id), registry.BranchCreateRecord{
 			BranchName: name, PgVersion: 18, StartLSN: "0/0",
 		}); err != nil {
 			t.Fatalf("RecordBranch(%s): %v", name, err)
@@ -86,7 +86,7 @@ func TestPgForkVsDropSerializes(t *testing.T) {
 	}
 	fork := func(child, parent uuid.UUID, name string) error {
 		parentHex := registry.FormatBranchID(parent)
-		return store.RecordBranch(ctx, projectID, registry.FormatBranchID(child), registry.BranchCreateRecord{
+		return store.RecordBranch(ctx, clusterID, registry.FormatBranchID(child), registry.BranchCreateRecord{
 			BranchName: name, PgVersion: 18,
 			AncestorBranchID: &parentHex, StartLSN: "0/16B8",
 		})
@@ -96,7 +96,7 @@ func TestPgForkVsDropSerializes(t *testing.T) {
 	// reusing it keeps the test from drifting from branchColumns.
 	liveBranch := func(id uuid.UUID) bool {
 		t.Helper()
-		_, err := b.getBranchByID(ctx, projectID, id)
+		_, err := b.getBranchByID(ctx, clusterID, id)
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			t.Fatalf("probe branch %s: %v", id, err)
 		}
@@ -117,7 +117,7 @@ func TestPgForkVsDropSerializes(t *testing.T) {
 	// the whole registration rolls back — neither of the child's two rows lands.
 	parent, child := uuid.New(), uuid.New()
 	recordRoot(parent, "race-dropped-parent")
-	if err := b.DeleteBranch(ctx, projectID, parent); err != nil {
+	if err := b.DeleteBranch(ctx, clusterID, parent); err != nil {
 		t.Fatalf("tombstone parent: %v", err)
 	}
 	if err := fork(child, parent, "race-orphan"); !errors.Is(err, registry.ErrNotFound) {
@@ -159,7 +159,7 @@ func TestPgForkVsDropSerializes(t *testing.T) {
 		})
 		wg.Go(func() {
 			<-start
-			r.dropErr = b.DeleteBranch(ctx, projectID, r.parent)
+			r.dropErr = b.DeleteBranch(ctx, clusterID, r.parent)
 		})
 	}
 	close(start)

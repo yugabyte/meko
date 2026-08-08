@@ -125,17 +125,20 @@ func (e ListTasksParamsStatus) Valid() bool {
 // Branch defines model for Branch.
 type Branch struct {
 	// BranchId The branch id (the storage-layer branch id verbatim).
-	BranchId  openapi_types.UUID `json:"branch_id"`
+	BranchId openapi_types.UUID `json:"branch_id"`
+
+	// ClusterId The cluster (control-plane grouping) this branch belongs to.
+	ClusterId openapi_types.UUID `json:"cluster_id"`
 	CreatedAt time.Time          `json:"created_at"`
 
 	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
 	ForkLsn *string `json:"fork_lsn,omitempty"`
 
-	// IsDefault True for a project's default (root) branch.
+	// IsDefault True for a cluster's default (root) branch.
 	IsDefault bool   `json:"is_default"`
 	Name      string `json:"name"`
 
-	// ParentBranchId The branch this one was forked from, or null for a project's default branch. Always in the same project.
+	// ParentBranchId The branch this one was forked from, or null for a cluster's default branch. Always in the same cluster.
 	ParentBranchId *openapi_types.UUID `json:"parent_branch_id,omitempty"`
 
 	// PgSettings Extra PostgreSQL settings applied to every compute on this branch, as
@@ -143,14 +146,35 @@ type Branch struct {
 	// `pg_settings` merge over these and win on a key both define.
 	PgSettings *map[string]string `json:"pg_settings,omitempty"`
 	PgVersion  int                `json:"pg_version"`
-
-	// ProjectId The project (control-plane grouping) this branch belongs to.
-	ProjectId openapi_types.UUID `json:"project_id"`
 }
 
 // BranchList defines model for BranchList.
 type BranchList struct {
 	Branches []Branch `json:"branches"`
+
+	// Count The number of items returned in this response (this page).
+	Count PageCount `json:"count"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
+// Cluster defines model for Cluster.
+type Cluster struct {
+	CreatedAt     time.Time `json:"created_at"`
+	DefaultBranch Branch    `json:"default_branch"`
+
+	// Id The cluster id (a control-plane id; maps to no storage object).
+	Id   openapi_types.UUID `json:"id"`
+	Name string             `json:"name"`
+
+	// StoragePoolId The storage pool this cluster belongs to.
+	StoragePoolId openapi_types.UUID `json:"storage_pool_id"`
+}
+
+// ClusterList defines model for ClusterList.
+type ClusterList struct {
+	Clusters []Cluster `json:"clusters"`
 
 	// Count The number of items returned in this response (this page).
 	Count PageCount `json:"count"`
@@ -165,16 +189,35 @@ type CreateBranchRequest struct {
 	// "0/16ABCD0"). Omit to branch at the parent's latest LSN.
 	ForkPointLsn *string `json:"fork_point_lsn,omitempty"`
 
-	// Name Name for the new branch; unique within the project.
+	// Name Name for the new branch; unique within the cluster.
 	Name string `json:"name"`
 
-	// ParentBranchId The branch to fork from. Defaults to the project's default branch; set it to branch off another branch.
+	// ParentBranchId The branch to fork from. Defaults to the cluster's default branch; set it to branch off another branch.
 	ParentBranchId *openapi_types.UUID `json:"parent_branch_id,omitempty"`
 
 	// PgSettings Extra PostgreSQL settings for the new branch, as `{name: value}`.
 	// They merge over what the branch inherits from its ancestor and win on
 	// a key both define. Omit to inherit unchanged.
 	PgSettings *map[string]string `json:"pg_settings,omitempty"`
+}
+
+// CreateClusterRequest defines model for CreateClusterRequest.
+type CreateClusterRequest struct {
+	// Name Cluster (database) name; unique within the pool. The cluster's default branch is always named "main".
+	Name string `json:"name"`
+
+	// PgVersion Postgres major version for the cluster's default branch. Defaults to 18.
+	PgVersion *int `json:"pg_version,omitempty"`
+
+	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
+	// Kubernetes resource quantity and is applied as BOTH the request and the
+	// limit on the endpoint container, so the pod is scheduled with the
+	// **Guaranteed** QoS class. Omit the object (or either field) to take the
+	// defaults of 2 CPU cores and 4Gi of memory.
+	Resources *EndpointResources `json:"resources,omitempty"`
+
+	// WithWriter When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
+	WithWriter *bool `json:"with_writer,omitempty"`
 }
 
 // CreateEndpointRequest defines model for CreateEndpointRequest.
@@ -243,25 +286,6 @@ type CreateEndpointRequestDiskType string
 // CreateEndpointRequestRole The endpoint's role. A branch admits at most one read_write endpoint.
 type CreateEndpointRequestRole string
 
-// CreateProjectRequest defines model for CreateProjectRequest.
-type CreateProjectRequest struct {
-	// Name Project (database) name; unique within the pool. The project's default branch is always named "main".
-	Name string `json:"name"`
-
-	// PgVersion Postgres major version for the project's default branch. Defaults to 18.
-	PgVersion *int `json:"pg_version,omitempty"`
-
-	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
-	// Kubernetes resource quantity and is applied as BOTH the request and the
-	// limit on the endpoint container, so the pod is scheduled with the
-	// **Guaranteed** QoS class. Omit the object (or either field) to take the
-	// defaults of 2 CPU cores and 4Gi of memory.
-	Resources *EndpointResources `json:"resources,omitempty"`
-
-	// WithWriter When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = project + writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
-	WithWriter *bool `json:"with_writer,omitempty"`
-}
-
 // CreateStoragePoolRequest defines model for CreateStoragePoolRequest.
 type CreateStoragePoolRequest struct {
 	// Id Optional explicit id — e.g. a Meko datapack UUID, so the pool and the datapack share one id (no separate mapping). Omit to auto-generate. Idempotent: re-creating an existing id returns it.
@@ -289,7 +313,10 @@ type Endpoint struct {
 	Address string `json:"address"`
 
 	// BranchId The branch (storage-layer branch id) this endpoint is bound to.
-	BranchId  openapi_types.UUID `json:"branch_id"`
+	BranchId openapi_types.UUID `json:"branch_id"`
+
+	// ClusterId The cluster (control-plane grouping) this endpoint is bound to.
+	ClusterId openapi_types.UUID `json:"cluster_id"`
 	CreatedAt time.Time          `json:"created_at"`
 
 	// ExtendedConfig The `extended_config` this endpoint was created with, verbatim, or
@@ -306,9 +333,6 @@ type Endpoint struct {
 	// winning on a key both define — so read the branch's too if you want
 	// the effective set.
 	PgSettings *map[string]string `json:"pg_settings,omitempty"`
-
-	// ProjectId The project (control-plane grouping) this endpoint is bound to.
-	ProjectId openapi_types.UUID `json:"project_id"`
 
 	// Resources CPU + memory reserved for the endpoint's compute pod. Each value is a
 	// Kubernetes resource quantity and is applied as BOTH the request and the
@@ -369,29 +393,6 @@ type ErrorBody struct {
 // PageCount The number of items returned in this response (this page).
 type PageCount = int
 
-// Project defines model for Project.
-type Project struct {
-	CreatedAt     time.Time `json:"created_at"`
-	DefaultBranch Branch    `json:"default_branch"`
-
-	// Id The project id (a control-plane id; maps to no storage object).
-	Id   openapi_types.UUID `json:"id"`
-	Name string             `json:"name"`
-
-	// StoragePoolId The storage pool this project belongs to.
-	StoragePoolId openapi_types.UUID `json:"storage_pool_id"`
-}
-
-// ProjectList defines model for ProjectList.
-type ProjectList struct {
-	// Count The number of items returned in this response (this page).
-	Count    PageCount `json:"count"`
-	Projects []Project `json:"projects"`
-
-	// Total The number of items matching the request across all pages (ignores limit/offset).
-	Total TotalCount `json:"total"`
-}
-
 // ResizeEndpointRequest Request to change an existing endpoint's compute reservation. cpu/memory
 // are applied as request == limit, so the pod keeps its Guaranteed QoS class
 // (a prerequisite for in-place resize).
@@ -424,14 +425,14 @@ type StoragePoolList struct {
 
 // Task defines model for Task.
 type Task struct {
-	CreatedAt time.Time          `json:"created_at"`
-	Error     *string            `json:"error,omitempty"`
-	Id        openapi_types.UUID `json:"id"`
-	Kind      string             `json:"kind"`
+	ClusterId *openapi_types.UUID `json:"cluster_id,omitempty"`
+	CreatedAt time.Time           `json:"created_at"`
+	Error     *string             `json:"error,omitempty"`
+	Id        openapi_types.UUID  `json:"id"`
+	Kind      string              `json:"kind"`
 
 	// Params The originating request, as opaque JSON.
-	Params    interface{}         `json:"params,omitempty"`
-	ProjectId *openapi_types.UUID `json:"project_id,omitempty"`
+	Params interface{} `json:"params,omitempty"`
 
 	// Result The task's final step result, as opaque JSON — the user-facing
 	// outcome once the task has run. For a `resize_endpoint` task it carries
@@ -465,7 +466,7 @@ type User struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 
-	// IsAdmin Admins skip all pool/project grants. Until auth lands, anyone may create an admin.
+	// IsAdmin Admins skip all pool/cluster grants. Until auth lands, anyone may create an admin.
 	IsAdmin bool `json:"is_admin"`
 }
 
@@ -494,6 +495,9 @@ type Version struct {
 // BranchId defines model for BranchId.
 type BranchId = openapi_types.UUID
 
+// ClusterId defines model for ClusterId.
+type ClusterId = openapi_types.UUID
+
 // EndpointId defines model for EndpointId.
 type EndpointId = openapi_types.UUID
 
@@ -508,9 +512,6 @@ type Offset = int
 
 // PoolId defines model for PoolId.
 type PoolId = openapi_types.UUID
-
-// ProjectId defines model for ProjectId.
-type ProjectId = openapi_types.UUID
 
 // TaskId defines model for TaskId.
 type TaskId = openapi_types.UUID
@@ -542,15 +543,15 @@ type ListStoragePoolsParams struct {
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
-// ListProjectsParams defines parameters for ListProjects.
-type ListProjectsParams struct {
+// ListClustersParams defines parameters for ListClusters.
+type ListClustersParams struct {
 	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
 	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 
-	// IncludeFailed Whether to include projects whose creation failed (an orphan left behind when a `create_project` task failed mid-provisioning). Defaults to `false` — the list is scoped to usable clusters, which is what a picker, a count, or a client that operates on each result wants. Pass `true` (e.g. from an operator's fleet view) to also surface the failed orphans so they can be seen and deleted. Affects both the returned page and its total count, so pagination stays consistent.
+	// IncludeFailed Whether to include clusters whose creation failed (an orphan left behind when a `create_cluster` task failed mid-provisioning). Defaults to `false` — the list is scoped to usable clusters, which is what a picker, a count, or a client that operates on each result wants. Pass `true` (e.g. from an operator's fleet view) to also surface the failed orphans so they can be seen and deleted. Affects both the returned page and its total count, so pagination stays consistent.
 	IncludeFailed *IncludeFailed `form:"include_failed,omitempty" json:"include_failed,omitempty"`
 }
 
@@ -583,11 +584,11 @@ type ListTasksParams struct {
 	// Status Only return tasks in this status.
 	Status *ListTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
 
-	// Kind Only return tasks of this kind (e.g. create_project, delete_branch).
+	// Kind Only return tasks of this kind (e.g. create_cluster, delete_branch).
 	Kind *string `form:"kind,omitempty" json:"kind,omitempty"`
 
-	// ProjectId Only return tasks scoped to this project.
-	ProjectId *openapi_types.UUID `form:"project_id,omitempty" json:"project_id,omitempty"`
+	// ClusterId Only return tasks scoped to this cluster.
+	ClusterId *openapi_types.UUID `form:"cluster_id,omitempty" json:"cluster_id,omitempty"`
 }
 
 // ListTasksParamsStatus defines parameters for ListTasks.
@@ -605,8 +606,8 @@ type ListUsersParams struct {
 // CreateStoragePoolJSONRequestBody defines body for CreateStoragePool for application/json ContentType.
 type CreateStoragePoolJSONRequestBody = CreateStoragePoolRequest
 
-// CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
-type CreateProjectJSONRequestBody = CreateProjectRequest
+// CreateClusterJSONRequestBody defines body for CreateCluster for application/json ContentType.
+type CreateClusterJSONRequestBody = CreateClusterRequest
 
 // CreateBranchJSONRequestBody defines body for CreateBranch for application/json ContentType.
 type CreateBranchJSONRequestBody = CreateBranchRequest
@@ -704,52 +705,52 @@ type ClientInterface interface {
 	// GetStoragePool request
 	GetStoragePool(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ListProjects request
-	ListProjects(ctx context.Context, poolId PoolId, params *ListProjectsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// ListClusters request
+	ListClusters(ctx context.Context, poolId PoolId, params *ListClustersParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// CreateProjectWithBody request with any body
-	CreateProjectWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateClusterWithBody request with any body
+	CreateClusterWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	CreateProject(ctx context.Context, poolId PoolId, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateCluster(ctx context.Context, poolId PoolId, body CreateClusterJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// DeleteProject request
-	DeleteProject(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// DeleteCluster request
+	DeleteCluster(ctx context.Context, poolId PoolId, clusterId ClusterId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// GetProject request
-	GetProject(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// GetCluster request
+	GetCluster(ctx context.Context, poolId PoolId, clusterId ClusterId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListBranches request
-	ListBranches(ctx context.Context, poolId PoolId, projectId ProjectId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListBranches(ctx context.Context, poolId PoolId, clusterId ClusterId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateBranchWithBody request with any body
-	CreateBranchWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateBranchWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	CreateBranch(ctx context.Context, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateBranch(ctx context.Context, poolId PoolId, clusterId ClusterId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeleteBranch request
-	DeleteBranch(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	DeleteBranch(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetBranch request
-	GetBranch(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	GetBranch(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListEndpoints request
-	ListEndpoints(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ListEndpoints(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateEndpointWithBody request with any body
-	CreateEndpointWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateEndpointWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	CreateEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeleteEndpoint request
-	DeleteEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	DeleteEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetEndpoint request
-	GetEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
+	GetEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ResizeEndpointWithBody request with any body
-	ResizeEndpointWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ResizeEndpointWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	ResizeEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ResizeEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListTasks request
 	ListTasks(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -820,8 +821,8 @@ func (c *Client) GetStoragePool(ctx context.Context, poolId PoolId, reqEditors .
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListProjects(ctx context.Context, poolId PoolId, params *ListProjectsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListProjectsRequest(c.Server, poolId, params)
+func (c *Client) ListClusters(ctx context.Context, poolId PoolId, params *ListClustersParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListClustersRequest(c.Server, poolId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -832,8 +833,8 @@ func (c *Client) ListProjects(ctx context.Context, poolId PoolId, params *ListPr
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateProjectWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateProjectRequestWithBody(c.Server, poolId, contentType, body)
+func (c *Client) CreateClusterWithBody(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateClusterRequestWithBody(c.Server, poolId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -844,8 +845,8 @@ func (c *Client) CreateProjectWithBody(ctx context.Context, poolId PoolId, conte
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateProject(ctx context.Context, poolId PoolId, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateProjectRequest(c.Server, poolId, body)
+func (c *Client) CreateCluster(ctx context.Context, poolId PoolId, body CreateClusterJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateClusterRequest(c.Server, poolId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -856,8 +857,8 @@ func (c *Client) CreateProject(ctx context.Context, poolId PoolId, body CreatePr
 	return c.Client.Do(req)
 }
 
-func (c *Client) DeleteProject(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteProjectRequest(c.Server, poolId, projectId)
+func (c *Client) DeleteCluster(ctx context.Context, poolId PoolId, clusterId ClusterId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteClusterRequest(c.Server, poolId, clusterId)
 	if err != nil {
 		return nil, err
 	}
@@ -868,8 +869,8 @@ func (c *Client) DeleteProject(ctx context.Context, poolId PoolId, projectId Pro
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetProject(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetProjectRequest(c.Server, poolId, projectId)
+func (c *Client) GetCluster(ctx context.Context, poolId PoolId, clusterId ClusterId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetClusterRequest(c.Server, poolId, clusterId)
 	if err != nil {
 		return nil, err
 	}
@@ -880,8 +881,8 @@ func (c *Client) GetProject(ctx context.Context, poolId PoolId, projectId Projec
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListBranches(ctx context.Context, poolId PoolId, projectId ProjectId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListBranchesRequest(c.Server, poolId, projectId, params)
+func (c *Client) ListBranches(ctx context.Context, poolId PoolId, clusterId ClusterId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListBranchesRequest(c.Server, poolId, clusterId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -892,8 +893,8 @@ func (c *Client) ListBranches(ctx context.Context, poolId PoolId, projectId Proj
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateBranchWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateBranchRequestWithBody(c.Server, poolId, projectId, contentType, body)
+func (c *Client) CreateBranchWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateBranchRequestWithBody(c.Server, poolId, clusterId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -904,8 +905,8 @@ func (c *Client) CreateBranchWithBody(ctx context.Context, poolId PoolId, projec
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateBranch(ctx context.Context, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateBranchRequest(c.Server, poolId, projectId, body)
+func (c *Client) CreateBranch(ctx context.Context, poolId PoolId, clusterId ClusterId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateBranchRequest(c.Server, poolId, clusterId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -916,8 +917,8 @@ func (c *Client) CreateBranch(ctx context.Context, poolId PoolId, projectId Proj
 	return c.Client.Do(req)
 }
 
-func (c *Client) DeleteBranch(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteBranchRequest(c.Server, poolId, projectId, branchId)
+func (c *Client) DeleteBranch(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteBranchRequest(c.Server, poolId, clusterId, branchId)
 	if err != nil {
 		return nil, err
 	}
@@ -928,8 +929,8 @@ func (c *Client) DeleteBranch(ctx context.Context, poolId PoolId, projectId Proj
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetBranch(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetBranchRequest(c.Server, poolId, projectId, branchId)
+func (c *Client) GetBranch(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetBranchRequest(c.Server, poolId, clusterId, branchId)
 	if err != nil {
 		return nil, err
 	}
@@ -940,8 +941,8 @@ func (c *Client) GetBranch(ctx context.Context, poolId PoolId, projectId Project
 	return c.Client.Do(req)
 }
 
-func (c *Client) ListEndpoints(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewListEndpointsRequest(c.Server, poolId, projectId, branchId, params)
+func (c *Client) ListEndpoints(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListEndpointsRequest(c.Server, poolId, clusterId, branchId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -952,8 +953,8 @@ func (c *Client) ListEndpoints(ctx context.Context, poolId PoolId, projectId Pro
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateEndpointWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateEndpointRequestWithBody(c.Server, poolId, projectId, branchId, contentType, body)
+func (c *Client) CreateEndpointWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateEndpointRequestWithBody(c.Server, poolId, clusterId, branchId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -964,8 +965,8 @@ func (c *Client) CreateEndpointWithBody(ctx context.Context, poolId PoolId, proj
 	return c.Client.Do(req)
 }
 
-func (c *Client) CreateEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewCreateEndpointRequest(c.Server, poolId, projectId, branchId, body)
+func (c *Client) CreateEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateEndpointRequest(c.Server, poolId, clusterId, branchId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -976,8 +977,8 @@ func (c *Client) CreateEndpoint(ctx context.Context, poolId PoolId, projectId Pr
 	return c.Client.Do(req)
 }
 
-func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewDeleteEndpointRequest(c.Server, poolId, projectId, branchId, endpointId)
+func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteEndpointRequest(c.Server, poolId, clusterId, branchId, endpointId)
 	if err != nil {
 		return nil, err
 	}
@@ -988,8 +989,8 @@ func (c *Client) DeleteEndpoint(ctx context.Context, poolId PoolId, projectId Pr
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetEndpointRequest(c.Server, poolId, projectId, branchId, endpointId)
+func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetEndpointRequest(c.Server, poolId, clusterId, branchId, endpointId)
 	if err != nil {
 		return nil, err
 	}
@@ -1000,8 +1001,8 @@ func (c *Client) GetEndpoint(ctx context.Context, poolId PoolId, projectId Proje
 	return c.Client.Do(req)
 }
 
-func (c *Client) ResizeEndpointWithBody(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewResizeEndpointRequestWithBody(c.Server, poolId, projectId, branchId, endpointId, contentType, body)
+func (c *Client) ResizeEndpointWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResizeEndpointRequestWithBody(c.Server, poolId, clusterId, branchId, endpointId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1012,8 +1013,8 @@ func (c *Client) ResizeEndpointWithBody(ctx context.Context, poolId PoolId, proj
 	return c.Client.Do(req)
 }
 
-func (c *Client) ResizeEndpoint(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewResizeEndpointRequest(c.Server, poolId, projectId, branchId, endpointId, body)
+func (c *Client) ResizeEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResizeEndpointRequest(c.Server, poolId, clusterId, branchId, endpointId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1248,8 +1249,8 @@ func NewGetStoragePoolRequest(server string, poolId PoolId) (*http.Request, erro
 	return req, nil
 }
 
-// NewListProjectsRequest generates requests for ListProjects
-func NewListProjectsRequest(server string, poolId PoolId, params *ListProjectsParams) (*http.Request, error) {
+// NewListClustersRequest generates requests for ListClusters
+func NewListClustersRequest(server string, poolId PoolId, params *ListClustersParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1264,7 +1265,7 @@ func NewListProjectsRequest(server string, poolId PoolId, params *ListProjectsPa
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects", pathParam0)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1333,19 +1334,19 @@ func NewListProjectsRequest(server string, poolId PoolId, params *ListProjectsPa
 	return req, nil
 }
 
-// NewCreateProjectRequest calls the generic CreateProject builder with application/json body
-func NewCreateProjectRequest(server string, poolId PoolId, body CreateProjectJSONRequestBody) (*http.Request, error) {
+// NewCreateClusterRequest calls the generic CreateCluster builder with application/json body
+func NewCreateClusterRequest(server string, poolId PoolId, body CreateClusterJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewCreateProjectRequestWithBody(server, poolId, "application/json", bodyReader)
+	return NewCreateClusterRequestWithBody(server, poolId, "application/json", bodyReader)
 }
 
-// NewCreateProjectRequestWithBody generates requests for CreateProject with any type of body
-func NewCreateProjectRequestWithBody(server string, poolId PoolId, contentType string, body io.Reader) (*http.Request, error) {
+// NewCreateClusterRequestWithBody generates requests for CreateCluster with any type of body
+func NewCreateClusterRequestWithBody(server string, poolId PoolId, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1360,7 +1361,7 @@ func NewCreateProjectRequestWithBody(server string, poolId PoolId, contentType s
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects", pathParam0)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1380,8 +1381,8 @@ func NewCreateProjectRequestWithBody(server string, poolId PoolId, contentType s
 	return req, nil
 }
 
-// NewDeleteProjectRequest generates requests for DeleteProject
-func NewDeleteProjectRequest(server string, poolId PoolId, projectId ProjectId) (*http.Request, error) {
+// NewDeleteClusterRequest generates requests for DeleteCluster
+func NewDeleteClusterRequest(server string, poolId PoolId, clusterId ClusterId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1393,7 +1394,7 @@ func NewDeleteProjectRequest(server string, poolId PoolId, projectId ProjectId) 
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1403,7 +1404,7 @@ func NewDeleteProjectRequest(server string, poolId PoolId, projectId ProjectId) 
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s", pathParam0, pathParam1)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s", pathParam0, pathParam1)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1421,8 +1422,8 @@ func NewDeleteProjectRequest(server string, poolId PoolId, projectId ProjectId) 
 	return req, nil
 }
 
-// NewGetProjectRequest generates requests for GetProject
-func NewGetProjectRequest(server string, poolId PoolId, projectId ProjectId) (*http.Request, error) {
+// NewGetClusterRequest generates requests for GetCluster
+func NewGetClusterRequest(server string, poolId PoolId, clusterId ClusterId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1434,7 +1435,7 @@ func NewGetProjectRequest(server string, poolId PoolId, projectId ProjectId) (*h
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1444,7 +1445,7 @@ func NewGetProjectRequest(server string, poolId PoolId, projectId ProjectId) (*h
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s", pathParam0, pathParam1)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s", pathParam0, pathParam1)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1463,7 +1464,7 @@ func NewGetProjectRequest(server string, poolId PoolId, projectId ProjectId) (*h
 }
 
 // NewListBranchesRequest generates requests for ListBranches
-func NewListBranchesRequest(server string, poolId PoolId, projectId ProjectId, params *ListBranchesParams) (*http.Request, error) {
+func NewListBranchesRequest(server string, poolId PoolId, clusterId ClusterId, params *ListBranchesParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1475,7 +1476,7 @@ func NewListBranchesRequest(server string, poolId PoolId, projectId ProjectId, p
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1485,7 +1486,7 @@ func NewListBranchesRequest(server string, poolId PoolId, projectId ProjectId, p
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches", pathParam0, pathParam1)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches", pathParam0, pathParam1)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1543,18 +1544,18 @@ func NewListBranchesRequest(server string, poolId PoolId, projectId ProjectId, p
 }
 
 // NewCreateBranchRequest calls the generic CreateBranch builder with application/json body
-func NewCreateBranchRequest(server string, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody) (*http.Request, error) {
+func NewCreateBranchRequest(server string, poolId PoolId, clusterId ClusterId, body CreateBranchJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewCreateBranchRequestWithBody(server, poolId, projectId, "application/json", bodyReader)
+	return NewCreateBranchRequestWithBody(server, poolId, clusterId, "application/json", bodyReader)
 }
 
 // NewCreateBranchRequestWithBody generates requests for CreateBranch with any type of body
-func NewCreateBranchRequestWithBody(server string, poolId PoolId, projectId ProjectId, contentType string, body io.Reader) (*http.Request, error) {
+func NewCreateBranchRequestWithBody(server string, poolId PoolId, clusterId ClusterId, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1566,7 +1567,7 @@ func NewCreateBranchRequestWithBody(server string, poolId PoolId, projectId Proj
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1576,7 +1577,7 @@ func NewCreateBranchRequestWithBody(server string, poolId PoolId, projectId Proj
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches", pathParam0, pathParam1)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches", pathParam0, pathParam1)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1597,7 +1598,7 @@ func NewCreateBranchRequestWithBody(server string, poolId PoolId, projectId Proj
 }
 
 // NewDeleteBranchRequest generates requests for DeleteBranch
-func NewDeleteBranchRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId) (*http.Request, error) {
+func NewDeleteBranchRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1609,7 +1610,7 @@ func NewDeleteBranchRequest(server string, poolId PoolId, projectId ProjectId, b
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1626,7 +1627,7 @@ func NewDeleteBranchRequest(server string, poolId PoolId, projectId ProjectId, b
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s", pathParam0, pathParam1, pathParam2)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s", pathParam0, pathParam1, pathParam2)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1645,7 +1646,7 @@ func NewDeleteBranchRequest(server string, poolId PoolId, projectId ProjectId, b
 }
 
 // NewGetBranchRequest generates requests for GetBranch
-func NewGetBranchRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId) (*http.Request, error) {
+func NewGetBranchRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1657,7 +1658,7 @@ func NewGetBranchRequest(server string, poolId PoolId, projectId ProjectId, bran
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1674,7 +1675,7 @@ func NewGetBranchRequest(server string, poolId PoolId, projectId ProjectId, bran
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s", pathParam0, pathParam1, pathParam2)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s", pathParam0, pathParam1, pathParam2)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1693,7 +1694,7 @@ func NewGetBranchRequest(server string, poolId PoolId, projectId ProjectId, bran
 }
 
 // NewListEndpointsRequest generates requests for ListEndpoints
-func NewListEndpointsRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams) (*http.Request, error) {
+func NewListEndpointsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, params *ListEndpointsParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1705,7 +1706,7 @@ func NewListEndpointsRequest(server string, poolId PoolId, projectId ProjectId, 
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1722,7 +1723,7 @@ func NewListEndpointsRequest(server string, poolId PoolId, projectId ProjectId, 
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints", pathParam0, pathParam1, pathParam2)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints", pathParam0, pathParam1, pathParam2)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1780,18 +1781,18 @@ func NewListEndpointsRequest(server string, poolId PoolId, projectId ProjectId, 
 }
 
 // NewCreateEndpointRequest calls the generic CreateEndpoint builder with application/json body
-func NewCreateEndpointRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody) (*http.Request, error) {
+func NewCreateEndpointRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, body CreateEndpointJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewCreateEndpointRequestWithBody(server, poolId, projectId, branchId, "application/json", bodyReader)
+	return NewCreateEndpointRequestWithBody(server, poolId, clusterId, branchId, "application/json", bodyReader)
 }
 
 // NewCreateEndpointRequestWithBody generates requests for CreateEndpoint with any type of body
-func NewCreateEndpointRequestWithBody(server string, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader) (*http.Request, error) {
+func NewCreateEndpointRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1803,7 +1804,7 @@ func NewCreateEndpointRequestWithBody(server string, poolId PoolId, projectId Pr
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1820,7 +1821,7 @@ func NewCreateEndpointRequestWithBody(server string, poolId PoolId, projectId Pr
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints", pathParam0, pathParam1, pathParam2)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints", pathParam0, pathParam1, pathParam2)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1841,7 +1842,7 @@ func NewCreateEndpointRequestWithBody(server string, poolId PoolId, projectId Pr
 }
 
 // NewDeleteEndpointRequest generates requests for DeleteEndpoint
-func NewDeleteEndpointRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) (*http.Request, error) {
+func NewDeleteEndpointRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1853,7 +1854,7 @@ func NewDeleteEndpointRequest(server string, poolId PoolId, projectId ProjectId,
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1877,7 +1878,7 @@ func NewDeleteEndpointRequest(server string, poolId PoolId, projectId ProjectId,
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints/%s", pathParam0, pathParam1, pathParam2, pathParam3)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s", pathParam0, pathParam1, pathParam2, pathParam3)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1896,7 +1897,7 @@ func NewDeleteEndpointRequest(server string, poolId PoolId, projectId ProjectId,
 }
 
 // NewGetEndpointRequest generates requests for GetEndpoint
-func NewGetEndpointRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) (*http.Request, error) {
+func NewGetEndpointRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1908,7 +1909,7 @@ func NewGetEndpointRequest(server string, poolId PoolId, projectId ProjectId, br
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1932,7 +1933,7 @@ func NewGetEndpointRequest(server string, poolId PoolId, projectId ProjectId, br
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints/%s", pathParam0, pathParam1, pathParam2, pathParam3)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s", pathParam0, pathParam1, pathParam2, pathParam3)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1951,18 +1952,18 @@ func NewGetEndpointRequest(server string, poolId PoolId, projectId ProjectId, br
 }
 
 // NewResizeEndpointRequest calls the generic ResizeEndpoint builder with application/json body
-func NewResizeEndpointRequest(server string, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody) (*http.Request, error) {
+func NewResizeEndpointRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewResizeEndpointRequestWithBody(server, poolId, projectId, branchId, endpointId, "application/json", bodyReader)
+	return NewResizeEndpointRequestWithBody(server, poolId, clusterId, branchId, endpointId, "application/json", bodyReader)
 }
 
 // NewResizeEndpointRequestWithBody generates requests for ResizeEndpoint with any type of body
-func NewResizeEndpointRequestWithBody(server string, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader) (*http.Request, error) {
+func NewResizeEndpointRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1974,7 +1975,7 @@ func NewResizeEndpointRequestWithBody(server string, poolId PoolId, projectId Pr
 
 	var pathParam1 string
 
-	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projectId", projectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
 	if err != nil {
 		return nil, err
 	}
@@ -1998,7 +1999,7 @@ func NewResizeEndpointRequestWithBody(server string, poolId PoolId, projectId Pr
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/storage-pools/%s/projects/%s/branches/%s/endpoints/%s/resize", pathParam0, pathParam1, pathParam2, pathParam3)
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s/resize", pathParam0, pathParam1, pathParam2, pathParam3)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -2094,9 +2095,9 @@ func NewListTasksRequest(server string, params *ListTasksParams) (*http.Request,
 
 		}
 
-		if params.ProjectId != nil {
+		if params.ClusterId != nil {
 
-			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "project_id", *params.ProjectId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: "uuid"}); err != nil {
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cluster_id", *params.ClusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: "uuid"}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -2375,52 +2376,52 @@ type ClientWithResponsesInterface interface {
 	// GetStoragePoolWithResponse request
 	GetStoragePoolWithResponse(ctx context.Context, poolId PoolId, reqEditors ...RequestEditorFn) (*GetStoragePoolResponse, error)
 
-	// ListProjectsWithResponse request
-	ListProjectsWithResponse(ctx context.Context, poolId PoolId, params *ListProjectsParams, reqEditors ...RequestEditorFn) (*ListProjectsResponse, error)
+	// ListClustersWithResponse request
+	ListClustersWithResponse(ctx context.Context, poolId PoolId, params *ListClustersParams, reqEditors ...RequestEditorFn) (*ListClustersResponse, error)
 
-	// CreateProjectWithBodyWithResponse request with any body
-	CreateProjectWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
+	// CreateClusterWithBodyWithResponse request with any body
+	CreateClusterWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateClusterResponse, error)
 
-	CreateProjectWithResponse(ctx context.Context, poolId PoolId, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error)
+	CreateClusterWithResponse(ctx context.Context, poolId PoolId, body CreateClusterJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateClusterResponse, error)
 
-	// DeleteProjectWithResponse request
-	DeleteProjectWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*DeleteProjectResponse, error)
+	// DeleteClusterWithResponse request
+	DeleteClusterWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, reqEditors ...RequestEditorFn) (*DeleteClusterResponse, error)
 
-	// GetProjectWithResponse request
-	GetProjectWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*GetProjectResponse, error)
+	// GetClusterWithResponse request
+	GetClusterWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, reqEditors ...RequestEditorFn) (*GetClusterResponse, error)
 
 	// ListBranchesWithResponse request
-	ListBranchesWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*ListBranchesResponse, error)
+	ListBranchesWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*ListBranchesResponse, error)
 
 	// CreateBranchWithBodyWithResponse request with any body
-	CreateBranchWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error)
+	CreateBranchWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error)
 
-	CreateBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error)
+	CreateBranchWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error)
 
 	// DeleteBranchWithResponse request
-	DeleteBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*DeleteBranchResponse, error)
+	DeleteBranchWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, reqEditors ...RequestEditorFn) (*DeleteBranchResponse, error)
 
 	// GetBranchWithResponse request
-	GetBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*GetBranchResponse, error)
+	GetBranchWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, reqEditors ...RequestEditorFn) (*GetBranchResponse, error)
 
 	// ListEndpointsWithResponse request
-	ListEndpointsWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error)
+	ListEndpointsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error)
 
 	// CreateEndpointWithBodyWithResponse request with any body
-	CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
+	CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
 
-	CreateEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
+	CreateEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error)
 
 	// DeleteEndpointWithResponse request
-	DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error)
+	DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error)
 
 	// GetEndpointWithResponse request
-	GetEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error)
+	GetEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error)
 
 	// ResizeEndpointWithBodyWithResponse request with any body
-	ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
+	ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
 
-	ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
+	ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
 
 	// ListTasksWithResponse request
 	ListTasksWithResponse(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*ListTasksResponse, error)
@@ -2542,17 +2543,17 @@ func (r GetStoragePoolResponse) ContentType() string {
 	return ""
 }
 
-type ListProjectsResponse struct {
+type ListClustersResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON200      *ProjectList
+	JSON200      *ClusterList
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
 }
 
 // Status returns HTTPResponse.Status
-func (r ListProjectsResponse) Status() string {
+func (r ListClustersResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -2560,7 +2561,7 @@ func (r ListProjectsResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r ListProjectsResponse) StatusCode() int {
+func (r ListClustersResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2568,14 +2569,14 @@ func (r ListProjectsResponse) StatusCode() int {
 }
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r ListProjectsResponse) ContentType() string {
+func (r ListClustersResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
 	return ""
 }
 
-type CreateProjectResponse struct {
+type CreateClusterResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON202      *Accepted
@@ -2585,7 +2586,7 @@ type CreateProjectResponse struct {
 }
 
 // Status returns HTTPResponse.Status
-func (r CreateProjectResponse) Status() string {
+func (r CreateClusterResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -2593,7 +2594,7 @@ func (r CreateProjectResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r CreateProjectResponse) StatusCode() int {
+func (r CreateClusterResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2601,14 +2602,14 @@ func (r CreateProjectResponse) StatusCode() int {
 }
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r CreateProjectResponse) ContentType() string {
+func (r CreateClusterResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
 	return ""
 }
 
-type DeleteProjectResponse struct {
+type DeleteClusterResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON202      *Accepted
@@ -2618,7 +2619,7 @@ type DeleteProjectResponse struct {
 }
 
 // Status returns HTTPResponse.Status
-func (r DeleteProjectResponse) Status() string {
+func (r DeleteClusterResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -2626,7 +2627,7 @@ func (r DeleteProjectResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r DeleteProjectResponse) StatusCode() int {
+func (r DeleteClusterResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2634,24 +2635,24 @@ func (r DeleteProjectResponse) StatusCode() int {
 }
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r DeleteProjectResponse) ContentType() string {
+func (r DeleteClusterResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
 	return ""
 }
 
-type GetProjectResponse struct {
+type GetClusterResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON200      *Project
+	JSON200      *Cluster
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
 }
 
 // Status returns HTTPResponse.Status
-func (r GetProjectResponse) Status() string {
+func (r GetClusterResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -2659,7 +2660,7 @@ func (r GetProjectResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r GetProjectResponse) StatusCode() int {
+func (r GetClusterResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -2667,7 +2668,7 @@ func (r GetProjectResponse) StatusCode() int {
 }
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
-func (r GetProjectResponse) ContentType() string {
+func (r GetClusterResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3201,53 +3202,53 @@ func (c *ClientWithResponses) GetStoragePoolWithResponse(ctx context.Context, po
 	return ParseGetStoragePoolResponse(rsp)
 }
 
-// ListProjectsWithResponse request returning *ListProjectsResponse
-func (c *ClientWithResponses) ListProjectsWithResponse(ctx context.Context, poolId PoolId, params *ListProjectsParams, reqEditors ...RequestEditorFn) (*ListProjectsResponse, error) {
-	rsp, err := c.ListProjects(ctx, poolId, params, reqEditors...)
+// ListClustersWithResponse request returning *ListClustersResponse
+func (c *ClientWithResponses) ListClustersWithResponse(ctx context.Context, poolId PoolId, params *ListClustersParams, reqEditors ...RequestEditorFn) (*ListClustersResponse, error) {
+	rsp, err := c.ListClusters(ctx, poolId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseListProjectsResponse(rsp)
+	return ParseListClustersResponse(rsp)
 }
 
-// CreateProjectWithBodyWithResponse request with arbitrary body returning *CreateProjectResponse
-func (c *ClientWithResponses) CreateProjectWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error) {
-	rsp, err := c.CreateProjectWithBody(ctx, poolId, contentType, body, reqEditors...)
+// CreateClusterWithBodyWithResponse request with arbitrary body returning *CreateClusterResponse
+func (c *ClientWithResponses) CreateClusterWithBodyWithResponse(ctx context.Context, poolId PoolId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateClusterResponse, error) {
+	rsp, err := c.CreateClusterWithBody(ctx, poolId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseCreateProjectResponse(rsp)
+	return ParseCreateClusterResponse(rsp)
 }
 
-func (c *ClientWithResponses) CreateProjectWithResponse(ctx context.Context, poolId PoolId, body CreateProjectJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateProjectResponse, error) {
-	rsp, err := c.CreateProject(ctx, poolId, body, reqEditors...)
+func (c *ClientWithResponses) CreateClusterWithResponse(ctx context.Context, poolId PoolId, body CreateClusterJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateClusterResponse, error) {
+	rsp, err := c.CreateCluster(ctx, poolId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseCreateProjectResponse(rsp)
+	return ParseCreateClusterResponse(rsp)
 }
 
-// DeleteProjectWithResponse request returning *DeleteProjectResponse
-func (c *ClientWithResponses) DeleteProjectWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*DeleteProjectResponse, error) {
-	rsp, err := c.DeleteProject(ctx, poolId, projectId, reqEditors...)
+// DeleteClusterWithResponse request returning *DeleteClusterResponse
+func (c *ClientWithResponses) DeleteClusterWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, reqEditors ...RequestEditorFn) (*DeleteClusterResponse, error) {
+	rsp, err := c.DeleteCluster(ctx, poolId, clusterId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseDeleteProjectResponse(rsp)
+	return ParseDeleteClusterResponse(rsp)
 }
 
-// GetProjectWithResponse request returning *GetProjectResponse
-func (c *ClientWithResponses) GetProjectWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, reqEditors ...RequestEditorFn) (*GetProjectResponse, error) {
-	rsp, err := c.GetProject(ctx, poolId, projectId, reqEditors...)
+// GetClusterWithResponse request returning *GetClusterResponse
+func (c *ClientWithResponses) GetClusterWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, reqEditors ...RequestEditorFn) (*GetClusterResponse, error) {
+	rsp, err := c.GetCluster(ctx, poolId, clusterId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseGetProjectResponse(rsp)
+	return ParseGetClusterResponse(rsp)
 }
 
 // ListBranchesWithResponse request returning *ListBranchesResponse
-func (c *ClientWithResponses) ListBranchesWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*ListBranchesResponse, error) {
-	rsp, err := c.ListBranches(ctx, poolId, projectId, params, reqEditors...)
+func (c *ClientWithResponses) ListBranchesWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, params *ListBranchesParams, reqEditors ...RequestEditorFn) (*ListBranchesResponse, error) {
+	rsp, err := c.ListBranches(ctx, poolId, clusterId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3255,16 +3256,16 @@ func (c *ClientWithResponses) ListBranchesWithResponse(ctx context.Context, pool
 }
 
 // CreateBranchWithBodyWithResponse request with arbitrary body returning *CreateBranchResponse
-func (c *ClientWithResponses) CreateBranchWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error) {
-	rsp, err := c.CreateBranchWithBody(ctx, poolId, projectId, contentType, body, reqEditors...)
+func (c *ClientWithResponses) CreateBranchWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error) {
+	rsp, err := c.CreateBranchWithBody(ctx, poolId, clusterId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParseCreateBranchResponse(rsp)
 }
 
-func (c *ClientWithResponses) CreateBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error) {
-	rsp, err := c.CreateBranch(ctx, poolId, projectId, body, reqEditors...)
+func (c *ClientWithResponses) CreateBranchWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, body CreateBranchJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateBranchResponse, error) {
+	rsp, err := c.CreateBranch(ctx, poolId, clusterId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3272,8 +3273,8 @@ func (c *ClientWithResponses) CreateBranchWithResponse(ctx context.Context, pool
 }
 
 // DeleteBranchWithResponse request returning *DeleteBranchResponse
-func (c *ClientWithResponses) DeleteBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*DeleteBranchResponse, error) {
-	rsp, err := c.DeleteBranch(ctx, poolId, projectId, branchId, reqEditors...)
+func (c *ClientWithResponses) DeleteBranchWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, reqEditors ...RequestEditorFn) (*DeleteBranchResponse, error) {
+	rsp, err := c.DeleteBranch(ctx, poolId, clusterId, branchId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3281,8 +3282,8 @@ func (c *ClientWithResponses) DeleteBranchWithResponse(ctx context.Context, pool
 }
 
 // GetBranchWithResponse request returning *GetBranchResponse
-func (c *ClientWithResponses) GetBranchWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, reqEditors ...RequestEditorFn) (*GetBranchResponse, error) {
-	rsp, err := c.GetBranch(ctx, poolId, projectId, branchId, reqEditors...)
+func (c *ClientWithResponses) GetBranchWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, reqEditors ...RequestEditorFn) (*GetBranchResponse, error) {
+	rsp, err := c.GetBranch(ctx, poolId, clusterId, branchId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3290,8 +3291,8 @@ func (c *ClientWithResponses) GetBranchWithResponse(ctx context.Context, poolId 
 }
 
 // ListEndpointsWithResponse request returning *ListEndpointsResponse
-func (c *ClientWithResponses) ListEndpointsWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error) {
-	rsp, err := c.ListEndpoints(ctx, poolId, projectId, branchId, params, reqEditors...)
+func (c *ClientWithResponses) ListEndpointsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, params *ListEndpointsParams, reqEditors ...RequestEditorFn) (*ListEndpointsResponse, error) {
+	rsp, err := c.ListEndpoints(ctx, poolId, clusterId, branchId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3299,16 +3300,16 @@ func (c *ClientWithResponses) ListEndpointsWithResponse(ctx context.Context, poo
 }
 
 // CreateEndpointWithBodyWithResponse request with arbitrary body returning *CreateEndpointResponse
-func (c *ClientWithResponses) CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
-	rsp, err := c.CreateEndpointWithBody(ctx, poolId, projectId, branchId, contentType, body, reqEditors...)
+func (c *ClientWithResponses) CreateEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
+	rsp, err := c.CreateEndpointWithBody(ctx, poolId, clusterId, branchId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParseCreateEndpointResponse(rsp)
 }
 
-func (c *ClientWithResponses) CreateEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
-	rsp, err := c.CreateEndpoint(ctx, poolId, projectId, branchId, body, reqEditors...)
+func (c *ClientWithResponses) CreateEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body CreateEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateEndpointResponse, error) {
+	rsp, err := c.CreateEndpoint(ctx, poolId, clusterId, branchId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3316,8 +3317,8 @@ func (c *ClientWithResponses) CreateEndpointWithResponse(ctx context.Context, po
 }
 
 // DeleteEndpointWithResponse request returning *DeleteEndpointResponse
-func (c *ClientWithResponses) DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error) {
-	rsp, err := c.DeleteEndpoint(ctx, poolId, projectId, branchId, endpointId, reqEditors...)
+func (c *ClientWithResponses) DeleteEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*DeleteEndpointResponse, error) {
+	rsp, err := c.DeleteEndpoint(ctx, poolId, clusterId, branchId, endpointId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3325,8 +3326,8 @@ func (c *ClientWithResponses) DeleteEndpointWithResponse(ctx context.Context, po
 }
 
 // GetEndpointWithResponse request returning *GetEndpointResponse
-func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error) {
-	rsp, err := c.GetEndpoint(ctx, poolId, projectId, branchId, endpointId, reqEditors...)
+func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, reqEditors ...RequestEditorFn) (*GetEndpointResponse, error) {
+	rsp, err := c.GetEndpoint(ctx, poolId, clusterId, branchId, endpointId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3334,16 +3335,16 @@ func (c *ClientWithResponses) GetEndpointWithResponse(ctx context.Context, poolI
 }
 
 // ResizeEndpointWithBodyWithResponse request with arbitrary body returning *ResizeEndpointResponse
-func (c *ClientWithResponses) ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error) {
-	rsp, err := c.ResizeEndpointWithBody(ctx, poolId, projectId, branchId, endpointId, contentType, body, reqEditors...)
+func (c *ClientWithResponses) ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error) {
+	rsp, err := c.ResizeEndpointWithBody(ctx, poolId, clusterId, branchId, endpointId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParseResizeEndpointResponse(rsp)
 }
 
-func (c *ClientWithResponses) ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error) {
-	rsp, err := c.ResizeEndpoint(ctx, poolId, projectId, branchId, endpointId, body, reqEditors...)
+func (c *ClientWithResponses) ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error) {
+	rsp, err := c.ResizeEndpoint(ctx, poolId, clusterId, branchId, endpointId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -3553,22 +3554,22 @@ func ParseGetStoragePoolResponse(rsp *http.Response) (*GetStoragePoolResponse, e
 	return response, nil
 }
 
-// ParseListProjectsResponse parses an HTTP response from a ListProjectsWithResponse call
-func ParseListProjectsResponse(rsp *http.Response) (*ListProjectsResponse, error) {
+// ParseListClustersResponse parses an HTTP response from a ListClustersWithResponse call
+func ParseListClustersResponse(rsp *http.Response) (*ListClustersResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &ListProjectsResponse{
+	response := &ListClustersResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest ProjectList
+		var dest ClusterList
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -3600,15 +3601,15 @@ func ParseListProjectsResponse(rsp *http.Response) (*ListProjectsResponse, error
 	return response, nil
 }
 
-// ParseCreateProjectResponse parses an HTTP response from a CreateProjectWithResponse call
-func ParseCreateProjectResponse(rsp *http.Response) (*CreateProjectResponse, error) {
+// ParseCreateClusterResponse parses an HTTP response from a CreateClusterWithResponse call
+func ParseCreateClusterResponse(rsp *http.Response) (*CreateClusterResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &CreateProjectResponse{
+	response := &CreateClusterResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3647,15 +3648,15 @@ func ParseCreateProjectResponse(rsp *http.Response) (*CreateProjectResponse, err
 	return response, nil
 }
 
-// ParseDeleteProjectResponse parses an HTTP response from a DeleteProjectWithResponse call
-func ParseDeleteProjectResponse(rsp *http.Response) (*DeleteProjectResponse, error) {
+// ParseDeleteClusterResponse parses an HTTP response from a DeleteClusterWithResponse call
+func ParseDeleteClusterResponse(rsp *http.Response) (*DeleteClusterResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &DeleteProjectResponse{
+	response := &DeleteClusterResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3694,22 +3695,22 @@ func ParseDeleteProjectResponse(rsp *http.Response) (*DeleteProjectResponse, err
 	return response, nil
 }
 
-// ParseGetProjectResponse parses an HTTP response from a GetProjectWithResponse call
-func ParseGetProjectResponse(rsp *http.Response) (*GetProjectResponse, error) {
+// ParseGetClusterResponse parses an HTTP response from a GetClusterWithResponse call
+func ParseGetClusterResponse(rsp *http.Response) (*GetClusterResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &GetProjectResponse{
+	response := &GetClusterResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest Project
+		var dest Cluster
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -4436,45 +4437,45 @@ type ServerInterface interface {
 	// Get a storage pool
 	// (GET /storage-pools/{poolId})
 	GetStoragePool(ctx echo.Context, poolId PoolId) error
-	// List the projects in a pool
-	// (GET /storage-pools/{poolId}/projects)
-	ListProjects(ctx echo.Context, poolId PoolId, params ListProjectsParams) error
-	// Create a project (and its default branch) in a pool
-	// (POST /storage-pools/{poolId}/projects)
-	CreateProject(ctx echo.Context, poolId PoolId) error
-	// Delete a project
-	// (DELETE /storage-pools/{poolId}/projects/{projectId})
-	DeleteProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error
-	// Get a project
-	// (GET /storage-pools/{poolId}/projects/{projectId})
-	GetProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error
-	// List the branches in a project
-	// (GET /storage-pools/{poolId}/projects/{projectId}/branches)
-	ListBranches(ctx echo.Context, poolId PoolId, projectId ProjectId, params ListBranchesParams) error
+	// List the clusters in a pool
+	// (GET /storage-pools/{poolId}/clusters)
+	ListClusters(ctx echo.Context, poolId PoolId, params ListClustersParams) error
+	// Create a cluster (and its default branch) in a pool
+	// (POST /storage-pools/{poolId}/clusters)
+	CreateCluster(ctx echo.Context, poolId PoolId) error
+	// Delete a cluster
+	// (DELETE /storage-pools/{poolId}/clusters/{clusterId})
+	DeleteCluster(ctx echo.Context, poolId PoolId, clusterId ClusterId) error
+	// Get a cluster
+	// (GET /storage-pools/{poolId}/clusters/{clusterId})
+	GetCluster(ctx echo.Context, poolId PoolId, clusterId ClusterId) error
+	// List the branches in a cluster
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches)
+	ListBranches(ctx echo.Context, poolId PoolId, clusterId ClusterId, params ListBranchesParams) error
 	// Branch (fork) a branch into a new branch
-	// (POST /storage-pools/{poolId}/projects/{projectId}/branches)
-	CreateBranch(ctx echo.Context, poolId PoolId, projectId ProjectId) error
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches)
+	CreateBranch(ctx echo.Context, poolId PoolId, clusterId ClusterId) error
 	// Delete a branch
-	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
-	DeleteBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error
+	// (DELETE /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId})
+	DeleteBranch(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error
 	// Get a branch
-	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
-	GetBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId})
+	GetBranch(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error
 	// List the endpoints bound to a branch
-	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints)
-	ListEndpoints(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params ListEndpointsParams) error
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints)
+	ListEndpoints(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, params ListEndpointsParams) error
 	// Create and deploy an endpoint on a branch
-	// (POST /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints)
-	CreateEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints)
+	CreateEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error
 	// Retire an endpoint
-	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
-	DeleteEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error
+	// (DELETE /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId})
+	DeleteEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
 	// Get an endpoint
-	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
-	GetEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId})
+	GetEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
 	// Resize an endpoint's compute (in place)
-	// (POST /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId}/resize)
-	ResizeEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize)
+	ResizeEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
 	// List tasks
 	// (GET /tasks)
 	ListTasks(ctx echo.Context, params ListTasksParams) error
@@ -4550,8 +4551,8 @@ func (w *ServerInterfaceWrapper) GetStoragePool(ctx echo.Context) error {
 	return err
 }
 
-// ListProjects converts echo context to params.
-func (w *ServerInterfaceWrapper) ListProjects(ctx echo.Context) error {
+// ListClusters converts echo context to params.
+func (w *ServerInterfaceWrapper) ListClusters(ctx echo.Context) error {
 	var err error
 	// ------------- Path parameter "poolId" -------------
 	var poolId PoolId
@@ -4562,7 +4563,7 @@ func (w *ServerInterfaceWrapper) ListProjects(ctx echo.Context) error {
 	}
 
 	// Parameter object where we will unmarshal all parameters from the context
-	var params ListProjectsParams
+	var params ListClustersParams
 	// ------------- Optional query parameter "limit" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", ctx.QueryParams(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
@@ -4585,12 +4586,12 @@ func (w *ServerInterfaceWrapper) ListProjects(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.ListProjects(ctx, poolId, params)
+	err = w.Handler.ListClusters(ctx, poolId, params)
 	return err
 }
 
-// CreateProject converts echo context to params.
-func (w *ServerInterfaceWrapper) CreateProject(ctx echo.Context) error {
+// CreateCluster converts echo context to params.
+func (w *ServerInterfaceWrapper) CreateCluster(ctx echo.Context) error {
 	var err error
 	// ------------- Path parameter "poolId" -------------
 	var poolId PoolId
@@ -4601,12 +4602,12 @@ func (w *ServerInterfaceWrapper) CreateProject(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.CreateProject(ctx, poolId)
+	err = w.Handler.CreateCluster(ctx, poolId)
 	return err
 }
 
-// DeleteProject converts echo context to params.
-func (w *ServerInterfaceWrapper) DeleteProject(ctx echo.Context) error {
+// DeleteCluster converts echo context to params.
+func (w *ServerInterfaceWrapper) DeleteCluster(ctx echo.Context) error {
 	var err error
 	// ------------- Path parameter "poolId" -------------
 	var poolId PoolId
@@ -4616,21 +4617,21 @@ func (w *ServerInterfaceWrapper) DeleteProject(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteProject(ctx, poolId, projectId)
+	err = w.Handler.DeleteCluster(ctx, poolId, clusterId)
 	return err
 }
 
-// GetProject converts echo context to params.
-func (w *ServerInterfaceWrapper) GetProject(ctx echo.Context) error {
+// GetCluster converts echo context to params.
+func (w *ServerInterfaceWrapper) GetCluster(ctx echo.Context) error {
 	var err error
 	// ------------- Path parameter "poolId" -------------
 	var poolId PoolId
@@ -4640,16 +4641,16 @@ func (w *ServerInterfaceWrapper) GetProject(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.GetProject(ctx, poolId, projectId)
+	err = w.Handler.GetCluster(ctx, poolId, clusterId)
 	return err
 }
 
@@ -4664,12 +4665,12 @@ func (w *ServerInterfaceWrapper) ListBranches(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// Parameter object where we will unmarshal all parameters from the context
@@ -4689,7 +4690,7 @@ func (w *ServerInterfaceWrapper) ListBranches(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.ListBranches(ctx, poolId, projectId, params)
+	err = w.Handler.ListBranches(ctx, poolId, clusterId, params)
 	return err
 }
 
@@ -4704,16 +4705,16 @@ func (w *ServerInterfaceWrapper) CreateBranch(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.CreateBranch(ctx, poolId, projectId)
+	err = w.Handler.CreateBranch(ctx, poolId, clusterId)
 	return err
 }
 
@@ -4728,12 +4729,12 @@ func (w *ServerInterfaceWrapper) DeleteBranch(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// ------------- Path parameter "branchId" -------------
@@ -4745,7 +4746,7 @@ func (w *ServerInterfaceWrapper) DeleteBranch(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteBranch(ctx, poolId, projectId, branchId)
+	err = w.Handler.DeleteBranch(ctx, poolId, clusterId, branchId)
 	return err
 }
 
@@ -4760,12 +4761,12 @@ func (w *ServerInterfaceWrapper) GetBranch(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// ------------- Path parameter "branchId" -------------
@@ -4777,7 +4778,7 @@ func (w *ServerInterfaceWrapper) GetBranch(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.GetBranch(ctx, poolId, projectId, branchId)
+	err = w.Handler.GetBranch(ctx, poolId, clusterId, branchId)
 	return err
 }
 
@@ -4792,12 +4793,12 @@ func (w *ServerInterfaceWrapper) ListEndpoints(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// ------------- Path parameter "branchId" -------------
@@ -4825,7 +4826,7 @@ func (w *ServerInterfaceWrapper) ListEndpoints(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.ListEndpoints(ctx, poolId, projectId, branchId, params)
+	err = w.Handler.ListEndpoints(ctx, poolId, clusterId, branchId, params)
 	return err
 }
 
@@ -4840,12 +4841,12 @@ func (w *ServerInterfaceWrapper) CreateEndpoint(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// ------------- Path parameter "branchId" -------------
@@ -4857,7 +4858,7 @@ func (w *ServerInterfaceWrapper) CreateEndpoint(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.CreateEndpoint(ctx, poolId, projectId, branchId)
+	err = w.Handler.CreateEndpoint(ctx, poolId, clusterId, branchId)
 	return err
 }
 
@@ -4872,12 +4873,12 @@ func (w *ServerInterfaceWrapper) DeleteEndpoint(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// ------------- Path parameter "branchId" -------------
@@ -4897,7 +4898,7 @@ func (w *ServerInterfaceWrapper) DeleteEndpoint(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.DeleteEndpoint(ctx, poolId, projectId, branchId, endpointId)
+	err = w.Handler.DeleteEndpoint(ctx, poolId, clusterId, branchId, endpointId)
 	return err
 }
 
@@ -4912,12 +4913,12 @@ func (w *ServerInterfaceWrapper) GetEndpoint(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// ------------- Path parameter "branchId" -------------
@@ -4937,7 +4938,7 @@ func (w *ServerInterfaceWrapper) GetEndpoint(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.GetEndpoint(ctx, poolId, projectId, branchId, endpointId)
+	err = w.Handler.GetEndpoint(ctx, poolId, clusterId, branchId, endpointId)
 	return err
 }
 
@@ -4952,12 +4953,12 @@ func (w *ServerInterfaceWrapper) ResizeEndpoint(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
 	}
 
-	// ------------- Path parameter "projectId" -------------
-	var projectId ProjectId
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
 
-	err = runtime.BindStyledParameterWithOptions("simple", "projectId", ctx.Param("projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter projectId: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
 	}
 
 	// ------------- Path parameter "branchId" -------------
@@ -4977,7 +4978,7 @@ func (w *ServerInterfaceWrapper) ResizeEndpoint(ctx echo.Context) error {
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
-	err = w.Handler.ResizeEndpoint(ctx, poolId, projectId, branchId, endpointId)
+	err = w.Handler.ResizeEndpoint(ctx, poolId, clusterId, branchId, endpointId)
 	return err
 }
 
@@ -5015,11 +5016,11 @@ func (w *ServerInterfaceWrapper) ListTasks(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter kind: %s", err))
 	}
 
-	// ------------- Optional query parameter "project_id" -------------
+	// ------------- Optional query parameter "cluster_id" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "project_id", ctx.QueryParams(), &params.ProjectId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cluster_id", ctx.QueryParams(), &params.ClusterId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter project_id: %s", err))
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter cluster_id: %s", err))
 	}
 
 	// Invoke the callback with all the unmarshaled arguments
@@ -5152,19 +5153,19 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 	router.GET(options.BaseURL+"/storage-pools", wrapper.ListStoragePools, options.OperationMiddlewares["listStoragePools"]...)
 	router.POST(options.BaseURL+"/storage-pools", wrapper.CreateStoragePool, options.OperationMiddlewares["createStoragePool"]...)
 	router.GET(options.BaseURL+"/storage-pools/:poolId", wrapper.GetStoragePool, options.OperationMiddlewares["getStoragePool"]...)
-	router.GET(options.BaseURL+"/storage-pools/:poolId/projects", wrapper.ListProjects, options.OperationMiddlewares["listProjects"]...)
-	router.POST(options.BaseURL+"/storage-pools/:poolId/projects", wrapper.CreateProject, options.OperationMiddlewares["createProject"]...)
-	router.DELETE(options.BaseURL+"/storage-pools/:poolId/projects/:projectId", wrapper.DeleteProject, options.OperationMiddlewares["deleteProject"]...)
-	router.GET(options.BaseURL+"/storage-pools/:poolId/projects/:projectId", wrapper.GetProject, options.OperationMiddlewares["getProject"]...)
-	router.GET(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches", wrapper.ListBranches, options.OperationMiddlewares["listBranches"]...)
-	router.POST(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches", wrapper.CreateBranch, options.OperationMiddlewares["createBranch"]...)
-	router.DELETE(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId", wrapper.DeleteBranch, options.OperationMiddlewares["deleteBranch"]...)
-	router.GET(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId", wrapper.GetBranch, options.OperationMiddlewares["getBranch"]...)
-	router.GET(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints", wrapper.ListEndpoints, options.OperationMiddlewares["listEndpoints"]...)
-	router.POST(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints", wrapper.CreateEndpoint, options.OperationMiddlewares["createEndpoint"]...)
-	router.DELETE(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId", wrapper.DeleteEndpoint, options.OperationMiddlewares["deleteEndpoint"]...)
-	router.GET(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint, options.OperationMiddlewares["getEndpoint"]...)
-	router.POST(options.BaseURL+"/storage-pools/:poolId/projects/:projectId/branches/:branchId/endpoints/:endpointId/resize", wrapper.ResizeEndpoint, options.OperationMiddlewares["resizeEndpoint"]...)
+	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters", wrapper.ListClusters, options.OperationMiddlewares["listClusters"]...)
+	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters", wrapper.CreateCluster, options.OperationMiddlewares["createCluster"]...)
+	router.DELETE(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId", wrapper.DeleteCluster, options.OperationMiddlewares["deleteCluster"]...)
+	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId", wrapper.GetCluster, options.OperationMiddlewares["getCluster"]...)
+	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches", wrapper.ListBranches, options.OperationMiddlewares["listBranches"]...)
+	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches", wrapper.CreateBranch, options.OperationMiddlewares["createBranch"]...)
+	router.DELETE(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId", wrapper.DeleteBranch, options.OperationMiddlewares["deleteBranch"]...)
+	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId", wrapper.GetBranch, options.OperationMiddlewares["getBranch"]...)
+	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints", wrapper.ListEndpoints, options.OperationMiddlewares["listEndpoints"]...)
+	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints", wrapper.CreateEndpoint, options.OperationMiddlewares["createEndpoint"]...)
+	router.DELETE(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.DeleteEndpoint, options.OperationMiddlewares["deleteEndpoint"]...)
+	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint, options.OperationMiddlewares["getEndpoint"]...)
+	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/resize", wrapper.ResizeEndpoint, options.OperationMiddlewares["resizeEndpoint"]...)
 	router.GET(options.BaseURL+"/tasks", wrapper.ListTasks, options.OperationMiddlewares["listTasks"]...)
 	router.GET(options.BaseURL+"/tasks/:taskId", wrapper.GetTask, options.OperationMiddlewares["getTask"]...)
 	router.GET(options.BaseURL+"/users", wrapper.ListUsers, options.OperationMiddlewares["listUsers"]...)
@@ -5383,18 +5384,18 @@ func (response GetStoragePool500JSONResponse) VisitGetStoragePoolResponse(w http
 	return err
 }
 
-type ListProjectsRequestObject struct {
+type ListClustersRequestObject struct {
 	PoolId PoolId `json:"poolId"`
-	Params ListProjectsParams
+	Params ListClustersParams
 }
 
-type ListProjectsResponseObject interface {
-	VisitListProjectsResponse(w http.ResponseWriter) error
+type ListClustersResponseObject interface {
+	VisitListClustersResponse(w http.ResponseWriter) error
 }
 
-type ListProjects200JSONResponse ProjectList
+type ListClusters200JSONResponse ClusterList
 
-func (response ListProjects200JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
+func (response ListClusters200JSONResponse) VisitListClustersResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5406,9 +5407,9 @@ func (response ListProjects200JSONResponse) VisitListProjectsResponse(w http.Res
 	return err
 }
 
-type ListProjects400JSONResponse struct{ BadRequestJSONResponse }
+type ListClusters400JSONResponse struct{ BadRequestJSONResponse }
 
-func (response ListProjects400JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
+func (response ListClusters400JSONResponse) VisitListClustersResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5420,9 +5421,9 @@ func (response ListProjects400JSONResponse) VisitListProjectsResponse(w http.Res
 	return err
 }
 
-type ListProjects404JSONResponse struct{ NotFoundJSONResponse }
+type ListClusters404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response ListProjects404JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
+func (response ListClusters404JSONResponse) VisitListClustersResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5434,9 +5435,9 @@ func (response ListProjects404JSONResponse) VisitListProjectsResponse(w http.Res
 	return err
 }
 
-type ListProjects500JSONResponse struct{ InternalErrorJSONResponse }
+type ListClusters500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response ListProjects500JSONResponse) VisitListProjectsResponse(w http.ResponseWriter) error {
+func (response ListClusters500JSONResponse) VisitListClustersResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5448,18 +5449,18 @@ func (response ListProjects500JSONResponse) VisitListProjectsResponse(w http.Res
 	return err
 }
 
-type CreateProjectRequestObject struct {
+type CreateClusterRequestObject struct {
 	PoolId PoolId `json:"poolId"`
-	Body   *CreateProjectJSONRequestBody
+	Body   *CreateClusterJSONRequestBody
 }
 
-type CreateProjectResponseObject interface {
-	VisitCreateProjectResponse(w http.ResponseWriter) error
+type CreateClusterResponseObject interface {
+	VisitCreateClusterResponse(w http.ResponseWriter) error
 }
 
-type CreateProject202JSONResponse struct{ AcceptedJSONResponse }
+type CreateCluster202JSONResponse struct{ AcceptedJSONResponse }
 
-func (response CreateProject202JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
+func (response CreateCluster202JSONResponse) VisitCreateClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -5472,9 +5473,9 @@ func (response CreateProject202JSONResponse) VisitCreateProjectResponse(w http.R
 	return err
 }
 
-type CreateProject400JSONResponse struct{ BadRequestJSONResponse }
+type CreateCluster400JSONResponse struct{ BadRequestJSONResponse }
 
-func (response CreateProject400JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
+func (response CreateCluster400JSONResponse) VisitCreateClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5486,9 +5487,9 @@ func (response CreateProject400JSONResponse) VisitCreateProjectResponse(w http.R
 	return err
 }
 
-type CreateProject404JSONResponse struct{ NotFoundJSONResponse }
+type CreateCluster404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response CreateProject404JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
+func (response CreateCluster404JSONResponse) VisitCreateClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5500,9 +5501,9 @@ func (response CreateProject404JSONResponse) VisitCreateProjectResponse(w http.R
 	return err
 }
 
-type CreateProject500JSONResponse struct{ InternalErrorJSONResponse }
+type CreateCluster500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response CreateProject500JSONResponse) VisitCreateProjectResponse(w http.ResponseWriter) error {
+func (response CreateCluster500JSONResponse) VisitCreateClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5514,18 +5515,18 @@ func (response CreateProject500JSONResponse) VisitCreateProjectResponse(w http.R
 	return err
 }
 
-type DeleteProjectRequestObject struct {
+type DeleteClusterRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
-	ProjectId ProjectId `json:"projectId"`
+	ClusterId ClusterId `json:"clusterId"`
 }
 
-type DeleteProjectResponseObject interface {
-	VisitDeleteProjectResponse(w http.ResponseWriter) error
+type DeleteClusterResponseObject interface {
+	VisitDeleteClusterResponse(w http.ResponseWriter) error
 }
 
-type DeleteProject202JSONResponse struct{ AcceptedJSONResponse }
+type DeleteCluster202JSONResponse struct{ AcceptedJSONResponse }
 
-func (response DeleteProject202JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
+func (response DeleteCluster202JSONResponse) VisitDeleteClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -5538,9 +5539,9 @@ func (response DeleteProject202JSONResponse) VisitDeleteProjectResponse(w http.R
 	return err
 }
 
-type DeleteProject400JSONResponse struct{ BadRequestJSONResponse }
+type DeleteCluster400JSONResponse struct{ BadRequestJSONResponse }
 
-func (response DeleteProject400JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
+func (response DeleteCluster400JSONResponse) VisitDeleteClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5552,9 +5553,9 @@ func (response DeleteProject400JSONResponse) VisitDeleteProjectResponse(w http.R
 	return err
 }
 
-type DeleteProject404JSONResponse struct{ NotFoundJSONResponse }
+type DeleteCluster404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response DeleteProject404JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
+func (response DeleteCluster404JSONResponse) VisitDeleteClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5566,9 +5567,9 @@ func (response DeleteProject404JSONResponse) VisitDeleteProjectResponse(w http.R
 	return err
 }
 
-type DeleteProject500JSONResponse struct{ InternalErrorJSONResponse }
+type DeleteCluster500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response DeleteProject500JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
+func (response DeleteCluster500JSONResponse) VisitDeleteClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5580,18 +5581,18 @@ func (response DeleteProject500JSONResponse) VisitDeleteProjectResponse(w http.R
 	return err
 }
 
-type GetProjectRequestObject struct {
+type GetClusterRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
-	ProjectId ProjectId `json:"projectId"`
+	ClusterId ClusterId `json:"clusterId"`
 }
 
-type GetProjectResponseObject interface {
-	VisitGetProjectResponse(w http.ResponseWriter) error
+type GetClusterResponseObject interface {
+	VisitGetClusterResponse(w http.ResponseWriter) error
 }
 
-type GetProject200JSONResponse Project
+type GetCluster200JSONResponse Cluster
 
-func (response GetProject200JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
+func (response GetCluster200JSONResponse) VisitGetClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5603,9 +5604,9 @@ func (response GetProject200JSONResponse) VisitGetProjectResponse(w http.Respons
 	return err
 }
 
-type GetProject400JSONResponse struct{ BadRequestJSONResponse }
+type GetCluster400JSONResponse struct{ BadRequestJSONResponse }
 
-func (response GetProject400JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
+func (response GetCluster400JSONResponse) VisitGetClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5617,9 +5618,9 @@ func (response GetProject400JSONResponse) VisitGetProjectResponse(w http.Respons
 	return err
 }
 
-type GetProject404JSONResponse struct{ NotFoundJSONResponse }
+type GetCluster404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response GetProject404JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
+func (response GetCluster404JSONResponse) VisitGetClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5631,9 +5632,9 @@ func (response GetProject404JSONResponse) VisitGetProjectResponse(w http.Respons
 	return err
 }
 
-type GetProject500JSONResponse struct{ InternalErrorJSONResponse }
+type GetCluster500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response GetProject500JSONResponse) VisitGetProjectResponse(w http.ResponseWriter) error {
+func (response GetCluster500JSONResponse) VisitGetClusterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -5647,7 +5648,7 @@ func (response GetProject500JSONResponse) VisitGetProjectResponse(w http.Respons
 
 type ListBranchesRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
-	ProjectId ProjectId `json:"projectId"`
+	ClusterId ClusterId `json:"clusterId"`
 	Params    ListBranchesParams
 }
 
@@ -5713,7 +5714,7 @@ func (response ListBranches500JSONResponse) VisitListBranchesResponse(w http.Res
 
 type CreateBranchRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
-	ProjectId ProjectId `json:"projectId"`
+	ClusterId ClusterId `json:"clusterId"`
 	Body      *CreateBranchJSONRequestBody
 }
 
@@ -5780,7 +5781,7 @@ func (response CreateBranch500JSONResponse) VisitCreateBranchResponse(w http.Res
 
 type DeleteBranchRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
-	ProjectId ProjectId `json:"projectId"`
+	ClusterId ClusterId `json:"clusterId"`
 	BranchId  BranchId  `json:"branchId"`
 }
 
@@ -5861,7 +5862,7 @@ func (response DeleteBranch500JSONResponse) VisitDeleteBranchResponse(w http.Res
 
 type GetBranchRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
-	ProjectId ProjectId `json:"projectId"`
+	ClusterId ClusterId `json:"clusterId"`
 	BranchId  BranchId  `json:"branchId"`
 }
 
@@ -5927,7 +5928,7 @@ func (response GetBranch500JSONResponse) VisitGetBranchResponse(w http.ResponseW
 
 type ListEndpointsRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
-	ProjectId ProjectId `json:"projectId"`
+	ClusterId ClusterId `json:"clusterId"`
 	BranchId  BranchId  `json:"branchId"`
 	Params    ListEndpointsParams
 }
@@ -5994,7 +5995,7 @@ func (response ListEndpoints500JSONResponse) VisitListEndpointsResponse(w http.R
 
 type CreateEndpointRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
-	ProjectId ProjectId `json:"projectId"`
+	ClusterId ClusterId `json:"clusterId"`
 	BranchId  BranchId  `json:"branchId"`
 	Body      *CreateEndpointJSONRequestBody
 }
@@ -6076,7 +6077,7 @@ func (response CreateEndpoint500JSONResponse) VisitCreateEndpointResponse(w http
 
 type DeleteEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
-	ProjectId  ProjectId  `json:"projectId"`
+	ClusterId  ClusterId  `json:"clusterId"`
 	BranchId   BranchId   `json:"branchId"`
 	EndpointId EndpointId `json:"endpointId"`
 }
@@ -6144,7 +6145,7 @@ func (response DeleteEndpoint500JSONResponse) VisitDeleteEndpointResponse(w http
 
 type GetEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
-	ProjectId  ProjectId  `json:"projectId"`
+	ClusterId  ClusterId  `json:"clusterId"`
 	BranchId   BranchId   `json:"branchId"`
 	EndpointId EndpointId `json:"endpointId"`
 }
@@ -6211,7 +6212,7 @@ func (response GetEndpoint500JSONResponse) VisitGetEndpointResponse(w http.Respo
 
 type ResizeEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
-	ProjectId  ProjectId  `json:"projectId"`
+	ClusterId  ClusterId  `json:"clusterId"`
 	BranchId   BranchId   `json:"branchId"`
 	EndpointId EndpointId `json:"endpointId"`
 	Body       *ResizeEndpointJSONRequestBody
@@ -6602,44 +6603,44 @@ type StrictServerInterface interface {
 	// Get a storage pool
 	// (GET /storage-pools/{poolId})
 	GetStoragePool(ctx context.Context, request GetStoragePoolRequestObject) (GetStoragePoolResponseObject, error)
-	// List the projects in a pool
-	// (GET /storage-pools/{poolId}/projects)
-	ListProjects(ctx context.Context, request ListProjectsRequestObject) (ListProjectsResponseObject, error)
-	// Create a project (and its default branch) in a pool
-	// (POST /storage-pools/{poolId}/projects)
-	CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error)
-	// Delete a project
-	// (DELETE /storage-pools/{poolId}/projects/{projectId})
-	DeleteProject(ctx context.Context, request DeleteProjectRequestObject) (DeleteProjectResponseObject, error)
-	// Get a project
-	// (GET /storage-pools/{poolId}/projects/{projectId})
-	GetProject(ctx context.Context, request GetProjectRequestObject) (GetProjectResponseObject, error)
-	// List the branches in a project
-	// (GET /storage-pools/{poolId}/projects/{projectId}/branches)
+	// List the clusters in a pool
+	// (GET /storage-pools/{poolId}/clusters)
+	ListClusters(ctx context.Context, request ListClustersRequestObject) (ListClustersResponseObject, error)
+	// Create a cluster (and its default branch) in a pool
+	// (POST /storage-pools/{poolId}/clusters)
+	CreateCluster(ctx context.Context, request CreateClusterRequestObject) (CreateClusterResponseObject, error)
+	// Delete a cluster
+	// (DELETE /storage-pools/{poolId}/clusters/{clusterId})
+	DeleteCluster(ctx context.Context, request DeleteClusterRequestObject) (DeleteClusterResponseObject, error)
+	// Get a cluster
+	// (GET /storage-pools/{poolId}/clusters/{clusterId})
+	GetCluster(ctx context.Context, request GetClusterRequestObject) (GetClusterResponseObject, error)
+	// List the branches in a cluster
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches)
 	ListBranches(ctx context.Context, request ListBranchesRequestObject) (ListBranchesResponseObject, error)
 	// Branch (fork) a branch into a new branch
-	// (POST /storage-pools/{poolId}/projects/{projectId}/branches)
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches)
 	CreateBranch(ctx context.Context, request CreateBranchRequestObject) (CreateBranchResponseObject, error)
 	// Delete a branch
-	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
+	// (DELETE /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId})
 	DeleteBranch(ctx context.Context, request DeleteBranchRequestObject) (DeleteBranchResponseObject, error)
 	// Get a branch
-	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId})
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId})
 	GetBranch(ctx context.Context, request GetBranchRequestObject) (GetBranchResponseObject, error)
 	// List the endpoints bound to a branch
-	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints)
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints)
 	ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error)
 	// Create and deploy an endpoint on a branch
-	// (POST /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints)
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints)
 	CreateEndpoint(ctx context.Context, request CreateEndpointRequestObject) (CreateEndpointResponseObject, error)
 	// Retire an endpoint
-	// (DELETE /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
+	// (DELETE /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId})
 	DeleteEndpoint(ctx context.Context, request DeleteEndpointRequestObject) (DeleteEndpointResponseObject, error)
 	// Get an endpoint
-	// (GET /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId})
+	// (GET /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId})
 	GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error)
 	// Resize an endpoint's compute (in place)
-	// (POST /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId}/resize)
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize)
 	ResizeEndpoint(ctx context.Context, request ResizeEndpointRequestObject) (ResizeEndpointResponseObject, error)
 	// List tasks
 	// (GET /tasks)
@@ -6752,109 +6753,109 @@ func (sh *strictHandler) GetStoragePool(ctx echo.Context, poolId PoolId) error {
 	return nil
 }
 
-// ListProjects operation middleware
-func (sh *strictHandler) ListProjects(ctx echo.Context, poolId PoolId, params ListProjectsParams) error {
-	var request ListProjectsRequestObject
+// ListClusters operation middleware
+func (sh *strictHandler) ListClusters(ctx echo.Context, poolId PoolId, params ListClustersParams) error {
+	var request ListClustersRequestObject
 
 	request.PoolId = poolId
 	request.Params = params
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.ListProjects(ctx.Request().Context(), request.(ListProjectsRequestObject))
+		return sh.ssi.ListClusters(ctx.Request().Context(), request.(ListClustersRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "ListProjects")
+		handler = middleware(handler, "ListClusters")
 	}
 
 	response, err := handler(ctx, request)
 
 	if err != nil {
 		return err
-	} else if validResponse, ok := response.(ListProjectsResponseObject); ok {
-		return validResponse.VisitListProjectsResponse(ctx.Response())
+	} else if validResponse, ok := response.(ListClustersResponseObject); ok {
+		return validResponse.VisitListClustersResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
 	return nil
 }
 
-// CreateProject operation middleware
-func (sh *strictHandler) CreateProject(ctx echo.Context, poolId PoolId) error {
-	var request CreateProjectRequestObject
+// CreateCluster operation middleware
+func (sh *strictHandler) CreateCluster(ctx echo.Context, poolId PoolId) error {
+	var request CreateClusterRequestObject
 
 	request.PoolId = poolId
 
-	var body CreateProjectJSONRequestBody
+	var body CreateClusterJSONRequestBody
 	if err := ctx.Bind(&body); err != nil {
 		return err
 	}
 	request.Body = &body
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.CreateProject(ctx.Request().Context(), request.(CreateProjectRequestObject))
+		return sh.ssi.CreateCluster(ctx.Request().Context(), request.(CreateClusterRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "CreateProject")
+		handler = middleware(handler, "CreateCluster")
 	}
 
 	response, err := handler(ctx, request)
 
 	if err != nil {
 		return err
-	} else if validResponse, ok := response.(CreateProjectResponseObject); ok {
-		return validResponse.VisitCreateProjectResponse(ctx.Response())
+	} else if validResponse, ok := response.(CreateClusterResponseObject); ok {
+		return validResponse.VisitCreateClusterResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
 	return nil
 }
 
-// DeleteProject operation middleware
-func (sh *strictHandler) DeleteProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error {
-	var request DeleteProjectRequestObject
+// DeleteCluster operation middleware
+func (sh *strictHandler) DeleteCluster(ctx echo.Context, poolId PoolId, clusterId ClusterId) error {
+	var request DeleteClusterRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.DeleteProject(ctx.Request().Context(), request.(DeleteProjectRequestObject))
+		return sh.ssi.DeleteCluster(ctx.Request().Context(), request.(DeleteClusterRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "DeleteProject")
+		handler = middleware(handler, "DeleteCluster")
 	}
 
 	response, err := handler(ctx, request)
 
 	if err != nil {
 		return err
-	} else if validResponse, ok := response.(DeleteProjectResponseObject); ok {
-		return validResponse.VisitDeleteProjectResponse(ctx.Response())
+	} else if validResponse, ok := response.(DeleteClusterResponseObject); ok {
+		return validResponse.VisitDeleteClusterResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
 	return nil
 }
 
-// GetProject operation middleware
-func (sh *strictHandler) GetProject(ctx echo.Context, poolId PoolId, projectId ProjectId) error {
-	var request GetProjectRequestObject
+// GetCluster operation middleware
+func (sh *strictHandler) GetCluster(ctx echo.Context, poolId PoolId, clusterId ClusterId) error {
+	var request GetClusterRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
-		return sh.ssi.GetProject(ctx.Request().Context(), request.(GetProjectRequestObject))
+		return sh.ssi.GetCluster(ctx.Request().Context(), request.(GetClusterRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetProject")
+		handler = middleware(handler, "GetCluster")
 	}
 
 	response, err := handler(ctx, request)
 
 	if err != nil {
 		return err
-	} else if validResponse, ok := response.(GetProjectResponseObject); ok {
-		return validResponse.VisitGetProjectResponse(ctx.Response())
+	} else if validResponse, ok := response.(GetClusterResponseObject); ok {
+		return validResponse.VisitGetClusterResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}
@@ -6862,11 +6863,11 @@ func (sh *strictHandler) GetProject(ctx echo.Context, poolId PoolId, projectId P
 }
 
 // ListBranches operation middleware
-func (sh *strictHandler) ListBranches(ctx echo.Context, poolId PoolId, projectId ProjectId, params ListBranchesParams) error {
+func (sh *strictHandler) ListBranches(ctx echo.Context, poolId PoolId, clusterId ClusterId, params ListBranchesParams) error {
 	var request ListBranchesRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 	request.Params = params
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -6889,11 +6890,11 @@ func (sh *strictHandler) ListBranches(ctx echo.Context, poolId PoolId, projectId
 }
 
 // CreateBranch operation middleware
-func (sh *strictHandler) CreateBranch(ctx echo.Context, poolId PoolId, projectId ProjectId) error {
+func (sh *strictHandler) CreateBranch(ctx echo.Context, poolId PoolId, clusterId ClusterId) error {
 	var request CreateBranchRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 
 	var body CreateBranchJSONRequestBody
 	if err := ctx.Bind(&body); err != nil {
@@ -6921,11 +6922,11 @@ func (sh *strictHandler) CreateBranch(ctx echo.Context, poolId PoolId, projectId
 }
 
 // DeleteBranch operation middleware
-func (sh *strictHandler) DeleteBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error {
+func (sh *strictHandler) DeleteBranch(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error {
 	var request DeleteBranchRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 	request.BranchId = branchId
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -6948,11 +6949,11 @@ func (sh *strictHandler) DeleteBranch(ctx echo.Context, poolId PoolId, projectId
 }
 
 // GetBranch operation middleware
-func (sh *strictHandler) GetBranch(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error {
+func (sh *strictHandler) GetBranch(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error {
 	var request GetBranchRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 	request.BranchId = branchId
 
 	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
@@ -6975,11 +6976,11 @@ func (sh *strictHandler) GetBranch(ctx echo.Context, poolId PoolId, projectId Pr
 }
 
 // ListEndpoints operation middleware
-func (sh *strictHandler) ListEndpoints(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, params ListEndpointsParams) error {
+func (sh *strictHandler) ListEndpoints(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, params ListEndpointsParams) error {
 	var request ListEndpointsRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 	request.BranchId = branchId
 	request.Params = params
 
@@ -7003,11 +7004,11 @@ func (sh *strictHandler) ListEndpoints(ctx echo.Context, poolId PoolId, projectI
 }
 
 // CreateEndpoint operation middleware
-func (sh *strictHandler) CreateEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId) error {
+func (sh *strictHandler) CreateEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error {
 	var request CreateEndpointRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 	request.BranchId = branchId
 
 	var body CreateEndpointJSONRequestBody
@@ -7039,11 +7040,11 @@ func (sh *strictHandler) CreateEndpoint(ctx echo.Context, poolId PoolId, project
 }
 
 // DeleteEndpoint operation middleware
-func (sh *strictHandler) DeleteEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error {
+func (sh *strictHandler) DeleteEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error {
 	var request DeleteEndpointRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 	request.BranchId = branchId
 	request.EndpointId = endpointId
 
@@ -7067,11 +7068,11 @@ func (sh *strictHandler) DeleteEndpoint(ctx echo.Context, poolId PoolId, project
 }
 
 // GetEndpoint operation middleware
-func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error {
+func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error {
 	var request GetEndpointRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 	request.BranchId = branchId
 	request.EndpointId = endpointId
 
@@ -7095,11 +7096,11 @@ func (sh *strictHandler) GetEndpoint(ctx echo.Context, poolId PoolId, projectId 
 }
 
 // ResizeEndpoint operation middleware
-func (sh *strictHandler) ResizeEndpoint(ctx echo.Context, poolId PoolId, projectId ProjectId, branchId BranchId, endpointId EndpointId) error {
+func (sh *strictHandler) ResizeEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error {
 	var request ResizeEndpointRequestObject
 
 	request.PoolId = poolId
-	request.ProjectId = projectId
+	request.ClusterId = clusterId
 	request.BranchId = branchId
 	request.EndpointId = endpointId
 

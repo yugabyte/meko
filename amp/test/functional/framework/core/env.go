@@ -10,7 +10,7 @@ import (
 // collection and chaos.
 type EnvHandles struct {
 	Namespace  string
-	Project    string
+	Cluster    string
 	Endpoint   string
 	Containers []string
 }

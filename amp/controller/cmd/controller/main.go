@@ -64,14 +64,14 @@ func main() {
 type recipeStore struct{ s *registry.Store }
 
 // branchID is the 32-hex BranchId the controller maps a branch to (the storage
-// layer is flat — the branch_id is the whole storage identity), and projectID is
-// the project whose branch table holds it.
-func (a recipeStore) RecordBranchRecipe(ctx context.Context, projectID uuid.UUID, branchID string, r task.BranchRecipe) error {
+// layer is flat — the branch_id is the whole storage identity), and clusterID is
+// the cluster whose branch table holds it.
+func (a recipeStore) RecordBranchRecipe(ctx context.Context, clusterID uuid.UUID, branchID string, r task.BranchRecipe) error {
 	var ancestor *string
 	if r.AncestorBranchID != "" {
 		ancestor = &r.AncestorBranchID
 	}
-	return a.s.RecordBranch(ctx, projectID, branchID, registry.BranchCreateRecord{
+	return a.s.RecordBranch(ctx, clusterID, branchID, registry.BranchCreateRecord{
 		BranchName:       r.BranchName,
 		PgVersion:        r.PgVersion,
 		AncestorBranchID: ancestor,
@@ -251,8 +251,8 @@ func runServe(args []string) error {
 	// Wire the write-ahead task framework's step catalog against the same
 	// collaborators the API handlers' cheap pre-checks use. The mutation handlers
 	// plan tasks through the Service (#113), so the worker drains every
-	// createProject/createBranch/createEndpoint/deleteEndpoint/deleteBranch/
-	// deleteProject. *core.PgBackend supplies the idempotent, id-keyed state
+	// createCluster/createBranch/createEndpoint/deleteEndpoint/deleteBranch/
+	// deleteCluster. *core.PgBackend supplies the idempotent, id-keyed state
 	// operations the steps need.
 	prov.Recipes = recipeStore{s: regStore}
 	deps := task.Deps{

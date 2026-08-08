@@ -38,7 +38,7 @@ func (a *ampFeatureRun) singleWriter(ctx context.Context) error {
 	return singleWriterSteps(ctx, cl, a.proj, a.f.endpointSQL)
 }
 
-func singleWriterSteps(ctx context.Context, cl ampCtl, proj ampProject, connect endpointConnector) error {
+func singleWriterSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect endpointConnector) error {
 	ep, err := createRoleEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID, roleReadWrite)
 	if err != nil {
 		return fmt.Errorf("create first read_write endpoint: %w", err)

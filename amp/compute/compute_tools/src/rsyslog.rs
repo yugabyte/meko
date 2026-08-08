@@ -130,7 +130,7 @@ fn parse_audit_syslog_address(
 fn generate_audit_rsyslog_config(
     log_directory: String,
     endpoint_id: &str,
-    project_id: &str,
+    cluster_id: &str,
     remote_syslog_host: &str,
     remote_syslog_port: u16,
     remote_syslog_tls: &str,
@@ -139,7 +139,7 @@ fn generate_audit_rsyslog_config(
         include_str!("config_template/compute_audit_rsyslog_template.conf"),
         log_directory = log_directory,
         endpoint_id = endpoint_id,
-        project_id = project_id,
+        cluster_id = cluster_id,
         remote_syslog_host = remote_syslog_host,
         remote_syslog_port = remote_syslog_port,
         remote_syslog_tls = remote_syslog_tls
@@ -149,7 +149,7 @@ fn generate_audit_rsyslog_config(
 pub fn configure_audit_rsyslog(
     log_directory: String,
     endpoint_id: &str,
-    project_id: &str,
+    cluster_id: &str,
     remote_endpoint: &str,
     remote_tls_endpoint: &str,
 ) -> Result<()> {
@@ -158,7 +158,7 @@ pub fn configure_audit_rsyslog(
     let config_content = generate_audit_rsyslog_config(
         log_directory,
         endpoint_id,
-        project_id,
+        cluster_id,
         &remote_syslog_host,
         remote_syslog_port,
         &remote_syslog_tls,
@@ -453,7 +453,7 @@ mod tests {
             // plaintext version
             let log_directory = "/tmp/log".to_string();
             let endpoint_id = "ep-test-endpoint-id";
-            let project_id = "test-project-id";
+            let cluster_id = "test-cluster-id";
             let remote_syslog_host = "collector.host.tld";
             let remote_syslog_port = 5555;
             let remote_syslog_tls = "false";
@@ -461,7 +461,7 @@ mod tests {
             let conf_str = generate_audit_rsyslog_config(
                 log_directory,
                 endpoint_id,
-                project_id,
+                cluster_id,
                 remote_syslog_host,
                 remote_syslog_port,
                 remote_syslog_tls,
@@ -478,7 +478,7 @@ mod tests {
             // TLS version
             let log_directory = "/tmp/log".to_string();
             let endpoint_id = "ep-test-endpoint-id";
-            let project_id = "test-project-id";
+            let cluster_id = "test-cluster-id";
             let remote_syslog_host = "collector.host.tld";
             let remote_syslog_port = 5556;
             let remote_syslog_tls = "true";
@@ -486,7 +486,7 @@ mod tests {
             let conf_str = generate_audit_rsyslog_config(
                 log_directory,
                 endpoint_id,
-                project_id,
+                cluster_id,
                 remote_syslog_host,
                 remote_syslog_port,
                 remote_syslog_tls,

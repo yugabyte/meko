@@ -244,7 +244,7 @@ The pageserver-facing GUCs (all in `pg_init_libpagestore()`):
 | --- | --- | --- | --- |
 | `yb_amp.pageserver_connstring` | SIGHUP | `""` | Pageserver connection string; also the switch that installs the smgr |
 | `yb_amp.branch_id` | POSTMASTER | `""` | Branch identifier sent in `pagestream_v3` and to the safekeeper |
-| `yb_amp.project_id` | POSTMASTER | `""` | Project the compute belongs to |
+| `yb_amp.cluster_id` | POSTMASTER | `""` | Cluster the compute belongs to |
 | `yb_amp.endpoint_id` | POSTMASTER | `""` | Endpoint identifier |
 | `yb_amp.protocol_version` | SU_BACKEND | `3` | compute↔pageserver protocol version (`2`–`3`) |
 | `yb_amp.max_cluster_size` | SIGHUP | `-1` | Cluster size limit (MB); `-1` disables |
@@ -513,7 +513,7 @@ stream into `pgdata`. A connection string parsed from the `postgresql://` /
 ([`config.rs`](../compute_tools/src/config.rs)). It writes, in order: the raw
 `cluster.postgresql_conf` blob from the spec; the storage-connection GUCs
 (`yb_amp.pageserver_connstring`, `yb_amp.safekeepers`, `yb_amp.branch_id`,
-`yb_amp.project_id`, `yb_amp.endpoint_id`, `yb_amp.compute_mode`,
+`yb_amp.cluster_id`, `yb_amp.endpoint_id`, `yb_amp.compute_mode`,
 `yb_amp.privileged_role_name`, `yb_amp.extension_server_port`); the generic GUC
 block from `cluster.settings`; audit settings; and finally an
 `include_if_exists` for a temp override file that wins over everything.

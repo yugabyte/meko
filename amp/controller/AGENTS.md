@@ -20,8 +20,8 @@ with the design docs in [`architecture/`](architecture/):
   Docker sibling behind `deploy.Deployer`, the synchronous deploy/retire path,
   the `--deploy-driver` selector, the recipe/bootstrap model, internal-LoadBalancer
   endpoints, and the current deployment assumptions).
-- [`architecture/controller-project-create.md`](architecture/controller-project-create.md) —
-  creating a project, patterned on `yb_amp_local`: declare a recipe at create,
+- [`architecture/controller-cluster-create.md`](architecture/controller-cluster-create.md) —
+  creating a cluster, patterned on `yb_amp_local`: declare a recipe at create,
   materialize the storage layer at the first endpoint.
 - [`architecture/ac-mcp.md`](architecture/ac-mcp.md) — the MCP server
   ([`mcp/`](mcp/)): a thin FastMCP wrapper exposing the REST API as 18 MCP tools
@@ -44,7 +44,7 @@ under `controller/`.
   request/task-scoped logger) — never `slog.New`, a hand-built `slog.Handler`,
   or `slog.Default()` as your source. Stamp scoped loggers onto the context with
   `log.IntoContext`, and use the canonical attribute-key constants
-  (`log.KeyTaskID`, `log.KeyProjectID`, `log.KeyRequestID`, …) so records stay
+  (`log.KeyTaskID`, `log.KeyClusterID`, `log.KeyRequestID`, …) so records stay
   consistent and queryable. You'll still use the `slog.Attr` / `slog.Level`
   value types and `*slog.Logger` is what `internal/log` hands back — that's
   expected; the rule is about where the logger *comes from*, so every component

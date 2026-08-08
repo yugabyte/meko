@@ -48,7 +48,7 @@ export default function SharedPoolsPage() {
     return pools.data;
   }, [pools.data, currentUser.data]);
 
-  // Cluster (project) counts per pool — reuse the fleet fan-out.
+  // Cluster counts per pool — reuse the fleet fan-out.
   const fleet = useFleet(myPools);
   const dbCountByPool = useMemo(() => {
     const counts: Record<string, number> = {};

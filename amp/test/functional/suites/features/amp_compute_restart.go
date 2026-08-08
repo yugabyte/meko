@@ -81,7 +81,7 @@ type computeRoller interface {
 // computeRestartSteps drives the storage/compute-separation assertions over the
 // ampCtl, pod-connector, and computeRoller seams, so write → restart-compute →
 // (data + checksum survive) is unit-testable with fakes.
-func computeRestartSteps(ctx context.Context, cl ampCtl, proj ampProject, connect podConnector, roller computeRoller, metric func(string, float64, string)) error {
+func computeRestartSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect podConnector, roller computeRoller, metric func(string, float64, string)) error {
 	ep, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
 		return fmt.Errorf("create endpoint: %w", err)

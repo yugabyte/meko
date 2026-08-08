@@ -23,7 +23,7 @@ Code auto-discovers it for anyone working in the yb-amp repo. Nothing to do.
 
 ### Claude Code — as an installable plugin (anywhere)
 The repo-root `.claude-plugin/marketplace.json` publishes this as a plugin.
-Install it from any project:
+Install it from any cluster:
 
 ```
 /plugin marketplace add yugabyte/amp
@@ -40,7 +40,7 @@ bash controller/mcp/skills/scripts/package-skill.sh
 
 ### Cursor / other harnesses
 No skill auto-discovery yet. Either paste `amp-mcp-tools/SKILL.md` into the
-project's rules/pinned-context file, or rely on the amp MCP server's in-band
+cluster's rules/pinned-context file, or rely on the amp MCP server's in-band
 `instructions` (`controller/mcp/src/server_instructions.py`), which every MCP
 client receives automatically.
 

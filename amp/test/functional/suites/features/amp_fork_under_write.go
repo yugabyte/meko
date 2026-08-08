@@ -51,7 +51,7 @@ type streamResult struct {
 	err       error
 }
 
-func forkUnderWriteSteps(ctx context.Context, cl ampCtl, proj ampProject, childName string, connect endpointConnector) error {
+func forkUnderWriteSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector) error {
 	baseEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
 		return fmt.Errorf("create base endpoint: %w", err)

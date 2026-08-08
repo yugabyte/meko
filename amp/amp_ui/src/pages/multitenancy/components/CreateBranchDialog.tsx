@@ -29,13 +29,13 @@ export function CreateBranchDialog({
   open,
   onOpenChange,
   poolId,
-  projectId,
+  clusterId,
   branches,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   poolId: string;
-  projectId: string;
+  clusterId: string;
   branches: Branch[];
 }) {
   const [name, setName] = useState("");
@@ -70,7 +70,7 @@ export function CreateBranchDialog({
     if (lsn) body.fork_point_lsn = lsn;
 
     createBranch.mutate(
-      { poolId, projectId, body },
+      { poolId, clusterId, body },
       {
         onSuccess: (branch) => {
           toast.success(msg.branchCreated(branch.name));

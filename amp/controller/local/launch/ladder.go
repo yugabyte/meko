@@ -15,10 +15,10 @@ import (
 
 // The launcher's own resource ladder: a user and a storage pool, nothing more.
 //
-// Projects are NOT bootstrapped. A project is one independent lineage, so it is
-// something a caller creates on purpose (`project create`) rather than ambient
+// Clusters are NOT bootstrapped. A cluster is one independent lineage, so it is
+// something a caller creates on purpose (`cluster create`) rather than ambient
 // state the launcher carries — which is also how the product works. Everything
-// below a project is addressed by id, so there is no "current project" to track.
+// below a cluster is addressed by id, so there is no "current cluster" to track.
 //
 // The user and pool ids are fixed rather than generated. Both create endpoints
 // are idempotent on an explicit id, so a fixed one converges even against a
@@ -44,17 +44,17 @@ const branchTaskTimeout = 60 * time.Second
 // a couple of row writes.
 const endpointTaskTimeout = 60 * time.Second
 
-// projectCreateTimeout bounds how long EnsureLadder waits for the create-project
+// clusterCreateTimeout bounds how long EnsureLadder waits for the create-cluster
 // task. It is a couple of task-worker poll intervals plus the two inserts the
 // task actually does; nothing in it waits on a pod.
-const projectCreateTimeout = 60 * time.Second
+const clusterCreateTimeout = 60 * time.Second
 
 // EnsureLadder makes sure the launcher's user and storage pool exist. Idempotent.
 // Returns whether env was mutated, so the caller can persist — nothing to persist
 // today, since both ids are constants.
 //
 // It must run after the controller answers /readyz and before anything creates
-// a project. Returns whether env was mutated, so the caller can persist.
+// a cluster. Returns whether env was mutated, so the caller can persist.
 func EnsureLadder(ctx context.Context, env *config.LocalEnv) (bool, error) {
 	base, err := controllerBase(env)
 	if err != nil {
@@ -124,11 +124,11 @@ func hex32UUID(id uuid.UUID) string {
 // already up.
 func persistLadder(env *config.LocalEnv) {
 	if err := env.PersistConfig(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not persist the launcher project id: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: could not persist the launcher cluster id: %v\n", err)
 	}
 }
 
-// branchAPI bundles the product-API client with the launcher's pool and project
+// branchAPI bundles the product-API client with the launcher's pool and cluster
 // ids — everything a branch call needs. Branches go through /api/v1 (#515), so
 // this is the seam every branch command starts from.
 type branchAPI struct {
@@ -148,19 +148,19 @@ func newBranchAPI(env *config.LocalEnv) (*branchAPI, error) {
 	return &branchAPI{api: client.NewAPI(base, httpClient()), poolID: poolID}, nil
 }
 
-// allBranches returns every live branch across the launcher's projects.
+// allBranches returns every live branch across the launcher's clusters.
 //
-// The launcher owns more than one project: a ROOT branch is a project create,
-// because a project is exactly one independent lineage (its default branch is
-// that lineage's root, with its own initdb). So resolution spans projects — a
-// branch id is not scoped to any one project.
+// The launcher owns more than one cluster: a ROOT branch is a cluster create,
+// because a cluster is exactly one independent lineage (its default branch is
+// that lineage's root, with its own initdb). So resolution spans clusters — a
+// branch id is not scoped to any one cluster.
 func (b *branchAPI) allBranches(ctx context.Context) ([]api.Branch, error) {
-	projects, err := b.api.ListProjects(ctx, b.poolID)
+	clusters, err := b.api.ListClusters(ctx, b.poolID)
 	if err != nil {
 		return nil, err
 	}
 	var out []api.Branch
-	for _, p := range projects {
+	for _, p := range clusters {
 		branches, err := b.api.ListBranches(ctx, b.poolID, p.Id)
 		if err != nil {
 			return nil, err
@@ -171,7 +171,7 @@ func (b *branchAPI) allBranches(ctx context.Context) ([]api.Branch, error) {
 }
 
 // resolveBranch returns the live branch with the given flat 32-hex id, from any
-// of the launcher's projects.
+// of the launcher's clusters.
 func (b *branchAPI) resolveBranch(ctx context.Context, hexID config.BranchID) (*api.Branch, error) {
 	branches, err := b.allBranches(ctx)
 	if err != nil {
@@ -185,11 +185,11 @@ func (b *branchAPI) resolveBranch(ctx context.Context, hexID config.BranchID) (*
 	return nil, nil
 }
 
-// resolveBranchInProject returns the live branch with the given name in one
-// project, which is how a just-created fork's id is read back. Names are unique
-// among a project's live branches, so within a project a name is unambiguous.
-func (b *branchAPI) resolveBranchInProject(ctx context.Context, projectID uuid.UUID, name string) (*api.Branch, error) {
-	branches, err := b.api.ListBranches(ctx, b.poolID, projectID)
+// resolveBranchInCluster returns the live branch with the given name in one
+// cluster, which is how a just-created fork's id is read back. Names are unique
+// among a cluster's live branches, so within a cluster a name is unambiguous.
+func (b *branchAPI) resolveBranchInCluster(ctx context.Context, clusterID uuid.UUID, name string) (*api.Branch, error) {
+	branches, err := b.api.ListBranches(ctx, b.poolID, clusterID)
 	if err != nil {
 		return nil, err
 	}

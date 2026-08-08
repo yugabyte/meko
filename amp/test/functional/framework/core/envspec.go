@@ -35,7 +35,7 @@ type Shape int
 
 const (
 	SingleContainer    Shape = iota // whole amp data path in one container (the endpoint image)
-	SharedControlPlane              // project-per-test on a shared control plane
+	SharedControlPlane              // cluster-per-test on a shared control plane
 	DedicatedStack                  // a whole dedicated stack (pod-kill access)
 	Remote                          // attach to a pre-existing stack by URL
 	Universe                        // a YB universe/cluster as the target (env/universe)

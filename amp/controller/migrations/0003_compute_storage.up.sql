@@ -10,7 +10,7 @@
 -- their own schema. So this migration must run before those daemons start.
 --
 -- The write-ahead task log lives in the `controller` schema (0001) and the
--- control plane's resource model — users, storage pools, projects, branches,
+-- control plane's resource model — users, storage pools, clusters, branches,
 -- endpoints — in `amp_registry` (0002). Every statement here is IF-NOT-EXISTS so
 -- the migration is idempotent. Objects are schema-qualified (the migrator's
 -- search_path is `amp_registry`).

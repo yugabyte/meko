@@ -26,7 +26,7 @@ import (
 type fakeStateStore struct {
 	mu sync.Mutex
 
-	ensureProjectCalls   int
+	ensureClusterCalls   int
 	ensureBranchCalls    int
 	endpointRecordCalls  int
 	setAddressCalls      int
@@ -42,27 +42,27 @@ type fakeStateStore struct {
 	existingWriterBranch map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
 
 	// Cascade-delete bookkeeping: where each (live) endpoint and branch sits, so
-	// EndpointIDsForBranch / EndpointIDsForProject can enumerate children and the
+	// EndpointIDsForBranch / EndpointIDsForCluster can enumerate children and the
 	// delete-by-id methods can prune them. Populated by seedEndpoint / seedBranch.
-	endpointBranch  map[uuid.UUID]branchRef // endpoint id -> its (project, branch)
-	branchProject   map[uuid.UUID]uuid.UUID // branch id -> its project
+	endpointBranch  map[uuid.UUID]branchRef // endpoint id -> its (cluster, branch)
+	branchCluster   map[uuid.UUID]uuid.UUID // branch id -> its cluster
 	branchParent    map[uuid.UUID]uuid.UUID // branch id -> its parent branch id (forks only)
 	branchExts      map[uuid.UUID][]string  // branch id -> opted-in extension names
 	deletedBranches map[uuid.UUID]struct{}
-	deletedProjects map[uuid.UUID]struct{}
+	deletedClusters map[uuid.UUID]struct{}
 
-	errEnsureProject  error
+	errEnsureCluster  error
 	errEnsureBranch   error
 	errEnsureEndpoint error
 	errSetAddress     error
 	errDeleteEndpoint error
 	errDeleteBranch   error
-	errDeleteProject  error
+	errDeleteCluster  error
 }
 
-// branchRef is an endpoint's (project, branch) placement in the fake.
+// branchRef is an endpoint's (cluster, branch) placement in the fake.
 type branchRef struct {
-	projectID uuid.UUID
+	clusterID uuid.UUID
 	branchID  uuid.UUID
 }
 
@@ -74,11 +74,11 @@ func newFakeStateStore() *fakeStateStore {
 		deletedEndpoints:     map[uuid.UUID]struct{}{},
 		existingWriterBranch: map[uuid.UUID]uuid.UUID{},
 		endpointBranch:       map[uuid.UUID]branchRef{},
-		branchProject:        map[uuid.UUID]uuid.UUID{},
+		branchCluster:        map[uuid.UUID]uuid.UUID{},
 		branchParent:         map[uuid.UUID]uuid.UUID{},
 		branchExts:           map[uuid.UUID][]string{},
 		deletedBranches:      map[uuid.UUID]struct{}{},
-		deletedProjects:      map[uuid.UUID]struct{}{},
+		deletedClusters:      map[uuid.UUID]struct{}{},
 	}
 }
 
@@ -120,51 +120,51 @@ func (f *fakeStateStore) AddBranchExtensions(_ context.Context, _, branchID uuid
 	return nil
 }
 
-// seedEndpoint registers a live endpoint on (projectID, branchID) so the cascade
+// seedEndpoint registers a live endpoint on (clusterID, branchID) so the cascade
 // enumeration methods can find it. Test helper.
-func (f *fakeStateStore) seedEndpoint(endpointID, projectID, branchID uuid.UUID) {
+func (f *fakeStateStore) seedEndpoint(endpointID, clusterID, branchID uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.endpointBranch[endpointID] = branchRef{projectID: projectID, branchID: branchID}
+	f.endpointBranch[endpointID] = branchRef{clusterID: clusterID, branchID: branchID}
 	f.createdEndpoints[endpointID] = "read_only"
 }
 
-// seedBranch registers a live branch under projectID. Test helper.
-func (f *fakeStateStore) seedBranch(projectID, branchID uuid.UUID) {
+// seedBranch registers a live branch under clusterID. Test helper.
+func (f *fakeStateStore) seedBranch(clusterID, branchID uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.branchProject[branchID] = projectID
+	f.branchCluster[branchID] = clusterID
 	f.createdBranches[branchID] = struct{}{}
 }
 
-// seedBranchFork registers a live branch under projectID forked from parentID,
+// seedBranchFork registers a live branch under clusterID forked from parentID,
 // so ChildBranchIDs reports parentID as having a child. Test helper.
-func (f *fakeStateStore) seedBranchFork(projectID, branchID, parentID uuid.UUID) {
+func (f *fakeStateStore) seedBranchFork(clusterID, branchID, parentID uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.branchProject[branchID] = projectID
+	f.branchCluster[branchID] = clusterID
 	f.branchParent[branchID] = parentID
 	f.createdBranches[branchID] = struct{}{}
 }
 
-func (f *fakeStateStore) ChildBranchIDs(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+func (f *fakeStateStore) ChildBranchIDs(_ context.Context, clusterID, branchID uuid.UUID) ([]uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ids []uuid.UUID
 	for id, parent := range f.branchParent {
-		if parent == branchID && f.branchProject[id] == projectID {
+		if parent == branchID && f.branchCluster[id] == clusterID {
 			ids = append(ids, id)
 		}
 	}
 	return ids, nil
 }
 
-func (f *fakeStateStore) EnsureProject(_ context.Context, _, _, branchID uuid.UUID, _ string, _ int) error {
+func (f *fakeStateStore) EnsureCluster(_ context.Context, _, _, branchID uuid.UUID, _ string, _ int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.ensureProjectCalls++
-	if f.errEnsureProject != nil {
-		return f.errEnsureProject
+	f.ensureClusterCalls++
+	if f.errEnsureCluster != nil {
+		return f.errEnsureCluster
 	}
 	f.createdBranches[branchID] = struct{}{}
 	return nil
@@ -260,31 +260,31 @@ func (f *fakeStateStore) UpdateEndpointResources(_ context.Context, endpointID u
 	return nil
 }
 
-func (f *fakeStateStore) EndpointIDsForBranch(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+func (f *fakeStateStore) EndpointIDsForBranch(_ context.Context, clusterID, branchID uuid.UUID) ([]uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ids []uuid.UUID
 	for id, ref := range f.endpointBranch {
-		if ref.projectID == projectID && ref.branchID == branchID {
+		if ref.clusterID == clusterID && ref.branchID == branchID {
 			ids = append(ids, id)
 		}
 	}
 	return ids, nil
 }
 
-func (f *fakeStateStore) EndpointIDsForProject(_ context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
+func (f *fakeStateStore) EndpointIDsForCluster(_ context.Context, clusterID uuid.UUID) ([]uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var ids []uuid.UUID
 	for id, ref := range f.endpointBranch {
-		if ref.projectID == projectID {
+		if ref.clusterID == clusterID {
 			ids = append(ids, id)
 		}
 	}
 	return ids, nil
 }
 
-func (f *fakeStateStore) DeleteBranch(_ context.Context, projectID, branchID uuid.UUID) error {
+func (f *fakeStateStore) DeleteBranch(_ context.Context, clusterID, branchID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.errDeleteBranch != nil {
@@ -293,37 +293,37 @@ func (f *fakeStateStore) DeleteBranch(_ context.Context, projectID, branchID uui
 	// Mirror PgBackend's self-FK RESTRICT: a still-referencing child fork makes
 	// the delete a conflict rather than a silent drop.
 	for id, parent := range f.branchParent {
-		if parent == branchID && f.branchProject[id] == projectID {
+		if parent == branchID && f.branchCluster[id] == clusterID {
 			return errConflict
 		}
 	}
-	if p, ok := f.branchProject[branchID]; ok && p == projectID {
-		delete(f.branchProject, branchID)
+	if p, ok := f.branchCluster[branchID]; ok && p == clusterID {
+		delete(f.branchCluster, branchID)
 		delete(f.createdBranches, branchID)
 	}
 	f.deletedBranches[branchID] = struct{}{} // idempotent: tolerate-absent
 	return nil
 }
 
-func (f *fakeStateStore) DeleteProject(_ context.Context, projectID uuid.UUID) error {
+func (f *fakeStateStore) DeleteCluster(_ context.Context, clusterID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.errDeleteProject != nil {
-		return f.errDeleteProject
+	if f.errDeleteCluster != nil {
+		return f.errDeleteCluster
 	}
 	for id, ref := range f.endpointBranch {
-		if ref.projectID == projectID {
+		if ref.clusterID == clusterID {
 			delete(f.endpointBranch, id)
 			delete(f.createdEndpoints, id)
 		}
 	}
-	for id, p := range f.branchProject {
-		if p == projectID {
-			delete(f.branchProject, id)
+	for id, p := range f.branchCluster {
+		if p == clusterID {
+			delete(f.branchCluster, id)
 			delete(f.createdBranches, id)
 		}
 	}
-	f.deletedProjects[projectID] = struct{}{} // idempotent: tolerate-absent
+	f.deletedClusters[clusterID] = struct{}{} // idempotent: tolerate-absent
 	return nil
 }
 
@@ -337,7 +337,7 @@ func (e stringError) Error() string { return string(e) }
 // --- fakeRecipeStore: an in-memory task.RecipeStore -------------------------
 
 type recordedRecipe struct {
-	projectID uuid.UUID
+	clusterID uuid.UUID
 	branchID  string
 	recipe    BranchRecipe
 }
@@ -350,13 +350,13 @@ type fakeRecipeStore struct {
 
 func newFakeRecipeStore() *fakeRecipeStore { return &fakeRecipeStore{} }
 
-func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, projectID uuid.UUID, branchID string, r BranchRecipe) error {
+func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, clusterID uuid.UUID, branchID string, r BranchRecipe) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.errRecord != nil {
 		return f.errRecord
 	}
-	f.recorded = append(f.recorded, recordedRecipe{projectID: projectID, branchID: branchID, recipe: r})
+	f.recorded = append(f.recorded, recordedRecipe{clusterID: clusterID, branchID: branchID, recipe: r})
 	return nil
 }
 

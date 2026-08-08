@@ -8,13 +8,13 @@ import type {
   BranchList,
   CreateBranchInput,
   CreateEndpointInput,
-  CreateProjectInput,
+  CreateClusterInput,
   CreateStoragePoolInput,
   CreateUserInput,
   Endpoint,
   EndpointList,
-  Project,
-  ProjectList,
+  Cluster,
+  ClusterList,
   ResizeEndpointInput,
   ResizeOutcome,
   StoragePool,
@@ -32,7 +32,7 @@ import type {
 // tolerance, progress-aware cadence, batch polling, possibly SSE — is tracked in #188.
 const TASK_POLL_INTERVAL_MS = 5000;
 // Generous: a create_endpoint task runs a Helm deploy (pod start + initdb) that
-// can take a few minutes; create_project / branch tasks finish in seconds.
+// can take a few minutes; create_cluster / branch tasks finish in seconds.
 const TASK_TIMEOUT_MS = 5 * 60 * 1000;
 
 export function getTask(taskId: string): Promise<Task> {
@@ -47,7 +47,7 @@ export function listTasks(params: {
   offset?: number;
   status?: string;
   kind?: string;
-  projectId?: string;
+  clusterId?: string;
 }): Promise<TaskList> {
   return apiRequest<TaskList>("/tasks", {
     query: {
@@ -55,7 +55,7 @@ export function listTasks(params: {
       offset: params.offset,
       status: params.status,
       kind: params.kind,
-      project_id: params.projectId,
+      cluster_id: params.clusterId,
     },
   });
 }
@@ -119,43 +119,43 @@ export function createStoragePool(
   });
 }
 
-/* ---- Projects (clusters) ---- */
+/* ---- Clusters ---- */
 
 // include_failed defaults to false server-side (the list is scoped to usable
 // clusters — what a picker or count wants); pass includeFailed:true — e.g. from
 // an operator's fleet view — to also surface failed-creation orphans so they can
 // be seen and deleted. undefined is dropped by apiRequest, keeping the server default.
-export function listProjects(
+export function listClusters(
   poolId: string,
   opts?: { includeFailed?: boolean },
-): Promise<ProjectList> {
-  return apiRequest<ProjectList>(`/storage-pools/${poolId}/projects`, {
+): Promise<ClusterList> {
+  return apiRequest<ClusterList>(`/storage-pools/${poolId}/clusters`, {
     query: { limit: LIST_LIMIT, include_failed: opts?.includeFailed },
   });
 }
 
-export function getProject(poolId: string, projectId: string): Promise<Project> {
-  return apiRequest<Project>(`/storage-pools/${poolId}/projects/${projectId}`);
+export function getCluster(poolId: string, clusterId: string): Promise<Cluster> {
+  return apiRequest<Cluster>(`/storage-pools/${poolId}/clusters/${clusterId}`);
 }
 
-// Async: POST records a create_project task; poll it, then read the materialized
-// project back (the task stamps the new project's id as project_id).
-export async function createProject(
+// Async: POST records a create_cluster task; poll it, then read the materialized
+// cluster back (the task stamps the new cluster's id as cluster_id).
+export async function createCluster(
   poolId: string,
-  input: CreateProjectInput,
-): Promise<Project> {
-  const task = await apiRequest<Task>(`/storage-pools/${poolId}/projects`, {
+  input: CreateClusterInput,
+): Promise<Cluster> {
+  const task = await apiRequest<Task>(`/storage-pools/${poolId}/clusters`, {
     method: "POST",
     body: input,
   });
   const done = await pollTask(task.id);
-  if (!done.project_id) {
-    throw new ApiError("create_project task reported no project id", 500);
+  if (!done.cluster_id) {
+    throw new ApiError("create_cluster task reported no cluster id", 500);
   }
-  return getProject(poolId, done.project_id);
+  return getCluster(poolId, done.cluster_id);
 }
 
-// Async, fire-and-forget: records a create_project task with `with_writer` so the
+// Async, fire-and-forget: records a create_cluster task with `with_writer` so the
 // controller creates the cluster AND its `main`-branch read_write endpoint in ONE
 // background task. Returns the Task immediately (no polling): the caller shows a
 // toast + deeplinks to Tasks, and the worker runs the whole thing independently
@@ -169,7 +169,7 @@ export function createClusterWithWriter(
   if (input.cpu || input.memory) {
     body.resources = { cpu: input.cpu || undefined, memory: input.memory || undefined };
   }
-  return apiRequest<Task>(`/storage-pools/${poolId}/projects`, {
+  return apiRequest<Task>(`/storage-pools/${poolId}/clusters`, {
     method: "POST",
     body,
   });
@@ -179,21 +179,21 @@ export function createClusterWithWriter(
 
 export function listBranches(
   poolId: string,
-  projectId: string,
+  clusterId: string,
 ): Promise<BranchList> {
   return apiRequest<BranchList>(
-    `/storage-pools/${poolId}/projects/${projectId}/branches`,
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches`,
     { query: { limit: LIST_LIMIT } },
   );
 }
 
 export function getBranch(
   poolId: string,
-  projectId: string,
+  clusterId: string,
   branchId: string,
 ): Promise<Branch> {
   return apiRequest<Branch>(
-    `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}`,
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}`,
   );
 }
 
@@ -201,41 +201,41 @@ export function getBranch(
 // (the task stamps the new branch's id as target_ref).
 export async function createBranch(
   poolId: string,
-  projectId: string,
+  clusterId: string,
   input: CreateBranchInput,
 ): Promise<Branch> {
   const task = await apiRequest<Task>(
-    `/storage-pools/${poolId}/projects/${projectId}/branches`,
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches`,
     { method: "POST", body: input },
   );
   const done = await pollTask(task.id);
   if (!done.target_ref) {
     throw new ApiError("branch task reported no branch id", 500);
   }
-  return getBranch(poolId, projectId, done.target_ref);
+  return getBranch(poolId, clusterId, done.target_ref);
 }
 
 /* ---- Endpoints (compute bound to a branch) ---- */
 
 export function listEndpoints(
   poolId: string,
-  projectId: string,
+  clusterId: string,
   branchId: string,
 ): Promise<EndpointList> {
   return apiRequest<EndpointList>(
-    `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints`,
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints`,
     { query: { limit: LIST_LIMIT } },
   );
 }
 
 export function getEndpoint(
   poolId: string,
-  projectId: string,
+  clusterId: string,
   branchId: string,
   endpointId: string,
 ): Promise<Endpoint> {
   return apiRequest<Endpoint>(
-    `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints/${endpointId}`,
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints/${endpointId}`,
   );
 }
 
@@ -243,19 +243,19 @@ export function getEndpoint(
 // it, then read the deployed endpoint back (target_ref = the new endpoint id).
 export async function createEndpoint(
   poolId: string,
-  projectId: string,
+  clusterId: string,
   branchId: string,
   input: CreateEndpointInput,
 ): Promise<Endpoint> {
   const task = await apiRequest<Task>(
-    `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints`,
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints`,
     { method: "POST", body: input },
   );
   const done = await pollTask(task.id);
   if (!done.target_ref) {
     throw new ApiError("create_endpoint task reported no endpoint id", 500);
   }
-  return getEndpoint(poolId, projectId, branchId, done.target_ref);
+  return getEndpoint(poolId, clusterId, branchId, done.target_ref);
 }
 
 /** The outcome of a resize: the endpoint at its new size, plus whether the live
@@ -272,13 +272,13 @@ export type ResizeResult = {
 // report the in-place outcome from the task result.
 export async function resizeEndpoint(
   poolId: string,
-  projectId: string,
+  clusterId: string,
   branchId: string,
   endpointId: string,
   input: ResizeEndpointInput,
 ): Promise<ResizeResult> {
   const task = await apiRequest<Task>(
-    `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints/${endpointId}/resize`,
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints/${endpointId}/resize`,
     { method: "POST", body: input },
   );
   const done = await pollTask(task.id);
@@ -286,7 +286,7 @@ export async function resizeEndpoint(
     in_place_resize?: ResizeOutcome;
     in_place_message?: string;
   };
-  const endpoint = await getEndpoint(poolId, projectId, branchId, endpointId);
+  const endpoint = await getEndpoint(poolId, clusterId, branchId, endpointId);
   return {
     endpoint,
     outcome: result.in_place_resize ?? "completed",
@@ -299,12 +299,12 @@ export async function resizeEndpoint(
 // completion so the caller only sees success once the instance is gone.
 export async function deleteEndpoint(
   poolId: string,
-  projectId: string,
+  clusterId: string,
   branchId: string,
   endpointId: string,
 ): Promise<void> {
   const task = await apiRequest<Task>(
-    `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints/${endpointId}`,
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints/${endpointId}`,
     { method: "DELETE" },
   );
   await pollTask(task.id);

@@ -314,73 +314,73 @@ func TestCreateStoragePoolTrimsName(t *testing.T) {
 	}
 }
 
-func TestCreateProject(t *testing.T) {
+func TestCreateCluster(t *testing.T) {
 	client, backend, tasks := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 	prov := api.Provisioning{Deployer: &fakeDeployer{}}
 
-	// Create project -> 202 + a pending create_project Task with a Location header.
-	// The project carries the chosen name; its default branch is always "main"
-	// (independent of the project name), so use a distinct project name here.
+	// Create cluster -> 202 + a pending create_cluster Task with a Location header.
+	// The cluster carries the chosen name; its default branch is always "main"
+	// (independent of the cluster name), so use a distinct cluster name here.
 	pgv := 18
-	cp, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "shop", PgVersion: &pgv})
+	cp, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: "shop", PgVersion: &pgv})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
 	if cp.StatusCode() != http.StatusAccepted {
-		t.Fatalf("CreateProject status = %d, want 202, body = %s", cp.StatusCode(), cp.Body)
+		t.Fatalf("CreateCluster status = %d, want 202, body = %s", cp.StatusCode(), cp.Body)
 	}
-	assertTaskAccepted(t, cp.JSON202, cp.HTTPResponse.Header.Get("Location"), "create_project")
-	if cp.JSON202.ProjectId == nil || *cp.JSON202.ProjectId == uuid.Nil {
-		t.Errorf("task project_id = %v, want a real project id", cp.JSON202.ProjectId)
+	assertTaskAccepted(t, cp.JSON202, cp.HTTPResponse.Header.Get("Location"), "create_cluster")
+	if cp.JSON202.ClusterId == nil || *cp.JSON202.ClusterId == uuid.Nil {
+		t.Errorf("task cluster_id = %v, want a real cluster id", cp.JSON202.ClusterId)
 	}
-	projectID := *cp.JSON202.ProjectId
+	clusterID := *cp.JSON202.ClusterId
 
-	// Drive the task to completion, then the project + its default branch are
-	// materialized: GET the project and assert the auto-created default branch.
+	// Drive the task to completion, then the cluster + its default branch are
+	// materialized: GET the cluster and assert the auto-created default branch.
 	drainTasks(t, tasks, backend, prov)
 	if got := soleTask(t, tasks); got.Status != task.StatusSucceeded {
-		t.Fatalf("create_project task status = %q, want succeeded; error = %v", got.Status, got.Error)
+		t.Fatalf("create_cluster task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
-	gp, err := client.GetProjectWithResponse(ctx, pool.Id, projectID)
+	gp, err := client.GetClusterWithResponse(ctx, pool.Id, clusterID)
 	if err != nil {
-		t.Fatalf("GetProject: %v", err)
+		t.Fatalf("GetCluster: %v", err)
 	}
 	if gp.StatusCode() != http.StatusOK || gp.JSON200 == nil {
-		t.Fatalf("GetProject status = %d, body = %s", gp.StatusCode(), gp.Body)
+		t.Fatalf("GetCluster status = %d, body = %s", gp.StatusCode(), gp.Body)
 	}
 	p := *gp.JSON200
 	if p.Name != "shop" {
-		t.Errorf("project name = %q, want %q", p.Name, "shop")
+		t.Errorf("cluster name = %q, want %q", p.Name, "shop")
 	}
 	def := p.DefaultBranch
-	if def.ProjectId != p.Id || def.BranchId == uuid.Nil {
-		t.Errorf("default branch ids = (%s,%s), want project %s and a non-nil branch", def.ProjectId, def.BranchId, p.Id)
+	if def.ClusterId != p.Id || def.BranchId == uuid.Nil {
+		t.Errorf("default branch ids = (%s,%s), want cluster %s and a non-nil branch", def.ClusterId, def.BranchId, p.Id)
 	}
 	if !def.IsDefault || def.Name != "main" || def.PgVersion != 18 {
 		t.Errorf("default branch = %+v, want {is_default name=main pg_version=18}", def)
 	}
 
 	// Empty name -> 400 (cheap validation, before any task is planned).
-	cpBad, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: ""})
+	cpBad, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: ""})
 	if err != nil {
-		t.Fatalf("CreateProject(empty): %v", err)
+		t.Fatalf("CreateCluster(empty): %v", err)
 	}
 	if cpBad.StatusCode() != http.StatusBadRequest {
-		t.Fatalf("CreateProject(empty) status = %d, body = %s", cpBad.StatusCode(), cpBad.Body)
+		t.Fatalf("CreateCluster(empty) status = %d, body = %s", cpBad.StatusCode(), cpBad.Body)
 	}
 
 	// Duplicate name in the same pool: under the async contract this is no longer a
 	// synchronous 409. The mutation is accepted (202) and the duplicate surfaces as
-	// a FAILED task when its create_project step's EnsureProject hits the conflict.
-	dup, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "shop"})
+	// a FAILED task when its create_cluster step's EnsureCluster hits the conflict.
+	dup, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: "shop"})
 	if err != nil {
-		t.Fatalf("CreateProject(dup): %v", err)
+		t.Fatalf("CreateCluster(dup): %v", err)
 	}
 	if dup.StatusCode() != http.StatusAccepted {
-		t.Fatalf("CreateProject(dup) status = %d, want 202, body = %s", dup.StatusCode(), dup.Body)
+		t.Fatalf("CreateCluster(dup) status = %d, want 202, body = %s", dup.StatusCode(), dup.Body)
 	}
 	dupID := dup.JSON202.Id
 	drainTasks(t, tasks, backend, prov)
@@ -393,31 +393,31 @@ func TestCreateProject(t *testing.T) {
 	}
 
 	// Unknown pool -> 404 (cheap pre-check: the pool must exist before planning).
-	missing, err := client.CreateProjectWithResponse(ctx, uuid.New(), api.CreateProjectRequest{Name: "x"})
+	missing, err := client.CreateClusterWithResponse(ctx, uuid.New(), api.CreateClusterRequest{Name: "x"})
 	if err != nil {
-		t.Fatalf("CreateProject(missing pool): %v", err)
+		t.Fatalf("CreateCluster(missing pool): %v", err)
 	}
 	if missing.StatusCode() != http.StatusNotFound || missing.JSON404 == nil {
-		t.Fatalf("CreateProject(missing pool) status = %d, body = %s", missing.StatusCode(), missing.Body)
+		t.Fatalf("CreateCluster(missing pool) status = %d, body = %s", missing.StatusCode(), missing.Body)
 	}
 
 	// Unsupported pg_version -> 400 (yb-amp is v18 only; cheap validation).
 	badVer := 15
-	bv, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "pg15", PgVersion: &badVer})
+	bv, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: "pg15", PgVersion: &badVer})
 	if err != nil {
-		t.Fatalf("CreateProject(bad version): %v", err)
+		t.Fatalf("CreateCluster(bad version): %v", err)
 	}
 	if bv.StatusCode() != http.StatusBadRequest {
-		t.Fatalf("CreateProject(pg_version=15) status = %d, want 400, body = %s", bv.StatusCode(), bv.Body)
+		t.Fatalf("CreateCluster(pg_version=15) status = %d, want 400, body = %s", bv.StatusCode(), bv.Body)
 	}
 }
 
-// TestCreateProjectWithWriter covers the composite "create cluster": with_writer
-// makes the single create_project task also deploy the default branch's
+// TestCreateClusterWithWriter covers the composite "create cluster": with_writer
+// makes the single create_cluster task also deploy the default branch's
 // read_write endpoint, sized to resources. Guards that the writer is (a) created
 // and (b) sized to the request — and that a bad resource quantity is rejected
 // synchronously with 400.
-func TestCreateProjectWithWriter(t *testing.T) {
+func TestCreateClusterWithWriter(t *testing.T) {
 	client, backend, tasks := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
@@ -427,22 +427,22 @@ func TestCreateProjectWithWriter(t *testing.T) {
 
 	withWriter := true
 	cpu, mem := "4", "8Gi"
-	cp, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{
+	cp, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name:       "shop",
 		WithWriter: &withWriter,
 		Resources:  &api.EndpointResources{Cpu: &cpu, Memory: &mem},
 	})
 	if err != nil {
-		t.Fatalf("CreateProject(with_writer): %v", err)
+		t.Fatalf("CreateCluster(with_writer): %v", err)
 	}
 	if cp.StatusCode() != http.StatusAccepted {
-		t.Fatalf("CreateProject(with_writer) status = %d, want 202, body = %s", cp.StatusCode(), cp.Body)
+		t.Fatalf("CreateCluster(with_writer) status = %d, want 202, body = %s", cp.StatusCode(), cp.Body)
 	}
 
-	// One task (create_project) with an appended create_endpoint step; drive it.
+	// One task (create_cluster) with an appended create_endpoint step; drive it.
 	drainTasks(t, tasks, backend, prov)
 	if got := soleTask(t, tasks); got.Status != task.StatusSucceeded {
-		t.Fatalf("create_project(with_writer) task status = %q, want succeeded; error = %v", got.Status, got.Error)
+		t.Fatalf("create_cluster(with_writer) task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
 
 	// Exactly one endpoint (the writer) must have been deployed, sized to the
@@ -456,16 +456,16 @@ func TestCreateProjectWithWriter(t *testing.T) {
 
 	// with_writer + an invalid cpu quantity -> synchronous 400 (before planning).
 	badCPU := "not-a-quantity"
-	bad, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{
+	bad, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{
 		Name:       "shop2",
 		WithWriter: &withWriter,
 		Resources:  &api.EndpointResources{Cpu: &badCPU},
 	})
 	if err != nil {
-		t.Fatalf("CreateProject(bad resources): %v", err)
+		t.Fatalf("CreateCluster(bad resources): %v", err)
 	}
 	if bad.StatusCode() != http.StatusBadRequest {
-		t.Fatalf("CreateProject(bad resources) status = %d, want 400, body = %s", bad.StatusCode(), bad.Body)
+		t.Fatalf("CreateCluster(bad resources) status = %d, want 400, body = %s", bad.StatusCode(), bad.Body)
 	}
 }
 
@@ -552,12 +552,12 @@ func TestCreateEndpointDeployFailure(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestCreateEndpointDeployFailure(t *testing.T) {
 		t.Fatalf("CreateEndpoint deploy calls = %d, want at least 1 (the step attempted the deploy)", len(dep.created))
 	}
 	// No address was recorded, so the endpoint never became usable.
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -612,12 +612,12 @@ func TestCreateEndpointAddressRecordFailure(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	mem.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	mem.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -635,11 +635,11 @@ func TestCreateEndpointAddressRecordFailure(t *testing.T) {
 	}
 }
 
-// TestProjectDeleteCascade: delete-project is a real async cascade now. Create a
-// project (with a deployed endpoint on its default branch), delete it -> 202 +
-// delete_project Task; drive the task; the project, its branch, and the endpoint
+// TestClusterDeleteCascade: delete-cluster is a real async cascade now. Create a
+// cluster (with a deployed endpoint on its default branch), delete it -> 202 +
+// delete_cluster Task; drive the task; the cluster, its branch, and the endpoint
 // are all gone, and the running instance was retired.
-func TestProjectDeleteCascade(t *testing.T) {
+func TestClusterDeleteCascade(t *testing.T) {
 	dep := &fakeDeployer{}
 	prov := api.Provisioning{Deployer: dep}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
@@ -647,72 +647,72 @@ func TestProjectDeleteCascade(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	// Seed a project with a default branch + a second branch, each carrying a
+	// Seed a cluster with a default branch + a second branch, each carrying a
 	// read_write endpoint, so the cascade has multiple branches and endpoints to
 	// retire and we can assert no branch survives.
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
 	branch2ID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branch2ID, Name: "feature", PgVersion: 18})
-	if _, err := backend.CreateEndpoint(ctx, projectID, branchID, core.RoleReadWrite, nil); err != nil {
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branch2ID, Name: "feature", PgVersion: 18})
+	if _, err := backend.CreateEndpoint(ctx, clusterID, branchID, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed endpoint (main): %v", err)
 	}
-	if _, err := backend.CreateEndpoint(ctx, projectID, branch2ID, core.RoleReadWrite, nil); err != nil {
+	if _, err := backend.CreateEndpoint(ctx, clusterID, branch2ID, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed endpoint (feature): %v", err)
 	}
 
-	delP, err := client.DeleteProjectWithResponse(ctx, pool.Id, projectID)
+	delP, err := client.DeleteClusterWithResponse(ctx, pool.Id, clusterID)
 	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
+		t.Fatalf("DeleteCluster: %v", err)
 	}
 	if delP.StatusCode() != http.StatusAccepted {
-		t.Fatalf("DeleteProject status = %d, want 202, body = %s", delP.StatusCode(), delP.Body)
+		t.Fatalf("DeleteCluster status = %d, want 202, body = %s", delP.StatusCode(), delP.Body)
 	}
-	assertTaskAccepted(t, delP.JSON202, delP.HTTPResponse.Header.Get("Location"), "delete_project")
+	assertTaskAccepted(t, delP.JSON202, delP.HTTPResponse.Header.Get("Location"), "delete_cluster")
 
 	drainTasks(t, store, backend, prov)
 	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
-		t.Fatalf("delete_project task status = %q, want succeeded; error = %v", got.Status, got.Error)
+		t.Fatalf("delete_cluster task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
 
-	// The project is gone.
-	gp, err := client.GetProjectWithResponse(ctx, pool.Id, projectID)
+	// The cluster is gone.
+	gp, err := client.GetClusterWithResponse(ctx, pool.Id, clusterID)
 	if err != nil {
-		t.Fatalf("GetProject(after delete): %v", err)
+		t.Fatalf("GetCluster(after delete): %v", err)
 	}
 	if gp.StatusCode() != http.StatusNotFound {
-		t.Fatalf("GetProject(after delete) status = %d, want 404", gp.StatusCode())
+		t.Fatalf("GetCluster(after delete) status = %d, want 404", gp.StatusCode())
 	}
 	// Both endpoint instances were retired.
 	if len(dep.deleted) != 2 {
 		t.Errorf("deployer retire calls = %d, want 2 (both cascaded endpoints)", len(dep.deleted))
 	}
-	// No branch row survives for the project.
-	if ids, err := backend.ChildBranchIDs(ctx, projectID, branchID); err != nil {
+	// No branch row survives for the cluster.
+	if ids, err := backend.ChildBranchIDs(ctx, clusterID, branchID); err != nil {
 		t.Fatalf("ChildBranchIDs: %v", err)
 	} else if len(ids) != 0 {
 		t.Errorf("child branches after cascade = %d, want 0", len(ids))
 	}
 	for _, bid := range []uuid.UUID{branchID, branch2ID} {
-		if _, err := backend.GetBranch(ctx, pool.Id, projectID, bid); !errors.Is(err, core.ErrNotFound) {
+		if _, err := backend.GetBranch(ctx, pool.Id, clusterID, bid); !errors.Is(err, core.ErrNotFound) {
 			t.Errorf("GetBranch(%s) after cascade err = %v, want ErrNotFound (branch row gone)", bid, err)
 		}
 	}
 
-	// Deleting an unknown project -> 404 (cheap pre-check).
-	miss, err := client.DeleteProjectWithResponse(ctx, pool.Id, uuid.New())
+	// Deleting an unknown cluster -> 404 (cheap pre-check).
+	miss, err := client.DeleteClusterWithResponse(ctx, pool.Id, uuid.New())
 	if err != nil {
-		t.Fatalf("DeleteProject(missing): %v", err)
+		t.Fatalf("DeleteCluster(missing): %v", err)
 	}
 	if miss.StatusCode() != http.StatusNotFound {
-		t.Fatalf("DeleteProject(missing) status = %d, want 404", miss.StatusCode())
+		t.Fatalf("DeleteCluster(missing) status = %d, want 404", miss.StatusCode())
 	}
 }
 
 // TestCreateBranchValidation keeps the cheap create-branch validation that stays
-// synchronous: an empty name -> 400, a nonexistent project -> 404. The happy path
-// (a real project + the recipe) lives in project_storage_test.go.
+// synchronous: an empty name -> 400, a nonexistent cluster -> 404. The happy path
+// (a real cluster + the recipe) lives in cluster_storage_test.go.
 func TestCreateBranchValidation(t *testing.T) {
 	client, _, _ := newTestServer(t)
 	ctx := context.Background()
@@ -731,7 +731,7 @@ func TestCreateBranchValidation(t *testing.T) {
 		t.Fatalf("CreateBranch: %v", err)
 	}
 	if br.StatusCode() != http.StatusNotFound {
-		t.Fatalf("CreateBranch(missing project) status = %d, body = %s", br.StatusCode(), br.Body)
+		t.Fatalf("CreateBranch(missing cluster) status = %d, body = %s", br.StatusCode(), br.Body)
 	}
 }
 
@@ -752,7 +752,7 @@ func TestGetTask(t *testing.T) {
 	id := uuid.New()
 	tasks.Seed(&task.Task{
 		ID:        id,
-		Kind:      "create_project",
+		Kind:      "create_cluster",
 		Status:    task.StatusRunning,
 		Params:    json.RawMessage(`{"name":"db1"}`),
 		CreatedAt: time.Now(),
@@ -765,8 +765,8 @@ func TestGetTask(t *testing.T) {
 	if got.StatusCode() != http.StatusOK || got.JSON200 == nil {
 		t.Fatalf("GetTask status = %d, body = %s", got.StatusCode(), got.Body)
 	}
-	if got.JSON200.Kind != "create_project" || got.JSON200.Status != api.TaskStatusRunning {
-		t.Errorf("task = {kind:%q status:%q}, want {create_project running}", got.JSON200.Kind, got.JSON200.Status)
+	if got.JSON200.Kind != "create_cluster" || got.JSON200.Status != api.TaskStatusRunning {
+		t.Errorf("task = {kind:%q status:%q}, want {create_cluster running}", got.JSON200.Kind, got.JSON200.Status)
 	}
 }
 
@@ -781,20 +781,20 @@ func newFakeTaskService() *task.Service {
 // right Kind with a Location header, WITHOUT driving the worker (the cheap
 // contract check; the materialization is covered by the drive-the-worker tests).
 
-func TestCreateProjectReturnsTask(t *testing.T) {
+func TestCreateClusterReturnsTask(t *testing.T) {
 	client, _, _ := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	resp, err := client.CreateProjectWithResponse(ctx, pool.Id, api.CreateProjectRequest{Name: "shop"})
+	resp, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: "shop"})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
 	if resp.StatusCode() != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202, body = %s", resp.StatusCode(), resp.Body)
 	}
-	assertTaskAccepted(t, resp.JSON202, resp.HTTPResponse.Header.Get("Location"), "create_project")
+	assertTaskAccepted(t, resp.JSON202, resp.HTTPResponse.Header.Get("Location"), "create_cluster")
 }
 
 func TestCreateBranchReturnsTask(t *testing.T) {
@@ -804,12 +804,12 @@ func TestCreateBranchReturnsTask(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	lsn := "0/16ABCD0"
-	resp, err := client.CreateBranchWithResponse(ctx, pool.Id, projectID, api.CreateBranchRequest{Name: "feature", ForkPointLsn: &lsn})
+	resp, err := client.CreateBranchWithResponse(ctx, pool.Id, clusterID, api.CreateBranchRequest{Name: "feature", ForkPointLsn: &lsn})
 	if err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
@@ -824,12 +824,12 @@ func TestCreateEndpointReturnsTask(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -844,15 +844,15 @@ func TestDeleteEndpointReturnsTask(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
-	ep, err := backend.CreateEndpoint(ctx, projectID, branchID, core.RoleReadWrite, nil)
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	ep, err := backend.CreateEndpoint(ctx, clusterID, branchID, core.RoleReadWrite, nil)
 	if err != nil {
 		t.Fatalf("seed endpoint: %v", err)
 	}
 
-	resp, err := client.DeleteEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.ID)
+	resp, err := client.DeleteEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.ID)
 	if err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
@@ -862,23 +862,23 @@ func TestDeleteEndpointReturnsTask(t *testing.T) {
 	assertTaskAccepted(t, resp.JSON202, resp.HTTPResponse.Header.Get("Location"), "delete_endpoint")
 }
 
-func TestDeleteProjectReturnsTask(t *testing.T) {
+func TestDeleteClusterReturnsTask(t *testing.T) {
 	client, backend, _ := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
-	resp, err := client.DeleteProjectWithResponse(ctx, pool.Id, projectID)
+	resp, err := client.DeleteClusterWithResponse(ctx, pool.Id, clusterID)
 	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
+		t.Fatalf("DeleteCluster: %v", err)
 	}
 	if resp.StatusCode() != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202, body = %s", resp.StatusCode(), resp.Body)
 	}
-	assertTaskAccepted(t, resp.JSON202, resp.HTTPResponse.Header.Get("Location"), "delete_project")
+	assertTaskAccepted(t, resp.JSON202, resp.HTTPResponse.Header.Get("Location"), "delete_cluster")
 }
 
 func TestDeleteBranchReturnsTask(t *testing.T) {
@@ -886,11 +886,11 @@ func TestDeleteBranchReturnsTask(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
-	resp, err := client.DeleteBranchWithResponse(ctx, pool.Id, projectID, branchID)
+	resp, err := client.DeleteBranchWithResponse(ctx, pool.Id, clusterID, branchID)
 	if err != nil {
 		t.Fatalf("DeleteBranch: %v", err)
 	}
@@ -912,19 +912,19 @@ func TestBranchDeleteCascade(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	target := uuid.New()
 	sibling := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: target, Name: "main", PgVersion: 18, IsDefault: true})
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: sibling, Name: "sibling", PgVersion: 18})
-	if _, err := backend.CreateEndpoint(ctx, projectID, target, core.RoleReadWrite, nil); err != nil {
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: target, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: sibling, Name: "sibling", PgVersion: 18})
+	if _, err := backend.CreateEndpoint(ctx, clusterID, target, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed endpoint (target): %v", err)
 	}
-	if _, err := backend.CreateEndpoint(ctx, projectID, sibling, core.RoleReadWrite, nil); err != nil {
+	if _, err := backend.CreateEndpoint(ctx, clusterID, sibling, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed endpoint (sibling): %v", err)
 	}
 
-	del, err := client.DeleteBranchWithResponse(ctx, pool.Id, projectID, target)
+	del, err := client.DeleteBranchWithResponse(ctx, pool.Id, clusterID, target)
 	if err != nil {
 		t.Fatalf("DeleteBranch: %v", err)
 	}
@@ -939,7 +939,7 @@ func TestBranchDeleteCascade(t *testing.T) {
 	}
 
 	// The target branch is gone.
-	if _, err := backend.GetBranch(ctx, pool.Id, projectID, target); !errors.Is(err, core.ErrNotFound) {
+	if _, err := backend.GetBranch(ctx, pool.Id, clusterID, target); !errors.Is(err, core.ErrNotFound) {
 		t.Errorf("GetBranch(target) after cascade err = %v, want ErrNotFound", err)
 	}
 	// Exactly the target's endpoint instance was retired (the sibling's survives).
@@ -947,10 +947,10 @@ func TestBranchDeleteCascade(t *testing.T) {
 		t.Errorf("deployer retire calls = %d, want 1 (only the target's endpoint)", len(dep.deleted))
 	}
 	// The sibling branch and its endpoint survive.
-	if _, err := backend.GetBranch(ctx, pool.Id, projectID, sibling); err != nil {
+	if _, err := backend.GetBranch(ctx, pool.Id, clusterID, sibling); err != nil {
 		t.Errorf("GetBranch(sibling) after cascade err = %v, want nil (it must survive)", err)
 	}
-	if eps, _, err := backend.ListEndpoints(ctx, pool.Id, projectID, sibling, 100, 0); err != nil {
+	if eps, _, err := backend.ListEndpoints(ctx, pool.Id, clusterID, sibling, 100, 0); err != nil {
 		t.Fatalf("ListEndpoints(sibling): %v", err)
 	} else if len(eps) != 1 {
 		t.Errorf("sibling endpoints after cascade = %d, want 1 (survives)", len(eps))
@@ -968,18 +968,18 @@ func TestDeleteBranchWithChildForkConflict(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	parent := uuid.New()
 	child := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: parent, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: parent, Name: "main", PgVersion: 18, IsDefault: true})
 	// A child branch forked from the parent (ParentBranchID set).
 	parentRef := parent
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: child, Name: "child", PgVersion: 18, ParentBranchID: &parentRef})
-	if _, err := backend.CreateEndpoint(ctx, projectID, parent, core.RoleReadWrite, nil); err != nil {
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: child, Name: "child", PgVersion: 18, ParentBranchID: &parentRef})
+	if _, err := backend.CreateEndpoint(ctx, clusterID, parent, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed endpoint (parent): %v", err)
 	}
 
-	del, err := client.DeleteBranchWithResponse(ctx, pool.Id, projectID, parent)
+	del, err := client.DeleteBranchWithResponse(ctx, pool.Id, clusterID, parent)
 	if err != nil {
 		t.Fatalf("DeleteBranch: %v", err)
 	}
@@ -996,33 +996,33 @@ func TestDeleteBranchWithChildForkConflict(t *testing.T) {
 		t.Errorf("deployer retire calls = %d, want 0 (parent's endpoints must not be retired)", len(dep.deleted))
 	}
 	// The parent branch still exists.
-	if _, err := backend.GetBranch(ctx, pool.Id, projectID, parent); err != nil {
+	if _, err := backend.GetBranch(ctx, pool.Id, clusterID, parent); err != nil {
 		t.Errorf("GetBranch(parent) after 409 err = %v, want nil (parent must survive)", err)
 	}
 }
 
 // TestListTasks seeds several tasks and pages through GET /tasks, asserting the
-// total/count/order contract (created_at DESC) and the status/kind/project_id
+// total/count/order contract (created_at DESC) and the status/kind/cluster_id
 // filters.
 func TestListTasks(t *testing.T) {
 	client, _, tasks := newTestServer(t)
 	ctx := context.Background()
 
-	// Seed a mix of kinds, statuses, and projects with distinct created_at so the
+	// Seed a mix of kinds, statuses, and clusters with distinct created_at so the
 	// DESC order is deterministic. seedTask appends one task at t0+i seconds.
 	proj := uuid.New()
 	base := time.Now().Add(-time.Hour)
 	type seed struct {
 		kind    string
 		status  task.Status
-		project *uuid.UUID
+		cluster *uuid.UUID
 	}
 	seeds := []seed{
-		{"create_project", task.StatusSucceeded, &proj},
+		{"create_cluster", task.StatusSucceeded, &proj},
 		{"branch", task.StatusFailed, &proj},
 		{"create_endpoint", task.StatusPending, nil},
 		{"delete_endpoint", task.StatusRunning, &proj},
-		{"create_project", task.StatusPending, nil},
+		{"create_cluster", task.StatusPending, nil},
 	}
 	ids := make([]uuid.UUID, len(seeds))
 	for i, s := range seeds {
@@ -1032,7 +1032,7 @@ func TestListTasks(t *testing.T) {
 			ID:        id,
 			Kind:      s.kind,
 			Status:    s.status,
-			ProjectID: s.project,
+			ClusterID: s.cluster,
 			CreatedAt: base.Add(time.Duration(i) * time.Second),
 			UpdatedAt: base.Add(time.Duration(i) * time.Second),
 		}, nil)
@@ -1101,32 +1101,32 @@ func TestListTasks(t *testing.T) {
 		}
 	}
 
-	// Kind filter: two tasks are create_project.
-	kind := "create_project"
+	// Kind filter: two tasks are create_cluster.
+	kind := "create_cluster"
 	byKind, err := client.ListTasksWithResponse(ctx, &api.ListTasksParams{Kind: &kind})
 	if err != nil {
-		t.Fatalf("ListTasks(kind=create_project): %v", err)
+		t.Fatalf("ListTasks(kind=create_cluster): %v", err)
 	}
 	if byKind.JSON200.Total != 2 {
-		t.Errorf("create_project total = %d, want 2", byKind.JSON200.Total)
+		t.Errorf("create_cluster total = %d, want 2", byKind.JSON200.Total)
 	}
 	for _, tk := range byKind.JSON200.Tasks {
-		if tk.Kind != "create_project" {
+		if tk.Kind != "create_cluster" {
 			t.Errorf("kind filter returned a %q task", tk.Kind)
 		}
 	}
 
-	// Project filter: three tasks are scoped to proj.
-	byProject, err := client.ListTasksWithResponse(ctx, &api.ListTasksParams{ProjectId: &proj})
+	// Cluster filter: three tasks are scoped to proj.
+	byCluster, err := client.ListTasksWithResponse(ctx, &api.ListTasksParams{ClusterId: &proj})
 	if err != nil {
-		t.Fatalf("ListTasks(project_id): %v", err)
+		t.Fatalf("ListTasks(cluster_id): %v", err)
 	}
-	if byProject.JSON200.Total != 3 {
-		t.Errorf("project-scoped total = %d, want 3", byProject.JSON200.Total)
+	if byCluster.JSON200.Total != 3 {
+		t.Errorf("cluster-scoped total = %d, want 3", byCluster.JSON200.Total)
 	}
-	for _, tk := range byProject.JSON200.Tasks {
-		if tk.ProjectId == nil || *tk.ProjectId != proj {
-			t.Errorf("project filter returned a task scoped to %v, want %s", tk.ProjectId, proj)
+	for _, tk := range byCluster.JSON200.Tasks {
+		if tk.ClusterId == nil || *tk.ClusterId != proj {
+			t.Errorf("cluster filter returned a task scoped to %v, want %s", tk.ClusterId, proj)
 		}
 	}
 

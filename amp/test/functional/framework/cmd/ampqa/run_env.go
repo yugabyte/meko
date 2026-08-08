@@ -13,7 +13,7 @@ import (
 //
 //   - An amp control plane (provider "ampstack" / shape "dedicated_stack", or any
 //     entry recording a controller_url/amp_controller_url or a kube
-//     context+namespace) → the sharedk8s provider, which carves a project-per-test
+//     context+namespace) → the sharedk8s provider, which carves a cluster-per-test
 //     out of the STANDING control plane. Connection info (controller_url or
 //     context+namespace+controller_service/port, and any pinned pool) is read from
 //     entry.Data and injected under env.sharedk8s.*.
@@ -24,7 +24,7 @@ import (
 // crash-recovery reap record is infrastructure to reap with `ampqa env rm`, not a
 // target `run` can attach to. The returned overrides carry NO per-run identifier,
 // so two sequential `run --env <id>` invocations against the same entry each get a
-// fresh, collision-free project name from the run seed (sharedk8s names projects
+// fresh, collision-free cluster name from the run seed (sharedk8s names clusters
 // ampqa-p-<seed>-<n>).
 func attachFromEntry(e registry.Entry) (provider string, overrides []string, err error) {
 	d := e.Data

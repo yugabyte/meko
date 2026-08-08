@@ -325,9 +325,9 @@ impl Cluster {
         self.yb(&init_args)?;
         self.yb(&["start"])?;
 
-        step("project + endpoint");
-        // The shared `main` lineage is a project like any other.
-        let branch = self.project_create("main")?;
+        step("amp cluster + endpoint");
+        // The shared `main` lineage is an amp cluster like any other.
+        let branch = self.cluster_create("main")?;
         tee_println!("branch: {branch}");
         self.branch = branch;
 
@@ -526,19 +526,19 @@ impl Cluster {
         Ok((branch, text))
     }
 
-    /// Create a PROJECT and return its default branch's id — the root of a new
+    /// Create an amp CLUSTER and return its default branch's id — the root of a new
     /// lineage, with its own initdb and its own GC cutoff.
     ///
     /// This is how a scenario gets an ancestor of its own. Children of the shared
     /// `main` pin its GC cutoff for the rest of the suite run (a dropped child's
     /// `branch_state` row keeps pinning), so a cutoff-sensitive scenario cannot
-    /// fork `main`. There is no such thing as a rootless branch: a lineage is a
-    /// project, in the launcher exactly as in the product.
-    pub fn project_create(&self, name: &str) -> anyhow::Result<String> {
+    /// fork `main`. There is no such thing as a rootless branch: a lineage is an
+    /// amp cluster, in the launcher exactly as in the product.
+    pub fn cluster_create(&self, name: &str) -> anyhow::Result<String> {
         let (branch, text) =
-            self.scrape_branch_id(&["project", "create", name], "project create")?;
+            self.scrape_branch_id(&["cluster", "create", name], "cluster create")?;
         branch
-            .ok_or_else(|| anyhow::anyhow!("project create {name} produced no branch id:\n{text}"))
+            .ok_or_else(|| anyhow::anyhow!("cluster create {name} produced no branch id:\n{text}"))
     }
 
     /// Fork `ancestor_id` and return the new branch's id.

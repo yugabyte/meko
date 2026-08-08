@@ -55,12 +55,12 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create pool: %v", err)
 	}
-	projectID, branchID := uuid.New(), uuid.New()
-	if err := b.EnsureProject(ctx, sp.ID, projectID, branchID, "projections", 18); err != nil {
-		t.Fatalf("ensure project: %v", err)
+	clusterID, branchID := uuid.New(), uuid.New()
+	if err := b.EnsureCluster(ctx, sp.ID, clusterID, branchID, "projections", 18); err != nil {
+		t.Fatalf("ensure cluster: %v", err)
 	}
 	endpointID := uuid.New()
-	if err := b.EnsureEndpointRecord(ctx, endpointID, projectID, branchID, RoleReadWrite, "primary",
+	if err := b.EnsureEndpointRecord(ctx, endpointID, clusterID, branchID, RoleReadWrite, "primary",
 		[]byte(`{"cpu":"2","memory":"4Gi","extended":{"pg_port":55432}}`),
 		[]byte(`{"work_mem":"64MB"}`)); err != nil {
 		t.Fatalf("ensure endpoint: %v", err)
@@ -68,7 +68,7 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 
 	t.Run("branches", func(t *testing.T) {
 		// GetBranch (branchSelect, pool-joined).
-		got, err := b.GetBranch(ctx, sp.ID, projectID, branchID)
+		got, err := b.GetBranch(ctx, sp.ID, clusterID, branchID)
 		if err != nil {
 			t.Fatalf("GetBranch: %v", err)
 		}
@@ -77,7 +77,7 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		}
 
 		// ListBranches (its own FROM, same column list).
-		list, total, err := b.ListBranches(ctx, sp.ID, projectID, 100, 0)
+		list, total, err := b.ListBranches(ctx, sp.ID, clusterID, 100, 0)
 		if err != nil {
 			t.Fatalf("ListBranches: %v", err)
 		}
@@ -85,19 +85,19 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 			t.Errorf("ListBranches = %d/%+v", total, list)
 		}
 
-		// GetProject resolves the default branch through getBranchByID, the third
+		// GetCluster resolves the default branch through getBranchByID, the third
 		// caller of scanBranch and the one with no pool join.
-		p, err := b.GetProject(ctx, sp.ID, projectID)
+		p, err := b.GetCluster(ctx, sp.ID, clusterID)
 		if err != nil {
-			t.Fatalf("GetProject: %v", err)
+			t.Fatalf("GetCluster: %v", err)
 		}
 		if p.DefaultBranch.BranchID != branchID {
-			t.Errorf("GetProject default branch = %+v", p.DefaultBranch)
+			t.Errorf("GetCluster default branch = %+v", p.DefaultBranch)
 		}
 	})
 
 	t.Run("endpoints", func(t *testing.T) {
-		got, err := b.GetEndpoint(ctx, sp.ID, projectID, branchID, endpointID)
+		got, err := b.GetEndpoint(ctx, sp.ID, clusterID, branchID, endpointID)
 		if err != nil {
 			t.Fatalf("GetEndpoint: %v", err)
 		}
@@ -116,7 +116,7 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 			t.Error("extended_config did not survive the round trip")
 		}
 
-		list, total, err := b.ListEndpoints(ctx, sp.ID, projectID, branchID, 100, 0)
+		list, total, err := b.ListEndpoints(ctx, sp.ID, clusterID, branchID, 100, 0)
 		if err != nil {
 			t.Fatalf("ListEndpoints: %v", err)
 		}

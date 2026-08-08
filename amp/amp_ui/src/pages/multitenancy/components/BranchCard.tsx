@@ -13,7 +13,7 @@ export function BranchCard({
   isRoot,
   parentName,
   poolId,
-  projectId,
+  clusterId,
   endpoints,
   endpointsLoading,
 }: {
@@ -21,7 +21,7 @@ export function BranchCard({
   isRoot: boolean;
   parentName?: string;
   poolId: string;
-  projectId: string;
+  clusterId: string;
   endpoints: Endpoint[];
   endpointsLoading: boolean;
 }) {
@@ -71,7 +71,7 @@ export function BranchCard({
 
       <EndpointsSection
         poolId={poolId}
-        projectId={projectId}
+        clusterId={clusterId}
         branchId={branch.branch_id}
         endpoints={endpoints}
         loading={endpointsLoading}

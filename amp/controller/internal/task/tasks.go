@@ -23,13 +23,13 @@ import (
 // Task kinds — the task.kind values. Each corresponds to a user-visible
 // operation whose status the API exposes (GET /tasks/{id}).
 const (
-	KindCreateProject  = "create_project"
+	KindCreateCluster  = "create_cluster"
 	KindBranch         = "branch"
 	KindCreateEndpoint = "create_endpoint"
 	KindResizeEndpoint = "resize_endpoint"
 	KindDeleteEndpoint = "delete_endpoint"
 	KindDeleteBranch   = "delete_branch"
-	KindDeleteProject  = "delete_project"
+	KindDeleteCluster  = "delete_cluster"
 )
 
 // Service records tasks against a Store and reads them back. It is the dependency
@@ -71,10 +71,10 @@ func (s *Service) Result(ctx context.Context, id uuid.UUID) (json.RawMessage, er
 	return nil, nil
 }
 
-// CreateProjectInput is the request for a create_project task: a new project (a
+// CreateClusterInput is the request for a create_cluster task: a new cluster (a
 // "database") and its default branch under a pool the caller can reach, and
 // optionally that branch's first read_write endpoint.
-type CreateProjectInput struct {
+type CreateClusterInput struct {
 	PoolID    uuid.UUID `json:"pool_id"`
 	Name      string    `json:"name"`
 	PgVersion int       `json:"pg_version"`
@@ -88,26 +88,26 @@ type CreateProjectInput struct {
 	Memory string `json:"memory,omitempty"`
 }
 
-// CreateProject records a create_project task: create the project + its default
+// CreateCluster records a create_cluster task: create the cluster + its default
 // branch, record the branch's pending-init recipe, then (when WithWriter) create
-// and deploy the first write endpoint. The project/branch (and endpoint) ids are
+// and deploy the first write endpoint. The cluster/branch (and endpoint) ids are
 // generated here so the whole plan is fixed before execution.
-func (s *Service) CreateProject(ctx context.Context, in CreateProjectInput) (*Task, error) {
-	projectID := uuid.New()
+func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Task, error) {
+	clusterID := uuid.New()
 	branchID := uuid.New()
 
 	steps := []StepSpec{
-		stepSpec(StepCreateProject, CreateProjectArgs{
+		stepSpec(StepCreateCluster, CreateClusterArgs{
 			PoolID:    in.PoolID,
-			ProjectID: projectID,
+			ClusterID: clusterID,
 			BranchID:  branchID,
 			Name:      in.Name,
 			PgVersion: in.PgVersion,
 		}),
 		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{
-			ProjectID:  projectID,
+			ClusterID:  clusterID,
 			BranchID:   branchID,
-			BranchName: defaultBranchName, // always "main", never the project name
+			BranchName: defaultBranchName, // always "main", never the cluster name
 			PgVersion:  in.PgVersion,
 			StartLSN:   "0/0", // a default (Bootstrap) branch starts at the origin
 		}),
@@ -115,7 +115,7 @@ func (s *Service) CreateProject(ctx context.Context, in CreateProjectInput) (*Ta
 	if in.WithWriter {
 		steps = append(steps, stepSpec(StepCreateEndpoint, CreateEndpointArgs{
 			EndpointID: uuid.New(),
-			ProjectID:  projectID,
+			ClusterID:  clusterID,
 			BranchID:   branchID,
 			Role:       roleReadWrite,
 			PgVersion:  in.PgVersion,
@@ -124,17 +124,17 @@ func (s *Service) CreateProject(ctx context.Context, in CreateProjectInput) (*Ta
 		}))
 	}
 	// TargetRef is the new default branch: the UI pre-selects it once the task
-	// succeeds (a project is created together with its default branch).
-	return s.create(ctx, KindCreateProject, in, projectID, branchID.String(), steps)
+	// succeeds (a cluster is created together with its default branch).
+	return s.create(ctx, KindCreateCluster, in, clusterID, branchID.String(), steps)
 }
 
 // BranchInput is the request for a branch task. The new branch stays in its
-// parent's project (ProjectID), forked off ParentBranchID at ForkLSN (resolved
+// parent's cluster (ClusterID), forked off ParentBranchID at ForkLSN (resolved
 // before planning — the storage layer's "X/X" form). PgVersion is the parent's
 // (a branch inherits its ancestor's version).
 type BranchInput struct {
 	PoolID         uuid.UUID `json:"pool_id"`
-	ProjectID      uuid.UUID `json:"project_id"`
+	ClusterID      uuid.UUID `json:"cluster_id"`
 	ParentBranchID uuid.UUID `json:"parent_branch_id"`
 	Name           string    `json:"name"`
 	ForkLSN        string    `json:"fork_lsn"`
@@ -162,7 +162,7 @@ func (s *Service) Branch(ctx context.Context, in BranchInput) (*Task, error) {
 	// create_branch is registered for task replay but planned by nothing.
 	steps := []StepSpec{
 		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{
-			ProjectID:        in.ProjectID,
+			ClusterID:        in.ClusterID,
 			BranchID:         branchID,
 			BranchName:       in.Name,
 			PgVersion:        in.PgVersion,
@@ -174,19 +174,19 @@ func (s *Service) Branch(ctx context.Context, in BranchInput) (*Task, error) {
 	if in.WithWriter {
 		steps = append(steps, stepSpec(StepCreateEndpoint, CreateEndpointArgs{
 			EndpointID: uuid.New(),
-			ProjectID:  in.ProjectID,
+			ClusterID:  in.ClusterID,
 			BranchID:   branchID,
 			Role:       roleReadWrite,
 			PgVersion:  in.PgVersion,
 		}))
 	}
-	return s.create(ctx, KindBranch, in, in.ProjectID, branchID.String(), steps)
+	return s.create(ctx, KindBranch, in, in.ClusterID, branchID.String(), steps)
 }
 
 // CreateEndpointInput is the request for a create_endpoint (scale-up) task on an
 // existing branch.
 type CreateEndpointInput struct {
-	ProjectID uuid.UUID `json:"project_id"`
+	ClusterID uuid.UUID `json:"cluster_id"`
 	BranchID  uuid.UUID `json:"branch_id"`
 	Role      string    `json:"role"`
 	PgVersion int       `json:"pg_version"`
@@ -219,7 +219,7 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 	steps := []StepSpec{
 		stepSpec(StepCreateEndpoint, CreateEndpointArgs{
 			EndpointID: endpointID,
-			ProjectID:  in.ProjectID,
+			ClusterID:  in.ClusterID,
 			BranchID:   in.BranchID,
 			Role:       role,
 			PgVersion:  in.PgVersion,
@@ -231,14 +231,14 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			PgSettings: in.PgSettings,
 		}),
 	}
-	return s.create(ctx, KindCreateEndpoint, in, in.ProjectID, endpointID.String(), steps)
+	return s.create(ctx, KindCreateEndpoint, in, in.ClusterID, endpointID.String(), steps)
 }
 
 // ResizeEndpointInput is the request for a resize_endpoint task: change an
 // existing endpoint's compute reservation. CPU/Memory are Kubernetes quantities
 // applied as request == limit (Guaranteed QoS preserved).
 type ResizeEndpointInput struct {
-	ProjectID  uuid.UUID `json:"project_id"`
+	ClusterID  uuid.UUID `json:"cluster_id"`
 	EndpointID uuid.UUID `json:"endpoint_id"`
 	CPU        string    `json:"cpu"`
 	Memory     string    `json:"memory"`
@@ -255,12 +255,12 @@ func (s *Service) ResizeEndpoint(ctx context.Context, in ResizeEndpointInput) (*
 			Memory:     in.Memory,
 		}),
 	}
-	return s.create(ctx, KindResizeEndpoint, in, in.ProjectID, in.EndpointID.String(), steps)
+	return s.create(ctx, KindResizeEndpoint, in, in.ClusterID, in.EndpointID.String(), steps)
 }
 
 // DeleteEndpointInput is the request for a delete_endpoint (scale-down) task.
 type DeleteEndpointInput struct {
-	ProjectID  uuid.UUID `json:"project_id"`
+	ClusterID  uuid.UUID `json:"cluster_id"`
 	EndpointID uuid.UUID `json:"endpoint_id"`
 }
 
@@ -269,13 +269,13 @@ func (s *Service) DeleteEndpoint(ctx context.Context, in DeleteEndpointInput) (*
 	steps := []StepSpec{
 		stepSpec(StepDeleteEndpoint, DeleteEndpointArgs{EndpointID: in.EndpointID}),
 	}
-	return s.create(ctx, KindDeleteEndpoint, in, in.ProjectID, in.EndpointID.String(), steps)
+	return s.create(ctx, KindDeleteEndpoint, in, in.ClusterID, in.EndpointID.String(), steps)
 }
 
 // DeleteBranchInput is the request for a delete_branch (cascade) task.
 type DeleteBranchInput struct {
 	PoolID    uuid.UUID `json:"pool_id"`
-	ProjectID uuid.UUID `json:"project_id"`
+	ClusterID uuid.UUID `json:"cluster_id"`
 	BranchID  uuid.UUID `json:"branch_id"`
 }
 
@@ -286,27 +286,27 @@ type DeleteBranchInput struct {
 // per-endpoint fan-out.
 func (s *Service) DeleteBranch(ctx context.Context, in DeleteBranchInput) (*Task, error) {
 	steps := []StepSpec{
-		stepSpec(StepDeleteBranch, DeleteBranchArgs{ProjectID: in.ProjectID, BranchID: in.BranchID}),
+		stepSpec(StepDeleteBranch, DeleteBranchArgs{ClusterID: in.ClusterID, BranchID: in.BranchID}),
 	}
-	return s.create(ctx, KindDeleteBranch, in, in.ProjectID, in.BranchID.String(), steps)
+	return s.create(ctx, KindDeleteBranch, in, in.ClusterID, in.BranchID.String(), steps)
 }
 
-// DeleteProjectInput is the request for a delete_project (cascade) task.
-type DeleteProjectInput struct {
+// DeleteClusterInput is the request for a delete_cluster (cascade) task.
+type DeleteClusterInput struct {
 	PoolID    uuid.UUID `json:"pool_id"`
-	ProjectID uuid.UUID `json:"project_id"`
+	ClusterID uuid.UUID `json:"cluster_id"`
 }
 
-// DeleteProject records a delete_project task: a single, self-contained
-// delete_project step that enumerates and retires all the project's endpoints at
-// Execute time, then drops the project (and all its branches). One idempotent
+// DeleteCluster records a delete_cluster task: a single, self-contained
+// delete_cluster step that enumerates and retires all the cluster's endpoints at
+// Execute time, then drops the cluster (and all its branches). One idempotent
 // step, for the same reason as DeleteBranch.
-func (s *Service) DeleteProject(ctx context.Context, in DeleteProjectInput) (*Task, error) {
+func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Task, error) {
 	steps := []StepSpec{
-		stepSpec(StepDeleteProject, DeleteProjectArgs{ProjectID: in.ProjectID}),
+		stepSpec(StepDeleteCluster, DeleteClusterArgs{ClusterID: in.ClusterID}),
 	}
-	// DeleteProject leaves TargetRef empty: project_id already carries the id.
-	return s.create(ctx, KindDeleteProject, in, in.ProjectID, "", steps)
+	// DeleteCluster leaves TargetRef empty: cluster_id already carries the id.
+	return s.create(ctx, KindDeleteCluster, in, in.ClusterID, "", steps)
 }
 
 // EndpointDeployName is the deployer's stable instance handle for an endpoint
@@ -324,27 +324,27 @@ func EndpointDeployName(endpointID uuid.UUID) string {
 const roleReadWrite = "read_write"
 
 // defaultBranchName mirrors core.DefaultBranchName without importing core: a
-// project's default branch is always named "main", independent of the project
-// name and not settable by a caller. The create_project step (EnsureProject)
+// cluster's default branch is always named "main", independent of the cluster
+// name and not settable by a caller. The create_cluster step (EnsureCluster)
 // names the branch the same way.
 const defaultBranchName = "main"
 
 // create marshals the originating request as params, stamps the task's target
-// project (project_id, exposed by the task API for monitoring; a nil project is
+// cluster (cluster_id, exposed by the task API for monitoring; a nil cluster is
 // left unstamped) and the resource the task acts on (targetRef — the branch or
 // endpoint id, so the UI/integration harness can pre-select it once the task succeeds; an
 // empty targetRef is left unstamped), and persists the task + its steps via the
-// Store. projectID is taken by value and the address of a copy is stored, so
+// Store. clusterID is taken by value and the address of a copy is stored, so
 // callers can pass a field directly.
-func (s *Service) create(ctx context.Context, kind string, params any, projectID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
+func (s *Service) create(ctx context.Context, kind string, params any, clusterID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s params: %w", kind, err)
 	}
 	spec := TaskSpec{Kind: kind, Params: raw, Steps: steps}
-	if projectID != uuid.Nil {
-		pid := projectID
-		spec.ProjectID = &pid
+	if clusterID != uuid.Nil {
+		pid := clusterID
+		spec.ClusterID = &pid
 	}
 	if targetRef != "" {
 		ref := targetRef

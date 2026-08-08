@@ -4,22 +4,22 @@
 // database. The real implementation (PgBackend) persists to YBDB, the
 // controller's only state store (amp-controller.md §10).
 //
-// The user-facing resource ladder is storage pool -> project -> branch ->
+// The user-facing resource ladder is storage pool -> cluster -> branch ->
 // endpoint. The storage layer is flat: a branch's BranchID IS the storage-layer
-// BranchId (there is no enclosing tenant), kept verbatim. A project is a
+// BranchId (there is no enclosing tenant), kept verbatim. A cluster is a
 // control-plane grouping ("a database") that owns a set of branches and maps to
 // no storage object.
 //
-// Scope: users (no auth), storage pools, project create (which provisions the
-// project and its default branch, #92) and branch (which forks an existing
+// Scope: users (no auth), storage pools, cluster create (which provisions the
+// cluster and its default branch, #92) and branch (which forks an existing
 // branch, #130), and endpoints on a branch (#108). The six mutations
-// (create/delete of project, branch, endpoint) now run as write-ahead tasks
+// (create/delete of cluster, branch, endpoint) now run as write-ahead tasks
 // (#113): the handlers return 202 + a Task and the deploy/cascade work happens
 // in the worker's steps. The synchronous Backend methods here serve the read
 // paths, the create-row records, and the handlers' cheap 404 pre-checks.
-// Cascade delete of branches/projects drops rows via the task StateStore
-// primitives (DeleteBranch/DeleteProject), not core.Backend, which has no
-// delete-branch/delete-project method.
+// Cascade delete of branches/clusters drops rows via the task StateStore
+// primitives (DeleteBranch/DeleteCluster), not core.Backend, which has no
+// delete-branch/delete-cluster method.
 package core
 
 import (
@@ -49,7 +49,7 @@ type User struct {
 	CreatedAt time.Time
 }
 
-// StoragePool is a grouping of projects, owned by the user that created it
+// StoragePool is a grouping of clusters, owned by the user that created it
 // (amp-controller.md §4.1). Sharing (pool grants) is out of scope for #92.
 type StoragePool struct {
 	ID          uuid.UUID
@@ -58,34 +58,35 @@ type StoragePool struct {
 	CreatedAt   time.Time
 }
 
-// Project is a "database" under a storage pool: a control-plane grouping that
+// Cluster is a "database" under a storage pool: a control-plane grouping that
 // owns a set of branches (ac-highlvl.md §6). ID is a control-plane id only — no
-// storage object maps to a project. Creating a project creates its default branch
+// storage object maps to a cluster. Creating a cluster creates its default branch
 // at the same time, returned in DefaultBranch (always populated on reads). A
-// project has exactly one default branch and zero or more branches off it.
-type Project struct {
+// cluster has exactly one default branch and zero or more branches off it.
+type Cluster struct {
 	ID            uuid.UUID // control-plane id (maps to no storage object)
 	StoragePoolID uuid.UUID
 	Name          string
 	CreatedAt     time.Time
-	// DefaultBranch is the project's root branch (IsDefault). It is created with
-	// the project and always exists; reads populate it.
+	// DefaultBranch is the cluster's root branch (IsDefault). It is created with
+	// the cluster and always exists; reads populate it.
 	DefaultBranch Branch
 }
 
-// Branch is a PG cluster. BranchID is the storage-layer BranchId verbatim (the
-// flat storage identity). The product identity is the (ProjectID, BranchID)
-// pair, which scopes lineage to a project; the storage layer keys on BranchID
-// alone. The project's first branch is its default (IsDefault); CreateBranch
+// Branch is one logical Postgres database's data — what Postgres itself calls a
+// cluster. BranchID is the storage-layer BranchId verbatim (the
+// flat storage identity). The product identity is the (ClusterID, BranchID)
+// pair, which scopes lineage to a cluster; the storage layer keys on BranchID
+// alone. The cluster's first branch is its default (IsDefault); CreateBranch
 // forks an existing branch into a non-default one.
 type Branch struct {
-	ProjectID uuid.UUID // control-plane grouping (maps to no storage object)
+	ClusterID uuid.UUID // control-plane grouping (maps to no storage object)
 	BranchID  uuid.UUID // the storage-layer BranchId
 	Name      string
 	PgVersion int
 	IsDefault bool
-	// ParentBranchID is the in-project branch this one was forked from, or nil
-	// for the project's default branch.
+	// ParentBranchID is the in-cluster branch this one was forked from, or nil
+	// for the cluster's default branch.
 	ParentBranchID *uuid.UUID
 	// ForkLSN is the ancestor LSN the branch was taken at (the storage layer's
 	// "X/X" pg_lsn form), or "" for the default branch.
@@ -129,7 +130,7 @@ func EffectivePgSettings(branch, endpoint map[string]string) map[string]string {
 // single-writer rule enforced in the schema.
 type Endpoint struct {
 	ID        uuid.UUID
-	ProjectID uuid.UUID
+	ClusterID uuid.UUID
 	BranchID  uuid.UUID
 	Role      string
 	// Name is the caller's handle for this endpoint, unique among its branch's
@@ -160,9 +161,9 @@ type Endpoint struct {
 	CreatedAt time.Time
 }
 
-// DefaultBranchName is the name given to a project's default (root) branch. The
-// project carries its own user-chosen name; its default branch is always "main"
-// (the trunk line of history), independent of the project name, matching the
+// DefaultBranchName is the name given to a cluster's default (root) branch. The
+// cluster carries its own user-chosen name; its default branch is always "main"
+// (the trunk line of history), independent of the cluster name, matching the
 // convention users expect from git/Neon. Forks off it choose their own names.
 const DefaultBranchName = "main"
 
@@ -215,59 +216,59 @@ type Backend interface {
 	// than the one user who created it.
 	GetStoragePool(ctx context.Context, poolID uuid.UUID) (StoragePool, error)
 
-	// CreateProject creates a project (a "database") named name in the pool,
+	// CreateCluster creates a cluster (a "database") named name in the pool,
 	// together with its default branch at Postgres major version pgVersion, and
-	// returns the project with DefaultBranch populated. Returns ErrNotFound if
-	// the pool does not exist, or ErrConflict if a project with that name already
+	// returns the cluster with DefaultBranch populated. Returns ErrNotFound if
+	// the pool does not exist, or ErrConflict if a cluster with that name already
 	// exists in the pool.
-	CreateProject(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Project, error)
-	// ListProjects returns a page of the projects in the pool ordered by
+	CreateCluster(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Cluster, error)
+	// ListClusters returns a page of the clusters in the pool ordered by
 	// (created_at, id), each with DefaultBranch populated, and the total number
-	// of projects in the pool (ignoring limit/offset). Returns ErrNotFound if
-	// the pool does not exist. When includeFailed is false, projects whose
-	// create_project task failed (orphans left mid-provisioning) are excluded
+	// of clusters in the pool (ignoring limit/offset). Returns ErrNotFound if
+	// the pool does not exist. When includeFailed is false, clusters whose
+	// create_cluster task failed (orphans left mid-provisioning) are excluded
 	// from both the page and the total; when true they are included.
-	ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]Project, int, error)
-	// GetProject returns the project addressed by (poolID, projectID) with
-	// DefaultBranch populated, validating that the project belongs to the pool.
+	ListClusters(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]Cluster, int, error)
+	// GetCluster returns the cluster addressed by (poolID, clusterID) with
+	// DefaultBranch populated, validating that the cluster belongs to the pool.
 	// Returns ErrNotFound if any link is missing.
-	GetProject(ctx context.Context, poolID, projectID uuid.UUID) (Project, error)
+	GetCluster(ctx context.Context, poolID, clusterID uuid.UUID) (Cluster, error)
 
-	// CreateBranch forks the branch addressed by (poolID, projectID,
-	// parentBranchID) into a new branch in the same project, named name and
+	// CreateBranch forks the branch addressed by (poolID, clusterID,
+	// parentBranchID) into a new branch in the same cluster, named name and
 	// recording its fork ancestry (parent_branch_id, fork_lsn). The Postgres
 	// version is inherited from the parent. forkLSN is the ancestor LSN to
 	// branch at (the storage layer's "X/X" pg_lsn form). Returns ErrNotFound if
-	// the pool, project, or parent branch does not exist, or ErrConflict if a
-	// branch named name already exists in the project.
-	CreateBranch(ctx context.Context, poolID, projectID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error)
-	// ListBranches returns a page of the branches in the project ordered by
-	// (created_at, branch_id), and the total number of branches in the project
-	// (ignoring limit/offset). Returns ErrNotFound if the pool or project does
+	// the pool, cluster, or parent branch does not exist, or ErrConflict if a
+	// branch named name already exists in the cluster.
+	CreateBranch(ctx context.Context, poolID, clusterID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error)
+	// ListBranches returns a page of the branches in the cluster ordered by
+	// (created_at, branch_id), and the total number of branches in the cluster
+	// (ignoring limit/offset). Returns ErrNotFound if the pool or cluster does
 	// not exist.
-	ListBranches(ctx context.Context, poolID, projectID uuid.UUID, limit, offset int) ([]Branch, int, error)
-	// GetBranch returns the branch addressed by (poolID, projectID, branchID),
-	// validating the pool->project->branch chain by ids. Returns ErrNotFound if
+	ListBranches(ctx context.Context, poolID, clusterID uuid.UUID, limit, offset int) ([]Branch, int, error)
+	// GetBranch returns the branch addressed by (poolID, clusterID, branchID),
+	// validating the pool->cluster->branch chain by ids. Returns ErrNotFound if
 	// any link is missing.
-	GetBranch(ctx context.Context, poolID, projectID, branchID uuid.UUID) (Branch, error)
+	GetBranch(ctx context.Context, poolID, clusterID, branchID uuid.UUID) (Branch, error)
 
-	// CreateEndpoint records an endpoint on the (projectID, branchID) branch.
+	// CreateEndpoint records an endpoint on the (clusterID, branchID) branch.
 	// config is the deploy spec stored for (re)creation. The address is set
 	// later (SetEndpointAddress) once the endpoint is deployed. Returns
 	// ErrNotFound if the branch does not exist, or ErrConflict if a read_write
 	// endpoint already exists for the branch (the single-writer rule).
-	CreateEndpoint(ctx context.Context, projectID, branchID uuid.UUID, role string, config []byte) (Endpoint, error)
+	CreateEndpoint(ctx context.Context, clusterID, branchID uuid.UUID, role string, config []byte) (Endpoint, error)
 
-	// GetEndpoint returns the endpoint addressed by (poolID, projectID,
-	// branchID, endpointID), validating the pool->project->branch->endpoint
+	// GetEndpoint returns the endpoint addressed by (poolID, clusterID,
+	// branchID, endpointID), validating the pool->cluster->branch->endpoint
 	// chain by ids. Returns ErrNotFound if any link is missing.
-	GetEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (Endpoint, error)
+	GetEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID uuid.UUID) (Endpoint, error)
 
 	// ListEndpoints returns a page of the endpoints bound to the branch
-	// (addressed by (poolID, projectID, branchID)) ordered by (created_at, id),
+	// (addressed by (poolID, clusterID, branchID)) ordered by (created_at, id),
 	// and the total number of endpoints for the branch (ignoring limit/offset).
-	// Returns ErrNotFound if the pool, project, or branch does not exist.
-	ListEndpoints(ctx context.Context, poolID, projectID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error)
+	// Returns ErrNotFound if the pool, cluster, or branch does not exist.
+	ListEndpoints(ctx context.Context, poolID, clusterID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error)
 
 	// SetEndpointAddress records an endpoint's client address and its tailnet
 	// address (tailnetAddress is "" when not tailnet-exposed). Idempotent

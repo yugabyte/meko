@@ -36,11 +36,11 @@ var (
 // makes the two views incapable of drifting: a branch dropped through either one
 // is the same row with the same `dropped_at` stamp.
 //
-// A caller still has to say which project it means. Not to identify the branch —
-// the id alone does that — but to scope the operation: `project_id` is an
+// A caller still has to say which cluster it means. Not to identify the branch —
+// the id alone does that — but to scope the operation: `cluster_id` is an
 // ordinary column on `branches`, and every read and write here is filtered by it
-// so one project's launcher cannot reach another's rows. An endpoint carries no
-// project at all and is scoped through its branch.
+// so one cluster's launcher cannot reach another's rows. An endpoint carries no
+// cluster at all and is scoped through its branch.
 //
 // Statements over the resource model are unqualified and resolve via the pool's
 // search_path (--db-schema); the data plane is qualified `amp_storage`.
@@ -91,8 +91,8 @@ func isSerializationAbort(err error) bool {
 
 // mapWriteErr translates the constraint violations a resource-model write can
 // raise into this package's sentinels: a name already taken among live rows, or a
-// second writer on a branch (branches_name_per_project /
-// endpoints_one_writer_per_branch) -> ErrConflict; a missing project or branch
+// second writer on a branch (branches_name_per_cluster /
+// endpoints_one_writer_per_branch) -> ErrConflict; a missing cluster or branch
 // (foreign key) -> ErrNotFound.
 func mapWriteErr(what string, err error) error {
 	var pgErr *pgconn.PgError
@@ -108,7 +108,7 @@ func mapWriteErr(what string, err error) error {
 }
 
 // RegistryCounts returns the live inventory size the metrics collector exports
-// as a gauge: the number of live branches, across every project. Queried on each
+// as a gauge: the number of live branches, across every cluster. Queried on each
 // scrape, so it must stay cheap.
 //
 // Tombstones are excluded — they are dropped branches, and counting them would
@@ -149,7 +149,7 @@ func FullPgVersionID(major int) (int, error) {
 // --- branch creation -------------------------------------------------------
 
 // RecordBranch declares a branch and seeds the storage-layer state it needs to
-// be materialized. Idempotent on (projectID, branchID).
+// be materialized. Idempotent on (clusterID, branchID).
 //
 // RecordBranch is reached by every branch-creation path — yb_amp_local's `branch
 // create` and the controller's record_branch_recipe step — and it provisions
@@ -172,8 +172,8 @@ func FullPgVersionID(major int) (int, error) {
 // its cutoff. Both are resolved the same way: the condition is the WHERE clause of
 // an UPDATE of the ancestor's row, so the two transactions conflict on that row
 // instead of both committing. Described per race in the body.
-func (s *Store) RecordBranch(ctx context.Context, projectID uuid.UUID, branchID string, req BranchCreateRecord) error {
-	err := s.recordBranch(ctx, projectID, branchID, req)
+func (s *Store) RecordBranch(ctx context.Context, clusterID uuid.UUID, branchID string, req BranchCreateRecord) error {
+	err := s.recordBranch(ctx, clusterID, branchID, req)
 	// The validations above write the ancestor's row, so a concurrent drop or
 	// cutoff advance can abort this whole transaction with a serialization failure
 	// (40001). ErrConflict tells the caller to retry.
@@ -185,7 +185,7 @@ func (s *Store) RecordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	return err
 }
 
-func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID string, req BranchCreateRecord) error {
+func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID string, req BranchCreateRecord) error {
 	id, err := ParseBranchID(branchID)
 	if err != nil {
 		return err
@@ -257,7 +257,7 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 		inheritedSettings = blob
 	}
 
-	// is_default is false: a project's default branch is created with the project
+	// is_default is false: a cluster's default branch is created with the cluster
 	// itself, and every branch declared here hangs off it (or stands alone as
 	// another root). ON CONFLICT DO NOTHING makes a re-record converge, and leaves
 	// an existing creation record untouched rather than rewriting it — which is
@@ -275,20 +275,20 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	if ancestorUUID != nil {
 		tag, err = tx.Exec(ctx,
 			`INSERT INTO amp_registry.branches
-			   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions, pg_settings)
+			   (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions, pg_settings)
 			 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn, $7::jsonb, $8::jsonb
 			   FROM amp_registry.branches p
-			  WHERE p.branch_id = $5::uuid AND p.project_id = $1::uuid AND p.dropped_at IS NULL
+			  WHERE p.branch_id = $5::uuid AND p.cluster_id = $1::uuid AND p.dropped_at IS NULL
 			 ON CONFLICT (branch_id) DO NOTHING`,
-			projectID.String(), id.String(), req.BranchName, req.PgVersion,
+			clusterID.String(), id.String(), req.BranchName, req.PgVersion,
 			ancestorUUID, req.StartLSN, string(inheritedExts), string(inheritedSettings))
 	} else {
 		tag, err = tx.Exec(ctx,
 			`INSERT INTO amp_registry.branches
-			   (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions, pg_settings)
+			   (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions, pg_settings)
 			 VALUES ($1::uuid, $2::uuid, $3, $4, false, NULL, $5::pg_lsn, $6::jsonb, $7::jsonb)
 			 ON CONFLICT (branch_id) DO NOTHING`,
-			projectID.String(), id.String(), req.BranchName, req.PgVersion,
+			clusterID.String(), id.String(), req.BranchName, req.PgVersion,
 			req.StartLSN, string(inheritedExts), string(inheritedSettings))
 	}
 	if err != nil {
@@ -300,13 +300,13 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 		var exists bool
 		if err := tx.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM amp_registry.branches
-			                 WHERE project_id = $1::uuid AND branch_id = $2::uuid)`,
-			projectID.String(), id.String()).Scan(&exists); err != nil {
+			                 WHERE cluster_id = $1::uuid AND branch_id = $2::uuid)`,
+			clusterID.String(), id.String()).Scan(&exists); err != nil {
 			return fmt.Errorf("classify branch declare no-op: %w", err)
 		}
 		if !exists {
-			return fmt.Errorf("%w: fork parent %s is not a live branch in project %s",
-				ErrNotFound, *req.AncestorBranchID, projectID)
+			return fmt.Errorf("%w: fork parent %s is not a live branch in cluster %s",
+				ErrNotFound, *req.AncestorBranchID, clusterID)
 		}
 	}
 
@@ -337,13 +337,13 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	// newly inserted fork at all: its read time is fixed when it asks for the lock,
 	// before the fork commits.
 	//
-	// DeleteProject tombstones every branch row in the project, P's included, so it
+	// DeleteCluster tombstones every branch row in the cluster, P's included, so it
 	// conflicts here the same way.
 	if req.AncestorBranchID != nil && tag.RowsAffected() == 1 {
 		live, err := tx.Exec(ctx,
 			`UPDATE amp_registry.branches SET dropped_at = dropped_at
-			  WHERE branch_id = $1::uuid AND project_id = $2::uuid AND dropped_at IS NULL`,
-			*ancestorUUID, projectID.String())
+			  WHERE branch_id = $1::uuid AND cluster_id = $2::uuid AND dropped_at IS NULL`,
+			*ancestorUUID, clusterID.String())
 		if err != nil {
 			return fmt.Errorf("validate fork parent %s liveness: %w", *req.AncestorBranchID, err)
 		}
@@ -363,7 +363,7 @@ func (s *Store) recordBranch(ctx context.Context, projectID uuid.UUID, branchID 
 	// carries. This is the column's only writer — both daemons just read it.
 	//
 	// Keyed by the flat branch id: amp_storage is the flat namespace, and it is
-	// deliberately NOT project-scoped (the storage layer has no projects).
+	// deliberately NOT cluster-scoped (the storage layer has no clusters).
 	var ancestorLSN *string
 	if req.AncestorBranchID != nil {
 		ancestorLSN = &req.StartLSN

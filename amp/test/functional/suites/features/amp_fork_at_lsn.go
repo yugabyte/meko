@@ -38,7 +38,7 @@ func (a *ampFeatureRun) forkAtLSN(ctx context.Context) error {
 	return forkAtLSNSteps(ctx, cl, a.proj, "fork-lsn-"+a.f.suffix(), a.f.endpointSQL)
 }
 
-func forkAtLSNSteps(ctx context.Context, cl ampCtl, proj ampProject, childName string, connect endpointConnector) error {
+func forkAtLSNSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector) error {
 	baseEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
 		return fmt.Errorf("create base endpoint: %w", err)

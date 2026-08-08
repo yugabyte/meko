@@ -70,7 +70,7 @@ func (a *ampFeatureRun) extensionPgvector(ctx context.Context) error {
 // condition the API reports explicitly — a controller with no extension catalog
 // (Docker driver / feature off). Everything else, including an endpoint that
 // fails to come up with the mount, is the product's and fails.
-func extensionPgvectorSteps(ctx context.Context, cl ampCtl, proj ampProject, childName string, connect endpointConnector, skip func(string)) error {
+func extensionPgvectorSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector, skip func(string)) error {
 	ep, err := createEndpointReq(ctx, cl, proj.poolID, proj.projID, proj.branchID, controller.CreateEndpointRequest{
 		Role:       roleReadWrite,
 		Extensions: []string{pgvectorCatalogName},

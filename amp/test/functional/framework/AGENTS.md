@@ -35,7 +35,7 @@ quietly.
   The controller client is **generated from the OpenAPI spec**, not imported.
 
 ## 3. Parallel by design — from the first line
-- Tests are atomic and independent: their own env/project, no shared mutable
+- Tests are atomic and independent: their own env/cluster, no shared mutable
   state, no ordering assumptions. `--parallel N` is first-class; sequential is
   just pool size 1, **never a separate code path**.
 - No fixed ports, no shared temp paths, no package-level mutable state (except

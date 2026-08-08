@@ -24,7 +24,7 @@ import (
 )
 
 // pgEnv is the accessor a test needs to reach the endpoint's Postgres. Both the
-// the sharedk8s project-per-test env implements
+// the sharedk8s cluster-per-test env implements
 // it; core stays untouched. The non-restart regression tests depend only on this
 // capability, so they run identically on either env (and any future env that can
 // serve an endpoint's Postgres).

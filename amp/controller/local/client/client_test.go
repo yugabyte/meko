@@ -12,15 +12,15 @@ import (
 	"github.com/google/uuid"
 )
 
-// Every resource the launcher addresses hangs off a pool, a project and a
+// Every resource the launcher addresses hangs off a pool, a cluster and a
 // branch, so its routes are nested all the way down. These pin the exact paths,
 // so a nesting change that silently broke the contract fails here.
 var (
 	testPoolID     = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000000")
-	testProjectID  = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000001")
+	testClusterID  = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000001")
 	testBranchID   = uuid.MustParse("2f3a1c00-0000-0000-0000-000000000002")
 	testBranchBase = "/api/v1/storage-pools/" + testPoolID.String() +
-		"/projects/" + testProjectID.String() +
+		"/clusters/" + testClusterID.String() +
 		"/branches/" + testBranchID.String()
 )
 
@@ -65,7 +65,7 @@ func TestAPIEndpointCreateAndDelete(t *testing.T) {
 			`"target_ref":"`+epID.String()+`","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)
 	c := NewAPI(rec.URL, nil)
 
-	task, err := c.CreateEndpoint(context.Background(), testPoolID, testProjectID, testBranchID,
+	task, err := c.CreateEndpoint(context.Background(), testPoolID, testClusterID, testBranchID,
 		EndpointCreate{
 			Name:       "ep_b1",
 			Extended:   json.RawMessage(`{"pg_port":55432}`),
@@ -108,7 +108,7 @@ func TestAPIEndpointCreateAndDelete(t *testing.T) {
 		`{"id":"3f3a1c00-0000-0000-0000-000000000002","kind":"delete_endpoint","status":"pending",`+
 			`"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)
 	if _, err := NewAPI(del.URL, nil).DeleteEndpoint(
-		context.Background(), testPoolID, testProjectID, testBranchID, epID); err != nil {
+		context.Background(), testPoolID, testClusterID, testBranchID, epID); err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
 	if cap.method != http.MethodDelete || cap.path != testBranchBase+"/endpoints/"+epID.String() {
@@ -131,7 +131,7 @@ func TestAPIHTTPError(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusConflict, `{"message":"nope"}`)
 	_, err := NewAPI(srv.URL, nil).CreateEndpoint(
-		context.Background(), testPoolID, testProjectID, testBranchID, EndpointCreate{})
+		context.Background(), testPoolID, testClusterID, testBranchID, EndpointCreate{})
 	if err == nil {
 		t.Fatal("expected error on 409")
 	}
@@ -153,7 +153,7 @@ func TestAPIIsNotFound(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusNotFound, `{"message":"gone"}`)
 	_, err := NewAPI(srv.URL, nil).DeleteEndpoint(
-		context.Background(), testPoolID, testProjectID, testBranchID, uuid.New())
+		context.Background(), testPoolID, testClusterID, testBranchID, uuid.New())
 	if !IsNotFound(err) {
 		t.Fatalf("IsNotFound(%v) = false, want true", err)
 	}

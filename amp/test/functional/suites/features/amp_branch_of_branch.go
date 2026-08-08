@@ -43,7 +43,7 @@ func (a *ampFeatureRun) branchOfBranch(ctx context.Context) error {
 // it, and returns a live connection. An explicit LSN keeps the fork point
 // deterministic under concurrency (the "latest" auto fork-point is not settled
 // immediately after a write).
-func forkChildAt(ctx context.Context, cl ampCtl, proj ampProject, parentBranchID, forkLSN, name string, connect endpointConnector) (sqlConn, error) {
+func forkChildAt(ctx context.Context, cl ampCtl, proj ampCluster, parentBranchID, forkLSN, name string, connect endpointConnector) (sqlConn, error) {
 	if _, err := cl.CreateBranchAndWait(ctx, proj.poolID, proj.projID, controller.CreateBranchRequest{
 		Name:           name,
 		ParentBranchID: parentBranchID,
@@ -77,7 +77,7 @@ func currentLSN(ctx context.Context, c sqlConn) (string, error) {
 	return lsn, nil
 }
 
-func branchOfBranchSteps(ctx context.Context, cl ampCtl, proj ampProject, childName, grandName string, connect endpointConnector) error {
+func branchOfBranchSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName, grandName string, connect endpointConnector) error {
 	baseEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
 		return fmt.Errorf("create base endpoint: %w", err)

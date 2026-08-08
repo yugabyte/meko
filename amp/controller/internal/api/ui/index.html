@@ -22,7 +22,7 @@
       --danger-soft: #fbeaea;
       --radius: 8px;
       --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
-      /* A serif display face sets a project (database) name apart from the sans UI. */
+      /* A serif display face sets a cluster (database) name apart from the sans UI. */
       --font-display: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
     }
     * { box-sizing: border-box; }
@@ -144,11 +144,11 @@
     .nowrap { white-space: nowrap; }
 
     .pool { margin-top: 14px; }
-    .pool .projects { padding: 0; }
-    .project { border-top: 1px solid var(--border); padding: 14px 16px; }
-    .project:first-child { border-top: none; }
-    .project .pj-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .project .pj-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; letter-spacing: 0.01em; }
+    .pool .clusters { padding: 0; }
+    .cluster { border-top: 1px solid var(--border); padding: 14px 16px; }
+    .cluster:first-child { border-top: none; }
+    .cluster .pj-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .cluster .pj-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; letter-spacing: 0.01em; }
     .branches { margin-top: 10px; padding-left: 14px; border-left: 2px solid var(--border); }
     .branch-bar { margin-bottom: 4px; }
     .branch-switch { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
@@ -351,32 +351,32 @@
     const createUser    = (isAdmin) => api("POST", "/users", { is_admin: isAdmin });
     const listPools     = () => api("GET", `/storage-pools${PAGE}`);
     const createPool    = (name, owner) => api("POST", "/storage-pools", { name, owner_user_id: owner });
-    // A project (database) is created with its default branch automatically.
-    const listProjects  = (poolId) => api("GET", `/storage-pools/${poolId}/projects${PAGE}`);
-    const createProject = (poolId, name) => api("POST", `/storage-pools/${poolId}/projects`, { name });
-    const listBranches  = (poolId, projectId) => api("GET", `/storage-pools/${poolId}/projects/${projectId}/branches${PAGE}`);
-    const listEndpoints = (poolId, projectId, branchId) =>
-      api("GET", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints${PAGE}`);
-    const createEndpoint= (poolId, projectId, branchId, role) =>
-      api("POST", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints`, { role });
-    const deleteEndpoint= (poolId, projectId, branchId, endpointId) =>
-      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}/endpoints/${endpointId}`);
-    const deleteProject = (poolId, projectId) =>
-      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}`);
-    const deleteBranch  = (poolId, projectId, branchId) =>
-      api("DELETE", `/storage-pools/${poolId}/projects/${projectId}/branches/${branchId}`);
+    // A cluster (database) is created with its default branch automatically.
+    const listClusters  = (poolId) => api("GET", `/storage-pools/${poolId}/clusters${PAGE}`);
+    const createCluster = (poolId, name) => api("POST", `/storage-pools/${poolId}/clusters`, { name });
+    const listBranches  = (poolId, clusterId) => api("GET", `/storage-pools/${poolId}/clusters/${clusterId}/branches${PAGE}`);
+    const listEndpoints = (poolId, clusterId, branchId) =>
+      api("GET", `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints${PAGE}`);
+    const createEndpoint= (poolId, clusterId, branchId, role) =>
+      api("POST", `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints`, { role });
+    const deleteEndpoint= (poolId, clusterId, branchId, endpointId) =>
+      api("DELETE", `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints/${endpointId}`);
+    const deleteCluster = (poolId, clusterId) =>
+      api("DELETE", `/storage-pools/${poolId}/clusters/${clusterId}`);
+    const deleteBranch  = (poolId, clusterId, branchId) =>
+      api("DELETE", `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}`);
     // Fork a branch into a new branch. parentBranchId is the branch to fork off
     // (the default branch or another branch — branch-of-branch). forkLsn is
     // optional (defaults to the parent's latest LSN server-side); pass it only
     // when set.
-    const createBranch  = (poolId, projectId, parentBranchId, name, forkLsn) => {
+    const createBranch  = (poolId, clusterId, parentBranchId, name, forkLsn) => {
       const body = { name, parent_branch_id: parentBranchId };
       if (forkLsn) body.fork_point_lsn = forkLsn;
-      return api("POST", `/storage-pools/${poolId}/projects/${projectId}/branches`, body);
+      return api("POST", `/storage-pools/${poolId}/clusters/${clusterId}/branches`, body);
     };
 
     // --- tasks ---------------------------------------------------------------
-    // The six mutating endpoints (create/delete project, branch, endpoint) no
+    // The six mutating endpoints (create/delete cluster, branch, endpoint) no
     // longer return the resource: they return 202 + a Task, and the work runs
     // asynchronously. The client POSTs, then polls GET /tasks/{id} until the
     // task reaches a terminal status, then refreshes the relevant list.
@@ -455,7 +455,7 @@
 
       app.innerHTML = `
         <h1>Users</h1>
-        <p class="sub">Select a user to manage its storage pools, projects, and branches.</p>
+        <p class="sub">Select a user to manage its storage pools, clusters, and branches.</p>
 
         <div class="card">
           <div class="card-head">
@@ -500,7 +500,7 @@
       bind();
     }
 
-    // --- user detail: pools -> projects -> branches -> endpoints -------------
+    // --- user detail: pools -> clusters -> branches -> endpoints -------------
 
     async function renderUser(userId) {
       app.innerHTML = `<div class="spinner">Loading user…</div>`;
@@ -549,7 +549,7 @@
         } catch (err) { toast(err.message); btn.disabled = false; }
       });
 
-      // Hydrate each pool's projects (and their branches/endpoints) independently.
+      // Hydrate each pool's clusters (and their branches/endpoints) independently.
       pools.forEach((p) => hydratePool(p.id, userId));
       bindPoolForms(userId);
       bind();
@@ -565,31 +565,31 @@
           </div>
           <div class="card-body">
             <div class="inline-form">
-              <input type="text" class="new-project" data-pool="${esc(p.id)}" placeholder="New project (database) name" />
-              <button class="btn primary create-project" data-pool="${esc(p.id)}">Create project</button>
+              <input type="text" class="new-cluster" data-pool="${esc(p.id)}" placeholder="New cluster (database) name" />
+              <button class="btn primary create-cluster" data-pool="${esc(p.id)}">Create cluster</button>
               <span class="muted">pg 17 · creates a default branch</span>
             </div>
           </div>
-          <div class="projects" id="proj-${esc(p.id)}">
-            <div class="spinner">Loading projects…</div>
+          <div class="clusters" id="proj-${esc(p.id)}">
+            <div class="spinner">Loading clusters…</div>
           </div>
         </div>`;
     }
 
     function bindPoolForms(userId) {
-      app.querySelectorAll(".create-project").forEach((btn) => {
+      app.querySelectorAll(".create-cluster").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const poolId = btn.getAttribute("data-pool");
-          const input = app.querySelector(`.new-project[data-pool="${poolId}"]`);
+          const input = app.querySelector(`.new-cluster[data-pool="${poolId}"]`);
           const name = input.value.trim();
-          if (!name) { toast("Enter a project name"); return; }
+          if (!name) { toast("Enter a cluster name"); return; }
           const prev = btn.textContent;
           btn.disabled = true;
           btn.textContent = "Creating…";
           try {
-            const task = await createProject(poolId, name);
+            const task = await createCluster(poolId, name);
             await pollTask(task.id);
-            toast("Project created", true);
+            toast("Cluster created", true);
             input.value = "";
             await hydratePool(poolId, userId);
           } catch (err) { toast(err.message); }
@@ -604,24 +604,24 @@
       const host = document.getElementById(`proj-${poolId}`);
       if (!host) return;
       let data;
-      try { data = await listProjects(poolId); }
-      catch (e) { host.innerHTML = `<div class="empty">Failed to load projects: ${esc(e.message)}</div>`; return; }
+      try { data = await listClusters(poolId); }
+      catch (e) { host.innerHTML = `<div class="empty">Failed to load clusters: ${esc(e.message)}</div>`; return; }
 
-      const projects = data.projects || [];
-      if (!projects.length) {
-        host.innerHTML = `<div class="empty">No projects yet.</div>`;
+      const clusters = data.clusters || [];
+      if (!clusters.length) {
+        host.innerHTML = `<div class="empty">No clusters yet.</div>`;
         return;
       }
-      host.innerHTML = projects.map((p) => `
-        <div class="project" id="pj-${esc(p.id)}">
+      host.innerHTML = clusters.map((p) => `
+        <div class="cluster" id="pj-${esc(p.id)}">
           <div class="pj-head">
             <span class="pj-name">${esc(p.name)}</span>
-            <span class="badge muted">project</span>
+            <span class="badge muted">cluster</span>
             <span class="spacer" style="flex:1"></span>
-            <button class="btn danger delete-project" data-pool="${esc(poolId)}" data-project="${esc(p.id)}" data-name="${esc(p.name)}">Delete project</button>
+            <button class="btn danger delete-cluster" data-pool="${esc(poolId)}" data-cluster="${esc(p.id)}" data-name="${esc(p.name)}">Delete cluster</button>
           </div>
           <div class="meta">
-            <span><span class="k">project</span> ${idChip(p.id)}</span>
+            <span><span class="k">cluster</span> ${idChip(p.id)}</span>
             <span><span class="k">created</span> ${fmtDate(p.created_at)}</span>
           </div>
           <div class="branches" id="br-${esc(p.id)}">
@@ -631,20 +631,20 @@
 
       bind();
 
-      // Delete-project: confirm, fire the DELETE (202 + Task), poll, then
-      // re-list this pool's projects so the removed one disappears.
-      host.querySelectorAll(".delete-project").forEach((btn) => {
+      // Delete-cluster: confirm, fire the DELETE (202 + Task), poll, then
+      // re-list this pool's clusters so the removed one disappears.
+      host.querySelectorAll(".delete-cluster").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          const projectId = btn.getAttribute("data-project");
+          const clusterId = btn.getAttribute("data-cluster");
           const name = btn.getAttribute("data-name");
-          if (!confirm(`Delete project "${name}"? This retires every endpoint and drops all its branches. This cannot be undone.`)) return;
+          if (!confirm(`Delete cluster "${name}"? This retires every endpoint and drops all its branches. This cannot be undone.`)) return;
           const prev = btn.textContent;
           btn.disabled = true;
           btn.textContent = "Deleting…";
           try {
-            const task = await deleteProject(poolId, projectId);
+            const task = await deleteCluster(poolId, clusterId);
             await pollTask(task.id);
-            toast("Project deleted", true);
+            toast("Cluster deleted", true);
             await hydratePool(poolId, userId);
           } catch (err) {
             toast(err.message);
@@ -654,20 +654,20 @@
         });
       });
 
-      // Branches per project, in parallel.
-      projects.forEach((p) => hydrateBranches(poolId, p.id, userId));
+      // Branches per cluster, in parallel.
+      clusters.forEach((p) => hydrateBranches(poolId, p.id, userId));
     }
 
-    // A project's branches are shown one at a time: the default branch ("main")
+    // A cluster's branches are shown one at a time: the default branch ("main")
     // is selected by default, with a dropdown to switch to any other branch.
     // Only the selected branch's detail (lineage, fork form, endpoints) is shown.
     // selectBranchId optionally pre-selects a branch after a re-hydrate (e.g. the
     // one just created) instead of falling back to the default.
-    async function hydrateBranches(poolId, projectId, userId, selectBranchId) {
-      const host = document.getElementById(`br-${projectId}`);
+    async function hydrateBranches(poolId, clusterId, userId, selectBranchId) {
+      const host = document.getElementById(`br-${clusterId}`);
       if (!host) return;
       let data;
-      try { data = await listBranches(poolId, projectId); }
+      try { data = await listBranches(poolId, clusterId); }
       catch (e) { host.innerHTML = `<div class="empty">Failed to load branches: ${esc(e.message)}</div>`; return; }
 
       const branches = data.branches || [];
@@ -681,7 +681,7 @@
       const byId = {};
       branches.forEach((b) => { byId[b.branch_id] = b; });
 
-      // The default branch is the project's trunk, so list it first; the rest
+      // The default branch is the cluster's trunk, so list it first; the rest
       // follow in creation order (the API returns them sorted by created_at).
       const def = branches.find((b) => b.is_default) || branches[0];
       const ordered = [def, ...branches.filter((b) => b.branch_id !== def.branch_id)];
@@ -695,7 +695,7 @@
             <select class="branch-select" aria-label="Select branch">${options}</select>
           </label>
           <button class="btn primary create-branch">Create branch…</button>
-          <span class="muted nowrap" style="font-size:12px; margin-left:auto">${count} branch${count === 1 ? "" : "es"} in this project</span>
+          <span class="muted nowrap" style="font-size:12px; margin-left:auto">${count} branch${count === 1 ? "" : "es"} in this cluster</span>
         </div>
         <div class="branch-detail"></div>`;
 
@@ -707,7 +707,7 @@
       host.querySelector(".create-branch").addEventListener("click", () => {
         const cur = byId[select.value];
         if (!cur) return;
-        openBranchDialog({ poolId, projectId, userId, parentId: cur.branch_id, parentName: cur.name });
+        openBranchDialog({ poolId, clusterId, userId, parentId: cur.branch_id, parentName: cur.name });
       });
 
       // Render the panel for one branch: its metadata (the fork point shown by the
@@ -756,10 +756,10 @@
             delBr.disabled = true;
             delBr.textContent = "Deleting…";
             try {
-              const task = await deleteBranch(poolId, projectId, b.branch_id);
+              const task = await deleteBranch(poolId, clusterId, b.branch_id);
               await pollTask(task.id);
               toast("Branch deleted", true);
-              await hydrateBranches(poolId, projectId, userId);
+              await hydrateBranches(poolId, clusterId, userId);
             } catch (err) {
               toast(err.message);
               delBr.disabled = false;
@@ -768,7 +768,7 @@
           });
         }
 
-        hydrateEndpoints(poolId, projectId, b.branch_id);
+        hydrateEndpoints(poolId, clusterId, b.branch_id);
       }
 
       const initial = selectBranchId && byId[selectBranchId] ? selectBranchId : def.branch_id;
@@ -777,11 +777,11 @@
       renderDetail(initial);
     }
 
-    async function hydrateEndpoints(poolId, projectId, branchId) {
+    async function hydrateEndpoints(poolId, clusterId, branchId) {
       const host = document.getElementById(`ep-${branchId}`);
       if (!host) return;
       let data;
-      try { data = await listEndpoints(poolId, projectId, branchId); }
+      try { data = await listEndpoints(poolId, clusterId, branchId); }
       catch (e) { host.innerHTML = `<div class="muted" style="font-size:12px">Failed to load endpoints: ${esc(e.message)}</div>`; return; }
 
       const eps = data.endpoints || [];
@@ -828,10 +828,10 @@
           try {
             // POST returns 202 + a Task; the worker deploys the compute pod and
             // records its address. Poll until the task settles, then re-list.
-            const task = await createEndpoint(poolId, projectId, branchId, role);
+            const task = await createEndpoint(poolId, clusterId, branchId, role);
             await pollTask(task.id);
             toast("Endpoint provisioned", true);
-            await hydrateEndpoints(poolId, projectId, branchId);
+            await hydrateEndpoints(poolId, clusterId, branchId);
           } catch (err) {
             toast(err.message);
             epBtn.disabled = false;
@@ -850,10 +850,10 @@
           btn.disabled = true;
           btn.textContent = "Deleting…";
           try {
-            const task = await deleteEndpoint(poolId, projectId, branchId, endpointId);
+            const task = await deleteEndpoint(poolId, clusterId, branchId, endpointId);
             await pollTask(task.id);
             toast("Endpoint deleted", true);
-            await hydrateEndpoints(poolId, projectId, branchId);
+            await hydrateEndpoints(poolId, clusterId, branchId);
           } catch (err) {
             toast(err.message);
             btn.disabled = false;
@@ -875,7 +875,7 @@
 
     // --- create-branch modal -------------------------------------------------
     // One shared <dialog> serves every branch panel; openBranchDialog stashes the
-    // context (which branch to fork, in which project) the submit handler reads.
+    // context (which branch to fork, in which cluster) the submit handler reads.
 
     const branchDialog = document.getElementById("branch-dialog");
     const bdForm   = document.getElementById("bd-form");
@@ -920,11 +920,11 @@
       try {
         // POST returns 202 + a Task; poll it to completion, then re-list the
         // branches. target_ref carries the new branch id, so pre-select it.
-        const task = await createBranch(bdCtx.poolId, bdCtx.projectId, bdCtx.parentId, name, forkLsn);
+        const task = await createBranch(bdCtx.poolId, bdCtx.clusterId, bdCtx.parentId, name, forkLsn);
         const done = await pollTask(task.id);
         branchDialog.close();
         toast("Branch created", true);
-        await hydrateBranches(bdCtx.poolId, bdCtx.projectId, bdCtx.userId, done.target_ref || undefined);
+        await hydrateBranches(bdCtx.poolId, bdCtx.clusterId, bdCtx.userId, done.target_ref || undefined);
       } catch (err) {
         bdShowError(err.message);
         bdSubmit.disabled = false;

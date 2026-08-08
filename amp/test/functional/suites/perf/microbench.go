@@ -98,7 +98,7 @@ func microbenchParamsFromConfig(c *core.Config) microbenchParams {
 // pgEndpointEnv is the capability this test needs: an env that serves an amp
 // compute endpoint's Postgres. Declared locally (like the features suite does)
 // so the test runs on any env able to hand out an endpoint — sharedk8s
-// single-container, sharedk8s project-per-test, or a universe env — and skips
+// single-container, sharedk8s cluster-per-test, or a universe env — and skips
 // cleanly on one that cannot (e.g. --fake-env).
 type pgEndpointEnv interface {
 	PGEndpoint() pg.ConnInfo

@@ -189,12 +189,12 @@ func startController(ctx context.Context, env *config.LocalEnv, instanceID uint8
 	}
 
 	// The branch and endpoint tables are the control plane's own and are
-	// project-scoped, so the launcher needs a project before it can declare a
+	// cluster-scoped, so the launcher needs a cluster before it can declare a
 	// branch. Provision it now that the controller answers, while we are the only
 	// thing running.
 	mutated, err := EnsureLadder(ctx, env)
 	if err != nil {
-		return fmt.Errorf("provision the launcher's control-plane project: %w", err)
+		return fmt.Errorf("provision the launcher's control-plane cluster: %w", err)
 	}
 	if mutated {
 		persistLadder(env)

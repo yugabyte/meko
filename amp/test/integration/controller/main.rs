@@ -1,11 +1,11 @@
 //! The controller-on-Docker integration suite (`integration_controller`) — a thin driver.
 //!
 //! Provisioning lives in the **controller**: this suite only drives its REST
-//! API (user → storage pool → project → branch → endpoint) and runs Postgres
+//! API (user → storage pool → cluster → branch → endpoint) and runs Postgres
 //! against the endpoint addresses the controller hands back. There is no
 //! container/Docker orchestration here — that is the controller's job.
 //!
-//! The centrepiece is [`branching_run`]: it creates a project (a storage-layer
+//! The centrepiece is [`branching_run`]: it creates a cluster (a storage-layer
 //! tenant + its default branch `main`), deploys an endpoint on `main`, seeds
 //! data, then forks a branch tree —
 //!
@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 
 use integration_common::db;
 
-/// Poll budget for a metadata-only task (create/delete project, create/delete
+/// Poll budget for a metadata-only task (create/delete cluster, create/delete
 /// branch). These only write control-plane rows + recipes, so they settle fast.
 const TASK_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -112,16 +112,16 @@ struct BranchRef {
     timeline_hex: String,
 }
 
-/// A project: its path id (UUID = the storage-layer tenant id), the tenant hex
+/// A cluster: its path id (UUID = the storage-layer tenant id), the tenant hex
 /// the compute reports (`yb_amp.tenant_id`), and its default branch.
-struct ProjectRef {
+struct ClusterRef {
     id: String,
     tenant_hex: String,
     default_branch: BranchRef,
 }
 
 /// The lifecycle status of an async task, as the controller reports it. The six
-/// mutating endpoints (create/delete project, branch, endpoint) now return a
+/// mutating endpoints (create/delete cluster, branch, endpoint) now return a
 /// `Task` and run the work in the background; the client polls until it reaches
 /// a terminal state.
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -308,51 +308,51 @@ impl AmpClient {
         field(&v, "id")
     }
 
-    /// Create a project (a tenant) and its default branch. Returns the project
+    /// Create a cluster (a tenant) and its default branch. Returns the cluster
     /// path id, its tenant hex, and the default branch. Does not deploy compute.
     ///
-    /// Async-task flow: `POST .../projects` now returns `202` + a `Task`; we poll
-    /// it to `succeeded`, then list the pool's projects to read back the
-    /// materialized project (its id + default branch) by name.
-    async fn create_project(&self, pool: &str, name: &str, pg_version: u32) -> Result<ProjectRef> {
+    /// Async-task flow: `POST .../clusters` now returns `202` + a `Task`; we poll
+    /// it to `succeeded`, then list the pool's clusters to read back the
+    /// materialized cluster (its id + default branch) by name.
+    async fn create_cluster(&self, pool: &str, name: &str, pg_version: u32) -> Result<ClusterRef> {
         self.run_task(
             reqwest::Method::POST,
-            &format!("/storage-pools/{pool}/projects"),
+            &format!("/storage-pools/{pool}/clusters"),
             Some(json!({ "name": name, "pg_version": pg_version })),
             TASK_TIMEOUT,
         )
         .await?;
 
-        let v = self.find_project(pool, name).await?;
+        let v = self.find_cluster(pool, name).await?;
         let id = field(&v, "id")?;
         let tenant_hex = id.replace('-', "");
         let default = v
             .get("default_branch")
-            .context("project response missing default_branch")?;
+            .context("cluster response missing default_branch")?;
         let default_branch = branch_ref(default)?;
-        Ok(ProjectRef {
+        Ok(ClusterRef {
             id,
             tenant_hex,
             default_branch,
         })
     }
 
-    /// List the pool's projects and return the one named `name` (the project a
-    /// just-succeeded create-project task materialized).
-    async fn find_project(&self, pool: &str, name: &str) -> Result<Value> {
+    /// List the pool's clusters and return the one named `name` (the cluster a
+    /// just-succeeded create-cluster task materialized).
+    async fn find_cluster(&self, pool: &str, name: &str) -> Result<Value> {
         let list = self
-            .get(&format!("/storage-pools/{pool}/projects?limit=1000"))
+            .get(&format!("/storage-pools/{pool}/clusters?limit=1000"))
             .await?;
-        find_named(&list, "projects", name)
-            .with_context(|| format!("project {name:?} not found after create task succeeded"))
+        find_named(&list, "clusters", name)
+            .with_context(|| format!("cluster {name:?} not found after create task succeeded"))
     }
 
-    /// List the project's branches and return the one named `name` (the branch a
+    /// List the cluster's branches and return the one named `name` (the branch a
     /// just-succeeded branch task materialized).
-    async fn find_branch(&self, pool: &str, project: &str, name: &str) -> Result<Value> {
+    async fn find_branch(&self, pool: &str, cluster: &str, name: &str) -> Result<Value> {
         let list = self
             .get(&format!(
-                "/storage-pools/{pool}/projects/{project}/branches?limit=1000"
+                "/storage-pools/{pool}/clusters/{cluster}/branches?limit=1000"
             ))
             .await?;
         find_named(&list, "branches", name)
@@ -360,14 +360,14 @@ impl AmpClient {
     }
 
     /// Fork a branch into a new one and return the created `Branch` JSON (so the
-    /// caller can assert fork ancestry). `parent` defaults to the project's
+    /// caller can assert fork ancestry). `parent` defaults to the cluster's
     /// default branch; `fork_point_lsn` defaults to the parent's latest durable
     /// LSN (read from the safekeeper co-located with the parent's read_write
     /// endpoint — so the parent must have one). No compute is started.
     async fn create_branch(
         &self,
         pool: &str,
-        project: &str,
+        cluster: &str,
         name: &str,
         parent: Option<&str>,
         fork_point_lsn: Option<&str>,
@@ -384,12 +384,12 @@ impl AmpClient {
         // still gets the branch JSON it asserts ancestry on, and its branch_id).
         self.run_task(
             reqwest::Method::POST,
-            &format!("/storage-pools/{pool}/projects/{project}/branches"),
+            &format!("/storage-pools/{pool}/clusters/{cluster}/branches"),
             Some(body),
             TASK_TIMEOUT,
         )
         .await?;
-        self.find_branch(pool, project, name).await
+        self.find_branch(pool, cluster, name).await
     }
 
     /// Deploy a read_write endpoint on a branch and return its `(endpoint_id,
@@ -402,12 +402,12 @@ impl AmpClient {
     async fn create_endpoint(
         &self,
         pool: &str,
-        project: &str,
+        cluster: &str,
         branch: &str,
     ) -> Result<(String, String)> {
         self.run_task(
             reqwest::Method::POST,
-            &format!("/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints"),
+            &format!("/storage-pools/{pool}/clusters/{cluster}/branches/{branch}/endpoints"),
             Some(json!({ "role": "read_write" })),
             ENDPOINT_TASK_TIMEOUT,
         )
@@ -415,7 +415,7 @@ impl AmpClient {
 
         let list = self
             .get(&format!(
-                "/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints?limit=1000"
+                "/storage-pools/{pool}/clusters/{cluster}/branches/{branch}/endpoints?limit=1000"
             ))
             .await?;
         let endpoints = list
@@ -441,14 +441,14 @@ impl AmpClient {
     async fn delete_endpoint(
         &self,
         pool: &str,
-        project: &str,
+        cluster: &str,
         branch: &str,
         endpoint: &str,
     ) -> Result<()> {
         self.run_task(
             reqwest::Method::DELETE,
             &format!(
-                "/storage-pools/{pool}/projects/{project}/branches/{branch}/endpoints/{endpoint}"
+                "/storage-pools/{pool}/clusters/{cluster}/branches/{branch}/endpoints/{endpoint}"
             ),
             None,
             ENDPOINT_TASK_TIMEOUT,
@@ -457,18 +457,18 @@ impl AmpClient {
     }
 
     /// Get one branch's JSON, by path id.
-    async fn get_branch(&self, pool: &str, project: &str, branch: &str) -> Result<Value> {
+    async fn get_branch(&self, pool: &str, cluster: &str, branch: &str) -> Result<Value> {
         self.get(&format!(
-            "/storage-pools/{pool}/projects/{project}/branches/{branch}"
+            "/storage-pools/{pool}/clusters/{cluster}/branches/{branch}"
         ))
         .await
     }
 
-    /// The `total` from listBranches (count of all branches in the project).
-    async fn count_branches(&self, pool: &str, project: &str) -> Result<i64> {
+    /// The `total` from listBranches (count of all branches in the cluster).
+    async fn count_branches(&self, pool: &str, cluster: &str) -> Result<i64> {
         let v = self
             .get(&format!(
-                "/storage-pools/{pool}/projects/{project}/branches?limit=1000"
+                "/storage-pools/{pool}/clusters/{cluster}/branches?limit=1000"
             ))
             .await?;
         v.get("total")
@@ -711,8 +711,8 @@ pub async fn run_suite(repeat: u32, fail_fast: bool) -> Result<()> {
     Ok(())
 }
 
-/// One full create-project → branch-tree → validate run. Each iteration uses a
-/// fresh project (so `-n` repeats are independent) and retires its endpoints at
+/// One full create-cluster → branch-tree → validate run. Each iteration uses a
+/// fresh cluster (so `-n` repeats are independent) and retires its endpoints at
 /// the end (best-effort).
 async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> {
     let proj_name = if iter == 1 {
@@ -724,28 +724,28 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
     let mut deployed: Vec<(String, String)> = Vec::new();
     let readiness = Duration::from_secs(90);
 
-    step("controller: create project (tenant + default branch 'main')");
-    let project = client
-        .create_project(pool, &proj_name, 18)
+    step("controller: create cluster (tenant + default branch 'main')");
+    let cluster = client
+        .create_cluster(pool, &proj_name, 18)
         .await
-        .context("create project")?;
-    let main_b = project.default_branch.clone();
+        .context("create cluster")?;
+    let main_b = cluster.default_branch.clone();
     let main_meta = client
-        .get_branch(pool, &project.id, &main_b.id)
+        .get_branch(pool, &cluster.id, &main_b.id)
         .await
         .context("get default branch")?;
     assert_branch_meta(&main_meta, true, None).context("default branch metadata")?;
 
-    step("controller: deploy endpoint on main; verify it serves the project's tenant+timeline");
+    step("controller: deploy endpoint on main; verify it serves the cluster's tenant+timeline");
     let (main_ep, main_addr) = client
-        .create_endpoint(pool, &project.id, &main_b.id)
+        .create_endpoint(pool, &cluster.id, &main_b.id)
         .await
         .context("deploy main endpoint")?;
     deployed.push((main_b.id.clone(), main_ep));
     let main = BranchEndpoint::from_address(
         "main",
         &main_addr,
-        project.tenant_hex.clone(),
+        cluster.tenant_hex.clone(),
         main_b.timeline_hex.clone(),
     )?;
     main.wait_ready(readiness)
@@ -774,7 +774,7 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
         .await
         .context("read main flush_lsn for b1")?;
     let b1_json = client
-        .create_branch(pool, &project.id, "b1", None, Some(&main_fork1))
+        .create_branch(pool, &cluster.id, "b1", None, Some(&main_fork1))
         .await
         .context("create branch b1")?;
     assert_branch_meta(&b1_json, false, Some(&main_b.id))
@@ -792,14 +792,14 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
 
     step("controller: deploy b1 endpoint; validate lineage isolation from main");
     let (b1_ep, b1_addr) = client
-        .create_endpoint(pool, &project.id, &b1_b.id)
+        .create_endpoint(pool, &cluster.id, &b1_b.id)
         .await
         .context("deploy b1 endpoint")?;
     deployed.push((b1_b.id.clone(), b1_ep));
     let b1 = BranchEndpoint::from_address(
         "b1",
         &b1_addr,
-        project.tenant_hex.clone(),
+        cluster.tenant_hex.clone(),
         b1_b.timeline_hex.clone(),
     )?;
     b1.wait_ready(readiness)
@@ -833,7 +833,7 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
     expect(&b1, "rows after b1-own", b1.total().await?, 160)?;
     let b1_fork = b1.flush_lsn().await.context("read b1 flush_lsn for b2")?;
     let b2_json = client
-        .create_branch(pool, &project.id, "b2", Some(&b1_b.id), Some(&b1_fork))
+        .create_branch(pool, &cluster.id, "b2", Some(&b1_b.id), Some(&b1_fork))
         .await
         .context("create branch b2 off b1")?;
     assert_branch_meta(&b2_json, false, Some(&b1_b.id)).context("b2 metadata (forked off b1)")?;
@@ -856,7 +856,7 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
         .await
         .context("read main flush_lsn for b3")?;
     let b3_json = client
-        .create_branch(pool, &project.id, "b3", None, Some(&main_fork2))
+        .create_branch(pool, &cluster.id, "b3", None, Some(&main_fork2))
         .await
         .context("create branch b3 off main")?;
     assert_branch_meta(&b3_json, false, Some(&main_b.id))
@@ -865,14 +865,14 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
 
     step("controller: deploy b2 + b3 endpoints");
     let (b2_ep, b2_addr) = client
-        .create_endpoint(pool, &project.id, &b2_b.id)
+        .create_endpoint(pool, &cluster.id, &b2_b.id)
         .await
         .context("deploy b2 endpoint")?;
     deployed.push((b2_b.id.clone(), b2_ep));
     let b2 = BranchEndpoint::from_address(
         "b2",
         &b2_addr,
-        project.tenant_hex.clone(),
+        cluster.tenant_hex.clone(),
         b2_b.timeline_hex.clone(),
     )?;
     b2.wait_ready(readiness)
@@ -881,14 +881,14 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
     b2.assert_identity().await.context("b2 identity")?;
 
     let (b3_ep, b3_addr) = client
-        .create_endpoint(pool, &project.id, &b3_b.id)
+        .create_endpoint(pool, &cluster.id, &b3_b.id)
         .await
         .context("deploy b3 endpoint")?;
     deployed.push((b3_b.id.clone(), b3_ep));
     let b3 = BranchEndpoint::from_address(
         "b3",
         &b3_addr,
-        project.tenant_hex.clone(),
+        cluster.tenant_hex.clone(),
         b3_b.timeline_hex.clone(),
     )?;
     b3.wait_ready(readiness)
@@ -1036,15 +1036,15 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
     )?;
 
     step("controller: listBranches reports all 4 (main + b1 + b2 + b3)");
-    let n = client.count_branches(pool, &project.id).await?;
+    let n = client.count_branches(pool, &cluster.id).await?;
     if n != 4 {
-        bail!("project has {n} branches, want 4 (main + b1 + b2 + b3)");
+        bail!("cluster has {n} branches, want 4 (main + b1 + b2 + b3)");
     }
 
     step("controller: retire endpoints (best-effort cleanup)");
     for (branch, endpoint) in &deployed {
         if let Err(e) = client
-            .delete_endpoint(pool, &project.id, branch, endpoint)
+            .delete_endpoint(pool, &cluster.id, branch, endpoint)
             .await
         {
             eprintln!("warn: retire endpoint {endpoint} failed: {e:#}");

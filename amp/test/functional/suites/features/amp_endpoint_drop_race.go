@@ -104,7 +104,7 @@ type branchComputeLister func(ctx context.Context, branchID string) (map[string]
 func endpointDropRaceSteps(
 	ctx context.Context,
 	cl ampCtl,
-	proj ampProject,
+	proj ampCluster,
 	namePrefix string,
 	connect endpointConnector,
 	branchCompute branchComputeLister,
@@ -155,7 +155,7 @@ func endpointDropRaceSteps(
 func endpointDropRaceRound(
 	ctx context.Context,
 	cl ampCtl,
-	proj ampProject,
+	proj ampCluster,
 	name, forkLSN string,
 	delay time.Duration,
 	connect endpointConnector,
@@ -293,10 +293,10 @@ func assertNoOrphanedCompute(ctx context.Context, branchCompute branchComputeLis
 
 // dropRaceCleanup retires what a lost drop left behind, so the next round starts
 // from the same shape and the namespace does not accumulate computes. Best
-// effort: the project-delete cascade in the shared teardown is the backstop, so a
+// effort: the cluster-delete cascade in the shared teardown is the backstop, so a
 // cleanup failure is logged rather than failing a round that already proved its
 // invariant.
-func dropRaceCleanup(ctx context.Context, cl ampCtl, proj ampProject, branchID string, logf func(string, ...any)) error {
+func dropRaceCleanup(ctx context.Context, cl ampCtl, proj ampCluster, branchID string, logf func(string, ...any)) error {
 	eps, err := cl.ListAllEndpoints(ctx, proj.poolID, proj.projID, branchID)
 	if err != nil {
 		logf("cleanup: list endpoints on %s: %v", branchID, err)

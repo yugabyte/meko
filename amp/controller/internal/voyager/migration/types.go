@@ -33,7 +33,7 @@ type SourceConfig struct {
 // target. API projections must never expose Password.
 type TargetConfig struct {
 	PoolID     uuid.UUID `json:"pool_id"`
-	ProjectID  uuid.UUID `json:"project_id"`
+	ClusterID  uuid.UUID `json:"cluster_id"`
 	BranchID   uuid.UUID `json:"branch_id"`
 	EndpointID uuid.UUID `json:"endpoint_id"`
 	Host       string    `json:"host"`

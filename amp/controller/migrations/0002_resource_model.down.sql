@@ -9,10 +9,10 @@ DROP TYPE  IF EXISTS amp_registry.endpoint_role;
 
 DROP TABLE IF EXISTS amp_registry.branches;
 
-DROP TABLE IF EXISTS amp_registry.user_project_grants;
+DROP TABLE IF EXISTS amp_registry.user_cluster_grants;
 DROP TYPE  IF EXISTS amp_registry.grant_role;
 DROP TABLE IF EXISTS amp_registry.user_pool_grants;
-DROP TABLE IF EXISTS amp_registry.projects;
+DROP TABLE IF EXISTS amp_registry.clusters;
 DROP TABLE IF EXISTS amp_registry.storage_pools;
 DROP TABLE IF EXISTS amp_registry.users;
 DROP SCHEMA IF EXISTS amp_registry;

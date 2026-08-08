@@ -222,7 +222,7 @@ order (later lines win in Postgres, which is the point):
 1. `cluster.postgresql_conf` verbatim (the spec's base config).
 2. Storage wiring: `yb_amp.pageserver_connstring` (the libpq URLs from
    `pageserver_connection_info`, comma-joined), `yb_amp.safekeepers`,
-   `yb_amp.branch_id`, `yb_amp.project_id`, `yb_amp.endpoint_id`.
+   `yb_amp.branch_id`, `yb_amp.cluster_id`, `yb_amp.endpoint_id`.
 3. TLS (`ssl = on` + cert/key paths) when the `tls_experimental` feature flag and
    `compute_ctl_config.tls` are both present; the key is copied into `pgdata` with
    0600 perms because Postgres insists on a private key file.

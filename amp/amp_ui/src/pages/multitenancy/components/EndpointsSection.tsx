@@ -22,14 +22,14 @@ import { ComputeInstance } from "./ComputeInstance";
 
 export function EndpointsSection({
   poolId,
-  projectId,
+  clusterId,
   branchId,
   endpoints,
   loading,
   isDefaultBranch,
 }: {
   poolId: string;
-  projectId: string;
+  clusterId: string;
   branchId: string;
   endpoints: Endpoint[];
   loading: boolean;
@@ -55,7 +55,7 @@ export function EndpointsSection({
     createEndpoint.mutate(
       {
         poolId,
-        projectId,
+        clusterId,
         branchId,
         role,
         cpu: cpu.trim() || DEFAULT_ENDPOINT_CPU,

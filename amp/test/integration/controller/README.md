@@ -4,10 +4,10 @@ The `integration_controller` crate: a deliberately thin driver that exercises
 the **controller** control plane on Docker. `run-controller.sh` starts the `controller`
 container (with its Docker endpoint provisioner enabled) against the
 host's YugabyteDB, then this binary calls controller's REST API
-(`user → storage pool → project → branch → endpoint`) and runs Postgres against the
+(`user → storage pool → cluster → branch → endpoint`) and runs Postgres against the
 endpoint addresses controller returns.
 
-**controller owns all provisioning** — create-project records the tenant + its
+**controller owns all provisioning** — create-cluster records the tenant + its
 default branch, create-branch forks an existing branch (recording its fork
 ancestry), and create-endpoint deploys the compute container synchronously via
 controller's `deploy.Deployer` (the Docker driver; amp-controller.md §5.6),
@@ -26,7 +26,7 @@ helm points both `AMP_DATABASE_URL` and `AMP_DEPLOY_YB_DBNAME` at `yb_storage`.
 The suite creates a user and a storage pool once, then runs the `branch_lineage`
 scenario, which is a full branching workout against the controller's API:
 
-1. **create-project** → a tenant and its default branch `main`; deploy a
+1. **create-cluster** → a tenant and its default branch `main`; deploy a
    read_write endpoint on `main` and assert the compute serves the exact
    tenant/timeline the controller bound it to (`yb_amp.tenant_id` /
    `yb_amp.timeline_id`).
@@ -51,13 +51,13 @@ scenario, which is a full branching workout against the controller's API:
    `fork_lsn`) on each create, and `listBranches` reporting all four branches.
 
 The endpoints are then retired (`deleteEndpoint`). `-n` repeats the scenario
-against a fresh project each time.
+against a fresh cluster each time.
 
 ## Running
 
 ```sh
 test/integration/controller/run-controller.sh           # one branch_lineage run
-test/integration/controller/run-controller.sh -n 3      # repeat the scenario 3x (fresh project each)
+test/integration/controller/run-controller.sh -n 3      # repeat the scenario 3x (fresh cluster each)
 ```
 
 Prerequisites: Docker; a YugabyteDB on the host at `:5433`

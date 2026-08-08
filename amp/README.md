@@ -46,7 +46,7 @@ architecture docs:
   patched PostgreSQL compute, pageserver, safekeeper, the `yb_amp` Postgres
   extension, and supporting Rust libraries.
 - [`controller/`](controller/) — the control plane for a placement group:
-  owns the lifecycle of storage pools, projects, PG clusters/branches, and
+  owns the lifecycle of storage pools, clusters, branches, and
   endpoints, exposed through a REST API.
 - [`amp_ui/`](amp_ui/) — the web UI: a React 19 + Vite + Tailwind SPA over
   the controller REST API.
@@ -193,7 +193,7 @@ repo root from its own location, so it works from any working directory
 ```sh
 ./yb_amp_local init                          # writes the .yb_amp repo dir
 ./yb_amp_local start                         # controller, safekeeper, pageserver
-./yb_amp_local project create main           # a lineage; prints its root branch id
+./yb_amp_local cluster create main           # a lineage; prints its root branch id
 ./yb_amp_local endpoint create main --branch-id <branch-id>
 ./yb_amp_local endpoint start main
 ```
@@ -252,7 +252,7 @@ psql -p 55432 -h 127.0.0.1 -U cloud_admin postgres
 
 Branches are cheap timeline forks at a given LSN, served out of the same YB
 rows. A branch always forks an existing one, addressed by id — a lineage with no
-ancestor is a *project*, so `project create` makes those:
+ancestor is a *cluster*, so `cluster create` makes those:
 
 ```sh
 yb_amp_local branch create --branch-name migration_check --ancestor-branch-id <branch-id>

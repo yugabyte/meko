@@ -15,7 +15,7 @@ const StepDeleteBranch = "delete_branch"
 
 // DeleteBranchArgs are the inputs to the delete_branch step.
 type DeleteBranchArgs struct {
-	ProjectID uuid.UUID `json:"project_id"`
+	ClusterID uuid.UUID `json:"cluster_id"`
 	BranchID  uuid.UUID `json:"branch_id"`
 }
 
@@ -61,14 +61,14 @@ func (s *deleteBranchStep) Execute(ctx context.Context) StepResult {
 	// no endpoints are retired and nothing is half-deleted (the branch row would
 	// otherwise survive with its compute already gone, and replays would re-hit
 	// the same FK error forever).
-	children, err := s.state.ChildBranchIDs(ctx, s.ProjectID, s.BranchID)
+	children, err := s.state.ChildBranchIDs(ctx, s.ClusterID, s.BranchID)
 	if err != nil {
 		return Fail(fmt.Errorf("check child branches: %w", err))
 	}
 	if len(children) > 0 {
 		return Fail(fmt.Errorf("cannot delete branch %s: it has %d child branch(es); delete them first", s.BranchID, len(children)))
 	}
-	epIDs, err := s.state.EndpointIDsForBranch(ctx, s.ProjectID, s.BranchID)
+	epIDs, err := s.state.EndpointIDsForBranch(ctx, s.ClusterID, s.BranchID)
 	if err != nil {
 		return Fail(fmt.Errorf("enumerate branch endpoints: %w", err))
 	}
@@ -85,7 +85,7 @@ func (s *deleteBranchStep) Execute(ctx context.Context) StepResult {
 			return Fail(fmt.Errorf("delete endpoint record %s: %w", id, err))
 		}
 	}
-	if err := s.state.DeleteBranch(ctx, s.ProjectID, s.BranchID); err != nil {
+	if err := s.state.DeleteBranch(ctx, s.ClusterID, s.BranchID); err != nil {
 		return Fail(fmt.Errorf("delete branch record: %w", err))
 	}
 	return Ok(mustResult(map[string]any{

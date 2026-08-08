@@ -83,7 +83,7 @@ type Config struct {
 	RowsPerTable int
 	Tablets      int
 	Concurrency  int
-	PgVersion    int // amp project/endpoint PG version (0 → controller default)
+	PgVersion    int // amp cluster/endpoint PG version (0 → controller default)
 
 	// amp compute endpoint connection (layer 2). Defaults to the real
 	// cloud_admin/cloud_admin/postgres credentials every amp endpoint

@@ -36,7 +36,7 @@ func main() {
 	root.AddCommand(
 		initCmd(),
 		startCmd(),
-		projectCmd(),
+		clusterCmd(),
 		branchCmd(),
 		endpointCmd(),
 		pageserverCmd(),
@@ -159,7 +159,7 @@ func branchCreateCmd() *cobra.Command {
 	var a launch.BranchCreateArgs
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Fork an existing branch (use `project create` for a new lineage)",
+		Short: "Fork an existing branch (use `cluster create` for a new lineage)",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
 				return launch.BranchCreate(ctx, env, a)
@@ -175,24 +175,24 @@ func branchCreateCmd() *cobra.Command {
 	return cmd
 }
 
-// --- project ---
+// --- cluster ---
 
-func projectCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "project", Short: "Manage projects (each one an independent lineage)"}
-	cmd.AddCommand(projectCreateCmd())
+func clusterCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "cluster", Short: "Manage clusters (each one an independent lineage)"}
+	cmd.AddCommand(clusterCreateCmd())
 	return cmd
 }
 
-func projectCreateCmd() *cobra.Command {
-	var a launch.ProjectCreateArgs
+func clusterCreateCmd() *cobra.Command {
+	var a launch.ClusterCreateArgs
 	cmd := &cobra.Command{
 		Use:   "create <name>",
-		Short: "Create a project: a new lineage whose default branch is its root",
+		Short: "Create a cluster: a new lineage whose default branch is its root",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			a.Name = args[0]
 			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
-				return launch.ProjectCreate(ctx, env, a)
+				return launch.ClusterCreate(ctx, env, a)
 			})
 		},
 	}

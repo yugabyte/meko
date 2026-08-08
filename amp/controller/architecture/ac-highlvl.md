@@ -3,7 +3,7 @@
 ## The one-paragraph version
 
 **amp-controller (ac) is the control plane for YB Amp.** It owns the full
-lifecycle of everything a customer cares about — projects, their databases (branches),
+lifecycle of everything a customer cares about — clusters, their databases (branches),
 the read/write compute "endpoints" that serve them, and the branching between them —
 and exposes all of it through a single REST API. It keeps its own state in YBDB
 it manages and reuses YB Amp's existing storage components rather than 
@@ -26,14 +26,14 @@ unit YBLC manages. It is built from a handful of parts:
 
 There is **one Controller per foundation**; the Controller lives *inside* the foundation
 it manages, and a deployment with N foundations has N independent controllers.
-Coordinating *across* foundations (managing a fleet) is the job of a future project and
+Coordinating *across* foundations (managing a fleet) is the job of a future cluster and
 not currently in scope of YBAmp Controller.
 
 These parts split into two planes — control and data — with the MCP server sitting in
 front of the control plane, and the rule for reaching each is different.
 
 **Control plane — always through the Controller.** Anything that changes the shape of
-the world — create a project, branch a branch, add/remove/pause an
+the world — create a cluster, branch a branch, add/remove/pause an
 endpoint, scale — is a **control-plane mutation**, and the only way to perform one is
 a Controller API call. Agents, the MCP server, future automation — they are all just
 API consumers of the Controller. Neither the data nor the compute layer has the
@@ -42,7 +42,7 @@ the control plane today.
 
 **An MCP server ships with YBLC.** Alongside the REST API, YBLC exposes its control
 plane as an MCP server so that AI agents can drive lifecycle operations — create a
-project, branch a branch, stand up or pause an endpoint, scale — through
+cluster, branch a branch, stand up or pause an endpoint, scale — through
 tool calls. The MCP server is a thin adapter over the same Controller API; it grants
 no special privileges and bypasses nothing, it simply makes the control plane
 directly consumable by agents.
@@ -84,33 +84,33 @@ exists. Requirements are cumulative going down the table.
 ```
 Foundation (= one YugabyteDB universe, one Controller)
   └── Storage Pool       ≈ a Meko datapack; any user can create one (becomes owner)
-        └── Project      a "database": created with its one default branch (PG cluster)
-              └── Branch (PG cluster)   the default branch + its forks
+        └── Cluster      a "database": created with its one default branch
+              └── Branch          the default branch + its forks
                     └── Endpoint        a running Postgres serving that branch
 ```
 
 | To create… | You need (cumulatively)… | Notes |
 |---|---|---|
 | **Storage pool** | A user account | Any user can create a pool and becomes its owner. It maps roughly to a Meko datapack; reaching someone else's pool requires it to be **shared** with you. |
-| **Project** (with its default branch) | Access to the pool | Creating a project creates the project *and* its one **default** branch together, and optionally that branch's first (write) endpoint. The default branch is never created on its own. Access is then granted per project. |
-| **Branch** (another branch) | Write access to the project | Fork an existing branch into a new one under the same project — off the default branch or off another branch (branch-of-branch). |
+| **Cluster** (with its default branch) | Access to the pool | Creating a cluster creates the cluster *and* its one **default** branch together, and optionally that branch's first (write) endpoint. The default branch is never created on its own. Access is then granted per cluster. |
+| **Branch** (another branch) | Write access to the cluster | Fork an existing branch into a new one under the same cluster — off the default branch or off another branch (branch-of-branch). |
 | **Endpoint** | An existing branch | A *write* endpoint is only allowed if the branch has no writer yet (single-writer rule); all others are read-only. |
 
 Branching is the action of creating a new branch from an existing one (the default
 branch or another branch); once created, a branch is an ordinary branch under the same
-project. (Merging branches is future work.)
+cluster. (Merging branches is future work.)
 
-Creating projects, branches, and endpoints can all be driven through the **MCP server**.
+Creating clusters, branches, and endpoints can all be driven through the **MCP server**.
 
-Under the hood a project is a purely control-plane grouping with **no** storage object;
+Under the hood a cluster is a purely control-plane grouping with **no** storage object;
 a branch's `branch_id` **is** the storage layer's flat `BranchId` verbatim. The
 Controller carries that storage-layer branch id verbatim when talking to the storage
 controller.
 
 Some notes on branches and endpoints:
 
-- **Branches are project-scoped.** A branch is identified within the Controller by
-  *(project, branch)*, the project being a control-plane scoping only; the `branch_id`
+- **Branches are cluster-scoped.** A branch is identified within the Controller by
+  *(cluster, branch)*, the cluster being a control-plane scoping only; the `branch_id`
   alone is the storage-layer identity.
 - **One writer per branch.** A second write endpoint cannot exist.
 
@@ -123,18 +123,18 @@ steps, so a crash mid-operation resumes rather than leaving a mess.
 1. **Create storage pool.** Any user can create a storage pool and becomes its **owner**;
    it maps roughly to a Meko datapack. A user who did not create a pool reaches it only if
    it is **shared** with them.
-2. **Create project.** The primary entry point. Under a storage pool the caller can
-   reach, the Controller — in one task — creates a **project** (a purely control-plane
+2. **Create cluster.** The primary entry point. Under a storage pool the caller can
+   reach, the Controller — in one task — creates a **cluster** (a purely control-plane
    grouping, assigning its **id**, which maps to no storage object), creates that
-   project's one **default branch (PG cluster)** *scoped to
-   that project* (assigning its **branch id**, which *is* the storage layer's flat
+   cluster's one **default branch** *scoped to
+   that cluster* (assigning its **branch id**, which *is* the storage layer's flat
    **`branch_id`**; a branch is identified within the Controller by the pair
-   **(project, branch)**, never globally — the project being a control-plane scoping
+   **(cluster, branch)**, never globally — the cluster being a control-plane scoping
    only), registers the branch with the storage
    layer, creates the database record, and can stand up its first write endpoint. The
-   default branch is never created on its own — a project *is* a control-plane record
-   plus its default branch. Access to the new project is then granted per user.
-3. **Create endpoint.** On an existing branch — addressed by its **(project, branch)**,
+   default branch is never created on its own — a cluster *is* a control-plane record
+   plus its default branch. Access to the new cluster is then granted per user.
+3. **Create endpoint.** On an existing branch — addressed by its **(cluster, branch)**,
    the storage-layer identity being the flat **`branch_id`** — the Controller assembles
    the endpoint
    *spec* (DB connection, branch binding, read/write role, version, TLS,
@@ -145,7 +145,7 @@ steps, so a crash mid-operation resumes rather than leaving a mess.
    `endpoint_id` (new instance, same record).
 4. **Branch.** Fork an existing branch at a chosen point — the default branch or another
    branch — producing a *new* branch (with its own `branch_id` under the same
-   project) and database linked to their parent, and, optionally, a first endpoint on the
+   cluster) and database linked to their parent, and, optionally, a first endpoint on the
    branch. The pre-fork history is shared, not copied.
 5. **Pause / resume.** A Controller API call targeting an endpoint. Pause suspends the
    compute while the endpoint record and its spec survive; resume recreates the running
@@ -226,14 +226,14 @@ hierarchy, the **physical** resources (branches and endpoints), and the **operat
 task log. A sketch in PostgreSQL DDL follows — a first cut to show the shape; authoritative
 DDL lives with the code and its migrations.
 
-A project's id is a control-plane-only id (it maps to no storage object); a branch's
+A cluster's id is a control-plane-only id (it maps to no storage object); a branch's
 `branch_id` *is* the storage layer's flat `BranchId` — a 128-bit id, carried here
 verbatim as `uuid` and globally unique, so it stands alone as the branch's primary
 key. The storage layer is flat: there is no enclosing tenant, and nothing above a
-branch is part of its identity — `project_id` is an ordinary scoping column, and an
-endpoint has none at all (it reaches its project through its branch). One
+branch is part of its identity — `cluster_id` is an ordinary scoping column, and an
+endpoint has none at all (it reaches its cluster through its branch). One
 consequence: the fork FK can no longer also assert that a parent is in the same
-project, so in-project lineage is an application invariant rather than a schema
+cluster, so in-cluster lineage is an application invariant rather than a schema
 one. All foreign keys are
 `RESTRICT` (the PG default) unless noted: teardown is top-down through tasks, never via
 `ON DELETE CASCADE` surprises.
@@ -254,29 +254,29 @@ CREATE TABLE storage_pools (
     owner_user_id  uuid NOT NULL REFERENCES users(id)
 );
 
-CREATE TABLE projects (                         -- a "database": one project, one default branch
+CREATE TABLE clusters (                         -- a "database": one cluster, one default branch
     id               uuid PRIMARY KEY,   -- control-plane-only id; maps to no storage object
     storage_pool_id  uuid NOT NULL REFERENCES storage_pools(id),
     name             text NOT NULL,
     dropped_at       timestamptz                -- tombstone; see `branch` below
 );
 
--- Name unique within its pool, among LIVE projects.
-CREATE UNIQUE INDEX projects_name_per_pool ON project (storage_pool_id, name)
+-- Name unique within its pool, among LIVE clusters.
+CREATE UNIQUE INDEX clusters_name_per_pool ON cluster (storage_pool_id, name)
     WHERE dropped_at IS NULL;
 
-CREATE TABLE user_pool_grants (                 -- the "share": create/see projects in a pool
+CREATE TABLE user_pool_grants (                 -- the "share": create/see clusters in a pool
     user_id          uuid NOT NULL REFERENCES users(id),
     storage_pool_id  uuid NOT NULL REFERENCES storage_pools(id),
     PRIMARY KEY (user_id, storage_pool_id)
 );
 
 CREATE TYPE grant_role AS ENUM ('read_only', 'read_write');
-CREATE TABLE user_project_grants (              -- per-project access; revoke = drop the row
+CREATE TABLE user_cluster_grants (              -- per-cluster access; revoke = drop the row
     user_id     uuid NOT NULL REFERENCES users(id),
-    project_id  uuid NOT NULL REFERENCES projects(id),
+    cluster_id  uuid NOT NULL REFERENCES clusters(id),
     role        grant_role NOT NULL,
-    PRIMARY KEY (user_id, project_id)
+    PRIMARY KEY (user_id, cluster_id)
 );
 ```
 
@@ -285,13 +285,13 @@ CREATE TABLE user_project_grants (              -- per-project access; revoke = 
 ```sql
 -- A branch's branch_id *is* the storage layer's flat BranchId, globally unique;
 -- the storage layer is flat (no enclosing tenant), so the id alone is the whole
--- identity and project_id is a control-plane scoping column.
+-- identity and cluster_id is a control-plane scoping column.
 CREATE TABLE branches (
     branch_id           uuid PRIMARY KEY,                      -- = storage-layer flat branch_id
-    project_id          uuid NOT NULL REFERENCES projects(id), -- control-plane scoping only
+    cluster_id          uuid NOT NULL REFERENCES clusters(id), -- control-plane scoping only
     name                text NOT NULL,
     pg_version          int  NOT NULL, -- Is PG Version needed?
-    is_default          boolean NOT NULL DEFAULT false,  -- the project's default (root) branch
+    is_default          boolean NOT NULL DEFAULT false,  -- the cluster's default (root) branch
 
     -- Branching
     parent_branch_id    uuid REFERENCES branches(branch_id),  -- fork ancestry; NULL for a root
@@ -303,23 +303,23 @@ CREATE TABLE branches (
 
     -- A dropped branch is TOMBSTONED, not deleted: a branch id is never reused and
     -- its pages/WAL in amp_storage outlive the drop. Every "is this live?" reader
-    -- filters `dropped_at IS NULL`. Projects tombstone for the follow-on reason:
-    -- the FK above is RESTRICT, so a project whose branches survive as tombstones
+    -- filters `dropped_at IS NULL`. Clusters tombstone for the follow-on reason:
+    -- the FK above is RESTRICT, so a cluster whose branches survive as tombstones
     -- could never be deleted.
     dropped_at          timestamptz
 );
 
--- "The branches of this project" is the hottest access path and the primary key
+-- "The branches of this cluster" is the hottest access path and the primary key
 -- no longer serves it, so it gets an index of its own.
-CREATE INDEX branches_by_project ON branches (project_id);
+CREATE INDEX branches_by_cluster ON branches (cluster_id);
 CREATE INDEX branches_by_parent  ON branches (parent_branch_id);
 
--- Name unique within its project, and exactly one default branch per project —
+-- Name unique within its cluster, and exactly one default branch per cluster —
 -- both among LIVE branches, so a drop frees the name and lets a new default be
 -- designated. Partial because the rows stay behind forever.
-CREATE UNIQUE INDEX branches_name_per_project ON branches (project_id, name)
+CREATE UNIQUE INDEX branches_name_per_cluster ON branches (cluster_id, name)
     WHERE dropped_at IS NULL;
-CREATE UNIQUE INDEX branches_one_default_per_project ON branches (project_id)
+CREATE UNIQUE INDEX branches_one_default_per_cluster ON branches (cluster_id)
     WHERE is_default AND dropped_at IS NULL;
 
 CREATE TYPE endpoint_role  AS ENUM ('read_write', 'read_only');
@@ -329,7 +329,7 @@ CREATE TABLE endpoints (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- the spec: complete enough to recreate the endpoint from scratch.
-    -- No project_id: an endpoint reaches its project through its branch, so the
+    -- No cluster_id: an endpoint reaches its cluster through its branch, so the
     -- two can never disagree.
     branch_id       uuid NOT NULL REFERENCES branches(branch_id),
     role            endpoint_role  NOT NULL,
@@ -358,7 +358,7 @@ CREATE UNIQUE INDEX endpoints_one_writer_per_branch
     ON endpoints (branch_id)
     WHERE role = 'read_write';
 -- A name identifies an endpoint within its branch, the way a branch name does
--- within its project — two branches may each have a `primary`. NULLs are
+-- within its cluster — two branches may each have a `primary`. NULLs are
 -- distinct, so any number of unnamed endpoints coexist.
 CREATE UNIQUE INDEX endpoints_name_per_branch ON endpoints (branch_id, name);
 CREATE INDEX endpoints_by_branch ON endpoints (branch_id);
@@ -377,7 +377,7 @@ run, written before execution and marked complete as it goes.
 ```sql
 CREATE TABLE tasks (                            -- one per operation; status is exposed via API
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind         text        NOT NULL,         -- 'create_project', 'branch', 'scale', ...
+    kind         text        NOT NULL,         -- 'create_cluster', 'branch', 'scale', ...
     status       text        NOT NULL DEFAULT 'pending',
     params       jsonb       NOT NULL,         -- the originating request
     step_ids     uuid[]      NOT NULL DEFAULT '{}',  -- its steps, in execution order
@@ -397,8 +397,8 @@ CREATE TABLE task_steps (                        -- the write-ahead steps of one
 ```
 
 The load-bearing rules are in the DDL above, not just in API checks: branch references
-are **project-scoped composite FKs** (cross-project use or forks are unrepresentable), the
-**single-writer** partial unique index, **one default branch per project**,
+are **cluster-scoped composite FKs** (cross-cluster use or forks are unrepresentable), the
+**single-writer** partial unique index, **one default branch per cluster**,
 **scoped-not-global names**, and **restrict (not cascade) deletes** across the resource
 hierarchy.
 

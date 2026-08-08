@@ -9,11 +9,11 @@ import { BranchCard } from "./BranchCard";
 
 export function BranchTree({
   poolId,
-  projectId,
+  clusterId,
   branches,
 }: {
   poolId: string;
-  projectId: string;
+  clusterId: string;
   branches: Branch[];
 }) {
   // Default branch is the source/root; everything else is a fork shown below.
@@ -25,7 +25,7 @@ export function BranchTree({
     return map;
   }, [branches]);
 
-  const endpoints = useBranchEndpoints(poolId, projectId, branches);
+  const endpoints = useBranchEndpoints(poolId, clusterId, branches);
 
   if (branches.length === 0) {
     return (
@@ -49,7 +49,7 @@ export function BranchTree({
               : undefined
           }
           poolId={poolId}
-          projectId={projectId}
+          clusterId={clusterId}
           endpoints={endpoints.byBranch[branch.branch_id] ?? []}
           endpointsLoading={endpoints.isLoading}
         />

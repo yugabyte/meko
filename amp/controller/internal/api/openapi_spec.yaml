@@ -7,7 +7,7 @@ info:
     Control-plane REST API for the **amp controller** (amp-controller): the
     control plane for a single placement group. See `controller/architecture/`.
 
-    The resource ladder is **storage pool → project → branch → endpoint**. Users
+    The resource ladder is **storage pool → cluster → branch → endpoint**. Users
     are a basic, *unauthenticated* notion of an identity; there is no auth yet
     (the user/grant model is designed but authentication is deferred).
 
@@ -18,16 +18,16 @@ info:
       Pool sharing (pool grants) is out of scope here, but a pool is addressed by
       its own id because multiple users will eventually act on it. Listing
       returns every pool.
-    - **Projects** — a project (a "database") in a pool. Create and delete are
+    - **Clusters** — a cluster (a "database") in a pool. Create and delete are
       **asynchronous** (`202` + a `Task` + a `Location: /api/v1/tasks/{id}`
-      header): the worker creates the project **and its default branch** (and the
+      header): the worker creates the cluster **and its default branch** (and the
       controller's pending-init recipe), or cascades the delete to the
-      project's branches and endpoints. The default branch id is the storage-layer
-      branch id verbatim (the storage layer is flat — a project maps to no storage
-      object). Poll the task, then read the project to see its `default_branch`.
-    - **Branches** — create / list / get / delete a branch in a project. Create
+      cluster's branches and endpoints. The default branch id is the storage-layer
+      branch id verbatim (the storage layer is flat — a cluster maps to no storage
+      object). Poll the task, then read the cluster to see its `default_branch`.
+    - **Branches** — create / list / get / delete a branch in a cluster. Create
       and delete are **asynchronous** (`202` + a `Task` + a `Location` header).
-      *Create* forks an existing branch (the parent, defaulting to the project's
+      *Create* forks an existing branch (the parent, defaulting to the cluster's
       default branch) into a new branch, recording its fork ancestry
       (`parent_branch_id`, `fork_lsn`) and inheriting the parent's Postgres
       version. Branches can fork off the default branch or off another branch.
@@ -62,10 +62,10 @@ tags:
     description: A basic, unauthenticated notion of a user.
   - name: storage-pools
     description: Storage pools (≈ a Meko datapack); top-level, created and owned by a user.
-  - name: projects
-    description: Projects (databases) in a pool. Create and delete are async (202 + Task); create records the project and its default branch, delete cascades to its branches and endpoints.
+  - name: clusters
+    description: Clusters (databases) in a pool. Create and delete are async (202 + Task); create records the cluster and its default branch, delete cascades to its branches and endpoints.
   - name: branches
-    description: Branches (PG cluster timelines) in a project. Create and delete are async (202 + Task); create forks an existing branch, delete cascades to the branch's endpoints.
+    description: Branches (timelines) in a cluster. Create and delete are async (202 + Task); create forks an existing branch, delete cascades to the branch's endpoints.
   - name: endpoints
     description: Compute endpoints bound to a branch; create/delete are asynchronous tasks (202 + Task + Location) — one container/pod per endpoint.
   - name: tasks
@@ -216,29 +216,29 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/projects:
+  /storage-pools/{poolId}/clusters:
     parameters:
       - $ref: '#/components/parameters/PoolId'
     post:
-      tags: [projects]
-      operationId: createProject
-      summary: Create a project (and its default branch) in a pool
+      tags: [clusters]
+      operationId: createCluster
+      summary: Create a cluster (and its default branch) in a pool
       description: |
-        Plans an asynchronous task that creates a project (a "database") in the
-        pool together with its default branch (a PG cluster) and the storage
+        Plans an asynchronous task that creates a cluster (a "database") in the
+        pool together with its default branch and the storage
         controller's pending-init recipe, and returns `202` + the `Task` with a
         `Location` header pointing at it. The default branch id is the storage-layer
-        branch id verbatim (the storage layer is flat — a project maps to no storage
-        object). Poll the task, then read the project to see its `default_branch`.
+        branch id verbatim (the storage layer is flat — a cluster maps to no storage
+        object). Poll the task, then read the cluster to see its `default_branch`.
         Cheap validation is synchronous (`400` bad body / unsupported `pg_version`,
-        `404` unknown pool); a duplicate project name surfaces as a `failed` task,
+        `404` unknown pool); a duplicate cluster name surfaces as a `failed` task,
         not a `409`.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateProjectRequest'
+              $ref: '#/components/schemas/CreateClusterRequest'
       responses:
         '202':
           $ref: '#/components/responses/Accepted'
@@ -249,13 +249,13 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
     get:
-      tags: [projects]
-      operationId: listProjects
-      summary: List the projects in a pool
+      tags: [clusters]
+      operationId: listClusters
+      summary: List the clusters in a pool
       description: >-
-        Lists the projects in the pool, each with its default branch. By default
+        Lists the clusters in the pool, each with its default branch. By default
         the list is scoped to usable clusters; pass `include_failed=true` (e.g.
-        from an operator's fleet view) to also surface projects whose creation
+        from an operator's fleet view) to also surface clusters whose creation
         failed, so they can be seen and deleted. Returns 404 if the pool does not
         exist.
       parameters:
@@ -264,11 +264,11 @@ paths:
         - $ref: '#/components/parameters/IncludeFailed'
       responses:
         '200':
-          description: A page of projects.
+          description: A page of clusters.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProjectList'
+                $ref: '#/components/schemas/ClusterList'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -276,22 +276,22 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/projects/{projectId}:
+  /storage-pools/{poolId}/clusters/{clusterId}:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ClusterId'
     get:
-      tags: [projects]
-      operationId: getProject
-      summary: Get a project
-      description: Returns the project (with its default branch). Returns 404 if the pool or project does not exist.
+      tags: [clusters]
+      operationId: getCluster
+      summary: Get a cluster
+      description: Returns the cluster (with its default branch). Returns 404 if the pool or cluster does not exist.
       responses:
         '200':
-          description: The project.
+          description: The cluster.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Project'
+                $ref: '#/components/schemas/Cluster'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -299,14 +299,14 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
     delete:
-      tags: [projects]
-      operationId: deleteProject
-      summary: Delete a project
+      tags: [clusters]
+      operationId: deleteCluster
+      summary: Delete a cluster
       description: |
-        Plans an asynchronous `delete_project` cascade task that retires the
-        project's endpoints, drops its branches, then drops the project row, and
+        Plans an asynchronous `delete_cluster` cascade task that retires the
+        cluster's endpoints, drops its branches, then drops the cluster row, and
         returns `202` + the `Task` with a `Location` header. A cheap synchronous
-        pre-check returns `404` if the pool or project does not exist.
+        pre-check returns `404` if the pool or cluster does not exist.
       responses:
         '202':
           $ref: '#/components/responses/Accepted'
@@ -317,26 +317,26 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/projects/{projectId}/branches:
+  /storage-pools/{poolId}/clusters/{clusterId}/branches:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ClusterId'
     post:
       tags: [branches]
       operationId: createBranch
       summary: Branch (fork) a branch into a new branch
       description: |
-        Plans an asynchronous task that forks a branch (the parent) in the project
+        Plans an asynchronous task that forks a branch (the parent) in the cluster
         into a new branch, and returns `202` + the `Task` with a `Location` header.
-        The parent defaults to the project's default branch; pass
+        The parent defaults to the cluster's default branch; pass
         `parent_branch_id` to fork off another branch (branch-of-branch). The new
         branch records its fork ancestry (`parent_branch_id`, `fork_lsn`) and
         inherits the parent's Postgres version. The fork point defaults to the
         parent's latest LSN; pass `fork_point_lsn` to branch at an earlier point.
-        Like create-project, the branch is recorded as a recipe and materialized
+        Like create-cluster, the branch is recorded as a recipe and materialized
         lazily by the first endpoint deployed on it — no compute is started here.
         Cheap validation is synchronous (`400` bad body / bad or unresolvable
-        `fork_point_lsn`, `404` unknown pool / project / parent); a duplicate branch
+        `fork_point_lsn`, `404` unknown pool / cluster / parent); a duplicate branch
         name surfaces as a `failed` task, not a `409`.
       requestBody:
         required: true
@@ -356,8 +356,8 @@ paths:
     get:
       tags: [branches]
       operationId: listBranches
-      summary: List the branches in a project
-      description: Lists the branches in the project (the default branch plus its forks). Returns 404 if the pool or project does not exist.
+      summary: List the branches in a cluster
+      description: Lists the branches in the cluster (the default branch plus its forks). Returns 404 if the pool or cluster does not exist.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
@@ -375,16 +375,16 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}:
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ClusterId'
       - $ref: '#/components/parameters/BranchId'
     get:
       tags: [branches]
       operationId: getBranch
       summary: Get a branch
-      description: Returns the branch. Returns 404 if the pool, project, or branch does not exist.
+      description: Returns the branch. Returns 404 if the pool, cluster, or branch does not exist.
       responses:
         '200':
           description: The branch.
@@ -406,7 +406,7 @@ paths:
         Plans an asynchronous `delete_branch` cascade task that retires the
         branch's endpoints, then drops the branch row, and returns `202` + the
         `Task` with a `Location` header. Cheap synchronous pre-checks return `404`
-        if the pool / project / branch does not exist, or `409` if the branch has
+        if the pool / cluster / branch does not exist, or `409` if the branch has
         child branches (the parent FK is `RESTRICT`, so the delete would be doomed).
       responses:
         '202':
@@ -420,10 +420,10 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints:
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ClusterId'
       - $ref: '#/components/parameters/BranchId'
     post:
       tags: [endpoints]
@@ -436,7 +436,7 @@ paths:
         task, then read the endpoint to see its id + `address`. A branch admits at
         most one `read_write` endpoint (the single-writer rule); a second one
         surfaces as a `failed` task, not a `409`. Requires the endpoint deployer
-        (`--deploy`); returns `501` otherwise. `404` if the pool / project / branch
+        (`--deploy`); returns `501` otherwise. `404` if the pool / cluster / branch
         does not exist.
       requestBody:
         required: false
@@ -459,7 +459,7 @@ paths:
       tags: [endpoints]
       operationId: listEndpoints
       summary: List the endpoints bound to a branch
-      description: Lists the compute endpoints bound to the branch. Returns 404 if the pool, project, or branch does not exist.
+      description: Lists the compute endpoints bound to the branch. Returns 404 if the pool, cluster, or branch does not exist.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
@@ -477,10 +477,10 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId}:
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ClusterId'
       - $ref: '#/components/parameters/BranchId'
       - $ref: '#/components/parameters/EndpointId'
     get:
@@ -508,7 +508,7 @@ paths:
         Plans an asynchronous `delete_endpoint` task that removes the endpoint's
         running instance and then deletes the endpoint record, and returns `202` +
         the `Task` with a `Location` header. Requires the endpoint deployer
-        (`--deploy`); returns `501` otherwise. `404` if the pool / project / branch
+        (`--deploy`); returns `501` otherwise. `404` if the pool / cluster / branch
         / endpoint does not exist.
       responses:
         '202':
@@ -520,10 +520,10 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /storage-pools/{poolId}/projects/{projectId}/branches/{branchId}/endpoints/{endpointId}/resize:
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize:
     parameters:
       - $ref: '#/components/parameters/PoolId'
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/ClusterId'
       - $ref: '#/components/parameters/BranchId'
       - $ref: '#/components/parameters/EndpointId'
     post:
@@ -543,7 +543,7 @@ paths:
         QoS preserved). **First-writer-wins**: while a resize of this endpoint is
         in flight, a concurrent resize is rejected with `409` until the first
         reaches a terminal state. Requires the endpoint deployer (`--deploy`);
-        returns `501` otherwise. `404` if the pool / project / branch / endpoint
+        returns `501` otherwise. `404` if the pool / cluster / branch / endpoint
         does not exist.
       requestBody:
         required: true
@@ -568,7 +568,7 @@ paths:
       tags: [tasks]
       operationId: listTasks
       summary: List tasks
-      description: Lists write-ahead tasks, most recent first, optionally filtered by status, kind, or project.
+      description: Lists write-ahead tasks, most recent first, optionally filtered by status, kind, or cluster.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
@@ -582,13 +582,13 @@ paths:
         - name: kind
           in: query
           required: false
-          description: Only return tasks of this kind (e.g. create_project, delete_branch).
+          description: Only return tasks of this kind (e.g. create_cluster, delete_branch).
           schema:
             type: string
-        - name: project_id
+        - name: cluster_id
           in: query
           required: false
-          description: Only return tasks scoped to this project.
+          description: Only return tasks scoped to this cluster.
           schema:
             type: string
             format: uuid
@@ -644,11 +644,11 @@ components:
       schema:
         type: string
         format: uuid
-    ProjectId:
-      name: projectId
+    ClusterId:
+      name: clusterId
       in: path
       required: true
-      description: The project's id (a control-plane id; maps to no storage object).
+      description: The cluster's id (a control-plane id; maps to no storage object).
       schema:
         type: string
         format: uuid
@@ -700,8 +700,8 @@ components:
       in: query
       required: false
       description: >-
-        Whether to include projects whose creation failed (an orphan left behind
-        when a `create_project` task failed mid-provisioning). Defaults to
+        Whether to include clusters whose creation failed (an orphan left behind
+        when a `create_cluster` task failed mid-provisioning). Defaults to
         `false` — the list is scoped to usable clusters, which is what a picker,
         a count, or a client that operates on each result wants. Pass `true`
         (e.g. from an operator's fleet view) to also surface the failed orphans so
@@ -772,7 +772,7 @@ components:
           format: uuid
         is_admin:
           type: boolean
-          description: Admins skip all pool/project grants. Until auth lands, anyone may create an admin.
+          description: Admins skip all pool/cluster grants. Until auth lands, anyone may create an admin.
         created_at:
           type: string
           format: date-time
@@ -855,35 +855,35 @@ components:
           format: uuid
           description: The user that will own the pool.
 
-    CreateProjectRequest:
+    CreateClusterRequest:
       type: object
       required: [name]
       properties:
         name:
           type: string
           minLength: 1
-          description: Project (database) name; unique within the pool. The project's default branch is always named "main".
+          description: Cluster (database) name; unique within the pool. The cluster's default branch is always named "main".
         pg_version:
           type: integer
-          description: Postgres major version for the project's default branch. Defaults to 18.
+          description: Postgres major version for the cluster's default branch. Defaults to 18.
         with_writer:
           type: boolean
-          description: When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = project + writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
+          description: When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
         resources:
           $ref: '#/components/schemas/EndpointResources'
 
-    Project:
+    Cluster:
       type: object
       required: [id, storage_pool_id, name, created_at, default_branch]
       properties:
         id:
           type: string
           format: uuid
-          description: The project id (a control-plane id; maps to no storage object).
+          description: The cluster id (a control-plane id; maps to no storage object).
         storage_pool_id:
           type: string
           format: uuid
-          description: The storage pool this project belongs to.
+          description: The storage pool this cluster belongs to.
         name:
           type: string
         created_at:
@@ -892,14 +892,14 @@ components:
         default_branch:
           $ref: '#/components/schemas/Branch'
 
-    ProjectList:
+    ClusterList:
       type: object
-      required: [projects, total, count]
+      required: [clusters, total, count]
       properties:
-        projects:
+        clusters:
           type: array
           items:
-            $ref: '#/components/schemas/Project'
+            $ref: '#/components/schemas/Cluster'
         total:
           $ref: '#/components/schemas/TotalCount'
         count:
@@ -907,12 +907,12 @@ components:
 
     Branch:
       type: object
-      required: [project_id, branch_id, name, pg_version, is_default, created_at]
+      required: [cluster_id, branch_id, name, pg_version, is_default, created_at]
       properties:
-        project_id:
+        cluster_id:
           type: string
           format: uuid
-          description: The project (control-plane grouping) this branch belongs to.
+          description: The cluster (control-plane grouping) this branch belongs to.
         branch_id:
           type: string
           format: uuid
@@ -923,12 +923,12 @@ components:
           type: integer
         is_default:
           type: boolean
-          description: True for a project's default (root) branch.
+          description: True for a cluster's default (root) branch.
         parent_branch_id:
           type: string
           format: uuid
           nullable: true
-          description: The branch this one was forked from, or null for a project's default branch. Always in the same project.
+          description: The branch this one was forked from, or null for a cluster's default branch. Always in the same cluster.
         fork_lsn:
           type: string
           nullable: true
@@ -965,11 +965,11 @@ components:
         name:
           type: string
           minLength: 1
-          description: Name for the new branch; unique within the project.
+          description: Name for the new branch; unique within the cluster.
         parent_branch_id:
           type: string
           format: uuid
-          description: The branch to fork from. Defaults to the project's default branch; set it to branch off another branch.
+          description: The branch to fork from. Defaults to the cluster's default branch; set it to branch off another branch.
         fork_point_lsn:
           type: string
           description: |
@@ -986,15 +986,15 @@ components:
 
     Endpoint:
       type: object
-      required: [id, project_id, branch_id, role, name, address, tailnet_address, created_at]
+      required: [id, cluster_id, branch_id, role, name, address, tailnet_address, created_at]
       properties:
         id:
           type: string
           format: uuid
-        project_id:
+        cluster_id:
           type: string
           format: uuid
-          description: The project (control-plane grouping) this endpoint is bound to.
+          description: The cluster (control-plane grouping) this endpoint is bound to.
         branch_id:
           type: string
           format: uuid
@@ -1164,7 +1164,7 @@ components:
         status:
           type: string
           enum: [pending, running, succeeded, failed]
-        project_id:
+        cluster_id:
           type: string
           format: uuid
           nullable: true

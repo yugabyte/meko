@@ -23,7 +23,7 @@ type LogConfig struct {
 type DBConfig struct {
 	URL string // YSQL connection string (required)
 	// Schema holds the controller's own tables — the write-ahead task log — and
-	// the migrator's version table. The resource model (users, pools, projects,
+	// the migrator's version table. The resource model (users, pools, clusters,
 	// branches, endpoints) lives in a schema of its own, `amp_registry`,
 	// hardcoded the way `amp_storage` is — see db.ResourceSchema.
 	Schema string
@@ -97,7 +97,7 @@ type DeployConfig struct {
 	// ControllerURL is the URL deployed endpoints use to reach the
 	// controller-managed controller (e.g. http://host.docker.internal:50051).
 	// When set, the endpoint runs the controller-coordinated path
-	// (controller-project-create.md). Empty = the endpoint runs
+	// (controller-cluster-create.md). Empty = the endpoint runs
 	// controller-free. Either way the pageserver claims its own generation.
 	ControllerURL string
 

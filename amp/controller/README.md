@@ -2,7 +2,7 @@
 
 `controller` is the **amp controller** (the `amp-controller` / `ac`): the control
 plane for a single placement group. It owns the lifecycle of storage pools,
-projects, PG clusters/branches, and endpoints, and exposes all of it through a
+clusters, branches, and endpoints, and exposes all of it through a
 REST API. Its only state store is the placement group's YBDB universe, reached
 over YSQL.
 
@@ -15,8 +15,8 @@ Design docs (read these first):
 - [`ac-k8s-deploy.md`](architecture/ac-k8s-deploy.md) — deploying endpoints: the
   Helm-backed Kubernetes deployer and its Docker sibling, the synchronous
   deploy/retire path, and the `--deploy-driver` selector.
-- [`controller-project-create.md`](architecture/controller-project-create.md) — creating a
-  project (patterned on `yb_amp_local`): declare a recipe at create, materialize
+- [`controller-cluster-create.md`](architecture/controller-cluster-create.md) — creating a
+  cluster (patterned on `yb_amp_local`): declare a recipe at create, materialize
   the storage layer at the first endpoint.
 - [`ac-mcp.md`](architecture/ac-mcp.md) — the MCP server (`controller/mcp/`): a
   FastMCP wrapper that exposes the REST API as MCP tools for AI agents.
@@ -25,14 +25,14 @@ It started as the **base framework** ([#84](https://github.com/yugabyte/amp/issu
 a runnable skeleton — `slog` logging, the write-ahead task framework, and the
 YBDB connection + initial migrations. On top of it, the **initial APIs**
 ([#92](https://github.com/yugabyte/amp/issues/92)) add the OpenAPI v3-driven
-REST surface (users, storage pools, projects, branches) below. The **Kubernetes endpoint
+REST surface (users, storage pools, clusters, branches) below. The **Kubernetes endpoint
 deploy** ([#108](https://github.com/yugabyte/amp/issues/108)) adds endpoints
 as a resource: `createEndpoint` synchronously shells out to the configured driver
 — Docker by default, or Helm on Kubernetes via `--deploy-driver kubernetes` — to
 bring up one pod/container per endpoint (see
 [`ac-k8s-deploy.md`](architecture/ac-k8s-deploy.md)). Moving the deploy onto
-the write-ahead task framework, along with the remaining project/branch calls
-(create-project, branch, scale), lands later.
+the write-ahead task framework, along with the remaining cluster/branch calls
+(create-cluster, branch, scale), lands later.
 
 ## Layout
 
@@ -87,9 +87,9 @@ controller serve   --database-url postgres://yugabyte@127.0.0.1:5433/amp_control
             --listen :8080
 ```
 
-The control-plane resource model — users, storage pools, projects, branches,
+The control-plane resource model — users, storage pools, clusters, branches,
 endpoints — lives in its own schema (`--db-schema`, default `amp_registry`),
-isolated from project data. Two companion schemas are fixed rather than
+isolated from cluster data. Two companion schemas are fixed rather than
 configurable: `controller` holds the write-ahead task log, and `amp_storage`
 holds the data plane. There is exactly one branch table and one endpoint table,
 reached through one API, so no two views of a branch can drift.
@@ -106,7 +106,7 @@ interface the controllers implement, and the Go client the tests drive (run
 `make controller-generate` after editing the spec). The controller also serves the spec
 and an interactive explorer, plus an embedded **admin console** at `/` (open the
 listen address, e.g. `http://localhost:8080/`): a static page to manage users
-and, per user, their storage pools, projects, branches, and endpoints. See
+and, per user, their storage pools, clusters, branches, and endpoints. See
 [`architecture/ac-apis.md`](architecture/ac-apis.md) for the full design.
 
 ## Storage-layer control
@@ -153,13 +153,13 @@ uv run --project controller/mcp pytest
 - `POST|GET /api/v1/storage-pools`, `GET …/storage-pools/:poolId` — storage pools,
   top-level (#109): create names the owner in the body (`owner_user_id`); list
   returns every pool; get is by id (not owner-scoped)
-- `POST|GET …/storage-pools/:poolId/projects` — create a project (creates a project
-  (a "database") + its default branch and returns a `Project` with its embedded
-  `default_branch`, `201`); list the pool's projects (paginated)
-- `GET …/projects/:projectId`, `DELETE …/projects/:projectId` — get a project /
+- `POST|GET …/storage-pools/:poolId/clusters` — create a cluster (creates a cluster
+  (a "database") + its default branch and returns a `Cluster` with its embedded
+  `default_branch`, `201`); list the pool's clusters (paginated)
+- `GET …/clusters/:clusterId`, `DELETE …/clusters/:clusterId` — get a cluster /
   delete it (**logged only**, `202`, until the task framework lands)
-- `POST|GET …/projects/:projectId/branches` — branch (fork) an existing branch into a
-  new branch (`201`); list the project's branches (paginated)
+- `POST|GET …/clusters/:clusterId/branches` — branch (fork) an existing branch into a
+  new branch (`201`); list the cluster's branches (paginated)
 - `GET …/branches/:branchId`, `DELETE …/branches/:branchId` — get a branch /
   delete it (**logged only**, `202`, until the task framework lands)
 - `GET …/branches/:branchId/endpoints` — list the branch's endpoints (paginated)

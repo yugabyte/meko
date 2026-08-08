@@ -51,7 +51,7 @@ func (a *ampFeatureRun) readReplica(ctx context.Context) error {
 	return readReplicaSteps(ctx, cl, a.proj, a.f.endpointSQL)
 }
 
-func readReplicaSteps(ctx context.Context, cl ampCtl, proj ampProject, connect endpointConnector) error {
+func readReplicaSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect endpointConnector) error {
 	rwEP, err := createRoleEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID, roleReadWrite)
 	if err != nil {
 		return fmt.Errorf("create read_write endpoint: %w", err)

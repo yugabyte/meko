@@ -11,13 +11,13 @@ import {
 } from "@tanstack/react-query";
 import {
   createBranch,
-  createProject,
+  createCluster,
   createClusterWithWriter,
   createStoragePool,
   createUser,
   getVersion,
   listBranches,
-  listProjects,
+  listClusters,
   listStoragePools,
   listTasks,
   listUsers,
@@ -25,7 +25,7 @@ import {
 import type {
   Branch,
   CreateBranchInput,
-  Project,
+  Cluster,
   StoragePool,
   User,
 } from "./types";
@@ -36,11 +36,11 @@ export const qk = {
   currentUser: ["current-user"] as const,
   users: ["users"] as const,
   storagePools: ["storage-pools"] as const,
-  projects: (poolId: string) => ["projects", poolId] as const,
-  branches: (poolId: string, projectId: string) =>
-    ["branches", poolId, projectId] as const,
-  endpoints: (poolId: string, projectId: string, branchId: string) =>
-    ["endpoints", poolId, projectId, branchId] as const,
+  clusters: (poolId: string) => ["clusters", poolId] as const,
+  branches: (poolId: string, clusterId: string) =>
+    ["branches", poolId, clusterId] as const,
+  endpoints: (poolId: string, clusterId: string, branchId: string) =>
+    ["endpoints", poolId, clusterId, branchId] as const,
   tasks: (params: TaskListParams) => ["tasks", params] as const,
 };
 
@@ -114,24 +114,24 @@ export function useCreateStoragePool() {
   });
 }
 
-/* ---- Projects (clusters) ---- */
+/* ---- Clusters ---- */
 
 // The cluster picker lists usable clusters only — the server default hides
 // failed-creation orphans. The key carries the include-failed flag so the
-// hidden-failed and show-all caches stay distinct (both share the qk.projects
+// hidden-failed and show-all caches stay distinct (both share the qk.clusters
 // prefix, which invalidations still match).
-export function useProjects(poolId: string | undefined) {
+export function useClusters(poolId: string | undefined) {
   return useQuery({
-    queryKey: [...qk.projects(poolId ?? ""), false] as const,
+    queryKey: [...qk.clusters(poolId ?? ""), false] as const,
     enabled: !!poolId,
-    queryFn: () => listProjects(poolId!),
-    select: (data) => data.projects,
+    queryFn: () => listClusters(poolId!),
+    select: (data) => data.clusters,
   });
 }
 
-/** A project paired with the pool it lives in — the row shape the Fleet
+/** A cluster paired with the pool it lives in — the row shape the Fleet
  *  table renders. */
-export type FleetRow = { project: Project; pool: StoragePool };
+export type FleetRow = { cluster: Cluster; pool: StoragePool };
 
 /** Fan out across every pool to assemble the org-wide cluster fleet.
  *  includeFailed surfaces failed-creation orphans (an operator's fleet view, so
@@ -145,13 +145,13 @@ export function useFleet(
     queries: list.map((pool) => ({
       // Key carries the flag so the show-all fleet cache stays distinct from the
       // usable-only cache the picker/counts use.
-      queryKey: [...qk.projects(pool.id), includeFailed] as const,
-      queryFn: () => listProjects(pool.id, { includeFailed }),
-      select: (data: { projects: Project[] }) => data.projects,
+      queryKey: [...qk.clusters(pool.id), includeFailed] as const,
+      queryFn: () => listClusters(pool.id, { includeFailed }),
+      select: (data: { clusters: Cluster[] }) => data.clusters,
     })),
     combine: (results) => ({
       rows: results.flatMap((r, i) =>
-        (r.data ?? []).map((project) => ({ project, pool: list[i] }) as FleetRow),
+        (r.data ?? []).map((cluster) => ({ cluster, pool: list[i] }) as FleetRow),
       ),
       isLoading: results.some((r) => r.isLoading),
       isError: results.some((r) => r.isError),
@@ -159,22 +159,22 @@ export function useFleet(
   });
 }
 
-export function useCreateProject() {
+export function useCreateCluster() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { poolId: string; name: string }) =>
-      createProject(input.poolId, { name: input.name }),
+      createCluster(input.poolId, { name: input.name }),
     onSuccess: (_data, input) => {
-      qc.invalidateQueries({ queryKey: qk.projects(input.poolId) });
+      qc.invalidateQueries({ queryKey: qk.clusters(input.poolId) });
     },
   });
 }
 
-// Composite "create cluster": fires ONE create_project(with_writer) task that
-// creates the project + its main-branch write endpoint in the background, and
+// Composite "create cluster": fires ONE create_cluster(with_writer) task that
+// creates the cluster + its main-branch write endpoint in the background, and
 // returns the Task immediately (no polling). The caller toasts + deeplinks to
 // Tasks; the fleet refetches when the task lands.
-export function useCreateCluster() {
+export function useCreateClusterWithWriter() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: { poolId: string; name: string; cpu?: string; memory?: string }) =>
@@ -184,7 +184,7 @@ export function useCreateCluster() {
         memory: input.memory,
       }),
     onSuccess: (_task, input) => {
-      qc.invalidateQueries({ queryKey: qk.projects(input.poolId) });
+      qc.invalidateQueries({ queryKey: qk.clusters(input.poolId) });
     },
   });
 }
@@ -193,12 +193,12 @@ export function useCreateCluster() {
 
 export function useBranches(
   poolId: string | undefined,
-  projectId: string | undefined,
+  clusterId: string | undefined,
 ) {
   return useQuery({
-    queryKey: qk.branches(poolId ?? "", projectId ?? ""),
-    enabled: !!poolId && !!projectId,
-    queryFn: () => listBranches(poolId!, projectId!),
+    queryKey: qk.branches(poolId ?? "", clusterId ?? ""),
+    enabled: !!poolId && !!clusterId,
+    queryFn: () => listBranches(poolId!, clusterId!),
     select: (data) => data.branches,
   });
 }
@@ -208,13 +208,13 @@ export function useCreateBranch() {
   return useMutation({
     mutationFn: (input: {
       poolId: string;
-      projectId: string;
+      clusterId: string;
       body: CreateBranchInput;
     }): Promise<Branch> =>
-      createBranch(input.poolId, input.projectId, input.body),
+      createBranch(input.poolId, input.clusterId, input.body),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
-        queryKey: qk.branches(input.poolId, input.projectId),
+        queryKey: qk.branches(input.poolId, input.clusterId),
       });
     },
   });
@@ -230,12 +230,12 @@ export type TaskListParams = {
   offset?: number;
   status?: string;
   kind?: string;
-  projectId?: string;
+  clusterId?: string;
 };
 
 /** Paged task history. Keeps the previous page on screen while the next one
  *  loads (smooth paging), but only when just the page changed — a filter change
- *  (status/kind/project) drops the stale rows and shows the loading state. */
+ *  (status/kind/cluster) drops the stale rows and shows the loading state. */
 export function useTasks(params: TaskListParams) {
   return useQuery({
     queryKey: qk.tasks(params),
@@ -246,7 +246,7 @@ export function useTasks(params: TaskListParams) {
         prev &&
         prev.status === params.status &&
         prev.kind === params.kind &&
-        prev.projectId === params.projectId;
+        prev.clusterId === params.clusterId;
       return sameFilter ? previousData : undefined;
     },
   });

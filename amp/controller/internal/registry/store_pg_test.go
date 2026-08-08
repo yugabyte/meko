@@ -30,15 +30,15 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 	s := NewStore(pool)
 
 	// Branches are rows in the control plane's resource model, so they need a
-	// project to hang off — there is no separate flat registry to write into.
-	projectID := seedProject(t, pool)
+	// cluster to hang off — there is no separate flat registry to write into.
+	clusterID := seedCluster(t, pool)
 
 	newID := func() string { return strings.ReplaceAll(uuid.NewString(), "-", "") }
 	parent := newID()
 
 	// A root branch, with a GC cutoff as the pageserver would have
 	// published it: 0/64 = 100.
-	if err := s.RecordBranch(ctx, projectID, parent, BranchCreateRecord{
+	if err := s.RecordBranch(ctx, clusterID, parent, BranchCreateRecord{
 		BranchName: "fork-validation-parent", PgVersion: 18, StartLSN: "0/0",
 	}); err != nil {
 		t.Fatalf("record parent: %v", err)
@@ -49,11 +49,11 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 		t.Fatalf("seed cutoff: %v", err)
 	}
 
-	// Each fork needs its own name: branch names are unique among a project's live
-	// branches (branches_name_per_project), which the standalone registry did not
+	// Each fork needs its own name: branch names are unique among a cluster's live
+	// branches (branches_name_per_cluster), which the standalone registry did not
 	// enforce.
 	fork := func(id, name, lsn string) error {
-		return s.RecordBranch(ctx, projectID, id, BranchCreateRecord{
+		return s.RecordBranch(ctx, clusterID, id, BranchCreateRecord{
 			BranchName: name, PgVersion: 18,
 			AncestorBranchID: &parent, StartLSN: lsn,
 		})
@@ -73,8 +73,8 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 		}
 		var n int
 		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM amp_registry.branches WHERE project_id = $1::uuid AND branch_id = $2::uuid`,
-			projectID.String(), parsed.String()).Scan(&n); err != nil {
+			`SELECT count(*) FROM amp_registry.branches WHERE cluster_id = $1::uuid AND branch_id = $2::uuid`,
+			clusterID.String(), parsed.String()).Scan(&n); err != nil {
 			t.Fatalf("count branch: %v", err)
 		}
 		return n
@@ -123,7 +123,7 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 	// A missing ancestor row: not found.
 	missing := newID()
 	orphan := newID()
-	if err := s.RecordBranch(ctx, projectID, orphan, BranchCreateRecord{
+	if err := s.RecordBranch(ctx, clusterID, orphan, BranchCreateRecord{
 		BranchName: "fork-validation-orphan", PgVersion: 18,
 		AncestorBranchID: &missing, StartLSN: "1/0",
 	}); !errors.Is(err, ErrNotFound) {
@@ -131,30 +131,30 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 	}
 }
 
-// TestPgRecordBranchUnknownProject pins that this surface cannot conjure a branch
-// outside the resource model: with one shared branch table, the project FK is what
+// TestPgRecordBranchUnknownCluster pins that this surface cannot conjure a branch
+// outside the resource model: with one shared branch table, the cluster FK is what
 // stops a launcher typo from creating an unreachable row.
-func TestPgRecordBranchUnknownProject(t *testing.T) {
+func TestPgRecordBranchUnknownCluster(t *testing.T) {
 	ctx := t.Context()
 	pool := migratedPool(t)
 
 	err := NewStore(pool).RecordBranch(ctx, uuid.New(), strings.ReplaceAll(uuid.NewString(), "-", ""),
 		BranchCreateRecord{BranchName: "orphan", PgVersion: 18, StartLSN: "0/0"})
 	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("record into an unknown project: want ErrNotFound, got %v", err)
+		t.Fatalf("record into an unknown cluster: want ErrNotFound, got %v", err)
 	}
 }
 
-// seedProject inserts the user -> pool -> project ladder a branch needs and
-// returns the project id.
+// seedCluster inserts the user -> pool -> cluster ladder a branch needs and
+// returns the cluster id.
 //
 // The names carry the pool's own id: every test in this package shares one
 // scratch database, and storage_pools.name is unique cluster-wide, so a fixed name
 // would make the second caller collide.
-func seedProject(t *testing.T, pool *db.Pool) uuid.UUID {
+func seedCluster(t *testing.T, pool *db.Pool) uuid.UUID {
 	t.Helper()
 	ctx := t.Context()
-	owner, poolID, projectID := uuid.New(), uuid.New(), uuid.New()
+	owner, poolID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	name := "registry-store-test-" + poolID.String()
 	for _, stmt := range []struct {
 		sql  string
@@ -163,14 +163,14 @@ func seedProject(t *testing.T, pool *db.Pool) uuid.UUID {
 		{`INSERT INTO amp_registry.users (id) VALUES ($1::uuid)`, []any{owner.String()}},
 		{`INSERT INTO amp_registry.storage_pools (id, name, owner_user_id) VALUES ($1::uuid, $2, $3::uuid)`,
 			[]any{poolID.String(), name, owner.String()}},
-		{`INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)`,
-			[]any{projectID.String(), poolID.String(), name}},
+		{`INSERT INTO amp_registry.clusters (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)`,
+			[]any{clusterID.String(), poolID.String(), name}},
 	} {
 		if _, err := pool.Exec(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("seed %q: %v", stmt.sql, err)
 		}
 	}
-	return projectID
+	return clusterID
 }
 
 // scratchURL is the throwaway database this package's Postgres-backed tests share,
@@ -230,10 +230,10 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	ctx := t.Context()
 	pool := migratedPool(t)
 	s := NewStore(pool)
-	projectID := seedProject(t, pool)
+	clusterID := seedCluster(t, pool)
 
 	parent := FormatBranchID(uuid.New())
-	if err := s.RecordBranch(ctx, projectID, parent, BranchCreateRecord{
+	if err := s.RecordBranch(ctx, clusterID, parent, BranchCreateRecord{
 		BranchName: "settings-parent", PgVersion: 18, StartLSN: "0/0",
 		PgSettings: map[string]string{"work_mem": "16MB", "jit": "off"},
 	}); err != nil {
@@ -242,7 +242,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 
 	// A fork that says nothing inherits the whole set.
 	plain := FormatBranchID(uuid.New())
-	if err := s.RecordBranch(ctx, projectID, plain, BranchCreateRecord{
+	if err := s.RecordBranch(ctx, clusterID, plain, BranchCreateRecord{
 		BranchName: "settings-plain", PgVersion: 18, StartLSN: "0/16B8",
 		AncestorBranchID: &parent,
 	}); err != nil {
@@ -254,7 +254,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 
 	// A fork that overrides one keeps the rest.
 	over := FormatBranchID(uuid.New())
-	if err := s.RecordBranch(ctx, projectID, over, BranchCreateRecord{
+	if err := s.RecordBranch(ctx, clusterID, over, BranchCreateRecord{
 		BranchName: "settings-override", PgVersion: 18, StartLSN: "0/16B8",
 		AncestorBranchID: &parent,
 		PgSettings:       map[string]string{"work_mem": "64MB", "hash_mem_multiplier": "2"},
@@ -274,7 +274,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 
 	// A root branch starts empty — there is no ancestor to inherit from.
 	root := FormatBranchID(uuid.New())
-	if err := s.RecordBranch(ctx, projectID, root, BranchCreateRecord{
+	if err := s.RecordBranch(ctx, clusterID, root, BranchCreateRecord{
 		BranchName: "settings-root", PgVersion: 18, StartLSN: "0/0",
 	}); err != nil {
 		t.Fatalf("record root: %v", err)

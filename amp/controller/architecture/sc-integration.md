@@ -31,7 +31,7 @@ renderings of those same rows, not two copies:
 
 | | product API | this surface |
 |---|---|---|
-| branch key | `(project_id uuid, branch_id uuid)` | flat 32-lowercase-hex `branch_id` |
+| branch key | `(cluster_id uuid, branch_id uuid)` | flat 32-lowercase-hex `branch_id` |
 | endpoint key | `id uuid` | caller-chosen handle in `endpoint.name` |
 
 The hex form is `replace(branch_id::text, '-', '')` — the same 128 bits, so the
@@ -42,8 +42,8 @@ Two companion schemas are fixed rather than configurable: `controller` holds the
 write-ahead task log, and `amp_storage` holds the data plane. `--db-schema`
 (default `amp_registry`) relocates only the resource model.
 
-Because the rows are project-scoped, so is this surface — see the routes below.
-`yb_amp_local` provisions its user/pool/project through `/api/v1` at startup.
+Because the rows are cluster-scoped, so is this surface — see the routes below.
+`yb_amp_local` provisions its user/pool/cluster through `/api/v1` at startup.
 
 Dropped vs upstream: the heartbeat/availability loop, the scheduler, tenant
 placement/sharding, the `/v1` pageserver passthrough, timeline imports, and
@@ -64,7 +64,7 @@ controller is, today — auth is deferred, #189).
 
 - **`yb_amp_local`** (the dev harness, `controller/local/`) launches the
   `controller` binary in place of the old subprocess and drives `/api/v1` over
-  HTTP via `controller/local/client` — its user and pool, its projects, its
+  HTTP via `controller/local/client` — its user and pool, its clusters, its
   branches, its endpoints. It starts the controller with
   `--deploy-driver=local`, so endpoint creates keep the record and launch
   nothing; the launcher spawns `compute-ctl` itself, and what it needs to do
@@ -78,8 +78,8 @@ controller is, today — auth is deferred, #189).
 - **The controller's own task framework** seeds branch state through the same store
   **in-process** (not over HTTP) — the `RecipeStore` port in
   `controller/internal/task` is satisfied by an in-process adapter, and it passes
-  the project id along with the branch id because the row it writes is
-  project-scoped.
+  the cluster id along with the branch id because the row it writes is
+  cluster-scoped.
 
 ## Why the generation is minted per spawn (not injected at deploy)
 

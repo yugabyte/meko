@@ -9,16 +9,16 @@ import (
 
 func TestDeleteBranchStep(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
-	projectID, branchID := uuid.New(), uuid.New()
-	state.seedBranch(projectID, branchID)
+	clusterID, branchID := uuid.New(), uuid.New()
+	state.seedBranch(clusterID, branchID)
 	ep1, ep2 := uuid.New(), uuid.New()
-	state.seedEndpoint(ep1, projectID, branchID)
-	state.seedEndpoint(ep2, projectID, branchID)
+	state.seedEndpoint(ep1, clusterID, branchID)
+	state.seedEndpoint(ep2, clusterID, branchID)
 	// An endpoint on another branch must be left untouched.
 	other := uuid.New()
-	state.seedEndpoint(other, projectID, uuid.New())
+	state.seedEndpoint(other, clusterID, uuid.New())
 
-	step := NewDeleteBranchStep(DeleteBranchArgs{ProjectID: projectID, BranchID: branchID}, Deps{State: state, Deployer: dep})
+	step := NewDeleteBranchStep(DeleteBranchArgs{ClusterID: clusterID, BranchID: branchID}, Deps{State: state, Deployer: dep})
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
 	}
@@ -48,7 +48,7 @@ func TestDeleteBranchStep(t *testing.T) {
 func TestDeleteBranchStepTolerateAbsent(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	// Nothing seeded: a branch with no endpoints and no row converges to success.
-	step := NewDeleteBranchStep(DeleteBranchArgs{ProjectID: uuid.New(), BranchID: uuid.New()}, Deps{State: state, Deployer: dep})
+	step := NewDeleteBranchStep(DeleteBranchArgs{ClusterID: uuid.New(), BranchID: uuid.New()}, Deps{State: state, Deployer: dep})
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute on absent branch failed: %v", res.Err)
 	}
@@ -65,12 +65,12 @@ func TestDeleteBranchStepTolerateAbsent(t *testing.T) {
 // still has endpoints must keep failing — dropping a record while its instance
 // runs is the leak this whole area exists to prevent.
 func TestDeleteBranchStepDeployerOnlyForEndpoints(t *testing.T) {
-	projectID, branchID := uuid.New(), uuid.New()
+	clusterID, branchID := uuid.New(), uuid.New()
 
 	t.Run("no endpoints: succeeds without a deployer", func(t *testing.T) {
 		state := newFakeStateStore()
-		state.seedBranch(projectID, branchID)
-		step := NewDeleteBranchStep(DeleteBranchArgs{ProjectID: projectID, BranchID: branchID},
+		state.seedBranch(clusterID, branchID)
+		step := NewDeleteBranchStep(DeleteBranchArgs{ClusterID: clusterID, BranchID: branchID},
 			Deps{State: state}) // no deployer
 		if res := step.Execute(t.Context()); res.Failed() {
 			t.Fatalf("Execute failed with nothing to retire: %v", res.Err)
@@ -79,9 +79,9 @@ func TestDeleteBranchStepDeployerOnlyForEndpoints(t *testing.T) {
 
 	t.Run("endpoints present: refuses without a deployer", func(t *testing.T) {
 		state := newFakeStateStore()
-		state.seedBranch(projectID, branchID)
-		state.seedEndpoint(uuid.New(), projectID, branchID)
-		step := NewDeleteBranchStep(DeleteBranchArgs{ProjectID: projectID, BranchID: branchID},
+		state.seedBranch(clusterID, branchID)
+		state.seedEndpoint(uuid.New(), clusterID, branchID)
+		step := NewDeleteBranchStep(DeleteBranchArgs{ClusterID: clusterID, BranchID: branchID},
 			Deps{State: state}) // no deployer
 		if res := step.Execute(t.Context()); !res.Failed() {
 			t.Fatal("Execute succeeded with endpoints to retire and no deployer, want a failure")
@@ -92,11 +92,11 @@ func TestDeleteBranchStepDeployerOnlyForEndpoints(t *testing.T) {
 func TestDeleteBranchStepRetireFailureSkipsBranchDelete(t *testing.T) {
 	state := newFakeStateStore()
 	dep := &fakeDeployer{deleteErr: errors.New("retire failed")}
-	projectID, branchID := uuid.New(), uuid.New()
-	state.seedBranch(projectID, branchID)
-	state.seedEndpoint(uuid.New(), projectID, branchID)
+	clusterID, branchID := uuid.New(), uuid.New()
+	state.seedBranch(clusterID, branchID)
+	state.seedEndpoint(uuid.New(), clusterID, branchID)
 
-	step := NewDeleteBranchStep(DeleteBranchArgs{ProjectID: projectID, BranchID: branchID}, Deps{State: state, Deployer: dep})
+	step := NewDeleteBranchStep(DeleteBranchArgs{ClusterID: clusterID, BranchID: branchID}, Deps{State: state, Deployer: dep})
 	if res := step.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded despite a retire failure")
 	}

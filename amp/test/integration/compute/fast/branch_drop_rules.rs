@@ -7,7 +7,7 @@
 //! The fork ↔ parent-drop race is covered by
 //! controller/internal/core/pg_fork_drop_race_test.go.
 //!
-//! Uses its own project, not `main`, because it drops the branches it creates.
+//! Uses its own amp cluster, not `main`, because it drops the branches it creates.
 
 use std::time::Duration;
 
@@ -49,8 +49,8 @@ async fn rows_for(yb: &str, branch_id: &str) -> anyhow::Result<i64> {
 }
 
 /// Rows for a branch NAME. Only for a branch whose creation was refused, where
-/// there is no id to address it by. A project's default branch is named `main`,
-/// not after the project, so never use this for one.
+/// there is no id to address it by. A cluster's default branch is named `main`,
+/// not after the cluster, so never use this for one.
 async fn named_rows(yb: &str, name: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
@@ -82,7 +82,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // the default fork point from the safekeeper co-located with the parent's
     // writer, and refuses an unmaterialized ancestor.
     step("Create an isolated parent branch + endpoint");
-    let parent_id = c.project_create(PARENT)?;
+    let parent_id = c.cluster_create(PARENT)?;
     c.endpoint_create_on_branch(ENDPOINT, &parent_id, pg_port)?;
     let parent = db::compute_conn(pg_port);
     let mut ready = false;

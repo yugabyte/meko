@@ -16,12 +16,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let a_port = c.compute_port() + 138;
     let b_port = c.compute_port() + 148;
     step("Create two independent branches (branch A, branch B)");
-    // Each gets its own project, i.e. its own independent lineage.
-    let ba = c.project_create("mt_a")?;
+    // Each gets its own amp cluster, i.e. its own independent lineage.
+    let ba = c.cluster_create("mt_a")?;
     if ba.is_empty() {
         bail!("branch A create failed");
     }
-    let bb = c.project_create("mt_b")?;
+    let bb = c.cluster_create("mt_b")?;
     if bb.is_empty() {
         bail!("branch B create failed");
     }

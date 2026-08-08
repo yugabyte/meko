@@ -27,16 +27,16 @@ async def test_round_trip_get_storage_pool():
     assert handler.last.url.path == "/api/v1/storage-pools/p1"
 
 
-async def test_round_trip_create_project_returns_task():
-    task = {"id": "t1", "kind": "create_project", "status": "pending"}
+async def test_round_trip_create_cluster_returns_task():
+    task = {"id": "t1", "kind": "create_cluster", "status": "pending"}
     mcp, handler = build_in_memory(
-        {"POST /api/v1/storage-pools/p1/projects": (202, task)}
+        {"POST /api/v1/storage-pools/p1/clusters": (202, task)}
     )
     async with Client(mcp) as client:
         result = await client.call_tool(
-            "create_project", {"pool_id": "p1", "name": "db"}
+            "create_cluster", {"pool_id": "p1", "name": "db"}
         )
-    assert result.data["kind"] == "create_project"
+    assert result.data["kind"] == "create_cluster"
     assert result.data["status"] == "pending"
 
 
@@ -76,7 +76,7 @@ async def _poll_task(client, task_id, timeout=30.0):
 
 @requires_real_controller
 async def test_real_controller_resource_ladder():
-    """Full ladder against a live controller: pool -> project -> branch, the
+    """Full ladder against a live controller: pool -> cluster -> branch, the
     async-task polling contract, the read paths, and an error path.
 
     Tolerant of both a deployer-enabled controller (cascades succeed) and a
@@ -114,21 +114,21 @@ async def test_real_controller_resource_ladder():
 
         proj_task = (
             await client.call_tool(
-                "create_project", {"pool_id": pool_id, "name": f"itest-proj-{sfx}"}
+                "create_cluster", {"pool_id": pool_id, "name": f"itest-proj-{sfx}"}
             )
         ).data
-        assert proj_task["kind"] == "create_project"
+        assert proj_task["kind"] == "create_cluster"
         assert _await_status(await _poll_task(client, proj_task["id"])) == "succeeded"
 
-        projs = (await client.call_tool("list_projects", {"pool_id": pool_id})).data
-        proj = next(p for p in projs["projects"] if p["name"] == f"itest-proj-{sfx}")
-        project_id = proj["id"]
+        projs = (await client.call_tool("list_clusters", {"pool_id": pool_id})).data
+        proj = next(p for p in projs["clusters"] if p["name"] == f"itest-proj-{sfx}")
+        cluster_id = proj["id"]
         default_branch_id = proj["default_branch"]["branch_id"]
         assert (
             await client.call_tool(
-                "get_project", {"pool_id": pool_id, "project_id": project_id}
+                "get_cluster", {"pool_id": pool_id, "cluster_id": cluster_id}
             )
-        ).data["id"] == project_id
+        ).data["id"] == cluster_id
 
         # fork_point_lsn is required when no deployer can resolve the parent's
         # latest LSN; the tool exposes it.
@@ -137,7 +137,7 @@ async def test_real_controller_resource_ladder():
                 "create_branch",
                 {
                     "pool_id": pool_id,
-                    "project_id": project_id,
+                    "cluster_id": cluster_id,
                     "name": f"itest-branch-{sfx}",
                     "fork_point_lsn": "0/0",
                 },
@@ -146,7 +146,7 @@ async def test_real_controller_resource_ladder():
         assert _await_status(await _poll_task(client, branch_task["id"])) == "succeeded"
         branches = (
             await client.call_tool(
-                "list_branches", {"pool_id": pool_id, "project_id": project_id}
+                "list_branches", {"pool_id": pool_id, "cluster_id": cluster_id}
             )
         ).data
         assert branches["total"] >= 2
@@ -157,7 +157,7 @@ async def test_real_controller_resource_ladder():
                 "create_endpoint",
                 {
                     "pool_id": pool_id,
-                    "project_id": project_id,
+                    "cluster_id": cluster_id,
                     "branch_id": default_branch_id,
                 },
             )
@@ -167,13 +167,13 @@ async def test_real_controller_resource_ladder():
         assert (
             await client.call_tool("get_user", {"user_id": user_id})
         ).data["id"] == user_id
-        tasks = (await client.call_tool("list_tasks", {"kind": "create_project"})).data
+        tasks = (await client.call_tool("list_tasks", {"kind": "create_cluster"})).data
         assert any(t["id"] == proj_task["id"] for t in tasks["tasks"])
 
         # Delete cascade: succeeds with a deployer, fails by design without one.
         del_task = (
             await client.call_tool(
-                "delete_project", {"pool_id": pool_id, "project_id": project_id}
+                "delete_cluster", {"pool_id": pool_id, "cluster_id": cluster_id}
             )
         ).data
         assert _await_status(await _poll_task(client, del_task["id"])) in (

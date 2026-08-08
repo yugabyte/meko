@@ -118,12 +118,12 @@ func TestCreateStoragePoolSync201(t *testing.T) {
 	}
 }
 
-func TestCreateProjectAndWaitSuccess(t *testing.T) {
+func TestCreateClusterAndWaitSuccess(t *testing.T) {
 	f := newFake()
 	defer f.close()
-	f.on("POST /api/v1/storage-pools/p1/projects", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("POST /api/v1/storage-pools/p1/clusters", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", "/api/v1/tasks/t1")
-		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t1", "kind": "create_project", "status": "pending"})
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t1", "kind": "create_cluster", "status": "pending"})
 	})
 	var polls int
 	f.on("GET /api/v1/tasks/t1", func(w http.ResponseWriter, _ *http.Request) {
@@ -132,11 +132,11 @@ func TestCreateProjectAndWaitSuccess(t *testing.T) {
 		if polls >= 2 {
 			status = "succeeded"
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": "t1", "kind": "create_project", "status": status})
+		writeJSON(w, http.StatusOK, map[string]any{"id": "t1", "kind": "create_cluster", "status": status})
 	})
-	task, err := f.client().CreateProjectAndWait(context.Background(), "p1", CreateProjectRequest{Name: "proj"})
+	task, err := f.client().CreateClusterAndWait(context.Background(), "p1", CreateClusterRequest{Name: "proj"})
 	if err != nil {
-		t.Fatalf("create project and wait: %v", err)
+		t.Fatalf("create cluster and wait: %v", err)
 	}
 	if task.Status != TaskSucceeded {
 		t.Errorf("task status = %q, want succeeded", task.Status)
@@ -150,7 +150,7 @@ func TestCreateEndpointSendsRole(t *testing.T) {
 	f := newFake()
 	defer f.close()
 	var body map[string]any
-	f.on("POST /api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints", func(w http.ResponseWriter, r *http.Request) {
+	f.on("POST /api/v1/storage-pools/p1/clusters/pr1/branches/b1/endpoints", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Location", "/api/v1/tasks/t1")
 		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t1", "kind": "create_endpoint", "status": "pending"})
@@ -169,20 +169,20 @@ func TestCreateEndpointSendsRole(t *testing.T) {
 func TestAsyncTaskFailureSurfaced(t *testing.T) {
 	f := newFake()
 	defer f.close()
-	f.on("POST /api/v1/storage-pools/p1/projects", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("POST /api/v1/storage-pools/p1/clusters", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", "/api/v1/tasks/t9")
-		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t9", "kind": "create_project", "status": "pending"})
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t9", "kind": "create_cluster", "status": "pending"})
 	})
 	f.on("GET /api/v1/tasks/t9", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id": "t9", "kind": "create_project", "status": "failed", "error": "duplicate project name",
+			"id": "t9", "kind": "create_cluster", "status": "failed", "error": "duplicate cluster name",
 		})
 	})
-	_, err := f.client().CreateProjectAndWait(context.Background(), "p1", CreateProjectRequest{Name: "proj"})
+	_, err := f.client().CreateClusterAndWait(context.Background(), "p1", CreateClusterRequest{Name: "proj"})
 	if err == nil {
 		t.Fatal("expected a failed-task error")
 	}
-	if want := "duplicate project name"; !contains(err.Error(), want) {
+	if want := "duplicate cluster name"; !contains(err.Error(), want) {
 		t.Errorf("error %q does not carry task error %q", err.Error(), want)
 	}
 }
@@ -200,7 +200,7 @@ func TestGetTaskRetriesTransientEOFThenSucceeds(t *testing.T) {
 			hijackDrop(w, r)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": "t1", "kind": "create_project", "status": "succeeded"})
+		writeJSON(w, http.StatusOK, map[string]any{"id": "t1", "kind": "create_cluster", "status": "succeeded"})
 	})
 	task, err := f.clientFreshConns().GetTask(context.Background(), "t1")
 	if err != nil {
@@ -214,18 +214,18 @@ func TestGetTaskRetriesTransientEOFThenSucceeds(t *testing.T) {
 	}
 }
 
-// TestCreateProjectAndWaitSurvivesPollBlipWithoutReissuingCreate: the create
+// TestCreateClusterAndWaitSurvivesPollBlipWithoutReissuingCreate: the create
 // POST succeeds once; the first poll GET blips (EOF), the second succeeds.
-// CreateProjectAndWait must retry only the GET and never re-issue the create
+// CreateClusterAndWait must retry only the GET and never re-issue the create
 // POST — a create that already went through must not be blindly repeated.
-func TestCreateProjectAndWaitSurvivesPollBlipWithoutReissuingCreate(t *testing.T) {
+func TestCreateClusterAndWaitSurvivesPollBlipWithoutReissuingCreate(t *testing.T) {
 	f := newFake()
 	defer f.close()
 	var posts atomic.Int32
-	f.on("POST /api/v1/storage-pools/p1/projects", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("POST /api/v1/storage-pools/p1/clusters", func(w http.ResponseWriter, _ *http.Request) {
 		posts.Add(1)
 		w.Header().Set("Location", "/api/v1/tasks/t1")
-		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t1", "kind": "create_project", "status": "pending"})
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t1", "kind": "create_cluster", "status": "pending"})
 	})
 	var gets atomic.Int32
 	f.on("GET /api/v1/tasks/t1", func(w http.ResponseWriter, r *http.Request) {
@@ -233,11 +233,11 @@ func TestCreateProjectAndWaitSurvivesPollBlipWithoutReissuingCreate(t *testing.T
 			hijackDrop(w, r)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": "t1", "kind": "create_project", "status": "succeeded"})
+		writeJSON(w, http.StatusOK, map[string]any{"id": "t1", "kind": "create_cluster", "status": "succeeded"})
 	})
-	task, err := f.clientFreshConns().CreateProjectAndWait(context.Background(), "p1", CreateProjectRequest{Name: "proj"})
+	task, err := f.clientFreshConns().CreateClusterAndWait(context.Background(), "p1", CreateClusterRequest{Name: "proj"})
 	if err != nil {
-		t.Fatalf("create project and wait: %v", err)
+		t.Fatalf("create cluster and wait: %v", err)
 	}
 	if task.Status != TaskSucceeded {
 		t.Errorf("task status = %q, want succeeded", task.Status)
@@ -273,7 +273,7 @@ func TestWaitTaskCtxTimeout(t *testing.T) {
 	f := newFake()
 	defer f.close()
 	f.on("GET /api/v1/tasks/stuck", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"id": "stuck", "kind": "delete_project", "status": "running"})
+		writeJSON(w, http.StatusOK, map[string]any{"id": "stuck", "kind": "delete_cluster", "status": "running"})
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
@@ -290,17 +290,17 @@ func TestLocationHeaderPreferredOverBodyID(t *testing.T) {
 	f := newFake()
 	defer f.close()
 	// Body id and Location id disagree; the Location id must win.
-	f.on("DELETE /api/v1/storage-pools/p/projects/pr", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("DELETE /api/v1/storage-pools/p/clusters/pr", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Location", "/api/v1/tasks/loc-id")
-		writeJSON(w, http.StatusAccepted, map[string]any{"id": "body-id", "kind": "delete_project", "status": "pending"})
+		writeJSON(w, http.StatusAccepted, map[string]any{"id": "body-id", "kind": "delete_cluster", "status": "pending"})
 	})
 	var polled string
 	f.on("GET /api/v1/tasks/loc-id", func(w http.ResponseWriter, r *http.Request) {
 		polled = r.URL.Path
-		writeJSON(w, http.StatusOK, map[string]any{"id": "loc-id", "kind": "delete_project", "status": "succeeded"})
+		writeJSON(w, http.StatusOK, map[string]any{"id": "loc-id", "kind": "delete_cluster", "status": "succeeded"})
 	})
-	if _, err := f.client().DeleteProjectAndWait(context.Background(), "p", "pr"); err != nil {
-		t.Fatalf("delete project and wait: %v", err)
+	if _, err := f.client().DeleteClusterAndWait(context.Background(), "p", "pr"); err != nil {
+		t.Fatalf("delete cluster and wait: %v", err)
 	}
 	if polled != "/api/v1/tasks/loc-id" {
 		t.Errorf("polled %q, want the Location-derived task id", polled)
@@ -311,7 +311,7 @@ func TestListAllEndpointsPagination(t *testing.T) {
 	f := newFake()
 	defer f.close()
 	const total = 250
-	f.on("GET /api/v1/storage-pools/p/projects/pr/branches/b/endpoints", func(w http.ResponseWriter, r *http.Request) {
+	f.on("GET /api/v1/storage-pools/p/clusters/pr/branches/b/endpoints", func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 		if limit == 0 {
@@ -338,12 +338,12 @@ func TestListAllEndpointsPagination(t *testing.T) {
 func TestErrorEnvelopeDecoded(t *testing.T) {
 	f := newFake()
 	defer f.close()
-	f.on("GET /api/v1/storage-pools/p/projects/missing", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("GET /api/v1/storage-pools/p/clusters/missing", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{
-			"error": map[string]any{"code": "not_found", "message": "no such project"},
+			"error": map[string]any{"code": "not_found", "message": "no such cluster"},
 		})
 	})
-	_, err := f.client().GetProject(context.Background(), "p", "missing")
+	_, err := f.client().GetCluster(context.Background(), "p", "missing")
 	apiErr, ok := err.(*APIError)
 	if !ok {
 		t.Fatalf("want *APIError, got %T: %v", err, err)
@@ -383,7 +383,7 @@ func TestResizeEndpointSendsResourcesAndReadsOutcome(t *testing.T) {
 	f := newFake()
 	defer f.close()
 	var body map[string]any
-	f.on("POST /api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1/resize", func(w http.ResponseWriter, r *http.Request) {
+	f.on("POST /api/v1/storage-pools/p1/clusters/pr1/branches/b1/endpoints/e1/resize", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Location", "/api/v1/tasks/t7")
 		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t7", "kind": "resize_endpoint", "status": "pending"})
@@ -416,7 +416,7 @@ func TestResizeEndpointOmitsUnsetDimension(t *testing.T) {
 	f := newFake()
 	defer f.close()
 	var body map[string]any
-	f.on("POST /api/v1/storage-pools/p/projects/pr/branches/b/endpoints/e/resize", func(w http.ResponseWriter, r *http.Request) {
+	f.on("POST /api/v1/storage-pools/p/clusters/pr/branches/b/endpoints/e/resize", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		writeJSON(w, http.StatusAccepted, map[string]any{"id": "t1", "kind": "resize_endpoint", "status": "pending"})
 	})
@@ -435,7 +435,7 @@ func TestResizeEndpointOmitsUnsetDimension(t *testing.T) {
 func TestResizeEndpointConflictSurfaced(t *testing.T) {
 	f := newFake()
 	defer f.close()
-	f.on("POST /api/v1/storage-pools/p/projects/pr/branches/b/endpoints/e/resize", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("POST /api/v1/storage-pools/p/clusters/pr/branches/b/endpoints/e/resize", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": map[string]any{"code": "conflict", "message": "a resize is already in progress for this endpoint"},
 		})
@@ -457,7 +457,7 @@ func TestResizeEndpointConflictSurfaced(t *testing.T) {
 func TestEndpointResourcesAbsentOnOlderController(t *testing.T) {
 	f := newFake()
 	defer f.close()
-	f.on("GET /api/v1/storage-pools/p/projects/pr/branches/b/endpoints/e", func(w http.ResponseWriter, _ *http.Request) {
+	f.on("GET /api/v1/storage-pools/p/clusters/pr/branches/b/endpoints/e", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"id": "e", "role": "read_write"})
 	})
 	ep, err := f.client().GetEndpoint(context.Background(), "p", "pr", "b", "e")

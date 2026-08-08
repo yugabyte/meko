@@ -164,7 +164,7 @@ func seriesDecayPct(series []SamplePoint, pick func(SamplePoint) float64, dir co
 	return regressionPct(medianOf(series[:third], pick), medianOf(series[n-third:], pick), dir)
 }
 
-// medianOf projects pick over the points and takes the median.
+// medianOf clusters pick over the points and takes the median.
 func medianOf(points []SamplePoint, pick func(SamplePoint) float64) float64 {
 	vals := make([]float64, len(points))
 	for i, p := range points {

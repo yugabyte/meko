@@ -63,14 +63,14 @@ func DefaultRegistry(deps Deps) *Registry {
 // tasks.go (Service.CreateX) and the API mutation handlers).
 func ProductionRegistry(deps Deps) *Registry {
 	r := DefaultRegistry(deps)
-	r.Register(StepCreateProject, buildCreateProjectStep)
+	r.Register(StepCreateCluster, buildCreateClusterStep)
 	r.Register(StepCreateBranch, buildCreateBranchStep)
 	r.Register(StepRecordBranchRecipe, buildRecordBranchRecipeStep)
 	r.Register(StepCreateEndpoint, buildCreateEndpointStep)
 	r.Register(StepResizeEndpoint, buildResizeEndpointStep)
 	r.Register(StepDeleteEndpoint, buildDeleteEndpointStep)
 	r.Register(StepDeleteBranch, buildDeleteBranchStep)
-	r.Register(StepDeleteProject, buildDeleteProjectStep)
+	r.Register(StepDeleteCluster, buildDeleteClusterStep)
 	return r
 }
 

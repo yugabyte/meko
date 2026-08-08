@@ -1,4 +1,4 @@
-// Tests for the paginated list endpoints (users, storage pools, projects,
+// Tests for the paginated list endpoints (users, storage pools, clusters,
 // branches, endpoints): the limit/offset contract, the total (all matches) vs
 // count (this page) fields, and parent 404s on the nested lists. They drive the
 // real controllers + generated client over MemBackend, like the other api tests.
@@ -121,7 +121,7 @@ func TestListStoragePoolsPaginationClamps(t *testing.T) {
 	}
 }
 
-func TestListProjects(t *testing.T) {
+func TestListClusters(t *testing.T) {
 	client, backend, store := newTestServer(t)
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
@@ -129,18 +129,18 @@ func TestListProjects(t *testing.T) {
 	other := mustCreatePool(t, client, u.Id, "other")
 
 	// Unknown pool -> 404.
-	miss, err := client.ListProjectsWithResponse(ctx, uuid.New(), nil)
+	miss, err := client.ListClustersWithResponse(ctx, uuid.New(), nil)
 	if err != nil {
-		t.Fatalf("ListProjects(missing pool): %v", err)
+		t.Fatalf("ListClusters(missing pool): %v", err)
 	}
 	if miss.StatusCode() != http.StatusNotFound || miss.JSON404 == nil {
 		t.Fatalf("missing pool status = %d, body = %s", miss.StatusCode(), miss.Body)
 	}
 
 	// Empty pool -> 200 with total 0.
-	empty, err := client.ListProjectsWithResponse(ctx, pool.Id, nil)
+	empty, err := client.ListClustersWithResponse(ctx, pool.Id, nil)
 	if err != nil {
-		t.Fatalf("ListProjects(empty): %v", err)
+		t.Fatalf("ListClusters(empty): %v", err)
 	}
 	if empty.StatusCode() != http.StatusOK || empty.JSON200 == nil {
 		t.Fatalf("empty list status = %d, body = %s", empty.StatusCode(), empty.Body)
@@ -149,17 +149,17 @@ func TestListProjects(t *testing.T) {
 		t.Errorf("empty pool = {total:%d count:%d}, want {0 0}", empty.JSON200.Total, empty.JSON200.Count)
 	}
 
-	// Create three projects in pool, one in the other pool.
+	// Create three clusters in pool, one in the other pool.
 	want := []string{"a", "b", "c"}
 	for _, name := range want {
-		mustCreateProject(t, client, store, backend, pool.Id, name)
+		mustCreateCluster(t, client, store, backend, pool.Id, name)
 	}
-	mustCreateProject(t, client, store, backend, other.Id, "z")
+	mustCreateCluster(t, client, store, backend, other.Id, "z")
 
 	// The pool lists exactly its own three, scoped away from the other pool.
-	got, err := client.ListProjectsWithResponse(ctx, pool.Id, nil)
+	got, err := client.ListClustersWithResponse(ctx, pool.Id, nil)
 	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+		t.Fatalf("ListClusters: %v", err)
 	}
 	if got.StatusCode() != http.StatusOK || got.JSON200 == nil {
 		t.Fatalf("list status = %d, body = %s", got.StatusCode(), got.Body)
@@ -167,17 +167,17 @@ func TestListProjects(t *testing.T) {
 	if got.JSON200.Total != 3 || got.JSON200.Count != 3 {
 		t.Errorf("list = {total:%d count:%d}, want {3 3}", got.JSON200.Total, got.JSON200.Count)
 	}
-	gotNames := make([]string, 0, len(got.JSON200.Projects))
-	for _, p := range got.JSON200.Projects {
+	gotNames := make([]string, 0, len(got.JSON200.Clusters))
+	for _, p := range got.JSON200.Clusters {
 		gotNames = append(gotNames, p.Name)
-		// Every project carries its auto-created default branch.
+		// Every cluster carries its auto-created default branch.
 		if !p.DefaultBranch.IsDefault {
-			t.Errorf("project %q default branch is_default = false", p.Name)
+			t.Errorf("cluster %q default branch is_default = false", p.Name)
 		}
 	}
 	sort.Strings(gotNames)
 	if !equalStrings(gotNames, want) {
-		t.Errorf("project names = %v, want %v", gotNames, want)
+		t.Errorf("cluster names = %v, want %v", gotNames, want)
 	}
 }
 
@@ -186,22 +186,22 @@ func TestListBranches(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	project := mustCreateProject(t, client, store, backend, pool.Id, "main")
+	cluster := mustCreateCluster(t, client, store, backend, pool.Id, "main")
 
-	// A fresh project lists exactly its default branch.
-	only, err := client.ListBranchesWithResponse(ctx, pool.Id, project.Id, nil)
+	// A fresh cluster lists exactly its default branch.
+	only, err := client.ListBranchesWithResponse(ctx, pool.Id, cluster.Id, nil)
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
 	}
 	if only.StatusCode() != http.StatusOK || only.JSON200 == nil || only.JSON200.Total != 1 {
-		t.Fatalf("fresh project branches = %d (status %d), want 1", only.JSON200.Total, only.StatusCode())
+		t.Fatalf("fresh cluster branches = %d (status %d), want 1", only.JSON200.Total, only.StatusCode())
 	}
 
 	// Fork a branch off the default with an explicit fork point (no storage
 	// controller is wired here, so the LSN must be explicit) -> 202 + a branch
 	// task; drive it, then the branch row is materialized.
 	lsn := "0/16ABCD0"
-	br, err := client.CreateBranchWithResponse(ctx, pool.Id, project.Id, api.CreateBranchRequest{Name: "feature", ForkPointLsn: &lsn})
+	br, err := client.CreateBranchWithResponse(ctx, pool.Id, cluster.Id, api.CreateBranchRequest{Name: "feature", ForkPointLsn: &lsn})
 	if err != nil {
 		t.Fatalf("CreateBranch: %v", err)
 	}
@@ -213,8 +213,8 @@ func TestListBranches(t *testing.T) {
 	}
 	drainTasks(t, store, backend, api.Provisioning{Deployer: &fakeDeployer{}, Recipes: &fakeRecipeStore{backend: backend}})
 
-	// Now the project lists both branches; the fork carries parent + is_default=false.
-	both, err := client.ListBranchesWithResponse(ctx, pool.Id, project.Id, nil)
+	// Now the cluster lists both branches; the fork carries parent + is_default=false.
+	both, err := client.ListBranchesWithResponse(ctx, pool.Id, cluster.Id, nil)
 	if err != nil {
 		t.Fatalf("ListBranches(after fork): %v", err)
 	}
@@ -233,17 +233,17 @@ func TestListBranches(t *testing.T) {
 	if feature.IsDefault {
 		t.Error("forked branch is_default = true, want false")
 	}
-	if feature.ParentBranchId == nil || *feature.ParentBranchId != project.DefaultBranch.BranchId {
-		t.Errorf("parent_branch_id = %v, want the default branch %v", feature.ParentBranchId, project.DefaultBranch.BranchId)
+	if feature.ParentBranchId == nil || *feature.ParentBranchId != cluster.DefaultBranch.BranchId {
+		t.Errorf("parent_branch_id = %v, want the default branch %v", feature.ParentBranchId, cluster.DefaultBranch.BranchId)
 	}
 
-	// Unknown project under a real pool -> 404.
+	// Unknown cluster under a real pool -> 404.
 	missing, err := client.ListBranchesWithResponse(ctx, pool.Id, uuid.New(), nil)
 	if err != nil {
-		t.Fatalf("ListBranches(missing project): %v", err)
+		t.Fatalf("ListBranches(missing cluster): %v", err)
 	}
 	if missing.StatusCode() != http.StatusNotFound {
-		t.Errorf("missing project status = %d, want 404", missing.StatusCode())
+		t.Errorf("missing cluster status = %d, want 404", missing.StatusCode())
 	}
 }
 
@@ -255,16 +255,16 @@ func TestListEndpoints(t *testing.T) {
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
 
-	// Create-project records the project + default branch only; compute is a
+	// Create-cluster records the cluster + default branch only; compute is a
 	// separate resource. The first endpoint is deployed by POSTing it.
-	project := mustCreateProject(t, client, store, backend, pool.Id, "main")
-	branchID := project.DefaultBranch.BranchId
+	cluster := mustCreateCluster(t, client, store, backend, pool.Id, "main")
+	branchID := cluster.DefaultBranch.BranchId
 
 	// Deploy a read_write endpoint on the default branch (the deployer is set) ->
 	// 202; drive the create_endpoint task, then it shows up in the list with its
 	// deployed address.
 	rw := api.CreateEndpointRequestRoleReadWrite
-	cep, err := client.CreateEndpointWithResponse(ctx, pool.Id, project.Id, branchID, api.CreateEndpointRequest{Role: &rw})
+	cep, err := client.CreateEndpointWithResponse(ctx, pool.Id, cluster.Id, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestListEndpoints(t *testing.T) {
 	}
 	drainTasks(t, store, backend, prov)
 
-	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, project.Id, branchID, nil)
+	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, cluster.Id, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -287,8 +287,8 @@ func TestListEndpoints(t *testing.T) {
 		t.Errorf("endpoint = {role:%q addr:%q}, want {read_write 127.0.0.1:5555}", got.Role, got.Address)
 	}
 
-	// Unknown branch under a real pool/project -> 404.
-	missBr, err := client.ListEndpointsWithResponse(ctx, pool.Id, project.Id, uuid.New(), nil)
+	// Unknown branch under a real pool/cluster -> 404.
+	missBr, err := client.ListEndpointsWithResponse(ctx, pool.Id, cluster.Id, uuid.New(), nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints(missing branch): %v", err)
 	}
@@ -297,7 +297,7 @@ func TestListEndpoints(t *testing.T) {
 	}
 
 	// Unknown pool -> 404.
-	missPool, err := client.ListEndpointsWithResponse(ctx, uuid.New(), project.Id, branchID, nil)
+	missPool, err := client.ListEndpointsWithResponse(ctx, uuid.New(), cluster.Id, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints(missing pool): %v", err)
 	}
@@ -306,14 +306,14 @@ func TestListEndpoints(t *testing.T) {
 	}
 
 	// A real but *different* pool must not see another pool's branch endpoints:
-	// the branch is resolved within the addressed pool/project, so this 404s.
+	// the branch is resolved within the addressed pool/cluster, so this 404s.
 	poolB := mustCreatePool(t, client, u.Id, "poolB")
-	crossPool, err := client.ListEndpointsWithResponse(ctx, poolB.Id, project.Id, branchID, nil)
+	crossPool, err := client.ListEndpointsWithResponse(ctx, poolB.Id, cluster.Id, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints(cross pool): %v", err)
 	}
 	if crossPool.StatusCode() != http.StatusNotFound {
-		t.Errorf("cross-pool endpoint list status = %d, want 404 (project not in poolB)", crossPool.StatusCode())
+		t.Errorf("cross-pool endpoint list status = %d, want 404 (cluster not in poolB)", crossPool.StatusCode())
 	}
 }
 
@@ -322,10 +322,10 @@ func TestListEndpointsEmpty(t *testing.T) {
 	ctx := context.Background()
 	u := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, u.Id, "pool")
-	project := mustCreateProject(t, client, store, backend, pool.Id, "main")
-	branchID := project.DefaultBranch.BranchId
+	cluster := mustCreateCluster(t, client, store, backend, pool.Id, "main")
+	branchID := cluster.DefaultBranch.BranchId
 
-	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, project.Id, branchID, nil)
+	eps, err := client.ListEndpointsWithResponse(ctx, pool.Id, cluster.Id, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -338,49 +338,49 @@ func TestListEndpointsEmpty(t *testing.T) {
 	}
 }
 
-// mustCreateProject creates a project through the client, drives the resulting
-// create_project task to completion against the shared store/backend (so the
-// project + its default branch are materialized), and returns the project read
+// mustCreateCluster creates a cluster through the client, drives the resulting
+// create_cluster task to completion against the shared store/backend (so the
+// cluster + its default branch are materialized), and returns the cluster read
 // back via GET. The drive uses a deployer-enabled provisioning, which is
-// sufficient for create_project (it plans no endpoint step). Tests whose endpoint
+// sufficient for create_cluster (it plans no endpoint step). Tests whose endpoint
 // creates need a specific deployer drive those separately.
-func mustCreateProject(t *testing.T, client *api.ClientWithResponses, store *task.MemStore, backend core.Backend, poolID uuid.UUID, name string) api.Project {
+func mustCreateCluster(t *testing.T, client *api.ClientWithResponses, store *task.MemStore, backend core.Backend, poolID uuid.UUID, name string) api.Cluster {
 	t.Helper()
-	resp, err := client.CreateProjectWithResponse(context.Background(), poolID, api.CreateProjectRequest{Name: name})
+	resp, err := client.CreateClusterWithResponse(context.Background(), poolID, api.CreateClusterRequest{Name: name})
 	if err != nil {
-		t.Fatalf("CreateProject(%q): %v", name, err)
+		t.Fatalf("CreateCluster(%q): %v", name, err)
 	}
 	if resp.StatusCode() != http.StatusAccepted || resp.JSON202 == nil {
-		t.Fatalf("CreateProject(%q) status = %d, body = %s", name, resp.StatusCode(), resp.Body)
+		t.Fatalf("CreateCluster(%q) status = %d, body = %s", name, resp.StatusCode(), resp.Body)
 	}
-	projectID := *resp.JSON202.ProjectId
+	clusterID := *resp.JSON202.ClusterId
 	drainTasks(t, store, backend, api.Provisioning{Deployer: &fakeDeployer{}})
-	gp, err := client.GetProjectWithResponse(context.Background(), poolID, projectID)
+	gp, err := client.GetClusterWithResponse(context.Background(), poolID, clusterID)
 	if err != nil {
-		t.Fatalf("GetProject(%q): %v", name, err)
+		t.Fatalf("GetCluster(%q): %v", name, err)
 	}
 	if gp.StatusCode() != http.StatusOK || gp.JSON200 == nil {
-		t.Fatalf("GetProject(%q) status = %d, body = %s", name, gp.StatusCode(), gp.Body)
+		t.Fatalf("GetCluster(%q) status = %d, body = %s", name, gp.StatusCode(), gp.Body)
 	}
 	return *gp.JSON200
 }
 
 // recordingBackend wraps MemBackend to capture the includeFailed flag the
-// handler passes to ListProjects. MemBackend itself ignores the flag (it has no
+// handler passes to ListClusters. MemBackend itself ignores the flag (it has no
 // failed-creation orphans), so this is how we assert the handler's default
 // (param omitted -> false, i.e. usable clusters only) and its opt-in wiring —
-// the logic the DB-backed pg_projects_test can't reach through the HTTP layer.
+// the logic the DB-backed pg_clusters_test can't reach through the HTTP layer.
 type recordingBackend struct {
 	*core.MemBackend
 	mu                sync.Mutex
 	lastIncludeFailed bool
 }
 
-func (r *recordingBackend) ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]core.Project, int, error) {
+func (r *recordingBackend) ListClusters(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]core.Cluster, int, error) {
 	r.mu.Lock()
 	r.lastIncludeFailed = includeFailed
 	r.mu.Unlock()
-	return r.MemBackend.ListProjects(ctx, poolID, limit, offset, includeFailed)
+	return r.MemBackend.ListClusters(ctx, poolID, limit, offset, includeFailed)
 }
 
 func (r *recordingBackend) got() bool {
@@ -389,10 +389,10 @@ func (r *recordingBackend) got() bool {
 	return r.lastIncludeFailed
 }
 
-// TestListProjectsIncludeFailedParam pins the handler's include_failed handling:
+// TestListClustersIncludeFailedParam pins the handler's include_failed handling:
 // omitted defaults to false (scope to usable clusters), and an explicit value is
 // passed through verbatim.
-func TestListProjectsIncludeFailedParam(t *testing.T) {
+func TestListClustersIncludeFailedParam(t *testing.T) {
 	rec := &recordingBackend{MemBackend: core.NewMemBackend()}
 	client, _ := newTestServerBackend(t, rec, api.Provisioning{})
 	ctx := context.Background()
@@ -402,17 +402,17 @@ func TestListProjectsIncludeFailedParam(t *testing.T) {
 	f, tr := false, true
 	for _, tt := range []struct {
 		name  string
-		param *api.ListProjectsParams
+		param *api.ListClustersParams
 		want  bool
 	}{
-		{"omitted defaults to false", &api.ListProjectsParams{}, false},
-		{"explicit false", &api.ListProjectsParams{IncludeFailed: &f}, false},
-		{"explicit true", &api.ListProjectsParams{IncludeFailed: &tr}, true},
+		{"omitted defaults to false", &api.ListClustersParams{}, false},
+		{"explicit false", &api.ListClustersParams{IncludeFailed: &f}, false},
+		{"explicit true", &api.ListClustersParams{IncludeFailed: &tr}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			resp, err := client.ListProjectsWithResponse(ctx, pool.Id, tt.param)
+			resp, err := client.ListClustersWithResponse(ctx, pool.Id, tt.param)
 			if err != nil || resp.StatusCode() != http.StatusOK {
-				t.Fatalf("ListProjects: status=%d err=%v", resp.StatusCode(), err)
+				t.Fatalf("ListClusters: status=%d err=%v", resp.StatusCode(), err)
 			}
 			if got := rec.got(); got != tt.want {
 				t.Errorf("handler passed includeFailed=%v, want %v", got, tt.want)

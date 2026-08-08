@@ -94,7 +94,7 @@ src/
 ├── lib/
 │   ├── api/              Controller REST API integration:
 │   │                       client.ts    — fetch wrapper + base URL
-│   │                       types.ts     — domain types (User, Pool, Project, …)
+│   │                       types.ts     — domain types (User, Pool, Cluster, …)
 │   │                       resources.ts — one function per endpoint
 │   │                       queries.ts   — react-query hooks, keys, identity bootstrap
 │   ├── theme.ts          Light/dark theme toggle + persistence

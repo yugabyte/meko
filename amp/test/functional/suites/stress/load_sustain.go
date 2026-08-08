@@ -1,6 +1,6 @@
 // Package stress registers real stress tests. stress/load_sustain is the
 // first: it runs entirely through workloadgen against whatever env exposes a
-// PGEndpoint — a sharedk8s project or a universe both
+// PGEndpoint — a sharedk8s cluster or a universe both
 // do — so it needs no client-pod image yet. Env is Exclusive — a stress test
 // never shares its environment with co-tenants. Blank-imported by cmd/ampqa.
 package stress

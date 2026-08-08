@@ -3,7 +3,7 @@
 # controller-on-Docker integration entry point. Starts the controller control plane as a
 # container (with its Docker endpoint provisioner enabled) and runs the thin integration
 # suite against it. Provisioning lives in controller: the suite drives its REST API
-# (create a project, fork branches off it, then create an endpoint on each branch) —
+# (create a cluster, fork branches off it, then create an endpoint on each branch) —
 # controller deploys the compute container synchronously (via the Docker provisioner,
 # over the daemon socket mounted here) and returns its address. The integration only calls
 # controller's REST API and runs Postgres against those addresses; it validates
@@ -23,10 +23,10 @@ usage() {
 Usage: test/integration/controller/run-controller.sh [-n <count>] [-h|--help]
 
 Starts controller with the Docker endpoint provisioner and runs the controller integration suite
-(create user -> storage pool -> project -> branch tree -> endpoints, then validate
+(create user -> storage pool -> cluster -> branch tree -> endpoints, then validate
 copy-on-write branch isolation over Postgres).
 
-  -n <count>    repeat the scenario <count> times, fresh project each (forwarded to the harness).
+  -n <count>    repeat the scenario <count> times, fresh cluster each (forwarded to the harness).
 
 Builds yb-amp/controller:dev locally each run. Requires yb-amp/neon-endpoint:dev and
 a YugabyteDB on the host (:5433).

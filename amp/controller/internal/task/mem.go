@@ -76,7 +76,7 @@ func (s *MemStore) Create(_ context.Context, spec TaskSpec) (*Task, error) {
 		ID:        id,
 		Kind:      spec.Kind,
 		Status:    StatusPending,
-		ProjectID: spec.ProjectID,
+		ClusterID: spec.ClusterID,
 		TargetRef: spec.TargetRef,
 		Params:    spec.Params,
 		StepIDs:   stepIDs,
@@ -235,7 +235,7 @@ func (s *MemStore) List(_ context.Context, f TaskFilter, limit, offset int) ([]*
 		if f.Kind != "" && t.Kind != f.Kind {
 			continue
 		}
-		if f.ProjectID != nil && (t.ProjectID == nil || *t.ProjectID != *f.ProjectID) {
+		if f.ClusterID != nil && (t.ClusterID == nil || *t.ClusterID != *f.ClusterID) {
 			continue
 		}
 		matched = append(matched, t)

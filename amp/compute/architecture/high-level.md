@@ -190,7 +190,7 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Live WAL | YB `amp_storage.wals` | `(bucket_id, branch_id, segno, chunk_offset)` all-range, pre-split into 6 |
 | initdb archives | YB `amp_storage.blobs` | `branches/<branch_id>/initdb.tar.zst` split across the namespace/branch_id/key columns, ≤ 100 MiB chunks |
 | Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | `{branch_id}/{endpoint_id}/lfc_state`, written by `compute_ctl` |
-| Control-plane resource model | YB `amp_registry` schema | users, pools, projects, grants, and the single `branch` / `endpoint` tables both the product API and the storage-layer surface read |
+| Control-plane resource model | YB `amp_registry` schema | users, pools, clusters, grants, and the single `branch` / `endpoint` tables both the product API and the storage-layer surface read |
 | Task log | YB `controller` schema | `task`, `task_step` |
 | Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on `endpoint create`, removed on destroy |
 | Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
@@ -229,7 +229,7 @@ yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RP
         |                         branch_state (one row per branch, shared by
         |                           the pageserver and the safekeeper)
         |                         wals (WAL chunks, 10 tablets)
-        +-- schema `amp_registry` resource model: users, pools, projects,
+        +-- schema `amp_registry` resource model: users, pools, clusters,
         |                         branches, endpoints (one table each, reached
         |                         through /api/v1)
         +-- schema `controller`  write-ahead task log

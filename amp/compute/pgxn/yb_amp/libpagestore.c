@@ -63,7 +63,7 @@ static const struct config_enum_entry yb_amp_compute_modes[] = {
 };
 
 /* GUCs */
-char	   *yb_amp_project_id;
+char	   *yb_amp_cluster_id;
 char	   *yb_amp_branch_id;
 char	   *yb_amp_endpoint_id;
 int32		max_cluster_size;
@@ -1110,10 +1110,10 @@ pg_init_libpagestore(void)
 							   0,	/* no flags required */
 							   CheckPageserverConnstring, NULL, NULL);
 
-	DefineCustomStringVariable("yb_amp.project_id",
-							   "YbAmp project_id the server is running on",
+	DefineCustomStringVariable("yb_amp.cluster_id",
+							   "YbAmp cluster_id the server is running on",
 							   NULL,
-							   &yb_amp_project_id,
+							   &yb_amp_cluster_id,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */

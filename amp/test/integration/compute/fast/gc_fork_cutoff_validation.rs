@@ -35,7 +35,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let pg_port = c.compute_port() + 140;
 
     step("Create an isolated parent branch + endpoint");
-    let parent_id = c.project_create(PARENT)?;
+    let parent_id = c.cluster_create(PARENT)?;
     c.endpoint_create_on_branch(ENDPOINT, &parent_id, pg_port)?;
     let parent = db::compute_conn(pg_port);
     let mut ready = false;

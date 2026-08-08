@@ -23,12 +23,12 @@ import (
 	"github.com/yugabyte/amp/controller/internal/version"
 )
 
-// Provisioning holds the collaborators the create-project / create-endpoint
+// Provisioning holds the collaborators the create-cluster / create-endpoint
 // workflows use beyond the state store: the controller (to record the
 // pending-init recipe and, once an endpoint materializes the branch, drop it)
 // and the endpoint deployer (to provision the compute). Both are optional —
 // with no deployer the endpoint mutation routes refuse with 501, and with no SC
-// create-project records the control-plane rows only. ControllerURL is the
+// create-cluster records the control-plane rows only. ControllerURL is the
 // controller URL as a *launched endpoint* reaches it (e.g. over the shared
 // network); empty means the endpoint runs controller-free.
 type Provisioning struct {
@@ -51,7 +51,7 @@ type Provisioning struct {
 
 // Controllers implements the generated StrictServerInterface: the controller's
 // HTTP behavior, decoupled from the wire format (which the generated code owns)
-// and from persistence (which the core.Backend owns). Project, branch, and
+// and from persistence (which the core.Backend owns). Cluster, branch, and
 // endpoint mutations (create + delete) plan write-ahead tasks and return 202 +
 // the Task + a Location header; the worker performs the work — recording the
 // control rows plus the controller's pending-init recipe and deploying
@@ -201,25 +201,25 @@ func (c *Controllers) GetStoragePool(ctx context.Context, request GetStoragePool
 	return GetStoragePool200JSONResponse(poolToAPI(p)), nil
 }
 
-// --- Projects --------------------------------------------------------------
+// --- Clusters --------------------------------------------------------------
 // Create and delete are async: each runs a cheap synchronous pre-check, then
-// plans a task (create_project / delete_project) and returns 202 + the Task.
-// The project + default branch rows and the controller's pending-init
-// recipe are written by the create_project worker; the branch is materialized
-// later by the first endpoint deployed on it. Delete cascades to the project's
+// plans a task (create_cluster / delete_cluster) and returns 202 + the Task.
+// The cluster + default branch rows and the controller's pending-init
+// recipe are written by the create_cluster worker; the branch is materialized
+// later by the first endpoint deployed on it. Delete cascades to the cluster's
 // branches and endpoints in the worker.
 
-// defaultPgVersion is used when a create-project request omits pg_version.
+// defaultPgVersion is used when a create-cluster request omits pg_version.
 // yb-amp is Postgres v18 only.
 const defaultPgVersion = 18
 
-func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error) {
+func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRequestObject) (CreateClusterResponseObject, error) {
 	if request.Body == nil {
-		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
+		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
 	}
 	name := strings.TrimSpace(request.Body.Name)
 	if name == "" {
-		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
+		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
 	}
 	pgVersion := defaultPgVersion
 	if request.Body.PgVersion != nil {
@@ -228,23 +228,23 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 	// yb-amp is Postgres v18 only; reject anything else up front rather than
 	// failing opaquely when the endpoint image (v18) can't honor it.
 	if pgVersion != defaultPgVersion {
-		return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
+		return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			fmt.Sprintf("unsupported pg_version %d (only %d is supported)", pgVersion, defaultPgVersion)))}, nil
 	}
-	// Cheap pre-check: the pool must exist. The task's create_project step would
+	// Cheap pre-check: the pool must exist. The task's create_cluster step would
 	// also fail on an absent pool, but a 404 here keeps the synchronous
 	// pool-not-found contract rather than surfacing it as a failed task.
 	if _, err := c.backend.GetStoragePool(ctx, request.PoolId); err != nil {
 		switch {
 		case errors.Is(err, core.ErrNotFound):
-			return CreateProject404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+			return CreateCluster404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
 		default:
 			return nil, fmt.Errorf("get storage pool: %w", err)
 		}
 	}
 
 	// Optionally provision the default branch's write endpoint in the same task
-	// ("create cluster" = project + writer), sized by resources. When with_writer
+	// ("create cluster" = the cluster + its writer), sized by resources. When with_writer
 	// is false (default), no endpoint is created — compute is a separate resource.
 	// resources is only honored alongside with_writer.
 	withWriter := request.Body.WithWriter != nil && *request.Body.WithWriter
@@ -252,15 +252,15 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 	if withWriter {
 		var errMsg string
 		if cpu, memory, errMsg = parseResourceOverrides(request.Body.Resources); errMsg != "" {
-			return CreateProject400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
+			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
 		}
 	}
 
-	// Plan the work as an async task and return 202 + the Task. The project +
+	// Plan the work as an async task and return 202 + the Task. The cluster +
 	// default branch rows, the pending-init recipe, and (when with_writer) the
-	// write endpoint are all created by the worker; a duplicate project name now
+	// write endpoint are all created by the worker; a duplicate cluster name now
 	// surfaces as a failed task rather than a synchronous 409.
-	t, err := c.tasks.CreateProject(ctx, task.CreateProjectInput{
+	t, err := c.tasks.CreateCluster(ctx, task.CreateClusterInput{
 		PoolID:     request.PoolId,
 		Name:       name,
 		PgVersion:  pgVersion,
@@ -269,15 +269,15 @@ func (c *Controllers) CreateProject(ctx context.Context, request CreateProjectRe
 		Memory:     memory,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create project task: %w", err)
+		return nil, fmt.Errorf("create cluster task: %w", err)
 	}
 
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "create project task accepted",
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "create cluster task accepted",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
 		slog.String(applog.KeyTaskID, t.ID.String()),
-		slog.String("project_name", name))
+		slog.String("cluster_name", name))
 
-	return CreateProject202JSONResponse{AcceptedJSONResponse{
+	return CreateCluster202JSONResponse{AcceptedJSONResponse{
 		Body:    taskToAPI(t),
 		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
 	}}, nil
@@ -299,64 +299,64 @@ func endpointDeployName(endpointID uuid.UUID) string {
 	return "yb-ep-" + endpointID.String()
 }
 
-func (c *Controllers) ListProjects(ctx context.Context, request ListProjectsRequestObject) (ListProjectsResponseObject, error) {
+func (c *Controllers) ListClusters(ctx context.Context, request ListClustersRequestObject) (ListClustersResponseObject, error) {
 	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
 	// Scope to usable clusters unless the caller opts in (include_failed=true);
 	// the default hides failed-creation orphans so pickers, counts, and clients
-	// that operate on each result don't trip over half-provisioned projects.
+	// that operate on each result don't trip over half-provisioned clusters.
 	includeFailed := request.Params.IncludeFailed != nil && *request.Params.IncludeFailed
-	projects, total, err := c.backend.ListProjects(ctx, request.PoolId, limit, offset, includeFailed)
+	clusters, total, err := c.backend.ListClusters(ctx, request.PoolId, limit, offset, includeFailed)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return ListProjects404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
+		return ListClusters404JSONResponse{NotFoundJSONResponse(apiError("not_found", "storage pool not found"))}, nil
 	case err != nil:
-		return nil, fmt.Errorf("list projects: %w", err)
+		return nil, fmt.Errorf("list clusters: %w", err)
 	}
-	out := make([]Project, 0, len(projects))
-	for _, p := range projects {
-		out = append(out, projectToAPI(p))
+	out := make([]Cluster, 0, len(clusters))
+	for _, p := range clusters {
+		out = append(out, clusterToAPI(p))
 	}
-	return ListProjects200JSONResponse(ProjectList{Projects: out, Total: total, Count: len(out)}), nil
+	return ListClusters200JSONResponse(ClusterList{Clusters: out, Total: total, Count: len(out)}), nil
 }
 
-func (c *Controllers) GetProject(ctx context.Context, request GetProjectRequestObject) (GetProjectResponseObject, error) {
-	p, err := c.backend.GetProject(ctx, request.PoolId, request.ProjectId)
+func (c *Controllers) GetCluster(ctx context.Context, request GetClusterRequestObject) (GetClusterResponseObject, error) {
+	p, err := c.backend.GetCluster(ctx, request.PoolId, request.ClusterId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return GetProject404JSONResponse{NotFoundJSONResponse(apiError("not_found", "project not found"))}, nil
+		return GetCluster404JSONResponse{NotFoundJSONResponse(apiError("not_found", "cluster not found"))}, nil
 	case err != nil:
-		return nil, fmt.Errorf("get project: %w", err)
+		return nil, fmt.Errorf("get cluster: %w", err)
 	}
-	return GetProject200JSONResponse(projectToAPI(p)), nil
+	return GetCluster200JSONResponse(clusterToAPI(p)), nil
 }
 
-func (c *Controllers) DeleteProject(ctx context.Context, request DeleteProjectRequestObject) (DeleteProjectResponseObject, error) {
-	// Cheap pre-check: the project must exist (404). The cascade delete itself —
-	// retiring every endpoint and dropping the branches and the project row — runs
-	// as the task's idempotent delete_project step.
-	if _, err := c.backend.GetProject(ctx, request.PoolId, request.ProjectId); err != nil {
+func (c *Controllers) DeleteCluster(ctx context.Context, request DeleteClusterRequestObject) (DeleteClusterResponseObject, error) {
+	// Cheap pre-check: the cluster must exist (404). The cascade delete itself —
+	// retiring every endpoint and dropping the branches and the cluster row — runs
+	// as the task's idempotent delete_cluster step.
+	if _, err := c.backend.GetCluster(ctx, request.PoolId, request.ClusterId); err != nil {
 		switch {
 		case errors.Is(err, core.ErrNotFound):
-			return DeleteProject404JSONResponse{NotFoundJSONResponse(apiError("not_found", "project not found"))}, nil
+			return DeleteCluster404JSONResponse{NotFoundJSONResponse(apiError("not_found", "cluster not found"))}, nil
 		default:
-			return nil, fmt.Errorf("get project: %w", err)
+			return nil, fmt.Errorf("get cluster: %w", err)
 		}
 	}
 
-	t, err := c.tasks.DeleteProject(ctx, task.DeleteProjectInput{
+	t, err := c.tasks.DeleteCluster(ctx, task.DeleteClusterInput{
 		PoolID:    request.PoolId,
-		ProjectID: request.ProjectId,
+		ClusterID: request.ClusterId,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("delete project task: %w", err)
+		return nil, fmt.Errorf("delete cluster task: %w", err)
 	}
 
-	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete project task accepted",
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete cluster task accepted",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyProjectID, request.ProjectId.String()),
+		slog.String(applog.KeyClusterID, request.ClusterId.String()),
 		slog.String(applog.KeyTaskID, t.ID.String()))
 
-	return DeleteProject202JSONResponse{AcceptedJSONResponse{
+	return DeleteCluster202JSONResponse{AcceptedJSONResponse{
 		Body:    taskToAPI(t),
 		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
 	}}, nil
@@ -364,15 +364,15 @@ func (c *Controllers) DeleteProject(ctx context.Context, request DeleteProjectRe
 
 // --- Branches --------------------------------------------------------------
 
-// CreateBranch forks an existing branch (the parent) in the project into a new
-// branch. The parent defaults to the project's default branch; pass
+// CreateBranch forks an existing branch (the parent) in the cluster into a new
+// branch. The parent defaults to the cluster's default branch; pass
 // parent_branch_id to fork off another branch (branch-of-branch). It validates
 // and resolves the fork point synchronously (resolveForkLSN), then plans a
 // `branch` task (create_branch -> record_branch_recipe with the ancestor set)
 // and returns 202 + the Task. The worker records the branch row and the storage
 // controller's pending-init recipe — this time with the ancestor and fork LSN
 // set — which materializes lazily at the first endpoint deployed on the branch
-// (controller-project-create.md).
+// (controller-cluster-create.md).
 func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequestObject) (CreateBranchResponseObject, error) {
 	if request.Body == nil {
 		return CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
@@ -382,26 +382,26 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 		return CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "name is required"))}, nil
 	}
 
-	// Resolve the project (404 if absent); it carries the default branch we fall
+	// Resolve the cluster (404 if absent); it carries the default branch we fall
 	// back to when no parent is given.
-	project, err := c.backend.GetProject(ctx, request.PoolId, request.ProjectId)
+	cluster, err := c.backend.GetCluster(ctx, request.PoolId, request.ClusterId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return CreateBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "project not found"))}, nil
+		return CreateBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "cluster not found"))}, nil
 	case err != nil:
-		return nil, fmt.Errorf("get project: %w", err)
+		return nil, fmt.Errorf("get cluster: %w", err)
 	}
 
-	// The parent defaults to the project's default branch; an explicit
+	// The parent defaults to the cluster's default branch; an explicit
 	// parent_branch_id forks off another branch (branch-of-branch).
-	parentBranchID := project.DefaultBranch.BranchID
+	parentBranchID := cluster.DefaultBranch.BranchID
 	if request.Body.ParentBranchId != nil {
 		parentBranchID = *request.Body.ParentBranchId
 	}
 
 	// Resolve the parent branch (404 if absent); we need its ids and pg_version
 	// for the branch recipe.
-	parent, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, parentBranchID)
+	parent, err := c.backend.GetBranch(ctx, request.PoolId, request.ClusterId, parentBranchID)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return CreateBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "parent branch not found"))}, nil
@@ -423,7 +423,7 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 	// WithWriter:false preserves "create branch does not deploy an endpoint".
 	t, err := c.tasks.Branch(ctx, task.BranchInput{
 		PoolID:         request.PoolId,
-		ProjectID:      request.ProjectId,
+		ClusterID:      request.ClusterId,
 		ParentBranchID: parentBranchID,
 		Name:           name,
 		ForkLSN:        forkLSN,
@@ -437,7 +437,7 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 
 	c.logger.LogAttrs(ctx, slog.LevelInfo, "create branch task accepted",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyProjectID, request.ProjectId.String()),
+		slog.String(applog.KeyClusterID, request.ClusterId.String()),
 		slog.String("parent_branch_id", parent.BranchID.String()),
 		slog.String(applog.KeyTaskID, t.ID.String()),
 		slog.String("branch_name", name),
@@ -451,10 +451,10 @@ func (c *Controllers) CreateBranch(ctx context.Context, request CreateBranchRequ
 
 func (c *Controllers) ListBranches(ctx context.Context, request ListBranchesRequestObject) (ListBranchesResponseObject, error) {
 	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
-	branches, total, err := c.backend.ListBranches(ctx, request.PoolId, request.ProjectId, limit, offset)
+	branches, total, err := c.backend.ListBranches(ctx, request.PoolId, request.ClusterId, limit, offset)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
-		return ListBranches404JSONResponse{NotFoundJSONResponse(apiError("not_found", "project not found"))}, nil
+		return ListBranches404JSONResponse{NotFoundJSONResponse(apiError("not_found", "cluster not found"))}, nil
 	case err != nil:
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
@@ -466,7 +466,7 @@ func (c *Controllers) ListBranches(ctx context.Context, request ListBranchesRequ
 }
 
 func (c *Controllers) GetBranch(ctx context.Context, request GetBranchRequestObject) (GetBranchResponseObject, error) {
-	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, request.BranchId)
+	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ClusterId, request.BranchId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return GetBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
@@ -480,7 +480,7 @@ func (c *Controllers) DeleteBranch(ctx context.Context, request DeleteBranchRequ
 	// Cheap pre-check: the branch must exist (404). The cascade delete itself —
 	// retiring the branch's endpoints and dropping the branch row — runs as the
 	// task's idempotent delete_branch step.
-	if _, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, request.BranchId); err != nil {
+	if _, err := c.backend.GetBranch(ctx, request.PoolId, request.ClusterId, request.BranchId); err != nil {
 		switch {
 		case errors.Is(err, core.ErrNotFound):
 			return DeleteBranch404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
@@ -492,7 +492,7 @@ func (c *Controllers) DeleteBranch(ctx context.Context, request DeleteBranchRequ
 	// Synchronous child-fork pre-check: a branch with children cannot be deleted
 	// (the parent FK is RESTRICT). Reject with a clean 409 rather than accepting a
 	// task that is doomed to fail. The step re-checks at Execute time too.
-	branches, _, err := c.backend.ListBranches(ctx, request.PoolId, request.ProjectId, maxPageLimit, 0)
+	branches, _, err := c.backend.ListBranches(ctx, request.PoolId, request.ClusterId, maxPageLimit, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list branches for child-fork check: %w", err)
 	}
@@ -505,7 +505,7 @@ func (c *Controllers) DeleteBranch(ctx context.Context, request DeleteBranchRequ
 
 	t, err := c.tasks.DeleteBranch(ctx, task.DeleteBranchInput{
 		PoolID:    request.PoolId,
-		ProjectID: request.ProjectId,
+		ClusterID: request.ClusterId,
 		BranchID:  request.BranchId,
 	})
 	if err != nil {
@@ -514,7 +514,7 @@ func (c *Controllers) DeleteBranch(ctx context.Context, request DeleteBranchRequ
 
 	c.logger.LogAttrs(ctx, slog.LevelInfo, "delete branch task accepted",
 		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
-		slog.String(applog.KeyProjectID, request.ProjectId.String()),
+		slog.String(applog.KeyClusterID, request.ClusterId.String()),
 		slog.String(applog.KeyBranchID, request.BranchId.String()),
 		slog.String(applog.KeyTaskID, t.ID.String()))
 
@@ -589,7 +589,7 @@ func (c *Controllers) parentWriterEndpoint(ctx context.Context, poolID uuid.UUID
 	// The single-writer rule caps a branch at one read_write endpoint; a generous
 	// page covers any read_only replicas alongside it without a role filter on the
 	// backend.
-	eps, _, err := c.backend.ListEndpoints(ctx, poolID, parent.ProjectID, parent.BranchID, 100, 0)
+	eps, _, err := c.backend.ListEndpoints(ctx, poolID, parent.ClusterID, parent.BranchID, 100, 0)
 	if err != nil {
 		c.logger.LogAttrs(ctx, slog.LevelWarn, "could not list parent branch endpoints for fork point",
 			slog.String(applog.KeyBranchID, parent.BranchID.String()), slog.String("error", err.Error()))
@@ -722,7 +722,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		}
 	}
 
-	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ProjectId, request.BranchId)
+	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ClusterId, request.BranchId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return CreateEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
@@ -740,7 +740,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		name = strings.TrimSpace(*request.Body.Name)
 	}
 	if name != "" {
-		taken, err := c.endpointNameTaken(ctx, request.PoolId, request.ProjectId, request.BranchId, name)
+		taken, err := c.endpointNameTaken(ctx, request.PoolId, request.ClusterId, request.BranchId, name)
 		if err != nil {
 			return nil, err
 		}
@@ -773,7 +773,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// create_endpoint step; the single-writer rule (a duplicate read_write
 	// endpoint) now surfaces as a failed task rather than a synchronous 409.
 	t, err := c.tasks.CreateEndpoint(ctx, task.CreateEndpointInput{
-		ProjectID:  br.ProjectID,
+		ClusterID:  br.ClusterID,
 		BranchID:   br.BranchID,
 		Role:       role,
 		PgVersion:  br.PgVersion,
@@ -789,7 +789,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	}
 
 	c.logger.LogAttrs(ctx, slog.LevelInfo, "create endpoint task accepted",
-		slog.String(applog.KeyProjectID, br.ProjectID.String()),
+		slog.String(applog.KeyClusterID, br.ClusterID.String()),
 		slog.String(applog.KeyBranchID, request.BranchId.String()),
 		slog.String(applog.KeyTaskID, t.ID.String()),
 		slog.String("role", role),
@@ -803,7 +803,7 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 }
 
 func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointRequestObject) (GetEndpointResponseObject, error) {
-	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ProjectId, request.BranchId, request.EndpointId)
+	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ClusterId, request.BranchId, request.EndpointId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return GetEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
@@ -815,7 +815,7 @@ func (c *Controllers) GetEndpoint(ctx context.Context, request GetEndpointReques
 
 func (c *Controllers) ListEndpoints(ctx context.Context, request ListEndpointsRequestObject) (ListEndpointsResponseObject, error) {
 	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
-	endpoints, total, err := c.backend.ListEndpoints(ctx, request.PoolId, request.ProjectId, request.BranchId, limit, offset)
+	endpoints, total, err := c.backend.ListEndpoints(ctx, request.PoolId, request.ClusterId, request.BranchId, limit, offset)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return ListEndpoints404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
@@ -833,7 +833,7 @@ func (c *Controllers) DeleteEndpoint(ctx context.Context, request DeleteEndpoint
 	if c.prov.Deployer == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "endpoint deployment is not enabled on this controller")
 	}
-	if _, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ProjectId, request.BranchId, request.EndpointId); err != nil {
+	if _, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ClusterId, request.BranchId, request.EndpointId); err != nil {
 		switch {
 		case errors.Is(err, core.ErrNotFound):
 			return DeleteEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
@@ -846,7 +846,7 @@ func (c *Controllers) DeleteEndpoint(ctx context.Context, request DeleteEndpoint
 	// running instance and dropping the record run as the worker's idempotent
 	// delete_endpoint step.
 	t, err := c.tasks.DeleteEndpoint(ctx, task.DeleteEndpointInput{
-		ProjectID:  request.ProjectId,
+		ClusterID:  request.ClusterId,
 		EndpointID: request.EndpointId,
 	})
 	if err != nil {
@@ -865,8 +865,8 @@ func (c *Controllers) DeleteEndpoint(ctx context.Context, request DeleteEndpoint
 
 // endpointNameTaken reports whether the branch already has an endpoint by this
 // name. A generous page covers any realistic per-branch endpoint count.
-func (c *Controllers) endpointNameTaken(ctx context.Context, poolID, projectID, branchID uuid.UUID, name string) (bool, error) {
-	eps, _, err := c.backend.ListEndpoints(ctx, poolID, projectID, branchID, 1000, 0)
+func (c *Controllers) endpointNameTaken(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string) (bool, error) {
+	eps, _, err := c.backend.ListEndpoints(ctx, poolID, clusterID, branchID, 1000, 0)
 	if err != nil {
 		return false, fmt.Errorf("list endpoints: %w", err)
 	}
@@ -889,7 +889,7 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 	// The GetEndpoint doubles as the 404 check and the source of the endpoint's
 	// current reservation, so an unspecified dimension keeps its current value
 	// (a resize that sets only cpu leaves memory unchanged, and vice versa).
-	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ProjectId, request.BranchId, request.EndpointId)
+	ep, err := c.backend.GetEndpoint(ctx, request.PoolId, request.ClusterId, request.BranchId, request.EndpointId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
 		return ResizeEndpoint404JSONResponse{NotFoundJSONResponse(apiError("not_found", "endpoint not found"))}, nil
@@ -926,7 +926,7 @@ func (c *Controllers) ResizeEndpoint(ctx context.Context, request ResizeEndpoint
 	// resources, and resizes the running pod in place; its result reports the
 	// in-place outcome.
 	t, err := c.tasks.ResizeEndpoint(ctx, task.ResizeEndpointInput{
-		ProjectID:  request.ProjectId,
+		ClusterID:  request.ClusterId,
 		EndpointID: request.EndpointId,
 		CPU:        cpu,
 		Memory:     memory,
@@ -978,7 +978,7 @@ func (c *Controllers) ListTasks(ctx context.Context, request ListTasksRequestObj
 	limit, offset := pageParams(request.Params.Limit, request.Params.Offset)
 
 	// Zero-value filter fields are unfiltered: an empty Status/Kind matches any,
-	// and a nil ProjectID matches any project. The server has no wire-level enum
+	// and a nil ClusterID matches any cluster. The server has no wire-level enum
 	// validator middleware, so an unrecognized status must be rejected here —
 	// otherwise it reaches the Postgres ::task_status cast and surfaces as a 500.
 	f := task.TaskFilter{}
@@ -994,8 +994,8 @@ func (c *Controllers) ListTasks(ctx context.Context, request ListTasksRequestObj
 	if request.Params.Kind != nil {
 		f.Kind = *request.Params.Kind
 	}
-	if request.Params.ProjectId != nil {
-		f.ProjectID = request.Params.ProjectId
+	if request.Params.ClusterId != nil {
+		f.ClusterID = request.Params.ClusterId
 	}
 
 	tasks, total, err := c.tasks.List(ctx, f, limit, offset)
@@ -1019,8 +1019,8 @@ func poolToAPI(p core.StoragePool) StoragePool {
 	return StoragePool{Id: p.ID, Name: p.Name, OwnerUserId: p.OwnerUserID, CreatedAt: p.CreatedAt}
 }
 
-func projectToAPI(p core.Project) Project {
-	return Project{
+func clusterToAPI(p core.Cluster) Cluster {
+	return Cluster{
 		Id:            p.ID,
 		StoragePoolId: p.StoragePoolID,
 		Name:          p.Name,
@@ -1040,12 +1040,12 @@ func branchPgSettings(body *CreateBranchRequest) map[string]string {
 
 func branchToAPI(b core.Branch) Branch {
 	out := Branch{
-		ProjectId:      b.ProjectID,
+		ClusterId:      b.ClusterID,
 		BranchId:       b.BranchID,
 		Name:           b.Name,
 		PgVersion:      b.PgVersion,
 		IsDefault:      b.IsDefault,
-		ParentBranchId: b.ParentBranchID, // nil for a project's default branch
+		ParentBranchId: b.ParentBranchID, // nil for a cluster's default branch
 		CreatedAt:      b.CreatedAt,
 	}
 	if b.ForkLSN != "" {
@@ -1071,7 +1071,7 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 	}
 	out := Endpoint{
 		Id:             e.ID,
-		ProjectId:      e.ProjectID,
+		ClusterId:      e.ClusterID,
 		BranchId:       e.BranchID,
 		Role:           EndpointRole(e.Role),
 		Name:           e.Name,
@@ -1124,7 +1124,7 @@ func taskToAPI(t *task.Task) Task {
 		Id:        t.ID,
 		Kind:      t.Kind,
 		Status:    TaskStatus(t.Status),
-		ProjectId: t.ProjectID,
+		ClusterId: t.ClusterID,
 		TargetRef: t.TargetRef,
 		Error:     t.Error,
 		CreatedAt: t.CreatedAt,

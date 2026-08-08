@@ -4,7 +4,7 @@ A [FastMCP](https://gofastmcp.com) server that exposes the **amp controller**
 REST API (`/api/v1`) as Model Context Protocol tools. It is a thin, stateless
 HTTP client of the controller — no database, no auth, no extra state. MCP
 clients (Claude Desktop, IDE assistants, agents) drive the control plane through
-it: create storage pools, projects, branches, and endpoints, and poll the
+it: create storage pools, clusters, branches, and endpoints, and poll the
 asynchronous tasks those mutations plan.
 
 See `controller/architecture/ac-mcp.md` for the design.
@@ -18,15 +18,15 @@ See `controller/architecture/ac-mcp.md` for the design.
   required argument.
 - **Storage pools:** `create_storage_pool` (requires `owner_user_id`),
   `list_storage_pools`, `get_storage_pool`.
-- **Projects:** `create_project` (optional `pg_version`, default 18 — only 18
-  is accepted today), `list_projects`, `get_project`, `delete_project`.
+- **Clusters:** `create_cluster` (optional `pg_version`, default 18 — only 18
+  is accepted today), `list_clusters`, `get_cluster`, `delete_cluster`.
 - **Branches:** `create_branch`, `list_branches`, `get_branch`, `delete_branch`.
 - **Endpoints:** `create_endpoint`, `list_endpoints`, `get_endpoint`,
   `delete_endpoint`, `resize_endpoint` (vertical CPU/memory resize, in place).
 - **Tasks:** `list_tasks`, `get_task`.
 
 `create_storage_pool` is **synchronous** — it returns the created storage pool
-directly. The `create_project` / `create_branch` / `create_endpoint` /
+directly. The `create_cluster` / `create_branch` / `create_endpoint` /
 `resize_endpoint` tools and every `delete_*` tool are **asynchronous**: they
 return a `Task` object immediately. Poll `get_task(task_id=<id>)` until the task's `status` reaches
 `succeeded` or `failed`, then read the resource to see its final state.

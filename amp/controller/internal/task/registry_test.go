@@ -62,7 +62,7 @@ func TestProductionRegistryHasFullCatalog(t *testing.T) {
 
 	for _, kind := range []string{
 		KindNoop,
-		StepCreateProject,
+		StepCreateCluster,
 		StepCreateBranch,
 		StepRecordBranchRecipe,
 		StepCreateEndpoint,
@@ -100,7 +100,7 @@ func TestRegistryBuildRejectsBadArgs(t *testing.T) {
 	r := ProductionRegistry(Deps{})
 	bad := json.RawMessage(`not json`)
 	for _, kind := range []string{
-		StepCreateProject,
+		StepCreateCluster,
 		StepCreateBranch,
 		StepRecordBranchRecipe,
 		StepCreateEndpoint,

@@ -250,10 +250,10 @@ echo ">>> bringing up yb-amp cluster (db=$YB_DBNAME base=$BASE compute=$COMPUTE)
 yb() { "$YB_AMP" "$@"; }
 yb init --yb-dbname "$YB_DBNAME" --yb-host "$YB_HOST" --yb-port "$YB_PORT" --port-base "$BASE"
 yb start
-# A project is a new lineage; its default branch is the root. The CLI prints
+# A cluster is a new lineage; its default branch is the root. The CLI prints
 # "branch <id> successfully created" — scrape the 2nd token for the branch id.
-BR=$(yb project create ext --pg-version 18 | awk '/successfully created/{print $2; exit}')
-[[ -n "$BR" ]] || { echo "project create produced no branch id" >&2; exit 1; }
+BR=$(yb cluster create ext --pg-version 18 | awk '/successfully created/{print $2; exit}')
+[[ -n "$BR" ]] || { echo "cluster create produced no branch id" >&2; exit 1; }
 echo ">>> branch: $BR"
 
 # 6) Create the endpoint with the two path GUCs pointing at the extracted tree.

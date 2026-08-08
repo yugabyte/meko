@@ -1,7 +1,7 @@
 // Domain types for the Meko Controller REST API (the `:8080` control plane).
 // These mirror the JSON the controller returns 1:1 — see api_server's
-// storage-pools / projects / branches handlers. The platform-model mapping
-// onto AMP's nav is: storage pool = "Shared pool", project = "Cluster",
+// storage-pools / clusters / branches handlers. The platform-model mapping
+// onto AMP's nav is: storage pool = "Shared pool", cluster = "Cluster",
 // branch = a timeline/fork of a cluster, user = a "Tenant".
 
 /** A tenant. `is_admin` distinguishes platform admins from regular tenants. */
@@ -19,11 +19,11 @@ export type StoragePool = {
   created_at: string;
 };
 
-/** A branch: a Postgres timeline within a project. The default branch is
+/** A branch: a Postgres timeline within a cluster. The default branch is
  *  `main`; forks carry a `parent_branch_id` and the `fork_lsn` they split at. */
 export type Branch = {
   branch_id: string;
-  project_id: string;
+  cluster_id: string;
   name: string;
   pg_version: number;
   is_default: boolean;
@@ -32,9 +32,9 @@ export type Branch = {
   created_at: string;
 };
 
-/** A project — AMP's "Cluster". Created inside a pool; ships with a
+/** A cluster — AMP's "Cluster". Created inside a pool; ships with a
  *  default branch (`main`). */
-export type Project = {
+export type Cluster = {
   id: string;
   name: string;
   storage_pool_id: string;
@@ -48,7 +48,7 @@ export type EndpointRole = "read_write" | "read_only";
 export type Endpoint = {
   id: string;
   branch_id: string;
-  project_id: string;
+  cluster_id: string;
   role: EndpointRole;
   address: string;
   tailnet_address: string;
@@ -58,11 +58,11 @@ export type Endpoint = {
   created_at: string;
 };
 
-/** A write-ahead task. The mutating endpoints (create project / branch /
+/** A write-ahead task. The mutating endpoints (create cluster / branch /
  *  endpoint) are async: they return `202` + one of these, and the work runs in
  *  the controller's task worker. Poll `GET /tasks/{id}` until `status` is
- *  terminal. On a create, the task carries the ids it produced: `project_id` is
- *  the project, and `target_ref` is the primary resource created (the new branch
+ *  terminal. On a create, the task carries the ids it produced: `cluster_id` is
+ *  the cluster, and `target_ref` is the primary resource created (the new branch
  *  for a branch task, the endpoint for an endpoint task). `error` is set on
  *  failure. */
 /** Controller build identity from GET /api/v1/version. */
@@ -77,7 +77,7 @@ export type Task = {
   id: string;
   kind: string;
   status: TaskStatus;
-  project_id: string | null;
+  cluster_id: string | null;
   target_ref: string | null;
   error: string | null;
   /** The final step's result, as opaque JSON (present once the task has run).
@@ -95,7 +95,7 @@ export type StoragePoolList = {
   count: number;
   total: number;
 };
-export type ProjectList = { projects: Project[]; count: number; total: number };
+export type ClusterList = { clusters: Cluster[]; count: number; total: number };
 export type BranchList = { branches: Branch[]; count: number; total: number };
 export type EndpointList = {
   endpoints: Endpoint[];
@@ -108,7 +108,7 @@ export type TaskList = { tasks: Task[]; count: number; total: number };
 
 export type CreateUserInput = { is_admin: boolean };
 export type CreateStoragePoolInput = { name: string; owner_user_id: string };
-export type CreateProjectInput = { name: string };
+export type CreateClusterInput = { name: string };
 /** CPU + memory reserved for the endpoint pod. Each value is a Kubernetes
  *  resource quantity applied as both the request and the limit (Guaranteed QoS).
  *  Omit either field to take its default (2 cores / 4Gi). */
@@ -141,7 +141,7 @@ export const DEFAULT_ENDPOINT_CPU = "2";
 export const DEFAULT_ENDPOINT_MEMORY = "4Gi";
 export type CreateBranchInput = {
   name: string;
-  /** Branch to fork from. Omit to use the project's default branch. */
+  /** Branch to fork from. Omit to use the cluster's default branch. */
   parent_branch_id?: string;
   /** Ancestor LSN to fork at ("X/X" hex, e.g. "0/16ABCD0"). Omit to use the
    *  parent's latest LSN — but the controller requires it when the parent has

@@ -12,7 +12,7 @@ stay consistent with the principles laid out here.
 
 amp-controller is the control plane for a **single placement group**. It lives within the
 placement group it manages and owns the full lifecycle of everything inside it:
-tenancy (storage pools, projects), PG clusters and their branches, and the endpoints
+tenancy (storage pools, clusters), branches, and the endpoints
 that serve traffic. It provisions capacity ahead of demand, drives YBA for YBDB
 universe management, and exposes an API for all of it.
 
@@ -29,8 +29,8 @@ instances; amp-controller creates, configures, tracks, and retires them.
 
 - **amp-controller is self-built and standalone, not a YBA fork.** It runs alongside YBA;
   YBA continues to manage the YBDB universes, and amp-controller drives YBA via its REST API.
-- **The tenancy model is the core reason a fork was rejected.** amp-controller owns projects,
-  service instances, and instance→universe pinning. Multiple projects share one
+- **The tenancy model is the core reason a fork was rejected.** amp-controller owns clusters,
+  service instances, and instance→universe pinning. Multiple clusters share one
   universe, which inverts YBA's Customer-owns-Universe model — retrofitting that
   inversion into YBA would fight its data model everywhere.
 - **VM provisioning reuses ybops** — the existing ybops PEX artifact, repackaged and
@@ -70,7 +70,7 @@ instances; amp-controller creates, configures, tracks, and retires them.
    amp-controller independently enforces it at the API layer so users can never get into a bad
    position. Defense in depth, with amp-controller as the first line.
 5. **All mutations go through the task framework.** Any action that changes the world
-   — create a project, branch a branch, add an endpoint — is a task composed of
+   — create a cluster, branch a branch, add an endpoint — is a task composed of
    re-usable, idempotent **steps** (§8). Nothing mutates state out-of-band.
 6. **amp-controller is the source of truth for intent; the world is the source of truth for
    reality.** amp-controller records what *should* exist; reconciliation against what actually
@@ -88,14 +88,14 @@ The hierarchy:
 ```
 Placement Group ──── YBDB Universe (managed by YBA)
   └── Storage Pools (0+)       ≈ a Meko datapack; created by any user, shared to others
-        └── Projects (0+)      each is a "database": a project + its one default PG cluster
+        └── Clusters (0+)      each is a "database": a cluster + its one default branch
               └── PG Clusters   the default (root) cluster + its branches (0+ forks)
                     └── Endpoints (0+)
 ```
 
 Most levels may be empty: a fresh placement group has no storage pools yet, a fresh
-pool no projects, a cluster no endpoints (§4.4). The project is the exception — it is
-created together with its default PG cluster (§6), so a project always has at least that
+pool no clusters, a cluster no endpoints (§4.4). The cluster is the exception — it is
+created together with its default branch (§6), so a cluster always has at least that
 one cluster. Empty is both a valid resting state and what top-down teardown (§10.2)
 passes through.
 
@@ -110,17 +110,17 @@ These exist only in amp-controller's state store; they have no physical footprin
 - **Placement group** — top-level unit, and the scope of a amp-controller deployment. Each
   placement group has exactly one YBDB universe (managed by a YBA; one YBA can manage
   multiple universes) and holds zero or more storage pools.
-- **Storage pool** — a grouping of projects, modeled to map roughly onto a **Meko
+- **Storage pool** — a grouping of clusters, modeled to map roughly onto a **Meko
   datapack**. It is *not* an "org" — the org level above pools is currently undefined
   (§12). Any user can create a storage pool and becomes its **owner**; a user who did
   not create it reaches it only if the pool is **shared** with them (a pool grant,
   §10.1). A user can own, or be shared into, many pools.
-- **Project** — a **database**: the unit a client creates, scoped to one storage pool. A
-  project maps ~1:1 to its **default PG cluster** — creating a database creates the project
+- **Cluster** — a **database**: the unit a client creates, scoped to one storage pool. A
+  cluster maps ~1:1 to its **default branch** — creating a database creates the cluster
   and that default cluster together (§6) — and every branch of that cluster lives under the
-  same project (§4.3). The project is the unit of branch ownership (§4.3) and the finest
-  grain of user access (§10.1); that branch scoping is what isolates projects from each
-  other structurally, with access granted per project. A project is a purely
+  same cluster (§4.3). The cluster is the unit of branch ownership (§4.3) and the finest
+  grain of user access (§10.1); that branch scoping is what isolates clusters from each
+  other structurally, with access granted per cluster. A cluster is a purely
   control-plane grouping — it maps to **no** storage object (§4.3); only its branches
   carry a storage-layer identity.
 
@@ -130,13 +130,13 @@ These correspond to real data or real running processes, and amp-controller trac
 
 - **YBDB universe** — the shared storage layer for a placement group; managed by YBA,
   driven by amp-controller through YBA's API.
-- **PG cluster** — a logical Postgres database backed by physical data in YBDB; that
-  data is the cluster's branch (whose `branch_id` is the storage layer's flat branch id),
-  exactly one per cluster
-  (§4.3). Each project has one **default** (root) cluster, created with the project; every
-  other cluster under the project is a **branch**, produced by forking another cluster's
-  branch (§4.3).
-- **Endpoint** — a self-contained YB Amp instance serving a PG cluster; runs on a
+- **Branch** — the physical data of one logical Postgres database, held in YBDB and
+  addressed by its `branch_id` (the storage layer's flat branch id). Postgres itself
+  calls this a *cluster*; in this document "cluster" is always the control-plane
+  resource that owns it, and the data is always a **branch** (§4.3). Each cluster has
+  one **default** (root) branch, created with the cluster; every other branch under it
+  is produced by forking an existing branch (§4.3).
+- **Endpoint** — a self-contained YB Amp instance serving a branch; runs on a
   pod (or, later, a VM). Endpoints are what users actually connect to, so the API
   must return endpoint connection details (host, port, TLS state) to users.
   Endpoints are **stateless** (§5.3): "physical" here means they consume hardware,
@@ -144,30 +144,30 @@ These correspond to real data or real running processes, and amp-controller trac
 
 ### 4.3 Branches
 
-A PG cluster's data is its **branch** — the two are synonyms for one entity,
-viewed from two angles: we say "branch" when talking about the data, and "PG
-cluster" when talking about the compute serving it. A branch's `branch_id` **is**
+A branch is the data of one logical Postgres database — what Postgres itself calls a
+*cluster*, named "branch" here so the word stays free for the control-plane resource
+that owns it. A branch's `branch_id` **is**
 the storage layer's `BranchId` verbatim — the flat storage identity, with no
 enclosing tenant. Branches are uniquely identified within the controller by the pair
-**`branch_id`** alone — globally unique, the storage layer's own id — with the project a control-plane scoping column, so a
-branch cannot be named, resolved, or attached to outside its owning project. This scoping
-is structural: every API and internal interface that touches a branch takes the project as
-part of the key, so cross-project branch use is unrepresentable, not merely forbidden.
+**`branch_id`** alone — globally unique, the storage layer's own id — with the cluster a control-plane scoping column, so a
+branch cannot be named, resolved, or attached to outside its owning cluster. This scoping
+is structural: every API and internal interface that touches a branch takes the cluster as
+part of the key, so cross-cluster branch use is unrepresentable, not merely forbidden.
 
 Forking a branch — the default branch or another branch — produces a new branch (same
-project) and a new PG cluster bound to it; the parent/child relationship is tracked so
+cluster); the parent/child relationship is tracked so
 branch ancestry is queryable.
 
 ### 4.4 Endpoint cardinality and the single-writer invariant
 
-- A PG cluster has **zero or more** endpoints. Zero is a valid, supported state —
-  a cluster's data lives in YBDB regardless of whether anything is serving it
+- A branch has **zero or more** endpoints. Zero is a valid, supported state —
+  a branch's data lives in YBDB regardless of whether anything is serving it
   (this is what enables scale-to-zero).
 - **Scale-up from zero is API-driven only.** An endpoint must be created through
   the amp-controller API before anything can connect to it; with zero endpoints there is
   nothing listening, so a "wake on connect" model is impossible by construction —
   there is nothing to receive the connection.
-- **At most one endpoint per PG cluster may be a write endpoint.** All others are
+- **At most one endpoint per branch may be a write endpoint.** All others are
   read-only. amp-controller enforces this at the API layer (per principle 4): a request that
   would create a second writer, or flip a reader to writer while a writer exists, is
   rejected before anything touches the data plane — regardless of whether YB Amp
@@ -175,16 +175,16 @@ branch ancestry is queryable.
 
 ### 4.5 Capacity headroom
 
-Headroom — the spare capacity kept on hand so new endpoints and PG clusters never
+Headroom — the spare capacity kept on hand so new endpoints and branches never
 block on provisioning — is modeled at the **placement group level**: one pool of
-spare capacity per placement group, not per storage pool or project. Subdividing it
+spare capacity per placement group, not per storage pool or cluster. Subdividing it
 between storage pools is a later refinement, possible if and when it's needed,
 precisely because we start with the coarser unit.
 
 This works because endpoints are stateless (§5.3) and carry no hardware affinity:
-an endpoint may be scheduled next to endpoints of other projects — including projects
-in other storage pools. Isolation between projects is enforced by branch scoping
-(§4.3), with user access granted per project (§10.1) — not by dedicated
+an endpoint may be scheduled next to endpoints of other clusters — including clusters
+in other storage pools. Isolation between clusters is enforced by branch scoping
+(§4.3), with user access granted per cluster (§10.1) — not by dedicated
 hardware.
 
 ## 5. Service topology
@@ -280,7 +280,7 @@ This property does a lot of work, and the rest of the design leans on it:
   recreated. There is no data to rescue, migrate, or resync.
 - **Scheduling is unconstrained by data locality.** Endpoints can be placed wherever
   capacity exists; nothing pins them to particular hardware.
-- **Scale-to-zero falls out for free.** Removing every endpoint from a PG cluster
+- **Scale-to-zero falls out for free.** Removing every endpoint from a branch
   loses nothing (§4.4); recreating one later picks the data back up.
 - **Upgrades can be replace, not mutate** (§7): bring up a new endpoint at the new
   version, cut over, retire the old one.
@@ -293,7 +293,7 @@ amp-controller's database, never only on the endpoint itself.
 Per-endpoint configuration that amp-controller owns and tracks includes (non-exhaustive):
 
 - the YBDB connection config through which the endpoint accesses its data;
-- which PG cluster / branch it serves, and whether it is the write endpoint;
+- which branch it serves, and whether it is the write endpoint;
 - TLS state (enabled/disabled) and the certificates backing it (§7);
 - software version (for upgrades, §7);
 - otel configuration;
@@ -389,15 +389,15 @@ re-usable steps (§8); none is a special case.
 
 1. **Create a storage pool** — any user can create a pool and becomes its owner;
    reaching a pool created by someone else requires a share (a pool grant, §10.1).
-2. **Create a project** — the primary entry point. In one task this creates the
-   **project**, its **default PG cluster** (a fresh branch), and optionally that cluster's
+2. **Create a cluster** — the primary entry point. In one task this creates the
+   **cluster**, its **default branch**, and optionally that cluster's
    first (write) endpoint, all under a storage pool the caller can reach. The default
-   branch is never created on its own — a project *is* a project record plus its default
-   cluster. Access to the new project is then granted per project (§10.1).
-3. **Branch a project (fork a branch)** — fork an existing cluster's branch at a
+   branch is never created on its own — a cluster *is* a cluster record plus its default
+   cluster. Access to the new cluster is then granted per cluster (§10.1).
+3. **Branch a cluster (fork a branch)** — fork an existing cluster's branch at a
    point — the default branch or another branch — creating a new branch cluster linked to
-   its parent, under the same project (§4.3).
-4. **Add/remove endpoints on a PG cluster** — scale endpoints up and down, including
+   its parent, under the same cluster (§4.3).
+4. **Add/remove endpoints on a branch** — scale endpoints up and down, including
    down to **zero**. Adding a write endpoint is only valid when none exists; removing
    the write endpoint leaves a read-only (or empty) cluster.
 
@@ -406,11 +406,11 @@ creation through YBA) follow the same pattern but are not user-facing.
 
 **Implemented today (the mutation workflows are tasks).** The world-changing
 operations run **through the write-ahead task framework** (principle 5, §8), not
-inline. `POST .../projects` plans a `create_project` task that creates the project
+inline. `POST .../clusters` plans a `create_cluster` task that creates the cluster
 + default branch (state store) and records the controller pending-init
 recipe — keyed by the storage-layer `branch_id` (§11.1); branching, adding an
 endpoint (provisioned through the deployer, §5.6), and the cascade deletes
-(remove an endpoint, a branch, or a project) are likewise tasks. The API
+(remove an endpoint, a branch, or a cluster) are likewise tasks. The API
 validates cheaply, plans the task, and returns `202 Accepted` with the `Task` and
 a `Location` header; the caller polls task status (§8) until it is `succeeded` or
 `failed`, then reads the materialized resource's ids/address back — so the
@@ -477,7 +477,7 @@ control-plane operations.
 
 Two record types, both rows in amp-controller's schema (§10):
 
-- **`task`** — one row per initiated operation (create project, branch, scale, a
+- **`task`** — one row per initiated operation (create cluster, branch, scale, a
   reconciliation repair). This is the **user-visible** unit: the API exposes task status
   so a caller can monitor or poll a long-running operation. It carries the task kind, a
   coarse status, the resource it targets, the originating request, and (on failure) the
@@ -502,9 +502,9 @@ CREATE TYPE step_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
 
 CREATE TABLE task (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind         text        NOT NULL,        -- e.g. 'create_project', 'branch', 'scale'
+    kind         text        NOT NULL,        -- e.g. 'create_cluster', 'branch', 'scale'
     status       task_status NOT NULL DEFAULT 'pending',
-    project_id   uuid,                         -- the resource the task is about, for API
+    cluster_id   uuid,                         -- the resource the task is about, for API
     target_ref   text,                         --   monitoring; nullable (a task may create
                                                --   its own target, absent when planned)
     params       jsonb       NOT NULL,        -- the request that created the task
@@ -593,13 +593,13 @@ against a universe whose management lives outside the controller's view.
 
 Standing up a placement group is **runbook-driven** — operator-run for now, with the
 agent layer as a candidate to automate it later. The runbook (a deliverable of this
-project) covers both connection modes:
+cluster) covers both connection modes:
 
 - **YBDB via yugabyted** — for direct mode, start YBDB with `yugabyted`, covering
   both Docker and standalone-on-a-VM deployment.
 - **YBA** — for YBA mode, stand up YBA and its universe following the public YBA
   documentation: <https://docs.yugabyte.com/stable/yugabyte-platform/>. We do not
-  duplicate YBA install/operations docs in this project.
+  duplicate YBA install/operations docs in this cluster.
 
 Once the database is reachable (either way), amp-controller's first boot creates
 its control-plane database and schema (§10) and the placement group is ready for
@@ -626,11 +626,11 @@ key.
 ## 10. State tracking
 
 amp-controller does not run its own database. Its state store is the **placement group's YBDB
-universe**, accessed over YSQL — the same universe whose PG clusters it manages. Two
+universe**, accessed over YSQL — the same universe whose branches it manages. Two
 consequences worth stating up front:
 
 - **Isolation.** amp-controller's control-plane tables live in their own database within the
-  universe, with RBAC keeping them strictly apart from project data. Projects must have
+  universe, with RBAC keeping them strictly apart from cluster data. Clusters must have
   no path to control-plane state.
 - **Coupling.** The control plane's availability is tied to its universe's
   availability. Within a single placement group this coupling is mostly tolerable —
@@ -641,12 +641,12 @@ consequences worth stating up front:
 
 The state store tracks both halves of the model:
 
-- **Logical:** storage pools (each with an owner), projects, and users — users are either
-  **admin** (placement-group-wide, all pools and projects) or non-admin. A non-admin
+- **Logical:** storage pools (each with an owner), clusters, and users — users are either
+  **admin** (placement-group-wide, all pools and clusters) or non-admin. A non-admin
   reaches a pool they created (as owner) or one **shared** with them via a **pool grant**,
-  and reaches a project through **per-project grants** (read-only or read-write access to
-  specific projects), see §10.1 — plus the RBAC bindings at each level.
-- **Physical:** PG clusters and their branches (which is the project's default cluster, plus
+  and reaches a cluster through **per-cluster grants** (read-only or read-write access to
+  specific clusters), see §10.1 — plus the RBAC bindings at each level.
+- **Physical:** branches (the cluster's default branch, plus
   fork ancestry), and endpoints (branch binding and r/w vs. read-only role, exposed
   ports/address, placement, version, TLS/cert state, otel config). Endpoint records must
   be complete enough to recreate the endpoint from scratch (§5.3).
@@ -659,24 +659,24 @@ reconciliation has something to reconcile against.
 ### 10.1 Entities
 
 ```
-user ──< user_pool_grant >── storage_pool ──< project ──< branch (= storage branch_id) ──< endpoint
+user ──< user_pool_grant >── storage_pool ──< cluster ──< branch (= storage branch_id) ──< endpoint
  │           (a "share")          ▲             │       one default branch + its forks
  │       owner_user_id ───────────┘             │
- └──< user_project_grant >───────────────────────┘   (role: read_only | read_write)
+ └──< user_cluster_grant >───────────────────────┘   (role: read_only | read_write)
 
 admin users skip both grants; a pool's owner needs no share for that pool
 ```
 
-- **storage_pool / project** — the ownership hierarchy. A storage pool maps roughly to a
+- **storage_pool / cluster** — the ownership hierarchy. A storage pool maps roughly to a
   **Meko datapack** and carries an **owner** (`owner_user_id`, the user who created it);
   it is *not* an "org" (that level is undefined for now, §12). Names are unique within
-  their parent scope (pool within placement group, project within pool), not globally, so
-  projects can't collide with or probe each other's names.
-- **branch** — the PG cluster's data; a branch's `branch_id` **is** the storage layer's
+  their parent scope (pool within placement group, cluster within pool), not globally, so
+  clusters can't collide with or probe each other's names.
+- **branch** — one logical Postgres database's data; a branch's `branch_id` **is** the storage layer's
   flat `BranchId` verbatim (§4.3), keyed in the controller by the composite
-  **`branch_id`** alone, with the project a control-plane scoping column;
-  plus name (unique within its project), an `is_default` flag
-  (exactly one default branch per project, created with the project, §6; the rest are
+  **`branch_id`** alone, with the cluster a control-plane scoping column;
+  plus name (unique within its cluster), an `is_default` flag
+  (exactly one default branch per cluster, created with the cluster, §6; the rest are
   forks), fork ancestry (parent branch + fork point), and lifecycle state.
 - **endpoint** — durable **record**, ephemeral **instance**. The record is what users
   address through the API ("add/remove endpoint"), by id — endpoints have no names.
@@ -686,15 +686,15 @@ admin users skip both grants; a pool's owner needs no share for that pool
   last-seen — are observed data. Replacing a failed instance keeps the endpoint id
   (new pod, same record); scale-to-zero deletes records, not just instances.
   Address + ports + TLS state form the connection details returned to users.
-- **user / user_pool_grant / user_project_grant** — users are either **admin** (all
-  pools and projects, no grants needed) or non-admin. Any user may **create** a storage
+- **user / user_pool_grant / user_cluster_grant** — users are either **admin** (all
+  pools and clusters, no grants needed) or non-admin. Any user may **create** a storage
   pool and is recorded as its **owner**, which needs no grant. To reach a pool they did
   not create, a non-admin needs a **pool grant** (the "share"), keyed
-  `(user_id, storage_pool_id)`, that lets them create and see projects in it; and
-  **project grants**, keyed `(user_id, project_id)` with a `read_only` | `read_write` role,
-  that govern access to specific projects. Effective access is the union of the project
+  `(user_id, storage_pool_id)`, that lets them create and see clusters in it; and
+  **cluster grants**, keyed `(user_id, cluster_id)` with a `read_only` | `read_write` role,
+  that govern access to specific clusters. Effective access is the union of the cluster
   grants. Revocation is dropping the relevant row; a non-admin with zero grants (and no
-  pools of their own) is valid and can access nothing. The project is the finest grain of
+  pools of their own) is valid and can access nothing. The cluster is the finest grain of
   user access (decided).
 - The **placement group has no table** — a controller instance *is* one placement
   group (§4); its identity and connection-mode configuration are deployment config,
@@ -705,19 +705,19 @@ admin users skip both grants; a pool's owner needs no share for that pool
 Per principle 4, the load-bearing rules are expressed in the schema itself, not only
 in API-layer validation (full DDL lives with the code and its migrations):
 
-1. **Branches are project-scoped structurally.** Every branch reference — endpoint
-   binding, fork parent — is a composite foreign key carrying `project_id`, so
-   cross-project branch use (including cross-project forks) is unrepresentable.
-2. **Single writer per PG cluster.** A partial unique index —
+1. **Branches are cluster-scoped structurally.** Every branch reference — endpoint
+   binding, fork parent — is a composite foreign key carrying `cluster_id`, so
+   cross-cluster branch use (including cross-cluster forks) is unrepresentable.
+2. **Single writer per branch.** A partial unique index —
    `UNIQUE (branch_id) WHERE role = 'read_write'` — so two write
    endpoints cannot exist no matter what code path tries.
-3. **One default branch per project.** A partial unique index on `branch` —
-   `UNIQUE (project_id) WHERE is_default` — so a project cannot acquire a second default
+3. **One default branch per cluster.** A partial unique index on `branch` —
+   `UNIQUE (cluster_id) WHERE is_default` — so a cluster cannot acquire a second default
    branch; every other branch under it is a fork.
 4. **Access is explicit rows.** Pool grants key on `(user_id, storage_pool_id)` and
-   project grants on `(user_id, project_id)`; a grant at either level either exists or it
+   cluster grants on `(user_id, cluster_id)`; a grant at either level either exists or it
    doesn't. A pool's `owner_user_id` is access in its own right and needs no grant row.
-5. **Deletes are restricted, not cascaded.** Removing a pool with projects, a project
+5. **Deletes are restricted, not cascaded.** Removing a pool with clusters, a cluster
    with clusters, a cluster with endpoints, or a cluster whose branch has fork
    children is a constraint violation; teardown happens top-down through tasks,
    never via `ON DELETE CASCADE` surprises.
@@ -752,8 +752,8 @@ twin, so it stayed live on the registry's list forever and inflated the branch
 gauge (#467 step 2).
 
 **How the launcher fits.** `yb_amp_local` is an ordinary client of `/api/v1`: it
-provisions a user and a storage pool at startup, creates projects on purpose
-(`project create`, since a project is one independent lineage), and its branches
+provisions a user and a storage pool at startup, creates clusters on purpose
+(`cluster create`, since a cluster is one independent lineage), and its branches
 and endpoints are ordinary rows the product API lists like any other.
 
 Endpoints work for it because it starts its controller with
@@ -802,7 +802,7 @@ the upstream multi-tenant machinery is dropped.
   amp-controller is the only mutation driver and the only reconciler. The
   registry is bookkeeping: there is no heartbeat-driven state machine and no
   scheduler/placement loop (both dropped).
-- **One row per branch, one row per endpoint.** Tenancy, PG clusters, branches,
+- **One row per branch, one row per endpoint.** Tenancy, clusters, branches,
   and endpoints live in `amp_registry` (§10) and are reached by both surfaces; the
   write-ahead task log lives in `controller`, and the data plane in `amp_storage`.
   There is no second copy of a branch anywhere — the storage layer's flat view is a
@@ -811,8 +811,8 @@ the upstream multi-tenant machinery is dropped.
   and the row stays: a branch id is never reused, and its pages and WAL in
   `amp_storage` outlive the drop (left for a later GC pass, #36). Every "is this
   live?" reader filters `dropped_at IS NULL`, and the name/default uniqueness
-  indexes are partial on it so a drop frees the name. Projects are tombstoned for
-  the same reason — the branch → project FK is RESTRICT, so a project whose
+  indexes are partial on it so a drop frees the name. Clusters are tombstoned for
+  the same reason — the branch → cluster FK is RESTRICT, so a cluster whose
   branches survive as tombstones could never be deleted.
 - **A tombstone trips no foreign key, so the guards around it are explicit — and
   the racing side's guard is a write.** Stamping `dropped_at` never touches
@@ -860,7 +860,7 @@ one from corrupting storage state.
 - **Billing/metering, quotas** — will build on the tenancy model later.
 - **API authentication** — the user/grant model (§10.1) is designed; how callers
   authenticate as users is not.
-- **Branch data GC** — deleting a branch (PG cluster) removes control-plane records;
+- **Branch data GC** — deleting a branch removes control-plane records;
   reclaiming the underlying branch's physical data in YBDB is a future design.
 - **Data-plane credential isolation** — pageservers and safekeepers across all
   storage-layer branches currently share one set of universe credentials on the shared

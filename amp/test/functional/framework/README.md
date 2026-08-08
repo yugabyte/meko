@@ -2,7 +2,7 @@
 
 `ampqa` is the system-test framework for **yb-amp / yb-amp** — a Neon-style
 fork that separates compute from storage: a controller manages
-projects / branches / endpoints (stateless Postgres compute) over a real
+clusters / branches / endpoints (stateless Postgres compute) over a real
 YugabyteDB cluster that holds the durable state. `ampqa` stands those systems
 up end to end — on **k8s (GKE primarily)**, plus GCE and AWS VM backings — runs
 workloads and chaos through them, and reports honestly what happened.
@@ -96,7 +96,7 @@ go run ./cmd/ampqa run --test features/pg_roundtrip -c my-env.yaml
 
 With only a `kubectl` current-context in scope and no `-c`, `--env-provider
 auto` self-builds a run-scoped amp control plane on k8s (`sharedk8s` deploy
-mode), runs the selected tests project-per-test against it, and tears the whole
+mode), runs the selected tests cluster-per-test against it, and tears the whole
 thing down when the run finishes. Only when **neither** a config-driven provider
 **nor** a kube-context is available does a real-env test **skip cleanly** (exit
 4, `no environment provider configured`) rather than fail.
@@ -153,7 +153,7 @@ against a different provider/backing without changing test code.
 | Provider | What it does |
 |---|---|
 | `fake` | in-process, no real infra — canary tests, dev loops |
-| `sharedk8s` | one amp control plane, a project + endpoint carved **per test** out of it (co-tenant `shared` tests packed, bounded by `--per-env-parallelism`). Two modes — see lifecycle below |
+| `sharedk8s` | one amp control plane, a cluster + endpoint carved **per test** out of it (co-tenant `shared` tests packed, bounded by `--per-env-parallelism`). Two modes — see lifecycle below |
 | `exclusivek8s` | a dedicated namespace + stack per `exclusive` test |
 | `universe` | attaches to / provisions a YugabyteDB **universe** directly (not amp) as the target |
 
@@ -194,10 +194,10 @@ prints a deprecation note).
 `sharedk8s` with only a kube-context (no `controller_url`, no attach namespace),
 the provider **deploys its own run-scoped amp control plane** — the same
 `ampstack.App` the `exclusivek8s` provider and the `deploy-amp` task build — into
-a freshly-named owned namespace (`ampqa-cp-<random>`), carves a project +
+a freshly-named owned namespace (`ampqa-cp-<random>`), carves a cluster +
 endpoint per test out of it, and tears the whole control plane down in `Close()`
 at run end. So `ampqa run --tag regression` with nothing but a kube-context
-stands up its own amp stack, runs project-per-test, and cleans up — no `setup`
+stands up its own amp stack, runs cluster-per-test, and cleans up — no `setup`
 step, no standing control plane needed. `--env-mode keep` / `--setup-only`
 records that self-built control plane (`Provider.StandingEnv()`) so a later `run
 --env <id>` attaches to it instead of rebuilding.

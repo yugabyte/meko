@@ -3,11 +3,11 @@
 -- Implements the design in controller/architecture/ac-highlvl.md §6 (resource
 -- ladder + tables) and controller/architecture/amp-controller.md §10 (state).
 -- The load-bearing invariants (§10.2) are expressed here in the schema, not only
--- in API checks: the single-writer partial unique index, one-default-per-project,
+-- in API checks: the single-writer partial unique index, one-default-per-cluster,
 -- and RESTRICT (never CASCADE) deletes.
 --
--- The user-facing resource ladder is storage pool -> project -> branch ->
--- endpoint. A project is purely a control-plane grouping ("a database") that owns
+-- The user-facing resource ladder is storage pool -> cluster -> branch ->
+-- endpoint. A cluster is purely a control-plane grouping ("a database") that owns
 -- a set of branches; it does NOT map to any storage object.
 --
 -- ONE branch table and ONE endpoint table, reached through one API (/api/v1).
@@ -17,7 +17,7 @@
 -- Keys are flat. A branch's `branch_id` IS the storage layer's `BranchId`, a
 -- 128-bit id carried here verbatim as `uuid` and globally unique on its own, so
 -- it is the whole primary key; the storage layer is flat and has no enclosing
--- tenant. An endpoint keys on its own `id` and reaches its project through its
+-- tenant. An endpoint keys on its own `id` and reaches its cluster through its
 -- branch.
 --
 -- Every object here is SCHEMA-QUALIFIED. `amp_registry` is a fixed name, not a
@@ -46,13 +46,13 @@ CREATE TABLE amp_registry.storage_pools (
     created_at     timestamptz NOT NULL DEFAULT now()
 );
 
--- A project is a "database": one project, one default branch. id is a
--- control-plane id only (no storage object maps to a project anymore).
+-- A cluster is a "database": one cluster, one default branch. id is a
+-- control-plane id only (no storage object maps to a cluster anymore).
 --
 -- Tombstoned, not deleted (see `branches` below for the full rationale): a
--- project owns branches, branches are tombstoned, and the branch -> project FK is
--- RESTRICT, so the project row has to outlive them.
-CREATE TABLE amp_registry.projects (
+-- cluster owns branches, branches are tombstoned, and the branch -> cluster FK is
+-- RESTRICT, so the cluster row has to outlive them.
+CREATE TABLE amp_registry.clusters (
     id               uuid PRIMARY KEY,
     storage_pool_id  uuid        NOT NULL REFERENCES amp_registry.storage_pools (id),
     name             text        NOT NULL,
@@ -60,13 +60,13 @@ CREATE TABLE amp_registry.projects (
     dropped_at       timestamptz
 );
 
--- Name unique within its pool, among LIVE projects: dropping a project frees its
--- name for reuse (unlike a branch id, a project name is not an identity the
+-- Name unique within its pool, among LIVE clusters: dropping a cluster frees its
+-- name for reuse (unlike a branch id, a cluster name is not an identity the
 -- storage layer ever saw).
-CREATE UNIQUE INDEX projects_name_per_pool ON amp_registry.projects (storage_pool_id, name)
+CREATE UNIQUE INDEX clusters_name_per_pool ON amp_registry.clusters (storage_pool_id, name)
     WHERE dropped_at IS NULL;
 
--- The "share": lets a non-owner create and see projects in a pool.
+-- The "share": lets a non-owner create and see clusters in a pool.
 CREATE TABLE amp_registry.user_pool_grants (
     user_id          uuid NOT NULL REFERENCES amp_registry.users (id),
     storage_pool_id  uuid NOT NULL REFERENCES amp_registry.storage_pools (id),
@@ -75,20 +75,21 @@ CREATE TABLE amp_registry.user_pool_grants (
 
 CREATE TYPE amp_registry.grant_role AS ENUM ('read_only', 'read_write');
 
--- Per-project access; revoke = drop the row.
-CREATE TABLE amp_registry.user_project_grants (
+-- Per-cluster access; revoke = drop the row.
+CREATE TABLE amp_registry.user_cluster_grants (
     user_id     uuid       NOT NULL REFERENCES amp_registry.users (id),
-    project_id  uuid       NOT NULL REFERENCES amp_registry.projects (id),
+    cluster_id  uuid       NOT NULL REFERENCES amp_registry.clusters (id),
     role        amp_registry.grant_role NOT NULL,
-    PRIMARY KEY (user_id, project_id)
+    PRIMARY KEY (user_id, cluster_id)
 );
 
 -- Physical -------------------------------------------------------------------
 
--- A branch is a PG cluster. `branch_id` is the storage-layer BranchId verbatim
+-- A branch is one logical Postgres database's data — what Postgres itself calls a
+-- cluster. `branch_id` is the storage-layer BranchId verbatim
 -- (the flat storage identity) and is globally unique, so it stands alone as the
 -- primary key; the storage layer addresses it as `replace(branch_id::text,'-','')`.
--- `project_id` is an ordinary scoping column, not part of the identity.
+-- `cluster_id` is an ordinary scoping column, not part of the identity.
 --
 -- This is also the branch's CREATION RECORD — `name`, `pg_version`,
 -- `parent_branch_id`, `fork_lsn` — written at branch-create time and read back
@@ -96,9 +97,9 @@ CREATE TABLE amp_registry.user_project_grants (
 -- parent means bootstrap, a set one means fork that ancestor at `fork_lsn`).
 --
 -- NB: with a single-column key the fork FK can no longer also assert that a
--- parent is in the SAME project — that was a side effect of the old composite
--- key. Lineage staying in-project is now an application invariant (the API
--- resolves a parent within the project before forking), not a schema one.
+-- parent is in the SAME cluster — that was a side effect of the old composite
+-- key. Lineage staying in-cluster is now an application invariant (the API
+-- resolves a parent within the cluster before forking), not a schema one.
 --
 -- There is deliberately NO generation here. Fencing is the pageserver's own
 -- concern: it claims a generation at startup by incrementing
@@ -115,10 +116,10 @@ CREATE TABLE amp_registry.user_project_grants (
 -- column groups) lives in `amp_storage.branch_state`, keyed by the same id.
 CREATE TABLE amp_registry.branches (
     branch_id           uuid        PRIMARY KEY,
-    project_id          uuid        NOT NULL REFERENCES amp_registry.projects (id),
+    cluster_id          uuid        NOT NULL REFERENCES amp_registry.clusters (id),
     name                text        NOT NULL,
     pg_version          int         NOT NULL,
-    is_default          boolean     NOT NULL DEFAULT false,  -- the project's root branch
+    is_default          boolean     NOT NULL DEFAULT false,  -- the cluster's root branch
 
     parent_branch_id    uuid        REFERENCES amp_registry.branches (branch_id),  -- fork ancestry; NULL for a root
     fork_lsn            pg_lsn,     -- the point the branch was taken at
@@ -143,19 +144,19 @@ CREATE TABLE amp_registry.branches (
     dropped_at          timestamptz -- tombstone; a branch id is never reused
 );
 
--- "The branches of this project" is the list endpoint, the storage-layer
--- surface's every read, and the project-delete cascade. It is the hottest access
+-- "The branches of this cluster" is the list endpoint, the storage-layer
+-- surface's every read, and the cluster-delete cascade. It is the hottest access
 -- path on the table and the primary key no longer serves it, so it gets an index
 -- of its own — the partial unique index below cannot stand in, since it covers
 -- only live rows and leads with a second column.
-CREATE INDEX branches_by_project ON amp_registry.branches (project_id);
+CREATE INDEX branches_by_cluster ON amp_registry.branches (cluster_id);
 
--- Name unique within its project, and exactly one default branch per project —
+-- Name unique within its cluster, and exactly one default branch per cluster —
 -- both among LIVE branches, so a drop frees the name and lets a replacement
 -- default be designated. Partial because the rows stay behind forever.
-CREATE UNIQUE INDEX branches_name_per_project ON amp_registry.branches (project_id, name)
+CREATE UNIQUE INDEX branches_name_per_cluster ON amp_registry.branches (cluster_id, name)
     WHERE dropped_at IS NULL;
-CREATE UNIQUE INDEX branches_one_default_per_project ON amp_registry.branches (project_id)
+CREATE UNIQUE INDEX branches_one_default_per_cluster ON amp_registry.branches (cluster_id)
     WHERE is_default AND dropped_at IS NULL;
 
 -- Fork lineage: "the children of this branch" gates a branch delete.
@@ -165,8 +166,8 @@ CREATE TYPE amp_registry.endpoint_role AS ENUM ('read_write', 'read_only');
 
 -- Durable record, ephemeral instance.
 --
--- An endpoint belongs to a branch and reaches its project through it — there is
--- no project_id column, so the two can never disagree.
+-- An endpoint belongs to a branch and reaches its cluster through it — there is
+-- no cluster_id column, so the two can never disagree.
 --
 -- Every endpoint is created the same way, through the product API, whether the
 -- instance it names is a pod the controller deploys or a local process
@@ -229,7 +230,7 @@ CREATE UNIQUE INDEX endpoints_one_writer_per_branch
     WHERE role = 'read_write';
 
 -- A name identifies an endpoint within its branch, the way a branch name does
--- within its project. Not global: two branches may each have a "primary", which
+-- within its cluster. Not global: two branches may each have a "primary", which
 -- is the natural thing to call the writer on each of them. NULLs are distinct in
 -- a unique index, so any number of unnamed endpoints coexist.
 CREATE UNIQUE INDEX endpoints_name_per_branch

@@ -11,19 +11,19 @@ import (
 	"github.com/yugabyte/amp/controller/internal/db"
 )
 
-// TestListProjectsIncludeFailed covers the failed-creation filter: a project
-// whose create_project task failed (its row written mid-provisioning before a
-// later step failed) is an orphan. ListProjects excludes it by default (usable
+// TestListClustersIncludeFailed covers the failed-creation filter: a cluster
+// whose create_cluster task failed (its row written mid-provisioning before a
+// later step failed) is an orphan. ListClusters excludes it by default (usable
 // clusters only), and includes it only when the caller passes includeFailed=true
 // (an operator's fleet view, to see and delete it). Succeeded and
-// still-in-progress projects are always listed.
+// still-in-progress clusters are always listed.
 //
 // Exercises the real PgBackend SQL against a Postgres/YSQL-compatible database.
 // It provisions an isolated schema per run and drops it afterwards, so it is
 // safe against any reachable DB (e.g. a meko-dev YB universe). Set
 // AMP_TEST_DATABASE_URL to run; skipped otherwise so `go test ./...` stays green
 // without a database.
-func TestListProjectsIncludeFailed(t *testing.T) {
+func TestListClustersIncludeFailed(t *testing.T) {
 	url := os.Getenv("AMP_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("set AMP_TEST_DATABASE_URL (e.g. postgres://yugabyte@host:5433/yb_storage?sslmode=disable) to run")
@@ -40,7 +40,7 @@ func TestListProjectsIncludeFailed(t *testing.T) {
 	const schema = "controller" // the --db-schema default
 	provCtx, provCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer provCancel()
-	scratchURL, drop, err := db.ScratchMigrated(provCtx, url, "amp_test_core_projects", schema)
+	scratchURL, drop, err := db.ScratchMigrated(provCtx, url, "amp_test_core_clusters", schema)
 	if err != nil {
 		t.Fatalf("provision scratch database: %v", err)
 	}
@@ -55,13 +55,13 @@ func TestListProjectsIncludeFailed(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	// --- seed: one pool, three projects each with a default branch, each with a
-	// create_project task in a different terminal/in-flight state. ---
+	// --- seed: one pool, three clusters each with a default branch, each with a
+	// create_cluster task in a different terminal/in-flight state. ---
 	owner := uuid.New()
 	poolID := uuid.New()
 	mustExec(t, ctx, pool, `INSERT INTO amp_registry.users (id) VALUES ($1)`, owner)
 	mustExec(t, ctx, pool, `INSERT INTO amp_registry.storage_pools (id, name, owner_user_id) VALUES ($1,$2,$3)`,
-		poolID, "pool-core-projects", owner)
+		poolID, "pool-core-clusters", owner)
 
 	type seed struct {
 		name       string
@@ -74,16 +74,16 @@ func TestListProjectsIncludeFailed(t *testing.T) {
 		{name: "inflight", taskStatus: "running", id: uuid.New()},
 	}
 	for _, s := range seeds {
-		mustExec(t, ctx, pool, `INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1,$2,$3)`,
+		mustExec(t, ctx, pool, `INSERT INTO amp_registry.clusters (id, storage_pool_id, name) VALUES ($1,$2,$3)`,
 			s.id, poolID, s.name)
-		mustExec(t, ctx, pool, `INSERT INTO amp_registry.branches (project_id, branch_id, name, pg_version, is_default) VALUES ($1,$2,'main',18,true)`,
+		mustExec(t, ctx, pool, `INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default) VALUES ($1,$2,'main',18,true)`,
 			s.id, uuid.New())
-		mustExec(t, ctx, pool, `INSERT INTO tasks (kind, status, project_id) VALUES ('create_project',$1::task_status,$2)`,
+		mustExec(t, ctx, pool, `INSERT INTO tasks (kind, status, cluster_id) VALUES ('create_cluster',$1::task_status,$2)`,
 			s.taskStatus, s.id)
 	}
 
 	b := NewPgBackend(pool)
-	names := func(ps []Project) map[string]bool {
+	names := func(ps []Cluster) map[string]bool {
 		m := map[string]bool{}
 		for _, p := range ps {
 			m[p.Name] = true
@@ -91,36 +91,36 @@ func TestListProjectsIncludeFailed(t *testing.T) {
 		return m
 	}
 
-	// --- includeFailed=false (the default): the failed project is hidden. ---
+	// --- includeFailed=false (the default): the failed cluster is hidden. ---
 	t.Run("excludes failed by default", func(t *testing.T) {
-		projects, total, err := b.ListProjects(ctx, poolID, 100, 0, false)
+		clusters, total, err := b.ListClusters(ctx, poolID, 100, 0, false)
 		if err != nil {
-			t.Fatalf("ListProjects: %v", err)
+			t.Fatalf("ListClusters: %v", err)
 		}
-		got := names(projects)
+		got := names(clusters)
 		if got["failed"] {
-			t.Errorf("failed-creation project should be excluded with includeFailed=false, but it was returned")
+			t.Errorf("failed-creation cluster should be excluded with includeFailed=false, but it was returned")
 		}
 		if !got["ok"] || !got["inflight"] {
-			t.Errorf("succeeded + in-progress projects should be listed, got %v", got)
+			t.Errorf("succeeded + in-progress clusters should be listed, got %v", got)
 		}
-		if total != 2 || len(projects) != 2 {
-			t.Errorf("total=%d len=%d, want 2/2 (failed excluded from the count too)", total, len(projects))
+		if total != 2 || len(clusters) != 2 {
+			t.Errorf("total=%d len=%d, want 2/2 (failed excluded from the count too)", total, len(clusters))
 		}
 	})
 
 	// --- includeFailed=true (opt-in): all three, including the failed one. ---
 	t.Run("includes failed when opted in", func(t *testing.T) {
-		projects, total, err := b.ListProjects(ctx, poolID, 100, 0, true)
+		clusters, total, err := b.ListClusters(ctx, poolID, 100, 0, true)
 		if err != nil {
-			t.Fatalf("ListProjects: %v", err)
+			t.Fatalf("ListClusters: %v", err)
 		}
-		got := names(projects)
+		got := names(clusters)
 		if !got["failed"] || !got["ok"] || !got["inflight"] {
-			t.Errorf("all three projects should be listed with includeFailed=true, got %v", got)
+			t.Errorf("all three clusters should be listed with includeFailed=true, got %v", got)
 		}
-		if total != 3 || len(projects) != 3 {
-			t.Errorf("total=%d len=%d, want 3/3 (failed included)", total, len(projects))
+		if total != 3 || len(clusters) != 3 {
+			t.Errorf("total=%d len=%d, want 3/3 (failed included)", total, len(clusters))
 		}
 	})
 }

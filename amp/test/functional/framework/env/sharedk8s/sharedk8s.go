@@ -1,6 +1,6 @@
-// Package sharedk8s is the project-per-test environment provider (architecture
+// Package sharedk8s is the cluster-per-test environment provider (architecture
 // §5.1): it drives a standing amp control plane over the controller REST API to
-// carve out an isolated project + endpoint for each test, and tears the project
+// carve out an isolated cluster + endpoint for each test, and tears the cluster
 // down (cascade) on teardown. The controller is reached directly by URL or, when
 // only a kube context is configured, through a kubectl port-forward. The
 // endpoint's Postgres is reached at the API-reported address, port-forwarded
@@ -51,7 +51,7 @@ const (
 	// computeRestartReadyTimeout bounds waiting for the endpoint's compute
 	// workload to report ready again after its pod is rolled.
 	computeRestartReadyTimeout = 5 * time.Minute
-	// provisionRetries is how many extra attempts project/endpoint creation makes
+	// provisionRetries is how many extra attempts cluster/endpoint creation makes
 	// on a transient controller 5xx (concurrent-DDL deadlock, endpoint helm race).
 	provisionRetries = 4
 )
@@ -74,7 +74,7 @@ type Config struct {
 
 	// Deploy selects self-building k8s: when true this provider OWNS one
 	// run-scoped amp control plane, deploying the same ampstack.App exclusivek8s
-	// builds into an owned ampqa-labelled namespace and carving projects out of
+	// builds into an owned ampqa-labelled namespace and carving clusters out of
 	// it, rather than attaching to a standing control plane. When false (attach
 	// mode) the behaviour is unchanged. Default: deploy unless a standing
 	// controller is already configured (a controller_url or a namespace to attach
@@ -152,7 +152,7 @@ func (c Config) deployContext() string {
 	return firstNonEmptyStr(c.Context, c.AmpStack.Context)
 }
 
-// Provider provisions project-per-test environments on a shared control plane.
+// Provider provisions cluster-per-test environments on a shared control plane.
 type Provider struct {
 	cfg  Config
 	kube *k8s.Kubectl
@@ -400,7 +400,7 @@ func (p *Provider) WithYBDeployConfig(c *core.Config) *Provider {
 }
 
 // Prepare eagerly deploys the run-scoped control plane (deploy mode) so it is up
-// BEFORE the scheduler starts provisioning per-test projects — otherwise the
+// BEFORE the scheduler starts provisioning per-test clusters — otherwise the
 // first test's short provision deadline would have to absorb the whole
 // control-plane bring-up. A no-op in attach mode. The `run` command calls this
 // (via an optional-interface assertion) before sched.Run.
@@ -538,7 +538,7 @@ func (p *Provider) nextLocalPort() int {
 	return p.cfg.LocalPortBase + int(p.portCounter.Add(1)-1)
 }
 
-// Provision creates a project + endpoint on the shared control plane and returns
+// Provision creates a cluster + endpoint on the shared control plane and returns
 // a live environment bound to the endpoint's Postgres.
 func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.Seed) (core.Environment, error) {
 	cl, url, err := p.ctrl.get(ctx)
@@ -570,7 +570,7 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		return fail(err)
 	}
 
-	proj, branchID, err := p.createProject(ctx, cl, poolID, seed)
+	proj, branchID, err := p.createCluster(ctx, cl, poolID, seed)
 	if err != nil {
 		return fail(err)
 	}
@@ -609,25 +609,25 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		pg:            ci,
 		prov:          p,
 		poolID:        poolID,
-		projectID:     proj.ID,
+		clusterID:     proj.ID,
 		endpointID:    ep.ID,
 		endpointAddr:  ep.Address,
-		ownProject:    true,
+		ownCluster:    true,
 		pfs:           nonNilPFs(epPF),
 		kube:          p.kube,
 		logf:          p.logf,
 		handles: core.EnvHandles{
 			Namespace: p.cfg.Namespace,
-			Project:   proj.ID,
+			Cluster:   proj.ID,
 			Endpoint:  ep.ID,
 		},
 	}
 	return env, nil
 }
 
-// Attach treats ref as a project id on the configured pool: it reads the project
+// Attach treats ref as a cluster id on the configured pool: it reads the cluster
 // and its first endpoint and returns an environment that will NOT delete the
-// project on teardown.
+// cluster on teardown.
 func (p *Provider) Attach(ctx context.Context, ref string) (core.Environment, error) {
 	cl, url, err := p.ctrl.get(ctx)
 	if err != nil {
@@ -648,9 +648,9 @@ func (p *Provider) Attach(ctx context.Context, ref string) (core.Environment, er
 		}
 		poolID = pid
 	}
-	proj, err := cl.GetProject(ctx, poolID, ref)
+	proj, err := cl.GetCluster(ctx, poolID, ref)
 	if err != nil {
-		return fail(fmt.Errorf("attach project %s: %w", ref, err))
+		return fail(fmt.Errorf("attach cluster %s: %w", ref, err))
 	}
 	branchID := proj.DefaultBranch.BranchID
 	eps, err := cl.ListAllEndpoints(ctx, poolID, proj.ID, branchID)
@@ -658,7 +658,7 @@ func (p *Provider) Attach(ctx context.Context, ref string) (core.Environment, er
 		return fail(err)
 	}
 	if len(eps) == 0 {
-		return fail(fmt.Errorf("attach project %s: no endpoints on default branch", ref))
+		return fail(fmt.Errorf("attach cluster %s: no endpoints on default branch", ref))
 	}
 	ci, pf, err := p.resolvePG(ctx, eps[0])
 	if err != nil {
@@ -675,18 +675,18 @@ func (p *Provider) Attach(ctx context.Context, ref string) (core.Environment, er
 		pg:            ci,
 		prov:          p,
 		poolID:        poolID,
-		projectID:     proj.ID,
+		clusterID:     proj.ID,
 		endpointID:    eps[0].ID,
 		endpointAddr:  eps[0].Address,
-		ownProject:    false,
+		ownCluster:    false,
 		pfs:           nonNilPFs(epPF),
 		kube:          p.kube,
 		logf:          p.logf,
-		handles:       core.EnvHandles{Namespace: p.cfg.Namespace, Project: proj.ID, Endpoint: eps[0].ID},
+		handles:       core.EnvHandles{Namespace: p.cfg.Namespace, Cluster: proj.ID, Endpoint: eps[0].ID},
 	}, nil
 }
 
-// Teardown deletes the per-test project (cascade) and closes the per-test pg
+// Teardown deletes the per-test cluster (cascade) and closes the per-test pg
 // port-forward. The shared controller forward is provider-owned and left up.
 func (p *Provider) Teardown(ctx context.Context, env core.Environment) error {
 	e, ok := env.(*Env)
@@ -694,10 +694,10 @@ func (p *Provider) Teardown(ctx context.Context, env core.Environment) error {
 		return fmt.Errorf("sharedk8s teardown: unexpected environment type %T", env)
 	}
 	var firstErr error
-	if e.ownProject {
-		if err := p.deleteProject(ctx, e); err != nil {
+	if e.ownCluster {
+		if err := p.deleteCluster(ctx, e); err != nil {
 			firstErr = err
-			p.log("sharedk8s: teardown of project %s failed: %v", e.projectID, err)
+			p.log("sharedk8s: teardown of cluster %s failed: %v", e.clusterID, err)
 		}
 	}
 	closeAll(e.pfs)
@@ -705,27 +705,27 @@ func (p *Provider) Teardown(ctx context.Context, env core.Environment) error {
 	return firstErr
 }
 
-// deleteProject cascade-deletes the project over the shared controller forward,
+// deleteCluster cascade-deletes the cluster over the shared controller forward,
 // health-checking it first (get re-establishes a dead forward) and retrying once
 // after a forced reconnect when the delete fails connection-refused — the
 // signature of a forward that died between provisioning and teardown.
-func (p *Provider) deleteProject(ctx context.Context, e *Env) error {
+func (p *Provider) deleteCluster(ctx context.Context, e *Env) error {
 	cl, _, err := p.ctrl.get(ctx)
 	if err != nil {
-		return fmt.Errorf("delete project %s: controller unavailable: %w", e.projectID, err)
+		return fmt.Errorf("delete cluster %s: controller unavailable: %w", e.clusterID, err)
 	}
-	if _, err := cl.DeleteProjectAndWait(ctx, e.poolID, e.projectID); err == nil {
+	if _, err := cl.DeleteClusterAndWait(ctx, e.poolID, e.clusterID); err == nil {
 		return nil
 	} else if !isConnRefused(err) {
-		return fmt.Errorf("delete project %s: %w", e.projectID, err)
+		return fmt.Errorf("delete cluster %s: %w", e.clusterID, err)
 	}
 	p.ctrl.reset()
 	cl, _, err = p.ctrl.get(ctx)
 	if err != nil {
-		return fmt.Errorf("delete project %s: reconnect controller: %w", e.projectID, err)
+		return fmt.Errorf("delete cluster %s: reconnect controller: %w", e.clusterID, err)
 	}
-	if _, err := cl.DeleteProjectAndWait(ctx, e.poolID, e.projectID); err != nil {
-		return fmt.Errorf("delete project %s (after reconnect): %w", e.projectID, err)
+	if _, err := cl.DeleteClusterAndWait(ctx, e.poolID, e.clusterID); err != nil {
+		return fmt.Errorf("delete cluster %s (after reconnect): %w", e.clusterID, err)
 	}
 	return nil
 }
@@ -869,35 +869,35 @@ func (p *Provider) findPoolByName(ctx context.Context, cl *controller.Client) (s
 	}
 }
 
-// createProject creates a project (with its default branch) on the control
+// createCluster creates a cluster (with its default branch) on the control
 // plane and returns it plus the default branch id. The amp controller
 // occasionally answers a concurrent create with a transient 5xx — most often a
-// deadlock in its own backing DB when several projects' branch recipes are
+// deadlock in its own backing DB when several clusters' branch recipes are
 // recorded at once (deploy mode starts every parallel test provisioning at once)
-// — so it retries with backoff and a FRESH project name each attempt (a failed
+// — so it retries with backoff and a FRESH cluster name each attempt (a failed
 // create can leave the old name half-populated).
-func (p *Provider) createProject(ctx context.Context, cl *controller.Client, poolID string, seed *core.Seed) (controller.Project, string, error) {
+func (p *Provider) createCluster(ctx context.Context, cl *controller.Client, poolID string, seed *core.Seed) (controller.Cluster, string, error) {
 	var lastErr error
 	for attempt := 0; attempt <= provisionRetries; attempt++ {
 		if attempt > 0 && !backoff(ctx, attempt) {
-			return controller.Project{}, "", fmt.Errorf("create project: %w (last: %v)", ctx.Err(), lastErr)
+			return controller.Cluster{}, "", fmt.Errorf("create cluster: %w (last: %v)", ctx.Err(), lastErr)
 		}
 		name := fmt.Sprintf("ampqa-p-%x-%d", uint64(seed.Value()), p.nameCounter.Add(1))
-		if _, err := cl.CreateProjectAndWait(ctx, poolID, controller.CreateProjectRequest{Name: name}); err != nil {
-			lastErr = fmt.Errorf("create project %s: %w", name, err)
+		if _, err := cl.CreateClusterAndWait(ctx, poolID, controller.CreateClusterRequest{Name: name}); err != nil {
+			lastErr = fmt.Errorf("create cluster %s: %w", name, err)
 			if transientController(err) {
 				p.log("sharedk8s: %v — retrying with a fresh name (attempt %d/%d)", lastErr, attempt+1, provisionRetries)
 				continue
 			}
-			return controller.Project{}, "", lastErr
+			return controller.Cluster{}, "", lastErr
 		}
-		proj, err := p.findProject(ctx, cl, poolID, name)
+		proj, err := p.findCluster(ctx, cl, poolID, name)
 		if err != nil {
-			return controller.Project{}, "", err
+			return controller.Cluster{}, "", err
 		}
 		return proj, proj.DefaultBranch.BranchID, nil
 	}
-	return controller.Project{}, "", lastErr
+	return controller.Cluster{}, "", lastErr
 }
 
 // createEndpoint returns a live read_write endpoint on the branch. The
@@ -908,7 +908,7 @@ func (p *Provider) createProject(ctx context.Context, cl *controller.Client, poo
 // finishes moments later, and the downstream Postgres-readiness wait validates
 // it), and only creates one when none exists — retrying on a transient 5xx or a
 // record conflict.
-func (p *Provider) createEndpoint(ctx context.Context, cl *controller.Client, poolID, projectID, branchID string) (controller.Endpoint, error) {
+func (p *Provider) createEndpoint(ctx context.Context, cl *controller.Client, poolID, clusterID, branchID string) (controller.Endpoint, error) {
 	var lastErr error
 	for attempt := 0; attempt <= provisionRetries; attempt++ {
 		if attempt > 0 {
@@ -917,11 +917,11 @@ func (p *Provider) createEndpoint(ctx context.Context, cl *controller.Client, po
 			}
 			// A prior attempt left a partial endpoint record (the non-idempotent
 			// create + helm race); reuse it rather than re-create into a conflict.
-			if ep, ok := p.existingEndpoint(ctx, cl, poolID, projectID, branchID); ok {
+			if ep, ok := p.existingEndpoint(ctx, cl, poolID, clusterID, branchID); ok {
 				return ep, nil
 			}
 		}
-		if _, err := cl.CreateEndpointAndWait(ctx, poolID, projectID, branchID, controller.CreateEndpointRequest{Role: "read_write"}); err != nil {
+		if _, err := cl.CreateEndpointAndWait(ctx, poolID, clusterID, branchID, controller.CreateEndpointRequest{Role: "read_write"}); err != nil {
 			lastErr = fmt.Errorf("create endpoint: %w", err)
 			if transientController(err) || isAlreadyExists(err) {
 				p.log("sharedk8s: %v — reusing/retrying endpoint (attempt %d/%d)", lastErr, attempt+1, provisionRetries)
@@ -929,7 +929,7 @@ func (p *Provider) createEndpoint(ctx context.Context, cl *controller.Client, po
 			}
 			return controller.Endpoint{}, lastErr
 		}
-		return p.pickEndpoint(ctx, cl, poolID, projectID, branchID)
+		return p.pickEndpoint(ctx, cl, poolID, clusterID, branchID)
 	}
 	return controller.Endpoint{}, lastErr
 }
@@ -937,8 +937,8 @@ func (p *Provider) createEndpoint(ctx context.Context, cl *controller.Client, po
 // existingEndpoint returns a read_write endpoint already present on the branch,
 // or ok=false when none exists (list errors are treated as "none", so the caller
 // proceeds to create).
-func (p *Provider) existingEndpoint(ctx context.Context, cl *controller.Client, poolID, projectID, branchID string) (controller.Endpoint, bool) {
-	eps, err := cl.ListAllEndpoints(ctx, poolID, projectID, branchID)
+func (p *Provider) existingEndpoint(ctx context.Context, cl *controller.Client, poolID, clusterID, branchID string) (controller.Endpoint, bool) {
+	eps, err := cl.ListAllEndpoints(ctx, poolID, clusterID, branchID)
 	if err != nil || len(eps) == 0 {
 		return controller.Endpoint{}, false
 	}
@@ -968,7 +968,7 @@ func backoff(ctx context.Context, attempt int) bool {
 }
 
 // transientController reports whether err is a retryable controller-side 5xx:
-// a backing-DB deadlock during concurrent project/branch creation, or the
+// a backing-DB deadlock during concurrent cluster/branch creation, or the
 // endpoint helm-deploy race, both of which clear on a fresh attempt.
 func transientController(err error) bool {
 	if err == nil {
@@ -981,28 +981,28 @@ func transientController(err error) bool {
 	return strings.Contains(s, "deadlock") || (strings.Contains(s, "not found") && strings.Contains(s, "yb-ep-"))
 }
 
-func (p *Provider) findProject(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Project, error) {
+func (p *Provider) findCluster(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Cluster, error) {
 	const page = 100
 	for offset := 0; ; offset += page {
-		list, err := cl.ListProjects(ctx, poolID, page, offset)
+		list, err := cl.ListClusters(ctx, poolID, page, offset)
 		if err != nil {
-			return controller.Project{}, fmt.Errorf("list projects: %w", err)
+			return controller.Cluster{}, fmt.Errorf("list clusters: %w", err)
 		}
-		for _, proj := range list.Projects {
+		for _, proj := range list.Clusters {
 			if proj.Name == name {
 				return proj, nil
 			}
 		}
 		if list.Count < page || offset+list.Count >= list.Total {
-			return controller.Project{}, fmt.Errorf("created project %q not found", name)
+			return controller.Cluster{}, fmt.Errorf("created cluster %q not found", name)
 		}
 	}
 }
 
 // pickEndpoint returns the branch's read_write endpoint (falling back to the
 // first).
-func (p *Provider) pickEndpoint(ctx context.Context, cl *controller.Client, poolID, projectID, branchID string) (controller.Endpoint, error) {
-	eps, err := cl.ListAllEndpoints(ctx, poolID, projectID, branchID)
+func (p *Provider) pickEndpoint(ctx context.Context, cl *controller.Client, poolID, clusterID, branchID string) (controller.Endpoint, error) {
+	eps, err := cl.ListAllEndpoints(ctx, poolID, clusterID, branchID)
 	if err != nil {
 		return controller.Endpoint{}, err
 	}
@@ -1046,7 +1046,7 @@ func (p *Provider) resolvePG(ctx context.Context, ep controller.Endpoint) (pg.Co
 	return ci, pf, nil
 }
 
-// Env is a live shared-control-plane environment (one project + endpoint).
+// Env is a live shared-control-plane environment (one cluster + endpoint).
 type Env struct {
 	controllerURL string
 	versions      core.DetectedVersions
@@ -1055,10 +1055,10 @@ type Env struct {
 
 	prov         *Provider
 	poolID       string
-	projectID    string
+	clusterID    string
 	endpointID   string
 	endpointAddr string // controller-reported endpoint address; re-resolved after a compute restart
-	ownProject   bool
+	ownCluster   bool
 	pfs          []*k8s.PortForward
 	kube         *k8s.Kubectl
 	logf         func(format string, args ...any)
@@ -1111,7 +1111,7 @@ func (e *Env) AmpController(ctx context.Context) (*controller.Client, error) {
 }
 
 // AmpPoolID is the storage pool the provider resolved/created on the standing
-// control plane; an attaching test creates its project-per-test on it.
+// control plane; an attaching test creates its cluster-per-test on it.
 func (e *Env) AmpPoolID() string { return e.poolID }
 
 // AmpKube is the kubectl scoped to the control-plane namespace, where endpoint

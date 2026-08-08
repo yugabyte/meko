@@ -25,8 +25,8 @@ ok(){  printf '\033[32m[itest OK]\033[0m %s\n' "$*"; }
 
 cleanup(){
   log "cleanup ($RUN)"
-  [ -n "$EP" ]   && curl -s -X DELETE "$API/storage-pools/$POOL/projects/$PROJ/branches/$BR/endpoints/$EP" >/dev/null 2>&1 && log "  deleted endpoint $EP"
-  [ -n "$PROJ" ] && curl -s -X DELETE "$API/storage-pools/$POOL/projects/$PROJ" >/dev/null 2>&1 && log "  deleted project $PROJ"
+  [ -n "$EP" ]   && curl -s -X DELETE "$API/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints/$EP" >/dev/null 2>&1 && log "  deleted endpoint $EP"
+  [ -n "$PROJ" ] && curl -s -X DELETE "$API/storage-pools/$POOL/clusters/$PROJ" >/dev/null 2>&1 && log "  deleted cluster $PROJ"
   for p in "${PF_PIDS[@]:-}"; do kill "$p" 2>/dev/null; done
 }
 trap cleanup EXIT
@@ -47,28 +47,28 @@ POOL=$(curl -s "$API/storage-pools" | python3 -c 'import json,sys;d=json.load(sy
 [ -n "$POOL" ] || { err "no storage pool exists (create one first)"; exit 1; }
 log "using storage pool $POOL"
 
-# --- create project (async: returns a task; default 'main' branch created by it) ---
-RESP=$(curl -s -X POST "$API/storage-pools/$POOL/projects" -H 'Content-Type: application/json' -d "{\"name\":\"$RUN\"}")
-PROJ=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("project_id",""))')
+# --- create cluster (async: returns a task; default 'main' branch created by it) ---
+RESP=$(curl -s -X POST "$API/storage-pools/$POOL/clusters" -H 'Content-Type: application/json' -d "{\"name\":\"$RUN\"}")
+PROJ=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("cluster_id",""))')
 TASK=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("id",""))')
-[ -n "$PROJ" ] || { err "createProject failed: $RESP"; exit 1; }
+[ -n "$PROJ" ] || { err "createCluster failed: $RESP"; exit 1; }
 for i in $(seq 1 30); do
   ST=$(curl -s "$API/tasks/$TASK" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("status",""))' 2>/dev/null)
   [ "$ST" = succeeded ] && break
-  [ "$ST" = failed ] && { err "create_project task failed"; exit 1; }
+  [ "$ST" = failed ] && { err "create_cluster task failed"; exit 1; }
   sleep 3
 done
-read BR PGV < <(curl -s "$API/storage-pools/$POOL/projects/$PROJ/branches" | python3 -c '
+read BR PGV < <(curl -s "$API/storage-pools/$POOL/clusters/$PROJ/branches" | python3 -c '
 import json,sys
 d=json.load(sys.stdin); a=d.get("branches", d if isinstance(d,list) else [])
 b=next((x for x in a if x.get("is_default")), a[0] if a else {})
 print(b.get("branch_id",""), b.get("pg_version",""))')
-[ -n "$BR" ] || { err "no branch found for project $PROJ"; exit 1; }
-ok "project $PROJ  branch $BR  (branch pg_version=$PGV)"
+[ -n "$BR" ] || { err "no branch found for cluster $PROJ"; exit 1; }
+ok "cluster $PROJ  branch $BR  (branch pg_version=$PGV)"
 [ "$PGV" = "18" ] || err "expected branch pg_version 18, got $PGV"
 
 # --- create a read_write endpoint (async: task's target_ref is the endpoint id) ---
-RESP=$(curl -s -X POST "$API/storage-pools/$POOL/projects/$PROJ/branches/$BR/endpoints" \
+RESP=$(curl -s -X POST "$API/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints" \
   -H 'Content-Type: application/json' -d '{"role":"read_write"}')
 EP=$(echo "$RESP" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("target_ref",""))')
 [ -n "$EP" ] || { err "createEndpoint produced no endpoint: $RESP"; exit 1; }

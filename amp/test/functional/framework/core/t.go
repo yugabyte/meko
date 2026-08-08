@@ -79,7 +79,7 @@ func newResourceNonce() string {
 }
 
 // ResourceSuffix is the identifier-safe token every provisioned resource name
-// (namespaces, SQL databases/tables, cloud tags, project names) embeds so
+// (namespaces, SQL databases/tables, cloud tags, cluster names) embeds so
 // concurrent tests never clash. It combines the seed (for traceability back to
 // a run) with a per-invocation nonce (for uniqueness across same-seed runs). It
 // is all-hex, so it is safe as an unquoted SQL identifier and a DNS label, and

@@ -1,11 +1,11 @@
 ---
 name: amp-mcp-tools
-description: Behavioral guide for AI agents using the amp controller MCP tools. Triggers when creating or managing Postgres storage pools, projects (databases), branches (timelines), or endpoints (compute) through the amp controller, or when polling amp tasks.
+description: Behavioral guide for AI agents using the amp controller MCP tools. Triggers when creating or managing Postgres storage pools, clusters (databases), branches (timelines), or endpoints (compute) through the amp controller, or when polling amp tasks.
 license: MIT
 metadata:
   author: amp
   version: "1.0.0"
-  tags: mcp, tools, amp, postgres, storage-pool, project, branch, endpoint, controller
+  tags: mcp, tools, amp, postgres, storage-pool, cluster, branch, endpoint, controller
 ---
 
 # amp MCP Tools — Agent Behavioral Guide
@@ -19,7 +19,7 @@ way agents get amp wrong.
 ## When to use this skill
 
 - You are calling tools on an **amp controller** MCP server.
-- You are creating/listing/deleting storage pools, projects, branches, or endpoints.
+- You are creating/listing/deleting storage pools, clusters, branches, or endpoints.
 - You provisioned or resized compute and need to know when it is actually ready.
 - You hit a `conflict` / `invalid_request` error and want to know why.
 
@@ -30,18 +30,18 @@ chain of ids**:
 
 ```
 storage pool          (a workspace, owned by a user)
-└── project           (a database; created with a default branch named "main")
+└── cluster           (a database; created with a default branch named "main")
     └── branch         (a Postgres timeline; fork any branch into a new one)
         └── endpoint    (the compute — one pod — you actually connect to)
 ```
 
 - **Storage pool** — top-level workspace. `create_storage_pool(name, owner_user_id)`.
-- **Project** — a database in a pool. Creating one also creates its `main` branch.
+- **Cluster** — a database in a pool. Creating one also creates its `main` branch.
 - **Branch** — a timeline. `create_branch` forks an existing branch (defaults to `main`).
 - **Endpoint** — compute bound to a branch. A branch admits **at most one `read_write`** endpoint (plus any number of `read_only`).
 
-Every project/branch/endpoint call needs the ids above it: `pool_id`, then
-`project_id`, then `branch_id`, then `endpoint_id`.
+Every cluster/branch/endpoint call needs the ids above it: `pool_id`, then
+`cluster_id`, then `branch_id`, then `endpoint_id`.
 
 ## ⚠️ The async model — the thing to get right
 
@@ -56,12 +56,12 @@ The mandatory pattern for every mutation:
 
 1. Call the tool → capture the returned Task `id`.
 2. **Poll `get_task(task_id=<id>)`** until `status` is terminal: `succeeded` or `failed`.
-3. On `succeeded`, **read the resource** (`get_project` / `get_branch` / `get_endpoint`) to see its final state — e.g. a project's `default_branch`, or an endpoint's `address` (and `tailnet_address` if tailnet-exposed).
+3. On `succeeded`, **read the resource** (`get_cluster` / `get_branch` / `get_endpoint`) to see its final state — e.g. a cluster's `default_branch`, or an endpoint's `address` (and `tailnet_address` if tailnet-exposed).
 4. On `failed`, the Task's `error` field says why.
 
 Do **not** treat the Task as the resource. A freshly created endpoint has **no
 `address` in the Task** — the address only exists after the task succeeds and
-you `get_endpoint`. `list_tasks(status=, kind=, project_id=)` finds tasks if you
+you `get_endpoint`. `list_tasks(status=, kind=, cluster_id=)` finds tasks if you
 lose an id. The synchronous exceptions are reads (`get_*`, `list_*`) and
 `create_storage_pool` (returns the pool directly).
 
@@ -107,7 +107,7 @@ reads a known user. If you don't have a user id, ask — don't invent one.
 ## Pagination
 
 List tools take `limit` (1..1000, default 100) and `offset` (>=0, default 0).
-Responses wrap items under the resource name (`storage_pools`, `projects`,
+Responses wrap items under the resource name (`storage_pools`, `clusters`,
 `branches`, `endpoints`, `tasks`) plus `total` (all matches) and `count` (this
 page).
 
@@ -125,17 +125,17 @@ Failures raise an error with a stable `code` and a human message. Common ones:
 
 **Users (1):** `get_user`
 **Storage pools (3):** `create_storage_pool`, `list_storage_pools`, `get_storage_pool`
-**Projects / databases (4):** `create_project`*, `list_projects`, `get_project`, `delete_project`*
+**Clusters / databases (4):** `create_cluster`*, `list_clusters`, `get_cluster`, `delete_cluster`*
 **Branches (4):** `create_branch`*, `list_branches`, `get_branch`, `delete_branch`*
 **Endpoints / compute (5):** `create_endpoint`*, `list_endpoints`, `get_endpoint`, `delete_endpoint`*, `resize_endpoint`*
 **Tasks (2):** `list_tasks`, `get_task`
 
 `*` = asynchronous → returns a Task, poll `get_task`.
 
-Notes: `create_project` takes an optional `pg_version` that **defaults to 18,
+Notes: `create_cluster` takes an optional `pg_version` that **defaults to 18,
 and only 18 is accepted** — omit it.
 
-**`create_branch` fork precondition.** It forks the project's default branch
+**`create_branch` fork precondition.** It forks the cluster's default branch
 (`main`) unless you pass `parent_branch_id`. When you **omit** `fork_point_lsn`,
 the controller derives the fork point from the parent's live WAL: it must find a
 **running `read_write` endpoint on the parent** and reach that endpoint's
@@ -151,17 +151,17 @@ which skips the live-WAL lookup entirely.
 **Spin up a database with connectable compute:**
 ```
 1. create_storage_pool(name, owner_user_id)            → pool (sync)
-2. create_project(pool_id, name)                        → Task → poll → get_project
-3. create_endpoint(pool_id, project_id, branch_id=<default_branch>)
+2. create_cluster(pool_id, name)                        → Task → poll → get_cluster
+3. create_endpoint(pool_id, cluster_id, branch_id=<default_branch>)
                                                         → Task → poll → get_endpoint
 4. read endpoint.address  → connect: postgresql://cloud_admin@<address>/postgres
 ```
 
 **Fork a branch for an experiment, give it its own writer:**
 ```
-1. create_branch(pool_id, project_id, name="exp", parent_branch_id=<main>)
+1. create_branch(pool_id, cluster_id, name="exp", parent_branch_id=<main>)
                                                         → Task → poll → get_branch
-2. create_endpoint(pool_id, project_id, branch_id=<exp>, role="read_write")
+2. create_endpoint(pool_id, cluster_id, branch_id=<exp>, role="read_write")
                                                         → Task → poll → get_endpoint
 ```
 

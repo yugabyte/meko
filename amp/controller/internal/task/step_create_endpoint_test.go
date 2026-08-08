@@ -22,8 +22,8 @@ func endpointDeps(state *fakeStateStore, recipes *fakeRecipeStore, dep *fakeDepl
 
 func TestCreateEndpointStepRecordsAndDeploys(t *testing.T) {
 	state, recipes, dep := newFakeStateStore(), newFakeRecipeStore(), &fakeDeployer{}
-	epID, projectID, branchID := uuid.New(), uuid.New(), uuid.New()
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: "read_write", PgVersion: 18}, endpointDeps(state, recipes, dep))
+	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18}, endpointDeps(state, recipes, dep))
 
 	res := step.Execute(t.Context())
 	if res.Failed() {
@@ -55,7 +55,7 @@ func TestCreateEndpointStepRecordsAndDeploys(t *testing.T) {
 
 func TestCreateEndpointStepIdempotent(t *testing.T) {
 	state, recipes, dep := newFakeStateStore(), newFakeRecipeStore(), &fakeDeployer{}
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, recipes, dep))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, recipes, dep))
 
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
@@ -71,7 +71,7 @@ func TestCreateEndpointStepIdempotent(t *testing.T) {
 func TestCreateEndpointStepDeployFailureStops(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{createErr: errors.New("deploy failed")}
 	epID := uuid.New()
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_only", PgVersion: 18}, endpointDeps(state, newFakeRecipeStore(), dep))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ClusterID: uuid.New(), BranchID: uuid.New(), Role: "read_only", PgVersion: 18}, endpointDeps(state, newFakeRecipeStore(), dep))
 	if res := step.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded, want the deploy error propagated")
 	}
@@ -83,7 +83,7 @@ func TestCreateEndpointStepDeployFailureStops(t *testing.T) {
 func TestCreateEndpointStepRecordConflictSkipsDeploy(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	state.errEnsureEndpoint = errConflict
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, newFakeRecipeStore(), dep))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, newFakeRecipeStore(), dep))
 	if res := step.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded, want the record conflict propagated")
 	}
@@ -98,8 +98,8 @@ func TestCreateEndpointStepNoDefaultsMountsNothing(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
-	epID, projectID, branchID := uuid.New(), uuid.New(), uuid.New()
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)
+	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)
 
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
@@ -115,9 +115,9 @@ func TestCreateEndpointStepOptInMountsAndPersists(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
-	epID, projectID, branchID := uuid.New(), uuid.New(), uuid.New()
+	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
 	step := NewCreateEndpointStep(CreateEndpointArgs{
-		EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: "read_write", PgVersion: 18,
+		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
 		Extensions: []string{"pgvector"},
 	}, deps)
 
@@ -129,7 +129,7 @@ func TestCreateEndpointStepOptInMountsAndPersists(t *testing.T) {
 		t.Fatalf("spec.Extensions = %+v, want the opted-in pgvector", exts)
 	}
 	// The opt-in is now durable on the branch.
-	persisted, _ := state.BranchExtensions(t.Context(), projectID, branchID)
+	persisted, _ := state.BranchExtensions(t.Context(), clusterID, branchID)
 	if len(persisted) != 1 || persisted[0] != "pgvector" {
 		t.Fatalf("branch extensions = %v, want [pgvector] persisted", persisted)
 	}
@@ -142,9 +142,9 @@ func TestCreateEndpointStepOptInPreloadExtension(t *testing.T) {
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
-	epID, projectID, branchID := uuid.New(), uuid.New(), uuid.New()
+	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
 	step := NewCreateEndpointStep(CreateEndpointArgs{
-		EndpointID: epID, ProjectID: projectID, BranchID: branchID, Role: "read_write", PgVersion: 18,
+		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
 		Extensions: []string{"pg_cron"},
 	}, deps)
 
@@ -156,7 +156,7 @@ func TestCreateEndpointStepOptInPreloadExtension(t *testing.T) {
 		exts[0].Image != "quay.io/yugabyte/amp-ext-pg_cron:1.6.7" || !exts[0].Preload {
 		t.Fatalf("spec.Extensions = %+v, want the opted-in pg_cron with Preload:true", exts)
 	}
-	persisted, _ := state.BranchExtensions(t.Context(), projectID, branchID)
+	persisted, _ := state.BranchExtensions(t.Context(), clusterID, branchID)
 	if len(persisted) != 1 || persisted[0] != "pg_cron" {
 		t.Fatalf("branch extensions = %v, want [pg_cron] persisted", persisted)
 	}
@@ -174,7 +174,7 @@ func TestCreateEndpointStepInheritsBranchExtensions(t *testing.T) {
 	state.seedBranchExtensions(branchID, "pgvector", "totally-unknown-ext")
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("r")
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: uuid.New(), BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)
 
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
@@ -188,7 +188,7 @@ func TestCreateEndpointStepInheritsBranchExtensions(t *testing.T) {
 func TestCreateEndpointStepNoCatalogMountsNothing(t *testing.T) {
 	// No catalog (Docker driver / feature off) => no ImageVolume mounts.
 	state, dep := newFakeStateStore(), &fakeDeployer{}
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, newFakeRecipeStore(), dep))
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, newFakeRecipeStore(), dep))
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
 	}
@@ -198,7 +198,7 @@ func TestCreateEndpointStepNoCatalogMountsNothing(t *testing.T) {
 }
 
 func TestCreateEndpointStepRequiresDeployer(t *testing.T) {
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ProjectID: uuid.New(), BranchID: uuid.New(), Role: "read_write"}, Deps{State: newFakeStateStore()}) // no deployer
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: uuid.New(), BranchID: uuid.New(), Role: "read_write"}, Deps{State: newFakeStateStore()}) // no deployer
 	if res := step.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded with no deployer configured, want a failure")
 	}

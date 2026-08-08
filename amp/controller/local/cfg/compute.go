@@ -95,7 +95,7 @@ type ComputeSpec struct {
 	StorageBranchID          *config.BranchID          `json:"storage_branch_id"`
 	PageserverConnectionInfo *PageserverConnectionInfo `json:"pageserver_connection_info"`
 	PageserverConnstring     *string                   `json:"pageserver_connstring"`
-	ProjectID                *string                   `json:"project_id"`
+	ClusterID                *string                   `json:"cluster_id"`
 	BranchID                 *string                   `json:"branch_id"`
 	EndpointID               *string                   `json:"endpoint_id"`
 	SafekeeperConnstrings    []string                  `json:"safekeeper_connstrings"`
@@ -289,7 +289,7 @@ func BuildComputeConfig(p ComputeSpecParams) (ComputeConfig, error) {
 		StorageBranchID:           &storageBranch,
 		PageserverConnectionInfo:  &connInfo,
 		PageserverConnstring:      p.PageserverConnstring,
-		ProjectID:                 nil,
+		ClusterID:                 nil,
 		BranchID:                  nil,
 		EndpointID:                &endpointID,
 		SafekeeperConnstrings:     safekeepers,

@@ -214,7 +214,7 @@ func RunBenchmark(ctx context.Context, ex exec.RemoteExecutor, w Workload, bc Be
 	return res, nil
 }
 
-// field projects one metric out of each sample into a fresh slice.
+// field clusters one metric out of each sample into a fresh slice.
 func field(samples []Sample, pick func(Sample) float64) []float64 {
 	out := make([]float64, len(samples))
 	for i, s := range samples {
@@ -319,7 +319,7 @@ type metricSpec struct {
 	Unit  string
 	Dir   core.Direction
 	Stats BenchStats
-	// FromSample / FromPoint project this metric out of one run's Sample and out
+	// FromSample / FromPoint cluster this metric out of one run's Sample and out
 	// of one periodic progress reading. The SHAPE gates use them for the warmup
 	// comparison and the intra-run decay; nil skips that shape for this metric
 	// (e.g. a driver that reports no periodic progress).

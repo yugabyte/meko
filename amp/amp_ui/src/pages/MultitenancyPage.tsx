@@ -1,5 +1,5 @@
 // Multitenancy = the data-branching workflow. Pick a shared pool, then a
-// cluster (project) in it, then view that cluster's branch tree and fork
+// cluster in it, then view that cluster's branch tree and fork
 // sub-branches off any branch. (Tenant/user management is bootstrapped
 // elsewhere — see useCurrentUser — so it isn't surfaced here.)
 
@@ -24,7 +24,7 @@ import {
 import {
   useBranches,
   useCurrentUser,
-  useProjects,
+  useClusters,
   useStoragePools,
 } from "@/lib/api/queries";
 import { dataBranchingMessages as msg } from "@/lib/messages";
@@ -55,12 +55,12 @@ export default function MultitenancyPage() {
     () => myPools.find((p) => p.name === poolName)?.id ?? "",
     [myPools, poolName],
   );
-  const projects = useProjects(poolId || undefined);
-  const projectId = useMemo(
-    () => projects.data?.find((p) => p.name === dbName)?.id ?? "",
-    [projects.data, dbName],
+  const clusters = useClusters(poolId || undefined);
+  const clusterId = useMemo(
+    () => clusters.data?.find((p) => p.name === dbName)?.id ?? "",
+    [clusters.data, dbName],
   );
-  const branches = useBranches(poolId || undefined, projectId || undefined);
+  const branches = useBranches(poolId || undefined, clusterId || undefined);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
 
   const selectPool = (name: string) =>
@@ -79,7 +79,7 @@ export default function MultitenancyPage() {
         action={
           <Button
             onClick={() => setNewBranchOpen(true)}
-            disabled={!projectId || !branches.data?.length}
+            disabled={!clusterId || !branches.data?.length}
             variant="brand"
           >
             <Plus className="h-4 w-4" />
@@ -121,27 +121,27 @@ export default function MultitenancyPage() {
               <Select
                 value={dbName}
                 onValueChange={selectDb}
-                disabled={!poolId || !projects.data?.length}
+                disabled={!poolId || !clusters.data?.length}
               >
                 <SelectTrigger>
                   <SelectValue
                     placeholder={
                       !poolId
                         ? "Pick a pool first"
-                        : projects.error
+                        : clusters.error
                           ? "Error loading clusters"
-                          : projects.isLoading
+                          : clusters.isLoading
                             ? "Loading clusters…"
-                            : projects.data?.length
+                            : clusters.data?.length
                               ? "Select a cluster"
                               : "No clusters in this pool"
                     }
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {projects.data?.map((project) => (
-                    <SelectItem key={project.id} value={project.name}>
-                      {project.name}
+                  {clusters.data?.map((cluster) => (
+                    <SelectItem key={cluster.id} value={cluster.name}>
+                      {cluster.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -154,7 +154,7 @@ export default function MultitenancyPage() {
             Zero-copy thin clones · copy-on-write · fork at an LSN
           </div>
 
-          {projectId && branches.data?.length ? (
+          {clusterId && branches.data?.length ? (
             <div className="mb-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-4">
               {[
                 { k: "Cluster", v: dbName },
@@ -171,7 +171,7 @@ export default function MultitenancyPage() {
           ) : null}
 
           <div className="rounded-xl border bg-card p-5 text-card-foreground shadow">
-            {!projectId ? (
+            {!clusterId ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
                 {msg.selectPoolAndCluster}
               </p>
@@ -182,7 +182,7 @@ export default function MultitenancyPage() {
             ) : (
               <BranchTree
                 poolId={poolId}
-                projectId={projectId}
+                clusterId={clusterId}
                 branches={branches.data ?? []}
               />
             )}
@@ -194,7 +194,7 @@ export default function MultitenancyPage() {
         open={newBranchOpen}
         onOpenChange={setNewBranchOpen}
         poolId={poolId}
-        projectId={projectId}
+        clusterId={clusterId}
         branches={branches.data ?? []}
       />
     </PageContainer>

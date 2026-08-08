@@ -13,7 +13,7 @@ import (
 )
 
 // API is the launcher's client for the controller's REST API. Every resource
-// the launcher creates — its user and storage pool, its projects, its branches,
+// the launcher creates — its user and storage pool, its clusters, its branches,
 // its endpoints — is an ordinary row created through the same routes any other
 // client uses, so the integration suite exercises the product's own async task
 // path rather than a surface only the launcher touches.
@@ -36,7 +36,7 @@ func NewAPI(base string, hc *http.Client) *API {
 }
 
 // Ready hits GET /readyz: the controller answers once its database is reachable
-// and its migrations are applied. It takes no project, so it gates startup
+// and its migrations are applied. It takes no cluster, so it gates startup
 // before the launcher's ladder exists.
 func (c *API) Ready(ctx context.Context) error {
 	return c.t.do(ctx, http.MethodGet, "/readyz", nil, nil)
@@ -56,34 +56,34 @@ func (c *API) EnsureStoragePool(ctx context.Context, id, ownerUserID uuid.UUID, 
 	return c.t.do(ctx, http.MethodPost, "/api/v1/storage-pools", body, nil)
 }
 
-// FindProject returns the pool's project with the given name, or nil if there is
-// none. Unlike users and pools, project creation does not take an explicit id
+// FindCluster returns the pool's cluster with the given name, or nil if there is
+// none. Unlike users and pools, cluster creation does not take an explicit id
 // (it is async and mints its own), so lookup-by-name is how the launcher's
 // bootstrap stays idempotent across restarts.
-func (c *API) FindProject(ctx context.Context, poolID uuid.UUID, name string) (*api.Project, error) {
-	var list api.ProjectList
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects?limit=100", url.PathEscape(poolID.String()))
+func (c *API) FindCluster(ctx context.Context, poolID uuid.UUID, name string) (*api.Cluster, error) {
+	var list api.ClusterList
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters?limit=100", url.PathEscape(poolID.String()))
 	if err := c.t.do(ctx, http.MethodGet, path, nil, &list); err != nil {
 		return nil, err
 	}
-	for i := range list.Projects {
-		if list.Projects[i].Name == name {
-			return &list.Projects[i], nil
+	for i := range list.Clusters {
+		if list.Clusters[i].Name == name {
+			return &list.Clusters[i], nil
 		}
 	}
 	return nil, nil
 }
 
-// CreateProject starts a create-project task and returns it. The project (and its
+// CreateCluster starts a create-cluster task and returns it. The cluster (and its
 // default branch) exist once the task succeeds — poll with GetTask.
 //
-// A project is one independent lineage, so this is also how the launcher creates
-// a *root* branch: the project carries the caller's chosen name and its default
+// A cluster is one independent lineage, so this is also how the launcher creates
+// a *root* branch: the cluster carries the caller's chosen name and its default
 // branch is always "main".
-func (c *API) CreateProject(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (*api.Task, error) {
-	body := api.CreateProjectRequest{Name: name, PgVersion: &pgVersion}
+func (c *API) CreateCluster(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (*api.Task, error) {
+	body := api.CreateClusterRequest{Name: name, PgVersion: &pgVersion}
 	var t api.Task
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects", url.PathEscape(poolID.String()))
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters", url.PathEscape(poolID.String()))
 	if err := c.t.do(ctx, http.MethodPost, path, body, &t); err != nil {
 		return nil, err
 	}
@@ -100,11 +100,11 @@ func (c *API) GetTask(ctx context.Context, id uuid.UUID) (*api.Task, error) {
 	return &t, nil
 }
 
-// GetProject fetches a project (with its default branch) by id.
-func (c *API) GetProject(ctx context.Context, poolID, projectID uuid.UUID) (*api.Project, error) {
-	var p api.Project
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s",
-		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()))
+// GetCluster fetches a cluster (with its default branch) by id.
+func (c *API) GetCluster(ctx context.Context, poolID, clusterID uuid.UUID) (*api.Cluster, error) {
+	var p api.Cluster
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters/%s",
+		url.PathEscape(poolID.String()), url.PathEscape(clusterID.String()))
 	if err := c.t.do(ctx, http.MethodGet, path, nil, &p); err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func (c *API) GetProject(ctx context.Context, poolID, projectID uuid.UUID) (*api
 // branch id; read it back from the branch list once the task succeeds. forkLSN
 // must be supplied because resolving one from the parent's safekeeper needs a
 // deployer, which the launcher has none of. Poll the returned task with GetTask.
-func (c *API) CreateBranch(ctx context.Context, poolID, projectID uuid.UUID, name string,
+func (c *API) CreateBranch(ctx context.Context, poolID, clusterID uuid.UUID, name string,
 	parent *uuid.UUID, forkLSN string,
 ) (*api.Task, error) {
 	body := api.CreateBranchRequest{Name: name, ParentBranchId: parent}
@@ -130,33 +130,33 @@ func (c *API) CreateBranch(ctx context.Context, poolID, projectID uuid.UUID, nam
 		body.ForkPointLsn = &forkLSN
 	}
 	var t api.Task
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches",
-		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()))
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters/%s/branches",
+		url.PathEscape(poolID.String()), url.PathEscape(clusterID.String()))
 	if err := c.t.do(ctx, http.MethodPost, path, body, &t); err != nil {
 		return nil, err
 	}
 	return &t, nil
 }
 
-// ListProjects returns the pool's live projects. The launcher has several once
-// root branches start creating them (a project is one lineage), so name and id
+// ListClusters returns the pool's live clusters. The launcher has several once
+// root branches start creating them (a cluster is one lineage), so name and id
 // resolution search across all of them.
-func (c *API) ListProjects(ctx context.Context, poolID uuid.UUID) ([]api.Project, error) {
-	var list api.ProjectList
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects?limit=1000", url.PathEscape(poolID.String()))
+func (c *API) ListClusters(ctx context.Context, poolID uuid.UUID) ([]api.Cluster, error) {
+	var list api.ClusterList
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters?limit=1000", url.PathEscape(poolID.String()))
 	if err := c.t.do(ctx, http.MethodGet, path, nil, &list); err != nil {
 		return nil, err
 	}
-	return list.Projects, nil
+	return list.Clusters, nil
 }
 
-// ListBranches returns the project's live branches. This is also the name -> id
-// resolution the launcher needs: branch names are unique among a project's live
+// ListBranches returns the cluster's live branches. This is also the name -> id
+// resolution the launcher needs: branch names are unique among a cluster's live
 // branches, so no separate name registry is required.
-func (c *API) ListBranches(ctx context.Context, poolID, projectID uuid.UUID) ([]api.Branch, error) {
+func (c *API) ListBranches(ctx context.Context, poolID, clusterID uuid.UUID) ([]api.Branch, error) {
 	var list api.BranchList
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches?limit=1000",
-		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()))
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters/%s/branches?limit=1000",
+		url.PathEscape(poolID.String()), url.PathEscape(clusterID.String()))
 	if err := c.t.do(ctx, http.MethodGet, path, nil, &list); err != nil {
 		return nil, err
 	}
@@ -164,10 +164,10 @@ func (c *API) ListBranches(ctx context.Context, poolID, projectID uuid.UUID) ([]
 }
 
 // DeleteBranch starts a delete-branch task and returns it. Poll with GetTask.
-func (c *API) DeleteBranch(ctx context.Context, poolID, projectID, branchID uuid.UUID) (*api.Task, error) {
+func (c *API) DeleteBranch(ctx context.Context, poolID, clusterID, branchID uuid.UUID) (*api.Task, error) {
 	var t api.Task
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s",
-		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters/%s/branches/%s",
+		url.PathEscape(poolID.String()), url.PathEscape(clusterID.String()),
 		url.PathEscape(branchID.String()))
 	if err := c.t.do(ctx, http.MethodDelete, path, nil, &t); err != nil {
 		return nil, err
@@ -197,7 +197,7 @@ type EndpointCreate struct {
 // The branch's single-writer slot is claimed by the task's step, so a second
 // primary on the same branch surfaces as a failed task, not a rejected POST. A
 // name already taken on the branch IS rejected synchronously, with a 409.
-func (c *API) CreateEndpoint(ctx context.Context, poolID, projectID, branchID uuid.UUID, in EndpointCreate) (*api.Task, error) {
+func (c *API) CreateEndpoint(ctx context.Context, poolID, clusterID, branchID uuid.UUID, in EndpointCreate) (*api.Task, error) {
 	body := api.CreateEndpointRequest{}
 	if in.Name != "" {
 		body.Name = &in.Name
@@ -213,8 +213,8 @@ func (c *API) CreateEndpoint(ctx context.Context, poolID, projectID, branchID uu
 		body.PgSettings = &in.PgSettings
 	}
 	var t api.Task
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s/endpoints",
-		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters/%s/branches/%s/endpoints",
+		url.PathEscape(poolID.String()), url.PathEscape(clusterID.String()),
 		url.PathEscape(branchID.String()))
 	if err := c.t.do(ctx, http.MethodPost, path, body, &t); err != nil {
 		return nil, err
@@ -224,10 +224,10 @@ func (c *API) CreateEndpoint(ctx context.Context, poolID, projectID, branchID uu
 
 // GetBranch returns one branch, which is how the launcher reads its
 // pg_settings baseline before building a compute spec.
-func (c *API) GetBranch(ctx context.Context, poolID, projectID, branchID uuid.UUID) (*api.Branch, error) {
+func (c *API) GetBranch(ctx context.Context, poolID, clusterID, branchID uuid.UUID) (*api.Branch, error) {
 	var b api.Branch
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s",
-		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters/%s/branches/%s",
+		url.PathEscape(poolID.String()), url.PathEscape(clusterID.String()),
 		url.PathEscape(branchID.String()))
 	if err := c.t.do(ctx, http.MethodGet, path, nil, &b); err != nil {
 		return nil, err
@@ -238,10 +238,10 @@ func (c *API) GetBranch(ctx context.Context, poolID, projectID, branchID uuid.UU
 // DeleteEndpoint starts a delete-endpoint task and returns it. Poll with GetTask.
 // With the local driver the step retires nothing and just drops the record —
 // the launcher has already stopped the compute by the time it calls this.
-func (c *API) DeleteEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (*api.Task, error) {
+func (c *API) DeleteEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID uuid.UUID) (*api.Task, error) {
 	var t api.Task
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s/endpoints/%s",
-		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s",
+		url.PathEscape(poolID.String()), url.PathEscape(clusterID.String()),
 		url.PathEscape(branchID.String()), url.PathEscape(endpointID.String()))
 	if err := c.t.do(ctx, http.MethodDelete, path, nil, &t); err != nil {
 		return nil, err
@@ -250,10 +250,10 @@ func (c *API) DeleteEndpoint(ctx context.Context, poolID, projectID, branchID, e
 }
 
 // ListEndpoints returns the branch's endpoints.
-func (c *API) ListEndpoints(ctx context.Context, poolID, projectID, branchID uuid.UUID) ([]api.Endpoint, error) {
+func (c *API) ListEndpoints(ctx context.Context, poolID, clusterID, branchID uuid.UUID) ([]api.Endpoint, error) {
 	var list api.EndpointList
-	path := fmt.Sprintf("/api/v1/storage-pools/%s/projects/%s/branches/%s/endpoints?limit=1000",
-		url.PathEscape(poolID.String()), url.PathEscape(projectID.String()),
+	path := fmt.Sprintf("/api/v1/storage-pools/%s/clusters/%s/branches/%s/endpoints?limit=1000",
+		url.PathEscape(poolID.String()), url.PathEscape(clusterID.String()),
 		url.PathEscape(branchID.String()))
 	if err := c.t.do(ctx, http.MethodGet, path, nil, &list); err != nil {
 		return nil, err

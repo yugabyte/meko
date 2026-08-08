@@ -21,36 +21,36 @@ type MemBackend struct {
 	users        map[uuid.UUID]User
 	pools        map[uuid.UUID]StoragePool
 	names        map[string]struct{} // pool names are unique across the placement group
-	projects     map[uuid.UUID]Project
+	clusters     map[uuid.UUID]Cluster
 	branches     map[uuid.UUID]Branch
-	projectNames map[projectNameKey]struct{} // project names are unique within their pool
-	branchNames  map[branchNameKey]struct{}  // branch names are unique within their project
+	clusterNames map[clusterNameKey]struct{} // cluster names are unique within their pool
+	branchNames  map[branchNameKey]struct{}  // branch names are unique within their cluster
 	endpoints    map[uuid.UUID]Endpoint
 	writers      map[branchKey]struct{} // at most one read_write endpoint per branch
 	now          func() time.Time
 }
 
-// projectNameKey makes a project name unique within its pool (the schema's
-// projects_name_per_pool).
-type projectNameKey struct {
+// clusterNameKey makes a cluster name unique within its pool (the schema's
+// clusters_name_per_pool).
+type clusterNameKey struct {
 	poolID uuid.UUID
 	name   string
 }
 
-// branchNameKey makes a branch name unique within its project (the schema's
-// branches_name_per_project): a project's default branch plus its branches all
+// branchNameKey makes a branch name unique within its cluster (the schema's
+// branches_name_per_cluster): a cluster's default branch plus its branches all
 // share one name space.
 type branchNameKey struct {
-	projectID uuid.UUID
+	clusterID uuid.UUID
 	name      string
 }
 
 // branchKey identifies a branch. The schema keys branches on `branch_id` alone
-// (it is the storage layer's globally-unique BranchId), but the project is
-// carried here too so the fake can answer project-scoped questions without a
+// (it is the storage layer's globally-unique BranchId), but the cluster is
+// carried here too so the fake can answer cluster-scoped questions without a
 // second index.
 type branchKey struct {
-	projectID uuid.UUID
+	clusterID uuid.UUID
 	branchID  uuid.UUID
 }
 
@@ -60,9 +60,9 @@ func NewMemBackend() *MemBackend {
 		users:        make(map[uuid.UUID]User),
 		pools:        make(map[uuid.UUID]StoragePool),
 		names:        make(map[string]struct{}),
-		projects:     make(map[uuid.UUID]Project),
+		clusters:     make(map[uuid.UUID]Cluster),
 		branches:     make(map[uuid.UUID]Branch),
-		projectNames: make(map[projectNameKey]struct{}),
+		clusterNames: make(map[clusterNameKey]struct{}),
 		branchNames:  make(map[branchNameKey]struct{}),
 		endpoints:    make(map[uuid.UUID]Endpoint),
 		writers:      make(map[branchKey]struct{}),
@@ -70,19 +70,19 @@ func NewMemBackend() *MemBackend {
 	}
 }
 
-// SeedBranch registers a branch (and a stub project for it, if absent) under a
+// SeedBranch registers a branch (and a stub cluster for it, if absent) under a
 // pool. Endpoint tests (#108) seed a branch directly when they want to exercise
-// the endpoint lifecycle without going through CreateProject/CreateBranch,
+// the endpoint lifecycle without going through CreateCluster/CreateBranch,
 // mirroring how a real branch is provisioned out-of-band.
 func (m *MemBackend) SeedBranch(poolID uuid.UUID, b Branch) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.projects[b.ProjectID]; !ok {
-		m.projects[b.ProjectID] = Project{ID: b.ProjectID, StoragePoolID: poolID, Name: b.Name, CreatedAt: b.CreatedAt}
-		m.projectNames[projectNameKey{poolID: poolID, name: b.Name}] = struct{}{}
+	if _, ok := m.clusters[b.ClusterID]; !ok {
+		m.clusters[b.ClusterID] = Cluster{ID: b.ClusterID, StoragePoolID: poolID, Name: b.Name, CreatedAt: b.CreatedAt}
+		m.clusterNames[clusterNameKey{poolID: poolID, name: b.Name}] = struct{}{}
 	}
 	m.branches[b.BranchID] = b
-	m.branchNames[branchNameKey{projectID: b.ProjectID, name: b.Name}] = struct{}{}
+	m.branchNames[branchNameKey{clusterID: b.ClusterID, name: b.Name}] = struct{}{}
 }
 
 func (m *MemBackend) Healthy(context.Context) error { return nil }
@@ -170,22 +170,22 @@ func (m *MemBackend) GetStoragePool(_ context.Context, poolID uuid.UUID) (Storag
 	return p, nil
 }
 
-func (m *MemBackend) CreateProject(_ context.Context, poolID uuid.UUID, name string, pgVersion int) (Project, error) {
+func (m *MemBackend) CreateCluster(_ context.Context, poolID uuid.UUID, name string, pgVersion int) (Cluster, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
-		return Project{}, ErrNotFound
+		return Cluster{}, ErrNotFound
 	}
-	key := projectNameKey{poolID: poolID, name: name}
-	if _, taken := m.projectNames[key]; taken {
-		return Project{}, ErrConflict
+	key := clusterNameKey{poolID: poolID, name: name}
+	if _, taken := m.clusterNames[key]; taken {
+		return Cluster{}, ErrConflict
 	}
 	now := m.now()
-	// The project and its default branch are created together: a project with no
+	// The cluster and its default branch are created together: a cluster with no
 	// branch is not a valid resource.
-	p := Project{ID: uuid.New(), StoragePoolID: poolID, Name: name, CreatedAt: now}
+	p := Cluster{ID: uuid.New(), StoragePoolID: poolID, Name: name, CreatedAt: now}
 	def := Branch{
-		ProjectID: p.ID,
+		ClusterID: p.ID,
 		BranchID:  uuid.New(),
 		Name:      DefaultBranchName,
 		PgVersion: pgVersion,
@@ -194,66 +194,66 @@ func (m *MemBackend) CreateProject(_ context.Context, poolID uuid.UUID, name str
 	}
 	// Populate DefaultBranch before storing so the map entry is self-consistent
 	// (the read paths re-derive it from m.branches, but a partially-initialized
-	// stored struct is a footgun for any future direct access to m.projects).
+	// stored struct is a footgun for any future direct access to m.clusters).
 	p.DefaultBranch = def
-	m.projects[p.ID] = p
+	m.clusters[p.ID] = p
 	m.branches[def.BranchID] = def
-	m.projectNames[key] = struct{}{}
-	m.branchNames[branchNameKey{projectID: p.ID, name: def.Name}] = struct{}{}
+	m.clusterNames[key] = struct{}{}
+	m.branchNames[branchNameKey{clusterID: p.ID, name: def.Name}] = struct{}{}
 	return p, nil
 }
 
 // includeFailed is accepted for parity with PgBackend but ignored: the in-memory
-// backend has no create_project task history, so it has no failed-creation orphans
+// backend has no create_cluster task history, so it has no failed-creation orphans
 // to filter.
-func (m *MemBackend) ListProjects(_ context.Context, poolID uuid.UUID, limit, offset int, _ bool) ([]Project, int, error) {
+func (m *MemBackend) ListClusters(_ context.Context, poolID uuid.UUID, limit, offset int, _ bool) ([]Cluster, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
 		return nil, 0, ErrNotFound
 	}
-	var projects []Project
-	for _, p := range m.projects {
+	var clusters []Cluster
+	for _, p := range m.clusters {
 		if p.StoragePoolID == poolID {
 			p.DefaultBranch = m.defaultBranchOf(p.ID)
-			projects = append(projects, p)
+			clusters = append(clusters, p)
 		}
 	}
-	sort.SliceStable(projects, func(i, j int) bool {
-		return createdBefore(projects[i].CreatedAt, projects[j].CreatedAt, projects[i].ID, projects[j].ID)
+	sort.SliceStable(clusters, func(i, j int) bool {
+		return createdBefore(clusters[i].CreatedAt, clusters[j].CreatedAt, clusters[i].ID, clusters[j].ID)
 	})
-	return page(projects, limit, offset), len(projects), nil
+	return page(clusters, limit, offset), len(clusters), nil
 }
 
-func (m *MemBackend) GetProject(_ context.Context, poolID, projectID uuid.UUID) (Project, error) {
+func (m *MemBackend) GetCluster(_ context.Context, poolID, clusterID uuid.UUID) (Cluster, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	p, ok := m.projectInPool(poolID, projectID)
+	p, ok := m.clusterInPool(poolID, clusterID)
 	if !ok {
-		return Project{}, ErrNotFound
+		return Cluster{}, ErrNotFound
 	}
 	p.DefaultBranch = m.defaultBranchOf(p.ID)
 	return p, nil
 }
 
-func (m *MemBackend) CreateBranch(_ context.Context, poolID, projectID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error) {
+func (m *MemBackend) CreateBranch(_ context.Context, poolID, clusterID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.projectInPool(poolID, projectID); !ok {
+	if _, ok := m.clusterInPool(poolID, clusterID); !ok {
 		return Branch{}, ErrNotFound
 	}
 	parent, ok := m.branches[parentBranchID]
-	if !ok || parent.ProjectID != projectID {
+	if !ok || parent.ClusterID != clusterID {
 		return Branch{}, ErrNotFound
 	}
-	nk := branchNameKey{projectID: projectID, name: name}
+	nk := branchNameKey{clusterID: clusterID, name: name}
 	if _, taken := m.branchNames[nk]; taken {
 		return Branch{}, ErrConflict
 	}
 	parentID := parent.BranchID
-	// A branch stays in its project and inherits the parent's Postgres version.
+	// A branch stays in its cluster and inherits the parent's Postgres version.
 	b := Branch{
-		ProjectID:      projectID,
+		ClusterID:      clusterID,
 		BranchID:       uuid.New(),
 		Name:           name,
 		PgVersion:      parent.PgVersion,
@@ -267,15 +267,15 @@ func (m *MemBackend) CreateBranch(_ context.Context, poolID, projectID, parentBr
 	return b, nil
 }
 
-func (m *MemBackend) ListBranches(_ context.Context, poolID, projectID uuid.UUID, limit, offset int) ([]Branch, int, error) {
+func (m *MemBackend) ListBranches(_ context.Context, poolID, clusterID uuid.UUID, limit, offset int) ([]Branch, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.projectInPool(poolID, projectID); !ok {
+	if _, ok := m.clusterInPool(poolID, clusterID); !ok {
 		return nil, 0, ErrNotFound
 	}
 	var branches []Branch
 	for _, b := range m.branches {
-		if b.ProjectID == projectID {
+		if b.ClusterID == clusterID {
 			branches = append(branches, b)
 		}
 	}
@@ -285,62 +285,62 @@ func (m *MemBackend) ListBranches(_ context.Context, poolID, projectID uuid.UUID
 	return page(branches, limit, offset), len(branches), nil
 }
 
-func (m *MemBackend) GetBranch(_ context.Context, poolID, projectID, branchID uuid.UUID) (Branch, error) {
+func (m *MemBackend) GetBranch(_ context.Context, poolID, clusterID, branchID uuid.UUID) (Branch, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	b, ok := m.branchInProject(poolID, projectID, branchID)
+	b, ok := m.branchInCluster(poolID, clusterID, branchID)
 	if !ok {
 		return Branch{}, ErrNotFound
 	}
 	return b, nil
 }
 
-// projectInPool returns the project addressed by (poolID, projectID) if the
-// project belongs to the pool. Caller holds m.mu.
-func (m *MemBackend) projectInPool(poolID, projectID uuid.UUID) (Project, bool) {
+// clusterInPool returns the cluster addressed by (poolID, clusterID) if the
+// cluster belongs to the pool. Caller holds m.mu.
+func (m *MemBackend) clusterInPool(poolID, clusterID uuid.UUID) (Cluster, bool) {
 	if _, ok := m.pools[poolID]; !ok {
-		return Project{}, false
+		return Cluster{}, false
 	}
-	p, ok := m.projects[projectID]
+	p, ok := m.clusters[clusterID]
 	if !ok || p.StoragePoolID != poolID {
-		return Project{}, false
+		return Cluster{}, false
 	}
 	return p, true
 }
 
-// branchInProject returns the branch addressed by (poolID, projectID, branchID)
-// if the pool->project->branch chain holds. Caller holds m.mu.
-func (m *MemBackend) branchInProject(poolID, projectID, branchID uuid.UUID) (Branch, bool) {
-	if _, ok := m.projectInPool(poolID, projectID); !ok {
+// branchInCluster returns the branch addressed by (poolID, clusterID, branchID)
+// if the pool->cluster->branch chain holds. Caller holds m.mu.
+func (m *MemBackend) branchInCluster(poolID, clusterID, branchID uuid.UUID) (Branch, bool) {
+	if _, ok := m.clusterInPool(poolID, clusterID); !ok {
 		return Branch{}, false
 	}
 	b, ok := m.branches[branchID]
-	if !ok || b.ProjectID != projectID {
+	if !ok || b.ClusterID != clusterID {
 		return Branch{}, false
 	}
 	return b, true
 }
 
-// defaultBranchOf returns the project's default branch (the one with IsDefault),
+// defaultBranchOf returns the cluster's default branch (the one with IsDefault),
 // or a zero Branch if absent. Caller holds m.mu.
-func (m *MemBackend) defaultBranchOf(projectID uuid.UUID) Branch {
+func (m *MemBackend) defaultBranchOf(clusterID uuid.UUID) Branch {
 	for _, b := range m.branches {
-		if b.ProjectID == projectID && b.IsDefault {
+		if b.ClusterID == clusterID && b.IsDefault {
 			return b
 		}
 	}
 	return Branch{}
 }
 
-func (m *MemBackend) CreateEndpoint(_ context.Context, projectID, branchID uuid.UUID, role string, _ []byte) (Endpoint, error) {
+func (m *MemBackend) CreateEndpoint(_ context.Context, clusterID, branchID uuid.UUID, role string, _ []byte) (Endpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.branches[branchID]
-	if !ok || b.ProjectID != projectID {
+	if !ok || b.ClusterID != clusterID {
 		return Endpoint{}, ErrNotFound
 	}
 	if role == RoleReadWrite {
-		k := branchKey{projectID: projectID, branchID: branchID}
+		k := branchKey{clusterID: clusterID, branchID: branchID}
 		if _, taken := m.writers[k]; taken {
 			return Endpoint{}, ErrConflict
 		}
@@ -349,7 +349,7 @@ func (m *MemBackend) CreateEndpoint(_ context.Context, projectID, branchID uuid.
 	// Address is set later via SetEndpointAddress, once the endpoint is deployed.
 	e := Endpoint{
 		ID:        uuid.New(),
-		ProjectID: projectID,
+		ClusterID: clusterID,
 		BranchID:  branchID,
 		Role:      role,
 		CreatedAt: m.now(),
@@ -358,30 +358,30 @@ func (m *MemBackend) CreateEndpoint(_ context.Context, projectID, branchID uuid.
 	return e, nil
 }
 
-func (m *MemBackend) GetEndpoint(_ context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (Endpoint, error) {
+func (m *MemBackend) GetEndpoint(_ context.Context, poolID, clusterID, branchID, endpointID uuid.UUID) (Endpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.branchInProject(poolID, projectID, branchID); !ok {
+	if _, ok := m.branchInCluster(poolID, clusterID, branchID); !ok {
 		return Endpoint{}, ErrNotFound
 	}
 	ep, ok := m.endpoints[endpointID]
-	// Match PgBackend, which reaches the project through the branch: the endpoint must
+	// Match PgBackend, which reaches the cluster through the branch: the endpoint must
 	// belong to this branch, not just share its branch id.
-	if !ok || ep.BranchID != branchID || ep.ProjectID != projectID {
+	if !ok || ep.BranchID != branchID || ep.ClusterID != clusterID {
 		return Endpoint{}, ErrNotFound
 	}
 	return ep, nil
 }
 
-func (m *MemBackend) ListEndpoints(_ context.Context, poolID, projectID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
+func (m *MemBackend) ListEndpoints(_ context.Context, poolID, clusterID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.branchInProject(poolID, projectID, branchID); !ok {
+	if _, ok := m.branchInCluster(poolID, clusterID, branchID); !ok {
 		return nil, 0, ErrNotFound
 	}
 	var endpoints []Endpoint
 	for _, e := range m.endpoints {
-		if e.BranchID == branchID && e.ProjectID == projectID {
+		if e.BranchID == branchID && e.ClusterID == clusterID {
 			endpoints = append(endpoints, e)
 		}
 	}
@@ -407,7 +407,7 @@ func (m *MemBackend) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) err
 	defer m.mu.Unlock()
 	if ep, ok := m.endpoints[endpointID]; ok {
 		if ep.Role == RoleReadWrite {
-			delete(m.writers, branchKey{projectID: ep.ProjectID, branchID: ep.BranchID})
+			delete(m.writers, branchKey{clusterID: ep.ClusterID, branchID: ep.BranchID})
 		}
 		delete(m.endpoints, endpointID)
 	}
@@ -420,56 +420,56 @@ func (m *MemBackend) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) err
 // existing id is a no-op, a name collision with a *different* id is ErrConflict.
 // These let the API tests drive a real worker against this in-memory backend. ---
 
-// EnsureProject idempotently creates a project and its default branch with the
-// given ids. A repeated id is a no-op; a project-name collision within the pool
+// EnsureCluster idempotently creates a cluster and its default branch with the
+// given ids. A repeated id is a no-op; a cluster-name collision within the pool
 // (a different id) is ErrConflict; a missing pool is ErrNotFound.
-func (m *MemBackend) EnsureProject(_ context.Context, poolID, projectID, branchID uuid.UUID, name string, pgVersion int) error {
+func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
 		return ErrNotFound
 	}
-	if existing, ok := m.projects[projectID]; ok {
+	if existing, ok := m.clusters[clusterID]; ok {
 		// Same id => idempotent no-op (mirrors ON CONFLICT (id) DO NOTHING).
 		_ = existing
 		return nil
 	}
-	nk := projectNameKey{poolID: poolID, name: name}
-	if _, taken := m.projectNames[nk]; taken {
+	nk := clusterNameKey{poolID: poolID, name: name}
+	if _, taken := m.clusterNames[nk]; taken {
 		return ErrConflict
 	}
 	now := m.now()
 	def := Branch{
-		ProjectID: projectID,
+		ClusterID: clusterID,
 		BranchID:  branchID,
 		Name:      DefaultBranchName,
 		PgVersion: pgVersion,
 		IsDefault: true,
 		CreatedAt: now,
 	}
-	p := Project{ID: projectID, StoragePoolID: poolID, Name: name, CreatedAt: now, DefaultBranch: def}
-	m.projects[projectID] = p
+	p := Cluster{ID: clusterID, StoragePoolID: poolID, Name: name, CreatedAt: now, DefaultBranch: def}
+	m.clusters[clusterID] = p
 	m.branches[branchID] = def
-	m.projectNames[nk] = struct{}{}
-	m.branchNames[branchNameKey{projectID: projectID, name: DefaultBranchName}] = struct{}{}
+	m.clusterNames[nk] = struct{}{}
+	m.branchNames[branchNameKey{clusterID: clusterID, name: DefaultBranchName}] = struct{}{}
 	return nil
 }
 
 // EnsureBranch idempotently creates a non-default branch with the given id,
 // forked from parentBranchID at forkLSN. A repeated id is a no-op; a name
-// collision within the project (a different id) is ErrConflict; a missing parent
+// collision within the cluster (a different id) is ErrConflict; a missing parent
 // is ErrNotFound.
-func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, projectID, branchID uuid.UUID, name, forkLSN string, pgVersion int) error {
+func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, clusterID, branchID uuid.UUID, name, forkLSN string, pgVersion int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.branches[branchID]; ok {
 		return nil // same id => idempotent no-op
 	}
 	parent, ok := m.branches[parentBranchID]
-	if !ok || parent.ProjectID != projectID {
+	if !ok || parent.ClusterID != clusterID {
 		return ErrNotFound
 	}
-	nk := branchNameKey{projectID: projectID, name: name}
+	nk := branchNameKey{clusterID: clusterID, name: name}
 	if _, taken := m.branchNames[nk]; taken {
 		return ErrConflict
 	}
@@ -481,7 +481,7 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, projectID, 
 		inherited = append([]string(nil), parent.Extensions...)
 	}
 	m.branches[branchID] = Branch{
-		ProjectID:      projectID,
+		ClusterID:      clusterID,
 		BranchID:       branchID,
 		Name:           name,
 		PgVersion:      pgVersion,
@@ -499,11 +499,11 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, projectID, 
 // branch yields an empty slice, not an error (mirrors PgBackend).
 // BranchPgSettings mirrors the Pg arm: the branch's baseline settings, nil for
 // none or an absent branch.
-func (m *MemBackend) BranchPgSettings(_ context.Context, projectID, branchID uuid.UUID) (map[string]string, error) {
+func (m *MemBackend) BranchPgSettings(_ context.Context, clusterID, branchID uuid.UUID) (map[string]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.branches[branchID]
-	if !ok || b.ProjectID != projectID || len(b.PgSettings) == 0 {
+	if !ok || b.ClusterID != clusterID || len(b.PgSettings) == 0 {
 		return nil, nil
 	}
 	out := make(map[string]string, len(b.PgSettings))
@@ -513,11 +513,11 @@ func (m *MemBackend) BranchPgSettings(_ context.Context, projectID, branchID uui
 	return out, nil
 }
 
-func (m *MemBackend) BranchExtensions(_ context.Context, projectID, branchID uuid.UUID) ([]string, error) {
+func (m *MemBackend) BranchExtensions(_ context.Context, clusterID, branchID uuid.UUID) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.branches[branchID]
-	if !ok || b.ProjectID != projectID {
+	if !ok || b.ClusterID != clusterID {
 		return nil, nil
 	}
 	if len(b.Extensions) == 0 {
@@ -529,14 +529,14 @@ func (m *MemBackend) BranchExtensions(_ context.Context, projectID, branchID uui
 // AddBranchExtensions adds names to the branch's durable extension set (absolute
 // union, existing-first order preserved). Idempotent; an absent branch or empty
 // names is a no-op. Mirrors PgBackend.
-func (m *MemBackend) AddBranchExtensions(_ context.Context, projectID, branchID uuid.UUID, names []string) error {
+func (m *MemBackend) AddBranchExtensions(_ context.Context, clusterID, branchID uuid.UUID, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.branches[branchID]
-	if !ok || b.ProjectID != projectID {
+	if !ok || b.ClusterID != clusterID {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(b.Extensions)+len(names))
@@ -554,17 +554,17 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, projectID, branchID 
 }
 
 // EnsureEndpointRecord idempotently records an endpoint with the given id on the
-// (projectID, branchID) branch. A repeated id is a no-op; a *second* read_write
+// (clusterID, branchID) branch. A repeated id is a no-op; a *second* read_write
 // endpoint (a different id on a branch that already has one) is ErrConflict, as
 // is a name already taken on the branch; a missing branch is ErrNotFound.
-func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, projectID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
+func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.endpoints[endpointID]; ok {
 		return nil // same id => idempotent no-op
 	}
 	b, ok := m.branches[branchID]
-	if !ok || b.ProjectID != projectID {
+	if !ok || b.ClusterID != clusterID {
 		return ErrNotFound
 	}
 	// Mirror endpoints_name_per_branch. Unnamed endpoints never collide (NULLs
@@ -577,7 +577,7 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, project
 		}
 	}
 	if role == RoleReadWrite {
-		k := branchKey{projectID: projectID, branchID: branchID}
+		k := branchKey{clusterID: clusterID, branchID: branchID}
 		if _, taken := m.writers[k]; taken {
 			return ErrConflict
 		}
@@ -600,7 +600,7 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, project
 	}
 	m.endpoints[endpointID] = Endpoint{
 		ID:         endpointID,
-		ProjectID:  projectID,
+		ClusterID:  clusterID,
 		BranchID:   branchID,
 		Role:       role,
 		Name:       name,
@@ -628,49 +628,49 @@ func (m *MemBackend) UpdateEndpointResources(_ context.Context, endpointID uuid.
 // EndpointIDsForBranch returns the ids of every endpoint on the branch (the
 // delete_branch step's Execute-time enumeration). An absent branch yields an
 // empty slice.
-func (m *MemBackend) EndpointIDsForBranch(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+func (m *MemBackend) EndpointIDsForBranch(_ context.Context, clusterID, branchID uuid.UUID) ([]uuid.UUID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ids []uuid.UUID
 	for id, e := range m.endpoints {
-		if e.ProjectID == projectID && e.BranchID == branchID {
+		if e.ClusterID == clusterID && e.BranchID == branchID {
 			ids = append(ids, id)
 		}
 	}
 	return ids, nil
 }
 
-// EndpointIDsForProject returns the ids of every endpoint in the project (the
-// delete_project step's Execute-time enumeration). An absent project yields an
+// EndpointIDsForCluster returns the ids of every endpoint in the cluster (the
+// delete_cluster step's Execute-time enumeration). An absent cluster yields an
 // empty slice.
-func (m *MemBackend) EndpointIDsForProject(_ context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
+func (m *MemBackend) EndpointIDsForCluster(_ context.Context, clusterID uuid.UUID) ([]uuid.UUID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ids []uuid.UUID
 	for id, e := range m.endpoints {
-		if e.ProjectID == projectID {
+		if e.ClusterID == clusterID {
 			ids = append(ids, id)
 		}
 	}
 	return ids, nil
 }
 
-// ChildBranchIDs returns the ids of every branch in projectID forked directly
+// ChildBranchIDs returns the ids of every branch in clusterID forked directly
 // from branchID (the delete_branch step's pre-cascade check). An absent branch
 // yields an empty slice.
-func (m *MemBackend) ChildBranchIDs(_ context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+func (m *MemBackend) ChildBranchIDs(_ context.Context, clusterID, branchID uuid.UUID) ([]uuid.UUID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ids []uuid.UUID
 	for id, b := range m.branches {
-		if b.ProjectID == projectID && b.ParentBranchID != nil && *b.ParentBranchID == branchID {
+		if b.ClusterID == clusterID && b.ParentBranchID != nil && *b.ParentBranchID == branchID {
 			ids = append(ids, id)
 		}
 	}
 	return ids, nil
 }
 
-// DeleteBranch removes the (projectID, branchID) branch (idempotent; absent row
+// DeleteBranch removes the (clusterID, branchID) branch (idempotent; absent row
 // is a no-op), keeping m.branchNames and the single-writer m.writers slot
 // consistent. A still-referencing child fork makes the delete an ErrConflict
 // rather than a silent drop, matching PgBackend's explicit no-live-children
@@ -679,21 +679,21 @@ func (m *MemBackend) ChildBranchIDs(_ context.Context, projectID, branchID uuid.
 // PgBackend tombstones (`dropped_at`) where this drops the entry outright. That
 // is deliberate: through the Backend interface the two are indistinguishable —
 // every read filters tombstones, and the name a drop frees is freed here too
-// (branches_name_per_project is partial for exactly that reason) — so modeling the
+// (branches_name_per_cluster is partial for exactly that reason) — so modeling the
 // column would add state without adding coverage. The one behaviour it does not
 // reproduce is re-Ensuring a dropped branch under its ORIGINAL id, which the real
 // backend converges to a still-dropped row and this would resurrect. Nothing does
 // that: the cascade never re-creates what it just retired, and ids are never
 // reused.
-func (m *MemBackend) DeleteBranch(_ context.Context, projectID, branchID uuid.UUID) error {
+func (m *MemBackend) DeleteBranch(_ context.Context, clusterID, branchID uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.branches[branchID]
-	if !ok || b.ProjectID != projectID {
+	if !ok || b.ClusterID != clusterID {
 		return nil // tolerate absent
 	}
 	for _, child := range m.branches {
-		if child.ProjectID == projectID && child.ParentBranchID != nil && *child.ParentBranchID == branchID {
+		if child.ClusterID == clusterID && child.ParentBranchID != nil && *child.ParentBranchID == branchID {
 			return ErrConflict // a child fork still references this branch
 		}
 	}
@@ -701,42 +701,42 @@ func (m *MemBackend) DeleteBranch(_ context.Context, projectID, branchID uuid.UU
 	// guard: the caller must retire endpoints first, and an endpoint added since
 	// its enumeration has to fail the step so the replay retires it.
 	for _, e := range m.endpoints {
-		if e.ProjectID == projectID && e.BranchID == branchID {
+		if e.ClusterID == clusterID && e.BranchID == branchID {
 			return ErrConflict
 		}
 	}
 	delete(m.branches, branchID)
-	delete(m.branchNames, branchNameKey{projectID: projectID, name: b.Name})
-	delete(m.writers, branchKey{projectID: projectID, branchID: branchID})
+	delete(m.branchNames, branchNameKey{clusterID: clusterID, name: b.Name})
+	delete(m.writers, branchKey{clusterID: clusterID, branchID: branchID})
 	return nil
 }
 
-// DeleteProject removes the project and all its branches/endpoints (idempotent;
-// absent rows are a no-op), mirroring *PgBackend.DeleteProject: it clears
-// m.endpoints/m.branches/m.projects for the project plus the m.writers /
-// m.branchNames / m.projectNames bookkeeping consistently.
-func (m *MemBackend) DeleteProject(_ context.Context, projectID uuid.UUID) error {
+// DeleteCluster removes the cluster and all its branches/endpoints (idempotent;
+// absent rows are a no-op), mirroring *PgBackend.DeleteCluster: it clears
+// m.endpoints/m.branches/m.clusters for the cluster plus the m.writers /
+// m.branchNames / m.clusterNames bookkeeping consistently.
+func (m *MemBackend) DeleteCluster(_ context.Context, clusterID uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	p, ok := m.projects[projectID]
+	p, ok := m.clusters[clusterID]
 	if !ok {
 		return nil // tolerate absent
 	}
-	// Mirror PgBackend: a project with any live endpoint refuses the cascade, so
+	// Mirror PgBackend: a cluster with any live endpoint refuses the cascade, so
 	// an endpoint added since the step's enumeration replays instead of leaking.
 	for _, e := range m.endpoints {
-		if e.ProjectID == projectID {
+		if e.ClusterID == clusterID {
 			return ErrConflict
 		}
 	}
 	for id, b := range m.branches {
-		if b.ProjectID == projectID {
+		if b.ClusterID == clusterID {
 			delete(m.branches, id)
-			delete(m.branchNames, branchNameKey{projectID: projectID, name: b.Name})
+			delete(m.branchNames, branchNameKey{clusterID: clusterID, name: b.Name})
 		}
 	}
-	delete(m.projects, projectID)
-	delete(m.projectNames, projectNameKey{poolID: p.StoragePoolID, name: p.Name})
+	delete(m.clusters, clusterID)
+	delete(m.clusterNames, clusterNameKey{poolID: p.StoragePoolID, name: p.Name})
 	return nil
 }
 

@@ -364,7 +364,7 @@ func TestYbStoreTargetProvisioning(t *testing.T) {
 
 	target := TargetConfig{
 		PoolID:     uuid.New(),
-		ProjectID:  uuid.New(),
+		ClusterID:  uuid.New(),
 		BranchID:   uuid.New(),
 		EndpointID: uuid.New(),
 		Host:       "amp-prod.yugabyte.cloud",

@@ -4,8 +4,8 @@
 // consumes ~15 operations and a handful of fields, so a thin net/http client is
 // simpler than wiring oapi-codegen and its build step (KISS; the implementation
 // plan allows revisiting codegen once the surface grows). The resource ladder is
-// User → StoragePool → Project → Branch → Endpoint; create/delete of
-// project/branch/endpoint are asynchronous (202 + Task + Location), so this
+// User → StoragePool → Cluster → Branch → Endpoint; create/delete of
+// cluster/branch/endpoint are asynchronous (202 + Task + Location), so this
 // package also provides *AndWait helpers that poll GET /tasks/{id} to a terminal
 // status. Types carry only the fields the framework reads and tolerate unknown
 // fields (encoding/json drops them).
@@ -137,9 +137,9 @@ type StoragePoolList struct {
 	Count        int           `json:"count"`
 }
 
-// Branch is a PG timeline in a project.
+// Branch is a PG timeline in a cluster.
 type Branch struct {
-	ProjectID      string  `json:"project_id"`
+	ClusterID      string  `json:"cluster_id"`
 	BranchID       string  `json:"branch_id"`
 	Name           string  `json:"name"`
 	PgVersion      int     `json:"pg_version"`
@@ -155,16 +155,16 @@ type CreateBranchRequest struct {
 	ForkPointLSN   string `json:"fork_point_lsn,omitempty"`
 }
 
-// Project is a database in a pool, with its default branch.
-type Project struct {
+// Cluster is a database in a pool, with its default branch.
+type Cluster struct {
 	ID            string `json:"id"`
 	StoragePoolID string `json:"storage_pool_id"`
 	Name          string `json:"name"`
 	DefaultBranch Branch `json:"default_branch"`
 }
 
-// CreateProjectRequest creates a project (and its default branch "main").
-type CreateProjectRequest struct {
+// CreateClusterRequest creates a cluster (and its default branch "main").
+type CreateClusterRequest struct {
 	Name      string `json:"name"`
 	PgVersion int    `json:"pg_version,omitempty"`
 }
@@ -172,7 +172,7 @@ type CreateProjectRequest struct {
 // Endpoint is the compute bound to a branch.
 type Endpoint struct {
 	ID             string `json:"id"`
-	ProjectID      string `json:"project_id"`
+	ClusterID      string `json:"cluster_id"`
 	BranchID       string `json:"branch_id"`
 	Role           string `json:"role"`
 	Address        string `json:"address"`
@@ -233,7 +233,7 @@ type Task struct {
 	ID        string  `json:"id"`
 	Kind      string  `json:"kind"`
 	Status    string  `json:"status"`
-	ProjectID *string `json:"project_id"`
+	ClusterID *string `json:"cluster_id"`
 	Error     *string `json:"error"`
 	// Result is the final step's opaque outcome JSON, absent until a step records
 	// one. For a resize_endpoint task it carries in_place_resize + in_place_message.
@@ -344,52 +344,52 @@ func (c *Client) ListStoragePools(ctx context.Context, limit, offset int) (Stora
 	return out, err
 }
 
-// --- projects ---
+// --- clusters ---
 
-// CreateProject plans an async project create (202). Returns the Task and the
+// CreateCluster plans an async cluster create (202). Returns the Task and the
 // Location header value.
-func (c *Client) CreateProject(ctx context.Context, poolID string, req CreateProjectRequest) (Task, string, error) {
-	return c.async(ctx, http.MethodPost, c.apiURL+"/storage-pools/"+poolID+"/projects", req)
+func (c *Client) CreateCluster(ctx context.Context, poolID string, req CreateClusterRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.apiURL+"/storage-pools/"+poolID+"/clusters", req)
 }
 
-// ProjectList is a page of projects.
-type ProjectList struct {
-	Projects []Project `json:"projects"`
+// ClusterList is a page of clusters.
+type ClusterList struct {
+	Clusters []Cluster `json:"clusters"`
 	Total    int       `json:"total"`
 	Count    int       `json:"count"`
 }
 
-// ListProjects returns one page of the projects in a pool. (Beyond the minimal
+// ListClusters returns one page of the clusters in a pool. (Beyond the minimal
 // enumerated op set, but needed to resolve the id of an asynchronously-created
-// project by name — the same lookup deploy/smoke-test.sh does.)
-func (c *Client) ListProjects(ctx context.Context, poolID string, limit, offset int) (ProjectList, error) {
-	var out ProjectList
-	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/storage-pools/"+poolID+"/projects"+pageQuery(limit, offset), nil, &out)
+// cluster by name — the same lookup deploy/smoke-test.sh does.)
+func (c *Client) ListClusters(ctx context.Context, poolID string, limit, offset int) (ClusterList, error) {
+	var out ClusterList
+	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/storage-pools/"+poolID+"/clusters"+pageQuery(limit, offset), nil, &out)
 	return out, err
 }
 
-// GetProject reads a project (with its default branch).
-func (c *Client) GetProject(ctx context.Context, poolID, projectID string) (Project, error) {
-	var out Project
-	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/storage-pools/"+poolID+"/projects/"+projectID, nil, &out)
+// GetCluster reads a cluster (with its default branch).
+func (c *Client) GetCluster(ctx context.Context, poolID, clusterID string) (Cluster, error) {
+	var out Cluster
+	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/storage-pools/"+poolID+"/clusters/"+clusterID, nil, &out)
 	return out, err
 }
 
-// DeleteProject plans an async cascade delete (202).
-func (c *Client) DeleteProject(ctx context.Context, poolID, projectID string) (Task, string, error) {
-	return c.async(ctx, http.MethodDelete, c.apiURL+"/storage-pools/"+poolID+"/projects/"+projectID, nil)
+// DeleteCluster plans an async cascade delete (202).
+func (c *Client) DeleteCluster(ctx context.Context, poolID, clusterID string) (Task, string, error) {
+	return c.async(ctx, http.MethodDelete, c.apiURL+"/storage-pools/"+poolID+"/clusters/"+clusterID, nil)
 }
 
 // --- branches ---
 
 // CreateBranch plans an async branch fork (202).
-func (c *Client) CreateBranch(ctx context.Context, poolID, projectID string, req CreateBranchRequest) (Task, string, error) {
-	return c.async(ctx, http.MethodPost, c.apiURL+"/storage-pools/"+poolID+"/projects/"+projectID+"/branches", req)
+func (c *Client) CreateBranch(ctx context.Context, poolID, clusterID string, req CreateBranchRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.apiURL+"/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches", req)
 }
 
 // DeleteBranch plans an async cascade delete (202).
-func (c *Client) DeleteBranch(ctx context.Context, poolID, projectID, branchID string) (Task, string, error) {
-	return c.async(ctx, http.MethodDelete, c.apiURL+"/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID, nil)
+func (c *Client) DeleteBranch(ctx context.Context, poolID, clusterID, branchID string) (Task, string, error) {
+	return c.async(ctx, http.MethodDelete, c.apiURL+"/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches/"+branchID, nil)
 }
 
 // BranchList is a page of branches.
@@ -399,21 +399,21 @@ type BranchList struct {
 	Count    int      `json:"count"`
 }
 
-// ListBranches returns one page of the branches in a project (the default branch
+// ListBranches returns one page of the branches in a cluster (the default branch
 // plus its forks). Needed to resolve the id of an asynchronously-created branch by
-// name — the same lookup findProject does for projects.
-func (c *Client) ListBranches(ctx context.Context, poolID, projectID string, limit, offset int) (BranchList, error) {
+// name — the same lookup findCluster does for clusters.
+func (c *Client) ListBranches(ctx context.Context, poolID, clusterID string, limit, offset int) (BranchList, error) {
 	var out BranchList
-	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/storage-pools/"+poolID+"/projects/"+projectID+"/branches"+pageQuery(limit, offset), nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, c.apiURL+"/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches"+pageQuery(limit, offset), nil, &out)
 	return out, err
 }
 
-// ListAllBranches pages through every branch in a project.
-func (c *Client) ListAllBranches(ctx context.Context, poolID, projectID string) ([]Branch, error) {
+// ListAllBranches pages through every branch in a cluster.
+func (c *Client) ListAllBranches(ctx context.Context, poolID, clusterID string) ([]Branch, error) {
 	const page = 100
 	var all []Branch
 	for offset := 0; ; offset += page {
-		list, err := c.ListBranches(ctx, poolID, projectID, page, offset)
+		list, err := c.ListBranches(ctx, poolID, clusterID, page, offset)
 		if err != nil {
 			return nil, err
 		}
@@ -426,59 +426,59 @@ func (c *Client) ListAllBranches(ctx context.Context, poolID, projectID string) 
 
 // --- endpoints ---
 
-func (c *Client) endpointsPath(poolID, projectID, branchID string) string {
-	return c.apiURL + "/storage-pools/" + poolID + "/projects/" + projectID + "/branches/" + branchID + "/endpoints"
+func (c *Client) endpointsPath(poolID, clusterID, branchID string) string {
+	return c.apiURL + "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches/" + branchID + "/endpoints"
 }
 
 // CreateEndpoint plans an async endpoint deploy (202).
-func (c *Client) CreateEndpoint(ctx context.Context, poolID, projectID, branchID string, req CreateEndpointRequest) (Task, string, error) {
-	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, projectID, branchID), req)
+func (c *Client) CreateEndpoint(ctx context.Context, poolID, clusterID, branchID string, req CreateEndpointRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID), req)
 }
 
 // GetEndpoint reads an endpoint.
-func (c *Client) GetEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) (Endpoint, error) {
+func (c *Client) GetEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string) (Endpoint, error) {
 	var out Endpoint
-	_, _, err := c.doJSON(ctx, http.MethodGet, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID, nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, c.endpointsPath(poolID, clusterID, branchID)+"/"+endpointID, nil, &out)
 	return out, err
 }
 
 // ListEndpoints returns one page of endpoints bound to a branch.
-func (c *Client) ListEndpoints(ctx context.Context, poolID, projectID, branchID string, limit, offset int) (EndpointList, error) {
+func (c *Client) ListEndpoints(ctx context.Context, poolID, clusterID, branchID string, limit, offset int) (EndpointList, error) {
 	var out EndpointList
-	_, _, err := c.doJSON(ctx, http.MethodGet, c.endpointsPath(poolID, projectID, branchID)+pageQuery(limit, offset), nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, c.endpointsPath(poolID, clusterID, branchID)+pageQuery(limit, offset), nil, &out)
 	return out, err
 }
 
 // DeleteEndpoint plans an async endpoint retire (202).
-func (c *Client) DeleteEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, string, error) {
-	return c.async(ctx, http.MethodDelete, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID, nil)
+func (c *Client) DeleteEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string) (Task, string, error) {
+	return c.async(ctx, http.MethodDelete, c.endpointsPath(poolID, clusterID, branchID)+"/"+endpointID, nil)
 }
 
 // ResizeEndpoint plans an async in-place compute resize (202). First-writer-wins:
 // while a resize of the same endpoint is non-terminal, this returns a 409
 // *APIError.
-func (c *Client) ResizeEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string, req ResizeEndpointRequest) (Task, string, error) {
-	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID+"/resize", req)
+func (c *Client) ResizeEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string, req ResizeEndpointRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID)+"/"+endpointID+"/resize", req)
 }
 
 // PauseEndpoint plans an async compute pause (202): the compute is stopped while
 // the endpoint record, its branch, and all of its storage stay put.
-func (c *Client) PauseEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, string, error) {
-	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID+"/pause", nil)
+func (c *Client) PauseEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID)+"/"+endpointID+"/pause", nil)
 }
 
 // ResumeEndpoint plans an async compute resume (202) of a paused endpoint on the
 // same branch.
-func (c *Client) ResumeEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, string, error) {
-	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, projectID, branchID)+"/"+endpointID+"/resume", nil)
+func (c *Client) ResumeEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID)+"/"+endpointID+"/resume", nil)
 }
 
 // ListAllEndpoints pages through every endpoint bound to a branch.
-func (c *Client) ListAllEndpoints(ctx context.Context, poolID, projectID, branchID string) ([]Endpoint, error) {
+func (c *Client) ListAllEndpoints(ctx context.Context, poolID, clusterID, branchID string) ([]Endpoint, error) {
 	const page = 100
 	var all []Endpoint
 	for offset := 0; ; offset += page {
-		list, err := c.ListEndpoints(ctx, poolID, projectID, branchID, page, offset)
+		list, err := c.ListEndpoints(ctx, poolID, clusterID, branchID, page, offset)
 		if err != nil {
 			return nil, err
 		}
@@ -534,7 +534,7 @@ type ListTasksOptions struct {
 	Offset    int
 	Status    string
 	Kind      string
-	ProjectID string
+	ClusterID string
 }
 
 // ListTasks returns one page of tasks, most recent first.
@@ -552,8 +552,8 @@ func (c *Client) ListTasks(ctx context.Context, opts ListTasksOptions) (TaskList
 	if opts.Kind != "" {
 		q.Set("kind", opts.Kind)
 	}
-	if opts.ProjectID != "" {
-		q.Set("project_id", opts.ProjectID)
+	if opts.ClusterID != "" {
+		q.Set("cluster_id", opts.ClusterID)
 	}
 	u := c.apiURL + "/tasks"
 	if enc := q.Encode(); enc != "" {
@@ -607,18 +607,18 @@ func (c *Client) WaitTask(ctx context.Context, taskID string) (Task, error) {
 	}
 }
 
-// CreateProjectAndWait creates a project and waits for its task to succeed.
-func (c *Client) CreateProjectAndWait(ctx context.Context, poolID string, req CreateProjectRequest) (Task, error) {
-	task, loc, err := c.CreateProject(ctx, poolID, req)
+// CreateClusterAndWait creates a cluster and waits for its task to succeed.
+func (c *Client) CreateClusterAndWait(ctx context.Context, poolID string, req CreateClusterRequest) (Task, error) {
+	task, loc, err := c.CreateCluster(ctx, poolID, req)
 	if err != nil {
 		return Task{}, err
 	}
 	return c.WaitTask(ctx, taskRef(task, loc))
 }
 
-// DeleteProjectAndWait deletes a project (cascade) and waits for success.
-func (c *Client) DeleteProjectAndWait(ctx context.Context, poolID, projectID string) (Task, error) {
-	task, loc, err := c.DeleteProject(ctx, poolID, projectID)
+// DeleteClusterAndWait deletes a cluster (cascade) and waits for success.
+func (c *Client) DeleteClusterAndWait(ctx context.Context, poolID, clusterID string) (Task, error) {
+	task, loc, err := c.DeleteCluster(ctx, poolID, clusterID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -626,8 +626,8 @@ func (c *Client) DeleteProjectAndWait(ctx context.Context, poolID, projectID str
 }
 
 // CreateBranchAndWait creates a branch and waits for success.
-func (c *Client) CreateBranchAndWait(ctx context.Context, poolID, projectID string, req CreateBranchRequest) (Task, error) {
-	task, loc, err := c.CreateBranch(ctx, poolID, projectID, req)
+func (c *Client) CreateBranchAndWait(ctx context.Context, poolID, clusterID string, req CreateBranchRequest) (Task, error) {
+	task, loc, err := c.CreateBranch(ctx, poolID, clusterID, req)
 	if err != nil {
 		return Task{}, err
 	}
@@ -635,8 +635,8 @@ func (c *Client) CreateBranchAndWait(ctx context.Context, poolID, projectID stri
 }
 
 // DeleteBranchAndWait deletes a branch (cascade) and waits for success.
-func (c *Client) DeleteBranchAndWait(ctx context.Context, poolID, projectID, branchID string) (Task, error) {
-	task, loc, err := c.DeleteBranch(ctx, poolID, projectID, branchID)
+func (c *Client) DeleteBranchAndWait(ctx context.Context, poolID, clusterID, branchID string) (Task, error) {
+	task, loc, err := c.DeleteBranch(ctx, poolID, clusterID, branchID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -644,8 +644,8 @@ func (c *Client) DeleteBranchAndWait(ctx context.Context, poolID, projectID, bra
 }
 
 // CreateEndpointAndWait creates an endpoint and waits for success.
-func (c *Client) CreateEndpointAndWait(ctx context.Context, poolID, projectID, branchID string, req CreateEndpointRequest) (Task, error) {
-	task, loc, err := c.CreateEndpoint(ctx, poolID, projectID, branchID, req)
+func (c *Client) CreateEndpointAndWait(ctx context.Context, poolID, clusterID, branchID string, req CreateEndpointRequest) (Task, error) {
+	task, loc, err := c.CreateEndpoint(ctx, poolID, clusterID, branchID, req)
 	if err != nil {
 		return Task{}, err
 	}
@@ -655,8 +655,8 @@ func (c *Client) CreateEndpointAndWait(ctx context.Context, poolID, projectID, b
 // ResizeEndpointAndWait resizes an endpoint and waits for its task to reach a
 // terminal status. The Task is returned even when it failed (the caller reads its
 // error and result), alongside the failure error.
-func (c *Client) ResizeEndpointAndWait(ctx context.Context, poolID, projectID, branchID, endpointID string, req ResizeEndpointRequest) (Task, error) {
-	task, loc, err := c.ResizeEndpoint(ctx, poolID, projectID, branchID, endpointID, req)
+func (c *Client) ResizeEndpointAndWait(ctx context.Context, poolID, clusterID, branchID, endpointID string, req ResizeEndpointRequest) (Task, error) {
+	task, loc, err := c.ResizeEndpoint(ctx, poolID, clusterID, branchID, endpointID, req)
 	if err != nil {
 		return Task{}, err
 	}
@@ -665,8 +665,8 @@ func (c *Client) ResizeEndpointAndWait(ctx context.Context, poolID, projectID, b
 
 // PauseEndpointAndWait pauses an endpoint's compute and waits for its task to
 // reach a terminal status. The Task is returned even when it failed.
-func (c *Client) PauseEndpointAndWait(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, error) {
-	task, loc, err := c.PauseEndpoint(ctx, poolID, projectID, branchID, endpointID)
+func (c *Client) PauseEndpointAndWait(ctx context.Context, poolID, clusterID, branchID, endpointID string) (Task, error) {
+	task, loc, err := c.PauseEndpoint(ctx, poolID, clusterID, branchID, endpointID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -675,8 +675,8 @@ func (c *Client) PauseEndpointAndWait(ctx context.Context, poolID, projectID, br
 
 // ResumeEndpointAndWait resumes a paused endpoint and waits for its task to
 // reach a terminal status. The Task is returned even when it failed.
-func (c *Client) ResumeEndpointAndWait(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, error) {
-	task, loc, err := c.ResumeEndpoint(ctx, poolID, projectID, branchID, endpointID)
+func (c *Client) ResumeEndpointAndWait(ctx context.Context, poolID, clusterID, branchID, endpointID string) (Task, error) {
+	task, loc, err := c.ResumeEndpoint(ctx, poolID, clusterID, branchID, endpointID)
 	if err != nil {
 		return Task{}, err
 	}
@@ -684,8 +684,8 @@ func (c *Client) ResumeEndpointAndWait(ctx context.Context, poolID, projectID, b
 }
 
 // DeleteEndpointAndWait retires an endpoint and waits for success.
-func (c *Client) DeleteEndpointAndWait(ctx context.Context, poolID, projectID, branchID, endpointID string) (Task, error) {
-	task, loc, err := c.DeleteEndpoint(ctx, poolID, projectID, branchID, endpointID)
+func (c *Client) DeleteEndpointAndWait(ctx context.Context, poolID, clusterID, branchID, endpointID string) (Task, error) {
+	task, loc, err := c.DeleteEndpoint(ctx, poolID, clusterID, branchID, endpointID)
 	if err != nil {
 		return Task{}, err
 	}

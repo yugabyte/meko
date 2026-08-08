@@ -1,5 +1,5 @@
 # controller-on-Docker integration suite. A thin driver binary that drives controller's REST
-# API (user -> storage pool -> project -> branch -> endpoint) and runs Postgres
+# API (user -> storage pool -> cluster -> branch -> endpoint) and runs Postgres
 # against the endpoints controller provisions, validating copy-on-write branch
 # isolation. Invoked via test/integration/controller/run-controller.sh, which starts
 # controller in Docker and passes its base URL in AMP_BASE_URL.

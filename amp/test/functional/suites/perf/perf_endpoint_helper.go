@@ -42,11 +42,11 @@ const (
 	// controller reports an endpoint address without one.
 	endpointComputePort = 55433
 
-	// perfPoolName / perfProjectPrefix name the objects carved out of the
-	// run-scoped control plane. It serves exactly one project, so the names need
+	// perfPoolName / perfClusterPrefix name the objects carved out of the
+	// run-scoped control plane. It serves exactly one cluster, so the names need
 	// no cross-run uniqueness beyond the resource suffix.
 	perfPoolName       = "ampqa-perf"
-	perfProjectPrefix  = "ampqa-perf-"
+	perfClusterPrefix  = "ampqa-perf-"
 	perfCPNamespaceFmt = "ampqa-perf-cp-%s"
 
 	// endpointSettle is a short pause after the compute workload reports ready.
@@ -133,7 +133,7 @@ func ampStackConfig(amp ampstack.Config, ybCfg ybk8s.Config, info ybk8s.Info, su
 }
 
 // provisionAmpEndpoint stands the control plane up on the already-running
-// backing, carves one project + read_write endpoint out of it, and returns the
+// backing, carves one cluster + read_write endpoint out of it, and returns the
 // endpoint's compute connection. Teardown (control plane namespace, cascading
 // the endpoint) is registered on td before the deploy, so a partial bring-up is
 // still reclaimed — and because td is LIFO and the backing was pushed first, the
@@ -180,7 +180,7 @@ func provisionAmpEndpoint(ctx context.Context, t *core.T, amp ampstack.Config, y
 	return out, nil
 }
 
-// createPerfEndpoint carves the one user/pool/project/endpoint this run needs
+// createPerfEndpoint carves the one user/pool/cluster/endpoint this run needs
 // out of a freshly deployed control plane. Nothing else uses it, so there is no
 // name contention to tolerate — unlike sharedk8s, which serves every parallel
 // test off one control plane.
@@ -193,11 +193,11 @@ func createPerfEndpoint(ctx context.Context, cl *controller.Client, suffix strin
 	if err != nil {
 		return controller.Endpoint{}, fmt.Errorf("create storage pool %s: %w", perfPoolName, err)
 	}
-	name := perfProjectPrefix + suffix
-	if _, err := cl.CreateProjectAndWait(ctx, pool.ID, controller.CreateProjectRequest{Name: name}); err != nil {
-		return controller.Endpoint{}, fmt.Errorf("create project %s: %w", name, err)
+	name := perfClusterPrefix + suffix
+	if _, err := cl.CreateClusterAndWait(ctx, pool.ID, controller.CreateClusterRequest{Name: name}); err != nil {
+		return controller.Endpoint{}, fmt.Errorf("create cluster %s: %w", name, err)
 	}
-	proj, err := findPerfProject(ctx, cl, pool.ID, name)
+	proj, err := findPerfCluster(ctx, cl, pool.ID, name)
 	if err != nil {
 		return controller.Endpoint{}, err
 	}
@@ -227,21 +227,21 @@ func pickReadWrite(eps []controller.Endpoint) (controller.Endpoint, error) {
 	return eps[0], nil
 }
 
-// findPerfProject resolves the just-created project by name.
-func findPerfProject(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Project, error) {
+// findPerfCluster resolves the just-created cluster by name.
+func findPerfCluster(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Cluster, error) {
 	const page = 100
 	for offset := 0; ; offset += page {
-		list, err := cl.ListProjects(ctx, poolID, page, offset)
+		list, err := cl.ListClusters(ctx, poolID, page, offset)
 		if err != nil {
-			return controller.Project{}, fmt.Errorf("list projects: %w", err)
+			return controller.Cluster{}, fmt.Errorf("list clusters: %w", err)
 		}
-		for _, proj := range list.Projects {
+		for _, proj := range list.Clusters {
 			if proj.Name == name {
 				return proj, nil
 			}
 		}
 		if list.Count < page || offset+list.Count >= list.Total {
-			return controller.Project{}, fmt.Errorf("created project %q not found", name)
+			return controller.Cluster{}, fmt.Errorf("created cluster %q not found", name)
 		}
 	}
 }

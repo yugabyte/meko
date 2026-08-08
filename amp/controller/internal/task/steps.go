@@ -19,13 +19,13 @@ import (
 // up in the Registry (registry.go) to rebuild its Step. Each kind constant lives
 // alongside its step in the step_<kind>.go file:
 //
-//	create_project        step_create_project.go
+//	create_cluster        step_create_cluster.go
 //	create_branch         step_create_branch.go
 //	record_branch_recipe  step_record_branch_recipe.go
 //	create_endpoint       step_create_endpoint.go
 //	delete_endpoint       step_delete_endpoint.go
 //	delete_branch         step_delete_branch.go
-//	delete_project        step_delete_project.go
+//	delete_cluster        step_delete_cluster.go
 
 // mustResult marshals a step result. The values are small, fixed-shape maps, so
 // marshaling cannot fail; a result is informational (read back via the task API)

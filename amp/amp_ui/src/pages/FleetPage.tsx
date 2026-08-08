@@ -1,4 +1,4 @@
-// Fleet = every cluster (project) across the current user's shared pools.
+// Fleet = every cluster across the current user's shared pools.
 // Stat cards + a table, and a "New cluster" dialog that creates a cluster in
 // a chosen pool. Mock-only columns (topology / region / model / quota / RPO /
 // status) are dropped — the controller doesn't expose them.
@@ -146,13 +146,13 @@ export default function FleetPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map(({ project, pool }) => (
+                  {rows.map(({ cluster, pool }) => (
                     <TableRow
-                      key={project.id}
+                      key={cluster.id}
                       className="cursor-pointer"
                       onClick={() =>
                         navigate(
-                          `/multitenancy?pool=${encodeURIComponent(pool.name)}&db=${encodeURIComponent(project.name)}`,
+                          `/multitenancy?pool=${encodeURIComponent(pool.name)}&db=${encodeURIComponent(cluster.name)}`,
                         )
                       }
                     >
@@ -163,10 +163,10 @@ export default function FleetPage() {
                           </div>
                           <div className="min-w-0">
                             <p className="truncate font-medium text-foreground">
-                              {project.name}
+                              {cluster.name}
                             </p>
                             <p className="font-mono text-xs text-muted-foreground">
-                              {shortId(project.id)}
+                              {shortId(cluster.id)}
                             </p>
                           </div>
                         </div>
@@ -184,14 +184,14 @@ export default function FleetPage() {
                       </TableCell>
                       <TableCell>
                         <span className="rounded-md border border-border px-2 py-0.5 font-mono text-xs">
-                          pg {project.default_branch.pg_version}
+                          pg {cluster.default_branch.pg_version}
                         </span>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {project.default_branch.name}
+                        {cluster.default_branch.name}
                       </TableCell>
                       <TableCell className="text-right text-muted-foreground">
-                        {formatDateTime(project.created_at)}
+                        {formatDateTime(cluster.created_at)}
                       </TableCell>
                     </TableRow>
                   ))}

@@ -38,7 +38,7 @@ func (a *ampFeatureRun) branchDelete(ctx context.Context) error {
 	return branchDeleteSteps(ctx, cl, a.proj, "branch-del-"+a.f.suffix(), a.f.endpointSQL)
 }
 
-func branchDeleteSteps(ctx context.Context, cl ampCtl, proj ampProject, childName string, connect endpointConnector) error {
+func branchDeleteSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector) error {
 	baseEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
 		return fmt.Errorf("create base endpoint: %w", err)
@@ -119,8 +119,8 @@ func branchDeleteSteps(ctx context.Context, cl ampCtl, proj ampProject, childNam
 		return fmt.Errorf("parent write after branch delete: %w", err)
 	}
 
-	// No task in the project ended up failed.
-	tasks, err := cl.ListTasks(ctx, controller.ListTasksOptions{Status: controller.TaskFailed, ProjectID: proj.projID, Limit: 100})
+	// No task in the cluster ended up failed.
+	tasks, err := cl.ListTasks(ctx, controller.ListTasksOptions{Status: controller.TaskFailed, ClusterID: proj.projID, Limit: 100})
 	if err != nil {
 		return fmt.Errorf("list failed tasks: %w", err)
 	}

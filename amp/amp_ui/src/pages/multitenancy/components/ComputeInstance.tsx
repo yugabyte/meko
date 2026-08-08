@@ -63,7 +63,7 @@ export function ComputeInstance({
     del.mutate(
       {
         poolId,
-        projectId: ep.project_id,
+        clusterId: ep.cluster_id,
         branchId: ep.branch_id,
         endpointId: ep.id,
       },
@@ -84,7 +84,7 @@ export function ComputeInstance({
     resize.mutate(
       {
         poolId,
-        projectId: ep.project_id,
+        clusterId: ep.cluster_id,
         branchId: ep.branch_id,
         endpointId: ep.id,
         cpu: cpu.trim() || undefined,

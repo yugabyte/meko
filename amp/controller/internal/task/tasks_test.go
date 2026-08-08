@@ -10,7 +10,7 @@ import (
 
 // These tests validate the task Service (tasks.go): each CreateX method records
 // the right ordered step kinds, generates and threads ids consistently across the
-// steps (so a downstream step operates on the same project/branch/endpoint an
+// steps (so a downstream step operates on the same cluster/branch/endpoint an
 // upstream step created), and gets the fork vs. default-branch (ancestor) wiring
 // right. They run the Service against an in-memory MemStore and read the
 // persisted steps back to assert on them.
@@ -53,37 +53,37 @@ func equalKinds(a, b []string) bool {
 	return true
 }
 
-func TestServiceCreateProjectNoWriter(t *testing.T) {
+func TestServiceCreateClusterNoWriter(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
 	poolID := uuid.New()
-	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: poolID, Name: "shop", PgVersion: 18})
+	tk, err := svc.CreateCluster(t.Context(), CreateClusterInput{PoolID: poolID, Name: "shop", PgVersion: 18})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
-	if tk.Kind != KindCreateProject {
-		t.Errorf("kind = %q, want %q", tk.Kind, KindCreateProject)
+	if tk.Kind != KindCreateCluster {
+		t.Errorf("kind = %q, want %q", tk.Kind, KindCreateCluster)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
-	want := []string{StepCreateProject, StepRecordBranchRecipe}
+	want := []string{StepCreateCluster, StepRecordBranchRecipe}
 	if !equalKinds(stepKinds(steps), want) {
 		t.Fatalf("steps = %v, want %v", stepKinds(steps), want)
 	}
 
-	var cp CreateProjectArgs
-	decodeArgs(t, stepByKind(t, steps, StepCreateProject), &cp)
+	var cp CreateClusterArgs
+	decodeArgs(t, stepByKind(t, steps, StepCreateCluster), &cp)
 	if cp.PoolID != poolID || cp.Name != "shop" || cp.PgVersion != 18 {
-		t.Errorf("create-project args = %+v, want pool=%s name=shop pgv=18", cp, poolID)
+		t.Errorf("create-cluster args = %+v, want pool=%s name=shop pgv=18", cp, poolID)
 	}
-	if cp.ProjectID == uuid.Nil || cp.BranchID == uuid.Nil {
-		t.Error("project/branch ids were not generated")
+	if cp.ClusterID == uuid.Nil || cp.BranchID == uuid.Nil {
+		t.Error("cluster/branch ids were not generated")
 	}
 
 	var rec RecordBranchRecipeArgs
 	decodeArgs(t, stepByKind(t, steps, StepRecordBranchRecipe), &rec)
-	// The recipe step must target the same project+branch the create step makes.
-	if rec.ProjectID != cp.ProjectID || rec.BranchID != cp.BranchID {
-		t.Errorf("recipe ids (%s,%s) != create-project ids (%s,%s)", rec.ProjectID, rec.BranchID, cp.ProjectID, cp.BranchID)
+	// The recipe step must target the same cluster+branch the create step makes.
+	if rec.ClusterID != cp.ClusterID || rec.BranchID != cp.BranchID {
+		t.Errorf("recipe ids (%s,%s) != create-cluster ids (%s,%s)", rec.ClusterID, rec.BranchID, cp.ClusterID, cp.BranchID)
 	}
 	if rec.AncestorBranchID != nil {
 		t.Error("default-branch recipe has an ancestor, want nil")
@@ -92,36 +92,36 @@ func TestServiceCreateProjectNoWriter(t *testing.T) {
 		t.Errorf("default-branch recipe start_lsn = %q, want 0/0", rec.StartLSN)
 	}
 
-	// The task targets the project it creates (stamped for the task API).
-	if tk.ProjectID == nil || *tk.ProjectID != cp.ProjectID {
-		t.Errorf("task ProjectID = %v, want %s", tk.ProjectID, cp.ProjectID)
+	// The task targets the cluster it creates (stamped for the task API).
+	if tk.ClusterID == nil || *tk.ClusterID != cp.ClusterID {
+		t.Errorf("task ClusterID = %v, want %s", tk.ClusterID, cp.ClusterID)
 	}
 	// Params round-trip to the originating request.
-	var got CreateProjectInput
+	var got CreateClusterInput
 	if err := json.Unmarshal(tk.Params, &got); err != nil || got.Name != "shop" || got.PoolID != poolID {
 		t.Errorf("params round-trip = %+v (err %v), want name=shop pool=%s", got, err, poolID)
 	}
 }
 
-func TestServiceCreateProjectWithWriter(t *testing.T) {
+func TestServiceCreateClusterWithWriter(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
-	tk, err := svc.CreateProject(t.Context(), CreateProjectInput{PoolID: uuid.New(), Name: "shop", PgVersion: 18, WithWriter: true, CPU: "4", Memory: "8Gi"})
+	tk, err := svc.CreateCluster(t.Context(), CreateClusterInput{PoolID: uuid.New(), Name: "shop", PgVersion: 18, WithWriter: true, CPU: "4", Memory: "8Gi"})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
-	want := []string{StepCreateProject, StepRecordBranchRecipe, StepCreateEndpoint}
+	want := []string{StepCreateCluster, StepRecordBranchRecipe, StepCreateEndpoint}
 	if !equalKinds(stepKinds(steps), want) {
 		t.Fatalf("steps = %v, want %v", stepKinds(steps), want)
 	}
 
-	var cp CreateProjectArgs
-	decodeArgs(t, stepByKind(t, steps, StepCreateProject), &cp)
+	var cp CreateClusterArgs
+	decodeArgs(t, stepByKind(t, steps, StepCreateCluster), &cp)
 	var ep CreateEndpointArgs
 	decodeArgs(t, stepByKind(t, steps, StepCreateEndpoint), &ep)
-	if ep.ProjectID != cp.ProjectID || ep.BranchID != cp.BranchID {
-		t.Errorf("endpoint targets (%s,%s), want the created branch (%s,%s)", ep.ProjectID, ep.BranchID, cp.ProjectID, cp.BranchID)
+	if ep.ClusterID != cp.ClusterID || ep.BranchID != cp.BranchID {
+		t.Errorf("endpoint targets (%s,%s), want the created branch (%s,%s)", ep.ClusterID, ep.BranchID, cp.ClusterID, cp.BranchID)
 	}
 	if ep.Role != "read_write" {
 		t.Errorf("first endpoint role = %q, want read_write", ep.Role)
@@ -139,9 +139,9 @@ func TestServiceCreateProjectWithWriter(t *testing.T) {
 func TestServiceBranch(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
-	poolID, projectID, parentID := uuid.New(), uuid.New(), uuid.New()
+	poolID, clusterID, parentID := uuid.New(), uuid.New(), uuid.New()
 	tk, err := svc.Branch(t.Context(), BranchInput{
-		PoolID: poolID, ProjectID: projectID, ParentBranchID: parentID,
+		PoolID: poolID, ClusterID: clusterID, ParentBranchID: parentID,
 		Name: "feature", ForkLSN: "0/16ABCD0", PgVersion: 18, WithWriter: true,
 	})
 	if err != nil {
@@ -162,8 +162,8 @@ func TestServiceBranch(t *testing.T) {
 	// create_branch step on this path.
 	var rec RecordBranchRecipeArgs
 	decodeArgs(t, stepByKind(t, steps, StepRecordBranchRecipe), &rec)
-	if rec.ProjectID != projectID {
-		t.Errorf("recipe project = %s, want %s", rec.ProjectID, projectID)
+	if rec.ClusterID != clusterID {
+		t.Errorf("recipe cluster = %s, want %s", rec.ClusterID, clusterID)
 	}
 	if rec.BranchID == uuid.Nil || rec.BranchID == parentID {
 		t.Errorf("branch id = %s, want a fresh id distinct from the parent", rec.BranchID)
@@ -188,10 +188,10 @@ func TestServiceBranch(t *testing.T) {
 func TestServiceCreateEndpointDefaultsRole(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
-	projectID, branchID := uuid.New(), uuid.New()
+	clusterID, branchID := uuid.New(), uuid.New()
 
 	// Role unset defaults to read_write.
-	tk, err := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, PgVersion: 18})
+	tk, err := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ClusterID: clusterID, BranchID: branchID, PgVersion: 18})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestServiceCreateEndpointDefaultsRole(t *testing.T) {
 		t.Errorf("default role = %q, want read_write", ep.Role)
 	}
 
-	tk2, _ := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ProjectID: projectID, BranchID: branchID, Role: "read_only", PgVersion: 18})
+	tk2, _ := svc.CreateEndpoint(t.Context(), CreateEndpointInput{ClusterID: clusterID, BranchID: branchID, Role: "read_only", PgVersion: 18})
 	steps2, _ := store.Steps(t.Context(), tk2.ID)
 	var ep2 CreateEndpointArgs
 	decodeArgs(t, steps2[0], &ep2)
@@ -218,7 +218,7 @@ func TestServiceDeleteEndpoint(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
 	epID := uuid.New()
-	tk, err := svc.DeleteEndpoint(t.Context(), DeleteEndpointInput{ProjectID: uuid.New(), EndpointID: epID})
+	tk, err := svc.DeleteEndpoint(t.Context(), DeleteEndpointInput{ClusterID: uuid.New(), EndpointID: epID})
 	if err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
@@ -236,8 +236,8 @@ func TestServiceDeleteEndpoint(t *testing.T) {
 func TestServiceDeleteBranch(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
-	projectID, branchID := uuid.New(), uuid.New()
-	tk, err := svc.DeleteBranch(t.Context(), DeleteBranchInput{PoolID: uuid.New(), ProjectID: projectID, BranchID: branchID})
+	clusterID, branchID := uuid.New(), uuid.New()
+	tk, err := svc.DeleteBranch(t.Context(), DeleteBranchInput{PoolID: uuid.New(), ClusterID: clusterID, BranchID: branchID})
 	if err != nil {
 		t.Fatalf("DeleteBranch: %v", err)
 	}
@@ -247,30 +247,30 @@ func TestServiceDeleteBranch(t *testing.T) {
 	}
 	var del DeleteBranchArgs
 	decodeArgs(t, steps[0], &del)
-	if del.ProjectID != projectID || del.BranchID != branchID {
-		t.Errorf("delete_branch args = %+v, want project=%s branch=%s", del, projectID, branchID)
+	if del.ClusterID != clusterID || del.BranchID != branchID {
+		t.Errorf("delete_branch args = %+v, want cluster=%s branch=%s", del, clusterID, branchID)
 	}
-	if tk.ProjectID == nil || *tk.ProjectID != projectID {
-		t.Errorf("task ProjectID = %v, want %s", tk.ProjectID, projectID)
+	if tk.ClusterID == nil || *tk.ClusterID != clusterID {
+		t.Errorf("task ClusterID = %v, want %s", tk.ClusterID, clusterID)
 	}
 }
 
-func TestServiceDeleteProject(t *testing.T) {
+func TestServiceDeleteCluster(t *testing.T) {
 	store := NewMemStore()
 	svc := NewService(store)
-	projectID := uuid.New()
-	tk, err := svc.DeleteProject(t.Context(), DeleteProjectInput{PoolID: uuid.New(), ProjectID: projectID})
+	clusterID := uuid.New()
+	tk, err := svc.DeleteCluster(t.Context(), DeleteClusterInput{PoolID: uuid.New(), ClusterID: clusterID})
 	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
+		t.Fatalf("DeleteCluster: %v", err)
 	}
 	steps, _ := store.Steps(t.Context(), tk.ID)
-	if tk.Kind != KindDeleteProject || len(steps) != 1 || steps[0].Kind != StepDeleteProject {
-		t.Fatalf("task = kind %q with steps %v, want one delete_project step", tk.Kind, stepKinds(steps))
+	if tk.Kind != KindDeleteCluster || len(steps) != 1 || steps[0].Kind != StepDeleteCluster {
+		t.Fatalf("task = kind %q with steps %v, want one delete_cluster step", tk.Kind, stepKinds(steps))
 	}
-	var del DeleteProjectArgs
+	var del DeleteClusterArgs
 	decodeArgs(t, steps[0], &del)
-	if del.ProjectID != projectID {
-		t.Errorf("delete_project args project = %s, want %s", del.ProjectID, projectID)
+	if del.ClusterID != clusterID {
+		t.Errorf("delete_cluster args cluster = %s, want %s", del.ClusterID, clusterID)
 	}
 }
 
@@ -285,12 +285,12 @@ func TestMemStoreList(t *testing.T) {
 		return base.Add(time.Duration(tick) * time.Second)
 	}
 	svc := NewService(store)
-	projectA, projectB := uuid.New(), uuid.New()
+	clusterA, clusterB := uuid.New(), uuid.New()
 
-	// Three tasks, created oldest-first: A1, A2 (project A), B1 (project B).
-	a1, _ := svc.DeleteProject(t.Context(), DeleteProjectInput{ProjectID: projectA})
-	a2, _ := svc.DeleteBranch(t.Context(), DeleteBranchInput{ProjectID: projectA, BranchID: uuid.New()})
-	b1, _ := svc.DeleteProject(t.Context(), DeleteProjectInput{ProjectID: projectB})
+	// Three tasks, created oldest-first: A1, A2 (cluster A), B1 (cluster B).
+	a1, _ := svc.DeleteCluster(t.Context(), DeleteClusterInput{ClusterID: clusterA})
+	a2, _ := svc.DeleteBranch(t.Context(), DeleteBranchInput{ClusterID: clusterA, BranchID: uuid.New()})
+	b1, _ := svc.DeleteCluster(t.Context(), DeleteClusterInput{ClusterID: clusterB})
 
 	// Unfiltered: newest-first (b1, a2, a1), total 3.
 	got, total, err := svc.List(t.Context(), TaskFilter{}, 10, 0)
@@ -313,19 +313,19 @@ func TestMemStoreList(t *testing.T) {
 		t.Fatalf("page = %v (total %d), want [a2 a1] total 3", taskIDs(page), total)
 	}
 
-	// Filter by project A: a2, a1 only.
-	byProject, total, _ := svc.List(t.Context(), TaskFilter{ProjectID: &projectA}, 10, 0)
-	if total != 2 || len(byProject) != 2 {
-		t.Fatalf("project filter total = %d (got %d rows), want 2", total, len(byProject))
+	// Filter by cluster A: a2, a1 only.
+	byCluster, total, _ := svc.List(t.Context(), TaskFilter{ClusterID: &clusterA}, 10, 0)
+	if total != 2 || len(byCluster) != 2 {
+		t.Fatalf("cluster filter total = %d (got %d rows), want 2", total, len(byCluster))
 	}
 
-	// Filter by kind: only the two delete_project tasks (a1, b1).
-	byKind, total, _ := svc.List(t.Context(), TaskFilter{Kind: KindDeleteProject}, 10, 0)
+	// Filter by kind: only the two delete_cluster tasks (a1, b1).
+	byKind, total, _ := svc.List(t.Context(), TaskFilter{Kind: KindDeleteCluster}, 10, 0)
 	if total != 2 {
 		t.Fatalf("kind filter total = %d, want 2", total)
 	}
 	for _, tk := range byKind {
-		if tk.Kind != KindDeleteProject {
+		if tk.Kind != KindDeleteCluster {
 			t.Errorf("kind filter returned a %q task", tk.Kind)
 		}
 	}

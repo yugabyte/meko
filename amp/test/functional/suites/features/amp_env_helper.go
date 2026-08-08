@@ -12,14 +12,14 @@ import (
 // ampControlPlane is the amp control-plane handle a scheduler-provided environment
 // exposes so an amp-feature test can ATTACH to a STANDING control plane instead of
 // self-provisioning its own backing + amp. env/sharedk8s.Env satisfies it
-// structurally (project-per-test on a standing amp control plane); a fake satisfies
+// structurally (cluster-per-test on a standing amp control plane); a fake satisfies
 // it in unit tests. When t.Env does NOT satisfy it — the fake/none provider, or a
 // universe env — the flow falls back to provisionYBK8s + deployAmp (today's
 // self-provision path).
 //
 // The four members are exactly what the flow needs to source the amp handle from
 // the environment: a controller client (the ampCtl seam), the pool the
-// project-per-test is created on, a way to connect an endpoint's Postgres (through
+// cluster-per-test is created on, a way to connect an endpoint's Postgres (through
 // the provider's port-forward when the control plane is cluster-internal), and the
 // namespace kubectl the compute-restart roller drives. The assertion cores
 // (branchIsolationSteps / endpointLifecycleSteps / computeRestartSteps) never see
@@ -28,7 +28,7 @@ type ampControlPlane interface {
 	// AmpController returns a live amp controller client over the standing control
 	// plane (re-establishing any provider-owned forward as needed).
 	AmpController(ctx context.Context) (*controller.Client, error)
-	// AmpPoolID is the storage pool the project-per-test is created on.
+	// AmpPoolID is the storage pool the cluster-per-test is created on.
 	AmpPoolID() string
 	// ConnectEndpoint opens a pooled SQL connection to an amp endpoint over the
 	// standing control plane, port-forwarding the endpoint Service when it is

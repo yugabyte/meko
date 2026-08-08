@@ -86,7 +86,7 @@ func (a *ampFeatureRun) forkBelowGCCutoff(ctx context.Context) error {
 	return forkBelowGCCutoffSteps(ctx, cl, a.proj, "gc-fork-"+a.f.suffix(), a.f.endpointSQL, a.f.logf, a.f.t.Skip)
 }
 
-func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampProject, childName string, connect endpointConnector, logf func(string, ...any), skip func(string)) error {
+func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector, logf func(string, ...any), skip func(string)) error {
 	baseEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
 		return fmt.Errorf("create ancestor endpoint: %w", err)

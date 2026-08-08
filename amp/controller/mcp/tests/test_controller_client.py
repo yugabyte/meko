@@ -52,23 +52,23 @@ def test_list_pagination_params():
     assert params == {"limit": "50", "offset": "10"}
 
 
-def test_create_project_async_returns_task_body():
-    task = {"id": "t1", "kind": "create_project", "status": "pending"}
+def test_create_cluster_async_returns_task_body():
+    task = {"id": "t1", "kind": "create_cluster", "status": "pending"}
     handler = RecordingHandler(
-        {"POST /api/v1/storage-pools/p1/projects": (202, task)}
+        {"POST /api/v1/storage-pools/p1/clusters": (202, task)}
     )
     client = make_client(handler)
-    result = client.create_project(pool_id="p1", name="db", pg_version=15)
+    result = client.create_cluster(pool_id="p1", name="db", pg_version=15)
     assert result == task
     assert handler.last_json() == {"name": "db", "pg_version": 15}
 
 
-def test_create_project_omits_pg_version_when_none():
+def test_create_cluster_omits_pg_version_when_none():
     handler = RecordingHandler(
-        {"POST /api/v1/storage-pools/p1/projects": (202, {"id": "t1"})}
+        {"POST /api/v1/storage-pools/p1/clusters": (202, {"id": "t1"})}
     )
     client = make_client(handler)
-    client.create_project(pool_id="p1", name="db")
+    client.create_cluster(pool_id="p1", name="db")
     assert handler.last_json() == {"name": "db"}
 
 
@@ -134,7 +134,7 @@ def test_empty_2xx_body_returns_empty_dict():
     client.initialize(
         controller_url="http://c:8080", transport=httpx.MockTransport(handler)
     )
-    assert client.delete_project("p1", "pr1") == {}
+    assert client.delete_cluster("p1", "pr1") == {}
 
 
 def test_uninitialized_client_raises():
@@ -148,14 +148,14 @@ def test_list_tasks_filters():
         {"GET /api/v1/tasks": {"tasks": [], "total": 0, "count": 0}}
     )
     client = make_client(handler)
-    client.list_tasks(status="failed", kind="create_branch", project_id="pr1")
+    client.list_tasks(status="failed", kind="create_branch", cluster_id="pr1")
     params = dict(handler.last.url.params)
     assert params["status"] == "failed"
     assert params["kind"] == "create_branch"
-    assert params["project_id"] == "pr1"
+    assert params["cluster_id"] == "pr1"
 
 
-RESIZE_PATH = "/api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1/resize"
+RESIZE_PATH = "/api/v1/storage-pools/p1/clusters/pr1/branches/b1/endpoints/e1/resize"
 
 
 def test_resize_endpoint_path_and_nested_resources():

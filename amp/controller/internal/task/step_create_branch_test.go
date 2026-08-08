@@ -10,7 +10,7 @@ func TestCreateBranchStep(t *testing.T) {
 	state := newFakeStateStore()
 	branchID := uuid.New()
 	step := NewCreateBranchStep(CreateBranchArgs{
-		ParentBranchID: uuid.New(), ProjectID: uuid.New(),
+		ParentBranchID: uuid.New(), ClusterID: uuid.New(),
 		BranchID: branchID, Name: "feature", ForkLSN: "0/16ABCD0", PgVersion: 18,
 	}, Deps{State: state})
 

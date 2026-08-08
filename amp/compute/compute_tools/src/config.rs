@@ -103,8 +103,8 @@ pub fn write_postgres_conf(
             escape_conf_value(&s.to_string())
         )?;
     }
-    if let Some(s) = &spec.project_id {
-        writeln!(file, "yb_amp.project_id={}", escape_conf_value(s))?;
+    if let Some(s) = &spec.cluster_id {
+        writeln!(file, "yb_amp.cluster_id={}", escape_conf_value(s))?;
     }
     if let Some(s) = &spec.endpoint_id {
         writeln!(file, "yb_amp.endpoint_id={}", escape_conf_value(s))?;

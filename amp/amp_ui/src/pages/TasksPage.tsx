@@ -1,4 +1,4 @@
-// Tasks = the controller's async operation history (create project / branch /
+// Tasks = the controller's async operation history (create cluster / branch /
 // endpoint, etc.). A status filter + a paged table, most-recent-first. Read-only:
 // the controller owns these rows; we only browse them here.
 
@@ -199,15 +199,15 @@ export default function TasksPage() {
 }
 
 /** Human labels for controller task kinds. Each kind is shown distinctly so the
- *  Tasks view can tell a cluster (project) operation apart from a compute
- *  (endpoint) one — a create-cluster flow spans a `create_project` task and a
+ *  Tasks view can tell a cluster operation apart from a compute
+ *  (endpoint) one — a create-cluster flow spans a `create_cluster` task and a
  *  separate `create_endpoint` task. Unknown kinds fall back to a prettified form. */
 const TASK_KIND_LABELS: Record<string, string> = {
-  create_project: "Create cluster",
+  create_cluster: "Create cluster",
   branch: "Branch",
   create_endpoint: "Provision compute",
   resize_endpoint: "Resize compute",
-  delete_project: "Delete cluster",
+  delete_cluster: "Delete cluster",
   delete_branch: "Delete branch",
   delete_endpoint: "Unprovision compute",
 };
@@ -218,7 +218,7 @@ function taskKindLabel(kind: string): string {
 
 /** Cluster column: the short cluster id, else the target ref, else a dash. */
 function clusterLabel(task: Task): string {
-  if (task.project_id) return shortId(task.project_id);
+  if (task.cluster_id) return shortId(task.cluster_id);
   if (task.target_ref) return shortId(task.target_ref);
   return "—";
 }

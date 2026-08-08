@@ -30,8 +30,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let port = c.compute_port() + 158;
 
     step("provision a 2PC-enabled branch endpoint (max_prepared_transactions=5)");
-    // Its own project, i.e. its own lineage, independent of the shared `main`.
-    let branch = c.project_create("twophase")?;
+    // Its own amp cluster, i.e. its own lineage, independent of the shared `main`.
+    let branch = c.cluster_create("twophase")?;
     if branch.is_empty() {
         bail!("branch create failed");
     }

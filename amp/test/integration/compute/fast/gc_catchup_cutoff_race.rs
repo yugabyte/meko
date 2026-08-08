@@ -14,7 +14,7 @@
 //! window; the suite's `pitr_interval=0s` + small `gc_horizon` (`cluster.rs`).
 //!
 //! Asserts the skip counter rises, since a run that never opened a replay window
-//! would otherwise pass. Own project: a fork of `main` pins main's cutoff for the
+//! would otherwise pass. Own amp cluster: a fork of `main` pins main's cutoff for the
 //! rest of the run.
 
 use std::time::{Duration, Instant};
@@ -27,7 +27,7 @@ use crate::db;
 use crate::psql;
 use crate::tee_println;
 
-const PROJECT: &str = "catchup_race";
+const CLUSTER: &str = "catchup_race";
 const ENDPOINT_ID: &str = "ep_catchup_race";
 const TABLE: &str = "catchup_race_counter";
 
@@ -50,8 +50,8 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // block ends at base+900, so anything above that is unprobed and can be in use.
     let pg_port = c.compute_port() + 110;
 
-    step("Create an own project (a fork of `main` would pin main's cutoff)");
-    let branch_id = c.project_create(PROJECT)?;
+    step("Create an own amp cluster (a fork of `main` would pin main's cutoff)");
+    let branch_id = c.cluster_create(CLUSTER)?;
     c.endpoint_create_on_branch(ENDPOINT_ID, &branch_id, pg_port)?;
     let compute = db::compute_conn(pg_port);
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());

@@ -37,10 +37,10 @@ run against a self-built or a standing control plane alike:
 
 ```
 # self-building k8s (default): stands up its own amp control plane off a bare
-# kube-context, project-per-test, tears it all down. No config needed.
+# kube-context, cluster-per-test, tears it all down. No config needed.
 ampqa run --tag regression
 
-# an already-standing control plane, project-per-test against it
+# an already-standing control plane, cluster-per-test against it
 ampqa run --tag regression -c <standing-cp.yaml>
 ```
 

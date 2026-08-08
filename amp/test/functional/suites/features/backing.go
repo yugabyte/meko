@@ -541,10 +541,10 @@ func (f *flow) controllerClient(ctx context.Context) (*controller.Client, error)
 	return cl, nil
 }
 
-// workloadAmp runs the layer-2 workload through amp's compute: create a project
+// workloadAmp runs the layer-2 workload through amp's compute: create a cluster
 // + endpoint via the controller, connect to the endpoint's Postgres, and run a
 // parallel multi-schema DDL/DML exercise plus a workloadgen load + verify. The
-// project delete (cascade) is registered so the endpoint is retired on teardown.
+// cluster delete (cascade) is registered so the endpoint is retired on teardown.
 func (f *flow) workloadAmp(ctx context.Context) error {
 	cl, err := f.controllerClient(ctx)
 	if err != nil {
@@ -563,18 +563,18 @@ func (f *flow) workloadAmp(ctx context.Context) error {
 	}
 
 	projName := "fnd-" + f.suffix()
-	if _, err := cl.CreateProjectAndWait(ctx, pool.ID, controller.CreateProjectRequest{
+	if _, err := cl.CreateClusterAndWait(ctx, pool.ID, controller.CreateClusterRequest{
 		Name:      projName,
 		PgVersion: f.cfg.PgVersion,
 	}); err != nil {
-		return fmt.Errorf("create amp project: %w", err)
+		return fmt.Errorf("create amp cluster: %w", err)
 	}
-	proj, err := findProject(ctx, cl, pool.ID, projName)
+	proj, err := findCluster(ctx, cl, pool.ID, projName)
 	if err != nil {
 		return err
 	}
-	f.register("delete amp project", func(ctx context.Context) error {
-		_, e := cl.DeleteProjectAndWait(ctx, pool.ID, proj.ID)
+	f.register("delete amp cluster", func(ctx context.Context) error {
+		_, e := cl.DeleteClusterAndWait(ctx, pool.ID, proj.ID)
 		return e
 	})
 
@@ -698,20 +698,20 @@ func connectPG(ctx context.Context, ci pg.ConnInfo) (*pg.Client, error) {
 	return pg.Connect(ctx, ci)
 }
 
-func findProject(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Project, error) {
+func findCluster(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Cluster, error) {
 	const page = 100
 	for offset := 0; ; offset += page {
-		list, err := cl.ListProjects(ctx, poolID, page, offset)
+		list, err := cl.ListClusters(ctx, poolID, page, offset)
 		if err != nil {
-			return controller.Project{}, fmt.Errorf("list projects: %w", err)
+			return controller.Cluster{}, fmt.Errorf("list clusters: %w", err)
 		}
-		for _, p := range list.Projects {
+		for _, p := range list.Clusters {
 			if p.Name == name {
 				return p, nil
 			}
 		}
-		if list.Count < page || offset+len(list.Projects) >= list.Total {
-			return controller.Project{}, fmt.Errorf("project %q not found after create", name)
+		if list.Count < page || offset+len(list.Clusters) >= list.Total {
+			return controller.Cluster{}, fmt.Errorf("cluster %q not found after create", name)
 		}
 	}
 }

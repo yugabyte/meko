@@ -1,7 +1,7 @@
 # Runbook: amp controller operations
 
 Operational debugging for the **amp controller** (control plane) and the endpoints it deploys on
-Kubernetes. Use this when a controller is deployed but a *mutation task* (create/delete project,
+Kubernetes. Use this when a controller is deployed but a *mutation task* (create/delete cluster,
 branch, endpoint) fails, or an endpoint pod won't come up. This is the **top-down flow**: start at
 the task's recorded error and walk down through Helm → pod → the endpoint supervisor → the
 individual binaries. For the deep, per-component config/serde errors you land on at the bottom of
@@ -242,7 +242,7 @@ the old size until a redeploy re-renders from `config`. Needs k8s ≥ 1.33.
 
 ```bash
 # resize -> 202 + a resize_endpoint Task (omit a field to keep its current value)
-curl -s -X POST "$BASE/storage-pools/$POOL/projects/$PROJ/branches/$BR/endpoints/$EP/resize" \
+curl -s -X POST "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints/$EP/resize" \
   -H 'content-type: application/json' -d '{"resources":{"cpu":"4","memory":"8Gi"}}'
 # poll the task; its result reports the in-place outcome:
 curl -s "$BASE/tasks/$TASK" | jq '{status, result}'   # result.in_place_resize: completed|pending|infeasible|unsupported

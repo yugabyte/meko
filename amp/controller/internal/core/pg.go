@@ -151,86 +151,86 @@ func (b *PgBackend) GetStoragePool(ctx context.Context, poolID uuid.UUID) (Stora
 	return p, err
 }
 
-func (b *PgBackend) CreateProject(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Project, error) {
-	projectID := uuid.New()
+func (b *PgBackend) CreateCluster(ctx context.Context, poolID uuid.UUID, name string, pgVersion int) (Cluster, error) {
+	clusterID := uuid.New()
 	branchID := uuid.New()
 
-	// The project and its default branch are written together: a project with no
+	// The cluster and its default branch are written together: a cluster with no
 	// branch is not a valid resource. Both inserts are ON CONFLICT (pk) DO
 	// NOTHING so re-executing the same statement (same ids) converges; the
-	// project-name collision surfaces as 23505 on the (storage_pool_id, name)
+	// cluster-name collision surfaces as 23505 on the (storage_pool_id, name)
 	// unique constraint, which is not the conflict target and so still errors.
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
-		return Project{}, fmt.Errorf("begin: %w", err)
+		return Cluster{}, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
+		`INSERT INTO amp_registry.clusters (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
 		 ON CONFLICT (id) DO NOTHING`,
-		projectID.String(), poolID.String(), name); err != nil {
-		return Project{}, mapProjectErr("insert project", err)
+		clusterID.String(), poolID.String(), name); err != nil {
+		return Cluster{}, mapClusterErr("insert cluster", err)
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.branches (project_id, branch_id, name, pg_version, is_default)
+		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default)
 		 VALUES ($1::uuid, $2::uuid, $3, $4, true)
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		projectID.String(), branchID.String(), DefaultBranchName, pgVersion); err != nil {
-		return Project{}, mapProjectErr("insert default branch", err)
+		clusterID.String(), branchID.String(), DefaultBranchName, pgVersion); err != nil {
+		return Cluster{}, mapClusterErr("insert default branch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return Project{}, fmt.Errorf("commit create project: %w", err)
+		return Cluster{}, fmt.Errorf("commit create cluster: %w", err)
 	}
-	return b.getProject(ctx, poolID, projectID)
+	return b.getCluster(ctx, poolID, clusterID)
 }
 
-// projectSelect joins project -> storage_pools and its default branch so a
-// project is only visible through the pool it belongs to, and always carries
+// clusterSelect joins cluster -> storage_pools and its default branch so a
+// cluster is only visible through the pool it belongs to, and always carries
 // its default branch. Pools are top-level, so this is not owner-scoped.
 //
-// The default-branch join filters tombstones inline; the project's own tombstone
-// filter is projectLive, which callers append alongside their WHERE.
-const projectSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at,
-		b.project_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.created_at
-	FROM amp_registry.projects p
+// The default-branch join filters tombstones inline; the cluster's own tombstone
+// filter is clusterLive, which callers append alongside their WHERE.
+const clusterSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at,
+		b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.created_at
+	FROM amp_registry.clusters p
 	JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id
-	JOIN amp_registry.branches b ON b.project_id = p.id AND b.is_default AND b.dropped_at IS NULL`
+	JOIN amp_registry.branches b ON b.cluster_id = p.id AND b.is_default AND b.dropped_at IS NULL`
 
-// projectLive excludes tombstoned (dropped) projects. Projects are tombstoned
+// clusterLive excludes tombstoned (dropped) clusters. Clusters are tombstoned
 // rather than deleted so their tombstoned branches keep a valid parent (see
-// PgBackend.DeleteProject), which means every read has to filter them out
-// explicitly. Assumes the project table is aliased `p`.
-const projectLive = ` AND p.dropped_at IS NULL`
+// PgBackend.DeleteCluster), which means every read has to filter them out
+// explicitly. Assumes the cluster table is aliased `p`.
+const clusterLive = ` AND p.dropped_at IS NULL`
 
-// projectCreateNotFailed excludes a project whose create_project task failed.
-// The project row is written mid-provisioning (the create_project step's
-// EnsureProject) before the later storage steps run, so a task that fails
-// afterward leaves an orphan project that should not surface as a real cluster.
-// Each project has exactly one create_project task — a retry mints a fresh
-// project id — so a single failed task is definitive. The failed task itself is
-// left intact so it still shows on the tasks page. Assumes the project table is
+// clusterCreateNotFailed excludes a cluster whose create_cluster task failed.
+// The cluster row is written mid-provisioning (the create_cluster step's
+// EnsureCluster) before the later storage steps run, so a task that fails
+// afterward leaves an orphan cluster that should not surface as a real cluster.
+// Each cluster has exactly one create_cluster task — a retry mints a fresh
+// cluster id — so a single failed task is definitive. The failed task itself is
+// left intact so it still shows on the tasks page. Assumes the cluster table is
 // aliased `p`.
-const projectCreateNotFailed = ` AND NOT EXISTS (
+const clusterCreateNotFailed = ` AND NOT EXISTS (
 		SELECT 1 FROM tasks t
-		WHERE t.project_id = p.id AND t.kind = 'create_project' AND t.status = 'failed')`
+		WHERE t.cluster_id = p.id AND t.kind = 'create_cluster' AND t.status = 'failed')`
 
-func (b *PgBackend) getProject(ctx context.Context, poolID, projectID uuid.UUID) (Project, error) {
+func (b *PgBackend) getCluster(ctx context.Context, poolID, clusterID uuid.UUID) (Cluster, error) {
 	row := b.pool.QueryRow(ctx,
-		projectSelect+` WHERE p.id = $1::uuid AND sp.id = $2::uuid`+projectLive,
-		projectID.String(), poolID.String())
-	p, err := scanProject(row)
+		clusterSelect+` WHERE p.id = $1::uuid AND sp.id = $2::uuid`+clusterLive,
+		clusterID.String(), poolID.String())
+	p, err := scanCluster(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Project{}, ErrNotFound
+		return Cluster{}, ErrNotFound
 	}
 	return p, err
 }
 
-func (b *PgBackend) GetProject(ctx context.Context, poolID, projectID uuid.UUID) (Project, error) {
-	return b.getProject(ctx, poolID, projectID)
+func (b *PgBackend) GetCluster(ctx context.Context, poolID, clusterID uuid.UUID) (Cluster, error) {
+	return b.getCluster(ctx, poolID, clusterID)
 }
 
-func (b *PgBackend) ListProjects(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]Project, int, error) {
+func (b *PgBackend) ListClusters(ctx context.Context, poolID uuid.UUID, limit, offset int, includeFailed bool) ([]Cluster, int, error) {
 	// A missing pool 404s rather than returning an empty page.
 	if _, err := b.GetStoragePool(ctx, poolID); err != nil {
 		return nil, 0, err
@@ -240,78 +240,78 @@ func (b *PgBackend) ListProjects(ctx context.Context, poolID uuid.UUID, limit, o
 	// is set (an operator's fleet view), so they can be seen and deleted.
 	filter := ""
 	if !includeFailed {
-		filter = projectCreateNotFailed
+		filter = clusterCreateNotFailed
 	}
-	// The count must match the page: projectSelect INNER-JOINs the default branch,
-	// so a project with no is_default branch never appears in the page — require
+	// The count must match the page: clusterSelect INNER-JOINs the default branch,
+	// so a cluster with no is_default branch never appears in the page — require
 	// one in the count too, or total would over-report and a cluster would be
 	// "counted but never returned", breaking pagination.
 	total, err := b.count(ctx,
-		`SELECT count(*) FROM amp_registry.projects p
+		`SELECT count(*) FROM amp_registry.clusters p
 		 WHERE p.storage_pool_id = $1::uuid
 		   AND EXISTS (SELECT 1 FROM amp_registry.branches b
-		               WHERE b.project_id = p.id AND b.is_default AND b.dropped_at IS NULL)`+projectLive+filter,
+		               WHERE b.cluster_id = p.id AND b.is_default AND b.dropped_at IS NULL)`+clusterLive+filter,
 		poolID.String())
 	if err != nil {
-		return nil, 0, fmt.Errorf("count projects: %w", err)
+		return nil, 0, fmt.Errorf("count clusters: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		projectSelect+` WHERE sp.id = $1::uuid`+projectLive+filter+`
+		clusterSelect+` WHERE sp.id = $1::uuid`+clusterLive+filter+`
 		 ORDER BY p.created_at, p.id LIMIT $2 OFFSET $3`,
 		poolID.String(), limit, offset)
 	if err != nil {
-		return nil, 0, fmt.Errorf("list projects: %w", err)
+		return nil, 0, fmt.Errorf("list clusters: %w", err)
 	}
 	defer rows.Close()
 
-	var projects []Project
+	var clusters []Cluster
 	for rows.Next() {
-		p, err := scanProject(rows)
+		p, err := scanCluster(rows)
 		if err != nil {
 			return nil, 0, err
 		}
-		projects = append(projects, p)
+		clusters = append(clusters, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("list projects: %w", err)
+		return nil, 0, fmt.Errorf("list clusters: %w", err)
 	}
-	return projects, total, nil
+	return clusters, total, nil
 }
 
-func (b *PgBackend) CreateBranch(ctx context.Context, poolID, projectID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error) {
-	// Validate the project within the pool first (a project not in the pool 404s).
-	if err := b.projectInPool(ctx, poolID, projectID); err != nil {
+func (b *PgBackend) CreateBranch(ctx context.Context, poolID, clusterID, parentBranchID uuid.UUID, name, forkLSN string) (Branch, error) {
+	// Validate the cluster within the pool first (a cluster not in the pool 404s).
+	if err := b.clusterInPool(ctx, poolID, clusterID); err != nil {
 		return Branch{}, err
 	}
 
 	branchID := uuid.New()
 	// is_default = false; record the fork ancestry. pg_version is inherited from
 	// the parent (the SELECT source) so a branch and its ancestor never drift.
-	// The SELECT is keyed by the parent within the project; a missing parent
+	// The SELECT is keyed by the parent within the cluster; a missing parent
 	// inserts nothing, so the read-back 404s. ON CONFLICT (pk) DO NOTHING makes a
 	// same-id retry converge; a duplicate name surfaces as 23505 on
-	// branches_name_per_project -> ErrConflict. forkLSN is validated to be a
+	// branches_name_per_cluster -> ErrConflict. forkLSN is validated to be a
 	// well-formed LSN by the caller before it reaches the pg_lsn cast. A
 	// tombstoned parent selects nothing, so forking a dropped branch 404s
 	// rather than resurrecting its lineage.
 	if _, err := b.pool.Exec(ctx,
-		`INSERT INTO amp_registry.branches (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
+		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
 		 SELECT $1::uuid, $2::uuid, $3, p.pg_version, false, $4::uuid, $5::pg_lsn
 		 FROM amp_registry.branches p
-		 WHERE p.project_id = $1::uuid AND p.branch_id = $4::uuid AND p.dropped_at IS NULL
+		 WHERE p.cluster_id = $1::uuid AND p.branch_id = $4::uuid AND p.dropped_at IS NULL
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		projectID.String(), branchID.String(), name, parentBranchID.String(), forkLSN); err != nil {
+		clusterID.String(), branchID.String(), name, parentBranchID.String(), forkLSN); err != nil {
 		return Branch{}, mapBranchErr("insert branch", err)
 	}
-	return b.getBranchByID(ctx, projectID, branchID)
+	return b.getBranchByID(ctx, clusterID, branchID)
 }
 
-func (b *PgBackend) getBranchByID(ctx context.Context, projectID, branchID uuid.UUID) (Branch, error) {
+func (b *PgBackend) getBranchByID(ctx context.Context, clusterID, branchID uuid.UUID) (Branch, error) {
 	row := b.pool.QueryRow(ctx,
 		`SELECT `+branchColumns+`
 		 FROM amp_registry.branches b
-		 WHERE b.project_id = $1::uuid AND b.branch_id = $2::uuid AND b.dropped_at IS NULL`,
-		projectID.String(), branchID.String())
+		 WHERE b.cluster_id = $1::uuid AND b.branch_id = $2::uuid AND b.dropped_at IS NULL`,
+		clusterID.String(), branchID.String())
 	br, err := scanBranch(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Branch{}, ErrNotFound
@@ -324,23 +324,23 @@ func (b *PgBackend) getBranchByID(ctx context.Context, projectID, branchID uuid.
 // `b`, so a column added to the projection cannot reach one scanBranch caller
 // and miss another — which is exactly how a query and its scanner drift out of
 // step and start answering 500.
-const branchColumns = `b.project_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.pg_settings, b.created_at`
+const branchColumns = `b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.pg_settings, b.created_at`
 
-// branchSelect joins branch -> project -> storage_pools so a branch is only
-// visible through the project (and pool) it belongs to. Tombstoned projects are
+// branchSelect joins branch -> cluster -> storage_pools so a branch is only
+// visible through the cluster (and pool) it belongs to. Tombstoned clusters are
 // filtered in the join; the branch's own tombstone filter is branchLive.
 const branchSelect = `SELECT ` + branchColumns + `
 	FROM amp_registry.branches b
-	JOIN amp_registry.projects p ON p.id = b.project_id AND p.dropped_at IS NULL
+	JOIN amp_registry.clusters p ON p.id = b.cluster_id AND p.dropped_at IS NULL
 	JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id`
 
 // branchLive excludes tombstoned (dropped) branches. Assumes `b` is the branch.
 const branchLive = ` AND b.dropped_at IS NULL`
 
-func (b *PgBackend) GetBranch(ctx context.Context, poolID, projectID, branchID uuid.UUID) (Branch, error) {
+func (b *PgBackend) GetBranch(ctx context.Context, poolID, clusterID, branchID uuid.UUID) (Branch, error) {
 	row := b.pool.QueryRow(ctx,
-		branchSelect+` WHERE b.branch_id = $1::uuid AND b.project_id = $2::uuid AND sp.id = $3::uuid`+branchLive,
-		branchID.String(), projectID.String(), poolID.String())
+		branchSelect+` WHERE b.branch_id = $1::uuid AND b.cluster_id = $2::uuid AND sp.id = $3::uuid`+branchLive,
+		branchID.String(), clusterID.String(), poolID.String())
 	br, err := scanBranch(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Branch{}, ErrNotFound
@@ -348,23 +348,23 @@ func (b *PgBackend) GetBranch(ctx context.Context, poolID, projectID, branchID u
 	return br, err
 }
 
-func (b *PgBackend) ListBranches(ctx context.Context, poolID, projectID uuid.UUID, limit, offset int) ([]Branch, int, error) {
-	// A missing pool or project 404s rather than returning an empty page.
-	if err := b.projectInPool(ctx, poolID, projectID); err != nil {
+func (b *PgBackend) ListBranches(ctx context.Context, poolID, clusterID uuid.UUID, limit, offset int) ([]Branch, int, error) {
+	// A missing pool or cluster 404s rather than returning an empty page.
+	if err := b.clusterInPool(ctx, poolID, clusterID); err != nil {
 		return nil, 0, err
 	}
 	total, err := b.count(ctx,
-		`SELECT count(*) FROM amp_registry.branches WHERE project_id = $1::uuid AND dropped_at IS NULL`,
-		projectID.String())
+		`SELECT count(*) FROM amp_registry.branches WHERE cluster_id = $1::uuid AND dropped_at IS NULL`,
+		clusterID.String())
 	if err != nil {
 		return nil, 0, fmt.Errorf("count branches: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
 		`SELECT `+branchColumns+`
 		 FROM amp_registry.branches b
-		 WHERE b.project_id = $1::uuid AND b.dropped_at IS NULL
+		 WHERE b.cluster_id = $1::uuid AND b.dropped_at IS NULL
 		 ORDER BY b.created_at, b.branch_id LIMIT $2 OFFSET $3`,
-		projectID.String(), limit, offset)
+		clusterID.String(), limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list branches: %w", err)
 	}
@@ -384,31 +384,31 @@ func (b *PgBackend) ListBranches(ctx context.Context, poolID, projectID uuid.UUI
 	return branches, total, nil
 }
 
-// projectInPool returns ErrNotFound unless a live projectID exists under poolID.
-func (b *PgBackend) projectInPool(ctx context.Context, poolID, projectID uuid.UUID) error {
+// clusterInPool returns ErrNotFound unless a live clusterID exists under poolID.
+func (b *PgBackend) clusterInPool(ctx context.Context, poolID, clusterID uuid.UUID) error {
 	var x int
 	err := b.pool.QueryRow(ctx,
-		`SELECT 1 FROM amp_registry.projects
+		`SELECT 1 FROM amp_registry.clusters
 		  WHERE id = $1::uuid AND storage_pool_id = $2::uuid AND dropped_at IS NULL`,
-		projectID.String(), poolID.String()).Scan(&x)
+		clusterID.String(), poolID.String()).Scan(&x)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("resolve project in pool: %w", err)
+		return fmt.Errorf("resolve cluster in pool: %w", err)
 	}
 	return nil
 }
 
-// mapProjectErr translates the constraint violations the project writes can
-// raise: a duplicate project name among live projects (projects_name_per_pool)
-// -> ErrConflict, and a missing pool (foreign key on project.storage_pool_id)
+// mapClusterErr translates the constraint violations the cluster writes can
+// raise: a duplicate cluster name among live clusters (clusters_name_per_pool)
+// -> ErrConflict, and a missing pool (foreign key on cluster.storage_pool_id)
 // -> ErrNotFound.
-func mapProjectErr(what string, err error) error {
+func mapClusterErr(what string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "23505": // unique_violation: the project name is already taken in the pool
+		case "23505": // unique_violation: the cluster name is already taken in the pool
 			return ErrConflict
 		case "23503": // foreign_key_violation: the pool no longer exists
 			return ErrNotFound
@@ -418,15 +418,15 @@ func mapProjectErr(what string, err error) error {
 }
 
 // mapBranchErr translates the constraint violations a branch write can raise: a
-// duplicate branch name among live branches (branches_name_per_project) ->
-// ErrConflict, and a missing in-project parent (foreign key) -> ErrNotFound.
+// duplicate branch name among live branches (branches_name_per_cluster) ->
+// ErrConflict, and a missing in-cluster parent (foreign key) -> ErrNotFound.
 func mapBranchErr(what string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "23505": // unique_violation: the branch name is already taken in the project
+		case "23505": // unique_violation: the branch name is already taken in the cluster
 			return ErrConflict
-		case "23503": // foreign_key_violation: the in-project parent does not exist
+		case "23503": // foreign_key_violation: the in-cluster parent does not exist
 			return ErrNotFound
 		}
 	}
@@ -441,7 +441,7 @@ func (b *PgBackend) getStoragePoolByID(ctx context.Context, id uuid.UUID) (Stora
 	return scanPool(row)
 }
 
-func (b *PgBackend) CreateEndpoint(ctx context.Context, projectID, branchID uuid.UUID, role string, config []byte) (Endpoint, error) {
+func (b *PgBackend) CreateEndpoint(ctx context.Context, clusterID, branchID uuid.UUID, role string, config []byte) (Endpoint, error) {
 	id := uuid.New()
 	var cfg any
 	if len(config) > 0 {
@@ -470,10 +470,10 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, projectID, branchID uuid
 // endpointSelect projects an endpoint row; address is NULL until the endpoint
 // is deployed (SetEndpointAddress), so it is coalesced to the empty string to
 // match Endpoint.Address being a plain string.
-// An endpoint has no project_id of its own — it reaches its project through its
+// An endpoint has no cluster_id of its own — it reaches its cluster through its
 // branch — so every projection joins `branches` to supply it. That join is also
-// what scopes a query to a project.
-const endpointSelect = `SELECT e.id::text, eb.project_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.config->'extended', e.created_at
+// what scopes a query to a cluster.
+const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.config->'extended', e.created_at
 	FROM amp_registry.endpoints e
 	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
@@ -482,14 +482,14 @@ func (b *PgBackend) getEndpointByID(ctx context.Context, id uuid.UUID) (Endpoint
 	return scanEndpoint(row)
 }
 
-func (b *PgBackend) GetEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (Endpoint, error) {
+func (b *PgBackend) GetEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID uuid.UUID) (Endpoint, error) {
 	row := b.pool.QueryRow(ctx,
 		endpointSelect+`
-		 JOIN amp_registry.projects p ON p.id = eb.project_id AND p.dropped_at IS NULL
+		 JOIN amp_registry.clusters p ON p.id = eb.cluster_id AND p.dropped_at IS NULL
 		 JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id
-		 WHERE e.id = $1::uuid AND eb.branch_id = $2::uuid AND eb.project_id = $3::uuid
+		 WHERE e.id = $1::uuid AND eb.branch_id = $2::uuid AND eb.cluster_id = $3::uuid
 		   AND eb.dropped_at IS NULL AND sp.id = $4::uuid`,
-		endpointID.String(), branchID.String(), projectID.String(), poolID.String())
+		endpointID.String(), branchID.String(), clusterID.String(), poolID.String())
 	ep, err := scanEndpoint(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Endpoint{}, ErrNotFound
@@ -497,24 +497,24 @@ func (b *PgBackend) GetEndpoint(ctx context.Context, poolID, projectID, branchID
 	return ep, err
 }
 
-func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, projectID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
-	// Resolve the branch within the project and pool first. No row means the
-	// pool, project, or branch does not exist -> 404.
-	if _, err := b.GetBranch(ctx, poolID, projectID, branchID); err != nil {
+func (b *PgBackend) ListEndpoints(ctx context.Context, poolID, clusterID, branchID uuid.UUID, limit, offset int) ([]Endpoint, int, error) {
+	// Resolve the branch within the cluster and pool first. No row means the
+	// pool, cluster, or branch does not exist -> 404.
+	if _, err := b.GetBranch(ctx, poolID, clusterID, branchID); err != nil {
 		return nil, 0, err
 	}
 	total, err := b.count(ctx,
 		`SELECT count(*) FROM amp_registry.endpoints e
 		  JOIN amp_registry.branches b ON b.branch_id = e.branch_id
-		 WHERE b.project_id = $1::uuid AND e.branch_id = $2::uuid`,
-		projectID.String(), branchID.String())
+		 WHERE b.cluster_id = $1::uuid AND e.branch_id = $2::uuid`,
+		clusterID.String(), branchID.String())
 	if err != nil {
 		return nil, 0, fmt.Errorf("count endpoints: %w", err)
 	}
 	rows, err := b.pool.Query(ctx,
-		endpointSelect+` WHERE eb.project_id = $1::uuid AND e.branch_id = $2::uuid
+		endpointSelect+` WHERE eb.cluster_id = $1::uuid AND e.branch_id = $2::uuid
 		 ORDER BY e.created_at, e.id LIMIT $3 OFFSET $4`,
-		projectID.String(), branchID.String(), limit, offset)
+		clusterID.String(), branchID.String(), limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list endpoints: %w", err)
 	}
@@ -621,47 +621,47 @@ func scanPool(r scanRow) (StoragePool, error) {
 	return p, nil
 }
 
-// scanProject scans a project row joined with its default branch (projectSelect).
-func scanProject(r scanRow) (Project, error) {
+// scanCluster scans a cluster row joined with its default branch (clusterSelect).
+func scanCluster(r scanRow) (Cluster, error) {
 	var (
 		idStr   string
 		poolStr string
-		p       Project
+		p       Cluster
 		def     Branch
 		// default-branch columns
-		defProjectStr string
+		defClusterStr string
 		defBranchStr  string
 		defParentStr  sql.NullString
 		defForkLSN    sql.NullString
 	)
 	if err := r.Scan(&idStr, &poolStr, &p.Name, &p.CreatedAt,
-		&defProjectStr, &defBranchStr, &def.Name, &def.PgVersion, &def.IsDefault, &defParentStr, &defForkLSN, &def.CreatedAt); err != nil {
-		return Project{}, err
+		&defClusterStr, &defBranchStr, &def.Name, &def.PgVersion, &def.IsDefault, &defParentStr, &defForkLSN, &def.CreatedAt); err != nil {
+		return Cluster{}, err
 	}
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		return Project{}, fmt.Errorf("parse project id: %w", err)
+		return Cluster{}, fmt.Errorf("parse cluster id: %w", err)
 	}
 	poolID, err := uuid.Parse(poolStr)
 	if err != nil {
-		return Project{}, fmt.Errorf("parse storage pool id: %w", err)
+		return Cluster{}, fmt.Errorf("parse storage pool id: %w", err)
 	}
-	defProjectID, err := uuid.Parse(defProjectStr)
+	defClusterID, err := uuid.Parse(defClusterStr)
 	if err != nil {
-		return Project{}, fmt.Errorf("parse default branch project id: %w", err)
+		return Cluster{}, fmt.Errorf("parse default branch cluster id: %w", err)
 	}
 	defBranchID, err := uuid.Parse(defBranchStr)
 	if err != nil {
-		return Project{}, fmt.Errorf("parse default branch id: %w", err)
+		return Cluster{}, fmt.Errorf("parse default branch id: %w", err)
 	}
 	p.ID = id
 	p.StoragePoolID = poolID
-	def.ProjectID = defProjectID
+	def.ClusterID = defClusterID
 	def.BranchID = defBranchID
 	if defParentStr.Valid {
 		parentID, err := uuid.Parse(defParentStr.String)
 		if err != nil {
-			return Project{}, fmt.Errorf("parse default branch parent id: %w", err)
+			return Cluster{}, fmt.Errorf("parse default branch parent id: %w", err)
 		}
 		def.ParentBranchID = &parentID
 	}
@@ -688,25 +688,25 @@ func decodePgSettings(raw []byte, what string) (map[string]string, error) {
 
 func scanBranch(r scanRow) (Branch, error) {
 	var (
-		projectStr  string
+		clusterStr  string
 		branchStr   string
 		parentStr   sql.NullString // NULL for the default branch
 		forkLSN     sql.NullString // NULL for the default branch
 		settingsRaw []byte
 		br          Branch
 	)
-	if err := r.Scan(&projectStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &settingsRaw, &br.CreatedAt); err != nil {
+	if err := r.Scan(&clusterStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &settingsRaw, &br.CreatedAt); err != nil {
 		return Branch{}, err
 	}
-	projectID, err := uuid.Parse(projectStr)
+	clusterID, err := uuid.Parse(clusterStr)
 	if err != nil {
-		return Branch{}, fmt.Errorf("parse project id: %w", err)
+		return Branch{}, fmt.Errorf("parse cluster id: %w", err)
 	}
 	branchID, err := uuid.Parse(branchStr)
 	if err != nil {
 		return Branch{}, fmt.Errorf("parse branch id: %w", err)
 	}
-	br.ProjectID = projectID
+	br.ClusterID = clusterID
 	br.BranchID = branchID
 	if parentStr.Valid {
 		parentID, err := uuid.Parse(parentStr.String)
@@ -725,28 +725,28 @@ func scanBranch(r scanRow) (Branch, error) {
 func scanEndpoint(r scanRow) (Endpoint, error) {
 	var (
 		idStr       string
-		projectStr  string
+		clusterStr  string
 		branchStr   string
 		settingsRaw []byte
 		ep          Endpoint
 	)
-	if err := r.Scan(&idStr, &projectStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &settingsRaw, &ep.Extended, &ep.CreatedAt); err != nil {
+	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &settingsRaw, &ep.Extended, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("parse endpoint id: %w", err)
 	}
-	project, err := uuid.Parse(projectStr)
+	cluster, err := uuid.Parse(clusterStr)
 	if err != nil {
-		return Endpoint{}, fmt.Errorf("parse project id: %w", err)
+		return Endpoint{}, fmt.Errorf("parse cluster id: %w", err)
 	}
 	branch, err := uuid.Parse(branchStr)
 	if err != nil {
 		return Endpoint{}, fmt.Errorf("parse branch id: %w", err)
 	}
 	ep.ID = id
-	ep.ProjectID = project
+	ep.ClusterID = cluster
 	ep.BranchID = branch
 	if ep.PgSettings, err = decodePgSettings(settingsRaw, "endpoint"); err != nil {
 		return Endpoint{}, err

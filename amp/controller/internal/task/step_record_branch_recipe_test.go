@@ -9,9 +9,9 @@ import (
 
 func TestRecordBranchRecipeStepDefault(t *testing.T) {
 	recipes := newFakeRecipeStore()
-	projectID, branchID := uuid.New(), uuid.New()
+	clusterID, branchID := uuid.New(), uuid.New()
 	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{
-		ProjectID: projectID, BranchID: branchID, BranchName: "main", PgVersion: 18, StartLSN: "0/0",
+		ClusterID: clusterID, BranchID: branchID, BranchName: "main", PgVersion: 18, StartLSN: "0/0",
 	}, Deps{Recipes: recipes})
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
@@ -35,7 +35,7 @@ func TestRecordBranchRecipeStepFork(t *testing.T) {
 	recipes := newFakeRecipeStore()
 	ancestor := uuid.New()
 	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{
-		ProjectID: uuid.New(), BranchID: uuid.New(), BranchName: "feature", PgVersion: 18,
+		ClusterID: uuid.New(), BranchID: uuid.New(), BranchName: "feature", PgVersion: 18,
 		AncestorBranchID: &ancestor, StartLSN: "0/16ABCD0",
 	}, Deps{Recipes: recipes})
 	if res := step.Execute(t.Context()); res.Failed() {
@@ -53,7 +53,7 @@ func TestRecordBranchRecipeStepFork(t *testing.T) {
 func TestRecordBranchRecipeStepNoController(t *testing.T) {
 	// With no controller (recipes nil) the step no-ops with a warning
 	// rather than failing — mirroring the synchronous handler.
-	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{ProjectID: uuid.New(), BranchID: uuid.New(), StartLSN: "0/0"}, Deps{})
+	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{ClusterID: uuid.New(), BranchID: uuid.New(), StartLSN: "0/0"}, Deps{})
 	res := step.Execute(t.Context())
 	if res.Failed() {
 		t.Fatalf("Execute with nil recipes failed, want no-op success: %v", res.Err)
@@ -66,7 +66,7 @@ func TestRecordBranchRecipeStepNoController(t *testing.T) {
 func TestRecordBranchRecipeStepPropagatesError(t *testing.T) {
 	recipes := newFakeRecipeStore()
 	recipes.errRecord = errors.New("sc down")
-	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{ProjectID: uuid.New(), BranchID: uuid.New(), StartLSN: "0/0"}, Deps{Recipes: recipes})
+	step := NewRecordBranchRecipeStep(RecordBranchRecipeArgs{ClusterID: uuid.New(), BranchID: uuid.New(), StartLSN: "0/0"}, Deps{Recipes: recipes})
 	if res := step.Execute(t.Context()); !res.Failed() {
 		t.Fatal("Execute succeeded, want the record error propagated")
 	}

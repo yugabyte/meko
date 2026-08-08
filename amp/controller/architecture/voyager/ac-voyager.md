@@ -75,10 +75,10 @@ unchanged**, **reused as logic**, **reused as-is**, or **new**.
 
 #### AMP
 1. **Target provisioning is a voyager API** (`POST /migrations/{id}/target`) that
-   internally reuses the existing project/endpoint task steps and attaches the
+   internally reuses the existing cluster/endpoint task steps and attaches the
    result to the migration — the agent never hand-carries endpoint ids.
 1. **AMP's task framework is reused as-is** (`internal/task/`) for the three
-   mutations, along with the existing project/endpoint provisioning steps for
+   mutations, along with the existing cluster/endpoint provisioning steps for
    target creation.
 1. **Voyager Runs are deployer-agnostic:** `deployer_type` + `deployer_metadata jsonb`,
    mirroring the existing `Deployer` split (kubernetes/docker).
@@ -120,7 +120,7 @@ CREATE TABLE amp_voyager_control.migration (
     -- POC: password in plaintext — see Post-POC action items.
     source_config   jsonb NOT NULL,
     -- Written by the attach-target-to-migration task step:
-    -- {pool_id, project_id, branch_id, endpoint_id, host, port, username, password, database}
+    -- {pool_id, cluster_id, branch_id, endpoint_id, host, port, username, password, database}
     target_config   jsonb,
     -- Task that is provisioning the target (drives state=provisioning_target).
     target_task_id  uuid,
@@ -259,14 +259,14 @@ Validation: `db_type == postgresql`, required fields non-empty. `400` otherwise.
 
 ### 4.3 `POST /migrations/{migrationId}/target` — provision PG compute + attach
 
-Async `202 + Task`. Reuses the existing project/endpoint provisioning steps and
+Async `202 + Task`. Reuses the existing cluster/endpoint provisioning steps and
 appends one new step that writes the result onto the migration.
 
 ```yaml
 request:
-  pool_id: <uuid>              # storage pool to create the project in
+  pool_id: <uuid>              # storage pool to create the cluster in
   vcpu: 16                     # sizing chosen by the agent from the assessment
-  project_name: "prod-migration"   # optional; defaults to migration name
+  cluster_name: "prod-migration"   # optional; defaults to migration name
 response: 202                  # Task; poll /tasks/{taskId}
 errors:
   404: migration not found
@@ -275,7 +275,7 @@ errors:
 
 Task plan (`KindCreateMigrationTarget`):
 
-1. `create_project` (existing step; with writer endpoint) — creates project,
+1. `create_cluster` (existing step; with writer endpoint) — creates cluster,
    default branch, and the `read_write` endpoint via the `yb-light-endpoint`
    Helm release, waits for the address.
 2. `attach_target_to_migration` (**new step**) — resolves the endpoint address
@@ -301,7 +301,7 @@ response: 200
   detail: "importing data"     # human-readable, chat-ready
   source: { db_type, host, port, username, database, schemas }     # no password
   target:                      # null until attached
-    { endpoint_id, project_id, pool_id, host, port, username, database }
+    { endpoint_id, cluster_id, pool_id, host, port, username, database }
   runs:                        # latest attempt per operation
     - operation: migrate
       attempt: 1
@@ -344,7 +344,7 @@ semantics):
   "id": "3f6c…task",
   "kind": "start_migration_run",
   "status": "running",
-  "project_id": null,
+  "cluster_id": null,
   "target_ref": "90b8b0b8-9013-4602-8898-fba5bf21f564",
   "params": { "migration_id": "90b8b0b8-…", "operation": "assess", "attempt": 1 },
   "error": null,
@@ -428,7 +428,7 @@ structurally identical to assess):
   "state": "migrating",
   "detail": "importing data (4,103/6,704 rows)",
   "source": { "…": "…" },
-  "target": { "endpoint_id": "e7a1…", "project_id": "p2f4…", "pool_id": "aa01…",
+  "target": { "endpoint_id": "e7a1…", "cluster_id": "p2f4…", "pool_id": "aa01…",
               "host": "amp-prod-x92.yugabyte.cloud", "port": 5433,
               "username": "cloud_admin", "database": "prod" },
   "runs": [
@@ -766,10 +766,10 @@ sequenceDiagram
   participant K8s
   Agent->>REST: POST /migrations/{id}/target {pool_id, vcpu}
   REST->>VoyagerDB: 409 if target attached or task in flight
-  REST->>VoyagerDB: plan Task [create_project(+writer endpoint), attach_target]
+  REST->>VoyagerDB: plan Task [create_cluster(+writer endpoint), attach_target]
   REST->>VoyagerDB: migration.target_task_id = task.id
   REST-->>Agent: 202 Task {task_id}
-  Worker->>K8s: create_project + endpoint (existing steps, helm install yb-light-endpoint, wait)
+  Worker->>K8s: create_cluster + endpoint (existing steps, helm install yb-light-endpoint, wait)
   K8s-->>Worker: endpoint address {host, port}
   Worker->>VoyagerDB: attach_target_to_migration: target_config={endpoint_id, host, port, creds, db}, clear target_task_id
   Agent->>REST: GET /tasks/{task_id}  (existing API)

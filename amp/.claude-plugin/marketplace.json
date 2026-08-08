@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "amp-agent-skills",
-      "description": "amp controller MCP tools: storage pools, projects (databases), branches, endpoints (compute), and tasks.",
+      "description": "amp controller MCP tools: storage pools, clusters (databases), branches, endpoints (compute), and tasks.",
       "source": "./controller/mcp/skills",
       "strict": false,
       "skills": [

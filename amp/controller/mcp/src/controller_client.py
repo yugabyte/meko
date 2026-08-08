@@ -151,35 +151,35 @@ class ControllerClient:
     def get_storage_pool(self, pool_id: str) -> dict:
         return self._request("GET", f"/storage-pools/{pool_id}")
 
-    # ---- Projects ----
+    # ---- Clusters ----
 
-    def create_project(
+    def create_cluster(
         self, pool_id: str, name: str, pg_version: Optional[int] = None
     ) -> dict:
         body: dict[str, Any] = {"name": name}
         if pg_version is not None:
             body["pg_version"] = pg_version
         return self._request(
-            "POST", f"/storage-pools/{pool_id}/projects", json=body
+            "POST", f"/storage-pools/{pool_id}/clusters", json=body
         )
 
-    def list_projects(
+    def list_clusters(
         self, pool_id: str, limit: Optional[int] = None, offset: Optional[int] = None
     ) -> dict:
         return self._request(
             "GET",
-            f"/storage-pools/{pool_id}/projects",
+            f"/storage-pools/{pool_id}/clusters",
             params=self._page_params(limit, offset),
         )
 
-    def get_project(self, pool_id: str, project_id: str) -> dict:
+    def get_cluster(self, pool_id: str, cluster_id: str) -> dict:
         return self._request(
-            "GET", f"/storage-pools/{pool_id}/projects/{project_id}"
+            "GET", f"/storage-pools/{pool_id}/clusters/{cluster_id}"
         )
 
-    def delete_project(self, pool_id: str, project_id: str) -> dict:
+    def delete_cluster(self, pool_id: str, cluster_id: str) -> dict:
         return self._request(
-            "DELETE", f"/storage-pools/{pool_id}/projects/{project_id}"
+            "DELETE", f"/storage-pools/{pool_id}/clusters/{cluster_id}"
         )
 
     # ---- Branches ----
@@ -187,7 +187,7 @@ class ControllerClient:
     def create_branch(
         self,
         pool_id: str,
-        project_id: str,
+        cluster_id: str,
         name: str,
         parent_branch_id: Optional[str] = None,
         fork_point_lsn: Optional[str] = None,
@@ -199,33 +199,33 @@ class ControllerClient:
             body["fork_point_lsn"] = fork_point_lsn
         return self._request(
             "POST",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches",
             json=body,
         )
 
     def list_branches(
         self,
         pool_id: str,
-        project_id: str,
+        cluster_id: str,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> dict:
         return self._request(
             "GET",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches",
             params=self._page_params(limit, offset),
         )
 
-    def get_branch(self, pool_id: str, project_id: str, branch_id: str) -> dict:
+    def get_branch(self, pool_id: str, cluster_id: str, branch_id: str) -> dict:
         return self._request(
             "GET",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}",
         )
 
-    def delete_branch(self, pool_id: str, project_id: str, branch_id: str) -> dict:
+    def delete_branch(self, pool_id: str, cluster_id: str, branch_id: str) -> dict:
         return self._request(
             "DELETE",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}",
         )
 
     # ---- Endpoints ----
@@ -233,7 +233,7 @@ class ControllerClient:
     def create_endpoint(
         self,
         pool_id: str,
-        project_id: str,
+        cluster_id: str,
         branch_id: str,
         role: Optional[str] = None,
         disk_type: Optional[str] = None,
@@ -254,44 +254,44 @@ class ControllerClient:
             body["resources"] = resources
         return self._request(
             "POST",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}/endpoints",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/endpoints",
             json=body,
         )
 
     def list_endpoints(
         self,
         pool_id: str,
-        project_id: str,
+        cluster_id: str,
         branch_id: str,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> dict:
         return self._request(
             "GET",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}/endpoints",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/endpoints",
             params=self._page_params(limit, offset),
         )
 
     def get_endpoint(
-        self, pool_id: str, project_id: str, branch_id: str, endpoint_id: str
+        self, pool_id: str, cluster_id: str, branch_id: str, endpoint_id: str
     ) -> dict:
         return self._request(
             "GET",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/endpoints/{endpoint_id}",
         )
 
     def delete_endpoint(
-        self, pool_id: str, project_id: str, branch_id: str, endpoint_id: str
+        self, pool_id: str, cluster_id: str, branch_id: str, endpoint_id: str
     ) -> dict:
         return self._request(
             "DELETE",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/endpoints/{endpoint_id}",
         )
 
     def resize_endpoint(
         self,
         pool_id: str,
-        project_id: str,
+        cluster_id: str,
         branch_id: str,
         endpoint_id: str,
         cpu: Optional[str] = None,
@@ -307,7 +307,7 @@ class ControllerClient:
             resources["memory"] = memory
         return self._request(
             "POST",
-            f"/storage-pools/{pool_id}/projects/{project_id}/branches/{branch_id}/endpoints/{endpoint_id}/resize",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/endpoints/{endpoint_id}/resize",
             json={"resources": resources},
         )
 
@@ -317,7 +317,7 @@ class ControllerClient:
         self,
         status: Optional[str] = None,
         kind: Optional[str] = None,
-        project_id: Optional[str] = None,
+        cluster_id: Optional[str] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
     ) -> dict:
@@ -326,8 +326,8 @@ class ControllerClient:
             params["status"] = status
         if kind is not None:
             params["kind"] = kind
-        if project_id is not None:
-            params["project_id"] = project_id
+        if cluster_id is not None:
+            params["cluster_id"] = cluster_id
         return self._request("GET", "/tasks", params=params)
 
     def get_task(self, task_id: str) -> dict:

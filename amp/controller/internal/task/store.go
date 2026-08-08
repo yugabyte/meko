@@ -109,12 +109,12 @@ type Store interface {
 }
 
 // TaskFilter narrows a List query. Zero-value fields are unfiltered: an empty
-// Status or Kind matches any, and a nil ProjectID matches any project (including
-// project-less tasks).
+// Status or Kind matches any, and a nil ClusterID matches any cluster (including
+// cluster-less tasks).
 type TaskFilter struct {
 	Status    Status     // "" => any
 	Kind      string     // "" => any
-	ProjectID *uuid.UUID // nil => any
+	ClusterID *uuid.UUID // nil => any
 }
 
 // PgStore is the YBDB-backed Store.
@@ -131,7 +131,7 @@ func NewPgStore(pool *db.Pool) *PgStore {
 // the in-memory implementation used by unit tests; see mem.go).
 var _ Store = (*PgStore)(nil)
 
-const taskColumns = `id::text, kind, status::text, project_id::text, target_ref,
+const taskColumns = `id::text, kind, status::text, cluster_id::text, target_ref,
 	params, step_ids::text[], error, owner, lease_expiry, created_at, updated_at`
 
 func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
@@ -140,9 +140,9 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 	if len(params) == 0 {
 		params = json.RawMessage("{}")
 	}
-	var projectArg any
-	if spec.ProjectID != nil {
-		projectArg = spec.ProjectID.String()
+	var clusterArg any
+	if spec.ClusterID != nil {
+		clusterArg = spec.ClusterID.String()
 	}
 
 	// Assign a stable id per step up front; their order is the task's step_ids.
@@ -160,10 +160,10 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 	// The task first (the steps' task_id FK points at it), carrying the ordered
 	// step ids; then the steps themselves.
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO tasks (id, kind, status, project_id, target_ref, params, step_ids)
+		`INSERT INTO tasks (id, kind, status, cluster_id, target_ref, params, step_ids)
 		 VALUES ($1::uuid, $2, 'pending', $3::uuid, $4, $5::jsonb, $6::uuid[])
 		 ON CONFLICT (id) DO NOTHING`,
-		taskID.String(), spec.Kind, projectArg, spec.TargetRef, []byte(params), stepIDs); err != nil {
+		taskID.String(), spec.Kind, clusterArg, spec.TargetRef, []byte(params), stepIDs); err != nil {
 		// The first-writer-wins resize lock: a second in-flight resize of the same
 		// endpoint violates the partial unique index, which we surface as a typed
 		// conflict for the API to turn into a 409.
@@ -357,8 +357,8 @@ func (s *PgStore) List(ctx context.Context, f TaskFilter, limit, offset int) ([]
 	if f.Kind != "" {
 		add("kind = $%d", f.Kind)
 	}
-	if f.ProjectID != nil {
-		add("project_id = $%d::uuid", f.ProjectID.String())
+	if f.ClusterID != nil {
+		add("cluster_id = $%d::uuid", f.ClusterID.String())
 	}
 
 	var total int
@@ -403,12 +403,12 @@ func scanTask(r row) (*Task, error) {
 	var (
 		idStr      string
 		statusStr  string
-		projectStr *string
+		clusterStr *string
 		params     []byte
 		stepIDStrs []string
 		t          Task
 	)
-	if err := r.Scan(&idStr, &t.Kind, &statusStr, &projectStr, &t.TargetRef,
+	if err := r.Scan(&idStr, &t.Kind, &statusStr, &clusterStr, &t.TargetRef,
 		&params, &stepIDStrs, &t.Error, &t.Owner, &t.LeaseExpiry, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -426,12 +426,12 @@ func scanTask(r row) (*Task, error) {
 		}
 		t.StepIDs = append(t.StepIDs, stepID)
 	}
-	if projectStr != nil {
-		pid, err := uuid.Parse(*projectStr)
+	if clusterStr != nil {
+		pid, err := uuid.Parse(*clusterStr)
 		if err != nil {
-			return nil, fmt.Errorf("parse project id: %w", err)
+			return nil, fmt.Errorf("parse cluster id: %w", err)
 		}
-		t.ProjectID = &pid
+		t.ClusterID = &pid
 	}
 	return &t, nil
 }

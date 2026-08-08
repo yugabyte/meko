@@ -20,11 +20,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // test's data by a fresh, dedicated branch id keeps the lookups below
     // unambiguous: the data we load here is the data we read.
     //
-    // Its own project, i.e. its own lineage: forking the shared `main` would pin
+    // Its own amp cluster, i.e. its own lineage: forking the shared `main` would pin
     // main's GC cutoff for the rest of the run.
     let tools_port = c.compute_port() + 120;
     step("create a dedicated branch + endpoint for this test");
-    let branch = c.project_create("tools")?;
+    let branch = c.cluster_create("tools")?;
     if branch.is_empty() {
         bail!("branch create failed");
     }

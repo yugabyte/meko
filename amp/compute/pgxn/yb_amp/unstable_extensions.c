@@ -65,7 +65,7 @@ CheckUnstableExtension(
 			{
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-						 errmsg("%s extension is in beta and may be unstable or introduce backward-incompatible changes.\nWe recommend testing it in a separate, dedicated YbAmp project.", stmt->extname),
+						 errmsg("%s extension is in beta and may be unstable or introduce backward-incompatible changes.\nWe recommend testing it in a separate, dedicated YbAmp cluster.", stmt->extname),
 						 errhint("to proceed with installation, run SET yb_amp.allow_unstable_extensions='true'")));
 			}
 			break;

@@ -60,7 +60,7 @@ Everything is env-overridable (`NS`, `CONTROLLER_TAG`, `ENDPOINT_TAG`,
 ## The shape — one endpoint = one Helm release = one pod
 
 ```
-POST …/storage-pools/{pool}/projects/{proj}/branches/{br}/endpoints
+POST …/storage-pools/{pool}/clusters/{proj}/branches/{br}/endpoints
    │  (handlers.go: CreateEndpoint)
    ├─ core.Backend.CreateEndpoint              → inserts the endpoint row (address empty)
    ├─ deploy.KubernetesDeployer.CreateEndpoint → helm upgrade --install --wait
@@ -81,11 +81,11 @@ resources are gone.
 
 ## Materializing a branch: the creation record
 
-Project/branch creation and endpoint creation are **separate** steps, joined by
+Cluster/branch creation and endpoint creation are **separate** steps, joined by
 the branch's **creation record** (full detail in
-[controller-project-create.md](controller-project-create.md)):
+[controller-cluster-create.md](controller-cluster-create.md)):
 
-- **create-project** (and **create-branch**) records the branch in the
+- **create-cluster** (and **create-branch**) records the branch in the
   control-plane DB (`branch`) **and** a creation record in the storage
   controller, keyed by the flat `branch_id`. It does **not** deploy anything or
   eagerly materialize the branch's storage.
@@ -364,16 +364,16 @@ The deploy is **demo-grade**. What it currently takes for granted:
   any authn/authz. Do not expose publicly.
 - **Shared, well-known endpoint credentials.** Every endpoint's compute uses the
   same `cloud_admin` / `cloud_admin` superuser (the `COMPUTE_PASSWORD` default);
-  there is no per-endpoint credential generation or project isolation at the SQL
+  there is no per-endpoint credential generation or cluster isolation at the SQL
   layer.
-- **Postgres v18 only.** create-project rejects any other `pg_version`.
+- **Postgres v18 only.** create-cluster rejects any other `pg_version`.
 - **One pageserver+safekeeper per endpoint pod**, registered with a **unique SC
   node id derived from the branch id** (a 31-bit hash). Collision-resistant, not
   collision-proof. One `read_write` endpoint per branch (single-writer).
 - **Bootstrap-on-first-endpoint.** Branches are materialized by the first
   endpoint's `initdb`, driven by the branch's seeded `branch_state` row — there
-  is no standalone create-project/branch flow yet.
-- **Synchronous, non-atomic provisioning.** create-project / create-endpoint run
+  is no standalone create-cluster/branch flow yet.
+- **Synchronous, non-atomic provisioning.** create-cluster / create-endpoint run
   inline on the request (no executing write-ahead task framework —
   [#84](https://github.com/yugabyte/amp/issues/84) /
   [#113](https://github.com/yugabyte/amp/issues/113)); a crash mid-flow can

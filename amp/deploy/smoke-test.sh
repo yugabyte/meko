@@ -13,7 +13,7 @@
 # What it checks (exits non-zero if any FAIL):
 #   - health (/healthz, /readyz)
 #   - createUser / createStoragePool stay synchronous (201 + resource)
-#   - createProject / createEndpoint / branch / deleteEndpoint / deleteProject /
+#   - createCluster / createEndpoint / branch / deleteEndpoint / deleteCluster /
 #     deleteBranch all return 202 + a Task + a Location header, and the task runs
 #     to status=succeeded (polled via GET /tasks/{id})
 #   - the created endpoint is USABLE: connect with psql and CREATE/INSERT/UPDATE/
@@ -23,7 +23,7 @@
 #   - GET /tasks lists tasks, filters by status, and rejects a bad status with 400
 #   - a duplicate name surfaces as a FAILED task (not a synchronous 409)
 #   - deleting a branch that still has child forks is refused with 409
-#   - delete_project cascades (retires endpoints, drops branches + project)
+#   - delete_cluster cascades (retires endpoints, drops branches + cluster)
 #
 # Optional (SMOKE_EXTENSIONS=1): the externalized-extension path — create an
 # endpoint that opts into pgvector (extensions:["pgvector"]), assert the
@@ -38,7 +38,7 @@
 # cluster's ImageVolume feature gate and images pushed by
 # deploy/extensions/build.sh.
 #
-# It cleans up everything it creates (its project is torn down by the cascade
+# It cleans up everything it creates (its cluster is torn down by the cascade
 # delete it exercises; the pool/user rows and any stray endpoint Helm releases are
 # removed at the end). Re-runnable. Pass KEEP=1 to leave resources for inspection.
 #
@@ -144,22 +144,22 @@ POOL=$(curl -sf -X POST "$BASE/storage-pools" -H 'Content-Type: application/json
         -d "{\"name\":\"pool-$SUFFIX\",\"owner_user_id\":\"$USER\"}" | jq -r '.id')
 [ -n "$POOL" ] && ok "createStoragePool 201 ($POOL)" || bad "createStoragePool"
 
-hdr "createProject -> 202 + Task + Location -> task succeeded -> materialized"
-IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects" '{"name":"proj"}')
-[ "$code" = 202 ] && ok "202 Accepted" || bad "createProject code=$code (want 202)"
+hdr "createCluster -> 202 + Task + Location -> task succeeded -> materialized"
+IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"proj"}')
+[ "$code" = 202 ] && ok "202 Accepted" || bad "createCluster code=$code (want 202)"
 [[ "$loc" == /api/v1/tasks/* ]] && ok "Location: $loc" || bad "Location header: '$loc'"
-[ "$(curl -sf "$BASE/tasks/$tid" | jq -r .kind)" = create_project ] && ok "task kind=create_project" || bad "task kind"
-st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_project succeeded" || bad "create_project task=$st"
-PROJ=$(curl -sf "$BASE/storage-pools/$POOL/projects" | jq -r '.projects[]|select(.name=="proj")|.id')
-DEF=$(curl -sf "$BASE/storage-pools/$POOL/projects/$PROJ" | jq -r '.default_branch.branch_id')
-[ -n "$PROJ" ] && [ -n "$DEF" ] && ok "materialized proj=$PROJ default_branch=$DEF" || bad "project not materialized"
+[ "$(curl -sf "$BASE/tasks/$tid" | jq -r .kind)" = create_cluster ] && ok "task kind=create_cluster" || bad "task kind"
+st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_cluster succeeded" || bad "create_cluster task=$st"
+PROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="proj")|.id')
+DEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ" | jq -r '.default_branch.branch_id')
+[ -n "$PROJ" ] && [ -n "$DEF" ] && ok "materialized proj=$PROJ default_branch=$DEF" || bad "cluster not materialized"
 
 hdr "createEndpoint (read_write on default branch) -> task succeeded -> address + pod Ready"
-IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$PROJ/branches/$DEF/endpoints" '{"role":"read_write"}')
+IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" '{"role":"read_write"}')
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createEndpoint code=$code"
 st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint succeeded" || bad "create_endpoint task=$st"
-EP=$(curl -sf "$BASE/storage-pools/$POOL/projects/$PROJ/branches/$DEF/endpoints" | jq -r '.endpoints[0].id')
-ADDR=$(curl -sf "$BASE/storage-pools/$POOL/projects/$PROJ/branches/$DEF/endpoints/$EP" | jq -r '.address')
+EP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints" | jq -r '.endpoints[0].id')
+ADDR=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF/endpoints/$EP" | jq -r '.address')
 [ -n "$ADDR" ] && [ "$ADDR" != null ] && ok "endpoint address recorded: $ADDR" || bad "endpoint address empty"
 POD=""
 for ((i=0; i<60; i++)); do
@@ -173,7 +173,7 @@ if [ -n "$POD" ] && [ "$(kubectl -n "$NS" get "pod/$POD" -o jsonpath='{.status.c
 else
   bad "endpoint pod not Ready"
   # Dump the endpoint's own state here, while the pod still exists: later
-  # scenarios delete the project, which retires it, and the workflow's
+  # scenarios delete the cluster, which retires it, and the workflow's
   # end-of-job dump then has nothing left to look at. The supervisor's log is
   # the only place that says which child failed to come up.
   echo "---- endpoint pod state (${POD:-<none>}) ----"
@@ -218,13 +218,13 @@ hdr "createBranch (fork default) -> task succeeded"
 # (safekeeper HTTP not yet reachable via its Service). A real client retries; so do we.
 code=""
 for ((r=0; r<8; r++)); do
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$PROJ/branches" "{\"name\":\"b1\",\"parent_branch_id\":\"$DEF\"}")
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$PROJ/branches" "{\"name\":\"b1\",\"parent_branch_id\":\"$DEF\"}")
   [ "$code" = 202 ] && break
   sleep 5
 done
 [ "$code" = 202 ] && ok "202 Accepted" || bad "createBranch code=$code"
 st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "branch succeeded" || bad "branch task=$st"
-B1=$(curl -sf "$BASE/storage-pools/$POOL/projects/$PROJ/branches" | jq -r '.branches[]|select(.name=="b1")|.branch_id')
+B1=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$PROJ/branches" | jq -r '.branches[]|select(.name=="b1")|.branch_id')
 [ -n "$B1" ] && ok "fork b1 materialized ($B1)" || bad "fork b1 missing"
 
 hdr "GET /tasks: list + filter + invalid-status 400"
@@ -235,44 +235,44 @@ SUC=$(curl -sf "$BASE/tasks?status=succeeded" | jq -r '.tasks|length')
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/tasks?status=bogus")
 [ "$code" = 400 ] && ok "listTasks?status=bogus -> 400" || bad "invalid status -> $code (want 400)"
 
-hdr "duplicate project name -> task FAILS (not a synchronous 409)"
-IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects" '{"name":"proj"}')
+hdr "duplicate cluster name -> task FAILS (not a synchronous 409)"
+IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"proj"}')
 [ "$code" = 202 ] && ok "dup-name accepted 202" || bad "dup-name code=$code"
 st=$(poll_task "$tid" 30); [ "$st" = failed ] && ok "duplicate name -> task failed" || bad "dup name task=$st (want failed)"
 
 hdr "delete a branch with a child fork -> 409 (no teardown)"
-code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/storage-pools/$POOL/projects/$PROJ/branches/$DEF")
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$DEF")
 [ "$code" = 409 ] && ok "deleteBranch(default w/ child b1) -> 409" || bad "deleteBranch(default) -> $code (want 409)"
 
 hdr "deleteBranch b1 -> task succeeded -> gone"
-IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/projects/$PROJ/branches/$B1")
+IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$PROJ/branches/$B1")
 [ "$code" = 202 ] && ok "202 Accepted" || bad "deleteBranch code=$code"
 st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "delete_branch succeeded" || bad "delete_branch task=$st"
-[ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/storage-pools/$POOL/projects/$PROJ/branches/$B1")" = 404 ] && ok "b1 gone (404)" || bad "b1 still present"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$B1")" = 404 ] && ok "b1 gone (404)" || bad "b1 still present"
 
-hdr "deleteProject cascade -> task succeeded -> project gone + endpoint retired"
-IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/projects/$PROJ")
-[ "$code" = 202 ] && ok "202 Accepted" || bad "deleteProject code=$code"
-st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "delete_project cascade succeeded" || bad "delete_project task=$st"
-[ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/storage-pools/$POOL/projects/$PROJ")" = 404 ] && ok "project gone (404)" || bad "project still present"
+hdr "deleteCluster cascade -> task succeeded -> cluster gone + endpoint retired"
+IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$PROJ")
+[ "$code" = 202 ] && ok "202 Accepted" || bad "deleteCluster code=$code"
+st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "delete_cluster cascade succeeded" || bad "delete_cluster task=$st"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/storage-pools/$POOL/clusters/$PROJ")" = 404 ] && ok "cluster gone (404)" || bad "cluster still present"
 for ((i=0; i<20; i++)); do [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && break; sleep 3; done
 [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && ok "endpoint instance retired" || bad "endpoint instance lingering"
 
 if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
   hdr "externalized extensions: pgvector opt-in mounts, CREATE EXTENSION (fork inherit disabled pending #440)"
 
-  # A self-contained project so this section is independent of the cascade above.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects" '{"name":"extproj"}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext project created" || bad "ext project task=$st"
-  EPROJ=$(curl -sf "$BASE/storage-pools/$POOL/projects" | jq -r '.projects[]|select(.name=="extproj")|.id')
-  EDEF=$(curl -sf "$BASE/storage-pools/$POOL/projects/$EPROJ" | jq -r '.default_branch.branch_id')
-  [ -n "$EPROJ" ] && [ -n "$EDEF" ] && ok "ext project materialized ($EPROJ / $EDEF)" || bad "ext project not materialized"
+  # A self-contained cluster so this section is independent of the cascade above.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"extproj"}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext cluster created" || bad "ext cluster task=$st"
+  EPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="extproj")|.id')
+  EDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ" | jq -r '.default_branch.branch_id')
+  [ -n "$EPROJ" ] && [ -n "$EDEF" ] && ok "ext cluster materialized ($EPROJ / $EDEF)" || bad "ext cluster not materialized"
 
   # Endpoint that opts into pgvector.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$EPROJ/branches/$EDEF/endpoints" '{"role":"read_write","extensions":["pgvector"]}')
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" '{"role":"read_write","extensions":["pgvector"]}')
   [ "$code" = 202 ] && ok "createEndpoint(extensions:[pgvector]) 202" || bad "createEndpoint(ext) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(ext) succeeded" || bad "create_endpoint(ext) task=$st"
-  EEP=$(curl -sf "$BASE/storage-pools/$POOL/projects/$EPROJ/branches/$EDEF/endpoints" | jq -r '.endpoints[0].id')
+  EEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" | jq -r '.endpoints[0].id')
   EPOD=$(wait_ready_pod "$EEP")
   [ -n "$EPOD" ] && ok "ext endpoint pod Ready ($EPOD)" || bad "ext endpoint pod not Ready"
 
@@ -301,19 +301,19 @@ SQL
 
   hdr "externalized extensions: pg_cron opt-in preloads, CREATE EXTENSION, a scheduled job runs"
 
-  # Its own project so this is independent of the pgvector section above.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects" '{"name":"cronproj"}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron project created" || bad "pg_cron project task=$st"
-  CPROJ=$(curl -sf "$BASE/storage-pools/$POOL/projects" | jq -r '.projects[]|select(.name=="cronproj")|.id')
-  CDEF=$(curl -sf "$BASE/storage-pools/$POOL/projects/$CPROJ" | jq -r '.default_branch.branch_id')
-  [ -n "$CPROJ" ] && [ -n "$CDEF" ] && ok "pg_cron project materialized ($CPROJ / $CDEF)" || bad "pg_cron project not materialized"
+  # Its own cluster so this is independent of the pgvector section above.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"cronproj"}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron cluster created" || bad "pg_cron cluster task=$st"
+  CPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="cronproj")|.id')
+  CDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$CPROJ" | jq -r '.default_branch.branch_id')
+  [ -n "$CPROJ" ] && [ -n "$CDEF" ] && ok "pg_cron cluster materialized ($CPROJ / $CDEF)" || bad "pg_cron cluster not materialized"
 
   # Opt into pg_cron. It is a preload extension, so the chart appends it to
   # shared_preload_libraries and the pod comes up with the scheduler running.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$CPROJ/branches/$CDEF/endpoints" '{"role":"read_write","extensions":["pg_cron"]}')
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" '{"role":"read_write","extensions":["pg_cron"]}')
   [ "$code" = 202 ] && ok "createEndpoint(extensions:[pg_cron]) 202" || bad "createEndpoint(pg_cron) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(pg_cron) succeeded" || bad "create_endpoint(pg_cron) task=$st"
-  CEP=$(curl -sf "$BASE/storage-pools/$POOL/projects/$CPROJ/branches/$CDEF/endpoints" | jq -r '.endpoints[0].id')
+  CEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" | jq -r '.endpoints[0].id')
   CPOD=$(wait_ready_pod "$CEP")
   [ -n "$CPOD" ] && ok "pg_cron endpoint pod Ready ($CPOD)" || bad "pg_cron endpoint pod not Ready"
 
@@ -368,12 +368,12 @@ SQL
 
   psql_pod "$CPOD" 127.0.0.1 55433 <<<"SELECT cron.unschedule('amp_pgcron_probe');" >/dev/null 2>&1
 
-  # KEEP=1 leaves the pg_cron project/endpoint up for hands-on inspection.
+  # KEEP=1 leaves the pg_cron cluster/endpoint up for hands-on inspection.
   if [ -n "${KEEP:-}" ]; then
-    echo "  KEEP set: leaving pg_cron project $CPROJ (endpoint pod $CPOD) up for inspection"
+    echo "  KEEP set: leaving pg_cron cluster $CPROJ (endpoint pod $CPOD) up for inspection"
   else
-    IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/projects/$CPROJ")
-    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron project cascade deleted" || bad "pg_cron project delete task=$st"
+    IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$CPROJ")
+    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron cluster cascade deleted" || bad "pg_cron cluster delete task=$st"
   fi
 
   # --- fork-inheritance sub-test: DISABLED pending #440 ----------------------
@@ -392,24 +392,24 @@ SQL
   # # at endpoint-create), so its endpoint mounts pgvector WITHOUT re-opting-in.
   # code=""
   # for ((r=0; r<8; r++)); do
-  #   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$EPROJ/branches" "{\"name\":\"extb1\",\"parent_branch_id\":\"$EDEF\"}")
+  #   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches" "{\"name\":\"extb1\",\"parent_branch_id\":\"$EDEF\"}")
   #   [ "$code" = 202 ] && break
   #   sleep 5
   # done
   # st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext fork extb1 succeeded" || bad "ext fork task=$st"
-  # EB1=$(curl -sf "$BASE/storage-pools/$POOL/projects/$EPROJ/branches" | jq -r '.branches[]|select(.name=="extb1")|.branch_id')
+  # EB1=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches" | jq -r '.branches[]|select(.name=="extb1")|.branch_id')
   #
-  # IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/projects/$EPROJ/branches/$EB1/endpoints" '{"role":"read_write"}')
+  # IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" '{"role":"read_write"}')
   # st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "fork endpoint (no opt-in) succeeded" || bad "fork endpoint task=$st"
-  # FEP=$(curl -sf "$BASE/storage-pools/$POOL/projects/$EPROJ/branches/$EB1/endpoints" | jq -r '.endpoints[0].id')
+  # FEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" | jq -r '.endpoints[0].id')
   # FPOD=$(wait_ready_pod "$FEP")
   # kubectl -n "$NS" exec "$FPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control \
   #   && ok "fork endpoint inherited pgvector mount" || bad "fork endpoint did NOT inherit pgvector"
   # ---------------------------------------------------------------------------
 
-  # Tear down the ext project (cascade retires both endpoints, drops branches).
-  IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/projects/$EPROJ")
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext project cascade deleted" || bad "ext project delete task=$st"
+  # Tear down the ext cluster (cascade retires both endpoints, drops branches).
+  IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$EPROJ")
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext cluster cascade deleted" || bad "ext cluster delete task=$st"
 fi
 
 printf '\n\033[1m================ RESULT: PASS=%d FAIL=%d ================\033[0m\n' "$PASS" "$FAIL"

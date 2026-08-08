@@ -21,11 +21,11 @@ import (
 )
 
 // fakeRecipeStore is an in-memory task.RecipeStore that records the calls the
-// project/branch handlers make, so the create-project recipe path is exercised
+// cluster/branch handlers make, so the create-cluster recipe path is exercised
 // end-to-end without a database. The storage layer is flat, so the recipe is keyed
 // by a single branch_id (the controller passes the branch's branch_id verbatim at
 // this boundary) — but the row it seeds lives in the control plane's own
-// project-scoped branch table, so the project id travels with it. failRecord, when
+// cluster-scoped branch table, so the cluster id travels with it. failRecord, when
 // set, makes RecordBranchRecipe fail so the handler's error path can be tested.
 type fakeRecipeStore struct {
 	// backend, when set, is where the fake materializes the branch. In production
@@ -37,20 +37,20 @@ type fakeRecipeStore struct {
 
 	mu              sync.Mutex
 	recordHit       bool
-	recordedProject uuid.UUID
+	recordedCluster uuid.UUID
 	recordedBranch  string
 	recordedReq     task.BranchRecipe
 	failRecord      bool
 }
 
-func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, projectID uuid.UUID, branchID string, r task.BranchRecipe) error {
+func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, clusterID uuid.UUID, branchID string, r task.BranchRecipe) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failRecord {
 		return fmt.Errorf("record recipe failed")
 	}
 	f.recordHit = true
-	f.recordedProject = projectID
+	f.recordedCluster = clusterID
 	f.recordedBranch = branchID
 	f.recordedReq = r
 	if f.backend == nil {
@@ -68,17 +68,17 @@ func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, projectID uuid.U
 		}
 	}
 	if parent == uuid.Nil {
-		return nil // a project's default branch is created by create_project
+		return nil // a cluster's default branch is created by create_cluster
 	}
-	return f.backend.EnsureBranch(context.Background(), parent, projectID, id, r.BranchName, r.StartLSN, r.PgVersion)
+	return f.backend.EnsureBranch(context.Background(), parent, clusterID, id, r.BranchName, r.StartLSN, r.PgVersion)
 }
 
-// newProjectControllersProv builds the controllers for the direct-call tests over
+// newClusterControllersProv builds the controllers for the direct-call tests over
 // a fresh MemBackend, wiring a REAL task.Service over a MemStore (the mutating
 // handlers now plan tasks, so a nil service would nil-deref). It returns the
 // controllers, the backend, and that store so a test can drainTasks against the
 // same backend and then read the materialized resource.
-func newProjectControllersProv(t *testing.T, prov api.Provisioning) (*api.Controllers, *core.MemBackend, *task.MemStore) {
+func newClusterControllersProv(t *testing.T, prov api.Provisioning) (*api.Controllers, *core.MemBackend, *task.MemStore) {
 	t.Helper()
 	backend := core.NewMemBackend()
 	// The recipe store is the branch's creator on the fork path, so point the fake
@@ -130,9 +130,9 @@ func (f *fakeSafekeeper) wasHit() bool {
 // seedWriter records a read_write endpoint on the branch so resolveForkLSN finds
 // a node to read the fork point from. The endpoint's safekeeper address comes
 // from the fakeDeployer's EndpointSafekeeperURL.
-func seedWriter(t *testing.T, backend *core.MemBackend, projectID, branchID uuid.UUID) {
+func seedWriter(t *testing.T, backend *core.MemBackend, clusterID, branchID uuid.UUID) {
 	t.Helper()
-	if _, err := backend.CreateEndpoint(context.Background(), projectID, branchID, core.RoleReadWrite, nil); err != nil {
+	if _, err := backend.CreateEndpoint(context.Background(), clusterID, branchID, core.RoleReadWrite, nil); err != nil {
 		t.Fatalf("seed read_write endpoint: %v", err)
 	}
 }
@@ -150,56 +150,56 @@ func seedUserPool(t *testing.T, backend *core.MemBackend) uuid.UUID {
 	return p.ID
 }
 
-// acceptedProjectTask asserts a direct CreateProject call returned a 202 + a
-// pending create_project Task and returns the task's id + project id (the task
-// stamps the project it will create).
-func acceptedProjectTask(t *testing.T, resp api.CreateProjectResponseObject) (taskID, projectID uuid.UUID) {
+// acceptedClusterTask asserts a direct CreateCluster call returned a 202 + a
+// pending create_cluster Task and returns the task's id + cluster id (the task
+// stamps the cluster it will create).
+func acceptedClusterTask(t *testing.T, resp api.CreateClusterResponseObject) (taskID, clusterID uuid.UUID) {
 	t.Helper()
-	created, ok := resp.(api.CreateProject202JSONResponse)
+	created, ok := resp.(api.CreateCluster202JSONResponse)
 	if !ok {
-		t.Fatalf("response = %T, want CreateProject202JSONResponse", resp)
+		t.Fatalf("response = %T, want CreateCluster202JSONResponse", resp)
 	}
 	body := created.Body
-	if body.Kind != "create_project" || body.Status != api.TaskStatusPending {
-		t.Errorf("task = {kind:%q status:%q}, want {create_project pending}", body.Kind, body.Status)
+	if body.Kind != "create_cluster" || body.Status != api.TaskStatusPending {
+		t.Errorf("task = {kind:%q status:%q}, want {create_cluster pending}", body.Kind, body.Status)
 	}
 	if want := "/api/v1/tasks/" + body.Id.String(); created.Headers.Location != want {
 		t.Errorf("Location = %q, want %q", created.Headers.Location, want)
 	}
-	if body.ProjectId == nil {
-		t.Fatal("task project_id = nil, want a real project id")
+	if body.ClusterId == nil {
+		t.Fatal("task cluster_id = nil, want a real cluster id")
 	}
-	return body.Id, *body.ProjectId
+	return body.Id, *body.ClusterId
 }
 
-// TestCreateProjectRecordsBranch: with a controller wired,
-// create-project plans a task that, once driven, records the pending-init recipe
+// TestCreateClusterRecordsBranch: with a controller wired,
+// create-cluster plans a task that, once driven, records the pending-init recipe
 // for the default branch (no ancestor, start LSN 0/0, pg_version 17) keyed by the
 // 32-hex branch id, and does NOT delete it (deletion is deferred to
 // create-endpoint). The recipe is now recorded by the record_branch_recipe step.
-func TestCreateProjectRecordsBranch(t *testing.T) {
+func TestCreateClusterRecordsBranch(t *testing.T) {
 	recipes := &fakeRecipeStore{}
 	prov := api.Provisioning{Recipes: recipes}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 
-	resp, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
+	resp, err := c.CreateCluster(context.Background(), api.CreateClusterRequestObject{
 		PoolId: poolID,
-		Body:   &api.CreateProjectJSONRequestBody{Name: "main"},
+		Body:   &api.CreateClusterJSONRequestBody{Name: "main"},
 	})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
-	_, projectID := acceptedProjectTask(t, resp)
+	_, clusterID := acceptedClusterTask(t, resp)
 
 	// The recipe is recorded by the worker, not synchronously: drive the task.
 	drainTasks(t, store, backend, prov)
 	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
-		t.Fatalf("create_project task status = %q, want succeeded; error = %v", got.Status, got.Error)
+		t.Fatalf("create_cluster task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
 
 	// The default branch's id is needed to assert the recipe key — read it back.
-	def := getDefaultBranch(t, c, poolID, projectID)
+	def := getDefaultBranch(t, c, poolID, clusterID)
 
 	if !recipes.recordHit {
 		t.Fatal("RecordBranch was not called")
@@ -221,54 +221,54 @@ func TestCreateProjectRecordsBranch(t *testing.T) {
 	}
 }
 
-// TestCreateProjectNoController: without a controller, the task
+// TestCreateClusterNoController: without a controller, the task
 // still succeeds (it records the control-plane rows only, no recipe) — no panic.
-func TestCreateProjectNoController(t *testing.T) {
+func TestCreateClusterNoController(t *testing.T) {
 	prov := api.Provisioning{}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 
-	resp, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
+	resp, err := c.CreateCluster(context.Background(), api.CreateClusterRequestObject{
 		PoolId: poolID,
-		Body:   &api.CreateProjectJSONRequestBody{Name: "main"},
+		Body:   &api.CreateClusterJSONRequestBody{Name: "main"},
 	})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
-	acceptedProjectTask(t, resp)
+	acceptedClusterTask(t, resp)
 	drainTasks(t, store, backend, prov)
 	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
-		t.Fatalf("create_project task (no SC) status = %q, want succeeded; error = %v", got.Status, got.Error)
+		t.Fatalf("create_cluster task (no SC) status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
 }
 
-// TestCreateProjectRecipeError: a recipe-store failure recording the
-// recipe now fails the create_project TASK (the record_branch_recipe step
+// TestCreateClusterRecipeError: a recipe-store failure recording the
+// recipe now fails the create_cluster TASK (the record_branch_recipe step
 // returns the error), not the synchronous handler — which returns 202.
-func TestCreateProjectRecipeError(t *testing.T) {
+func TestCreateClusterRecipeError(t *testing.T) {
 	recipes := &fakeRecipeStore{failRecord: true}
 	prov := api.Provisioning{Recipes: recipes}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
 
-	resp, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
+	resp, err := c.CreateCluster(context.Background(), api.CreateClusterRequestObject{
 		PoolId: poolID,
-		Body:   &api.CreateProjectJSONRequestBody{Name: "main"},
+		Body:   &api.CreateClusterJSONRequestBody{Name: "main"},
 	})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
-	acceptedProjectTask(t, resp)
+	acceptedClusterTask(t, resp)
 	drainTasks(t, store, backend, prov)
 	got := soleTask(t, store)
 	if got.Status != task.StatusFailed || got.Error == nil {
-		t.Fatalf("create_project task = {status:%q err:%v}, want failed (controller error)", got.Status, got.Error)
+		t.Fatalf("create_cluster task = {status:%q err:%v}, want failed (controller error)", got.Status, got.Error)
 	}
 }
 
 // soleTaskWithKind returns the single task of the given kind in the store,
 // failing if there is not exactly one (the direct-call branch tests create a
-// create_project task plus the branch task, so they filter by kind).
+// create_cluster task plus the branch task, so they filter by kind).
 func soleTaskWithKind(t *testing.T, store *task.MemStore, kind string) *task.Task {
 	t.Helper()
 	tasks, _, err := store.List(context.Background(), task.TaskFilter{Kind: kind}, 1000, 0)
@@ -281,11 +281,11 @@ func soleTaskWithKind(t *testing.T, store *task.MemStore, kind string) *task.Tas
 	return tasks[0]
 }
 
-// branchByName lists a project's branches through the controller and returns the
+// branchByName lists a cluster's branches through the controller and returns the
 // one with the given name, failing if absent.
-func branchByName(t *testing.T, c *api.Controllers, poolID, projectID uuid.UUID, name string) api.Branch {
+func branchByName(t *testing.T, c *api.Controllers, poolID, clusterID uuid.UUID, name string) api.Branch {
 	t.Helper()
-	resp, err := c.ListBranches(context.Background(), api.ListBranchesRequestObject{PoolId: poolID, ProjectId: projectID})
+	resp, err := c.ListBranches(context.Background(), api.ListBranchesRequestObject{PoolId: poolID, ClusterId: clusterID})
 	if err != nil {
 		t.Fatalf("ListBranches: %v", err)
 	}
@@ -298,50 +298,50 @@ func branchByName(t *testing.T, c *api.Controllers, poolID, projectID uuid.UUID,
 			return b
 		}
 	}
-	t.Fatalf("branch %q not found in project %s", name, projectID)
+	t.Fatalf("branch %q not found in cluster %s", name, clusterID)
 	return api.Branch{}
 }
 
-// getDefaultBranch reads a project back through the controller and returns its
+// getDefaultBranch reads a cluster back through the controller and returns its
 // default branch.
-func getDefaultBranch(t *testing.T, c *api.Controllers, poolID, projectID uuid.UUID) api.Branch {
+func getDefaultBranch(t *testing.T, c *api.Controllers, poolID, clusterID uuid.UUID) api.Branch {
 	t.Helper()
-	resp, err := c.GetProject(context.Background(), api.GetProjectRequestObject{PoolId: poolID, ProjectId: projectID})
+	resp, err := c.GetCluster(context.Background(), api.GetClusterRequestObject{PoolId: poolID, ClusterId: clusterID})
 	if err != nil {
-		t.Fatalf("GetProject: %v", err)
+		t.Fatalf("GetCluster: %v", err)
 	}
-	got, ok := resp.(api.GetProject200JSONResponse)
+	got, ok := resp.(api.GetCluster200JSONResponse)
 	if !ok {
-		t.Fatalf("GetProject response = %T, want 200", resp)
+		t.Fatalf("GetCluster response = %T, want 200", resp)
 	}
-	return api.Project(got).DefaultBranch
+	return api.Cluster(got).DefaultBranch
 }
 
-// mustCreateProjectC creates a project + its default branch through the
+// mustCreateClusterC creates a cluster + its default branch through the
 // controller AND drives the resulting task to completion (recording the default
-// branch's recipe too), then returns the materialized project, for tests that
+// branch's recipe too), then returns the materialized cluster, for tests that
 // then branch off it. It drains every pending task on the shared store.
-func mustCreateProjectC(t *testing.T, c *api.Controllers, store *task.MemStore, backend core.Backend, prov api.Provisioning, poolID uuid.UUID, name string) api.Project {
+func mustCreateClusterC(t *testing.T, c *api.Controllers, store *task.MemStore, backend core.Backend, prov api.Provisioning, poolID uuid.UUID, name string) api.Cluster {
 	t.Helper()
-	resp, err := c.CreateProject(context.Background(), api.CreateProjectRequestObject{
+	resp, err := c.CreateCluster(context.Background(), api.CreateClusterRequestObject{
 		PoolId: poolID,
-		Body:   &api.CreateProjectJSONRequestBody{Name: name},
+		Body:   &api.CreateClusterJSONRequestBody{Name: name},
 	})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateCluster: %v", err)
 	}
-	_, projectID := acceptedProjectTask(t, resp)
+	_, clusterID := acceptedClusterTask(t, resp)
 	drainTasks(t, store, backend, prov)
 
-	gp, err := c.GetProject(context.Background(), api.GetProjectRequestObject{PoolId: poolID, ProjectId: projectID})
+	gp, err := c.GetCluster(context.Background(), api.GetClusterRequestObject{PoolId: poolID, ClusterId: clusterID})
 	if err != nil {
-		t.Fatalf("GetProject: %v", err)
+		t.Fatalf("GetCluster: %v", err)
 	}
-	got, ok := gp.(api.GetProject200JSONResponse)
+	got, ok := gp.(api.GetCluster200JSONResponse)
 	if !ok {
-		t.Fatalf("GetProject response = %T, want 200", gp)
+		t.Fatalf("GetCluster response = %T, want 200", gp)
 	}
-	return api.Project(got)
+	return api.Cluster(got)
 }
 
 // TestCreateBranchDefaultsForkToFlushLSN: branching with no fork_point_lsn and
@@ -355,17 +355,17 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
 	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
-	def := project.DefaultBranch
+	cluster := mustCreateClusterC(t, c, store, backend, prov, poolID, "main")
+	def := cluster.DefaultBranch
 	// The parent (default branch) must have a read_write endpoint whose
 	// safekeeper holds the fork point.
-	seedWriter(t, backend, project.Id, def.BranchId)
+	seedWriter(t, backend, cluster.Id, def.BranchId)
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
-		ProjectId: project.Id,
+		ClusterId: cluster.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "feature"},
 	})
 	if err != nil {
@@ -388,7 +388,7 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	if got := soleTaskWithKind(t, store, "branch"); got.Status != task.StatusSucceeded {
 		t.Fatalf("branch task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
-	br := branchByName(t, c, poolID, project.Id, "feature")
+	br := branchByName(t, c, poolID, cluster.Id, "feature")
 
 	if br.IsDefault {
 		t.Error("branch is_default = true, want false")
@@ -399,8 +399,8 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	if br.ForkLsn == nil || *br.ForkLsn != "0/16ABCD0" {
 		t.Errorf("fork_lsn = %v, want 0/16ABCD0", br.ForkLsn)
 	}
-	if br.ProjectId != project.Id {
-		t.Errorf("branch project = %v, want %v", br.ProjectId, project.Id)
+	if br.ClusterId != cluster.Id {
+		t.Errorf("branch cluster = %v, want %v", br.ClusterId, cluster.Id)
 	}
 	if br.PgVersion != def.PgVersion {
 		t.Errorf("branch pg_version = %d, want inherited %d", br.PgVersion, def.PgVersion)
@@ -433,14 +433,14 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
 	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
+	cluster := mustCreateClusterC(t, c, store, backend, prov, poolID, "main")
 
 	lsn := "0/ABCDEF1"
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
-		ProjectId: project.Id,
+		ClusterId: cluster.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "feature", ForkPointLsn: &lsn},
 	})
 	if err != nil {
@@ -457,13 +457,13 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	if got := soleTaskWithKind(t, store, "branch"); got.Status != task.StatusSucceeded {
 		t.Fatalf("branch task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
-	if got := branchByName(t, c, poolID, project.Id, "feature").ForkLsn; got == nil || *got != lsn {
+	if got := branchByName(t, c, poolID, cluster.Id, "feature").ForkLsn; got == nil || *got != lsn {
 		t.Errorf("fork_lsn = %v, want %q", got, lsn)
 	}
 	if recipes.recordedReq.StartLSN != lsn {
 		t.Errorf("recipe start_lsn = %q, want %q", recipes.recordedReq.StartLSN, lsn)
 	}
-	if want := hex.EncodeToString(project.DefaultBranch.BranchId[:]); recipes.recordedReq.AncestorBranchID == "" || recipes.recordedReq.AncestorBranchID != want {
+	if want := hex.EncodeToString(cluster.DefaultBranch.BranchId[:]); recipes.recordedReq.AncestorBranchID == "" || recipes.recordedReq.AncestorBranchID != want {
 		t.Errorf("recipe ancestor = %v, want the default branch %q", recipes.recordedReq.AncestorBranchID, want)
 	}
 }
@@ -473,14 +473,14 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 func TestCreateBranchInvalidForkLSN(t *testing.T) {
 	recipes := &fakeRecipeStore{}
 	prov := api.Provisioning{Recipes: recipes}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
+	cluster := mustCreateClusterC(t, c, store, backend, prov, poolID, "main")
 
 	bad := "not-an-lsn"
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
-		ProjectId: project.Id,
+		ClusterId: cluster.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "feature", ForkPointLsn: &bad},
 	})
 	if err != nil {
@@ -492,7 +492,7 @@ func TestCreateBranchInvalidForkLSN(t *testing.T) {
 }
 
 // TestCreateBranchDuplicateName: a branch whose name is already taken in the
-// project (here, the default branch's own name) is no longer a synchronous 409 —
+// cluster (here, the default branch's own name) is no longer a synchronous 409 —
 // the create is accepted (202) and the conflict surfaces as a FAILED branch task
 // when its create_branch step's EnsureBranch hits the name index. The fork point
 // resolves first (a cheap pre-check), so the parent still needs a read_write
@@ -502,14 +502,14 @@ func TestCreateBranchDuplicateName(t *testing.T) {
 	sk := &fakeSafekeeper{flushLSN: "0/10"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
 	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
-	seedWriter(t, backend, project.Id, project.DefaultBranch.BranchId)
+	cluster := mustCreateClusterC(t, c, store, backend, prov, poolID, "main")
+	seedWriter(t, backend, cluster.Id, cluster.DefaultBranch.BranchId)
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
-		ProjectId: project.Id,
+		ClusterId: cluster.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "main"},
 	})
 	if err != nil {
@@ -531,14 +531,14 @@ func TestCreateBranchDuplicateName(t *testing.T) {
 // at 0/0; an explicit fork_point_lsn still works and is recorded on the row.
 func TestCreateBranchNoController(t *testing.T) {
 	prov := api.Provisioning{}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
+	cluster := mustCreateClusterC(t, c, store, backend, prov, poolID, "main")
 
 	// No fork point + no controller -> 400 (no silent 0/0); cheap pre-validation.
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
-		ProjectId: project.Id,
+		ClusterId: cluster.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "feature"},
 	})
 	if err != nil {
@@ -555,7 +555,7 @@ func TestCreateBranchNoController(t *testing.T) {
 	lsn := "0/ABCDEF1"
 	resp, err = c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
-		ProjectId: project.Id,
+		ClusterId: cluster.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "feature", ForkPointLsn: &lsn},
 	})
 	if err != nil {
@@ -572,12 +572,12 @@ func TestCreateBranchNoController(t *testing.T) {
 	// And with a store wired, the same request declares the branch and carries the
 	// fork LSN — the task's one step does both.
 	provWithStore := api.Provisioning{Recipes: &fakeRecipeStore{}}
-	c2, backend2, store2 := newProjectControllersProv(t, provWithStore)
+	c2, backend2, store2 := newClusterControllersProv(t, provWithStore)
 	poolID2 := seedUserPool(t, backend2)
-	project2 := mustCreateProjectC(t, c2, store2, backend2, provWithStore, poolID2, "main")
+	cluster2 := mustCreateClusterC(t, c2, store2, backend2, provWithStore, poolID2, "main")
 	resp, err = c2.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID2,
-		ProjectId: project2.Id,
+		ClusterId: cluster2.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "feature", ForkPointLsn: &lsn},
 	})
 	if err != nil {
@@ -590,7 +590,7 @@ func TestCreateBranchNoController(t *testing.T) {
 	if got := soleTaskWithKind(t, store2, "branch"); got.Status != task.StatusSucceeded {
 		t.Fatalf("branch task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
-	if got := branchByName(t, c2, poolID2, project2.Id, "feature").ForkLsn; got == nil || *got != lsn {
+	if got := branchByName(t, c2, poolID2, cluster2.Id, "feature").ForkLsn; got == nil || *got != lsn {
 		t.Errorf("fork_lsn = %v, want %q", got, lsn)
 	}
 }
@@ -603,14 +603,14 @@ func TestCreateBranchDefaultForkNoEndpoint(t *testing.T) {
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
 	dep := &fakeDeployer{skURL: sk.start(t)}
 	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
+	cluster := mustCreateClusterC(t, c, store, backend, prov, poolID, "main")
 	// No endpoint seeded on the default branch.
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
-		ProjectId: project.Id,
+		ClusterId: cluster.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "feature"},
 	})
 	if err != nil {
@@ -633,14 +633,14 @@ func TestCreateBranchDefaultForkSafekeeperUnavailable(t *testing.T) {
 	sk := &fakeSafekeeper{flushLSN: ""} // 404: the safekeeper does not serve the timeline
 	dep := &fakeDeployer{skURL: sk.start(t)}
 	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
-	c, backend, store := newProjectControllersProv(t, prov)
+	c, backend, store := newClusterControllersProv(t, prov)
 	poolID := seedUserPool(t, backend)
-	project := mustCreateProjectC(t, c, store, backend, prov, poolID, "main")
-	seedWriter(t, backend, project.Id, project.DefaultBranch.BranchId)
+	cluster := mustCreateClusterC(t, c, store, backend, prov, poolID, "main")
+	seedWriter(t, backend, cluster.Id, cluster.DefaultBranch.BranchId)
 
 	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
 		PoolId:    poolID,
-		ProjectId: project.Id,
+		ClusterId: cluster.Id,
 		Body:      &api.CreateBranchJSONRequestBody{Name: "feature"},
 	})
 	if err != nil {

@@ -126,7 +126,7 @@ pub struct ComputeSpec {
 
     // More neon ids that we expose to the compute_ctl
     // and to postgres as neon extension GUCs.
-    pub project_id: Option<String>,
+    pub cluster_id: Option<String>,
     pub branch_id: Option<String>,
     pub endpoint_id: Option<String>,
 

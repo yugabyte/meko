@@ -158,7 +158,7 @@ func TestAttachFromNonAttachableEntryErrors(t *testing.T) {
 
 // TestAttachIsStatelessAndCollisionFree: resolving the same entry twice yields
 // identical overrides carrying no per-run identifier, so two sequential
-// `run --env <id>` invocations don't collide — distinct project names come from the
+// `run --env <id>` invocations don't collide — distinct cluster names come from the
 // per-run seed, not from this mapping.
 func TestAttachIsStatelessAndCollisionFree(t *testing.T) {
 	entry := registry.Entry{
@@ -179,9 +179,9 @@ func TestAttachIsStatelessAndCollisionFree(t *testing.T) {
 		t.Fatalf("overrides differ across calls: %v vs %v", ov1, ov2)
 	}
 	for _, o := range ov1 {
-		// A pinned project/name/seed in the overrides would make two runs collide;
+		// A pinned cluster/name/seed in the overrides would make two runs collide;
 		// only connection info (context/namespace/url/pool) is allowed.
-		if strings.Contains(o, "project") || strings.Contains(o, "seed") || strings.Contains(o, "name=") {
+		if strings.Contains(o, "cluster") || strings.Contains(o, "seed") || strings.Contains(o, "name=") {
 			t.Errorf("override %q must not pin a per-run identifier", o)
 		}
 	}

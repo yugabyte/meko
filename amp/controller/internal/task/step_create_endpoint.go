@@ -16,12 +16,12 @@ import (
 const StepCreateEndpoint = "create_endpoint"
 
 // CreateEndpointArgs are the inputs to the create_endpoint step — the shared step
-// that create-project, branch, and scale-up all use (§8). It records the
+// that create-cluster, branch, and scale-up all use (§8). It records the
 // endpoint, deploys the compute, records the address, and clears the branch
 // recipe.
 type CreateEndpointArgs struct {
 	EndpointID uuid.UUID `json:"endpoint_id"`
-	ProjectID  uuid.UUID `json:"project_id"`
+	ClusterID  uuid.UUID `json:"cluster_id"`
 	BranchID   uuid.UUID `json:"branch_id"`
 	Role       string    `json:"role"`
 	PgVersion  int       `json:"pg_version"`
@@ -96,7 +96,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	// (absolute union); a no-op when none were requested. Only meaningful with a
 	// catalog (the handler rejects opt-ins otherwise), but harmless without one.
 	if len(s.Extensions) > 0 {
-		if err := s.state.AddBranchExtensions(ctx, s.ProjectID, s.BranchID, s.Extensions); err != nil {
+		if err := s.state.AddBranchExtensions(ctx, s.ClusterID, s.BranchID, s.Extensions); err != nil {
 			return Fail(fmt.Errorf("add branch extensions: %w", err))
 		}
 	}
@@ -122,7 +122,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(fmt.Errorf("encode endpoint pg_settings: %w", err))
 	}
-	if err := s.state.EnsureEndpointRecord(ctx, s.EndpointID, s.ProjectID, s.BranchID, s.Role, s.Name, config, settings); err != nil {
+	if err := s.state.EnsureEndpointRecord(ctx, s.EndpointID, s.ClusterID, s.BranchID, s.Role, s.Name, config, settings); err != nil {
 		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
 	}
 
@@ -167,7 +167,7 @@ func (s *createEndpointStep) resolveExtensions(ctx context.Context) ([]deploy.Ex
 	if s.extensions == nil {
 		return nil, nil, nil
 	}
-	opted, err := s.state.BranchExtensions(ctx, s.ProjectID, s.BranchID)
+	opted, err := s.state.BranchExtensions(ctx, s.ClusterID, s.BranchID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read branch extensions: %w", err)
 	}
@@ -217,7 +217,7 @@ func orEmptyMap(m map[string]string) map[string]string {
 
 func endpointConfig(args CreateEndpointArgs, extensions []string) ([]byte, error) {
 	cfg := map[string]any{
-		"project_id": args.ProjectID,
+		"cluster_id": args.ClusterID,
 		"branch_id":  args.BranchID,
 		"role":       args.Role,
 		"pg_version": args.PgVersion,

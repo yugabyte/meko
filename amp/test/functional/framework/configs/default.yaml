@@ -86,14 +86,14 @@ env:
   # here — it would force a doomed YBA attempt on runs that carry no YBA creds.
   yb_deploy: ""
 
-  # env/sharedk8s: project-per-test on a control plane.
+  # env/sharedk8s: cluster-per-test on a control plane.
   # controller_url/context/namespace/user_id/pool_id: no default —
   # Configured() is true only once controller_url or context (deploy: a context)
   # is set.
   #   deploy (dynamic default): when true this provider self-builds ONE
   #     run-scoped amp control plane (the same ampstack the exclusivek8s provider
   #     and deploy-amp task build, read from env.ampstack.* below) in an owned
-  #     ampqa-labelled namespace, and carves projects out of it — "self-building
+  #     ampqa-labelled namespace, and carves clusters out of it — "self-building
   #     k8s". When false it ATTACHES to a standing control plane. Defaults on
   #     unless a standing controller is already configured (controller_url or a
   #     namespace to attach to), so a bare kube-context self-builds and
@@ -293,7 +293,7 @@ functional:
   tablets: 3
   # Bounded parallelism across namespaces.
   concurrency: 4
-  # amp project/endpoint PG version (0 → the controller chooses).
+  # amp cluster/endpoint PG version (0 → the controller chooses).
   pg_version: 0
   # Backing-cluster runtime layout on the bare awsvm AMI (no YugabyteDB baked in).
   #   install_dir empty + deploy true (defaults) → deploy the versions.yugabytedb

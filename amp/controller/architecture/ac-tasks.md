@@ -14,15 +14,15 @@ It covers the package layout, the execution model as implemented, the step
 catalog (kinds, arguments, results, and each step's idempotency contract), the
 task builders that compose those steps, and the dependency ports that keep it
 testable. The API mutation handlers now **plan** these tasks: the six
-world-changing operations (`createProject`, `createBranch`, `createEndpoint`,
-`deleteProject`, `deleteBranch`, `deleteEndpoint`) validate cheaply, plan a task,
+world-changing operations (`createCluster`, `createBranch`, `createEndpoint`,
+`deleteCluster`, `deleteBranch`, `deleteEndpoint`) validate cheaply, plan a task,
 and return `202` + the `Task` + a `Location` header for the client to poll
 ([#113](https://github.com/yugabyte/amp/issues/113); the wire contract is in
 [`ac-apis.md`](ac-apis.md)).
 
-**Terminology.** The controller's user-facing ladder is **storage pool → project
+**Terminology.** The controller's user-facing ladder is **storage pool → cluster
 → branch → endpoint** ([#147](https://github.com/yugabyte/amp/issues/147)).
-A project is a purely control-plane grouping (it maps to no storage object); a
+A cluster is a purely control-plane grouping (it maps to no storage object); a
 branch's `branch_id` **is** the storage layer's flat `BranchId`. The controller
 carries that `branch_id` verbatim to the storage seam — the controller
 recipe and client, via `hex32` — and the controller is keyed by the flat
@@ -53,7 +53,7 @@ A task is two kinds of row (schema in migration `0002_resource_model.up.sql` —
 sketch in §8.1 of the high-level doc):
 
 - **`task`** — one per operation, the user-visible unit (`GET /tasks/{id}`). Holds
-  the kind, a coarse status, the target project/ref (for monitoring), the
+  the kind, a coarse status, the target cluster/ref (for monitoring), the
   originating request (`params`), `step_ids` (its steps in execution order), the
   owner + lease, and (on failure) the error.
 - **`task_step`** — the idempotent steps, one row each, keyed by its own `id`
@@ -63,7 +63,7 @@ sketch in §8.1 of the high-level doc):
   the write-ahead log.
 
 **Creation is write-ahead.** A `Service.CreateX` method (`tasks.go`) generates
-*all* the ids the operation will need — project, branch, endpoint — up front and
+*all* the ids the operation will need — cluster, branch, endpoint — up front and
 bakes them into the step args (described as `StepSpec`s — pure data, never an
 executable `Step`), then `Store.Create` assigns the task id + a step id per step and writes
 the `task` (with its ordered `step_ids`) and all its `pending` steps in one
@@ -156,16 +156,16 @@ double-apply or error.
 
 | Step kind | Args | Effect | How it stays idempotent |
 |---|---|---|---|
-| `create_project` | pool, project, branch ids, name, pg_version | Create the project + its default branch. | `EnsureProject`: `INSERT … ON CONFLICT (pk) DO NOTHING` on both rows — same ids re-run is a no-op. A *name* collision (different ids) is a real error. |
-| `create_branch` | parent, project, branch ids, name, fork LSN, pg_version | Fork a branch into a new branch (records ancestry). | `EnsureBranch`: same `ON CONFLICT (pk) DO NOTHING`; a missing parent or name collision is a real error. |
-| `record_branch_recipe` | project, branch ids, branch name, pg_version, ancestor (opt), start LSN | Record the controller's pending-init recipe (materialized later by the first endpoint). | The controller upserts the recipe; with no controller the step no-ops with a warning (the recipe then lives only in the `branch` row). |
-| `create_endpoint` | endpoint, project, branch ids, role, pg_version, cpu, memory, ancestor (opt) | Ensure the endpoint record, deploy the compute (with its CPU/memory reservation), record the address, clear the branch recipe. **The shared step** create-project, branch, and scale-up all reuse (§8). | Record insert is id-keyed `ON CONFLICT (id) DO NOTHING` (so the single-writer index is not re-violated on replay); deploy is keyed by the endpoint's stable name (deployer idempotency); address is an absolute `UPDATE`; recipe clear tolerates an already-absent recipe. `cpu`/`memory` are resolved (defaulted to 2 cores / 4Gi) by the API handler and carried in the args, so a reclaim/replay redeploys the same size. |
+| `create_cluster` | pool, cluster, branch ids, name, pg_version | Create the cluster + its default branch. | `EnsureCluster`: `INSERT … ON CONFLICT (pk) DO NOTHING` on both rows — same ids re-run is a no-op. A *name* collision (different ids) is a real error. |
+| `create_branch` | parent, cluster, branch ids, name, fork LSN, pg_version | Fork a branch into a new branch (records ancestry). | `EnsureBranch`: same `ON CONFLICT (pk) DO NOTHING`; a missing parent or name collision is a real error. |
+| `record_branch_recipe` | cluster, branch ids, branch name, pg_version, ancestor (opt), start LSN | Record the controller's pending-init recipe (materialized later by the first endpoint). | The controller upserts the recipe; with no controller the step no-ops with a warning (the recipe then lives only in the `branch` row). |
+| `create_endpoint` | endpoint, cluster, branch ids, role, pg_version, cpu, memory, ancestor (opt) | Ensure the endpoint record, deploy the compute (with its CPU/memory reservation), record the address, clear the branch recipe. **The shared step** create-cluster, branch, and scale-up all reuse (§8). | Record insert is id-keyed `ON CONFLICT (id) DO NOTHING` (so the single-writer index is not re-violated on replay); deploy is keyed by the endpoint's stable name (deployer idempotency); address is an absolute `UPDATE`; recipe clear tolerates an already-absent recipe. `cpu`/`memory` are resolved (defaulted to 2 cores / 4Gi) by the API handler and carried in the args, so a reclaim/replay redeploys the same size. |
 | `resize_endpoint` | endpoint id, cpu, memory | Change the endpoint's compute reservation: persist the new size to the endpoint `config`, then resize the **running pod in place** (`internal/task/step_resize_endpoint.go`). Records the in-place outcome on the step result. | Persist-first, then resize: `UpdateEndpointResources` is an absolute jsonb merge and the deployer resize is idempotent, so a replay converges. The DB write lands before the live resize, so even if the in-place step is deferred/infeasible a controller-driven redeploy still lands the new size. The deployer does **not** patch the Deployment template (that would trigger a rollout and recreate the pod — the opposite of in-place); an involuntary recreate before the next redeploy comes back at the old size (durable in DB, converges). **First-writer-wins lock**: the partial unique index `tasks_one_active_resize_per_endpoint` (migration 0004) admits at most one non-terminal `resize_endpoint` per endpoint (`target_ref`); a concurrent one is `ErrResizeInProgress` → `409`. The lock self-releases when the task reaches terminal (a crashed task is reclaimed by its lease, so it can't wedge). |
 | `delete_endpoint` | endpoint id | Retire the running instance, then delete the record. | Both effects tolerate an already-absent target. Order matters: retire the instance *before* deleting the record, so a crash between them leaves a record whose instance can still be retired on replay (never an orphaned instance with no record). |
-| `delete_branch` | project, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct), as does an endpoint still on the branch — an endpoint being created *concurrently with* the tombstone is caught by the other side's branch-row interlock (§3, `create_endpoint`). |
-| `delete_project` | project id | Cascade-delete a project: enumerate **all** the project's endpoints, retire each (instance + record), then delete the project — which drops all its branches. | Self-contained, enumerating children at Execute time (`EndpointIDsForProject`). Cascade order is **endpoints → branches → project**; `DeleteProject` nulls the branches' in-project parent pointers before dropping them to sidestep the self-FK `RESTRICT` ordering. Idempotent throughout. |
+| `delete_branch` | cluster, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct), as does an endpoint still on the branch — an endpoint being created *concurrently with* the tombstone is caught by the other side's branch-row interlock (§3, `create_endpoint`). |
+| `delete_cluster` | cluster id | Cascade-delete a cluster: enumerate **all** the cluster's endpoints, retire each (instance + record), then delete the cluster — which drops all its branches. | Self-contained, enumerating children at Execute time (`EndpointIDsForCluster`). Cascade order is **endpoints → branches → cluster**; `DeleteCluster` nulls the branches' in-cluster parent pointers before dropping them to sidestep the self-FK `RESTRICT` ordering. Idempotent throughout. |
 
-`delete_branch` and `delete_project` are **single self-contained steps**, not a
+`delete_branch` and `delete_cluster` are **single self-contained steps**, not a
 planned per-endpoint fan-out, because the worker has no dynamic sub-step
 expansion: the set of endpoints to retire isn't known until Execute time, so the
 one step enumerates and retires them itself. Both require a deployer (they retire
@@ -191,14 +191,14 @@ A few invariants worth calling out:
   concurrently ⇒ the whole record rolls back and the step fails `ErrNotFound`; a
   serialization abort is reported as a retryable conflict. The interlock is gated
   on the insert having actually inserted, so a replay stays an idempotent no-op.
-  `delete_project` tombstones every branch row in the project, so it conflicts the
+  `delete_cluster` tombstones every branch row in the cluster, so it conflicts the
   same way. Same shape as the fork↔cutoff interlock in `registry.RecordBranch`.
 - **Fork vs. default branch.** When `create_endpoint`'s args carry an ancestor,
   the endpoint clones from that ancestor at the fork LSN (`Bootstrap` forced off);
   otherwise a default branch runs `initdb` when the deployment's bootstrap flag is
   set. The deploy
   spec carries the storage layer's flat branch id — `hex32(branch_id)` as the
-  spec's `BranchID` (and `hex32(ancestor_branch_id)` for a fork); a project no
+  spec's `BranchID` (and `hex32(ancestor_branch_id)` for a fork); a cluster no
   longer maps to a storage tenant (#168).
 - **Clearing the recipe is best-effort.** A lingering recipe is harmless (nothing
   reads it once the branch is materialized), so a clear failure logs a warning and
@@ -221,15 +221,15 @@ which persists the task + steps and returns the `Task` to surface to the user.
 
 | Task kind | Service method | Steps |
 |---|---|---|
-| `create_project` | `Service.CreateProject` | `create_project` → `record_branch_recipe` → (`create_endpoint`, when a first writer is requested). |
+| `create_cluster` | `Service.CreateCluster` | `create_cluster` → `record_branch_recipe` → (`create_endpoint`, when a first writer is requested). |
 | `branch` | `Service.Branch` | `create_branch` → `record_branch_recipe` (ancestor set) → (`create_endpoint` cloning from the ancestor, when requested). |
 | `create_endpoint` (scale-up) | `Service.CreateEndpoint` | `create_endpoint`. |
 | `delete_endpoint` (scale-down) | `Service.DeleteEndpoint` | `delete_endpoint`. |
 | `delete_branch` | `Service.DeleteBranch` | `delete_branch`. |
-| `delete_project` | `Service.DeleteProject` | `delete_project`. |
+| `delete_cluster` | `Service.DeleteCluster` | `delete_cluster`. |
 
-The kind constants (`KindCreateProject`, `KindBranch`, `KindCreateEndpoint`,
-`KindDeleteEndpoint`, `KindDeleteBranch`, `KindDeleteProject`) are the
+The kind constants (`KindCreateCluster`, `KindBranch`, `KindCreateEndpoint`,
+`KindDeleteEndpoint`, `KindDeleteBranch`, `KindDeleteCluster`) are the
 `task.kind` values the API exposes and `listTasks` filters on.
 
 `create_endpoint` appearing in three of the six tasks is the point: it is one
@@ -244,10 +244,10 @@ at Execute time, not planned up front.
 `Service.Get` reads one task back (`GET /tasks/{id}`); `Service.List(ctx, filter,
 limit, offset)` returns a page of tasks newest-first (`created_at` DESC) plus the
 total matching count for the **`listTasks`** endpoint (`GET /tasks`). The filter
-(`TaskFilter`: `status`, `kind`, `project_id`, any of which may be zero-valued =
+(`TaskFilter`: `status`, `kind`, `cluster_id`, any of which may be zero-valued =
 unfiltered) maps straight from the spec's query parameters. `List` is backed by
 `Store.List`, whose scan is kept cheap by the task-list indexes in `0001_task_log`
-(§2): `tasks_by_created_at` (the DESC order), `tasks_by_project`, and
+(§2): `tasks_by_created_at` (the DESC order), `tasks_by_cluster`, and
 `tasks_by_status` (the optional filters). These are distinct from the
 `tasks_runnable` partial index (also `0001_task_log`), which serves the worker's claim path,
 not the list path.
@@ -260,16 +260,16 @@ are bundled into `Deps`, which the registry binds into each step at construction
 (so a built step keeps only the ports it uses, and `Execute` needs only a
 context):
 
-- **`StateStore`** — the idempotent, id-keyed project/branch operations. The
-  create/scale path: `EnsureProject`, `EnsureBranch`, `EnsureEndpointRecord`,
+- **`StateStore`** — the idempotent, id-keyed cluster/branch operations. The
+  create/scale path: `EnsureCluster`, `EnsureBranch`, `EnsureEndpointRecord`,
   `SetEndpointAddress`, `DeleteEndpoint`. The cascade-delete path adds the
-  enumeration + drop primitives the `delete_branch`/`delete_project` steps use:
-  `EndpointIDsForBranch` and `EndpointIDsForProject` (the at-Execute-time child
+  enumeration + drop primitives the `delete_branch`/`delete_cluster` steps use:
+  `EndpointIDsForBranch` and `EndpointIDsForCluster` (the at-Execute-time child
   enumeration — an absent target yields an empty slice, not an error, so a re-run
   mid-cascade converges), `DeleteBranch` (drops one branch row; the parent FK is
   `RESTRICT`, so a still-referencing child fork is a real error), and
-  `DeleteProject` (drops the project and all its branches, nulling the branches'
-  in-project parent pointers first to sidestep the self-FK ordering). All are
+  `DeleteCluster` (drops the cluster and all its branches, nulling the branches'
+  in-cluster parent pointers first to sidestep the self-FK ordering). All are
   id-keyed and idempotent (an absent row is a no-op). `*core.PgBackend` satisfies
   the interface structurally; these are deliberately *not* on the `core.Backend`
   interface, so the synchronous API read/pre-check path keeps using the
@@ -290,8 +290,8 @@ from the same `Provisioning` the API handlers' cheap pre-checks use and passes
 them to `ProductionRegistry`, then hands the registry to `NewWorker`. It also
 wraps the store in a `Service` and hands that to the API. The mutation handlers
 plan tasks through that `Service` (#113), so the worker live in `serve` now has
-real work to claim: every `createProject`/`createBranch`/`createEndpoint`/
-`deleteEndpoint`/`deleteBranch`/`deleteProject` request records a task it runs to
+real work to claim: every `createCluster`/`createBranch`/`createEndpoint`/
+`deleteEndpoint`/`deleteBranch`/`deleteCluster` request records a task it runs to
 completion.
 
 ## 6. Testing

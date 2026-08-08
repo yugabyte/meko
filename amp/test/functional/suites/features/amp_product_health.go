@@ -124,7 +124,7 @@ func (h *healthRun) healthEndpointPG(ctx context.Context, ep controller.Endpoint
 	return connectPG(ctx, ci)
 }
 
-// baseEndpoint creates the read_write endpoint on the project's default branch
+// baseEndpoint creates the read_write endpoint on the cluster's default branch
 // and holds a connection for the oracle load + LSN capture.
 func (h *healthRun) baseEndpoint(ctx context.Context) error {
 	cl, err := h.a.f.controllerClient(ctx)

@@ -1,20 +1,20 @@
-# Amp Controller — Creating a project
+# Amp Controller — Creating a cluster
 
 **Status:** Draft
 **Last updated:** 2026-06-18
 
-How the Amp Controller ("cAmp") creates a new project (and its default branch). It
+How the Amp Controller ("cAmp") creates a new cluster (and its default branch). It
 follows the `yb_amp_local` workflow (`controller/local/cmd/yb_amp_local/main.go`),
 expressed in cAmp's resource model. **Precondition:** the storage pool already exists.
 
 ## Resource model
 
-`app_user` → **storage pool** → **project** → **branch** (`pg_cluster`) →
+`app_user` → **storage pool** → **cluster** → **branch** (`pg_cluster`) →
 **endpoint**.
 
-- A **project** is the user-facing "database" — a purely control-plane grouping
+- A **cluster** is the user-facing "database" — a purely control-plane grouping
   that maps to **no** storage object. A **branch** (`pg_cluster`) is a line of
-  history within the project (the default branch, plus its forks); a branch's
+  history within the cluster (the default branch, plus its forks); a branch's
   `branch_id` **is** the storage layer's `BranchId` verbatim — the flat storage
   identity, with no enclosing tenant.
 - An **endpoint** is a single-container pod (or Docker container) — compute plus
@@ -32,21 +32,21 @@ when the first endpoint for that branch is deployed. The endpoint's own
 pageserver bootstraps the branch (`initdb`); the controller **records**
 the result — it does not run `initdb` itself.
 
-## Step 1 — `create-project`
+## Step 1 — `create-cluster`
 
-`POST /storage-pools/{p}/projects`. cAmp:
+`POST /storage-pools/{p}/clusters`. cAmp:
 
-1. Allocates the project id (a control-plane-only id) and the default branch id
+1. Allocates the cluster id (a control-plane-only id) and the default branch id
    (= the storage layer's `branch_id`).
-2. Writes the control-plane rows to its database: `project` (under the pool) and
+2. Writes the control-plane rows to its database: `cluster` (under the pool) and
    its default `branch` (`name = "main"`, `pg_version`, `is_default = true`,
    `parent_branch_id = NULL` for the default branch). The default branch is always
-   named `main`, independent of the project name; forks off it choose their own
-   names (unique within the project).
+   named `main`, independent of the cluster name; forks off it choose their own
+   names (unique within the cluster).
 3. Seeds the branch's `amp_storage.branch_state` row — the per-branch state a
    pageserver reads at attach to decide bootstrap vs fork — through the
    in-process store, via the `record_branch_recipe` step.
-4. Returns the project, with its embedded `default_branch`.
+4. Returns the cluster, with its embedded `default_branch`.
 
 Nothing is materialized, no `initdb` runs, and no compute is started. There is one
 branch record, not two: the `branch` row written in step 2 is the one every
@@ -55,7 +55,7 @@ data-plane `amp_storage.branch_state` seed from step 3.
 
 ## Step 2 — Materialize at the first endpoint
 
-`POST …/projects/{proj}/branches/{br}/endpoints`. cAmp deploys the endpoint, the
+`POST …/clusters/{proj}/branches/{br}/endpoints`. cAmp deploys the endpoint, the
 endpoint materializes the branch, and cAmp finalizes.
 
 **cAmp deploys:**
@@ -98,12 +98,12 @@ ancestor at `fork_lsn` instead of running `initdb`.
 
 ## Forking a branch
 
-`POST …/projects/{proj}/branches` (#130) is the same recipe-then-materialize
+`POST …/clusters/{proj}/branches` (#130) is the same recipe-then-materialize
 flow, forking an existing branch instead of bootstrapping a fresh one:
 
-1. cAmp resolves the **parent** branch within the project — the project's default
+1. cAmp resolves the **parent** branch within the cluster — the cluster's default
    branch, or any branch named with `parent_branch_id` (branch-of-branch) — then
-   writes a `branch` row under the **same project** with a new branch id (=
+   writes a `branch` row under the **same cluster** with a new branch id (=
    storage-layer `branch_id`), `is_default = false`, `parent_branch_id = parent`,
    the inherited `pg_version`, and `fork_lsn` (`core.Backend.CreateBranch`).
    The parent must be **live**: `RecordBranch` enforces that with a conditional
@@ -138,7 +138,7 @@ writes are synchronous today and move onto the task framework under #113.
 
 | `yb_amp_local` | Amp Controller (cAmp) |
 |---|---|
-| `record_branch` (per branch) | `create-project` → `project` + default `branch` **and** that branch's `amp_storage.branch_state` seed, keyed by the flat `branch_id`, written by the `record_branch_recipe` step. A root branch is a branch row with a NULL parent. |
+| `record_branch` (per branch) | `create-cluster` → `cluster` + default `branch` **and** that branch's `amp_storage.branch_state` seed, keyed by the flat `branch_id`, written by the `record_branch_recipe` step. A root branch is a branch row with a NULL parent. |
 | control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |
 | control plane inits PS + `register_and_attach` | the **endpoint** starts its pageserver, which claims its own generation |
 | PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb`, driven by the seeded `branch_state` row |

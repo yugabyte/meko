@@ -733,11 +733,11 @@ impl ComputeNode {
 
         let pspec = compute_state.pspec.as_ref().expect("spec must be set");
         info!(
-            "starting compute for project {}, operation {}, storage branch {}, project {}, branch {}, endpoint {}, features {:?}, spec.remote_extensions {:?}",
+            "starting compute for cluster spec id {}, operation {}, storage branch {}, cluster {}, branch {}, endpoint {}, features {:?}, spec.remote_extensions {:?}",
             pspec.spec.cluster.cluster_id.as_deref().unwrap_or("None"),
             pspec.spec.operation_uuid.as_deref().unwrap_or("None"),
             pspec.branch_id,
-            pspec.spec.project_id.as_deref().unwrap_or("None"),
+            pspec.spec.cluster_id.as_deref().unwrap_or("None"),
             pspec.spec.branch_id.as_deref().unwrap_or("None"),
             pspec.spec.endpoint_id.as_deref().unwrap_or("None"),
             pspec.spec.features,
@@ -865,16 +865,16 @@ impl ComputeNode {
                 let log_directory_path = Path::new(&self.params.pgdata).join("log");
                 let log_directory_path = log_directory_path.to_string_lossy().to_string();
 
-                // Add project_id,endpoint_id to identify the logs.
+                // Add cluster_id,endpoint_id to identify the logs.
                 //
                 // These ids are passed from cplane,
                 let endpoint_id = pspec.spec.endpoint_id.as_deref().unwrap_or("");
-                let project_id = pspec.spec.project_id.as_deref().unwrap_or("");
+                let cluster_id = pspec.spec.cluster_id.as_deref().unwrap_or("");
 
                 configure_audit_rsyslog(
                     log_directory_path.clone(),
                     endpoint_id,
-                    project_id,
+                    cluster_id,
                     &remote_plain_endpoint,
                     &remote_tls_endpoint,
                 )?;

@@ -43,22 +43,22 @@ def test_create_storage_pool_passes_owner(wired):
 
 @pytest.mark.parametrize(
     "wired",
-    [{"POST /api/v1/storage-pools/p1/projects": (202, {"id": "t1", "kind": "create_project", "status": "pending"})}],
+    [{"POST /api/v1/storage-pools/p1/clusters": (202, {"id": "t1", "kind": "create_cluster", "status": "pending"})}],
     indirect=True,
 )
-def test_create_project_returns_task(wired):
-    result = tools.create_project(pool_id="p1", name="db")
-    assert result == {"id": "t1", "kind": "create_project", "status": "pending"}
+def test_create_cluster_returns_task(wired):
+    result = tools.create_cluster(pool_id="p1", name="db")
+    assert result == {"id": "t1", "kind": "create_cluster", "status": "pending"}
 
 
 @pytest.mark.parametrize(
     "wired",
-    [{"DELETE /api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1": (202, {"id": "t2", "kind": "delete_endpoint", "status": "pending"})}],
+    [{"DELETE /api/v1/storage-pools/p1/clusters/pr1/branches/b1/endpoints/e1": (202, {"id": "t2", "kind": "delete_endpoint", "status": "pending"})}],
     indirect=True,
 )
 def test_delete_endpoint_returns_task(wired):
     result = tools.delete_endpoint(
-        pool_id="p1", project_id="pr1", branch_id="b1", endpoint_id="e1"
+        pool_id="p1", cluster_id="pr1", branch_id="b1", endpoint_id="e1"
     )
     assert result["kind"] == "delete_endpoint"
     assert wired.last.method == "DELETE"
@@ -66,13 +66,13 @@ def test_delete_endpoint_returns_task(wired):
 
 @pytest.mark.parametrize(
     "wired",
-    [{"POST /api/v1/storage-pools/p1/projects/pr1/branches": (202, {"id": "t3"})}],
+    [{"POST /api/v1/storage-pools/p1/clusters/pr1/branches": (202, {"id": "t3"})}],
     indirect=True,
 )
 def test_create_branch_optional_fields(wired):
     tools.create_branch(
         pool_id="p1",
-        project_id="pr1",
+        cluster_id="pr1",
         name="feature",
         parent_branch_id="b0",
         fork_point_lsn="0/16ABCD0",
@@ -95,12 +95,12 @@ def test_get_task(wired):
 
 @pytest.mark.parametrize(
     "wired",
-    [{"POST /api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1/resize": (202, {"id": "t9", "kind": "resize_endpoint", "status": "pending"})}],
+    [{"POST /api/v1/storage-pools/p1/clusters/pr1/branches/b1/endpoints/e1/resize": (202, {"id": "t9", "kind": "resize_endpoint", "status": "pending"})}],
     indirect=True,
 )
 def test_resize_endpoint_returns_task_and_nests_resources(wired):
     result = tools.resize_endpoint(
-        pool_id="p1", project_id="pr1", branch_id="b1", endpoint_id="e1",
+        pool_id="p1", cluster_id="pr1", branch_id="b1", endpoint_id="e1",
         cpu="4", memory="8Gi",
     )
     assert result["kind"] == "resize_endpoint"
@@ -111,11 +111,11 @@ def test_resize_endpoint_returns_task_and_nests_resources(wired):
 
 @pytest.mark.parametrize(
     "wired",
-    [{"POST /api/v1/storage-pools/p1/projects/pr1/branches/b1/endpoints/e1/resize": (202, {"id": "t9"})}],
+    [{"POST /api/v1/storage-pools/p1/clusters/pr1/branches/b1/endpoints/e1/resize": (202, {"id": "t9"})}],
     indirect=True,
 )
 def test_resize_endpoint_omits_unset_field(wired):
     tools.resize_endpoint(
-        pool_id="p1", project_id="pr1", branch_id="b1", endpoint_id="e1", cpu="4",
+        pool_id="p1", cluster_id="pr1", branch_id="b1", endpoint_id="e1", cpu="4",
     )
     assert wired.last_json() == {"resources": {"cpu": "4"}}

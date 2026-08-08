@@ -311,7 +311,7 @@ patches, we can just keep it around as a patch or as separate branch in a repo.
 
 ## pg_waldump flags to ignore errors
 
-After creating a new project or branch in yb-amp, the first timeline can begin in the middle of a WAL segment. pg_waldump chokes on that, so we added some flags to make it possible to ignore errors.
+After creating a new cluster or branch in yb-amp, the first timeline can begin in the middle of a WAL segment. pg_waldump chokes on that, so we added some flags to make it possible to ignore errors.
 
 ### How to get rid of the patch
 

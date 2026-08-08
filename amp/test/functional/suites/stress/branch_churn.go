@@ -1,15 +1,15 @@
 // branch_churn is the control-plane churn stress scenario: several lanes run the
 // full branch lifecycle — fork a branch, deploy an endpoint on it, write and
 // verify a dataset, retire the endpoint, delete the branch — over and over, in
-// parallel, against one project. It is the counterpart to the data-plane load
+// parallel, against one cluster. It is the counterpart to the data-plane load
 // tests: nothing here is about throughput, it is about whether the controller's
 // asynchronous create/delete tasks stay correct and leak nothing when the same
 // resource ladder is built and torn down concurrently, hundreds of tasks deep.
 //
-// It runs on a STANDING amp control plane (the sharedk8s project-per-test env
+// It runs on a STANDING amp control plane (the sharedk8s cluster-per-test env
 // exposes one) rather than self-provisioning: churning branches needs the control
 // plane, not a bare YugabyteDB backing, and it skips cleanly on any env that does
-// not offer one. Everything it creates hangs off a single project, whose delete
+// not offer one. Everything it creates hangs off a single cluster, whose delete
 // cascade is registered before the first lane starts, so a killed run leaves
 // nothing behind.
 package stress
@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	// churnLanes is how many lifecycles run concurrently against the one project.
+	// churnLanes is how many lifecycles run concurrently against the one cluster.
 	churnLanes = 3
 	// churnCycles is how many lifecycles each lane completes in sequence.
 	churnCycles = 4
@@ -39,7 +39,7 @@ const (
 	// churnTable is the per-cycle table name (each cycle owns its own branch, so
 	// the name never collides).
 	churnTable = "amp_churn"
-	// churnTeardownBudget bounds the project-cascade cleanup, independent of the
+	// churnTeardownBudget bounds the cluster-cascade cleanup, independent of the
 	// body's deadline.
 	churnTeardownBudget = 15 * time.Minute
 	// churnRetries is how many extra attempts one control-plane call makes on a
@@ -56,14 +56,14 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"stress", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Churn the branch lifecycle (fork, endpoint, write, retire, delete) in parallel lanes against one project and assert every cycle converged, nothing was orphaned, and no task failed.",
+		Description: "Churn the branch lifecycle (fork, endpoint, write, retire, delete) in parallel lanes against one cluster and assert every cycle converged, nothing was orphaned, and no task failed.",
 		Params:      []string{"env.sharedk8s"},
 		Run:         runBranchChurn,
 	})
 }
 
 // ampControlPlaneEnv is the capability this test depends on: a standing amp
-// control plane it can create a project on and reach the endpoints of. The
+// control plane it can create a cluster on and reach the endpoints of. The
 // sharedk8s env satisfies it; depending on the capability rather than that
 // concrete env is what lets any future control-plane env run this unchanged.
 type ampControlPlaneEnv interface {
@@ -80,10 +80,10 @@ type churnRun struct {
 	retried atomic.Int64
 }
 
-// runBranchChurn creates one project, runs churnLanes × churnCycles branch
+// runBranchChurn creates one cluster, runs churnLanes × churnCycles branch
 // lifecycles across it, and then asserts the control plane is exactly where it
 // started: only the default branch left, no endpoint anywhere, no failed task
-// recorded against the project, and the controller still ready.
+// recorded against the cluster, and the controller still ready.
 func runBranchChurn(t *core.T) (err error) {
 	env, ok := t.Env.(ampControlPlaneEnv)
 	if !ok {
@@ -107,20 +107,20 @@ func runBranchChurn(t *core.T) (err error) {
 		}
 	}()
 
-	var proj controller.Project
-	if err := t.Step("create_project", func(s *core.StepHandle) error {
+	var proj controller.Cluster
+	if err := t.Step("create_cluster", func(s *core.StepHandle) error {
 		name := "churn-" + suffix(t)
-		s.Set("project", name)
-		if _, err := cl.CreateProjectAndWait(t.Context, poolID, controller.CreateProjectRequest{Name: name}); err != nil {
+		s.Set("cluster", name)
+		if _, err := cl.CreateClusterAndWait(t.Context, poolID, controller.CreateClusterRequest{Name: name}); err != nil {
 			return err
 		}
-		p, err := findProject(t.Context, cl, poolID, name)
+		p, err := findCluster(t.Context, cl, poolID, name)
 		if err != nil {
 			return err
 		}
 		proj = p
-		td.push("delete churn project (cascade)", func(ctx context.Context) error {
-			_, e := cl.DeleteProjectAndWait(ctx, poolID, proj.ID)
+		td.push("delete churn cluster (cascade)", func(ctx context.Context) error {
+			_, e := cl.DeleteClusterAndWait(ctx, poolID, proj.ID)
 			return e
 		})
 		return nil
@@ -198,7 +198,7 @@ func runBranchChurn(t *core.T) (err error) {
 			for _, b := range branches {
 				names = append(names, b.Name)
 			}
-			return fmt.Errorf("after %d branch lifecycles the project lists %d branch(es) (%v), want only the default branch — every churned branch was deleted and waited on, so anything left is an orphan",
+			return fmt.Errorf("after %d branch lifecycles the cluster lists %d branch(es) (%v), want only the default branch — every churned branch was deleted and waited on, so anything left is an orphan",
 				churnLanes*churnCycles, len(branches), names)
 		}
 		eps, err := cl.ListAllEndpoints(t.Context, poolID, proj.ID, proj.DefaultBranch.BranchID)
@@ -208,7 +208,7 @@ func runBranchChurn(t *core.T) (err error) {
 		if len(eps) != 0 {
 			return fmt.Errorf("the default branch lists %d endpoint(s) after the churn, want 0 — the churn only ever created endpoints on its own branches", len(eps))
 		}
-		failed, err := cl.ListTasks(t.Context, controller.ListTasksOptions{ProjectID: proj.ID, Status: controller.TaskFailed, Limit: 50})
+		failed, err := cl.ListTasks(t.Context, controller.ListTasksOptions{ClusterID: proj.ID, Status: controller.TaskFailed, Limit: 50})
 		if err != nil {
 			return fmt.Errorf("list failed tasks after the churn: %w", err)
 		}
@@ -221,7 +221,7 @@ func runBranchChurn(t *core.T) (err error) {
 			for _, tk := range failed.Tasks {
 				kinds = append(kinds, tk.Kind)
 			}
-			return fmt.Errorf("the project has %d failed task(s) after the churn (%v) but the lanes only retried past %d transient error(s), so at least one lifecycle failed unobserved", failed.Total, kinds, retried)
+			return fmt.Errorf("the cluster has %d failed task(s) after the churn (%v) but the lanes only retried past %d transient error(s), so at least one lifecycle failed unobserved", failed.Total, kinds, retried)
 		}
 		if err := cl.Readyz(t.Context); err != nil {
 			return fmt.Errorf("the controller is not ready after the churn: %w", err)
@@ -235,7 +235,7 @@ func runBranchChurn(t *core.T) (err error) {
 // branch — asserting each step converged before moving on. It probes controller
 // readiness every cycle so a control plane that degrades under the churn is
 // caught while it is happening, not only at the end.
-func runChurnLane(ctx context.Context, t *core.T, run *churnRun, env ampControlPlaneEnv, cl *controller.Client, poolID string, proj controller.Project, lane int, logf func(string, ...any)) error {
+func runChurnLane(ctx context.Context, t *core.T, run *churnRun, env ampControlPlaneEnv, cl *controller.Client, poolID string, proj controller.Cluster, lane int, logf func(string, ...any)) error {
 	for cycle := 0; cycle < churnCycles; cycle++ {
 		name := fmt.Sprintf("churn-l%d-c%d-%s", lane, cycle, suffix(t))
 		if err := churnCycle(ctx, run, env, cl, poolID, proj, name); err != nil {
@@ -251,7 +251,7 @@ func runChurnLane(ctx context.Context, t *core.T, run *churnRun, env ampControlP
 
 // churnCycle is one full lifecycle. Every create and delete is waited on, so a
 // step that never converges fails here rather than surfacing as an orphan later.
-func churnCycle(ctx context.Context, run *churnRun, env ampControlPlaneEnv, cl *controller.Client, poolID string, proj controller.Project, name string) error {
+func churnCycle(ctx context.Context, run *churnRun, env ampControlPlaneEnv, cl *controller.Client, poolID string, proj controller.Cluster, name string) error {
 	if err := withChurnRetry(ctx, run, func() error {
 		_, err := cl.CreateBranchAndWait(ctx, poolID, proj.ID, controller.CreateBranchRequest{
 			Name:           name,
@@ -356,22 +356,22 @@ func transientChurnErr(err error) bool {
 		(strings.Contains(s, "not found") && strings.Contains(s, "yb-ep-"))
 }
 
-// findProject resolves an asynchronously-created project by name (its id is not
+// findCluster resolves an asynchronously-created cluster by name (its id is not
 // known until the create task succeeds).
-func findProject(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Project, error) {
+func findCluster(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Cluster, error) {
 	const page = 100
 	for offset := 0; ; offset += page {
-		list, err := cl.ListProjects(ctx, poolID, page, offset)
+		list, err := cl.ListClusters(ctx, poolID, page, offset)
 		if err != nil {
-			return controller.Project{}, fmt.Errorf("list projects: %w", err)
+			return controller.Cluster{}, fmt.Errorf("list clusters: %w", err)
 		}
-		for _, p := range list.Projects {
+		for _, p := range list.Clusters {
 			if p.Name == name {
 				return p, nil
 			}
 		}
-		if list.Count < page || offset+len(list.Projects) >= list.Total {
-			return controller.Project{}, fmt.Errorf("project %q not found after create", name)
+		if list.Count < page || offset+len(list.Clusters) >= list.Total {
+			return controller.Cluster{}, fmt.Errorf("cluster %q not found after create", name)
 		}
 	}
 }

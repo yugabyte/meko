@@ -25,17 +25,17 @@ import (
 // SetEndpointAddress and DeleteEndpoint (already on Backend) round out the
 // task.StateStore create/set/delete-endpoint surface; the Ensure* methods plus
 // the cascade-delete primitives below (EndpointIDsForBranch / EndpointIDsFor
-// Project / DeleteBranch / DeleteProject) are the task-only additions. The
+// Cluster / DeleteBranch / DeleteCluster) are the task-only additions. The
 // cascade primitives are id-keyed and idempotent: an absent parent enumerates to
 // an empty slice and an absent row deletes to a no-op, so a delete task re-run
 // after a crash converges.
 
-// EnsureProject idempotently creates a project and its default branch with the
-// given ids (the create_project step). Re-running with the same ids is a no-op.
-// A project-name collision within the pool surfaces as ErrConflict (the
-// projects_name_per_pool unique index, which is not the ON CONFLICT target); a
-// missing pool surfaces as ErrNotFound (the FK on project.storage_pool_id).
-func (b *PgBackend) EnsureProject(ctx context.Context, poolID, projectID, branchID uuid.UUID, name string, pgVersion int) error {
+// EnsureCluster idempotently creates a cluster and its default branch with the
+// given ids (the create_cluster step). Re-running with the same ids is a no-op.
+// A cluster-name collision within the pool surfaces as ErrConflict (the
+// clusters_name_per_pool unique index, which is not the ON CONFLICT target); a
+// missing pool surfaces as ErrNotFound (the FK on cluster.storage_pool_id).
+func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int) error {
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -43,32 +43,32 @@ func (b *PgBackend) EnsureProject(ctx context.Context, poolID, projectID, branch
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
+		`INSERT INTO amp_registry.clusters (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)
 		 ON CONFLICT (id) DO NOTHING`,
-		projectID.String(), poolID.String(), name); err != nil {
-		return mapProjectErr("insert project", err)
+		clusterID.String(), poolID.String(), name); err != nil {
+		return mapClusterErr("insert cluster", err)
 	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.branches (project_id, branch_id, name, pg_version, is_default)
+		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default)
 		 VALUES ($1::uuid, $2::uuid, $3, $4, true)
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		projectID.String(), branchID.String(), DefaultBranchName, pgVersion); err != nil {
+		clusterID.String(), branchID.String(), DefaultBranchName, pgVersion); err != nil {
 		return mapBranchErr("insert default branch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit ensure project+default branch: %w", err)
+		return fmt.Errorf("commit ensure cluster+default branch: %w", err)
 	}
 	return nil
 }
 
 // EnsureBranch idempotently creates a branch (a non-default branch) with the
-// given id, forked from parentBranchID at forkLSN, under projectID (the
+// given id, forked from parentBranchID at forkLSN, under clusterID (the
 // create_branch step). Re-running with the same id is a no-op. A name collision
-// within the project surfaces as ErrConflict; a missing parent (the in-project
+// within the cluster surfaces as ErrConflict; a missing parent (the in-cluster
 // fork FK) as ErrNotFound. forkLSN must be a well-formed "X/X" LSN (the caller
 // validates before it reaches the pg_lsn cast). No pool id is needed: the branch
-// is scoped to its project, and the in-project parent FK enforces lineage.
-func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, projectID, branchID uuid.UUID, name, forkLSN string, pgVersion int) error {
+// is scoped to its cluster, and the in-cluster parent FK enforces lineage.
+func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, clusterID, branchID uuid.UUID, name, forkLSN string, pgVersion int) error {
 	// is_default = false; record the fork ancestry. The explicit pg_version is the
 	// parent's, resolved write-ahead at plan time (a branch inherits its
 	// ancestor's version), so it never drifts from the parent. Idempotent:
@@ -84,12 +84,12 @@ func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, projectID,
 	// tombstoned or absent parent selects nothing, so the step fails ErrNotFound.
 	// Mirrors the same guard in the synchronous CreateBranch (pg.go).
 	tag, err := b.pool.Exec(ctx,
-		`INSERT INTO amp_registry.branches (project_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
+		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
 		 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn
 		   FROM amp_registry.branches p
-		  WHERE p.branch_id = $5::uuid AND p.project_id = $1::uuid AND p.dropped_at IS NULL
+		  WHERE p.branch_id = $5::uuid AND p.cluster_id = $1::uuid AND p.dropped_at IS NULL
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		projectID.String(), branchID.String(), name, pgVersion, parentBranchID.String(), forkLSN)
+		clusterID.String(), branchID.String(), name, pgVersion, parentBranchID.String(), forkLSN)
 	if err != nil {
 		return mapBranchErr("insert branch", err)
 	}
@@ -99,8 +99,8 @@ func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, projectID,
 		var exists bool
 		if err := b.pool.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM amp_registry.branches
-			                 WHERE project_id = $1::uuid AND branch_id = $2::uuid)`,
-			projectID.String(), branchID.String()).Scan(&exists); err != nil {
+			                 WHERE cluster_id = $1::uuid AND branch_id = $2::uuid)`,
+			clusterID.String(), branchID.String()).Scan(&exists); err != nil {
 			return fmt.Errorf("classify ensure branch no-op: %w", err)
 		}
 		if !exists {
@@ -192,7 +192,7 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // so any number of unnamed endpoints coexist while two named the same on one
 // branch collide.
 //
-// projectID is accepted but not stored: an endpoint reaches its project through
+// clusterID is accepted but not stored: an endpoint reaches its cluster through
 // its branch, so there is no column for it to disagree with. It stays in the
 // signature (and in the step's persisted args) because the caller plans the whole
 // ladder write-ahead and the branch FK is what validates the pairing.
@@ -200,8 +200,8 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // The branch must also be LIVE, and that check is a conditional WRITE of the
 // branch row rather than a read of it, so it serializes against a concurrent drop
 // instead of write-skewing past it (see the interlock comment in the body).
-func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, projectID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
-	_ = projectID // implied by branchID; see the doc comment
+func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
+	_ = clusterID // implied by branchID; see the doc comment
 	var cfg any
 	if len(config) > 0 {
 		cfg = config
@@ -271,7 +271,7 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, projec
 	// pages and WAL out from under a running compute. Writing B's row here makes
 	// the two statements conflict, so one of them loses.
 	//
-	// DeleteProject tombstones every branch row in the project, B's included, so it
+	// DeleteCluster tombstones every branch row in the cluster, B's included, so it
 	// conflicts here the same way.
 	//
 	// The interlock runs only when the INSERT actually inserted: a replay of the
@@ -311,15 +311,15 @@ func mapBranchDropRaceErr(what string, err error) error {
 }
 
 // EndpointIDsForBranch returns the ids of every endpoint on the
-// (projectID, branchID) branch (the delete_branch step's Execute-time
+// (clusterID, branchID) branch (the delete_branch step's Execute-time
 // enumeration). An absent branch yields an empty slice — no ErrNotFound — so a
 // cascade re-run after a crash converges.
-func (b *PgBackend) EndpointIDsForBranch(ctx context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+func (b *PgBackend) EndpointIDsForBranch(ctx context.Context, clusterID, branchID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := b.pool.Query(ctx,
 		`SELECT e.id::text FROM amp_registry.endpoints e
 		  JOIN amp_registry.branches b ON b.branch_id = e.branch_id
-		 WHERE b.project_id = $1::uuid AND e.branch_id = $2::uuid`,
-		projectID.String(), branchID.String())
+		 WHERE b.cluster_id = $1::uuid AND e.branch_id = $2::uuid`,
+		clusterID.String(), branchID.String())
 	if err != nil {
 		return nil, fmt.Errorf("list endpoint ids for branch: %w", err)
 	}
@@ -327,32 +327,32 @@ func (b *PgBackend) EndpointIDsForBranch(ctx context.Context, projectID, branchI
 	return scanUUIDs(rows)
 }
 
-// EndpointIDsForProject returns the ids of every endpoint in the project (the
-// delete_project step's Execute-time enumeration). An absent project yields an
+// EndpointIDsForCluster returns the ids of every endpoint in the cluster (the
+// delete_cluster step's Execute-time enumeration). An absent cluster yields an
 // empty slice — no ErrNotFound.
-func (b *PgBackend) EndpointIDsForProject(ctx context.Context, projectID uuid.UUID) ([]uuid.UUID, error) {
+func (b *PgBackend) EndpointIDsForCluster(ctx context.Context, clusterID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := b.pool.Query(ctx,
 		`SELECT e.id::text FROM amp_registry.endpoints e
 		  JOIN amp_registry.branches b ON b.branch_id = e.branch_id
-		 WHERE b.project_id = $1::uuid`,
-		projectID.String())
+		 WHERE b.cluster_id = $1::uuid`,
+		clusterID.String())
 	if err != nil {
-		return nil, fmt.Errorf("list endpoint ids for project: %w", err)
+		return nil, fmt.Errorf("list endpoint ids for cluster: %w", err)
 	}
 	defer rows.Close()
 	return scanUUIDs(rows)
 }
 
-// ChildBranchIDs returns the ids of every LIVE branch in projectID forked
+// ChildBranchIDs returns the ids of every LIVE branch in clusterID forked
 // directly from branchID (the delete_branch step's pre-cascade check). An absent
 // branch yields an empty slice — no ErrNotFound. Tombstoned children are skipped:
 // they keep their parent pointer forever (the row stays), so counting them would
 // make a parent permanently undeletable.
-func (b *PgBackend) ChildBranchIDs(ctx context.Context, projectID, branchID uuid.UUID) ([]uuid.UUID, error) {
+func (b *PgBackend) ChildBranchIDs(ctx context.Context, clusterID, branchID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := b.pool.Query(ctx,
 		`SELECT branch_id::text FROM amp_registry.branches
-		  WHERE project_id = $1::uuid AND parent_branch_id = $2::uuid AND dropped_at IS NULL`,
-		projectID.String(), branchID.String())
+		  WHERE cluster_id = $1::uuid AND parent_branch_id = $2::uuid AND dropped_at IS NULL`,
+		clusterID.String(), branchID.String())
 	if err != nil {
 		return nil, fmt.Errorf("list child branch ids: %w", err)
 	}
@@ -360,7 +360,7 @@ func (b *PgBackend) ChildBranchIDs(ctx context.Context, projectID, branchID uuid
 	return scanUUIDs(rows)
 }
 
-// DeleteBranch tombstones the (projectID, branchID) branch: it stamps
+// DeleteBranch tombstones the (clusterID, branchID) branch: it stamps
 // `dropped_at` rather than deleting the row, because a branch id is never reused
 // and the branch's page/WAL data in amp_storage outlives the drop (#36). Every
 // reader filters `dropped_at IS NULL`, so the branch stops existing as far as
@@ -390,17 +390,17 @@ func (b *PgBackend) ChildBranchIDs(ctx context.Context, projectID, branchID uuid
 // this same branch row, so the two serialize. See the interlock comment there.
 //
 // It also keeps *MemBackend.DeleteBranch (which reports ErrConflict) honest.
-func (b *PgBackend) DeleteBranch(ctx context.Context, projectID, branchID uuid.UUID) error {
+func (b *PgBackend) DeleteBranch(ctx context.Context, clusterID, branchID uuid.UUID) error {
 	tag, err := b.pool.Exec(ctx,
 		`UPDATE amp_registry.branches SET dropped_at = now()
-		  WHERE project_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL
+		  WHERE cluster_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL
 		    AND NOT EXISTS (
 		        SELECT 1 FROM amp_registry.branches c
-		         WHERE c.project_id = $1::uuid AND c.parent_branch_id = $2::uuid
+		         WHERE c.cluster_id = $1::uuid AND c.parent_branch_id = $2::uuid
 		           AND c.dropped_at IS NULL)
 		    AND NOT EXISTS (
 		        SELECT 1 FROM amp_registry.endpoints e WHERE e.branch_id = $2::uuid)`,
-		projectID.String(), branchID.String())
+		clusterID.String(), branchID.String())
 	if err != nil {
 		return fmt.Errorf("tombstone branch: %w", err)
 	}
@@ -415,14 +415,14 @@ func (b *PgBackend) DeleteBranch(ctx context.Context, projectID, branchID uuid.U
 	if err := b.pool.QueryRow(ctx,
 		`SELECT (EXISTS (
 		    SELECT 1 FROM amp_registry.branches c
-		     WHERE c.project_id = $1::uuid AND c.parent_branch_id = $2::uuid
+		     WHERE c.cluster_id = $1::uuid AND c.parent_branch_id = $2::uuid
 		       AND c.dropped_at IS NULL)
 		   OR EXISTS (
 		    SELECT 1 FROM amp_registry.endpoints e WHERE e.branch_id = $2::uuid))
 		  AND EXISTS (
 		    SELECT 1 FROM amp_registry.branches
-		     WHERE project_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL)`,
-		projectID.String(), branchID.String()).Scan(&blocked); err != nil {
+		     WHERE cluster_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL)`,
+		clusterID.String(), branchID.String()).Scan(&blocked); err != nil {
 		return fmt.Errorf("classify branch tombstone no-op: %w", err)
 	}
 	if blocked {
@@ -431,22 +431,22 @@ func (b *PgBackend) DeleteBranch(ctx context.Context, projectID, branchID uuid.U
 	return nil
 }
 
-// DeleteProject tombstones the project and every branch under it, and revokes
+// DeleteCluster tombstones the cluster and every branch under it, and revokes
 // its grants (idempotent; absent rows are a no-op). The caller retires the
-// project's endpoints first.
+// cluster's endpoints first.
 //
-// The project row has to be tombstoned rather than deleted *because* its branches
-// are: the branch -> project FK is RESTRICT, so a project whose branches survive
+// The cluster row has to be tombstoned rather than deleted *because* its branches
+// are: the branch -> cluster FK is RESTRICT, so a cluster whose branches survive
 // as tombstones can never be deleted. Tombstoning both keeps the whole lineage
 // legible after the fact, and it retires the pre-tombstone dance this used to
-// need — nulling every in-project parent pointer to sidestep the self-FK ordering
+// need — nulling every in-cluster parent pointer to sidestep the self-FK ordering
 // before a bulk delete — because an UPDATE never trips a foreign key.
 //
 // Grants are still hard-deleted: access is not history worth keeping, and a
-// revoked grant should not linger on a dropped project.
+// revoked grant should not linger on a dropped cluster.
 //
 // This transaction deliberately does NOT touch endpoints, but it does refuse to
-// run while any of the project's branches still has one. That check has to be
+// run while any of the cluster's branches still has one. That check has to be
 // explicit: tombstoning is an UPDATE that never writes `branch_id`, so unlike the
 // old DELETE it leaves the endpoints FK unexamined and would otherwise succeed
 // with live endpoints still attached. Failing here is what makes an endpoint
@@ -456,43 +456,43 @@ func (b *PgBackend) DeleteBranch(ctx context.Context, projectID, branchID uuid.U
 // instance. Like the one in DeleteBranch that check is a read, and what makes it
 // hold against an endpoint creation still in flight is the branch-row interlock
 // on the other side (EnsureEndpointRecord): the tombstone below writes every
-// branch row in the project, so the two serialize.
-func (b *PgBackend) DeleteProject(ctx context.Context, projectID uuid.UUID) error {
+// branch row in the cluster, so the two serialize.
+func (b *PgBackend) DeleteCluster(ctx context.Context, clusterID uuid.UUID) error {
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	id := projectID.String()
+	id := clusterID.String()
 	var hasEndpoints bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS (
 		    SELECT 1 FROM amp_registry.endpoints e
 		      JOIN amp_registry.branches b ON b.branch_id = e.branch_id
-		     WHERE b.project_id = $1::uuid)`,
+		     WHERE b.cluster_id = $1::uuid)`,
 		id).Scan(&hasEndpoints); err != nil {
-		return fmt.Errorf("check project endpoints: %w", err)
+		return fmt.Errorf("check cluster endpoints: %w", err)
 	}
 	if hasEndpoints {
 		return ErrConflict
 	}
 	if _, err := tx.Exec(ctx,
-		`UPDATE amp_registry.branches SET dropped_at = now() WHERE project_id = $1::uuid AND dropped_at IS NULL`,
+		`UPDATE amp_registry.branches SET dropped_at = now() WHERE cluster_id = $1::uuid AND dropped_at IS NULL`,
 		id); err != nil {
-		return fmt.Errorf("tombstone project branches: %w", err)
+		return fmt.Errorf("tombstone cluster branches: %w", err)
 	}
 	if _, err := tx.Exec(ctx,
-		`DELETE FROM amp_registry.user_project_grants WHERE project_id = $1::uuid`, id); err != nil {
-		return fmt.Errorf("delete project grants: %w", err)
+		`DELETE FROM amp_registry.user_cluster_grants WHERE cluster_id = $1::uuid`, id); err != nil {
+		return fmt.Errorf("delete cluster grants: %w", err)
 	}
 	if _, err := tx.Exec(ctx,
-		`UPDATE amp_registry.projects SET dropped_at = now() WHERE id = $1::uuid AND dropped_at IS NULL`,
+		`UPDATE amp_registry.clusters SET dropped_at = now() WHERE id = $1::uuid AND dropped_at IS NULL`,
 		id); err != nil {
-		return fmt.Errorf("tombstone project: %w", err)
+		return fmt.Errorf("tombstone cluster: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit delete project: %w", err)
+		return fmt.Errorf("commit delete cluster: %w", err)
 	}
 	return nil
 }

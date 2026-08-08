@@ -60,15 +60,15 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	b := NewPgBackend(pool)
 
 	// A branch's row is created by RecordBranch — the shared choke point both the
-	// controller and yb_amp_local reach. Branches are project-scoped now, so the
-	// project has to exist: the branch -> project FK is what enforces it.
-	projectID := seedCoreProject(t, ctx, pool)
+	// controller and yb_amp_local reach. Branches are cluster-scoped now, so the
+	// cluster has to exist: the branch -> cluster FK is what enforces it.
+	clusterID := seedCoreCluster(t, ctx, pool)
 	rootID := uuid.New()
 	rootHex := registry.FormatBranchID(rootID)
 
 	recordBranch := func(id uuid.UUID, name string, ancestorHex *string, startLSN string) {
 		t.Helper()
-		if err := store.RecordBranch(ctx, projectID, registry.FormatBranchID(id), registry.BranchCreateRecord{
+		if err := store.RecordBranch(ctx, clusterID, registry.FormatBranchID(id), registry.BranchCreateRecord{
 			BranchName:       name,
 			PgVersion:        18,
 			AncestorBranchID: ancestorHex,
@@ -79,7 +79,7 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	}
 	mustExts := func(id uuid.UUID) []string {
 		t.Helper()
-		got, err := b.BranchExtensions(ctx, projectID, id)
+		got, err := b.BranchExtensions(ctx, clusterID, id)
 		if err != nil {
 			t.Fatalf("BranchExtensions: %v", err)
 		}
@@ -93,7 +93,7 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	}
 
 	// --- opt in (idempotent absolute union). ---
-	if err := b.AddBranchExtensions(ctx, projectID, rootID, []string{"pgvector"}); err != nil {
+	if err := b.AddBranchExtensions(ctx, clusterID, rootID, []string{"pgvector"}); err != nil {
 		t.Fatalf("AddBranchExtensions: %v", err)
 	}
 	if got := mustExts(rootID); !reflect.DeepEqual(got, []string{"pgvector"}) {
@@ -110,7 +110,7 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 
 	// --- child opts into more; the union is sorted+deduped and the parent is
 	// unaffected (the snapshot is a copy, not a live pointer). ---
-	if err := b.AddBranchExtensions(ctx, projectID, childID, []string{"rum", "pgvector"}); err != nil {
+	if err := b.AddBranchExtensions(ctx, clusterID, childID, []string{"rum", "pgvector"}); err != nil {
 		t.Fatalf("AddBranchExtensions(child): %v", err)
 	}
 	if got := mustExts(childID); !reflect.DeepEqual(got, []string{"pgvector", "rum"}) {
@@ -121,7 +121,7 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	}
 
 	// --- re-adding is idempotent (absolute union, no double-apply). ---
-	if err := b.AddBranchExtensions(ctx, projectID, childID, []string{"pgvector", "rum"}); err != nil {
+	if err := b.AddBranchExtensions(ctx, clusterID, childID, []string{"pgvector", "rum"}); err != nil {
 		t.Fatalf("AddBranchExtensions(idempotent): %v", err)
 	}
 	if got := mustExts(childID); !reflect.DeepEqual(got, []string{"pgvector", "rum"}) {
@@ -148,7 +148,7 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	if got := mustExts(absent); len(got) != 0 {
 		t.Fatalf("absent branch extensions = %v, want none", got)
 	}
-	if err := b.AddBranchExtensions(ctx, projectID, absent, []string{"pgvector"}); err != nil {
+	if err := b.AddBranchExtensions(ctx, clusterID, absent, []string{"pgvector"}); err != nil {
 		t.Fatalf("AddBranchExtensions(absent): %v", err)
 	}
 	if got := mustExts(absent); len(got) != 0 {
@@ -156,12 +156,12 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	}
 }
 
-// seedCoreProject inserts the user -> pool -> project ladder a branch needs
-// and returns the project id. Names carry the pool id because storage_pool names
+// seedCoreCluster inserts the user -> pool -> cluster ladder a branch needs
+// and returns the cluster id. Names carry the pool id because storage_pool names
 // are unique cluster-wide and this database may be reused across tests.
-func seedCoreProject(t *testing.T, ctx context.Context, pool *db.Pool) uuid.UUID {
+func seedCoreCluster(t *testing.T, ctx context.Context, pool *db.Pool) uuid.UUID {
 	t.Helper()
-	owner, poolID, projectID := uuid.New(), uuid.New(), uuid.New()
+	owner, poolID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	name := "core-test-" + poolID.String()
 	for _, stmt := range []struct {
 		sql  string
@@ -170,12 +170,12 @@ func seedCoreProject(t *testing.T, ctx context.Context, pool *db.Pool) uuid.UUID
 		{`INSERT INTO amp_registry.users (id) VALUES ($1::uuid)`, []any{owner.String()}},
 		{`INSERT INTO amp_registry.storage_pools (id, name, owner_user_id) VALUES ($1::uuid, $2, $3::uuid)`,
 			[]any{poolID.String(), name, owner.String()}},
-		{`INSERT INTO amp_registry.projects (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)`,
-			[]any{projectID.String(), poolID.String(), name}},
+		{`INSERT INTO amp_registry.clusters (id, storage_pool_id, name) VALUES ($1::uuid, $2::uuid, $3)`,
+			[]any{clusterID.String(), poolID.String(), name}},
 	} {
 		if _, err := pool.Exec(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("seed %q: %v", stmt.sql, err)
 		}
 	}
-	return projectID
+	return clusterID
 }

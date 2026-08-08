@@ -12,11 +12,11 @@ import (
 const StepCreateBranch = "create_branch"
 
 // CreateBranchArgs are the inputs to the create_branch step. The branch stays in
-// its parent's project; ForkLSN is the storage layer's "X/X" pg_lsn form,
+// its parent's cluster; ForkLSN is the storage layer's "X/X" pg_lsn form,
 // resolved at plan time.
 type CreateBranchArgs struct {
 	ParentBranchID uuid.UUID `json:"parent_branch_id"`
-	ProjectID      uuid.UUID `json:"project_id"`
+	ClusterID      uuid.UUID `json:"cluster_id"`
 	BranchID       uuid.UUID `json:"branch_id"`
 	Name           string    `json:"name"`
 	ForkLSN        string    `json:"fork_lsn"`
@@ -46,8 +46,8 @@ func buildCreateBranchStep(raw json.RawMessage, deps Deps) (Step, error) {
 func (*createBranchStep) Kind() string { return StepCreateBranch }
 
 func (s *createBranchStep) Execute(ctx context.Context) StepResult {
-	if err := s.state.EnsureBranch(ctx, s.ParentBranchID, s.ProjectID, s.BranchID, s.Name, s.ForkLSN, s.PgVersion); err != nil {
+	if err := s.state.EnsureBranch(ctx, s.ParentBranchID, s.ClusterID, s.BranchID, s.Name, s.ForkLSN, s.PgVersion); err != nil {
 		return Fail(fmt.Errorf("ensure branch: %w", err))
 	}
-	return Ok(mustResult(map[string]string{"project_id": s.ProjectID.String(), "branch_id": s.BranchID.String()}))
+	return Ok(mustResult(map[string]string{"cluster_id": s.ClusterID.String(), "branch_id": s.BranchID.String()}))
 }

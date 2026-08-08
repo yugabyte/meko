@@ -44,9 +44,9 @@ func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.Branc
 	if err != nil {
 		return err
 	}
-	// Scoped to the branch's own project: a lineage is a project, so different
+	// Scoped to the branch's own cluster: a lineage is a cluster, so different
 	// branches live in different ones.
-	task, err := b.api.DeleteBranch(ctx, b.poolID, branch.ProjectId, id)
+	task, err := b.api.DeleteBranch(ctx, b.poolID, branch.ClusterId, id)
 	if err != nil {
 		return err
 	}
@@ -56,19 +56,19 @@ func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.Branc
 // BranchCreateArgs are the flags of `branch create`.
 type BranchCreateArgs struct {
 	AncestorBranchID string // required: the branch to fork
-	BranchName       string // required: name for the new branch, unique in its project
+	BranchName       string // required: name for the new branch, unique in its cluster
 	AncestorStartLSN string // optional; defaults to the ancestor's durable WAL end
 }
 
 // BranchCreate forks an existing branch. That is the only thing it does — a
-// lineage with no ancestor is a project, so `project create` makes those.
+// lineage with no ancestor is a cluster, so `cluster create` makes those.
 //
-// The fork lands in the ANCESTOR's project, since a fork stays in its ancestor's
+// The fork lands in the ANCESTOR's cluster, since a fork stays in its ancestor's
 // lineage. The controller assigns the new branch's id; it is read back and
 // printed on the line the harness scrapes.
 func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateArgs) error {
 	if args.AncestorBranchID == "" {
-		return fmt.Errorf("`branch create` requires --ancestor-branch-id (use `project create` for a new lineage)")
+		return fmt.Errorf("`branch create` requires --ancestor-branch-id (use `cluster create` for a new lineage)")
 	}
 	if args.BranchName == "" {
 		return fmt.Errorf("`branch create` requires --branch-name")
@@ -84,7 +84,7 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 		return err
 	}
 	if ancestor == nil {
-		return fmt.Errorf("no live branch %s in any of the launcher's projects", ancestorID)
+		return fmt.Errorf("no live branch %s in any of the launcher's clusters", ancestorID)
 	}
 
 	// The ancestor has to be materialized: the fork point comes from its safekeeper.
@@ -104,7 +104,7 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 	// has none — but it has just read the durable LSN from that same safekeeper.
 	// pg_version is not passed; a fork inherits its ancestor's, resolved server-side.
 	ancestorUUID := uuid.UUID(ancestor.BranchId)
-	task, err := b.api.CreateBranch(ctx, b.poolID, ancestor.ProjectId, args.BranchName, &ancestorUUID, startLSN)
+	task, err := b.api.CreateBranch(ctx, b.poolID, ancestor.ClusterId, args.BranchName, &ancestorUUID, startLSN)
 	if err != nil {
 		return err
 	}
@@ -112,7 +112,7 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 		return err
 	}
 
-	created, err := b.resolveBranchInProject(ctx, ancestor.ProjectId, args.BranchName)
+	created, err := b.resolveBranchInCluster(ctx, ancestor.ClusterId, args.BranchName)
 	if err != nil {
 		return err
 	}

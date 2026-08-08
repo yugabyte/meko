@@ -24,14 +24,14 @@ import (
 )
 
 // fakeCtl is a minimal in-memory controller for provision/teardown/attach tests.
-// It tracks created users/pools/projects/endpoints and records request paths so
+// It tracks created users/pools/clusters/endpoints and records request paths so
 // call order and idempotency can be asserted.
 type fakeCtl struct {
 	mu           sync.Mutex
 	reqs         []string
 	srv          *httptest.Server
 	pools        []controller.StoragePool
-	projects     []controller.Project
+	clusters     []controller.Cluster
 	deletedProj  int
 	taskStatus   string
 	nextID       int
@@ -80,43 +80,43 @@ func newFakeCtl() *fakeCtl {
 		f.record(r)
 		writeJSON(w, 200, map[string]any{"id": strings.TrimPrefix(r.URL.Path, "/api/v1/tasks/"), "kind": "x", "status": f.taskStatus})
 	})
-	// projects collection + item; endpoints under the branch.
+	// clusters collection + item; endpoints under the branch.
 	mux.HandleFunc("/api/v1/storage-pools/", func(w http.ResponseWriter, r *http.Request) {
 		f.record(r)
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		path := r.URL.Path
 		switch {
-		case strings.HasSuffix(path, "/projects") && r.Method == http.MethodPost:
-			var req controller.CreateProjectRequest
+		case strings.HasSuffix(path, "/clusters") && r.Method == http.MethodPost:
+			var req controller.CreateClusterRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			proj := controller.Project{
+			proj := controller.Cluster{
 				ID: f.idLocked("proj"), Name: req.Name,
 				DefaultBranch: controller.Branch{BranchID: f.idLocked("br"), IsDefault: true, Name: "main"},
 			}
-			f.projects = append(f.projects, proj)
+			f.clusters = append(f.clusters, proj)
 			w.Header().Set("Location", "/api/v1/tasks/"+f.idLocked("t"))
-			writeJSON(w, 202, map[string]any{"id": "t-proj", "kind": "create_project", "status": "pending"})
-		case strings.HasSuffix(path, "/projects") && r.Method == http.MethodGet:
-			writeJSON(w, 200, map[string]any{"projects": f.projects, "total": len(f.projects), "count": len(f.projects)})
+			writeJSON(w, 202, map[string]any{"id": "t-proj", "kind": "create_cluster", "status": "pending"})
+		case strings.HasSuffix(path, "/clusters") && r.Method == http.MethodGet:
+			writeJSON(w, 200, map[string]any{"clusters": f.clusters, "total": len(f.clusters), "count": len(f.clusters)})
 		case strings.HasSuffix(path, "/endpoints") && r.Method == http.MethodPost:
 			w.Header().Set("Location", "/api/v1/tasks/t-ep")
 			writeJSON(w, 202, map[string]any{"id": "t-ep", "kind": "create_endpoint", "status": "pending"})
 		case strings.HasSuffix(path, "/endpoints") && r.Method == http.MethodGet:
 			eps := []map[string]any{{"id": "ep-1", "role": "read_write", "address": f.endpointAddr}}
 			writeJSON(w, 200, map[string]any{"endpoints": eps, "total": 1, "count": 1})
-		case r.Method == http.MethodDelete: // deleteProject
+		case r.Method == http.MethodDelete: // deleteCluster
 			f.deletedProj++
 			w.Header().Set("Location", "/api/v1/tasks/t-del")
-			writeJSON(w, 202, map[string]any{"id": "t-del", "kind": "delete_project", "status": "pending"})
-		case r.Method == http.MethodGet: // getProject (attach)
-			for _, proj := range f.projects {
+			writeJSON(w, 202, map[string]any{"id": "t-del", "kind": "delete_cluster", "status": "pending"})
+		case r.Method == http.MethodGet: // getCluster (attach)
+			for _, proj := range f.clusters {
 				if strings.HasSuffix(path, "/"+proj.ID) {
 					writeJSON(w, 200, proj)
 					return
 				}
 			}
-			writeJSON(w, 404, map[string]any{"error": map[string]any{"code": "not_found", "message": "no project"}})
+			writeJSON(w, 404, map[string]any{"error": map[string]any{"code": "not_found", "message": "no cluster"}})
 		default:
 			w.WriteHeader(404)
 		}
@@ -192,10 +192,10 @@ func TestProvisionHappyPathOrder(t *testing.T) {
 		"POST /api/v1/users",
 		"GET /api/v1/storage-pools",
 		"POST /api/v1/storage-pools",
-		"POST /api/v1/storage-pools/p-2/projects",
-		"GET /api/v1/storage-pools/p-2/projects",
-		"POST /api/v1/storage-pools/p-2/projects/proj-3/branches/br-4/endpoints",
-		"GET /api/v1/storage-pools/p-2/projects/proj-3/branches/br-4/endpoints",
+		"POST /api/v1/storage-pools/p-2/clusters",
+		"GET /api/v1/storage-pools/p-2/clusters",
+		"POST /api/v1/storage-pools/p-2/clusters/proj-3/branches/br-4/endpoints",
+		"GET /api/v1/storage-pools/p-2/clusters/proj-3/branches/br-4/endpoints",
 	)
 }
 
@@ -254,8 +254,8 @@ func TestProvisionIdempotentPoolReused(t *testing.T) {
 			t.Error("existing pool must be reused, not re-created")
 		}
 	}
-	if !hasReq(f.recorded(), "POST /api/v1/storage-pools/existing/projects") {
-		t.Error("project must be created under the reused pool")
+	if !hasReq(f.recorded(), "POST /api/v1/storage-pools/existing/clusters") {
+		t.Error("cluster must be created under the reused pool")
 	}
 }
 
@@ -271,16 +271,16 @@ func TestTeardownCascadesOnce(t *testing.T) {
 		t.Fatalf("teardown: %v", err)
 	}
 	if f.deletedProj != 1 {
-		t.Errorf("deleteProject called %d times, want exactly 1", f.deletedProj)
+		t.Errorf("deleteCluster called %d times, want exactly 1", f.deletedProj)
 	}
 }
 
 func TestAttachDoesNotDeleteOnTeardown(t *testing.T) {
 	f := newFakeCtl()
 	defer f.close()
-	// A project + pool must exist for attach to resolve.
+	// A cluster + pool must exist for attach to resolve.
 	f.pools = append(f.pools, controller.StoragePool{ID: "pool-a", Name: "ampqa"})
-	f.projects = append(f.projects, controller.Project{
+	f.clusters = append(f.clusters, controller.Cluster{
 		ID: "proj-a", Name: "attached",
 		DefaultBranch: controller.Branch{BranchID: "br-a", IsDefault: true},
 	})
@@ -291,14 +291,14 @@ func TestAttachDoesNotDeleteOnTeardown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	if env.(*Env).ownProject {
-		t.Error("attached env must not own its project")
+	if env.(*Env).ownCluster {
+		t.Error("attached env must not own its cluster")
 	}
 	if err := p.Teardown(context.Background(), env); err != nil {
 		t.Fatalf("teardown: %v", err)
 	}
 	if f.deletedProj != 0 {
-		t.Errorf("attach teardown must not delete the project, got %d deletes", f.deletedProj)
+		t.Errorf("attach teardown must not delete the cluster, got %d deletes", f.deletedProj)
 	}
 }
 
@@ -461,7 +461,7 @@ func TestTeardownReconnectsOnConnRefused(t *testing.T) {
 	}}
 	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(st.start).WithRunner((&kubeRec{}).run)
 
-	e := &Env{ownProject: true, prov: p, poolID: "pool", projectID: "proj-x"}
+	e := &Env{ownCluster: true, prov: p, poolID: "pool", clusterID: "proj-x"}
 	if err := p.Teardown(context.Background(), e); err != nil {
 		t.Fatalf("teardown must recover via reconnect, got %v", err)
 	}
@@ -1010,7 +1010,7 @@ func testDeployProvider(f *fakeCtl, rec *k8sRecorder) *Provider {
 }
 
 // TestDeployModeProvisionAndClose: deploy mode OWNS a run-scoped control plane —
-// Provision lazily deploys the ampstack App, carves a project out of it, and
+// Provision lazily deploys the ampstack App, carves a cluster out of it, and
 // Close tears the whole namespace down.
 func TestDeployModeProvisionAndClose(t *testing.T) {
 	f := newFakeCtl()
@@ -1031,9 +1031,9 @@ func TestDeployModeProvisionAndClose(t *testing.T) {
 	if !hasSubstr(rec.argvs(), "create namespace ampqa-cp-test") && !hasSubstr(rec.argvs(), "ampqa-cp-test") {
 		t.Errorf("expected the owned namespace to be created; calls=%v", rec.argvs())
 	}
-	// The project was created on the deployed control plane's controller.
-	if !hasReq(f.recorded(), "POST /api/v1/storage-pools/p-2/projects") && len(f.recorded()) == 0 {
-		t.Errorf("expected a project create on the deployed controller; reqs=%v", f.recorded())
+	// The cluster was created on the deployed control plane's controller.
+	if !hasReq(f.recorded(), "POST /api/v1/storage-pools/p-2/clusters") && len(f.recorded()) == 0 {
+		t.Errorf("expected a cluster create on the deployed controller; reqs=%v", f.recorded())
 	}
 	_ = env
 
@@ -1141,7 +1141,7 @@ func TestEnsurePoolConcurrentCreateTolerated(t *testing.T) {
 
 func TestTransientControllerPredicate(t *testing.T) {
 	transient := []string{
-		"create project x: task 1 failed: record: status 500: deadlock detected",
+		"create cluster x: task 1 failed: record: status 500: deadlock detected",
 		"create endpoint: helm: Error: services \"yb-ep-abc\" not found",
 		"status 503: unavailable",
 	}

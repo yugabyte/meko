@@ -12,7 +12,7 @@ import (
 )
 
 // ResourceSchema is the schema holding the control-plane resource model: users,
-// storage pools, projects, and the single `branches` / `endpoints` tables that
+// storage pools, clusters, and the single `branches` / `endpoints` tables that
 // both the product API and the storage-layer control surface read and write.
 //
 // It is hardcoded rather than configurable, the same way `amp_storage` is: these

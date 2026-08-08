@@ -1,8 +1,8 @@
 // Create-cluster wizard: a multi-step flow (Cluster -> Compute -> Review) that
 // creates a cluster and its writer endpoint. It composes the reusable
 // components/ui primitives (Stepper, ComputeSizeField) and fires ONE composite
-// call — createCluster (create_project with_writer) — which the controller runs
-// as a single background task: project + `main` branch + read_write endpoint.
+// call — createCluster (create_cluster with_writer) — which the controller runs
+// as a single background task: cluster + `main` branch + read_write endpoint.
 // The wizard doesn't wait for it; it toasts and deeplinks to Tasks, so the work
 // survives navigating away. No read replica — not supported today.
 
@@ -30,7 +30,7 @@ import {
 import { Stepper } from "@/components/ui/stepper";
 import { ComputeSizeField, type ComputeSize } from "@/components/ui/compute-size-field";
 import { EngineField } from "@/components/ui/engine-field";
-import { useCreateCluster } from "@/lib/api/queries";
+import { useCreateClusterWithWriter } from "@/lib/api/queries";
 import {
   DEFAULT_ENDPOINT_CPU,
   DEFAULT_ENDPOINT_MEMORY,
@@ -58,7 +58,7 @@ export function CreateClusterWizard({
   });
 
   const navigate = useNavigate();
-  const createCluster = useCreateCluster();
+  const createCluster = useCreateClusterWithWriter();
   const pending = createCluster.isPending;
 
   useEffect(() => {
@@ -77,7 +77,7 @@ export function CreateClusterWizard({
     step === 0 ? Boolean(trimmedName && poolId) : step === 1 ? Boolean(size.cpu.trim() && size.memory.trim()) : true;
 
   function create() {
-    // One composite call: the controller creates the project, its `main` branch,
+    // One composite call: the controller creates the cluster, its `main` branch,
     // and the read_write endpoint as a single background task. We don't wait for
     // it — toast + deeplink to Tasks and let the worker finish independently.
     createCluster.mutate(

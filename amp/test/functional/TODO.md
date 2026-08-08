@@ -14,7 +14,7 @@ operation end-to-end against a fresh stack and reports every duration as a gated
 datapoint, so operation latency gets the same portal history / baselines /
 per-version averages the benchmarks already have:
 
-- project create / delete
+- cluster create / delete
 - branch create (from empty parent), branch fork (from a seeded parent — size the
   seed so copy-vs-CoW behaviour is visible), branch delete
 - endpoint create (cold: image pull + volume; warm: repeat on the same node),

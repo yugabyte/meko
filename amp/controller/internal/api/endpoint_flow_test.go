@@ -22,7 +22,7 @@ import (
 // the task. It then covers get, list, the single-writer rule (now a FAILED task,
 // not a synchronous 409), read-only endpoints, and retire (a delete_endpoint task
 // that, once driven, removes the row). The branch is seeded directly so the test
-// exercises the endpoint lifecycle without going through create-project/branch.
+// exercises the endpoint lifecycle without going through create-cluster/branch.
 func TestEndpointFlow(t *testing.T) {
 	dep := &fakeDeployer{}
 	prov := api.Provisioning{Deployer: dep}
@@ -32,10 +32,10 @@ func TestEndpointFlow(t *testing.T) {
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "ep-pool")
 
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
 	backend.SeedBranch(pool.Id, core.Branch{
-		ProjectID: projectID,
+		ClusterID: clusterID,
 		BranchID:  branchID,
 		Name:      "main",
 		PgVersion: 18,
@@ -46,7 +46,7 @@ func TestEndpointFlow(t *testing.T) {
 	ro := api.CreateEndpointRequestRoleReadOnly
 
 	// Create a read_write endpoint -> 202 + a create_endpoint Task.
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestEndpointFlow(t *testing.T) {
 	drainTasks(t, store, backend, prov)
 
 	// List -> exactly one endpoint, bound to the branch, read_write, with an address.
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -67,8 +67,8 @@ func TestEndpointFlow(t *testing.T) {
 		t.Fatalf("ListEndpoints status = %d, body = %s", list.StatusCode(), list.Body)
 	}
 	ep := list.JSON200.Endpoints[0]
-	if ep.ProjectId != projectID || ep.BranchId != branchID {
-		t.Errorf("endpoint binding = (%s,%s), want (%s,%s)", ep.ProjectId, ep.BranchId, projectID, branchID)
+	if ep.ClusterId != clusterID || ep.BranchId != branchID {
+		t.Errorf("endpoint binding = (%s,%s), want (%s,%s)", ep.ClusterId, ep.BranchId, clusterID, branchID)
 	}
 	if ep.Role != api.EndpointRoleReadWrite {
 		t.Errorf("role = %q, want read_write", ep.Role)
@@ -78,7 +78,7 @@ func TestEndpointFlow(t *testing.T) {
 	}
 
 	// Get it back -> 200.
-	got, err := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
+	got, err := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id)
 	if err != nil {
 		t.Fatalf("GetEndpoint: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestEndpointFlow(t *testing.T) {
 	// the async contract this is no longer a synchronous 409 — the create is
 	// accepted (202) and the conflict surfaces as a FAILED task when its step's
 	// EnsureEndpointRecord hits the single-writer index.
-	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(dup writer): %v", err)
 	}
@@ -107,12 +107,12 @@ func TestEndpointFlow(t *testing.T) {
 		t.Errorf("dup-writer task = {status:%q err:%v}, want failed (single-writer)", dupTask.Status, dupTask.Error)
 	}
 	// Still exactly one endpoint (the duplicate did not materialize a second writer).
-	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 1 {
+	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 1 {
 		t.Errorf("endpoints after a failed dup-writer = %v, want still 1", l.Body)
 	}
 
 	// A read_only endpoint is allowed alongside the writer -> 202, and materializes.
-	roResp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &ro})
+	roResp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &ro})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(read_only): %v", err)
 	}
@@ -120,12 +120,12 @@ func TestEndpointFlow(t *testing.T) {
 		t.Fatalf("read_only status = %d, want 202, body = %s", roResp.StatusCode(), roResp.Body)
 	}
 	drainTasks(t, store, backend, prov)
-	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 2 {
+	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 2 {
 		t.Errorf("endpoints after read_only = %v, want 2 (writer + replica)", l.Body)
 	}
 
 	// Retire the writer -> 202 + a delete_endpoint Task; drive it, then it's gone.
-	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
+	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id)
 	if err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestEndpointFlow(t *testing.T) {
 	drainTasks(t, store, backend, prov)
 
 	// It is gone now -> get 404.
-	gone, err := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
+	gone, err := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id)
 	if err != nil {
 		t.Fatalf("GetEndpoint(after retire): %v", err)
 	}
@@ -164,10 +164,10 @@ func TestEndpointErrors(t *testing.T) {
 	}
 
 	// Get against a missing endpoint (branch seeded) -> 404.
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
-	getMissing, err := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New())
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	getMissing, err := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, uuid.New())
 	if err != nil {
 		t.Fatalf("GetEndpoint(missing): %v", err)
 	}
@@ -186,23 +186,23 @@ func TestEndpointDiskType(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "disk-pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	network := api.Network
 	local := api.Local
 
 	// disk_type=local -> 400 (cheap validation), and no endpoint exists.
-	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &local})
+	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &local})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(local): %v", err)
 	}
 	if bad.StatusCode() != http.StatusBadRequest || bad.JSON400 == nil {
 		t.Fatalf("local status = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
 	}
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestEndpointDiskType(t *testing.T) {
 	}
 
 	// disk_type=network -> 202 (the default disk); drive it, then it deployed.
-	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &network})
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, DiskType: &network})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(network): %v", err)
 	}
@@ -222,7 +222,7 @@ func TestEndpointDiskType(t *testing.T) {
 	if got := soleTask(t, store); got.Status != task.StatusSucceeded {
 		t.Fatalf("create_endpoint(network) task status = %q, want succeeded; error = %v", got.Status, got.Error)
 	}
-	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 1 {
+	if l, _ := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil); l.JSON200 == nil || len(l.JSON200.Endpoints) != 1 {
 		t.Errorf("endpoints after network create = %v, want 1", l.Body)
 	}
 }
@@ -239,14 +239,14 @@ func TestEndpointExtensions(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "ext-pool")
-	projectID, branchID := uuid.New(), uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 
 	// Unknown extension -> 400 before any task is planned.
 	unknown := []string{"not-a-real-ext"}
-	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &unknown})
+	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &unknown})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(unknown ext): %v", err)
 	}
@@ -256,7 +256,7 @@ func TestEndpointExtensions(t *testing.T) {
 
 	// Known extension -> 202, and once driven it is mounted + persisted.
 	want := []string{"pgvector"}
-	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &want})
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &want})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(pgvector): %v", err)
 	}
@@ -272,7 +272,7 @@ func TestEndpointExtensions(t *testing.T) {
 		t.Fatalf("deploy spec extensions = %+v, want the pinned pgvector", exts)
 	}
 	// The opt-in is durable on the branch (so a fork inherits it).
-	persisted, _ := backend.BranchExtensions(ctx, projectID, branchID)
+	persisted, _ := backend.BranchExtensions(ctx, clusterID, branchID)
 	if len(persisted) != 1 || persisted[0] != "pgvector" {
 		t.Errorf("branch extensions = %v, want [pgvector] persisted", persisted)
 	}
@@ -280,10 +280,10 @@ func TestEndpointExtensions(t *testing.T) {
 	// A preload extension (pg_cron) opts in the same way and is mounted with
 	// Preload:true so the chart can extend shared_preload_libraries. Use a fresh
 	// branch so its set is independent of the pgvector one above.
-	cronProjectID, cronBranchID := uuid.New(), uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: cronProjectID, BranchID: cronBranchID, Name: "main", PgVersion: 18, IsDefault: true})
+	cronClusterID, cronBranchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: cronClusterID, BranchID: cronBranchID, Name: "main", PgVersion: 18, IsDefault: true})
 	cron := []string{"pg_cron"}
-	cok, err := client.CreateEndpointWithResponse(ctx, pool.Id, cronProjectID, cronBranchID, api.CreateEndpointRequest{Role: &rw, Extensions: &cron})
+	cok, err := client.CreateEndpointWithResponse(ctx, pool.Id, cronClusterID, cronBranchID, api.CreateEndpointRequest{Role: &rw, Extensions: &cron})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(pg_cron): %v", err)
 	}
@@ -296,7 +296,7 @@ func TestEndpointExtensions(t *testing.T) {
 		last[0].Image != "quay.io/yugabyte/amp-ext-pg_cron:1.6.7" || !last[0].Preload {
 		t.Fatalf("deploy spec extensions = %+v, want the pinned pg_cron with Preload:true", last)
 	}
-	cronPersisted, _ := backend.BranchExtensions(ctx, cronProjectID, cronBranchID)
+	cronPersisted, _ := backend.BranchExtensions(ctx, cronClusterID, cronBranchID)
 	if len(cronPersisted) != 1 || cronPersisted[0] != "pg_cron" {
 		t.Errorf("branch extensions = %v, want [pg_cron] persisted", cronPersisted)
 	}
@@ -312,12 +312,12 @@ func TestEndpointExtensionsUnsupported(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "ext-off-pool")
-	projectID, branchID := uuid.New(), uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 	want := []string{"pgvector"}
-	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &want})
+	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &want})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(ext, no catalog): %v", err)
 	}
@@ -338,14 +338,14 @@ func TestEndpointResources(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "res-pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
 
 	// (1) omitted resources -> the 2-core / 4Gi default reaches the deployer.
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(default resources): %v", err)
 	}
@@ -363,9 +363,9 @@ func TestEndpointResources(t *testing.T) {
 	// (2) explicit resources -> threaded through verbatim (on a second branch, so
 	// the single-writer rule isn't tripped).
 	branch2 := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branch2, Name: "b2", PgVersion: 18})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branch2, Name: "b2", PgVersion: 18})
 	cpu, mem := "8", "16Gi"
-	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branch2, api.CreateEndpointRequest{
+	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branch2, api.CreateEndpointRequest{
 		Role:      &rw,
 		Resources: &api.EndpointResources{Cpu: &cpu, Memory: &mem},
 	})
@@ -385,7 +385,7 @@ func TestEndpointResources(t *testing.T) {
 	// being accepted and only failing later in the worker's helm run.
 	badCPU, badMem := "2x", "4Gii"
 	for _, res := range []*api.EndpointResources{{Cpu: &badCPU}, {Memory: &badMem}} {
-		resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branch2, api.CreateEndpointRequest{Role: &rw, Resources: res})
+		resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branch2, api.CreateEndpointRequest{Role: &rw, Resources: res})
 		if err != nil {
 			t.Fatalf("CreateEndpoint(invalid resources): %v", err)
 		}
@@ -408,17 +408,17 @@ func TestEndpointResize(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "resize-pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
 	drainTasks(t, store, backend, prov)
-	list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
 	if list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
 		t.Fatalf("expected one endpoint, body = %s", list.Body)
 	}
@@ -431,7 +431,7 @@ func TestEndpointResize(t *testing.T) {
 
 	// Resize cpu+memory -> 202 + a resize_endpoint task.
 	cpu, mem := "4", "8Gi"
-	resized, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id, api.ResizeEndpointRequest{
+	resized, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id, api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
 	})
 	if err != nil {
@@ -448,7 +448,7 @@ func TestEndpointResize(t *testing.T) {
 		t.Fatalf("deployer resize calls = %+v, want one {cpu:4, memory:8Gi}", rs)
 	}
 	// The persisted size now reflects the resize.
-	got, _ := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
+	got, _ := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id)
 	if got.JSON200 == nil || got.JSON200.Resources == nil || *got.JSON200.Resources.Cpu != "4" || *got.JSON200.Resources.Memory != "8Gi" {
 		t.Fatalf("resized endpoint resources = %+v, want cpu=4 memory=8Gi", got.JSON200.Resources)
 	}
@@ -463,7 +463,7 @@ func TestEndpointResize(t *testing.T) {
 
 	// Resize only cpu -> memory keeps its current value (8Gi).
 	cpuOnly := "6"
-	partial, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id, api.ResizeEndpointRequest{
+	partial, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id, api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &cpuOnly},
 	})
 	if err != nil || partial.StatusCode() != http.StatusAccepted {
@@ -476,7 +476,7 @@ func TestEndpointResize(t *testing.T) {
 
 	// A malformed quantity is rejected synchronously with 400.
 	badCPU := "4x"
-	bad, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id, api.ResizeEndpointRequest{
+	bad, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id, api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &badCPU},
 	})
 	if err != nil {
@@ -487,7 +487,7 @@ func TestEndpointResize(t *testing.T) {
 	}
 
 	// Resizing a missing endpoint -> 404.
-	missing, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New(), api.ResizeEndpointRequest{
+	missing, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, uuid.New(), api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &cpu},
 	})
 	if err != nil {
@@ -512,16 +512,16 @@ func TestEndpointResizeParallel(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "par-pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
+	if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
 	drainTasks(t, store, backend, prov)
-	list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
 	if list.JSON200 == nil || len(list.JSON200.Endpoints) != 1 {
 		t.Fatalf("expected one endpoint, body = %s", list.Body)
 	}
@@ -543,7 +543,7 @@ func TestEndpointResizeParallel(t *testing.T) {
 		wg.Add(1)
 		go func(i int, cpu, mem string) {
 			defer wg.Done()
-			resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, epID, api.ResizeEndpointRequest{
+			resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID, api.ResizeEndpointRequest{
 				Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
 			})
 			if err != nil {
@@ -583,7 +583,7 @@ func TestEndpointResizeParallel(t *testing.T) {
 	if got := statusOfTask(t, store, tasks[0].ID); got != task.StatusSucceeded {
 		t.Errorf("winning resize task status = %v, want succeeded", got)
 	}
-	got, _ := client.GetEndpointWithResponse(ctx, pool.Id, projectID, branchID, epID)
+	got, _ := client.GetEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID)
 	if got.JSON200 == nil || got.JSON200.Resources == nil ||
 		*got.JSON200.Resources.Cpu != winners[0].cpu || *got.JSON200.Resources.Memory != winners[0].mem {
 		t.Errorf("final size = %+v, want the winner's (%s, %s)", got.JSON200.Resources, winners[0].cpu, winners[0].mem)
@@ -591,7 +591,7 @@ func TestEndpointResizeParallel(t *testing.T) {
 
 	// The lock released: a fresh resize is accepted again.
 	nc, nm := "2", "4Gi"
-	again, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, epID, api.ResizeEndpointRequest{
+	again, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, epID, api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &nc, Memory: &nm},
 	})
 	if err != nil || again.StatusCode() != http.StatusAccepted {
@@ -621,7 +621,7 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 		store             *task.MemStore
 		prov              api.Provisioning
 		poolID            uuid.UUID
-		projectID, branch uuid.UUID
+		clusterID, branch uuid.UUID
 		epID              uuid.UUID
 	}
 	seed := func(t *testing.T, dep *fakeDeployer) fixture {
@@ -631,15 +631,15 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 		ctx := context.Background()
 		user := mustCreateUser(t, client, false)
 		pool := mustCreatePool(t, client, user.Id, "outcome-pool")
-		projectID, branchID := uuid.New(), uuid.New()
-		backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+		clusterID, branchID := uuid.New(), uuid.New()
+		backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 		rw := api.CreateEndpointRequestRoleReadWrite
-		if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
+		if _, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw}); err != nil {
 			t.Fatalf("CreateEndpoint: %v", err)
 		}
 		drainTasks(t, store, backend, prov)
-		list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
-		return fixture{client, backend, store, prov, pool.Id, projectID, branchID, list.JSON200.Endpoints[0].Id}
+		list, _ := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
+		return fixture{client, backend, store, prov, pool.Id, clusterID, branchID, list.JSON200.Endpoints[0].Id}
 	}
 
 	cpu, mem := "4", "8Gi"
@@ -648,7 +648,7 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 	t.Run("infeasible still succeeds and persists", func(t *testing.T) {
 		f := seed(t, &fakeDeployer{resizeOutcome: deploy.ResizeInfeasible})
 		ctx := context.Background()
-		resp, err := f.client.ResizeEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID, api.ResizeEndpointRequest{
+		resp, err := f.client.ResizeEndpointWithResponse(ctx, f.poolID, f.clusterID, f.branch, f.epID, api.ResizeEndpointRequest{
 			Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
 		})
 		if err != nil || resp.StatusCode() != http.StatusAccepted {
@@ -663,7 +663,7 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 		if res, ok := taskResp.JSON200.Result.(map[string]any); !ok || res["in_place_resize"] != "infeasible" {
 			t.Errorf("task result = %v, want in_place_resize=infeasible", taskResp.JSON200.Result)
 		}
-		got, _ := f.client.GetEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID)
+		got, _ := f.client.GetEndpointWithResponse(ctx, f.poolID, f.clusterID, f.branch, f.epID)
 		if *got.JSON200.Resources.Cpu != cpu || *got.JSON200.Resources.Memory != mem {
 			t.Errorf("persisted size = (%s,%s), want (%s,%s) despite infeasible in-place", *got.JSON200.Resources.Cpu, *got.JSON200.Resources.Memory, cpu, mem)
 		}
@@ -675,7 +675,7 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 	t.Run("deployer error fails the task and does not persist the size", func(t *testing.T) {
 		f := seed(t, &fakeDeployer{resizeErr: errors.New("kube-apiserver rejected the resize")})
 		ctx := context.Background()
-		resp, err := f.client.ResizeEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID, api.ResizeEndpointRequest{
+		resp, err := f.client.ResizeEndpointWithResponse(ctx, f.poolID, f.clusterID, f.branch, f.epID, api.ResizeEndpointRequest{
 			Resources: api.EndpointResources{Cpu: &cpu, Memory: &mem},
 		})
 		if err != nil || resp.StatusCode() != http.StatusAccepted {
@@ -687,7 +687,7 @@ func TestEndpointResizeInPlaceOutcomes(t *testing.T) {
 			t.Fatalf("errored resize task = %v, want failed with an error", statusOf(tk))
 		}
 		// Original create-time defaults (2 / 4Gi), unchanged by the rejected resize.
-		got, _ := f.client.GetEndpointWithResponse(ctx, f.poolID, f.projectID, f.branch, f.epID)
+		got, _ := f.client.GetEndpointWithResponse(ctx, f.poolID, f.clusterID, f.branch, f.epID)
 		if *got.JSON200.Resources.Cpu != "2" || *got.JSON200.Resources.Memory != "4Gi" {
 			t.Errorf("size after a rejected resize = (%s,%s), want the unchanged original (2,4Gi) — a rejected size must not be persisted", *got.JSON200.Resources.Cpu, *got.JSON200.Resources.Memory)
 		}
@@ -709,11 +709,11 @@ func TestEndpointResizeDeployDisabled(t *testing.T) {
 	ctx := context.Background()
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "off-resize-pool")
-	projectID, branchID := uuid.New(), uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	clusterID, branchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	cpu := "4"
-	resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New(), api.ResizeEndpointRequest{
+	resp, err := client.ResizeEndpointWithResponse(ctx, pool.Id, clusterID, branchID, uuid.New(), api.ResizeEndpointRequest{
 		Resources: api.EndpointResources{Cpu: &cpu},
 	})
 	if err != nil {
@@ -733,12 +733,12 @@ func TestEndpointDeployDisabled(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "off-pool")
-	projectID := uuid.New()
+	clusterID := uuid.New()
 	branchID := uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID, api.CreateEndpointRequest{Role: &rw})
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
 	}
@@ -747,7 +747,7 @@ func TestEndpointDeployDisabled(t *testing.T) {
 	}
 
 	// No endpoint row was committed.
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestEndpointDeployDisabled(t *testing.T) {
 		t.Fatalf("ListEndpoints after refused create = %d / %v", list.StatusCode(), list.Body)
 	}
 
-	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, projectID, branchID, uuid.New())
+	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, clusterID, branchID, uuid.New())
 	if err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
@@ -776,13 +776,13 @@ func TestEndpointLocalDeployer(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "local-pool")
-	projectID, branchID := uuid.New(), uuid.New()
+	clusterID, branchID := uuid.New(), uuid.New()
 	backend.SeedBranch(pool.Id, core.Branch{
-		ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true,
+		ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true,
 	})
 
 	rw := api.CreateEndpointRequestRoleReadWrite
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID,
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID,
 		api.CreateEndpointRequest{Role: &rw})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
@@ -799,7 +799,7 @@ func TestEndpointLocalDeployer(t *testing.T) {
 
 	drainTasks(t, store, backend, prov)
 
-	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	list, err := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}
@@ -819,7 +819,7 @@ func TestEndpointLocalDeployer(t *testing.T) {
 		t.Errorf("address = %q, want empty: the local driver launches nothing", ep.Address)
 	}
 
-	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, projectID, branchID, ep.Id)
+	del, err := client.DeleteEndpointWithResponse(ctx, pool.Id, clusterID, branchID, ep.Id)
 	if err != nil {
 		t.Fatalf("DeleteEndpoint: %v", err)
 	}
@@ -828,7 +828,7 @@ func TestEndpointLocalDeployer(t *testing.T) {
 	}
 	drainTasks(t, store, backend, prov)
 
-	after, err := client.ListEndpointsWithResponse(ctx, pool.Id, projectID, branchID, nil)
+	after, err := client.ListEndpointsWithResponse(ctx, pool.Id, clusterID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints after delete: %v", err)
 	}
@@ -850,9 +850,9 @@ func TestEndpointNameAndPgSettings(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "named-pool")
-	projectID, branchID := uuid.New(), uuid.New()
+	clusterID, branchID := uuid.New(), uuid.New()
 	backend.SeedBranch(pool.Id, core.Branch{
-		ProjectID: projectID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true,
+		ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true,
 		// The branch-wide baseline. work_mem is the one the endpoint overrides.
 		PgSettings: map[string]string{"work_mem": "16MB", "log_min_duration_statement": "250ms"},
 	})
@@ -860,7 +860,7 @@ func TestEndpointNameAndPgSettings(t *testing.T) {
 	rw := api.CreateEndpointRequestRoleReadWrite
 	name := "primary"
 	epSettings := map[string]string{"work_mem": "64MB", "jit": "off"}
-	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID,
+	created, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID,
 		api.CreateEndpointRequest{Role: &rw, Name: &name, PgSettings: &epSettings})
 	if err != nil {
 		t.Fatalf("CreateEndpoint: %v", err)
@@ -870,7 +870,7 @@ func TestEndpointNameAndPgSettings(t *testing.T) {
 	}
 	drainTasks(t, store, backend, prov)
 
-	ep := mustOneEndpoint(t, client, pool.Id, projectID, branchID)
+	ep := mustOneEndpoint(t, client, pool.Id, clusterID, branchID)
 	if ep.Name != name {
 		t.Errorf("endpoint name = %q, want %q", ep.Name, name)
 	}
@@ -895,7 +895,7 @@ func TestEndpointNameAndPgSettings(t *testing.T) {
 	// A name already taken on the branch is refused synchronously, so the caller
 	// learns immediately rather than by polling a doomed task.
 	ro := api.CreateEndpointRequestRoleReadOnly
-	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, projectID, branchID,
+	dup, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID,
 		api.CreateEndpointRequest{Role: &ro, Name: &name})
 	if err != nil {
 		t.Fatalf("CreateEndpoint(dup name): %v", err)
@@ -909,9 +909,9 @@ func TestEndpointNameAndPgSettings(t *testing.T) {
 // exactly one. Tests re-read the endpoint after every task rather than reusing
 // an earlier copy: the row is what the API actually reports, and a stale copy
 // would hide a field the handler forgot to echo.
-func mustOneEndpoint(t *testing.T, client *api.ClientWithResponses, poolID, projectID, branchID uuid.UUID) api.Endpoint {
+func mustOneEndpoint(t *testing.T, client *api.ClientWithResponses, poolID, clusterID, branchID uuid.UUID) api.Endpoint {
 	t.Helper()
-	list, err := client.ListEndpointsWithResponse(context.Background(), poolID, projectID, branchID, nil)
+	list, err := client.ListEndpointsWithResponse(context.Background(), poolID, clusterID, branchID, nil)
 	if err != nil {
 		t.Fatalf("ListEndpoints: %v", err)
 	}

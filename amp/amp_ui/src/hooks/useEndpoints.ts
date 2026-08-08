@@ -16,15 +16,15 @@ import type { Branch, Endpoint, EndpointRole } from "@/lib/api/types";
 /** Fan out across branches to fetch each one's endpoints, keyed by branch id. */
 export function useBranchEndpoints(
   poolId: string | undefined,
-  projectId: string | undefined,
+  clusterId: string | undefined,
   branches: Branch[] | undefined,
 ) {
   const list = branches ?? [];
   return useQueries({
     queries: list.map((b) => ({
-      queryKey: qk.endpoints(poolId ?? "", projectId ?? "", b.branch_id),
-      enabled: !!poolId && !!projectId,
-      queryFn: () => listEndpoints(poolId!, projectId!, b.branch_id),
+      queryKey: qk.endpoints(poolId ?? "", clusterId ?? "", b.branch_id),
+      enabled: !!poolId && !!clusterId,
+      queryFn: () => listEndpoints(poolId!, clusterId!, b.branch_id),
       select: (data: { endpoints: Endpoint[] }) => data.endpoints,
     })),
     combine: (results) => {
@@ -42,13 +42,13 @@ export function useCreateEndpoint() {
   return useMutation({
     mutationFn: (input: {
       poolId: string;
-      projectId: string;
+      clusterId: string;
       branchId: string;
       role: EndpointRole;
       cpu?: string;
       memory?: string;
     }): Promise<Endpoint> =>
-      createEndpoint(input.poolId, input.projectId, input.branchId, {
+      createEndpoint(input.poolId, input.clusterId, input.branchId, {
         role: input.role,
         // Only send a resources block when the caller specified something; an
         // omitted block lets the controller apply its 2-core / 4Gi default.
@@ -58,7 +58,7 @@ export function useCreateEndpoint() {
       }),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
-        queryKey: qk.endpoints(input.poolId, input.projectId, input.branchId),
+        queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),
       });
     },
   });
@@ -69,14 +69,14 @@ export function useDeleteEndpoint() {
   return useMutation({
     mutationFn: (input: {
       poolId: string;
-      projectId: string;
+      clusterId: string;
       branchId: string;
       endpointId: string;
     }): Promise<void> =>
-      deleteEndpoint(input.poolId, input.projectId, input.branchId, input.endpointId),
+      deleteEndpoint(input.poolId, input.clusterId, input.branchId, input.endpointId),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
-        queryKey: qk.endpoints(input.poolId, input.projectId, input.branchId),
+        queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),
       });
     },
   });
@@ -87,18 +87,18 @@ export function useResizeEndpoint() {
   return useMutation({
     mutationFn: (input: {
       poolId: string;
-      projectId: string;
+      clusterId: string;
       branchId: string;
       endpointId: string;
       cpu?: string;
       memory?: string;
     }): Promise<ResizeResult> =>
-      resizeEndpoint(input.poolId, input.projectId, input.branchId, input.endpointId, {
+      resizeEndpoint(input.poolId, input.clusterId, input.branchId, input.endpointId, {
         resources: { cpu: input.cpu, memory: input.memory },
       }),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
-        queryKey: qk.endpoints(input.poolId, input.projectId, input.branchId),
+        queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),
       });
     },
   });

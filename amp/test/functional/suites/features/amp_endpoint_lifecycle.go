@@ -63,7 +63,7 @@ func (a *ampFeatureRun) endpointLifecycle(ctx context.Context) error {
 // endpointLifecycleSteps drives the lifecycle assertions over the ampCtl,
 // endpoint-connector, and connection-probe seams, so create → write → delete →
 // (gone + refused) → recreate → (data survives) is unit-testable with fakes.
-func endpointLifecycleSteps(ctx context.Context, cl ampCtl, proj ampProject, connect endpointConnector, refused endpointProbe) error {
+func endpointLifecycleSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect endpointConnector, refused endpointProbe) error {
 	// Create an endpoint and write a known dataset.
 	e1, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {

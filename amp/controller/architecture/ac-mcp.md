@@ -11,7 +11,7 @@ translates a small, curated catalog of MCP **tools** into HTTP calls against
 database, and no auth — everything authoritative still lives behind the
 controller.
 
-It lives in [`controller/mcp/`](../mcp/) as a self-contained Python project and
+It lives in [`controller/mcp/`](../mcp/) as a self-contained Python cluster and
 is built/tested with [`uv`](https://docs.astral.sh/uv/), separate from the Go
 module.
 
@@ -59,7 +59,7 @@ controller/mcp/src/
 - **`tools.py`** is the MCP surface. Each tool is a typed Python function whose
   arguments map to path parameters, query parameters, and request-body fields;
   it calls the matching client method and returns the JSON. Path ids are plain
-  `str` UUID arguments in snake_case (`pool_id`, `project_id`, `branch_id`,
+  `str` UUID arguments in snake_case (`pool_id`, `cluster_id`, `branch_id`,
   `endpoint_id`, `task_id`, `user_id`).
 - **`server.py`** wires config (CLI flags layered over `AMP_*` env vars, flags
   winning), registers each tool with its annotation preset, attaches the
@@ -83,12 +83,12 @@ external service).
 | `create_storage_pool` | `POST /storage-pools` (body `{name, owner_user_id}`) | write |
 | `list_storage_pools` | `GET /storage-pools` | read-only |
 | `get_storage_pool` | `GET /storage-pools/{poolId}` | read-only |
-| `create_project` | `POST /storage-pools/{poolId}/projects` | write (async) |
-| `list_projects` | `GET /storage-pools/{poolId}/projects` | read-only |
-| `get_project` | `GET …/projects/{projectId}` | read-only |
-| `delete_project` | `DELETE …/projects/{projectId}` | destructive (async) |
-| `create_branch` | `POST …/projects/{projectId}/branches` | write (async) |
-| `list_branches` | `GET …/projects/{projectId}/branches` | read-only |
+| `create_cluster` | `POST /storage-pools/{poolId}/clusters` | write (async) |
+| `list_clusters` | `GET /storage-pools/{poolId}/clusters` | read-only |
+| `get_cluster` | `GET …/clusters/{clusterId}` | read-only |
+| `delete_cluster` | `DELETE …/clusters/{clusterId}` | destructive (async) |
+| `create_branch` | `POST …/clusters/{clusterId}/branches` | write (async) |
+| `list_branches` | `GET …/clusters/{clusterId}/branches` | read-only |
 | `get_branch` | `GET …/branches/{branchId}` | read-only |
 | `delete_branch` | `DELETE …/branches/{branchId}` | destructive (async) |
 | `create_endpoint` | `POST …/branches/{branchId}/endpoints` | write (async) |
@@ -96,13 +96,13 @@ external service).
 | `get_endpoint` | `GET …/endpoints/{endpointId}` | read-only |
 | `resize_endpoint` | `POST …/endpoints/{endpointId}/resize` | write (async) |
 | `delete_endpoint` | `DELETE …/endpoints/{endpointId}` | destructive (async) |
-| `list_tasks` | `GET /tasks` (`status`, `kind`, `project_id` filters) | read-only |
+| `list_tasks` | `GET /tasks` (`status`, `kind`, `cluster_id` filters) | read-only |
 | `get_task` | `GET /tasks/{taskId}` | read-only |
 
 The list tools take the controller's pagination contract verbatim — `limit`
 (`1..1000`, default 100) and `offset` (`>= 0`, default 0) — and the response
 carries `total` (all matches) and `count` (this page) alongside the items array
-under its tag-named key (`users`, `storage_pools`, `projects`, `branches`,
+under its tag-named key (`users`, `storage_pools`, `clusters`, `branches`,
 `endpoints`, `tasks`).
 
 ### Why no `create_user` / `list_users`
@@ -123,7 +123,7 @@ moves the owner onto an authenticated principal.
 
 ## Async tasks: tools return a Task, you poll `get_task`
 
-The seven world-changing operations — `create_project`, `delete_project`,
+The seven world-changing operations — `create_cluster`, `delete_cluster`,
 `create_branch`, `delete_branch`, `create_endpoint`, `resize_endpoint`,
 `delete_endpoint` — are
 **asynchronous** on the controller (`ac-apis.md` §The surface,
@@ -213,7 +213,7 @@ own README for the full values surface.
 
 ## Local testing
 
-The project is built and tested with `uv`; tests are `pytest` (with
+The cluster is built and tested with `uv`; tests are `pytest` (with
 `pytest-asyncio`) and need no running controller or network:
 
 ```sh

@@ -12,20 +12,20 @@ databases backed by branchable storage.
 
 ## Resource ladder
 
-Resources are nested **storage pool → project → branch → endpoint**:
+Resources are nested **storage pool → cluster → branch → endpoint**:
 
 - **Storage pool** — a top-level workspace owned by a user. Create one with \
 `create_storage_pool` (you must pass `owner_user_id`).
-- **Project** — a database living in a pool. Creating a project also creates \
+- **Cluster** — a database living in a pool. Creating a cluster also creates \
 its default branch named "main".
-- **Branch** — a Postgres timeline in a project. `create_branch` forks an \
-existing branch (the project's default branch unless you pass \
+- **Branch** — a Postgres timeline in a cluster. `create_branch` forks an \
+existing branch (the cluster's default branch unless you pass \
 `parent_branch_id`).
 - **Endpoint** — the compute (one container/pod) bound to a branch. A branch \
 admits at most one `read_write` endpoint.
 
 Address every nested resource by the full chain of ids (`pool_id`, \
-`project_id`, `branch_id`, `endpoint_id`).
+`cluster_id`, `branch_id`, `endpoint_id`).
 
 ## No user create/list; owner_user_id is a per-call argument
 
@@ -36,16 +36,16 @@ available to read a known user by id.
 
 ## Asynchronous operations — poll get_task
 
-All `create_*` and `delete_*` tools (projects, branches, endpoints) plus \
+All `create_*` and `delete_*` tools (clusters, branches, endpoints) plus \
 `resize_endpoint` are **asynchronous**. They return a **Task** object \
 immediately, not the finished \
 resource. After calling one, take the Task's `id` and poll \
 `get_task(task_id=<id>)` until its `status` reaches a terminal value \
-(`succeeded` or `failed`). On success, read the resource (e.g. `get_project`, \
-`get_branch`, `get_endpoint`) to see its final state, such as a project's \
+(`succeeded` or `failed`). On success, read the resource (e.g. `get_cluster`, \
+`get_branch`, `get_endpoint`) to see its final state, such as a cluster's \
 `default_branch` or an endpoint's `address` (and `tailnet_address`, if the \
 endpoint is exposed on the tailnet). `list_tasks` lists tasks, optionally \
-filtered by `status`, `kind`, or `project_id`.
+filtered by `status`, `kind`, or `cluster_id`.
 
 ## Pagination
 

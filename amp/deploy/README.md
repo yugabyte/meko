@@ -311,7 +311,7 @@ plane on Docker; this one proves an actual Kubernetes deployment, including the
 write-ahead task contract (#113) and **real data I/O** through a created endpoint.
 
 It port-forwards the controller API and walks the full async-task lifecycle —
-`createProject` / `createEndpoint` / `branch` / `deleteEndpoint` / `deleteProject` /
+`createCluster` / `createEndpoint` / `branch` / `deleteEndpoint` / `deleteCluster` /
 `deleteBranch` each return `202 + a Task + a Location` header and run to
 `status=succeeded` (polled via `GET /tasks/{id}`) — then **connects to the new
 endpoint with `psql` and writes + reads actual data**: full CRUD + `CHECKPOINT`
@@ -319,7 +319,7 @@ endpoint with `psql` and writes + reads actual data**: full CRUD + `CHECKPOINT`
 and checks that the recorded connection address routes to a ready Service backend.
 It also asserts the contract edges (`GET /tasks` filters + a bad
 `status` → `400`, a duplicate name → a *failed* task, deleting a branch with a
-child fork → `409`, and `delete_project` cascading). `createUser` /
+child fork → `409`, and `delete_cluster` cascading). `createUser` /
 `createStoragePool` are checked to stay synchronous `201`.
 
 It cleans up everything it creates and exits non-zero on any failure.

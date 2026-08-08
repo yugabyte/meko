@@ -68,9 +68,9 @@ type endpointConf struct {
 type launcherEndpoint struct {
 	// ID is the row's id, the key every product-API call takes.
 	ID uuid.UUID
-	// Pool and Project locate the endpoint's branch, which is what the nested
+	// Pool and Cluster locate the endpoint's branch, which is what the nested
 	// endpoint routes are addressed by.
-	Pool, Project, Branch uuid.UUID
+	Pool, Cluster, Branch uuid.UUID
 	conf                  endpointConf
 	pgSettings            map[string]string
 }
@@ -79,7 +79,7 @@ type launcherEndpoint struct {
 // as well as the by-name index, because the two answer different questions and
 // only one of them can be keyed by name.
 type launcherEndpoints struct {
-	// all is every launcher endpoint across every project, in load order. Port
+	// all is every launcher endpoint across every cluster, in load order. Port
 	// allocation reads THIS, not byName: an endpoint left out of the index still
 	// holds its ports, and handing them to a new compute would collide.
 	all []launcherEndpoint
@@ -108,7 +108,7 @@ func (l launcherEndpoints) lookup(name string) (launcherEndpoint, error) {
 }
 
 // loadEndpoints returns every endpoint the launcher owns. Endpoints span
-// projects (a lineage is a project), so this walks all of them.
+// clusters (a lineage is a cluster), so this walks all of them.
 //
 // An endpoint with no extended_config is not the launcher's: something else
 // created it against the same controller. Skipped rather than failing the scan.
@@ -123,7 +123,7 @@ func loadEndpoints(ctx context.Context, env *config.LocalEnv) (launcherEndpoints
 		return out, err
 	}
 	for _, br := range branches {
-		eps, err := b.api.ListEndpoints(ctx, b.poolID, br.ProjectId, br.BranchId)
+		eps, err := b.api.ListEndpoints(ctx, b.poolID, br.ClusterId, br.BranchId)
 		if err != nil {
 			return out, err
 		}
@@ -144,7 +144,7 @@ func loadEndpoints(ctx context.Context, env *config.LocalEnv) (launcherEndpoints
 				settings = *ep.PgSettings
 			}
 			le := launcherEndpoint{
-				ID: ep.Id, Pool: b.poolID, Project: br.ProjectId, Branch: br.BranchId,
+				ID: ep.Id, Pool: b.poolID, Cluster: br.ClusterId, Branch: br.BranchId,
 				conf: conf, pgSettings: settings,
 			}
 			out.all = append(out.all, le)
@@ -220,7 +220,7 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 	}
 
 	// A branch is addressed by id, never by name: names are unique only within a
-	// project, and the launcher spans several (a lineage is a project).
+	// cluster, and the launcher spans several (a lineage is a cluster).
 	branchID := config.BranchID(args.BranchID)
 	if branchID == "" {
 		return fmt.Errorf("`endpoint create` requires --branch-id")
@@ -230,8 +230,8 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		endpointID = "ep-" + string(branchID)
 	}
 
-	// The endpoint hangs off this branch, and the branch says which project and
-	// pool to address it in: a lineage IS a project, so there is nothing ambient
+	// The endpoint hangs off this branch, and the branch says which cluster and
+	// pool to address it in: a lineage IS a cluster, so there is nothing ambient
 	// to fall back on.
 	b, err := newBranchAPI(env)
 	if err != nil {
@@ -242,7 +242,7 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		return err
 	}
 	if branch == nil {
-		return fmt.Errorf("no live branch %s in any of the launcher's projects", branchID)
+		return fmt.Errorf("no live branch %s in any of the launcher's clusters", branchID)
 	}
 
 	// Primary mode only; conflict check unless allow_multiple (not exposed).
@@ -351,7 +351,7 @@ func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch
 	if err != nil {
 		return fmt.Errorf("serializing endpoint config: %w", err)
 	}
-	task, err := b.api.CreateEndpoint(ctx, b.poolID, branch.ProjectId, branch.BranchId, client.EndpointCreate{
+	task, err := b.api.CreateEndpoint(ctx, b.poolID, branch.ClusterId, branch.BranchId, client.EndpointCreate{
 		Name:       endpointID,
 		Extended:   extended,
 		PgSettings: pgSettingsMap(args.PgSettings),
@@ -374,7 +374,7 @@ func effectivePgSettings(ctx context.Context, env *config.LocalEnv, le launcherE
 	if err != nil {
 		return nil, err
 	}
-	branch, err := b.api.GetBranch(ctx, b.poolID, le.Project, le.Branch)
+	branch, err := b.api.GetBranch(ctx, b.poolID, le.Cluster, le.Branch)
 	if err != nil {
 		return nil, err
 	}
@@ -788,7 +788,7 @@ func deleteEndpointRecord(ctx context.Context, env *config.LocalEnv, le launcher
 	if err != nil {
 		return err
 	}
-	task, err := b.api.DeleteEndpoint(ctx, le.Pool, le.Project, le.Branch, le.ID)
+	task, err := b.api.DeleteEndpoint(ctx, le.Pool, le.Cluster, le.Branch, le.ID)
 	if err != nil {
 		if client.IsNotFound(err) {
 			return nil

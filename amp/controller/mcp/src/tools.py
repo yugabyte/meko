@@ -44,86 +44,86 @@ def get_storage_pool(pool_id: str) -> dict[str, Any]:
     return controller_client.get_storage_pool(pool_id)
 
 
-def create_project(
+def create_cluster(
     pool_id: str, name: str, pg_version: Optional[int] = None
 ) -> dict[str, Any]:
-    """Create a project (and its default branch "main") in a pool. ASYNCHRONOUS.
+    """Create a cluster (and its default branch "main") in a pool. ASYNCHRONOUS.
 
-    Returns a Task, not the finished project. Poll `get_task(task_id=<id>)`
-    until `status` is `succeeded` or `failed`, then call `get_project` to read
-    the project and its `default_branch`. `pg_version` defaults to 18; only 18
+    Returns a Task, not the finished cluster. Poll `get_task(task_id=<id>)`
+    until `status` is `succeeded` or `failed`, then call `get_cluster` to read
+    the cluster and its `default_branch`. `pg_version` defaults to 18; only 18
     is currently accepted — any other value is rejected with 400, so omit it
     unless you have a reason to set it.
     """
-    return controller_client.create_project(pool_id, name, pg_version)
+    return controller_client.create_cluster(pool_id, name, pg_version)
 
 
-def list_projects(
+def list_clusters(
     pool_id: str, limit: Optional[int] = None, offset: Optional[int] = None
 ) -> dict[str, Any]:
-    """List the projects in a pool (each with its default branch).
+    """List the clusters in a pool (each with its default branch).
 
-    Paginated via `limit`/`offset`. Items are under `projects` plus `total` and
+    Paginated via `limit`/`offset`. Items are under `clusters` plus `total` and
     `count`.
     """
-    return controller_client.list_projects(pool_id, limit, offset)
+    return controller_client.list_clusters(pool_id, limit, offset)
 
 
-def get_project(pool_id: str, project_id: str) -> dict[str, Any]:
-    """Get a project (with its default branch) by id."""
-    return controller_client.get_project(pool_id, project_id)
+def get_cluster(pool_id: str, cluster_id: str) -> dict[str, Any]:
+    """Get a cluster (with its default branch) by id."""
+    return controller_client.get_cluster(pool_id, cluster_id)
 
 
-def delete_project(pool_id: str, project_id: str) -> dict[str, Any]:
-    """Delete a project, cascading to its branches and endpoints. ASYNCHRONOUS.
+def delete_cluster(pool_id: str, cluster_id: str) -> dict[str, Any]:
+    """Delete a cluster, cascading to its branches and endpoints. ASYNCHRONOUS.
 
     Returns a Task, not a final result. Poll `get_task(task_id=<id>)` until
     `status` is `succeeded` or `failed`.
     """
-    return controller_client.delete_project(pool_id, project_id)
+    return controller_client.delete_cluster(pool_id, cluster_id)
 
 
 def create_branch(
     pool_id: str,
-    project_id: str,
+    cluster_id: str,
     name: str,
     parent_branch_id: Optional[str] = None,
     fork_point_lsn: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Fork a branch into a new branch in a project. ASYNCHRONOUS.
+    """Fork a branch into a new branch in a cluster. ASYNCHRONOUS.
 
-    The parent defaults to the project's default branch; pass
+    The parent defaults to the cluster's default branch; pass
     `parent_branch_id` to fork off another branch. `fork_point_lsn` (storage
     "X/X" form) defaults to the parent's latest LSN. Returns a Task; poll
     `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`, then
     call `get_branch` to read the new branch.
     """
     return controller_client.create_branch(
-        pool_id, project_id, name, parent_branch_id, fork_point_lsn
+        pool_id, cluster_id, name, parent_branch_id, fork_point_lsn
     )
 
 
 def list_branches(
     pool_id: str,
-    project_id: str,
+    cluster_id: str,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> dict[str, Any]:
-    """List the branches in a project (default branch plus its forks).
+    """List the branches in a cluster (default branch plus its forks).
 
     Paginated via `limit`/`offset`. Items are under `branches` plus `total` and
     `count`.
     """
-    return controller_client.list_branches(pool_id, project_id, limit, offset)
+    return controller_client.list_branches(pool_id, cluster_id, limit, offset)
 
 
-def get_branch(pool_id: str, project_id: str, branch_id: str) -> dict[str, Any]:
+def get_branch(pool_id: str, cluster_id: str, branch_id: str) -> dict[str, Any]:
     """Get a branch by id."""
-    return controller_client.get_branch(pool_id, project_id, branch_id)
+    return controller_client.get_branch(pool_id, cluster_id, branch_id)
 
 
 def delete_branch(
-    pool_id: str, project_id: str, branch_id: str
+    pool_id: str, cluster_id: str, branch_id: str
 ) -> dict[str, Any]:
     """Delete a branch, cascading to its endpoints. ASYNCHRONOUS.
 
@@ -131,12 +131,12 @@ def delete_branch(
     or `failed`. A branch with child branches is rejected synchronously
     (`conflict`).
     """
-    return controller_client.delete_branch(pool_id, project_id, branch_id)
+    return controller_client.delete_branch(pool_id, cluster_id, branch_id)
 
 
 def create_endpoint(
     pool_id: str,
-    project_id: str,
+    cluster_id: str,
     branch_id: str,
     role: Optional[str] = None,
     disk_type: Optional[str] = None,
@@ -155,13 +155,13 @@ def create_endpoint(
     is exposed on the tailnet).
     """
     return controller_client.create_endpoint(
-        pool_id, project_id, branch_id, role, disk_type, cpu, memory
+        pool_id, cluster_id, branch_id, role, disk_type, cpu, memory
     )
 
 
 def list_endpoints(
     pool_id: str,
-    project_id: str,
+    cluster_id: str,
     branch_id: str,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
@@ -172,21 +172,21 @@ def list_endpoints(
     `count`.
     """
     return controller_client.list_endpoints(
-        pool_id, project_id, branch_id, limit, offset
+        pool_id, cluster_id, branch_id, limit, offset
     )
 
 
 def get_endpoint(
-    pool_id: str, project_id: str, branch_id: str, endpoint_id: str
+    pool_id: str, cluster_id: str, branch_id: str, endpoint_id: str
 ) -> dict[str, Any]:
     """Get an endpoint by id."""
     return controller_client.get_endpoint(
-        pool_id, project_id, branch_id, endpoint_id
+        pool_id, cluster_id, branch_id, endpoint_id
     )
 
 
 def delete_endpoint(
-    pool_id: str, project_id: str, branch_id: str, endpoint_id: str
+    pool_id: str, cluster_id: str, branch_id: str, endpoint_id: str
 ) -> dict[str, Any]:
     """Retire an endpoint (remove its running instance, delete the record). ASYNCHRONOUS.
 
@@ -194,13 +194,13 @@ def delete_endpoint(
     or `failed`.
     """
     return controller_client.delete_endpoint(
-        pool_id, project_id, branch_id, endpoint_id
+        pool_id, cluster_id, branch_id, endpoint_id
     )
 
 
 def resize_endpoint(
     pool_id: str,
-    project_id: str,
+    cluster_id: str,
     branch_id: str,
     endpoint_id: str,
     cpu: Optional[str] = None,
@@ -219,24 +219,24 @@ def resize_endpoint(
     / `unsupported`). Then call `get_endpoint` to read the new reservation.
     """
     return controller_client.resize_endpoint(
-        pool_id, project_id, branch_id, endpoint_id, cpu, memory
+        pool_id, cluster_id, branch_id, endpoint_id, cpu, memory
     )
 
 
 def list_tasks(
     status: Optional[str] = None,
     kind: Optional[str] = None,
-    project_id: Optional[str] = None,
+    cluster_id: Optional[str] = None,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
 ) -> dict[str, Any]:
     """List write-ahead tasks, most recent first.
 
     Optionally filter by `status` (`pending`/`running`/`succeeded`/`failed`),
-    `kind` (e.g. `create_project`), or `project_id`. Paginated via
+    `kind` (e.g. `create_cluster`), or `cluster_id`. Paginated via
     `limit`/`offset`; items are under `tasks` plus `total` and `count`.
     """
-    return controller_client.list_tasks(status, kind, project_id, limit, offset)
+    return controller_client.list_tasks(status, kind, cluster_id, limit, offset)
 
 
 def get_task(task_id: str) -> dict[str, Any]:

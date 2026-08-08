@@ -12,7 +12,7 @@
 --
 -- It is provisioned FIRST so a fresh database has somewhere to record work from
 -- the moment the controller starts. Nothing here references the resource model:
--- `tasks.project_id` is deliberately FK-less, because a task may create its own
+-- `tasks.cluster_id` is deliberately FK-less, because a task may create its own
 -- target.
 
 CREATE TYPE task_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
@@ -23,9 +23,9 @@ CREATE TYPE step_status AS ENUM ('pending', 'running', 'succeeded', 'failed');
 -- themselves live in task_steps.
 CREATE TABLE tasks (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    kind         text        NOT NULL,  -- e.g. 'create_project', 'branch', 'create_endpoint'
+    kind         text        NOT NULL,  -- e.g. 'create_cluster', 'branch', 'create_endpoint'
     status       task_status NOT NULL DEFAULT 'pending',
-    project_id   uuid,                   -- target resource (for API monitoring); a
+    cluster_id   uuid,                   -- target resource (for API monitoring); a
                                          --   task may create its own target, so no FK
     target_ref   text,
     params       jsonb       NOT NULL DEFAULT '{}'::jsonb,  -- the originating request
@@ -57,9 +57,9 @@ CREATE INDEX task_steps_by_task ON task_steps (task_id);
 CREATE INDEX tasks_runnable ON tasks (status) WHERE status IN ('pending', 'running');
 
 -- Indexes backing the task list endpoint (GET /api/v1/tasks): the list is ordered
--- by created_at DESC and optionally filtered by project_id and status.
+-- by created_at DESC and optionally filtered by cluster_id and status.
 CREATE INDEX tasks_by_created_at ON tasks (created_at);
-CREATE INDEX tasks_by_project ON tasks (project_id);
+CREATE INDEX tasks_by_cluster ON tasks (cluster_id);
 CREATE INDEX tasks_by_status ON tasks (status);
 
 -- First-writer-wins lock for endpoint resize.

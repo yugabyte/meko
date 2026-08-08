@@ -30,7 +30,7 @@ Key env vars: `TAG` (required), `NS`, `KCTX`, `ECR`, `CHART`, `YB_HOSTPORTS`,
 
 Drives the controller REST API to provision a fresh `read_write` endpoint, asserts
 it comes up as **PostgreSQL 18** and does a real **write/read** round-trip, then
-tears the endpoint + project down. Repeatable and non-destructive to the stack;
+tears the endpoint + cluster down. Repeatable and non-destructive to the stack;
 exits non-zero on failure (CI-friendly).
 
 ```sh

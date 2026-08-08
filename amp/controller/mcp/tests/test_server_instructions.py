@@ -3,7 +3,7 @@ from server_instructions import AMP_CONTROLLER_SERVER_INSTRUCTIONS
 
 def test_mentions_resource_ladder():
     text = AMP_CONTROLLER_SERVER_INSTRUCTIONS.lower()
-    for word in ("storage pool", "project", "branch", "endpoint"):
+    for word in ("storage pool", "cluster", "branch", "endpoint"):
         assert word in text
 
 
