@@ -1,45 +1,94 @@
 # Meko
 
-> Meko is an open-source, agent-native data layer that gives AI agents persistent memory, knowledge bases, and direct database access — all unified on a distributed PostgreSQL backend (YugabyteDB).  Meko enables multi-agent systems, as wells as multi-person teams, to collaborate.
+> Meko is an agent-native data layer that gives AI agents persistent memory, shared knowledge, and decision traces — unified on a distributed PostgreSQL backend (YugabyteDB). Multi-agent systems and multi-person teams collaborate through datapacks exposed over the Model Context Protocol (MCP).
 
-Meko exposes everything through the Model Context Protocol (MCP), making it compatible with any MCP-enabled IDE or framework. Agents connect to a **datapack** — an isolated unit that bundles a database, MCP server, and credentials — to store memories and store knowledge (i.e. store document chunks), index documents for RAG, run SQL queries, and capture observability traces across sessions.  
+## For agents reading this file
+
+### Connect
+
+1. User signs up at https://cloud.mekodata.ai and generates an API key under **Settings > API Keys**. Keys start with `mko_tkn_` and are shown once.
+2. Register the shared MCP endpoint with that key:
+
+```json
+{
+  "mcpServers": {
+    "meko": {
+      "url": "https://mcp.mekodata.ai/mcp",
+      "headers": {
+        "API_KEY": "<paste-your-api-key>"
+      }
+    }
+  }
+}
+```
+
+3. Preferred for Cursor, Claude Code, Claude Desktop, and Codex — portal one-liner (also installs agent skills / hooks where supported):
+
+```sh
+npx @yugabytedb/meko-mcp --client <client> --url "https://mcp.mekodata.ai/mcp" --api-key <paste-your-api-key>
+```
+
+Replace `<client>` with `cursor`, `claude-code`, `claude-desktop`, or `codex`. VS Code and other MCP clients use the manual JSON config above (see Connect via IDE).
+
+OAuth (URL only, no API key) works for clients with a custom-connector flow; that path is on-demand unless skills are installed separately.
+
+### Routing
+
+- One MCP URL for every datapack: `https://mcp.mekodata.ai/mcp`. Pass `datapack_id` (or name) on tool calls to select a datapack; do not invent per-datapack URLs.
+- Auth header name is `API_KEY` (not `Authorization` / Bearer). Key prefix is `mko_tkn_`.
+- There is no released Python SDK. "Connect your AI app" / framework SDKs are under development. Integrate via MCP until those ship.
+- Supported IDE / coding clients today: Cursor, Claude Code, Claude Desktop, Codex, VS Code.
+- Tool catalog and calling conventions: [Meko MCP Server](/reference/mcp-server/). Do not send retired tool-level `scope` arguments.
+
+### Suggested first tools
+
+- List workspaces → `datapack_list`
+- Remember a fact → `memory_add` (or ask the user to say "remember this")
+- Search memory → `memory_search`
+- Search uploaded docs → `knowledgebase_search`
+- Save a chat turn → `conversation_create` then `conversation_add_message`
 
 ## Getting Started
 
-- [Quick Start](/quick-start/): Sign up for Meko, connect your IDE, create your first memory and knowledge base, and explore the Meko portal
+- [Quick Start](/quick-start/): Use when onboarding — sign up, try WorkbenchLM, connect an AI client, then (later) a custom app
+- [Explore Meko](/quick-start/explore-meko/): Use when adding first knowledge uploads and creating memories after connect
 
 ## Core Concepts
 
-- [Datapacks](/architecture/core-concepts/datapacks/): Isolation units that bundle a YugabyteDB database, MCP server, and credentials into a single deployable unit
-- [Memory](/architecture/core-concepts/memory/): Persistent agent memory using semantic search (pgvector) and graph relationships (Apache AGE via mem0)
-- [Knowledge Bases](/architecture/core-concepts/knowledgebase/): RAG pipelines for chunking, embedding, and indexing documents using pg_dist_rag
-- [Graph RAG](/architecture/core-concepts/graph-rag/): Entity-relationship queries over documents using Apache AGE
-- [OLTP Data](/architecture/core-concepts/oltp-data/): Direct PostgreSQL-compatible access to structured data via YugabyteDB YSQL
-- [Traces](/architecture/core-concepts/traces/): Full observability of agent operations, conversation history, and chain-of-thought reasoning
-- [Connectors](/architecture/core-concepts/connectors/): Data source connectors for ingesting content into knowledge bases
+- [Datapacks](/architecture/core-concepts/datapacks/): Use when explaining isolation — one datapack bundles memory, knowledge, conversations, traces, and credentials
+- [Memory](/architecture/core-concepts/memory/): Use when storing or recalling durable facts via vectors + graph (MAGE)
+- [Learnings](/architecture/core-concepts/learnings/): Use when promoting private memory into collective memory or shared knowledge
+- [Knowledge Bases](/architecture/core-concepts/knowledgebase/): Use when describing RAG over uploaded documents (`pg_dist_rag`)
+- [Graph RAG](/architecture/core-concepts/graph-rag/): Use when answering entity-relationship / graph traversal questions over memory
+- [Traces](/architecture/core-concepts/traces/): Use when explaining observability, conversation history, and chain-of-thought audit
 
 ## Architecture
 
-- [How Meko Fits](/architecture/how-meko-fits/): Architecture overview, deployment models, and where Meko sits in an agentic stack
+- [How Meko Fits](/architecture/how-meko-fits/): Use when placing Meko in an agentic stack or comparing deployment models
 
 ## Guides
 
-- [Working with Memory](/guides/working-with-memory/): Add, search, update, manage, and compress agent memories
-- [Working with Knowledge Bases](/guides/working-with-knowledge-bases/): Build and query document collections for retrieval-augmented generation
-- [Database Access](/guides/database-access/): Connect directly to a datapack's PostgreSQL database for custom queries
-- [Observability](/guides/observability/): View traces, conversation history, and performance metrics
+- [WorkbenchLM](/guides/workbench-lm/): Use when trying Meko in the portal chat with no local MCP install
+- [Working with Memory](/guides/working-with-memory/): Use when adding, searching, listing, or promoting memories over MCP
+- [Working with Knowledge Bases](/guides/working-with-knowledge-bases/): Use when building or querying document collections for RAG
+- [Observability](/guides/observability/): Use when locating decision traces and conversation history in the portal
 
 ## Integrations
 
-- [Connect via IDE](/integrations/connect-to-ai-agent/): Configure Meko in Cursor Desktop, Cursor Web, Claude Desktop, Claude Code, and more
-- [Connect Programmatically](/integrations/connect-programmatically/): Use Meko with LangChain, LangGraph, and the Python SDK
+- [Connect via IDE](/integrations/connect-to-ai-agent/): Use when configuring Cursor, Claude Code, Claude Desktop, Codex, VS Code, or another MCP client
+- [Connect Programmatically](/integrations/connect-programmatically/): Use when wiring an MCP-capable framework to `https://mcp.mekodata.ai/mcp` (no Python SDK yet; fuller framework guides under development)
 
 ## Examples
 
-- [Meko in Your IDE](/examples/meko-enhances-teaming/): Store personal preferences, portable coding standards, team policies, and project-specific context
-- [Build Software with Meko](/examples/trace-and-resume/): Persist conversation history, reasoning traces, and resumable task state in agentic applications
+- [Enhanced Teaming](/examples/meko-enhances-teaming/): Use when showing handoffs, shared standards, and team memory across agents
+- [Traces and Resumability](/examples/trace-and-resume/): Use when showing decision traces, archived conversations, and resumable agent state
 
 ## Reference
 
-- [Meko CLI](/reference/meko-cli/): Install the Meko CLI binary (on Linux and macOS), and command reference
-- [Meko MCP Server](/reference/mcp-server/): MCP server and tools reference
+- [API Keys](/reference/api-keys/): Use when generating, naming, rotating, or revoking `mko_tkn_` keys
+- [Meko MCP Server](/reference/mcp-server/): Use when looking up the 23 tools, quotas, and call patterns
+
+## Other
+
+- [Changelog](/changelog/): Use when checking installer (`@yugabytedb/meko-mcp`) or platform release notes
+- [Troubleshooting](/troubleshooting/): Use when installs, auth, hooks, or automatic capture fail
