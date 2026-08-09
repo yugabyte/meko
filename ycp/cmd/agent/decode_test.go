@@ -51,17 +51,18 @@ func TestDecodeBodyEnvelopeError(t *testing.T) {
 	}
 }
 
-// {"data":…} with no "error" key is a payload that happens to have a data field,
-// not an envelope — decode it flat.
-func TestDecodeBodyDataFieldIsNotAnEnvelope(t *testing.T) {
-	var out struct {
-		Data string `json:"data"`
-	}
-	if err := decodeBody(strings.NewReader(`{"data":"literal"}`), &out); err != nil {
+// api_server omits "error" on success (it is `omitempty`), so the real success
+// envelope is {"data":…} with NO "error" key. The agent must still unwrap it —
+// requiring an "error" key was the bug that left environment_id/status_token
+// empty and got every status report rejected with 400.
+func TestDecodeBodyEnvelopeWithoutErrorKey(t *testing.T) {
+	var er api.EnrollResponse
+	in := `{"data":{"environment_id":"acme-prod","status_token":"mko_sts_x","mcp_base_url":"acme.mcp"}}`
+	if err := decodeBody(strings.NewReader(in), &er); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Data != "literal" {
-		t.Fatalf("treated a plain data field as an envelope: %+v", out)
+	if er.EnvironmentID != "acme-prod" || er.StatusToken != "mko_sts_x" {
+		t.Fatalf("success envelope (no error key) not unwrapped: %+v", er)
 	}
 }
 

@@ -421,13 +421,14 @@ func (m *ycp) req(method, path string, body, out any) (int, error) {
 
 // decodeBody unwraps the two response shapes the agent has to speak to.
 //
-// api_server wraps every payload as {"data":…,"error":…}. Decoding that straight
-// into the payload struct silently yields zero values — which meant an empty
-// environment_id and status_token, so every following status report was rejected
-// with 400 while enrollment had already succeeded server-side. Detect the
-// envelope and decode its "data" instead. A flat payload is still accepted: it is
-// what the retired reference control plane returned, and tolerating both is one
-// type switch.
+// api_server wraps payloads as {"data":…,"error":…}, but "error" is omitempty:
+// on success it is dropped, so the body is {"data":…} with no "error" key.
+// Decoding that straight into the payload struct silently yields zero values —
+// which meant an empty environment_id and status_token, so every following
+// status report was rejected with 400 while enrollment had already succeeded
+// server-side. So an envelope is identified by the "data" key ALONE (requiring
+// "error" too missed every success response). A flat payload — what the retired
+// reference control plane returned — has no "data" key and is decoded as-is.
 func decodeBody(r io.Reader, out any) error {
 	raw, err := io.ReadAll(r)
 	if err != nil {
@@ -444,14 +445,13 @@ func decodeBody(r io.Reader, out any) error {
 		} `json:"error"`
 		hasEnvelope bool
 	}
-	// Only treat it as an envelope when "data" is actually present: a flat payload
-	// that happens to lack every field would otherwise look like one.
+	// The api_server envelope always carries "data" and omits "error" on success,
+	// so the "data" key alone identifies it. A flat payload (retired reference
+	// control plane) has its fields at the top level and no "data" key.
 	var probe map[string]json.RawMessage
 	if json.Unmarshal(raw, &probe) == nil {
 		if _, ok := probe["data"]; ok {
-			if _, ok := probe["error"]; ok {
-				env.hasEnvelope = true
-			}
+			env.hasEnvelope = true
 		}
 	}
 	if !env.hasEnvelope {
