@@ -24,7 +24,7 @@ tests:
         - opentelemetry.io/v1beta1
     asserts:
       - hasDocuments:
-          count: 5
+          count: 7
 
   - it: renders nothing when the opentelemetry.io CRDs are absent, though enabled by default
     asserts:
@@ -38,7 +38,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: renders both collector CRs plus RBAC (SA + ClusterRole + binding) when enabled
+  - it: renders both collector CRs plus RBAC (SA + Role/binding + ClusterRole/binding) when enabled
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
@@ -46,7 +46,7 @@ tests:
       otel.enabled: true
     asserts:
       - hasDocuments:
-          count: 5
+          count: 7
 
   - it: the controller collector is a deployment-mode OpenTelemetryCollector
     capabilities:
@@ -105,9 +105,9 @@ tests:
       otel.enabled: true
       otel.collectors.controller.enabled: false
     asserts:
-      # SA + ClusterRole + ClusterRoleBinding + compute CR only.
+      # SA + Role + RoleBinding + ClusterRole + ClusterRoleBinding + compute CR.
       - hasDocuments:
-          count: 4
+          count: 6
 
   - it: includes the cadvisor job only when podMetrics is on
     capabilities:
@@ -138,3 +138,46 @@ tests:
       - lengthEqual:
           path: spec.config.receivers.prometheus.config.scrape_configs
           count: 4
+
+  - it: podMetrics off needs no cluster-scoped RBAC at all
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.podMetrics: false
+    asserts:
+      # SA + Role + RoleBinding + both collectors, and NO ClusterRole/binding:
+      # the default renders 7, so 5 here is exactly the two cluster-scoped
+      # documents being absent.
+      - hasDocuments:
+          count: 5
+
+  - it: pod discovery is a namespaced Role scoped to pods only
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: NAMESPACE
+      - equal:
+          path: rules[0].resources
+          value: [pods]
+
+  - it: the node ClusterRole exists only for cadvisor and grants only node access
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules[0].resources
+          value: [nodes, nodes/proxy, nodes/metrics]
+      - equal:
+          path: rules[1].nonResourceURLs
+          value: ["/metrics/cadvisor"]

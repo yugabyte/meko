@@ -104,10 +104,14 @@ an install where the operator is absent; there the collectors are skipped and
   (`:3080`), and (with `otel.podMetrics`) per-pod cAdvisor resource metrics from
   each node's kubelet.
 
-The chart also creates the collector `ServiceAccount` + a `ClusterRole`/binding
-for pod and node discovery. Store is set via `otel.remoteWriteEndpoint`
-(VictoriaMetrics by default). **Requires the OTel Operator** (opentelemetry.io
-CRDs) in the cluster.
+The chart also creates the collector `ServiceAccount` and RBAC sized to what is
+actually scraped: a namespaced **`Role`** on `pods` for discovery — every app
+scrape job restricts SD to the release namespace — plus a **`ClusterRole`** on
+`nodes`/`nodes/proxy`/`nodes/metrics` **only when `otel.podMetrics` is on**,
+because cAdvisor lives in the kubelet and has no namespaced equivalent. With
+`podMetrics` off the collectors need no cluster-scoped rights at all. Store is
+set via `otel.remoteWriteEndpoint` (VictoriaMetrics by default). **Requires the
+OTel Operator** (opentelemetry.io CRDs) in the cluster.
 
 Implementation notes learned deploying this on EKS:
 - Use the **contrib** collector image (the `prometheus` receiver +

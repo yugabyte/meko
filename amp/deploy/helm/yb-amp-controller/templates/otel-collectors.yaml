@@ -26,6 +26,49 @@ metadata:
   labels:
     {{- include "yb-amp-controller.labels" . | nindent 4 }}
 ---
+{{- /*
+Pod discovery for every app scrape job. All of them are namespace-restricted
+(`role: pod, namespaces: {names: [<release ns>]}`), so this is a Role, not a
+ClusterRole: an install that does not scrape node metrics needs no cluster-scoped
+rights at all.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}-otel
+  namespace: {{ $ns }}
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}-otel
+  namespace: {{ $ns }}
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}-otel
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $ns }}
+{{- if .Values.otel.podMetrics }}
+---
+{{- /*
+Node access, for the kubelet-cadvisor job alone (otel.podMetrics). cAdvisor runs
+inside the kubelet and publishes per-container CPU/memory/network at
+https://<nodeIP>:10250/metrics/cadvisor, so `role: node` discovery and
+nodes/metrics are cluster-scoped by nature — there is no namespaced equivalent,
+which is why this is the one piece of otel RBAC that cannot be a Role. Rendered
+only when that job exists: with podMetrics off, nothing here is created.
+*/}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -33,11 +76,10 @@ metadata:
   labels:
     {{- include "yb-amp-controller.labels" . | nindent 4 }}
 rules:
-  # Prometheus kubernetes_sd_configs (pod/node discovery) + cAdvisor scraping.
   - apiGroups: [""]
-    resources: [pods, services, endpoints, nodes, nodes/proxy, nodes/metrics, namespaces]
+    resources: [nodes, nodes/proxy, nodes/metrics]
     verbs: [get, list, watch]
-  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+  - nonResourceURLs: ["/metrics/cadvisor"]
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -54,6 +96,7 @@ subjects:
   - kind: ServiceAccount
     name: {{ $saName }}
     namespace: {{ $ns }}
+{{- end }}
 {{- if .Values.otel.collectors.controller.enabled }}
 ---
 apiVersion: opentelemetry.io/v1beta1

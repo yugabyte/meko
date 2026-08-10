@@ -11,12 +11,18 @@ fullnameOverride: ""
 
 # RBAC. The namespaced ServiceAccount + Role + RoleBinding are always created.
 rbac:
-  # -- Also create the cluster-scoped ClusterRole + ClusterRoleBinding: namespaces
-  # get/list/create (Helm --create-namespace probing) and nodes get/list (NodePort
-  # endpoint node-IP resolution). Default off — with the default controller
-  # (internal-lb) and endpoint (ClusterIP) service types nothing reads nodes, and
-  # namespace-scoped installs on shared clusters have no cluster-scope rights.
-  # Enable only for a NodePort deploy (which needs node-IP reads).
+  # -- Also create the *controller's* cluster-scoped ClusterRole +
+  # ClusterRoleBinding: namespaces get/list/create (Helm --create-namespace
+  # probing) and nodes get/list (NodePort endpoint node-IP resolution). Default
+  # off — with the default controller (internal-lb) and endpoint (ClusterIP)
+  # service types nothing reads nodes. Enable only for a NodePort deploy (which
+  # needs node-IP reads).
+  #
+  # This governs the controller only. The metrics collectors carry their own
+  # RBAC, sized to what they scrape: a namespaced Role for pod discovery always,
+  # plus a ClusterRole for node access when `otel.podMetrics` is on (see there).
+  # A wholly namespace-scoped install therefore wants this false AND
+  # otel.podMetrics false.
   clusterScoped: false
 
 controller:
@@ -241,7 +247,15 @@ otel:
   # Prometheus, Thanos receive, …).
   remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
   # -- Also scrape per-pod cAdvisor resource metrics (CPU/mem/net) for the
-  # endpoint pods, via each node's kubelet.
+  # endpoint pods, via each node's kubelet. Feeds the whole "amp — Pod resources"
+  # dashboard (all 7 panels); the controller, postgres and storage dashboards do
+  # not use it.
+  #
+  # REQUIRES CLUSTER-SCOPED RBAC. cAdvisor lives in the kubelet, so this is the
+  # one collector job that cannot be namespaced: turning it on renders a
+  # ClusterRole granting nodes/nodes-proxy/nodes-metrics reads. Set false for an
+  # install that must stay namespace-scoped — the other three dashboards are
+  # unaffected and this one reports no data.
   podMetrics: true
   # -- Pod-name regex the compute collector keeps for cAdvisor metrics. Defaults
   # to the controller's endpoint naming (yb-ep-*); widen it (e.g.
