@@ -50,6 +50,7 @@ import (
 
 	execpkg "github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/kubemeta"
 )
 
 // Defaults (core/defaults_test.go asserts the embedded default.yaml agrees).
@@ -952,13 +953,8 @@ func chartS3URL(version string) string {
 // namespaceLabels are stamped on the namespace ybk8s creates, so Teardown (and
 // any reaper) can recognize and safely reclaim it.
 func namespaceLabels(extra map[string]string) map[string]string {
-	out := map[string]string{
-		"ampqa":        "1",
-		ManagedByLabel: ManagedByValue,
-	}
-	for k, v := range extra {
-		out[k] = v
-	}
+	out := kubemeta.TestLabels(extra)
+	out[ManagedByLabel] = ManagedByValue
 	return out
 }
 

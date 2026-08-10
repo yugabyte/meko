@@ -19,6 +19,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
+	"github.com/yugabyte/amp/test/functional/framework/kubemeta"
 )
 
 // Spec describes a client-pod workload to launch.
@@ -124,11 +125,13 @@ func (k *K8s) Stop(ctx context.Context, into apps.ArtifactSink) error {
 	})
 }
 
-// podManifest is a minimal bare Pod carrying spec's image/command/env,
-// labeled ampqa=1 so the reaper can find every client pod it ever launched.
+// podManifest is a minimal bare Pod carrying spec's image/command/env, labelled
+// so the janitor can find every client pod it ever launched — including one whose
+// namespace label is gone or which was created somewhere unexpected.
 func podManifest(spec Spec) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "apiVersion: v1\nkind: Pod\nmetadata:\n  name: %s\n  labels:\n    ampqa: \"1\"\n", spec.Name)
+	fmt.Fprintf(&b, "apiVersion: v1\nkind: Pod\nmetadata:\n  name: %s\n  labels:\n    ampqa: \"1\"\n    %s: \"%s\"\n",
+		spec.Name, kubemeta.TestLabel, kubemeta.TestLabelValue)
 	b.WriteString("spec:\n  restartPolicy: Never\n")
 	if len(spec.ImagePullSecrets) > 0 {
 		b.WriteString("  imagePullSecrets:\n")

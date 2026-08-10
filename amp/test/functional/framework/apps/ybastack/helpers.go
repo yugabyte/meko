@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/yugabyte/amp/test/functional/framework/kubemeta"
 	"gopkg.in/yaml.v3"
 )
 
@@ -215,13 +216,8 @@ metadata:
 // namespaceLabels are stamped on the namespace ybastack creates, so Teardown
 // (and any reaper) can recognize and safely reclaim it.
 func namespaceLabels(extra map[string]string) map[string]string {
-	out := map[string]string{
-		"ampqa":        "1",
-		ManagedByLabel: ManagedByValue,
-	}
-	for k, v := range extra {
-		out[k] = v
-	}
+	out := kubemeta.TestLabels(extra)
+	out[ManagedByLabel] = ManagedByValue
 	return out
 }
 

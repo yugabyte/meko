@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/yugabyte/amp/test/functional/framework/kubemeta"
 	"gopkg.in/yaml.v3"
 )
 
@@ -82,7 +83,7 @@ spec:
     matchLabels: { app: yugabyted }
   template:
     metadata:
-      labels: { app: yugabyted }
+      labels: { app: yugabyted, ampqa: "1", %[8]s: "%[9]s" }
       annotations:
         # Keep the cluster autoscaler from draining the node this pod sits on.
         # Its data lives on a ReadWriteOnce PVC, so a reschedule cannot take the
@@ -129,7 +130,7 @@ spec:
         resources:
           requests:
             storage: %[3]s
-`, namespace, image, storage, sc, tflags, mflags, ips)
+`, namespace, image, storage, sc, tflags, mflags, ips, kubemeta.TestLabel, kubemeta.TestLabelValue)
 }
 
 // joinGflags merges CSV flag=value lists, dropping empty parts.
@@ -334,13 +335,8 @@ func asSlice(v any) []any {
 // merged with any extras the caller supplies. The managed-by label is always
 // present so Teardown can refuse foreign namespaces.
 func namespaceLabels(extra map[string]string) map[string]string {
-	out := map[string]string{
-		"ampqa":        "1",
-		ManagedByLabel: ManagedByValue,
-	}
-	for k, v := range extra {
-		out[k] = v
-	}
+	out := kubemeta.TestLabels(extra)
+	out[ManagedByLabel] = ManagedByValue
 	return out
 }
 
