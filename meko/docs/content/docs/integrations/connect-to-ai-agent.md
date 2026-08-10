@@ -99,18 +99,21 @@ In Cursor Desktop:
 
 In the Meko portal, select **Connect** and follow the steps.
 
+This adds a `mcpServers.meko` entry in the `claude_desktop_config.json` configuration file of your Claude Desktop (see also Manual setup).
+
 ##### OAuth
 
 In Claude Desktop:
 
-1. Open **Customize > Connectors**, search for **Meko** in the Connectors search box, and add it as a custom MCP connector with the URL `https://mcp.mekodata.ai/mcp`.
+1. Navigate to **Settings**, and under **Customize** select **Connectors**.
+1. Search for **Meko** in the Connectors search box, and add it as a custom MCP connector with the URL `https://mcp.mekodata.ai/mcp`.
 1. Complete the OAuth handshake when the browser opens.
 
 ##### Manual setup
 
 In Claude Desktop (whether used for Chat, Cowork, or Code):
 
-1. Choose **Claude>Settings>Developer>Edit Config**.
+1. Navigate to **Settings**, and under **Desktop app** select **Developer**, then click **Edit Config**.
 1. Edit the `claude_desktop_config.json` file to add the following MCP Server entry. Replace `<paste-your-api-key>` with the token you saved.
 
     ```json
@@ -147,6 +150,35 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
     ```text
     List my datapacks in Meko
     ```
+
+### Uninstall
+
+How you remove Meko from Claude Desktop depends on how you installed it, because each installation method creates a different artifact.
+
+##### Automated setup
+
+Run the following:
+
+```bash
+npx @yugabytedb/meko-mcp --client claude-desktop --uninstall
+```
+
+If you installed under a non-default server name, pass `--server-name <name>`. The uninstall removes only the MCP server entry; if you also imported a Meko skill bundle, remove it manually via **Settings > Extensions**.
+
+##### OAuth
+
+In Claude Desktop:
+
+1. Navigate to **Settings**, and under **Customize** select **Connectors**.
+1. Search for **Meko** in the Connectors search box and delete it.
+
+##### Manual setup
+
+In Claude Desktop:
+
+1. Navigate to **Settings**, and under **Desktop app** select **Developer**, then click **Edit Config**.
+1. Edit the `claude_desktop_config.json` file to delete the `mcpServers.meko` entry.
+1. Restart Claude Desktop.
 
 ## Claude Code
 
