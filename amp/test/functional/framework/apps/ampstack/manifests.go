@@ -83,6 +83,15 @@ spec:
   template:
     metadata:
       labels: { app: yugabyted }
+      annotations:
+        # Keep the cluster autoscaler from draining the node this pod sits on.
+        # Its data lives on a ReadWriteOnce PVC, so a reschedule cannot take the
+        # volume with it: the new pod sticks in ContainerCreating with
+        # "Multi-Attach error ... already exclusively attached to one node", the
+        # backing never returns, and every test in the run fails with a
+        # controller 500 or "backing YSQL not ready" — which is what happened to
+        # the whole 0.260807.1 nightly (9 failures, one cause).
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
       terminationGracePeriodSeconds: 60
       securityContext:

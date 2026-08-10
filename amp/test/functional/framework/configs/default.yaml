@@ -184,7 +184,12 @@ env:
     # --wait). The binary default is 10m — sized for a warm single-node cluster;
     # a multi-node backing's first endpoint (node scale-up + multi-GB pull)
     # needs more. Empty = leave the binary default.
-    deploy_timeout: 20m
+    #
+    # 20m was not enough: an endpoint requests 40Gi ephemeral storage against
+    # ~43.8Gi allocatable per node, so one lands per node and a cold tenant
+    # waits on a freshly autoscaled node — ~15m observed on amp-dev, which
+    # leaves 20m no headroom for the image pull behind it.
+    deploy_timeout: 35m
     # true → install the helm shim that strips --create-namespace (needed until
     # a controller image built without that flag ships).
     helm_shim: true
@@ -874,6 +879,9 @@ versions:
   # release tag. Both mirror the stress framework's pinned versions.
   sampleapp: "1.4.90"
   benchbase: "1.12"
+  # benchbase_stress: the stress fork's release tag (yb-stress-test
+  # benchbase_<version>). Mirrors the stress framework's pinned version.
+  benchbase_stress: "1.0"
 
 # artifacts{}: fetchable artifacts by name (glob_path, url, type, target, secret,
 # delivery flags). Consumed by artifact.Resolve and the deploy-artifact task.
@@ -912,6 +920,22 @@ artifacts:
     type: github_release
     secret: "gh_package"
     target: "client"
+
+  # benchbase_stress: the stress team's BenchBase fork (vendored in
+  # yb-stress-test as tools/benchbase, released there as benchbase_<version>).
+  # Two additions matter here: its workers RECONNECT and retry on a dropped
+  # connection instead of killing the terminal thread — an amp compute that
+  # restarts mid-run otherwise ends that tenant's load permanently — and its
+  # per-window results CSV carries operations/sec and latency, not throughput
+  # alone. Private repo → the fetch authenticates with gh_package, like the
+  # sample-app jar. Extracts to the same benchbase-yugabyte/ directory.
+  benchbase_stress:
+    glob_path: "benchbase-{benchbase_stress}.tgz"
+    url: "https://api.github.com/repos/yugabyte/yb-stress-test/releases/tags/benchbase_{benchbase_stress}"
+    type: github_release
+    secret: "gh_package"
+    target: "client"
+    remote_unzip: true
 
   # benchbase: the BenchBase (yugabyte fork) release tarball — a PUBLIC github
   # release asset, no secret needed. remote_download (curl on the client) +

@@ -61,7 +61,7 @@ func Init(ctx context.Context, ex exec.RemoteExecutor, opts InitOptions) error {
 	args = append(args, opts.ExtraArgs...)
 	args = append(args, connArgs(opts.Conn)...)
 
-	res, err := ex.Run(ctx, envPrefix(opts.Conn)+strings.Join(args, " "))
+	res, err := ex.Run(ctx, quietTrace(envPrefix(opts.Conn)+strings.Join(args, " ")))
 	if err != nil {
 		return fmt.Errorf("pgbench init: %w", err)
 	}
@@ -99,6 +99,20 @@ func Run(ctx context.Context, ex exec.RemoteExecutor, opts RunOptions) (Result, 
 		return Result{Raw: out}, fmt.Errorf("pgbench run exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
 	return parseOutput(out), nil
+}
+
+// quietTrace drops ysql_bench's per-statement client tracing, which it writes to
+// stderr unasked ("ysql_bench: client 3 sending BEGIN;", four lines per
+// transaction). At a few hundred tps that is megabytes a minute: a 60-second run
+// produced 10MiB, hit the capture cap, and the `-P` progress lines past ~20s
+// went over the side with it — so the time series covered a third of the run
+// while the summary, printed on stdout, looked fine.
+//
+// Output goes to a file first so the filter cannot swallow pgbench's exit code,
+// and only the client-trace prefix is removed: real errors still come back.
+func quietTrace(cmd string) string {
+	return "out=$(mktemp); " + cmd + " >\"$out\" 2>&1; rc=$?; " +
+		"grep -vE '^ysql_bench: client [0-9]+ ' \"$out\"; rm -f \"$out\"; exit $rc"
 }
 
 // checkAvailable detects a missing pgbench binary on the target and returns
