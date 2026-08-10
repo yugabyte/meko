@@ -1,14 +1,12 @@
 ---
 title: Meko
 linkTitle: Meko
-description: What's new in the Meko portal, API, and platform.
+description: What's new in the Meko portal, API, and platform
 weight: 10
 type: docs
 breadcrumb_disable: true
 notoc: true
 ---
-
-What's new in the Meko portal, API, and platform.
 
 {{< card-group >}}
   {{< card
