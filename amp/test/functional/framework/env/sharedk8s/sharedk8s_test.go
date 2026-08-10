@@ -162,7 +162,7 @@ func testProvider(f *fakeCtl) *Provider {
 	p.waitPG = func(context.Context, pg.ConnInfo, time.Duration) error { return nil }
 	p.detectYB = func(context.Context, pg.ConnInfo) string { return "yb-test" }
 	p.detectProduct = func(context.Context, pg.ConnInfo) string { return "" }
-	p.newClient = func(url string) *controller.Client {
+	p.newClient = func(url string, _ ...controller.Option) *controller.Client {
 		return controller.New(url, controller.WithHTTPClient(f.srv.Client()))
 	}
 	return p
@@ -454,7 +454,7 @@ func TestTeardownReconnectsOnConnRefused(t *testing.T) {
 
 	p := New(Config{Context: "x", PoolName: "ampqa"})
 	p.logf = nil
-	p.newClient = func(url string) *controller.Client { return controller.New(url) }
+	p.newClient = func(url string, _ ...controller.Option) *controller.Client { return controller.New(url) }
 	st := &seqStarter{lines: []string{
 		fmt.Sprintf("Forwarding from 127.0.0.1:%d -> 8080\n", deadPort), // first: dead
 		fmt.Sprintf("Forwarding from 127.0.0.1:%d -> 8080\n", livePort), // after reconnect: live
@@ -481,7 +481,7 @@ func TestProvisionForwardDeathSurfacesClearError(t *testing.T) {
 	defer f.close()
 	p := New(Config{Context: "x", PoolName: "ampqa"})
 	p.logf = nil
-	p.newClient = func(url string) *controller.Client { return controller.New(url) }
+	p.newClient = func(url string, _ ...controller.Option) *controller.Client { return controller.New(url) }
 	p.kube = k8s.New(k8s.Config{Context: "x"}).WithStarter(func(context.Context, []string) (k8s.Process, error) {
 		return deadProc{}, nil // exits before forwarding
 	})
@@ -997,7 +997,9 @@ func testDeployProvider(f *fakeCtl, rec *k8sRecorder) *Provider {
 	fakeClient := func(string) *controller.Client {
 		return controller.New(f.srv.URL, controller.WithHTTPClient(f.srv.Client()))
 	}
-	p.newClient = fakeClient
+	// The provider's factory takes controller options (it passes a reviving
+	// transport); ampstack's takes a bare URL. Same fake behind both.
+	p.newClient = func(u string, _ ...controller.Option) *controller.Client { return fakeClient(u) }
 	p.newApp = func(cfg ampstack.Config) *ampstack.App {
 		return ampstack.New(cfg).
 			WithKube(k8s.New(k8s.Config{Context: cfg.Context, Namespace: cfg.Namespace}).WithRunner(rec.run).WithStarter(rec.start)).

@@ -16,6 +16,7 @@ import (
 	"log"
 	mrand "math/rand"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -159,7 +160,7 @@ type Provider struct {
 	logf func(format string, args ...any)
 
 	// Injected in tests; defaults wired in New.
-	newClient     func(url string) *controller.Client
+	newClient     func(url string, opts ...controller.Option) *controller.Client
 	waitPG        func(ctx context.Context, ci pg.ConnInfo, timeout time.Duration) error
 	detectYB      func(ctx context.Context, ci pg.ConnInfo) string
 	detectProduct func(ctx context.Context, ci pg.ConnInfo) string
@@ -238,8 +239,35 @@ func (cc *controllerConn) get(ctx context.Context) (*controller.Client, string, 
 	}
 	cc.pf = pf
 	cc.url = "http://" + pf.LocalAddr()
-	cc.cl = p.newClient(cc.url)
+	// The client resolves the forward's address per request instead of pinning
+	// it, so a test already holding this client survives the forward dying under
+	// it. See revive.go.
+	cc.cl = p.newClient(cc.url, controller.WithHTTPClient(&http.Client{
+		Transport: &revivingTransport{host: cc.liveHost, logf: p.logf},
+	}))
 	return cc.cl, cc.url, nil
+}
+
+// liveHost is the forward's current "host:port". force re-establishes it first,
+// which is what a refused connection needs: kubectl port-forward does not
+// reconnect, so the dead one must be replaced before a retry can land.
+//
+// It takes the same lock get() does, so it must never be called from under it.
+func (cc *controllerConn) liveHost(force bool) (string, error) {
+	if force {
+		cc.reset()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), controllerReviveTimeout)
+	defer cancel()
+	_, rawURL, err := cc.get(ctx)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse controller url %q: %w", rawURL, err)
+	}
+	return u.Host, nil
 }
 
 // alive reports whether the shared controller forward is currently up (always
@@ -517,9 +545,14 @@ func (p *Provider) Close() error {
 	return firstErr
 }
 
-func defaultNewClient(url string) *controller.Client {
-	return controller.New(url)
+func defaultNewClient(url string, opts ...controller.Option) *controller.Client {
+	return controller.New(url, opts...)
 }
+
+// controllerReviveTimeout bounds re-establishing a dead forward. Short: the
+// caller is a request already in flight, and a forward that cannot come back in
+// this long is not coming back.
+const controllerReviveTimeout = 90 * time.Second
 
 func (p *Provider) log(format string, args ...any) {
 	if p.logf != nil {
@@ -622,7 +655,19 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 			Endpoint:  ep.ID,
 		},
 	}
+	env.ownCtrl = p.ownControllerConn()
 	return env, nil
+}
+
+// ownControllerConn returns a fresh per-environment controller connection, or nil
+// when the mode has no forward to own (a direct controller URL, or deploy mode
+// where the app owns the reach). Opened lazily on first use, so an Env that never
+// talks to the controller costs no kubectl process.
+func (p *Provider) ownControllerConn() *controllerConn {
+	if p.deploy || p.cfg.ControllerURL != "" || p.kube == nil {
+		return nil
+	}
+	return &controllerConn{p: p}
 }
 
 // Attach treats ref as a cluster id on the configured pool: it reads the cluster
@@ -702,6 +747,9 @@ func (p *Provider) Teardown(ctx context.Context, env core.Environment) error {
 	}
 	closeAll(e.pfs)
 	closeAll(e.takeExtraPFs())
+	if e.ownCtrl != nil {
+		e.ownCtrl.reset() // closes this Env's own controller forward
+	}
 	return firstErr
 }
 
@@ -1070,6 +1118,14 @@ type Env struct {
 	extraMu  sync.Mutex
 	extraPFs []*k8s.PortForward
 
+	// ownCtrl is THIS environment's controller forward, when the control plane is
+	// reached by kubectl. Per-environment rather than per-run so a dead forward,
+	// and the revival that replaces it, touch only the tests using this Env.
+	// Sharing one forward across a run means one test's recovery closes the port
+	// its neighbours are mid-request on, and they fail before recovering too.
+	// Nil in direct-URL and deploy modes, which have no forward of their own.
+	ownCtrl *controllerConn
+
 	// Memoized backing-storage access (see YBStorage). Resolving it may open a
 	// port-forward, so co-tenant tests must not each open their own; the result —
 	// including a failure — is computed once. Any forward is registered with
@@ -1106,6 +1162,10 @@ func (e *Env) takeExtraPFs() []*k8s.PortForward {
 // functional amp-feature flow ATTACH to this control plane instead of deploying its
 // own — one half of the ampControlPlane handle env/functional type-asserts for.
 func (e *Env) AmpController(ctx context.Context) (*controller.Client, error) {
+	if e.ownCtrl != nil {
+		cl, _, err := e.ownCtrl.get(ctx)
+		return cl, err
+	}
 	cl, _, err := e.prov.ctrl.get(ctx)
 	return cl, err
 }
