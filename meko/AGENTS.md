@@ -49,6 +49,7 @@ Meko is a polyglot monorepo. Each top-level directory is an independently-built 
 | `meko_ui/` | TypeScript (React 19 + Vite + Tailwind + Drizzle) + Node Express server | Web UI; Express server in `meko_ui/server/` proxies to `api_server`. |
 | `system_agent/` | Python (LangChain + mem0 + Streamlit) | Standalone agent + Streamlit playground; uses pgvector + BM25 over YugabyteDB. |
 | `docs/` | Hugo | Public documentation site. |
+| `deploy/helm/meko/` | Helm | One flat chart deploying the whole platform — every component above plus langfuse — toggled per component and rendered for EKS or GKE from the same templates via values presets. See `deploy/helm/meko/README.md`. |
 
 `ycp/` is **not** part of this tree — it is the shared control-plane surface between
 meko and amp and lives at the repository root. See the root `AGENTS.md`.
@@ -109,6 +110,23 @@ Per-component dev loops:
 
 # UI typecheck
 (cd meko_ui && npm run check)
+
+# Helm chart — needs the helm-unittest plugin
+# (helm plugin install https://github.com/helm-unittest/helm-unittest)
+helm unittest deploy/helm/meko
+```
+
+**Linting the chart needs a values preset.** It is preset-driven, so bare
+defaults trip an install-time guard (`ingress.tls.acmCertArn required for
+acm-arn mode`) and `helm lint` then reports a misleading YAML parse error
+against an unrelated template. Compose a cloud preset with an env preset, the
+mode preset last:
+
+```bash
+cd deploy/helm/meko
+helm lint . -f values-aws.yaml -f values-dev.yaml                     # EKS
+helm lint . -f values-gcp.yaml -f values-dev.yaml -f values-byoc.yaml # BYOC data plane
+helm lint . -f values-gcp.yaml -f values-dev.yaml -f values-ycp.yaml  # YCP control plane
 ```
 
 ## Lint

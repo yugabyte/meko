@@ -1,0 +1,22 @@
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") .Values.langfuse.lb.enabled }}
+{{- $c := .Values.langfuse }}
+# Internet-facing LoadBalancer for the langfuse UI. Per-cloud annotations
+# (AWS NLB / GKE LB) come from the cloud preset via langfuse.lb.annotations.
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-web-lb
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "langfuse-web-worker") | nindent 4 }}
+  annotations:
+    {{- include "meko.lbServiceAnnotations" (dict "root" $ "extra" $c.lb.annotations) | nindent 4 }}
+spec:
+  type: {{ $c.lb.type }}
+  selector:
+    {{- include "meko.selectorLabels" (dict "app" "langfuse-web-worker") | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+{{- end }}

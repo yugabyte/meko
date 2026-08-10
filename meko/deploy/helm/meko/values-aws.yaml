@@ -1,0 +1,52 @@
+# AWS (EKS) cloud preset. Sets ONLY cloud-specific concerns: ingress class +
+# ACM TLS, storage class, LoadBalancer annotations, GPU plugin mode. Registry
+# and env-specific values come from values-dev.yaml / values-prod.yaml.
+#
+# Compose:  -f values-aws.yaml -f values-<env>.yaml
+
+global:
+  cloud: aws
+  # gp2-csi, not the EKS Auto Mode `auto-ebs-sc` this used to name. Only
+  # controlPlaneDb (ycp mode) consumes a storage class today, and the one AWS
+  # cluster that runs YCP is meko-dev-eks, which offers gp2 and gp2-csi — so
+  # `auto-ebs-sc` produced a PVC stuck Pending and a `--set` on every deploy
+  # (issue #42). No data-plane render changes: nothing else in the chart claims a
+  # volume. If an EKS Auto Mode cluster ever needs `auto-ebs-sc` back, override it
+  # per release; a class that does not exist on the target now fails the install
+  # with the list of ones that do, instead of hanging.
+  storageClassName: gp2-csi
+  region: us-east-2
+
+ingress:
+  className: alb
+  tls:
+    mode: acm-arn
+    # acmCertArn is per-env (dev vs prod account) — set in values-<env>.yaml.
+
+apiServer:
+  # Optional api-server LoadBalancer. In `ycp` (control-plane) mode this is the
+  # fleet console / agent-API entry point — enable with apiServer.lb.enabled=true
+  # (values-ycp.yaml does) for an INTERNAL NLB reachable only inside the VPC.
+  lb:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+
+langfuse:
+  lb:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+
+ragAgent:
+  gpu:
+    # OFF to match current AWS behavior — the nvidia plugin is unwired today and
+    # the driver comes from gpu-operator (§6.3). Flip to true only for a node
+    # pool that truly needs a self-managed device plugin.
+    selfManagedPlugin: false
+    pluginNamespace: kube-system
+    nodeSelector:
+      node_type: gpu
+  text:
+    nodeSelector:
+      node_type: rag-worker

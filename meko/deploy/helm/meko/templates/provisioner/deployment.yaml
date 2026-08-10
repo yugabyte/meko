@@ -1,0 +1,85 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "provisioner")) "true") }}
+{{- $c := .Values.provisioner }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: meko-provisioner-controller-manager-metrics-service
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+    control-plane: controller-manager
+spec:
+  ports:
+  - name: https
+    port: {{ $c.metricsPort }}
+    protocol: TCP
+    targetPort: {{ $c.metricsPort }}
+  selector:
+    app.kubernetes.io/name: meko-provisioner
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-provisioner-controller-manager
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+    control-plane: controller-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: meko-provisioner
+      control-plane: controller-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        app.kubernetes.io/name: meko-provisioner
+        control-plane: controller-manager
+    spec:
+      {{- include "meko.imagePullSecrets" . }}
+      containers:
+      - args:
+        - --metrics-bind-address=:{{ $c.metricsPort }}
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        command:
+        - /manager
+        env:
+        - name: MCP_INGRESS_DOMAIN
+          value: {{ $c.mcpIngressDomain | quote }}
+        image: {{ include "meko.image" (dict "image" $c.image "global" $.Values.global) }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        ports: []
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          {{- toYaml $c.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts: []
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: meko-provisioner-controller-manager
+      terminationGracePeriodSeconds: 10
+      volumes: []
+{{- end }}

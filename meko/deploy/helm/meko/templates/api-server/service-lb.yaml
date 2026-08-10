@@ -1,0 +1,25 @@
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "apiServer")) "true") .Values.apiServer.lb.enabled }}
+{{- $c := .Values.apiServer }}
+# Optional LoadBalancer for the api-server. In `ycp` (control-plane) mode this
+# is the fleet console / agent-API entry point — use an INTERNAL LB (annotations
+# come from the cloud preset) so it is reachable only inside the Meko/Aeon VPC,
+# never the public internet. Off by default; the Ingress is the usual entrypoint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: meko-api-server-lb
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
+  annotations:
+    {{- include "meko.lbServiceAnnotations" (dict "root" $ "extra" $c.lb.annotations) | nindent 4 }}
+spec:
+  type: {{ $c.lb.type }}
+  selector:
+    {{- include "meko.selectorLabels" (dict "app" "meko-api-server") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $c.lb.port }}
+      targetPort: {{ $c.containerPort }}
+      protocol: TCP
+{{- end }}

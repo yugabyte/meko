@@ -1,0 +1,72 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+{{- $c := .Values.langfuse }}
+{{- $secret := $c.secrets.existing.langfuse }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-web-worker
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "langfuse-web-worker") | nindent 4 }}
+spec:
+  replicas: {{ $c.replicas }}
+  selector:
+    matchLabels:
+      {{- include "meko.selectorLabels" (dict "app" "langfuse-web-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meko.selectorLabels" (dict "app" "langfuse-web-worker") | nindent 8 }}
+      annotations:
+        {{- include "meko.configChecksum" (dict "root" $ "files" (list "langfuse/configmap.yaml")) | nindent 8 }}
+    spec:
+      {{- include "meko.imagePullSecrets" . }}
+      containers:
+        - name: langfuse-web
+          image: {{ include "meko.image" (dict "image" $c.web.image "global" $.Values.global) }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http-web
+          envFrom:
+            - configMapRef:
+                name: langfuse-config
+            - secretRef:
+                name: {{ $secret }}
+          readinessProbe:
+            httpGet:
+              path: /api/public/health
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/public/health
+              port: 3000
+            initialDelaySeconds: 40
+            periodSeconds: 20
+
+        - name: langfuse-worker
+          image: {{ include "meko.image" (dict "image" $c.worker.image "global" $.Values.global) }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3030
+              name: http-worker
+          envFrom:
+            - configMapRef:
+                name: langfuse-config
+            - secretRef:
+                name: {{ $secret }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3030
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3030
+            initialDelaySeconds: 40
+            periodSeconds: 20
+{{- end }}

@@ -1,0 +1,16 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+{{- $c := .Values.langfuse }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: langfuse-config
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "langfuse-web-worker") | nindent 4 }}
+data:
+  # §5: secret-bearing keys ({{ join ", " $c.secretKeys }}) are intentionally
+  # NOT here — they live in the langfuse-secrets Secret (see values.yaml).
+  {{- range $k, $v := $c.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+{{- end }}

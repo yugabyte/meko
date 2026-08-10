@@ -1,0 +1,18 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+{{- $c := .Values.langfuse }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-web
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "langfuse-web-worker") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "meko.selectorLabels" (dict "app" "langfuse-web-worker") | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+{{- end }}

@@ -1,0 +1,190 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true") }}
+{{- $c := .Values.mekoMcpServer }}
+{{- $s := $c.secrets.existing }}
+{{- $cm := "meko-mcp-server-config" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-mcp-server
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-mcp-server") | nindent 4 }}
+spec:
+  replicas: {{ $c.replicas }}
+  selector:
+    matchLabels:
+      {{- include "meko.selectorLabels" (dict "app" "meko-mcp-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meko.selectorLabels" (dict "app" "meko-mcp-server") | nindent 8 }}
+      annotations:
+        {{- include "meko.configChecksum" (dict "root" $ "files" (list "meko-mcp-server/configmap.yaml")) | nindent 8 }}
+    spec:
+      {{- include "meko.imagePullSecrets" . }}
+      # Image runs as uid 1000 (app); enforce non-root + drop privileges.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: meko-mcp
+          image: {{ include "meko.image" (dict "image" $c.image "global" $.Values.global) }}
+          env:
+            - name: YUGABYTEDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.yugabytedb }}
+                  key: password
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.openai }}
+                  key: password
+                  # Unset rather than unstartable: memory extraction fails where it
+                  # is called, instead of the whole MCP server never scheduling.
+                  optional: true
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: DB_HOST
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: DB_NAME
+            - name: SYSTEM_DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: SYSTEM_DB_HOST
+            - name: SYSTEM_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: SYSTEM_DB_NAME
+            - name: YB_MCP_TRANSPORT
+              value: {{ $c.staticEnv.transport | quote }}
+            - name: YB_LOG_LEVEL
+              value: {{ $c.staticEnv.logLevel | quote }}
+            - name: YB_ALLOWED_HOSTS
+              value: "all"
+            - name: YB_MCP_STATELESS_HTTP
+              value: "true"
+            - name: PASSWORD
+              value: "$(YUGABYTEDB_PASSWORD)"
+            - name: YUGABYTEDB_URL
+              value: "host=$(DB_HOST) port={{ $c.config.DB_PORT | default "5433" }} dbname=$(DB_NAME) user=yugabyte password=$(YUGABYTEDB_PASSWORD)"
+            - name: YUGABYTEDB_SYSTEM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.yugabytedb }}
+                  key: system_password
+            - name: YUGABYTEDB_SYSTEM_URL
+              value: "host=$(SYSTEM_DB_HOST) port={{ $c.config.SYSTEM_DB_PORT | default "5433" }} dbname=$(SYSTEM_DB_NAME) user=yugabyte password=$(YUGABYTEDB_SYSTEM_PASSWORD)"
+            - name: MCP_AUTH_PROVIDER
+              value: {{ $c.staticEnv.authProvider | quote }}
+{{- if eq $c.staticEnv.authProvider "cognito" }}
+            - name: COGNITO_AWS_REGION
+              value: {{ $c.staticEnv.cognitoAwsRegion | quote }}
+            - name: COGNITO_USER_POOL_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: COGNITO_USER_POOL_ID
+            - name: COGNITO_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: COGNITO_CLIENT_ID
+            {{- /*
+              NOT optional, unlike the api-server's. meko-mcp-server reads this with
+              os.environ[...] the moment it builds a cognito provider, so an absent
+              Secret is a KeyError in the first second of startup, not a degraded
+              feature. A deployment with no IdP sets authProvider: meko_tkn instead
+              of hoping a missing credential is tolerated.
+            */}}
+            - name: COGNITO_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.cognito }}
+                  key: password
+{{- end }}
+            - name: MEKO_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: MEKO_BASE_URL
+            - name: MCP_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: MCP_BASE_URL
+            - name: LANGFUSE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: LANGFUSE_HOST
+            - name: LLM_PROVIDER
+              value: "openai"
+            - name: LLM_MODEL
+              value: {{ $c.staticEnv.llmModel | quote }}
+            - name: EMBEDDER_PROVIDER
+              value: "openai"
+            - name: EMBEDDING_MODEL
+              value: "text-embedding-3-small"
+            - name: MEKO_TKN_AUTH_ENABLED
+              value: "true"
+            - name: MEKO_MCP_INTERNAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.mcpInternal }}
+                  key: secret-key
+            - name: HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: MEM0_HOST
+            - name: DBNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: MEM0_DB_NAME
+            - name: CONVERSATION_SEARCH_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: CONVERSATION_SEARCH_ENABLED
+            - name: MEKO_FREE_TIER_QUOTA_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: MEKO_FREE_TIER_QUOTA_ENABLED
+            - name: ENABLE_ASYNC_MEMORY_EXTRACTION
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ $cm }}
+                  key: ENABLE_ASYNC_MEMORY_EXTRACTION
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      restartPolicy: Always
+{{- end }}

@@ -1,0 +1,121 @@
+{{- if .Values.apiServer.enabled }}
+{{- $c := .Values.apiServer }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-api-server
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
+spec:
+  replicas: {{ $c.replicas }}
+  selector:
+    matchLabels:
+      {{- include "meko.selectorLabels" (dict "app" "meko-api-server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meko.selectorLabels" (dict "app" "meko-api-server") | nindent 8 }}
+      annotations:
+        {{- include "meko.configChecksum" (dict "root" $ "files" (list "api-server/configmap.yaml")) | nindent 8 }}
+    spec:
+      {{- include "meko.imagePullSecrets" . }}
+      serviceAccountName: meko-api-server
+      {{- if $c.migrate.enabled }}
+      # DB migration runs as an initContainer: blocks the main container until it
+      # succeeds, shares the ConfigMap/SA/Secrets, and works under `helm --wait`
+      # and Argo CD (no hook-ordering/readiness deadlock). Runs on each pod start;
+      # the migration tool is expected to be idempotent / concurrency-safe.
+      initContainers:
+        {{- if $c.migrate.ensureExtensions }}
+        {{- /* Create the database extensions the data-plane migrations depend on,
+               BEFORE migrate runs. Ordering matters more than it looks.
+
+               The first data migration does `INSERT INTO dist_rag.vector_indexes`
+               and calls `mag_catalog.create_graph`. Those schemas come from the
+               pg_dist_rag and mage extensions — present in the ybdb-meko-release
+               image, but not created in a fresh database. A migrate that starts
+               first does not merely fail: it fails PARTWAY, and golang-migrate then
+               marks the schema dirty, which no retry recovers from —
+
+                 Dirty database version 1. Fix and force version.
+
+               — so the pod crash-loops forever over a database that only needed one
+               statement. An init container rather than a Helm hook because hooks
+               cannot be ordered against another resource's init container; this one
+               is ordered by the pod itself.
+
+               It also doubles as the readiness gate for a cold database: YugabyteDB
+               plus the subchart's credentials hook takes over a minute, well past
+               migrate's own retry budget. */}}
+        - name: ensure-extensions
+          image: {{ $c.migrate.extensionsImage }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PGPASSWORD="$DB_PASSWORD"
+              until /home/yugabyte/bin/ysqlsh -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER_NAME" \
+                    -d "$DB_NAME" -tAc 'select 1' >/dev/null 2>&1; do
+                echo "waiting for ysql at $DB_HOST:$DB_PORT ..."
+                sleep 5
+              done
+              for ext in {{ $c.migrate.extensions | join " " }}; do
+                echo "creating extension $ext (if not present)"
+                /home/yugabyte/bin/ysqlsh -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER_NAME" \
+                  -d "$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS $ext"
+              done
+              echo "extensions ready"
+          env:
+            {{- include "meko.apiServer.env" $ | nindent 12 }}
+        {{- end }}
+        - name: migrate
+          image: {{ include "meko.image" (dict "image" $c.image "global" $.Values.global) }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          args:
+            {{- include "meko.apiServer.args" $ | nindent 12 }}
+            - "--deploy-env={{ $c.deployEnv }}"
+            - "--migrate-only"
+            {{- if eq $c.migrate.scope "datapack" }}
+            - "--only-data-migrate"
+            {{- else if eq $c.migrate.scope "system" }}
+            - "--only-system-migrate"
+            {{- else if eq $c.migrate.scope "controlplane" }}
+            # Fleet registry only. Unlike the system set this one is portable SQL,
+            # so a control plane can run on plain Postgres; the system sequence
+            # needs YugabyteDB (HASH primary keys, SPLIT INTO ... TABLETS).
+            - "--only-controlplane-migrate"
+            {{- end }}
+          env:
+            {{- include "meko.apiServer.env" $ | nindent 12 }}
+          resources:
+            {{- toYaml $c.migrate.resources | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: meko-api-server
+          image: {{ include "meko.image" (dict "image" $c.image "global" $.Values.global) }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          args:
+            {{- include "meko.apiServer.args" $ | nindent 12 }}
+            - "--deploy-env={{ $c.deployEnv }}"
+          env:
+            {{- include "meko.apiServer.env" $ | nindent 12 }}
+          ports:
+            - containerPort: {{ $c.containerPort }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: {{ $c.ingress.healthcheckPath }}
+              port: {{ $c.containerPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ $c.ingress.healthcheckPath }}
+              port: {{ $c.containerPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+{{- end }}

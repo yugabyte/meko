@@ -1,0 +1,155 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "provisioner")) "true") }}
+{{- $c := .Values.provisioner }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: meko-provisioner-controller-manager
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: meko-provisioner-leader-election-role
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-provisioner-manager-role
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "namespaces", "secrets", "services"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts/status"]
+  verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-provisioner-mekouseraccount-admin-role
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+rules:
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts"]
+  verbs: ["*"]
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts/status"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-provisioner-mekouseraccount-editor-role
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+rules:
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts/status"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-provisioner-mekouseraccount-viewer-role
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+rules:
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["saas.mekodata.ai"]
+  resources: ["mekouseraccounts/status"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-provisioner-metrics-auth-role
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-provisioner-metrics-reader
+rules:
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: meko-provisioner-leader-election-rolebinding
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: meko-provisioner-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: meko-provisioner-controller-manager
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-provisioner-manager-rolebinding
+  labels:
+    app.kubernetes.io/name: meko-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-provisioner-manager-role
+subjects:
+- kind: ServiceAccount
+  name: meko-provisioner-controller-manager
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-provisioner-metrics-auth-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-provisioner-metrics-auth-role
+subjects:
+- kind: ServiceAccount
+  name: meko-provisioner-controller-manager
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+{{- end }}

@@ -1,0 +1,105 @@
+# ============================================================================
+# MODE preset — YCP control plane (BYOC).
+#
+# Deploys the Yugabyte Control Plane: api-server run with --control-plane-mode
+# (the fleet registry + agent API from design/byoc-control-plane.md) plus its
+# console, exposed on an INTERNAL LoadBalancer. No data-plane components render
+# (meko-mcp-server / provisioner / meko-ui / inference-gateway / rag-agent /
+# langfuse are all suppressed by the mode, regardless of their `enabled` flags).
+#
+# This runs inside the Meko/Aeon VPC — NOT a customer cluster. Customer data
+# planes run the separate meko-agent chart, which reaches this control plane
+# over outbound HTTPS only.
+#
+# Compose with a cloud preset + an env preset, and pass THIS FILE LAST:
+#   helm upgrade --install ycp charts/meko -n ycp-system --create-namespace \
+#     -f charts/meko/values-aws.yaml -f charts/meko/values-dev.yaml \
+#     -f charts/meko/values-ycp.yaml \
+#     --set apiServer.namespace=ycp-system \
+#     --set controlPlaneDb.namespace=ycp-system \
+#     --set-string apiServer.image.tag=$VERSION
+#
+# Order matters, and this preset must win. Helm merges -f files left to right, and
+# the env presets set apiServer.migrate.scope and the SYSTEM_DB_/DB_ endpoints for
+# a data plane — a YugabyteDB on 5433 with sslmode=require. If this file is not
+# last, those overwrite the control-plane database wiring and the migrate scope,
+# and the release silently comes up pointed at the shared data-plane database with
+# the wrong migration set.
+#
+# Required Secrets (control-plane subset — no S3/OpenAI/langfuse/SES needed):
+#   meko-api-server-db, meko-api-server-system-db, meko-mcp-internal-secret,
+#   meko-admin-api-key (gates the fleet/console routes -- without it they 503),
+#   ycp-postgres (the bundled database's password — same value as the two DB
+#   Secrets above), and (if apiServer.cognito.enabled) meko-api-server-cognito.
+#
+# The chart can render all but the Cognito one from values instead of you creating
+# them by hand — controlPlaneSecrets in values.yaml, off by default. One dbPassword
+# reaches all three Secrets that have to agree on it. Read the block comment there
+# first: the values land in Helm release state, and Helm cannot adopt Secrets that
+# were created with kubectl.
+#
+# Pick a namespace of its own (-n ycp-system --set apiServer.namespace=ycp-system).
+# Do NOT install into a namespace that already runs the data plane: its
+# meko-api-server Deployment has the same name and Helm will refuse to adopt it.
+# ============================================================================
+
+mode: ycp
+
+# Bundled Postgres for the fleet registry, so the release does not borrow the data
+# plane's shared YugabyteDB. Works because control-plane migrations are portable
+# SQL. To use an external database, set enabled=false and point the SYSTEM_DB_*/DB_*
+# config below at it instead.
+controlPlaneDb:
+  enabled: true
+
+apiServer:
+  # Its own namespace, not meko-system. The data plane's api-server Deployment has
+  # the same name, so a shared namespace fails on Helm ownership — and forcing it
+  # would replace the live data plane. controlPlaneDb defaults to this namespace
+  # too, so setting it here covers both.
+  namespace: ycp-system
+  # A control plane authenticates operators with the admin shared secret, not an
+  # IdP. Leaving Cognito on would demand a meko-api-server-cognito Secret it never
+  # uses. Set true and supply that Secret if you do want a pool wired.
+  cognito:
+    enabled: false
+  # The control plane's console + fleet/agent API. Exposed on an internal LB
+  # (annotations come from the cloud preset). The public Ingress is not needed;
+  # disable it if you don't want a public api-server hostname.
+  lb:
+    enabled: true
+  # No public hostname for the control plane — reach it via the internal LB.
+  ingress:
+    enabled: false
+  # Create the fleet-registry tables on every pod start. `controlplane` scope is
+  # required here: the system/data sets need YugabyteDB, this one does not.
+  migrate:
+    enabled: true
+    scope: controlplane
+  # Point both DB handles at the bundled Postgres. api_server opens a data-plane
+  # and a system connection even in control-plane mode, so both are set; only the
+  # system one gets tables, and no data-plane route is served in this mode.
+  #
+  # Overrides the env preset's YugabyteDB endpoints (port 5433, sslmode=require) —
+  # this Postgres is 5432 with TLS off inside the cluster.
+  config:
+    DB_HOST: ycp-postgres
+    DB_PORT: "5432"
+    DB_USER_NAME: ycp
+    DB_NAME: ycp
+    DB_SSL_MODE: disable
+    SYSTEM_DB_HOST: ycp-postgres
+    SYSTEM_DB_PORT: "5432"
+    SYSTEM_DB_USER_NAME: ycp
+    SYSTEM_DB_NAME: ycp
+    SYSTEM_DB_SSL_MODE: disable
+
+# The data-plane components below are already suppressed by `mode: ycp`; setting
+# enabled=false as well makes the intent explicit and keeps `helm get values`
+# honest about what this release does NOT deploy.
+mekoUi: { enabled: false }
+mekoMcpServer: { enabled: false }
+inferenceGateway: { enabled: false }
+ragAgent: { enabled: false }
+langfuse: { enabled: false }
+provisioner: { enabled: false }

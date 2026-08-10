@@ -1,0 +1,15 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "ragAgent")) "true") }}
+{{- $c := .Values.ragAgent }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-agent-config
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: rag-agent
+    app.kubernetes.io/component: worker
+data:
+  {{- range $k, $v := $c.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+{{- end }}

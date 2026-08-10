@@ -1,0 +1,15 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") }}
+{{- $c := .Values.inferenceGateway }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inference-gateway-config
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: inference-gateway
+    app.kubernetes.io/part-of: meko
+data:
+  {{- range $k, $v := $c.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,23 @@
+{{- if .Values.createNamespaces }}
+{{- /* An agent release spans one namespace — its own, which Helm requires to exist
+       already — so there is nothing here for it to create. Without this it would try
+       to create a data plane's six namespaces in a customer's cluster. */}}
+{{- $nss := .Values.namespaces }}
+{{- if or (eq (include "meko.mode" .) "agent") .Values.global.singleNamespace }}{{ $nss = list }}{{ end }}
+{{- range $nss }}
+{{- /* The release namespace must already exist for Helm to run — never try to create it. */}}
+{{- if ne . $.Release.Namespace }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . }}
+  labels:
+    {{- include "meko.labels" $ | nindent 4 }}
+  annotations:
+    # Keep namespaces on `helm uninstall` — they may hold tenant data / other
+    # releases (valkey, YB). Removing them is a deliberate ops action.
+    helm.sh/resource-policy: keep
+{{- end }}
+{{- end }}
+{{- end }}

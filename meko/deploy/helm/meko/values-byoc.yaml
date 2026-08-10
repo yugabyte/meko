@@ -1,0 +1,159 @@
+# ============================================================================
+# MODE preset — a self-contained Meko data plane in ONE namespace.
+#
+# What the BYOC agent installs into the namespace it runs in: the full stack plus
+# its own YugabyteDB, with nothing outside that namespace and nothing to configure
+# by hand. This file is the difference between a working install and fifteen --set
+# flags, three of which are not guessable.
+#
+# Compose with a cloud preset and an env preset, and pass THIS FILE LAST:
+#   helm upgrade --install meko charts/meko -n <ns> \
+#     -f charts/meko/values-gcp.yaml -f charts/meko/values-dev.yaml \
+#     -f charts/meko/values-byoc.yaml \
+#     --set-string apiServer.image.tag=$TAG
+#
+# No storage class to pass, on purpose. The bundled database's volumes are the ONLY
+# PVCs in a BYOC release — controlPlaneDb, ragAgent and langfuse are all off — so
+# there is nothing for them to be consistent WITH, and in a customer's cluster we
+# cannot know the class names anyway. Its default class is both the right answer and
+# the only one we can rely on being appropriate there. `global.storageClassName`
+# from the cloud preset governs nothing here: it cannot reach a subchart's values
+# (Helm resolves values before rendering), which is what acceptClusterDefault below
+# acknowledges rather than pretends away.
+#
+# The chart does still refuse to install when the cluster has NO default class,
+# because then the PVCs sit Pending forever and the StatefulSet never becomes ready
+# with nothing saying why. To pin a class instead:
+#   --set yugabyte.storage.master.storageClass=<c> --set yugabyte.storage.tserver.storageClass=<c>
+#
+# The one thing this preset deliberately does NOT decide is image tags, which are
+# per-release.
+#
+# There is no `kubectl create secret` step. The chart renders the Secrets that
+# matter (dataPlaneSecrets, below) and reads the rest with optional=true, so an
+# unused credential costs its own feature instead of leaving a pod stuck in
+# CreateContainerConfigError. What you lose by supplying nothing:
+#   - no OpenAI key    -> no memory extraction and no RAG. Everything runs; Meko
+#                         remembers nothing. This is the one worth filling in.
+#   - no S3 creds      -> knowledge-base file uploads fail at upload time.
+#   - no Cognito       -> already off in this preset (apiServer.cognito.enabled).
+#   - no Rudderstack   -> no product analytics from the UI.
+# Override in a values file of your own, passed AFTER this one:
+#
+#   # my-values.yaml
+#   dataPlaneSecrets:
+#     openaiApiKey: sk-...
+#     mcpInternalSecret: <openssl rand -hex 24>
+#
+#   helm upgrade --install ... -f charts/meko/values-byoc.yaml -f my-values.yaml
+# ============================================================================
+
+global:
+  # One namespace: the only shape an agent can install, since it manages exactly the
+  # namespace it runs in.
+  singleNamespace: true
+
+yugabyte:
+  # Its own database. Requires the Meko build and the mage gflag — see values.yaml.
+  enabled: true
+  storage:
+    # Use whatever this cluster puts volumes on. See the header: these are the only
+    # PVCs in the release, and a customer's class names are not ours to guess. The
+    # guard still fails the install if the cluster has no default class at all.
+    acceptClusterDefault: true
+
+dataPlaneSecrets:
+  enabled: true
+  # The well-known password, on purpose. The bundled YugabyteDB runs with YSQL auth
+  # off, so this guards nothing — it exists because api_server and meko-mcp-server
+  # both insist on reading *a* password, from three Secrets, under two key names.
+  # Writing them from one value is what removes the "these must all match" step.
+  #
+  # To actually authenticate: set a real password here and add
+  #   yugabyte:
+  #     authCredentials: { ysql: { passwordSecretName: yugabytedb-credentials } }
+  # which points the database's own credential job at the same Secret. Do it on a
+  # fresh namespace — the PVC outlives the release, and a database keeps the
+  # password it was initialised with.
+  dbPassword: yugabyte
+  # No key, no memory. Left empty because a chart cannot invent one, and because the
+  # refs that read it are optional — the stack starts and extraction fails at the
+  # point of use, which says so in the logs. See the header for how to supply it.
+  openaiApiKey: ""
+  # Shared between api_server and meko-mcp-server, and NOT optional at either ref:
+  # empty here means the api-server never starts. Hence a default rather than "".
+  # It is a real credential — the machine-to-machine validate endpoint — so replace
+  # it in your own values file for anything reachable beyond this namespace:
+  #   --set dataPlaneSecrets.mcpInternalSecret=$(openssl rand -hex 24)
+  mcpInternalSecret: meko-byoc-internal
+
+apiServer:
+  migrate:
+    # Create pg_dist_rag / mage / vector before migrating. Without this the first
+    # data migration dies partway on `dist_rag.vector_indexes`, and golang-migrate
+    # then marks the schema dirty — which no restart recovers from.
+    ensureExtensions: true
+  cognito:
+    # No IdP in a BYOC bring-up. api_server then treats every request as its dev
+    # account, which is fine for an environment nobody else can reach and NOT fine
+    # as a permanent answer — a real deployment wires an IdP here.
+    enabled: false
+  ingress:
+    # Reached by port-forward or whatever the operator puts in front. An Ingress
+    # would need a hostname and a certificate this chart has no way to know.
+    enabled: false
+  config:
+    # Emptied on purpose: the chart fills these with the bundled database's Service
+    # when yugabyte.enabled, which a values file cannot express (it needs the release
+    # namespace). The env presets point them at a shared YugabyteDB; this unsets that.
+    DB_HOST: ""
+    SYSTEM_DB_HOST: ""
+    # One database holding both the data-plane schemas and meko_system. api_server
+    # supports the colocated layout, and a fresh YugabyteDB has no meko_system
+    # database for the split one to use.
+    DB_NAME: yugabyte
+    SYSTEM_DB_NAME: yugabyte
+    # In-namespace traffic to a database this release owns.
+    DB_SSL_MODE: disable
+    SYSTEM_DB_SSL_MODE: disable
+
+mekoMcpServer:
+  config:
+    # Emptied for the same reason as the api-server's: the env preset points these
+    # at the SHARED dev YugabyteDB, and the chart refills them with this release's
+    # own database. Left as the preset had them, the api-server reads the database
+    # beside it while the MCP server reads a cluster in another namespace — both
+    # green, one of them serving someone else's data.
+    DB_HOST: ""
+    SYSTEM_DB_HOST: ""
+    # One colocated database, matching apiServer.config above: a fresh YugabyteDB has
+    # no separate meko_system database to point the system connection at.
+    DB_NAME: yugabyte
+    SYSTEM_DB_NAME: yugabyte
+  staticEnv:
+    # No Cognito pool in a BYOC data plane, matching apiServer.cognito.enabled=false
+    # above. PAT-only: callers present `mko_tkn_*` tokens this Meko issued. Left on
+    # `cognito` the MCP server reads COGNITO_CLIENT_SECRET at startup and exits with
+    # a KeyError, so this is not optional dressing — it is what makes the component
+    # start without an IdP.
+    authProvider: meko_tkn
+
+mekoUi:
+  ingress:
+    enabled: false
+
+# Off until each has a BYOC story of its own:
+#   langfuse — v3 needs ClickHouse, Redis and object storage beside it;
+#   ragAgent — wants GPU nodes and an S3 bucket;
+#   inferenceGateway — needs an LLM provider configured;
+#   provisioner — manages per-tenant namespaces, which is the opposite of one namespace.
+inferenceGateway: { enabled: false }
+ragAgent: { enabled: false }
+langfuse: { enabled: false }
+provisioner: { enabled: false }
+
+# The refresher keeps the ECR pull Secret alive (tokens last ~12h) but needs AWS
+# credentials of its own. Off by default here; turn it on with
+# ecrCredentialRefresh.awsCredentialsSecret or awsRoleArn set.
+ecrCredentialRefresh:
+  enabled: false

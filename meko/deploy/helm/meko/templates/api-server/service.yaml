@@ -1,0 +1,32 @@
+{{- if .Values.apiServer.enabled }}
+{{- $c := .Values.apiServer }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: meko-api-server-service
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
+{{- /* Why this hook exists: exposing the control-plane console on a tailnet means
+       annotating a Service for the Tailscale operator. Without it the only options
+       were editing this Helm-managed object by hand — reverted on the next upgrade
+       — or maintaining a second, unmanaged Service alongside it.
+
+       Values are quoted rather than passed through toYaml: annotation values must
+       be strings, and `--set …/expose=true` yields a bool that the API server
+       rejects with "cannot unmarshal bool into string". */}}
+  {{- with $c.service.annotations }}
+  annotations:
+    {{- range $k, $v := . }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "meko.selectorLabels" (dict "app" "meko-api-server") | nindent 4 }}
+  ports:
+    - port: {{ $c.service.port }}
+      targetPort: {{ $c.service.targetPort }}
+      protocol: TCP
+{{- end }}

@@ -1,0 +1,792 @@
+# ============================================================================
+# meko chart — canonical values schema with cloud-neutral safe defaults.
+#
+# Compose at install time: a cloud preset + an env preset, e.g.
+#   helm upgrade --install meko charts/meko -n meko-system --create-namespace \
+#     -f charts/meko/values-aws.yaml -f charts/meko/values-prod.yaml \
+#     --set-string apiServer.image.tag=$VERSION
+#
+# Cloud presets (values-aws.yaml / values-gcp.yaml) set only global.*, ingress.*,
+# langfuse.lb.annotations, ragAgent.gpu.*, and registry paths. Env presets
+# (values-dev.yaml / values-prod.yaml) set hosts, Cognito IDs, DB endpoints,
+# tags, replicas, SES. This base file is cloud-neutral: it must never encode
+# an AWS-only or GCP-only default.
+# ============================================================================
+
+# Deploy mode — selects which component set this release stands up:
+#   mcp   (default) DATA PLANE: the full Meko stack (unchanged behavior) —
+#         api-server + meko-mcp-server + provisioner + meko-ui + inference-gateway
+#         + rag-agent + langfuse. This is what every existing install deploys.
+#   ycp  CONTROL PLANE (BYOC / YCP): api-server run with --control-plane-mode
+#         (the fleet registry + agent API) plus its console, exposed via an
+#         internal LoadBalancer. No data-plane components render. Deployed inside
+#         the Meko/Aeon VPC, not a customer cluster.
+# Compose with the matching preset, e.g. -f values-gcp.yaml -f values-ycp.yaml.
+mode: mcp
+
+global:
+  # e.g. 161908593886.dkr.ecr.us-east-2.amazonaws.com (AWS)
+  #      us-east1-docker.pkg.dev/<project> (GCP)
+  imageRegistry: ""
+  # gp2-csi (AWS) / pd-ssd (GCP) — set by the cloud preset. Only controlPlaneDb
+  # (ycp mode) claims a volume today. A class the target cluster does not have
+  # fails the install rather than leaving a PVC Pending forever.
+  storageClassName: ""
+  # aws | gcp — selects preset defaults in helpers/NOTES
+  cloud: aws
+  region: us-east-2
+  imagePullPolicy: Always
+  # Collapse every component into the RELEASE namespace, ignoring the per-component
+  # `namespace` values below. What a BYOC data plane needs: one namespace an operator
+  # can grant, inspect and delete as a unit — and the only shape the pull agent can
+  # install, since it manages exactly the namespace it runs in. Off keeps the
+  # historical split (meko-system / meko-mcp / meko-rag-workers / meko-langfuse) and
+  # renders byte-identically to before this existed.
+  singleNamespace: false
+  # Names of dockerconfigjson Secrets for pulling images. Empty on EKS (node IAM
+  # authorizes ECR). On GKE pulling from ECR, set to a Secret holding ECR creds
+  # that exists in EVERY namespace the chart deploys into (see values-gcp.yaml).
+  imagePullSecrets: []
+
+# Create the namespaces the chart spans. Default false: the GKE/ECR flow needs
+# the namespaces to already exist (you create the ECR pull Secret in each before
+# `helm install`), and pre-creating them while this is true causes Helm ownership
+# conflicts. Set true only for a fresh cluster where nothing is pre-created and
+# no cross-namespace Secrets are needed beforehand.
+createNamespaces: false
+namespaces:
+  - meko-system
+  - meko-tenants
+  - meko-mcp
+  - meko-rag-workers
+  - meko-langfuse
+  - meko-ingress
+
+# ECR image-pull credential refresh (for the GKE-from-ECR path). ECR auth tokens
+# expire ~12h, so a static dockerconfigjson pull Secret goes stale; this CronJob
+# re-mints global.imagePullSecrets in each namespace on a schedule. Disabled by
+# default (EKS uses node IAM); enable it in values-gcp.yaml.
+ecrCredentialRefresh:
+  enabled: false
+  namespace: meko-system         # where the CronJob + its RBAC live
+  schedule: "0 */6 * * *"        # every 6h (< 12h token TTL, with margin)
+  image: alpine/k8s:1.30.2       # public multi-tool image (aws-cli + kubectl)
+  region: ""                     # defaults to global.region
+  ecrServer: ""                  # defaults to global.imageRegistry
+  secretName: ecr-registry-creds # must match global.imagePullSecrets
+  namespaces: []                 # target namespaces; defaults to .Values.namespaces
+  serviceAccountName: ecr-token-refresher
+  # Referenced Secret (created out-of-band) holding the AWS creds the refresher
+  # uses to call `aws ecr get-login-password`. Keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY.
+  # Clear this (set "") when using Workload Identity (awsRoleArn) instead.
+  awsCredentialsSecret: aws-ecr-refresher-creds
+  # GKE->AWS Workload Identity (no static key): set to an IAM role ARN and the
+  # CronJob assumes it via a projected SA token (audience sts.amazonaws.com).
+  # See README. When set, also clear awsCredentialsSecret.
+  awsRoleArn: ""
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+
+ingress:
+  className: alb                 # alb | nginx | gce
+  tls:
+    mode: acm-arn                # acm-arn | cert-manager | managed-cert
+    acmCertArn: ""               # AWS only (acm-arn mode)
+    clusterIssuer: ""            # cert-manager only
+  # Extra annotations, merged AFTER the per-cloud base emitted by the
+  # meko.ingressAnnotations helper.
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# api-server
+# ---------------------------------------------------------------------------
+apiServer:
+  enabled: true
+  namespace: meko-system
+  tenantsNamespace: meko-tenants
+  # Standardized on saas.mekodata.ai (the real CRD group). Base/prod historically
+  # drifted to cloud.mekodata.ai — see HELM_MIGRATION_PLAN.md §6.6 (behavior fix).
+  crdApiGroup: saas.mekodata.ai
+  replicas: 3
+  image:
+    repository: meko/meko-api-server
+    tag: ""                      # REQUIRED at deploy time (per-env)
+  service:
+    port: 80
+    targetPort: 25433
+    # Annotations on the ClusterIP Service. Mainly for operators that expose a
+    # Service by watching for their own annotations — e.g. Tailscale:
+    #   annotations:
+    #     tailscale.com/expose: "true"
+    #     tailscale.com/hostname: "ycp"
+    #     tailscale.com/tags: "tag:k8s-meko"
+    annotations: {}
+  containerPort: 25433
+  # Serve the whole api-server under a URL prefix instead of the domain root:
+  # console, /api/v1, the agent API, swagger, the OAuth2 callback. Empty (the
+  # default) keeps everything at the root — set it only when a proxy in front
+  # forwards the prefix through UNSTRIPPED. That is how YCP is fronted at
+  # https://devcloud.yugabyte.com/ycp/, sharing the YBM domain so the browser's
+  # auth tokens and session storage carry over.
+  #
+  # A plain path prefix, not a URL: the api-server refuses to start on anything
+  # else rather than mounting where nothing can reach it. Needs an image built
+  # with --base-path support; older images ignore the env var and serve at the
+  # root, so setting this against one silently does nothing.
+  #
+  # The probes below stay on the unprefixed healthcheckPath on purpose — the
+  # api-server keeps /api/v1/health at the domain root precisely because kubelet
+  # reaches the pod directly and never passes through the proxy.
+  basePath: ""
+  # ycp mode only — what a newly registered environment is told to run, so an
+  # enrolling agent brings Meko up instead of idling until someone commands it.
+  # The control plane seeds a `database` (which has a working default) at
+  # registration; an `mcp-server` is seeded only when mcpImage is set here,
+  # because it is a private image with no tag worth guessing.
+  #
+  # imagePullSecret and secretRef are names of Secrets that must exist in the
+  # AGENT's namespace, in whatever cluster that is — desired state references
+  # Secrets by name and never carries secret material. On GKE that pull secret is
+  # the same `ecr-registry-creds` the rest of the chart uses.
+  #
+  # An operator can still override the seed per environment (`"desired": [...]` on
+  # POST /environments) or replace it at any time; noBootstrapDefaults turns
+  # seeding off fleet-wide.
+  dataplane:
+    mcpImage: ""
+    imagePullSecret: ""
+    secretRef: ""
+    noBootstrapDefaults: false
+  ingress:
+    enabled: true                # public Ingress; set false in ycp mode (internal LB only)
+    host: api.mekodata.ai
+    healthcheckPath: /api/v1/health
+    gke:                         # GKE-native (className=gce, tls.mode=managed-cert)
+      managedCert: ""            # ManagedCertificate name to create for host
+      preSharedCert: ""          # or a pre-uploaded Google cert (wildcard hosts)
+      staticIp: ""               # optional GKE global static IP name
+  # Cognito auth. Default on (AWS parity). Set enabled=false to bring the service
+  # up WITHOUT any Cognito wiring — drops the cognito args, env, and secret
+  # reference so no cognito Secret is required. Login/authenticated features stay
+  # off until a real IdP is wired (a Cognito pool, or generic OIDC once the
+  # api-server supports it).
+  cognito:
+    enabled: true
+  # Optional LoadBalancer Service for the api-server (alternative to the Ingress).
+  # In `ycp` (control-plane) mode this is the fleet console / agent-API entry
+  # point — set lb.enabled=true and use an INTERNAL LB (annotations come from the
+  # cloud preset) so it is reachable only inside the Meko/Aeon VPC.
+  lb:
+    enabled: false
+    type: LoadBalancer
+    port: 80
+    annotations: {}
+  # --deploy-env value
+  deployEnv: dev
+  ses:
+    fromAddress: ""
+    region: us-east-2
+  # Non-secret config -> ConfigMap meko-api-server-config
+  config:
+    DB_HOST: ""
+    DB_PORT: "5433"
+    DB_USER_NAME: yugabyte
+    DB_NAME: ""
+    DB_SSL_MODE: require
+    SYSTEM_DB_HOST: ""
+    SYSTEM_DB_PORT: "5433"
+    SYSTEM_DB_USER_NAME: yugabyte
+    SYSTEM_DB_NAME: meko_system
+    SYSTEM_DB_SSL_MODE: require
+    COGNITO_REGION: us-east-2
+    COGNITO_POOL_ID: ""
+    COGNITO_CLIENT_ID: ""
+    COGNITO_DOMAIN: ""
+    S3_BUCKET: ""
+    S3_REGION: us-east-2
+    LANGFUSE_HOST: ""
+    LANGFUSE_DB_HOST: ""
+    LANGFUSE_DB_SSL_MODE: require
+  # Hardcoded flags from the base deployment, surfaced so they can change without
+  # editing templates. Values mirror kustomize/api-server/base/deployment.yaml.
+  staticArgs:
+    crdNamespace: meko-tenants
+    langfuseAdminApiKey: meko-local-admin-key
+    s3AuthMode: iam-user
+    openaiLlmModel: gpt-4.1-nano-2025-04-14
+    openaiEmbeddingModel: text-embedding-3-small
+    langfuseDbPort: "5433"
+    langfuseDbUser: yugabyte
+    langfuseDbName: langfuse
+  resources:
+    requests: { cpu: "1", memory: 1Gi }
+    limits: { cpu: "2", memory: 2Gi }
+  # References to pre-created Secrets (no secret material lives in the chart).
+  # Create these Secrets in the target cluster out-of-band; keys per §5 inventory.
+  # The top-level `controlPlaneSecrets` block can render the ycp-mode subset of
+  # them for you instead of you creating them by hand.
+  secrets:
+    existing:
+      cognito: meko-api-server-cognito
+      db: meko-api-server-db
+      s3: meko-api-server-s3
+      llm: meko-api-server-llm
+      systemDb: meko-api-server-system-db
+      mcpInternal: meko-mcp-internal-secret
+      # ycp mode only. Gates the fleet/console routes (X-Meko-Admin-Secret); with
+      # no secret those routes return 503, so the console is unusable. Key:
+      # admin-api-key.
+      adminApiKey: meko-admin-api-key
+  migrate:
+    # Create the extensions the data-plane migrations depend on before migrating.
+    # Needed wherever the database is fresh — a BYOC data plane the agent brings up —
+    # and harmless where they already exist (CREATE EXTENSION IF NOT EXISTS). Off by
+    # default: an existing shared YugabyteDB had these created when it was provisioned.
+    ensureExtensions: false
+    # pg_dist_rag provides dist_rag.vector_indexes; mage provides mag_catalog (the
+    # multi-tenant Apache-AGE graph catalog); vector is pgvector. All three ship in
+    # the ybdb-meko-release image and none are created by default.
+    extensions: [vector, pg_dist_rag, mage]
+    # Image with ysqlsh in it — the database's own image is the reliable place to
+    # find a client that matches the server.
+    extensionsImage: 161908593886.dkr.ecr.us-east-2.amazonaws.com/yugabyte-db/ybdb-meko-release:2026.1.0.0-b1-meko-2
+    enabled: false               # runs the DB migration as an initContainer on the Deployment
+    # all | datapack | system | controlplane
+    #
+    # controlplane runs only the YCP fleet-registry set. It is the scope to use in
+    # `ycp` mode: the other sets need YugabyteDB (HASH primary keys, SPLIT INTO
+    # ... TABLETS), while this one is portable SQL and runs on plain Postgres. It
+    # is also idempotent over a YugabyteDB that already applied system/000008.
+    scope: all
+    resources:
+      requests: { cpu: 500m, memory: 512Mi }
+      limits: { cpu: "1", memory: 1Gi }
+
+# ---------------------------------------------------------------------------
+# controlPlaneDb — a small Postgres holding the YCP fleet registry, so a
+# control-plane release is self-contained rather than borrowing the data plane's
+# shared YugabyteDB. Control-plane-mode only: suppressed in `mcp` mode, and OFF by
+# default so the data-plane stack is unchanged. values-ycp.yaml turns it on.
+#
+# Postgres rather than YugabyteDB because control-plane mode runs the portable
+# `migrations/controlplane` set. To use an external database instead, leave this
+# disabled and set apiServer.config SYSTEM_DB_*/DB_* to point at it.
+# ---------------------------------------------------------------------------
+controlPlaneDb:
+  enabled: false
+  name: ycp-postgres
+  namespace: ""                  # defaults to apiServer.namespace
+  image: postgres:16-alpine      # public image; no registry credentials needed
+  auth:
+    user: ycp
+    database: ycp
+    # Password comes from a pre-created Secret — no credential material in the
+    # chart. Create it alongside the api-server DB Secrets, e.g.
+    #   kubectl -n <ns> create secret generic ycp-postgres \
+    #     --from-literal=password="$(openssl rand -hex 16)"
+    # The same value must appear in the api-server db/systemDb Secrets, since
+    # api_server reads its password from those.
+    existingSecret: ycp-postgres
+    passwordKey: password
+  storage:
+    size: 8Gi
+    # Defaults to global.storageClassName from the cloud preset. Override when the
+    # target cluster does not have that class — e.g. meko-dev-eks offers gp2 and
+    # gp2-csi, not the values-aws.yaml default, and a PVC naming a missing class
+    # stays Pending forever with no obvious error on the StatefulSet.
+    storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+# ---------------------------------------------------------------------------
+# yugabyte — the data-plane database, as the upstream YugabyteDB subchart.
+#
+# Required for a self-contained BYOC data plane: the data plane's system migrations
+# are YB-only DDL (SPLIT INTO … TABLETS, HASH primary keys), so api_server cannot
+# migrate against Postgres at all. The upstream chart rather than a StatefulSet of
+# our own — it is what YB operators already know how to tune, back up and upgrade,
+# and reimplementing it would be a second implementation of somebody else's product.
+#
+# Off by default: every deployment today points at a YugabyteDB someone else runs.
+# The values below are only read when it is on (Chart.yaml `condition`).
+#
+# The defaults here are a SINGLE NODE — replication factor 1, one master, one
+# tserver. That is right for a BYOC environment being brought up by an agent and
+# wrong for anything holding data you care about: no replication, no fault
+# tolerance. Raise `replicas` and give it real storage for that.
+# ---------------------------------------------------------------------------
+yugabyte:
+  enabled: false
+  # NOT the public yugabytedb/yugabyte image.
+  #
+  # The data plane's migrations use YugabyteDB features that only the Meko build
+  # ships — `dist_rag.vector_indexes` (the distributed-RAG vector index catalog) and
+  # `mag_catalog` (the multi-tenant Apache-AGE graph catalog mem0 builds on). Against
+  # stock YugabyteDB the very first data migration dies with
+  #
+  #   relation "dist_rag.vector_indexes" does not exist
+  #
+  # so a vanilla image cannot host Meko at all, however healthy the database looks.
+  # This is the same build the shared dev data plane runs.
+  Image:
+    repository: 161908593886.dkr.ecr.us-east-2.amazonaws.com/yugabyte-db/ybdb-meko-release
+    tag: 2026.1.0.0-b1-meko-2
+    pullPolicy: IfNotPresent
+    # Private registry: set to a dockerconfigjson Secret in the release namespace
+    # (the same ecr-registry-creds the rest of the chart uses on GKE).
+    pullSecretName: ""
+  # Without ysql_yb_enable_mage the `mage` extension is present on disk and still
+  # refuses to install — `CREATE EXTENSION mage` answers "extension is not available"
+  # — and the data-plane migration then dies on mag_catalog.create_graph(). It is a
+  # server gflag, so it cannot be fixed from the client side afterwards. This is the
+  # same flag the shared dev universe runs with.
+  gflags:
+    tserver:
+      ysql_yb_enable_mage: "true"
+  replicas:
+    master: 1
+    tserver: 1
+    totalMasters: 1
+  # A LoadBalancer per service is the upstream default and wrong here: nothing
+  # outside the namespace talks to this database, and on GKE each one costs an IP
+  # and several minutes of provisioning.
+  enableLoadBalancer: false
+  storage:
+    # storageClass is NOT set here and cannot be defaulted from
+    # global.storageClassName: Helm resolves values before rendering, so a parent
+    # cannot compute a subchart's. Pass it at install time alongside the global one
+    # (see values-byoc.yaml's header) or the database lands on the cluster's default
+    # class while everything else lands where you asked —
+    # templates/yugabyte-storage-guard.yaml refuses that rather than letting it hide.
+    #
+    # Set this instead to accept the cluster default on purpose. Required on any
+    # database whose volumes already exist: volumeClaimTemplates are immutable, so
+    # naming a class after the fact fails the upgrade outright.
+    acceptClusterDefault: false
+    master:
+      count: 1
+      size: 10Gi
+    tserver:
+      count: 1
+      size: 20Gi
+  resource:
+    master:
+      requests: { cpu: "0.5", memory: 1Gi }
+      limits: { cpu: "1", memory: 2Gi }
+    tserver:
+      requests: { cpu: "0.5", memory: 2Gi }
+      limits: { cpu: "2", memory: 4Gi }
+
+# ---------------------------------------------------------------------------
+# controlPlaneSecrets — render the ycp-mode Secrets from values instead of
+# creating them by hand (issue #42, item 7).
+#
+# A control-plane install needs four Secrets, five with the bundled Postgres, and
+# creating them by hand is both the longest step in the runbook and the easiest to
+# get wrong: the SAME database password has to appear in three separate Secrets,
+# and a mismatch shows up as an api-server that starts, passes its probes, and
+# fails every query. Set one value here and the chart fans it out.
+#
+# OFF by default, deliberately. Two consequences to accept before enabling it:
+#
+#   1. Whatever you pass lands in Helm release state (the release Secret in the
+#      namespace, and `helm get values <release>`). That is fine for a dev or
+#      demo control plane and a judgement call for anything else — an external
+#      secret manager, or the by-hand path, keeps credentials out of it.
+#   2. Helm refuses to adopt objects it did not create. Enabling this on a release
+#      whose Secrets were made with `kubectl create secret` fails with "invalid
+#      ownership metadata"; delete those Secrets first (the DB one only when the
+#      database's own password can be reset, i.e. before the volume exists).
+#
+# Only the entries you fill in are rendered, so partial adoption works: supply
+# just adminApiKey and keep the DB Secrets out-of-band, for instance.
+#
+# Nothing is auto-generated. A chart that generated a password would have to read
+# it back with `lookup` on every upgrade, and `lookup` returns nothing under
+# `helm template` or a client dry-run — so the generated value silently rotates
+# and locks you out of your own database. Generate at the call site instead, where
+# the value is visible and can be saved:
+#   --set controlPlaneSecrets.adminApiKey=$(openssl rand -hex 24)
+#
+# One reinstall hazard, for the same reason: the bundled Postgres' PVC outlives both
+# the release and this Secret, and Postgres keeps the password it was initialised
+# with. Reinstalling into a namespace whose PVC survived, with a NEW dbPassword,
+# gives a healthy-looking database that rejects every connection. Reuse the password
+# or delete the PVC.
+# ---------------------------------------------------------------------------
+controlPlaneSecrets:
+  enabled: false
+  # Fans out to apiServer.secrets.existing.db and .systemDb (key `db-password`),
+  # and to controlPlaneDb.auth.existingSecret (key `password`) when the bundled
+  # Postgres is enabled. One value, so they cannot disagree.
+  dbPassword: ""
+  # Gates the fleet/console routes. Losing it means no console: it cannot be
+  # recovered from the chart, only replaced.
+  adminApiKey: ""
+  # api_server's internal machine-to-machine validate endpoint.
+  mcpInternalSecret: ""
+
+# ---------------------------------------------------------------------------
+# dataPlaneSecrets — the same idea for a data plane, and the reason a BYOC
+# install needs no `kubectl create secret` at all.
+#
+# The by-hand version is worse here than on the control plane: the SAME database
+# password has to appear in THREE Secrets under two different key names
+# (`db-password` twice, then `password` and `system_password`), and it also has to
+# match whatever the database was initialised with. Set dbPassword once and the
+# chart writes all of them — and because `yugabyte.enabled` means this release
+# installs the database too, both sides of that match come from this one value.
+#
+# What you can leave empty:
+#   - openaiApiKey — memory extraction and RAG stop working; nothing fails to start,
+#     because those refs are optional. Fill it in to get a Meko that remembers.
+#   - mcpInternalSecret — needed by api_server and meko-mcp-server, and deliberately
+#     NOT optional at the ref: an absent internal secret is a data plane whose two
+#     halves silently reject each other, which is worse than a pod that won't start.
+#   - the four this block does not cover — cognito-client-secret, meko-api-server-s3,
+#     meko-ui-secret and openai-credentials are read with optional=true, so a missing
+#     one costs its feature (auth, uploads, analytics) and nothing else.
+#
+# Same no-generation rule as controlPlaneSecrets, for the same reason: `lookup` is
+# empty under `helm template`, so a chart-generated password rotates itself out of
+# its own database. values-byoc.yaml sets dbPassword to the well-known `yugabyte`
+# instead — the bundled database ships with YSQL auth off, so it guards nothing.
+# Turning auth on means a real password here AND
+# `yugabyte.authCredentials.ysql.passwordSecretName: yugabytedb-credentials`, which
+# points the subchart's credential job at the very Secret this renders (key
+# `ysqlPassword`): one value, both sides, no way to disagree.
+#
+# Reinstall hazard, unchanged from the control plane's: the database's PVC outlives
+# the release. A new dbPassword against a surviving volume, with auth on, is a
+# healthy-looking database that rejects every connection.
+# ---------------------------------------------------------------------------
+dataPlaneSecrets:
+  enabled: false
+  # Fans out to apiServer.secrets.existing.db and .systemDb (key `db-password`) and
+  # to mekoMcpServer.secrets.existing.yugabytedb (keys `password`, `system_password`,
+  # plus `ysqlPassword` for the YugabyteDB subchart).
+  dbPassword: ""
+  # apiServer.secrets.existing.llm (key `openai-api-key`) and
+  # mekoMcpServer.secrets.existing.openai (key `password`).
+  openaiApiKey: ""
+  # Shared between api_server and meko-mcp-server. Both must see the same value.
+  mcpInternalSecret: ""
+
+# ---------------------------------------------------------------------------
+# meko-ui
+# ---------------------------------------------------------------------------
+mekoUi:
+  enabled: true
+  namespace: meko-system
+  replicas: 1
+  image:
+    repository: meko/meko-ui
+    tag: ""                      # REQUIRED every env (§6.5 — no implicit base tag)
+  proxyImage: nginx:1.27-alpine
+  # UI container resources (configurable; lower these for dev). Default matches
+  # the original manifest.
+  resources:
+    requests: { cpu: "2", memory: "4Gi" }
+    limits: { cpu: "2", memory: "4Gi" }
+  # nginx proxy sidecar resources (configurable; the default is generous —
+  # lower it for smaller clusters).
+  proxyResources:
+    requests: { cpu: "1", memory: "2Gi" }
+    limits: { cpu: "2", memory: "4Gi" }
+  ingress:
+    host: cloud.mekodata.ai
+    healthcheckPath: /
+    acmCertArn: ""               # per-component override; falls back to global
+    gke:
+      managedCert: ""
+      preSharedCert: ""
+      staticIp: ""
+  # Optional LoadBalancer Service for the UI (alternative to the Ingress —
+  # handy for an internal LB reachable inside the VPC without an ingress/cert).
+  # Per-cloud internal-vs-external annotations come from the cloud preset.
+  lb:
+    enabled: false
+    type: LoadBalancer
+    port: 80
+    annotations: {}
+  env:
+    rudderstackDataPlaneUrl: "https://yugabyteklhgka.dataplane.rudderstack.com"
+    freeTierQuotaEnabled: "true"
+  # nginx proxy upstream server addresses (host:port), injected into default.conf.
+  upstreams:
+    ui: 127.0.0.1:5000
+    api: meko-api-server-service.meko-system.svc.cluster.local:80
+    langfuse: langfuse-web.meko-langfuse.svc.cluster.local:3000
+    inference: inference-gateway-service.meko-system.svc.cluster.local:8088
+  secrets:
+    existing:
+      ui: meko-ui-secret
+
+# ---------------------------------------------------------------------------
+# meko-mcp-server
+# ---------------------------------------------------------------------------
+mekoMcpServer:
+  enabled: true
+  namespace: meko-mcp
+  replicas: 3
+  image:
+    repository: meko/meko-mcp-server
+    tag: ""
+  resources:
+    requests: { cpu: "500m", memory: "512Mi" }
+    limits: { cpu: "2", memory: "2Gi" }
+  config:
+    DB_HOST: ""
+    DB_PORT: "5433"              # templated into YUGABYTEDB_URL
+    DB_NAME: ""
+    SYSTEM_DB_HOST: ""
+    SYSTEM_DB_PORT: "5433"       # templated into YUGABYTEDB_SYSTEM_URL
+    SYSTEM_DB_NAME: meko_system
+    COGNITO_USER_POOL_ID: ""
+    COGNITO_CLIENT_ID: ""
+    MEKO_BASE_URL: ""
+    MCP_BASE_URL: ""
+    LANGFUSE_HOST: ""
+    MEM0_HOST: ""
+    MEM0_DB_NAME: ""
+    CONVERSATION_SEARCH_ENABLED: "true"
+    MEKO_FREE_TIER_QUOTA_ENABLED: "true"
+    ENABLE_ASYNC_MEMORY_EXTRACTION: "true"
+  # Tunable static env (rest are literal in the template, matching source).
+  staticEnv:
+    transport: http
+    logLevel: DEBUG
+    llmModel: gpt-4.1-nano-2025-04-14
+    # Which IdP the MCP server authenticates against: cognito | oidc | auth0 |
+    # azure | meko_tkn. `meko_tkn` is PAT-only — no IdP at all, callers present
+    # `mko_tkn_*` tokens issued by this Meko — and is what a BYOC data plane wants,
+    # since it has no Cognito pool. Anything other than `meko_tkn` also needs that
+    # IdP's credentials present: the server reads them at startup and exits if they
+    # are missing, so this cannot be left on `cognito` and simply unconfigured.
+    authProvider: cognito
+    cognitoAwsRegion: us-east-2
+  secrets:
+    existing:
+      yugabytedb: yugabytedb-credentials
+      openai: openai-credentials
+      cognito: cognito-client-secret
+      mcpInternal: meko-mcp-internal-secret
+
+# ---------------------------------------------------------------------------
+# meko-agent — the BYOC pull agent, run INSIDE this data plane. When enabled it
+# enrolls this environment into an YCP control plane and reconciles/report its
+# state over OUTBOUND HTTPS only (agent -> YCP, agent -> in-cluster k8s API).
+# Data-plane only: suppressed in `ycp` mode. OFF by default — a data-plane
+# install opts in by setting agent.enabled=true + agent.ycpUrl + an enrollment
+# token Secret. This is how "an actual meko" registers itself with the control
+# plane, without a separate chart.
+# ---------------------------------------------------------------------------
+agent:
+  enabled: false
+  namespace: meko-system
+  # Keep this at 1. The agent is a singleton per environment: enrollment mints a
+  # status token and overwrites the environment's stored hash, so a second replica
+  # invalidates the first one's credential, and both then race on the shared
+  # meko-agent-state Secret. There is no leader election. Scaling this does not
+  # give redundancy, it gives two agents fighting over one identity.
+  replicas: 1
+  image:
+    repository: meko/meko-agent
+    tag: ""                      # REQUIRED when enabled
+  # YCP control-plane base URL (outbound). In-cluster to a demo YCP, e.g.
+  # http://ycp.ycp-demo.svc.cluster.local:80 ; or the control plane's internal-LB URL.
+  ycpUrl: ""
+  # Environment identity as registered in YCP (POST /api/v1/environments).
+  # Empty → falls back to the release namespace.
+  envName: ""
+  placement: cloud               # cloud | onprem
+  provider: ""                   # ENV_PROVIDER (agent defaults to gke when empty)
+  region: ""                     # ENV_REGION
+  agentVersion: v1.4.2
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+  # Pre-created Secret holding the one-time enrollment token minted by YCP.
+  # Key: enrollment-token. (No secret material lives in the chart.)
+  secrets:
+    existing:
+      enrollment: meko-agent-enrollment
+
+# ---------------------------------------------------------------------------
+# inference-gateway
+# ---------------------------------------------------------------------------
+inferenceGateway:
+  enabled: true
+  namespace: meko-system
+  replicas: 1
+  image:
+    repository: meko/inference-gateway
+    tag: ""
+  resources:
+    requests: { cpu: "1", memory: "1Gi" }
+    limits: { cpu: "2", memory: "2Gi" }
+  config:
+    INFERENCE_LLM_PROVIDER: bedrock
+    INFERENCE_LLM_MODEL: "openai.gpt-oss-120b-1:0"
+    INFERENCE_PORT: "8088"
+    INFERENCE_LOG_LEVEL: INFO
+    AWS_REGION: us-east-2
+    INFERENCE_MCP_ENDPOINT: ""
+    INFERENCE_CORS_ORIGINS: ""
+    INFERENCE_CONV_SUMMARY_MODEL: mistral.ministral-3-3b-instruct
+  secrets:
+    existing:
+      aws: inference-gateway-aws
+
+# ---------------------------------------------------------------------------
+# rag-agent
+# ---------------------------------------------------------------------------
+ragAgent:
+  enabled: true
+  namespace: meko-rag-workers
+  # Resources default to base (= prod); dev overrides in values-dev.yaml.
+  text:
+    image: { repository: meko/rag-agent, tag: "" }
+    nodeSelector: { node_type: rag-worker }
+    resources:
+      requests: { cpu: "500m", memory: "4Gi", ephemeral-storage: "8Gi" }
+      limits: { cpu: "2", memory: "6Gi", ephemeral-storage: "12Gi" }
+  pdf:
+    image: { repository: meko/rag-agent, tag: "" }
+    resources:
+      requests: { cpu: "2", memory: "6Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }
+      limits: { cpu: "3", memory: "6Gi", ephemeral-storage: "12Gi", nvidia.com/gpu: "1" }
+  gpu:
+    enabled: true
+    nodeSelector: { node_type: gpu }
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    # nvidia DaemonSet is UNWIRED today (§6.3 — no overlay renders it; the GPU
+    # driver is provided out-of-band by gpu-operator). Keep OFF to preserve
+    # cutover parity; turn on only for a genuinely self-managed GPU node pool.
+    selfManagedPlugin: false
+    pluginNamespace: kube-system
+    pluginImage: nvcr.io/nvidia/k8s-device-plugin:v0.15.0
+  config:
+    AWS_REGION: us-east-1
+    TASK_LEASE_DURATION: "600"
+    TXT_LANGFUSE_HOST: ""
+    PDF_LANGFUSE_HOST: ""
+    AWS_S3_BUCKET_NAME: ""
+    ENABLE_FINETUNING: "true"
+  openai:
+    enabled: false               # prod-with-openai overlay → OPENAI_API_KEY env
+  secrets:
+    existing:
+      rag: rag-agent-secret
+
+# ---------------------------------------------------------------------------
+# langfuse
+# ---------------------------------------------------------------------------
+langfuse:
+  enabled: true
+  namespace: meko-langfuse
+  replicas: 1
+  web:
+    image: { repository: meko/langfuse-web, tag: "" }
+  worker:
+    image: { repository: meko/langfuse-worker, tag: "" }
+  lb:
+    enabled: true
+    type: LoadBalancer
+    annotations: {}              # per-cloud (NLB on AWS)
+  # §5 SECURITY FIX (flagged for confirmation): these keys carried secrets in
+  # the ConfigMap today — DATABASE_URL/TRACING_DATABASE_URL embed the YB
+  # password, and the S3 *_ACCESS_KEY_ID keys are AWS creds. The chart does NOT
+  # put them in langfuse-config; Jenkins must add them to langfuse-secrets.env
+  # instead (they arrive as env via the existing secretRef). Prod also had a
+  # placeholder (<change-me>) password gap that this closes.
+  secretKeys:
+    - DATABASE_URL
+    - TRACING_DATABASE_URL
+    - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+    - LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID
+    - LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID
+  # Non-sensitive config (identical dev/prod). Rendered into langfuse-config.
+  config:
+    REDIS_HOST: "valkey"
+    REDIS_PORT: "6379"
+    LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "langfuse-meko-bucket"
+    LANGFUSE_S3_EVENT_UPLOAD_REGION: "us-east-2"
+    LANGFUSE_S3_EVENT_UPLOAD_PREFIX: "events/"
+    LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: "langfuse-meko-bucket"
+    LANGFUSE_S3_MEDIA_UPLOAD_REGION: "us-east-2"
+    LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: "media/"
+    LANGFUSE_S3_BATCH_EXPORT_ENABLED: "true"
+    LANGFUSE_S3_BATCH_EXPORT_BUCKET: "langfuse-meko-bucket"
+    LANGFUSE_S3_BATCH_EXPORT_PREFIX: "exports/"
+    LANGFUSE_S3_BATCH_EXPORT_REGION: "us-east-2"
+    NEXTAUTH_URL: "http://localhost:5000"
+    LANGFUSE_EE_LICENSE_KEY: "langfuse_ee_local_dev"
+    TELEMETRY_ENABLED: "false"
+    LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+    LANGFUSE_AUTO_POSTGRES_MIGRATION_DISABLED: "true"
+    LANGFUSE_AUTO_CLICKHOUSE_MIGRATION_DISABLED: "true"
+    NEXT_PUBLIC_LANGFUSE_RUN_NEXT_INIT: "true"
+    NEXT_PUBLIC_BASE_PATH: ""
+    LANGFUSE_INIT_ORG_ID: "11111111-1111-4111-8111-111111111111"
+    LANGFUSE_INIT_ORG_NAME: "Tracing Only Org"
+    LANGFUSE_INIT_PROJECT_ID: "22222222-2222-4222-8222-222222222222"
+    LANGFUSE_INIT_PROJECT_NAME: "Tracing Project"
+    LANGFUSE_INIT_PROJECT_PUBLIC_KEY: "pk-lf-local-tracing-project"
+    LANGFUSE_INIT_USER_EMAIL: "owner@local.langfuse"
+    LANGFUSE_INIT_USER_NAME: "Tracing Owner"
+    LANGFUSE_INIT_USER_PASSWORD: "password123"
+    LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS: "false"
+    LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED: "false"
+    LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED: "false"
+    LANGFUSE_BATCH_TRACE_DELETION_CLEANER_ENABLED: "false"
+    LANGFUSE_DISABLE_CLICKHOUSE_WRITES: "true"
+    QUEUE_CONSUMER_INGESTION_QUEUE_IS_ENABLED: "true"
+    QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED: "true"
+  secrets:
+    existing:
+      langfuse: langfuse-secrets
+  valkey:
+    managed: false               # Valkey stays a separate helm release
+
+# ---------------------------------------------------------------------------
+# provisioner (operator + CRD + per-tenant mcp-proxy)
+# ---------------------------------------------------------------------------
+provisioner:
+  enabled: true
+  namespace: meko-system
+  installCRD: true               # templated CRD w/ resource-policy: keep (§6.7)
+  image:
+    repository: meko/meko-provisioner
+    tag: ""
+  mcpIngressDomain: mcp.mekodev.com
+  # Prereq Secret the controller reads at runtime to seed per-tenant creds.
+  # Create it out-of-band (reference-only model, §5): meko-shared-credentials in
+  # meko-system with OPENAI_API_KEY (+ optional AWS_ACCESS_KEY_ID/SECRET).
+  sharedCredentialsSecret: meko-shared-credentials
+  resources:
+    requests: { cpu: 10m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 128Mi }
+  metricsPort: 8443
+  mcpProxy:
+    enabled: true
+    namespace: meko-ingress
+    replicas: 2
+    image: nginx:1.27-alpine
+    resources:
+      requests: { cpu: 250m, memory: 256Mi }
+      limits: { cpu: "1", memory: 512Mi }
+    hpa: { minReplicas: 2, maxReplicas: 10, cpuTarget: 70 }
+    ingress:
+      host: "*.mcp.mekodev.com"
+      healthcheckPath: /healthz
+      acmCertArn: ""             # mcp-proxy has its own wildcard ACM cert (AWS)
+      gke:
+        managedCert: ""          # wildcard can't use ManagedCertificate — use preSharedCert
+        preSharedCert: ""        # pre-uploaded Google wildcard cert name
+        staticIp: ""

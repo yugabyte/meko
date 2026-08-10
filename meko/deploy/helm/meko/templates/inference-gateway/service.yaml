@@ -1,0 +1,21 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") }}
+{{- $c := .Values.inferenceGateway }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-gateway-service
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: inference-gateway
+    app.kubernetes.io/part-of: meko
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: inference-gateway
+    app.kubernetes.io/part-of: meko
+  ports:
+    - name: http
+      port: 8088
+      targetPort: http
+      protocol: TCP
+{{- end }}

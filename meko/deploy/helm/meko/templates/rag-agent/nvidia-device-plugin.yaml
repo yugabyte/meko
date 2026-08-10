@@ -1,0 +1,41 @@
+{{- if and .Values.ragAgent.enabled .Values.ragAgent.gpu.selfManagedPlugin }}
+{{- $c := .Values.ragAgent }}
+# Self-managed NVIDIA device plugin. UNWIRED in Kustomize today (§6.3); rendered
+# only when ragAgent.gpu.selfManagedPlugin is true. On GKE the driver is provided
+# by the platform, so leave this off there.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-device-plugin-daemonset
+  namespace: {{ $c.gpu.pluginNamespace }}
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-device-plugin-daemonset
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: nvidia-device-plugin-daemonset
+    spec:
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      priorityClassName: "system-node-critical"
+      containers:
+        - name: nvidia-device-plugin-ctr
+          image: {{ $c.gpu.pluginImage }}
+          securityContext:
+            # The device plugin needs privileged access to register GPU devices
+            # with the kubelet.
+            privileged: true
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+{{- end }}

@@ -1,0 +1,58 @@
+meko chart deployed as release {{ .Release.Name }} (cloud: {{ .Values.global.cloud }}, region: {{ .Values.global.region }}).
+
+Deploy mode: {{ include "meko.mode" . }}{{ if eq (include "meko.mode" .) "ycp" }}  — CONTROL PLANE (YCP): api-server --control-plane-mode + internal-LB console; no data-plane components.{{ else if eq (include "meko.mode" .) "agent" }}  — BYOC AGENT: the pull agent alone, in this namespace. It enrolls into YCP and brings up whatever that environment's desired state declares.{{ else }}  — DATA PLANE: full Meko stack.{{ end }}
+
+Enabled components:
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "apiServer")) "true" }}
+  - api-server        ns={{ .Values.apiServer.namespace }}{{ if eq (include "meko.mode" .) "ycp" }} (control-plane mode{{ if .Values.apiServer.lb.enabled }}, console on internal LB svc/meko-api-server-lb{{ end }}){{ else }} host={{ .Values.apiServer.ingress.host }}{{ end }}{{ if .Values.apiServer.migrate.enabled }} (migration hook ON, scope={{ .Values.apiServer.migrate.scope }}){{ end }}
+{{- end }}
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true" }}
+  - meko-ui           ns={{ .Values.mekoUi.namespace }} host={{ .Values.mekoUi.ingress.host }}
+{{- end }}
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true" }}
+  - meko-mcp-server   ns={{ .Values.mekoMcpServer.namespace }}
+{{- end }}
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true" }}
+  - inference-gateway ns={{ .Values.inferenceGateway.namespace }}
+{{- end }}
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "ragAgent")) "true" }}
+  - rag-agent         ns={{ .Values.ragAgent.namespace }} (gpu.enabled={{ .Values.ragAgent.gpu.enabled }}, selfManagedPlugin={{ .Values.ragAgent.gpu.selfManagedPlugin }})
+{{- end }}
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true" }}
+  - langfuse          ns={{ .Values.langfuse.namespace }} (requires a separate valkey release: REDIS_HOST={{ .Values.langfuse.config.REDIS_HOST }})
+{{- end }}
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "provisioner")) "true" }}
+  - provisioner       ns={{ .Values.provisioner.namespace }} (installCRD={{ .Values.provisioner.installCRD }}, mcpProxy={{ .Values.provisioner.mcpProxy.enabled }})
+{{- end }}
+{{- if eq (include "meko.componentEnabled" (dict "root" $ "comp" "agent")) "true" }}
+  - meko-agent        ns={{ .Values.agent.namespace | default .Release.Namespace }} → enrolls env "{{ .Values.agent.envName | default .Release.Namespace }}" into YCP at {{ .Values.agent.ycpUrl }}
+{{- end }}
+
+Ingress class: {{ .Values.ingress.className }}, TLS mode: {{ .Values.ingress.tls.mode }}
+Image registry: {{ .Values.global.imageRegistry | default "(none — repositories used as-is)" }}
+Storage class: {{ .Values.global.storageClassName | default "(cluster default)" }}
+
+{{ if .Values.dataPlaneSecrets.enabled -}}
+Secrets: rendered from dataPlaneSecrets — this release created
+{{ .Values.apiServer.secrets.existing.db }}, {{ .Values.apiServer.secrets.existing.systemDb }} and {{ .Values.mekoMcpServer.secrets.existing.yugabytedb }}
+from one dbPassword, so the database and the services that connect to it cannot
+disagree. Everything else is read with optional=true: an absent credential costs
+its own feature, not the pod.
+{{- if not .Values.dataPlaneSecrets.openaiApiKey }}
+
+  ! No OpenAI key. Meko runs, and stores nothing: memory extraction and RAG fail
+    at the point of use. Set dataPlaneSecrets.openaiApiKey to fix that.
+{{- end }}
+{{- else -}}
+Secrets: this release holds NO secret material — it only references pre-created
+Secrets by name (<comp>.secrets.existing). Create those Secrets in the target
+cluster before deploying (kubectl / your secret store); required Secret names +
+keys are listed in HELM_MIGRATION_PLAN.md §5. A missing Secret behind a required
+ref is a pod stuck in CreateContainerConfigError — no logs, no probe failures.
+Set dataPlaneSecrets.enabled (or controlPlaneSecrets.enabled) to have the chart
+render them from values instead.
+{{- end }}
+
+Prerequisites not installed by this chart: cluster storage classes, the ingress
+controller / TLS mechanism, the langfuse valkey release, any image-pull Secret a
+private registry needs{{ if not .Values.dataPlaneSecrets.enabled }}, and the Secrets above{{ end }}.

@@ -1,0 +1,34 @@
+apiVersion: v2
+name: meko
+description: >-
+  Cloud-portable Helm chart for the Meko platform. A single flat chart whose
+  components (api-server, meko-ui, meko-mcp-server, inference-gateway, rag-agent,
+  langfuse, provisioner) are individually toggleable and render correctly for
+  AWS (EKS) and GKE from the same templates via values presets.
+type: application
+# Chart version tracks the chart's own schema/template revisions, NOT the app
+# images (those are set per-component via <comp>.image.tag at deploy time).
+version: 0.1.0
+# appVersion is informational only; deploys pin image tags explicitly.
+appVersion: "1.0.0"
+kubeVersion: ">=1.27.0-0"
+# The data-plane database, as a subchart rather than a StatefulSet of our own.
+#
+# YugabyteDB is the one dependency we must not reimplement: the data plane's system
+# migrations are YB-only DDL (SPLIT INTO … TABLETS, HASH primary keys), so this is a
+# hard requirement rather than a preference, and the upstream chart is what YB
+# operators already know how to tune, back up and upgrade.
+#
+# Off by default — `condition` — because every deployment today points at a
+# YugabyteDB someone else runs. A BYOC data plane, where the agent installs
+# everything into one namespace, turns it on.
+dependencies:
+  - name: yugabyte
+    version: "2025.2.5"
+    repository: https://charts.yugabyte.com
+    condition: yugabyte.enabled
+
+maintainers:
+  - name: Meko DevOps
+sources:
+  - https://github.com/yugabyte/meko-devops

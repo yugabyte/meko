@@ -1,0 +1,100 @@
+# GCP (GKE) cloud preset. Portable default: ingress-nginx + cert-manager (works
+# identically on both clouds). A gke-native mode (className: gce + managed-cert)
+# is available as an opt-in override.
+#
+# IMAGES: for now we pull from the existing AWS ECR (imageRegistry stays the ECR
+# account, set by the env preset). GKE nodes have no AWS IAM, so every pod gets
+# an imagePullSecret referencing a dockerconfigjson Secret with ECR creds.
+# Create that Secret in EVERY namespace the chart uses before deploying, e.g.:
+#   for ns in meko-system meko-mcp meko-rag-workers meko-langfuse meko-ingress; do
+#     kubectl create secret docker-registry ecr-registry-creds -n $ns \
+#       --docker-server=<acct>.dkr.ecr.us-east-2.amazonaws.com \
+#       --docker-username=AWS \
+#       --docker-password="$(aws ecr get-login-password --region us-east-2)"
+#   done
+# (ECR tokens expire ~12h; refresh the Secret on a schedule, or move to an
+#  ECR credential-helper / Artifact Registry mirror later.)
+#
+# NOTE: GKE storage classes and accelerator labels are hardened in M5.
+#
+# Compose:  -f values-gcp.yaml -f values-<env>.yaml
+
+global:
+  cloud: gcp
+  storageClassName: pd-ssd
+  # imageRegistry stays the ECR account from the env preset (pull from ECR for now).
+  imagePullSecrets:
+    - ecr-registry-creds
+
+# Keep the ECR pull Secret fresh (tokens expire ~12h). Create the referenced
+# aws-ecr-refresher-creds Secret (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) once;
+# the CronJob re-mints ecr-registry-creds in every namespace on schedule.
+ecrCredentialRefresh:
+  enabled: true
+
+# GKE-native ingress: GCE Ingress (L7 LB) + Google-managed TLS. No add-ons to
+# install. Google ManagedCertificate provisions per host once DNS points at the
+# ingress IP. NOTE: ManagedCertificate can't do wildcards, so the mcp-proxy
+# (*.mcp...) uses a PRE-SHARED cert you upload to GCP instead.
+#
+# TODO(you): set real GKE-served hostnames in values-<env>.yaml (the defaults are
+# the AWS hostnames), point DNS at the ingress IP, and — if you reserve global
+# static IPs — set <comp>.ingress.gke.staticIp. Backends are ClusterIP Services;
+# on a VPC-native cluster GKE wires container-native LB (NEG) automatically.
+ingress:
+  className: gce
+  tls:
+    mode: managed-cert
+
+apiServer:
+  ingress:
+    gke:
+      managedCert: meko-api-server-cert
+      # staticIp: meko-api-server-ip
+  # Optional api-server LoadBalancer. In `ycp` (control-plane) mode this is the
+  # fleet console / agent-API entry point — enable with apiServer.lb.enabled=true
+  # (values-ycp.yaml does) for an INTERNAL LB reachable only inside the VPC.
+  lb:
+    annotations:
+      cloud.google.com/load-balancer-type: "Internal"
+      networking.gke.io/load-balancing: "internal"
+
+mekoUi:
+  ingress:
+    gke:
+      managedCert: meko-ui-cert
+      # staticIp: meko-ui-ip
+  # Optional UI LoadBalancer. Off by default (the Ingress is the usual public
+  # entrypoint); enable with --set mekoUi.lb.enabled=true for an INTERNAL LB
+  # reachable inside the VPC (no ingress/cert/DNS needed). deploy-gke.sh turns
+  # this on. Flip to external by removing these annotations.
+  lb:
+    annotations:
+      cloud.google.com/load-balancer-type: "Internal"
+      networking.gke.io/load-balancing: "internal"
+
+provisioner:
+  mcpProxy:
+    ingress:
+      gke:
+        # wildcard host → upload a Google SSL cert and name it here (managed certs
+        # don't support wildcards). Create: gcloud compute ssl-certificates create ...
+        preSharedCert: mcp-proxy-wildcard-cert
+        # staticIp: mcp-proxy-ip
+
+langfuse:
+  lb:
+    type: LoadBalancer
+    annotations:
+      # GKE external L4 LB by default; switch to Internal LB via override.
+      cloud.google.com/l4-rbs: enabled
+
+ragAgent:
+  gpu:
+    # GKE installs the GPU driver via its own DaemonSet; don't self-manage.
+    selfManagedPlugin: false
+    nodeSelector:
+      cloud.google.com/gke-accelerator: nvidia-tesla-t4
+  text:
+    nodeSelector:
+      cloud.google.com/gke-nodepool: rag-worker

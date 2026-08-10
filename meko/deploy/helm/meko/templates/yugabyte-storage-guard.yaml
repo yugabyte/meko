@@ -1,0 +1,84 @@
+{{- if .Values.yugabyte.enabled }}
+{{- /*
+Renders nothing. It exists to fail an install where the bundled YugabyteDB would
+land on a different storage class than the one the operator asked for.
+
+`global.storageClassName` reaches every volume this chart templates itself, but it
+cannot reach the yugabyte SUBCHART: Helm resolves values before rendering, so a
+parent's values file has no way to compute `yugabyte.storage.*.storageClass` from
+another value. The subchart's default is `""` — the cluster default class — so an
+operator who names a class gets it everywhere except on the database.
+
+That divergence hid on itest-mcs, whose default happens to be the same
+`standard-rwo` that was passed in. It would not hide on a cluster whose default is
+a slower disk (the database silently gets it) or one with no default class at all
+(the PVCs stay Pending forever and the StatefulSet simply never becomes ready,
+with nothing on it saying why). Both are worse than a message at install time.
+
+So: if you name a class for the release, name it for the database too.
+*/}}
+{{- $global := .Values.global.storageClassName }}
+{{- $master := "" }}
+{{- $tserver := "" }}
+{{- if .Values.yugabyte.storage }}
+{{- if .Values.yugabyte.storage.master }}{{ $master = .Values.yugabyte.storage.master.storageClass | default "" }}{{ end }}
+{{- if .Values.yugabyte.storage.tserver }}{{ $tserver = .Values.yugabyte.storage.tserver.storageClass | default "" }}{{ end }}
+{{- end }}
+{{- /*
+  The escape hatch, and it earns its keep on the first upgrade: a release whose
+  database volumes were created BEFORE these flags existed cannot satisfy the guard
+  at all. volumeClaimTemplates are immutable, so naming the class now fails with
+  "updates to statefulset spec ... are forbidden" — and the only way to comply
+  would be deleting the StatefulSet that owns the data. A guard whose sole remedy
+  is destroying a database is one people route around, so say yes deliberately
+  instead: yugabyte.storage.acceptClusterDefault=true.
+*/}}
+{{- $accepted := false }}
+{{- if .Values.yugabyte.storage }}{{ $accepted = .Values.yugabyte.storage.acceptClusterDefault | default false }}{{ end }}
+{{- if and $global (or (not $master) (not $tserver)) (not $accepted) }}
+{{- fail (printf "global.storageClassName=%q does not reach the bundled YugabyteDB — a subchart's values cannot be derived from a parent's, so its volumes would use this cluster's DEFAULT class instead (or stay Pending forever if it has no default). Name it for the database as well, or accept the default deliberately with --set yugabyte.storage.acceptClusterDefault=true (the only option on a database whose volumes already exist — they are immutable):\n  --set yugabyte.storage.master.storageClass=%s --set yugabyte.storage.tserver.storageClass=%s" $global $global $global) }}
+{{- end }}
+{{- /*
+Relying on the cluster default is legitimate — it is the mechanism for "put this
+where this cluster puts things", and in a BYOC install the database's volumes are
+the ONLY ones in the release, so there is nothing for them to diverge from. What is
+not legitimate is relying on a default that does not exist: the PVCs then stay
+Pending forever and the StatefulSet never becomes ready, with nothing on it saying
+why. A customer cluster is well within its rights to have no default class.
+
+So when nothing names a class for the database, require that the cluster has one.
+*/}}
+{{- if not (and $master $tserver) }}
+{{- $classes := (lookup "storage.k8s.io/v1" "StorageClass" "" "") }}
+{{- if and $classes $classes.items }}
+{{- $default := "" }}
+{{- range $classes.items }}
+{{- if eq (index (.metadata.annotations | default dict) "storageclass.kubernetes.io/is-default-class") "true" }}
+{{- $default = .metadata.name }}
+{{- end }}
+{{- end }}
+{{- if not $default }}
+{{- $available := list }}
+{{- range $classes.items }}{{ $available = append $available .metadata.name }}{{ end }}
+{{- fail (printf "the bundled YugabyteDB would fall back to this cluster's DEFAULT storage class, and this cluster has no default (classes: %s). Its PVCs would stay Pending indefinitely, with no error on the StatefulSet to say so. Name one:\n  --set yugabyte.storage.master.storageClass=<class> --set yugabyte.storage.tserver.storageClass=<class>" (join ", " $available)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /*
+And when they ARE set, check they exist — same reasoning and same offline
+behaviour as the controlPlaneDb guard: `lookup` returns nothing when there is no
+cluster to ask, so `helm template` and `helm lint` stay usable.
+*/}}
+{{- range $field, $class := (dict "master" $master "tserver" $tserver) }}
+{{- if $class }}
+{{- $classes := (lookup "storage.k8s.io/v1" "StorageClass" "" "") }}
+{{- if and $classes $classes.items }}
+{{- $available := list }}
+{{- range $classes.items }}{{ $available = append $available .metadata.name }}{{ end }}
+{{- if not (has $class $available) }}
+{{- fail (printf "storage class %q (yugabyte.storage.%s.storageClass) does not exist on this cluster (available: %s). A PVC naming a missing class stays Pending indefinitely with no error on the StatefulSet." $class $field (join ", " $available)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

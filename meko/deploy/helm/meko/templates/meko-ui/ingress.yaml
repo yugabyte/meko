@@ -1,0 +1,27 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true") }}
+{{- $c := .Values.mekoUi }}
+{{- include "meko.managedCertificate" (dict "root" $ "name" $c.ingress.gke.managedCert "namespace" (include "meko.ns" (dict "root" $ "ns" $c.namespace)) "host" $c.ingress.host) }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: meko-ui-ingress
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-ui") | nindent 4 }}
+  annotations:
+    {{- include "meko.ingressAnnotations" (dict "root" $ "healthcheckPath" $c.ingress.healthcheckPath "certArn" $c.ingress.acmCertArn "gke" $c.ingress.gke) | nindent 4 }}
+spec:
+  {{- include "meko.ingressClassField" (dict "root" $) | nindent 2 }}
+  {{- include "meko.ingressTLS" (dict "root" $ "host" $c.ingress.host "secretName" "meko-ui-tls") | nindent 2 }}
+  rules:
+    - host: {{ $c.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: meko-ui-service
+                port:
+                  number: 80
+{{- end }}

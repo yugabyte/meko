@@ -1,0 +1,66 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "ragAgent")) "true") }}
+{{- $c := .Values.ragAgent }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-agent-text
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    app.kubernetes.io/name: rag-agent
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rag-agent
+      app.kubernetes.io/component: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rag-agent
+        app.kubernetes.io/component: worker
+      annotations:
+        {{- include "meko.configChecksum" (dict "root" $ "files" (list "rag-agent/configmap.yaml")) | nindent 8 }}
+    spec:
+      {{- include "meko.imagePullSecrets" . }}
+      {{- with $c.text.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsUser: 1001
+        runAsNonRoot: true
+        fsGroup: 1001
+      containers:
+        - name: rag-agent
+          image: {{ include "meko.image" (dict "image" $c.text.image "global" $.Values.global) }}
+          imagePullPolicy: IfNotPresent
+          env:
+            {{- include "meko.ragAgent.env" (dict "root" $ "docType" "TEXT" "langfuseKey" "TXT_LANGFUSE_HOST") | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: rag-agent-config
+          resources:
+            {{- toYaml $c.text.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          # No liveness probe: a /proc/1/cmdline grep can't detect an app hang
+          # (only process exit, which the kubelet already restarts on). Add a
+          # real heartbeat check if/when the worker exposes one.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      restartPolicy: Always
+{{- end }}

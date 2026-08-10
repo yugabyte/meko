@@ -1,0 +1,39 @@
+{{- if .Values.apiServer.enabled }}
+{{- $c := .Values.apiServer }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meko-api-server-config
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
+data:
+  {{- /* The bundled database's address, when the chart is the thing that deployed it.
+
+         DB_HOST cannot be written in a values file, because it needs the release
+         namespace and values files cannot see it. Leaving it to the operator is how
+         a BYOC install ends up with fifteen --set flags and one of them wrong. So:
+         when yugabyte.enabled is on and the host is empty, point at the subchart's
+         own Service. Absolute (trailing dot) — Kubernetes sets ndots:5, and the
+         four-dot relative form sends Go's resolver down the search list first. */}}
+  {{- $ybHost := "" }}
+  {{- if $.Values.yugabyte.enabled }}
+  {{- $ybHost = printf "yb-tservers.%s.svc.cluster.local." $.Release.Namespace }}
+  {{- end }}
+  {{- range $k, $v := $c.config }}
+  {{- $val := $v }}
+  {{- if and $ybHost (or (eq $k "DB_HOST") (eq $k "SYSTEM_DB_HOST")) (not $v) }}
+  {{- $val = $ybHost }}
+  {{- end }}
+  {{ $k }}: {{ $val | quote }}
+  {{- end }}
+  # Consumed by the migration Job's --deploy-env (via DEPLOY_ENV). Harmless to
+  # the Deployment, which passes --deploy-env as a literal arg.
+  DEPLOY_ENV: {{ $c.deployEnv | quote }}
+  {{- if $c.basePath }}
+  # Subpath mount (apiServer.basePath). Emitted only when set, because the env
+  # entry that reads it is a configMapKeyRef — a reference to a key that isn't
+  # here blocks the pod from starting.
+  MEKO_YCP_BASE_PATH: {{ $c.basePath | quote }}
+  {{- end }}
+{{- end }}

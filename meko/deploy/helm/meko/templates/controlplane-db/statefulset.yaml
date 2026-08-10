@@ -1,0 +1,122 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "controlPlaneDb")) "true") }}
+{{- $c := .Values.controlPlaneDb }}
+{{- $ns := include "meko.ns" (dict "root" $ "ns" ($c.namespace | default .Values.apiServer.namespace)) }}
+{{/*
+A small Postgres holding the fleet registry, so a control-plane release is
+self-contained instead of borrowing the data plane's shared YugabyteDB.
+
+Postgres and not YugabyteDB: control-plane mode runs the portable
+`migrations/controlplane` set (--only-controlplane-migrate), which is the only set
+that does not need YB-specific DDL. The chart still lets you point at an external
+DSN instead — set controlPlaneDb.enabled=false and fill in the apiServer.config
+SYSTEM_DB_ and DB_ entries yourself.
+
+A StatefulSet, not a Deployment: the volume is the database, so it needs stable
+identity and an ordered restart rather than a Recreate roll.
+*/}}
+{{- $class := ($c.storage.storageClass | default $.Values.global.storageClassName) }}
+{{- /*
+Fail the install when the requested storage class does not exist on the target
+cluster. This is issue #42's storage item: a PVC naming a missing class does not
+error, it stays Pending forever, and the StatefulSet just never becomes ready —
+which is how `auto-ebs-sc` from values-aws.yaml (EKS Auto Mode) cost a bring-up on
+meko-dev-eks, where the classes are gp2 and gp2-csi.
+
+`lookup` returns an empty list whenever there is no cluster to ask — `helm
+template`, `helm lint`, a client-side dry-run — so the check runs only when we can
+actually see the API and would otherwise be guessing. That is deliberate: this
+must not turn rendering the chart offline into an error.
+*/}}
+{{- if $class }}
+{{- $classes := (lookup "storage.k8s.io/v1" "StorageClass" "" "") }}
+{{- if and $classes $classes.items }}
+{{- $available := list }}
+{{- range $classes.items }}{{ $available = append $available .metadata.name }}{{ end }}
+{{- if not (has $class $available) }}
+{{- fail (printf "storage class %q does not exist on this cluster (available: %s) — set controlPlaneDb.storage.storageClass to one of those, or global.storageClassName in the cloud/env preset. A PVC naming a missing class stays Pending indefinitely with no error on the StatefulSet." $class (join ", " $available)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" $c.name) | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $c.name }}
+  selector:
+    matchLabels:
+      {{- include "meko.selectorLabels" (dict "app" $c.name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "meko.selectorLabels" (dict "app" $c.name) | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70          # the postgres user in the alpine image
+        fsGroup: 70            # so the mounted volume is writable
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: {{ $c.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: POSTGRES_USER, value: {{ $c.auth.user | quote }} }
+            - { name: POSTGRES_DB, value: {{ $c.auth.database | quote }} }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.auth.existingSecret }}
+                  key: {{ $c.auth.passwordKey }}
+            # Subdirectory, not the mount root: initdb refuses a non-empty
+            # directory, and a PVC mount root can carry lost+found.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: pg, containerPort: 5432 }
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U {{ $c.auth.user }} -d {{ $c.auth.database }}"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U {{ $c.auth.user }} -d {{ $c.auth.database }}"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $class }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $c.storage.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" $c.name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "meko.selectorLabels" (dict "app" $c.name) | nindent 4 }}
+  ports:
+    - { name: pg, port: 5432, targetPort: 5432 }
+{{- end }}

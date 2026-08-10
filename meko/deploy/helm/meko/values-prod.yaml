@@ -1,0 +1,105 @@
+# PROD env preset. Mirrors kustomize/**/overlays/prod. Pair with values-aws.yaml.
+#
+# Image tags are placeholders; Jenkins passes the real tag via
+# --set-string <comp>.image.tag=$VERSION at deploy time.
+
+global:
+  imageRegistry: 751821720815.dkr.ecr.us-east-2.amazonaws.com
+  region: us-east-2
+
+ingress:
+  tls:
+    acmCertArn: arn:aws:acm:us-east-2:751821720815:certificate/70c62ea1-a2a0-41d8-8788-23c5acb49f2f
+
+apiServer:
+  replicas: 3
+  deployEnv: prod
+  image: { tag: "1.0.13-20260529" }
+  ingress:
+    host: api.mekodata.ai
+    healthcheckPath: /api/v1/health
+  ses:
+    fromAddress: no-reply@cloud.mekodata.ai
+    region: us-east-2
+  # §6.6: prod historically drifted to cloud.mekodata.ai; standardize on saas.
+  crdApiGroup: saas.mekodata.ai
+  config:
+    DB_HOST: ybmeko-prod-datapacks-1-zsdr-yb-tservers.yb-prod-meko-prod-datapacks-1.svc.cluster.local
+    DB_PORT: "5433"
+    DB_USER_NAME: yugabyte
+    DB_NAME: mekodata
+    DB_SSL_MODE: disable
+    SYSTEM_DB_HOST: ybmeko-prod-s-us-east-2a-oimt-yb-tservers.yb-prod-meko-prod-system-data.svc.cluster.local
+    SYSTEM_DB_PORT: "5433"
+    SYSTEM_DB_USER_NAME: yugabyte
+    SYSTEM_DB_NAME: meko_system
+    SYSTEM_DB_SSL_MODE: disable
+    COGNITO_REGION: us-east-2
+    COGNITO_POOL_ID: us-east-2_nzS7GcAPm
+    COGNITO_CLIENT_ID: 5i8kcbcjf59cqffm1m6lukiuk3
+    COGNITO_DOMAIN: auth.mekodata.ai
+    S3_BUCKET: meko-kb-uploads-launch-1
+    S3_REGION: us-east-2
+    LANGFUSE_HOST: http://k8s-mekolang-langfuse-5d9cc6e6db-7d950f5a10c5ea10.elb.us-east-2.amazonaws.com:3000
+    LANGFUSE_DB_HOST: ybmeko-prod-datapacks-1-zsdr-yb-tservers.yb-prod-meko-prod-datapacks-1.svc.cluster.local
+    LANGFUSE_DB_SSL_MODE: disable
+  # Prod runs migrations via an explicit Jenkins step, same as dev — toggle at deploy.
+  migrate:
+    enabled: false
+    scope: all
+
+mekoUi:
+  # Matches current prod (base default 1; prod overlay never scaled it). Scaling
+  # up is a separate ops decision, not part of the port.
+  replicas: 1
+  # §6.5: prod overlay historically never set a tag; now explicit every env.
+  image: { tag: "1.0.0-20260504" }
+  ingress:
+    host: cloud.mekodata.ai
+    # prod UI has its own ACM cert, distinct from api-server's.
+    acmCertArn: arn:aws:acm:us-east-2:751821720815:certificate/412d5f69-9cdf-4198-a2ee-b67757d76908
+
+mekoMcpServer:
+  replicas: 3
+  image: { tag: "1.2.0-20260529-4b07353" }
+  config:
+    DB_HOST: ybmeko-prod-datapacks-1-zsdr-yb-tservers.yb-prod-meko-prod-datapacks-1.svc.cluster.local
+    DB_NAME: mekodata
+    SYSTEM_DB_HOST: ybmeko-prod-s-us-east-2a-oimt-yb-tservers.yb-prod-meko-prod-system-data.svc.cluster.local
+    SYSTEM_DB_NAME: meko_system
+    COGNITO_USER_POOL_ID: us-east-2_nzS7GcAPm
+    COGNITO_CLIENT_ID: 5i8kcbcjf59cqffm1m6lukiuk3
+    MEKO_BASE_URL: https://cloud.mekodata.ai/api/v1
+    MCP_BASE_URL: https://mcp.mekodata.ai
+    LANGFUSE_HOST: http://k8s-mekolang-langfuse-5d9cc6e6db-7d950f5a10c5ea10.elb.us-east-2.amazonaws.com:3000
+    MEM0_HOST: ybmeko-prod-datapacks-1-zsdr-yb-tservers.yb-prod-meko-prod-datapacks-1.svc.cluster.local
+    MEM0_DB_NAME: mekodata
+    CONVERSATION_SEARCH_ENABLED: "true"
+    MEKO_FREE_TIER_QUOTA_ENABLED: "true"
+    ENABLE_ASYNC_MEMORY_EXTRACTION: "true"
+
+inferenceGateway:
+  image: { tag: "0.1.0-20260528-98ab3d3" }
+  config:
+    INFERENCE_MCP_ENDPOINT: "https://mcp.mekodata.ai/mcp"
+    INFERENCE_CORS_ORIGINS: "https://cloud.mekodata.ai"
+
+ragAgent:
+  # §6.4: prod pulls meko/meko-rag-agent (dev pulls meko/rag-agent).
+  text: { image: { repository: meko/meko-rag-agent, tag: "1.0.4-20260507" } }
+  pdf:  { image: { repository: meko/meko-rag-agent, tag: "1.0.3-20260507" } }
+  # Bedrock-only prod. Set true to build the prod-with-openai variant.
+  openai: { enabled: false }
+  config:
+    TXT_LANGFUSE_HOST: http://k8s-mekolang-langfuse-5d9cc6e6db-7d950f5a10c5ea10.elb.us-east-2.amazonaws.com:3000
+    PDF_LANGFUSE_HOST: http://k8s-mekolang-langfuse-5d9cc6e6db-7d950f5a10c5ea10.elb.us-east-2.amazonaws.com:3000
+    AWS_S3_BUCKET_NAME: meko-kb-uploads-launch-1
+    ENABLE_FINETUNING: "true"
+
+langfuse:
+  web:    { image: { tag: "0.0.4" } }
+  worker: { image: { tag: "0.0.4" } }
+
+provisioner:
+  image: { tag: "REPLACE" }
+  mcpIngressDomain: mcp.mekodata.ai

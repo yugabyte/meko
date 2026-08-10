@@ -1,0 +1,47 @@
+{{- if .Values.apiServer.enabled }}
+{{- $c := .Values.apiServer }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: meko-api-server
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
+    {{- include "meko.labels" . | nindent 4 }}
+{{- /* Not rendered in ycp mode: a control plane provisions no tenant CRs, and
+       emitting these forces the tenants namespace to pre-exist for a release that
+       never touches it — an install-time failure for no benefit. A template
+       comment, not a YAML one, so the data-plane render stays byte-identical. */}}
+{{- if ne (include "meko.mode" .) "ycp" }}
+---
+# Role + binding live in the tenants namespace so the api-server SA can create
+# MekouserAccount CRs there. apiGroup is standardized on saas.mekodata.ai (§6.6).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-api-server-crd-creator
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.tenantsNamespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
+rules:
+  - apiGroups: [{{ $c.crdApiGroup | quote }}]
+    resources: ["mekouseraccounts"]
+    verbs: ["create", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-api-server-crd-creator
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.tenantsNamespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-api-server") | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: meko-api-server
+    namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-api-server-crd-creator
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

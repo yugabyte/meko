@@ -1,0 +1,18 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true") }}
+{{- $c := .Values.mekoUi }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: meko-ui-service
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-ui") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "meko.selectorLabels" (dict "app" "meko-ui") | nindent 4 }}
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+{{- end }}

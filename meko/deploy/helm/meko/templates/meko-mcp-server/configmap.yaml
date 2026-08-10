@@ -1,0 +1,29 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoMcpServer")) "true") }}
+{{- $c := .Values.mekoMcpServer }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meko-mcp-server-config
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-mcp-server") | nindent 4 }}
+data:
+  {{- /* Same fill as the api-server's ConfigMap, and for the same reason: a values
+         file cannot name the bundled database's Service because it cannot see the
+         release namespace. Without this, a BYOC install whose api-server correctly
+         found its own YugabyteDB had an MCP server still dialling the SHARED dev
+         database from the env preset — a stack that looks healthy and reads the
+         wrong data. Absolute (trailing dot): ndots:5 sends the four-dot relative
+         form down the search list first. */}}
+  {{- $ybHost := "" }}
+  {{- if $.Values.yugabyte.enabled }}
+  {{- $ybHost = printf "yb-tservers.%s.svc.cluster.local." $.Release.Namespace }}
+  {{- end }}
+  {{- range $k, $v := $c.config }}
+  {{- $val := $v }}
+  {{- if and $ybHost (or (eq $k "DB_HOST") (eq $k "SYSTEM_DB_HOST")) (not $v) }}
+  {{- $val = $ybHost }}
+  {{- end }}
+  {{ $k }}: {{ $val | quote }}
+  {{- end }}
+{{- end }}

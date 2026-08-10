@@ -1,0 +1,111 @@
+# DEV env preset. Hosts, Cognito IDs, DB endpoints, replicas, SES, image tags.
+# Mirrors kustomize/**/overlays/dev. Pair with a cloud preset (values-aws.yaml).
+#
+# Image tags are placeholders; Jenkins passes the real tag via
+# --set-string <comp>.image.tag=$VERSION at deploy time.
+
+global:
+  imageRegistry: 161908593886.dkr.ecr.us-east-2.amazonaws.com
+  region: us-east-2
+
+ingress:
+  tls:
+    acmCertArn: arn:aws:acm:us-east-2:161908593886:certificate/d793e8ad-1832-4107-bcfd-c51cace54464
+
+apiServer:
+  replicas: 1
+  deployEnv: dev
+  image: { tag: "1.0.5-20260508" }
+  ingress:
+    host: mekodev.com
+    healthcheckPath: /api/v1/health
+  ses:
+    fromAddress: no-reply@mekodev.com
+    region: us-east-2
+  crdApiGroup: saas.mekodata.ai
+  config:
+    DB_HOST: ybmeko-dev-rf1-wruh-yb-tservers.yb-dev-meko-dev-rf1.svc.cluster.local
+    DB_PORT: "5433"
+    DB_USER_NAME: yugabyte
+    DB_NAME: mekodev
+    DB_SSL_MODE: require
+    SYSTEM_DB_HOST: ybmeko-dev-rf1-wruh-yb-tservers.yb-dev-meko-dev-rf1.svc.cluster.local
+    SYSTEM_DB_PORT: "5433"
+    SYSTEM_DB_USER_NAME: yugabyte
+    SYSTEM_DB_NAME: meko_system
+    SYSTEM_DB_SSL_MODE: require
+    COGNITO_REGION: us-east-2
+    COGNITO_POOL_ID: us-east-2_UJwIyxWqe
+    COGNITO_CLIENT_ID: 4kipguff8t7fphhee3dktt9ihn
+    COGNITO_DOMAIN: auth.mekodev.com
+    S3_BUCKET: meko-kb-store
+    S3_REGION: us-east-2
+    LANGFUSE_HOST: http://k8s-mekolang-langfuse-5855532971-660935736e2a0dc8.elb.us-east-2.amazonaws.com:3000
+    LANGFUSE_DB_HOST: ybmeko-dev-rf1-wruh-yb-tservers.yb-dev-meko-dev-rf1.svc.cluster.local
+    LANGFUSE_DB_SSL_MODE: require
+  migrate:
+    enabled: true
+    scope: all
+
+mekoUi:
+  replicas: 1
+  image: { tag: "1.0.2-20260509" }
+  ingress:
+    host: app.mekodev.com
+    # dev shares the api-server ACM cert (global default), no override needed.
+
+mekoMcpServer:
+  replicas: 1
+  image: { tag: "1.0.8-20260519-38c9064" }
+  config:
+    DB_HOST: ybmeko-dev-rf1-wruh-yb-tservers.yb-dev-meko-dev-rf1.svc.cluster.local
+    DB_NAME: mekodev
+    SYSTEM_DB_HOST: ybmeko-dev-rf1-wruh-yb-tservers.yb-dev-meko-dev-rf1.svc.cluster.local
+    SYSTEM_DB_NAME: meko_system
+    COGNITO_USER_POOL_ID: us-east-2_UJwIyxWqe
+    COGNITO_CLIENT_ID: 4kipguff8t7fphhee3dktt9ihn
+    MEKO_BASE_URL: https://mekodev.com/api/v1
+    MCP_BASE_URL: https://mcp.mekodev.com
+    LANGFUSE_HOST: http://k8s-mekolang-langfuse-5855532971-660935736e2a0dc8.elb.us-east-2.amazonaws.com:3000
+    MEM0_HOST: ybmeko-dev-rf1-wruh-yb-tservers.yb-dev-meko-dev-rf1.svc.cluster.local
+    MEM0_DB_NAME: mekodev
+    CONVERSATION_SEARCH_ENABLED: "true"
+    MEKO_FREE_TIER_QUOTA_ENABLED: "true"
+    ENABLE_ASYNC_MEMORY_EXTRACTION: "true"
+
+inferenceGateway:
+  image: { tag: "0.0.3-20260512" }
+  config:
+    INFERENCE_MCP_ENDPOINT: "https://mcp.mekodev.com/mcp"
+    INFERENCE_CORS_ORIGINS: "https://app.mekodev.com"
+
+ragAgent:
+  text:
+    image: { repository: meko/rag-agent, tag: "1.0.4-20260507" }
+    # dev: smaller memory footprint (base is 4Gi request / 6Gi limit).
+    resources:
+      requests: { cpu: "500m", memory: "2Gi", ephemeral-storage: "8Gi" }
+      limits: { cpu: "2", memory: "4Gi", ephemeral-storage: "12Gi" }
+  pdf:
+    image: { repository: meko/rag-agent, tag: "1.0.3-20260507" }
+    # dev: smaller CPU/memory for the GPU worker.
+    resources:
+      requests: { cpu: "1", memory: "3Gi", ephemeral-storage: "8Gi", nvidia.com/gpu: "1" }
+      limits: { cpu: "2", memory: "4Gi", ephemeral-storage: "12Gi", nvidia.com/gpu: "1" }
+  config:
+    TXT_LANGFUSE_HOST: http://k8s-mekolang-langfuse-5855532971-660935736e2a0dc8.elb.us-east-2.amazonaws.com:3000
+    PDF_LANGFUSE_HOST: http://k8s-mekolang-langfuse-5855532971-660935736e2a0dc8.elb.us-east-2.amazonaws.com:3000
+    AWS_S3_BUCKET_NAME: meko-kb-store
+    ENABLE_FINETUNING: "true"
+
+langfuse:
+  web:    { image: { tag: "0.0.4" } }
+  worker: { image: { tag: "0.0.4" } }
+
+provisioner:
+  image: { tag: "0.0.8-20260401" }
+  mcpIngressDomain: mcp.mekodev.com
+  mcpProxy:
+    ingress:
+      host: "*.mcp.mekodev.com"
+      acmCertArn: arn:aws:acm:us-east-2:161908593886:certificate/54024bed-67c0-40c2-9a1d-d710d5f219cb

@@ -1,0 +1,208 @@
+{{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true") }}
+{{- $c := .Values.mekoUi }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meko-ui-nginx-config
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-ui") | nindent 4 }}
+data:
+  default.conf: |
+    # NOTE: this file is included inside the stock nginx.conf http{} block, so
+    # only http-context directives are valid here. The writable pid path needed
+    # for the non-root (UID 101), read-only-rootfs proxy is a main-context
+    # directive and is set via `nginx -g "pid /tmp/nginx.pid;"` in the
+    # deployment args, not here.
+
+    # Handle Connection header correctly for websocket upgrades
+    map $http_upgrade $connection_upgrade {
+      default upgrade;
+      '' close;
+    }
+
+    # Real client scheme behind the TLS-terminating LB: prefer the incoming
+    # X-Forwarded-Proto, fall back to $scheme for direct/in-cluster access.
+    map $http_x_forwarded_proto $real_scheme {
+      default $http_x_forwarded_proto;
+      ''      $scheme;
+    }
+
+    upstream meko_ui {
+        server {{ $c.upstreams.ui }};
+    }
+
+    upstream meko_api {
+        server {{ include "meko.upstream" (dict "root" $ "addr" $c.upstreams.api) }};
+    }
+
+    {{- /* Only for components this release actually deploys.
+
+           nginx resolves every `upstream` at STARTUP and refuses to start on one it
+           cannot resolve — it is not a lazy lookup and not a warning:
+
+             [emerg] host not found in upstream "langfuse-web.…svc.cluster.local:3000"
+
+           so an upstream naming a disabled component takes the whole UI down with a
+           CrashLoopBackOff, while the thing it proxies to was never meant to exist.
+           Emitting the block only when the component is enabled is the difference
+           between "Langfuse is off" and "the UI does not run". */}}
+    {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+    upstream langfuse_backend {
+      server {{ include "meko.upstream" (dict "root" $ "addr" $c.upstreams.langfuse) }};
+    }
+    {{- end }}
+
+    {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") }}
+    upstream inference_gateway {
+      server {{ include "meko.upstream" (dict "root" $ "addr" $c.upstreams.inference) }};
+    }
+    {{- end }}
+
+    server {
+      # Non-privileged port so the proxy can run as non-root (UID 101).
+      listen 8080;
+      server_name _;
+
+      # Allow moderate payloads for API requests/uploads
+      client_max_body_size 25m;
+
+      # Preserve original request host/port/proto for upstream redirects and logs
+      proxy_set_header Host $http_host;
+      proxy_set_header X-Forwarded-Host $http_host;
+      proxy_set_header X-Forwarded-Port $server_port;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $real_scheme;
+
+      # Observe entry from deployed UI points here; keep /observe UX.
+      location = /observe {
+        return 302 $real_scheme://$http_host/observe/;
+      }
+
+      # Local Langfuse now runs with root basePath. Strip /observe prefix before proxying.
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location ^~ /observe/ {
+        rewrite ^/observe/(.*)$ /$1 break;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      # Root-path compatibility for deployments where Langfuse may still emit
+      # non-/observe links (for example /project/* or /api/auth/*).
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location ^~ /project/ {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location ^~ /organization/ {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location ^~ /auth/ {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location ^~ /_next/ {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location = /icon.svg {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location ^~ /api/public/ {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location ^~ /api/auth/ {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      # Meko API server via publicly reachable domain.
+      location ^~ /api/v1/ {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host {{ $c.upstreams.api }};
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+        # Login returns multiple auth cookies; increase upstream header buffer.
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
+        proxy_busy_buffers_size 24k;
+        proxy_pass http://meko_api;
+      }
+
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "inferenceGateway")) "true") }}
+      location ^~ /inference/ {
+        rewrite ^/inference/(.*)$ /$1 break;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host {{ $c.upstreams.inference }};
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+        proxy_pass http://inference_gateway;
+      }
+      {{- end }}
+
+      # Keep any other /api/* requests on Langfuse while preserving /api/v1/* above for Meko.
+      {{- if (eq (include "meko.componentEnabled" (dict "root" $ "comp" "langfuse")) "true") }}
+      location ^~ /api/ {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://langfuse_backend;
+      }
+      {{- end }}
+
+      # Fallback: everything else is served by Meko UI.
+      location / {
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_pass http://meko_ui;
+      }
+    }
+{{- end }}

@@ -1,0 +1,28 @@
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "provisioner")) "true") .Values.provisioner.mcpProxy.enabled }}
+{{- $m := .Values.provisioner.mcpProxy }}
+{{- include "meko.managedCertificate" (dict "root" $ "name" $m.ingress.gke.managedCert "namespace" $m.namespace "host" $m.ingress.host) }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-proxy
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $m.namespace) }}
+  labels:
+    app.kubernetes.io/name: mcp-proxy
+    app.kubernetes.io/part-of: meko
+  annotations:
+    {{- include "meko.ingressAnnotations" (dict "root" $ "healthcheckPath" $m.ingress.healthcheckPath "certArn" $m.ingress.acmCertArn "sslRedirect" true "gke" $m.ingress.gke) | nindent 4 }}
+spec:
+  {{- include "meko.ingressClassField" (dict "root" $) | nindent 2 }}
+  {{- include "meko.ingressTLS" (dict "root" $ "host" $m.ingress.host "secretName" "mcp-proxy-tls") | nindent 2 }}
+  rules:
+  - host: {{ $m.ingress.host | quote }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mcp-proxy
+            port:
+              number: 8080
+{{- end }}

@@ -1,0 +1,26 @@
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "mekoUi")) "true") .Values.mekoUi.lb.enabled }}
+{{- $c := .Values.mekoUi }}
+# Optional LoadBalancer for the UI. Cloud preset supplies the annotations
+# (e.g. GKE internal LB, or AWS NLB scheme). Off by default; the Ingress is the
+# usual public entrypoint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: meko-ui-lb
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $c.namespace) }}
+  labels:
+    {{- include "meko.componentLabels" (dict "app" "meko-ui") | nindent 4 }}
+  annotations:
+    {{- include "meko.lbServiceAnnotations" (dict "root" $ "extra" $c.lb.annotations) | nindent 4 }}
+spec:
+  type: {{ $c.lb.type }}
+  selector:
+    {{- include "meko.selectorLabels" (dict "app" "meko-ui") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $c.lb.port }}
+      # nginx proxy sidecar listens on 8080 (same target as meko-ui-service);
+      # nothing serves on 80 in the pod.
+      targetPort: 8080
+      protocol: TCP
+{{- end }}

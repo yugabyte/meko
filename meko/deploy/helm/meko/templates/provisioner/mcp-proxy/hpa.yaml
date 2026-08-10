@@ -1,0 +1,25 @@
+{{- if and (eq (include "meko.componentEnabled" (dict "root" $ "comp" "provisioner")) "true") .Values.provisioner.mcpProxy.enabled }}
+{{- $m := .Values.provisioner.mcpProxy }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mcp-proxy
+  namespace: {{ include "meko.ns" (dict "root" $ "ns" $m.namespace) }}
+  labels:
+    app.kubernetes.io/name: mcp-proxy
+    app.kubernetes.io/part-of: meko
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mcp-proxy
+  minReplicas: {{ $m.hpa.minReplicas }}
+  maxReplicas: {{ $m.hpa.maxReplicas }}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ $m.hpa.cpuTarget }}
+{{- end }}
