@@ -91,8 +91,11 @@ worker.
 Two **`OpenTelemetryCollector` CRs** (reconciled by the **OpenTelemetry
 Operator**) ship with the control-plane chart
 ([`deploy/helm/yb-amp-controller`](../../deploy/helm/yb-amp-controller),
-`templates/otel-collectors.yaml`, gated by `otel.enabled`), both `mode:
-deployment`, remote-writing to a Prometheus-compatible store:
+`templates/otel-collectors.yaml`), both `mode: deployment`, remote-writing to a
+Prometheus-compatible store. They render when `otel.enabled` (**on by default**)
+**and** the cluster has the `opentelemetry.io` CRDs — so the default cannot fail
+an install where the operator is absent; there the collectors are skipped and
+`NOTES.txt` says they were:
 
 - **`<release>-controller`** — scrapes the amp controller (`:8080`) and its in-pod
   controller (`:50051`).

@@ -58,3 +58,19 @@ MCP server ({{ include "yb-amp-controller.mcpName" . }}) is up, wrapping the con
 
 MCP server disabled (mcp.enabled=false).
 {{- end }}
+{{- if .Values.otel.enabled }}
+{{- if .Capabilities.APIVersions.Has "opentelemetry.io/v1beta1" }}
+
+Metrics collectors are deployed (otel.enabled), remote-writing to:
+
+    {{ .Values.otel.remoteWriteEndpoint }}
+{{- else }}
+
+WARNING: metrics collectors were SKIPPED. otel.enabled is true, but this
+cluster has no opentelemetry.io CRDs — the OpenTelemetry Operator is not
+installed, so the OpenTelemetryCollector CRs could not be created and nothing
+is scraping amp. Dashboards will stay empty until the operator is installed
+and this chart is upgraded. Install it, or set otel.enabled=false to silence
+this warning.
+{{- end }}
+{{- end }}

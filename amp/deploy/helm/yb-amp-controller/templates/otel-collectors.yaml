@@ -1,4 +1,4 @@
-{{- if .Values.otel.enabled }}
+{{- if and .Values.otel.enabled (.Capabilities.APIVersions.Has "opentelemetry.io/v1beta1") }}
 {{- /*
 OpenTelemetry Collector CRs (reconciled by the OpenTelemetry Operator) that
 implement the amp metrics pipeline's collect-and-export step
@@ -9,7 +9,12 @@ with the control plane:
     postgres_exporter sidecar (:9187), pageserver (:9898), safekeeper (:7676),
     compute_ctl (:3080) — plus per-pod cAdvisor resource metrics.
 Both remote-write to a Prometheus-compatible store (VictoriaMetrics by default).
-Requires the OpenTelemetry Operator (opentelemetry.io CRDs) in the cluster.
+
+Gated on the opentelemetry.io CRDs being present as well as otel.enabled, so
+that enabled-by-default cannot fail an install on a cluster without the
+OpenTelemetry Operator: there, the collectors are skipped and NOTES.txt says
+so. `helm template`/`--dry-run` without a live cluster reports no CRDs either,
+so rendering locally needs `--api-versions opentelemetry.io/v1beta1`.
 */}}
 {{- $fullName := include "yb-amp-controller.fullname" . }}
 {{- $saName := printf "%s-otel" $fullName }}

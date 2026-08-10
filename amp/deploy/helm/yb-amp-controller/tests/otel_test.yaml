@@ -1,13 +1,47 @@
 suite: otel collectors
 templates:
   - templates/otel-collectors.yaml
+# Rendering is gated on the OpenTelemetry Operator's CRDs as well as
+# otel.enabled, so each case that expects output declares the CRD itself. There
+# is no suite-level `capabilities` on purpose: helm unittest MERGES a per-test
+# apiVersions list into the suite's rather than replacing it, so a suite-level
+# declaration cannot be cleared and the CRD-absent cases below could never be
+# expressed.
 tests:
-  - it: renders nothing when otel is disabled (default)
+  - it: renders nothing when otel is explicitly disabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the collectors by default
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: renders nothing when the opentelemetry.io CRDs are absent, though enabled by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when the CRDs are absent and otel is explicitly enabled
+    set:
+      otel.enabled: true
     asserts:
       - hasDocuments:
           count: 0
 
   - it: renders both collector CRs plus RBAC (SA + ClusterRole + binding) when enabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
     set:
       otel.enabled: true
     asserts:
@@ -15,6 +49,9 @@ tests:
           count: 5
 
   - it: the controller collector is a deployment-mode OpenTelemetryCollector
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
     set:
       otel.enabled: true
     documentSelector:
@@ -30,6 +67,9 @@ tests:
           value: deployment
 
   - it: the compute collector is a deployment-mode OpenTelemetryCollector
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
     set:
       otel.enabled: true
     documentSelector:
@@ -43,6 +83,9 @@ tests:
           value: deployment
 
   - it: points the exporter at the configured remote-write endpoint
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
     set:
       otel.enabled: true
       otel.remoteWriteEndpoint: http://vm.example:8428/api/v1/write
@@ -55,6 +98,9 @@ tests:
           value: http://vm.example:8428/api/v1/write
 
   - it: omits the controller collector when only compute is enabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
     set:
       otel.enabled: true
       otel.collectors.controller.enabled: false
@@ -64,6 +110,9 @@ tests:
           count: 4
 
   - it: includes the cadvisor job only when podMetrics is on
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
     set:
       otel.enabled: true
       otel.podMetrics: true
@@ -76,6 +125,9 @@ tests:
           count: 5
 
   - it: drops the cadvisor job when podMetrics is off
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
     set:
       otel.enabled: true
       otel.podMetrics: false

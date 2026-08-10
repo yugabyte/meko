@@ -219,12 +219,20 @@ affinity: {}
 
 # OpenTelemetry metrics collectors (controller/architecture/ac-metrics.md).
 # Deployed as OpenTelemetryCollector CRs reconciled by the OpenTelemetry
-# Operator — so this REQUIRES the operator (opentelemetry.io CRDs) in the
-# cluster. Two deployment-mode collectors scrape the amp components' Prometheus
+# Operator. Two deployment-mode collectors scrape the amp components' Prometheus
 # endpoints and remote-write to a Prometheus-compatible store.
 otel:
-  # -- Deploy the OTel collector CRs. Off by default; needs the OTel Operator.
-  enabled: false
+  # -- Deploy the OTel collector CRs. On by default, so a deployment gets its
+  # dashboards populated without a second, separately-remembered setting — an
+  # install that names a remote-write endpoint and runs no collector reports
+  # nothing, silently, which is the failure this default exists to prevent.
+  #
+  # Rendering is additionally gated on the opentelemetry.io CRDs being present,
+  # so this default cannot fail an install on a cluster without the
+  # OpenTelemetry Operator — there the collectors are skipped and NOTES.txt says
+  # they were. Set false to opt out on a cluster that has the operator but
+  # should not run these collectors.
+  enabled: true
   # -- Collector image. Empty => the operator's configured default (must be a
   # distro with the prometheus receiver + prometheusremotewrite exporter, i.e.
   # opentelemetry-collector-contrib).

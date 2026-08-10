@@ -21,8 +21,9 @@ For dashboards to show data, the collect step must be running:
      --set admissionWebhooks.autoGenerateCert.enabled=true \
      --set manager.collectorImage.repository=otel/opentelemetry-collector-contrib
    ```
-2. **`yb-amp-controller` deployed with `otel.enabled=true`**, pointed at this
-   store (`otel.remoteWriteEndpoint=http://victoria-metrics-server:8428/api/v1/write`).
+2. **`yb-amp-controller` deployed with `otel.enabled=true`** (the default), pointed
+   at this store
+   (`otel.remoteWriteEndpoint=http://victoria-metrics-server:8428/api/v1/write`).
 
 This chart is valid and installable without them — the dashboards are just empty
 until metrics arrive.
