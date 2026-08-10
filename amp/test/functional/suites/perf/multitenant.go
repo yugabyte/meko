@@ -454,21 +454,33 @@ func runMultitenant(t *core.T) error {
 	}
 
 	return t.Step("fork_latency", func(s *core.StepHandle) error {
-		// An empty parent: a fresh tenant's default branch, nothing written to it.
-		empty, _, err := createTenant(t, cl, env, poolID, len(tenants), params)
+		// A minimal parent: a fresh tenant's default branch carrying its schema and
+		// one row, against which the seeded parent below is 20k.
+		//
+		// Not literally empty. A branch nobody has written to has no determinable
+		// fork point even with an endpoint deployed — the controller rejects the
+		// fork with `cannot determine a fork point for the parent branch (deploy an
+		// endpoint on it first, or pass fork_point_lsn)`, which cost a 107-minute
+		// run its last step after every measurement had passed. stress/branch_churn
+		// already worked this out for itself: "the parent gets one writer + a seed
+		// row before any lane forks from it".
+		minimal, _, err := createTenant(t, cl, env, poolID, len(tenants), params)
 		if err != nil {
 			return err
 		}
-		tenants = append(tenants, empty)
+		tenants = append(tenants, minimal)
+		if err := seedTenant(t, &tenants[len(tenants)-1], forkMinimalRows); err != nil {
+			return fmt.Errorf("seed the minimal fork parent: %w", err)
+		}
 
-		emptyMS, err := timeFork(t, cl, poolID, empty.ClusterID, empty.BranchID, "fork-empty")
+		emptyMS, err := timeFork(t, cl, poolID, minimal.ClusterID, minimal.BranchID, "fork-empty")
 		if err != nil {
 			return err
 		}
 		if err := seedTenant(t, &tenants[len(tenants)-1], params.ForkSeedRows); err != nil {
 			return err
 		}
-		seededMS, err := timeFork(t, cl, poolID, empty.ClusterID, empty.BranchID, "fork-seeded")
+		seededMS, err := timeFork(t, cl, poolID, minimal.ClusterID, minimal.BranchID, "fork-seeded")
 		if err != nil {
 			return err
 		}
@@ -485,6 +497,11 @@ func runMultitenant(t *core.T) error {
 		return nil
 	})
 }
+
+// forkMinimalRows is the smallest parent a fork can be timed against: enough
+// that the branch HAS a fork point, few enough that its size is not what the
+// comparison against ForkSeedRows measures.
+const forkMinimalRows = 1
 
 // recordDriverRun keeps each driver's own output and says how much of the
 // requested window its series actually covers. pgbench's line stopped at 25s of
