@@ -5,11 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
-import { ArrowUpCircle, ArrowDownCircle, Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import axios from "axios";
 import { fetchAdminUsers, updateUserTier, type AdminUser, type Tier } from "@/lib/adminApi";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -60,21 +59,12 @@ const LABEL: Record<string, string> = {
   enterprise: "Enterprise",
 };
 
-// The tiers the admin console moves users through, low → high. Enterprise sits
-// above this ladder (sales-led): an enterprise user can only be downgraded to
-// pro, never upgraded from here.
+// The tiers the admin console can set, low → high (matches api_server's
+// validTiers). Each user's dropdown offers all of these except their current
+// tier, so an admin can move directly to any of them. Enterprise isn't settable
+// here (sales-led), but an enterprise user can be moved down to any of these.
 const TIER_LADDER = ["free", "standard", "pro"] as const;
 const PAGE_SIZE = 12;
-
-// The one-step upgrade/downgrade targets for a tier along the ladder.
-function tierSteps(tier: Tier): { up?: string; down?: string } {
-  const i = (TIER_LADDER as readonly string[]).indexOf(tier);
-  if (i === -1) return { down: "pro" }; // enterprise → step down into the ladder
-  return {
-    up: i + 1 < TIER_LADDER.length ? TIER_LADDER[i + 1] : undefined,
-    down: i - 1 >= 0 ? TIER_LADDER[i - 1] : undefined,
-  };
-}
 
 function errMessage(e: unknown, fallback: string): string {
   if (axios.isAxiosError(e)) {
@@ -251,8 +241,10 @@ export function UsersPage() {
               </TableRow>
             ) : (
               pageRows.map((u) => {
-                const steps = tierSteps(u.tier);
                 const rowPending = mutation.isPending && pending?.user.id === u.id;
+                // Every settable tier except the user's current one — the admin
+                // can jump straight to any of them (e.g. free → pro directly).
+                const options = TIER_LADDER.filter((t) => t !== u.tier);
                 return (
                   <TableRow key={u.id}>
                     <TableCell>
@@ -275,40 +267,28 @@ export function UsersPage() {
                       {u.created_at ? format(parseISO(u.created_at), "MMM d, yyyy") : "—"}
                     </TableCell>
                     <TableCell className="text-center">
-                      <div className="flex items-center justify-center gap-2">
-                        {steps.up && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="min-w-[6.5rem] gap-1.5"
-                            disabled={mutation.isPending}
-                            onClick={() => setPending({ user: u, tier: steps.up! })}
-                          >
-                            {rowPending && pending?.tier === steps.up ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <ArrowUpCircle className="h-3.5 w-3.5" />
-                            )}
-                            {LABEL[steps.up]}
-                          </Button>
-                        )}
-                        {steps.down && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="min-w-[6.5rem] gap-1.5"
-                            disabled={mutation.isPending}
-                            onClick={() => setPending({ user: u, tier: steps.down! })}
-                          >
-                            {rowPending && pending?.tier === steps.down ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <ArrowDownCircle className="h-3.5 w-3.5" />
-                            )}
-                            {LABEL[steps.down]}
-                          </Button>
-                        )}
-                      </div>
+                      {/* Pick any other tier to move this user to; value stays
+                          empty so the trigger reads as an action, not a bound
+                          field. Choosing one opens the confirm dialog. */}
+                      <Select
+                        value=""
+                        disabled={mutation.isPending}
+                        onValueChange={(tier) => setPending({ user: u, tier })}
+                      >
+                        <SelectTrigger
+                          className="mx-auto w-36 border-border"
+                          aria-label={`Change tier for ${u.email}`}
+                        >
+                          <SelectValue placeholder={rowPending ? "Updating…" : "Change tier"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {options.map((t) => (
+                            <SelectItem key={t} value={t}>
+                              {LABEL[t]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </TableCell>
                   </TableRow>
                 );
