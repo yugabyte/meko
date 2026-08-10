@@ -78,6 +78,10 @@ type ampControlPlaneEnv interface {
 // asserting a flat zero would be asserting something the retry itself breaks.
 type churnRun struct {
 	retried atomic.Int64
+	// seedEndpoint is the writer seed_parent leaves on the DEFAULT branch. The
+	// churn's own endpoints live on its own branches, so this one is the only
+	// endpoint the default branch is allowed to have at the end.
+	seedEndpoint string
 }
 
 // runBranchChurn creates one cluster, runs churnLanes × churnCycles branch
@@ -145,6 +149,7 @@ func runBranchChurn(t *core.T) (err error) {
 			return fmt.Errorf("parent endpoint create reported success but the branch lists none")
 		}
 		ep := eps[len(eps)-1]
+		run.seedEndpoint = ep.ID
 		s.Set("endpoint", ep.ID)
 		conn, err := env.ConnectEndpoint(t.Context, ep)
 		if err != nil {
@@ -205,8 +210,17 @@ func runBranchChurn(t *core.T) (err error) {
 		if err != nil {
 			return fmt.Errorf("list endpoints after the churn: %w", err)
 		}
-		if len(eps) != 0 {
-			return fmt.Errorf("the default branch lists %d endpoint(s) after the churn, want 0 — the churn only ever created endpoints on its own branches", len(eps))
+		// seed_parent's writer is still there on purpose — it is what gives the
+		// lanes a determinable fork point, and only the cascade at teardown
+		// removes it. So the bar is "exactly that endpoint and nothing else":
+		// an extra one, or a different one, still means the churn leaked.
+		if len(eps) != 1 || eps[0].ID != run.seedEndpoint {
+			ids := make([]string, 0, len(eps))
+			for _, e := range eps {
+				ids = append(ids, e.ID)
+			}
+			return fmt.Errorf("the default branch lists %v after the churn, want only seed_parent's writer %s — the churn only ever created endpoints on its own branches",
+				ids, run.seedEndpoint)
 		}
 		failed, err := cl.ListTasks(t.Context, controller.ListTasksOptions{ClusterID: proj.ID, Status: controller.TaskFailed, Limit: 50})
 		if err != nil {

@@ -205,6 +205,42 @@ func createClusterOnPool(ctx context.Context, cl ampCtl, poolID, name string, pg
 	return ampCluster{poolID: poolID, projID: proj.ID, branchID: proj.DefaultBranch.BranchID}, nil
 }
 
+// classifyEndpointCreate marks an abandoned wait as an environment failure
+// rather than a product one.
+//
+// A create_endpoint task that FAILS is the product refusing to bring an endpoint
+// up. A wait that runs out of context is not: on this cluster an endpoint pod
+// requests 40Gi ephemeral against ~43.8Gi allocatable, so exactly one fits per
+// node and a cold endpoint waits on a freshly autoscaled node — 10 to 19 minutes
+// observed, against a warm median of 18s. Four tests in nightly 0.260807.1
+// reported "endpoint never came up" for endpoints the controller log shows were
+// created and deployed minutes after the test stopped watching.
+//
+// The two arrive at the call site as the same error, so the task's own status is
+// the only thing that separates them.
+func classifyEndpointCreate(ctx context.Context, cl ampCtl, clusterID string, err error) error {
+	if ctx.Err() == nil || hasFailedEndpointTask(ctx, cl, clusterID) {
+		return err
+	}
+	return core.AsEnvFailure(fmt.Errorf("%w — no create_endpoint task failed, so the endpoint was still being provisioned when this wait ran out (a cold endpoint needs a fresh node); this is the cluster being slow, not the product refusing", err))
+}
+
+// hasFailedEndpointTask reports whether any create_endpoint task for the cluster
+// actually failed, as opposed to still being in flight.
+func hasFailedEndpointTask(ctx context.Context, cl ampCtl, clusterID string) bool {
+	// The caller's ctx is typically already expired, which is the whole reason we
+	// are here — so this lookup gets its own budget.
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	failed, err := cl.ListTasks(lctx, controller.ListTasksOptions{
+		ClusterID: clusterID, Kind: "create_endpoint", Status: controller.TaskFailed, Limit: 10,
+	})
+	if err != nil {
+		return false
+	}
+	return failed.Total > 0
+}
+
 // createEndpoint deploys a read_write endpoint on the addressed branch and
 // returns it, converging on the controller's non-idempotent create: a failed
 // helm deploy ("services yb-ep-… not found") can leave a partial record whose
@@ -235,7 +271,7 @@ func createEndpointReq(ctx context.Context, cl ampCtl, poolID, projID, branchID 
 			if transientEndpointDeploy(err) {
 				continue
 			}
-			return controller.Endpoint{}, lastErr
+			return controller.Endpoint{}, classifyEndpointCreate(ctx, cl, projID, lastErr)
 		}
 		if ep, ok := lastEndpoint(ctx, cl, poolID, projID, branchID); ok {
 			return ep, nil

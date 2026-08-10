@@ -139,7 +139,16 @@ func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 	childEP, err := createEndpointReq(ectx, cl, proj.poolID, proj.projID, child.BranchID,
 		controller.CreateEndpointRequest{Role: roleReadWrite})
 	if err != nil {
-		return fmt.Errorf("the fork at LSN %s was ACCEPTED but its endpoint never came up — a fork the system registers must be usable, so a fork point the ancestor's GC already reclaimed has to be rejected at registration instead: %w", earlyLSN, err)
+		// A doomed fork's endpoint FAILS — the task records an error. This one
+		// merely never finished, which on a cluster that cannot place a pod looks
+		// identical and says nothing about the fork. Only a failed task is
+		// evidence, so anything else is reported as an environment failure rather
+		// than as a verdict on the product.
+		if !hasFailedEndpointTask(ctx, cl, proj.projID) {
+			return core.AsEnvFailure(fmt.Errorf("the fork at LSN %s was accepted, but its endpoint neither came up nor failed within %s — no create_endpoint task failed, so the cluster never placed the pod and whether the fork is usable stays unknown: %w",
+				earlyLSN, cutoffDoomedEndpointBudget, err))
+		}
+		return fmt.Errorf("the fork at LSN %s was ACCEPTED but its endpoint FAILED to come up — a fork the system registers must be usable, so a fork point the ancestor's GC already reclaimed has to be rejected at registration instead: %w", earlyLSN, err)
 	}
 	kid, err := connect(ectx, childEP)
 	if err != nil {
