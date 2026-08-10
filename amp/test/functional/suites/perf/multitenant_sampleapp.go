@@ -140,6 +140,9 @@ func (w *sampleappWorkload) RunOnce(ctx context.Context, ex exec.RemoteExecutor,
 	if err != nil {
 		return Sample{}, fmt.Errorf("%s: %w", w.Name(), err)
 	}
+	// The jar's own log, which is what gets attached for a human to read. The
+	// parser cannot supply it: it is handed the text and returns measurements.
+	sample.Raw = log
 	return sample, nil
 }
 
@@ -257,7 +260,6 @@ func parseSampleAppMetrics(log string) (Sample, error) {
 		TPS:          mean,
 		LatencyAvgMS: weighted / totalTPS,
 		Series:       points,
-		Raw:          fmt.Sprintf("%d windows", len(windows)),
 	}, nil
 }
 

@@ -535,3 +535,25 @@ func TestMeasurementWindowIsLongEnoughToMeanSomething(t *testing.T) {
 		t.Errorf("iterations = %d, want at least 3 so the median is not one run", p.Iterations)
 	}
 }
+
+// The attached driver log must be the driver's own output. It was the string
+// "60 windows" — the parser's window count, which is a measurement, not a log —
+// so a human opening driver-bank_transfer-solo-1.log got 10 bytes.
+func TestSampleAppSampleCarriesTheDriverLog(t *testing.T) {
+	const log = `2026-08-10 19:40:12,001 [INFO] Tracker - Read: 0.00 ops/sec (0.00 ms/op), 0 total ops  |  Write: 120.00 ops/sec (8.00 ms/op), 600 total ops
+2026-08-10 19:40:17,001 [INFO] Tracker - Read: 0.00 ops/sec (0.00 ms/op), 0 total ops  |  Write: 130.00 ops/sec (7.50 ms/op), 1250 total ops
+2026-08-10 19:40:22,001 [INFO] Tracker - Read: 0.00 ops/sec (0.00 ms/op), 0 total ops  |  Write: 125.00 ops/sec (7.80 ms/op), 1875 total ops
+`
+	s, err := parseSampleAppMetrics(log)
+	if err != nil {
+		t.Fatalf("parseSampleAppMetrics: %v", err)
+	}
+	if len(s.Series) != 3 {
+		t.Errorf("series has %d points, want 3", len(s.Series))
+	}
+	// The parser is handed the text and returns measurements; it must not invent a
+	// stand-in for the log it was given.
+	if strings.Contains(s.Raw, "windows") {
+		t.Errorf("Raw = %q — a window count is a measurement, not the driver's log", s.Raw)
+	}
+}

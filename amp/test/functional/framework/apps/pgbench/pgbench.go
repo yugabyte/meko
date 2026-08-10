@@ -90,7 +90,7 @@ func Run(ctx context.Context, ex exec.RemoteExecutor, opts RunOptions) (Result, 
 	args = append(args, opts.ExtraArgs...)
 	args = append(args, connArgs(opts.Conn)...)
 
-	res, err := ex.Run(ctx, envPrefix(opts.Conn)+strings.Join(args, " "))
+	res, err := ex.Run(ctx, quietTrace(envPrefix(opts.Conn)+strings.Join(args, " ")))
 	if err != nil {
 		return Result{}, fmt.Errorf("pgbench run: %w", err)
 	}
