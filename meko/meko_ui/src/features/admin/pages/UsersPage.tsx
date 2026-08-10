@@ -3,9 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
-import { ArrowUpCircle, ArrowDownCircle, Loader2, Search } from "lucide-react";
-import { fetchAdminUsers, updateUserTier, type AdminUser } from "@/lib/api/adminApi";
-import { getApiErrorMessage } from "@/lib/api/mekoApi";
+import { ArrowUpCircle, ArrowDownCircle, History, Loader2, Search } from "lucide-react";
+import {
+  fetchAdminUsers,
+  fetchUserTierAudit,
+  updateUserTier,
+  type AdminUser,
+} from "@/lib/api/adminApi";
+import { getApiErrorMessage, getCurrentUser } from "@/lib/api/mekoApi";
 import { toast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +41,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -72,6 +84,8 @@ export function UsersPage() {
   const [page, setPage] = useState(1);
   // The user whose tier change is awaiting confirmation in the dialog.
   const [target, setTarget] = useState<AdminUser | null>(null);
+  // The user whose tier-change history is open.
+  const [historyUser, setHistoryUser] = useState<AdminUser | null>(null);
   const queryClient = useQueryClient();
 
   const usersQuery = useQuery({
@@ -80,9 +94,24 @@ export function UsersPage() {
     staleTime: 60_000,
   });
 
+  // The signed-in operator, forwarded as the actor on tier changes so the
+  // backend can audit who made them.
+  const meQuery = useQuery({
+    queryKey: ["current-user"],
+    queryFn: () => getCurrentUser(),
+    staleTime: 300_000,
+  });
+  const me = meQuery.data;
+
+  const historyQuery = useQuery({
+    queryKey: ["admin-tier-audit", historyUser?.id],
+    queryFn: () => fetchUserTierAudit(historyUser!.id),
+    enabled: historyUser !== null,
+  });
+
   const mutation = useMutation({
     mutationFn: ({ userId, tier }: { userId: string; tier: "free" | "pro" }) =>
-      updateUserTier(userId, tier),
+      updateUserTier(userId, tier, me ? { email: me.email, uuid: me.account_id } : undefined),
     onSuccess: (_data, { tier }) => {
       toast({
         title: "Tier updated",
@@ -224,22 +253,33 @@ export function UsersPage() {
                       {u.created_at ? format(parseISO(u.created_at), "MMM d, yyyy") : "—"}
                     </TableCell>
                     <TableCell className="text-center">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="min-w-[7rem] gap-1.5"
-                        disabled={mutation.isPending}
-                        onClick={() => setTarget(u)}
-                      >
-                        {isThisPending ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : u.tier === "pro" ? (
-                          <ArrowDownCircle className="h-3.5 w-3.5" />
-                        ) : (
-                          <ArrowUpCircle className="h-3.5 w-3.5" />
-                        )}
-                        {u.tier === "pro" ? "Free" : "Pro"}
-                      </Button>
+                      <div className="flex items-center justify-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1.5"
+                          onClick={() => setHistoryUser(u)}
+                          title="Tier-change history"
+                        >
+                          <History className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="min-w-[7rem] gap-1.5"
+                          disabled={mutation.isPending}
+                          onClick={() => setTarget(u)}
+                        >
+                          {isThisPending ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : u.tier === "pro" ? (
+                            <ArrowDownCircle className="h-3.5 w-3.5" />
+                          ) : (
+                            <ArrowUpCircle className="h-3.5 w-3.5" />
+                          )}
+                          {u.tier === "pro" ? "Free" : "Pro"}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -304,6 +344,47 @@ export function UsersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={historyUser !== null} onOpenChange={(o) => !o && setHistoryUser(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Tier history — {historyUser?.email}</DialogTitle>
+            <DialogDescription>Who changed this user's tier, and when.</DialogDescription>
+          </DialogHeader>
+          {historyQuery.isLoading ? (
+            <p className="py-4 text-sm text-muted-foreground">Loading…</p>
+          ) : historyQuery.isError ? (
+            <p className="py-4 text-sm text-destructive">Couldn't load tier history.</p>
+          ) : (historyQuery.data?.length ?? 0) === 0 ? (
+            <p className="py-4 text-sm text-muted-foreground">No tier changes recorded.</p>
+          ) : (
+            <div className="max-h-80 overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>When</TableHead>
+                    <TableHead>Change</TableHead>
+                    <TableHead>By</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {historyQuery.data!.map((e, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                        {format(parseISO(e.created_at), "MMM d, yyyy HH:mm")}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {LABEL[e.old_tier] ?? e.old_tier} → {LABEL[e.new_tier] ?? e.new_tier}
+                      </TableCell>
+                      <TableCell className="text-sm">{e.actor_email}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,5 +1,16 @@
 import { Router } from "express";
 import { apiServerGet, apiServerSend } from "../apiServerClient";
+import { type AuthenticatedRequest } from "../middleware/requireAdminAuth";
+
+// One tier-change audit event (who changed a user's tier, old→new, when).
+type TierAuditEntry = {
+  actor_email: string;
+  actor_uuid?: string;
+  source: string;
+  old_tier: string;
+  new_tier: string;
+  created_at: string;
+};
 
 // Admin usage metrics, proxied from api_server (which owns the queries across
 // the meko_system + data-plane DBs). meko_admin adds no SQL of its own here.
@@ -61,15 +72,28 @@ router.get("/dataplane", async (_req, res, next) => {
   }
 });
 
-/** PATCH /api/admin/usage/users/:id/tier — override a user's tier. */
+/** PATCH /api/admin/usage/users/:id/tier — override a user's tier. Forwards the
+ *  authenticated operator so api_server can audit who made the change. */
 router.patch("/users/:id/tier", async (req, res, next) => {
   try {
     const { tier } = req.body as { tier?: string };
+    const actor = (req as unknown as AuthenticatedRequest).adminUser;
     const data = await apiServerSend<{ id: string; tier: string }>(
       "PATCH",
       `/users/${req.params.id}/tier`,
       { tier },
+      { "X-Meko-Admin-Actor-Email": actor.email, "X-Meko-Admin-Actor-Uuid": actor.sub },
     );
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** GET /api/admin/usage/users/:id/tier-audit — tier-change history for a user. */
+router.get("/users/:id/tier-audit", async (req, res, next) => {
+  try {
+    const data = await apiServerGet<TierAuditEntry[]>(`/users/${req.params.id}/tier-audit`);
     res.json(data);
   } catch (e) {
     next(e);

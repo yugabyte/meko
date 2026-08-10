@@ -362,6 +362,7 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	adminGroup.GET("/token-savings", adminH.Executive)
 	adminGroup.GET("/dataplane", adminH.DataPlane)
 	adminGroup.PATCH("/users/:id/tier", adminH.UpdateUserTier)
+	adminGroup.GET("/users/:id/tier-audit", adminH.TierAudit)
 
 	// AMP controller registration, managed by meko_admin through api_server so
 	// the write path shares api_server's system-DB connection.

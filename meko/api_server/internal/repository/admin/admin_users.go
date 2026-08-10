@@ -100,25 +100,6 @@ func (r *AdminRepo) ListUserIDs(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
-// UpdateUserTier sets a user's user_type. Returns (true, nil) on a hit,
-// (false, nil) when no user matched the id (caller maps to not-found).
-func (r *AdminRepo) UpdateUserTier(ctx context.Context, userID, tier string) (bool, error) {
-	res, err := r.systemDB.ExecContext(ctx,
-		`UPDATE meko_system.users
-		 SET user_type = $1::meko_system.account_type, updated_at = NOW()
-		 WHERE user_id = $2`,
-		tier, userID,
-	)
-	if err != nil {
-		return false, fmt.Errorf("update user tier: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("update user tier rows: %w", err)
-	}
-	return n > 0, nil
-}
-
 // GetUserType returns the raw user_type for a single user, or "" and
 // sql.ErrNoRows when the user does not exist.
 func (r *AdminRepo) GetUserType(ctx context.Context, userID string) (string, error) {

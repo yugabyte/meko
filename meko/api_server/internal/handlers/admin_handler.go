@@ -153,7 +153,16 @@ func (h *AdminHandler) UpdateUserTier(c echo.Context) error {
 	if tier == "" {
 		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "tier is required")
 	}
-	err := h.svc.UpdateUserTier(c.Request().Context(), userID, tier)
+	// Operator identity, set by the trusted admin proxy from its authenticated
+	// session (never by the browser). Required so every tier change is
+	// attributable in the audit log — no anonymous upgrades.
+	actorEmail := strings.TrimSpace(c.Request().Header.Get("X-Meko-Admin-Actor-Email"))
+	actorUUID := strings.TrimSpace(c.Request().Header.Get("X-Meko-Admin-Actor-Uuid"))
+	if actorEmail == "" {
+		return apiError(c, http.StatusBadRequest, "MISSING_ACTOR",
+			"operator identity required (X-Meko-Admin-Actor-Email)")
+	}
+	err := h.svc.UpdateUserTier(c.Request().Context(), userID, tier, actorEmail, actorUUID)
 	if errors.Is(err, adminsvc.ErrInvalidTier) {
 		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "invalid tier")
 	}
@@ -164,4 +173,26 @@ func (h *AdminHandler) UpdateUserTier(c echo.Context) error {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 	return ok(c, http.StatusOK, map[string]any{"id": userID, "tier": tier})
+}
+
+// TierAudit handles GET /api/v1/admin/users/:id/tier-audit — a user's
+// tier-change history (who changed it, old→new, when), newest first.
+//
+//	@Summary	User tier-change audit history (admin)
+//	@Tags		admin
+//	@Produce	json
+//	@Param		id	path		string	true	"User UUID"
+//	@Success	200	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/users/{id}/tier-audit [get]
+func (h *AdminHandler) TierAudit(c echo.Context) error {
+	userID := strings.TrimSpace(c.Param("id"))
+	if userID == "" {
+		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "user id is required")
+	}
+	entries, err := h.svc.ListUserTierAudit(c.Request().Context(), userID)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, entries)
 }

@@ -40,15 +40,47 @@ export async function fetchAdminUsers(options: RouteOptions = {}): Promise<Admin
   return res.users;
 }
 
-/** PATCH /admin/users/:id/tier — override a single user's tier (Free <-> Pro). */
+/** PATCH /admin/users/:id/tier — override a single user's tier. The actor
+ *  (the signed-in operator) is forwarded so api_server can audit who made the
+ *  change. NOTE: this admin view is single-operator/dev-only (no per-user role
+ *  gating yet), so the actor is browser-supplied; the production admin path
+ *  (meko_admin) sets it server-side. */
 export async function updateUserTier(
   userId: string,
   tier: "free" | "pro",
+  actor?: { email: string; uuid?: string },
 ): Promise<{ id: string; tier: string }> {
+  const headers: Record<string, string> = {};
+  if (actor?.email) headers["X-Meko-Admin-Actor-Email"] = actor.email;
+  if (actor?.uuid) headers["X-Meko-Admin-Actor-Uuid"] = actor.uuid;
   return request<{ id: string; tier: string }>(
     `/admin/users/${encodeURIComponent(userId)}/tier`,
     "PATCH",
     { tier },
+    { headers },
+  );
+}
+
+/** One tier-change audit event: who changed a user's tier, old→new, when. */
+export type TierAuditEntry = {
+  actor_email: string;
+  actor_uuid?: string;
+  source: string;
+  old_tier: string;
+  new_tier: string;
+  created_at: string;
+};
+
+/** GET /admin/users/:id/tier-audit — a user's tier-change history (newest first). */
+export async function fetchUserTierAudit(
+  userId: string,
+  options: RouteOptions = {},
+): Promise<TierAuditEntry[]> {
+  return request<TierAuditEntry[]>(
+    `/admin/users/${encodeURIComponent(userId)}/tier-audit`,
+    "GET",
+    undefined,
+    options,
   );
 }
 

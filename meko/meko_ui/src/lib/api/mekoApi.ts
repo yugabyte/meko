@@ -291,7 +291,7 @@ export async function request<T>(
   path: string,
   method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
   body?: unknown,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; headers?: Record<string, string> } = {},
 ): Promise<T> {
   try {
     const res = await apiClient.request<ApiEnvelope<T>>({
@@ -299,6 +299,7 @@ export async function request<T>(
       method,
       data: method === "GET" ? undefined : body,
       signal: options.signal,
+      headers: options.headers,
     });
 
     const payload = res.data;

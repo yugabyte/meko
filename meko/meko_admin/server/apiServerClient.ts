@@ -19,14 +19,21 @@ export async function apiServerGet<T>(path: string, query?: Record<string, strin
   return body.data as T;
 }
 
-/** Send a method+JSON body to an api_server admin route; returns `data`. */
-export async function apiServerSend<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** Send a method+JSON body to an api_server admin route; returns `data`.
+ *  extraHeaders lets callers attach the operator identity (X-Meko-Admin-Actor-*)
+ *  so api_server can audit who performed the action. */
+export async function apiServerSend<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
   if (!BASE_URL) throw new Error("MEKO_API_URL is not configured");
   const url = new URL(`/api/v1/admin${path}`, BASE_URL);
 
   const resp = await fetch(url, {
     method,
-    headers: { "X-Meko-Admin-Secret": ADMIN_SECRET, "Content-Type": "application/json" },
+    headers: { "X-Meko-Admin-Secret": ADMIN_SECRET, "Content-Type": "application/json", ...(extraHeaders ?? {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const payload = (await resp.json().catch(() => ({}))) as { data?: T; error?: { message?: string } };

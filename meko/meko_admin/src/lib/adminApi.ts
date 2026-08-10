@@ -195,3 +195,19 @@ export async function updateUserTier(
   );
   return data;
 }
+
+/** One tier-change audit event: who changed a user's tier, old→new, when. */
+export type TierAuditEntry = {
+  actor_email: string;
+  actor_uuid?: string;
+  source: string;
+  old_tier: string;
+  new_tier: string;
+  created_at: string;
+};
+
+/** Fetch a user's tier-change history (newest first). */
+export async function fetchUserTierAudit(userId: string): Promise<TierAuditEntry[]> {
+  const { data } = await http.get<TierAuditEntry[]>(`/usage/users/${userId}/tier-audit`);
+  return data ?? [];
+}

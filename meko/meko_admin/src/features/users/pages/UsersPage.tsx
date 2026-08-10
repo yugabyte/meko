@@ -5,10 +5,24 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, parseISO } from "date-fns";
 import { toast } from "sonner";
-import { Search } from "lucide-react";
+import { History, Search } from "lucide-react";
 import axios from "axios";
-import { fetchAdminUsers, updateUserTier, type AdminUser, type Tier } from "@/lib/adminApi";
+import {
+  fetchAdminUsers,
+  fetchUserTierAudit,
+  updateUserTier,
+  type AdminUser,
+  type Tier,
+} from "@/lib/adminApi";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -128,7 +142,15 @@ export function UsersPage() {
   const [page, setPage] = useState(1);
   // The user + target tier awaiting confirmation in the dialog.
   const [pending, setPending] = useState<{ user: AdminUser; tier: string } | null>(null);
+  // The user whose tier-change history is open.
+  const [historyUser, setHistoryUser] = useState<AdminUser | null>(null);
   const queryClient = useQueryClient();
+
+  const historyQuery = useQuery({
+    queryKey: ["admin-tier-audit", historyUser?.id],
+    queryFn: () => fetchUserTierAudit(historyUser!.id),
+    enabled: historyUser !== null,
+  });
 
   const usersQuery = useQuery({
     queryKey: ["admin-users"],
@@ -267,28 +289,39 @@ export function UsersPage() {
                       {u.created_at ? format(parseISO(u.created_at), "MMM d, yyyy") : "—"}
                     </TableCell>
                     <TableCell className="text-center">
-                      {/* Pick any other tier to move this user to; value stays
-                          empty so the trigger reads as an action, not a bound
-                          field. Choosing one opens the confirm dialog. */}
-                      <Select
-                        value=""
-                        disabled={mutation.isPending}
-                        onValueChange={(tier) => setPending({ user: u, tier })}
-                      >
-                        <SelectTrigger
-                          className="mx-auto w-36 border-border"
-                          aria-label={`Change tier for ${u.email}`}
+                      <div className="flex items-center justify-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1.5"
+                          onClick={() => setHistoryUser(u)}
+                          title="Tier-change history"
                         >
-                          <SelectValue placeholder={rowPending ? "Updating…" : "Change tier"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {options.map((t) => (
-                            <SelectItem key={t} value={t}>
-                              {LABEL[t]}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                          <History className="h-3.5 w-3.5" />
+                        </Button>
+                        {/* Pick any other tier to move this user to; value stays
+                            empty so the trigger reads as an action, not a bound
+                            field. Choosing one opens the confirm dialog. */}
+                        <Select
+                          value=""
+                          disabled={mutation.isPending}
+                          onValueChange={(tier) => setPending({ user: u, tier })}
+                        >
+                          <SelectTrigger
+                            className="w-36 border-border"
+                            aria-label={`Change tier for ${u.email}`}
+                          >
+                            <SelectValue placeholder={rowPending ? "Updating…" : "Change tier"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {options.map((t) => (
+                              <SelectItem key={t} value={t}>
+                                {LABEL[t]}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -355,6 +388,47 @@ export function UsersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={historyUser !== null} onOpenChange={(o) => !o && setHistoryUser(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Tier history — {historyUser?.email}</DialogTitle>
+            <DialogDescription>Who changed this user's tier, and when.</DialogDescription>
+          </DialogHeader>
+          {historyQuery.isLoading ? (
+            <p className="py-4 text-sm text-muted-foreground">Loading…</p>
+          ) : historyQuery.isError ? (
+            <p className="py-4 text-sm text-destructive">Couldn't load tier history.</p>
+          ) : (historyQuery.data?.length ?? 0) === 0 ? (
+            <p className="py-4 text-sm text-muted-foreground">No tier changes recorded.</p>
+          ) : (
+            <div className="max-h-80 overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>When</TableHead>
+                    <TableHead>Change</TableHead>
+                    <TableHead>By</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {historyQuery.data!.map((e, i) => (
+                    <TableRow key={i}>
+                      <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                        {format(parseISO(e.created_at), "MMM d, yyyy HH:mm")}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {LABEL[e.old_tier] ?? e.old_tier} → {LABEL[e.new_tier] ?? e.new_tier}
+                      </TableCell>
+                      <TableCell className="text-sm">{e.actor_email}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
