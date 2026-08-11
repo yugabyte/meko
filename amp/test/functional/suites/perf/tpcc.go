@@ -253,7 +253,7 @@ func tpccWorkloadFor(cfg perfConfig, conn pg.ConnInfo) Workload {
 // control plane deployed next creates its yb_storage database over YSQL. Once
 // it is serving, the backing's pods are known and the metrics sampler starts.
 func (r *perfRun) waitReady(ctx context.Context) error {
-	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout); err != nil {
+	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout, r.sink, r.logf); err != nil {
 		return err
 	}
 	r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)

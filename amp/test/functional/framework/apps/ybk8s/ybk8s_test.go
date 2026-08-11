@@ -189,6 +189,7 @@ func TestDeployRF1DefaultBuildsBothPaths(t *testing.T) {
 			t.Errorf("helm install missing %q in: %s", want, joined)
 		}
 	}
+
 }
 
 func TestDeployRF3SetsThreeReplicas(t *testing.T) {

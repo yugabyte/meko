@@ -71,7 +71,7 @@ func TestBuildRunCommandTPCC(t *testing.T) {
 		"java -Xmx8g -jar benchbase.jar -b 'tpcc'",
 		"-c 'config/yugabyte/sample_tpcc_config.xml'",
 		"--create=true --load=true --execute=true",
-		"-im 5000",
+		"-im 1000",
 		"> 'benchbase.out' 2>&1",
 	} {
 		if !strings.Contains(got, want) {

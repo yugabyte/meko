@@ -1171,3 +1171,64 @@ func TestControllerWaitDiagnosticsCarriesCrashLogs(t *testing.T) {
 		t.Errorf("diagnostics pulled logs for a pod that is not the controller:\n%s", got)
 	}
 }
+
+// A co-located backing's storage database is created IN the cluster. Dialling it
+// from here needs a route into the pod CIDR, and where that is absent every
+// attempt times out against a healthy cluster: three call sites failed that way
+// on 0.260810.0 while `select 1` answered from inside the tserver.
+func TestColocatedBackingCreatesItsStorageDBInCluster(t *testing.T) {
+	rec := newRecorder()
+	a := New(Config{
+		Namespace: "ampqa-cp-1",
+		Backing: Backing{
+			Mode:           BackingExternal,
+			HostPorts:      "yb-tserver-0.yb-tservers.ampqa-yb-1.svc.cluster.local:5433",
+			AdminHostPorts: "10.21.139.6:5433",
+			KubeNamespace:  "ampqa-yb-1",
+			User:           "yugabyte",
+		},
+	}).WithKube(k8s.New(k8s.Config{Namespace: "ampqa-cp-1"}).WithRunner(rec.run))
+
+	if err := a.ensureExternalStorageDB(context.Background()); err != nil {
+		t.Fatalf("ensureExternalStorageDB: %v", err)
+	}
+
+	var execs []string
+	for _, c := range rec.snapshot() {
+		if strings.Contains(c.argv, "exec") {
+			execs = append(execs, c.argv)
+		}
+		if strings.Contains(c.argv, "10.21.139.6") {
+			t.Errorf("dialled the admin host-ports instead of exec-ing in the cluster: %s", c.argv)
+		}
+	}
+	if len(execs) != 1 {
+		t.Fatalf("ran %d exec commands, want 1: %v", len(execs), execs)
+	}
+	for _, want := range []string{"-n ampqa-yb-1", "yb-tserver-0", "CREATE DATABASE", "command -v ysqlsh"} {
+		if !strings.Contains(execs[0], want) {
+			t.Errorf("exec is missing %q: %s", want, execs[0])
+		}
+	}
+	// The tserver container's workdir is not /home/yugabyte, so an unresolved
+	// relative path exits 127 — which already burned one loop iteration.
+	if strings.Contains(execs[0], `"$(bin/ysqlsh`) {
+		t.Errorf("the script assumes where ysqlsh lives: %s", execs[0])
+	}
+}
+
+// A genuinely remote backing has no pods here, so it keeps dialling.
+func TestRemoteBackingStillDialsItsAdminHostPorts(t *testing.T) {
+	a := New(Config{
+		Namespace: "ampqa-cp-1",
+		Backing: Backing{
+			Mode:           BackingExternal,
+			HostPorts:      "yb.example.com:5433",
+			AdminHostPorts: "yb.example.com:5433",
+			User:           "yugabyte",
+		},
+	})
+	if ns := a.cfg.Backing.KubeNamespace; ns != "" {
+		t.Fatalf("KubeNamespace = %q, want empty for a remote backing", ns)
+	}
+}

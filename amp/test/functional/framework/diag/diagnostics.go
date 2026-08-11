@@ -34,6 +34,8 @@ type Kube interface {
 	Describe(ctx context.Context, kind, name string) (string, error)
 	Events(ctx context.Context) (string, error)
 	Wide(ctx context.Context, kind string) (string, error)
+	Nodes(ctx context.Context) (string, error)
+	NodeUsage(ctx context.Context) (string, error)
 }
 
 // endpointPodPrefix marks the controller-deployed endpoint compute pods
@@ -69,7 +71,15 @@ type scheme struct {
 	events       string
 	resourcesDir string // "" → no wide listings
 	describeAll  bool   // describe every pod, not just unhealthy + yb-ep-*
+	treePrefix   string // where this scheme files cluster-scoped evidence
 }
+
+// nodesName / nodeUsageName file the cluster-scoped node evidence in whichever
+// tree this scheme owns, using its own prefix — the amp tree separates with a
+// space ("Amp events.txt") and the others with a folder ("Universe logs/"), so
+// this cannot be derived from the events path.
+func (s scheme) nodesName() string     { return s.treePrefix + "nodes.txt" }
+func (s scheme) nodeUsageName() string { return s.treePrefix + "node-usage.txt" }
 
 // ampScheme files amp control-plane pods under "Amp ...", but routes any
 // co-located backing-YugabyteDB pod (yugabyted / yb-master / yb-tserver, which
@@ -92,6 +102,7 @@ func ampScheme() scheme {
 		},
 		events:       "Amp events.txt",
 		resourcesDir: "Amp resources",
+		treePrefix:   "Amp ",
 	}
 }
 
@@ -111,6 +122,7 @@ func universeScheme() scheme {
 		},
 		events:      "Universe logs/events.txt",
 		describeAll: true,
+		treePrefix:  "Universe logs/",
 	}
 }
 
@@ -120,6 +132,7 @@ func ybaScheme() scheme {
 		describeName: func(pod string) string { return "YBA logs/" + pod + "/describe.txt" },
 		events:       "YBA logs/events.txt",
 		describeAll:  true,
+		treePrefix:   "YBA logs/",
 	}
 }
 
@@ -181,6 +194,26 @@ func collect(ctx context.Context, kube Kube, namespace string, sink apps.Artifac
 		logf("diagnostics: get events in %s (best-effort): %v", namespace, err)
 	} else {
 		add(sink, logf, sc.events, "txt", events)
+	}
+
+	// Node-level state. A pod can be Running and Ready with zero restarts while
+	// its node is starved, and from inside the pod that is indistinguishable from
+	// the product hanging: in run 6a26ee65 all three tservers of an RF=3 backing
+	// stopped making progress in the same second, stayed Ready, and the client's
+	// TCP connects timed out — with nothing collected about the nodes, whether
+	// that was YB or the cluster could not be settled afterwards.
+	//
+	// Cluster-scoped, so it is gathered once per collection rather than per
+	// namespace, and `top` needs metrics-server — hence best-effort like the rest.
+	if out, err := kube.Nodes(ctx); err != nil {
+		logf("diagnostics: describe nodes (best-effort): %v", err)
+	} else {
+		add(sink, logf, sc.nodesName(), "txt", out)
+	}
+	if out, err := kube.NodeUsage(ctx); err != nil {
+		logf("diagnostics: top nodes (best-effort, needs metrics-server): %v", err)
+	} else {
+		add(sink, logf, sc.nodeUsageName(), "txt", out)
 	}
 
 	if sc.resourcesDir != "" {

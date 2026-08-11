@@ -38,11 +38,28 @@ func TestBothInitAndRunSuppressTheTrace(t *testing.T) {
 		t.Fatalf("ran %d pgbench commands, want 2 (init + run): %v", len(invocations), invocations)
 	}
 	for i, c := range invocations {
-		if !strings.Contains(c, "grep -vE '^ysql_bench: client [0-9]+ '") {
+		if !strings.Contains(c, "ysql_bench: client [0-9]+ ") {
 			t.Errorf("pgbench command %d is unfiltered, so its log will be megabytes of client trace:\n%s", i, c)
+		}
+		// The time series is the -P progress lines on stderr. They are pulled out
+		// FIRST and unbounded, because the trace tears into prefixless fragments
+		// no denylist can drop — and when those fragments shared the budget, a
+		// 5-minute run charted 24 seconds.
+		if !strings.Contains(c, `grep -aE '^progress: '`) {
+			t.Errorf("pgbench command %d does not extract its progress lines, so the series can be crowded out:\n%s", i, c)
 		}
 		if !strings.Contains(c, "exit $rc") {
 			t.Errorf("pgbench command %d loses its exit code through the filter:\n%s", i, c)
+		}
+		// The streams must be captured separately: merged (2>&1), ysql_bench's
+		// threads tear lines mid-write, torn lines slip a line-anchored filter,
+		// and the flood evicts the stdout summary — observed as a 10MiB log with
+		// no tps line and a tenant reported at 0.00.
+		if strings.Contains(c, "2>&1") {
+			t.Errorf("pgbench command %d merges stdout and stderr, which lets torn trace lines evict the summary:\n%s", i, c)
+		}
+		if !strings.Contains(c, "tail -c") {
+			t.Errorf("pgbench command %d leaves stderr unbounded, so a flood can still cap the capture:\n%s", i, c)
 		}
 	}
 }

@@ -61,7 +61,7 @@ func StandUpPgbenchClient(t *core.T) (*core.SetupResult, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err := waitBackingYSQL(t.Context, kube, info, cfg.RF, cfg.ReadyTimeout); err != nil {
+	if err := waitBackingYSQL(t.Context, kube, info, cfg.RF, cfg.ReadyTimeout, sink, logf); err != nil {
 		return fail(err)
 	}
 	spec, err := pgbenchArtifact(t.Options)

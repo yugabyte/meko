@@ -144,17 +144,21 @@ func joinGflags(parts ...string) string {
 	return strings.Join(out, ",")
 }
 
-// createStorageDBScript is the sh -c body run inside yugabyted-0 to ensure the
-// yb_storage database exists (deploy/up.sh step 4). yugabyted binds YSQL to its
-// advertise address (the pod FQDN), so it connects there, not loopback. It is
-// idempotent and tolerates a racy "already exists".
+// createStorageDBScript is the sh -c body run inside a YB pod (yugabyted-0, or a
+// co-located backing's tserver) to ensure the amp storage database exists
+// (deploy/up.sh step 4). ysqlsh is resolved, not assumed: a relative bin/ysqlsh
+// works in the yugabyted image only because its workdir is /home/yugabyte — the
+// helm tserver container starts elsewhere and answered exit 127. YB binds YSQL
+// to its advertise address (the pod FQDN), so it connects there, not loopback.
+// It is idempotent and tolerates a racy "already exists".
 func createStorageDBScript(dbName string) string {
 	return fmt.Sprintf(`set -e
+YSQLSH="$(command -v ysqlsh || echo /home/yugabyte/bin/ysqlsh)"
 H="$(hostname -f)"
-exists="$(bin/ysqlsh -h "$H" -p 5433 -U yugabyte -d yugabyte -tAc "SELECT 1 FROM pg_database WHERE datname='%[1]s'")"
+exists="$("$YSQLSH" -h "$H" -p 5433 -U yugabyte -d yugabyte -tAc "SELECT 1 FROM pg_database WHERE datname='%[1]s'")"
 if [ "$exists" = "1" ]; then
   echo "%[1]s already exists"
-elif out="$(bin/ysqlsh -h "$H" -p 5433 -U yugabyte -d yugabyte -c "CREATE DATABASE %[1]s" 2>&1)"; then
+elif out="$("$YSQLSH" -h "$H" -p 5433 -U yugabyte -d yugabyte -c "CREATE DATABASE %[1]s" 2>&1)"; then
   echo "created %[1]s"
 elif printf '%%s' "$out" | grep -q "already exists"; then
   echo "%[1]s already exists"

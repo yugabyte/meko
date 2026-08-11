@@ -266,7 +266,7 @@ func (p *liveProvisioner) Provision(ctx context.Context, v resolvedVariant) (exe
 	if err != nil {
 		return nil, pg.ConnInfo{}, teardown, err
 	}
-	if err := waitBackingYSQL(ctx, kube, info, p.perf.RF, p.perf.ReadyTimeout); err != nil {
+	if err := waitBackingYSQL(ctx, kube, info, p.perf.RF, p.perf.ReadyTimeout, p.sink, p.logf); err != nil {
 		return nil, pg.ConnInfo{}, teardown, err
 	}
 	ep, err := provisionAmpEndpoint(ctx, p.t, v.Amp, v.YBK8s, info, suffix, p.sink, td, p.logf)

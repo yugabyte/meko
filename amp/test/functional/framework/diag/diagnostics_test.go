@@ -6,19 +6,22 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // fakeKube is a scripted Kube double: it returns canned output per pod and can be
 // told to error on a single item, so tests exercise the best-effort skip.
 type fakeKube struct {
-	ns         string
-	pods       []string
-	states     []k8s.PodState
-	logs       map[string]string // per-pod LogsAll override (default: single prefixed "main" stream)
-	logsErrPod string            // pod whose LogsAll call errors
-	eventsErr  bool
-	wideErr    bool
+	ns           string
+	pods         []string
+	states       []k8s.PodState
+	logs         map[string]string // per-pod LogsAll override (default: single prefixed "main" stream)
+	logsErrPod   string            // pod whose LogsAll call errors
+	eventsErr    bool
+	nodesErr     bool
+	nodeUsageErr bool
+	wideErr      bool
 }
 
 func (f *fakeKube) Namespace() string { return f.ns }
@@ -50,6 +53,20 @@ func (f *fakeKube) Wide(_ context.Context, kind string) (string, error) {
 		return "", fmt.Errorf("wide listing unavailable")
 	}
 	return "wide:" + kind, nil
+}
+
+func (f *fakeKube) Nodes(_ context.Context) (string, error) {
+	if f.nodesErr {
+		return "", fmt.Errorf("nodes unavailable")
+	}
+	return "node conditions", nil
+}
+
+func (f *fakeKube) NodeUsage(_ context.Context) (string, error) {
+	if f.nodeUsageErr {
+		return "", fmt.Errorf("metrics-server not installed")
+	}
+	return "node usage", nil
 }
 
 func (f *fakeKube) Describe(_ context.Context, _, name string) (string, error) {
@@ -281,4 +298,45 @@ func keys(m map[string][]byte) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// Node state is what separates "the product hung" from "its node was starved":
+// a pod can be Running and Ready with zero restarts while its node is out of
+// CPU or disk, and from inside the pod the two are identical. Run 6a26ee65 lost
+// three tservers to that with nothing collected to prove it either way.
+func TestNodeEvidenceIsCollectedBesideTheNamespaceEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		collect   func(context.Context, Kube, string, apps.ArtifactSink, func(string, ...any))
+		nodes     string
+		nodeUsage string
+	}{
+		{"amp", CollectK8sDiagnostics, "Amp nodes.txt", "Amp node-usage.txt"},
+		{"universe", CollectUniverseK8sDiagnostics, "Universe logs/nodes.txt", "Universe logs/node-usage.txt"},
+		{"yba", CollectYBADiagnostics, "YBA logs/nodes.txt", "YBA logs/node-usage.txt"},
+	} {
+		sink := &recordSink{}
+		tc.collect(context.Background(), newFakeKube(), "ns", sink, nil)
+		if got := string(sink.added[tc.nodes]); got != "node conditions" {
+			t.Errorf("%s: %q = %q, want the node describe", tc.name, tc.nodes, got)
+		}
+		if got := string(sink.added[tc.nodeUsage]); got != "node usage" {
+			t.Errorf("%s: %q = %q, want top nodes", tc.name, tc.nodeUsage, got)
+		}
+	}
+}
+
+// metrics-server is not everywhere, and node access can be denied. Neither may
+// cost us the logs — the whole collection is best-effort by design.
+func TestMissingNodeEvidenceDoesNotLoseTheRest(t *testing.T) {
+	sink := &recordSink{}
+	kube := newFakeKube()
+	kube.nodesErr, kube.nodeUsageErr = true, true
+	CollectK8sDiagnostics(context.Background(), kube, "ns", sink, nil)
+	if _, ok := sink.added["Amp nodes.txt"]; ok {
+		t.Error("a failed node lookup must attach nothing rather than an empty file")
+	}
+	if _, ok := sink.added["Amp events.txt"]; !ok {
+		t.Error("the namespace events were lost because the node lookup failed")
+	}
 }

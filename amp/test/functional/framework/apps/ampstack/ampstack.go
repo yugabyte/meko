@@ -178,6 +178,14 @@ type Backing struct {
 	// controller's HostPorts is an in-cluster .svc.cluster.local name this
 	// coordinator cannot resolve; "" → HostPorts (the normal external case).
 	AdminHostPorts string
+	// KubeNamespace is the namespace the backing's own pods live in, when the
+	// backing is co-located in THIS cluster. Set it and the one-shot yb_storage
+	// CREATE runs via `kubectl exec` in a tserver instead of dialling
+	// AdminHostPorts from here — which needs a route into the pod CIDR that this
+	// coordinator may simply not have. "" → dial (a genuinely remote cluster).
+	KubeNamespace string
+	// KubePod selects the pod to exec the CREATE in; "" → yb-tserver-0.
+	KubePod string
 }
 
 // Config configures a control-plane stack. Namespace is required; a few fields
@@ -1150,6 +1158,14 @@ func (a *App) ensureExternalStorageDB(ctx context.Context) error {
 	if strings.TrimSpace(a.cfg.Backing.HostPorts) == "" {
 		return fmt.Errorf("ampstack: external backing requires backing.host_ports")
 	}
+	// Co-located: run it where the database is. Dialling the backing from here
+	// needs a route into the pod CIDR, and where that is absent every attempt
+	// times out against a healthy cluster — three call sites failed that way on
+	// 0.260810.0 while `select 1` answered from inside the tserver. The built-in
+	// yugabyted path has always created its database in-pod; this is the same.
+	if ns := strings.TrimSpace(a.cfg.Backing.KubeNamespace); ns != "" {
+		return a.ensureStorageDBInCluster(ctx, ns)
+	}
 	host, port := firstHostPort(a.adminHostPorts())
 	ci := pg.ConnInfo{
 		Host:     host,
@@ -1164,6 +1180,33 @@ func (a *App) ensureExternalStorageDB(ctx context.Context) error {
 	}
 	return nil
 }
+
+// ensureStorageDBInCluster creates the amp storage database by exec-ing into a
+// tserver of the co-located backing, reusing the same idempotent script the
+// built-in yugabyted path runs.
+func (a *App) ensureStorageDBInCluster(ctx context.Context, namespace string) error {
+	pod := a.cfg.Backing.KubePod
+	if pod == "" {
+		pod = defaultBackingPod
+	}
+	kube := a.kube.InNamespace(namespace).ForPod(pod, backingContainer)
+	res, err := kube.Run(ctx, createStorageDBScript(a.storageDBName()))
+	if err != nil {
+		return fmt.Errorf("ensure %s in %s/%s: %w", a.storageDBName(), namespace, pod, err)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("ensure %s in %s/%s exited %d: %s",
+			a.storageDBName(), namespace, pod, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return nil
+}
+
+// defaultBackingPod / backingContainer name where a co-located YB-in-k8s backing
+// keeps a tserver able to run ysqlsh.
+const (
+	defaultBackingPod = "yb-tserver-0"
+	backingContainer  = "yb-tserver"
+)
 
 // Status reports pod/deployment readiness plus a controller /healthz probe. It
 // opens a short-lived port-forward for the probe (or reuses the held one).

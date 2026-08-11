@@ -48,7 +48,12 @@ const (
 	DefaultRate       = "unlimited"
 	DefaultMaxHeap    = "8g" // java -Xmx
 	DefaultSubdir     = "benchbase-yugabyte"
-	intervalMonitorMS = 5000 // -im: metrics sampling interval
+	// -im: how often BenchBase writes a results row. This IS the resolution of
+	// every benchbase-driven time series (tpcc, ycsb): at 5000 a 3-minute window
+	// charted 36 points, which hides anything shorter than a five-second dip.
+	// 1s matches what the pgbench driver already emits via -P, so all five
+	// multitenant workloads now share one x-resolution and can be read together.
+	intervalMonitorMS = 1000
 )
 
 // missingJarHint names the artifact route to fix a missing benchbase.jar,

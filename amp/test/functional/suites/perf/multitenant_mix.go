@@ -309,6 +309,7 @@ func mixWorkloadFor(name string, cfg perfConfig, opts *core.Config, conn pg.Conn
 	if bench, ok := benchbaseMix(name); ok {
 		c := cfg
 		c.Benchmark = string(bench)
+		c.Terminals = mixTerminals(opts)
 		return &benchbaseSeriesWorkload{Workload: tpccWorkloadFor(c, conn), runDir: benchbaseDirFor(cfg)}, nil
 	}
 	if wl, ok := sampleappMix(name); ok {
@@ -328,8 +329,8 @@ func mixWorkloadFor(name string, cfg perfConfig, opts *core.Config, conn pg.Conn
 			// embedded config (meaning "let the jar decide"), which is fine for a
 			// stress soak but leaves a perf measurement with a concurrency nobody
 			// chose and cannot compare across runs.
-			readers: opts.GetInt("perf.multitenant.sampleapp_threads", 4),
-			writers: opts.GetInt("perf.multitenant.sampleapp_threads", 4),
+			readers: opts.GetInt("perf.multitenant.sampleapp_threads", 8),
+			writers: opts.GetInt("perf.multitenant.sampleapp_threads", 8),
 			marker:  deps.marker, logf: deps.logf,
 			// Seeding before the first operation is part of these workloads, so
 			// readiness gets a real budget rather than the measurement's.
@@ -368,6 +369,10 @@ func sampleAppProps(name string, conn pg.ConnInfo) map[string]string {
 	for k, v := range pgOnlyProps {
 		props[k] = v
 	}
+	// One row per second, matching benchbase's -im and pgbench's -P, so all five
+	// workloads share an x-resolution and their timelines can be read against
+	// each other. The jar's own default is 5000ms.
+	props["metrics_trace_timeout"] = strconv.Itoa(int(sampleAppTraceInterval / time.Millisecond))
 	return props
 }
 
@@ -377,6 +382,18 @@ func sampleAppProps(name string, conn pg.ConnInfo) map[string]string {
 // in createTablesIfNeeded with "syntax error at or near SPLIT". The other two
 // are off by default today; they are pinned so a change to those defaults
 // cannot silently drop a tenant again.
+// mixTerminals is a benchbase tenant's client concurrency. Its own knob rather
+// than perf.terminals, because a multitenant tenant is sized to help SATURATE a
+// shared deployment, while the single-tenant perf tests size for a clean number
+// from one client. At 8 the whole population left the storage layer at ~1% CPU.
+func mixTerminals(opts *core.Config) int {
+	return opts.GetInt("perf.multitenant.terminals", 16)
+}
+
+// sampleAppTraceInterval is how often the yb-stress-sample-apps tracker prints a
+// window — the resolution of those drivers' time series.
+const sampleAppTraceInterval = time.Second
+
 var pgOnlyProps = map[string]string{
 	"bank_number_of_tablets":   "0",     // else: SPLIT INTO n TABLETS
 	"num_tablets":              "0",     // else: SPLIT INTO n TABLETS

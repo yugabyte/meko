@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
 	"github.com/yugabyte/amp/test/functional/framework/env/registry"
 )
 
@@ -94,9 +96,36 @@ func keepAndRecord(c *cobra.Command, provider core.EnvProvider, cfg *core.Config
 		closeProvider(provider)
 		return fmt.Errorf("record standing env (env torn down to avoid orphan): %w", err)
 	}
+	markKeptOnCluster(c, stored)
 	printKeptEnv(c, stored)
 	return nil
 }
+
+// markKeptOnCluster records the keep on the namespaces themselves, so an
+// out-of-band janitor leaves them alone. NON-FATAL: the environment is up and
+// registered either way, and failing the command here would strand it with no
+// record at all. It warns loudly instead, because an unmarked kept environment is
+// one a janitor will eventually reap.
+func markKeptOnCluster(c *cobra.Command, e registry.Entry) {
+	plan, err := reap.FromJSON(e.Data["reap_plan"])
+	if err != nil || plan == nil || plan.Empty() {
+		return
+	}
+	var until time.Time
+	if e.TTL > 0 {
+		until = e.CreatedAt.Add(e.TTL)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), keepMarkTimeout)
+	defer cancel()
+	if err := reap.MarkKept(ctx, plan, until); err != nil {
+		fmt.Fprintf(c.ErrOrStderr(), "warning: environment %s is kept but could not be marked as such on the cluster (%v); a janitor reaping by age may delete it\n", e.ID, err)
+	}
+}
+
+// keepMarkTimeout bounds the marking. It is a couple of kubectl calls per
+// namespace, and the run has already finished — a long stall here only delays the
+// build.
+const keepMarkTimeout = 2 * time.Minute
 
 // runSetupOnly stands each selected test's environment up, SKIPS its body, and
 // leaves the environment running and recorded — the "set up the env a test

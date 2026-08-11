@@ -102,6 +102,69 @@ func TestMultitenantParamsDefaults(t *testing.T) {
 	}
 }
 
+// Every knob the multitenant test reads has to be DECLARED in default.yaml, not
+// just defaulted in Go: an undeclared key is invisible to anyone reading the
+// config for something to override, and a declared one that drifts from the Go
+// fallback silently changes the shape depending on which layer wins.
+func TestMultitenantKnobsAreDeclaredInDefaultConfig(t *testing.T) {
+	c, err := core.LoadConfig(nil, nil, nil)
+	if err != nil {
+		t.Fatalf("load shipped defaults: %v", err)
+	}
+	for _, key := range []string{
+		"perf.multitenant.tenants",
+		"perf.multitenant.workloads",
+		"perf.multitenant.endpoint_cpu",
+		"perf.multitenant.endpoint_memory",
+		"perf.multitenant.measurement_duration",
+		"perf.multitenant.iterations",
+		"perf.multitenant.terminals",
+		"perf.multitenant.sampleapp_threads",
+		"perf.multitenant.sampleapp_ready_timeout",
+		"perf.multitenant.benchbase_fork",
+		"perf.multitenant.seed_rows",
+		"perf.multitenant.fork_seed_rows",
+		"perf.multitenant.max_interference",
+	} {
+		if !c.Has(key) {
+			t.Errorf("%s is read by the test but not declared in configs/default.yaml", key)
+		}
+	}
+
+	// The declared values must be the ones that reach the test.
+	p := multitenantParamsFromConfig(c)
+	if p.Tenants != 15 || len(p.Workloads) != 5 {
+		t.Errorf("resolved tenants/workloads = %d/%d, want 15/5", p.Tenants, len(p.Workloads))
+	}
+	if p.EndpointCPU != "2" || p.EndpointMemory != "4Gi" {
+		t.Errorf("resolved endpoint size = %s/%s, want 2/4Gi", p.EndpointCPU, p.EndpointMemory)
+	}
+	if p.MeasurementDuration != 3*time.Minute || p.Iterations != 3 {
+		t.Errorf("resolved window = %s x%d, want 3m x3", p.MeasurementDuration, p.Iterations)
+	}
+	if got := mixTerminals(c); got != 16 {
+		t.Errorf("resolved terminals = %d, want 16", got)
+	}
+}
+
+// An overridden endpoint size has to reach the tenants, or a run asking for a
+// bigger shape gets the default one and the measurement answers the wrong
+// question.
+func TestMultitenantEndpointSizeIsOverridable(t *testing.T) {
+	base, err := core.LoadConfig(nil, nil, nil)
+	if err != nil {
+		t.Fatalf("load shipped defaults: %v", err)
+	}
+	p := multitenantParamsFromConfig(base.Derive(map[string]string{
+		"perf.multitenant.endpoint_cpu":    "4",
+		"perf.multitenant.endpoint_memory": "8Gi",
+		"perf.multitenant.tenants":         "5",
+	}))
+	if p.EndpointCPU != "4" || p.EndpointMemory != "8Gi" || p.Tenants != 5 {
+		t.Errorf("override did not reach the params: %s/%s x%d", p.EndpointCPU, p.EndpointMemory, p.Tenants)
+	}
+}
+
 // An unknown driver must be named in the error, so the fix is obvious from the
 // failure alone.
 func TestUnknownMixWorkloadIsReportedClearly(t *testing.T) {
@@ -430,8 +493,13 @@ func TestSampleAppPropsCarryCredentialsOnly(t *testing.T) {
 	conn := pg.ConnInfo{User: "u", Password: "p", Database: "postgres"}
 	for _, name := range []string{mixSqlTransactions, mixDataLoadDDL} {
 		props := sampleAppProps(name, conn)
-		if want := 3 + len(pgOnlyProps); len(props) != want {
-			t.Errorf("%s props = %v, want the three connection flags plus the %d Postgres-only switches", name, props, len(pgOnlyProps))
+		// three connection flags + the Postgres-only switches + the trace interval.
+		if want := 3 + len(pgOnlyProps) + 1; len(props) != want {
+			t.Errorf("%s props = %v, want %d entries", name, props, want)
+		}
+		if props["metrics_trace_timeout"] != "1000" {
+			t.Errorf("%s: metrics_trace_timeout = %q, want 1000 so its series matches benchbase -im and pgbench -P",
+				name, props["metrics_trace_timeout"])
 		}
 		if props["username"] != "u" || props["password"] != "p" || props["default_postgres_database"] != "postgres" {
 			t.Errorf("%s props = %v, want the connection flags carried through", name, props)
@@ -486,8 +554,16 @@ func TestDefaultMixIsBroadAndTenantsMatchIt(t *testing.T) {
 	if len(kinds) < 3 {
 		t.Errorf("default mix draws from %v; want benchbase, sample-app and micro-driver tenants", kinds)
 	}
-	if got := multitenantParamsFromConfig(core.NewConfig()).Tenants; got != len(defaultWorkloadMix) {
-		t.Errorf("default tenants = %d, want %d so every workload in the mix gets one", got, len(defaultWorkloadMix))
+	// Whole multiples of the mix, so the population stays balanced (the workload
+	// list is cycled) and no workload is over-represented in the mixed phase.
+	got := multitenantParamsFromConfig(core.NewConfig()).Tenants
+	if got < len(defaultWorkloadMix) || got%len(defaultWorkloadMix) != 0 {
+		t.Errorf("default tenants = %d, want a whole multiple of the %d-workload mix", got, len(defaultWorkloadMix))
+	}
+	// One near-idle tenant per workload left the shared storage at ~1% CPU and
+	// every interference ratio at 1.0x — the deployment was never contended.
+	if got == len(defaultWorkloadMix) {
+		t.Error("one tenant per workload cannot contend for a shared deployment; the mixed phase needs a population")
 	}
 }
 
@@ -528,8 +604,8 @@ func TestCvPctSpotsUnstableIterations(t *testing.T) {
 // ramp-up, and one window is not a statistic.
 func TestMeasurementWindowIsLongEnoughToMeanSomething(t *testing.T) {
 	p := multitenantParamsFromConfig(core.NewConfig())
-	if p.MeasurementDuration < 5*time.Minute {
-		t.Errorf("measurement duration = %v, want at least 5m", p.MeasurementDuration)
+	if p.MeasurementDuration < 3*time.Minute {
+		t.Errorf("measurement duration = %v, want at least 3m — a shorter window is mostly TPC-C ramp-up", p.MeasurementDuration)
 	}
 	if p.Iterations < 3 {
 		t.Errorf("iterations = %d, want at least 3 so the median is not one run", p.Iterations)

@@ -98,21 +98,49 @@ func Run(ctx context.Context, ex exec.RemoteExecutor, opts RunOptions) (Result, 
 	if res.ExitCode != 0 {
 		return Result{Raw: out}, fmt.Errorf("pgbench run exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
 	}
-	return parseOutput(out), nil
+	parsed := parseOutput(out)
+	// No tps line means the SUMMARY never reached the capture — a broken exec
+	// stream or an output flood evicting the tail. Returning it as a zero
+	// poisoned a whole multitenant gate ("tenant 4 (pgbench) produced no
+	// throughput") when the tenant had in fact been running fine; a missing
+	// measurement is an error, not a measurement of zero.
+	if !strings.Contains(out, "tps") {
+		return Result{Raw: out}, fmt.Errorf("pgbench exited 0 but its summary is not in the captured output (%d bytes captured; the stream broke or the capture cap evicted it)", len(out))
+	}
+	return parsed, nil
 }
 
-// quietTrace drops ysql_bench's per-statement client tracing, which it writes to
-// stderr unasked ("ysql_bench: client 3 sending BEGIN;", four lines per
-// transaction). At a few hundred tps that is megabytes a minute: a 60-second run
-// produced 10MiB, hit the capture cap, and the `-P` progress lines past ~20s
-// went over the side with it — so the time series covered a third of the run
-// while the summary, printed on stdout, looked fine.
+// quietTrace keeps pgbench's summary safe from ysql_bench's per-statement
+// client tracing, which it writes to stderr unasked ("ysql_bench: client 3
+// sending BEGIN;", four lines per transaction) — megabytes a minute at a few
+// hundred tps.
 //
-// Output goes to a file first so the filter cannot swallow pgbench's exit code,
-// and only the client-trace prefix is removed: real errors still come back.
+// A denylist alone was not enough: the trace tears into prefixless fragments
+// that no line-anchored filter can drop, and 300 progress lines then compete
+// with megabytes of debris for the capture. A 5-minute run charted 24 seconds.
+// So the progress lines are extracted explicitly and emitted first.
+//
+// The streams are captured SEPARATELY. Merging them (`2>&1`) let 8 client
+// threads tear each other's lines mid-write ("ysql_bench: ysql_bench: client…",
+// prefixless fragments), which defeated any line-anchored filter, flooded the
+// 10MiB capture cap, and evicted the stdout summary — the tps line — with it.
+// Kept apart, stdout holds the clean summary in full; stderr is filtered for
+// the trace prefix and then hard-bounded, so no flood shape (torn lines
+// included) can ever crowd the summary out again. The -P progress lines ride
+// stderr and survive the filter; a torn one is a lost point, not a lost run.
+//
+// Both go to files first so the filter cannot swallow pgbench's exit code, and
+// real errors on stderr still come back inside the bounded tail.
 func quietTrace(cmd string) string {
-	return "out=$(mktemp); " + cmd + " >\"$out\" 2>&1; rc=$?; " +
-		"grep -vE '^ysql_bench: client [0-9]+ ' \"$out\"; rm -f \"$out\"; exit $rc"
+	return "out=$(mktemp); errf=$(mktemp); " + cmd + " >\"$out\" 2>\"$errf\"; rc=$?; " +
+		"cat \"$out\"; " +
+		// Progress lines FIRST and unbounded: they are the time series, they are
+		// small (one per -P second), and they must not compete with the trace for
+		// room. The rest of stderr follows as a bounded tail so real errors still
+		// arrive without a flood being able to push the series out.
+		"{ grep -aE '^progress: ' \"$errf\"; " +
+		"grep -avE '^progress: |^ysql_bench: client [0-9]+ ' \"$errf\" | tail -c 65536; } >&2; " +
+		"rm -f \"$out\" \"$errf\"; exit $rc"
 }
 
 // checkAvailable detects a missing pgbench binary on the target and returns

@@ -87,7 +87,11 @@ func ampCPNamespace(suffix string) string { return fmt.Sprintf(perfCPNamespaceFm
 func ampBacking(info ybk8s.Info) ampstack.Backing {
 	host, port := ybk8s.FirstHostPort(strings.Join(info.TailnetAddrs, ","))
 	conn := pg.ConnInfo{Host: host, Port: port, User: info.User, Database: info.User, SSLMode: "disable"}
-	return ybbacking.ExternalBacking(ybbacking.FromYBK8s(conn, info.TailnetAddrs, info.TserverHostPorts))
+	b := ybbacking.ExternalBacking(ybbacking.FromYBK8s(conn, info.TailnetAddrs, info.TserverHostPorts))
+	// The backing is in THIS cluster, so the one-shot yb_storage CREATE runs in a
+	// tserver rather than being dialled from here — see Backing.KubeNamespace.
+	b.KubeNamespace = info.Namespace
+	return b
 }
 
 // endpointConn builds the connection the in-cluster client pod drives: the

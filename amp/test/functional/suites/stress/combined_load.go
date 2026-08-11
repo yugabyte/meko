@@ -29,7 +29,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -283,10 +285,11 @@ func (r *combinedRun) schemaSetup(ctx context.Context) error {
 // so verifyConsistency can prove it survived them. It registers a best-effort
 // drop for teardown.
 func (r *combinedRun) loadConsistencyDataset(ctx context.Context) error {
-	ci, err := r.freshTailnetConn(ctx)
+	ci, closePF, err := r.forwardedConn(ctx)
 	if err != nil {
 		return err
 	}
+	defer closePF()
 	if err := pg.WaitReady(ctx, ci, r.cfg.ReadyTimeout); err != nil {
 		return fmt.Errorf("backing YSQL not ready: %w", err)
 	}
@@ -503,10 +506,11 @@ func (r *combinedRun) healthCheck(ctx context.Context) error {
 // coordinator-reachable tserver connection — the oracle that the combined load +
 // faults neither corrupted nor lost the pre-loaded data.
 func (r *combinedRun) verifyConsistency(ctx context.Context) error {
-	ci, err := r.freshTailnetConn(ctx)
+	ci, closePF, err := r.forwardedConn(ctx)
 	if err != nil {
 		return err
 	}
+	defer closePF()
 	if err := pg.WaitReady(ctx, ci, r.cfg.VerifyTimeout); err != nil {
 		return fmt.Errorf("backing YSQL not serving for verify: %w", err)
 	}
@@ -534,10 +538,11 @@ func (r *combinedRun) verifyConsistency(ctx context.Context) error {
 // dropConsistencyDataset best-effort drops the workloadgen tables at teardown
 // over a fresh connection (the load pool is long gone by then).
 func (r *combinedRun) dropConsistencyDataset(ctx context.Context) error {
-	ci, err := r.freshTailnetConn(ctx)
+	ci, closePF, err := r.forwardedConn(ctx)
 	if err != nil {
 		return err
 	}
+	defer closePF()
 	cl, err := pg.Connect(ctx, ci)
 	if err != nil {
 		return err
@@ -552,25 +557,55 @@ func (r *combinedRun) dropConsistencyDataset(ctx context.Context) error {
 	return nil
 }
 
-// freshTailnetConn resolves a currently-live tserver pod IP into a
-// coordinator-reachable YSQL ConnInfo. Resolved fresh each call so a pod that
-// chaos rescheduled (new IP) never leaves the oracle pointed at a dead endpoint.
-func (r *combinedRun) freshTailnetConn(ctx context.Context) (pg.ConnInfo, error) {
-	out, err := r.kube.GetSelector(ctx, "pod", tserverSelector, "{.items[*].status.podIP}")
+// forwardedConn opens a kubectl port-forward to a currently-live tserver and
+// returns a loopback YSQL ConnInfo plus the forward's closer.
+//
+// A forward, not the pod IP it used to dial: a pod IP is only reachable where
+// something routes this coordinator into the pod CIDR, and that is a property
+// of the CLUSTER — itest-dev's pod range is advertised on the tailnet, amp-dev's
+// collides with an unrelated network's advertisement and every dial times out.
+// The forward rides the kube API server instead, which is reachable wherever
+// kubectl works. Opened fresh each call so a pod that chaos rescheduled never
+// leaves the oracle pointed at a dead endpoint — same rationale the per-call IP
+// resolution had.
+func (r *combinedRun) forwardedConn(ctx context.Context) (pg.ConnInfo, func(), error) {
+	out, err := r.kube.GetSelector(ctx, "pod", tserverSelector, "{.items[0].metadata.name}")
 	if err != nil {
-		return pg.ConnInfo{}, fmt.Errorf("resolve tserver pod IPs: %w", err)
+		return pg.ConnInfo{}, nil, fmt.Errorf("resolve a tserver pod: %w", err)
 	}
-	ips := strings.Fields(out)
-	if len(ips) == 0 {
-		return pg.ConnInfo{}, fmt.Errorf("no live tserver pod IPs")
+	pod := strings.TrimSpace(out)
+	if pod == "" {
+		return pg.ConnInfo{}, nil, fmt.Errorf("no live tserver pods")
+	}
+	pf, err := r.kube.PortForward(ctx, "pod/"+pod, 0, r.info.YSQLPort)
+	if err != nil {
+		return pg.ConnInfo{}, nil, fmt.Errorf("port-forward %s: %w", pod, err)
+	}
+	host, port, err := splitHostPort(pf.LocalAddr())
+	if err != nil {
+		_ = pf.Close()
+		return pg.ConnInfo{}, nil, fmt.Errorf("parse forward address %q: %w", pf.LocalAddr(), err)
 	}
 	return pg.ConnInfo{
-		Host:     ips[0],
-		Port:     r.info.YSQLPort,
+		Host:     host,
+		Port:     port,
 		User:     r.info.User,
 		Database: r.info.User,
 		SSLMode:  "disable",
-	}, nil
+	}, func() { _ = pf.Close() }, nil
+}
+
+// splitHostPort parses "host:port" with a numeric port.
+func splitHostPort(addr string) (string, int, error) {
+	host, ps, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, err
+	}
+	port, err := strconv.Atoi(ps)
+	if err != nil {
+		return "", 0, err
+	}
+	return host, port, nil
 }
 
 // wgSpec is the consistency-oracle workloadgen dataset (seed-unique prefix so

@@ -252,7 +252,7 @@ func sysbenchWorkloadFor(params sysbenchParams, conn pg.ConnInfo) Workload {
 // waitReady blocks until the backing serves YSQL, then starts the metrics
 // sampler over the now-known backing pods.
 func (r *sysbenchRun) waitReady(ctx context.Context) error {
-	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout); err != nil {
+	if err := waitBackingYSQL(ctx, r.kube, r.info, r.cfg.RF, r.cfg.ReadyTimeout, r.sink, r.logf); err != nil {
 		return err
 	}
 	r.sampler = startMetricsSampler(ctx, r.t, r.kube, r.td, r.logf)

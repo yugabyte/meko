@@ -663,6 +663,14 @@ func (d *Deployer) fetchChart(ctx context.Context) (string, func(), error) {
 // gflag), the image, storage, and small resource requests (cheap), and
 // enableLoadBalancer=false so the Services stay ClusterIP (co-located; reached
 // via pod IP over the tailnet).
+//
+// NOTE: enableLoadBalancer arrives as the STRING "false" here, which the chart's
+// `{{- if .Values.enableLoadBalancer }}` treats as truthy — so the LoadBalancers
+// are in fact created, and `yb-tserver-service` (which DefaultServiceName and
+// therefore the amp controller's YB_HOST_PORTS depend on) exists only because of
+// that. Left exactly as it is on purpose: correcting it changes the deployed
+// topology the product is tested against, which is a deliberate decision and not
+// a side effect of a test fix. Tracked separately.
 func (d *Deployer) helmSets() map[string]string {
 	sets := map[string]string{
 		"enableLoadBalancer":               "false",

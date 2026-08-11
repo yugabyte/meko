@@ -84,6 +84,9 @@ type multitenantParams struct {
 	// MeasurementDuration is how long ONE iteration of a workload runs. A minute
 	// is too short to characterise a tenant: TPC-C spends the first windows
 	// ramping connections and warming caches, so a 60s window is mostly warm-up.
+	// 3m clears that ramp and, across Iterations, kept the coefficient of
+	// variation inside a few percent — while cutting ~30 minutes off a run that
+	// measures each of five workloads alone before running them together.
 	MeasurementDuration time.Duration
 	// Iterations is how many times each condition is measured. Reported values
 	// are the median across iterations, so one unlucky run cannot set the
@@ -93,22 +96,38 @@ type multitenantParams struct {
 
 func multitenantParamsFromConfig(c *core.Config) multitenantParams {
 	return multitenantParams{
-		// One tenant per workload in the default mix: the point is a deployment
-		// hosting DIFFERENT kinds of tenant, not N copies of one benchmark.
-		Tenants:         c.GetInt("perf.multitenant.tenants", len(defaultWorkloadMix)),
+		// Three tenants per workload in the default mix. One each proved the shape
+		// but not the point: with five near-idle tenants the shared storage sat at
+		// ~1% CPU and every interference ratio came back 1.0x — the deployment was
+		// never contended, so the measurement said nothing about multitenancy.
+		// Solo now costs one baseline per WORKLOAD, so the population can grow
+		// without the serial phase growing with it.
+		Tenants:         c.GetInt("perf.multitenant.tenants", 3*len(defaultWorkloadMix)),
 		Workloads:       c.GetStringSlice("perf.multitenant.workloads", defaultWorkloadMix),
 		MaxInterference: c.GetFloat("perf.multitenant.max_interference", 4),
 		SeedRows:        c.GetInt("perf.multitenant.seed_rows", 2000),
 		ForkSeedRows:    c.GetInt("perf.multitenant.fork_seed_rows", 20000),
-		// 2 cores and 2Gi, not the half-core the stress tier gives its light
+		// 4 cores and 8Gi, not the half-core the stress tier gives its light
 		// writers. A benchmark tenant loads a dataset and then serves a driver
 		// flat out. At 500m the compute sat pegged at its own limit: TPC-C's load
 		// crawled for half an hour, and the compute could not answer its 1-second
 		// liveness probe, so kubelet killed it and the driver saw its connection
-		// close mid-benchmark.
+		// close mid-benchmark. At 2Gi it was the MEMORY limit: TPC-C's load
+		// crossed it (OOMKilled, exit 137, caught live at 1790Mi minutes before),
+		// postgres restarted, and prepare took 40 minutes instead of 5–8 while
+		// the loader re-drove the data.
+		//
+		// 2 cores / 4Gi is what a default tenant gets, and it is bounded by the
+		// CLUSTER, not by what the benchmark would enjoy: the endpoint requests
+		// 40Gi of ephemeral storage against ~43.8Gi allocatable, so it is one
+		// endpoint per node whatever the CPU, and the autoprovisioned shape is
+		// e2-standard-4 with 3920m allocatable — a request of 4 cores cannot fit
+		// one at all and waits for a bigger node per tenant. Asking 15 tenants for
+		// 4 cores each got 0/26 nodes and burned the full 35-minute helm budget.
+		// Raise these per run when a shape is worth the nodes it costs.
 		EndpointCPU:         c.GetString("perf.multitenant.endpoint_cpu", "2"),
-		EndpointMemory:      c.GetString("perf.multitenant.endpoint_memory", "2Gi"),
-		MeasurementDuration: c.GetDuration("perf.multitenant.measurement_duration", 5*time.Minute),
+		EndpointMemory:      c.GetString("perf.multitenant.endpoint_memory", "4Gi"),
+		MeasurementDuration: c.GetDuration("perf.multitenant.measurement_duration", 3*time.Minute),
 		Iterations:          c.GetInt("perf.multitenant.iterations", 3),
 	}
 }
@@ -228,6 +247,16 @@ func runMultitenant(t *core.T) error {
 		_ = td.run(tctx, logf)
 	}()
 
+	// YugabyteDB's own server metrics for the whole measured window, the way
+	// every other perf test collects them. Without them a multitenant number is
+	// unexplainable: "pgbench lost 6% while its neighbours ran" says nothing
+	// about WHERE it went, and the storage layer is shared by every tenant, so
+	// it is the first place to look. Drains on the teardown stack, so whatever
+	// it gathered reaches the report even when the run fails.
+	if kubeEnv, ok := t.Env.(interface{ AmpKube() *k8s.Kubectl }); ok && kubeEnv.AmpKube() != nil {
+		startMetricsSampler(t.Context, t, kubeEnv.AmpKube(), td, logf)
+	}
+
 	if err := t.Step("start_tenant_clients", func(s *core.StepHandle) error {
 		kubeEnv, ok := t.Env.(interface{ AmpKube() *k8s.Kubectl })
 		if !ok || kubeEnv.AmpKube() == nil {
@@ -313,8 +342,21 @@ func runMultitenant(t *core.T) error {
 		// One tenant at a time, so each workload's number is what it gets with the
 		// deployment to itself. This is the reference every mixed number is read
 		// against, measured in the same run on the same hardware.
+		// One solo baseline per DISTINCT workload, not per tenant: solo is serial by
+		// definition, so measuring every tenant alone makes the phase grow with the
+		// tenant count (20 tenants x 3 iterations x 3m = 3 hours) while producing
+		// N copies of the same number — two tpcc tenants alone on the deployment
+		// measure the same thing. Every tenant of that workload is then read
+		// against its workload's baseline in the mixed phase, which is where the
+		// population size actually matters.
 		var kept []tenantClient
+		soloDone := map[string]Sample{}
 		for _, c := range clients {
+			if base, ok := soloDone[c.WorkloadName]; ok {
+				kept = append(kept, c)
+				solo[c.TenantIndex] = base
+				continue
+			}
 			sample, cv, err := measureRepeated(t, logf, c, "solo", params, bc.SampleInterval)
 			if err != nil {
 				logf("multitenant: dropping tenant %d (%s): solo run failed: %v", c.TenantIndex, c.WorkloadName, err)
@@ -323,6 +365,7 @@ func runMultitenant(t *core.T) error {
 			}
 			kept = append(kept, c)
 			solo[c.TenantIndex] = sample
+			soloDone[c.WorkloadName] = sample
 			s.Set(fmt.Sprintf("%s_solo_tps", c.WorkloadName), fmt.Sprintf("%.1f", sample.TPS))
 			t.Datapoint(core.Datapoint{
 				Name: fmt.Sprintf("multitenant.%s.solo_tps", c.WorkloadName), Value: sample.TPS,

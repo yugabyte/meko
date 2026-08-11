@@ -4,6 +4,8 @@
 // objects needs this without importing the others.
 package kubemeta
 
+import "time"
+
 // TestLabel marks every Kubernetes object the ampqa framework creates — the
 // namespaces it stands environments up in, and the pods it runs inside them.
 //
@@ -34,4 +36,35 @@ func TestLabels(extra map[string]string) map[string]string {
 	out["ampqa"] = "1"
 	out[TestLabel] = TestLabelValue
 	return out
+}
+
+// Keep markers record that a run was ASKED to leave an environment up
+// (`ampqa run --env-mode keep`, `--setup-only`), so an out-of-band janitor can
+// tell a held environment from an abandoned one and stop reaping it on age.
+//
+// They live on the namespace because that is the only durable place. The
+// framework's own registry of kept environments is a file in the working
+// directory, and a Jenkins build's container is destroyed when the build ends —
+// so a kept environment from CI is invisible to `ampqa env rm` from then on, and
+// the cluster is the sole record that it was deliberate.
+//
+// KeepLabel is a label so a selector can find it; KeepUntil is an ANNOTATION
+// because a label value cannot contain the colons of an RFC3339 timestamp.
+// An absent KeepUntil means "held until someone says otherwise" — a standing dev
+// environment, which a janitor reports rather than reaps.
+const (
+	KeepLabel      = "ampqa-keep"
+	KeepLabelValue = "true"
+	KeepUntil      = "ampqa-keep-until"
+)
+
+// KeepMarkers are the label and annotation that mark a namespace as
+// deliberately held. until is zero for an environment with no expiry.
+func KeepMarkers(until time.Time) (labels, annotations map[string]string) {
+	labels = map[string]string{KeepLabel: KeepLabelValue}
+	annotations = map[string]string{}
+	if !until.IsZero() {
+		annotations[KeepUntil] = until.UTC().Format(time.RFC3339)
+	}
+	return labels, annotations
 }

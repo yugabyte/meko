@@ -639,7 +639,9 @@ apps:
     storage_class: "standard-rwo"
     storage_size: "10Gi"
     # service_name is the tserver Service whose in-cluster DNS the amp controller
-    # connects at; the framework reaches YSQL over the tailnet via pod IPs.
+    # connects at — the product's own connection target, so it is NOT changed to
+    # suit the harness. The framework itself reaches YSQL through kubectl
+    # (exec / port-forward), never a routable address.
     service_name: "yb-tserver-service"
     ysql_port: 5433
     # Small resource requests keep a real run cheap.
@@ -1331,6 +1333,59 @@ perf:
     # against real hardware: treat the first runs as establishing what the healthy
     # ratio is on your target. 0 disables the assertion, keeping the datapoint.
     max_phase_ratio: 2.0
+  # multitenant is the perf/multitenant load shape: N tenants on ONE control
+  # plane, each its own cluster + endpoint driven by its own real benchmark
+  # client, measured alone and then all together. Everything here is overridable
+  # per run (-o perf.multitenant.<key>=...), because the useful shape depends on
+  # what the cluster can actually schedule that day — see endpoint_cpu.
+  multitenant:
+    # tenants is the population. Default: three per workload in the mix (15).
+    # One each proved the shape but not the point — five near-idle tenants left
+    # the shared storage at ~1% CPU and every interference ratio came back 1.0x.
+    # Solo costs one baseline per WORKLOAD, not per tenant, so this can grow
+    # without the serial phase growing with it.
+    tenants: 15
+    # workloads is the mix each tenant is assigned round-robin: tpcc and ycsb
+    # (benchbase), bank_transfer and sql_transactions (yb-stress-sample-apps),
+    # pgbench. A single-entry list turns this into a same-workload contention
+    # test.
+    workloads: ["tpcc", "ycsb", "bank_transfer", "sql_transactions", "pgbench"]
+    # endpoint_cpu / endpoint_memory size EVERY tenant's compute. Requests ==
+    # limits, so these are hard cgroup ceilings (Guaranteed QoS), not
+    # preferences. Raising them is not free: an endpoint also requests 40Gi of
+    # ephemeral storage against ~43.8Gi allocatable (one endpoint per node
+    # whatever the CPU), and the autoprovisioned e2-standard-4 has 3920m
+    # allocatable — a request of "4" fits NO default node and waits for a bigger
+    # one per tenant. 15 tenants at 4 cores got 0/26 nodes and burned the full
+    # 35-minute helm budget. Scale tenants down when scaling these up.
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+    # measurement_duration is one measured window, and iterations is how many of
+    # them (the reported figure is the median, with a coefficient of variation).
+    # Every phase pays this twice — once solo per workload, once mixed.
+    measurement_duration: "3m"
+    iterations: 3
+    # terminals is the per-tenant client concurrency for the benchbase drivers,
+    # sampleapp_threads the reader AND writer count for the sample-app ones. A
+    # tenant that is not driven hard enough shows no interference no matter how
+    # many tenants there are.
+    terminals: 16
+    sampleapp_threads: 8
+    # sampleapp_ready_timeout bounds how long to wait for a sample-app client to
+    # report load actually flowing before calling the phase broken.
+    sampleapp_ready_timeout: "10m"
+    # benchbase_fork drives benchbase tenants from a forked branch rather than
+    # the parent, so the mix exercises copy-on-write storage too.
+    benchbase_fork: true
+    # seed_rows is the dataset a tenant is seeded with before measurement;
+    # fork_seed_rows is the separate, larger parent used to time a fork against a
+    # non-trivial ancestor (a branch with no writes has no fork point at all).
+    seed_rows: 2000
+    fork_seed_rows: 20000
+    # max_interference is the GATE: the worst allowed mixed-vs-solo throughput
+    # ratio across workloads. 4x tolerates real contention while still failing a
+    # collapse.
+    max_interference: 4.0
   # history is the HISTORICAL perf tracking store: distinct from the baseline
   # (which holds ONE reference value per test/metric to gate against), the
   # history APPENDS every run's aggregate so the report can render a TREND of

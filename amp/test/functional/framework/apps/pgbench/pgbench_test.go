@@ -89,6 +89,7 @@ func TestInitCommandConstruction(t *testing.T) {
 
 func TestRunCommandConstruction(t *testing.T) {
 	ex := available()
+	ex.on("pgbench -c", exec.Result{Stdout: "tps = 100.0\nlatency average = 5.000 ms\n"})
 	conn := pg.ConnInfo{Host: "endpoint", Port: 5432, User: "cloud_admin", Database: "postgres"}
 	_, err := pgbench.Run(context.Background(), ex, pgbench.RunOptions{
 		Conn: conn, Clients: 10, Jobs: 2, Duration: 30 * time.Second,
@@ -200,17 +201,20 @@ func TestParseOutputLegacyTwoTPSLinesPrefersExcluding(t *testing.T) {
 	}
 }
 
-func TestParseOutputMissingFieldsStayZero(t *testing.T) {
+// A run whose captured output has no tps summary is an ERROR, never a silent
+// zero. The old contract (zero fields, nil error) let a flood-evicted summary
+// report a healthy tenant as 0.00 tps and fail a whole multitenant gate.
+func TestSummarylessOutputIsAnErrorNotAZero(t *testing.T) {
 	ex := available()
 	ex.on("pgbench -c", exec.Result{ExitCode: 0, Stdout: "starting vacuum...end.\nsome unrelated output\n"})
 	res, err := pgbench.Run(context.Background(), ex, pgbench.RunOptions{Clients: 1})
-	if err != nil {
-		t.Fatalf("run: %v", err)
+	if err == nil {
+		t.Fatal("a summary-less output parsed as a measurement instead of erroring")
 	}
-	if res.TPS != 0 || res.LatencyAvgMs != 0 {
-		t.Errorf("expected zero fields on unparseable output, got tps=%v latency=%v", res.TPS, res.LatencyAvgMs)
+	if !strings.Contains(err.Error(), "summary is not in the captured output") {
+		t.Errorf("error %q does not say what went missing", err)
 	}
 	if res.Raw == "" {
-		t.Error("Raw must still be populated")
+		t.Error("Raw must still be populated so the failure is diagnosable")
 	}
 }

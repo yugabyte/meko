@@ -2,6 +2,7 @@ package perf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/baseline"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/diag"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -104,39 +106,126 @@ func startPerfClientPod(ctx context.Context, kube *k8s.Kubectl, sink apps.Artifa
 	return cp.Exec(), nil
 }
 
-// waitBackingYSQL blocks until the co-located backing actually serves YSQL:
-// the tserver statefulset reaches rf ready replicas, YSQL accepts a connection
-// over a live tserver pod IP, then a short settle so the Service endpoints the
-// in-pod workload connects through are stable. Pod-Ready alone is not
-// sufficient — YSQL (:5433) comes up slightly after the tserver RPC port.
-func waitBackingYSQL(ctx context.Context, kube *k8s.Kubectl, info ybk8s.Info, rf int, readyTimeout time.Duration) error {
+// waitBackingYSQL blocks until the co-located backing actually serves YSQL: the
+// tserver statefulset reaches rf ready replicas, YSQL answers a query, then a
+// short settle so the Service endpoints the in-pod workload connects through are
+// stable. Pod-Ready alone is not sufficient — YSQL (:5433) comes up slightly
+// after the tserver RPC port.
+//
+// The probe runs INSIDE the cluster, via `kubectl exec` into a tserver. It used
+// to dial the tserver's pod IP from this process, which only works where the
+// coordinator has a route into the pod CIDR — and where it does not, every dial
+// times out (packets to an unroutable address, so a timeout rather than a
+// refusal) while the backing is perfectly healthy. That cost four tests a full
+// readiness budget each on 0.260810.0: `postgres not ready at 10.21.139.36:5433:
+// dial error: timeout`, an address reachable from the very client pod that was
+// about to run the workload.
+//
+// Probing from in-cluster also tests the path that matters: the workload runs in
+// the client pod, never from here.
+func waitBackingYSQL(ctx context.Context, kube *k8s.Kubectl, info ybk8s.Info, rf int, readyTimeout time.Duration, sink apps.ArtifactSink, logf func(string, ...any)) error {
 	want := fmt.Sprintf("jsonpath={.status.readyReplicas}=%d", rf)
 	if err := kube.WaitFor(ctx, "statefulset/yb-tserver", want, readyTimeout); err != nil {
+		collectBackingEvidence(ctx, kube, sink, logf)
 		return core.EnvFail("tservers not Ready before workload: %w", err)
 	}
-	ci, err := freshTserverConn(ctx, kube, info)
-	if err != nil {
-		return core.AsEnvFailure(err)
-	}
-	if err := pg.WaitReady(ctx, ci, readyTimeout); err != nil {
+	if err := waitYSQLInCluster(ctx, kube, info, readyTimeout); err != nil {
+		collectBackingEvidence(ctx, kube, sink, logf)
 		return core.EnvFail("backing YSQL not accepting connections before workload: %w", err)
 	}
 	return sleepCtx(ctx, ysqlSettle)
 }
 
-// freshTserverConn resolves a currently-live tserver pod IP into a
-// coordinator-reachable (tailnet) YSQL ConnInfo for the readiness probe.
-func freshTserverConn(ctx context.Context, kube *k8s.Kubectl, info ybk8s.Info) (pg.ConnInfo, error) {
-	out, err := kube.GetSelector(ctx, "pod", tserverSelector, "{.items[*].status.podIP}")
-	if err != nil {
-		return pg.ConnInfo{}, fmt.Errorf("resolve tserver pod IPs: %w", err)
+// collectBackingEvidence attaches the backing's own account of itself when it
+// never became ready. Nothing did before: a wait_backing_ready failure arrived
+// with a controller log, an endpoint log, and nothing about the YugabyteDB it was
+// waiting for or the nodes it ran on — so four identical failures on 0.260810.0
+// could only be diagnosed by catching a later run live. Best-effort, and never
+// allowed to mask the readiness error it is explaining.
+func collectBackingEvidence(ctx context.Context, kube *k8s.Kubectl, sink apps.ArtifactSink, logf func(string, ...any)) {
+	if sink == nil {
+		return
 	}
-	ips := strings.Fields(out)
-	if len(ips) == 0 {
-		return pg.ConnInfo{}, fmt.Errorf("no live tserver pod IPs")
-	}
-	return pg.ConnInfo{Host: ips[0], Port: info.YSQLPort, User: info.User, Database: info.User, SSLMode: "disable"}, nil
+	// The wait's own ctx is typically spent, which is why we are here.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), backingEvidenceBudget)
+	defer cancel()
+	diag.CollectUniverseK8sDiagnostics(cctx, kube, kube.Namespace(), sink, logf)
 }
+
+// backingEvidenceBudget bounds the collection: pod logs and describes for an
+// RF=3 backing plus the node listings, on a path that has already failed.
+const backingEvidenceBudget = 4 * time.Minute
+
+// waitYSQLInCluster polls `ysqlsh -c "select 1"` inside a tserver pod until it
+// answers. The pod is re-resolved every attempt, so a tserver that is replaced
+// mid-wait does not pin the probe to a pod that no longer exists.
+func waitYSQLInCluster(ctx context.Context, kube *k8s.Kubectl, info ybk8s.Info, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var last error
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, last)
+		}
+		pod, err := firstTserverPod(ctx, kube)
+		if err != nil {
+			last = err
+		} else {
+			// ysqlsh is resolved rather than assumed: a relative `bin/ysqlsh`
+			// depends on the container's working directory and exited 127 ("sh:
+			// bin/ysqlsh: No such file or directory") for a whole 5-minute budget
+			// against a backing whose YSQL had been up for four seconds.
+			//
+			// -h $(hostname -f): YB binds the advertise address, so loopback is not
+			// necessarily listening.
+			probe := fmt.Sprintf(
+				`YSQLSH=$(command -v ysqlsh || echo %s); "$YSQLSH" -h "$(hostname -f)" -p %d -U %s -d %s -tAc "select 1"`,
+				ysqlshFallbackPath, info.YSQLPort, info.User, info.User)
+			res, err := kube.ForPod(pod, tserverContainer).Run(ctx, probe)
+			switch {
+			case err != nil:
+				last = fmt.Errorf("exec ysqlsh in %s: %w", pod, err)
+			case res.ExitCode != 0:
+				last = fmt.Errorf("ysqlsh in %s exited %d: %s", pod, res.ExitCode, strings.TrimSpace(res.Stderr))
+			case strings.Contains(res.Stdout, "1"):
+				return nil
+			default:
+				last = fmt.Errorf("ysqlsh in %s answered %q, want 1", pod, strings.TrimSpace(res.Stdout))
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("YSQL did not answer inside the cluster within %s (last: %w)", timeout, last)
+		}
+		if err := sleepCtx(ctx, ysqlProbeInterval); err != nil {
+			return errors.Join(err, last)
+		}
+	}
+}
+
+// firstTserverPod names a currently-existing tserver pod, resolved per attempt.
+func firstTserverPod(ctx context.Context, kube *k8s.Kubectl) (string, error) {
+	out, err := kube.GetSelector(ctx, "pod", tserverSelector, "{.items[0].metadata.name}")
+	if err != nil {
+		return "", fmt.Errorf("resolve a tserver pod: %w", err)
+	}
+	if strings.TrimSpace(out) == "" {
+		return "", fmt.Errorf("no tserver pods matched %s", tserverSelector)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// tserverContainer is the container ysqlsh lives in; ysqlProbeInterval paces the
+// probe (a cold RF=3 backing needs tens of seconds, so a tight loop only adds
+// exec churn).
+const (
+	tserverContainer = "yb-tserver"
+	// ysqlshFallbackPath is where the YB image keeps ysqlsh when it is not on
+	// PATH. Used only if `command -v` finds nothing.
+	ysqlshFallbackPath = "/home/yugabyte/bin/ysqlsh"
+)
+
+// ysqlProbeInterval paces the probe: a cold RF=3 backing needs tens of seconds,
+// so a tight loop only adds exec churn. A var so tests do not have to sleep it.
+var ysqlProbeInterval = 5 * time.Second
 
 // startMetricsSampler starts the background YB server-metrics sampler over the
 // backing's namespace and registers its drain on td, so whatever it collected

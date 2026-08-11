@@ -107,6 +107,15 @@ func (k *Kubectl) WithStarter(s Starter) *Kubectl { k.startPF = s; return k }
 
 // ForPod returns a shallow copy bound to pod/container so it satisfies
 // exec.RemoteExecutor (`kubectl exec`). The original is unchanged.
+// InNamespace returns a copy scoped to another namespace, for the occasional
+// cross-namespace step (a co-located backing's pods live outside the control
+// plane's namespace).
+func (k *Kubectl) InNamespace(ns string) *Kubectl {
+	cp := *k
+	cp.cfg.Namespace = ns
+	return &cp
+}
+
 func (k *Kubectl) ForPod(pod, container string) *Kubectl {
 	cp := *k
 	cp.cfg.Pod = pod
@@ -234,6 +243,55 @@ func (k *Kubectl) Get(ctx context.Context, kind, name, jsonpath string) (string,
 		return "", err
 	}
 	return strings.TrimSpace(res.Stdout), nil
+}
+
+// LabelNamespace sets one label on a namespace, overwriting any current value.
+// Namespace-scoped commands carry -n; a namespace itself is cluster-scoped, so
+// this drops it.
+func (k *Kubectl) LabelNamespace(ctx context.Context, name, key, value string) error {
+	nk := *k
+	nk.cfg.Namespace = ""
+	_, err := nk.exec(ctx, nil, "label", "namespace", name, fmt.Sprintf("%s=%s", key, value), "--overwrite")
+	return err
+}
+
+// AnnotateNamespace sets one annotation on a namespace, overwriting any current
+// value. Annotations hold what a label value cannot — an RFC3339 timestamp's
+// colons, for one.
+func (k *Kubectl) AnnotateNamespace(ctx context.Context, name, key, value string) error {
+	nk := *k
+	nk.cfg.Namespace = ""
+	_, err := nk.exec(ctx, nil, "annotate", "namespace", name, fmt.Sprintf("%s=%s", key, value), "--overwrite")
+	return err
+}
+
+// Nodes returns every node's describe — conditions (MemoryPressure,
+// DiskPressure, Ready), allocatable, and the pods each carries. Cluster-scoped,
+// so it drops any -n.
+//
+// A pod that is Running and Ready with zero restarts on a starved node looks,
+// from inside, exactly like the product hanging. This is what tells them apart.
+func (k *Kubectl) Nodes(ctx context.Context) (string, error) {
+	nk := *k
+	nk.cfg.Namespace = ""
+	res, err := nk.exec(ctx, nil, "describe", "nodes")
+	if err != nil {
+		return "", err
+	}
+	return res.Stdout, nil
+}
+
+// NodeUsage returns `kubectl top nodes` — actual CPU/memory use, as opposed to
+// the requests `describe` reports. Needs metrics-server, so callers treat a
+// failure as a skip rather than an error.
+func (k *Kubectl) NodeUsage(ctx context.Context) (string, error) {
+	nk := *k
+	nk.cfg.Namespace = ""
+	res, err := nk.exec(ctx, nil, "top", "nodes")
+	if err != nil {
+		return "", err
+	}
+	return res.Stdout, nil
 }
 
 // Patch applies a patch to a resource (`kubectl patch <kind> <name> --type
