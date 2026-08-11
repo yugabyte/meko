@@ -196,9 +196,9 @@ READY → DRAINING (drain) → DEREGISTERED (deregister)
 Two token types, both stored only as SHA-256 hashes (`hashToken` in
 `api_server/internal/service/environment_service.go`):
 
-- **Enrollment token** (`mko_enr_…`) — a bootstrap credential with a 30-minute
+- **Enrollment token** (`ycp_enr_…`) — a bootstrap credential with a 30-minute
   TTL, reusable within that window. Validated by matching hash + non-expiry.
-- **Status token** (`mko_sts_…`) — long-lived, env-scoped. Sent as a bearer on
+- **Status token** (`ycp_sts_…`) — long-lived, env-scoped. Sent as a bearer on
   every agent → YCP call.
 
 Plaintext tokens are returned to the caller exactly once and never persisted.

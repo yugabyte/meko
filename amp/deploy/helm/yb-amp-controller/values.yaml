@@ -109,6 +109,37 @@ controller:
       # strings (joined into the AMP_DEPLOY_SERVICE_ANNOTATIONS CSV).
       annotations: []
 
+  # YCP fleet control plane registration + reporting. Off by default: a
+  # standalone amp controller needs none of this. When enabled the controller
+  # enrolls itself as an "amp" environment with the control plane and reports the
+  # storage pools / databases / branches / endpoints it owns on a heartbeat. It
+  # does not reconcile YCP-declared desired state (a later phase).
+  ycp:
+    # -- Register with and report to YCP (AMP_YCP_ENABLED).
+    enabled: false
+    # -- YCP control-plane base URL, e.g. https://devcloud.yugabyte.com/ycp
+    # (AMP_YCP_URL). Required when enabled.
+    url: ""
+    # -- Environment name to enroll as; must match the environment registered in
+    # the YCP console (AMP_YCP_ENV_NAME). Required when enabled.
+    envName: ""
+    # -- Placement reported to YCP: cloud | onprem (AMP_YCP_PLACEMENT).
+    placement: "cloud"
+    # -- Inventory heartbeat cadence (AMP_YCP_REPORT_INTERVAL). Empty => the
+    # binary's default (30s).
+    reportInterval: ""
+    # The one-time enrollment token is read from a Secret, not set inline, so it
+    # never lands in the release values. Create it before install, e.g.:
+    #   kubectl -n <ns> create secret generic <name> \
+    #     --from-literal=enrollment-token=<ycp_enr_...>
+    # A restart after the token is consumed/removed still works: the controller
+    # resumes from the status token it persisted, and the env var is optional.
+    enrollTokenSecret:
+      # -- Secret name holding the enrollment token. Empty => "<release>-ycp-enrollment".
+      name: ""
+      # -- Key within the Secret holding the token.
+      key: "enrollment-token"
+
   # -- Compute resources for the controller container.
   resources: {}
   # -- Readiness probe (HTTP /readyz on the api port). The controller has NO

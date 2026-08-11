@@ -66,7 +66,7 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 	return ok(c, http.StatusCreated, map[string]any{
 		"environment":      e,
 		"enrollment_token": token,
-		"install_hint":     installHint(c, e.ID, token),
+		"install_hint":     installHint(c, e.Kind, e.ID, token),
 	})
 }
 
@@ -186,10 +186,13 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	e, statusToken, valid, err := h.svc.EnrollWithToken(req.EnrollmentToken, req.Placement, req.ClusterFacts)
+	e, statusToken, valid, err := h.svc.EnrollWithToken(req.EnrollmentToken, req.Placement, req.Kind, req.ClusterFacts)
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+		}
+		if errors.Is(err, service.ErrKindMismatch) {
+			return apiError(c, http.StatusConflict, "KIND_MISMATCH", err.Error())
 		}
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}

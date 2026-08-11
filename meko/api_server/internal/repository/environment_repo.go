@@ -22,17 +22,18 @@ func NewEnvironmentRepo(db *sql.DB) *EnvironmentRepo {
 
 const envColumns = `id, account_id, placement, region, state, k8s_version, node_count, provider,
 	datapacks, max_datapacks, agent_version, last_heartbeat_at, mcp_base_url, cert_fingerprint,
-	COALESCE(components::text, '[]'), live, enroll_token_hash, enroll_token_expires_at, status_token_hash, created_at`
+	COALESCE(components::text, '[]'), live, enroll_token_hash, enroll_token_expires_at, status_token_hash, created_at,
+	COALESCE(kind, 'meko'), COALESCE(resources::text, '[]')`
 
 func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, error) {
 	var e models.Environment
 	var accountID, region, k8sVersion, provider, agentVersion, mcpBaseURL, certFingerprint sql.NullString
 	var lastHeartbeat, enrollExpires sql.NullTime
-	var componentsText string
+	var componentsText, resourcesText string
 	if err := row.Scan(&e.ID, &accountID, &e.Placement, &region, &e.State, &k8sVersion, &e.NodeCount, &provider,
 		&e.Datapacks, &e.MaxDatapacks, &agentVersion, &lastHeartbeat, &mcpBaseURL, &certFingerprint,
 		&componentsText, &e.Live, &e.EnrollTokenHash, &enrollExpires, &e.StatusTokenHash,
-		&e.CreatedAt); err != nil {
+		&e.CreatedAt, &e.Kind, &resourcesText); err != nil {
 		return nil, err
 	}
 	if enrollExpires.Valid {
@@ -51,6 +52,7 @@ func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, 
 		e.LastHeartbeatAt = &t
 	}
 	e.Components = json.RawMessage(componentsText)
+	e.Resources = json.RawMessage(resourcesText)
 	return &e, nil
 }
 
@@ -91,18 +93,27 @@ func (r *EnvironmentRepo) Upsert(e *models.Environment) error {
 	if len(components) == 0 {
 		components = json.RawMessage("[]")
 	}
+	resources := e.Resources
+	if len(resources) == 0 {
+		resources = json.RawMessage("[]")
+	}
+	kind := e.Kind
+	if kind == "" {
+		kind = "meko"
+	}
 	_, err := r.db.Exec(`
 		INSERT INTO meko_system.environments (`+envColumnsInsert+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
 		ON CONFLICT (id) DO UPDATE SET
 			account_id=$2, placement=$3, region=$4, state=$5, k8s_version=$6, node_count=$7,
 			provider=$8, datapacks=$9, max_datapacks=$10, agent_version=$11, last_heartbeat_at=$12,
 			mcp_base_url=$13, cert_fingerprint=$14, components=$15, live=$16,
-			enroll_token_hash=$17, enroll_token_expires_at=$18, status_token_hash=$19`,
+			enroll_token_hash=$17, enroll_token_expires_at=$18, status_token_hash=$19,
+			kind=$21, resources=$22`,
 		e.ID, nullStr(e.AccountID), e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
-		e.EnrollTokenHash, e.EnrollTokenExpiresAt, e.StatusTokenHash, e.CreatedAt)
+		e.EnrollTokenHash, e.EnrollTokenExpiresAt, e.StatusTokenHash, e.CreatedAt, kind, []byte(resources))
 	if err != nil {
 		slog.Error("upsert environment", "id", e.ID, "err", err)
 		return fmt.Errorf("upsert environment: %w", err)
@@ -112,7 +123,8 @@ func (r *EnvironmentRepo) Upsert(e *models.Environment) error {
 
 const envColumnsInsert = `id, account_id, placement, region, state, k8s_version, node_count, provider,
 	datapacks, max_datapacks, agent_version, last_heartbeat_at, mcp_base_url, cert_fingerprint,
-	components, live, enroll_token_hash, enroll_token_expires_at, status_token_hash, created_at`
+	components, live, enroll_token_hash, enroll_token_expires_at, status_token_hash, created_at,
+	kind, resources`
 
 // EnrollLookup returns the id of the (single) environment holding a non-expired
 // enrollment token with the given hash; found=false when none matches.

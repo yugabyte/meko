@@ -235,7 +235,7 @@
     <!-- ============ FLEET ============ -->
     <section data-view="fleet">
       <div class="phead">
-        <div><h2>Fleet</h2><div class="desc">Every registered Meko environment across cloud and on-prem.</div></div>
+        <div><h2>Fleet</h2><div class="desc">Every registered environment — amp controllers and Meko stacks — across cloud and on-prem.</div></div>
         <button class="btn primary spacer" data-nav="onboard">＋ Register environment</button>
       </div>
 
@@ -255,7 +255,7 @@
       <div class="fleet-grid">
         <div class="panel tablewrap">
           <table>
-            <thead><tr><th>Environment</th><th>Region</th><th>Placement</th><th>State</th><th>Agent</th><th>Heartbeat</th></tr></thead>
+            <thead><tr><th>Environment</th><th>Kind</th><th>Region</th><th>Placement</th><th>State</th><th>Agent</th><th>Heartbeat</th></tr></thead>
             <tbody id="envRows"></tbody>
           </table>
         </div>
@@ -274,6 +274,13 @@
         <div class="frow">
           <div class="fgroup"><label>Region</label><input id="obRegion" value="us-east-1" /></div>
           <div class="fgroup"><label>Placement</label><select id="obPlacement"><option value="cloud">cloud</option><option value="onprem">on-prem</option></select></div>
+        </div>
+        <div class="fgroup">
+          <label>Kind</label>
+          <select id="obKind">
+            <option value="meko">meko — Meko datapack / stack agent</option>
+            <option value="amp">amp — AMP controller (reports its resource inventory)</option>
+          </select>
         </div>
 
         <div class="sect-l">Onboarding mode</div>
@@ -362,11 +369,14 @@
     return Math.round(s/3600)+"h";
   }
   function mapEnv(a) {
-    return { id:a.id, region:a.region||"—", place:a.placement, state:a.state,
+    return { id:a.id, kind:a.kind||"meko", region:a.region||"—", place:a.placement, state:a.state,
       agent:a.agent_version||"—", hb:rel(a.last_heartbeat_at), stale:a.last_heartbeat_at && (Date.now()-new Date(a.last_heartbeat_at).getTime())>90000,
-      live:a.live, components:a.components||null, mcp:a.mcp_base_url||"—", cert:a.cert_fingerprint||"—",
+      live:a.live, components:a.components||null, resources:a.resources||[], mcp:a.mcp_base_url||"", cert:a.cert_fingerprint||"",
       k8s:a.k8s_version, nodes:a.node_count, provider:a.provider };
   }
+  // A kind badge distinguishes an amp environment (the controller) from a meko one
+  // (the datapack/stack agent) at a glance in the fleet table and detail drawer.
+  const kindBadge = k => `<span class="chip ${(k||"meko")==="amp"?"prov":"ready"}" style="font-size:9px;padding:1px 6px;text-transform:uppercase">${k||"meko"}</span>`;
   // ---- API access -------------------------------------------------------
   // Three things this control plane needs that a bare fetch() does not give us:
   //
@@ -452,13 +462,18 @@
     if (r.status === 503) throw new Error("fleet API disabled (no admin secret configured server-side)");
     return r;
   }
-  // Unwrap {"data":…} when present; tolerate a flat body.
+  // Unwrap {"data":…} when present; tolerate a flat body. The envelope carries a
+  // top-level "error" only when something went wrong — a successful list/register
+  // is just {"data":…} with no "error" key — so we must not require "error" to be
+  // present before unwrapping, or every success reads as an empty/flat body (the
+  // bug that made a READY fleet render empty and register fall back to the meko
+  // snippet). Surface "error" whenever it is set, regardless of "data".
   async function unwrap(r) {
     if (r.status === 204 || r.status === 202) return null;
     const j = await r.json().catch(() => null);
-    if (j && typeof j === "object" && "data" in j && "error" in j) {
+    if (j && typeof j === "object") {
       if (j.error) throw new Error((j.error && j.error.message) || "request failed");
-      return j.data;
+      if ("data" in j) return j.data;
     }
     return j;
   }
@@ -486,16 +501,27 @@
     el("kReady").textContent = ready;
     el("navFleetCount").textContent = ENVS.length || "";
   }
+  // The detail drawer is expensive to repaint — it re-fetches desired state, whose
+  // async fill changes the drawer's height. Rebuilding it on every 4s poll is what
+  // made the page visibly jump up and down. detailId/detailSig let renderRows rebuild
+  // it only when the selection changes or the selected environment's own state /
+  // inventory changes — a bare heartbeat tick leaves it untouched.
+  let detailId = null, detailSig = "";
+  function detailSigFor(e) {
+    return e ? JSON.stringify([e.state, e.live, e.stale, (e.resources || []).length, e.components]) : "";
+  }
 
   function renderRows(filter) {
     const list = ENVS.filter(e => !filter || filter==="all" || (filter==="PROVISIONING" ? String(e.state).includes("PROVISIONING") : e.state===filter));
     if (!list.length) {
       rowsEl.innerHTML = `<tr><td colspan="8" style="color:var(--ink-faint);padding:20px">No environments yet — enroll an agent, or use <b>Register</b>.</td></tr>`;
       el("detail").innerHTML = '<div style="color:var(--ink-faint);font-size:13px">Select an environment.</div>';
+      detailId = null; detailSig = "";
       return;
     }
     rowsEl.innerHTML = list.map(e => `<tr data-id="${e.id}">
         <td><span class="env">${e.id}</span>${e.live?' <span class="chip ready" style="font-size:9px;padding:1px 5px">LIVE</span>':''}</td>
+        <td>${kindBadge(e.kind)}</td>
         <td>${e.region}</td>
         <td><span class="place"><span class="pdot ${e.place}"></span>${e.place==="cloud"?"Cloud":"On-prem"}</span></td>
         <td>${chip(e.state)}</td>
@@ -504,7 +530,21 @@
       </tr>`).join("");
     rowsEl.querySelectorAll("tr").forEach(tr => tr.onclick = () => selectEnv(tr.dataset.id));
     let pick = selectedId && list.some(e=>e.id===selectedId) ? selectedId : list[0].id;
-    selectEnv(pick);
+    // Keep the row highlight in sync on every render (the tbody was just rewritten),
+    // but only rebuild the detail drawer when the selection or the selected env's
+    // own signature actually changed — otherwise the drawer's desired-state reload
+    // repaints and the page jumps on every poll.
+    rowsEl.querySelectorAll("tr").forEach(tr => tr.classList.toggle("sel", tr.dataset.id===pick));
+    const picked = ENVS.find(x => x.id===pick);
+    if (pick !== detailId || detailSigFor(picked) !== detailSig) {
+      selectEnv(pick);
+    } else {
+      // Same selection, nothing structural changed: don't rebuild the drawer (that
+      // is what caused the page to jump), but do keep the one time-relative field —
+      // the heartbeat age — ticking in place. Text-only update, no reflow of layout.
+      const hb = el("detailHb");
+      if (hb && picked) hb.textContent = picked.hb + " ago";
+    }
   }
   // Why an environment is not READY, in the terms the agent decides it: every declared
   // component with all replicas ready. Without this the console
@@ -538,10 +578,34 @@
     }
     return `<div style="color:var(--ink-faint);font-size:12px">No components reported yet.</div>`;
   }
+  // The amp controller reports the storage pools / databases / branches / compute
+  // endpoints it owns (models.ResourceStatus). This renders that inventory as the
+  // resource tree it is — pool → database → branch → endpoint — from the flat list
+  // and its parent links. Meko environments report no inventory, so the section is
+  // shown only for amp (or whenever a resource is present).
+  const RES_ORDER = { storage_pool:0, project:1, branch:2, endpoint:3 };
+  const RES_LABEL = { storage_pool:"pool", project:"database", branch:"branch", endpoint:"endpoint" };
+  function resourceSection(e) {
+    const res = e.resources || [];
+    if (!res.length) {
+      if (e.kind !== "amp") return "";
+      return `<div class="sect-l">Resources</div><div style="color:var(--ink-faint);font-size:12px">No resources reported yet.</div>`;
+    }
+    const byParent = {};
+    res.forEach(r => { (byParent[r.parent||""] = byParent[r.parent||""] || []).push(r); });
+    const render = (parentId, depth) =>
+      (byParent[parentId] || []).sort((a,b)=>(RES_ORDER[a.kind]??9)-(RES_ORDER[b.kind]??9)).map(r => {
+        const nm = r.name || (r.id||"").slice(0,8);
+        const meta = r.state ? ` <span style="color:var(--ink-faint)">· ${r.state}</span>` : "";
+        return `<div class="comp" style="padding-left:${depth*14}px"><span class="cn">${RES_LABEL[r.kind]||r.kind} / ${nm}</span>${meta}</div>` + render(r.id, depth+1);
+      }).join("");
+    return `<div class="sect-l">Resources <span style="font-weight:400;color:var(--ink-faint)">— ${res.length}</span></div>` + render("", 0);
+  }
   function selectEnv(id) {
     selectedId = id;
     rowsEl.querySelectorAll("tr").forEach(tr => tr.classList.toggle("sel", tr.dataset.id===id));
     const e = ENVS.find(x => x.id===id); if (!e) return;
+    detailId = id; detailSig = detailSigFor(e);
     const curIdx = LIFECYCLE.indexOf(TERMINAL.has(e.state) ? "READY" : e.state);
     const stepsHtml = LIFECYCLE.map((s,i) => {
       const cls = i<curIdx ? "done" : i===curIdx ? (TERMINAL.has(e.state)?"done":"cur") : "";
@@ -551,7 +615,7 @@
                  : e.state==="SUSPENDED" ? `<div class="chip suspended" style="margin-bottom:10px">suspended</div>` : "";
     const factLine = e.live ? `<div class="dmeta" style="color:var(--data)">● live agent · ${e.provider||""} · k8s ${e.k8s||"?"} · ${e.nodes||0} nodes</div>` : "";
     el("detail").innerHTML = `
-      <div class="dh"><span class="en">${e.id}</span>${chip(e.state)}</div>
+      <div class="dh"><span class="en">${e.id}</span>${kindBadge(e.kind)}${chip(e.state)}</div>
       <div class="dmeta">${e.region} · ${e.place==="cloud"?"cloud":"on-prem"}</div>
       ${factLine}${banner}
       <div class="sect-l">Lifecycle state</div>
@@ -559,12 +623,13 @@
       <div class="sect-l">Components</div>
       ${compRows(e)}
       ${blockerRows(e)}
+      ${resourceSection(e)}
       <div class="sect-l">Metadata</div>
       <dl class="kv">
         <dt>agent</dt><dd>${e.agent}</dd>
-        <dt>heartbeat</dt><dd>${e.hb} ago</dd>
-        <dt>mcp base</dt><dd>${e.mcp}</dd>
-        <dt>cert</dt><dd>${e.cert}</dd>
+        <dt>heartbeat</dt><dd id="detailHb">${e.hb} ago</dd>
+        ${e.kind!=="amp" && e.mcp?`<dt>mcp base</dt><dd>${e.mcp}</dd>`:""}
+        ${e.kind!=="amp" && e.cert?`<dt>cert</dt><dd>${e.cert}</dd>`:""}
       </dl>
       <div class="sect-l">Desired state</div>
       <div id="desiredBox"><div style="color:var(--ink-faint);font-size:12px">Loading…</div></div>
@@ -651,14 +716,18 @@
     const name = el("obName").value.trim();
     if (!name) { alert("Environment name is required"); return; }
     const reqBody = {
-      name, account_id: el("obAccount").value.trim(), region: el("obRegion").value.trim(),
+      name, kind: el("obKind").value, account_id: el("obAccount").value.trim(), region: el("obRegion").value.trim(),
       placement: el("obPlacement").value,
       cluster_spec: mode==="provision" ? {provider:"aws", region: el("obRegion").value.trim()||"us-east-1", node_count:3} : null,
     };
     const r = await api("/api/v1/environments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(reqBody)});
     if (!r.ok) { alert("Register failed ("+r.status+")"); return; }
     const j = (await unwrap(r)) || {};
-    el("installCode").innerHTML = installSnippet(j.enrollment_token || "mko_enr_…");
+    // Prefer the server's install_hint: it is kind-aware (amp installs the amp
+    // controller chart, meko the meko-agent) and always runnable as printed.
+    // Fall back to the client-side snippet only if the server sent none.
+    if (j.install_hint) { el("installCode").textContent = j.install_hint; }
+    else { el("installCode").innerHTML = installSnippet(j.enrollment_token || "ycp_enr_…"); }
     el("registerResult").hidden = false;
     refresh();
   };

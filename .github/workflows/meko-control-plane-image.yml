@@ -1,0 +1,60 @@
+name: Control-plane image
+
+# Builds the YCP control-plane image — meko api_server, run with
+# --control-plane-mode — and pushes it to Quay (quay.io/yugabyte/ycp-api-server)
+# so it can be deployed on Kubernetes. This is the first workflow to publish this
+# image; before it, the control plane was built by hand.
+#
+# It is a thin wrapper around meko/api_server/build-image.sh: the script is the
+# source of truth for how the image is built and tagged, and stays runnable
+# locally (./build-image.sh [--no-push]). CI only supplies credentials and calls
+# it.
+#
+# Auth is a Quay robot account, delivered as repo secrets. When they are absent
+# (a fork, or before they are configured) the job still BUILDS the image with
+# --no-push and stays green, so main cannot go red waiting on secret setup.
+#
+#   - QUAY_USER  — the robot account name, e.g. yugabyte+ycp_ci
+#   - QUAY_TOKEN — its token
+#
+# The Quay repository must exist and the robot must have write on it before the
+# first push.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'meko/api_server/**'
+      - '.github/workflows/meko-control-plane-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Build & push control-plane image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Push only when the robot credentials are present; otherwise build-only so
+      # the job is still a real compile+package check on forks and before setup.
+      - name: Build and push
+        env:
+          QUAY_USER: ${{ secrets.QUAY_USER }}
+          QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+        run: |
+          if [ -n "${QUAY_TOKEN}" ]; then
+            echo "::notice::pushing quay.io/yugabyte/ycp-api-server"
+            ./meko/api_server/build-image.sh
+          else
+            echo "::warning::QUAY_TOKEN not set — building the control-plane image but skipping the push"
+            ./meko/api_server/build-image.sh --no-push
+          fi

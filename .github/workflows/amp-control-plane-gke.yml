@@ -33,6 +33,14 @@ name: Amp control-plane GKE (itest-dev)
 #     pays a cold PG18 base build (~30 min) on top of amp_deploy_gke; --cache
 #     (:buildcache) then restores it in minutes, so it is PR-directive-only:
 #     nightly does NOT rebuild it.
+#   * `/ci amp_deploy_gke_ycp` — another superset of `amp_deploy_gke` that ALSO
+#     builds+pushes the YCP control-plane image (meko/api_server ->
+#     quay.io/yugabyte/ycp-api-server) from PR source, stands up an ephemeral
+#     control plane in the CI namespace (amp/deploy/ycp-up.sh: Postgres +
+#     api_server --control-plane-mode), registers an amp environment, wires the
+#     controller's controller.ycp.* Helm values + enrollment secret, and runs the
+#     smoke test with YCP_ASSERT=1 so it also proves the created endpoint shows up
+#     in GET /api/v1/environments. Directive/dispatch-only; NOT nightly.
 # It touches the itest cluster and needs org secrets (KUBECONFIG_ITEST_DEV,
 # QUAY_AMP_TOKEN), so fork PRs (which get no secrets) are always skipped.
 # Stale ci-pr-* namespaces are swept by control-plane-gke-cleanup.yml.
@@ -49,6 +57,10 @@ on:
     inputs:
       push_extensions:
         description: 'Also build+push the extension images and run the extension smoke checks'
+        type: boolean
+        default: false
+      push_ycp:
+        description: 'Also build+push the YCP control-plane image and run the register + endpoint-inventory assertion'
         type: boolean
         default: false
   pull_request:
@@ -84,6 +96,7 @@ jobs:
     outputs:
       suites: ${{ steps.gate.outputs.decided }}
       ext: ${{ steps.gate_ext.outputs.decided }}
+      ycp: ${{ steps.gate_ycp.outputs.decided }}
     steps:
       # Needed only to make the local composite action below available.
       - uses: actions/checkout@v7
@@ -106,6 +119,16 @@ jobs:
           suites: '["amp_deploy_gke_extensions"]'
           unconditional-events: ''
 
+      # amp_deploy_gke_ycp is a superset of amp_deploy_gke (the images/deploy gates
+      # OR it in) that also builds the YCP control-plane image and runs the register
+      # + endpoint-inventory assertion. Directive/dispatch-only — NOT unconditional
+      # on schedule, so nightly stays a plain deploy.
+      - id: gate_ycp
+        uses: ./.github/actions/ci-directives
+        with:
+          suites: '["amp_deploy_gke_ycp"]'
+          unconditional-events: ''
+
   images:
     name: Amp GKE — build + push images (Quay)
     needs: decide
@@ -115,7 +138,9 @@ jobs:
     if: >-
       (fromJSON(needs.decide.outputs.suites).amp_deploy_gke ||
        fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions ||
-       github.event.inputs.push_extensions == 'true') &&
+       fromJSON(needs.decide.outputs.ycp).amp_deploy_gke_ycp ||
+       github.event.inputs.push_extensions == 'true' ||
+       github.event.inputs.push_ycp == 'true') &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -204,6 +229,19 @@ jobs:
           docker buildx build --push -f amp/controller/mcp/Dockerfile \
             -t "$QUAY_NS/amp-mcp:${{ steps.tag.outputs.tag }}" amp/controller/mcp
 
+      # YCP control-plane image (amp_deploy_gke_ycp only): meko/api_server, the
+      # thing the amp controller registers against, built from THIS PR's source and
+      # tagged with the same custom-<sha> as the amp images so the deploy job pulls a
+      # matching pair. The Quay login above authorizes the push; the QUAY_AMP_TOKEN
+      # robot needs push+pull on quay.io/yugabyte/ycp-api-server for this to land.
+      - name: YCP api-server image
+        if: fromJSON(needs.decide.outputs.ycp).amp_deploy_gke_ycp || github.event.inputs.push_ycp == 'true'
+        run: |
+          docker buildx build --push --platform linux/amd64 \
+            -f meko/api_server/Dockerfile \
+            -t "$QUAY_NS/ycp-api-server:${{ steps.tag.outputs.tag }}" \
+            meko/api_server
+
       # Externalized-extension images (amp_deploy_gke_extensions only): builds the
       # ABI-anchor PG18 base locally (~30 min cold, to compile against) and pushes
       # ONLY each manifest extension to Quay under
@@ -234,6 +272,10 @@ jobs:
       NS: ci-pr-${{ github.event.pull_request.number || github.run_id }}
       PULL_SECRET: quay-pull-secret
       TAG: ${{ needs.images.outputs.tag }}
+      # '1' for the amp_deploy_gke_ycp superset (directive or manual push_ycp),
+      # gating the control-plane bring-up, the controller's ycp.* Helm wiring, and
+      # the smoke test's YCP_ASSERT block. '0' for a plain amp_deploy_gke.
+      YCP: ${{ (fromJSON(needs.decide.outputs.ycp).amp_deploy_gke_ycp || github.event.inputs.push_ycp == 'true') && '1' || '0' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -250,6 +292,25 @@ jobs:
       - uses: azure/setup-helm@v5
         with:
           version: v3.18.6
+
+      # YCP smoke only: stand up an ephemeral control plane (Postgres + api_server
+      # --control-plane-mode) in this namespace, register an amp environment, and
+      # drop the enrollment token into the Secret the controller chart reads. Runs
+      # BEFORE up-gke.sh so the controller enrolls on first boot. ycp-up.sh appends
+      # YCP_URL / YCP_ENV_ID / YCP_ADMIN_KEY / YCP_ENROLL_SECRET to $GITHUB_ENV for
+      # the up-gke.sh (Helm values) and smoke-test.sh (assertion) steps below.
+      - name: YCP control plane + register (amp_deploy_gke_ycp)
+        if: env.YCP == '1'
+        env:
+          QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+        run: |
+          AUTH="$(printf '%s' "$QUAY_TOKEN" | base64 -w0)"
+          export PULL_SECRET_DOCKERCONFIGJSON="{\"auths\":{\"quay.io\":{\"auth\":\"${AUTH}\"}}}"
+          NS="$NS" \
+          YCP_IMAGE="$QUAY_NS/ycp-api-server:$TAG" \
+          PULL_SECRET="$PULL_SECRET" \
+          YCP_ENV_NAME="gke-smoke" \
+          amp/deploy/ycp-up.sh
 
       # up-gke.sh runs deploy-only (no BUILD=1, so it never calls gcloud
       # configure-docker): it creates the (fresh, per-run) namespace, mints the
@@ -277,6 +338,7 @@ jobs:
           PULL_SECRET="$PULL_SECRET" \
           CONTROLLER_EXPOSE=none \
           ENDPOINT_SERVICE_TYPE=ClusterIP \
+          YCP_ENABLED="$YCP" \
           amp/deploy/up-gke.sh
 
       # With amp_deploy_gke_extensions, the extension images were pushed above and
@@ -286,7 +348,7 @@ jobs:
       - name: Smoke test (amp/deploy/smoke-test.sh)
         env:
           SMOKE_EXTENSIONS: ${{ (fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true') && '1' || '0' }}
-        run: NS="$NS" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" amp/deploy/smoke-test.sh
+        run: NS="$NS" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" YCP_ASSERT="$YCP" amp/deploy/smoke-test.sh
 
       - name: Dump controller/endpoint state on failure
         if: failure()
@@ -301,6 +363,16 @@ jobs:
             kubectl -n "$NS" logs "$p" -c endpoint --previous --tail=200 || true
           done
           kubectl -n "$NS" logs deploy/amp-controller --tail=200 || true
+          # YCP smoke: the control plane and what it thinks the fleet looks like.
+          if [ "${YCP:-0}" = 1 ]; then
+            kubectl -n "$NS" logs deploy/meko-api-server --tail=200 || true
+            kubectl -n "$NS" logs deploy/postgres --tail=50 || true
+            ( kubectl -n "$NS" port-forward svc/meko-api-server 18099:80 >/tmp/cp-pf.log 2>&1 & \
+              PF=$!; sleep 4; \
+              curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY:-}" \
+                http://127.0.0.1:18099/api/v1/environments | jq . || true; \
+              kill "$PF" 2>/dev/null || true )
+          fi
 
       - name: Teardown
         if: always()

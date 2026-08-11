@@ -8,10 +8,16 @@ import (
 // Environment is one registered customer data-plane environment (YCP fleet
 // registry, control-plane mode). Metadata only -- never customer data.
 type Environment struct {
-	CreatedAt       time.Time       `json:"created_at"`
-	LastHeartbeatAt *time.Time      `json:"last_heartbeat_at,omitempty"`
-	ID              string          `json:"id"`
-	AccountID       string          `json:"account_id,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
+	ID              string     `json:"id"`
+	AccountID       string     `json:"account_id,omitempty"`
+	// Kind distinguishes an amp environment (the amp controller) from a meko one
+	// (the datapack/stack agent). It is fixed at registration. A meko id is a bare
+	// slug(name) (unchanged, backward compatible); an amp id is prefixed "amp-",
+	// so the two can coexist in one fleet and the kind column disambiguates. Legacy
+	// rows registered before this read as "meko".
+	Kind            string          `json:"kind"`
 	Placement       string          `json:"placement"`
 	Region          string          `json:"region"`
 	State           string          `json:"state"`
@@ -21,9 +27,14 @@ type Environment struct {
 	MCPBaseURL      string          `json:"mcp_base_url,omitempty"`
 	CertFingerprint string          `json:"cert_fingerprint,omitempty"`
 	Components      json.RawMessage `json:"components,omitempty"`
-	NodeCount       int             `json:"node_count,omitempty"`
-	MaxDatapacks    int             `json:"max_datapacks,omitempty"`
-	Live            bool            `json:"live"`
+	// Resources is the amp controller's reported inventory (storage pools,
+	// databases, branches, compute endpoints) — a JSON array of ResourceStatus,
+	// stored verbatim from the status heartbeat for the console to render. Empty
+	// ("[]") for a meko environment, which reports no inventory.
+	Resources    json.RawMessage `json:"resources,omitempty"`
+	NodeCount    int             `json:"node_count,omitempty"`
+	MaxDatapacks int             `json:"max_datapacks,omitempty"`
+	Live         bool            `json:"live"`
 
 	// Datapacks is no longer reported. Nothing can compute it: YCP stopped modelling
 	// datapacks, so the agent does not count them and ApplyStatus has nothing to set it

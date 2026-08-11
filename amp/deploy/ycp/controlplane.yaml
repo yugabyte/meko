@@ -1,0 +1,166 @@
+# Ephemeral YCP control plane for the amp GKE smoke test (amp_deploy_gke_ycp).
+#
+# This is api_server run with --control-plane-mode — the real control plane the amp
+# controller registers against, NOT a stand-in — backed by a plain Postgres. It is
+# deployed into the same per-PR CI namespace as the amp stack and torn down with it
+# (the namespace delete removes everything here), so its Postgres is an emptyDir: no
+# PVC to leak, nothing to reach it from outside the cluster.
+#
+# Postgres rather than YugabyteDB: control-plane mode only runs the portable
+# migrations/controlplane set, so it needs no YB-specific DDL. That is also why the
+# init container uses --only-controlplane-migrate.
+#
+# Templated by amp/deploy/ycp-up.sh with `envsubst` over exactly these vars:
+#   ${NS}             the CI namespace (ci-pr-<n>)
+#   ${YCP_IMAGE}      quay.io/yugabyte/ycp-api-server:<tag> (built from PR source)
+#   ${YCP_ADMIN_KEY}  the generated admin secret gating the fleet/console routes
+#   ${YCP_IPS}        imagePullSecrets in flow style: [{name: <secret>}] or []
+# The k8s `$(DB_PASSWORD)` env-var references below are NOT touched (envsubst is
+# scoped to the four vars above), so they interpolate at runtime as intended.
+#
+# The db-password / mcp secret are fixed and weak on purpose: this cluster lives and
+# dies inside one CI run and is never reachable. The admin key is the one credential
+# that is generated per run (ycp-up.sh) so the fleet API cannot be poked by anything
+# that hasn't seen this run's secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ycp-cp-secrets
+  namespace: ${NS}
+  labels:
+    app.kubernetes.io/part-of: ycp-smoke
+type: Opaque
+stringData:
+  db-password: ycp-smoke-pw
+  admin-api-key: ${YCP_ADMIN_KEY}
+  secret-key: ycp-smoke-mcp-internal
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: ${NS}
+  labels: { app: postgres, app.kubernetes.io/part-of: ycp-smoke }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata:
+      labels: { app: postgres, app.kubernetes.io/part-of: ycp-smoke }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: POSTGRES_USER, value: ycp }
+            - { name: POSTGRES_DB, value: ycp }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: ycp-cp-secrets, key: db-password } }
+            # A subdirectory: initdb refuses a non-empty directory, and emptyDir
+            # roots can carry lost+found.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ name: pg, containerPort: 5432 }]
+          readinessProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U ycp -d ycp"] }
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ${NS}
+spec:
+  selector: { app: postgres }
+  ports: [{ name: pg, port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meko-api-server
+  namespace: ${NS}
+  labels: { app: meko-api-server, app.kubernetes.io/part-of: ycp-smoke }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: meko-api-server } }
+  template:
+    metadata:
+      labels: { app: meko-api-server, app.kubernetes.io/part-of: ycp-smoke }
+    spec:
+      imagePullSecrets: ${YCP_IPS}
+      initContainers:
+        # Creates the fleet-registry tables. controlplane scope only: the system and
+        # data sets need YugabyteDB, this one is portable SQL. Retries its own DB
+        # connection, so it tolerates starting before Postgres is ready.
+        - name: migrate
+          image: ${YCP_IMAGE}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--only-controlplane-migrate"
+            - "--system-db-host=postgres"
+            - "--system-db-port=5432"
+            - "--system-db-user-name=ycp"
+            - "--system-db-password=$(DB_PASSWORD)"
+            - "--system-db-name=ycp"
+            - "--system-db-sslmode=disable"
+            - "--db-host=postgres"
+            - "--db-port=5432"
+            - "--db-user-name=ycp"
+            - "--db-password=$(DB_PASSWORD)"
+            - "--db-name=ycp"
+            - "--db-sslmode=disable"
+          env:
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: ycp-cp-secrets, key: db-password } }
+      containers:
+        - name: meko-api-server
+          image: ${YCP_IMAGE}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--control-plane-mode"
+            - "--admin-api-key=$(ADMIN_API_KEY)"
+            - "--mcp-internal-secret=$(MCP_INTERNAL_SECRET)"
+            - "--system-db-host=postgres"
+            - "--system-db-port=5432"
+            - "--system-db-user-name=ycp"
+            - "--system-db-password=$(DB_PASSWORD)"
+            - "--system-db-name=ycp"
+            - "--system-db-sslmode=disable"
+            - "--db-host=postgres"
+            - "--db-port=5432"
+            - "--db-user-name=ycp"
+            - "--db-password=$(DB_PASSWORD)"
+            - "--db-name=ycp"
+            - "--db-sslmode=disable"
+          env:
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: ycp-cp-secrets, key: db-password } }
+            - name: ADMIN_API_KEY
+              valueFrom: { secretKeyRef: { name: ycp-cp-secrets, key: admin-api-key } }
+            - name: MCP_INTERNAL_SECRET
+              valueFrom: { secretKeyRef: { name: ycp-cp-secrets, key: secret-key } }
+          ports: [{ name: http, containerPort: 25433 }]
+          readinessProbe:
+            httpGet: { path: /api/v1/health, port: 25433 }
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            failureThreshold: 40
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: meko-api-server
+  namespace: ${NS}
+spec:
+  selector: { app: meko-api-server }
+  ports: [{ name: http, port: 80, targetPort: 25433 }]

@@ -17,6 +17,35 @@ import (
 // ErrValidation wraps input-validation failures (mapped to 400 by handlers).
 var ErrValidation = errors.New("validation error")
 
+// ErrKindMismatch is returned when an agent enrolls declaring a kind that does
+// not match the kind the environment was registered with (mapped to 409). It
+// stops an amp controller from attaching to a meko environment, or vice versa,
+// which would otherwise reconcile the wrong desired state.
+var ErrKindMismatch = errors.New("environment kind mismatch")
+
+// Environment kinds. An amp environment is driven by the amp controller (which
+// reports a resource inventory and no meko-stack); a meko environment is driven
+// by the datapack/stack agent. The kind is fixed at registration and baked into
+// the id so both can coexist in one fleet.
+const (
+	KindMeko = "meko"
+	KindAmp  = "amp"
+)
+
+// normalizeKind lowercases and validates a declared kind, defaulting empty to
+// meko so a pre-kind caller (an older console, the existing meko flow) keeps its
+// behaviour. Returns ErrValidation for anything else.
+func normalizeKind(kind string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "", KindMeko:
+		return KindMeko, nil
+	case KindAmp:
+		return KindAmp, nil
+	default:
+		return "", fmt.Errorf("%w: unknown environment kind %q (want %q or %q)", ErrValidation, kind, KindMeko, KindAmp)
+	}
+}
+
 // enrollTokenTTL is how long a minted enrollment token stays valid. It is reusable
 // within this window (kubeadm-style bootstrap token) so agent restarts can re-enroll.
 const enrollTokenTTL = 30 * time.Minute
@@ -105,7 +134,11 @@ type ClusterSpec struct {
 
 // RegisterEnvironmentRequest is the console's register-environment body.
 type RegisterEnvironmentRequest struct {
-	Name        string       `json:"name"`
+	Name string `json:"name"`
+	// Kind is "amp" (the amp controller) or "meko" (the datapack/stack agent);
+	// empty defaults to "meko". It fixes what the environment runs and is baked
+	// into the returned id.
+	Kind        string       `json:"kind,omitempty"`
 	AccountID   string       `json:"account_id"`
 	Placement   string       `json:"placement"`
 	Region      string       `json:"region"`
@@ -119,10 +152,29 @@ type RegisterEnvironmentRequest struct {
 
 // EnrollRequest is the agent's enrollment body.
 type EnrollRequest struct {
-	Name            string       `json:"name"`
-	EnrollmentToken string       `json:"enrollment_token"`
-	Placement       string       `json:"placement"`
-	ClusterFacts    ClusterFacts `json:"cluster_facts"`
+	Name            string `json:"name"`
+	EnrollmentToken string `json:"enrollment_token"`
+	Placement       string `json:"placement"`
+	// Kind is the kind the agent believes it is (amp | meko). It is checked
+	// against the environment's registered kind so an amp controller cannot
+	// attach to a meko environment or vice versa; empty is treated as meko.
+	Kind         string       `json:"kind,omitempty"`
+	ClusterFacts ClusterFacts `json:"cluster_facts"`
+}
+
+// ResourceStatus is one item of an amp environment's observed inventory: a
+// storage pool, database (project), branch, or compute endpoint. The amp
+// controller reports its whole inventory on each status heartbeat; the control
+// plane stores it verbatim for the console. Kind-agnostic and flat — Parent
+// links a resource to its owner (project→pool, branch→project, endpoint→branch)
+// by id — so new resource kinds need no schema change.
+type ResourceStatus struct {
+	Kind   string            `json:"kind"`
+	ID     string            `json:"id"`
+	Name   string            `json:"name,omitempty"`
+	Parent string            `json:"parent,omitempty"`
+	State  string            `json:"state,omitempty"`
+	Attrs  map[string]string `json:"attrs,omitempty"`
 }
 
 // StatusReport is the agent's heartbeat + phases.
@@ -132,6 +184,10 @@ type StatusReport struct {
 	AppliedRevision  int            `json:"applied_revision"`
 	ClusterFacts     ClusterFacts   `json:"cluster_facts"`
 	Components       []EnvComponent `json:"components"`
+	// Resources is the amp controller's observed inventory. A meko agent omits
+	// it (nil); ApplyStatus leaves the stored inventory untouched when it is nil
+	// and replaces it (including with an empty set) when it is present.
+	Resources []ResourceStatus `json:"resources,omitempty"`
 }
 
 // ---- token helpers ----
@@ -168,6 +224,10 @@ func (s *EnvironmentService) Register(req RegisterEnvironmentRequest) (*models.E
 	if len(name) < 3 || len(name) > 60 {
 		return nil, "", fmt.Errorf("%w: name must be 3-60 chars", ErrValidation)
 	}
+	kind, err := normalizeKind(req.Kind)
+	if err != nil {
+		return nil, "", err
+	}
 	placement := req.Placement
 	if placement == "" {
 		placement = "cloud"
@@ -176,12 +236,22 @@ func (s *EnvironmentService) Register(req RegisterEnvironmentRequest) (*models.E
 	if req.ClusterSpec != nil {
 		state = "CLUSTER_PROVISIONING"
 	}
-	plain, hash := newToken("mko_enr_")
+	plain, hash := newToken("ycp_enr_")
 	exp := time.Now().UTC().Add(enrollTokenTTL)
+	// A meko environment keeps a bare slug id — that is the id the existing meko
+	// agent, e2e, and console already use, so prefixing it would silently break
+	// them. An amp environment is prefixed "amp-", so an amp and a meko
+	// environment of the same name never collide and the kind is legible from the
+	// id. The kind column disambiguates regardless of the id shape.
+	id := slug(name)
+	if kind == KindAmp {
+		id = KindAmp + "-" + id
+	}
 	e := &models.Environment{
-		ID: slug(name), AccountID: req.AccountID, Placement: placement, Region: req.Region,
+		ID: id, Kind: kind, AccountID: req.AccountID, Placement: placement, Region: req.Region,
 		State: state, MaxDatapacks: 400, CreatedAt: time.Now().UTC(),
-		Components: json.RawMessage("[]"), EnrollTokenHash: hash, EnrollTokenExpiresAt: &exp,
+		Components: json.RawMessage("[]"), Resources: json.RawMessage("[]"),
+		EnrollTokenHash: hash, EnrollTokenExpiresAt: &exp,
 	}
 	if err := s.repo.Upsert(e); err != nil {
 		return nil, "", err
@@ -191,7 +261,7 @@ func (s *EnvironmentService) Register(req RegisterEnvironmentRequest) (*models.E
 	// enrollment token has already been minted and is returned exactly once, so
 	// discarding it here would leave an environment nobody can attach an agent to.
 	// A desired-state write can always be retried; a token cannot.
-	if res := s.initialDesired(req); res != nil {
+	if res := s.initialDesired(req, kind); res != nil {
 		if err := s.repo.ReplaceDesired(e.ID, res); err != nil {
 			return e, plain, nil //nolint:nilerr // see above: the token must survive
 		}
@@ -201,9 +271,17 @@ func (s *EnvironmentService) Register(req RegisterEnvironmentRequest) (*models.E
 
 // initialDesired resolves what a newly registered environment should be running:
 // whatever the caller asked for, else the server's bootstrap defaults, else nothing.
-func (s *EnvironmentService) initialDesired(req RegisterEnvironmentRequest) []models.DesiredResource {
+func (s *EnvironmentService) initialDesired(req RegisterEnvironmentRequest, kind string) []models.DesiredResource {
 	if req.Desired != nil {
 		return *req.Desired
+	}
+	// The meko-stack bootstrap default is meko's data plane; it is meaningless to
+	// an amp environment, which is a running amp controller reporting the storage
+	// pools / databases / branches / endpoints it already owns. An amp environment
+	// therefore seeds nothing (the reconcile loop that would push amp desired state
+	// is a later phase) unless the caller passed an explicit `desired`.
+	if kind == KindAmp {
+		return nil
 	}
 	if !s.bootstrap.Enabled {
 		return nil
@@ -229,9 +307,18 @@ func (s *EnvironmentService) initialDesired(req RegisterEnvironmentRequest) []mo
 
 // EnrollWithToken validates and consumes an enrollment token, mints a status token,
 // merges facts, and returns the environment. ok=false ⇒ invalid/consumed token.
-func (s *EnvironmentService) EnrollWithToken(tokenPlain, placement string, f ClusterFacts) (*models.Environment, string, bool, error) {
+//
+// declaredKind is the kind the enrolling agent believes it is; empty is treated
+// as meko. It must match the kind the environment was registered with, so an amp
+// controller cannot attach to a meko environment (or vice versa) and start
+// reporting or reconciling the wrong thing — a mismatch returns ErrKindMismatch.
+func (s *EnvironmentService) EnrollWithToken(tokenPlain, placement, declaredKind string, f ClusterFacts) (*models.Environment, string, bool, error) {
 	if tokenPlain == "" {
 		return nil, "", false, fmt.Errorf("%w: enrollment_token required", ErrValidation)
+	}
+	kind, err := normalizeKind(declaredKind)
+	if err != nil {
+		return nil, "", false, err
 	}
 	id, found, err := s.repo.EnrollLookup(hashToken(tokenPlain))
 	if err != nil || !found {
@@ -241,15 +328,29 @@ func (s *EnvironmentService) EnrollWithToken(tokenPlain, placement string, f Clu
 	if err != nil || e == nil {
 		return nil, "", false, err
 	}
+	envKind := e.Kind
+	if envKind == "" {
+		envKind = KindMeko
+	}
+	if kind != envKind {
+		return nil, "", false, fmt.Errorf("%w: environment %q is kind %q, agent declared %q", ErrKindMismatch, e.ID, envKind, kind)
+	}
 	e.Live = true
 	if placement != "" {
 		e.Placement = placement
 	}
 	mergeFacts(e, f)
 	e.State = "ATTESTING"
-	e.MCPBaseURL = e.ID + ".mcp.mekodata.ai"
-	e.CertFingerprint = "sha256:" + randHex(6)
-	statusPlain, statusHash := newToken("mko_sts_")
+	// The MCP base URL and cert fingerprint are meko-specific: the meko agent fronts
+	// a per-environment MCP endpoint under mekodata.ai and presents a TLS cert. The
+	// amp controller reports neither, so synthesizing a mekodata.ai hostname and a
+	// random fingerprint for it is misleading noise in the console — populate them
+	// only for meko, and leave them empty for amp.
+	if kind == KindMeko {
+		e.MCPBaseURL = e.ID + ".mcp.mekodata.ai"
+		e.CertFingerprint = "sha256:" + randHex(6)
+	}
+	statusPlain, statusHash := newToken("ycp_sts_")
 	e.StatusTokenHash = statusHash
 	// The enrollment token is deliberately NOT burned here, even though the agent
 	// now persists the status token and so does not need to enroll again in normal
@@ -295,6 +396,15 @@ func (s *EnvironmentService) ApplyStatus(envID string, r StatusReport) (bool, er
 	mergeFacts(e, r.ClusterFacts)
 	if comps, err := json.Marshal(r.Components); err == nil {
 		e.Components = comps
+	}
+	// The amp controller reports its inventory here; a meko agent omits it (nil),
+	// in which case the stored inventory is left as it was. A present-but-empty
+	// set is a real report (the environment currently owns nothing) and replaces
+	// what was stored.
+	if r.Resources != nil {
+		if res, err := json.Marshal(r.Resources); err == nil {
+			e.Resources = res
+		}
 	}
 	if err := s.repo.Upsert(e); err != nil {
 		return false, err

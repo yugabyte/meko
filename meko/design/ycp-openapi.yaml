@@ -202,7 +202,7 @@ paths:
               type: object
               required: [enrollment_token, csr]
               properties:
-                enrollment_token: { type: string, examples: [mko_enr_9f2c...a71] }
+                enrollment_token: { type: string, examples: [ycp_enr_9f2c...a71] }
                 csr: { type: string, description: PEM-encoded certificate signing request. }
                 cluster_facts: { $ref: '#/components/schemas/ClusterFacts' }
       responses:
@@ -389,7 +389,7 @@ components:
         - $ref: '#/components/schemas/Environment'
         - type: object
           properties:
-            enrollment_token: { type: string, examples: [mko_enr_9f2c...a71] }
+            enrollment_token: { type: string, examples: [ycp_enr_9f2c...a71] }
             enrollment_expires_at: { type: string, format: date-time }
             install_hint: { type: string, examples: ['helm install meko-agent meko/meko-agent --set enrollmentToken=...'] }
 

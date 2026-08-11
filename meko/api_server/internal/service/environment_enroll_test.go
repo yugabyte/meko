@@ -27,7 +27,7 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
-	const plain = "mko_enr_deadbeef"
+	const plain = "ycp_enr_deadbeef"
 	tokenHash := hashToken(plain)
 	expires := time.Now().Add(20 * time.Minute).UTC()
 
@@ -41,11 +41,11 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 			"id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 			"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 			"cert_fingerprint", "components", "live", "enroll_token_hash", "enroll_token_expires_at",
-			"status_token_hash", "created_at",
+			"status_token_hash", "created_at", "kind", "resources",
 		}).AddRow(
 			"acme-prod", "acme", "cloud", "us-east-2", "PENDING", "", 0, "",
 			// created_at is a non-pointer time.Time, so it cannot be NULL here.
-			0, 400, "", nil, "", "", "[]", false, tokenHash, expires, "", time.Now(),
+			0, 400, "", nil, "", "", "[]", false, tokenHash, expires, "", time.Now(), "meko", "[]",
 		))
 
 	// $17 is enroll_token_hash and $18 its expiry. The regex below pins that mapping
@@ -58,13 +58,14 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), true,
-			tokenHash, // $17 — still there
-			expires,   // $18 — still there
-			sqlmock.AnyArg(), sqlmock.AnyArg(),
+			tokenHash,                          // $17 — still there
+			expires,                            // $18 — still there
+			sqlmock.AnyArg(), sqlmock.AnyArg(), // $19 status_token_hash, $20 created_at
+			sqlmock.AnyArg(), sqlmock.AnyArg(), // $21 kind, $22 resources
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	_, statusToken, ok, err := svc.EnrollWithToken(plain, "cloud", ClusterFacts{Provider: "aws"})
+	_, statusToken, ok, err := svc.EnrollWithToken(plain, "cloud", KindMeko, ClusterFacts{Provider: "aws"})
 	if err != nil {
 		t.Fatalf("EnrollWithToken: %v", err)
 	}

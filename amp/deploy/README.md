@@ -199,6 +199,21 @@ every push while it is present. Fork PRs are always skipped (no secrets). It:
   / `ENDPOINT_SERVICE_TYPE=ClusterIP`, runs the smoke test (which port-forwards),
   and **always** tears the namespace down.
 
+A superset directive, **`/ci amp_deploy_gke_ycp`**, additionally proves the amp↔YCP
+integration end to end. On top of the plain deploy it builds + pushes the YCP
+control-plane image (`meko/api_server` → `quay.io/yugabyte/ycp-api-server`) from the
+PR source, then [`ycp-up.sh`](ycp-up.sh) stands up an ephemeral control plane
+(`api_server --control-plane-mode` + a throwaway Postgres, from
+[`ycp/controlplane.yaml`](ycp/controlplane.yaml)) in the same `ci-pr-<n>` namespace,
+registers a `kind=amp` environment, and drops the enrollment token into the
+`amp-controller-ycp-enrollment` Secret. `up-gke.sh` is then run with `YCP_ENABLED=1`
+(which sets `controller.ycp.*` — `url` to the in-cluster Service, `envName` to the
+registered id, `reportInterval=5s`), and the smoke test runs with `YCP_ASSERT=1`:
+after it creates a compute endpoint it polls `GET /api/v1/environments` and asserts
+the environment is `READY` with that endpoint present in the reported `resources`.
+The whole control plane is torn down with the namespace. This directive is opt-in
+only — it does **not** run nightly.
+
 Stale `ci-pr-*` namespaces (from a run cancelled before teardown) are swept every
 6 h by [`amp-control-plane-gke-cleanup.yml`](../../.github/workflows/amp-control-plane-gke-cleanup.yml).
 
@@ -234,7 +249,8 @@ Required repo secrets (both workflows):
 - **`QUAY_TOKEN`** — a Quay robot credential as a **`robot-user:token`** string.
   CI splits it to `docker login quay.io` (push) and derives the in-namespace pull
   secret from it (the `.dockerconfigjson` auth is `base64(QUAY_TOKEN)`). The robot
-  needs **push + pull** on the four `amp-*` repos.
+  needs **push + pull** on the four `amp-*` repos — plus **`ycp-api-server`** if you
+  use `/ci amp_deploy_gke_ycp` (it builds + pulls the control-plane image there).
 
 Fork PRs are skipped (secrets aren't exposed to them).
 

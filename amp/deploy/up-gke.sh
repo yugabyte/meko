@@ -313,6 +313,30 @@ HELM_SET=(
 )
 [ -n "${PULL_SECRET}" ] && HELM_SET+=("imagePullSecrets[0].name=${PULL_SECRET}")
 
+# YCP fleet registration + reporting (off by default). When YCP_ENABLED=1, wire the
+# controller.ycp.* values so the controller enrolls with the control plane at
+# YCP_URL as environment YCP_ENV_ID, using the enrollment token in the Secret
+# YCP_ENROLL_SECRET (amp/deploy/ycp-up.sh creates all of these). The amp_deploy_gke_ycp
+# smoke path forces a fast report interval so the endpoint-inventory assertion
+# resolves quickly.
+YCP_ENABLED="${YCP_ENABLED:-0}"
+if [ "${YCP_ENABLED}" = "1" ]; then
+  : "${YCP_URL:?YCP_ENABLED=1 requires YCP_URL}"
+  : "${YCP_ENV_ID:?YCP_ENABLED=1 requires YCP_ENV_ID}"
+  YCP_REPORT_INTERVAL="${YCP_REPORT_INTERVAL:-5s}"
+  YCP_ENROLL_SECRET="${YCP_ENROLL_SECRET:-amp-controller-ycp-enrollment}"
+  YCP_PLACEMENT="${YCP_PLACEMENT:-cloud}"
+  say "YCP reporting enabled (url=${YCP_URL} env=${YCP_ENV_ID} interval=${YCP_REPORT_INTERVAL})"
+  HELM_SET+=(
+    "controller.ycp.enabled=true"
+    "controller.ycp.url=${YCP_URL}"
+    "controller.ycp.envName=${YCP_ENV_ID}"
+    "controller.ycp.placement=${YCP_PLACEMENT}"
+    "controller.ycp.reportInterval=${YCP_REPORT_INTERVAL}"
+    "controller.ycp.enrollTokenSecret.name=${YCP_ENROLL_SECRET}"
+  )
+fi
+
 HELM_ARGS=(upgrade --install yb-amp-controller "${CHART_DIR}" -n "${NS}"
            --set-string "controller.databaseUrl=${DB_URL}")
 for s in "${HELM_SET[@]}"; do HELM_ARGS+=(--set "${s}"); done

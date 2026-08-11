@@ -56,6 +56,12 @@ func ConsoleHandler(embedSecret string) echo.HandlerFunc {
 			return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "console secret encode failed")
 		}
 		page := strings.Replace(string(b), `"`+adminSecretPlaceholder+`"`, string(quoted), 1)
+		// The page is generated per request (it embeds the admin secret) and ships
+		// inside the api-server binary, so a new image is the only way it changes —
+		// and a browser must never keep serving the previous build's copy. Without
+		// this a rolled-forward console (e.g. amp support added to the register form)
+		// silently shows the old UI until a hard refresh.
+		c.Response().Header().Set("Cache-Control", "no-store")
 		return c.HTMLBlob(http.StatusOK, []byte(page))
 	}
 }

@@ -305,7 +305,7 @@ Failure modes worth knowing:
 | `reconcile mcp-server/… needs spec.image` | the private Meko images have no default. Declare `spec.image`, and `spec.image_pull_secret` for a namespace with no pull credentials. |
 | `this database's StatefulSet … cannot be changed in place` | `storage_size` (or another `volumeClaimTemplates` field) differs from what the StatefulSet was created with, which Kubernetes forbids changing. The database keeps serving; either declare the original value or delete the StatefulSet deliberately. |
 
-`meko-agent-state` holds a live `mko_sts_` token that the control plane keeps
+`meko-agent-state` holds a live `ycp_sts_` token that the control plane keeps
 honouring until the environment is deregistered. Deleting the agent's release does
 not remove it — delete the namespace, and `DELETE /api/v1/environments/{id}` to
 stop the token being accepted.

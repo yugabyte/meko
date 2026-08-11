@@ -375,8 +375,8 @@ reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
 TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
 [ -n "$TOKEN" ] || die "no enrollment_token in the register response: ${reg:0:200}"
 case "$TOKEN" in
-  mko_enr_*) ;;
-  *) die "enrollment token has an unexpected prefix (want mko_enr_): ${TOKEN:0:12}..." ;;
+  ycp_enr_*) ;;
+  *) die "enrollment token has an unexpected prefix (want ycp_enr_): ${TOKEN:0:12}..." ;;
 esac
 echo "    enrollment token minted (${TOKEN:0:12}...)"
 

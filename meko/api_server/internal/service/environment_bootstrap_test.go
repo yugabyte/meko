@@ -72,7 +72,7 @@ func TestRegister_SeedsTheWholeStackInOneResource(t *testing.T) {
 		Enabled: true, Release: testRelease,
 		ImagePullSecret: "meko-ecr", SecretRef: "meko-data-plane",
 	}}
-	res := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"})
+	res := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"}, KindMeko)
 	if len(res) != 1 || res[0].Kind != "meko-stack" {
 		t.Fatalf("seeded %+v, want a single meko-stack resource", res)
 	}
@@ -102,7 +102,7 @@ func TestRegister_SeedsTheWholeStackInOneResource(t *testing.T) {
 // runs. Seeding a placeholder would provision one nobody asked for.
 func TestRegister_SeedsNoDatapack(t *testing.T) {
 	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: true, Release: testRelease}}
-	for _, r := range svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"}) {
+	for _, r := range svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"}, KindMeko) {
 		if r.Kind == "datapack" {
 			t.Errorf("registration seeded a datapack (%s), which nobody asked for", r.Name)
 		}
@@ -115,7 +115,7 @@ func TestRegister_ExplicitDesiredWins(t *testing.T) {
 	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: true, Release: testRelease}}
 
 	empty := []models.DesiredResource{}
-	got := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme", Desired: &empty})
+	got := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme", Desired: &empty}, KindMeko)
 	if len(got) != 0 {
 		t.Errorf("explicit empty desired state was overridden with %+v", got)
 	}
@@ -123,7 +123,7 @@ func TestRegister_ExplicitDesiredWins(t *testing.T) {
 	custom := []models.DesiredResource{
 		{Kind: "database", Name: "byo", Spec: json.RawMessage(`{"mode":"external","host":"db"}`)},
 	}
-	got = svc.initialDesired(RegisterEnvironmentRequest{Name: "acme", Desired: &custom})
+	got = svc.initialDesired(RegisterEnvironmentRequest{Name: "acme", Desired: &custom}, KindMeko)
 	if len(got) != 1 || got[0].Name != "byo" {
 		t.Errorf("explicit desired state not used: %+v", got)
 	}
@@ -133,7 +133,7 @@ func TestRegister_ExplicitDesiredWins(t *testing.T) {
 // operators want to declare every environment by hand.
 func TestRegister_BootstrapDisabled(t *testing.T) {
 	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: false, Release: testRelease}}
-	if got := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"}); got != nil {
+	if got := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"}, KindMeko); got != nil {
 		t.Errorf("seeded %+v with bootstrap defaults disabled", got)
 	}
 }

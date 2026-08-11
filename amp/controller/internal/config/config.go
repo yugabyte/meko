@@ -127,6 +127,33 @@ const (
 	DriverLocal = "local"
 )
 
+// YCPConfig configures the controller's registration with, and reporting to,
+// the YCP fleet control plane (meko api_server --control-plane-mode). It is a
+// no-op unless Enabled.
+//
+// The controller registers itself as an "amp" environment: it exchanges a
+// one-time enrollment token for a long-lived, environment-scoped status token
+// (persisted so a restart resumes without re-enrolling), then reports the
+// storage pools / databases / branches / compute endpoints it owns on a periodic
+// heartbeat. It does NOT yet reconcile YCP-declared desired state back into the
+// cluster — that is a later phase (ac-ycp-reconcile.md).
+type YCPConfig struct {
+	Enabled bool // register with and report to YCP
+	// URL is the control-plane base URL. It may carry a subpath when the control
+	// plane is mounted under one (e.g. https://devcloud.yugabyte.com/ycp); every
+	// request appends "/api/v1/…", so a trailing slash is trimmed.
+	URL string
+	// EnvName is the environment name to enroll as. It must match the name the
+	// environment was registered under in YCP (the id it maps to is "amp-"+slug).
+	EnvName string
+	// EnrollmentToken is the one-time bootstrap token minted at registration.
+	// Delivered via a mounted Secret in production. It may be empty on a restart
+	// once the status token has been persisted — the controller resumes on that.
+	EnrollmentToken string
+	Placement       string        // cloud | onprem
+	ReportInterval  time.Duration // status heartbeat cadence
+}
+
 // Config is the fully-resolved controller configuration.
 type Config struct {
 	ListenAddr     string
@@ -136,6 +163,7 @@ type Config struct {
 	DB             DBConfig
 	Task           TaskConfig
 	Deploy         DeployConfig
+	YCP            YCPConfig
 }
 
 var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -196,11 +224,20 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.ExternalHost, "deploy-external-host", env("AMP_DEPLOY_EXTERNAL_HOST", "127.0.0.1"), "docker: host a client uses to reach a published compute port")
 	fs.StringVar(&d.ControllerURL, "deploy-controller-url", env("AMP_DEPLOY_CONTROLLER_URL", ""), "URL deployed endpoints use to reach the controller; empty = endpoint runs controller-free (Kubernetes: typically the controller's in-cluster Service URL, e.g. http://amp-controller.<ns>.svc.cluster.local:8080)")
 
+	y := &c.YCP
+	fs.BoolVar(&y.Enabled, "ycp", envBool("AMP_YCP_ENABLED", false), "register with and report the resource inventory to the YCP fleet control plane")
+	fs.StringVar(&y.URL, "ycp-url", env("AMP_YCP_URL", ""), "YCP control-plane base URL (may include a subpath, e.g. https://host/ycp)")
+	fs.StringVar(&y.EnvName, "ycp-env-name", env("AMP_YCP_ENV_NAME", ""), "environment name to enroll as (must match the environment registered in YCP)")
+	fs.StringVar(&y.EnrollmentToken, "ycp-enrollment-token", env("AMP_YCP_ENROLLMENT_TOKEN", ""), "one-time YCP enrollment token (delivered via a mounted Secret; may be empty once the status token is persisted)")
+	fs.StringVar(&y.Placement, "ycp-placement", env("AMP_YCP_PLACEMENT", "cloud"), "environment placement reported to YCP: cloud | onprem")
+	fs.DurationVar(&y.ReportInterval, "ycp-report-interval", envDuration("AMP_YCP_REPORT_INTERVAL", 30*time.Second), "how often to report the resource inventory to YCP")
+
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 	d.ServiceAnnotations = parseKeyValueList(serviceAnnotationsRaw)
 	d.NodeSelector = parseKeyValueList(nodeSelectorRaw)
+	y.URL = strings.TrimRight(y.URL, "/")
 
 	// The universe connection is required configuration: the controller refuses
 	// to start without it (amp-controller.md §9).
@@ -231,7 +268,30 @@ func Load(args []string) (*Config, error) {
 	if err := validateDeploy(d); err != nil {
 		return nil, err
 	}
+	if err := validateYCP(y); err != nil {
+		return nil, err
+	}
 	return c, nil
+}
+
+// validateYCP validates the YCP registration/reporting config. It is a no-op
+// unless enabled. The enrollment token is deliberately NOT required: on a
+// restart the controller resumes from the persisted status token, and requiring
+// the (short-lived) enrollment token would break that path.
+func validateYCP(y *YCPConfig) error {
+	if !y.Enabled {
+		return nil
+	}
+	if y.URL == "" {
+		return fmt.Errorf("YCP url is required when --ycp is set (set --ycp-url or AMP_YCP_URL)")
+	}
+	if y.EnvName == "" {
+		return fmt.Errorf("YCP env name is required when --ycp is set (set --ycp-env-name or AMP_YCP_ENV_NAME)")
+	}
+	if y.ReportInterval <= 0 {
+		return fmt.Errorf("YCP report interval must be positive")
+	}
+	return nil
 }
 
 // parseKeyValueList parses "k1=v1,k2=v2" into a map (nil if empty). The first

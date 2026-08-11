@@ -23,6 +23,18 @@ const defaultAgentNamespace = "ycp-agent"
 // environment. It is the only place an operator is told how to do this, so it has to
 // be runnable as printed, not a sketch.
 //
+// The hint is kind-specific: a meko environment installs the meko-agent (a
+// component of the `meko` chart), an amp environment installs the amp controller
+// (the yb-amp-controller chart) with its YCP reporting turned on.
+func installHint(c echo.Context, kind, envID, token string) string {
+	if kind == "amp" {
+		return ampInstallHint(c, envID, token)
+	}
+	return mekoInstallHint(c, envID, token)
+}
+
+// mekoInstallHint attaches the meko-agent to a meko environment.
+//
 // The previous version was a sketch, and each gap in it was a support question: it
 // named a `meko/meko-agent` chart in a `meko` Helm repo (neither exists — the agent
 // is a component of the `meko` chart in meko-devops), left `<ns>` and
@@ -31,7 +43,7 @@ const defaultAgentNamespace = "ycp-agent"
 // other seven components off. That last one is how a data-plane install ends up
 // putting an api-server and a Langfuse in a customer's cluster; `values-agent.yaml`
 // is the preset that exists to prevent it.
-func installHint(c echo.Context, envID, token string) string {
+func mekoInstallHint(c echo.Context, envID, token string) string {
 	ycpURL := controlPlaneURL(c)
 	ns := defaultAgentNamespace
 
@@ -55,6 +67,45 @@ func installHint(c echo.Context, envID, token string) string {
 	fmt.Fprintf(&b, "# The agent enrolls, then brings up what this environment was registered with.\n")
 	fmt.Fprintf(&b, "# There is no third step: registration already declared its desired state.\n")
 	fmt.Fprintf(&b, "#   kubectl -n %s logs -f deploy/meko-agent\n", ns)
+	return b.String()
+}
+
+// ampInstallNamespace is where the amp controller install puts the controller
+// when the operator does not choose otherwise.
+const ampInstallNamespace = "amp"
+
+// ampEnrollSecretName is the Secret the amp controller reads the enrollment
+// token from. It is passed to the chart's controller.ycp.enrollTokenSecret.name
+// so the created Secret and the Deployment's secretKeyRef agree.
+const ampEnrollSecretName = "amp-controller-ycp-enrollment"
+
+// ampInstallHint attaches the amp controller to an amp environment. The
+// controller enrolls with YCP and reports the storage pools / databases /
+// branches / endpoints it owns; a YugabyteDB foundation cluster must already be
+// running in the target cluster (the controller's state store).
+func ampInstallHint(c echo.Context, envID, token string) string {
+	ycpURL := controlPlaneURL(c)
+	ns := ampInstallNamespace
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Prerequisite: a YugabyteDB foundation cluster already running in this\n")
+	fmt.Fprintf(&b, "# cluster — it is the amp controller's state store.\n\n")
+
+	fmt.Fprintf(&b, "# 1 — hand the cluster this one-time enrollment token (30-minute TTL, so install promptly)\n")
+	fmt.Fprintf(&b, "kubectl create namespace %s\n", ns)
+	fmt.Fprintf(&b, "kubectl -n %s create secret generic %s \\\n", ns, ampEnrollSecretName)
+	fmt.Fprintf(&b, "  --from-literal=enrollment-token=%s\n\n", token)
+
+	fmt.Fprintf(&b, "# 2 — install the amp controller (from an amp checkout), pointed at this control plane\n")
+	fmt.Fprintf(&b, "helm upgrade --install amp-controller amp/deploy/helm/yb-amp-controller -n %s \\\n", ns)
+	fmt.Fprintf(&b, "  --set controller.ycp.enabled=true \\\n")
+	fmt.Fprintf(&b, "  --set controller.ycp.url=%s \\\n", ycpURL)
+	fmt.Fprintf(&b, "  --set controller.ycp.envName=%s \\\n", envID)
+	fmt.Fprintf(&b, "  --set controller.ycp.enrollTokenSecret.name=%s \\\n", ampEnrollSecretName)
+	fmt.Fprintf(&b, "  --set controller.databaseUrl=<your YugabyteDB DSN>\n\n")
+
+	fmt.Fprintf(&b, "# The controller enrolls, then reports the resources it owns to this console.\n")
+	fmt.Fprintf(&b, "#   kubectl -n %s logs -f deploy/amp-controller\n", ns)
 	return b.String()
 }
 

@@ -8,7 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func hintFor(t *testing.T, path, host string, headers map[string]string) string {
+func hintFor(t *testing.T, kind, path, host string, headers map[string]string) string {
 	t.Helper()
 	req := httptest.NewRequest("POST", path, nil)
 	req.Host = host
@@ -16,17 +16,17 @@ func hintFor(t *testing.T, path, host string, headers map[string]string) string 
 		req.Header.Set(k, v)
 	}
 	c := echo.New().NewContext(req, httptest.NewRecorder())
-	return installHint(c, "acme-prod", "mko_enr_deadbeef")
+	return installHint(c, kind, "acme-prod", "ycp_enr_deadbeef")
 }
 
 // The hint is the only place an operator is told how to attach an agent, so it has to
 // be runnable as printed. These are the specific ways the old one was not.
 func TestInstallHint_IsRunnableAsPrinted(t *testing.T) {
-	hint := hintFor(t, "/api/v1/environments", "ycp.example.com", nil)
+	hint := hintFor(t, "meko", "/api/v1/environments", "ycp.example.com", nil)
 
 	for _, want := range []string{
 		// The token, in a Secret rather than on a command line.
-		"--from-literal=enrollment-token=mko_enr_deadbeef",
+		"--from-literal=enrollment-token=ycp_enr_deadbeef",
 		// The chart that actually exists: a component of `meko` in meko-devops.
 		"helm upgrade --install meko-agent charts/meko",
 		// values-agent.yaml is what suppresses the other seven components. Without it
@@ -51,11 +51,42 @@ func TestInstallHint_IsRunnableAsPrinted(t *testing.T) {
 	}
 }
 
+// An amp environment gets a different hint: it installs the amp controller chart
+// with YCP reporting on, not the meko-agent. It must be runnable as printed and
+// must not leak the meko chart into an amp install.
+func TestInstallHint_Amp(t *testing.T) {
+	hint := hintFor(t, "amp", "/api/v1/environments", "ycp.example.com", nil)
+
+	for _, want := range []string{
+		// The token, in a Secret the chart reads from.
+		"--from-literal=enrollment-token=ycp_enr_deadbeef",
+		"amp-controller-ycp-enrollment",
+		// The amp controller chart, with reporting turned on and pointed here.
+		"helm upgrade --install amp-controller amp/deploy/helm/yb-amp-controller",
+		"--set controller.ycp.enabled=true",
+		"--set controller.ycp.url=http://ycp.example.com",
+		"--set controller.ycp.envName=acme-prod",
+		// The YugabyteDB prerequisite is called out.
+		"YugabyteDB",
+	} {
+		if !strings.Contains(hint, want) {
+			t.Errorf("amp hint is missing %q:\n%s", want, hint)
+		}
+	}
+
+	// The meko-agent install must not bleed into an amp hint.
+	for _, unwanted := range []string{"meko-agent", "values-agent.yaml"} {
+		if strings.Contains(hint, unwanted) {
+			t.Errorf("amp hint leaked the meko-agent install (%q):\n%s", unwanted, hint)
+		}
+	}
+}
+
 // A YCP mounted under a subpath has to print its own URL including that subpath —
 // production serves it at https://devcloud.yugabyte.com/ycp/, and an agent pointed at
 // the bare domain gets 404s from every call.
 func TestInstallHint_CarriesTheBasePath(t *testing.T) {
-	hint := hintFor(t, "/ycp/api/v1/environments", "devcloud.yugabyte.com", map[string]string{
+	hint := hintFor(t, "meko", "/ycp/api/v1/environments", "devcloud.yugabyte.com", map[string]string{
 		"X-Forwarded-Proto": "https",
 	})
 	if !strings.Contains(hint, "--set agent.ycpUrl=https://devcloud.yugabyte.com/ycp") {
@@ -65,7 +96,7 @@ func TestInstallHint_CarriesTheBasePath(t *testing.T) {
 
 // Root-mounted YCP: no prefix invented.
 func TestInstallHint_NoBasePath(t *testing.T) {
-	hint := hintFor(t, "/api/v1/environments", "ycp.internal", nil)
+	hint := hintFor(t, "meko", "/api/v1/environments", "ycp.internal", nil)
 	if !strings.Contains(hint, "--set agent.ycpUrl=http://ycp.internal \\") {
 		t.Errorf("hint should carry a bare host with no trailing path:\n%s", hint)
 	}
@@ -75,7 +106,7 @@ func TestInstallHint_NoBasePath(t *testing.T) {
 // http:// URL for an https:// control plane sends the agent somewhere that redirects
 // or refuses, so the forwarded headers win.
 func TestInstallHint_HonorsForwardedHeaders(t *testing.T) {
-	hint := hintFor(t, "/api/v1/environments", "10.0.0.5:25433", map[string]string{
+	hint := hintFor(t, "meko", "/api/v1/environments", "10.0.0.5:25433", map[string]string{
 		"X-Forwarded-Proto": "https, http",
 		"X-Forwarded-Host":  "ycp.example.com, internal",
 	})

@@ -411,9 +411,9 @@
   function renderInstall() {
     const c = document.getElementById("installCode");
     if (mode === "attach") {
-      c.innerHTML = `<span class="cm"># attach the agent + operator to your current cluster</span>\nhelm install meko-agent <span class="tok">meko/meko-agent</span> \\\n  <span class="fl">--set</span> ycp.url=https://ycp.mekodata.ai \\\n  <span class="fl">--set</span> enrollmentToken=<span class="tok">mko_enr_9f2c…a71</span> \\\n  <span class="fl">--set</span> secretStore=externalSecrets`;
+      c.innerHTML = `<span class="cm"># attach the agent + operator to your current cluster</span>\nhelm install meko-agent <span class="tok">meko/meko-agent</span> \\\n  <span class="fl">--set</span> ycp.url=https://ycp.mekodata.ai \\\n  <span class="fl">--set</span> enrollmentToken=<span class="tok">ycp_enr_9f2c…a71</span> \\\n  <span class="fl">--set</span> secretStore=externalSecrets`;
     } else {
-      c.innerHTML = `<span class="cm"># provision a fresh cluster, then install</span>\nmeko bootstrap provision \\\n  <span class="fl">--cloud</span> aws <span class="fl">--region</span> us-east-1 <span class="fl">--nodes</span> 3 \\\n  <span class="fl">--enrollment-token</span> <span class="tok">mko_enr_9f2c…a71</span>`;
+      c.innerHTML = `<span class="cm"># provision a fresh cluster, then install</span>\nmeko bootstrap provision \\\n  <span class="fl">--cloud</span> aws <span class="fl">--region</span> us-east-1 <span class="fl">--nodes</span> 3 \\\n  <span class="fl">--enrollment-token</span> <span class="tok">ycp_enr_9f2c…a71</span>`;
     }
   }
   document.querySelectorAll("#modes .mode").forEach(m => m.onclick = () => {

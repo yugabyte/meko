@@ -14,25 +14,25 @@ import (
 // control plane returned, and tolerating both costs one type switch.
 func TestDecodeBodyFlat(t *testing.T) {
 	var er api.EnrollResponse
-	in := `{"environment_id":"acme-prod","status_token":"mko_sts_x","mcp_base_url":"acme.mcp"}`
+	in := `{"environment_id":"acme-prod","status_token":"ycp_sts_x","mcp_base_url":"acme.mcp"}`
 	if err := decodeBody(strings.NewReader(in), &er); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if er.EnvironmentID != "acme-prod" || er.StatusToken != "mko_sts_x" {
+	if er.EnvironmentID != "acme-prod" || er.StatusToken != "ycp_sts_x" {
 		t.Fatalf("flat body not decoded: %+v", er)
 	}
 }
 
 func TestDecodeBodyEnveloped(t *testing.T) {
 	var er api.EnrollResponse
-	in := `{"data":{"environment_id":"acme-prod","status_token":"mko_sts_x","mcp_base_url":"acme.mcp"},"error":null}`
+	in := `{"data":{"environment_id":"acme-prod","status_token":"ycp_sts_x","mcp_base_url":"acme.mcp"},"error":null}`
 	if err := decodeBody(strings.NewReader(in), &er); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if er.EnvironmentID != "acme-prod" {
 		t.Fatalf("envelope not unwrapped, environment_id = %q", er.EnvironmentID)
 	}
-	if er.StatusToken != "mko_sts_x" {
+	if er.StatusToken != "ycp_sts_x" {
 		t.Fatalf("envelope not unwrapped, status_token = %q", er.StatusToken)
 	}
 }
@@ -57,11 +57,11 @@ func TestDecodeBodyEnvelopeError(t *testing.T) {
 // empty and got every status report rejected with 400.
 func TestDecodeBodyEnvelopeWithoutErrorKey(t *testing.T) {
 	var er api.EnrollResponse
-	in := `{"data":{"environment_id":"acme-prod","status_token":"mko_sts_x","mcp_base_url":"acme.mcp"}}`
+	in := `{"data":{"environment_id":"acme-prod","status_token":"ycp_sts_x","mcp_base_url":"acme.mcp"}}`
 	if err := decodeBody(strings.NewReader(in), &er); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if er.EnvironmentID != "acme-prod" || er.StatusToken != "mko_sts_x" {
+	if er.EnvironmentID != "acme-prod" || er.StatusToken != "ycp_sts_x" {
 		t.Fatalf("success envelope (no error key) not unwrapped: %+v", er)
 	}
 }

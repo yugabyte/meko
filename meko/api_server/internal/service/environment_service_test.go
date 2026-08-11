@@ -19,7 +19,7 @@ func TestRegisterEnvironment_RequiresValidName(t *testing.T) {
 
 func TestEnrollWithToken_RequiresToken(t *testing.T) {
 	svc := service.NewEnvironmentService(nil, service.BootstrapDefaults{})
-	_, _, ok, err := svc.EnrollWithToken("", "cloud", service.ClusterFacts{})
+	_, _, ok, err := svc.EnrollWithToken("", "cloud", service.KindMeko, service.ClusterFacts{})
 	if ok {
 		t.Fatal("empty token should not enroll")
 	}

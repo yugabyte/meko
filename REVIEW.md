@@ -106,8 +106,8 @@ or a port the customer must open inverts that model — a finding, not a design 
 
 ### The two tokens are not interchangeable
 
-Enrollment (`mko_enr_…`, 30-minute bootstrap TTL) is exchanged **once** for a long-lived
-env-scoped status token (`mko_sts_…`, returned once, hash persisted). The e2e asserts an
+Enrollment (`ycp_enr_…`, 30-minute bootstrap TTL) is exchanged **once** for a long-lived
+env-scoped status token (`ycp_sts_…`, returned once, hash persisted). The e2e asserts an
 agent survives a restart *without* re-enrolling, precisely because the status token
 persists. A change that loses that token, or silently falls back to enrollment, forces a
 human to re-run enrollment on every customer cluster. Check persistence and TTL handling

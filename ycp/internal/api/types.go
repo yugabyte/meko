@@ -46,23 +46,28 @@ type ClusterFacts struct {
 
 // Environment is one registered customer data plane.
 type Environment struct {
-	ID              string      `json:"id"`
-	AccountID       string      `json:"account_id,omitempty"`
-	Placement       string      `json:"placement"` // cloud | onprem
-	Region          string      `json:"region"`
-	State           EnvState    `json:"state"`
-	K8sVersion      string      `json:"k8s_version,omitempty"`
-	NodeCount       int         `json:"node_count,omitempty"`
-	Provider        string      `json:"provider,omitempty"`
-	Datapacks       int         `json:"datapacks"`
-	MaxDatapacks    int         `json:"max_datapacks,omitempty"`
-	AgentVersion    string      `json:"agent_version,omitempty"`
-	LastHeartbeatAt *time.Time  `json:"last_heartbeat_at,omitempty"`
-	MCPBaseURL      string      `json:"mcp_base_url,omitempty"`
-	CertFingerprint string      `json:"cert_fingerprint,omitempty"`
-	Components      []Component `json:"components,omitempty"`
-	Live            bool        `json:"live"` // true = driven by a real agent
-	CreatedAt       time.Time   `json:"created_at"`
+	ID string `json:"id"`
+	// Kind is "amp" (the amp controller) or "meko" (the datapack/stack agent),
+	// fixed at registration. A meko id is a bare slug; an amp id is prefixed
+	// "amp-". Empty legacy rows read as meko.
+	Kind            string           `json:"kind,omitempty"`
+	AccountID       string           `json:"account_id,omitempty"`
+	Placement       string           `json:"placement"` // cloud | onprem
+	Region          string           `json:"region"`
+	State           EnvState         `json:"state"`
+	K8sVersion      string           `json:"k8s_version,omitempty"`
+	NodeCount       int              `json:"node_count,omitempty"`
+	Provider        string           `json:"provider,omitempty"`
+	Datapacks       int              `json:"datapacks"`
+	MaxDatapacks    int              `json:"max_datapacks,omitempty"`
+	AgentVersion    string           `json:"agent_version,omitempty"`
+	LastHeartbeatAt *time.Time       `json:"last_heartbeat_at,omitempty"`
+	MCPBaseURL      string           `json:"mcp_base_url,omitempty"`
+	CertFingerprint string           `json:"cert_fingerprint,omitempty"`
+	Components      []Component      `json:"components,omitempty"`
+	Resources       []ResourceStatus `json:"resources,omitempty"` // amp controller's reported inventory
+	Live            bool             `json:"live"`                // true = driven by a real agent
+	CreatedAt       time.Time        `json:"created_at"`
 
 	// EnrollmentToken is set only on the create response (returned once, never persisted).
 	EnrollmentToken string `json:"enrollment_token,omitempty"`
@@ -86,6 +91,7 @@ type ClusterSpec struct {
 // EnvironmentCreate is the console's register-environment request.
 type EnvironmentCreate struct {
 	Name        string       `json:"name"`
+	Kind        string       `json:"kind,omitempty"` // amp | meko (empty => meko)
 	AccountID   string       `json:"account_id,omitempty"`
 	Placement   string       `json:"placement"`
 	Region      string       `json:"region"`
@@ -97,6 +103,7 @@ type EnrollRequest struct {
 	Name            string       `json:"name"`
 	EnrollmentToken string       `json:"enrollment_token,omitempty"`
 	Placement       string       `json:"placement,omitempty"`
+	Kind            string       `json:"kind,omitempty"` // amp | meko; checked against the environment's kind
 	ClusterFacts    ClusterFacts `json:"cluster_facts"`
 }
 
@@ -141,11 +148,26 @@ type DesiredResource struct {
 
 // StatusReport is the agent's heartbeat + phases (drives the fleet registry).
 type StatusReport struct {
-	EnvironmentState EnvState     `json:"environment_state"`
-	AgentVersion     string       `json:"agent_version"`
-	AppliedRevision  int          `json:"applied_revision"`
-	ClusterFacts     ClusterFacts `json:"cluster_facts"`
-	Components       []Component  `json:"components"`
+	EnvironmentState EnvState         `json:"environment_state"`
+	AgentVersion     string           `json:"agent_version"`
+	AppliedRevision  int              `json:"applied_revision"`
+	ClusterFacts     ClusterFacts     `json:"cluster_facts"`
+	Components       []Component      `json:"components"`
+	Resources        []ResourceStatus `json:"resources,omitempty"` // amp controller's inventory; meko omits it
+}
+
+// ResourceStatus is one item of an amp environment's reported inventory: a
+// storage pool, database (project), branch, or compute endpoint. The amp
+// controller reports its whole inventory on each status heartbeat; a meko agent
+// omits it. Kind-agnostic and flat — Parent links a resource to its owner by id
+// (project→pool, branch→project, endpoint→branch).
+type ResourceStatus struct {
+	Kind   string            `json:"kind"`
+	ID     string            `json:"id"`
+	Name   string            `json:"name,omitempty"`
+	Parent string            `json:"parent,omitempty"`
+	State  string            `json:"state,omitempty"`
+	Attrs  map[string]string `json:"attrs,omitempty"`
 }
 
 // BootstrapProgress is the pre-agent installer's outbound report.

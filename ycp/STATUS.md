@@ -192,11 +192,15 @@ the same set, and `charts/meko/tests/agent-rbac_test.yaml` pins it.
 (`.github/workflows/ycp-images.yml`, OIDC — no secrets). `meko/ycp` and
 `meko/dpmcp` are no longer built; nothing deploys them.
 
-`meko/meko-api-server` does **not** publish from CI: nothing in the repo builds it,
-and meko-devops only deploys and promotes. It is hand-built. That already caused two
-false starts — an image without `--control-plane-mode`, then one without
-`-only-controlplane-migrate`. The e2e now builds it from source on every PR touching
-`ycp/`, so the flags at least cannot silently disappear.
+`meko/meko-api-server` is not published to ECR on merge, but there is now an
+**on-demand build** of the control-plane image: `meko/api_server/build-image.sh`
+builds it and pushes `quay.io/yugabyte/ycp-api-server` (tags `custom-<sha>` +
+`latest`), wrapped by `.github/workflows/meko-control-plane-image.yml` on `main`
+and `workflow_dispatch` — build-only, staying green, when the `QUAY_TOKEN` secret
+is absent. Before this it was purely hand-built, which caused two false starts —
+an image without `--control-plane-mode`, then one without
+`-only-controlplane-migrate`. The e2e also builds it from source on every PR
+touching `ycp/`, so the flags cannot silently disappear.
 
 ## Open
 
@@ -232,6 +236,22 @@ Known gaps not yet filed:
 
 1. Rebuild and push `meko/meko-api-server` from `main`, then redeploy `ycp-system`
    off a real tag instead of a branch build.
-2. Wire an api-server image build into CI so (1) is not a manual step.
+2. ~~Wire an api-server image build into CI~~ — done: `meko/api_server/build-image.sh`
+   + `meko-control-plane-image.yml` publish `quay.io/yugabyte/ycp-api-server`. Still
+   to do: configure the `QUAY_USER`/`QUAY_TOKEN` robot secret so the push is not
+   skipped.
 3. meko-devops#42 remainder — Secrets, and a storage class that is not per-cluster
    guesswork.
+
+## amp environments
+
+YCP now registers **amp** environments too, not just meko ones — an amp
+environment is a running **amp controller** that reports the storage pools,
+databases, branches and compute endpoints it owns. Registration takes a
+`kind` (`amp` | `meko`, default meko); a meko id stays a bare `<slug>` while an
+amp id is prefixed `amp-<slug>`, and the enroll handshake checks the kind, so the
+two coexist in one fleet and neither attaches to the other's environment. An amp environment seeds no `meko-stack`;
+its install hint installs the `yb-amp-controller` chart with `controller.ycp.*`
+turned on. The controller's design for this is
+[`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md).
+Reconciling YCP-declared desired state back into an amp cluster is a later phase.

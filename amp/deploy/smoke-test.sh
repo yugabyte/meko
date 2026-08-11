@@ -67,8 +67,10 @@ bad() { printf '  \033[0;31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 hdr() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 
 PF_PID=""
+YCP_PF_PID=""
 cleanup() {
   [ -n "$PF_PID" ] && kill "$PF_PID" 2>/dev/null
+  [ -n "$YCP_PF_PID" ] && kill "$YCP_PF_PID" 2>/dev/null
   if [ "$KEEP" != "1" ]; then
     # best-effort: drop any endpoint Helm releases this run may have left behind
     for r in $(helm -n "$NS" list -aq 2>/dev/null | grep '^yb-ep-'); do
@@ -211,6 +213,46 @@ echo "$out" | grep -q '^3,24$' && ok "loopback CRUD + checkpoint + readback (3 r
 EPS=$(kubectl -n "$NS" get endpoints "yb-ep-$EP" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)
 [ -n "$EPS" ] && ok "recorded address $ADDR routes to a ready Service backend ($EPS)" \
   || bad "endpoint Service has no ready backend for $ADDR"
+
+# --- YCP assertion (amp_deploy_gke_ycp): the controller registered with the
+#     control plane and its heartbeat reports this endpoint. Runs here, while the
+#     endpoint EP still exists — the deleteProject cascade later retires it, which
+#     would also drop it from the reported inventory. Guarded by YCP_ASSERT=1;
+#     needs YCP_ENV_ID + YCP_ADMIN_KEY (amp/deploy/ycp-up.sh emits both).
+if [ "${YCP_ASSERT:-0}" = 1 ]; then
+  hdr "YCP: controller registered + endpoint $EP reported to the control plane"
+  : "${YCP_ENV_ID:?YCP_ASSERT=1 needs YCP_ENV_ID}"
+  : "${YCP_ADMIN_KEY:?YCP_ASSERT=1 needs YCP_ADMIN_KEY}"
+  YCP_PF_PORT="${YCP_PF_PORT:-18091}"
+  kubectl -n "$NS" port-forward svc/meko-api-server "${YCP_PF_PORT}:80" >/tmp/smoke-ycp-pf.log 2>&1 &
+  YCP_PF_PID=$!
+  CP="http://127.0.0.1:${YCP_PF_PORT}"
+  for ((i=0; i<30; i++)); do curl -sf "$CP/api/v1/health" >/dev/null 2>&1 && break; sleep 1; done
+
+  # Poll until the controller's next report lands the endpoint in resources[] (the
+  # smoke deploy forces a ~5s report interval; budget ~120s to be safe).
+  state=""; found=""; kinds=""
+  for ((i=0; i<24; i++)); do
+    envjson=$(curl -sf -H "X-Meko-Admin-Secret: ${YCP_ADMIN_KEY}" "$CP/api/v1/environments" \
+              | jq -c --arg id "$YCP_ENV_ID" '.data.items[]|select(.id==$id)' 2>/dev/null)
+    state=$(printf '%s' "$envjson" | jq -r '.state // empty' 2>/dev/null)
+    found=$(printf '%s' "$envjson" | jq -r --arg ep "$EP" '.resources[]?|select(.kind=="endpoint" and .id==$ep)|.id' 2>/dev/null | head -1)
+    kinds=$(printf '%s' "$envjson" | jq -r '[.resources[]?.kind]|sort|unique|join(",")' 2>/dev/null)
+    [ -n "$found" ] && break
+    sleep 5
+  done
+
+  [ "$state" = READY ] && ok "environment $YCP_ENV_ID is READY on the control plane" \
+    || bad "env $YCP_ENV_ID state=$state (want READY)"
+  [ "$found" = "$EP" ] && ok "control plane reports endpoint $EP in resources[]" \
+    || bad "endpoint $EP not in control plane resources (kinds seen: ${kinds:-none})"
+  # The inventory is a tree: the endpoint should arrive alongside its ancestors.
+  case "${kinds:-}" in
+    *storage_pool*) ok "resource tree kinds present ($kinds)" ;;
+    *)              bad "control plane resources missing pool/project/branch (kinds: ${kinds:-none})" ;;
+  esac
+  kill "$YCP_PF_PID" 2>/dev/null; YCP_PF_PID=""
+fi
 
 hdr "createBranch (fork default) -> task succeeded"
 # The default fork-point resolution reads the parent writer's safekeeper flush_lsn;
