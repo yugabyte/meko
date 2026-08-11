@@ -24,11 +24,11 @@ import {
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
   KNOWLEDGE_UPLOAD_EXTENSIONS_HINT,
   KNOWLEDGE_UPLOAD_MAX_BATCH,
-  KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
   dedupNote,
   filterFilesForKnowledgeUploadBatch,
   sanitizeFilenameForMatch,
 } from "@/lib/knowledgeFileUploadRules";
+import { useKnowledgeUploadMaxFileSizeMB } from "@/hooks/useKnowledgeUploadMaxFileSizeMB";
 import { formatFileSize } from "@/lib/fileSize";
 import { formatRelativeTime, useNowMs } from "@/lib/relativeTime";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
@@ -262,6 +262,10 @@ export default function FileUpload({
   const batchRemaining = KNOWLEDGE_UPLOAD_MAX_BATCH - inFlightCount;
   const batchFull = batchRemaining <= 0;
 
+  // Tier-aware per-file cap (5 MB free / 50 MB standard / 1 GB pro) — used
+  // by both the client-side filter and the hint copy below.
+  const maxFileSizeMB = useKnowledgeUploadMaxFileSizeMB();
+
   const addFiles = useCallback(
     (incoming: FileList | File[]) => {
       const all = Array.from(incoming);
@@ -280,7 +284,11 @@ export default function FileUpload({
           ).length +
           orphansAwaitingPipeline.length +
           pipelineInFlight;
-        const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(all, prevInFlightCount);
+        const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(
+          all,
+          prevInFlightCount,
+          maxFileSizeMB,
+        );
         if (warningParts.length > 0) showWarning(warningParts.join(". "));
         if (accepted.length === 0) return prev;
         return [
@@ -294,7 +302,7 @@ export default function FileUpload({
         ];
       });
     },
-    [showWarning, pipelineDocNames, orphansAwaitingPipeline.length, pipelineInFlight],
+    [showWarning, pipelineDocNames, orphansAwaitingPipeline.length, pipelineInFlight, maxFileSizeMB],
   );
 
   useEffect(() => {
@@ -684,7 +692,10 @@ export default function FileUpload({
                 Upload files to Knowledge Base
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {KNOWLEDGE_UPLOAD_EXTENSIONS_HINT.toUpperCase()} — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}MB each,{" "}
+                {KNOWLEDGE_UPLOAD_EXTENSIONS_HINT.toUpperCase()}
+                {Number.isFinite(maxFileSizeMB)
+                  ? ` — up to ${maxFileSizeMB >= 1024 ? `${(maxFileSizeMB / 1024).toFixed(maxFileSizeMB % 1024 === 0 ? 0 : 1)}GB` : `${maxFileSizeMB}MB`} each,`
+                  : " —"}{" "}
                 {KNOWLEDGE_UPLOAD_MAX_BATCH} in progress at a time.
                 {totalUploaded > 0 && ` ${totalUploaded} uploaded so far.`}
               </p>

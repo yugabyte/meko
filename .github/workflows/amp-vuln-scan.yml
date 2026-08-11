@@ -13,11 +13,19 @@ name: Amp vuln scan
 #   amp/**/*.rs, amp/Cargo.{toml,lock}   — Rust; cargo-audit is a separate
 #                                          tool + not requested yet
 #   amp/deploy/**/pyproject.toml         — Python; add pip-audit later
-# Runs on every PR — see the note on the meko sibling for why the
-# trigger isn't path-filtered (required-check safety).
+# Trigger-level `paths:` filter — meko-only PRs skip this workflow
+# entirely (no runner minutes, no wall-clock waiting on a check that
+# would always report pass). Safe here because `Amp vuln scan gate` is
+# NOT in the required-checks list on the `main-branch` ruleset, so a
+# non-triggered workflow doesn't strand the PR on "Expected — Waiting".
+# `paths-ignore` is deliberately NOT used — the allow-list is easier to
+# audit as new top-level directories appear.
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'amp/**'
+      - '.github/workflows/amp-vuln-scan.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}

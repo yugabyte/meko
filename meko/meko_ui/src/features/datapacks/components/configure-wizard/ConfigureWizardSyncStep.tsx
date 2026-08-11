@@ -9,8 +9,8 @@ import type { ListedSource, SyncSectionId } from "./types";
 import {
   KNOWLEDGE_UPLOAD_EXTENSIONS_HINT,
   KNOWLEDGE_UPLOAD_MAX_BATCH,
-  KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
 } from "@/lib/knowledgeFileUploadRules";
+import { useKnowledgeUploadMaxFileSizeMB } from "@/hooks/useKnowledgeUploadMaxFileSizeMB";
 type Props = {
   knowledgeItems: ListedSource[];
   conversationItems: ListedSource[];
@@ -44,11 +44,14 @@ export function ConfigureWizardSyncStep({
   knowledgeFileAccept,
   syncFileWarning,
 }: Props) {
+  // Tier-aware per-file cap (5 MB free / 50 MB standard / ∞ pro).
+  const maxFileSizeMB = useKnowledgeUploadMaxFileSizeMB();
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Stage knowledge files for this datapack (PDF, TXT, MD, JSON, CSV, HTML — up to {KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}
-        MB each, up to {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch). Conversations and skills use the same layout below and
+        Stage knowledge files for this datapack (PDF, TXT, MD, JSON, CSV, HTML
+        {Number.isFinite(maxFileSizeMB) ? ` — up to ${maxFileSizeMB}MB each,` : " —"} up to{" "}
+        {KNOWLEDGE_UPLOAD_MAX_BATCH} per batch). Conversations and skills use the same layout below and
         will be available in a future release.
       </p>
       {syncFileWarning ? (

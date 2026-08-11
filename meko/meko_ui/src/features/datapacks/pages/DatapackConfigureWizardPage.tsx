@@ -46,6 +46,7 @@ import {
   dedupNote,
   filterFilesForKnowledgeUploadBatch,
 } from "@/lib/knowledgeFileUploadRules";
+import { useKnowledgeUploadMaxFileSizeMB } from "@/hooks/useKnowledgeUploadMaxFileSizeMB";
 import { startKnowledgeBaseImport } from "@/lib/knowledgeBaseImportJob";
 import { uploadFileToS3 } from "@/lib/uploadFileToS3";
 import { KNOWLEDGE_UPLOAD_STATUS } from "@/lib/knowledgeUploadStatus";
@@ -238,12 +239,19 @@ export default function DatapackConfigureWizardPage({
     }
   }, [knowledgeItems, persistedKnowledgeStorageKey]);
 
+  // Tier-aware per-file cap (5 MB free / 50 MB standard / ∞ pro).
+  const maxFileSizeMB = useKnowledgeUploadMaxFileSizeMB();
+
   const addFiles = (section: SyncSectionId, files: FileList | null) => {
     if (section !== "knowledge" || !files?.length) return;
     setKnowledgeItems((prev) => {
       const staging = prev.filter((it) => it.kind === "file" && it.uploadStatus !== KNOWLEDGE_UPLOAD_STATUS.DONE)
         .length;
-      const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(Array.from(files), staging);
+      const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(
+        Array.from(files),
+        staging,
+        maxFileSizeMB,
+      );
       if (warningParts.length > 0) {
         setTimeout(() => showSyncWarning(warningParts.join(". ")), 0);
       }

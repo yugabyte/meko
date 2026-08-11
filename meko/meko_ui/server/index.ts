@@ -136,6 +136,25 @@ app.use((req, res, next) => {
     "MEKO_FREE_TIER_KB_BYTES",
     "MEKO_FREE_TIER_CONVERSATIONS",
     "MEKO_FREE_TIER_TOKEN_BURN",
+    // Remaining Free caps + every Standard cap read by lib/freeTier.ts. Without
+    // these the Usage tracker and upload filter fall back to compiled defaults,
+    // diverging from whatever the API/MCP actually enforce after an override.
+    "MEKO_FREE_TIER_KB_FILE_BYTES",
+    "MEKO_FREE_TIER_MEMORY_SEARCH",
+    "MEKO_FREE_TIER_KB_SEARCH",
+    "MEKO_FREE_TIER_MEMORY_ADD",
+    "MEKO_STANDARD_TIER_DATAPACKS",
+    "MEKO_STANDARD_TIER_KB_BYTES",
+    "MEKO_STANDARD_TIER_KB_FILE_BYTES",
+    "MEKO_STANDARD_TIER_CONVERSATIONS",
+    "MEKO_STANDARD_TIER_TOKEN_BURN",
+    "MEKO_STANDARD_TIER_MEMORY_SEARCH",
+    "MEKO_STANDARD_TIER_KB_SEARCH",
+    "MEKO_STANDARD_TIER_MEMORY_ADD",
+    // Platform-wide per-file upload ceiling (RAG processing bound) — the
+    // pro/enterprise kbFileBytes in lib/freeTier.ts; api_server enforces the
+    // same env name (KBFileMaxBytes).
+    "MEKO_KB_FILE_MAX_BYTES",
     "VITE_RUDDERSTACK_WRITE_KEY",
     "VITE_RUDDERSTACK_DATA_PLANE_URL",
     // Gates the AMP (Postgres databases) UI inside a datapack. Runtime flag so

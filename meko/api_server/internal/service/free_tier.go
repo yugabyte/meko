@@ -57,6 +57,17 @@ var (
 	// meko_system.free_tier_usage (metric conversation_search_embedding);
 	// this copy exists so api_server/UI read the same env name.
 	FreeTierMaxConversationEmbeddings = envInt64("MEKO_FREE_TIER_CONVERSATION_EMBEDDINGS", 2_000)
+
+	// MCP-side per-user retrieval caps: enforced by meko-mcp-server
+	// against meko_system.free_tier_usage (metrics `memory_search`,
+	// `knowledgebase_search`, `memory_add`). Kept here in Go so
+	// api_server can surface consumed/max to the UI's Settings usage
+	// tracker; api_server itself never gates these calls (they go
+	// through MCP, not the REST API). Env names are shared with the
+	// MCP process — one variable tunes both sides.
+	FreeTierMaxMemorySearch = envInt64("MEKO_FREE_TIER_MEMORY_SEARCH", 1_000)
+	FreeTierMaxKBSearch     = envInt64("MEKO_FREE_TIER_KB_SEARCH", 1_000)
+	FreeTierMaxMemoryAdd    = envInt64("MEKO_FREE_TIER_MEMORY_ADD", 10_000)
 )
 
 // Standard tier caps (AWS Marketplace $25/mo). Roughly 5-10× Free per
@@ -67,7 +78,29 @@ var (
 	StandardTierMaxKBFileBytes    = envInt64("MEKO_STANDARD_TIER_KB_FILE_BYTES", 50*1024*1024)
 	StandardTierMaxConversations  = envInt64("MEKO_STANDARD_TIER_CONVERSATIONS", 10_000)
 	StandardTierMaxTokenBurn      = envInt64("MEKO_STANDARD_TIER_TOKEN_BURN", 50_000_000)
+
+	// MCP-side per-user retrieval caps — Standard-tier counterparts of
+	// the Free vars above. Roughly 3× Free per the pricing table.
+	// Enforcement is in meko-mcp-server (PAID_TIER_LIMITS["standard"]);
+	// this copy exists so api_server/UI read from one shared env name.
+	StandardTierMaxMemorySearch = envInt64("MEKO_STANDARD_TIER_MEMORY_SEARCH", 5_000)
+	StandardTierMaxKBSearch     = envInt64("MEKO_STANDARD_TIER_KB_SEARCH", 5_000)
+	StandardTierMaxMemoryAdd    = envInt64("MEKO_STANDARD_TIER_MEMORY_ADD", 30_000)
 )
+
+// The multipart upload route (UploadFile) buffers each file fully in memory
+// before writing to S3, so an unbounded per-file size is an OOM vector even
+// for paying top tiers. This ceiling is an infrastructure guard local to
+// that route — NOT a tier limit; the presigned-S3 flow streams directly to
+// S3 and is bounded only by the tier cap / KBFileMaxBytes.
+var MultipartMaxFileBytes = envInt64("MEKO_MULTIPART_MAX_FILE_BYTES", 50*1024*1024)
+
+// KBFileMaxBytes is the platform-wide per-file upload ceiling: the RAG
+// pipeline cannot process arbitrarily heavy files, so even the uncapped
+// tiers (and unknown tiers, which otherwise fail open) stop here on BOTH
+// upload routes. The UI's limitsFor reads the same env name, so the hint
+// copy and enforcement stay in lockstep.
+var KBFileMaxBytes = envInt64("MEKO_KB_FILE_MAX_BYTES", 1024*1024*1024) // 1 GiB
 
 // TierLimits is the per-tier cap set. `Unlimited` for pro / enterprise
 // (a sentinel > any realistic counter) so the same `n >= limit.X` check
@@ -78,6 +111,12 @@ type TierLimits struct {
 	MaxKBFileBytes    int64
 	MaxConversations  int64
 	MaxTokenBurn      int64
+	// MCP-side retrieval / write caps. api_server does not enforce
+	// these — kept on the struct so LimitsFor can hand a single
+	// per-tier bundle to the UI's usage tracker.
+	MaxMemorySearch int64
+	MaxKBSearch     int64
+	MaxMemoryAdd    int64
 }
 
 // TierUnlimited is int64's max; treated as "no cap" by callers.
@@ -95,6 +134,9 @@ func LimitsFor(userType string) TierLimits {
 			MaxKBFileBytes:    FreeTierMaxKBFileBytes,
 			MaxConversations:  FreeTierMaxConversations,
 			MaxTokenBurn:      FreeTierMaxTokenBurn,
+			MaxMemorySearch:   FreeTierMaxMemorySearch,
+			MaxKBSearch:       FreeTierMaxKBSearch,
+			MaxMemoryAdd:      FreeTierMaxMemoryAdd,
 		}
 	case "standard":
 		return TierLimits{
@@ -103,14 +145,38 @@ func LimitsFor(userType string) TierLimits {
 			MaxKBFileBytes:    StandardTierMaxKBFileBytes,
 			MaxConversations:  StandardTierMaxConversations,
 			MaxTokenBurn:      StandardTierMaxTokenBurn,
+			MaxMemorySearch:   StandardTierMaxMemorySearch,
+			MaxKBSearch:       StandardTierMaxKBSearch,
+			MaxMemoryAdd:      StandardTierMaxMemoryAdd,
 		}
-	default:
+	case "pro", "enterprise":
+		// Uncapped on everything except per-file size, which stops at the
+		// platform RAG-processing ceiling. The multipart route additionally
+		// applies MultipartMaxFileBytes as a buffering OOM guard, but that
+		// is route infrastructure, not a tier limit.
 		return TierLimits{
 			MaxDatapacks:      TierUnlimited,
 			MaxKBStorageBytes: TierUnlimited,
-			MaxKBFileBytes:    TierUnlimited,
+			MaxKBFileBytes:    KBFileMaxBytes,
 			MaxConversations:  TierUnlimited,
 			MaxTokenBurn:      TierUnlimited,
+			MaxMemorySearch:   TierUnlimited,
+			MaxKBSearch:       TierUnlimited,
+			MaxMemoryAdd:      TierUnlimited,
+		}
+	default:
+		// Unknown / mis-typed tier: fail open on everything except per-file
+		// size — the RAG ceiling is a platform bound, not a tier perk, so a
+		// bad tier value must not bypass it. The UI's limitsFor mirrors this.
+		return TierLimits{
+			MaxDatapacks:      TierUnlimited,
+			MaxKBStorageBytes: TierUnlimited,
+			MaxKBFileBytes:    KBFileMaxBytes,
+			MaxConversations:  TierUnlimited,
+			MaxTokenBurn:      TierUnlimited,
+			MaxMemorySearch:   TierUnlimited,
+			MaxKBSearch:       TierUnlimited,
+			MaxMemoryAdd:      TierUnlimited,
 		}
 	}
 }
@@ -135,26 +201,32 @@ const (
 	FreeTierUpgradeMessageKBUpload     = "Upgrade to Standard to upload new documents."
 	StandardTierUpgradeMessageDatapack = "Upgrade to Pro to create a new datapack."
 	StandardTierUpgradeMessageKBUpload = "Upgrade to Pro to upload new documents."
-	// FreeTierUpgradeMessageFileSize / StandardTierUpgradeMessageFileSize
-	// are the per-tier "your file is too big" copies. Free caps at 5 MB
-	// per file and steers toward Standard; Standard caps at 50 MB and
-	// steers toward Pro. Pro / enterprise are TierUnlimited on
-	// MaxKBFileBytes and never hit these strings. Dispatched via
+	// Per-tier "your file is too big" copies. Free caps at 5 MB and steers
+	// toward Standard; Standard caps at 50 MB and steers toward Pro. Pro /
+	// enterprise also cap at 50 MB (the OOM guard) but are already top-tier, so
+	// their copy just states the limit with no upgrade pitch. Dispatched via
 	// UpgradeMessageFileSize(userType).
 	FreeTierUpgradeMessageFileSize     = "File too large; maximum 5 MB per file. Upgrade to Standard for larger file uploads."
 	StandardTierUpgradeMessageFileSize = "File too large; maximum 50 MB per file. Upgrade to Pro for larger file uploads."
+	ProTierUpgradeMessageFileSize      = "File too large; maximum 1 GB per file."
+	// Returned by the multipart route when the requester's tier allows more
+	// than the route's buffering ceiling — names the route cap, not the tier
+	// cap, and points at the flow that can take the bigger file.
+	MultipartFileTooLargeMessage = "File too large for this endpoint; maximum 50 MB per direct upload. Use the browser upload for larger files."
 )
 
-// UpgradeMessageFileSize picks the per-tier "file too large" copy so
-// Standard users see the 50 MB cap in the error instead of the Free
-// tier's 5 MB. Anything not-Standard (including Pro/Enterprise, which
-// shouldn't hit this branch at all thanks to TierUnlimited) falls back
-// to the Free copy so the response body is never empty.
+// UpgradeMessageFileSize picks the per-tier "file too large" copy so each
+// tier sees its own cap (and pitch) rather than the Free tier's 5 MB. Unknown
+// tiers fall back to the Free copy so the response body is never empty.
 func UpgradeMessageFileSize(userType string) string {
-	if IsStandardUserType(userType) {
+	switch normalizeTier(userType) {
+	case "standard":
 		return StandardTierUpgradeMessageFileSize
+	case "pro", "enterprise":
+		return ProTierUpgradeMessageFileSize
+	default:
+		return FreeTierUpgradeMessageFileSize
 	}
-	return FreeTierUpgradeMessageFileSize
 }
 
 // TierLimitResponse bundles the wire code + user-facing message a
@@ -172,9 +244,9 @@ type TierLimitResponse struct {
 // FREE_TIER_* codes match what shipped in v0.9.2 (see changelog), so
 // existing consumers that hard-coded them keep working.
 const (
-	CodeFreeTierDatapackLimit     = "FREE_TIER_DATAPACK_LIMIT"
-	CodeStandardTierDatapackLimit = "STANDARD_TIER_DATAPACK_LIMIT"
-	CodeFreeTierKBStorageLimit    = "FREE_TIER_KB_STORAGE_LIMIT"
+	CodeFreeTierDatapackLimit      = "FREE_TIER_DATAPACK_LIMIT"
+	CodeStandardTierDatapackLimit  = "STANDARD_TIER_DATAPACK_LIMIT"
+	CodeFreeTierKBStorageLimit     = "FREE_TIER_KB_STORAGE_LIMIT"
 	CodeStandardTierKBStorageLimit = "STANDARD_TIER_KB_STORAGE_LIMIT"
 )
 
@@ -214,12 +286,21 @@ func KBStorageLimitResponse(userType string) TierLimitResponse {
 // envInt64 reads an int64 from env; falls back to def when unset, empty,
 // or unparseable. Negative values are treated as unset.
 func envInt64(key string, def int64) int64 {
-	raw := os.Getenv(key)
+	// Canonical override syntax shared with the MCP server (_int_env) and the
+	// UI (envInt): surrounding whitespace trimmed, then base-10 digits only.
+	// Signs, underscores, and exponents fall back to the default, so one env
+	// value can never yield different limits in different services.
+	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
 		return def
 	}
+	for _, c := range raw {
+		if c < '0' || c > '9' {
+			return def
+		}
+	}
 	n, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || n < 0 {
+	if err != nil {
 		return def
 	}
 	return n

@@ -17,6 +17,7 @@ import {
   Users,
   Settings as SettingsIcon,
   CreditCard,
+  Gauge,
   Shield,
 } from "lucide-react";
 import { isDatapackListGrantOwner } from "@/lib/datapackShareGrants";
@@ -549,6 +550,25 @@ export default function Sidebar() {
               {!isCollapsed && <span className="animate-in fade-in truncate">Admin</span>}
             </NavLink>
           ) : null}
+
+          {/* Usage — live consumed-vs-cap tracker, promoted out of Settings
+              so quota visibility is one click away. Sits above Settings. */}
+          <NavLink
+            to={ROUTES.usage}
+            onClick={expandSidebar}
+            className={cn(
+              "flex items-center rounded-md text-sm font-medium transition-colors",
+              isCollapsed ? "justify-center w-10 h-10 mx-auto" : "gap-3 px-3 py-2",
+              location.pathname === ROUTES.usage ||
+                location.pathname.startsWith(`${ROUTES.usage}/`)
+                ? "bg-foreground/10 text-foreground"
+                : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+            )}
+            title={isCollapsed ? "Usage" : undefined}
+          >
+            <Gauge className={cn("shrink-0", isCollapsed ? "w-5 h-5" : "w-4 h-4")} />
+            {!isCollapsed && <span className="animate-in fade-in truncate">Usage</span>}
+          </NavLink>
 
           <NavLink
             to={ROUTES.settings}

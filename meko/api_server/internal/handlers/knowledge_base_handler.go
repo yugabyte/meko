@@ -335,8 +335,8 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 				"incoming_bytes", req.Size,
 				"cap", limits.MaxKBStorageBytes,
 			)
-			return apiError(c, http.StatusPaymentRequired,
-				"FREE_TIER_KB_STORAGE_LIMIT", service.FreeTierUpgradeMessageKBUpload)
+			resp := service.KBStorageLimitResponse(account.AccountType)
+			return apiError(c, http.StatusPaymentRequired, resp.Code, resp.Message)
 		}
 	}
 
@@ -1101,7 +1101,8 @@ func mimeIsTextual(m *mimetype.MIME) bool {
 //
 // Single-call alternative to the presigned upload-url -> PUT -> upload-complete
 // -> create browser flow: the caller sends the file as multipart/form-data
-// (field name "file", capped at maxFileSizeBytes = 5MB) and this handler
+// (field name "file", capped at the requester's per-tier MaxKBFileBytes —
+// 5 MB free, 50 MB standard/pro/enterprise) and this handler
 // uploads to S3, registers the document with dist_rag, and triggers indexing
 // — all in one round trip. Built for programmatic / agentic callers (PAT
 // bearer tokens) that shouldn't have to orchestrate the multi-step browser
@@ -1139,15 +1140,41 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 			"RAG_DISABLED", "rag service is not configured")
 	}
 
+	// The per-file cap is the requester's tier limit (mirrors the presigned
+	// flow), so the body bound below matches what Standard/Pro are allowed to
+	// upload rather than a flat 5 MB. GetAccount reads the auth context, not the
+	// body, so resolving it before multipart parsing is safe. Falls back to the
+	// base cap when there's no tier limit.
+	acct, err := auth.GetAccount(c)
+	if err != nil || acct == nil {
+		return apiError(c, http.StatusUnauthorized,
+			"UNAUTHORIZED", "authentication required")
+	}
+	perFileCap := int64(maxFileSizeBytes)
+	if l := service.LimitsFor(acct.AccountType).MaxKBFileBytes; l > 0 {
+		perFileCap = l
+	}
+	// This route buffers the whole file in memory before S3, so cap every
+	// tier at the multipart OOM ceiling — pro/enterprise included. The
+	// presigned flow streams to S3 and does not apply this guard. When the
+	// route ceiling (not the tier cap) is what binds, the error must name
+	// it — telling a Pro user "maximum 1 GB" on a 50 MB endpoint is a lie.
+	sizeMsg := service.UpgradeMessageFileSize(acct.AccountType)
+	if perFileCap > service.MultipartMaxFileBytes {
+		perFileCap = service.MultipartMaxFileBytes
+		sizeMsg = service.MultipartFileTooLargeMessage
+	}
+	bodyCap := perFileCap + multipartOverheadBytes
+
 	// Reject oversized uploads on the declared Content-Length before any
-	// multipart parsing, so the 5 MB cap holds for every caller regardless of
+	// multipart parsing, so the cap holds for every caller regardless of
 	// whether an ingress/proxy enforces a body-size limit. With
 	// Expect: 100-continue (curl sends it for larger bodies) the client never
 	// transmits the payload. The MaxBytesReader below still enforces the cap
 	// when Content-Length is absent or under-reports.
-	if c.Request().ContentLength > maxFileSizeBytes+multipartOverheadBytes {
+	if c.Request().ContentLength > bodyCap {
 		return apiError(c, http.StatusRequestEntityTooLarge,
-			"VALIDATION_ERROR", service.FreeTierUpgradeMessageFileSize)
+			"VALIDATION_ERROR", sizeMsg)
 	}
 
 	// Cap the raw body before anything can trigger multipart parsing. Both
@@ -1158,7 +1185,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	// slips past the check above, leaving this as its only bound. Small slack
 	// over the file cap covers the multipart framing (boundary + part headers).
 	c.Request().Body = http.MaxBytesReader(
-		c.Response().Writer, c.Request().Body, maxFileSizeBytes+multipartOverheadBytes,
+		c.Response().Writer, c.Request().Body, bodyCap,
 	)
 
 	// Resolve the byte source up front. Empty defaults to "local"; anything
@@ -1179,11 +1206,6 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 		return apiError(c, http.StatusInternalServerError,
 			"INTERNAL_ERROR", "datapack context missing")
 	}
-	acct, err := auth.GetAccount(c)
-	if err != nil || acct == nil {
-		return apiError(c, http.StatusUnauthorized,
-			"UNAUTHORIZED", "authentication required")
-	}
 
 	fileHeader, err := c.FormFile(uploadFormFileField)
 	if err != nil {
@@ -1192,7 +1214,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			return apiError(c, http.StatusRequestEntityTooLarge,
-				"VALIDATION_ERROR", service.FreeTierUpgradeMessageFileSize)
+				"VALIDATION_ERROR", sizeMsg)
 		}
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", `multipart form field "file" is required`)
@@ -1214,9 +1236,9 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	}
 	// Reject on the declared part size before reading any bytes; the decoded
 	// length is re-checked below in case the header under-reports.
-	if fileHeader.Size > maxFileSizeBytes {
+	if fileHeader.Size > perFileCap {
 		return apiError(c, http.StatusRequestEntityTooLarge,
-			"VALIDATION_ERROR", service.FreeTierUpgradeMessageFileSize)
+			"VALIDATION_ERROR", sizeMsg)
 	}
 
 	src, err := fileHeader.Open()
@@ -1258,14 +1280,14 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	// smuggle an oversized body through. header holds the bytes DetectReader
 	// already consumed, so prepend it to the remaining stream.
 	body := io.MultiReader(header, src)
-	data, err := io.ReadAll(io.LimitReader(body, maxFileSizeBytes+1))
+	data, err := io.ReadAll(io.LimitReader(body, perFileCap+1))
 	if err != nil {
 		return apiError(c, http.StatusBadRequest,
 			"VALIDATION_ERROR", "failed to read uploaded file")
 	}
-	if int64(len(data)) > maxFileSizeBytes {
+	if int64(len(data)) > perFileCap {
 		return apiError(c, http.StatusRequestEntityTooLarge,
-			"VALIDATION_ERROR", service.FreeTierUpgradeMessageFileSize)
+			"VALIDATION_ERROR", sizeMsg)
 	}
 
 	contentHash := sha256.Sum256(data)
@@ -1321,25 +1343,27 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 
 	key := existingKey
 	if key == "" {
-		// New content: enforce the free-tier storage cap (same as the presigned
-		// path, gated on the REQUESTER's tier), then upload.
-		if service.IsFreeUserType(acct.AccountType) {
+		// New content: enforce the storage cap (same as the presigned path,
+		// gated on the REQUESTER's tier), then upload.
+		if service.IsGatedUserType(acct.AccountType) {
+			limits := service.LimitsFor(acct.AccountType)
 			currentBytes, sumErr := h.knowledgeBaseSvc.SumDocumentSizesByOwner(dp.UserID)
 			if sumErr != nil {
-				slog.Error("UploadFile: free-tier cap check failed",
+				slog.Error("UploadFile: tier cap check failed",
 					"user_id", dp.UserID, "datapack_id", dp.ID, "error", sumErr)
 				return apiError(c, http.StatusInternalServerError,
-					"INTERNAL_ERROR", "failed to read free-tier storage usage")
+					"INTERNAL_ERROR", "failed to read tier storage usage")
 			}
-			if currentBytes+int64(len(data)) > service.FreeTierMaxKBStorageBytes {
-				slog.Info("UploadFile: blocked by free-tier cap",
+			if currentBytes+int64(len(data)) > limits.MaxKBStorageBytes {
+				slog.Info("UploadFile: blocked by tier cap",
 					"user_id", dp.UserID,
+					"user_type", acct.AccountType,
 					"current_bytes", currentBytes,
 					"incoming_bytes", len(data),
-					"cap", service.FreeTierMaxKBStorageBytes,
+					"cap", limits.MaxKBStorageBytes,
 				)
-				return apiError(c, http.StatusPaymentRequired,
-					"FREE_TIER_KB_STORAGE_LIMIT", service.FreeTierUpgradeMessageKBUpload)
+				resp := service.KBStorageLimitResponse(acct.AccountType)
+				return apiError(c, http.StatusPaymentRequired, resp.Code, resp.Message)
 			}
 		}
 		key, err = h.s3Svc.UploadObject(ctx, dp.UserID, dp.ID, contentHashHex, filename, contentType, data)

@@ -32,6 +32,13 @@ type AccountUsage struct {
 	// GENERATION observations written by inference_gateway via the
 	// MCP `track_token_usage` tool.
 	TokenBurn int64 `json:"token_burn"`
+	// MCP-side retrieval / write counters. `meko-mcp-server` increments
+	// these on every gated call to `memory_search`, `knowledgebase_search`,
+	// and `memory_add`; api_server only reads them so the UI's Settings
+	// usage tracker can render "consumed / max" against the tier caps.
+	NumMemorySearches int64 `json:"num_memory_searches"`
+	NumKBSearches     int64 `json:"num_kb_searches"`
+	NumMemoryAdds     int64 `json:"num_memory_adds"`
 }
 
 // AccountUsageService aggregates per-account free-tier usage counters
@@ -106,6 +113,25 @@ func (s *AccountUsageService) GetUsage(userID string) (AccountUsage, error) {
 			slog.Warn("usage: read datapack_creation counter", "user_id", userID, "error", crErr)
 		} else {
 			usage.DatapackCreations = nCreations
+		}
+
+		// MCP-side retrieval counters — metric names match the tool
+		// names meko-mcp-server passes to `_enforce_free_tier_limit` /
+		// `_enforce_quota_charge`. Best-effort like the others above.
+		for _, m := range []struct {
+			metric string
+			set    func(int64)
+		}{
+			{"memory_search", func(n int64) { usage.NumMemorySearches = n }},
+			{"knowledgebase_search", func(n int64) { usage.NumKBSearches = n }},
+			{"memory_add", func(n int64) { usage.NumMemoryAdds = n }},
+		} {
+			n, e := s.freeTierRepo.RequestCount(userID, m.metric)
+			if e != nil {
+				slog.Warn("usage: read free_tier_usage", "user_id", userID, "metric", m.metric, "error", e)
+				continue
+			}
+			m.set(n)
 		}
 	}
 

@@ -84,3 +84,30 @@ describe("getFreeTierStatus", () => {
     expect(s.hasHitDatapackCount).toBe(true);
   });
 });
+
+describe("envInt canonical parsing", () => {
+  // Must match api_server's envInt64 and the MCP server's _int_env: trimmed
+  // base-10 digits only. MEKO_FREE_TIER_DATAPACKS defaults to 10.
+  const cases: Array<[string, number]> = [
+    ["25", 25],
+    [" 25 ", 25],
+    ["0", 0],
+    ["1e3", 10], // exponent — rejected (Number() alone accepted it)
+    ["0x10", 10],
+    ["25.5", 10],
+    ["+25", 10],
+    ["-5", 10],
+    ["1_000", 10],
+    ["  ", 10],
+  ];
+  it.each(cases)("parses %j", async (raw, expected) => {
+    vi.resetModules();
+    vi.doMock("@/lib/runtimeEnv", () => ({
+      readRuntimeEnv: (name: string) =>
+        name === "MEKO_FREE_TIER_DATAPACKS" ? raw : undefined,
+    }));
+    const mod = await import("@/lib/freeTier");
+    expect(mod.FREE_TIER_LIMITS.datapacks).toBe(expected);
+    vi.doUnmock("@/lib/runtimeEnv");
+  });
+});

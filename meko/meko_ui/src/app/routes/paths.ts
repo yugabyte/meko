@@ -16,6 +16,8 @@ export const ROUTES = {
   observeHub: "/observe-hub",
   /** Account-scoped settings page (profile + change password). */
   settings: "/settings",
+  /** Account-scoped usage page — live consumed-vs-cap tracker (moved out of Settings). */
+  usage: "/usage",
   /** Workspace plans & billing (current plan, usage, plan picker). */
   billing: "/billing",
   /**
@@ -246,5 +248,6 @@ export const PROTECTED_ROUTE_PREFIXES = [
   ROUTES.datapacks,
   ROUTES.observeHub,
   ROUTES.settings,
+  ROUTES.usage,
   ROUTES.admin,
 ] as const;

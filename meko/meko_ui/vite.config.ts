@@ -34,10 +34,13 @@ export default defineConfig({
     },
   },
   root: path.resolve(import.meta.dirname),
-  // Expose MEKO_FREE_TIER_* env vars (in addition to the default VITE_*
-  // ones) so api_server's `free_tier.go` and `src/lib/freeTier.ts` can
-  // share a single env-var name per cap. See free_tier.go for the names.
-  envPrefix: ["VITE_", "MEKO_FREE_TIER_"],
+  // Expose MEKO_FREE_TIER_* / MEKO_STANDARD_TIER_* env vars (in addition to the
+  // default VITE_* ones) so api_server's `free_tier.go` and `src/lib/freeTier.ts`
+  // can share a single env-var name per cap. This covers the Vite-only dev path;
+  // production reads the same names via the server's RUNTIME_ENV_KEYS. See
+  // free_tier.go for the names. MEKO_KB_FILE_MAX_BYTES is the platform
+  // per-file ceiling (an exact name works as a prefix).
+  envPrefix: ["VITE_", "MEKO_FREE_TIER_", "MEKO_STANDARD_TIER_", "MEKO_KB_FILE_MAX_BYTES"],
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,

@@ -8,6 +8,7 @@ import HomePage from "@/features/home/pages/HomePage";
 import OnboardingPage from "@/features/onboarding/pages/OnboardingPage";
 import WorkbenchLMPage from "@/features/workbench-lm/pages/WorkbenchLMPage";
 import SettingsPage from "@/features/settings/pages/SettingsPage";
+import UsagePage from "@/features/settings/pages/UsagePage";
 import BillingPage from "@/features/billing/pages/BillingPage";
 import AdminPage from "@/features/admin/pages/AdminPage";
 import MarketplaceCompletePage from "@/features/billing/pages/MarketplaceCompletePage";
@@ -46,6 +47,7 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const isWorkbenchLM =
     pathname === ROUTES.workbenchLm || pathname.startsWith(`${ROUTES.workbenchLm}/`);
   const isSettings = pathname === ROUTES.settings || pathname.startsWith(`${ROUTES.settings}/`);
+  const isUsage = pathname === ROUTES.usage || pathname.startsWith(`${ROUTES.usage}/`);
 
   const isBilling = pathname === ROUTES.billing || pathname.startsWith(`${ROUTES.billing}/`);
   // Admin console (flag-gated). Conditionally mounted like WorkbenchLM so its
@@ -57,12 +59,13 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
   const onAdminRoute = pathname === ROUTES.admin || pathname.startsWith(`${ROUTES.admin}/`);
   const isMarketplaceComplete = pathname === ROUTES.marketplaceComplete;
 
-  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, billing, marketplace-complete, admin. */
+  /** Datapacks UI for `/datapacks` and legacy deep links; excludes connect, observe, workbench-lm, settings, usage, billing, marketplace-complete, admin. */
   const isDatapacks =
     !isObserve &&
     !isConnect &&
     !isWorkbenchLM &&
     !isSettings &&
+    !isUsage &&
     !isBilling &&
     !isMarketplaceComplete &&
     !onAdminRoute;
@@ -110,6 +113,11 @@ export default function ProtectedRoutes({ isOnboardingRoute }: Props) {
           >
             <SettingsPage />
           </div>
+          {/* Usage — conditionally mounted (not display-toggled) so the
+              tracker's refetchOnMount:"always" refetches on every /usage visit,
+              and nothing is fetched until the page is opened. UsagePage owns its
+              own flex-1 height chain, so no wrapper is needed (like Admin). */}
+          {isUsage ? <UsagePage /> : null}
           <div
             className="min-h-0 flex-1 overflow-hidden"
             style={{ display: isBilling ? "contents" : "none" }}

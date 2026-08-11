@@ -829,6 +829,14 @@ export type AccountUsage = {
   kb_storage_file_size: number;
   num_conversations: number;
   token_burn: number;
+  /** MCP-side retrieval counters — increment on every gated call to
+   *  `memory_search`, `knowledgebase_search`, and `memory_add` in
+   *  meko-mcp-server. api_server only reads them for the tracker.
+   *  Optional: absent on api_server builds that predate these fields —
+   *  readers must default to 0, not render NaN. */
+  num_memory_searches?: number;
+  num_kb_searches?: number;
+  num_memory_adds?: number;
 };
 
 export async function getCurrentUserUsage(options: { signal?: AbortSignal } = {}) {

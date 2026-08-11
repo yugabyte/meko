@@ -8,10 +8,12 @@ import { readRuntimeEnv } from "@/lib/runtimeEnv";
 import type { AccountUsage } from "@/lib/api/mekoApi";
 
 function envInt(name: string, def: number): number {
-  const raw = readRuntimeEnv(name);
-  if (!raw) return def;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : def;
+  // Canonical override syntax shared with api_server (envInt64) and the MCP
+  // server (_int_env): trimmed base-10 digits only. Number() alone would also
+  // accept exponents ("1e3"), hex, and floats that the backends reject.
+  const raw = readRuntimeEnv(name)?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return def;
+  return Number(raw);
 }
 
 /**
@@ -32,6 +34,13 @@ export const FREE_TIER_LIMITS = {
   kbFileBytes: envInt("MEKO_FREE_TIER_KB_FILE_BYTES", MB(5)),
   conversations: envInt("MEKO_FREE_TIER_CONVERSATIONS", 1000),
   tokenBurn: envInt("MEKO_FREE_TIER_TOKEN_BURN", 10_000_000),
+  // MCP-side retrieval / write caps. Enforced by meko-mcp-server
+  // against `meko_system.free_tier_usage`; api_server + UI only read
+  // them for the Settings usage tracker. Env names shared with the
+  // MCP process so one variable tunes both sides.
+  memorySearches: envInt("MEKO_FREE_TIER_MEMORY_SEARCH", 1000),
+  kbSearches: envInt("MEKO_FREE_TIER_KB_SEARCH", 1000),
+  memoryAdds: envInt("MEKO_FREE_TIER_MEMORY_ADD", 10_000),
 } as const;
 
 /** Standard tier ($25/mo via AWS Marketplace) — same env-override pattern. */
@@ -41,7 +50,15 @@ export const STANDARD_TIER_LIMITS = {
   kbFileBytes: envInt("MEKO_STANDARD_TIER_KB_FILE_BYTES", MB(50)),
   conversations: envInt("MEKO_STANDARD_TIER_CONVERSATIONS", 10_000),
   tokenBurn: envInt("MEKO_STANDARD_TIER_TOKEN_BURN", 50_000_000),
+  memorySearches: envInt("MEKO_STANDARD_TIER_MEMORY_SEARCH", 5000),
+  kbSearches: envInt("MEKO_STANDARD_TIER_KB_SEARCH", 5000),
+  memoryAdds: envInt("MEKO_STANDARD_TIER_MEMORY_ADD", 30_000),
 } as const;
+
+/** Row label shared by the Pricing card and the Usage tracker so the
+ *  two surfaces read as a matched pair. "Total" distinguishes the
+ *  account-wide storage cap from the per-file "Max KB file size" row. */
+export const KB_STORAGE_LIMIT_LABEL = "Total KB file storage";
 
 export type TierName = "free" | "standard" | "pro" | "enterprise" | "unknown";
 
@@ -67,7 +84,11 @@ export function isGatedTier(userType?: string | null): boolean {
 
 export type TierLimits = typeof FREE_TIER_LIMITS;
 
-/** Cap set for the given tier. Unknown / pro / enterprise → Infinity per field. */
+/** Cap set for the given tier. Unknown / pro / enterprise → Infinity per
+ *  field, EXCEPT per-file upload size: the RAG pipeline can't process
+ *  arbitrarily heavy files, so every tier stops at the platform ceiling
+ *  (same env name api_server's KBFileMaxBytes reads — display and
+ *  enforcement stay in lockstep). */
 export function limitsFor(userType?: string | null): TierLimits {
   const t = resolveTier(userType);
   if (t === "free") return FREE_TIER_LIMITS;
@@ -75,9 +96,12 @@ export function limitsFor(userType?: string | null): TierLimits {
   return {
     datapacks: Number.POSITIVE_INFINITY,
     kbStorageBytes: Number.POSITIVE_INFINITY,
-    kbFileBytes: Number.POSITIVE_INFINITY,
+    kbFileBytes: envInt("MEKO_KB_FILE_MAX_BYTES", GB(1)),
     conversations: Number.POSITIVE_INFINITY,
     tokenBurn: Number.POSITIVE_INFINITY,
+    memorySearches: Number.POSITIVE_INFINITY,
+    kbSearches: Number.POSITIVE_INFINITY,
+    memoryAdds: Number.POSITIVE_INFINITY,
   };
 }
 

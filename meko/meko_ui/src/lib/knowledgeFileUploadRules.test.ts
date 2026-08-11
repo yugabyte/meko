@@ -4,7 +4,9 @@ import {
   isAcceptedKnowledgeFile,
   sanitizeFilenameForMatch,
   dedupNote,
+  filterFilesForKnowledgeUploadBatch,
   KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS,
+  KNOWLEDGE_UPLOAD_MAX_BATCH,
 } from "@/lib/knowledgeFileUploadRules";
 
 // Derive the expected accepted set from the source constant so the test can't
@@ -65,5 +67,63 @@ describe("dedupNote", () => {
   });
   it("treats a missing existingName as the same name", () => {
     expect(dedupNote("doc.pdf", undefined, false)).toBe("The document is already processed");
+  });
+});
+
+describe("filterFilesForKnowledgeUploadBatch", () => {
+  // Fake the size instead of allocating real buffers — 40MB of zeros in a
+  // unit test buys nothing.
+  const fileOfSize = (name: string, sizeMB: number): File => {
+    const f = new File([""], name);
+    Object.defineProperty(f, "size", { value: sizeMB * 1024 * 1024 });
+    return f;
+  };
+
+  it("skips files over the default 5MB cap with an upgrade nudge", () => {
+    const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(
+      [fileOfSize("big.pdf", 40), fileOfSize("small.pdf", 1)],
+      0,
+    );
+    expect(accepted.map((f) => f.name)).toEqual(["small.pdf"]);
+    expect(warningParts).toEqual([
+      "1 skipped (over 5MB — upgrade your plan for larger file uploads)",
+    ]);
+  });
+
+  it("honors a tier-supplied cap (Standard: 50MB)", () => {
+    const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(
+      [fileOfSize("big.pdf", 40), fileOfSize("huge.pdf", 60)],
+      0,
+      50,
+    );
+    expect(accepted.map((f) => f.name)).toEqual(["big.pdf"]);
+    expect(warningParts).toEqual([
+      "1 skipped (over 50MB — upgrade your plan for larger file uploads)",
+    ]);
+  });
+
+  it("never size-skips when the cap is Infinity (un-capped tiers)", () => {
+    const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(
+      [fileOfSize("huge.pdf", 500)],
+      0,
+      Number.POSITIVE_INFINITY,
+    );
+    expect(accepted.map((f) => f.name)).toEqual(["huge.pdf"]);
+    expect(warningParts).toEqual([]);
+  });
+
+  it("skips unsupported types and caps by remaining batch slots", () => {
+    const files = [
+      fileOfSize("notes.exe", 1),
+      ...Array.from({ length: KNOWLEDGE_UPLOAD_MAX_BATCH + 1 }, (_, i) =>
+        fileOfSize(`doc${i}.pdf`, 1),
+      ),
+    ];
+    const { accepted, warningParts } = filterFilesForKnowledgeUploadBatch(files, 0);
+    expect(accepted).toHaveLength(KNOWLEDGE_UPLOAD_MAX_BATCH);
+    expect(warningParts).toEqual([
+      "1 skipped (unsupported type)",
+      `1 skipped (${KNOWLEDGE_UPLOAD_MAX_BATCH} files already in progress)`,
+    ]);
   });
 });

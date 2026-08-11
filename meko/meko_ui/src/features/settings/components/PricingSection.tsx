@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
   AWS_MARKETPLACE_LISTING_URL,
+  KB_STORAGE_LIMIT_LABEL,
   SALES_CONTACT_URL,
   STANDARD_TIER_ENABLED,
   resolveTier,
@@ -42,9 +43,9 @@ type Row = {
 const TIER_ROWS: ReadonlyArray<Row> = [
   { label: "Datapacks", values: { free: "10", standard: "50", pro: "Unlimited" } },
   { label: "Add conversations", values: { free: "1,000", standard: "10,000", pro: "Custom" } },
-  { label: "Retrieval requests", values: { free: "10,000", standard: "100,000", pro: "Custom" } },
+  { label: "Memory adds", values: { free: "10,000", standard: "30,000", pro: "Custom" } },
   { label: "Workbench tokens", values: { free: "10M", standard: "50M", pro: "Custom" } },
-  { label: "KB storage", values: { free: "100 MB", standard: "5 GB", pro: "Custom" } },
+  { label: KB_STORAGE_LIMIT_LABEL, values: { free: "100 MB", standard: "5 GB", pro: "Custom" } },
   { label: "Max KB file size", values: { free: "5 MB", standard: "50 MB", pro: "Custom" } },
   { label: "Support", values: { free: "Community", standard: "Email", pro: "Priority" } },
   { label: "Decision trace", values: { free: "Supported", standard: "Supported", pro: "Supported" } },
@@ -70,10 +71,10 @@ export function PricingSection() {
         <h2 className="text-sm font-semibold text-foreground">Pricing</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {activeTier === "free"
-            ? "You're on the Free tier. Upgrade for higher limits, more datapacks, and email support."
+            ? "You're on the Free tier. All plan limits are account totals — they don't reset each month. Upgrade for higher limits, more datapacks, and email support."
             : activeTier === "standard"
-              ? "You're on Standard. Need SSO, on-prem, or higher limits? Talk to our team about Pro."
-              : "Compare Meko plans below."}
+              ? "You're on Standard. All plan limits are account totals — they don't reset each month. Need SSO, on-prem, or higher limits? Talk to our team about Pro."
+              : "Compare Meko plans below. All plan limits are account totals — they don't reset each month."}
         </p>
       </header>
 
@@ -176,8 +177,9 @@ const AWS_BUYER_SUBSCRIPTIONS_URL =
 // Badge in the top-right of each card. "Current" wins for the active
 // tier; Standard shows an Upgrade button that deep-links to AWS
 // Marketplace, Pro shows "Talk to our team", Free shows nothing.
-// When Standard is the CURRENT plan we also surface a "Manage in AWS"
-// link so users have a one-click path to change / cancel the sub.
+// When Standard is the CURRENT plan we also surface a "Manage
+// subscription" link so users have a one-click path to change / cancel
+// the sub.
 function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boolean }) {
   if (isCurrent) {
     const chip = (
@@ -200,9 +202,10 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
             href={AWS_BUYER_SUBSCRIPTIONS_URL}
             target="_blank"
             rel="noopener noreferrer"
+            title="Opens the AWS Marketplace buyer console"
             className="inline-flex items-center gap-0.5 text-[11px] font-medium text-brand hover:underline"
           >
-            Manage in AWS
+            Manage subscription
             <ArrowUpRight className="h-3 w-3" aria-hidden />
           </a>
         </div>

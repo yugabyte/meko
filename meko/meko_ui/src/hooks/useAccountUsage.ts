@@ -20,7 +20,17 @@ import { FREE_TIER_QUOTA_ENABLED } from "@/lib/freeTier";
 
 export const ACCOUNT_USAGE_QUERY_KEY = "account-usage";
 
-export function useAccountUsage(options?: { enabled?: boolean }) {
+// `refetchOnMount: "always"` overrides the shared 60s staleTime for a
+// single caller. Callers that only need the number to gate a click
+// (create-datapack, KB upload) stick with the default and read from
+// cache within the window; the Settings usage tracker passes "always"
+// so users see live consumption every time they open the page.
+type UseAccountUsageOptions = {
+  enabled?: boolean;
+  refetchOnMount?: boolean | "always";
+};
+
+export function useAccountUsage(options?: UseAccountUsageOptions) {
   // When the master `MEKO_FREE_TIER_QUOTA_ENABLED` flag is off, skip
   // the /auth/me/usage fetch entirely — no consumer applies caps in
   // that mode, so the network request is wasted load on api_server.
@@ -30,5 +40,6 @@ export function useAccountUsage(options?: { enabled?: boolean }) {
     queryFn: ({ signal }) => getCurrentUserUsage({ signal }),
     staleTime: 60_000,
     enabled,
+    refetchOnMount: options?.refetchOnMount,
   });
 }

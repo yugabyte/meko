@@ -13,6 +13,13 @@ const ACCEPTED_EXTENSION_LIST = [".pdf", ".txt", ".md", ".json", ".csv", ".html"
 /** Comma-joined form for a file input's `accept` attribute. */
 export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS = ACCEPTED_EXTENSION_LIST.join(",");
 
+/**
+ * Legacy / conservative per-file cap. The REAL cap is per-tier
+ * (`limitsFor(user_type).kbFileBytes` — 5 MB free, 50 MB standard,
+ * unlimited pro; mirrors api_server's LimitsFor().MaxKBFileBytes).
+ * This constant is only the fallback while the caller's identity is
+ * still loading — see useKnowledgeUploadMaxFileSizeMB.
+ */
 export const KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB = 5;
 export const KNOWLEDGE_UPLOAD_MAX_BATCH = 10;
 
@@ -84,13 +91,15 @@ export type KnowledgeBatchFilterResult = {
 export function filterFilesForKnowledgeUploadBatch(
   incoming: File[],
   currentNonDoneStagingCount: number,
+  maxFileSizeMB: number = KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB,
 ): KnowledgeBatchFilterResult {
   const valid: File[] = [];
   let skippedSize = 0;
   let skippedType = 0;
 
   for (const f of incoming) {
-    if (f.size > KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB * 1024 * 1024) {
+    // Infinity (un-capped tiers) never trips this branch.
+    if (f.size > maxFileSizeMB * 1024 * 1024) {
       skippedSize++;
       continue;
     }
@@ -108,11 +117,11 @@ export function filterFilesForKnowledgeUploadBatch(
   const warningParts: string[] = [];
   if (skippedType > 0) warningParts.push(`${skippedType} skipped (unsupported type)`);
   if (skippedSize > 0) {
-    // Upsell copy rather than a bare limit statement -- the 5MB cap is the
-    // same for every tier today, but this nudges Free users toward Pro
-    // without promising a bigger limit that doesn't exist yet.
+    // Upsell copy rather than a bare limit statement -- the cap is
+    // tier-dependent (5 MB free / 50 MB standard), so nudge toward an
+    // upgrade without naming a specific plan.
     warningParts.push(
-      `${skippedSize} skipped (over ${KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB}MB — upgrade to Pro for larger file uploads)`,
+      `${skippedSize} skipped (over ${maxFileSizeMB}MB — upgrade your plan for larger file uploads)`,
     );
   }
   if (skippedLimit > 0) {
