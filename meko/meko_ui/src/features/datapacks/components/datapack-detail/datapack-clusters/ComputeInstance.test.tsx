@@ -15,7 +15,7 @@ const mockDelete = vi.mocked(ampDeleteCompute);
 
 const ep: AmpCompute = {
   id: "e1",
-  project_id: "p",
+  cluster_id: "p",
   branch_id: "br",
   role: "read_write",
   address: "10.0.0.1:5432",

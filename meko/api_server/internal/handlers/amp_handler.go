@@ -11,8 +11,8 @@ import (
 )
 
 // AMPHandler holds Echo handlers for the AMP cluster endpoints scoped to a
-// datapack. A "cluster" is Meko's user-facing name for an AMP project (a
-// Postgres database). Registered only when the AMP feature is enabled.
+// datapack. A cluster is an AMP database (its default branch is `main`).
+// Registered only when the AMP feature is enabled.
 type AMPHandler struct {
 	svc *service.AMPService
 }
@@ -24,9 +24,9 @@ func NewAMPHandler(svc *service.AMPService) *AMPHandler {
 type createClusterRequest struct {
 	Name      string `json:"name"`
 	PgVersion *int   `json:"pg_version,omitempty"`
-	// WithWriter runs the composite "create cluster" (project + main branch +
+	// WithWriter runs the composite "create cluster" (cluster + main branch +
 	// read_write endpoint) as one background task, sized by CPU/Memory. Default
-	// false keeps the project-only behavior (e.g. the MCP tool).
+	// false keeps the cluster-only behavior (e.g. the MCP tool).
 	WithWriter bool   `json:"with_writer,omitempty"`
 	CPU        string `json:"cpu,omitempty"`
 	Memory     string `json:"memory,omitempty"`
@@ -71,7 +71,7 @@ func (h *AMPHandler) CreateCluster(c echo.Context) error {
 	}
 	// with_writer provisions the writer endpoint in the same task. Both paths
 	// poll the task to completion and return the materialized cluster (201).
-	var cluster service.AMPProject
+	var cluster service.AMPCluster
 	if req.WithWriter {
 		cluster, err = h.svc.CreateClusterWithWriter(c.Request().Context(), in)
 	} else {

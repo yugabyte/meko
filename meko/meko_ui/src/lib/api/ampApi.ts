@@ -1,12 +1,11 @@
-// AMP cluster API calls, kept separate from the core mekoApi surface. A
-// "cluster" is Meko's user-facing name for an AMP project (a Postgres
-// database). Every function + route is `amp`-prefixed so it's clear at the call
-// site (and on the wire, /datapacks/:id/amp/...) that this is the AMP surface.
+// AMP cluster API calls, kept separate from the core mekoApi surface. A cluster
+// is an AMP database (its default branch is `main`). Every function + route is
+// `amp`-prefixed so it's clear at the call site (and on the wire,
+// /datapacks/:id/amp/...) that this is the AMP surface.
 // Gated by SHOW_PG_AMP; reuses mekoApi's `request` (envelope unwrap + errors).
 //
-// NOTE: response field names (project_id, storage_pool_id, …) mirror the AMP
-// controller payload that api_server passes through unchanged, so they keep the
-// AMP terminology even though the Meko-facing concept is a "cluster".
+// NOTE: response field names (cluster_id, storage_pool_id, …) mirror the AMP
+// controller payload that api_server passes through unchanged.
 
 import { request } from "@/lib/api/mekoApi";
 
@@ -19,7 +18,7 @@ function clustersRoute(datapackId: string): string {
 /** A branch (Postgres timeline) of an AMP cluster; `main` is the default. */
 export type AmpBranch = {
   branch_id: string;
-  project_id: string;
+  cluster_id: string;
   name: string;
   pg_version: number;
   is_default: boolean;
@@ -27,7 +26,7 @@ export type AmpBranch = {
   created_at: string;
 };
 
-/** An AMP cluster (a Postgres database / AMP project) inside the datapack's shared pool. */
+/** An AMP cluster (a Postgres database) inside the datapack's shared pool. */
 export type AmpCluster = {
   id: string;
   name: string;
@@ -75,7 +74,7 @@ export type AmpResources = { cpu?: string; memory?: string };
  *  host:port, empty until deployed. */
 export type AmpCompute = {
   id: string;
-  project_id: string;
+  cluster_id: string;
   branch_id: string;
   role: string;
   address: string;

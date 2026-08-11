@@ -25,9 +25,11 @@ internal/
   `apiError(c, status, code, msg)` (see `handlers/response.go`) and pull HTTP
   request-scoped context via `auth.GetAccount(c)` / `auth.GetDatapack(c)`.
 - **Services** hold logic and call repos + clients. External-system vocabulary
-  stays at the edge: e.g. Meko-facing routes/handlers say `cluster`, and the
-  `AMPService`→AMP client boundary is where it becomes an AMP `project` (the
-  handler translates `:cluster_id` → the service's `projectID`). Keep that seam.
+  stays at the edge — translate a third party's terms to Meko's at the service
+  boundary rather than leaking them inward. (The AMP client used to be the
+  example: Meko's `cluster` became AMP's `project` at the `AMPService`→client
+  boundary. AMP renamed the resource to `cluster` in #671, so that hop is now
+  `cluster` end to end and there's no term to translate.)
 - **Repos** own every query — parameterized, wrap errors with `%w`, translate
   `sql.ErrNoRows` to a domain sentinel (e.g. `ErrUserNotFound`).
 

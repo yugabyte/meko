@@ -23,7 +23,7 @@ function renderWithClient(ui: ReactElement) {
 
 const compute = (over: Partial<AmpCompute>): AmpCompute => ({
   id: "e1",
-  project_id: "p",
+  cluster_id: "p",
   branch_id: "br",
   role: "read_only",
   address: "10.0.0.1:5432",

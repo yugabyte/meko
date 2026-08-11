@@ -15,9 +15,9 @@ import (
 // AMPClient is a thin HTTP client for the AMP controller REST API (base URL +
 // "/api/v1"). Meko uses it to provision AMP resources on a user's behalf:
 // ensure the AMP user + shared pool exist (both idempotent, keyed on ids Meko
-// supplies) and create databases (projects) inside the pool.
+// supplies) and create databases (clusters) inside the pool.
 //
-// User and pool creation are synchronous on the controller; project creation is
+// User and pool creation are synchronous on the controller; cluster creation is
 // asynchronous (202 + a task that we poll to completion), mirroring amp_ui's
 // resource client.
 type AMPClient struct {
@@ -38,11 +38,11 @@ func NewAMPClient(baseURL string, httpClient *http.Client) *AMPClient {
 
 /* ---- wire types (subset of the controller's schema) ---- */
 
-// AMPBranch is a Postgres timeline within a project (the default branch is
+// AMPBranch is a Postgres timeline within a cluster (the default branch is
 // "main"; forks carry parent_branch_id + fork_lsn).
 type AMPBranch struct {
 	BranchID  string `json:"branch_id"`
-	ProjectID string `json:"project_id"`
+	ClusterID string `json:"cluster_id"`
 	Name      string `json:"name"`
 	PgVersion int    `json:"pg_version"`
 	IsDefault bool   `json:"is_default"`
@@ -50,8 +50,8 @@ type AMPBranch struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// AMPProject is an AMP "database": one project with a default branch.
-type AMPProject struct {
+// AMPCluster is an AMP "database": one cluster with a default branch.
+type AMPCluster struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"`
 	StoragePoolID string    `json:"storage_pool_id"`
@@ -65,15 +65,15 @@ type ampPool struct {
 	OwnerUserID string `json:"owner_user_id"`
 }
 
-type ampProjectList struct {
-	Projects []AMPProject `json:"projects"`
+type ampClusterList struct {
+	Clusters []AMPCluster `json:"clusters"`
 }
 
 type ampTask struct {
 	ID        string  `json:"id"`
 	Kind      string  `json:"kind"`
 	Status    string  `json:"status"`
-	ProjectID *string `json:"project_id"`
+	ClusterID *string `json:"cluster_id"`
 	TargetRef *string `json:"target_ref"`
 	Error     *string `json:"error"`
 	// Result is the task's final step result as opaque JSON. For a
@@ -106,78 +106,78 @@ func (c *AMPClient) EnsurePool(ctx context.Context, id, ownerID, name string) (a
 	return p, err
 }
 
-// ListProjects returns the databases (projects) in a pool.
-func (c *AMPClient) ListProjects(ctx context.Context, poolID string) ([]AMPProject, error) {
-	var list ampProjectList
-	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects?limit=1000", nil, &list)
-	return list.Projects, err
+// ListClusters returns the databases (clusters) in a pool.
+func (c *AMPClient) ListClusters(ctx context.Context, poolID string) ([]AMPCluster, error) {
+	var list ampClusterList
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/clusters?limit=1000", nil, &list)
+	return list.Clusters, err
 }
 
-// GetProject reads a single database (project) by id.
-func (c *AMPClient) GetProject(ctx context.Context, poolID, projectID string) (AMPProject, error) {
-	var p AMPProject
-	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID, nil, &p)
+// GetCluster reads a single database (cluster) by id.
+func (c *AMPClient) GetCluster(ctx context.Context, poolID, clusterID string) (AMPCluster, error) {
+	var p AMPCluster
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/clusters/"+clusterID, nil, &p)
 	return p, err
 }
 
-// DeleteProject deletes a database, cascading to its branches and endpoints.
+// DeleteCluster deletes a database, cascading to its branches and endpoints.
 // The controller returns a task; we poll it to completion (a delete that is
 // rejected synchronously — e.g. a 409 conflict — surfaces as an error here).
-func (c *AMPClient) DeleteProject(ctx context.Context, poolID, projectID string) error {
+func (c *AMPClient) DeleteCluster(ctx context.Context, poolID, clusterID string) error {
 	var task ampTask
-	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/projects/"+projectID, nil, &task); err != nil {
+	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/clusters/"+clusterID, nil, &task); err != nil {
 		return err
 	}
 	_, err := c.pollTask(ctx, task.ID)
 	return err
 }
 
-// DeleteProjectAsync issues the delete but does NOT poll the resulting task.
+// DeleteClusterAsync issues the delete but does NOT poll the resulting task.
 // Used for bulk teardown (datapack deletion), where blocking on each cascade to
 // finish would make deleting a datapack take minutes. Synchronous rejections
 // (404 / 409 / 5xx) still surface here; the cascade itself runs on the controller.
-func (c *AMPClient) DeleteProjectAsync(ctx context.Context, poolID, projectID string) error {
+func (c *AMPClient) DeleteClusterAsync(ctx context.Context, poolID, clusterID string) error {
 	var task ampTask
-	return c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/projects/"+projectID, nil, &task)
+	return c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/clusters/"+clusterID, nil, &task)
 }
 
-// createProject POSTs a create_project request, polls the task to completion,
-// and reads the materialized project back. Shared by the project-only and
+// createCluster POSTs a create_cluster request, polls the task to completion,
+// and reads the materialized cluster back. Shared by the cluster-only and
 // with_writer variants — they differ only in the request body.
-func (c *AMPClient) createProject(ctx context.Context, poolID string, body map[string]any) (AMPProject, error) {
+func (c *AMPClient) createCluster(ctx context.Context, poolID string, body map[string]any) (AMPCluster, error) {
 	var task ampTask
-	if err := c.do(ctx, http.MethodPost, "/storage-pools/"+poolID+"/projects", body, &task); err != nil {
-		return AMPProject{}, err
+	if err := c.do(ctx, http.MethodPost, "/storage-pools/"+poolID+"/clusters", body, &task); err != nil {
+		return AMPCluster{}, err
 	}
 	done, err := c.pollTask(ctx, task.ID)
 	if err != nil {
-		return AMPProject{}, err
+		return AMPCluster{}, err
 	}
-	if done.ProjectID == nil || *done.ProjectID == "" {
-		return AMPProject{}, fmt.Errorf("amp create_project task %s returned no project id", task.ID)
+	if done.ClusterID == nil || *done.ClusterID == "" {
+		return AMPCluster{}, fmt.Errorf("amp create_cluster task %s returned no cluster id", task.ID)
 	}
-	var p AMPProject
-	err = c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+*done.ProjectID, nil, &p)
+	var p AMPCluster
+	err = c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/clusters/"+*done.ClusterID, nil, &p)
 	return p, err
 }
 
-// CreateProject creates a database in a pool (no compute), polling the task to
-// completion and reading the materialized project back.
-func (c *AMPClient) CreateProject(ctx context.Context, poolID, name string, pgVersion *int) (AMPProject, error) {
+// CreateCluster creates a database in a pool (no compute), polling the task to
+// completion and reading the materialized cluster back.
+func (c *AMPClient) CreateCluster(ctx context.Context, poolID, name string, pgVersion *int) (AMPCluster, error) {
 	body := map[string]any{"name": name}
 	if pgVersion != nil {
 		body["pg_version"] = *pgVersion
 	}
-	return c.createProject(ctx, poolID, body)
+	return c.createCluster(ctx, poolID, body)
 }
 
-// CreateProjectWithWriter creates a database AND its `main`-branch read_write
-// endpoint in ONE background task (with_writer). Like CreateProject it polls the
-// task to completion and returns the materialized project — the initial cluster +
+// CreateClusterWithWriter creates a database AND its `main`-branch read_write
+// endpoint in ONE background task (with_writer). Like CreateCluster it polls the
+// task to completion and returns the materialized cluster — the initial cluster +
 // writer provisions in well under a minute, so we wait (consistent with every
 // other Meko→controller call) rather than leave the caller guessing. cpu/memory
 // size the writer; omit either to take AMP's default (2 cores / 4Gi).
-func (c *AMPClient) CreateProjectWithWriter(ctx context.Context, poolID, name string, pgVersion *int, cpu, memory string) (AMPProject, error) {
+func (c *AMPClient) CreateClusterWithWriter(ctx context.Context, poolID, name string, pgVersion *int, cpu, memory string) (AMPCluster, error) {
 	body := map[string]any{"name": name, "with_writer": true}
 	if pgVersion != nil {
 		body["pg_version"] = *pgVersion
@@ -192,7 +192,7 @@ func (c *AMPClient) CreateProjectWithWriter(ctx context.Context, poolID, name st
 		}
 		body["resources"] = res
 	}
-	return c.createProject(ctx, poolID, body)
+	return c.createCluster(ctx, poolID, body)
 }
 
 /* ---- branches ---- */
@@ -208,26 +208,26 @@ type CreateBranchInput struct {
 	ForkPointLSN string `json:"fork_point_lsn,omitempty"`
 }
 
-// ListBranches returns the branches of a database (project).
-func (c *AMPClient) ListBranches(ctx context.Context, poolID, projectID string) ([]AMPBranch, error) {
+// ListBranches returns the branches of a database (cluster).
+func (c *AMPClient) ListBranches(ctx context.Context, poolID, clusterID string) ([]AMPBranch, error) {
 	var list ampBranchList
-	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches?limit=1000", nil, &list)
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches?limit=1000", nil, &list)
 	return list.Branches, err
 }
 
 // GetBranch reads a single branch by id.
-func (c *AMPClient) GetBranch(ctx context.Context, poolID, projectID, branchID string) (AMPBranch, error) {
+func (c *AMPClient) GetBranch(ctx context.Context, poolID, clusterID, branchID string) (AMPBranch, error) {
 	var b AMPBranch
-	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID, nil, &b)
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches/"+branchID, nil, &b)
 	return b, err
 }
 
 // DeleteBranch deletes a branch, cascading to its endpoints (task-based: poll to
 // completion). A branch with child branches is rejected by the controller
 // (409), surfaced as an error here.
-func (c *AMPClient) DeleteBranch(ctx context.Context, poolID, projectID, branchID string) error {
+func (c *AMPClient) DeleteBranch(ctx context.Context, poolID, clusterID, branchID string) error {
 	var task ampTask
-	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID, nil, &task); err != nil {
+	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches/"+branchID, nil, &task); err != nil {
 		return err
 	}
 	_, err := c.pollTask(ctx, task.ID)
@@ -235,8 +235,8 @@ func (c *AMPClient) DeleteBranch(ctx context.Context, poolID, projectID, branchI
 }
 
 // CreateBranch forks a branch (task-based: poll, then read back via target_ref).
-func (c *AMPClient) CreateBranch(ctx context.Context, poolID, projectID string, in CreateBranchInput) (AMPBranch, error) {
-	base := "/storage-pools/" + poolID + "/projects/" + projectID + "/branches"
+func (c *AMPClient) CreateBranch(ctx context.Context, poolID, clusterID string, in CreateBranchInput) (AMPBranch, error) {
+	base := "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches"
 	var task ampTask
 	if err := c.do(ctx, http.MethodPost, base, in, &task); err != nil {
 		return AMPBranch{}, err
@@ -266,7 +266,7 @@ type AMPResources struct {
 // empty until deployed.
 type AMPEndpoint struct {
 	ID        string `json:"id"`
-	ProjectID string `json:"project_id"`
+	ClusterID string `json:"cluster_id"`
 	BranchID  string `json:"branch_id"`
 	Role      string `json:"role"`
 	Address   string `json:"address"`
@@ -285,23 +285,23 @@ type ampEndpointList struct {
 }
 
 // ListEndpoints returns the compute instances on a branch.
-func (c *AMPClient) ListEndpoints(ctx context.Context, poolID, projectID, branchID string) ([]AMPEndpoint, error) {
+func (c *AMPClient) ListEndpoints(ctx context.Context, poolID, clusterID, branchID string) ([]AMPEndpoint, error) {
 	var list ampEndpointList
-	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID+"/endpoints?limit=1000", nil, &list)
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches/"+branchID+"/endpoints?limit=1000", nil, &list)
 	return list.Endpoints, err
 }
 
 // GetEndpoint reads a single compute instance (endpoint) by id.
-func (c *AMPClient) GetEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) (AMPEndpoint, error) {
+func (c *AMPClient) GetEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string) (AMPEndpoint, error) {
 	var e AMPEndpoint
-	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID+"/endpoints/"+endpointID, nil, &e)
+	err := c.do(ctx, http.MethodGet, "/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches/"+branchID+"/endpoints/"+endpointID, nil, &e)
 	return e, err
 }
 
 // DeleteEndpoint retires a compute instance (task-based: poll to completion).
-func (c *AMPClient) DeleteEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID string) error {
+func (c *AMPClient) DeleteEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string) error {
 	var task ampTask
-	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/projects/"+projectID+"/branches/"+branchID+"/endpoints/"+endpointID, nil, &task); err != nil {
+	if err := c.do(ctx, http.MethodDelete, "/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches/"+branchID+"/endpoints/"+endpointID, nil, &task); err != nil {
 		return err
 	}
 	_, err := c.pollTask(ctx, task.ID)
@@ -310,8 +310,8 @@ func (c *AMPClient) DeleteEndpoint(ctx context.Context, poolID, projectID, branc
 
 // CreateEndpoint provisions compute on a branch (task-based: poll, then read
 // back via target_ref).
-func (c *AMPClient) CreateEndpoint(ctx context.Context, poolID, projectID, branchID, role, cpu, memory string) (AMPEndpoint, error) {
-	base := "/storage-pools/" + poolID + "/projects/" + projectID + "/branches/" + branchID + "/endpoints"
+func (c *AMPClient) CreateEndpoint(ctx context.Context, poolID, clusterID, branchID, role, cpu, memory string) (AMPEndpoint, error) {
+	base := "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches/" + branchID + "/endpoints"
 	body := map[string]any{"role": role}
 	// AMP nests compute sizing under `resources` as Kubernetes quantities
 	// (cpu e.g. "2"/"1500m", memory e.g. "4Gi"). Only send fields we have so
@@ -358,8 +358,8 @@ type ResizeResult struct {
 // back to a rollout); we poll it to completion, read the in-place outcome from
 // the task result, then read the endpoint back at its new size. Send only the
 // fields we have so AMP leaves the rest unchanged.
-func (c *AMPClient) ResizeEndpoint(ctx context.Context, poolID, projectID, branchID, endpointID, cpu, memory string) (ResizeResult, error) {
-	base := "/storage-pools/" + poolID + "/projects/" + projectID + "/branches/" + branchID + "/endpoints/" + endpointID
+func (c *AMPClient) ResizeEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID, cpu, memory string) (ResizeResult, error) {
+	base := "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches/" + branchID + "/endpoints/" + endpointID
 	res := map[string]any{}
 	if cpu != "" {
 		res["cpu"] = cpu

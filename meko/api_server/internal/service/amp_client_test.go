@@ -24,7 +24,7 @@ type fakeController struct {
 func (f *fakeController) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	const epPath = "/api/v1/storage-pools/p/projects/pr/branches/b/endpoints/e"
+	const epPath = "/api/v1/storage-pools/p/clusters/pr/branches/b/endpoints/e"
 	mux.HandleFunc(epPath+"/resize", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("resize: method = %s, want POST", r.Method)
@@ -48,17 +48,17 @@ func (f *fakeController) server(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func TestDeleteProjectAsync_IssuesDeleteWithoutPolling(t *testing.T) {
+func TestDeleteClusterAsync_IssuesDeleteWithoutPolling(t *testing.T) {
 	var deleted bool
 	var polled bool
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/storage-pools/p/projects/pr", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/storage-pools/p/clusters/pr", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("method = %s, want DELETE", r.Method)
 		}
 		deleted = true
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"id":"t7","kind":"delete_project","status":"pending"}`))
+		_, _ = w.Write([]byte(`{"id":"t7","kind":"delete_cluster","status":"pending"}`))
 	})
 	mux.HandleFunc("/api/v1/tasks/t7", func(w http.ResponseWriter, _ *http.Request) {
 		polled = true // must NOT be hit — async delete does not poll
@@ -68,45 +68,45 @@ func TestDeleteProjectAsync_IssuesDeleteWithoutPolling(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := NewAMPClient(srv.URL, http.DefaultClient)
 
-	if err := c.DeleteProjectAsync(context.Background(), "p", "pr"); err != nil {
-		t.Fatalf("DeleteProjectAsync: %v", err)
+	if err := c.DeleteClusterAsync(context.Background(), "p", "pr"); err != nil {
+		t.Fatalf("DeleteClusterAsync: %v", err)
 	}
 	if !deleted {
 		t.Error("expected the DELETE to be issued")
 	}
 	if polled {
-		t.Error("DeleteProjectAsync must not poll /tasks")
+		t.Error("DeleteClusterAsync must not poll /tasks")
 	}
 }
 
-func TestCreateProjectWithWriter_SendsWithWriterAndPollsToProject(t *testing.T) {
+func TestCreateClusterWithWriter_SendsWithWriterAndPollsToCluster(t *testing.T) {
 	var body map[string]any
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/storage-pools/p/projects", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/storage-pools/p/clusters", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", r.Method)
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"id":"t9","kind":"create_project","status":"pending"}`))
+		_, _ = w.Write([]byte(`{"id":"t9","kind":"create_cluster","status":"pending"}`))
 	})
 	mux.HandleFunc("/api/v1/tasks/t9", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"t9","kind":"create_project","status":"succeeded","project_id":"pr9"}`))
+		_, _ = w.Write([]byte(`{"id":"t9","kind":"create_cluster","status":"succeeded","cluster_id":"pr9"}`))
 	})
-	mux.HandleFunc("/api/v1/storage-pools/p/projects/pr9", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(AMPProject{ID: "pr9", Name: "orders"})
+	mux.HandleFunc("/api/v1/storage-pools/p/clusters/pr9", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(AMPCluster{ID: "pr9", Name: "orders"})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	c := NewAMPClient(srv.URL, http.DefaultClient)
 
-	// Polls the task to completion and returns the materialized project.
-	p, err := c.CreateProjectWithWriter(context.Background(), "p", "orders", nil, "4", "8Gi")
+	// Polls the task to completion and returns the materialized cluster.
+	p, err := c.CreateClusterWithWriter(context.Background(), "p", "orders", nil, "4", "8Gi")
 	if err != nil {
-		t.Fatalf("CreateProjectWithWriter: %v", err)
+		t.Fatalf("CreateClusterWithWriter: %v", err)
 	}
 	if p.ID != "pr9" {
-		t.Errorf("project id = %q, want pr9", p.ID)
+		t.Errorf("cluster id = %q, want pr9", p.ID)
 	}
 	// with_writer must be true and cpu/memory nested under `resources`.
 	if body["with_writer"] != true {

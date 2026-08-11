@@ -47,7 +47,7 @@ func (s *AMPService) client(ctx context.Context) (*AMPClient, error) {
 /* ---- clusters ---- */
 
 // CreateClusterInput is the request to create an AMP cluster (a Postgres
-// database — an AMP "project") in a datapack.
+// database — an AMP "cluster") in a datapack.
 type CreateClusterInput struct {
 	DatapackID   string
 	DatapackName string // human-readable datapack name; used to name the AMP pool
@@ -78,98 +78,98 @@ func ampPoolName(datapackName, datapackID string) string {
 // CreateCluster ensures the datapack's AMP shared pool exists (first-time,
 // idempotent) and then creates a cluster in it. The pool id is the datapack id
 // by construction, so there is nothing to reconcile.
-func (s *AMPService) CreateCluster(ctx context.Context, in CreateClusterInput) (AMPProject, error) {
+func (s *AMPService) CreateCluster(ctx context.Context, in CreateClusterInput) (AMPCluster, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		return AMPProject{}, fmt.Errorf("cluster name is required")
+		return AMPCluster{}, fmt.Errorf("cluster name is required")
 	}
 	c, err := s.client(ctx)
 	if err != nil {
-		return AMPProject{}, err
+		return AMPCluster{}, err
 	}
 
 	// Step 1 — ensure the AMP user + shared pool for this datapack (idempotent).
 	if err := c.EnsureUser(ctx, in.UserID); err != nil {
-		return AMPProject{}, fmt.Errorf("ensure amp user: %w", err)
+		return AMPCluster{}, fmt.Errorf("ensure amp user: %w", err)
 	}
 	pool, err := c.EnsurePool(ctx, in.DatapackID, in.UserID, ampPoolName(in.DatapackName, in.DatapackID))
 	if err != nil {
 		_ = s.repo.Upsert(ctx, in.DatapackID, in.DatapackID, in.UserID, "failed")
-		return AMPProject{}, fmt.Errorf("ensure amp pool: %w", err)
+		return AMPCluster{}, fmt.Errorf("ensure amp pool: %w", err)
 	}
 	if err := s.repo.Upsert(ctx, in.DatapackID, pool.ID, in.UserID, "ready"); err != nil {
-		return AMPProject{}, err
+		return AMPCluster{}, err
 	}
 
-	// Step 2 — create the cluster (an AMP project) in the pool.
-	return c.CreateProject(ctx, pool.ID, name, in.PgVersion)
+	// Step 2 — create the cluster (an AMP cluster) in the pool.
+	return c.CreateCluster(ctx, pool.ID, name, in.PgVersion)
 }
 
 // CreateClusterWithWriter is the composite "create cluster" the wizard uses: it
 // ensures the pool (idempotent), then runs ONE background task that provisions
 // the database, its `main` branch, and a read_write endpoint together
-// (create_project with_writer). Like CreateCluster it polls the task to
+// (create_cluster with_writer). Like CreateCluster it polls the task to
 // completion and returns the materialized cluster.
-func (s *AMPService) CreateClusterWithWriter(ctx context.Context, in CreateClusterInput) (AMPProject, error) {
+func (s *AMPService) CreateClusterWithWriter(ctx context.Context, in CreateClusterInput) (AMPCluster, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
-		return AMPProject{}, fmt.Errorf("cluster name is required")
+		return AMPCluster{}, fmt.Errorf("cluster name is required")
 	}
 	c, err := s.client(ctx)
 	if err != nil {
-		return AMPProject{}, err
+		return AMPCluster{}, err
 	}
 
 	// Step 1 — ensure the AMP user + shared pool for this datapack (idempotent).
 	if err := c.EnsureUser(ctx, in.UserID); err != nil {
-		return AMPProject{}, fmt.Errorf("ensure amp user: %w", err)
+		return AMPCluster{}, fmt.Errorf("ensure amp user: %w", err)
 	}
 	pool, err := c.EnsurePool(ctx, in.DatapackID, in.UserID, ampPoolName(in.DatapackName, in.DatapackID))
 	if err != nil {
 		_ = s.repo.Upsert(ctx, in.DatapackID, in.DatapackID, in.UserID, "failed")
-		return AMPProject{}, fmt.Errorf("ensure amp pool: %w", err)
+		return AMPCluster{}, fmt.Errorf("ensure amp pool: %w", err)
 	}
 	if err := s.repo.Upsert(ctx, in.DatapackID, pool.ID, in.UserID, "ready"); err != nil {
-		return AMPProject{}, err
+		return AMPCluster{}, err
 	}
 
-	// Step 2 — run the composite task (project + main branch + writer).
-	return c.CreateProjectWithWriter(ctx, pool.ID, name, in.PgVersion, in.CPU, in.Memory)
+	// Step 2 — run the composite task (cluster + main branch + writer).
+	return c.CreateClusterWithWriter(ctx, pool.ID, name, in.PgVersion, in.CPU, in.Memory)
 }
 
 // ListClusters returns the clusters in a datapack's AMP pool. If no pool has
 // been provisioned yet, it returns an empty slice (no AMP call).
-func (s *AMPService) ListClusters(ctx context.Context, datapackID string) ([]AMPProject, error) {
+func (s *AMPService) ListClusters(ctx context.Context, datapackID string) ([]AMPCluster, error) {
 	mapping, err := s.repo.GetByDatapack(ctx, datapackID)
 	if err != nil {
 		return nil, err
 	}
 	if mapping == nil {
-		return []AMPProject{}, nil
+		return []AMPCluster{}, nil
 	}
 	c, err := s.client(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return c.ListProjects(ctx, mapping.SharedPoolID)
+	return c.ListClusters(ctx, mapping.SharedPoolID)
 }
 
 // GetCluster reads a single cluster (database) in a datapack's AMP pool.
-func (s *AMPService) GetCluster(ctx context.Context, datapackID, projectID string) (AMPProject, error) {
+func (s *AMPService) GetCluster(ctx context.Context, datapackID, clusterID string) (AMPCluster, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
-		return AMPProject{}, err
+		return AMPCluster{}, err
 	}
 	c, err := s.client(ctx)
 	if err != nil {
-		return AMPProject{}, err
+		return AMPCluster{}, err
 	}
-	return c.GetProject(ctx, poolID, projectID)
+	return c.GetCluster(ctx, poolID, clusterID)
 }
 
 // DeleteCluster deletes a cluster (database), cascading to its branches and
 // compute. Polls the AMP task to completion before returning.
-func (s *AMPService) DeleteCluster(ctx context.Context, datapackID, projectID string) error {
+func (s *AMPService) DeleteCluster(ctx context.Context, datapackID, clusterID string) error {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return err
@@ -178,7 +178,7 @@ func (s *AMPService) DeleteCluster(ctx context.Context, datapackID, projectID st
 	if err != nil {
 		return err
 	}
-	return c.DeleteProject(ctx, poolID, projectID)
+	return c.DeleteCluster(ctx, poolID, clusterID)
 }
 
 // CleanupForDeletedDatapack tears down a datapack's AMP footprint when the
@@ -205,19 +205,19 @@ func (s *AMPService) CleanupForDeletedDatapack(ctx context.Context, datapackID s
 	if err != nil {
 		return err
 	}
-	projects, err := c.ListProjects(ctx, mapping.SharedPoolID)
+	clusters, err := c.ListClusters(ctx, mapping.SharedPoolID)
 	if err != nil {
 		return fmt.Errorf("list clusters for cleanup: %w", err)
 	}
 	// No active clusters — skip AMP entirely and just drop the mapping.
-	if len(projects) == 0 {
+	if len(clusters) == 0 {
 		return s.repo.DeleteByDatapack(ctx, datapackID)
 	}
 	// Fire each cluster delete without polling: the cascade runs on the
 	// controller so datapack deletion returns promptly.
 	var errs []string
-	for _, p := range projects {
-		if err := c.DeleteProjectAsync(ctx, mapping.SharedPoolID, p.ID); err != nil {
+	for _, p := range clusters {
+		if err := c.DeleteClusterAsync(ctx, mapping.SharedPoolID, p.ID); err != nil {
 			errs = append(errs, fmt.Sprintf("delete cluster %s: %v", p.ID, err))
 		}
 	}
@@ -248,7 +248,7 @@ func (s *AMPService) poolID(ctx context.Context, datapackID string) (string, err
 }
 
 // ListBranches returns a database's branch tree.
-func (s *AMPService) ListBranches(ctx context.Context, datapackID, projectID string) ([]AMPBranch, error) {
+func (s *AMPService) ListBranches(ctx context.Context, datapackID, clusterID string) ([]AMPBranch, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return nil, err
@@ -257,11 +257,11 @@ func (s *AMPService) ListBranches(ctx context.Context, datapackID, projectID str
 	if err != nil {
 		return nil, err
 	}
-	return c.ListBranches(ctx, poolID, projectID)
+	return c.ListBranches(ctx, poolID, clusterID)
 }
 
 // GetBranch reads a single branch of a database.
-func (s *AMPService) GetBranch(ctx context.Context, datapackID, projectID, branchID string) (AMPBranch, error) {
+func (s *AMPService) GetBranch(ctx context.Context, datapackID, clusterID, branchID string) (AMPBranch, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return AMPBranch{}, err
@@ -270,12 +270,12 @@ func (s *AMPService) GetBranch(ctx context.Context, datapackID, projectID, branc
 	if err != nil {
 		return AMPBranch{}, err
 	}
-	return c.GetBranch(ctx, poolID, projectID, branchID)
+	return c.GetBranch(ctx, poolID, clusterID, branchID)
 }
 
 // DeleteBranch deletes a branch, cascading to its compute. Polls the AMP task to
 // completion; a branch with child branches is rejected (conflict).
-func (s *AMPService) DeleteBranch(ctx context.Context, datapackID, projectID, branchID string) error {
+func (s *AMPService) DeleteBranch(ctx context.Context, datapackID, clusterID, branchID string) error {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return err
@@ -284,11 +284,11 @@ func (s *AMPService) DeleteBranch(ctx context.Context, datapackID, projectID, br
 	if err != nil {
 		return err
 	}
-	return c.DeleteBranch(ctx, poolID, projectID, branchID)
+	return c.DeleteBranch(ctx, poolID, clusterID, branchID)
 }
 
 // CreateBranch forks a branch of a database.
-func (s *AMPService) CreateBranch(ctx context.Context, datapackID, projectID string, in CreateBranchInput) (AMPBranch, error) {
+func (s *AMPService) CreateBranch(ctx context.Context, datapackID, clusterID string, in CreateBranchInput) (AMPBranch, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return AMPBranch{}, err
@@ -297,11 +297,11 @@ func (s *AMPService) CreateBranch(ctx context.Context, datapackID, projectID str
 	if err != nil {
 		return AMPBranch{}, err
 	}
-	return c.CreateBranch(ctx, poolID, projectID, in)
+	return c.CreateBranch(ctx, poolID, clusterID, in)
 }
 
 // ListCompute returns the compute instances on a branch.
-func (s *AMPService) ListCompute(ctx context.Context, datapackID, projectID, branchID string) ([]AMPEndpoint, error) {
+func (s *AMPService) ListCompute(ctx context.Context, datapackID, clusterID, branchID string) ([]AMPEndpoint, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return nil, err
@@ -310,11 +310,11 @@ func (s *AMPService) ListCompute(ctx context.Context, datapackID, projectID, bra
 	if err != nil {
 		return nil, err
 	}
-	return c.ListEndpoints(ctx, poolID, projectID, branchID)
+	return c.ListEndpoints(ctx, poolID, clusterID, branchID)
 }
 
 // GetCompute reads a single compute instance on a branch.
-func (s *AMPService) GetCompute(ctx context.Context, datapackID, projectID, branchID, computeID string) (AMPEndpoint, error) {
+func (s *AMPService) GetCompute(ctx context.Context, datapackID, clusterID, branchID, computeID string) (AMPEndpoint, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return AMPEndpoint{}, err
@@ -323,12 +323,12 @@ func (s *AMPService) GetCompute(ctx context.Context, datapackID, projectID, bran
 	if err != nil {
 		return AMPEndpoint{}, err
 	}
-	return c.GetEndpoint(ctx, poolID, projectID, branchID, computeID)
+	return c.GetEndpoint(ctx, poolID, clusterID, branchID, computeID)
 }
 
 // DeleteCompute retires a compute instance on a branch. Polls the AMP task to
 // completion before returning.
-func (s *AMPService) DeleteCompute(ctx context.Context, datapackID, projectID, branchID, computeID string) error {
+func (s *AMPService) DeleteCompute(ctx context.Context, datapackID, clusterID, branchID, computeID string) error {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return err
@@ -337,11 +337,11 @@ func (s *AMPService) DeleteCompute(ctx context.Context, datapackID, projectID, b
 	if err != nil {
 		return err
 	}
-	return c.DeleteEndpoint(ctx, poolID, projectID, branchID, computeID)
+	return c.DeleteEndpoint(ctx, poolID, clusterID, branchID, computeID)
 }
 
 // CreateCompute provisions a compute instance on a branch.
-func (s *AMPService) CreateCompute(ctx context.Context, datapackID, projectID, branchID, role, cpu, memory string) (AMPEndpoint, error) {
+func (s *AMPService) CreateCompute(ctx context.Context, datapackID, clusterID, branchID, role, cpu, memory string) (AMPEndpoint, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return AMPEndpoint{}, err
@@ -350,12 +350,12 @@ func (s *AMPService) CreateCompute(ctx context.Context, datapackID, projectID, b
 	if err != nil {
 		return AMPEndpoint{}, err
 	}
-	return c.CreateEndpoint(ctx, poolID, projectID, branchID, role, cpu, memory)
+	return c.CreateEndpoint(ctx, poolID, clusterID, branchID, role, cpu, memory)
 }
 
 // ResizeCompute changes a compute instance's cpu/memory in place, returning the
 // endpoint at its new size and the in-place outcome.
-func (s *AMPService) ResizeCompute(ctx context.Context, datapackID, projectID, branchID, computeID, cpu, memory string) (ResizeResult, error) {
+func (s *AMPService) ResizeCompute(ctx context.Context, datapackID, clusterID, branchID, computeID, cpu, memory string) (ResizeResult, error) {
 	poolID, err := s.poolID(ctx, datapackID)
 	if err != nil {
 		return ResizeResult{}, err
@@ -364,5 +364,5 @@ func (s *AMPService) ResizeCompute(ctx context.Context, datapackID, projectID, b
 	if err != nil {
 		return ResizeResult{}, err
 	}
-	return c.ResizeEndpoint(ctx, poolID, projectID, branchID, computeID, cpu, memory)
+	return c.ResizeEndpoint(ctx, poolID, clusterID, branchID, computeID, cpu, memory)
 }
