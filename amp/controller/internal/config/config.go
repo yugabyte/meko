@@ -162,8 +162,18 @@ type Config struct {
 	Log            LogConfig
 	DB             DBConfig
 	Task           TaskConfig
+	GC             GCConfig
 	Deploy         DeployConfig
 	YCP            YCPConfig
+}
+
+// GCConfig tunes the failed-create orphan sweeper (internal/gc). Mirrors gc.Config;
+// kept separate so the config package does not depend on it.
+type GCConfig struct {
+	Enabled    bool
+	Interval   time.Duration
+	Grace      time.Duration
+	BatchLimit int
 }
 
 var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -188,6 +198,10 @@ func Load(args []string) (*Config, error) {
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
 	fs.DurationVar(&c.Task.RenewInterval, "task-lease-renew-interval", envDuration("AMP_TASK_LEASE_RENEW_INTERVAL", 10*time.Second), "how often the worker renews the lease of a running task (must be < task-lease-ttl)")
 	fs.IntVar(&c.Task.MaxConcurrent, "task-max-concurrent", envInt("AMP_TASK_MAX_CONCURRENT", 50), "max tasks the worker executes concurrently")
+	fs.BoolVar(&c.GC.Enabled, "gc-enabled", envBool("AMP_GC_ENABLED", true), "sweep failed-create orphan clusters and enqueue their teardown")
+	fs.DurationVar(&c.GC.Interval, "gc-interval", envDuration("AMP_GC_INTERVAL", 5*time.Minute), "how often the orphan sweeper runs")
+	fs.DurationVar(&c.GC.Grace, "gc-grace", envDuration("AMP_GC_GRACE", 30*time.Minute), "how long a failed-create orphan is left alone before teardown, so a fresh failure can be inspected and a manual retry is not raced")
+	fs.IntVar(&c.GC.BatchLimit, "gc-batch-limit", envInt("AMP_GC_BATCH_LIMIT", 20), "max orphans one sweep enqueues")
 	fs.DurationVar(&c.Task.ShutdownGrace, "task-shutdown-grace", envDuration("AMP_TASK_SHUTDOWN_GRACE", 10*time.Second), "max time to wait for in-flight tasks to finish on shutdown")
 
 	d := &c.Deploy

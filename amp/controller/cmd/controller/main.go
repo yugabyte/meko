@@ -25,6 +25,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/db"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
+	"github.com/yugabyte/amp/controller/internal/gc"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 	"github.com/yugabyte/amp/controller/internal/metrics"
 	"github.com/yugabyte/amp/controller/internal/node"
@@ -285,11 +286,25 @@ func runServe(args []string) error {
 	// wraps the same store the worker drains).
 	srv := api.NewServer(cfg, backend, task.NewService(store), prov, metricsReg, logger)
 
+	// Reclaims clusters whose create_cluster failed, by enqueueing the same
+	// delete_cluster task an operator's delete would. Runs beside the worker
+	// rather than inside it: it produces tasks, it does not execute them.
+	sweeper := gc.New(backend, task.NewService(store), gc.Config{
+		Enabled:    cfg.GC.Enabled,
+		Interval:   cfg.GC.Interval,
+		Grace:      cfg.GC.Grace,
+		BatchLimit: cfg.GC.BatchLimit,
+	}, logger, metricsReg)
+
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		worker.Run(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		sweeper.Run(ctx)
 	}()
 
 	// YCP fleet registration + reporting (opt-in via --ycp). The controller

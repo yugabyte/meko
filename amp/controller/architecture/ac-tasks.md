@@ -361,3 +361,50 @@ claim/lease query, the transactional `Create` writes, the `step_ids`-ordered
 `PgBackend`). That SQL is exercised by the integration suite; the `0002` schema +
 the new `uuid[]` / `array_position` queries were validated by applying the
 migrations against YugabyteDB directly.
+
+## Failed-create GC (implemented)
+
+A cluster row is written mid-provisioning, before the storage steps run, so a
+`create_cluster` that fails afterwards leaves a half-built cluster. The read path
+hides those (`core`'s `clusterCreateNotFailed`, surfaced as `include_failed` on
+the list API for the operator fleet view), which keeps them from being mistaken
+for real clusters but leaves the rows and their Kubernetes resources in place
+indefinitely.
+
+`internal/gc`'s **Sweeper** reclaims them. It cannot be a compensating step on
+the failure path: the controller can crash *during* that path, and an inline
+rollback that never runs leaks silently. So it is a reconciler, and it borrows
+this framework's durability rather than adding its own — every tick it selects
+orphans past a grace window and enqueues an ordinary **`delete_cluster`** task
+for each. Teardown is therefore the same code an operator's delete runs, and a
+crash mid-teardown is recovered by the ordinary lease reclaim (a task running
+with an expired lease is claimable again).
+
+Selection is the positive form of `clusterCreateNotFailed`, resting on the same
+invariant: a cluster has exactly one `create_cluster` task, because a retry mints
+a fresh cluster id, so one failed task is definitive. Clusters with a
+`delete_cluster` already pending or running are excluded, and a succeeded delete
+tombstones the row, which `dropped_at` excludes.
+
+Before each destructive enqueue the sweeper re-checks that one orphan
+(`IsFailedCreateCluster`), so a batch that went stale — deleted by hand,
+tombstoned, or already claimed — cannot cause a redundant teardown. `Sweep` holds
+a mutex for the whole pass, which makes "one Sweeper enqueues a cluster once"
+hold however it is called. Two *separate* controllers could still both enqueue;
+that is left unguarded, because `delete_cluster` must be idempotent regardless
+(the worker re-runs steps after a crash) and the deployed topology is a single
+controller. Two controllers would want an atomic conditional insert in the store.
+
+| flag | env | default | meaning |
+|---|---|---|---|
+| `--gc-enabled` | `AMP_GC_ENABLED` | `true` | run the sweeper |
+| `--gc-interval` | `AMP_GC_INTERVAL` | `5m` | how often a sweep runs |
+| `--gc-grace` | `AMP_GC_GRACE` | `30m` | how long an orphan is left alone after its create failed, so a fresh failure can be inspected and a manual retry is not raced |
+| `--gc-batch-limit` | `AMP_GC_BATCH_LIMIT` | `20` | max orphans enqueued per sweep |
+
+Observability: `amp_controller_gc_sweeps_total`,
+`amp_controller_gc_sweep_duration_seconds`, and
+`amp_controller_gc_orphans_total{outcome=enqueued|skipped|failed}`. A flat
+`orphans_total` against a rising `sweeps_total` means the sweeper is running and
+idle rather than stuck. Each orphan acted on is logged with its cluster id, pool
+id, and when its create failed.

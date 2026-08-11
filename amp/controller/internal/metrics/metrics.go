@@ -40,6 +40,9 @@ type Metrics struct {
 	tasksTotal    *prometheus.CounterVec
 	taskDuration  *prometheus.HistogramVec
 	tasksInflight prometheus.Gauge
+	gcOrphans     *prometheus.CounterVec
+	gcSweeps      prometheus.Counter
+	gcSweepDur    prometheus.Histogram
 }
 
 // New builds the registry, registers the Go runtime and process collectors and
@@ -76,6 +79,20 @@ func New() *Metrics {
 		}),
 	}
 
+	m.gcOrphans = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "gc", Name: "orphans_total",
+		Help: "Failed-create orphans seen by the GC sweeper, by outcome: enqueued (teardown recorded), skipped (no longer reclaimable), failed (left for the next sweep).",
+	}, []string{"outcome"})
+	m.gcSweeps = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "gc", Name: "sweeps_total",
+		Help: "Completed GC sweeps. A sweep that found nothing still counts, so a flat orphans_total against a rising sweeps_total means the sweeper is running and idle rather than stuck.",
+	})
+	m.gcSweepDur = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: namespace, Subsystem: "gc", Name: "sweep_duration_seconds",
+		Help:    "GC sweep duration in seconds, covering selection plus every per-orphan precheck and enqueue.",
+		Buckets: prometheus.DefBuckets,
+	})
+
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -84,6 +101,9 @@ func New() *Metrics {
 		m.tasksTotal,
 		m.taskDuration,
 		m.tasksInflight,
+		m.gcOrphans,
+		m.gcSweeps,
+		m.gcSweepDur,
 	)
 
 	// build_info: a constant-1 gauge whose labels carry the build identity, so a
@@ -136,4 +156,19 @@ func (m *Metrics) TaskFinished(kind, status string, dur time.Duration) {
 	if status != statusInterrupted {
 		m.taskDuration.WithLabelValues(kind).Observe(dur.Seconds())
 	}
+}
+
+// GCSwept records one completed GC sweep: how many failed-create orphans it saw
+// and what became of each. found is not recorded as its own series — it is
+// enqueued+skipped+failed by construction, so a fourth counter could only
+// disagree with the other three.
+func (m *Metrics) GCSwept(found, enqueued, skipped, failed int, dur time.Duration) {
+	if m == nil {
+		return
+	}
+	m.gcSweeps.Inc()
+	m.gcSweepDur.Observe(dur.Seconds())
+	m.gcOrphans.WithLabelValues("enqueued").Add(float64(enqueued))
+	m.gcOrphans.WithLabelValues("skipped").Add(float64(skipped))
+	m.gcOrphans.WithLabelValues("failed").Add(float64(failed))
 }
