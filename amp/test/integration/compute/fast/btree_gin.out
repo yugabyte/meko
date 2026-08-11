@@ -1,0 +1,34 @@
+CREATE EXTENSION
+CREATE EXTENSION
+CREATE EXTENSION
+CREATE TABLE
+CREATE INDEX
+INSERT 0 5000
+DELETE 2500
+VACUUM
+ clear_buffer_cache
+--------------------
+
+(1 row)
+
+SET
+ count
+-------
+   357
+(1 row)
+
+ count
+-------
+     1
+(1 row)
+
+ count
+-------
+     6
+(1 row)
+
+RESET
+DROP TABLE
+DROP EXTENSION
+DROP EXTENSION
+DROP EXTENSION

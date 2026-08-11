@@ -10,7 +10,9 @@ adding another is a manifest row plus a catalog entry.
 ## Why not bake them into the endpoint image
 
 The yb-amp endpoint image ([`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile))
-ships **only** PG18 + the `yb_amp` extension. Everything else is externalized:
+ships **only** PG18 — including the in-tree contrib modules installed by
+[`postgres.mk`](../../postgres.mk) (`pg_trgm`, `btree_gin`, …) — plus the
+`yb_amp` extension. Everything else is externalized:
 
 - **Licensing forces it.** GPL extensions (e.g. **PostGIS**) can't be baked into
   our image; they must be built and shipped independently, then downloaded and
