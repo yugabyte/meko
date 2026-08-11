@@ -84,7 +84,16 @@ func FromYugabyte(app *yugabyte.App) Static {
 type Colocated struct {
 	Static
 	ControllerAddrs []string
+	// KubeNamespace / KubePod locate a tserver of this backing in the cluster,
+	// so the one-shot yb_storage CREATE can be exec'd where the database lives
+	// instead of dialled from the coordinator. Empty leaves the dial path.
+	KubeNamespace string
+	KubePod       string
 }
+
+// KubeColocation reports where to exec into this backing, and is what
+// ExternalBacking reads to route the CREATE through kubectl.
+func (c Colocated) KubeColocation() (namespace, pod string) { return c.KubeNamespace, c.KubePod }
 
 // ControllerHostPortsCSV is the in-cluster host:port CSV the amp controller +
 // endpoints connect at (ExternalBacking routes it into ampstack.Backing).
@@ -128,6 +137,13 @@ type controllerBacking interface {
 	ControllerHostPortsCSV() string
 }
 
+// kubeColocated is the optional surface a store in THIS cluster implements to
+// say where its tservers are, so ampstack execs the yb_storage CREATE in a pod
+// rather than dialling an address the coordinator may have no route to.
+type kubeColocated interface {
+	KubeColocation() (namespace, pod string)
+}
+
 // ExternalBacking maps a BackingStore into an ampstack.Backing (external mode):
 // the amp controller + endpoints are wired at HostPortsCSV with the store's YB
 // role/password/sslmode. DBName is left empty so ampstack applies its yb_storage
@@ -147,6 +163,11 @@ func ExternalBacking(bs BackingStore) ampstack.Backing {
 		User:      ci.User,
 		Password:  ci.Password,
 		SSLMode:   ci.SSLMode,
+	}
+	if kc, ok := bs.(kubeColocated); ok {
+		if ns, pod := kc.KubeColocation(); ns != "" {
+			b.KubeNamespace, b.KubePod = ns, pod
+		}
 	}
 	if cb, ok := bs.(controllerBacking); ok {
 		if inCluster := cb.ControllerHostPortsCSV(); inCluster != "" {

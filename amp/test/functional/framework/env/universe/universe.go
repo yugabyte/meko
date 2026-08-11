@@ -334,6 +334,11 @@ func (p *Provider) defaultNewProvisioner(info ybastack.Info) ybaProvisioner {
 	if p.cfg.InsecureTLS {
 		hc.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // YBA is commonly self-signed; opt-in via config
 	}
+	// A forwarded URL is a loopback port that stops answering when kubectl dies;
+	// its transport re-establishes the forward, so universe creation survives it.
+	if info.Transport != nil {
+		hc.Transport = info.Transport
+	}
 	return yba.New(info.URL, info.CustomerUUID, info.APIToken, yba.WithHTTPClient(hc), yba.WithLogf(p.logf))
 }
 

@@ -461,8 +461,17 @@ func (p *Provider) prepareYBDeploy() error {
 	ctx, cancel := context.WithTimeout(context.Background(), p.cfg.DeployTimeout)
 	defer cancel()
 	store, td, err := ybdeploy.Provision(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
+	if err != nil && mode == ybdeploy.ModeYBAProvisioned && ybdeploy.Requested(p.ybDeployCfg) {
+		// The run ASKED for YBA (env.yb_deploy was set explicitly), so a
+		// downgrade would answer a different question than the one it was
+		// launched to answer: a single-node yugabyted is not an RF=3 universe,
+		// and a perf number measured against it is not comparable to one that
+		// was. Three multitenant runs were reported as "YBA RF=3" that way
+		// before this refused.
+		return core.AsEnvFailure(fmt.Errorf("sharedk8s: yba_provisioned backing was requested explicitly and failed; refusing to downgrade to built-in yugabyted: %w", err))
+	}
 	if err != nil && mode == ybdeploy.ModeYBAProvisioned {
-		// yba_provisioned is the default backing, but it needs a deployable YBA
+		// Merely the default (no explicit knob): it needs a deployable YBA
 		// (quay pull secret + a k8s/cloud provider). Where that isn't available,
 		// fall back to ampstack's built-in single-node yugabyted (the proven
 		// default backing) so the run still proceeds instead of failing the env.

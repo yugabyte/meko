@@ -6,11 +6,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -255,21 +259,126 @@ func TestDeployRequiresChartVersion(t *testing.T) {
 	}
 }
 
-// TestResolveURLTailnetPodIPUsesTargetPort pins the reach bug fix: over the
-// tailnet the ClusterIP is not routable, so resolveURL falls back to the pod IP
-// — and it must reach the pod on the Service's targetPort (the container port),
-// not the Service port. clusterIP "None" skips the (network) probe branch.
-func TestResolveURLTailnetPodIPUsesTargetPort(t *testing.T) {
+// The pod-IP path must reach the pod on the Service's targetPort (the container
+// port), not the Service port — and only when that address ANSWERS.
+// clusterIP "None" skips the ClusterIP branch.
+func TestReachTailnetPodIPUsesTargetPort(t *testing.T) {
 	rr := &recordRunner{clusterIP: "None", podIP: "10.1.2.3", targetPort: "9000"}
 	d := New(Config{Reach: ReachTailnet, ServicePort: 80}, "run7", func(string) (string, error) { return "x", nil }).
 		WithKube(k8s.New(k8s.Config{Namespace: "ampqa-yba-run7"}).WithRunner(rr.run)).
 		WithLogf(nil)
-	url, err := d.resolveURL(context.Background())
+	var probed []string
+	d.probeURL = func(_ context.Context, url string) bool { probed = append(probed, url); return true }
+	url, err := d.reachPlatform(context.Background())
 	if err != nil {
-		t.Fatalf("resolveURL: %v", err)
+		t.Fatalf("reachPlatform: %v", err)
 	}
 	if url != "http://10.1.2.3:9000" {
 		t.Errorf("URL = %q, want http://10.1.2.3:9000", url)
+	}
+	if len(probed) != 1 || probed[0] != "http://10.1.2.3:9000" {
+		t.Errorf("probed %v, want exactly the pod URL on the targetPort", probed)
+	}
+	if d.forwarded() {
+		t.Error("a reachable direct address must not open a port-forward")
+	}
+}
+
+// The regression that cost three runs: on amp-dev neither the ClusterIP nor the
+// pod IP answers (the pod CIDR collides with an advertised tailnet route, so the
+// dial TIMES OUT). Handing that address to bootstrap anyway burned its whole
+// 10-minute budget and the caller then downgraded to yugabyted. Now an
+// unanswering pod IP falls through to a port-forward.
+func TestReachFallsBackToPortForwardWhenNoDirectAddressAnswers(t *testing.T) {
+	rr := &recordRunner{clusterIP: "34.118.225.179", podIP: "10.21.137.3", targetPort: "9000"}
+	starter, _ := fakePF(15551)
+	kube := k8s.New(k8s.Config{Namespace: "ampqa-yba-run7"}).WithRunner(rr.run).WithStarter(starter)
+	d := New(Config{Reach: ReachTailnet, ServicePort: 80}, "run7", func(string) (string, error) { return "x", nil }).
+		WithKube(kube).WithLogf(nil)
+	d.probeURL = func(context.Context, string) bool { return false }
+
+	url, err := d.reachPlatform(context.Background())
+	if err != nil {
+		t.Fatalf("reachPlatform: %v", err)
+	}
+	if url != "http://127.0.0.1:15551" {
+		t.Errorf("URL = %q, want the forwarded loopback address", url)
+	}
+	if !d.forwarded() {
+		t.Fatal("the forward handle was not kept, so Teardown cannot close it")
+	}
+	// Both dead addresses must be named, or the log says nothing about why.
+	if _, err := d.resolveDirectURL(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "34.118.225.179") || !strings.Contains(err.Error(), "10.21.137.3:9000") {
+		t.Errorf("direct error %v does not name both addresses tried", err)
+	}
+	// A forwarded platform hands its callers a reviving transport; a directly
+	// reached one must not (there is nothing to revive).
+	if d.infoTransport() == nil {
+		t.Error("a forwarded platform must expose a transport for Info")
+	}
+}
+
+// A client built for a forwarded YBA must survive the forward dying: one
+// re-forward and a retry, not a failed run.
+func TestRevivingTransportRetriesOnceOnRefused(t *testing.T) {
+	var live atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"version":"2026.1.0.0"}`))
+	}))
+	defer srv.Close()
+	liveHost := strings.TrimPrefix(srv.URL, "http://")
+
+	var hostCalls int
+	tr := &revivingTransport{host: func(_ context.Context, force bool) (string, error) {
+		hostCalls++
+		if force {
+			live.Store(true)
+		}
+		if live.Load() {
+			return liveHost, nil
+		}
+		return "127.0.0.1:1", nil // refuses
+	}}
+	res, err := (&http.Client{Transport: tr}).Get("http://placeholder/api/v1/app_version")
+	if err != nil {
+		t.Fatalf("request through a revived forward: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", res.StatusCode)
+	}
+	if hostCalls != 2 {
+		t.Errorf("host resolved %d times, want 2 (once refused, once re-forwarded)", hostCalls)
+	}
+}
+
+// Teardown owns the forward: its kubectl process is background-rooted precisely
+// so the Deploy ctx cannot kill it, which means nothing else ever will.
+func TestTeardownClosesThePortForward(t *testing.T) {
+	rr := &recordRunner{nsLabel: ManagedByValue, clusterIP: "None", podIP: "10.21.137.3", targetPort: "9000"}
+	starter, procs := fakePF(15552)
+	kube := k8s.New(k8s.Config{Namespace: "ampqa-yba-run7"}).WithRunner(rr.run).WithStarter(starter)
+	d := New(Config{Reach: ReachTailnet, ServicePort: 80}, "run7", func(string) (string, error) { return "x", nil }).
+		WithKube(kube).WithLogf(nil)
+	d.probeURL = func(context.Context, string) bool { return false }
+	if _, err := d.reachPlatform(context.Background()); err != nil {
+		t.Fatalf("reachPlatform: %v", err)
+	}
+	if err := d.Teardown(context.Background()); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if len(procs()) != 1 {
+		t.Fatalf("expected exactly one forward process, got %d", len(procs()))
+	}
+	select {
+	case <-procs()[0].killed:
+	case <-time.After(2 * time.Second):
+		t.Error("the port-forward process survived Teardown")
+	}
+	if d.forwarded() {
+		t.Error("Teardown left the forward handle in place")
 	}
 }
 
@@ -481,3 +590,43 @@ func makeChartTGZ(t *testing.T) string {
 	}
 	return path
 }
+
+// fakePF is a Starter yielding forwards that announce `port` and stay alive until
+// killed, plus an accessor for the processes it handed out (so a test can prove
+// Teardown killed one). kubectl's real forward behaves the same way: it prints
+// the "Forwarding from" line and then runs until signalled.
+func fakePF(port int) (k8s.Starter, func() []*livePFProc) {
+	var mu sync.Mutex
+	var procs []*livePFProc
+	starter := func(context.Context, []string) (k8s.Process, error) {
+		pr, pw := io.Pipe()
+		go func() { _, _ = io.WriteString(pw, fmt.Sprintf("Forwarding from 127.0.0.1:%d -> 80\n", port)) }()
+		p := &livePFProc{out: pr, w: pw, killed: make(chan struct{})}
+		mu.Lock()
+		procs = append(procs, p)
+		mu.Unlock()
+		return p, nil
+	}
+	return starter, func() []*livePFProc {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]*livePFProc(nil), procs...)
+	}
+}
+
+type livePFProc struct {
+	out    io.Reader
+	w      *io.PipeWriter
+	killed chan struct{}
+	once   sync.Once
+}
+
+func (p *livePFProc) Stdout() io.Reader { return p.out }
+func (p *livePFProc) Kill() error {
+	p.once.Do(func() {
+		close(p.killed)
+		_ = p.w.Close()
+	})
+	return nil
+}
+func (p *livePFProc) Wait() error { <-p.killed; return nil }

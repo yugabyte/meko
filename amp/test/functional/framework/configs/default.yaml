@@ -582,6 +582,10 @@ apps:
     rbac_dir: ""
     # reach: tailnet (default) resolves the yugaware Service cluster-internal
     # address and talks direct; loadbalancer reads the external ingress IP.
+    # tailnet PROBES the address it picks and falls back to a kubectl
+    # port-forward when neither the ClusterIP nor the pod IP answers — on a
+    # cluster whose pod CIDR is shadowed by another advertised tailnet route,
+    # every pod-IP dial times out rather than being refused.
     reach: "tailnet"
     # empty → service_name "<release>-yugaware-ui", pod_selector
     # "app=<release>-yugaware", helm_release "<namespace>-yugaware".
@@ -589,6 +593,9 @@ apps:
     pod_selector: ""
     helm_release: ""
     service_port: 80
+    # local_port is the port-forward fallback's local port; 0 lets kubectl pick
+    # one, which is what parallel runs on one agent need.
+    local_port: 0
     helm_timeout: "40m"
     # insecure_tls true (default) → reach client skips TLS verify (self-signed).
     insecure_tls: true

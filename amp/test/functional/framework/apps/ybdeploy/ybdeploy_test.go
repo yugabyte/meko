@@ -115,3 +115,35 @@ func TestProvisionExternalMissingHostPortsErrors(t *testing.T) {
 		t.Fatal("external without host_ports err = nil, want an error")
 	}
 }
+
+// An explicitly requested backing must be distinguishable from a defaulted one:
+// it is what decides whether a failed YBA may be silently downgraded to a
+// single-node yugabyted, which would answer a different question than the run
+// was launched to answer.
+func TestRequestedOnlyWhenTheKnobIsSet(t *testing.T) {
+	explicit, err := core.LoadConfig(nil, nil, []string{"env.yb_deploy=yba_provisioned"})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !ybdeploy.Requested(explicit) {
+		t.Error("an explicit env.yb_deploy must count as requested")
+	}
+	defaulted, err := core.LoadConfig(nil, nil, nil)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if ybdeploy.Requested(defaulted) {
+		t.Error("a test's PreferredYBDeploy must not count as an explicit request")
+	}
+	if ybdeploy.Requested(nil) {
+		t.Error("a nil config cannot have requested anything")
+	}
+	// An empty knob is an explicit "use the preference", not a request.
+	empty, err := core.LoadConfig(nil, nil, []string{"env.yb_deploy="})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if ybdeploy.Requested(empty) {
+		t.Error("an empty env.yb_deploy must not count as requested")
+	}
+}

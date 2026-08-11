@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -58,6 +59,15 @@ func Resolve(cfg *core.Config, spec core.EnvSpec) string {
 		return spec.PreferredYBDeploy
 	}
 	return ModeBuiltin
+}
+
+// Requested reports whether the deploy mode was asked for EXPLICITLY, via the
+// env.yb_deploy knob, rather than merely defaulted from a test's preference.
+// It is what separates "this run wants YBA" from "YBA is what runs get unless
+// something is missing", and so decides whether a failed backing may be
+// silently downgraded.
+func Requested(cfg *core.Config) bool {
+	return cfg != nil && cfg.Has("env.yb_deploy") && cfg.GetString("env.yb_deploy", "") != ""
 }
 
 // Provision stands up the deployment named by mode (the value Resolve produced)
@@ -260,6 +270,11 @@ func provisionYBAProvisioned(ctx context.Context, cfg *core.Config, runTag strin
 // — its node IPs are reachable both ways) stays a plain Static.
 func ybaProvisionedBacking(conn pg.ConnInfo, addrs, inClusterAddrs []string) ybbacking.BackingStore {
 	if len(inClusterAddrs) > 0 {
+		// The tserver's own pod and namespace, read off its in-cluster DNS name.
+		// Without them ampstack dials the universe to create yb_storage, and on a
+		// cluster whose pod CIDR is shadowed by another advertised tailnet route
+		// that dial times out against a perfectly healthy RF=3 universe.
+		ns, pod := kubeLocationFromDNS(inClusterAddrs[0])
 		return ybbacking.Colocated{
 			Static: ybbacking.Static{
 				Conn:  conn,
@@ -267,6 +282,8 @@ func ybaProvisionedBacking(conn pg.ConnInfo, addrs, inClusterAddrs []string) ybb
 				Desc:  fmt.Sprintf("provisioned YBA k8s universe (%d tservers, amp via %s, coordinator via %s)", len(inClusterAddrs), strings.Join(inClusterAddrs, ","), conn.Addr()),
 			},
 			ControllerAddrs: inClusterAddrs,
+			KubeNamespace:   ns,
+			KubePod:         pod,
 		}
 	}
 	return ybbacking.Static{
@@ -274,6 +291,26 @@ func ybaProvisionedBacking(conn pg.ConnInfo, addrs, inClusterAddrs []string) ybb
 		Addrs: addrs,
 		Desc:  fmt.Sprintf("provisioned YBA universe (%d live tservers, primary %s)", len(addrs), conn.Addr()),
 	}
+}
+
+// kubeLocationFromDNS pulls the pod and namespace out of a StatefulSet pod's
+// in-cluster address — "<pod>.<service>.<namespace>.svc.cluster.local[:port]",
+// the shape a YBA kubernetes universe reports its tservers at. Anything else
+// (a VM universe's bare IP, a Service-only name) yields empty strings, which
+// leaves the caller on the dial path it had before.
+func kubeLocationFromDNS(addr string) (namespace, pod string) {
+	host := strings.TrimSpace(addr)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	parts := strings.Split(host, ".")
+	// Exactly <pod>.<service>.<namespace>.svc… — a Service-only name
+	// (<service>.<namespace>.svc…) is one label shorter and carries no pod, so
+	// requiring "svc" in the fourth position is what tells them apart.
+	if len(parts) < 4 || parts[3] != "svc" || parts[0] == "" || parts[2] == "" {
+		return "", ""
+	}
+	return parts[2], parts[0]
 }
 
 // ybaHTTPClient builds the YBA HTTP client, skipping TLS verification when the

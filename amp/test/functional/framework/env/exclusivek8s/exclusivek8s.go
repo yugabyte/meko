@@ -211,10 +211,15 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 		mode := ybdeploy.Resolve(p.ybDeployCfg, spec)
 		if mode != ybdeploy.ModeBuiltin {
 			store, td, berr := ybdeploy.Provision(ctx, p.ybDeployCfg, mode, ns, p.logf)
+			if berr != nil && mode == ybdeploy.ModeYBAProvisioned && ybdeploy.Requested(p.ybDeployCfg) {
+				// Explicitly requested: a downgrade would measure a different
+				// topology than the run asked for, silently.
+				return nil, core.AsEnvFailure(fmt.Errorf("exclusivek8s: yba_provisioned backing was requested explicitly and failed; refusing to downgrade to built-in yugabyted: %w", berr))
+			}
 			if berr != nil && mode == ybdeploy.ModeYBAProvisioned {
-				// yba_provisioned is the default but needs a deployable YBA
-				// (quay + provider creds); fall back to the built-in single-node
-				// yugabyted (the proven default) so the env still comes up.
+				// Merely the default; it needs a deployable YBA (quay + provider
+				// creds). Fall back to the built-in single-node yugabyted (the
+				// proven default) so the env still comes up.
 				p.logf("exclusivek8s: yba_provisioned backing failed (%v); falling back to built-in yugabyted", berr)
 				mode = ybdeploy.ModeBuiltin
 				store, td, berr = ybdeploy.Provision(ctx, p.ybDeployCfg, mode, ns, p.logf)

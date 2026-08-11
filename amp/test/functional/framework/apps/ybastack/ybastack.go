@@ -103,6 +103,9 @@ type Config struct {
 	Reach       ReachMode
 	ServiceName string // "" → "<release>-yugaware-ui"
 	ServicePort int
+	// LocalPort is the port-forward fallback's local port; 0 lets kubectl pick
+	// one, which is what parallel runs on one agent need.
+	LocalPort   int
 	PodSelector string // "" → "app=<release>-yugaware"
 	HelmRelease string // "" → "<namespace>-yugaware"
 	HelmTimeout time.Duration
@@ -161,6 +164,7 @@ func FromConfig(get Getter) Config {
 		Reach:             ReachMode(get.GetString("apps.ybastack.reach", string(DefaultReach))),
 		ServiceName:       get.GetString("apps.ybastack.service_name", ""),
 		ServicePort:       get.GetInt("apps.ybastack.service_port", DefaultServicePort),
+		LocalPort:         get.GetInt("apps.ybastack.local_port", 0),
 		PodSelector:       get.GetString("apps.ybastack.pod_selector", ""),
 		HelmRelease:       get.GetString("apps.ybastack.helm_release", ""),
 		HelmTimeout:       get.GetDuration("apps.ybastack.helm_timeout", DefaultHelmTimeout),
@@ -228,6 +232,11 @@ type Info struct {
 	HelmRelease         string
 	YBImageRegistry     string   // universe image registry, for the provider wave
 	ClusterRoleBindings []string // namespace-suffixed CRBs Teardown must delete
+	// Transport is set only when URL is a kubectl port-forward: a client built
+	// on it survives the forward dying mid-provision. Callers that build their
+	// own yba.Client from URL must use it, or they are pinned to a loopback port
+	// that stops answering the moment kubectl exits.
+	Transport http.RoundTripper
 }
 
 // Deployer stands one YBA up in one namespace and tears it down.
@@ -245,9 +254,11 @@ type Deployer struct {
 	resolveSecret SecretResolver
 	newClient     func(url string) *yba.Client
 	bootstrap     func(ctx context.Context, cl *yba.Client, creds yba.BootstrapCreds, timeout time.Duration) (yba.BootstrapResult, error)
+	probeURL      func(ctx context.Context, url string) bool
 
 	mu          sync.Mutex
 	createdCRBs []string
+	pf          *k8s.PortForward
 }
 
 // New builds a Deployer for cfg using the real kubectl/helm/aws binaries. runTag
@@ -391,8 +402,9 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 		return Info{}, err
 	}
 
-	// 7. reach the platform (tailnet direct address, or the LB ingress IP).
-	url, err := d.resolveURL(ctx)
+	// 7. reach the platform (probed direct address, the LB ingress IP, or a
+	// port-forward when no direct address answers).
+	url, err := d.reachPlatform(ctx)
 	if err != nil {
 		return Info{}, err
 	}
@@ -420,6 +432,7 @@ func (d *Deployer) Deploy(ctx context.Context) (Info, error) {
 		HelmRelease:         d.release,
 		YBImageRegistry:     d.cfg.YBImageRegistry,
 		ClusterRoleBindings: crbs,
+		Transport:           d.infoTransport(),
 	}, nil
 }
 
@@ -570,41 +583,6 @@ func (d *Deployer) podSelector() string {
 	return "app=" + d.release + "-yugaware"
 }
 
-// resolveURL resolves how the platform is reached. loadbalancer reads the
-// Service's external LoadBalancer ingress IP; tailnet resolves the Service's
-// cluster-internal address (ClusterIP that answers, else the pod IP on its
-// container target port) — the direct, port-forward-free path (mirrors
-// ampstack.resolveControllerAddr).
-func (d *Deployer) resolveURL(ctx context.Context) (string, error) {
-	if d.cfg.Reach == ReachLoadBalancer {
-		ip, err := d.kube.Get(ctx, "svc", d.serviceName(), "{.status.loadBalancer.ingress[0].ip}")
-		if err != nil {
-			return "", fmt.Errorf("read load-balancer ip of svc %s: %w", d.serviceName(), err)
-		}
-		if ip = strings.TrimSpace(ip); ip == "" {
-			return "", fmt.Errorf("svc %s has no load-balancer ingress ip yet", d.serviceName())
-		}
-		return d.urlFor(ip), nil
-	}
-	if ip, err := d.kube.Get(ctx, "svc", d.serviceName(), "{.spec.clusterIP}"); err == nil {
-		if ip = strings.TrimSpace(ip); ip != "" && ip != "None" && d.probe(ctx, ip) {
-			return d.urlFor(ip), nil
-		}
-	}
-	podIP, err := d.kube.GetSelector(ctx, "pod", d.podSelector(), "{.items[0].status.podIP}")
-	if err != nil {
-		return "", fmt.Errorf("yba ClusterIP unreachable; pod IP lookup failed: %w", err)
-	}
-	if podIP = strings.TrimSpace(podIP); podIP == "" {
-		return "", fmt.Errorf("yba not reachable: no ClusterIP and no pod for selector %s", d.podSelector())
-	}
-	// The pod listens on the Service's targetPort (the container port), not the
-	// Service port — reaching podIP:ServicePort would hit a closed port. The
-	// Service VIP maps ServicePort→targetPort but is not routable from outside
-	// the cluster, so the direct-to-pod path must use targetPort itself.
-	return fmt.Sprintf("http://%s:%d", podIP, d.podTargetPort(ctx)), nil
-}
-
 // podTargetPort returns the container port the yugaware Service forwards
 // ServicePort to (its targetPort) — the port the pod itself listens on. Falls
 // back to ServicePort when the targetPort can't be read as a number.
@@ -619,14 +597,6 @@ func (d *Deployer) podTargetPort(ctx context.Context) int {
 	return d.cfg.ServicePort
 }
 
-// probe reports whether the YBA at ip answers its version endpoint.
-func (d *Deployer) probe(ctx context.Context, ip string) bool {
-	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, err := d.newClient(d.urlFor(ip)).AppVersion(pctx)
-	return err == nil
-}
-
 func (d *Deployer) urlFor(host string) string {
 	return fmt.Sprintf("http://%s:%d", host, d.cfg.ServicePort)
 }
@@ -639,7 +609,23 @@ func (d *Deployer) defaultNewClient(url string) *yba.Client {
 	if d.cfg.InsecureTLS {
 		hc.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // YBA is commonly self-signed
 	}
+	if tr := d.infoTransport(); tr != nil {
+		hc.Transport = tr
+	}
 	return yba.New(url, "", "", yba.WithHTTPClient(hc), yba.WithLogf(d.logf))
+}
+
+// infoTransport is the round-tripper a client must use when the platform is
+// reached over a port-forward, and nil when it is reached directly.
+func (d *Deployer) infoTransport() http.RoundTripper {
+	if !d.forwarded() {
+		return nil
+	}
+	var base http.RoundTripper
+	if d.cfg.InsecureTLS {
+		base = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // YBA is commonly self-signed
+	}
+	return &revivingTransport{base: base, host: d.forwardHost, logf: d.log}
 }
 
 // Teardown removes everything Deploy created, best-effort and LIFO, on its own
@@ -656,7 +642,16 @@ func (d *Deployer) Teardown(ctx context.Context) error {
 
 	d.mu.Lock()
 	crbs := append([]string(nil), d.createdCRBs...)
+	pf := d.pf
+	d.pf = nil
 	d.mu.Unlock()
+	// The forward's kubectl process is background-rooted (it must outlive the
+	// Deploy ctx), so nothing but this closes it.
+	if pf != nil {
+		if err := pf.Close(); err != nil {
+			errs = append(errs, fmt.Sprintf("close yba port-forward: %v", err))
+		}
+	}
 	cluster := d.clusterKube()
 	for _, name := range crbs {
 		// Only ever delete a binding this run suffixed with its own namespace.
