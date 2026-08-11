@@ -1127,6 +1127,9 @@ type Env struct {
 	extraMu  sync.Mutex
 	extraPFs []*k8s.PortForward
 
+	// samplers holds the per-test server-metrics samplers (servermetrics.go).
+	samplers serverSamplers
+
 	// ownCtrl is THIS environment's controller forward, when the control plane is
 	// reached by kubectl. Per-environment rather than per-run so a dead forward,
 	// and the revival that replaces it, touch only the tests using this Env.

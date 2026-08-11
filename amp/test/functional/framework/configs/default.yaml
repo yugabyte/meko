@@ -779,8 +779,16 @@ apps:
   # cpu_utime / cpu_stime are deliberately absent: "[<section>] CPU" from the
   # cgroup already measures the container's CPU in cores, counting every thread.
   metrics:
+    # enabled turns on the background server-metrics sampler. It is collected for
+    # EVERY test — the environment samples the backing YugabyteDB (in whichever
+    # namespace its pods actually run) and the amp compute endpoints across the
+    # test body, and the series land on the result. Best-effort throughout: a
+    # sampler that cannot start is logged, never a test failure.
     enabled: true
-    sample_interval: "15s"
+    # sample_interval paces every scrape. 5s resolves a 3-minute measured window
+    # into ~36 points per series — enough to see a stall inside a window, which
+    # 15s flattened away — while max_points still bounds a long soak.
+    sample_interval: "5s"
     max_points: 2000
     tserver_port: 9000
     master_port: 7000

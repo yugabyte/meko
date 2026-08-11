@@ -33,9 +33,12 @@ type T struct {
 	maxMetrics int
 	mu         sync.Mutex
 	failed     bool
-	failErr    error
-	skipped    bool
-	skipMsg    string
+	// serverMetricsCollected suppresses the env-level drain when the test
+	// sampled its own backing (see MarkServerMetricsCollected).
+	serverMetricsCollected bool
+	failErr                error
+	skipped                bool
+	skipMsg                string
 }
 
 // Per-test retention caps for the in-memory result snapshot. The live sink

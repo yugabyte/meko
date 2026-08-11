@@ -1232,3 +1232,26 @@ func TestRemoteBackingStillDialsItsAdminHostPorts(t *testing.T) {
 		t.Fatalf("KubeNamespace = %q, want empty for a remote backing", ns)
 	}
 }
+
+// A sampler (and anything else looking for the backing's pods) must be pointed
+// at the namespace those pods are actually in. The amp namespace holds no
+// tserver when the backing is a co-located ybk8s deploy or a provisioned YBA
+// universe, which is how server metrics came back empty for every such run.
+func TestBackingNamespacePrefersTheBackingsOwn(t *testing.T) {
+	external := New(Config{Namespace: "ampqa-cp-1", Backing: Backing{
+		Mode: BackingExternal, KubeNamespace: "yb-dev-ampqa-1",
+	}})
+	if got := external.BackingNamespace(); got != "yb-dev-ampqa-1" {
+		t.Errorf("BackingNamespace = %q, want the backing's own namespace", got)
+	}
+	// The built-in yugabyted shares the stack's namespace, so that is the answer
+	// when the backing names none.
+	builtin := New(Config{Namespace: "ampqa-cp-2"})
+	if got := builtin.BackingNamespace(); got != "ampqa-cp-2" {
+		t.Errorf("BackingNamespace = %q, want the stack namespace", got)
+	}
+	blank := New(Config{Namespace: "ampqa-cp-3", Backing: Backing{KubeNamespace: "   "}})
+	if got := blank.BackingNamespace(); got != "ampqa-cp-3" {
+		t.Errorf("BackingNamespace = %q, want the stack namespace for a blank value", got)
+	}
+}

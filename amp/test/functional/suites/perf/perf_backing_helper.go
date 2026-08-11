@@ -247,6 +247,10 @@ func startMetricsSampler(ctx context.Context, t *core.T, kube *k8s.Kubectl, td *
 		emitMetricSeries(t, s)
 		return nil
 	})
+	// This test samples the backing it provisioned itself, in that backing's own
+	// namespace. The environment samples for every test by default; telling it
+	// this one is covered keeps each metric key from being emitted twice.
+	t.MarkServerMetricsCollected()
 	return s
 }
 

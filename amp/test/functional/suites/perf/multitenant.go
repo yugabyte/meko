@@ -247,16 +247,6 @@ func runMultitenant(t *core.T) error {
 		_ = td.run(tctx, logf)
 	}()
 
-	// YugabyteDB's own server metrics for the whole measured window, the way
-	// every other perf test collects them. Without them a multitenant number is
-	// unexplainable: "pgbench lost 6% while its neighbours ran" says nothing
-	// about WHERE it went, and the storage layer is shared by every tenant, so
-	// it is the first place to look. Drains on the teardown stack, so whatever
-	// it gathered reaches the report even when the run fails.
-	if kubeEnv, ok := t.Env.(interface{ AmpKube() *k8s.Kubectl }); ok && kubeEnv.AmpKube() != nil {
-		startMetricsSampler(t.Context, t, kubeEnv.AmpKube(), td, logf)
-	}
-
 	if err := t.Step("start_tenant_clients", func(s *core.StepHandle) error {
 		kubeEnv, ok := t.Env.(interface{ AmpKube() *k8s.Kubectl })
 		if !ok || kubeEnv.AmpKube() == nil {

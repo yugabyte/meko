@@ -17,11 +17,13 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
+	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
@@ -349,6 +351,10 @@ type Env struct {
 	// ybDeployTeardown reaps an externally-provisioned deployment (nil for the
 	// built-in yugabyted); run AFTER the amp stack in Teardown (LIFO).
 	ybDeployTeardown func(context.Context) error
+
+	// server-metrics sampler for the test on this env (servermetrics.go).
+	smMu    sync.Mutex
+	sampler *metrics.Sampler
 }
 
 func (e *Env) ControllerURL() string           { return e.controllerURL }

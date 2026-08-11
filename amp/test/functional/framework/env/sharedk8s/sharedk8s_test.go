@@ -1252,3 +1252,33 @@ func TestCaptureControllerHangSkipsStaleAddress(t *testing.T) {
 		t.Fatalf("forwarded hang should be signalled, got calls:\n%s", strings.Join(rec.calls, "\n"))
 	}
 }
+
+// The env must sample where the servers ARE. Pointing at the amp namespace is
+// what made every YBA-universe / ybk8s run report no server metrics.
+func TestBackingNamespaceForServerMetrics(t *testing.T) {
+	p := New(Config{Namespace: "ampqa-cp-x"})
+	p.kube = k8s.New(k8s.Config{Namespace: "ampqa-cp-x"})
+	p.ampCfg.Namespace = "ampqa-cp-x"
+	e := &Env{prov: p, kube: p.kube}
+
+	if got := e.backingNamespace(); got != "ampqa-cp-x" {
+		t.Errorf("backingNamespace = %q, want the amp namespace for the built-in backing", got)
+	}
+	p.ampCfg.Backing.KubeNamespace = "yb-dev-ampqa-x"
+	if got := e.backingNamespace(); got != "yb-dev-ampqa-x" {
+		t.Errorf("backingNamespace = %q, want the backing's own namespace", got)
+	}
+}
+
+// The endpoint sampler needs this run's endpoint pods, and nothing else's.
+func TestEndpointSelectorForServerMetrics(t *testing.T) {
+	e := &Env{}
+	if got := e.endpointSelector(); got != "" {
+		t.Errorf("selector = %q, want empty before an endpoint exists", got)
+	}
+	e.endpointID = "abc-123"
+	got := e.endpointSelector()
+	if !strings.HasPrefix(got, "app.kubernetes.io/instance=") || !strings.Contains(got, "abc-123") {
+		t.Errorf("selector = %q, want an instance selector naming the endpoint", got)
+	}
+}

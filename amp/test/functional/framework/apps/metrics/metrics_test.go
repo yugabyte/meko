@@ -481,3 +481,44 @@ func TestSamplerStartErrorsWithNoPods(t *testing.T) {
 		t.Errorf("Start on an empty namespace returned no error")
 	}
 }
+
+// The single-pod yugabyted — ampstack's built-in backing, and therefore the
+// default of nearly every run — must be sampleable. It is labelled
+// app=yugabyted, not app=yb-tserver, so with only the yb-* selectors Start
+// failed with "no pods matched" and results carried no server series at all.
+func TestYBRolesCoverYugabytedAndBothPorts(t *testing.T) {
+	cfg := Config{TServerPort: 9000, MasterPort: 7000}
+	roles := ybRoles(cfg)
+
+	bySelector := map[string][]int{}
+	containers := map[string]string{}
+	for _, r := range roles {
+		bySelector[r.selector] = append(bySelector[r.selector], r.port)
+		containers[r.selector] = r.container
+	}
+	for _, sel := range []string{"app=yb-tserver", "app=yb-master", "app=yugabyted"} {
+		if _, ok := bySelector[sel]; !ok {
+			t.Errorf("no role sampled %s; selectors = %v", sel, bySelector)
+		}
+	}
+	// yugabyted runs both roles in one pod and serves each on its own port, so it
+	// needs an entry per port — one alone silently halves what is collected.
+	ports := bySelector["app=yugabyted"]
+	if len(ports) != 2 || !containsInt(ports, 9000) || !containsInt(ports, 7000) {
+		t.Errorf("yugabyted ports = %v, want both 9000 and 7000", ports)
+	}
+	// The pod also runs sidecars; an exec that does not name the container is
+	// answered by whichever one k8s picks.
+	if containers["app=yugabyted"] != yugabytedContainer {
+		t.Errorf("yugabyted container = %q, want %q", containers["app=yugabyted"], yugabytedContainer)
+	}
+}
+
+func containsInt(xs []int, want int) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}

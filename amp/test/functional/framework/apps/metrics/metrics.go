@@ -27,11 +27,16 @@ import (
 )
 
 // Defaults for apps.metrics.* (mirrored in configs/default.yaml). Collection is
-// ON by default: a test that does not compose the app is simply unaffected.
-// MaxPoints is generous — a 15s interval over a 1h run is 240 points per line.
+// ON by default, for every test whose environment can sample (see
+// core.ServerMetricsEnv). MaxPoints is a RING per line, not a stop: at a 5s
+// interval it holds the most recent ~2.8h, so a soak keeps sampling and reports
+// its latest window instead of growing without bound.
 const (
-	DefaultEnabled        = true
-	DefaultSampleInterval = 15 * time.Second
+	DefaultEnabled = true
+	// DefaultSampleInterval matches configs/default.yaml. 5s resolves a 3-minute
+	// measured window into ~36 points per series; 15s flattened a stall inside a
+	// window into one sample.
+	DefaultSampleInterval = 5 * time.Second
 	DefaultMaxPoints      = 2000
 	DefaultTServerPort    = 9000
 	DefaultMasterPort     = 7000
@@ -288,8 +293,19 @@ func ybRoles(cfg Config) []role {
 	return []role{
 		{tag: "yb tserver", selector: "app=yb-tserver", container: "yb-tserver", port: cfg.TServerPort, path: ybPromPath, entries: entries},
 		{tag: "yb master", selector: "app=yb-master", container: "yb-master", port: cfg.MasterPort, path: ybPromPath, entries: entries},
+		// The single-pod yugabyted (ampstack's built-in backing, labelled
+		// app=yugabyted) runs BOTH roles in one process and serves each one's
+		// exposition on its own port. Without these two entries the default
+		// backing of nearly every run was unsampleable: the selectors above match
+		// nothing in its namespace, so Start failed with "no pods matched" and
+		// results carried no server series at all.
+		{tag: "yugabyted tserver", selector: "app=yugabyted", container: yugabytedContainer, port: cfg.TServerPort, path: ybPromPath, entries: entries},
+		{tag: "yugabyted master", selector: "app=yugabyted", container: yugabytedContainer, port: cfg.MasterPort, path: ybPromPath, entries: entries},
 	}
 }
+
+// yugabytedContainer is the container name in ampstack's built-in backing pod.
+const yugabytedContainer = "yugabyted"
 
 // endpointRole is the amp compute endpoint's pod. The container is named
 // explicitly: the pod also runs a postgres-exporter sidecar, and an exec that

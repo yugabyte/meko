@@ -587,6 +587,18 @@ func (a *App) log(format string, args ...any) {
 // Namespace is the stack's namespace.
 func (a *App) Namespace() string { return a.cfg.Namespace }
 
+// BackingNamespace is the namespace the backing YugabyteDB's own pods run in: an
+// external backing that told us (a co-located ybk8s deploy, a provisioned YBA
+// universe) reports its own; the built-in yugabyted shares this stack's. It is
+// what a metrics sampler must be pointed at — the amp namespace holds no tserver
+// when the backing lives elsewhere.
+func (a *App) BackingNamespace() string {
+	if ns := strings.TrimSpace(a.cfg.Backing.KubeNamespace); ns != "" {
+		return ns
+	}
+	return a.cfg.Namespace
+}
+
 // registryPrefix is where bare image refs resolve, per the Registry knob.
 func (c Config) registryPrefix() string {
 	switch c.Registry {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -358,4 +359,113 @@ func hasAttachment(r *core.Result, name string) bool {
 		}
 	}
 	return false
+}
+
+/* ---- server metrics for every test ---- */
+
+// metricsEnv records the sampling calls the lifecycle makes and hands back one
+// series on drain.
+type metricsEnv struct {
+	mu       sync.Mutex
+	started  int
+	drained  int
+	bodyRan  bool
+	startedB bool // start happened before the body
+}
+
+func (m *metricsEnv) ControllerURL() string           { return "" }
+func (m *metricsEnv) Versions() core.DetectedVersions { return core.DetectedVersions{} }
+func (m *metricsEnv) Exec() exec.RemoteExecutor       { return nil }
+func (m *metricsEnv) Handles() core.EnvHandles        { return core.EnvHandles{} }
+func (m *metricsEnv) Collect(context.Context, core.ArtifactSink) error {
+	return nil
+}
+func (m *metricsEnv) StartServerMetrics(context.Context, *core.Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.started++
+	m.startedB = !m.bodyRan
+}
+func (m *metricsEnv) DrainServerMetrics(emit func(core.Metric)) {
+	m.mu.Lock()
+	m.drained++
+	m.mu.Unlock()
+	emit(core.Metric{Key: "[ yb tserver] Write RPCs", Value: 42, Unit: "rpc/s"})
+}
+
+type metricsProvider struct{ env *metricsEnv }
+
+func (p metricsProvider) Provision(context.Context, core.EnvSpec, *core.Seed) (core.Environment, error) {
+	return p.env, nil
+}
+func (p metricsProvider) Attach(context.Context, string) (core.Environment, error) {
+	return p.env, nil
+}
+func (metricsProvider) Teardown(context.Context, core.Environment) error { return nil }
+
+// Server metrics are collected for EVERY test, not only the perf tier that used
+// to ask for them: the sampler is started before the body and drained after, and
+// what it collected lands on the result as metrics.
+func TestServerMetricsCollectedForEveryTest(t *testing.T) {
+	env := &metricsEnv{}
+	plain := core.Test{Name: "t", Run: func(tt *core.T) error {
+		env.mu.Lock()
+		env.bodyRan = true
+		env.mu.Unlock()
+		return nil
+	}}
+	r := runOne(t, plain, metricsProvider{env: env}, core.DetectedVersions{})
+	if r.Status != core.StatusPassed {
+		t.Fatalf("status = %s, want passed", r.Status)
+	}
+	if env.started != 1 || env.drained != 1 {
+		t.Errorf("started=%d drained=%d, want 1/1", env.started, env.drained)
+	}
+	if !env.startedB {
+		t.Error("sampling started after the body ran; the window must cover it")
+	}
+	if !hasMetric(r, "[ yb tserver] Write RPCs") {
+		t.Errorf("collected series did not reach the result; metrics = %+v", r.Metrics)
+	}
+}
+
+// A test that sampled its own backing (the perf workloads that provision one)
+// still gets the sampler stopped — but its series are dropped, or every key it
+// already reported would appear twice.
+func TestServerMetricsNotDuplicatedWhenTestCollectsItsOwn(t *testing.T) {
+	env := &metricsEnv{}
+	own := core.Test{Name: "t", Run: func(tt *core.T) error {
+		tt.MetricSeries(core.Metric{Key: "[ yb tserver] Write RPCs", Value: 7, Unit: "rpc/s"})
+		tt.MarkServerMetricsCollected()
+		return nil
+	}}
+	r := runOne(t, own, metricsProvider{env: env}, core.DetectedVersions{})
+	if env.drained != 1 {
+		t.Errorf("drained=%d, want 1 — the sampler must be stopped either way", env.drained)
+	}
+	if n := countMetric(r, "[ yb tserver] Write RPCs"); n != 1 {
+		t.Errorf("metric emitted %d times, want exactly 1 (the test's own)", n)
+	}
+}
+
+// A test whose environment cannot sample must still run and pass: observability
+// never decides an outcome.
+func TestTestPassesWhenEnvHasNoServerMetrics(t *testing.T) {
+	r := runOne(t, core.Test{Name: "t", Run: func(*core.T) error { return nil }},
+		collectingProvider{}, core.DetectedVersions{})
+	if r.Status != core.StatusPassed {
+		t.Fatalf("status = %s, want passed", r.Status)
+	}
+}
+
+func hasMetric(r *core.Result, key string) bool { return countMetric(r, key) > 0 }
+
+func countMetric(r *core.Result, key string) int {
+	n := 0
+	for _, m := range r.Metrics {
+		if m.Key == key {
+			n++
+		}
+	}
+	return n
 }

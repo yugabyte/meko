@@ -334,6 +334,15 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 		setupTeardown func(context.Context) error
 		setupFailed   bool
 	)
+	// Server metrics for EVERY test: the env samples its own backing tservers/
+	// masters and the amp endpoints across the body. Started before Setup so a
+	// provisioning-heavy test is covered too, and drained after the body on an
+	// independent deadline (below) so a timed-out test still reports them.
+	sm, hasServerMetrics := env.(ServerMetricsEnv)
+	if hasServerMetrics {
+		sm.StartServerMetrics(bctx, opts.Config)
+	}
+
 	wd := watchdog(bctx, timeout, bcancel, func() error {
 		if test.Setup != nil {
 			sr, err := test.Setup(t)
@@ -362,6 +371,18 @@ func runBody(ctx context.Context, test Test, env Environment, seed *Seed, opts R
 	// that failed outside the amp-feature flow (which collects for itself) landed
 	// with a single error line and no evidence at all. Gated by
 	// report.collect_diagnostics so a green run does not haul logs per test.
+	// Drain before Collect: both run on their own deadlines, and the series are
+	// result data (metrics), not attachments. A test that sampled its own backing
+	// still drains — to stop the sampler — but its series are discarded, because
+	// emitting them again would duplicate every key it already reported.
+	if hasServerMetrics {
+		if t.ServerMetricsCollected() {
+			sm.DrainServerMetrics(func(Metric) {})
+		} else {
+			sm.DrainServerMetrics(t.MetricSeries)
+		}
+	}
+
 	cctx, ccancel := context.WithTimeout(context.Background(), ResolveCollectTimeout(opts.Config))
 	_ = env.Collect(cctx, collectSink(t, wd, opts))
 	ccancel()
