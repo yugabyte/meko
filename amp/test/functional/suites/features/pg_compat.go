@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
@@ -601,7 +600,7 @@ func runPartitionedTables(t *core.T) error {
 		if own != 10 {
 			return fmt.Errorf("temp table %s has %d rows on its owning session, want 10", tempTable, own)
 		}
-		other, err := pg.Connect(t, env.PGEndpoint())
+		other, err := connect(t, env)
 		if err != nil {
 			return err
 		}
@@ -694,7 +693,7 @@ func runConcurrentWriters(t *core.T) error {
 			wg.Add(1)
 			go func(w int) {
 				defer wg.Done()
-				c, err := pg.Connect(t, env.PGEndpoint())
+				c, err := connect(t, env)
 				if err != nil {
 					errs[w] = err
 					return
@@ -750,7 +749,7 @@ func runConcurrentWriters(t *core.T) error {
 			wg.Add(1)
 			go func(w int) {
 				defer wg.Done()
-				c, err := pg.Connect(t, env.PGEndpoint())
+				c, err := connect(t, env)
 				if err != nil {
 					errs[w] = err
 					return

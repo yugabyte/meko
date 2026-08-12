@@ -137,11 +137,7 @@ func runMicrobench(t *core.T) error {
 		LoadSignature(loadFieldsMicrobench(params)))
 	t.SetPerfIdentity(id.core())
 
-	ci := env.PGEndpoint()
-	if err := pg.WaitReady(t.Context, ci, cfg.ReadyTimeout); err != nil {
-		return err
-	}
-	client, err := pg.Connect(t.Context, ci)
+	client, err := core.ConnectPG(t, env, cfg.ReadyTimeout)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,32 @@
 package ampstack
 
-import "github.com/yugabyte/amp/test/functional/framework/apps/pg"
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
+)
+
+// backingVersionProbe bounds the direct-dial version read. It is best-effort
+// reporting, never a gate, so it must not hold up provisioning.
+const backingVersionProbe = 5 * time.Second
+
+// queryBackingVersion dials the backing and reads `select version()`.
+func queryBackingVersion(ctx context.Context, ci pg.ConnInfo) string {
+	cctx, cancel := context.WithTimeout(ctx, backingVersionProbe)
+	defer cancel()
+	client, err := pg.Connect(cctx, ci)
+	if err != nil {
+		return ""
+	}
+	defer client.Close()
+	v, err := client.QueryString(cctx, "select version()")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(v)
+}
 
 // BackingConnInfo exposes connection info for the stack's own YugabyteDB
 // backing store — the built-in single-node yugabyted or the external cluster,
@@ -28,15 +54,23 @@ func (a *App) BackingConnInfo() pg.ConnInfo {
 //
 // Conn always carries the role, password, sslmode and database. When
 // ForwardTarget is set, Conn has no address and the caller must port-forward
-// ForwardTarget:RemotePort and dial the local end; the caller owns that
-// forward's lifetime, which is why this reports a target rather than opening one.
+// ForwardTarget:RemotePort in ForwardNamespace and dial the local end; the
+// caller owns that forward's lifetime, which is why this reports a target
+// rather than opening one.
 type StorageAccess struct {
-	Conn          pg.ConnInfo
-	ForwardTarget string // kubectl port-forward target; "" when Conn is directly dialable
-	RemotePort    int    // port to forward to; 0 when ForwardTarget is ""
+	Conn             pg.ConnInfo
+	ForwardTarget    string // kubectl port-forward target; "" when Conn is directly dialable
+	ForwardNamespace string // namespace holding ForwardTarget; "" → the stack's own
+	RemotePort       int    // port to forward to; 0 when ForwardTarget is ""
 }
 
 // StorageAccess resolves how this process reaches the amp storage database.
+//
+// Anything living in a cluster is forwarded to, never dialled: a pod address is
+// routable only from inside, and on a cluster whose pod CIDR is shadowed by an
+// unrelated advertised route the dial does not even fail fast — it times out
+// against a perfectly healthy database. Only a backing that named no kube
+// location (a VM universe, a cluster owned elsewhere) is dialled directly.
 func (a *App) StorageAccess() StorageAccess {
 	ci := a.BackingConnInfo()
 	if !a.externalBacking() {
@@ -45,9 +79,17 @@ func (a *App) StorageAccess() StorageAccess {
 		ci.Host, ci.Port = "", 0
 		return StorageAccess{Conn: ci, ForwardTarget: "pod/" + yugabytedPod, RemotePort: ybPGPort}
 	}
-	// External: adminHostPorts is the coordinator-reachable CSV — the same
-	// address ensureExternalStorageDB dials, and it falls back to HostPorts when
-	// the backing is not co-located.
+	if ns := strings.TrimSpace(a.cfg.Backing.KubeNamespace); ns != "" {
+		ci.Host, ci.Port = "", 0
+		return StorageAccess{
+			Conn:             ci,
+			ForwardTarget:    "pod/" + a.backingPod(),
+			ForwardNamespace: ns,
+			RemotePort:       ybPGPort,
+		}
+	}
+	// External and not in a cluster we can name: adminHostPorts is the
+	// coordinator-reachable CSV, falling back to HostPorts.
 	ci.Host, ci.Port = firstHostPort(a.adminHostPorts())
 	return StorageAccess{Conn: ci}
 }

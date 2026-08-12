@@ -322,12 +322,15 @@ func (cfg Config) provisionYBAProvisioned(ctx context.Context, t *core.T, td *te
 	if !ok {
 		return nil, nil, fmt.Errorf("provisioned yba env does not expose a YSQL endpoint (%T)", env)
 	}
-	addrs := acc.NodeAddrs()
-	return ybbacking.Static{
-		Conn:  acc.PGEndpoint(),
-		Addrs: addrs,
-		Desc:  fmt.Sprintf("provisioned YBA universe (%d live tservers, primary %s)", len(addrs), acc.PGEndpoint().Addr()),
-	}, ybaReapPlan(acc.ProvisionedHandles()), nil
+	// A kubernetes universe's in-cluster addresses carry where its tservers are,
+	// which is what keeps everything this process needs from the universe on
+	// kubectl rather than a dial into the pod CIDR.
+	var inCluster []string
+	if k, ok := env.(interface{ InClusterAddrs() []string }); ok {
+		inCluster = k.InClusterAddrs()
+	}
+	return ybbacking.FromProvisionedUniverse(acc.PGEndpoint(), acc.NodeAddrs(), inCluster),
+		ybaReapPlan(acc.ProvisionedHandles()), nil
 }
 
 // ybaReapPlan builds the separate-process reap plan for a provision_yba env: the

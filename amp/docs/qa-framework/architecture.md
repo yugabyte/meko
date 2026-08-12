@@ -241,8 +241,15 @@ simply the cleanest way to *create* environments; everything else about running
 a test uses the same machinery the stress framework relies on — **SSH into VMs
 and pods**, `kubectl exec`, libpq, and **starting / stopping /
 inspecting any app or command** on a node or pod (sample apps, workload
-generators, `yb` tools, log & core collection). Any transport that reaches the
-target is fair game.
+generators, `yb` tools, log & core collection).
+
+**With one invariant: the framework never dials a pod IP.** `kubectl exec` for
+one-shot work, `kubectl port-forward` for sessions — including the backing
+YugabyteDB, which is reached in its own namespace whenever it lives in a
+cluster (built-in yugabyted, co-located `yb_k8s`, a YBA kubernetes universe).
+Routability is a property of the cluster, not of the pod: where a pod CIDR is
+shadowed by an unrelated advertised route, the dial does not refuse, it hangs
+until the caller's budget is gone.
 
 ---
 

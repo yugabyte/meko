@@ -544,7 +544,10 @@ func runMultiDBWorkload(t *core.T) error {
 		return err
 	}
 
-	ci := env.PGEndpoint()
+	ci, err := core.ResolvePGEndpoint(t, env, readyTimeout)
+	if err != nil {
+		return err
+	}
 	checksums := make([]int64, k)
 
 	if err := t.Step("workload_per_db", func(s *core.StepHandle) error {

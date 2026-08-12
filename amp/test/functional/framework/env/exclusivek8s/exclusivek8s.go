@@ -24,7 +24,6 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/metrics"
-	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -40,8 +39,13 @@ const (
 	DefaultYBStorage         = "20Gi"
 	DefaultControllerService = "amp-controller"
 	DefaultControllerPort    = 8080
-	DefaultLocalPortBase     = 18080
-	DefaultHelmRelease       = "amp-controller"
+	// DefaultLocalPortBase is 0: kubectl picks each local port. A fixed base
+	// collides with anything already on that port — including a second run of
+	// this framework on the same machine, which is the normal state of a CI
+	// agent — and the failure is a whole environment lost to "unable to listen
+	// on port".
+	DefaultLocalPortBase = 0
+	DefaultHelmRelease   = "amp-controller"
 )
 
 // Config is the env.exclusivek8s.* configuration.
@@ -107,11 +111,12 @@ type Provider struct {
 	// Injected in tests; defaults wired in New. newClient/waitReady are handed
 	// to each per-namespace ampstack App; readManifest reads the controller
 	// manifest file for the no-chart path. detectYB live-detects the stack's
-	// own backing YugabyteDB version once Deploy succeeds.
+	// own backing YugabyteDB version once Deploy succeeds, reading it through
+	// the App because the backing may only be reachable from inside the cluster.
 	newClient    func(url string) *controller.Client
 	waitReady    func(ctx context.Context, cl *controller.Client, timeout time.Duration) error
 	readManifest func(path string) (string, error)
-	detectYB     func(ctx context.Context, ci pg.ConnInfo) string
+	detectYB     func(ctx context.Context, app *ampstack.App) string
 
 	// ybDeployCfg is the raw framework config, injected via WithYBDeployConfig so
 	// the per-test deploy selector (apps/ybdeploy) can read env.yb_deploy and
@@ -167,15 +172,22 @@ func applyDefaults(cfg *Config) {
 	if cfg.ControllerPort == 0 {
 		cfg.ControllerPort = DefaultControllerPort
 	}
-	if cfg.LocalPortBase == 0 {
-		cfg.LocalPortBase = DefaultLocalPortBase
-	}
 	if cfg.YBReadyTimeout == 0 {
 		cfg.YBReadyTimeout = ampstack.DefaultYBReadyTimeout
 	}
 	if cfg.ReadyTimeout == 0 {
 		cfg.ReadyTimeout = ampstack.DefaultControllerReadyTimeout
 	}
+}
+
+// nextLocalPort hands out the next port-forward local port: a distinct port per
+// stack when a base is configured, else 0 so kubectl allocates an ephemeral one
+// (the default — see DefaultLocalPortBase).
+func (p *Provider) nextLocalPort() int {
+	if p.cfg.LocalPortBase <= 0 {
+		return 0
+	}
+	return p.cfg.LocalPortBase + int(p.portCounter.Add(1)-1)
 }
 
 func (p *Provider) log(format string, args ...any) {
@@ -258,7 +270,7 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 	// it is up (architecture §4.9: read from the live environment, not assumed
 	// from config). "" on any failure — Qualifies' documented "don't enforce
 	// this bound" sentinel — never blocks the run.
-	yb := p.detectYB(ctx, app.BackingConnInfo())
+	yb := p.detectYB(ctx, app)
 	p.log("exclusivek8s: namespace %s backing YB version detected=%q (live=%v)", ns, yb, yb != "")
 
 	return &Env{
@@ -278,7 +290,7 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 // secret (ECRRegistry left empty), applying only a pre-encoded pull secret when
 // one is configured, matching the pre-composition behavior.
 func (p *Provider) ampstackConfig(ns string) (ampstack.Config, error) {
-	local := p.cfg.LocalPortBase + int(p.portCounter.Add(1)-1)
+	local := p.nextLocalPort()
 	cfg := ampstack.Config{
 		Context:                   p.cfg.Context,
 		Namespace:                 ns,
@@ -374,16 +386,9 @@ func (e *Env) Collect(ctx context.Context, into core.ArtifactSink) error {
 // VersionSpec.Qualifies instead of silently parsing to garbage. Returns "" on
 // any failure (connect, query, or no marker) — the sentinel Qualifies already
 // treats as "don't enforce this bound".
-func detectYBVersion(ctx context.Context, ci pg.ConnInfo) string {
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	client, err := pg.Connect(cctx, ci)
-	if err != nil {
-		return ""
-	}
-	defer client.Close()
-	raw, err := client.QueryString(cctx, "SELECT version()")
-	if err != nil {
+func detectYBVersion(ctx context.Context, app *ampstack.App) string {
+	raw := app.BackingVersion(ctx)
+	if raw == "" {
 		return ""
 	}
 	v, ok := core.ExtractYBVersionMarker(raw)

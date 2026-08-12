@@ -43,6 +43,7 @@ import (
 	osexec "os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	awscloud "github.com/yugabyte/amp/test/functional/framework/apps/cloud/aws"
@@ -50,6 +51,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybastack"
+	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/apps/yugabyted"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
@@ -528,7 +530,7 @@ func (p *Provider) provisionYugabyted(ctx context.Context) (core.Environment, er
 // universe then tears the YBA down (LIFO).
 func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Environment, error) {
 	runTag := provisionRunTag(seed)
-	k8s := p.providerType == "kubernetes"
+	isK8s := p.providerType == "kubernetes"
 	gcp := p.providerType == "gcp"
 
 	// Build the specs first: a config/secret error must fail before anything is
@@ -543,7 +545,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 		err         error
 	)
 	switch {
-	case k8s:
+	case isK8s:
 		k8sProvSpec, err = p.buildK8sProviderSpec()
 		if err != nil {
 			return nil, fmt.Errorf("provision_yba: build k8s provider spec: %w", err)
@@ -623,7 +625,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	}
 	var reap func(context.Context) error
 	switch {
-	case k8s:
+	case isK8s:
 		reap = func(c context.Context) error {
 			return p.reapNamespaces(c, kubeContext, kubeconfig, universeName)
 		}
@@ -660,7 +662,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	// ("no artifact found for architecture <arch>"). k8s universes pull their DB
 	// image from the provider's kubernetesImageRegistry instead, so there is no
 	// tarball release to import. Idempotent — a present artifact is a no-op.
-	if !k8s {
+	if !isK8s {
 		arch := provSpec.Arch
 		if gcp {
 			arch = gcpProvSpec.Arch
@@ -671,7 +673,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	}
 	var providerUUID string
 	switch {
-	case k8s:
+	case isK8s:
 		providerUUID, err = cl.EnsureK8sProvider(ctx, k8sProvSpec)
 		if err != nil {
 			return failure(fmt.Errorf("provision_yba: ensure k8s provider: %w", err))
@@ -703,7 +705,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	// auto-populate its machine-type catalog from the GCE API on create
 	// (GCPInitializer), so no registration is needed. A kubernetes universe has no
 	// instance type at all — pods, not VMs.
-	if !k8s && !gcp {
+	if !isK8s && !gcp {
 		if err := cl.AddInstanceType(ctx, providerUUID, yba.InstanceTypeSpec{
 			Code:      uniSpec.InstanceType,
 			NumCores:  uniSpec.NumCores,
@@ -718,7 +720,7 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	// keypair). A GCP provider created with no keypair (the default) has no access
 	// key — YBA then uses project/OS-login SSH keys — so the resolve is skipped
 	// unless a keypair was configured. A kubernetes universe has no SSH key.
-	if !k8s {
+	if !isK8s {
 		needAccessKey := !gcp || gcpProvSpec.KeyPairName != ""
 		if needAccessKey {
 			accessKeyCode, err := cl.ProviderAccessKeyCode(ctx, providerUUID)
@@ -780,8 +782,12 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	if err != nil {
 		return failure(fmt.Errorf("provision_yba: %w", err))
 	}
-	var inClusterAddrs []string
-	if k8s {
+	var (
+		inClusterAddrs  []string
+		kubeNS, kubePod string
+		pfs             []*k8s.PortForward
+	)
+	if isK8s {
 		// YBA reports a k8s universe node's private_ip as an in-cluster address
 		// (pod DNS / ClusterIP) the operator can't reach over the tailnet; only
 		// the framework's OPERATOR-side layer-1 path is affected (amp's own deploy
@@ -798,6 +804,18 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 		}
 		host, port := splitAddr(podAddrs[0], ci.Port)
 		ci.Host, ci.Port, addrs = host, port, podAddrs
+		// A pod IP is routable only from inside the cluster, and on a cluster
+		// whose pod CIDR is shadowed by an unrelated advertised route it is not
+		// routable at all — the dial times out rather than refusing. Forward to
+		// the tserver instead whenever its in-cluster name says where it is.
+		kubeNS, kubePod = ybbacking.KubeLocationFromDNS(inClusterAddrs[0])
+		if kubeNS != "" {
+			fwdCI, fwd, ferr := forwardToTServer(ctx, kubeContext, kubeconfig, kubeNS, kubePod, ci)
+			if ferr != nil {
+				return failure(fmt.Errorf("provision_yba: reach the universe's tserver: %w", ferr))
+			}
+			ci, pfs = fwdCI, append(pfs, fwd)
+		}
 	}
 	version := u.Version()
 	if version == "" {
@@ -808,6 +826,11 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 		pg:              ci,
 		nodeAddrs:       addrs,
 		inClusterAddrs:  inClusterAddrs,
+		kubeContext:     kubeContext,
+		kubeconfig:      kubeconfig,
+		kubeNamespace:   kubeNS,
+		kubePod:         kubePod,
+		pfs:             pfs,
 		versions:        core.DetectedVersions{YB: version, Product: p.cfg.Product},
 		provStack:       stack,
 		provClient:      cl,
@@ -1078,6 +1101,16 @@ func (p *Provider) Teardown(ctx context.Context, env core.Environment) error {
 	if !ok {
 		return fmt.Errorf("universe teardown: unexpected environment type %T", env)
 	}
+	// Whatever the mode, this env's own forwards go with it.
+	e.pgMu.Lock()
+	pfs := e.pfs
+	e.pgMu.Unlock()
+	for _, pf := range pfs {
+		if pf != nil {
+			_ = pf.Close()
+		}
+	}
+
 	switch e.mode {
 	case ModeAttachYBA:
 		if !e.owned {
@@ -1121,6 +1154,17 @@ type Env struct {
 	mode      string
 	pg        pg.ConnInfo
 	nodeAddrs []string
+	// kubeContext/kubeconfig/kubeNamespace/kubePod locate a kubernetes universe's
+	// tserver, so this process can forward to it instead of dialling a pod IP it
+	// may have no route to. Empty for VM universes.
+	kubeContext   string
+	kubeconfig    string
+	kubeNamespace string
+	kubePod       string
+	// pfs are the forwards this env owns; Teardown closes them.
+	pfs  []*k8s.PortForward
+	pgMu sync.Mutex
+
 	// inClusterAddrs is set for a kubernetes provision_yba universe only: the
 	// tserver in-cluster addresses (YBA's private_ip — pod DNS / ClusterIP) that
 	// an amp control plane co-located in this cluster dials, distinct from the
@@ -1203,7 +1247,11 @@ func (e *Env) ProvisionedHandles() ProvisionedHandles {
 func (e *Env) Mode() string { return e.mode }
 
 // PGEndpoint lets pg-based tests reach the universe.
-func (e *Env) PGEndpoint() pg.ConnInfo { return e.pg }
+func (e *Env) PGEndpoint() pg.ConnInfo {
+	e.pgMu.Lock()
+	defer e.pgMu.Unlock()
+	return e.pg
+}
 
 // NodeAddrs lists every tserver host:port the target exposes.
 func (e *Env) NodeAddrs() []string { return e.nodeAddrs }
@@ -1240,6 +1288,38 @@ func (e *Env) Collect(ctx context.Context, into core.ArtifactSink) error {
 type discardSink struct{}
 
 func (discardSink) Add(string, string, []byte) error { return nil }
+
+// forwardToTServer opens a port-forward to a universe tserver pod and returns
+// connection info pointing at the local end.
+func forwardToTServer(ctx context.Context, kubeContext, kubeconfig, namespace, pod string, ci pg.ConnInfo) (pg.ConnInfo, *k8s.PortForward, error) {
+	kube := k8s.New(k8s.Config{Context: kubeContext, Namespace: namespace}).WithRunner(k8sReapRunner(kubeconfig))
+	pf, err := kube.PortForward(ctx, "pod/"+pod, 0, ci.Port)
+	if err != nil {
+		return pg.ConnInfo{}, nil, fmt.Errorf("port-forward %s/%s: %w", namespace, pod, err)
+	}
+	ci.Host, ci.Port = "127.0.0.1", pf.LocalPort()
+	return ci, pf, nil
+}
+
+// RefreshPGEndpoint rebuilds a dead forward to the universe's tserver, on the
+// same terms as the amp endpoint's: only a refused loopback connection reaches
+// here, so a rebuild cannot mask a database that is genuinely down.
+func (e *Env) RefreshPGEndpoint(ctx context.Context) (pg.ConnInfo, error) {
+	e.pgMu.Lock()
+	defer e.pgMu.Unlock()
+	if e.kubeNamespace == "" || e.kubePod == "" {
+		return pg.ConnInfo{}, fmt.Errorf("universe: this target is dialled directly, not forwarded")
+	}
+	ci := e.pg
+	ci.Port = DefaultYSQLPort
+	fresh, pf, err := forwardToTServer(ctx, e.kubeContext, e.kubeconfig, e.kubeNamespace, e.kubePod, ci)
+	if err != nil {
+		return pg.ConnInfo{}, err
+	}
+	e.pg = fresh
+	e.pfs = append(e.pfs, pf) // the superseded forward is retired, not closed
+	return fresh, nil
+}
 
 // splitAddr parses host:port, defaulting the port when absent/unparseable.
 func splitAddr(addr string, defPort int) (string, int) {

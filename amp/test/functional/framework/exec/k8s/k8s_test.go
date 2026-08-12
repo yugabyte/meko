@@ -395,3 +395,31 @@ func assertHas(t *testing.T, argvs []string, sub string) {
 	}
 	t.Errorf("no command contained %q\ngot: %v", sub, argvs)
 }
+
+// A forward that never reports a bound local port must fail where kubectl and
+// the target are still known. It used to succeed and hand back port 0, so the
+// caller's dial failed naming neither.
+func TestPortForwardEphemeralWithoutPortIsAnError(t *testing.T) {
+	k := New(Config{Context: "x", Namespace: "ns"}).WithStarter(func(_ context.Context, _ []string) (Process, error) {
+		return &fakeProc{out: strings.NewReader("Forwarding from something-unparseable -> 5433\n"), killed: make(chan struct{})}, nil
+	})
+	if _, err := k.PortForward(context.Background(), "pod/p", 0, 5433); err == nil {
+		t.Fatal("a ready line with no parseable local port must be an error")
+	}
+}
+
+// kubectl says why a forward failed, and that used to be dropped: the run saw a
+// bare ECONNREFUSED with no cause. The handle keeps the tail and the error
+// carries it.
+func TestPortForwardErrorCarriesKubectlOutput(t *testing.T) {
+	k := New(Config{Context: "x", Namespace: "ns"}).WithStarter(func(_ context.Context, _ []string) (Process, error) {
+		return &fakeProc{out: strings.NewReader("Unable to listen on port 18080: bind: address already in use\n"), killed: make(chan struct{})}, nil
+	})
+	_, err := k.PortForward(context.Background(), "pod/p", 18080, 5433)
+	if err == nil {
+		t.Fatal("a forward that never became ready must error")
+	}
+	if !strings.Contains(err.Error(), "address already in use") {
+		t.Errorf("error = %q, want kubectl's own reason in it", err)
+	}
+}

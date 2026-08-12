@@ -52,11 +52,7 @@ func runLoadSustain(t *core.T) error {
 		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
 		return nil
 	}
-	ci := env.PGEndpoint()
-	if err := pg.WaitReady(t, ci, readyTimeout); err != nil {
-		return err
-	}
-	client, err := pg.Connect(t, ci)
+	client, err := core.ConnectPG(t, env, readyTimeout)
 	if err != nil {
 		return err
 	}

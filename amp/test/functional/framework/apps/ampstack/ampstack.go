@@ -1197,10 +1197,7 @@ func (a *App) ensureExternalStorageDB(ctx context.Context) error {
 // tserver of the co-located backing, reusing the same idempotent script the
 // built-in yugabyted path runs.
 func (a *App) ensureStorageDBInCluster(ctx context.Context, namespace string) error {
-	pod := a.cfg.Backing.KubePod
-	if pod == "" {
-		pod = defaultBackingPod
-	}
+	pod := a.backingPod()
 	kube := a.kube.InNamespace(namespace).ForPod(pod, backingContainer)
 	res, err := kube.Run(ctx, createStorageDBScript(a.storageDBName()))
 	if err != nil {
@@ -1219,6 +1216,40 @@ const (
 	defaultBackingPod = "yb-tserver-0"
 	backingContainer  = "yb-tserver"
 )
+
+// backingPod is the co-located backing's tserver pod: the one the store named,
+// else the first of its StatefulSet.
+func (a *App) backingPod() string {
+	if pod := strings.TrimSpace(a.cfg.Backing.KubePod); pod != "" {
+		return pod
+	}
+	return defaultBackingPod
+}
+
+// BackingVersion live-reads the backing YugabyteDB's `select version()`. It runs
+// the query where the database is — in the pod for the built-in yugabyted and
+// for a co-located store, dialling only a backing that named no kube location —
+// because the address the controller uses is in-cluster and this process may
+// have no route to it at all. Best-effort: "" on any failure, never fatal.
+func (a *App) BackingVersion(ctx context.Context) string {
+	access := a.StorageAccess()
+	if access.ForwardTarget == "" {
+		return queryBackingVersion(ctx, access.Conn)
+	}
+	pod, container, ns := yugabytedPod, "", ""
+	if a.externalBacking() {
+		pod, container, ns = a.backingPod(), backingContainer, access.ForwardNamespace
+	}
+	kube := a.kube
+	if ns != "" {
+		kube = kube.InNamespace(ns)
+	}
+	res, err := kube.ForPod(pod, container).Run(ctx, selectVersionScript())
+	if err != nil || res.ExitCode != 0 {
+		return ""
+	}
+	return strings.TrimSpace(res.Stdout)
+}
 
 // Status reports pod/deployment readiness plus a controller /healthz probe. It
 // opens a short-lived port-forward for the probe (or reuses the held one).

@@ -123,3 +123,53 @@ func TestStorageAccessColocatedUsesAdminHostPorts(t *testing.T) {
 		t.Errorf("forward target = %q, want none", got.ForwardTarget)
 	}
 }
+
+// TestStorageAccessKubeLocatedForwards is the case that cost a daily-regression
+// (run 526cc990): a backing that named its own pod is in a cluster, and its
+// AdminHostPorts is a pod IP. Where the pod CIDR is shadowed by an unrelated
+// advertised route that dial does not refuse, it hangs until the budget is
+// gone — so a named location must always win over the address.
+func TestStorageAccessKubeLocatedForwards(t *testing.T) {
+	a := New(Config{
+		Namespace: "ampqa-ns4",
+		Backing: Backing{
+			Mode:           BackingExternal,
+			HostPorts:      "yb-tserver-0.yb-tservers.yb-dev-ampqa-1.svc.cluster.local:5433",
+			AdminHostPorts: "10.21.142.31:5433",
+			KubeNamespace:  "yb-dev-ampqa-1",
+			KubePod:        "yb-tserver-0",
+		},
+	})
+	got := a.StorageAccess()
+	if got.ForwardTarget != "pod/yb-tserver-0" {
+		t.Errorf("forward target = %q, want pod/yb-tserver-0", got.ForwardTarget)
+	}
+	if got.ForwardNamespace != "yb-dev-ampqa-1" {
+		t.Errorf("forward namespace = %q, want the backing's own", got.ForwardNamespace)
+	}
+	if got.RemotePort != ybPGPort {
+		t.Errorf("remote port = %d, want %d", got.RemotePort, ybPGPort)
+	}
+	if got.Conn.Host != "" || got.Conn.Port != 0 {
+		t.Errorf("conn carries %s:%d, want no address (dialling it is the bug)", got.Conn.Host, got.Conn.Port)
+	}
+	if got.Conn.Database != DefaultDBName {
+		t.Errorf("database = %q, want %q", got.Conn.Database, DefaultDBName)
+	}
+}
+
+// A co-located backing that named a namespace but no pod forwards to the first
+// tserver of the StatefulSet — the same default the CREATE path takes.
+func TestStorageAccessKubeLocatedDefaultsPod(t *testing.T) {
+	a := New(Config{
+		Namespace: "ampqa-ns5",
+		Backing: Backing{
+			Mode:          BackingExternal,
+			HostPorts:     "yb-tservers.yb.svc.cluster.local:5433",
+			KubeNamespace: "yb",
+		},
+	})
+	if got := a.StorageAccess().ForwardTarget; got != "pod/"+defaultBackingPod {
+		t.Errorf("forward target = %q, want pod/%s", got, defaultBackingPod)
+	}
+}

@@ -271,7 +271,9 @@ env:
     # "" inherits apps/ampstack's default (tailnet: direct if reachable, else a
     # port-forward); "portforward" always uses the kubectl forward.
     controller_reach: ""
-    local_port_base: 18080
+    # 0 lets kubectl pick each local port; a fixed base collides with anything
+    # already holding it, including a second run on the same machine.
+    local_port_base: 0
     yb_ready_timeout: 20m
     controller_ready_timeout: 5m
 

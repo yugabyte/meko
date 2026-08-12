@@ -511,7 +511,7 @@ func (k *Kubectl) PortForward(ctx context.Context, target string, localPort, rem
 		cancel()
 		return nil, fmt.Errorf("start port-forward %s: %w", target, err)
 	}
-	pf := &PortForward{proc: proc, localPort: localPort, cancel: cancel, done: make(chan struct{})}
+	pf := &PortForward{proc: proc, target: target, localPort: localPort, cancel: cancel, done: make(chan struct{})}
 
 	ready := make(chan error, 1)
 	go pf.watch(ready)
@@ -520,33 +520,98 @@ func (k *Kubectl) PortForward(ctx context.Context, target string, localPort, rem
 	case err := <-ready:
 		if err != nil {
 			pf.Close()
-			return nil, fmt.Errorf("port-forward %s not ready: %w", target, err)
+			return nil, fmt.Errorf("port-forward %s not ready: %w%s", target, err, pf.outputSuffix())
+		}
+		// An ephemeral request whose bound port could not be read leaves the handle
+		// pointing at port 0. Callers would dial it and get a failure that names
+		// neither kubectl nor the target, so fail here where both are known.
+		if localPort <= 0 && pf.LocalPort() <= 0 {
+			pf.Close()
+			return nil, fmt.Errorf("port-forward %s reported ready without a local port%s", target, pf.outputSuffix())
 		}
 		return pf, nil
 	case <-ctx.Done():
 		pf.Close()
-		return nil, fmt.Errorf("port-forward %s cancelled: %w", target, ctx.Err())
+		return nil, fmt.Errorf("port-forward %s cancelled: %w%s", target, ctx.Err(), pf.outputSuffix())
 	}
 }
 
 // PortForward is a running `kubectl port-forward` handle.
 type PortForward struct {
 	proc      Process
+	target    string
 	localPort int
 	cancel    context.CancelFunc
 	done      chan struct{}
 	dead      atomic.Bool
+	ready     atomic.Bool
 	closeOnce sync.Once
+	portMu    sync.RWMutex
+
+	// out keeps the tail of what kubectl said. Everything that goes wrong with a
+	// forward — "Unable to listen on port … address already in use", "lost
+	// connection to pod", an expired credential — is said here and nowhere else,
+	// and it used to be dropped on the floor: a dead forward reached the run as a
+	// bare ECONNREFUSED with no cause attached.
+	outMu sync.Mutex
+	out   []string
 }
+
+// maxForwardOutput is how many of kubectl's most recent lines a handle keeps.
+// The interesting line is always the last one or two.
+const maxForwardOutput = 8
+
+func (pf *PortForward) record(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	pf.outMu.Lock()
+	pf.out = append(pf.out, line)
+	if len(pf.out) > maxForwardOutput {
+		pf.out = pf.out[len(pf.out)-maxForwardOutput:]
+	}
+	pf.outMu.Unlock()
+}
+
+// Output is the tail of kubectl's own output — the reason a forward failed to
+// start or stopped working, when there is one.
+func (pf *PortForward) Output() string {
+	pf.outMu.Lock()
+	defer pf.outMu.Unlock()
+	return strings.Join(pf.out, "; ")
+}
+
+// outputSuffix renders Output for appending to an error message.
+func (pf *PortForward) outputSuffix() string {
+	if out := pf.Output(); out != "" {
+		return " (kubectl: " + out + ")"
+	}
+	return ""
+}
+
+// Target is the kubectl target this forward was opened against.
+func (pf *PortForward) Target() string { return pf.target }
 
 // LocalAddr is the loopback address callers connect to.
 func (pf *PortForward) LocalAddr() string {
-	return "127.0.0.1:" + strconv.Itoa(pf.localPort)
+	return "127.0.0.1:" + strconv.Itoa(pf.LocalPort())
 }
 
 // LocalPort is the bound local port (the ephemeral one kubectl chose when an
-// auto port was requested).
-func (pf *PortForward) LocalPort() int { return pf.localPort }
+// auto port was requested). Read under a lock: the watcher goroutine sets it
+// from kubectl's readiness line.
+func (pf *PortForward) LocalPort() int {
+	pf.portMu.RLock()
+	defer pf.portMu.RUnlock()
+	return pf.localPort
+}
+
+func (pf *PortForward) setLocalPort(port int) {
+	pf.portMu.Lock()
+	pf.localPort = port
+	pf.portMu.Unlock()
+}
 
 // Alive reports whether the underlying kubectl process is still running. A dead
 // forward's local port is refusing connections and must be re-established.
@@ -569,23 +634,24 @@ func (pf *PortForward) Close() error {
 // of proc.Wait.
 func (pf *PortForward) watch(ready chan<- error) {
 	sc := bufio.NewScanner(pf.proc.Stdout())
-	signaled := false
 	for sc.Scan() {
-		if signaled {
-			continue // drain remaining output
+		line := sc.Text()
+		pf.record(line)
+		if pf.ready.Load() {
+			continue // drain remaining output, keeping the tail for diagnostics
 		}
-		if strings.Contains(sc.Text(), "Forwarding from") {
-			if port, ok := parseForwardPort(sc.Text()); ok {
-				pf.localPort = port
+		if strings.Contains(line, "Forwarding from") {
+			if port, ok := parseForwardPort(line); ok {
+				pf.setLocalPort(port)
 			}
-			signaled = true
+			pf.ready.Store(true)
 			ready <- nil
 		}
 	}
 	// Stream ended: the process is exiting. Reap it and mark the forward dead.
 	waitErr := pf.proc.Wait()
 	pf.dead.Store(true)
-	if !signaled {
+	if !pf.ready.Load() {
 		if waitErr != nil {
 			ready <- waitErr
 		} else {

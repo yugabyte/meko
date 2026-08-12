@@ -13,6 +13,7 @@ package ybbacking
 
 import (
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
@@ -105,6 +106,7 @@ var _ BackingStore = Colocated{}
 // are the coordinator-reachable (tailnet) endpoint, inClusterAddrs are the
 // in-cluster Service DNS the amp controller connects at.
 func FromYBK8s(tailnetConn pg.ConnInfo, tailnetAddrs, inClusterAddrs []string) Colocated {
+	ns, pod := KubeLocationFromDNS(first(inClusterAddrs))
 	return Colocated{
 		Static: Static{
 			Conn:  tailnetConn,
@@ -112,22 +114,94 @@ func FromYBK8s(tailnetConn pg.ConnInfo, tailnetAddrs, inClusterAddrs []string) C
 			Desc:  fmt.Sprintf("co-located YB-in-k8s (%d tservers, primary %s, amp via %s)", len(tailnetAddrs), tailnetConn.Addr(), strings.Join(inClusterAddrs, ",")),
 		},
 		ControllerAddrs: inClusterAddrs,
+		KubeNamespace:   ns,
+		KubePod:         pod,
 	}
 }
 
 // FromYBAUniverse adapts a YBA universe: its first live tserver as the primary
 // target and every live tserver as the host-ports list (via yba.YSQLConnInfo).
 // A universe with no live tserver is an error.
-func FromYBAUniverse(u yba.Universe) (Static, error) {
+//
+// A kubernetes universe reports its tservers at in-cluster pod DNS names, so it
+// yields a Colocated carrying that location: those names are not resolvable
+// from here, and the pod IPs behind them are not necessarily routable either,
+// so everything this process needs from the universe goes through kubectl. A VM
+// universe's addresses are reachable both ways and stay a plain Static.
+func FromYBAUniverse(u yba.Universe) (BackingStore, error) {
 	ci, addrs, err := yba.YSQLConnInfo(u)
 	if err != nil {
-		return Static{}, err
+		return nil, err
 	}
-	return Static{
+	static := Static{
 		Conn:  ci,
 		Addrs: addrs,
 		Desc:  fmt.Sprintf("YBA universe %q (%d live tservers, primary %s)", u.Name, len(addrs), ci.Addr()),
-	}, nil
+	}
+	if ns, pod := KubeLocationFromDNS(first(addrs)); ns != "" {
+		static.Desc = fmt.Sprintf("YBA k8s universe %q (%d live tservers, primary %s)", u.Name, len(addrs), ci.Addr())
+		return Colocated{
+			Static:          static,
+			ControllerAddrs: addrs,
+			KubeNamespace:   ns,
+			KubePod:         pod,
+		}, nil
+	}
+	return static, nil
+}
+
+// FromProvisionedUniverse adapts a freshly provisioned YBA universe, whose
+// operator-facing endpoint (conn/addrs) is resolved separately from the
+// in-cluster addresses the amp controller connects at. A kubernetes universe
+// yields a Colocated carrying both the controller addresses and the kube
+// location; a VM universe (no in-cluster addresses — its node IPs are reachable
+// both ways) stays a plain Static.
+func FromProvisionedUniverse(conn pg.ConnInfo, addrs, inClusterAddrs []string) BackingStore {
+	if len(inClusterAddrs) == 0 {
+		return Static{
+			Conn:  conn,
+			Addrs: addrs,
+			Desc:  fmt.Sprintf("provisioned YBA universe (%d live tservers, primary %s)", len(addrs), conn.Addr()),
+		}
+	}
+	ns, pod := KubeLocationFromDNS(first(inClusterAddrs))
+	return Colocated{
+		Static: Static{
+			Conn:  conn,
+			Addrs: addrs,
+			Desc:  fmt.Sprintf("provisioned YBA k8s universe (%d tservers, amp via %s, coordinator via %s)", len(inClusterAddrs), strings.Join(inClusterAddrs, ","), conn.Addr()),
+		},
+		ControllerAddrs: inClusterAddrs,
+		KubeNamespace:   ns,
+		KubePod:         pod,
+	}
+}
+
+// KubeLocationFromDNS pulls the pod and namespace out of a StatefulSet pod's
+// in-cluster address — "<pod>.<service>.<namespace>.svc.cluster.local[:port]",
+// the shape a YugabyteDB-in-k8s deploy and a YBA kubernetes universe both
+// report their tservers at. Anything else (a VM node's bare IP, a Service-only
+// name) yields empty strings, which leaves the caller on the dial path.
+func KubeLocationFromDNS(addr string) (namespace, pod string) {
+	host := strings.TrimSpace(addr)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	parts := strings.Split(host, ".")
+	// Exactly <pod>.<service>.<namespace>.svc… — a Service-only name
+	// (<service>.<namespace>.svc…) is one label shorter and carries no pod, so
+	// requiring "svc" in the fourth position is what tells them apart.
+	if len(parts) < 4 || parts[3] != "svc" || parts[0] == "" || parts[2] == "" {
+		return "", ""
+	}
+	return parts[2], parts[0]
+}
+
+func first(addrs []string) string {
+	if len(addrs) == 0 {
+		return ""
+	}
+	return addrs[0]
 }
 
 // controllerBacking is the optional surface a co-located store implements to

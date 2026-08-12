@@ -652,6 +652,12 @@ const storageReadyTimeout = time.Minute
 // instead of one long wait spending the whole budget on a corpse.
 const storageProbeBudget = 15 * time.Second
 
+// storageRefresher is an env that can rebuild a DEAD forward to its backing
+// store. Refused is the only thing that reaches it — see RefreshYBStorage.
+type storageRefresher interface {
+	RefreshYBStorage(ctx context.Context) (pg.ConnInfo, error)
+}
+
 func connectStorage(t *core.T, env storageEnv) (*pg.Client, error) {
 	deadline := time.Now().Add(storageReadyTimeout)
 	for {
@@ -663,6 +669,15 @@ func connectStorage(t *core.T, env storageEnv) (*pg.Client, error) {
 		err = pg.WaitReady(t, ci, wait)
 		if err == nil {
 			return pg.Connect(t, ci)
+		}
+		// A refused loopback port is a dead tunnel, not a dead database — kubectl
+		// can outlive its own forward when the tserver behind it is replaced. Ask
+		// the env to rebuild it; anything else is the backing's own failure and
+		// simply retries until the budget ends.
+		if r, ok := env.(storageRefresher); ok && core.IsConnRefused(err) {
+			if fresh, rerr := r.RefreshYBStorage(t.Context); rerr == nil {
+				ci = fresh
+			}
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("backing amp storage database %s never answered: %w", ci.Addr(), err)

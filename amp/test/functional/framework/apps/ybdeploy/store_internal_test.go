@@ -65,7 +65,7 @@ func TestYBAProvisionedBackingVMStatic(t *testing.T) {
 // universe (run 98bbfdef: "connect 10.21.137.4:5433 … dial error: timeout").
 func TestKubeLocationFromDNS(t *testing.T) {
 	const addr = "ybampqa-9225-gin2-yb-tserver-0.ybampqa-9225-gin2-yb-tservers.yb-dev-ampqa-9225.svc.cluster.local:5433"
-	ns, pod := kubeLocationFromDNS(addr)
+	ns, pod := ybbacking.KubeLocationFromDNS(addr)
 	if ns != "yb-dev-ampqa-9225" {
 		t.Errorf("namespace = %q, want yb-dev-ampqa-9225", ns)
 	}
@@ -76,8 +76,8 @@ func TestKubeLocationFromDNS(t *testing.T) {
 	// on the dial path rather than inventing a namespace: a VM universe's node
 	// address is dialable and has no pod to exec into.
 	for _, other := range []string{"10.150.8.50:5433", "yb-tservers.ns.svc.cluster.local:5433", "", "host:5433"} {
-		if ns, pod := kubeLocationFromDNS(other); ns != "" || pod != "" {
-			t.Errorf("kubeLocationFromDNS(%q) = %q/%q, want empty", other, ns, pod)
+		if ns, pod := ybbacking.KubeLocationFromDNS(other); ns != "" || pod != "" {
+			t.Errorf("KubeLocationFromDNS(%q) = %q/%q, want empty", other, ns, pod)
 		}
 	}
 }

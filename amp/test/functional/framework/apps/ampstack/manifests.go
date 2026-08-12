@@ -168,6 +168,15 @@ else
 fi`, dbName)
 }
 
+// selectVersionScript reads the backing's own `select version()` from inside a
+// YB pod. Same ysqlsh resolution and advertise-address rules as
+// createStorageDBScript.
+func selectVersionScript() string {
+	return `set -e
+YSQLSH="$(command -v ysqlsh || echo /home/yugabyte/bin/ysqlsh)"
+"$YSQLSH" -h "$(hostname -f)" -p 5433 -U yugabyte -d yugabyte -tAc "select version()"`
+}
+
 // pullSecretManifest builds a dockerconfigjson image-pull Secret from a
 // pre-encoded (base64) .dockerconfigjson value.
 func pullSecretManifest(namespace, name, dockerConfigB64 string) string {

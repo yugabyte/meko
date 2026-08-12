@@ -643,7 +643,13 @@ func (p *Provider) Provision(ctx context.Context, spec core.EnvSpec, seed *core.
 	} else if v := p.detectProduct(ctx, ci); v != "" {
 		product, productLive = v, true
 	}
-	yb := p.detectYB(ctx, ci)
+	// YB version: ask the backing itself. The compute endpoint answers amp's own
+	// version(), which carries no YugabyteDB marker, so it is only a fallback for
+	// an attached stack whose backing this provider cannot name.
+	yb := p.detectBackingYB(ctx)
+	if yb == "" {
+		yb = p.detectYB(ctx, ci)
+	}
 	p.log("sharedk8s: versions detected — product=%q (live=%v) yb=%q (live=%v)", product, productLive, yb, yb != "")
 	env := &Env{
 		controllerURL: url,
@@ -754,7 +760,10 @@ func (p *Provider) Teardown(ctx context.Context, env core.Environment) error {
 			p.log("sharedk8s: teardown of cluster %s failed: %v", e.clusterID, err)
 		}
 	}
-	closeAll(e.pfs)
+	e.pgMu.Lock()
+	pfs := e.pfs // Close is idempotent; leave the handles in place for callers inspecting them
+	e.pgMu.Unlock()
+	closeAll(pfs)
 	closeAll(e.takeExtraPFs())
 	if e.ownCtrl != nil {
 		e.ownCtrl.reset() // closes this Env's own controller forward
@@ -1127,6 +1136,11 @@ type Env struct {
 	extraMu  sync.Mutex
 	extraPFs []*k8s.PortForward
 
+	// pgMu serializes rebuilds of the endpoint forward and guards pg/pfs. One
+	// Env serves many co-tenant tests, so a refused connection is noticed by
+	// several at once.
+	pgMu sync.Mutex
+
 	// samplers holds the per-test server-metrics samplers (servermetrics.go).
 	samplers serverSamplers
 
@@ -1239,17 +1253,22 @@ func (e *Env) ConnectEndpoint(ctx context.Context, ep controller.Endpoint) (*pg.
 }
 
 // PGEndpoint is connection info for the endpoint's compute Postgres.
-func (e *Env) PGEndpoint() pg.ConnInfo { return e.pg }
+func (e *Env) PGEndpoint() pg.ConnInfo {
+	e.pgMu.Lock()
+	defer e.pgMu.Unlock()
+	return e.pg
+}
 
 // YBStorage is connection info for the backing YugabyteDB's amp storage database
 // — the one holding the `amp_storage` schema the data path writes. Tests that
 // assert on what actually landed in storage need it; the endpoint's own compute
 // Postgres (PGEndpoint) cannot see it.
 //
-// A built-in yugabyted answers only inside the cluster, so reaching it opens a
-// port-forward; an external backing is dialled directly. Either way the result
-// is memoized, so co-tenant tests sharing this Env resolve it once. Any forward
-// is owned by the Env and closes in Teardown.
+// A backing that lives in a cluster — the built-in yugabyted, a co-located
+// YB-in-k8s deploy, a YBA universe — is reached over a port-forward into its own
+// namespace; only a backing owned entirely elsewhere is dialled. The result is
+// memoized, so co-tenant tests sharing this Env resolve it once. Any forward is
+// owned by the Env and closes in Teardown.
 func (e *Env) YBStorage(ctx context.Context) (pg.ConnInfo, error) {
 	e.storageMu.Lock()
 	defer e.storageMu.Unlock()
@@ -1264,6 +1283,35 @@ func (e *Env) YBStorage(ctx context.Context) (pg.ConnInfo, error) {
 	return e.storageCI, e.storageErr
 }
 
+// RefreshYBStorage rebuilds the storage forward after the CALLER's connection to
+// it was refused, and returns the fresh connection info.
+//
+// It exists because process liveness is not the test: kubectl keeps running
+// while its tunnel is dead — a tserver replaced by a rescheduling or a nemesis
+// leaves a forward whose local port refuses every connection — so YBStorage
+// alone would hand the same corpse back until the caller's budget ran out. As on
+// the endpoint path, what authorises the rebuild is a refused loopback
+// connection, which cannot have carried an answer from the database and so
+// cannot hide a real fault. A backing that is dialled directly has no forward of
+// ours and answers ErrNoStorageForward.
+func (e *Env) RefreshYBStorage(ctx context.Context) (pg.ConnInfo, error) {
+	e.storageMu.Lock()
+	defer e.storageMu.Unlock()
+	if !e.storageDone || e.storagePF == nil {
+		return pg.ConnInfo{}, ErrNoStorageForward
+	}
+	// A co-tenant may have rebuilt it while this caller waited for the lock.
+	if pgForwardAccepts(ctx, e.storageCI) {
+		return e.storageCI, e.storageErr
+	}
+	old := e.storagePF
+	e.storageCI, e.storageErr = e.resolveStorage(ctx)
+	if old != nil {
+		e.addExtraPF(old) // retired, not closed: a co-tenant may be mid-query on it
+	}
+	return e.storageCI, e.storageErr
+}
+
 // resolveStorage does the work behind YBStorage, caller holding storageMu.
 func (e *Env) resolveStorage(ctx context.Context) (pg.ConnInfo, error) {
 	e.storagePF = nil
@@ -1275,9 +1323,13 @@ func (e *Env) resolveStorage(ctx context.Context) (pg.ConnInfo, error) {
 		return access.Conn, nil
 	}
 	if e.kube == nil {
-		return pg.ConnInfo{}, fmt.Errorf("reaching the built-in yugabyted needs a kube context (it is cluster-internal)")
+		return pg.ConnInfo{}, fmt.Errorf("reaching an in-cluster backing store needs a kube context")
 	}
-	pf, err := e.kube.PortForward(ctx, access.ForwardTarget, e.prov.nextLocalPort(), access.RemotePort)
+	kube := e.kube
+	if ns := access.ForwardNamespace; ns != "" {
+		kube = kube.InNamespace(ns)
+	}
+	pf, err := kube.PortForward(ctx, access.ForwardTarget, e.prov.nextLocalPort(), access.RemotePort)
 	if err != nil {
 		return pg.ConnInfo{}, fmt.Errorf("port-forward backing store %s: %w", access.ForwardTarget, err)
 	}
@@ -1346,7 +1398,9 @@ func (e *Env) RestartCompute(ctx context.Context) error {
 		}
 		return fmt.Errorf("endpoint %s postgres not ready after restart: %w", e.endpointID, err)
 	}
+	e.pgMu.Lock()
 	e.swapPG(ci, pf)
+	e.pgMu.Unlock()
 	return nil
 }
 
@@ -1389,6 +1443,10 @@ func (e *Env) computePodName(ctx context.Context) (string, error) {
 // here would turn a product outage into a passing test.
 var ErrPGForwardAlive = errors.New("pg port-forward is alive")
 
+// ErrNoStorageForward is returned when the backing store is reached directly
+// rather than through a forward of ours — there is nothing here to rebuild.
+var ErrNoStorageForward = errors.New("backing store is dialled directly, not forwarded")
+
 // RefreshPGEndpoint re-establishes the endpoint's port-forward when THIS
 // process's kubectl forward has died — the local port then refuses connections
 // and every dial fails for reasons that have nothing to do with the endpoint
@@ -1402,10 +1460,24 @@ var ErrPGForwardAlive = errors.New("pg port-forward is alive")
 // Postgres — the caller owns that, so an endpoint that is genuinely down still
 // fails on its own terms, one readiness budget later.
 func (e *Env) RefreshPGEndpoint(ctx context.Context) (pg.ConnInfo, error) {
+	// One rebuild at a time, and co-tenant callers that queued behind it get the
+	// forward it produced. Without this, every co-tenant test that noticed the
+	// same dead forward opened its own and closed the others' — the failure they
+	// were recovering from, caused by the recovery.
+	e.pgMu.Lock()
+	defer e.pgMu.Unlock()
+
 	// A direct tailnet/in-cluster address has no forward at all, so a failure
 	// there is the endpoint's and nothing here can help.
 	if len(e.pfs) == 0 {
 		return pg.ConnInfo{}, ErrPGForwardAlive
+	}
+	// A co-tenant may have rebuilt it while this caller waited for the lock. The
+	// local port answering IS the test: this caller's refusal predates the
+	// rebuild, so replacing a tunnel that now accepts would cut the neighbour's
+	// live connections for nothing.
+	if pgForwardAccepts(ctx, e.pg) {
+		return e.pg, nil
 	}
 	// Process liveness is NOT the test. kubectl can keep running while its tunnel
 	// is dead — the pod behind a Service forward gets replaced and every later
@@ -1423,17 +1495,55 @@ func (e *Env) RefreshPGEndpoint(ctx context.Context) (pg.ConnInfo, error) {
 	if err != nil {
 		return pg.ConnInfo{}, fmt.Errorf("re-resolve endpoint %s after a dead port-forward: %w", e.endpointID, err)
 	}
-	e.swapPG(ci, pf)
+	e.swapPGRetiring(ci, pf)
 	return ci, nil
 }
 
+// pgForwardAccepts reports whether something is listening on the endpoint's
+// current local address. It is a TCP probe, not a readiness check: it separates
+// "this forward is gone" from "someone already replaced it".
+func pgForwardAccepts(ctx context.Context, ci pg.ConnInfo) bool {
+	if ci.Host == "" || ci.Port == 0 {
+		return false
+	}
+	dctx, cancel := context.WithTimeout(ctx, forwardProbeTimeout)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(dctx, "tcp", ci.Addr())
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// forwardProbeTimeout bounds the loopback probe above. It only ever dials
+// 127.0.0.1, so it answers immediately or not at all.
+const forwardProbeTimeout = 2 * time.Second
+
 // swapPG repoints the Env at a freshly-resolved connection + port-forward and
-// closes the superseded forward(s).
+// closes the superseded one. For a deliberate roll (RestartCompute) the old
+// forward's pod is gone and nobody can still be using it. Caller holds pgMu.
 func (e *Env) swapPG(ci pg.ConnInfo, pf *k8s.PortForward) {
 	old := e.pfs
 	e.pg = ci
 	e.pfs = nonNilPFs(pf)
 	closeAll(old)
+}
+
+// swapPGRetiring is the same swap for a RECOVERY, where the superseded forward
+// is retired rather than closed: one Env serves co-tenant tests, and a
+// neighbour may be mid-query on the old local port — killing it turns this
+// test's recovery into their failure (the lesson the controller forward already
+// learned; see ownCtrl). Retired forwards close with the rest at Teardown.
+// Caller holds pgMu.
+func (e *Env) swapPGRetiring(ci pg.ConnInfo, pf *k8s.PortForward) {
+	old := e.pfs
+	e.pg = ci
+	e.pfs = nonNilPFs(pf)
+	for _, o := range old {
+		e.addExtraPF(o)
+	}
 }
 
 // ControllerURL is the current controller root URL. It tracks the shared
@@ -1603,6 +1713,28 @@ func splitAddr(addr string, defPort int) (string, int) {
 // silently parsing to garbage. Returns "" on any failure (connect, query, or
 // no marker — the compute Postgres is not always a direct YSQL connection) —
 // the sentinel Qualifies already treats as "don't enforce this bound".
+// detectBackingYB reads the YugabyteDB version from the backing store this
+// provider deployed, in the pod when the backing lives in the cluster. "" when
+// the stack is attached (its backing is not ours to name) or the probe misses.
+func (p *Provider) detectBackingYB(ctx context.Context) string {
+	p.ctrl.mu.Lock()
+	app := p.app
+	deploy := p.deploy
+	p.ctrl.mu.Unlock()
+	if !deploy || app == nil {
+		return ""
+	}
+	raw := app.BackingVersion(ctx)
+	if raw == "" {
+		return ""
+	}
+	v, ok := core.ExtractYBVersionMarker(raw)
+	if !ok {
+		return ""
+	}
+	return v
+}
+
 func detectYBVersion(ctx context.Context, ci pg.ConnInfo) string {
 	raw, ok := queryVersion(ctx, ci)
 	if !ok {

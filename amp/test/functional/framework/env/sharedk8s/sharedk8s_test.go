@@ -1298,3 +1298,155 @@ func TestBackingKubeScopesToTheBackingNamespace(t *testing.T) {
 		t.Errorf("external backing: namespace = %q, want the backing's own", got)
 	}
 }
+
+// argvStarter records the whole kubectl argv, not just the port spec, so a test
+// can assert WHERE a forward was opened.
+type argvStarter struct {
+	mu    sync.Mutex
+	n     int
+	calls [][]string
+}
+
+func (a *argvStarter) start(_ context.Context, argv []string) (k8s.Process, error) {
+	a.mu.Lock()
+	a.n++
+	port := 41000 + a.n
+	a.calls = append(a.calls, append([]string(nil), argv...))
+	a.mu.Unlock()
+	return newLivePFProc(fmt.Sprintf("Forwarding from 127.0.0.1:%d -> yb\n", port)), nil
+}
+
+func (a *argvStarter) argv() [][]string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.calls
+}
+
+// TestYBStorageForwardsIntoTheBackingNamespace: a co-located backing (a YB-in-k8s
+// deploy, a YBA kubernetes universe) lives in its OWN namespace, not the amp
+// stack's, and its coordinator-facing address is a pod IP. Dialling that is what
+// failed run 526cc990 — on a cluster whose pod CIDR is shadowed by an unrelated
+// advertised route the dial times out rather than refusing, so the test burns
+// its whole budget against a healthy database. The forward must be opened in the
+// backing's namespace instead.
+func TestYBStorageForwardsIntoTheBackingNamespace(t *testing.T) {
+	rec := &execRec{}
+	st := &argvStarter{}
+	p := New(Config{Deploy: true, DeployTimeout: time.Minute, AmpStack: ampstack.Config{Namespace: "amp", Context: "x"}})
+	p.logf = nil
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run).WithStarter(st.start)
+	p.kube = kube
+	p.app = ampstack.New(ampstack.Config{
+		Namespace: "amp",
+		Backing: ampstack.Backing{
+			Mode:           ampstack.BackingExternal,
+			HostPorts:      "yb-tserver-0.yb-tservers.yb-dev-ampqa-1.svc.cluster.local:5433",
+			AdminHostPorts: "10.21.142.31:5433",
+			KubeNamespace:  "yb-dev-ampqa-1",
+			KubePod:        "yb-tserver-0",
+		},
+	}).WithKube(kube)
+	e := &Env{prov: p, kube: kube, endpointID: "ep-1"}
+
+	ci, err := e.YBStorage(context.Background())
+	if err != nil {
+		t.Fatalf("YBStorage: %v", err)
+	}
+	if ci.Host != "127.0.0.1" || ci.Port == 0 {
+		t.Fatalf("conn = %s:%d, want the local end of a forward (never the pod IP)", ci.Host, ci.Port)
+	}
+	calls := st.argv()
+	if len(calls) != 1 {
+		t.Fatalf("opened %d forwards, want 1: %v", len(calls), calls)
+	}
+	argv := strings.Join(calls[0], " ")
+	if !strings.Contains(argv, "-n yb-dev-ampqa-1") {
+		t.Errorf("forward argv = %q, want it opened in the backing's namespace", argv)
+	}
+	if !strings.Contains(argv, "pod/yb-tserver-0") {
+		t.Errorf("forward argv = %q, want the backing's tserver pod as the target", argv)
+	}
+}
+
+// A recovery must not cut its neighbours' connections. Co-tenant tests share one
+// Env, so several notice the same dead forward at once; the superseded forward
+// is retired (closed at Teardown) rather than killed under a neighbour that is
+// mid-query on it. RestartCompute is the opposite case — its pod is deliberately
+// gone — and still closes immediately.
+func TestRefreshPGRetiresTheOldForwardInsteadOfKillingIt(t *testing.T) {
+	rec := &execRec{}
+	st := &autoStarter{}
+	p := New(Config{Deploy: true, DeployTimeout: time.Minute, AmpStack: ampstack.Config{Namespace: "amp", Context: "x"}})
+	p.logf = nil
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run).WithStarter(st.start)
+	p.kube = kube
+	p.app = ampstack.New(ampstack.Config{Namespace: "amp"}).WithKube(kube)
+
+	first, pf, err := p.resolvePG(context.Background(), controller.Endpoint{ID: "ep-1", Address: "10.0.0.1:5433"})
+	if err != nil {
+		t.Fatalf("resolvePG: %v", err)
+	}
+	e := &Env{prov: p, kube: kube, endpointID: "ep-1", endpointAddr: "10.0.0.1:5433", pg: first, pfs: []*k8s.PortForward{pf}}
+
+	fresh, err := e.RefreshPGEndpoint(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshPGEndpoint: %v", err)
+	}
+	if fresh.Port == first.Port {
+		t.Errorf("refresh returned the same local port %d, want a new forward", fresh.Port)
+	}
+	if !pf.Alive() {
+		t.Error("the superseded forward was closed under a co-tenant that may be mid-query on it")
+	}
+	if len(e.takeExtraPFs()) != 1 {
+		t.Error("the superseded forward must be retired on the Env so Teardown still closes it")
+	}
+}
+
+// A backing forward whose tserver was replaced leaves kubectl running with a
+// dead tunnel. YBStorage alone would hand the corpse back; the caller's refused
+// connection is what authorises the rebuild.
+func TestRefreshYBStorageRebuildsAndRetires(t *testing.T) {
+	rec := &execRec{}
+	st := &autoStarter{}
+	p := New(Config{Deploy: true, DeployTimeout: time.Minute, AmpStack: ampstack.Config{Namespace: "amp", Context: "x"}})
+	p.logf = nil
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run).WithStarter(st.start)
+	p.kube = kube
+	p.app = ampstack.New(ampstack.Config{Namespace: "amp"}).WithKube(kube)
+	e := &Env{prov: p, kube: kube, endpointID: "ep-1"}
+
+	first, err := e.YBStorage(context.Background())
+	if err != nil {
+		t.Fatalf("YBStorage: %v", err)
+	}
+	old := e.storagePF
+
+	fresh, err := e.RefreshYBStorage(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshYBStorage: %v", err)
+	}
+	if fresh.Port == first.Port {
+		t.Errorf("refresh returned the same local port %d, want a rebuilt forward", fresh.Port)
+	}
+	if !old.Alive() {
+		t.Error("the superseded storage forward was closed rather than retired")
+	}
+	// And a subsequent YBStorage hands back the rebuilt one, not the corpse.
+	again, err := e.YBStorage(context.Background())
+	if err != nil {
+		t.Fatalf("YBStorage after refresh: %v", err)
+	}
+	if again.Port != fresh.Port {
+		t.Errorf("YBStorage = %d after a rebuild, want the fresh %d", again.Port, fresh.Port)
+	}
+}
+
+// An env with no forward of its own has nothing to rebuild and must say so
+// rather than inventing one.
+func TestRefreshYBStorageWithoutForward(t *testing.T) {
+	e := &Env{}
+	if _, err := e.RefreshYBStorage(context.Background()); !errors.Is(err, ErrNoStorageForward) {
+		t.Errorf("err = %v, want ErrNoStorageForward", err)
+	}
+}

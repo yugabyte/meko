@@ -10,7 +10,6 @@ import (
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
-	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -86,7 +85,7 @@ func testProvider(cfg Config, rec *recorder) *Provider {
 	p.waitReady = func(context.Context, *controller.Client, time.Duration) error { return nil }
 	// No real backing YugabyteDB to dial in a unit test; default to "no live
 	// detection" unless a test overrides this.
-	p.detectYB = func(context.Context, pg.ConnInfo) string { return "" }
+	p.detectYB = func(context.Context, *ampstack.App) string { return "" }
 	return p
 }
 
@@ -95,6 +94,7 @@ func TestProvisionComposesAmpstackHelmSequence(t *testing.T) {
 	p := testProvider(Config{
 		HelmChart:     "./charts/yb-amp-controller",
 		PullSecretB64: "ZG9ja2Vy",
+		LocalPortBase: 18080, // an explicitly configured base is still honoured
 	}, rec)
 
 	env, err := p.Provision(context.Background(), core.EnvSpec{Sharing: core.Exclusive}, core.NewRunSeed(42, true))
@@ -126,13 +126,13 @@ func TestProvisionComposesAmpstackHelmSequence(t *testing.T) {
 
 // TestProvisionYBVersionLiveDetected: once the dedicated stack's own backing
 // YugabyteDB is up, its version (simulated here via the detectYB seam,
-// standing in for a live pg connection to app.BackingConnInfo()) is recorded
+// standing in for the App's in-pod version read) is recorded
 // on the env — the stack has no other source for it (no static "yb version"
 // config for this per-test backing).
 func TestProvisionYBVersionLiveDetected(t *testing.T) {
 	rec := newRecorder()
 	p := testProvider(Config{HelmChart: "./charts/yb-amp-controller"}, rec)
-	p.detectYB = func(context.Context, pg.ConnInfo) string { return "2.21.1.0-b1" }
+	p.detectYB = func(context.Context, *ampstack.App) string { return "2.21.1.0-b1" }
 
 	env, err := p.Provision(context.Background(), core.EnvSpec{Sharing: core.Exclusive}, core.NewRunSeed(1, true))
 	if err != nil {
@@ -150,7 +150,7 @@ func TestProvisionYBVersionLiveDetected(t *testing.T) {
 func TestProvisionYBVersionFallsBackOnDetectionFailure(t *testing.T) {
 	rec := newRecorder()
 	p := testProvider(Config{HelmChart: "./charts/yb-amp-controller"}, rec)
-	p.detectYB = func(context.Context, pg.ConnInfo) string { return "" }
+	p.detectYB = func(context.Context, *ampstack.App) string { return "" }
 
 	env, err := p.Provision(context.Background(), core.EnvSpec{Sharing: core.Exclusive}, core.NewRunSeed(1, true))
 	if err != nil {
@@ -249,4 +249,22 @@ func containsAny(got []string, sub string) bool {
 		}
 	}
 	return false
+}
+
+// The default local port is ephemeral: a fixed base collides with whatever else
+// holds that port — most often a second run of this framework on the same CI
+// agent — and costs a whole environment. Configuring one stays possible; not
+// configuring one must not pin 18080.
+func TestDefaultLocalPortIsEphemeral(t *testing.T) {
+	p := New(Config{Context: "x"})
+	if got := p.nextLocalPort(); got != 0 {
+		t.Errorf("nextLocalPort() = %d, want 0 (kubectl allocates)", got)
+	}
+	withBase := New(Config{Context: "x", LocalPortBase: 20000})
+	if got := withBase.nextLocalPort(); got != 20000 {
+		t.Errorf("nextLocalPort() with a base = %d, want 20000", got)
+	}
+	if got := withBase.nextLocalPort(); got != 20001 {
+		t.Errorf("second nextLocalPort() = %d, want 20001 (distinct per stack)", got)
+	}
 }
