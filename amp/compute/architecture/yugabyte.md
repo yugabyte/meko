@@ -17,7 +17,7 @@ All subsystems share **one** database, `yb_storage`. Within it:
 | Schema | Tables | Provisioned by |
 |---|---|---|
 | `amp_storage` | the data plane: `pages`, `slru_pages`, `meta`, `pending_gc`, `wals`, `blobs` (+ the `blob_namespace` ENUM), and `branch_state` — the per-branch row the pageserver and safekeeper share | migration `0003_compute_storage` |
-| `amp_registry` | the control plane's resource model: `users`, `storage_pools`, `clusters`, `user_pool_grants`, `user_cluster_grants`, `branches`, `endpoints` (plus the `grant_role` and `endpoint_role` ENUMs). One branch table and one endpoint table, serving both the product API and the storage-layer control surface | migration `0002_resource_model` |
+| `amp_registry` | the control plane's resource model: `users`, `storage_pools`, `clusters`, `user_pool_grants`, `user_cluster_grants`, `branches`, `endpoints` (plus the `grant_role` and `endpoint_role` ENUMs). One branch table and one endpoint table, serving both the product API and the storage-layer control surface | migration `0002_resource_model` (`0005_endpoint_daemon_settings` repairs databases that applied it before the endpoint's `pageserver_settings` / `safekeeper_settings` columns were added to it) |
 | `controller` | the write-ahead task log: `tasks`, `task_steps` (plus the `task_status` / `step_status` ENUMs) | migration `0001_task_log` |
 
 ### Provisioning — controller migrations on startup
