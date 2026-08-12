@@ -4,6 +4,7 @@ linkTitle: Changelog
 description: What's new in Meko
 weight: 5500
 type: docs
+body_class: full-width
 breadcrumb_disable: true
 notoc: true
 ---

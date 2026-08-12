@@ -4,6 +4,7 @@ linkTitle: Installer
 description: What's new in the Installer, MCP server, and agent skills
 weight: 20
 type: docs
+body_class: full-width
 breadcrumb_disable: true
 notoc: true
 ---

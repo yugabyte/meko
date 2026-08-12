@@ -4,6 +4,7 @@ linkTitle: Meko
 description: What's new in the Meko portal, API, and platform
 weight: 10
 type: docs
+body_class: full-width
 breadcrumb_disable: true
 notoc: true
 ---

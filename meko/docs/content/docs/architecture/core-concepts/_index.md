@@ -3,6 +3,7 @@ title: Core concepts
 linkTitle: Core concepts
 description: Understand the foundational building blocks of Meko
 weight: 50
+body_class: full-width
 ---
 
 Meko organizes agent data around a few key concepts. Understanding these will help you get the most out of the platform.

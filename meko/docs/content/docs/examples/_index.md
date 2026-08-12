@@ -3,6 +3,7 @@ title: Examples
 linkTitle: Examples
 description: Real-world scenarios and sample solutions built with Meko
 weight: 2000
+body_class: full-width
 type: docs
 ---
 ## Enhanced team efficiency and productivity
