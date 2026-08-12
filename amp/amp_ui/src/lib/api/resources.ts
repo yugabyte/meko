@@ -175,6 +175,21 @@ export function createClusterWithWriter(
   });
 }
 
+// Async: DELETE plans a delete_cluster cascade (retires the cluster's endpoints,
+// drops its branches, then drops the cluster row); poll to completion so the
+// caller only sees success once the whole cascade has finished. 404 up front if
+// the pool or cluster is already gone.
+export async function deleteCluster(
+  poolId: string,
+  clusterId: string,
+): Promise<void> {
+  const task = await apiRequest<Task>(
+    `/storage-pools/${poolId}/clusters/${clusterId}`,
+    { method: "DELETE" },
+  );
+  await pollTask(task.id);
+}
+
 /* ---- Branches (timelines / forks) ---- */
 
 export function listBranches(
@@ -213,6 +228,22 @@ export async function createBranch(
     throw new ApiError("branch task reported no branch id", 500);
   }
   return getBranch(poolId, clusterId, done.target_ref);
+}
+
+// Async: DELETE plans a delete_branch cascade (retires the branch's endpoints,
+// then drops the branch row); poll to completion. The controller pre-checks and
+// returns 409 if the branch has child branches forked off it (the parent FK is
+// RESTRICT), surfaced here as an ApiError(status 409) the UI turns actionable.
+export async function deleteBranch(
+  poolId: string,
+  clusterId: string,
+  branchId: string,
+): Promise<void> {
+  const task = await apiRequest<Task>(
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}`,
+    { method: "DELETE" },
+  );
+  await pollTask(task.id);
 }
 
 /* ---- Endpoints (compute bound to a branch) ---- */

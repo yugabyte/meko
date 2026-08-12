@@ -15,6 +15,8 @@ import {
   createClusterWithWriter,
   createStoragePool,
   createUser,
+  deleteBranch,
+  deleteCluster,
   getVersion,
   listBranches,
   listClusters,
@@ -189,6 +191,24 @@ export function useCreateClusterWithWriter() {
   });
 }
 
+// Delete a cluster: the controller cascades through branches to endpoints, so
+// the whole subtree is stale afterwards — invalidate the cluster list AND the
+// cluster's branches and every branch's endpoints (an "endpoints" prefix match),
+// not just qk.clusters.
+export function useDeleteCluster() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { poolId: string; clusterId: string }) =>
+      deleteCluster(input.poolId, input.clusterId),
+    onSuccess: (_data, input) => {
+      qc.invalidateQueries({ queryKey: qk.clusters(input.poolId) });
+      qc.invalidateQueries({ queryKey: qk.branches(input.poolId, input.clusterId) });
+      // Prefix of qk.endpoints(pool, cluster, *) — matches every branch's endpoints.
+      qc.invalidateQueries({ queryKey: ["endpoints", input.poolId, input.clusterId] });
+    },
+  });
+}
+
 /* ---- Branches (timelines / forks) ---- */
 
 export function useBranches(
@@ -215,6 +235,25 @@ export function useCreateBranch() {
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
         queryKey: qk.branches(input.poolId, input.clusterId),
+      });
+    },
+  });
+}
+
+// Delete a branch: cascades to the branch's endpoints, so invalidate the
+// cluster's branch list and this branch's endpoints. (A 409 from a branch that
+// still has child branches rejects before any cascade — the caller surfaces it.)
+export function useDeleteBranch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { poolId: string; clusterId: string; branchId: string }) =>
+      deleteBranch(input.poolId, input.clusterId, input.branchId),
+    onSuccess: (_data, input) => {
+      qc.invalidateQueries({
+        queryKey: qk.branches(input.poolId, input.clusterId),
+      });
+      qc.invalidateQueries({
+        queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),
       });
     },
   });

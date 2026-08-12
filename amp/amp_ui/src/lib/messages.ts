@@ -39,6 +39,25 @@ export const dataBranchingMessages = {
   branchCreated: (name: string) => `Branch "${name}" created`,
   branchCreateError: "Failed to create branch",
 
+  // Delete branch (offered on forks only; the source branch goes with the cluster)
+  deleteBranchTitle: (name: string) => `Delete branch "${name}"?`,
+  deleteBranchConfirm:
+    "This retires the branch's compute and permanently drops the branch and its data. This can't be undone.",
+  deleteBranchSuccess: (name: string) => `Branch "${name}" deleted`,
+  deleteBranchError: "Failed to delete branch",
+  // 409: the branch is a fork point. Actionable — the user is looking at the tree.
+  deleteBranchHasChildren:
+    "This branch has sub-branches forked from it. Delete those first, then delete this branch.",
+
+  // Delete cluster (cascades through every branch + all compute — type-to-confirm)
+  deleteClusterTitle: (name: string) => `Delete cluster "${name}"?`,
+  deleteClusterConfirm: (name: string) =>
+    `This permanently deletes "${name}" and everything in it — every branch, all compute, and all data. This cascade can't be undone.`,
+  deleteClusterConfirmPrompt: (name: string) =>
+    `Type the cluster name (${name}) to confirm.`,
+  deleteClusterSuccess: (name: string) => `Cluster "${name}" deleted`,
+  deleteClusterError: "Failed to delete cluster",
+
   // Misc
   clipboardError: "Couldn't copy to clipboard",
 } as const;

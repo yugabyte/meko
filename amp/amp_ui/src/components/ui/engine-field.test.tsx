@@ -17,7 +17,7 @@ describe("EngineField", () => {
     expect((pg as HTMLButtonElement).disabled).toBe(false);
 
     // The four roadmap engines are present, disabled, and labelled Coming soon.
-    for (const name of [/ai db/i, /oracle/i, /sql server/i, /documentdb/i]) {
+    for (const name of [/ai database/i, /oracle/i, /sql server/i, /documentdb/i]) {
       const btn = screen.getByRole("button", { name });
       expect((btn as HTMLButtonElement).disabled).toBe(true);
     }

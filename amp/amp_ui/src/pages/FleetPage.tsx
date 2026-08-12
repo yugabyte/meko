@@ -4,8 +4,8 @@
 // status) are dropped — the controller doesn't expose them.
 
 import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { Database, Plus } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Database, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import {
@@ -22,9 +22,15 @@ import {
   PageContainer,
   PageHeader,
 } from "@/components/data/Page";
-import { useCurrentUser, useFleet, useStoragePools } from "@/lib/api/queries";
+import {
+  useCurrentUser,
+  useFleet,
+  useStoragePools,
+  type FleetRow,
+} from "@/lib/api/queries";
 import { formatDateTime, shortId } from "@/lib/format";
 import { CreateClusterWizard } from "@/components/CreateClusterWizard";
+import { DeleteClusterDialog } from "@/pages/multitenancy/components/DeleteClusterDialog";
 
 export default function FleetPage() {
   const currentUser = useCurrentUser();
@@ -44,6 +50,9 @@ export default function FleetPage() {
   // too, so they're visible to delete (other views — counts, pickers — omit them).
   const fleet = useFleet(myPools, true);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // The cluster row pending deletion (null = no dialog). Delete cascades through
+  // branches → endpoints, so it's type-to-confirm (see DeleteClusterDialog).
+  const [toDelete, setToDelete] = useState<FleetRow | null>(null);
 
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -137,12 +146,13 @@ export default function FleetPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Cluster</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Shared pool</TableHead>
-                    <TableHead>PG version</TableHead>
-                    <TableHead>Default branch</TableHead>
-                    <TableHead className="text-right">Created</TableHead>
+                    <TableHead className="text-center">Cluster</TableHead>
+                    <TableHead className="text-center">Status</TableHead>
+                    <TableHead className="text-center">Shared pool</TableHead>
+                    <TableHead className="text-center">PG version</TableHead>
+                    <TableHead className="text-center">Default branch</TableHead>
+                    <TableHead className="text-center">Created</TableHead>
+                    <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -157,11 +167,11 @@ export default function FleetPage() {
                       }
                     >
                       <TableCell>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center justify-center gap-3">
                           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand/15 text-brand">
                             <Database className="h-4 w-4" />
                           </div>
-                          <div className="min-w-0">
+                          <div className="min-w-0 text-center">
                             <p className="truncate font-medium text-foreground">
                               {cluster.name}
                             </p>
@@ -171,27 +181,51 @@ export default function FleetPage() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="text-center">
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
                           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                           Available
                         </span>
                       </TableCell>
-                      <TableCell>
-                        <span className="text-teal-600 dark:text-teal-400">
+                      <TableCell className="text-center">
+                        {/* Orange = link (Meko convention). Scopes the fleet to
+                            this pool; stopPropagation so it doesn't also fire the
+                            row's navigate-to-branch-tree click. */}
+                        <Link
+                          to={`/fleet?pool=${encodeURIComponent(pool.name)}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-brand hover:underline"
+                        >
                           {pool.name}
-                        </span>
+                        </Link>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="text-center">
                         <span className="rounded-md border border-border px-2 py-0.5 font-mono text-xs">
                           pg {cluster.default_branch.pg_version}
                         </span>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className="text-center text-muted-foreground">
                         {cluster.default_branch.name}
                       </TableCell>
-                      <TableCell className="text-right text-muted-foreground">
+                      <TableCell className="text-center text-muted-foreground">
                         {formatDateTime(cluster.created_at)}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {/* stopPropagation so deleting doesn't also fire the
+                            row's navigate-to-branch-tree click. */}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setToDelete({ cluster, pool });
+                          }}
+                          className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                          title={`Delete cluster ${cluster.name}`}
+                          aria-label={`Delete cluster ${cluster.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -207,6 +241,18 @@ export default function FleetPage() {
         onOpenChange={setDialogOpen}
         pools={myPools}
       />
+
+      {/* Mounted per-target so the type-to-confirm input resets each open. The
+          delete cascade invalidates the cluster list, so the fleet refetches. */}
+      {toDelete && (
+        <DeleteClusterDialog
+          open
+          onOpenChange={(o) => !o && setToDelete(null)}
+          poolId={toDelete.pool.id}
+          clusterId={toDelete.cluster.id}
+          clusterName={toDelete.cluster.name}
+        />
+      )}
     </PageContainer>
   );
 }
