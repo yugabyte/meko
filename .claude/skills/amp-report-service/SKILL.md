@@ -50,8 +50,17 @@ From a `qa-services` checkout: `cd yb-cli && ./install.sh` (or
 `YB_FROM_SOURCE=1 ./install.sh` to build). Update = re-run the installer.
 
 Command families (`yb amp --help` for the live list): `run`, `result`, `files`,
-`perf`, `issue`, `report`, `fleet`, `build`, `schedule`, `catalog`, `status`,
-`stats`.
+`perf`, `issue`, `report`, `fleet`, `build`, `builds`, `schedule`, `catalog`,
+`settings`, `status`, `stats`. Verbs that arrived with the tooling's growth and
+are easy to miss: `run trigger` (launch; `--wait` follows it), `run restart`
+(re-run with the exact same params, any of them overridable, `--dry-run` to
+preview), `run rerun` (replay picked tests — results land back on the SAME run
+as retry attempts, superseding the failed ones), `run wait`/`run stop`,
+`result metrics` / `result metric <key>` (the per-test server-metric series:
+backing tserver/master and endpoint CPU, memory, WAL, page-request latency —
+collected for every test since meko#726), `issue sync`/`detach`, `builds`
+(branch + commit behind each image tag), and the whole `schedule` family
+(list/create/update/enable/disable/run/preview).
 
 Conventions that hold across all of them:
 
@@ -130,7 +139,14 @@ yb amp result get <result-id>         # error, steps, attachments, KI chips
 yb amp files read <source>            # read an attachment (log, phases.txt)
 yb amp files search-in <source> "..." # grep inside one attachment
 yb amp result history <result-id>     # flaky, or new with this build?
+yb amp result metrics <result-id>     # server-metric series collected during
+yb amp result metric <result-id> "<key>"   # ... the run: was the backing loaded?
 ```
+
+The run's REAL parameters live in the Jenkins tracker, not in `run.data` —
+`yb amp run status <id> --json` → `jenkins.data.params` is the source of truth
+for what branch/image/options a run actually got (`OPTIONS: None` from a
+schedule means every default applied, backing topology included).
 
 Then either attach an existing known issue or file a GitHub issue (follow the
 `create-amp-issue` skill: area label + AMP milestone) and register it:
@@ -138,6 +154,27 @@ Then either attach an existing known issue or file a GitHub issue (follow the
 ```bash
 yb amp issue create --url <github-url> --result <id> --notes "..." --yes
 ```
+
+**Release / scheduled-run triage — leave a breadcrumb on the GitHub issue.**
+When the triage target is a RELEASE or SCHEDULED run (`triggered_by:
+schedule:*` in the Jenkins params, a product-status column, or the user asked
+to "triage the release / nightly failures") and a failure matches an EXISTING
+known issue, do both halves — attach the KI on the portal AND post a short
+comment on that GitHub issue recording the fresh reproduction:
+
+```bash
+yb amp issue attach <issue-id> --result <result-id> --yes
+gh issue comment <n> --repo yugabyte/meko --body   "Reproduced on <image-tag> (scheduled <kind> run): http://10.150.1.93/results/<result-id> — <one line: which step/signature matched>."
+```
+
+The comment is what tells the engineer the bug is still alive on current
+builds without them watching the portal. Keep it to 2–3 lines: image tag, the
+result link, and which signature matched — no analysis dumps. Before posting,
+glance at the issue's recent comments: one breadcrumb per run — if this run
+(or today's run of the same schedule) is already recorded, the attach alone is
+enough. Scope guard: this is ONLY for release/scheduled-run triage — ad-hoc
+runs, dev-branch runs and one-off debugging do NOT get GitHub comments unless
+the user explicitly asks.
 
 **Perf question** ("did X regress?"):
 
