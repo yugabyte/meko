@@ -84,11 +84,10 @@ export function isGatedTier(userType?: string | null): boolean {
 
 export type TierLimits = typeof FREE_TIER_LIMITS;
 
-/** Cap set for the given tier. Unknown / pro / enterprise → Infinity per
- *  field, EXCEPT per-file upload size: the RAG pipeline can't process
- *  arbitrarily heavy files, so every tier stops at the platform ceiling
- *  (same env name api_server's KBFileMaxBytes reads — display and
- *  enforcement stay in lockstep). */
+/** Cap set for the given tier. Pro / enterprise / unknown → Infinity per field,
+ *  EXCEPT per-file upload size, which caps at 60 MB (matching api_server's
+ *  ProTierMaxKBFileBytes — just above Standard's 50 MB). Display + enforcement
+ *  read the same env name api_server does, so they stay in lockstep. */
 export function limitsFor(userType?: string | null): TierLimits {
   const t = resolveTier(userType);
   if (t === "free") return FREE_TIER_LIMITS;
@@ -96,7 +95,7 @@ export function limitsFor(userType?: string | null): TierLimits {
   return {
     datapacks: Number.POSITIVE_INFINITY,
     kbStorageBytes: Number.POSITIVE_INFINITY,
-    kbFileBytes: envInt("MEKO_KB_FILE_MAX_BYTES", GB(1)),
+    kbFileBytes: envInt("MEKO_PRO_TIER_KB_FILE_BYTES", MB(60)),
     conversations: Number.POSITIVE_INFINITY,
     tokenBurn: Number.POSITIVE_INFINITY,
     memorySearches: Number.POSITIVE_INFINITY,

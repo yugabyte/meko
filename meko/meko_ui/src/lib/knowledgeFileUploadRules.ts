@@ -16,7 +16,7 @@ export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS = ACCEPTED_EXTENSION_LIST.join
 /**
  * Legacy / conservative per-file cap. The REAL cap is per-tier
  * (`limitsFor(user_type).kbFileBytes` — 5 MB free, 50 MB standard,
- * unlimited pro; mirrors api_server's LimitsFor().MaxKBFileBytes).
+ * 60 MB pro; mirrors api_server's LimitsFor().MaxKBFileBytes).
  * This constant is only the fallback while the caller's identity is
  * still loading — see useKnowledgeUploadMaxFileSizeMB.
  */

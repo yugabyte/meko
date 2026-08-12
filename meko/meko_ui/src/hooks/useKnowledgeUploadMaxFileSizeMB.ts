@@ -1,7 +1,7 @@
 // useKnowledgeUploadMaxFileSizeMB — tier-aware per-file KB upload cap in MB.
 // Mirrors api_server's LimitsFor().MaxKBFileBytes (5 MB free, 50 MB standard,
-// the 1 GB platform RAG ceiling for pro/enterprise) so hint copy and the
-// client-side size filter match what the backend will actually accept.
+// 60 MB pro/enterprise) so hint copy and the client-side size filter match what
+// the backend will actually accept.
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { limitsFor } from "@/lib/freeTier";

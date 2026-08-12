@@ -299,11 +299,11 @@ func (h *KnowledgeBaseHandler) RequestUploadURL(c echo.Context) error {
 	// LimitsFor(user_type):
 	//   free      -> 5 MB   / 100 MB total
 	//   standard  -> 50 MB  / 5 GB total   (Marketplace-paid)
-	//   pro/etc.  -> TierUnlimited on both
+	//   pro/etc.  -> 60 MB per file / unlimited total
 	// Gated on the REQUESTER's tier (not the owner's) to stay
 	// consistent with the FE — a Pro user uploading into a shared
-	// Free-owner datapack sees no cap on either side. Falls back to
-	// the legacy 5 MB per-file cap when there's no account context.
+	// Free-owner datapack gets the Pro caps. Falls back to the legacy
+	// 5 MB per-file cap when there's no account context.
 	account, _ := auth.GetAccount(c)
 	perFileCap := int64(maxFileSizeBytes)
 	if account != nil {
@@ -1102,7 +1102,7 @@ func mimeIsTextual(m *mimetype.MIME) bool {
 // Single-call alternative to the presigned upload-url -> PUT -> upload-complete
 // -> create browser flow: the caller sends the file as multipart/form-data
 // (field name "file", capped at the requester's per-tier MaxKBFileBytes —
-// 5 MB free, 50 MB standard/pro/enterprise) and this handler
+// 5 MB free, 50 MB standard, 60 MB pro/enterprise) and this handler
 // uploads to S3, registers the document with dist_rag, and triggers indexing
 // — all in one round trip. Built for programmatic / agentic callers (PAT
 // bearer tokens) that shouldn't have to orchestrate the multi-step browser
@@ -1158,7 +1158,7 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	// tier at the multipart OOM ceiling — pro/enterprise included. The
 	// presigned flow streams to S3 and does not apply this guard. When the
 	// route ceiling (not the tier cap) is what binds, the error must name
-	// it — telling a Pro user "maximum 1 GB" on a 50 MB endpoint is a lie.
+	// it — telling a Pro user "maximum 60 MB" on a 50 MB endpoint is a lie.
 	sizeMsg := service.UpgradeMessageFileSize(acct.AccountType)
 	if perFileCap > service.MultipartMaxFileBytes {
 		perFileCap = service.MultipartMaxFileBytes

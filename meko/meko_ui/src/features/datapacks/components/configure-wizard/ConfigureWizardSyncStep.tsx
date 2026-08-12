@@ -44,7 +44,7 @@ export function ConfigureWizardSyncStep({
   knowledgeFileAccept,
   syncFileWarning,
 }: Props) {
-  // Tier-aware per-file cap (5 MB free / 50 MB standard / ∞ pro).
+  // Tier-aware per-file cap (5 MB free / 50 MB standard / 60 MB pro).
   const maxFileSizeMB = useKnowledgeUploadMaxFileSizeMB();
   return (
     <div className="space-y-4">

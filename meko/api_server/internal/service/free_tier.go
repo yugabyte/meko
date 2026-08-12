@@ -88,19 +88,18 @@ var (
 	StandardTierMaxMemoryAdd    = envInt64("MEKO_STANDARD_TIER_MEMORY_ADD", 30_000)
 )
 
+// Pro / enterprise are uncapped on datapacks, storage, etc.; per-file upload
+// size caps at 60 MB — just above Standard's 50 MB, so "upgrade to Pro for
+// larger files" stays honest while the RAG pipeline still gets bounded files.
+// Tunable via MEKO_PRO_TIER_KB_FILE_BYTES.
+var ProTierMaxKBFileBytes = envInt64("MEKO_PRO_TIER_KB_FILE_BYTES", 60*1024*1024)
+
 // The multipart upload route (UploadFile) buffers each file fully in memory
 // before writing to S3, so an unbounded per-file size is an OOM vector even
 // for paying top tiers. This ceiling is an infrastructure guard local to
 // that route — NOT a tier limit; the presigned-S3 flow streams directly to
-// S3 and is bounded only by the tier cap / KBFileMaxBytes.
+// S3 and is bounded only by the tier cap.
 var MultipartMaxFileBytes = envInt64("MEKO_MULTIPART_MAX_FILE_BYTES", 50*1024*1024)
-
-// KBFileMaxBytes is the platform-wide per-file upload ceiling: the RAG
-// pipeline cannot process arbitrarily heavy files, so even the uncapped
-// tiers (and unknown tiers, which otherwise fail open) stop here on BOTH
-// upload routes. The UI's limitsFor reads the same env name, so the hint
-// copy and enforcement stay in lockstep.
-var KBFileMaxBytes = envInt64("MEKO_KB_FILE_MAX_BYTES", 1024*1024*1024) // 1 GiB
 
 // TierLimits is the per-tier cap set. `Unlimited` for pro / enterprise
 // (a sentinel > any realistic counter) so the same `n >= limit.X` check
@@ -150,14 +149,14 @@ func LimitsFor(userType string) TierLimits {
 			MaxMemoryAdd:      StandardTierMaxMemoryAdd,
 		}
 	case "pro", "enterprise":
-		// Uncapped on everything except per-file size, which stops at the
-		// platform RAG-processing ceiling. The multipart route additionally
-		// applies MultipartMaxFileBytes as a buffering OOM guard, but that
-		// is route infrastructure, not a tier limit.
+		// Uncapped on everything except per-file upload size, which caps at
+		// 60 MB — see ProTierMaxKBFileBytes. The multipart route additionally
+		// applies MultipartMaxFileBytes as a buffering OOM guard, but that is
+		// route infrastructure, not a tier limit.
 		return TierLimits{
 			MaxDatapacks:      TierUnlimited,
 			MaxKBStorageBytes: TierUnlimited,
-			MaxKBFileBytes:    KBFileMaxBytes,
+			MaxKBFileBytes:    ProTierMaxKBFileBytes,
 			MaxConversations:  TierUnlimited,
 			MaxTokenBurn:      TierUnlimited,
 			MaxMemorySearch:   TierUnlimited,
@@ -166,12 +165,12 @@ func LimitsFor(userType string) TierLimits {
 		}
 	default:
 		// Unknown / mis-typed tier: fail open on everything except per-file
-		// size — the RAG ceiling is a platform bound, not a tier perk, so a
-		// bad tier value must not bypass it. The UI's limitsFor mirrors this.
+		// size, which falls back to the top-tier 60 MB cap so a bad tier value
+		// can't upload unbounded. The UI's limitsFor mirrors this.
 		return TierLimits{
 			MaxDatapacks:      TierUnlimited,
 			MaxKBStorageBytes: TierUnlimited,
-			MaxKBFileBytes:    KBFileMaxBytes,
+			MaxKBFileBytes:    ProTierMaxKBFileBytes,
 			MaxConversations:  TierUnlimited,
 			MaxTokenBurn:      TierUnlimited,
 			MaxMemorySearch:   TierUnlimited,
@@ -201,14 +200,13 @@ const (
 	FreeTierUpgradeMessageKBUpload     = "Upgrade to Standard to upload new documents."
 	StandardTierUpgradeMessageDatapack = "Upgrade to Pro to create a new datapack."
 	StandardTierUpgradeMessageKBUpload = "Upgrade to Pro to upload new documents."
-	// Per-tier "your file is too big" copies. Free caps at 5 MB and steers
-	// toward Standard; Standard caps at 50 MB and steers toward Pro. Pro /
-	// enterprise also cap at 50 MB (the OOM guard) but are already top-tier, so
-	// their copy just states the limit with no upgrade pitch. Dispatched via
-	// UpgradeMessageFileSize(userType).
+	// Per-tier "your file is too big" copies. Free caps at 5 MB and steers to
+	// Standard; Standard caps at 50 MB and steers to Pro (which allows 60 MB).
+	// Pro / enterprise cap at 60 MB — top tier, so their copy just states the
+	// limit with no upgrade pitch. Dispatched via UpgradeMessageFileSize(userType).
 	FreeTierUpgradeMessageFileSize     = "File too large; maximum 5 MB per file. Upgrade to Standard for larger file uploads."
 	StandardTierUpgradeMessageFileSize = "File too large; maximum 50 MB per file. Upgrade to Pro for larger file uploads."
-	ProTierUpgradeMessageFileSize      = "File too large; maximum 1 GB per file."
+	ProTierUpgradeMessageFileSize      = "File too large; maximum 60 MB per file."
 	// Returned by the multipart route when the requester's tier allows more
 	// than the route's buffering ceiling — names the route cap, not the tier
 	// cap, and points at the flow that can take the bigger file.

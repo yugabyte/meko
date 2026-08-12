@@ -262,7 +262,7 @@ export default function FileUpload({
   const batchRemaining = KNOWLEDGE_UPLOAD_MAX_BATCH - inFlightCount;
   const batchFull = batchRemaining <= 0;
 
-  // Tier-aware per-file cap (5 MB free / 50 MB standard / 1 GB pro) — used
+  // Tier-aware per-file cap (5 MB free / 50 MB standard / 60 MB pro) — used
   // by both the client-side filter and the hint copy below.
   const maxFileSizeMB = useKnowledgeUploadMaxFileSizeMB();
 

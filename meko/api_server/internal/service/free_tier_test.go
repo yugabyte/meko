@@ -24,13 +24,13 @@ func TestLimitsFor_PerTierCaps(t *testing.T) {
 	}{
 		{"free", 5 * mib, 100 * mib},
 		{"standard", 50 * mib, 5 * gib},
-		// Pro/enterprise: storage unlimited; per-file stops at the platform
-		// RAG ceiling. The multipart OOM guard (MultipartMaxFileBytes) is
-		// route-local and does not appear here.
-		{"pro", 1 * gib, service.TierUnlimited},
-		{"enterprise", 1 * gib, service.TierUnlimited},
-		// Unknown tier fails open EXCEPT the platform per-file ceiling.
-		{"", 1 * gib, service.TierUnlimited},
+		// Pro/enterprise: storage unlimited; per-file caps at 60 MB
+		// (ProTierMaxKBFileBytes), just above Standard. The multipart OOM guard
+		// (MultipartMaxFileBytes) is route-local and does not appear here.
+		{"pro", 60 * mib, service.TierUnlimited},
+		{"enterprise", 60 * mib, service.TierUnlimited},
+		// Unknown tier fails open EXCEPT per-file size → top-tier 60 MB fallback.
+		{"", 60 * mib, service.TierUnlimited},
 	}
 	for _, tc := range cases {
 		got := service.LimitsFor(tc.userType)
@@ -69,10 +69,10 @@ func TestUpgradeMessageFileSize(t *testing.T) {
 	if msg := service.UpgradeMessageFileSize("free"); !strings.Contains(msg, "5 MB") {
 		t.Errorf("free file-size message = %q, want it to mention 5 MB", msg)
 	}
-	// Pro is top-tier: state the 1 GB platform ceiling, no upgrade pitch.
+	// Pro is top-tier and caps per-file at 60 MB, stated with no upgrade pitch.
 	proMsg := service.UpgradeMessageFileSize("pro")
-	if !strings.Contains(proMsg, "1 GB") {
-		t.Errorf("pro file-size message = %q, want it to mention 1 GB", proMsg)
+	if !strings.Contains(proMsg, "60 MB") {
+		t.Errorf("pro file-size message = %q, want it to mention 60 MB", proMsg)
 	}
 	if strings.Contains(proMsg, "Upgrade") {
 		t.Errorf("pro file-size message = %q, should not pitch an upgrade", proMsg)

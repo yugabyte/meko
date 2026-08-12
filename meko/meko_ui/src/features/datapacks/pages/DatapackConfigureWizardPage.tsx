@@ -239,7 +239,7 @@ export default function DatapackConfigureWizardPage({
     }
   }, [knowledgeItems, persistedKnowledgeStorageKey]);
 
-  // Tier-aware per-file cap (5 MB free / 50 MB standard / ∞ pro).
+  // Tier-aware per-file cap (5 MB free / 50 MB standard / 60 MB pro).
   const maxFileSizeMB = useKnowledgeUploadMaxFileSizeMB();
 
   const addFiles = (section: SyncSectionId, files: FileList | null) => {
