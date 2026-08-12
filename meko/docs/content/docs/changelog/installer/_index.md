@@ -1,14 +1,14 @@
 ---
 title: Installer
 linkTitle: Installer
-description: What's new in the installer, MCP server, and agent skills
+description: What's new in the Installer, MCP server, and agent skills
 weight: 20
 type: docs
 breadcrumb_disable: true
 notoc: true
 ---
 
-Release notes for [`@yugabytedb/meko-mcp`](https://www.npmjs.com/package/@yugabytedb/meko-mcp), including the installer, the Meko MCP server, and the agent skills (for Claude Code, Claude Desktop, Cursor, and Codex). These ship independently of the Meko portal, on their own version line.
+Release notes for [`@yugabytedb/meko-mcp`](https://www.npmjs.com/package/@yugabytedb/meko-mcp), including the Installer, the Meko MCP server, and the agent skills (for Claude Code, Claude Desktop, Cursor, and Codex). For Meko portal, API, and platform updates, see the [Meko release notes](../meko/).
 
 {{< card-group >}}
   {{< card
