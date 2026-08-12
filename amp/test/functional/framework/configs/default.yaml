@@ -1055,7 +1055,8 @@ chaos:
   # node_restart, network_partition, network_slowdown, packet_loss, node_stop.
   actions: []
   # owner_prefix guards which resources may be targeted: a pod whose namespace
-  # lacks this prefix is refused (the loop will not start).
+  # does not CONTAIN this marker is refused (the loop will not start). Contains,
+  # not prefix: a YBA-provisioned universe lives in yb-dev-ampqa-<tag>.
   owner_prefix: "ampqa-"
   # net_device is the interface tc/iptables actions operate on.
   net_device: "eth0"
@@ -1123,6 +1124,26 @@ stress:
   # while the chaos NemesisLoop injects faults against the co-located YB pods; then
   # it asserts the cluster is healthy and a seeded workloadgen dataset is still
   # consistent. Self-provisions real infra (k8s + secrets), so it is opt-in.
+  # amp_nemesis kills the endpoint compute pods amp deployed while tenants
+  # write through them; backing_nemesis kills the pods of the backing
+  # YugabyteDB itself — whichever backing the run deployed (a YBA universe's
+  # tservers, a ybk8s deploy's tservers, or the built-in yugabyted). Both end
+  # by reading every acknowledged row back over a fresh connection.
+  amp_nemesis:
+    tenants: 3
+    # duration is the fault window; settle_timeout bounds recovery after it.
+    duration: "3m"
+    settle_timeout: "10m"
+    payload_bytes: 256
+  backing_nemesis:
+    tenants: 3
+    duration: "3m"
+    settle_timeout: "10m"
+    payload_bytes: 256
+    # resume_duration is the post-chaos write window proving the WAL path
+    # works again — the probe for a backing that came back but can no longer
+    # commit anything (meko#727).
+    resume_duration: "30s"
   combined:
     # enabled gates the whole scenario (self-provisioning + private jar + k8s).
     enabled: false

@@ -1192,6 +1192,19 @@ func (e *Env) AmpPoolID() string { return e.poolID }
 // feature cannot run.
 func (e *Env) AmpKube() *k8s.Kubectl { return e.kube }
 
+// BackingKube is a kube handle scoped to the namespace the backing
+// YugabyteDB's pods actually run in — its own for an external backing that
+// told us (a co-located ybk8s deploy, a provisioned YBA universe), the amp
+// namespace for the built-in yugabyted. It is what backing-directed chaos and
+// diagnostics must aim at; the amp namespace holds no tserver when the backing
+// lives elsewhere.
+func (e *Env) BackingKube() *k8s.Kubectl {
+	if e.kube == nil {
+		return nil
+	}
+	return e.kube.InNamespace(e.backingNamespace())
+}
+
 // ConnectEndpoint opens a pooled SQL connection to an amp endpoint on the standing
 // control plane, port-forwarding the endpoint Service through kubectl when it is
 // cluster-internal (context mode). The forward is owned by the Env (recorded and

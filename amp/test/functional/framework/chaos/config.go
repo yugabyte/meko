@@ -26,9 +26,14 @@ type Config struct {
 	// deterministically so selection stays reproducible.
 	Actions []string
 
-	// OwnerPrefix guards which resources may be targeted. A pod target whose
-	// namespace lacks this prefix is refused (the loop will not start). Default
-	// "ampqa-".
+	// OwnerPrefix guards which resources may be targeted: a pod target is
+	// refused (the loop will not start) unless its namespace CONTAINS this
+	// marker. Contains, not has-prefix, because the framework's own namespaces
+	// carry the marker in more than one position — ampqa-cp-<tag> for the
+	// control plane, but yb-dev-ampqa-<tag> for a YBA-provisioned universe,
+	// where YBA prepends its own naming. Every namespace this framework creates
+	// carries "ampqa-" somewhere; nothing else on a shared cluster does.
+	// Default "ampqa-".
 	OwnerPrefix string
 
 	// NetDevice is the interface tc/iptables actions operate on. Default "eth0".

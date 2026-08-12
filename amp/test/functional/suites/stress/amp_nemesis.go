@@ -19,10 +19,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/yugabyte/amp/test/functional/framework/chaos"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -109,10 +107,6 @@ func runAmpNemesis(t *core.T) error {
 		return err
 	}
 
-	var runner *chaos.Runner
-	var injects, recovers int
-	var chaosMu sync.Mutex
-
 	if err := t.Step("chaos_under_load", func(s *core.StepHandle) error {
 		pods, err := endpointPods(t, kube)
 		if err != nil {
@@ -122,83 +116,28 @@ func runAmpNemesis(t *core.T) error {
 			return fmt.Errorf("the control-plane namespace has no %s* pod to aim at, though %d tenants have endpoints",
 				endpointPodPrefix, len(fleet.Tenants))
 		}
-		s.Set("targets", strings.Join(pods, ","))
-
-		targets := make([]*chaos.Target, 0, len(pods))
-		for _, pod := range pods {
-			targets = append(targets, chaos.NewPodTarget(pod, kube, pod, ""))
-		}
-
-		cfg := chaos.FromConfig(t.Options)
-		// Only pod_delete: the others operate on a host or a named process and
-		// have no meaning against a compute pod amp owns.
-		cfg.Actions = []string{chaos.ActionPodDelete}
-		cfg.Observe = func(e chaos.Event) {
-			chaosMu.Lock()
-			switch e.Phase {
-			case "inject":
-				injects++
-			case "recover":
-				recovers++
-			}
-			chaosMu.Unlock()
-			if e.Err != nil {
-				logf("chaos %s %s on %s: %v", e.Phase, e.Action, e.Target, e.Err)
-			}
-		}
-		runner, err = chaos.NewRunner(t.Seed.Fork("amp-nemesis"), chaos.DefaultRegistry(), cfg, targets)
-		if err != nil {
-			return err
-		}
-		if err := runner.Start(); err != nil {
-			return err
-		}
-		runWriters(t.Context, env, fleet.Tenants, params.Duration, params.PayloadBytes)
-		runner.Stop()
-
-		chaosMu.Lock()
-		s.Set("injects", injects)
-		s.Set("recovers", recovers)
-		chaosMu.Unlock()
-		if injects == 0 {
-			return fmt.Errorf("the chaos loop injected no fault in %s, so this run proves nothing", params.Duration)
-		}
-		return nil
+		return chaosOnPods(t, s, env, fleet, kube, pods, "amp-nemesis",
+			params.Duration, params.PayloadBytes, logf)
 	}); err != nil {
-		if runner != nil {
-			runner.Stop()
-		}
 		return err
 	}
 
 	if err := t.Step("endpoints_serve_again", func(s *core.StepHandle) error {
-		deadline := time.Now().Add(params.SettleTimeout)
-		for i := range fleet.Tenants {
-			ten := &fleet.Tenants[i]
-			var lastErr error
-			for time.Now().Before(deadline) {
-				conn, err := env.ConnectEndpoint(t.Context, ten.Endpoint)
-				if err == nil {
-					_, err = conn.QueryInt(t.Context, "SELECT 1")
-					conn.Close()
-				}
-				if err == nil {
-					lastErr = nil
-					break
-				}
-				lastErr = err
-				if t.Context.Err() != nil {
-					return t.Context.Err()
-				}
-				time.Sleep(5 * time.Second)
-			}
-			if lastErr != nil {
-				return fmt.Errorf("tenant %d's endpoint never served again within %s after the faults stopped: %w",
-					i, params.SettleTimeout, lastErr)
-			}
+		if err := assertEndpointsServe(t, env, fleet.Tenants, params.SettleTimeout); err != nil {
+			return err
 		}
 		s.Set("endpoints_recovered", len(fleet.Tenants))
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	// The verification the doc always promised and the code never did: every
+	// row acknowledged before or during the chaos read back over a fresh
+	// connection, count and content both. Without it, silent data loss under
+	// compute-pod chaos passed this test.
+	if err := t.Step("verify_data", func(s *core.StepHandle) error {
+		return verifyTenantData(t, s, env, fleet.Tenants, params.PayloadBytes)
 	}); err != nil {
 		return err
 	}

@@ -166,14 +166,15 @@ func (r *Runner) Stop() {
 }
 
 // validate enforces the ownership guard: pod targets must live in a namespace
-// matching the owner prefix. Host targets are caller-asserted owned (there is no
-// namespace to check), matching how the SSH transport is only ever handed a
-// test-provisioned host.
+// carrying the owner marker (see Config.OwnerPrefix — contains, not prefix,
+// because a YBA-provisioned universe lives in yb-dev-ampqa-<tag>). Host targets
+// are caller-asserted owned (there is no namespace to check), matching how the
+// SSH transport is only ever handed a test-provisioned host.
 func (r *Runner) validate() error {
 	for _, t := range r.targets {
 		if t.kind == KindPod {
-			if t.namespace == "" || !strings.HasPrefix(t.namespace, r.cfg.OwnerPrefix) {
-				return fmt.Errorf("chaos: refusing pod target %q in namespace %q (must match owner prefix %q)",
+			if t.namespace == "" || !strings.Contains(t.namespace, r.cfg.OwnerPrefix) {
+				return fmt.Errorf("chaos: refusing pod target %q in namespace %q (must carry owner marker %q)",
 					t.name, t.namespace, r.cfg.OwnerPrefix)
 			}
 		}

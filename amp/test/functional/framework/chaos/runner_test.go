@@ -250,3 +250,34 @@ func sortedStrings(s []string) bool {
 	}
 	return true
 }
+
+// The guard is a CONTAINS check, not a prefix check: a YBA-provisioned
+// universe's namespace is yb-dev-ampqa-<tag> — ours, created by this
+// framework's provisioner, with YBA's own naming prepended. A prefix check
+// refused it and no backing-directed chaos could ever start against a
+// universe. A namespace without the marker anywhere must still be refused.
+func TestOwnershipGuardAcceptsMarkerAnywhereInNamespace(t *testing.T) {
+	spy := newSpy()
+	rec := &kubeRecorder{}
+	universe := chaos.NewPodTarget("ts",
+		k8s.New(k8s.Config{Namespace: "yb-dev-ampqa-4f6c5f762c037e38"}).WithRunner(rec.run), "ts", "")
+	r, err := chaos.NewRunner(core.NewRunSeed(7, true), spyRegistry(spy), fastCfg(), []*chaos.Target{universe})
+	if err != nil {
+		t.Fatalf("new runner: %v", err)
+	}
+	if err := r.Start(); err != nil {
+		t.Fatalf("a universe namespace carrying the marker was refused: %v", err)
+	}
+	r.Stop()
+
+	sneaky := chaos.NewPodTarget("victim",
+		k8s.New(k8s.Config{Namespace: "prod-payments"}).WithRunner(rec.run), "victim", "")
+	r2, err := chaos.NewRunner(core.NewRunSeed(7, true), spyRegistry(spy), fastCfg(), []*chaos.Target{sneaky})
+	if err != nil {
+		t.Fatalf("new runner: %v", err)
+	}
+	if err := r2.Start(); err == nil {
+		r2.Stop()
+		t.Fatal("a namespace without the marker must still be refused")
+	}
+}

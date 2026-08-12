@@ -1282,3 +1282,19 @@ func TestEndpointSelectorForServerMetrics(t *testing.T) {
 		t.Errorf("selector = %q, want an instance selector naming the endpoint", got)
 	}
 }
+
+// Chaos aimed at the backing must land in the backing's own namespace: the amp
+// namespace holds no tserver when the backing is a YBA universe or ybk8s deploy.
+func TestBackingKubeScopesToTheBackingNamespace(t *testing.T) {
+	p := New(Config{Namespace: "ampqa-cp-x"})
+	p.kube = k8s.New(k8s.Config{Namespace: "ampqa-cp-x"})
+	p.ampCfg.Namespace = "ampqa-cp-x"
+	e := &Env{prov: p, kube: p.kube}
+	if got := e.BackingKube().Namespace(); got != "ampqa-cp-x" {
+		t.Errorf("built-in backing: namespace = %q, want the amp namespace", got)
+	}
+	p.ampCfg.Backing.KubeNamespace = "yb-dev-ampqa-x"
+	if got := e.BackingKube().Namespace(); got != "yb-dev-ampqa-x" {
+		t.Errorf("external backing: namespace = %q, want the backing's own", got)
+	}
+}

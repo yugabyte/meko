@@ -6,7 +6,7 @@
 // through their own endpoints, does every tenant still get exactly its own data
 // back, does anyone starve, and is the control plane still able to work?
 //
-// Every write is accounted for by the writer that made it (count + checksum),
+// Every write is accounted for by the writer that made it (count + content),
 // and the verification reads through a FRESH connection per tenant, so what is
 // judged is what shared storage holds rather than what a writing session
 // remembers.
@@ -116,6 +116,16 @@ func runMultitenantLoad(t *core.T) error {
 		}
 		s.Set("endpoints", len(fleet.Tenants))
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	// The read-back this test's own doc always promised: what shared storage
+	// holds, judged over a fresh connection per tenant, not what a writing
+	// session remembers. Without it a tenant's acknowledged rows could vanish
+	// and the run still passed on liveness + fairness alone.
+	if err := t.Step("verify_data", func(s *core.StepHandle) error {
+		return verifyTenantData(t, s, env, fleet.Tenants, params.PayloadBytes)
 	}); err != nil {
 		return err
 	}
