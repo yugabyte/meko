@@ -4,8 +4,8 @@ This page describes how yb-amp ships PostgreSQL extensions **outside** the
 endpoint image — each extension is built into its own tiny OCI image and mounted
 into the endpoint pod as a Kubernetes **ImageVolume**, with PostgreSQL pointed at
 it via `extension_control_path` / `dynamic_library_path` (both PG18 features).
-`pgvector` and `pg_cron` are delivered this way; the pipeline is generic so
-adding another is a manifest row plus a catalog entry.
+`pgvector`, `pg_cron`, and `hexabridge` are delivered this way; the pipeline is
+generic so adding another is a manifest row plus a catalog entry.
 
 ## Why not bake them into the endpoint image
 
@@ -19,8 +19,11 @@ ships **only** PG18 — including the in-tree contrib modules installed by
   attached on demand by the customer. Externalized ImageVolumes are the delivery
   mechanism that makes this possible.
 - **Partner / third-party extensions.** We want to support extensions we don't
-  own or build ourselves (e.g. **Hexabridge**), each on its own release track —
-  an independent image per extension is the natural unit.
+  own or build ourselves (e.g. **hexabridge**, HexaCluster's Oracle-compat layer,
+  now shipped this way), each on its own release track — an independent image per
+  extension is the natural unit. When the source is **closed and in a private
+  repo** (hexabridge), the build fetches it with a GitHub token passed as a
+  BuildKit secret (see "Authenticated source fetch", below).
 - **Small, independent images.** One extension = one `FROM scratch` image
   containing just its `share/` (control + SQL) and `lib/` (the `.so`). It is
   versioned and pushed on its own.
@@ -93,6 +96,11 @@ extension is tagged and released on its own cadence.
   link against byte-for-byte the same PostgreSQL the endpoint runs. Because the
   fork's `storage/smgr.h` `#define`s `YB_AMP_SMGR`, the unlogged-build hooks in
   patches like `pgvector-pg18.patch` light up automatically — no extra compiler flag.
+  It also carries the system `-dev` headers some extensions link against
+  (`libcurl4-openssl-dev`, `libxml2-dev`, `libssl-dev`, `zlib1g-dev` — hexabridge's
+  `utl_*`/`dbms_*` deps); extensions build as an unprivileged user and can't
+  install packages, so the headers must be present here. Build-time only — this
+  image is never shipped to a pod.
 - **[`extension.Dockerfile`](../../deploy/extensions/extension.Dockerfile)** —
   the **generic** recipe for pure-C / PGXS extensions. Build args:
   `NAME`, `VERSION`, `URL`, `SHA256`, `PATCH` (a file under
@@ -100,10 +108,15 @@ extension is tagged and released on its own cadence.
   the source dir before the patch — e.g. fetch an extra per-version SQL file),
   and `TRUSTED`. It fetches + checksum-verifies the tarball, patches, builds,
   `make install DESTDIR=/stage`, and repackages just `share/postgresql/extension`
-  + `lib/postgresql` into a `FROM scratch` image. **Complex extensions**
-  (Rust/pgrx, heavy system deps) get their own Dockerfile referenced from the
-  manifest's `dockerfile:` field instead of this generic one — the common path
-  stays small.
+  + `lib/postgresql` into a `FROM scratch` image. The fetch takes an optional
+  `gh_token` **BuildKit secret** (`--mount=type=secret,id=gh_token,required=false`):
+  when present it is sent as an `Authorization: Bearer` header so a **private**
+  source (hexabridge) can be pulled; public extensions build with no secret. The
+  token is a secret mount, never a build-arg, so it never lands in a layer, and
+  the checksum still gates the result (a missing/bad token fails closed).
+  **Complex extensions** (Rust/pgrx, heavy system deps) get their own Dockerfile
+  referenced from the manifest's `dockerfile:` field instead of this generic one —
+  the common path stays small.
 - **[`extensions.yaml`](../../deploy/extensions/extensions.yaml)** — the build
   **manifest**: one row per extension (version, URL, checksums, patch, preload,
   prep, optional dedicated dockerfile). The single source of truth for versions
@@ -118,6 +131,12 @@ extension is tagged and released on its own cadence.
   Only the `:buildcache` tag is pushed — never the base image — so it needs a
   buildx docker-container builder and a registry login; it is a CI opt-in (the
   GKE `amp_deploy_gke_extensions` step passes it), not for a plain local build.
+  Extension image tags are immutable (version-pinned), so an extension whose tag
+  already exists (checked in the registry with `--push`, else the local store) is
+  **skipped**; pass `--force` to rebuild. `AMP_EXT_GH_TOKEN` in the environment is
+  forwarded to each build as the `gh_token` secret above, so a private-source
+  extension (hexabridge) can fetch — CI sets it from the `HEXABRIDGE_GH_PULL`
+  secret; it is empty on forks, so the hexabridge steps skip there.
 
 ```sh
 # build everything locally
@@ -184,6 +203,18 @@ the feature is additive.
   recreating the endpoint pod** (a rolling restart). A `preload` extension needs
   the postmaster restart regardless. Non-preload extensions are otherwise
   ready to `CREATE EXTENSION` as soon as the pod is up with the volume mounted.
+  The ImageVolume carries only the extension **tree** (control + SQL + `.so`), not
+  its system libraries, so the **endpoint runtime image**
+  ([`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile)) must carry
+  any shared library an externalized `.so` links — e.g. `libxml2` for hexabridge
+  (`libcurl4`/`openssl`/`zlib1g` were already present). An extension that links a
+  **Postgres core** feature gated behind a build flag needs the *server* built
+  with it, not just the runtime lib: hexabridge uses PG's XML machinery
+  (`pg_xml_init_library`), so the forked Postgres is configured `--with-libxml`
+  (`PG_CONFIGURE_OPTS` in [`Makefile`](../../Makefile)) — without it the `.so`
+  fails to load with `undefined symbol: pg_xml_init_library`. An extension is also
+  only as trusted as its `.control` says: hexabridge ships no `trusted`, so
+  `CREATE EXTENSION hexabridge` is **superuser-only**.
 
 ## Opt-in API
 
@@ -239,7 +270,17 @@ audit / recreate.
 1. Add a row to
    [`deploy/extensions/extensions.yaml`](../../deploy/extensions/extensions.yaml)
    (version, URL, sha256, optional patch/prep/preload/dedicated dockerfile) and
-   `deploy/extensions/build.sh --push <name>`.
+   `deploy/extensions/build.sh --push <name>`. If the source is private, export
+   `AMP_EXT_GH_TOKEN` first (build.sh forwards it as the `gh_token` secret). If
+   the `.so` links a new system library, add its `-dev` package to
+   [`pg18-build.Dockerfile`](../../deploy/extensions/pg18-build.Dockerfile) (build)
+   and the runtime package to
+   [`deploy/endpoint/Dockerfile`](../../deploy/endpoint/Dockerfile) (load). If it
+   links a Postgres **core** feature behind a configure flag (e.g. XML →
+   `--with-libxml`), add that flag to `PG_CONFIGURE_OPTS` in the
+   [`Makefile`](../../Makefile) and its `-dev` package to every PG build context
+   (the endpoint `pg-build` stage, the ABI base, and the on-host CI build-dep
+   lists in `.github/workflows/amp-*.yml`).
 2. Add the matching entry to the controller catalog
    ([`catalog.go`](../../controller/internal/extensions/catalog.go)) with the
    same version, and `Default: true` only if it should be mounted on every
@@ -266,11 +307,14 @@ audit / recreate.
   extension end-to-end. For `pg_cron` it goes past `CREATE EXTENSION` and
   schedules a sub-minute job, waiting for `cron.job_run_details` to report a
   succeeded run — so the background-worker scheduler is exercised, not just
-  registration. The opt-in `amp_extensions_local` CI suite runs it, and it fires
-  automatically when a diff touches `deploy/extensions/`. It is the local-deploy
-  twin of `deploy/smoke-test.sh`'s `SMOKE_EXTENSIONS` GKE check.
+  registration. For `hexabridge` it goes past `CREATE EXTENSION` (superuser-only)
+  and calls deterministic Oracle-compat functions (`nanvl`, `utl_raw.length`) so
+  the loaded `.so` is exercised; that run needs `AMP_EXT_GH_TOKEN` for the private
+  fetch and is skipped on forks. The opt-in `amp_extensions_local` CI suite runs
+  all three, and it fires automatically when a diff touches `deploy/extensions/`.
+  It is the local-deploy twin of `deploy/smoke-test.sh`'s `SMOKE_EXTENSIONS` check.
 - **Smoke test** — `deploy/smoke-test.sh` with `SMOKE_EXTENSIONS=1` exercises the
-  real K8s ImageVolume path for both pgvector and pg_cron end-to-end.
+  real K8s ImageVolume path for pgvector, pg_cron, and hexabridge end-to-end.
 
 ## Code anchors
 

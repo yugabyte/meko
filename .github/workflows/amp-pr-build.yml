@@ -195,7 +195,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential libtool libreadline-dev zlib1g-dev flex bison \
             libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
-            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev
+            protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
+            libxml2-dev
 
       - name: Install pinned Rust toolchain
         # Reads rust-toolchain.toml (channel + clippy/rustfmt components).
@@ -327,7 +328,7 @@ jobs:
             build-essential libtool libreadline-dev zlib1g-dev flex bison \
             libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
             protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
-            postgresql-client
+            libxml2-dev postgresql-client
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install

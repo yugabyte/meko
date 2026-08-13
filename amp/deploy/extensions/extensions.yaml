@@ -60,3 +60,27 @@ extensions:
     preload: true
     prep: ""
     dockerfile: ""
+
+  - name: hexabridge
+    # HexaCluster's Oracle-compatibility layer (DBMS_*/UTL_* packages). Closed
+    # source in a PRIVATE repo, so the source is fetched from the GitHub API
+    # tarball endpoint with an auth header — build.sh mounts $AMP_EXT_GH_TOKEN as
+    # the gh_token BuildKit secret (see extension.Dockerfile). Pin to a commit
+    # (no upstream release yet); the /tarball/<sha> archive is byte-stable for a
+    # given commit, so the sha256 below is reproducible.
+    version: "0.1"
+    url: https://api.github.com/repos/HexaCluster/hexabridge-ybamp/tarball/1868d155428df6a2e61a5e58d08f31e7df3260b7
+    sha256: 636132b5bac6f08871e40d6efe8a926f246db9526197ad26dc70c7f41ff2da93
+    patch: ""
+    # SQL name == package name: CREATE EXTENSION hexabridge.
+    control: hexabridge
+    # The .control ships no `trusted`, so CREATE EXTENSION is superuser-only —
+    # keep trusted: false rather than forcing it open.
+    trusted: false
+    # Plain function library, no background worker — no shared_preload_libraries
+    # entry, so an endpoint can opt in with just a mount (no restart).
+    preload: false
+    prep: ""
+    # Pure PGXS (make && make install) — the generic extension.Dockerfile builds
+    # it; its link deps (libcurl/libxml2/openssl/zlib) live in the ABI base.
+    dockerfile: ""

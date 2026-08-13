@@ -62,6 +62,12 @@ var builtin = []Extension{
 	// cron.database_name GUC (default "postgres", which every endpoint serves);
 	// a non-default database is set through the endpoint's pg_settings.
 	{Name: "pg_cron", Version: "1.6.7", Default: false, Preload: true},
+	// hexabridge: HexaCluster's Oracle-compatibility layer. Opt-in per branch
+	// like the others and NOT a default. No preload (plain function library, no
+	// background worker), so opting in on a live endpoint needs only a mount. The
+	// SQL name equals the catalog name (CREATE EXTENSION hexabridge); its source
+	// is fetched from a private repo at build time (see deploy/extensions).
+	{Name: "hexabridge", Version: "0.1", Default: false, Preload: false},
 }
 
 // NewCatalog returns the built-in catalog with images under registry (e.g.

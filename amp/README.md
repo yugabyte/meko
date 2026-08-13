@@ -296,13 +296,13 @@ Notes:
 apt install build-essential libtool libreadline-dev zlib1g-dev flex bison \
   libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
   postgresql-client protobuf-compiler libprotobuf-dev libcurl4-openssl-dev \
-  openssl python3-poetry lsof libicu-dev
+  openssl python3-poetry lsof libicu-dev libxml2-dev
 
 # Fedora
 dnf install flex bison readline-devel zlib-devel openssl-devel \
   libseccomp-devel perl clang cmake postgresql postgresql-contrib \
   protobuf-compiler protobuf-devel libcurl-devel openssl poetry lsof \
-  libicu-devel libpq-devel python3-devel libffi-devel
+  libicu-devel libpq-devel python3-devel libffi-devel libxml2-devel
 ```
 
 `protoc` ≥ 3.15 required.

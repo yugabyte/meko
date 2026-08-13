@@ -25,16 +25,19 @@
 # the ABI-anchor guarantee the build pipeline is built around.
 #
 # Usage:
-#   test/integration/compute/extensions.sh                 # pgvector, release
-#   test/integration/compute/extensions.sh --ext pgvector  # explicit
-#   test/integration/compute/extensions.sh --debug         # debug cluster build
-#   test/integration/compute/extensions.sh --registry my   # override image registry
-#   test/integration/compute/extensions.sh --cache         # layer-cache the base build
-#   test/integration/compute/extensions.sh --keep          # leave the cluster up
+#   test/integration/compute/extensions.sh                  # pgvector, release
+#   test/integration/compute/extensions.sh --ext pgvector   # explicit
+#   test/integration/compute/extensions.sh --ext hexabridge # needs AMP_EXT_GH_TOKEN
+#   test/integration/compute/extensions.sh --debug          # debug cluster build
+#   test/integration/compute/extensions.sh --registry my    # override image registry
+#   test/integration/compute/extensions.sh --cache          # layer-cache the base build
+#   test/integration/compute/extensions.sh --keep           # leave the cluster up
 #
 # Honoured env vars: YB_HOST, YB_PORT (the backing YugabyteDB; default
 # 127.0.0.1:5433), INTEGRATION_PORT_BASE (pin the cluster's port block),
-# YB_AMP_REPO_DIR, YB_DBNAME.
+# YB_AMP_REPO_DIR, YB_DBNAME. For a private-source extension (hexabridge),
+# AMP_EXT_GH_TOKEN must be set — build.sh passes it through as the gh_token
+# BuildKit secret to fetch the source (see deploy/extensions/build.sh).
 #
 # Requires: docker, python3 + PyYAML (the manifest parse), a YugabyteDB, and a
 # built Postgres (pg_install/v18 — this script runs ./build.sh if it is
@@ -147,7 +150,20 @@ docker rm "$CID" >/dev/null
 [[ -d "$EXT_DIR/share/postgresql/extension" ]] || { echo "extracted tree missing share/postgresql/extension" >&2; exit 1; }
 [[ -d "$EXT_DIR/lib/postgresql" ]] || { echo "extracted tree missing lib/postgresql" >&2; exit 1; }
 
-# 4) Build the binaries yb_amp_local spawns at runtime (it does not build them
+# 4) The compute needs a built Postgres (+ the yb_amp extension) to run. build.sh
+#    is the single entry point that produces pg_install/v18 and the yb_amp .so.
+#    This has to happen BEFORE the cargo build below: postgres_ffi's build script
+#    generates bindings against pg_install/v18's server headers (it reads
+#    pg_config / include/postgresql/server), so a missing pg_install/v18 fails the
+#    cluster-binary build with "'c.h' file not found" rather than building it. The
+#    CI PG-install cache is keyed on amp/Makefile, so a Makefile change is a cache
+#    miss and pg_install/v18 is absent here on the first run after such a change.
+if [[ ! -x "$PGINST/bin/postgres" || ! -f "$PGINST/lib/postgresql/yb_amp.so" ]]; then
+    echo ">>> pg_install/v18 missing — building Postgres + yb_amp extension (./build.sh)"
+    bash "$REPO/build.sh"
+fi
+
+# 5) Build the binaries yb_amp_local spawns at runtime (it does not build them
 #    itself — a stale one surfaces as baffling runtime mismatches). The four
 #    server binaries are cargo targets; yb_amp_local and the controller are Go
 #    (controller/local/cmd, controller/cmd), built separately below. Mirrors run.sh.
@@ -167,14 +183,7 @@ fi
 ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local )
 ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
 
-# The compute needs a built Postgres (+ the yb_amp extension) to run. build.sh
-# is the single entry point that produces pg_install/v18 and the yb_amp .so.
-if [[ ! -x "$PGINST/bin/postgres" || ! -f "$PGINST/lib/postgresql/yb_amp.so" ]]; then
-    echo ">>> pg_install/v18 missing — building Postgres + yb_amp extension (./build.sh)"
-    bash "$REPO/build.sh"
-fi
-
-# 5) Run-scoped, isolated cluster identifiers (mirrors run.sh / pg_regress.sh).
+# 6) Run-scoped, isolated cluster identifiers (mirrors run.sh / pg_regress.sh).
 RUN_ID="${EPOCHSECONDS:-$(date +%s)}_$$"
 export YB_HOST="${YB_HOST:-127.0.0.1}"
 export YB_PORT="${YB_PORT:-5433}"
@@ -256,7 +265,7 @@ BR=$(yb cluster create ext --pg-version 18 | awk '/successfully created/{print $
 [[ -n "$BR" ]] || { echo "cluster create produced no branch id" >&2; exit 1; }
 echo ">>> branch: $BR"
 
-# 6) Create the endpoint with the two path GUCs pointing at the extracted tree.
+# 7) Create the endpoint with the two path GUCs pointing at the extracted tree.
 #    $system / $libdir stay literal (PG expands them); the extracted dir is
 #    interpolated by the shell. These are Postgres path lists, so entries are
 #    COLON-separated (like the chart's `join ":"` in configmap.yaml) — a comma
@@ -275,7 +284,7 @@ fi
 yb endpoint create ext --branch-id "$BR" --pg-version 18 --pg-port "$COMPUTE" "${PG_SETTINGS[@]}"
 yb endpoint start ext -t 600s
 
-# 7) Assert end-to-end via the Postgres we built (its psql must match the
+# 8) Assert end-to-end via the Postgres we built (its psql must match the
 #    compute's major version). Connect as cloud_admin over loopback (pg_hba
 #    trusts it, no password). -tA prints raw values for exact-match grepping.
 PSQL=("$PGINST/bin/psql" -h 127.0.0.1 -p "$COMPUTE" -U cloud_admin -d postgres -tA -v ON_ERROR_STOP=1)
@@ -355,6 +364,31 @@ SQL
         echo ">>> PASS pg_cron: preload + CREATE EXTENSION + scheduled job fired ($fired run(s))"
     else
         echo ">>> FAIL pg_cron: job never completed a succeeded run within 120s" >&2
+        echo "$out" >&2
+        exit 1
+    fi
+elif [[ "$EXT_NAME" == hexabridge ]]; then
+    # hexabridge is HexaCluster's Oracle-compat layer: a plain (non-preload)
+    # function library whose source lives in a PRIVATE repo (build.sh fetched it
+    # with $AMP_EXT_GH_TOKEN). CREATE EXTENSION is superuser-only (the .control
+    # ships no `trusted`); cloud_admin is the compute superuser. Beyond
+    # registration, call two deterministic, IMMUTABLE Oracle-compat functions so
+    # the loaded .so is actually exercised: nanvl returns its first arg when it is
+    # not NaN (-> 1), and utl_raw.length over the raw cast of 'AB' is 2 bytes.
+    # Same assertions as deploy/smoke-test.sh's hexabridge block.
+    out=$("${PSQL[@]}" <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS hexabridge;
+SELECT 'INSTALLED:'||extversion FROM pg_extension WHERE extname='hexabridge';
+SELECT 'NANVL:'||hexabridge.nanvl(1::float8, 2::float8);
+SELECT 'RAWLEN:'||utl_raw.length(utl_raw.cast_to_raw('AB'));
+SQL
+)
+    if echo "$out" | grep -q '^INSTALLED:0.1$' \
+       && echo "$out" | grep -q '^NANVL:1$' \
+       && echo "$out" | grep -q '^RAWLEN:2$'; then
+        echo ">>> PASS hexabridge: CREATE EXTENSION (v0.1) + nanvl(1,2)=1 + utl_raw.length('AB')=2"
+    else
+        echo ">>> FAIL hexabridge functional checks; output:" >&2
         echo "$out" >&2
         exit 1
     fi

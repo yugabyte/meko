@@ -95,6 +95,14 @@ else ifeq ($(UNAME_S),Darwin)
 	endif
 endif
 
+# Build Postgres with libxml2 so the server exports its XML core
+# (pg_xml_init_library etc.). The externalized `hexabridge` extension links that
+# machinery (its xmltype / dbms_xmldom packages), and its .so fails to load with
+# "undefined symbol: pg_xml_init_library" against a server built without XML.
+# libxml2 is ubiquitous, so it is added for every build type and platform: build
+# hosts need libxml2-dev (headers + xml2-config), the runtime needs libxml2.
+PG_CONFIGURE_OPTS += --with-libxml
+
 # Use -C option so that when PostgreSQL "make install" installs the
 # headers, the mtime of the headers are not changed when there have
 # been no changes to the files. Changing the mtime triggers an

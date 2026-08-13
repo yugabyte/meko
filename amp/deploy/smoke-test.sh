@@ -32,7 +32,11 @@
 # Then the preload path: an endpoint that opts into pg_cron (extensions:
 # ["pg_cron"]), assert the ImageVolume mounted at /extensions/pg_cron, pg_cron is
 # in shared_preload_libraries, `CREATE EXTENSION pg_cron`, and a scheduled job
-# runs to success. (The pgvector fork-inheritance sub-test is commented out
+# runs to success. Then a private-source extension: an endpoint that opts into
+# hexabridge (extensions:["hexabridge"]), assert the ImageVolume mounted at
+# /extensions/hexabridge, `CREATE EXTENSION hexabridge` (superuser-only), and an
+# Oracle-compat function returns its expected value. (The pgvector
+# fork-inheritance sub-test is commented out
 # pending #440 — a pre-existing pageserver attach bug crash-loops the fork
 # endpoint; see the block in the SMOKE_EXTENSIONS section.) Requires the
 # cluster's ImageVolume feature gate and images pushed by
@@ -411,11 +415,56 @@ SQL
   psql_pod "$CPOD" 127.0.0.1 55433 <<<"SELECT cron.unschedule('amp_pgcron_probe');" >/dev/null 2>&1
 
   # KEEP=1 leaves the pg_cron cluster/endpoint up for hands-on inspection.
-  if [ -n "${KEEP:-}" ]; then
+  if [ "$KEEP" = "1" ]; then
     echo "  KEEP set: leaving pg_cron cluster $CPROJ (endpoint pod $CPOD) up for inspection"
   else
     IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$CPROJ")
     st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron cluster cascade deleted" || bad "pg_cron cluster delete task=$st"
+  fi
+
+  hdr "externalized extensions: hexabridge opt-in mounts, CREATE EXTENSION, Oracle-compat fn"
+
+  # Its own cluster so this is independent of the sections above.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"hbproj"}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster created" || bad "hexabridge cluster task=$st"
+  HPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="hbproj")|.id')
+  HDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$HPROJ" | jq -r '.default_branch.branch_id')
+  [ -n "$HPROJ" ] && [ -n "$HDEF" ] && ok "hexabridge cluster materialized ($HPROJ / $HDEF)" || bad "hexabridge cluster not materialized"
+
+  # Opt into hexabridge. It is a plain (non-preload) extension, so like pgvector
+  # the pod comes up with just the ImageVolume mounted — no restart needed.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" '{"role":"read_write","extensions":["hexabridge"]}')
+  [ "$code" = 202 ] && ok "createEndpoint(extensions:[hexabridge]) 202" || bad "createEndpoint(hexabridge) code=$code"
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(hexabridge) succeeded" || bad "create_endpoint(hexabridge) task=$st"
+  HEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" | jq -r '.endpoints[0].id')
+  HPOD=$(wait_ready_pod "$HEP")
+  [ -n "$HPOD" ] && ok "hexabridge endpoint pod Ready ($HPOD)" || bad "hexabridge endpoint pod not Ready"
+
+  # The ImageVolume is mounted at /extensions/hexabridge with the control file.
+  kubectl -n "$NS" exec "$HPOD" -- test -f /extensions/hexabridge/share/postgresql/extension/hexabridge.control \
+    && ok "hexabridge ImageVolume mounted (/extensions/hexabridge)" || bad "hexabridge ImageVolume not mounted"
+
+  # CREATE EXTENSION (superuser-only; the smoke connection is the superuser) +
+  # two deterministic Oracle-compat calls that exercise the loaded .so: nanvl
+  # (returns the first arg when it is not NaN -> 1) and utl_raw over a cast
+  # (length of the 2-byte raw for 'AB' -> 2). Both are IMMUTABLE/pure, so the
+  # expected output is fixed.
+  out=$(psql_pod "$HPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS hexabridge;
+SELECT 'NANVL:'||hexabridge.nanvl(1::float8, 2::float8);
+SELECT 'RAWLEN:'||utl_raw.length(utl_raw.cast_to_raw('AB'));
+SQL
+)
+  { echo "$out" | grep -q '^NANVL:1$' && echo "$out" | grep -q '^RAWLEN:2$'; } \
+    && ok "hexabridge CREATE EXTENSION + nanvl(1,2)=1 + utl_raw.length('AB')=2" \
+    || bad "hexabridge function checks failed (got: $(echo "$out" | tr '\n' ' '))"
+
+  # KEEP=1 leaves the hexabridge cluster/endpoint up for hands-on inspection.
+  if [ "$KEEP" = "1" ]; then
+    echo "  KEEP set: leaving hexabridge cluster $HPROJ (endpoint pod $HPOD) up for inspection"
+  else
+    IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$HPROJ")
+    st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster cascade deleted" || bad "hexabridge cluster delete task=$st"
   fi
 
   # --- fork-inheritance sub-test: DISABLED pending #440 ----------------------

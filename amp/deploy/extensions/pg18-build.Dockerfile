@@ -21,6 +21,19 @@ ARG TAG=v1
 FROM $REPOSITORY/$IMAGE:$TAG
 WORKDIR /home/nonroot
 
+# System -dev headers some extensions link against. HexaBridge (amp-ext-hexabridge)
+# links libcurl (utl_mail/utl_http), libxml2 (dbms_xmldom), OpenSSL (dbms_crypto)
+# and zlib (utl_compress), so its compile needs these headers here — extensions
+# build as the unprivileged `nonroot` user and can't install packages themselves.
+# Idempotent (a no-op for anything the base already carries) and build-time only:
+# this image is never shipped to a pod, so it adds no runtime bloat.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       libcurl4-openssl-dev libxml2-dev libssl-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+USER nonroot
+
 # Same inputs as the endpoint image's pg-build stage, so the PG we compile
 # extensions against is byte-for-byte the PG the endpoint runs.
 COPY --chown=nonroot compute/vendor/postgres-v18 compute/vendor/postgres-v18

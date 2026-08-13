@@ -27,6 +27,15 @@ ARG DEBIAN_FLAVOR=${DEBIAN_VERSION}-slim
 # 1. Build patched Postgres v18 -> pg_install/v18.
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
 WORKDIR /home/nonroot
+# Postgres is configured --with-libxml (see Makefile) so the server exports the
+# XML core the hexabridge extension links; that needs libxml2 headers at build
+# time. The build-tools base runs as nonroot and can't apt-install, so add it as
+# root here (mirrors deploy/extensions/pg18-build.Dockerfile's ABI base).
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libxml2-dev \
+    && rm -rf /var/lib/apt/lists/*
+USER nonroot
 COPY --chown=nonroot compute/vendor/postgres-v18 compute/vendor/postgres-v18
 COPY --chown=nonroot Makefile Makefile
 COPY --chown=nonroot postgres.mk postgres.mk
@@ -105,6 +114,13 @@ RUN --mount=type=cache,target=/home/nonroot/target,uid=1000,gid=1000 \
 FROM debian:${DEBIAN_FLAVOR} AS endpoint
 WORKDIR /data
 
+# libxml2 (the runtime .so, not the -dev headers): the forked Postgres is now
+# built --with-libxml (PG_CONFIGURE_OPTS in Makefile) so the server links it, and
+# the externalized hexabridge extension .so links it too (its xmltype/dbms_xmldom
+# packages). This is a fresh stage from a slim base — packages from the build
+# stages don't carry over — so it must be installed here for either to load.
+# libcurl4/zlib1g/openssl cover hexabridge's other link deps (utl_mail/utl_http,
+# utl_compress, dbms_crypto).
 RUN set -e \
     && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
     && apt-get update \
@@ -112,6 +128,7 @@ RUN set -e \
         ca-certificates \
         openssl \
         libcurl4 \
+        libxml2 \
         libreadline8 \
         libseccomp2 \
         libicu72 \

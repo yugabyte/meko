@@ -153,7 +153,7 @@ jobs:
             build-essential libtool libreadline-dev zlib1g-dev flex bison \
             libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
             protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
-            postgresql-client
+            libxml2-dev postgresql-client
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
@@ -264,6 +264,9 @@ jobs:
       # can be reused. Empty on forks (which get no secrets) → the Quay login below
       # skips and extensions.sh builds the base cold, without --cache.
       QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
+      # Authenticates the private hexabridge source fetch (build.sh -> gh_token
+      # BuildKit secret). Empty on forks → the hexabridge step below skips.
+      AMP_EXT_GH_TOKEN: ${{ secrets.HEXABRIDGE_GH_PULL }}
     defaults:
       run:
         working-directory: amp
@@ -309,7 +312,10 @@ jobs:
           docker run -d --name yb --network host "$YB_IMAGE" \
             bin/yugabyted start --advertise_address=127.0.0.1 --background=false
 
-      # postgresql-client for pg_isready; python3-yaml for extensions.sh's manifest parse.
+      # postgresql-client for pg_isready; python3-yaml for extensions.sh's manifest
+      # parse. libxml2-dev pulls in the libxml2 runtime the host compute needs to
+      # load hexabridge.so (which links libxml2 for dbms_xmldom); libcurl/openssl/
+      # zlib runtimes come with their -dev packages already listed.
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -317,7 +323,7 @@ jobs:
             build-essential libtool libreadline-dev zlib1g-dev flex bison \
             libseccomp-dev libssl-dev clang pkg-config libpq-dev cmake \
             protobuf-compiler libprotobuf-dev libcurl4-openssl-dev libicu-dev \
-            postgresql-client python3-yaml
+            libxml2-dev postgresql-client python3-yaml
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install
@@ -378,6 +384,15 @@ jobs:
         env:
           INTEGRATION_PORT_BASE: "55000"
         run: test/integration/compute/extensions.sh --ext pg_cron ${{ steps.quay.outputs.cache }}
+
+      # hexabridge's source is private, so this needs AMP_EXT_GH_TOKEN — skipped on
+      # forks (no secrets), where the env var is empty. Distinct port block again
+      # (57000..57700) so it can't collide with the two runs above.
+      - name: Local extension test (hexabridge)
+        if: env.AMP_EXT_GH_TOKEN != ''
+        env:
+          INTEGRATION_PORT_BASE: "57000"
+        run: test/integration/compute/extensions.sh --ext hexabridge ${{ steps.quay.outputs.cache }}
 
       - name: Upload run logs
         if: failure()

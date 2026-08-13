@@ -108,33 +108,35 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 		t.Fatalf("forked child extensions = %v, want inherited [pgvector]", got)
 	}
 
-	// --- child opts into more; the union is sorted+deduped and the parent is
-	// unaffected (the snapshot is a copy, not a live pointer). ---
-	if err := b.AddBranchExtensions(ctx, clusterID, childID, []string{"rum", "pgvector"}); err != nil {
+	// --- child opts into more (a mix including hexabridge); the union is
+	// sorted+deduped and the parent is unaffected (the snapshot is a copy, not a
+	// live pointer). Sort is lexical: hexabridge < pgvector < rum. ---
+	if err := b.AddBranchExtensions(ctx, clusterID, childID, []string{"rum", "pgvector", "hexabridge"}); err != nil {
 		t.Fatalf("AddBranchExtensions(child): %v", err)
 	}
-	if got := mustExts(childID); !reflect.DeepEqual(got, []string{"pgvector", "rum"}) {
-		t.Fatalf("child extensions = %v, want sorted union [pgvector rum]", got)
+	if got := mustExts(childID); !reflect.DeepEqual(got, []string{"hexabridge", "pgvector", "rum"}) {
+		t.Fatalf("child extensions = %v, want sorted union [hexabridge pgvector rum]", got)
 	}
 	if got := mustExts(rootID); !reflect.DeepEqual(got, []string{"pgvector"}) {
 		t.Fatalf("parent extensions = %v after child add, want unchanged [pgvector]", got)
 	}
 
 	// --- re-adding is idempotent (absolute union, no double-apply). ---
-	if err := b.AddBranchExtensions(ctx, clusterID, childID, []string{"pgvector", "rum"}); err != nil {
+	if err := b.AddBranchExtensions(ctx, clusterID, childID, []string{"pgvector", "rum", "hexabridge"}); err != nil {
 		t.Fatalf("AddBranchExtensions(idempotent): %v", err)
 	}
-	if got := mustExts(childID); !reflect.DeepEqual(got, []string{"pgvector", "rum"}) {
-		t.Fatalf("child extensions after idempotent re-add = %v, want [pgvector rum]", got)
+	if got := mustExts(childID); !reflect.DeepEqual(got, []string{"hexabridge", "pgvector", "rum"}) {
+		t.Fatalf("child extensions after idempotent re-add = %v, want [hexabridge pgvector rum]", got)
 	}
 
 	// --- a grandchild forked AFTER the child's extra opt-in inherits the fuller
-	// set; a second fork off the (still single-extension) root does not. ---
+	// set (including hexabridge); a second fork off the (still single-extension)
+	// root does not. ---
 	grandID := uuid.New()
 	childHex := registry.FormatBranchID(childID)
 	recordBranch(grandID, "b2", &childHex, "0/1C90")
-	if got := mustExts(grandID); !reflect.DeepEqual(got, []string{"pgvector", "rum"}) {
-		t.Fatalf("grandchild extensions = %v, want inherited [pgvector rum]", got)
+	if got := mustExts(grandID); !reflect.DeepEqual(got, []string{"hexabridge", "pgvector", "rum"}) {
+		t.Fatalf("grandchild extensions = %v, want inherited [hexabridge pgvector rum]", got)
 	}
 	sibID := uuid.New()
 	recordBranch(sibID, "b3", &rootHex, "0/16B8")

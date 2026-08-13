@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Generic yb-amp extension image (the common path for pure-C / PGXS extensions).
 #
 # Fetches an extension's source tarball, optionally runs a PREP hook and applies
@@ -52,10 +53,25 @@ ARG TRUSTED=""
 # stage/ and out/ live under the writable build dir: the build-tools base runs as
 # the unprivileged `nonroot` user, which can't create directories at the
 # filesystem root (/stage, /out). The final scratch stage copies from out/.
-RUN set -eux; \
+# The optional gh_token secret authenticates the source fetch for extensions
+# whose tarball lives in a private repo (e.g. hexabridge on a private GitHub);
+# build.sh passes it as a BuildKit secret so the token never lands in a layer.
+# required=false keeps public extensions (pgvector, pg_cron) building with no
+# secret mounted. The checksum is still verified, so a bad/missing token fails
+# closed (404 body -> sha mismatch) rather than shipping garbage.
+# mode=0444: this stage runs as the base image's `nonroot` user, but a secret
+# mount defaults to root-owned 0400 — unreadable here, which silently drops the
+# auth header and 404s the private fetch. World-readable is safe: the mount is an
+# ephemeral tmpfs scoped to this RUN, never written to a layer.
+RUN --mount=type=secret,id=gh_token,required=false,mode=0444 \
+    set -eux; \
     stage=/home/nonroot/build/stage; \
     out=/home/nonroot/build/out; \
-    curl -fsSL "$URL" -o src.tgz; \
+    auth=""; \
+    if [ -s /run/secrets/gh_token ]; then \
+        auth="Authorization: Bearer $(cat /run/secrets/gh_token)"; \
+    fi; \
+    curl -fsSL ${auth:+-H "$auth"} "$URL" -o src.tgz; \
     echo "${SHA256}  src.tgz" | sha256sum -c -; \
     mkdir src; \
     tar -xzf src.tgz --strip-components=1 -C src; \

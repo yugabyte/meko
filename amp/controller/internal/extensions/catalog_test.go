@@ -22,6 +22,9 @@ func TestCatalogHasKnownAndUnknown(t *testing.T) {
 	if !c.Has("pg_cron") {
 		t.Fatal("Has(pg_cron) = false, want true (a known catalog extension)")
 	}
+	if !c.Has("hexabridge") {
+		t.Fatal("Has(hexabridge) = false, want true (a known catalog extension)")
+	}
 	if c.Has("totally-unknown-ext") {
 		t.Fatal("Has(totally-unknown-ext) = true, want false")
 	}
@@ -44,6 +47,17 @@ func TestCatalogResolveBuildsImageRef(t *testing.T) {
 	want := []Resolved{{Name: "pgvector", Image: "quay.io/yugabyte/amp-ext-pgvector:0.8.2", Preload: false}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Resolve(pgvector) = %+v, want %+v", got, want)
+	}
+}
+
+func TestCatalogResolveHexabridge(t *testing.T) {
+	// hexabridge is a plain (non-preload) opt-in extension; Resolve yields its
+	// image ref with Preload:false, and it stays off the default set.
+	c := NewCatalog("quay.io/yugabyte")
+	got := c.Resolve([]string{"hexabridge"})
+	want := []Resolved{{Name: "hexabridge", Image: "quay.io/yugabyte/amp-ext-hexabridge:0.1", Preload: false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Resolve(hexabridge) = %+v, want %+v", got, want)
 	}
 }
 
