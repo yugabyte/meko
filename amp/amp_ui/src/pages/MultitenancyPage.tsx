@@ -74,8 +74,8 @@ export default function MultitenancyPage() {
     <PageContainer>
       <PageHeader
         eyebrow="Cluster"
-        title="Data branching"
-        description="Pick a shared pool and one of its clusters to see the branch tree, then fork zero-copy sub-branches off any branch."
+        title="Endpoints and Branches"
+        description="Pick a shared pool and one of its clusters to see its branch tree and the endpoints serving each branch, then fork zero-copy sub-branches off any branch."
         action={
           <Button
             onClick={() => setNewBranchOpen(true)}
@@ -159,12 +159,23 @@ export default function MultitenancyPage() {
               {[
                 { k: "Cluster", v: dbName },
                 { k: "Engine", v: `PostgreSQL ${branches.data[0]?.pg_version ?? 18}` },
-                { k: "Shared pool", v: poolName },
+                { k: "Cluster ID", v: clusterId, mono: true },
                 { k: "Branches", v: String(branches.data.length) },
-              ].map(({ k, v }) => (
+              ].map(({ k, v, mono }) => (
                 <div key={k} className="bg-card p-3">
                   <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{k}</div>
-                  <div className="mt-1 truncate text-sm font-medium text-foreground">{v}</div>
+                  {/* A uuid is 36 chars: sized to fit the tile on one line at
+                      the 4-column breakpoint, and wrapping rather than
+                      truncating below it. */}
+                  <div
+                    className={
+                      mono
+                        ? "mt-1 break-all font-mono text-[11px] font-medium leading-5 text-foreground"
+                        : "mt-1 truncate text-sm font-medium text-foreground"
+                    }
+                  >
+                    {v}
+                  </div>
                 </div>
               ))}
             </div>

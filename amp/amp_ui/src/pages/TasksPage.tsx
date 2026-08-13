@@ -39,7 +39,7 @@ import {
 } from "@/components/data/Page";
 import { useTasks } from "@/lib/api/queries";
 import type { Task, TaskStatus } from "@/lib/api/types";
-import { formatDateTime, shortId } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 
 /** Page size for the task history. */
 const PAGE_SIZE = 20;
@@ -216,11 +216,9 @@ function taskKindLabel(kind: string): string {
   return TASK_KIND_LABELS[kind] ?? kind.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
 
-/** Cluster column: the short cluster id, else the target ref, else a dash. */
+/** Cluster column: the cluster id, else the target ref, else a dash. */
 function clusterLabel(task: Task): string {
-  if (task.cluster_id) return shortId(task.cluster_id);
-  if (task.target_ref) return shortId(task.target_ref);
-  return "—";
+  return task.cluster_id || task.target_ref || "—";
 }
 
 /** Tailwind tint per status — matches the tinted-badge convention used

@@ -147,6 +147,7 @@ export function ComputeInstance({
             </span>
           )}
         </span>
+        <span className="font-mono text-xs text-muted-foreground">{ep.id}</span>
         <Badge variant="secondary" className="font-mono text-[10px]">
           {ep.role.replace("_", "-")}
         </Badge>

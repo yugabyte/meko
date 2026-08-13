@@ -28,7 +28,7 @@ import {
   useStoragePools,
   type FleetRow,
 } from "@/lib/api/queries";
-import { formatDateTime, shortId } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { CreateClusterWizard } from "@/components/CreateClusterWizard";
 import { DeleteClusterDialog } from "@/pages/multitenancy/components/DeleteClusterDialog";
 
@@ -176,7 +176,7 @@ export default function FleetPage() {
                               {cluster.name}
                             </p>
                             <p className="font-mono text-xs text-muted-foreground">
-                              {shortId(cluster.id)}
+                              {cluster.id}
                             </p>
                           </div>
                         </div>

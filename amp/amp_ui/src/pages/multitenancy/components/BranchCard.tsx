@@ -21,7 +21,7 @@ import { ApiError } from "@/lib/api/client";
 import { useDeleteBranch } from "@/lib/api/queries";
 import type { Branch, Endpoint } from "@/lib/api/types";
 import { dataBranchingMessages as msg } from "@/lib/messages";
-import { formatDateTime, shortId } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { EndpointsSection } from "./EndpointsSection";
 
 export function BranchCard({
@@ -93,7 +93,7 @@ export function BranchCard({
           pg {branch.pg_version}
         </span>
         <span className="font-mono text-xs text-muted-foreground">
-          {shortId(branch.branch_id)}
+          {branch.branch_id}
         </span>
         {parentName && (
           <span className="text-xs text-muted-foreground">

@@ -31,7 +31,7 @@ import {
   useStoragePools,
 } from "@/lib/api/queries";
 import type { StoragePool } from "@/lib/api/types";
-import { formatDateTime, shortId } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 
 export default function SharedPoolsPage() {
   const navigate = useNavigate();
@@ -145,7 +145,7 @@ function PoolCard({
         <div className="min-w-0">
           <p className="truncate font-semibold">{pool.name}</p>
           <p className="font-mono text-xs text-muted-foreground">
-            {shortId(pool.id)}
+            {pool.id}
           </p>
         </div>
       </div>

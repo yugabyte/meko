@@ -13,7 +13,3 @@ export function formatDateTime(iso: string): string {
   });
 }
 
-/** First segment of a UUID — enough to identify a row at a glance. */
-export function shortId(id: string): string {
-  return id.split("-")[0] ?? id;
-}

@@ -34,8 +34,8 @@ export const WORKSPACE_NAV: NavItem[] = [
   // Foundations tab temporarily disabled — no backing API yet.
   // { label: "Foundations", to: "/foundations", icon: Layers },
   { label: "Shared pools", to: "/shared-pools", icon: Boxes },
-  { label: "Fleet", to: "/fleet", icon: Server },
   { label: "Cluster", to: "/multitenancy", icon: Globe },
+  { label: "Fleet", to: "/fleet", icon: Server },
   { label: "Tasks", to: "/tasks", icon: ListChecks },
 ];
 
