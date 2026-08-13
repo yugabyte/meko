@@ -557,7 +557,8 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, clusterID, branchID 
 // (clusterID, branchID) branch. A repeated id is a no-op; a *second* read_write
 // endpoint (a different id on a branch that already has one) is ErrConflict, as
 // is a name already taken on the branch; a missing branch is ErrNotFound.
-func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
+func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string,
+	config, pgSettings, pageserverSettings, safekeeperSettings []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.endpoints[endpointID]; ok {
@@ -599,17 +600,32 @@ func (m *MemBackend) EnsureEndpointRecord(_ context.Context, endpointID, cluster
 		settings = nil
 	}
 	m.endpoints[endpointID] = Endpoint{
-		ID:         endpointID,
-		ClusterID:  clusterID,
-		BranchID:   branchID,
-		Role:       role,
-		Name:       name,
-		PgSettings: settings,
-		CPU:        cfg.CPU,
-		Memory:     cfg.Memory,
-		CreatedAt:  m.now(),
+		ID:                 endpointID,
+		ClusterID:          clusterID,
+		BranchID:           branchID,
+		Role:               role,
+		Name:               name,
+		PgSettings:         settings,
+		PageserverSettings: decodeAnyMap(pageserverSettings),
+		SafekeeperSettings: decodeAnyMap(safekeeperSettings),
+		CPU:                cfg.CPU,
+		Memory:             cfg.Memory,
+		CreatedAt:          m.now(),
 	}
 	return nil
+}
+
+// decodeAnyMap mirrors PgBackend's read-back of a daemon-settings column: absent,
+// empty and unparseable all become nil.
+func decodeAnyMap(doc []byte) map[string]any {
+	if len(doc) == 0 {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(doc, &out); err != nil || len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // UpdateEndpointResources merges the new cpu/memory into the stored endpoint,

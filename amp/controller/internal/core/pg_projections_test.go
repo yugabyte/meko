@@ -62,7 +62,11 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 	endpointID := uuid.New()
 	if err := b.EnsureEndpointRecord(ctx, endpointID, clusterID, branchID, RoleReadWrite, "primary",
 		[]byte(`{"cpu":"2","memory":"4Gi","extended":{"pg_port":55432}}`),
-		[]byte(`{"work_mem":"64MB"}`)); err != nil {
+		[]byte(`{"work_mem":"64MB"}`),
+		// Disjoint keys: the two daemon columns are adjacent in the projection, so
+		// identical fixtures would let a transposed scan pass.
+		[]byte(`{"tenant_config.enable_gc":true,"scale_factor":8}`),
+		[]byte(`{"wal_cache_size_mib":512}`)); err != nil {
 		t.Fatalf("ensure endpoint: %v", err)
 	}
 
@@ -114,6 +118,20 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		}
 		if len(got.Extended) == 0 {
 			t.Error("extended_config did not survive the round trip")
+		}
+		// Each must land in its own field, and the dotted key must survive as a
+		// literal key rather than being nested by the json round trip.
+		if got.PageserverSettings["tenant_config.enable_gc"] != true {
+			t.Errorf("pageserver_settings = %v, want tenant_config.enable_gc true", got.PageserverSettings)
+		}
+		if _, wrong := got.PageserverSettings["wal_cache_size_mib"]; wrong {
+			t.Errorf("safekeeper settings leaked into pageserver_settings: %v", got.PageserverSettings)
+		}
+		if got.SafekeeperSettings["wal_cache_size_mib"] != float64(512) {
+			t.Errorf("safekeeper_settings = %v, want wal_cache_size_mib 512", got.SafekeeperSettings)
+		}
+		if _, wrong := got.SafekeeperSettings["scale_factor"]; wrong {
+			t.Errorf("pageserver settings leaked into safekeeper_settings: %v", got.SafekeeperSettings)
 		}
 
 		list, total, err := b.ListEndpoints(ctx, sp.ID, clusterID, branchID, 100, 0)

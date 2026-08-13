@@ -26,20 +26,23 @@ import (
 type fakeStateStore struct {
 	mu sync.Mutex
 
-	ensureClusterCalls   int
-	ensureBranchCalls    int
-	endpointRecordCalls  int
-	setAddressCalls      int
-	endpointNames        map[uuid.UUID]string
-	branchPgSettings     map[uuid.UUID]map[string]string
-	endpointPgSettings   map[uuid.UUID]string
-	deleteEndpointCalls  int
-	createdBranches      map[uuid.UUID]struct{} // distinct branch ids created
-	createdEndpoints     map[uuid.UUID]string   // endpoint id -> role
-	endpointAddresses    map[uuid.UUID]string
-	endpointResources    map[uuid.UUID][2]string // endpoint id -> {cpu, memory} last resized to
-	deletedEndpoints     map[uuid.UUID]struct{}
-	existingWriterBranch map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
+	ensureClusterCalls  int
+	ensureBranchCalls   int
+	endpointRecordCalls int
+	setAddressCalls     int
+	endpointNames       map[uuid.UUID]string
+	branchPgSettings    map[uuid.UUID]map[string]string
+	endpointPgSettings  map[uuid.UUID]string
+	// The two daemon override documents, as encoded JSON, keyed by endpoint.
+	endpointPageserverSettings map[uuid.UUID]string
+	endpointSafekeeperSettings map[uuid.UUID]string
+	deleteEndpointCalls        int
+	createdBranches            map[uuid.UUID]struct{} // distinct branch ids created
+	createdEndpoints           map[uuid.UUID]string   // endpoint id -> role
+	endpointAddresses          map[uuid.UUID]string
+	endpointResources          map[uuid.UUID][2]string // endpoint id -> {cpu, memory} last resized to
+	deletedEndpoints           map[uuid.UUID]struct{}
+	existingWriterBranch       map[uuid.UUID]uuid.UUID // branch id -> the writer endpoint id already present
 
 	// Cascade-delete bookkeeping: where each (live) endpoint and branch sits, so
 	// EndpointIDsForBranch / EndpointIDsForCluster can enumerate children and the
@@ -194,7 +197,8 @@ func (f *fakeStateStore) BranchPgSettings(_ context.Context, _, branchID uuid.UU
 	return out, nil
 }
 
-func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, branchID uuid.UUID, role, name string, _, pgSettings []byte) error {
+func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, branchID uuid.UUID, role, name string,
+	_, pgSettings, pageserverSettings, safekeeperSettings []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.endpointRecordCalls++
@@ -222,6 +226,20 @@ func (f *fakeStateStore) EnsureEndpointRecord(_ context.Context, endpointID, _, 
 			f.endpointPgSettings = map[uuid.UUID]string{}
 		}
 		f.endpointPgSettings[endpointID] = string(pgSettings)
+	}
+	// Kept as the raw encoded JSON so a test can catch the two documents being
+	// swapped, which the same-typed parameters make possible.
+	if len(pageserverSettings) > 0 {
+		if f.endpointPageserverSettings == nil {
+			f.endpointPageserverSettings = map[uuid.UUID]string{}
+		}
+		f.endpointPageserverSettings[endpointID] = string(pageserverSettings)
+	}
+	if len(safekeeperSettings) > 0 {
+		if f.endpointSafekeeperSettings == nil {
+			f.endpointSafekeeperSettings = map[uuid.UUID]string{}
+		}
+		f.endpointSafekeeperSettings[endpointID] = string(safekeeperSettings)
 	}
 	return nil
 }

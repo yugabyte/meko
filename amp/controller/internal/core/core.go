@@ -142,6 +142,12 @@ type Endpoint struct {
 	// winning on a key both define — see EffectivePgSettings. Nil when none are
 	// set.
 	PgSettings map[string]string
+	// PageserverSettings and SafekeeperSettings are this endpoint's overrides for
+	// the two storage daemons in its pod, merged into their toml at pod start.
+	// Unlike PgSettings there is no branch-level equivalent to merge with, so what
+	// is here is the whole story. Nil when none are set.
+	PageserverSettings map[string]any
+	SafekeeperSettings map[string]any
 	// Extended is the caller's opaque extended_config, stored and returned
 	// verbatim. The control plane never looks inside it; it exists so whatever
 	// deploys the compute can carry what the API does not model (the ports a

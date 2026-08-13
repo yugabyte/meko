@@ -259,6 +259,33 @@ type CreateEndpointRequest struct {
 	// branch.
 	Name *string `json:"name,omitempty"`
 
+	// PageserverSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	PageserverSettings *DaemonSettings `json:"pageserver_settings,omitempty"`
+
 	// PgSettings Extra PostgreSQL settings for THIS endpoint, as `{name: value}`.
 	// They merge over the branch's `pg_settings` and win on a key both
 	// define, so this is the per-endpoint override of a branch-wide
@@ -274,6 +301,33 @@ type CreateEndpointRequest struct {
 
 	// Role The endpoint's role. A branch admits at most one read_write endpoint.
 	Role *CreateEndpointRequestRole `json:"role,omitempty"`
+
+	// SafekeeperSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
 }
 
 // CreateEndpointRequestDiskType Backing disk for the endpoint's data volume. `network` (the default)
@@ -307,6 +361,33 @@ type CreateUserRequest struct {
 	IsAdmin *bool `json:"is_admin,omitempty"`
 }
 
+// DaemonSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+// flat `{key: value}` object merged into that daemon's toml at pod start.
+// They beat every resource-derived default the supervisor computes.
+//
+// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+// is how the pageserver's GC knobs are reached at all — they live in
+// `tenant_config`, not at the top level:
+//
+// ```json
+// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+// ```
+//
+// **Values must be scalars** (boolean, integer, float, string). The nesting
+// is expressed entirely in the key; a nested object as a *value* is
+// rejected. Durations and byte sizes are strings in the daemons' own format
+// (`"7 days"`, `"1 GiB"`).
+//
+// Validated against a key set generated from the daemons' own config types,
+// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+// rather than a pod that will not start.
+//
+// Applied at pod start, so a change takes effect on the endpoint's next
+// start — there is no live-reload path today.
+type DaemonSettings map[string]interface{}
+
 // Endpoint defines model for Endpoint.
 type Endpoint struct {
 	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.
@@ -328,6 +409,33 @@ type Endpoint struct {
 	// Name The caller's handle for this endpoint, unique among its branch's endpoints. Empty when the endpoint was created without one.
 	Name string `json:"name"`
 
+	// PageserverSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	PageserverSettings *DaemonSettings `json:"pageserver_settings,omitempty"`
+
 	// PgSettings This endpoint's OWN extra PostgreSQL settings. The settings its
 	// compute actually runs with are its branch's merged with these, these
 	// winning on a key both define — so read the branch's too if you want
@@ -341,6 +449,33 @@ type Endpoint struct {
 	// defaults of 2 CPU cores and 4Gi of memory.
 	Resources *EndpointResources `json:"resources,omitempty"`
 	Role      EndpointRole       `json:"role"`
+
+	// SafekeeperSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
 
 	// TailnetAddress Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.
 	TailnetAddress string `json:"tailnet_address"`

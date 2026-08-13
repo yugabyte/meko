@@ -473,7 +473,7 @@ func (b *PgBackend) CreateEndpoint(ctx context.Context, clusterID, branchID uuid
 // An endpoint has no cluster_id of its own — it reaches its cluster through its
 // branch — so every projection joins `branches` to supply it. That join is also
 // what scopes a query to a cluster.
-const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.config->'extended', e.created_at
+const endpointSelect = `SELECT e.id::text, eb.cluster_id::text, e.branch_id::text, e.role::text, COALESCE(e.name, ''), COALESCE(e.address, ''), COALESCE(e.tailnet_address, ''), COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', ''), e.pg_settings, e.pageserver_settings, e.safekeeper_settings, e.config->'extended', e.created_at
 	FROM amp_registry.endpoints e
 	JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id`
 
@@ -728,9 +728,12 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 		clusterStr  string
 		branchStr   string
 		settingsRaw []byte
+		psRaw       []byte
+		skRaw       []byte
 		ep          Endpoint
 	)
-	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory, &settingsRaw, &ep.Extended, &ep.CreatedAt); err != nil {
+	if err := r.Scan(&idStr, &clusterStr, &branchStr, &ep.Role, &ep.Name, &ep.Address, &ep.TailnetAddress, &ep.CPU, &ep.Memory,
+		&settingsRaw, &psRaw, &skRaw, &ep.Extended, &ep.CreatedAt); err != nil {
 		return Endpoint{}, err
 	}
 	id, err := uuid.Parse(idStr)
@@ -751,5 +754,28 @@ func scanEndpoint(r scanRow) (Endpoint, error) {
 	if ep.PgSettings, err = decodePgSettings(settingsRaw, "endpoint"); err != nil {
 		return Endpoint{}, err
 	}
+	if ep.PageserverSettings, err = decodeDaemonSettings(psRaw, "pageserver"); err != nil {
+		return Endpoint{}, err
+	}
+	if ep.SafekeeperSettings, err = decodeDaemonSettings(skRaw, "safekeeper"); err != nil {
+		return Endpoint{}, err
+	}
 	return ep, nil
+}
+
+// decodeDaemonSettings is decodePgSettings for the daemon override columns, whose
+// values are mixed-type scalars. Absent or empty decodes to nil, so "no overrides"
+// is one case.
+func decodeDaemonSettings(raw []byte, what string) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode %s_settings: %w", what, err)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }

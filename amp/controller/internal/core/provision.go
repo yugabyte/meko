@@ -182,6 +182,15 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 	return nil
 }
 
+// orEmptyJSON substitutes `{}` for an absent document, since the settings columns
+// are NOT NULL.
+func orEmptyJSON(doc []byte) []byte {
+	if len(doc) == 0 {
+		return []byte("{}")
+	}
+	return doc
+}
+
 // EnsureEndpointRecord idempotently records an endpoint with the given id on
 // branchID (the create_endpoint step's first effect). Re-running with the same id
 // is a no-op (ON CONFLICT (id) DO NOTHING), so the single-writer partial unique
@@ -200,7 +209,8 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 // The branch must also be LIVE, and that check is a conditional WRITE of the
 // branch row rather than a read of it, so it serializes against a concurrent drop
 // instead of write-skewing past it (see the interlock comment in the body).
-func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error {
+func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string,
+	config, pgSettings, pageserverSettings, safekeeperSettings []byte) error {
 	_ = clusterID // implied by branchID; see the doc comment
 	var cfg any
 	if len(config) > 0 {
@@ -210,10 +220,9 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, cluste
 	if name != "" {
 		nameArg = name
 	}
-	settings := pgSettings
-	if len(settings) == 0 {
-		settings = []byte("{}")
-	}
+	settings := orEmptyJSON(pgSettings)
+	psSettings := orEmptyJSON(pageserverSettings)
+	skSettings := orEmptyJSON(safekeeperSettings)
 
 	// One transaction, so the record and the interlock below commit or roll back
 	// together: a refused endpoint leaves no row behind.
@@ -224,10 +233,12 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, cluste
 	defer tx.Rollback(ctx)
 
 	tag, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.endpoints (id, branch_id, role, name, config, pg_settings)
-		 VALUES ($1::uuid, $2::uuid, $3::amp_registry.endpoint_role, $4, $5::jsonb, $6::jsonb)
+		`INSERT INTO amp_registry.endpoints
+		   (id, branch_id, role, name, config, pg_settings, pageserver_settings, safekeeper_settings)
+		 VALUES ($1::uuid, $2::uuid, $3::amp_registry.endpoint_role, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb)
 		 ON CONFLICT (id) DO NOTHING`,
-		endpointID.String(), branchID.String(), role, nameArg, cfg, string(settings))
+		endpointID.String(), branchID.String(), role, nameArg, cfg,
+		string(settings), string(psSettings), string(skSettings))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {

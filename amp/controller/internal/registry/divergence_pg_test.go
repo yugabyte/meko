@@ -78,7 +78,7 @@ func TestPgTombstoneGuards(t *testing.T) {
 		t.Fatalf("record root: %v", err)
 	}
 	endpointID := uuid.New()
-	if err := backend.EnsureEndpointRecord(ctx, endpointID, clusterID, rootID, "read_write", "", nil, nil); err != nil {
+	if err := backend.EnsureEndpointRecord(ctx, endpointID, clusterID, rootID, "read_write", "", nil, nil, nil, nil); err != nil {
 		t.Fatalf("create product endpoint: %v", err)
 	}
 

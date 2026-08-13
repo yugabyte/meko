@@ -757,6 +757,24 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		pgSettings = *request.Body.PgSettings
 	}
 
+	// The two storage daemons' overrides. See validateDaemonSettings for why a bad
+	// key has to be caught here rather than at the pod.
+	var pageserverSettings, safekeeperSettings map[string]any
+	if request.Body != nil && request.Body.PageserverSettings != nil {
+		pageserverSettings = *request.Body.PageserverSettings
+	}
+	if request.Body != nil && request.Body.SafekeeperSettings != nil {
+		safekeeperSettings = *request.Body.SafekeeperSettings
+	}
+	if err := validateDaemonSettings(daemonPageserver, pageserverSettings); err != nil {
+		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(
+			apiError("invalid_argument", err.Error()))}, nil
+	}
+	if err := validateDaemonSettings(daemonSafekeeper, safekeeperSettings); err != nil {
+		return CreateEndpoint400JSONResponse{BadRequestJSONResponse(
+			apiError("invalid_argument", err.Error()))}, nil
+	}
+
 	// Opaque passthrough: stored verbatim under config.extended and handed to the
 	// deployer. The control plane does not look inside.
 	var extended json.RawMessage
@@ -773,16 +791,18 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 	// create_endpoint step; the single-writer rule (a duplicate read_write
 	// endpoint) now surfaces as a failed task rather than a synchronous 409.
 	t, err := c.tasks.CreateEndpoint(ctx, task.CreateEndpointInput{
-		ClusterID:  br.ClusterID,
-		BranchID:   br.BranchID,
-		Role:       role,
-		PgVersion:  br.PgVersion,
-		Name:       name,
-		CPU:        cpu,
-		Memory:     memory,
-		Extensions: exts,
-		Extended:   extended,
-		PgSettings: pgSettings,
+		ClusterID:          br.ClusterID,
+		BranchID:           br.BranchID,
+		Role:               role,
+		PgVersion:          br.PgVersion,
+		Name:               name,
+		CPU:                cpu,
+		Memory:             memory,
+		Extensions:         exts,
+		Extended:           extended,
+		PgSettings:         pgSettings,
+		PageserverSettings: pageserverSettings,
+		SafekeeperSettings: safekeeperSettings,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create endpoint task: %w", err)
@@ -1082,6 +1102,14 @@ func endpointToAPI(e core.Endpoint) Endpoint {
 	}
 	if len(e.PgSettings) > 0 {
 		out.PgSettings = &e.PgSettings
+	}
+	if len(e.PageserverSettings) > 0 {
+		ps := DaemonSettings(e.PageserverSettings)
+		out.PageserverSettings = &ps
+	}
+	if len(e.SafekeeperSettings) > 0 {
+		sk := DaemonSettings(e.SafekeeperSettings)
+		out.SafekeeperSettings = &sk
 	}
 	// Echoed verbatim, including its internal shape: whoever set it is the only
 	// party that knows what it means.

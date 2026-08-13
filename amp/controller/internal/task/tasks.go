@@ -197,6 +197,12 @@ type CreateEndpointInput struct {
 	Extended json.RawMessage `json:"extended,omitempty"`
 	// PgSettings are this endpoint's own extra PostgreSQL settings.
 	PgSettings map[string]string `json:"pg_settings,omitempty"`
+	// PageserverSettings and SafekeeperSettings are per-endpoint overrides for the
+	// two storage daemons in the pod, as flat {key: scalar} maps whose keys may be
+	// dotted paths ("tenant_config.enable_gc"). Validated by the API before the
+	// task is recorded.
+	PageserverSettings map[string]any `json:"pageserver_settings,omitempty"`
+	SafekeeperSettings map[string]any `json:"safekeeper_settings,omitempty"`
 	// CPU and Memory are the pod's compute reservation (Kubernetes quantities),
 	// applied as request == limit for Guaranteed QoS. Empty falls back to the
 	// deployer/chart default (2 cores / 4Gi).
@@ -218,17 +224,19 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 	endpointID := uuid.New()
 	steps := []StepSpec{
 		stepSpec(StepCreateEndpoint, CreateEndpointArgs{
-			EndpointID: endpointID,
-			ClusterID:  in.ClusterID,
-			BranchID:   in.BranchID,
-			Role:       role,
-			PgVersion:  in.PgVersion,
-			Name:       in.Name,
-			CPU:        in.CPU,
-			Memory:     in.Memory,
-			Extensions: in.Extensions,
-			Extended:   in.Extended,
-			PgSettings: in.PgSettings,
+			EndpointID:         endpointID,
+			ClusterID:          in.ClusterID,
+			BranchID:           in.BranchID,
+			Role:               role,
+			PgVersion:          in.PgVersion,
+			Name:               in.Name,
+			CPU:                in.CPU,
+			Memory:             in.Memory,
+			Extensions:         in.Extensions,
+			Extended:           in.Extended,
+			PgSettings:         in.PgSettings,
+			PageserverSettings: in.PageserverSettings,
+			SafekeeperSettings: in.SafekeeperSettings,
 		}),
 	}
 	return s.create(ctx, KindCreateEndpoint, in, in.ClusterID, endpointID.String(), steps)

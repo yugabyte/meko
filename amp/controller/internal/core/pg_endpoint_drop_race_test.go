@@ -109,7 +109,7 @@ func TestPgEndpointVsBranchDropSerializes(t *testing.T) {
 	if err := b.DeleteBranch(ctx, clusterID, branchID); err != nil {
 		t.Fatalf("tombstone branch: %v", err)
 	}
-	if err := b.EnsureEndpointRecord(ctx, uuid.New(), clusterID, branchID, RoleReadWrite, "", nil, nil); !errors.Is(err, ErrNotFound) {
+	if err := b.EnsureEndpointRecord(ctx, uuid.New(), clusterID, branchID, RoleReadWrite, "", nil, nil, nil, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("endpoint on a tombstoned branch: want ErrNotFound, got %v", err)
 	}
 	if n := endpointRows(branchID); n != 0 {
@@ -142,7 +142,7 @@ func TestPgEndpointVsBranchDropSerializes(t *testing.T) {
 		r := &races[i]
 		wg.Go(func() {
 			<-start
-			r.createErr = b.EnsureEndpointRecord(ctx, r.endpointID, clusterID, r.branchID, RoleReadWrite, "", nil, nil)
+			r.createErr = b.EnsureEndpointRecord(ctx, r.endpointID, clusterID, r.branchID, RoleReadWrite, "", nil, nil, nil, nil)
 		})
 		wg.Go(func() {
 			<-start

@@ -50,7 +50,13 @@ type StateStore interface {
 	// with the given id, or no-ops if that id already exists. A *second*
 	// read_write endpoint (a different id violating the single-writer index) or a
 	// missing branch is a real error.
-	EnsureEndpointRecord(ctx context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string, config, pgSettings []byte) error
+	//
+	// The four trailing JSON documents are positional and same-typed, so check the
+	// order when editing a call. Not a struct because the type would have to live
+	// in `task` or `core`, and `core`'s in-package test imports back the other
+	// way, so that edge would be an import cycle.
+	EnsureEndpointRecord(ctx context.Context, endpointID, clusterID, branchID uuid.UUID, role, name string,
+		config, pgSettings, pageserverSettings, safekeeperSettings []byte) error
 
 	// BranchExtensions returns the branch's opted-in externalized extension names
 	// (the durable set the create_endpoint step unions with the catalog defaults

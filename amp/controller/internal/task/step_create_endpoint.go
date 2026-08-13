@@ -46,6 +46,12 @@ type CreateEndpointArgs struct {
 	// PgSettings are this endpoint's own extra PostgreSQL settings, merged over
 	// its branch's at spec-build time (the endpoint's win).
 	PgSettings map[string]string `json:"pg_settings,omitempty"`
+	// PageserverSettings and SafekeeperSettings are this endpoint's overrides for
+	// the two storage daemons in its pod. Unlike the compute spec they never travel
+	// through the deployer — the supervisor reads them from the endpoint's row at
+	// pod start — but they are carried here so a replay writes the same row.
+	PageserverSettings map[string]any `json:"pageserver_settings,omitempty"`
+	SafekeeperSettings map[string]any `json:"safekeeper_settings,omitempty"`
 }
 
 // createEndpointStep records the endpoint, provisions the compute, and records
@@ -122,7 +128,16 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	if err != nil {
 		return Fail(fmt.Errorf("encode endpoint pg_settings: %w", err))
 	}
-	if err := s.state.EnsureEndpointRecord(ctx, s.EndpointID, s.ClusterID, s.BranchID, s.Role, s.Name, config, settings); err != nil {
+	pageserverSettings, err := json.Marshal(orEmptyAnyMap(s.PageserverSettings))
+	if err != nil {
+		return Fail(fmt.Errorf("encode endpoint pageserver_settings: %w", err))
+	}
+	safekeeperSettings, err := json.Marshal(orEmptyAnyMap(s.SafekeeperSettings))
+	if err != nil {
+		return Fail(fmt.Errorf("encode endpoint safekeeper_settings: %w", err))
+	}
+	if err := s.state.EnsureEndpointRecord(ctx, s.EndpointID, s.ClusterID, s.BranchID, s.Role, s.Name,
+		config, settings, pageserverSettings, safekeeperSettings); err != nil {
 		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
 	}
 
@@ -211,6 +226,16 @@ func unionStrings(a, b []string) []string {
 func orEmptyMap(m map[string]string) map[string]string {
 	if m == nil {
 		return map[string]string{}
+	}
+	return m
+}
+
+// orEmptyAnyMap is orEmptyMap for the daemon-settings maps, whose values are
+// mixed-type scalars. Both exist so a nil map marshals as `{}` rather than a JSON
+// null, which the NOT NULL columns would reject.
+func orEmptyAnyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
 	}
 	return m
 }

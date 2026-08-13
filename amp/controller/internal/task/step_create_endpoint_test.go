@@ -53,6 +53,50 @@ func TestCreateEndpointStepRecordsAndDeploys(t *testing.T) {
 	}
 }
 
+// Pins the argument order of EnsureEndpointRecord, whose four trailing []byte the
+// compiler cannot tell apart, so the two documents are made distinguishable.
+func TestCreateEndpointStepWritesDaemonSettings(t *testing.T) {
+	state, recipes, dep := newFakeStateStore(), newFakeRecipeStore(), &fakeDeployer{}
+	epID := uuid.New()
+	step := NewCreateEndpointStep(CreateEndpointArgs{
+		EndpointID: epID, ClusterID: uuid.New(), BranchID: uuid.New(),
+		Role: "read_write", PgVersion: 18,
+		PageserverSettings: map[string]any{"tenant_config.enable_gc": true},
+		SafekeeperSettings: map[string]any{"wal_cache_size_mib": 512},
+	}, endpointDeps(state, recipes, dep))
+
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	if got, want := state.endpointPageserverSettings[epID], `{"tenant_config.enable_gc":true}`; got != want {
+		t.Errorf("pageserver_settings written = %s, want %s", got, want)
+	}
+	if got, want := state.endpointSafekeeperSettings[epID], `{"wal_cache_size_mib":512}`; got != want {
+		t.Errorf("safekeeper_settings written = %s, want %s", got, want)
+	}
+}
+
+// A nil map must still write `{}`: the columns are NOT NULL, and a JSON null
+// would fail the insert rather than mean "no overrides".
+func TestCreateEndpointStepWritesEmptyDaemonSettings(t *testing.T) {
+	state, recipes, dep := newFakeStateStore(), newFakeRecipeStore(), &fakeDeployer{}
+	epID := uuid.New()
+	step := NewCreateEndpointStep(CreateEndpointArgs{
+		EndpointID: epID, ClusterID: uuid.New(), BranchID: uuid.New(),
+		Role: "read_write", PgVersion: 18,
+	}, endpointDeps(state, recipes, dep))
+
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	if got := state.endpointPageserverSettings[epID]; got != "{}" {
+		t.Errorf("pageserver_settings written = %q, want {}", got)
+	}
+	if got := state.endpointSafekeeperSettings[epID]; got != "{}" {
+		t.Errorf("safekeeper_settings written = %q, want {}", got)
+	}
+}
+
 func TestCreateEndpointStepIdempotent(t *testing.T) {
 	state, recipes, dep := newFakeStateStore(), newFakeRecipeStore(), &fakeDeployer{}
 	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: uuid.New(), BranchID: uuid.New(), Role: "read_write", PgVersion: 18}, endpointDeps(state, recipes, dep))
