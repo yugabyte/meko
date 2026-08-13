@@ -36,8 +36,6 @@ pub struct PeerInfo {
     /// LSN of the last record.
     pub flush_lsn: Lsn,
     pub commit_lsn: Lsn,
-    /// Since which LSN safekeeper has WAL.
-    pub local_start_lsn: Lsn,
     /// When info was received. Serde annotations are not very useful but make
     /// the code compile -- we don't rely on this field externally.
     #[serde(skip)]
@@ -164,7 +162,6 @@ pub struct TimelineStatus {
     pub pg_info: ServerInfo,
     pub flush_lsn: Lsn,
     pub timeline_start_lsn: Lsn,
-    pub local_start_lsn: Lsn,
     pub commit_lsn: Lsn,
     pub remote_consistent_lsn: Lsn,
     pub peers: Vec<PeerInfo>,

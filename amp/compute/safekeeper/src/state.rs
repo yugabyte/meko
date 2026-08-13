@@ -25,13 +25,9 @@ pub struct TimelinePersistentState {
     pub branch_id: BranchId,
     /// information about server
     pub server: ServerInfo,
-    /// Since which LSN this timeline generally starts. Safekeeper might have
-    /// joined later.
+    /// Since which LSN this timeline starts: the branch point, latched at
+    /// creation or on the first `ProposerElected`. Persisted WAL begins here.
     pub timeline_start_lsn: Lsn,
-    /// Since which LSN safekeeper has (had) WAL for this timeline.
-    /// All WAL segments next to one containing local_start_lsn are
-    /// filled with data from the beginning.
-    pub local_start_lsn: Lsn,
     /// LSN of the oldest known checkpoint made by pageserver. We don't
     /// remove WAL beyond it. The pageserver advertises this via
     /// `PageserverFeedback.disk_consistent_lsn`.
@@ -59,7 +55,6 @@ impl TimelinePersistentState {
             branch_id: *branch_id,
             server: server_info,
             timeline_start_lsn: start_lsn,
-            local_start_lsn: start_lsn,
             remote_consistent_lsn: Lsn(0),
             creation_ts: SystemTime::now(),
         })

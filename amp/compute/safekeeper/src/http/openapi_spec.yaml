@@ -154,8 +154,6 @@ components:
           type: string
         timeline_start_lsn:
           type: string
-        local_start_lsn:
-          type: string
         commit_lsn:
           type: string
         remote_consistent_lsn:

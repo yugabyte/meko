@@ -541,17 +541,15 @@ impl YbWalStorage {
             // (the same scan Neon ran over local segments). On any scan
             // failure, fall back to the raw offset so startup is never worse.
             use postgres_ffi::wal_record_boundary::{find_anchor, find_end_of_wal};
-            let scanned = if max_offset <= state.local_start_lsn {
+            let scanned = if max_offset <= state.timeline_start_lsn {
                 Ok(max_offset)
             } else {
-                // `local_start_lsn` is where this safekeeper's persisted WAL
+                // `timeline_start_lsn` is where this branch's persisted WAL
                 // begins (see `TimelinePersistentState`) and a guaranteed record
                 // boundary; pass it as the anchor-scan floor so a record spanning
                 // back to a mid-page start (wal_craft's XLOG_SWITCH padding)
-                // doesn't overshoot below the store (#181). It's the tighter,
-                // correct bound: `timeline_start_lsn` can sit below where this SK
-                // actually has WAL.
-                match find_anchor(&src, max_offset, state.local_start_lsn).await {
+                // doesn't overshoot below the store (#181).
+                match find_anchor(&src, max_offset, state.timeline_start_lsn).await {
                     Ok(anchor) => find_end_of_wal(&src, anchor, pg_version).await,
                     Err(e) => Err(e),
                 }
@@ -625,7 +623,6 @@ impl YbWalStorage {
         tracing::info!(
             branch_id = %branch_id_str,
             %write_lsn,
-            cfile_local_start_lsn = %state.local_start_lsn,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
             "YbWalStorage::new — rehydrated write_lsn from amp_storage.wals \
              (last valid record boundary; falls back to timeline_start_lsn on empty)",
@@ -2894,7 +2891,6 @@ mod tests {
         let mut state = TimelinePersistentState::empty();
         state.branch_id = branch_id;
         state.timeline_start_lsn = start_lsn;
-        state.local_start_lsn = start_lsn;
 
         let tmp = camino_tempfile::tempdir().expect("tempdir");
         let yb_wal = Arc::new(YbWalConn {
@@ -2929,7 +2925,6 @@ mod tests {
         let mut state = TimelinePersistentState::empty();
         state.branch_id = branch_id;
         state.timeline_start_lsn = start_lsn;
-        state.local_start_lsn = start_lsn;
         // truncate_wal decomposes end_pos with this, so it must be real.
         state.server.wal_seg_size = SEG_SIZE as u32;
 
@@ -4621,7 +4616,6 @@ mod tests {
         let mut state = TimelinePersistentState::empty();
         state.branch_id = branch_id;
         state.timeline_start_lsn = start;
-        state.local_start_lsn = start;
         state.server.wal_seg_size = SEG_SIZE as u32;
 
         let _tmp = camino_tempfile::tempdir().expect("tempdir");

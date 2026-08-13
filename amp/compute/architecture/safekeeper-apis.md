@@ -46,7 +46,7 @@ router is not kept authoritative.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | POST | `/v1/branch` | Create a branch. Body = `TimelineCreateRequest` (`branch_id`, `pg_version`, optional `system_id`, `wal_seg_size`, `start_lsn`). Defaults: `system_id=0`, `wal_seg_size=WAL_SEGMENT_SIZE`. Writes the branch's `amp_storage.branch_state` row; returns the existing timeline if already present. Branch scope. |
-| GET | `/v1/branch/:branch_id` | Branch status: `TimelineStatus` with `pg_info`, `flush_lsn`, `commit_lsn` (reported equal to `flush_lsn` — every flushed LSN is committed), `timeline_start_lsn`, `local_start_lsn`, `remote_consistent_lsn`, peers, walsenders, walreceivers. In-memory values. Branch scope. |
+| GET | `/v1/branch/:branch_id` | Branch status: `TimelineStatus` with `pg_info`, `flush_lsn`, `commit_lsn` (reported equal to `flush_lsn` — every flushed LSN is committed), `timeline_start_lsn`, `remote_consistent_lsn`, peers, walsenders, walreceivers. In-memory values. Branch scope. |
 
 ### Timeline maintenance / debug
 

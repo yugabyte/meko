@@ -494,11 +494,6 @@ where
                 );
             }
 
-            if state.local_start_lsn == Lsn(0) {
-                state.local_start_lsn = msg.start_streaming_at;
-                info!("setting local_start_lsn to {:?}", state.local_start_lsn);
-            }
-
             // Seed remote_consistent_lsn at the timeline start so that
             // post-restart catch-up doesn't read a pre-timeline LSN.
             state.remote_consistent_lsn =
@@ -740,7 +735,6 @@ mod tests {
                 wal_seg_size: 0x12345678,
             },
             timeline_start_lsn: Lsn(0x12345600),
-            local_start_lsn: Lsn(0x12),
             remote_consistent_lsn: Lsn(1234560000),
             creation_ts: UNIX_EPOCH,
         };

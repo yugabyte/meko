@@ -76,8 +76,7 @@ the advisory single-column path (below). The current column list is
 
 | Column | Meaning |
 |--------|---------|
-| `timeline_start_lsn` | Earliest LSN the timeline conceptually covers (branch/bootstrap point). Set on the first `ProposerElected` if still zero. |
-| `local_start_lsn` | Earliest LSN this safekeeper has contiguous WAL from. Set to `start_streaming_at` on the first election. Floors the restart record-boundary back-walk (below). |
+| `timeline_start_lsn` | Earliest LSN the timeline covers (branch/bootstrap point) — also the earliest contiguous WAL in the store. Set on the first `ProposerElected` if still zero. Floors the restart record-boundary back-walk (below). |
 | `remote_consistent_lsn` | Oldest checkpoint the pageserver has durably ingested into YB page storage — WAL at or above this must be retained. Fed by `PageserverFeedback.disk_consistent_lsn`. Seeded to `max(current, timeline_start_lsn)` at election so a fresh timeline doesn't pin the horizon at 0. |
 | `pg_version`, `system_id`, `wal_seg_size` | Server info, set at creation; immutable. |
 | `creation_ts` | Row insert time. |
@@ -210,12 +209,12 @@ timeline starts at a nonzero LSN.
    durable row set is a contiguous prefix — the max end is the end of WAL.
 2. That raw byte offset can point inside a torn record or a torn trailing
    page (#61), so it is refined to a record boundary by replaying the
-   decoder: `find_anchor` walks back (floored at `local_start_lsn`), then
+   decoder: `find_anchor` walks back (floored at `timeline_start_lsn`), then
    `find_end_of_wal` scans forward. A torn tail truncates `write_lsn`
    *back*; a trailing `XLOG_SWITCH` advances it *forward* to the next
    segment boundary, past padding the compute never streamed. Clamping the
    switch case back to the raw max — or letting the anchor walk overshoot a
-   mid-page `local_start_lsn` — wedges the safekeeper (#181); see
+   mid-page `timeline_start_lsn` — wedges the safekeeper (#181); see
    [`safekeeper.md`](safekeeper.md) §"Restart".
 3. Rows past the refined `write_lsn` are deleted (best-effort; a failed
    cleanup is absorbed on the next restart), and `durable_lsn` +
@@ -229,7 +228,7 @@ timeline starts at a nonzero LSN.
 | LSN | Carried in | Semantics |
 |-----|-----------|-----------|
 | `AcceptorGreeting.flush_lsn` | greeting reply | The safekeeper's end-of-WAL. The walproposer stores it as `propStartLsn` and derives its resume point from it; on bootstrap (`flushLsn == 0`) the compute starts from the basebackup redo LSN (`GetRedoStartLsn`). |
-| `ProposerElected.start_streaming_at` | election message | Where the walproposer resumes appending; the safekeeper truncates its WAL to exactly this point. **Invariant (asserted in `handle_elected`): `start_streaming_at ≥ flush_lsn()`** — truncating below the durable frontier would discard acknowledged WAL. Because the walproposer derives it from the greeting's `flush_lsn`, the assert holds in steady state; a violation means the two sides disagree about durable history. First election also latches `timeline_start_lsn` / `local_start_lsn` and seeds `remote_consistent_lsn`. |
+| `ProposerElected.start_streaming_at` | election message | Where the walproposer resumes appending; the safekeeper truncates its WAL to exactly this point. **Invariant (asserted in `handle_elected`): `start_streaming_at ≥ flush_lsn()`** — truncating below the durable frontier would discard acknowledged WAL. Because the walproposer derives it from the greeting's `flush_lsn`, the assert holds in steady state; a violation means the two sides disagree about durable history. First election also latches `timeline_start_lsn` and seeds `remote_consistent_lsn`. |
 | `AppendRequestHeader.begin_lsn` / `end_lsn` | each append | Byte range of the WAL chunk. `handle_append_request` enforces gap-free, rewrite-free sequencing against `write_lsn`. |
 | `AppendResponse.flush_lsn` | acks | The durability-capped flush frontier. Drives `wp->commitLsn` (syncrep release) and `CheckGracefulShutdown`. |
 | `AppendResponse.hs_feedback` | acks | Aggregated hot-standby feedback (xmin/catalog_xmin), injected by `Timeline::process_msg` / `yb_emit_append_response` from `WalSenders::get_hotstandby`. |
@@ -371,7 +370,7 @@ remote_consistent_lsn (inmem)  ≥  remote_consistent_lsn (persisted)
 
 remote_consistent_lsn  ≤  flush_lsn (= commit_lsn)
 
-timeline_start_lsn  ≤  local_start_lsn  ≤  flush_lsn
+timeline_start_lsn  ≤  flush_lsn
 
 write_lsn  ≥  write_record_lsn  ≥  flush_record_lsn
 
@@ -424,7 +423,6 @@ UPSERTs; a lagging safekeeper column means segments are trimmed later.
 | Field | YB `amp_storage.branch_state` | YB `amp_storage.wals` | In memory only |
 |-------|-------------------------------|----------------------|----------------|
 | `timeline_start_lsn` | Yes | — | — |
-| `local_start_lsn` | Yes | — | — |
 | `remote_consistent_lsn` | Yes (advisory, lagging) | — | `TimelineMemState` (live) |
 | `flush_lsn` / `commit_lsn` | — | implied by max chunk end (rehydrated by `load_write_lsn` + boundary walk) | `WalBookkeeping` + `durable_lsn` |
 | `write_lsn` / `write_record_lsn` | — | same rehydration | `WalBookkeeping` |

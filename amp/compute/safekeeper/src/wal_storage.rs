@@ -312,13 +312,8 @@ impl WalReader {
         yb_wal: Option<Arc<YbWalConn>>,
         flush_lsn: Arc<std::sync::atomic::AtomicU64>,
     ) -> Result<Self> {
-        if state.server.wal_seg_size == 0 || state.local_start_lsn == Lsn(0) {
+        if state.server.wal_seg_size == 0 || state.timeline_start_lsn == Lsn(0) {
             bail!("state uninitialized, no data to read");
-        }
-
-        // TODO: Upgrade to bail!() once we know this couldn't possibly happen
-        if state.timeline_start_lsn == Lsn(0) {
-            warn!("timeline_start_lsn uninitialized before initializing wal reader");
         }
 
         if start_pos

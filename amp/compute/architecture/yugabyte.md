@@ -530,7 +530,6 @@ CREATE TABLE amp_storage.branch_state (
 
     -- safekeeper-owned; NULL until the safekeeper creates its control file
     timeline_start_lsn     BIGINT,
-    local_start_lsn        BIGINT,
     remote_consistent_lsn  BIGINT,
     system_id              BIGINT,
     wal_seg_size           INT,

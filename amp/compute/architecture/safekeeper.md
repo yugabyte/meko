@@ -60,7 +60,6 @@ CREATE TABLE amp_storage.branch_state (
     safekeeper_initialized BOOLEAN     NOT NULL DEFAULT false,
 
     timeline_start_lsn     BIGINT,
-    local_start_lsn        BIGINT,
     remote_consistent_lsn  BIGINT,
     system_id              BIGINT,
     wal_seg_size           INT,
@@ -72,8 +71,8 @@ CREATE TABLE amp_storage.branch_state (
 
 Because the row is shared, its **presence is not the signal** that a control
 file exists — `safekeeper_initialized` is. `restore_opt` scopes its SELECT to
-that flag and reads the six columns as non-nullable, which is sound precisely
-because `write_row` sets the flag and all six together. It used to test
+that flag and reads the columns as non-nullable, which is sound precisely
+because `write_row` sets the flag and all of them together. It used to test
 `timeline_start_lsn IS NOT NULL` instead; that held only because this group has
 a single writer, an assumption the pageserver made about `consistent_lsn` and
 lost (#552).
@@ -84,9 +83,8 @@ sole implementation of the control-file `Storage` trait
 one typed column per scalar of `TimelinePersistentState`
 (`compute/safekeeper/src/state.rs`):
 
-- `timeline_start_lsn` — where the branch's WAL history begins.
-- `local_start_lsn` — where **this safekeeper's** persisted WAL begins
-  (a guaranteed record boundary; can sit above `timeline_start_lsn`).
+- `timeline_start_lsn` — where the branch's persisted WAL begins
+  (a guaranteed record boundary).
 - `remote_consistent_lsn` — the pageserver's durable ingest frontier,
   advertised via `PageserverFeedback`; WAL below it is eligible for GC.
 - `pg_version` / `system_id` / `wal_seg_size` — server identity, validated
@@ -487,7 +485,7 @@ between these two components. Message flow on every (re)connect:
   asserts `start_streaming_at >= flush_lsn` (never truncate committed data
   — with `commit_lsn ≡ flush_lsn` the two invariants coincide), initializes
   the first segment if this is the timeline's first WAL, truncates its WAL
-  to `start_streaming_at`, seeds `timeline_start_lsn` / `local_start_lsn`
+  to `start_streaming_at`, seeds `timeline_start_lsn`
   on the very first election (where `start_streaming_at` is the timeline's
   WAL start), floors `remote_consistent_lsn` at the timeline start, and
   force-persists the control file so `postgres --sync-safekeepers` polls a
@@ -625,7 +623,7 @@ loses nothing but logs.
      leaves a torn trailing page) or **short of the true end** (after an
      `XLOG_SWITCH`, whose zero padding is never stored as rows). A decoder
      replay refines it: `find_anchor` walks back to the nearest fresh-record
-     page — floored at `local_start_lsn`, a guaranteed record boundary, so a
+     page — floored at `timeline_start_lsn`, a guaranteed record boundary, so a
      record spanning all the way back to a mid-page branch start cannot
      drive the walk below the store (#181) — then `find_end_of_wal` scans
      forward to the last complete record boundary.

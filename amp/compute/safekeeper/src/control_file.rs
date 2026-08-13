@@ -50,7 +50,7 @@ impl std::fmt::Debug for YbControlFileStorage {
     }
 }
 
-const COLUMNS: &str = "timeline_start_lsn, local_start_lsn, remote_consistent_lsn, \
+const COLUMNS: &str = "timeline_start_lsn, remote_consistent_lsn, \
                        pg_version, system_id, wal_seg_size, creation_ts";
 
 impl YbControlFileStorage {
@@ -70,7 +70,7 @@ impl YbControlFileStorage {
     /// made the same bet on `consistent_lsn`, which does not, and silently lost
     /// its creation write (#552). An explicit flag doesn't depend on the bet,
     /// and it keeps the non-nullable `try_get`s below honest: `write_row` sets
-    /// the flag in the same statement that fills all six columns.
+    /// the flag in the same statement that fills all five columns.
     pub async fn restore_opt(
         client: Arc<YsqlClient>,
         branch_id: &BranchId,
@@ -88,13 +88,12 @@ impl YbControlFileStorage {
         };
 
         let timeline_start_lsn = Lsn(row.try_get::<_, i64>(0)? as u64);
-        let local_start_lsn = Lsn(row.try_get::<_, i64>(1)? as u64);
-        let remote_consistent_lsn = Lsn(row.try_get::<_, i64>(2)? as u64);
+        let remote_consistent_lsn = Lsn(row.try_get::<_, i64>(1)? as u64);
         let pg_version: PgVersionId =
-            PgVersionId::from_full_pg_version(row.try_get::<_, i32>(3)? as u32);
-        let system_id = row.try_get::<_, i64>(4)? as u64;
-        let wal_seg_size = row.try_get::<_, i32>(5)? as u32;
-        let creation_ts_dt: DateTime<Utc> = row.try_get(6)?;
+            PgVersionId::from_full_pg_version(row.try_get::<_, i32>(2)? as u32);
+        let system_id = row.try_get::<_, i64>(3)? as u64;
+        let wal_seg_size = row.try_get::<_, i32>(4)? as u32;
+        let creation_ts_dt: DateTime<Utc> = row.try_get(5)?;
         let creation_ts: std::time::SystemTime = creation_ts_dt.into();
 
         let state = TimelinePersistentState {
@@ -105,7 +104,6 @@ impl YbControlFileStorage {
                 wal_seg_size,
             },
             timeline_start_lsn,
-            local_start_lsn,
             remote_consistent_lsn,
             creation_ts,
         };
@@ -150,10 +148,9 @@ impl YbControlFileStorage {
         let creation_ts: DateTime<Utc> = s.creation_ts.into();
 
         let branch_id = self.branch_id.to_string();
-        let params: [&(dyn ToSql + Sync); 7] = [
+        let params: [&(dyn ToSql + Sync); 6] = [
             &branch_id,
             &(s.timeline_start_lsn.0 as i64),
-            &(s.local_start_lsn.0 as i64),
             &(s.remote_consistent_lsn.0 as i64),
             &(s.server.system_id as i64),
             &(s.server.wal_seg_size as i32),
@@ -166,11 +163,10 @@ impl YbControlFileStorage {
         // *major* versions only, so there is nothing for us to refine.
         let set_clause = "UPDATE amp_storage.branch_state SET \
                  timeline_start_lsn    = $2, \
-                 local_start_lsn       = $3, \
-                 remote_consistent_lsn = $4, \
-                 system_id             = $5, \
-                 wal_seg_size          = $6, \
-                 creation_ts           = $7, \
+                 remote_consistent_lsn = $3, \
+                 system_id             = $4, \
+                 wal_seg_size          = $5, \
+                 creation_ts           = $6, \
                  safekeeper_initialized = true \
              WHERE branch_id           = $1";
         let sql = if create {
