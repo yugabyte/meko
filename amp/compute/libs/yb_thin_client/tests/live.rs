@@ -1701,3 +1701,208 @@ async fn repro_wals_range_sharded() {
         .await
         .unwrap();
 }
+
+/// Repro for #739: on a RANGE-sharded table, `range_values` sets only where a
+/// scan STARTS. Nothing sets where it ENDS, so every read runs from its start
+/// key to the physical end of the table — visiting every remaining tablet and
+/// returning an empty page plus a continuation for each.
+///
+/// The safekeeper's covering arm is where that becomes a wedge: it binds the
+/// `(bucket_id, branch_id, segno)` prefix, filters `chunk_offset <
+/// byte_offset`, and scans DESCENDING for one row. On `amp_storage.wals` —
+/// pre-split `((1), (2), (3), (4), (5))` — the bucket-5 arm therefore walks
+/// down through every tablet of every lower bucket. Buckets whose arm finds
+/// its row stop on page 1; the buckets whose arm matches nothing pay the full
+/// walk, and bucket 5 pays the longest one. On a production-sized `wals` that
+/// walk exceeds the 64-barren-round guard, the fetch fails, and WAL replay
+/// stops for good.
+///
+/// The table below is the production `wals` shape with one chunk per bucket,
+/// all at the same offset. Every arm's key range lives inside ONE tablet, so
+/// every arm must settle in ONE page. What actually happens is `bucket + 1`
+/// pages — the walk, measured. The `descending` covering arm and the full-key
+/// point read are both here because they fail identically: a point read that
+/// has already returned its row on page 1 still walks the rest of the table,
+/// which is what shows this is about the missing end bound rather than about
+/// empty result sets, reverse scans, or the open-ended last tablet.
+#[tokio::test]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
+async fn repro_range_scan_walks_past_its_key_range() {
+    use yb_thin_client::CondOp;
+    const TABLE: &str = "wals_scan_walk_repro";
+    const SEGNO: i64 = 4410;
+    /// The one chunk each bucket holds, ABOVE the fetch position — so the
+    /// covering arm's `chunk_offset < POS` matches nothing, in any bucket.
+    const CHUNK_OFFSET: i64 = 7414080;
+    const POS: i64 = 7337520;
+    /// Enough to distinguish "walks the table" from "settles"; the real fetch
+    /// gives up at 64 barren rounds.
+    const MAX_PAGES: usize = 128;
+    const BUCKETS: i16 = 6;
+
+    let ysql = ysql().await;
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
+        .await
+        .unwrap();
+    // The production `wals` shape and split: bucket-leading all-range PK, one
+    // tablet per bucket.
+    ysql.execute(
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
+                 bucket_id SMALLINT NOT NULL, branch_id TEXT NOT NULL, segno BIGINT NOT NULL,
+                 chunk_offset BIGINT NOT NULL, chunk_size INTEGER NOT NULL, data BYTEA NOT NULL,
+                 PRIMARY KEY (bucket_id ASC, branch_id ASC, segno ASC, chunk_offset ASC))
+             SPLIT AT VALUES ((1), (2), (3), (4), (5))"
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    ysql.execute(
+        &format!(
+            "INSERT INTO {TABLE} SELECT b::smallint, 'b', {SEGNO}, {CHUNK_OFFSET}, 100, \
+             '\\x02'::bytea FROM generate_series(0, {}) b",
+            BUCKETS - 1
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
+    let client = TsClient::connect(&TsClientConfig {
+        tserver_addrs: tserver_addrs(),
+        ..Default::default()
+    })
+    .expect("connect");
+    let table = client.open_table(db_oid, table_oid).expect("open_table");
+
+    // Page a read by hand rather than through `read_scan`, so a scan that
+    // refuses to end is a reported page count instead of a hang.
+    let page_count = |read: RangeRead| {
+        let client = client.clone();
+        let table = table.clone();
+        async move {
+            let mut paging_state: Option<Bytes> = None;
+            let (mut pages, mut rows) = (0usize, 0usize);
+            loop {
+                if pages >= MAX_PAGES {
+                    return (pages, rows, false);
+                }
+                let page = client
+                    .read_page(&table, &read, paging_state.as_deref())
+                    .await
+                    .expect("read page");
+                pages += 1;
+                rows += page.rows.len();
+                match page.paging_state {
+                    Some(ps) => paging_state = Some(ps),
+                    None => return (pages, rows, true),
+                }
+            }
+        }
+    };
+
+    // (1) The safekeeper's covering arm, once per bucket. Same bound, same
+    //     empty result everywhere — the bucket is the only variable.
+    let mut covering: Vec<(i16, usize)> = Vec::new();
+    for bucket in 0..BUCKETS {
+        let read = RangeRead::new_range(
+            &table,
+            vec![
+                BindValue::I16(bucket),
+                BindValue::Text("b".into()),
+                BindValue::I64(SEGNO),
+            ],
+        )
+        .unwrap()
+        .cond(&table, "chunk_offset", CondOp::Lt, BindValue::I64(POS))
+        .unwrap()
+        .targets(&table, &["chunk_offset", "chunk_size", "data"])
+        .unwrap()
+        .descending()
+        .limit(1);
+        let (pages, rows, exhausted) = page_count(read).await;
+        assert_eq!(
+            rows, 0,
+            "bucket {bucket}: the only chunk is at {CHUNK_OFFSET}, which does not satisfy \
+             chunk_offset < {POS} — the fixture is wrong, not the scan"
+        );
+        assert!(
+            exhausted,
+            "bucket {bucket}: covering arm still continuing after {MAX_PAGES} pages"
+        );
+        covering.push((bucket, pages));
+    }
+
+    // (2) The same walk with no empty result set to blame: a full-key POINT
+    //     read, which returns its row on page 1 and has nothing left to find.
+    //     Run it in both directions, each from the end of the table it scans
+    //     AWAY from, so each one has the whole table ahead of it: descending
+    //     from the last bucket, ascending from the first.
+    let point = |bucket: i16, descending: bool| {
+        let mut r = RangeRead::new_range(
+            &table,
+            vec![
+                BindValue::I16(bucket),
+                BindValue::Text("b".into()),
+                BindValue::I64(SEGNO),
+                BindValue::I64(CHUNK_OFFSET),
+            ],
+        )
+        .unwrap()
+        .targets(&table, &["chunk_offset"])
+        .unwrap()
+        .limit(1);
+        if descending {
+            r = r.descending();
+        }
+        r
+    };
+    let mut points: Vec<(&str, usize)> = Vec::new();
+    for (label, bucket, descending) in [
+        ("descending from the last bucket", BUCKETS - 1, true),
+        ("ascending from the first bucket", 0, false),
+    ] {
+        let (pages, rows, exhausted) = page_count(point(bucket, descending)).await;
+        assert_eq!(
+            rows, 1,
+            "{label}: the full-key point read must find its row"
+        );
+        assert!(
+            exhausted,
+            "{label}: point read still continuing after {MAX_PAGES} pages"
+        );
+        points.push((label, pages));
+    }
+
+    println!(
+        "repro #739: covering arm (bucket, pages) = {covering:?}; \
+         full-key point reads (direction, pages) = {points:?}. Want 1 page each — every one \
+         of these key ranges lives in a single tablet."
+    );
+
+    let walked: Vec<(i16, usize)> = covering.iter().copied().filter(|(_, p)| *p > 1).collect();
+    assert!(
+        walked.is_empty(),
+        "covering arm walked past its key range: (bucket, pages) = {walked:?}. Each of these \
+         binds a (bucket_id, branch_id, segno) prefix whose whole key range is inside one \
+         tablet, so one page must exhaust the scan; instead the page count tracks how many \
+         tablets sit BELOW the bucket, i.e. the descending scan runs from its start key to \
+         the beginning of the table. In `fetch_chunks_thin` this is the WAL-replay wedge \
+         (#739): on a production-sized `wals` the walk outruns the barren-round guard."
+    );
+    let point_walked: Vec<&(&str, usize)> = points.iter().filter(|(_, p)| *p > 1).collect();
+    assert!(
+        point_walked.is_empty(),
+        "a full-key point read returned its row on page 1 and then kept paging: {point_walked:?} \
+         (direction, pages) — one page per tablet still ahead of it. `range_values` fixes where \
+         a scan STARTS but nothing bounds where it ENDS, so this is not about reverse scans, \
+         empty result sets, or the open-ended last tablet: every read on a range-sharded table \
+         runs to the physical end of the table in whichever direction it scans."
+    );
+
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
+        .await
+        .unwrap();
+}
