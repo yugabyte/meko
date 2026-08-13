@@ -207,11 +207,16 @@ env:
     helm_release: "yb-amp-controller"
     # How the controller is reached once deployed:
     #   tailnet (default) — resolve its cluster-internal address (ClusterIP, then
-    #     pod IP) and talk direct, no port-forward that can die mid-test; if
-    #     neither answers (cluster ranges not routable from the coordinator) it
-    #     falls back to a kubectl port-forward instead of failing the run.
+    #     pod IP) and talk direct; if neither answers (cluster ranges not
+    #     routable from the coordinator) it falls back to the exec relay, and
+    #     only when the relay pod cannot come up to a kubectl port-forward.
+    #   exec — always carry controller HTTP over `kubectl exec` + curl through
+    #     the relay pod: no local socket, so nothing that dies mid-run.
     #   portforward — always use the kubectl port-forward (reconnected on death).
     controller_reach: "tailnet"
+    # The relay pod's image; must carry curl. Default: the same public image
+    # the perf client pods run, already pullable on every suite cluster.
+    relay_image: "eclipse-temurin:21-jdk"
     # 0 → kubectl auto-allocates the port-forward local port.
     local_port: 0
     yb_ready_timeout: 20m

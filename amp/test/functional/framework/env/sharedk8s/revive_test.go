@@ -199,3 +199,58 @@ func TestADirectControllerURLOwnsNoForward(t *testing.T) {
 		t.Error("a direct URL needs no port-forward; spawning one per Env would be pure waste")
 	}
 }
+
+// A forward torn down mid-request surfaces as EOF or a reset rather than a
+// refusal, and those used to reach the caller as a product verdict.
+func TestATornDownForwardIsAlsoRevived(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"eof", io.EOF},
+		{"reset", errors.New("read tcp 127.0.0.1:1: read: connection reset by peer")},
+		{"broken pipe", errors.New("write tcp 127.0.0.1:1: write: broken pipe")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+			live := strings.TrimPrefix(srv.URL, "http://")
+
+			var forced atomic.Bool
+			tr := &revivingTransport{
+				base: errThenLive{err: tc.err, forced: &forced},
+				host: func(force bool) (string, error) {
+					if force {
+						forced.Store(true)
+					}
+					return live, nil
+				},
+				logf: func(string, ...any) {},
+			}
+			res, err := (&http.Client{Transport: tr}).Post("http://placeholder/x", "application/json",
+				strings.NewReader("payload"))
+			if err != nil {
+				t.Fatalf("want the retry to succeed, got %v", err)
+			}
+			res.Body.Close()
+			if !forced.Load() {
+				t.Fatal("a torn-down forward must be re-established, not reported to the caller")
+			}
+		})
+	}
+}
+
+// errThenLive fails the first round trip with err, then delegates.
+type errThenLive struct {
+	err    error
+	forced *atomic.Bool
+}
+
+func (e errThenLive) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !e.forced.Load() {
+		return nil, e.err
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}

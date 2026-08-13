@@ -302,7 +302,11 @@ func assertAmpHealthy(t *core.T, kube *k8s.Kubectl) (string, error) {
 			continue
 		}
 		if p.Phase != "Running" || !p.Ready {
-			unhealthy = append(unhealthy, fmt.Sprintf("%s (%s, ready=%v)", p.Name, p.Phase, p.Ready))
+			entry := fmt.Sprintf("%s (%s, ready=%v)", p.Name, p.Phase, p.Ready)
+			if why := kube.PodTrouble(t.Context, p.Name); why != "" {
+				entry += ": " + why
+			}
+			unhealthy = append(unhealthy, entry)
 		}
 	}
 	if len(unhealthy) > 0 {

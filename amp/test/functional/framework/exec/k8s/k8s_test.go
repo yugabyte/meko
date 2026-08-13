@@ -423,3 +423,86 @@ func TestPortForwardErrorCarriesKubectlOutput(t *testing.T) {
 		t.Errorf("error = %q, want kubectl's own reason in it", err)
 	}
 }
+
+// A forward whose kubectl dies must come back on the SAME local port without
+// the caller noticing. kubectl port-forward does not reconnect on its own, and
+// every "controller unreachable while the controller was fine" failure traces
+// to that: one dead local process, every pinned client refused.
+func TestPortForwardRestartsItselfOnTheSamePort(t *testing.T) {
+	sr := &scriptRunner{}
+	first := &fakeProc{out: strings.NewReader("Forwarding from 127.0.0.1:18080 -> 8080\n"), killed: make(chan struct{})}
+	// The replacement keeps its stdout open so the handle stays up.
+	pr, pw := io.Pipe()
+	second := &fakeProc{out: pr, killed: make(chan struct{})}
+	var argvs [][]string
+	var mu sync.Mutex
+	n := 0
+	k := testKubectl(sr).WithStarter(func(_ context.Context, argv []string) (Process, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		argvs = append(argvs, argv)
+		n++
+		if n == 1 {
+			return first, nil
+		}
+		go func() { _, _ = pw.Write([]byte("Forwarding from 127.0.0.1:18080 -> 8080\n")) }()
+		return second, nil
+	})
+	pf, err := k.PortForward(context.Background(), "svc/amp-controller", 18080, 8080)
+	if err != nil {
+		t.Fatalf("port-forward: %v", err)
+	}
+	defer pf.Close()
+
+	// first's stdout is already at EOF, so the supervisor sees it exit.
+	deadline := time.Now().Add(5 * time.Second)
+	for pf.Restarts() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pf.Restarts() == 0 {
+		t.Fatal("a dead kubectl must be re-established, not left dead")
+	}
+	if !pf.Alive() {
+		t.Error("the handle must stay alive across a restart")
+	}
+	if pf.LocalAddr() != "127.0.0.1:18080" {
+		t.Errorf("local addr = %q, want the original port so pinned callers keep working", pf.LocalAddr())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(argvs) < 2 {
+		t.Fatalf("kubectl was started %d time(s), want a relaunch", len(argvs))
+	}
+	if got := strings.Join(argvs[1], " "); !strings.Contains(got, "port-forward svc/amp-controller 18080:8080") {
+		t.Errorf("restart argv = %q, want the same target and port", got)
+	}
+	if !strings.Contains(pf.Output(), "re-established") {
+		t.Error("the restart must be recorded in the forward's output for triage")
+	}
+}
+
+// A forward the caller Closed must stay closed: no supervisor resurrection.
+func TestPortForwardDoesNotRestartAfterClose(t *testing.T) {
+	sr := &scriptRunner{}
+	pr, pw := io.Pipe()
+	proc := &fakeProc{out: pr, killed: make(chan struct{})}
+	starts := 0
+	k := testKubectl(sr).WithStarter(func(_ context.Context, argv []string) (Process, error) {
+		starts++
+		go func() { _, _ = pw.Write([]byte("Forwarding from 127.0.0.1:18080 -> 8080\n")) }()
+		return proc, nil
+	})
+	pf, err := k.PortForward(context.Background(), "svc/amp-controller", 18080, 8080)
+	if err != nil {
+		t.Fatalf("port-forward: %v", err)
+	}
+	pf.Close()
+	pw.Close()
+	time.Sleep(200 * time.Millisecond)
+	if starts != 1 {
+		t.Errorf("kubectl started %d times after Close, want 1", starts)
+	}
+	if pf.Alive() {
+		t.Error("a closed forward must report dead")
+	}
+}

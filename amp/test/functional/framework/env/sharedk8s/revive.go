@@ -1,9 +1,14 @@
 package sharedk8s
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
+	"strings"
+	"syscall"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
 )
@@ -30,24 +35,57 @@ type revivingTransport struct {
 
 func (t *revivingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	res, err := t.attempt(req, false)
-	if err == nil || !isConnRefused(err) {
+	if err == nil || !isDeadForward(err) {
 		return res, err
 	}
 	// Only a replayable body can be retried. http.NewRequest sets GetBody for
 	// every in-memory body, which is all this client sends.
 	if req.Body != nil && req.GetBody == nil {
-		return res, fmt.Errorf("%w (controller port-forward is down and this request's body cannot be replayed)", err)
+		return res, core.AsEnvFailure(fmt.Errorf("controller unreachable (%w) and this request's body cannot be replayed, so the forward was not revived", err))
 	}
-	if t.logf != nil {
-		t.logf("sharedk8s: controller port-forward refused the connection; re-establishing it and retrying %s %s", req.Method, req.URL.Path)
-	}
+	// Unconditional, not through the optional logf: a run that fails on a dead
+	// forward has to show whether the revive was even attempted. One perf run
+	// lost its last step to a bare "connection refused" with no way to tell.
+	t.log("sharedk8s: controller forward looks dead (%v); re-establishing it and retrying %s %s", err, req.Method, req.URL.Path)
 	res2, err2 := t.attempt(req, true)
-	if err2 != nil && isConnRefused(err2) {
-		// Twice refused is the environment, not the product: say so, because the
+	if err2 != nil && isDeadForward(err2) {
+		// Twice down is the environment, not the product: say so, because the
 		// bare error reads like the controller rejected the call.
+		t.log("sharedk8s: controller forward still down after re-establishing it: %v", err2)
 		return res2, core.AsEnvFailure(fmt.Errorf("controller unreachable: the kubectl port-forward died and could not be re-established: %w", err2))
 	}
+	if err2 == nil {
+		t.log("sharedk8s: controller forward re-established; %s %s succeeded on retry", req.Method, req.URL.Path)
+	}
 	return res2, err2
+}
+
+func (t *revivingTransport) log(format string, args ...any) {
+	if t.logf != nil {
+		t.logf(format, args...)
+		return
+	}
+	log.Printf(format, args...)
+}
+
+// isDeadForward reports the transport-level errors a kubectl port-forward
+// produces as it dies. Refused is the common one, but a forward that is torn
+// down mid-request surfaces as EOF or a reset instead, and those went unretried
+// — the whole point of this transport is that none of them is a product verdict.
+func isDeadForward(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isConnRefused(err) || errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	msg := err.Error()
+	for _, s := range []string{"connection reset by peer", "broken pipe", "EOF", "an existing connection was forcibly closed"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // attempt rewrites the request at the live forward address and sends it.

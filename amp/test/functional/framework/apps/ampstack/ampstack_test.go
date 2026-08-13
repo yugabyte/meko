@@ -331,12 +331,13 @@ func TestControllerForwardSurvivesDeployNotClosedAtHealthCheck(t *testing.T) {
 	}
 }
 
-// TestControllerClientReconnectsWhenForwardDies: once the kubectl process
+// TestControllerForwardHealsItselfWhenItsProcessDies: the kubectl process
 // backing the held forward exits on its own (the real bug — "process already
-// finished" — not via the app's own Close), ControllerClient must detect it
-// via Alive() and transparently re-establish a new forward on a new local
-// port, handing back a client pointed at the new URL.
-func TestControllerClientReconnectsWhenForwardDies(t *testing.T) {
+// finished"). The forward re-establishes itself on the SAME local port, so the
+// handle never goes dead, the URL the caller already holds keeps working, and
+// ampstack has nothing to reconnect. This is the failure that produced
+// "controller unreachable" while the controller was healthy.
+func TestControllerForwardHealsItselfWhenItsProcessDies(t *testing.T) {
 	rec := newRecorder()
 	a := testApp(Config{HelmShim: false}, rec)
 	df := wireDyingForwards(a, 18080)
@@ -351,31 +352,31 @@ func TestControllerClientReconnectsWhenForwardDies(t *testing.T) {
 
 	// The kubectl process backing the held forward dies on its own.
 	df.killLatest()
-	if !waitUntil(func() bool { return !info.Forward.Alive() }, time.Second) {
-		t.Fatal("forward must be observed dead once its process exits")
+	if !waitUntil(func() bool { return info.Forward.Restarts() > 0 }, 5*time.Second) {
+		t.Fatal("a dead kubectl must be re-established by the forward itself")
+	}
+	if !info.Forward.Alive() {
+		t.Error("the handle must stay alive across the restart")
 	}
 
 	cl, url, err := a.ControllerClient(context.Background())
 	if err != nil {
-		t.Fatalf("ControllerClient did not reconnect: %v", err)
+		t.Fatalf("ControllerClient: %v", err)
 	}
-	if url == info.ControllerURL {
-		t.Errorf("reconnect should bind a new local port, still got %q", url)
+	if url != info.ControllerURL {
+		t.Errorf("url = %q, want the original %q — a self-healed forward keeps its port", url, info.ControllerURL)
 	}
 	if cl == nil || cl.BaseURL() != url {
 		t.Errorf("client base url = %q, want %q", cl.BaseURL(), url)
 	}
-	if n := df.count(); n != 2 {
-		t.Errorf("port-forward opened %d times, want 2 (initial + reconnect)", n)
-	}
 
-	// A second call with the reconnected forward still alive must not
-	// reconnect again.
+	// A second call must not open anything further: the forward is alive.
+	before := df.count()
 	if _, url2, err := a.ControllerClient(context.Background()); err != nil || url2 != url {
-		t.Errorf("ControllerClient(again) = (%q, %v), want the same reconnected url with no error", url2, err)
+		t.Errorf("ControllerClient(again) = (%q, %v), want the same url with no error", url2, err)
 	}
-	if n := df.count(); n != 2 {
-		t.Errorf("port-forward opened %d times, want still 2 (alive forward must be reused)", n)
+	if df.count() != before {
+		t.Errorf("port-forward opened again (%d → %d); an alive forward must be reused", before, df.count())
 	}
 }
 
@@ -474,16 +475,80 @@ func TestDeployTailnetFallsBackToPodIPWhenClusterIPUnhealthy(t *testing.T) {
 	}
 }
 
-// TestDeployTailnetFallsBackToPortForwardWhenNoDirectAddress asserts the
-// production case that used to env-fail the whole run (GKE amp-dev: the
+// TestDeployTailnetFallsBackToExecRelayWhenNoDirectAddress asserts the
+// production case that used to ride a kubectl port-forward (GKE amp-dev: the
 // coordinator has no route to the cluster's pod range nor its services range):
-// neither the ClusterIP nor the pod IP answers, so tailnet mode continues over a
-// kubectl port-forward, holds it for the caller to close, and says so in the log
-// with both addresses it tried.
-func TestDeployTailnetFallsBackToPortForwardWhenNoDirectAddress(t *testing.T) {
+// neither the ClusterIP nor the pod IP answers, so tailnet mode continues over
+// the exec relay — a pod, not a local process that can die mid-run — and no
+// forward is opened at all.
+func TestDeployTailnetFallsBackToExecRelayWhenNoDirectAddress(t *testing.T) {
 	rec := newRecorder()
 	rec.on("get svc amp-controller", exec.Result{Stdout: "34.118.224.5"})
 	rec.on("get pod -l app=amp-controller", exec.Result{Stdout: "10.21.128.7"})
+	bad := healthzServer(false)
+	defer bad.Close()
+
+	a := testApp(Config{HelmShim: false, ControllerReach: ReachTailnet}, rec)
+	a.WithClientFactory(func(string) *controller.Client { return controller.New(bad.URL) })
+	var logged []string
+	a.WithLogf(func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) })
+
+	info, err := a.Deploy(context.Background())
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if info.ControllerURL != "http://amp-controller:8080" {
+		t.Errorf("controller url = %q, want the in-cluster service address the relay dials", info.ControllerURL)
+	}
+	if info.Forward != nil {
+		t.Error("the exec relay must not open a port-forward")
+	}
+	calls := rec.snapshot()
+	if !hasStdin(calls, relayPodName) {
+		t.Error("the relay pod manifest was never applied")
+	}
+	if !hasCall(calls, "wait pod/"+relayPodName) {
+		t.Error("Deploy must wait for the relay pod to be Ready")
+	}
+	if hasCall(calls, "port-forward svc/amp-controller") {
+		t.Error("no port-forward may be opened when the relay is up")
+	}
+	joined := strings.Join(logged, "\n")
+	for _, want := range []string{"34.118.224.5", "10.21.128.7", "exec relay"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("fallback log %q must mention %q", joined, want)
+		}
+	}
+
+	// The relay is the reach from here on: a client fetch reports the
+	// in-cluster address, never an unreachable direct URL.
+	_, url, err := a.ControllerClient(context.Background())
+	if err != nil {
+		t.Fatalf("ControllerClient: %v", err)
+	}
+	if url != "http://amp-controller:8080" {
+		t.Errorf("ControllerClient url = %q, want the relay's in-cluster address", url)
+	}
+}
+
+// hasStdin reports whether any recorded call carried sub on its stdin.
+func hasStdin(calls []call, sub string) bool {
+	for _, c := range calls {
+		if strings.Contains(c.stdin, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestDeployFallsBackToPortForwardWhenTheRelayCannotStart pins the last
+// resort: no direct address AND the relay pod cannot come up (image pull,
+// quota) — only then does the old kubectl port-forward path carry the run.
+func TestDeployFallsBackToPortForwardWhenTheRelayCannotStart(t *testing.T) {
+	rec := newRecorder()
+	rec.on("get svc amp-controller", exec.Result{Stdout: "34.118.224.5"})
+	rec.on("get pod -l app=amp-controller", exec.Result{Stdout: "10.21.128.7"})
+	rec.on("wait pod/"+relayPodName, exec.Result{ExitCode: 1, Stderr: "timed out waiting for the condition"})
 	bad := healthzServer(false)
 	defer bad.Close()
 	good := healthzServer(true)
@@ -496,8 +561,6 @@ func TestDeployTailnetFallsBackToPortForwardWhenNoDirectAddress(t *testing.T) {
 		}
 		return controller.New(bad.URL)
 	})
-	var logged []string
-	a.WithLogf(func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) })
 
 	info, err := a.Deploy(context.Background())
 	if err != nil {
@@ -507,26 +570,7 @@ func TestDeployTailnetFallsBackToPortForwardWhenNoDirectAddress(t *testing.T) {
 		t.Errorf("controller url = %q, want the port-forward local address", info.ControllerURL)
 	}
 	if info.Forward == nil {
-		t.Error("the fallback must hand the caller the port-forward to close")
-	}
-	if !hasCall(rec.snapshot(), "port-forward svc/amp-controller") {
-		t.Error("no direct address answering must fall back to kubectl port-forward")
-	}
-	joined := strings.Join(logged, "\n")
-	for _, want := range []string{"34.118.224.5", "10.21.128.7", "port-forward"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("fallback log %q must mention %q", joined, want)
-		}
-	}
-
-	// The held forward is the reach from here on, so a client fetch reconnects
-	// through it rather than handing back an unreachable direct URL.
-	_, url, err := a.ControllerClient(context.Background())
-	if err != nil {
-		t.Fatalf("ControllerClient: %v", err)
-	}
-	if url != "http://127.0.0.1:18080" {
-		t.Errorf("ControllerClient url = %q, want the held forward", url)
+		t.Error("the last-resort fallback must hand the caller the port-forward to close")
 	}
 }
 
@@ -540,6 +584,7 @@ func TestDeployTailnetFallbackErrorCarriesBothFailures(t *testing.T) {
 	bad := healthzServer(false)
 	defer bad.Close()
 
+	rec.on("wait pod/"+relayPodName, exec.Result{ExitCode: 1, Stderr: "relay image unpullable"})
 	a := testApp(Config{HelmShim: false, ControllerReach: ReachTailnet}, rec)
 	a.WithClientFactory(func(string) *controller.Client { return controller.New(bad.URL) })
 	a.WithKube(k8s.New(k8s.Config{Context: "test-ctx", Namespace: "ampqa-test"}).

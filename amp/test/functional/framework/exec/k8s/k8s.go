@@ -170,16 +170,25 @@ func (k *Kubectl) exec(ctx context.Context, stdin io.Reader, extra ...string) (e
 
 // Run executes cmd inside the bound pod/container via `kubectl exec -- sh -c`.
 func (k *Kubectl) Run(ctx context.Context, cmd string) (execpkg.Result, error) {
+	return k.RunStdin(ctx, nil, cmd)
+}
+
+// RunStdin is Run with the command's stdin attached (`kubectl exec -i`).
+func (k *Kubectl) RunStdin(ctx context.Context, stdin io.Reader, cmd string) (execpkg.Result, error) {
 	if k.cfg.Pod == "" {
 		return execpkg.Result{}, fmt.Errorf("k8s Run: no pod bound (use ForPod)")
 	}
-	extra := []string{"exec", k.cfg.Pod}
+	extra := []string{"exec"}
+	if stdin != nil {
+		extra = append(extra, "-i")
+	}
+	extra = append(extra, k.cfg.Pod)
 	if k.cfg.Container != "" {
 		extra = append(extra, "-c", k.cfg.Container)
 	}
 	extra = append(extra, "--", "sh", "-c", cmd)
 	argv := append(k.base(), extra...)
-	res, err := k.run(ctx, nil, argv)
+	res, err := k.run(ctx, stdin, argv)
 	if err != nil {
 		return res, fmt.Errorf("kubectl exec %s: %w", k.cfg.Pod, err)
 	}
@@ -422,6 +431,38 @@ func (k *Kubectl) Describe(ctx context.Context, kind, name string) (string, erro
 	return res.Stdout, nil
 }
 
+// troubleMarkers are the describe lines that say why a pod is not running.
+var troubleMarkers = []string{"FailedScheduling", "Insufficient", "ImagePull", "CrashLoopBackOff",
+	"FailedAttachVolume", "FailedMount", "OOMKilled", "Evicted", "untolerated taint"}
+
+// PodTrouble returns the most recent describe line that explains why a pod is
+// not running. "Pending" on its own is unactionable — a report has to say
+// whether it was capacity, an image, or a volume. Best-effort: "" when the
+// describe fails or says nothing recognisable.
+func (k *Kubectl) PodTrouble(ctx context.Context, pod string) string {
+	out, err := k.Describe(ctx, "pod", pod)
+	if err != nil {
+		return ""
+	}
+	return pickTroubleLine(out)
+}
+
+func pickTroubleLine(describeOut string) string {
+	var last string
+	for _, line := range strings.Split(describeOut, "\n") {
+		for _, m := range troubleMarkers {
+			if strings.Contains(line, m) {
+				last = strings.TrimSpace(line)
+				break
+			}
+		}
+	}
+	if len(last) > 400 {
+		last = last[:400] + "…"
+	}
+	return last
+}
+
 // Events returns the namespace's events sorted by last timestamp
 // (`kubectl get events --sort-by=.lastTimestamp`).
 func (k *Kubectl) Events(ctx context.Context) (string, error) {
@@ -511,7 +552,21 @@ func (k *Kubectl) PortForward(ctx context.Context, target string, localPort, rem
 		cancel()
 		return nil, fmt.Errorf("start port-forward %s: %w", target, err)
 	}
-	pf := &PortForward{proc: proc, target: target, localPort: localPort, cancel: cancel, done: make(chan struct{})}
+	pf := &PortForward{
+		proc: proc, target: target, localPort: localPort, cancel: cancel,
+		done: make(chan struct{}),
+		logf: k.logf,
+	}
+	// Re-launch against the port kubectl actually bound, so the address every
+	// caller already holds keeps working across a restart.
+	pf.restart = func(rctx context.Context) (Process, error) {
+		bound := pf.LocalPort()
+		rspec := fmt.Sprintf("%d:%d", bound, remotePort)
+		if bound <= 0 {
+			rspec = fmt.Sprintf(":%d", remotePort)
+		}
+		return k.startPF(rctx, append(k.base(), "port-forward", target, rspec))
+	}
 
 	ready := make(chan error, 1)
 	go pf.watch(ready)
@@ -538,6 +593,7 @@ func (k *Kubectl) PortForward(ctx context.Context, target string, localPort, rem
 
 // PortForward is a running `kubectl port-forward` handle.
 type PortForward struct {
+	procMu    sync.Mutex // guards proc across a supervised restart
 	proc      Process
 	target    string
 	localPort int
@@ -547,6 +603,13 @@ type PortForward struct {
 	ready     atomic.Bool
 	closeOnce sync.Once
 	portMu    sync.RWMutex
+
+	// restart re-launches kubectl for this same target/ports. Set for every
+	// forward the Kubectl factory builds; nil only in hand-built test handles,
+	// which then behave exactly as before (one process, dead stays dead).
+	restart  func(ctx context.Context) (Process, error)
+	restarts atomic.Int64
+	logf     func(string, ...any)
 
 	// out keeps the tail of what kubectl said. Everything that goes wrong with a
 	// forward — "Unable to listen on port … address already in use", "lost
@@ -623,7 +686,10 @@ func (pf *PortForward) Close() error {
 	pf.closeOnce.Do(func() {
 		close(pf.done)
 		pf.cancel()
-		err = pf.proc.Kill()
+		pf.procMu.Lock()
+		proc := pf.proc
+		pf.procMu.Unlock()
+		err = proc.Kill()
 	})
 	return err
 }
@@ -633,7 +699,73 @@ func (pf *PortForward) Close() error {
 // reaps the process on exit — flipping the handle to dead. It is the sole caller
 // of proc.Wait.
 func (pf *PortForward) watch(ready chan<- error) {
-	sc := bufio.NewScanner(pf.proc.Stdout())
+	for {
+		exited := pf.readUntilExit(ready)
+		if !pf.supervise(exited) {
+			return
+		}
+	}
+}
+
+// supervise decides what happens after the kubectl process exits. A forward
+// that was never ready, or one the caller Closed, is done. Otherwise the death
+// is the failure this whole mechanism exists to absorb — kubectl port-forward
+// does not reconnect on its own — so relaunch it, on the same local port, and
+// keep the handle alive. Callers never observe the gap unless they dial during
+// it, and their own retry covers that.
+func (pf *PortForward) supervise(waitErr error) bool {
+	if pf.restart == nil || !pf.ready.Load() {
+		pf.dead.Store(true)
+		return false
+	}
+	select {
+	case <-pf.done:
+		pf.dead.Store(true)
+		return false
+	default:
+	}
+	for attempt := 1; attempt <= portForwardRestartAttempts; attempt++ {
+		select {
+		case <-pf.done:
+			pf.dead.Store(true)
+			return false
+		case <-time.After(portForwardRestartDelay):
+		}
+		procCtx, cancel := context.WithCancel(context.Background())
+		proc, err := pf.restart(procCtx)
+		if err != nil {
+			cancel()
+			pf.record(fmt.Sprintf("ampqa: port-forward %s restart attempt %d failed: %v", pf.target, attempt, err))
+			continue
+		}
+		pf.procMu.Lock()
+		pf.proc = proc
+		oldCancel := pf.cancel
+		pf.cancel = cancel
+		pf.procMu.Unlock()
+		oldCancel()
+		n := pf.restarts.Add(1)
+		pf.record(fmt.Sprintf("ampqa: port-forward %s died (%v); re-established on %s (restart %d)",
+			pf.target, waitErr, pf.LocalAddr(), n))
+		if pf.logf != nil {
+			pf.logf("k8s: port-forward %s died (%v); re-established on %s (restart %d)",
+				pf.target, waitErr, pf.LocalAddr(), n)
+		}
+		return true
+	}
+	pf.dead.Store(true)
+	pf.record(fmt.Sprintf("ampqa: port-forward %s could not be re-established after %d attempts",
+		pf.target, portForwardRestartAttempts))
+	return false
+}
+
+// readUntilExit drains one kubectl process until its stdout closes, then reaps
+// it and returns its wait error.
+func (pf *PortForward) readUntilExit(ready chan<- error) error {
+	pf.procMu.Lock()
+	proc := pf.proc
+	pf.procMu.Unlock()
+	sc := bufio.NewScanner(proc.Stdout())
 	for sc.Scan() {
 		line := sc.Text()
 		pf.record(line)
@@ -648,17 +780,29 @@ func (pf *PortForward) watch(ready chan<- error) {
 			ready <- nil
 		}
 	}
-	// Stream ended: the process is exiting. Reap it and mark the forward dead.
-	waitErr := pf.proc.Wait()
-	pf.dead.Store(true)
+	// Stream ended: the process is exiting. Reap it; supervise decides whether
+	// this handle dies with it or gets a new process.
+	waitErr := proc.Wait()
 	if !pf.ready.Load() {
 		if waitErr != nil {
 			ready <- waitErr
 		} else {
-			ready <- fmt.Errorf("port-forward exited before forwarding")
+			waitErr = fmt.Errorf("port-forward exited before forwarding")
+			ready <- waitErr
 		}
 	}
+	return waitErr
 }
+
+// Restarts is how many times this forward has been re-established under the
+// caller. Non-zero means the environment dropped it and the framework absorbed
+// it — worth reporting, never worth failing a run over.
+func (pf *PortForward) Restarts() int64 { return pf.restarts.Load() }
+
+const (
+	portForwardRestartAttempts = 10
+	portForwardRestartDelay    = 500 * time.Millisecond
+)
 
 // parseForwardPort extracts the local port from a kubectl readiness line like
 // "Forwarding from 127.0.0.1:54123 -> 5432" (or an IPv6 "[::1]:54123 -> 5432").

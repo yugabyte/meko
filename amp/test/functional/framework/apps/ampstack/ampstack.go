@@ -141,6 +141,9 @@ const (
 	// through Teardown/Close, reconnected on death) without probing the direct
 	// addresses first.
 	ReachPortForward ControllerReachMode = "portforward"
+	// ReachExec forces the exec relay (see relay.go) without probing the
+	// direct addresses first.
+	ReachExec ControllerReachMode = "exec"
 )
 
 // controllerCrashLogLines is how much of a crash-looping controller's log is
@@ -275,6 +278,9 @@ type Config struct {
 	// ReachPortForward always uses the kubectl port-forward path.
 	ControllerReach ControllerReachMode
 
+	// RelayImage is the HTTP relay pod's image; "" → DefaultRelayImage.
+	RelayImage string
+
 	LocalPort int // controller port-forward local port; 0 → ephemeral
 
 	YBReadyTimeout         time.Duration
@@ -330,6 +336,10 @@ type App struct {
 	// ClusterIP or pod IP — nothing to reconnect). Portforward mode leaves this
 	// empty; the URL is derived from pf instead.
 	controllerURL string
+	// execReach records that Deploy settled on the exec relay: controller HTTP
+	// rides `kubectl exec` + curl through the relay pod, and there is no
+	// forward and no coordinator-routable URL.
+	execReach bool
 }
 
 var _ apps.App = (*App)(nil)
@@ -397,6 +407,7 @@ func FromConfig(get Getter) Config {
 		ControllerExpose:          get.GetString("env.ampstack.controller_expose", DefaultControllerExpose),
 		HelmRelease:               get.GetString("env.ampstack.helm_release", DefaultHelmRelease),
 		ControllerReach:           ControllerReachMode(get.GetString("env.ampstack.controller_reach", string(ReachTailnet))),
+		RelayImage:                get.GetString("env.ampstack.relay_image", DefaultRelayImage),
 		LocalPort:                 get.GetInt("env.ampstack.local_port", 0),
 		YBReadyTimeout:            get.GetDuration("env.ampstack.yb_ready_timeout", DefaultYBReadyTimeout),
 		ControllerReadyTimeout:    get.GetDuration("env.ampstack.controller_ready_timeout", DefaultControllerReadyTimeout),
@@ -713,7 +724,7 @@ func (a *App) Deploy(ctx context.Context) (StackInfo, error) {
 	if err != nil {
 		return StackInfo{}, err
 	}
-	if err := a.waitReady(ctx, a.newClient(url), a.cfg.ControllerReadyTimeout); err != nil {
+	if err := a.waitReady(ctx, a.clientFor(url), a.cfg.ControllerReadyTimeout); err != nil {
 		if pf != nil {
 			_ = pf.Close()
 		}
@@ -809,16 +820,55 @@ func (a *App) reachController(ctx context.Context) (string, *k8s.PortForward, er
 	if a.cfg.ControllerReach == ReachPortForward {
 		return a.forwardController(ctx)
 	}
+	if a.cfg.ControllerReach == ReachExec {
+		if err := a.ensureRelay(ctx); err != nil {
+			return "", nil, err
+		}
+		a.setExecReach()
+		return a.execControllerURL(), nil, nil
+	}
 	addr, directErr := a.resolveControllerAddr(ctx)
 	if directErr == nil {
 		return fmt.Sprintf("http://%s:%d", addr, a.cfg.ControllerPort), nil, nil
 	}
-	a.log("ampstack: %v; continuing over a kubectl port-forward", directErr)
+	// No direct route from the coordinator. The exec relay is the reliable
+	// fallback — a port-forward is a long-lived local process that dies
+	// silently mid-run; each exec is one API-server round trip with no local
+	// state. The forward remains only as the last resort when the relay pod
+	// itself cannot come up.
+	a.log("ampstack: %v; continuing over the exec relay", directErr)
+	if relayErr := a.ensureRelay(ctx); relayErr == nil {
+		a.setExecReach()
+		return a.execControllerURL(), nil, nil
+	} else {
+		a.log("ampstack: %v; continuing over a kubectl port-forward", relayErr)
+	}
 	url, pf, err := a.forwardController(ctx)
 	if err != nil {
 		return "", nil, fmt.Errorf("controller unreachable directly (%v) and the port-forward fallback failed: %w", directErr, err)
 	}
 	return url, pf, nil
+}
+
+func (a *App) setExecReach() {
+	a.pfMu.Lock()
+	a.execReach = true
+	a.pfMu.Unlock()
+}
+
+func (a *App) isExecReach() bool {
+	a.pfMu.Lock()
+	defer a.pfMu.Unlock()
+	return a.execReach
+}
+
+// clientFor is reach-aware: over the exec relay the url is an in-cluster
+// address only curl can dial, so the client must carry the exec transport.
+func (a *App) clientFor(url string) *controller.Client {
+	if a.isExecReach() {
+		return a.execClient()
+	}
+	return a.newClient(url)
 }
 
 // forwardController opens the kubectl port-forward to the controller Service and
@@ -1288,6 +1338,9 @@ func (a *App) Status(ctx context.Context) (StackStatus, error) {
 // check, not the long-lived compute-phase path — see ControllerClient for the
 // reconnecting accessor that path uses.
 func (a *App) probeHealthz(ctx context.Context) error {
+	if a.isExecReach() {
+		return a.execClient().Healthz(ctx)
+	}
 	a.pfMu.Lock()
 	pf := a.pf
 	a.pfMu.Unlock()
@@ -1339,6 +1392,9 @@ func (a *App) directControllerURL(ctx context.Context) (string, error) {
 func (a *App) ControllerClient(ctx context.Context) (*controller.Client, string, error) {
 	a.pfMu.Lock()
 	defer a.pfMu.Unlock()
+	if a.execReach {
+		return a.execClient(), a.execControllerURL(), nil
+	}
 	if a.pf == nil && a.cfg.ControllerReach != ReachPortForward {
 		if a.controllerURL == "" {
 			return nil, "", fmt.Errorf("ampstack: controller address not resolved (Deploy must run first)")
@@ -1383,7 +1439,7 @@ func (a *App) ReconnectController(ctx context.Context) (*controller.Client, stri
 	a.pf = pf
 	a.controllerURL = url
 	a.pfMu.Unlock()
-	return a.newClient(url), url, nil
+	return a.clientFor(url), url, nil
 }
 
 // Collect gathers the controller and yugabyted logs, best-effort.
