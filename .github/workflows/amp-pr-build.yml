@@ -106,6 +106,9 @@ jobs:
               # safekeeper daemons bind to, so a migration
               # change must run the integration suite.
               - 'amp/controller/migrations/**'
+              # Generated from the daemons' config types by the compute job, so
+              # a hand-edit has to face the job that regenerates it.
+              - 'amp/controller/internal/api/daemon_config_keys.json'
               - 'amp/compute/vendor/postgres-v18'
               - 'amp/Makefile'
               - 'amp/postgres.mk'
@@ -238,6 +241,24 @@ jobs:
 
       - name: Lint (clippy, -D warnings)
         run: ./run_clippy.sh
+
+      # The controller's API validates override keys against a set generated
+      # from the daemons' own config types, because a hand-maintained allowlist
+      # in Go would drift from them silently — either rejecting a key that works
+      # or admitting one that crash-loops the pod. The generated file is checked
+      # in so the Go build needs no Rust; this step is what keeps it honest.
+      - name: Daemon config keys are up to date
+        run: |
+          cargo run -q -p endpoint_supervisor --bin dump-config-keys \
+            > /tmp/daemon_config_keys.json
+          if ! diff -u controller/internal/api/daemon_config_keys.json \
+               /tmp/daemon_config_keys.json; then
+            echo
+            echo "::error::daemon_config_keys.json is stale. Regenerate it:"
+            echo "  (cd amp && cargo run -q -p endpoint_supervisor --bin dump-config-keys \\"
+            echo "     > controller/internal/api/daemon_config_keys.json)"
+            exit 1
+          fi
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2.85.6

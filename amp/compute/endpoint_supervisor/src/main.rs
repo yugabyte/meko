@@ -65,6 +65,7 @@ pub mod control;
 pub mod coordinate;
 pub mod pg_settings;
 pub mod pidfile;
+pub mod protected_keys;
 pub mod registry;
 pub mod remote_auth;
 pub mod resources;

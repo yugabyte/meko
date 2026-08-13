@@ -10,6 +10,13 @@ license.workspace = true
 name = "endpoint-supervisor"
 path = "src/main.rs"
 
+# Build-time tool, not shipped in the image: emits the override keys the daemons
+# accept, for the controller API to validate against. Lives here because this is
+# the crate that already depends on both daemons' config types.
+[[bin]]
+name = "dump-config-keys"
+path = "src/bin/dump_config_keys.rs"
+
 [dependencies]
 anyhow.workspace = true
 camino.workspace = true
