@@ -11,6 +11,7 @@
 // "5m ago" updates to "6m ago" without a manual refresh.
 
 import { useCallback, useEffect, useState } from "react";
+import axios from "axios";
 import { History, Loader2, Sparkles, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -63,6 +64,9 @@ export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAUL
         setNextCursor(resp.next_cursor);
         setInitialized(true);
       } catch (err) {
+        // Self-inflicted rate limiting: keep showing the last good page
+        // instead of surfacing a scary red banner for a transient 429.
+        if (axios.isAxiosError(err) && err.response?.status === 429) return;
         setError(getApiErrorMessage(err, "Failed to load activity log."));
       } finally {
         setLoading(false);
@@ -77,7 +81,7 @@ export function KnowledgeActivityLog({ datapackId, refreshKey, pageSize = DEFAUL
     setNextCursor("");
     setInitialized(false);
     void loadPage("", false);
-  }, [loadPage, refreshKey]);
+  }, [loadPage, refreshKey, datapackId]);
 
   return (
     <section className="rounded-xl border border-border bg-card p-6">

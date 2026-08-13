@@ -21,10 +21,10 @@ describe("kbDocumentStatusTone", () => {
   it("maps terminal/active states to their tone", () => {
     expect(kbDocumentStatusTone(KB_DOCUMENT_STATUS.COMPLETED)).toBe("green");
     expect(kbDocumentStatusTone(KB_DOCUMENT_STATUS.FAILED)).toBe("red");
-    expect(kbDocumentStatusTone(KB_DOCUMENT_STATUS.PROCESSING)).toBe("blue");
+    expect(kbDocumentStatusTone(KB_DOCUMENT_STATUS.PROCESSING)).toBe("yellow");
+    expect(kbDocumentStatusTone(KB_DOCUMENT_STATUS.QUEUED)).toBe("blue");
   });
-  it("falls back to muted for QUEUED and unknown statuses", () => {
-    expect(kbDocumentStatusTone(KB_DOCUMENT_STATUS.QUEUED)).toBe("muted");
+  it("falls back to muted for unknown statuses", () => {
     expect(kbDocumentStatusTone("WHATEVER")).toBe("muted");
   });
 });

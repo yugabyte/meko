@@ -361,7 +361,8 @@ func (r *KnowledgeBaseRepo) DeleteByDatapack(datapackID string) error {
 
 // DocumentRef is the small per-file projection returned by
 // GetDocumentRef — just enough for the DELETE flow to enforce
-// permission (UploadedByUserID) and clean up S3 (DocumentURI).
+// permission (UploadedByUserID), refuse a mid-pipeline delete (Status)
+// and clean up S3 (DocumentURI).
 //
 // Both pointer fields can be nil for legacy rows: documents inserted
 // before the dual-write don't carry a `meko.user_id`, and (rarely)
@@ -371,19 +372,26 @@ func (r *KnowledgeBaseRepo) DeleteByDatapack(datapackID string) error {
 type DocumentRef struct {
 	UploadedByUserID *string
 	DocumentURI      *string
+	// Status feeds the in-flight delete guard. Read from the same source
+	// as the listing's `status` column (see the query below) so the
+	// guard can never disagree with what the UI just showed the user.
+	// Empty only if the enum ever gains a NULL, which the column's NOT
+	// NULL forbids.
+	Status string
 }
 
-// GetDocumentRef returns the (uploader_user_id, document_uri) for a
-// single file inside the given datapack. Used by the DELETE flow to
-// (a) check whether the caller is the file's uploader, and (b) build
-// the S3 key for the object delete step.
+// GetDocumentRef returns the (uploader_user_id, document_uri, status)
+// for a single file inside the given datapack. Used by the DELETE flow
+// to (a) check whether the caller is the file's uploader, (b) reject the
+// delete while the file is still QUEUED/PROCESSING, and (c) build the S3
+// key for the object delete step.
 //
 // Returns ErrDocumentNotFound when no row matches (datapack_id,
 // document_id). The (datapack_id, document_id) pair is validated via
 // the same Option-2 path the listing uses: join dist_rag.documents to
 // the datapack's rag_source_ids through meko_system.knowledge_bases.
 func (r *KnowledgeBaseRepo) GetDocumentRef(
-	datapackID, documentID string,
+	datapackID, documentID, schema, indexName string,
 ) (DocumentRef, error) {
 	// Two-step: meko_system and dist_rag now live on separate physical
 	// databases, so we can't filter `dist_rag.documents` with an inline
@@ -401,15 +409,39 @@ func (r *KnowledgeBaseRepo) GetDocumentRef(
 	var (
 		uploaderUserID sql.NullString
 		documentURI    sql.NullString
+		status         sql.NullString
 	)
+	// Status: the latest pipeline run's status for this document (its
+	// pipeline_status, falling back to that same row's document_status),
+	// falling back again to dist_rag.documents.status itself if the
+	// document has no pipeline_details row at all -- exactly what
+	// ListDistRagDocuments' `lpd.status` computes. This used to read
+	// only d.status on the theory that it was the more conservative of
+	// the two sources, but that meant it could disagree with what the
+	// listing (and so the UI's delete-button gating) had just shown the
+	// user: the pipeline row reaches COMPLETED first, so the UI would
+	// enable delete on a file this guard still called in-flight. Reading
+	// the same source the listing does removes that gap entirely -- keep
+	// in step with `lpd.status` there and with isKbDocumentInFlight in
+	// the UI.
 	err = r.dataDB.QueryRow(
 		`SELECT d.document_details->'meko'->>'user_id',
-		        d.document_uri
+		        d.document_uri,
+		        COALESCE(lpd.pipeline_status::text, lpd.document_status::text, d.status::text) AS status
 		 FROM   dist_rag.documents d
+		 LEFT JOIN LATERAL (
+		           SELECT pipeline_status, document_status
+		           FROM   dist_rag.vector_index_pipeline_details
+		           WHERE  document_id = d.document_id
+		             AND  schema_name = $3
+		             AND  index_name  = $4
+		           ORDER  BY pipeline_created_at DESC NULLS LAST, pipeline_id DESC
+		           LIMIT  1
+		         ) lpd ON true
 		 WHERE  d.document_id = $1::uuid
 		   AND  d.source_id = ANY($2::uuid[])`,
-		documentID, pq.Array(sourceIDs),
-	).Scan(&uploaderUserID, &documentURI)
+		documentID, pq.Array(sourceIDs), schema, indexName,
+	).Scan(&uploaderUserID, &documentURI, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DocumentRef{}, fmt.Errorf("%w: datapack_id=%s document_id=%s",
 			ErrDocumentNotFound, datapackID, documentID)
@@ -426,6 +458,7 @@ func (r *KnowledgeBaseRepo) GetDocumentRef(
 		s := documentURI.String
 		out.DocumentURI = &s
 	}
+	out.Status = strings.TrimSpace(status.String)
 	return out, nil
 }
 
@@ -754,13 +787,14 @@ func (r *KnowledgeBaseRepo) Counts(
 //   - TypeFilter:  file-extension suffix match, e.g. ".md". Matched
 //     against the full document_name path so ".md" correctly filters
 //     "user/pack/file.md" without a JOIN.
-//   - IndexedOnly: when true, restricts to documents in COMPLETED status.
+//   - StatusFilter: exact status match (QUEUED/PROCESSING/COMPLETED/FAILED);
+//     empty = no filter.
 type DocumentListOpts struct {
-	Limit       int
-	Offset      int
-	SearchQuery string // ILIKE '%<val>%' on document_name; empty = no filter
-	TypeFilter  string // LIKE '%<val>'  on document_name; empty = no filter
-	IndexedOnly bool   // true → status = 'COMPLETED' only
+	Limit        int
+	Offset       int
+	SearchQuery  string // ILIKE '%<val>%' on document_name; empty = no filter
+	TypeFilter   string // LIKE '%<val>'  on document_name; empty = no filter
+	StatusFilter string // exact status match; empty = no filter
 }
 
 // ListDistRagDocuments returns one row per uploaded file for the given
@@ -792,6 +826,17 @@ type DocumentListOpts struct {
 // count at query time so the caller can derive has_more without a
 // separate COUNT query.
 //
+// Ordering: newest-first by upload time (`document_details->meko
+// ->uploaded_at`, set at CreateKB/ConfirmUpload time and stable across
+// the whole pipeline run), falling back to pipeline_completed_at for
+// the rare row that hasn't been backfilled with upload details yet
+// (see waitBuildAndPopulateDetails). Previously this also special-cased
+// QUEUED/PROCESSING to the very top regardless of age -- dropped so
+// every surface embedding this list (Files tab, the upload dialog, the
+// datapack page's preview tile) shows one consistent, non-jumping order
+// rather than a row hopping to the top just because a poll caught it
+// mid-pipeline.
+//
 // `schema` and `indexName` are the service-layer constants
 // ("datapacks" / "knowledge_bases" today).
 func (r *KnowledgeBaseRepo) ListDistRagDocuments(
@@ -822,7 +867,7 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 	//
 	// Filter predicates use the "($N = '' OR ...)" short-circuit so the
 	// same parameterized query handles all filter combinations without
-	// dynamic SQL. IndexedOnly uses a bool param instead.
+	// dynamic SQL.
 	rows, err := r.dataDB.Query(
 		`WITH latest_per_document AS (
 		   SELECT DISTINCT ON (document_id)
@@ -858,17 +903,15 @@ func (r *KnowledgeBaseRepo) ListDistRagDocuments(
 		   ON   d.document_id = lpd.document_id
 		 WHERE  ($4 = '' OR lpd.document_name ILIKE '%' || $4 || '%')
 		   AND  ($5 = '' OR lower(lpd.document_name) LIKE '%' || lower($5))
-		   AND  (NOT $6  OR lpd.status = 'COMPLETED')
-		 ORDER  BY CASE lpd.status
-		             WHEN 'QUEUED'     THEN 0
-		             WHEN 'PROCESSING' THEN 1
-		             ELSE 2
-		           END,
-		           lpd.pipeline_completed_at DESC NULLS LAST,
+		   AND  ($6 = '' OR lpd.status = $6)
+		 ORDER  BY COALESCE(
+		             (d.document_details->'meko'->>'uploaded_at')::timestamptz,
+		             lpd.pipeline_completed_at
+		           ) DESC NULLS LAST,
 		           lpd.document_name
 		 LIMIT  $7 OFFSET $8`,
 		pq.Array(sourceIDs), schema, indexName,
-		opts.SearchQuery, opts.TypeFilter, opts.IndexedOnly,
+		opts.SearchQuery, opts.TypeFilter, opts.StatusFilter,
 		opts.Limit, opts.Offset,
 	)
 	if err != nil {

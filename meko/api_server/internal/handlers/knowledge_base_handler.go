@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -501,9 +502,13 @@ func canDeleteKBDocument(
 //
 //  2. Permission check (see canDeleteKBDocument).
 //
-//  3. Delete chunks + dist_rag rows in a single transaction (repo).
+//  3. Refuse the delete outright while the file is still QUEUED or
+//     PROCESSING — the indexing worker would keep writing chunks past
+//     it, orphaning them.
 //
-//  4. Best-effort S3 delete — failures are logged but do not unwind
+//  4. Delete chunks + dist_rag rows in a single transaction (repo).
+//
+//  5. Best-effort S3 delete — failures are logged but do not unwind
 //     the DB delete (the orphan storage cost is small, a sweeper can
 //     reconcile later).
 //
@@ -517,6 +522,7 @@ func canDeleteKBDocument(
 //     @Failure	401		{object}	APIResponse
 //     @Failure	403		{object}	APIResponse
 //     @Failure	404		{object}	APIResponse
+//     @Failure	409		{object}	APIResponse	"File is still being indexed"
 //     @Failure	500		{object}	APIResponse
 //     @Security	BearerAuth
 //     @Router		/datapacks/{datapack_id}/knowledge-bases/documents/{document_id} [delete]
@@ -558,7 +564,28 @@ func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 			"FORBIDDEN", "only datapack owners, maintainers, or the file's uploader can delete this file")
 	}
 
-	// Step 3: DB cleanup (chunks + dist_rag) in a single transaction.
+	// Step 3: refuse to delete a file the pipeline still has in hand.
+	// DeleteDocument drops the document + pipeline rows and the chunks in
+	// one transaction, but the rag_agent worker chunking this file holds
+	// its own work_queue task and keeps writing chunks afterwards -- so a
+	// mid-flight delete leaves orphaned chunks behind with no document row
+	// to attribute or ever clean them up by. Wait for a terminal status.
+	//
+	// Only COMPLETED and FAILED are terminal: dist_rag's
+	// document_processing_status_enum has six values, and the other four
+	// all mean work is still owed on this file. Listing just
+	// QUEUED/PROCESSING lets NOT_STARTED and RETRY through, which is the
+	// same orphaned-chunk bug with a rarer trigger. Still an allow-list
+	// rather than "not terminal" so a future enum value can't leave a file
+	// undeletable with nothing to ever move it on. Keep in step with
+	// isKbDocumentInFlight in the UI.
+	switch strings.ToUpper(ref.Status) {
+	case "NOT_STARTED", "QUEUED", "PROCESSING", "RETRY":
+		return apiError(c, http.StatusConflict, "DOCUMENT_PROCESSING",
+			"this file is still being processed and cannot be removed yet; try again once it finishes")
+	}
+
+	// Step 4: DB cleanup (chunks + dist_rag) in a single transaction.
 	chunksDeleted, err := h.knowledgeBaseSvc.DeleteDocument(dp, documentID)
 	if err != nil {
 		if errors.Is(err, repository.ErrDocumentNotFound) {
@@ -572,7 +599,7 @@ func (h *KnowledgeBaseHandler) DeleteDocument(c echo.Context) error {
 			"INTERNAL_ERROR", "failed to delete document")
 	}
 
-	// Step 4: best-effort S3 delete. We've already removed the DB
+	// Step 5: best-effort S3 delete. We've already removed the DB
 	// pointers, so the user-visible state is consistent even if S3
 	// errors out (orphan object that a sweeper can collect).
 	s3Deleted := false
@@ -793,6 +820,21 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 		"is_new_source", isNewSource,
 	)
 
+	// Caller of CreateKB is recorded as the uploader for every document
+	// synced/populated below. This is the best approximation available
+	// at sync time: ListObjects doesn't return per-object uploader
+	// identity, and ConfirmUpload (which DOES know the per-file uploader)
+	// is currently advisory.
+	// TODO(uploader-precision): persist (s3_key -> uploader_user_id) from
+	// ConfirmUpload into a small meko_system table so this can attribute
+	// each file to its actual uploader instead of the CreateKB caller.
+	var uploaderUserID string
+	if acct, acctErr := auth.GetAccount(c); acctErr == nil && acct != nil {
+		uploaderUserID = acct.ID
+	} else {
+		uploaderUserID = dp.UserID // last-resort fallback
+	}
+
 	newDocs := 0
 	skippedDocs := 0
 	shouldSkipAPIDocumentSync := isNewSource
@@ -842,35 +884,13 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 				"RAG_ERROR", "failed to check existing documents")
 		}
 
-		// Caller of CreateKB is recorded as the uploader for every
-		// newly-inserted document. This is the best approximation we
-		// have at sync time: ListObjects doesn't return per-object
-		// uploader identity, and ConfirmUpload (which DOES know the
-		// per-file uploader) is currently advisory.
-		// TODO(uploader-precision): persist (s3_key -> uploader_user_id)
-		// from ConfirmUpload into a small meko_system table so this
-		// loop can attribute each file to its actual uploader instead
-		// of the CreateKB caller.
-		var uploaderUserID string
-		if acct, acctErr := auth.GetAccount(c); acctErr == nil && acct != nil {
-			uploaderUserID = acct.ID
-		} else {
-			uploaderUserID = dp.UserID // last-resort fallback
-		}
 		for _, obj := range objects {
-			docURI := fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), obj.Key)
+			docURI := h.documentURI(obj.Key)
 			if existingURIs[docURI] {
 				skippedDocs++
 				continue
 			}
-			// document_details carries per-file provenance: who
-			// uploaded it (resolved above) + the byte size observed
-			// in S3. The downstream documents-list endpoint resolves
-			// user_id -> email at read time via meko_system.users.
-			details := buildMekoDocDetails(uploaderUserID, obj.Size, obj.UploadedAt)
-			if err := h.ragSvc.InsertDocument(
-				sourceID, obj.Key, docURI, obj.ETag, obj.ContentType, details,
-			); err != nil {
+			if err := h.upsertDocumentDetails(sourceID, uploaderUserID, obj); err != nil {
 				slog.Warn("failed to insert document",
 					"document", obj.Key, "document_uri", docURI,
 					"error", err)
@@ -894,7 +914,7 @@ func (h *KnowledgeBaseHandler) CreateKB(c echo.Context) error {
 			"datapack_id", dp.ID,
 			"source_id", sourceID,
 		)
-		go h.ragSvc.WaitAndBuild(sourceID)
+		go h.waitBuildAndPopulateDetails(dp.ID, s3Prefix, sourceID, uploaderUserID)
 	case newDocs > 0:
 		slog.Info("CreateKB: source path already exists and new docs were added, triggering BuildIndex",
 			"datapack_id", dp.ID,
@@ -1443,6 +1463,71 @@ func (h *KnowledgeBaseHandler) UploadFile(c echo.Context) error {
 	})
 }
 
+// waitBuildAndPopulateDetails is the isNewSource background step: wait for
+// dist_rag's CREATE_SOURCE worker to finish discovering + indexing, then
+// populate document_details onto the rows it created.
+//
+// On the isNewSource path, CreateKB deliberately skips inserting document
+// rows itself (see shouldSkipAPIDocumentSync above) so it doesn't race that
+// worker. The worker inserts rows with empty document_details, so a
+// datapack's very first KB upload always landed with no Size/By in the UI —
+// every upload after that goes through the normal sync loop in CreateKB,
+// which does set the details. Meant to be run via `go`; logs and returns on
+// any error rather than propagating, since the HTTP response has already
+// been sent by the time this runs.
+//
+// Only populates once WaitAndBuild reports the source actually reached
+// SourceStatusCompleted. On a transient status-check error, a failed
+// source, or the 5-minute discovery timeout, dist_rag's CREATE_SOURCE
+// worker may still be running and inserting its own document rows for the
+// same S3 keys — upserting here concurrently would reintroduce the exact
+// duplicate-row race shouldSkipAPIDocumentSync exists to prevent.
+func (h *KnowledgeBaseHandler) waitBuildAndPopulateDetails(datapackID, s3Prefix, sourceID, uploaderUserID string) {
+	if !h.ragSvc.WaitAndBuild(sourceID) {
+		slog.Warn("waitBuildAndPopulateDetails: source did not complete; skipping document_details populate to avoid racing the CREATE_SOURCE worker",
+			"datapack_id", datapackID, "source_id", sourceID)
+		return
+	}
+
+	objects, err := h.s3Svc.ListObjects(context.Background(), s3Prefix)
+	if err != nil {
+		slog.Error("waitBuildAndPopulateDetails: failed to list S3 objects",
+			"datapack_id", datapackID, "source_id", sourceID, "error", err)
+		return
+	}
+	updated := 0
+	for _, obj := range objects {
+		if err := h.upsertDocumentDetails(sourceID, uploaderUserID, obj); err != nil {
+			slog.Warn("waitBuildAndPopulateDetails: failed to upsert document details",
+				"datapack_id", datapackID, "source_id", sourceID,
+				"document", obj.Key, "error", err)
+			continue
+		}
+		updated++
+	}
+	slog.Info("waitBuildAndPopulateDetails: document_details populate complete",
+		"datapack_id", datapackID, "source_id", sourceID,
+		"total_s3_objects", len(objects), "updated", updated)
+}
+
+// documentURI builds the dist_rag.documents.document_uri form ("s3://bucket/key")
+// for an S3 object key. Shared so every call site constructs the exact same
+// string that GetExistingDocURIs / InsertDocument key off of.
+func (h *KnowledgeBaseHandler) documentURI(key string) string {
+	return fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), key)
+}
+
+// upsertDocumentDetails builds document_details for a single S3 object
+// (uploader + size + uploaded-at, see buildMekoDocDetails) and upserts it
+// into dist_rag.documents via InsertDocument's ON CONFLICT(source_id,
+// document_uri) path. Shared by the normal CreateKB sync loop and
+// populateDocumentDetails so both write the exact same shape.
+func (h *KnowledgeBaseHandler) upsertDocumentDetails(sourceID, uploaderUserID string, obj service.S3Object) error {
+	docURI := h.documentURI(obj.Key)
+	details := buildMekoDocDetails(uploaderUserID, obj.Size, obj.UploadedAt)
+	return h.ragSvc.InsertDocument(sourceID, obj.Key, docURI, obj.ETag, obj.ContentType, details)
+}
+
 // KBStatus handles GET /api/v1/datapacks/:datapack_id/knowledge-bases/status.
 //
 //	@Summary	Get knowledge base pipeline status
@@ -1626,7 +1711,9 @@ func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 //
 //   - type_filter string file-extension suffix filter, e.g. ".md"
 //
-//   - indexed_only "true" restrict to COMPLETED documents
+//   - status_filter exact status match, one of dist_rag's six document
+//     statuses: NOT_STARTED, QUEUED, PROCESSING, COMPLETED, FAILED or RETRY
+//     (case-insensitive); any other value is ignored
 //
 //     @Summary	List uploaded documents for a datapack (paginated)
 //     @Tags		knowledge-bases
@@ -1636,7 +1723,7 @@ func (h *KnowledgeBaseHandler) Counts(c echo.Context) error {
 //     @Param		page_size	query	int		false	"Page size (default 50, max 200)"
 //     @Param		q			query	string	false	"Filename substring search"
 //     @Param		type_filter	query	string	false	"File extension suffix, e.g. .md"
-//     @Param		indexed_only query	bool	false	"Restrict to fully indexed documents"
+//     @Param		status_filter query	string	false	"Exact status match: NOT_STARTED, QUEUED, PROCESSING, COMPLETED, FAILED or RETRY"
 //     @Success	200			{object}	APIResponse
 //     @Failure	401			{object}	APIResponse
 //     @Failure	500			{object}	APIResponse
@@ -1668,14 +1755,22 @@ func (h *KnowledgeBaseHandler) Documents(c echo.Context) error {
 		}
 	}
 
-	indexedOnly := strings.EqualFold(strings.TrimSpace(c.QueryParam("indexed_only")), "true")
+	// Only pass through a status_filter value the DB column can actually
+	// hold -- anything else (typo, stale client) is silently ignored
+	// rather than returning an empty page.
+	statusFilter := strings.ToUpper(strings.TrimSpace(c.QueryParam("status_filter")))
+	switch statusFilter {
+	case "NOT_STARTED", "QUEUED", "PROCESSING", "COMPLETED", "FAILED", "RETRY":
+	default:
+		statusFilter = ""
+	}
 
 	opts := repository.DocumentListOpts{
-		Limit:       pageSize,
-		Offset:      (page - 1) * pageSize,
-		SearchQuery: strings.TrimSpace(c.QueryParam("q")),
-		TypeFilter:  strings.TrimSpace(c.QueryParam("type_filter")),
-		IndexedOnly: indexedOnly,
+		Limit:        pageSize,
+		Offset:       (page - 1) * pageSize,
+		SearchQuery:  strings.TrimSpace(c.QueryParam("q")),
+		TypeFilter:   strings.TrimSpace(c.QueryParam("type_filter")),
+		StatusFilter: statusFilter,
 	}
 
 	result, err := h.knowledgeBaseSvc.ListDistRagDocuments(dp, opts)
@@ -1825,7 +1920,7 @@ func (h *KnowledgeBaseHandler) PendingUploads(c echo.Context) error {
 
 	items := make([]PendingUploadItem, 0)
 	for _, obj := range objects {
-		docURI := fmt.Sprintf("s3://%s/%s", h.s3Svc.Bucket(), obj.Key)
+		docURI := h.documentURI(obj.Key)
 		if existingURIs[docURI] {
 			continue
 		}

@@ -122,7 +122,14 @@ func (s *RagService) BuildIndex() error {
 
 // WaitAndBuild polls until the source is ready, then triggers build_index.
 // Runs synchronously — callers should invoke via goroutine if needed.
-func (s *RagService) WaitAndBuild(sourceID string) {
+//
+// Returns true only when the source actually reached SourceStatusCompleted
+// (regardless of whether the subsequent BuildIndex call itself succeeded).
+// A false return (status-check error, SourceStatusFailed, or the 5-minute
+// timeout while still QUEUED/InProgress) means dist_rag's CREATE_SOURCE
+// worker may still be running in the background — the caller must not
+// assume the source's document rows are finalized in that case.
+func (s *RagService) WaitAndBuild(sourceID string) bool {
 	const pollInterval = 2 * time.Second
 	const maxWait = 5 * time.Minute
 	deadline := time.Now().Add(maxWait)
@@ -132,7 +139,7 @@ func (s *RagService) WaitAndBuild(sourceID string) {
 		if err != nil {
 			slog.Error("WaitAndBuild: check source status failed",
 				"source_id", sourceID, "error", err)
-			return
+			return false
 		}
 		switch status {
 		case SourceStatusCompleted:
@@ -142,10 +149,10 @@ func (s *RagService) WaitAndBuild(sourceID string) {
 				slog.Error("WaitAndBuild: build_index failed",
 					"source_id", sourceID, "error", err)
 			}
-			return
+			return true
 		case SourceStatusFailed:
 			slog.Error("WaitAndBuild: source failed", "source_id", sourceID)
-			return
+			return false
 		case SourceStatusQueued, SourceStatusInProgress:
 			slog.Info("WaitAndBuild: source not ready yet",
 				"source_id", sourceID, "status", status)
@@ -156,7 +163,7 @@ func (s *RagService) WaitAndBuild(sourceID string) {
 		if time.Now().After(deadline) {
 			slog.Error("WaitAndBuild: timed out",
 				"source_id", sourceID, "status", status)
-			return
+			return false
 		}
 		time.Sleep(pollInterval)
 	}

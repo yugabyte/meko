@@ -137,9 +137,12 @@ func (s *KnowledgeBaseService) Delete(
 }
 
 // GetDocumentRef returns per-file metadata needed by the DELETE flow
-// (the uploader's user_id for the permission check + the S3 URI for
-// the bucket-side cleanup). Thin pass-through to the repo so the
-// handler doesn't import the repository package directly.
+// (the uploader's user_id for the permission check, the in-flight
+// status for the delete guard, and the S3 URI for the bucket-side
+// cleanup). Thin pass-through to the repo so the handler doesn't import
+// the repository package directly. Passes the same schema/index
+// constants ListDistRagDocuments uses so the returned Status is read
+// from the same source as the listing's — see the repo-level comment.
 func (s *KnowledgeBaseService) GetDocumentRef(
 	dp *models.Datapack, documentID string,
 ) (repository.DocumentRef, error) {
@@ -149,7 +152,7 @@ func (s *KnowledgeBaseService) GetDocumentRef(
 	if strings.TrimSpace(documentID) == "" {
 		return repository.DocumentRef{}, fmt.Errorf("document_id is required")
 	}
-	return s.repo.GetDocumentRef(dp.ID, documentID)
+	return s.repo.GetDocumentRef(dp.ID, documentID, DatapackIndexSchema, DatapackIndexName)
 }
 
 // DeleteDocument removes a file's chunks + dist_rag rows. The S3
@@ -279,9 +282,9 @@ type KnowledgeBaseSummaryResponse struct {
 //
 // Three repo calls, all cheap:
 //
-//   1. doc/chunk/heaviest aggregates + embedding metadata
-//      (`repo.GetKnowledgeBaseSummary` — two SQL statements internally)
-//   2. promoted-memories count (`repo.Counts` reuses an existing query)
+//  1. doc/chunk/heaviest aggregates + embedding metadata
+//     (`repo.GetKnowledgeBaseSummary` — two SQL statements internally)
+//  2. promoted-memories count (`repo.Counts` reuses an existing query)
 //
 // The description and files-summary strings are computed from the
 // resulting numbers via small deterministic templates — no LLM, no

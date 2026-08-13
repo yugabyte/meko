@@ -10,6 +10,10 @@
  */
 const ACCEPTED_EXTENSION_LIST = [".pdf", ".txt", ".md", ".json", ".csv", ".html", ".htm"];
 
+/** Raw list export so callers (e.g. the Files table's type-filter chips)
+ *  stay in sync with upload's allow-list without duplicating it. */
+export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSION_LIST = ACCEPTED_EXTENSION_LIST;
+
 /** Comma-joined form for a file input's `accept` attribute. */
 export const KNOWLEDGE_UPLOAD_ACCEPTED_EXTENSIONS = ACCEPTED_EXTENSION_LIST.join(",");
 

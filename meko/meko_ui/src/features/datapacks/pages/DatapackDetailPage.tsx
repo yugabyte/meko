@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Settings, Share2, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,9 +49,9 @@ import {
   PROVISION_STATUS_CACHE_KEY,
   type CurrentUser,
   type Datapack,
-  type KnowledgeBaseDocument,
   type ProvisionStatus,
 } from "@/lib/api/mekoApi";
+import { kbFilesKeys, kbSummaryKey } from "@/features/datapacks/lib/knowledgeQueryKeys";
 import { notifyDatapacksListChanged } from "@/features/observe/observeRefresh";
 import { toast } from "@/hooks/use-toast";
 import { formatDatapackCreatedAtUtc, isDatapackCreatedWithinLast24Hours } from "@/lib/datapackDateFormat";
@@ -110,6 +111,21 @@ function writeProvisionStatusCache(cache: ProvisionStatusCache) {
 export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Deep-link from clicking a specific row in the upload dialog's table:
+  // shimmer that same document's row once it loads in the compact
+  // Knowledge tile below (mirrors DatapackKnowledgeSummaryPage's
+  // `highlightDocId` handling for the full Files tab). Captured once via
+  // a lazy initializer, then stripped from the URL below -- otherwise
+  // navigating away and back to this exact page would redeliver the
+  // same param off `searchParams` and re-trigger the shimmer every time
+  // instead of once (see DatapackKnowledgeSummaryPage's matching comment).
+  const [highlightDocId] = useState(() => searchParams.get("highlightDocId") ?? undefined);
+  useEffect(() => {
+    if (!searchParams.has("highlightDocId")) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("highlightDocId");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const routeDatapackId = datapackId;
   const [datapack, setDatapack] = useState<Datapack | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -156,20 +172,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isCreateClusterOpen, setIsCreateClusterOpen] = useState(false);
 
-  // const [knowledgeBaseCount, setKnowledgeBaseCount] = useState(0);
-  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeBaseDocument[]>([]);
-  const [knowledgeDocumentsLoading, setKnowledgeDocumentsLoading] = useState(true);
-  const [knowledgeDocumentsError, setKnowledgeDocumentsError] = useState<string | null>(null);
-  const [knowledgeTotalCount, setKnowledgeTotalCount] = useState<number | null>(null);
-  // True file count from the same summary fetch, surfaced separately
-  // because the right-rail `<DatapackDetailKnowledgeTile>` chip is
-  // file-only ("Knowledge · N files"), not files + promoted memories.
-  // Splitting the two avoids overloading the meaning of either.
-  const [knowledgeFileCount, setKnowledgeFileCount] = useState<number | null>(null);
-  // Bumped after a successful upload (createKnowledgeBase) so the summary
-  // effect re-fires and the file/promoted counts refresh without the
-  // user having to navigate away and back.
-  const [knowledgeSummaryRefreshTick, setKnowledgeSummaryRefreshTick] = useState(0);
+  const qc = useQueryClient();
   const [memoriesCount, setMemoriesCount] = useState(0);
   const [learningsCount, setLearningsCount] = useState(0);
   const [collectiveMemoryCount, setCollectiveMemoryCount] = useState(0);
@@ -290,55 +293,39 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
     };
   }, [datapack?.datapack_id, routeDatapackId]);
 
-  useEffect(() => {
-    const ac = new AbortController();
-    setKnowledgeDocumentsLoading(true);
-    setKnowledgeDocumentsError(null);
-    // Fetch only what the right-rail preview tile actually renders
-    // (top `KNOWLEDGE_PREVIEW_LIMIT` rows). Constant is exported from
-    // the tile so the page-side fetch size and the tile-side slice
-    // stay locked together. The Shared Knowledge tile's count no
-    // longer depends on this fetch (it reads `getKnowledgeBaseSummary`
-    // separately), so over-fetching here would be pure waste.
-    void getKnowledgeBaseDocuments(routeDatapackId, { signal: ac.signal, page_size: KNOWLEDGE_PREVIEW_LIMIT })
-      .then((page) => {
-        if (ac.signal.aborted) return;
-        setKnowledgeDocuments(page.items ?? []);
-      })
-      .catch((e) => {
-        if (ac.signal.aborted) return;
-        setKnowledgeDocuments([]);
-        setKnowledgeDocumentsError(
-          getApiErrorMessage(e, "Could not load knowledge documents."),
-        );
-      })
-      .finally(() => {
-        if (!ac.signal.aborted) setKnowledgeDocumentsLoading(false);
-      });
-    return () => ac.abort();
-  }, [routeDatapackId]);
+  // Fetch only what the right-rail preview tile actually renders (top
+  // `KNOWLEDGE_PREVIEW_LIMIT` rows). Constant is exported from the tile
+  // so the page-side fetch size and the tile-side slice stay locked
+  // together. Cached under the same `kbFilesKeys` namespace the Files
+  // tab / upload dialog use -- an upload finishing in the dialog (open
+  // on top of this same page) invalidates every cached page-size/filter
+  // combo for this datapack, so this preview refreshes right along with
+  // the dialog's own table instead of going stale until a reload.
+  const knowledgeDocumentsQuery = useQuery({
+    queryKey: kbFilesKeys.documents(routeDatapackId, 1, KNOWLEDGE_PREVIEW_LIMIT, "", "all", "all"),
+    queryFn: ({ signal }) =>
+      getKnowledgeBaseDocuments(routeDatapackId, { signal, page_size: KNOWLEDGE_PREVIEW_LIMIT }),
+    staleTime: 10_000,
+  });
+  const knowledgeDocuments = knowledgeDocumentsQuery.data?.items ?? [];
+  const knowledgeDocumentsLoading = knowledgeDocumentsQuery.isLoading;
+  const knowledgeDocumentsError = knowledgeDocumentsQuery.isError
+    ? getApiErrorMessage(knowledgeDocumentsQuery.error, "Could not load knowledge documents.")
+    : null;
 
-  // Knowledge base SUMMARY — count of promoted memories + successfukl file uploaded
-  useEffect(() => {
-    const ac = new AbortController();
-    void getKnowledgeBaseSummary(routeDatapackId, { signal: ac.signal })
-      .then((s) => {
-        if (ac.signal.aborted) return;
-        const files = s.total_files ?? 0;
-        const promoted = s.promoted_memories_count ?? 0;
-        setKnowledgeFileCount(files);
-        setKnowledgeTotalCount(files + promoted);
-      })
-      .catch(() => {
-        if (ac.signal.aborted) return;
-        setKnowledgeFileCount(null);
-        setKnowledgeTotalCount(null);
-      });
-    return () => ac.abort();
-    // `knowledgeSummaryRefreshTick` is here so the upload dialog's
-    // `onKnowledgeBaseCreated` callback re-runs this effect and the
-    // counts update without a page reload.
-  }, [routeDatapackId, knowledgeSummaryRefreshTick]);
+  // Knowledge base SUMMARY — count of promoted memories + successful file
+  // uploads. `knowledgeFileCount` is split out from the files+promoted
+  // total because the right-rail `<DatapackDetailKnowledgeTile>` chip is
+  // file-only ("Knowledge · N files"), not files + promoted memories.
+  const knowledgeSummaryQuery = useQuery({
+    queryKey: kbSummaryKey(routeDatapackId),
+    queryFn: ({ signal }) => getKnowledgeBaseSummary(routeDatapackId, { signal }),
+    staleTime: 10_000,
+  });
+  const knowledgeFileCount = knowledgeSummaryQuery.data ? knowledgeSummaryQuery.data.total_files ?? 0 : null;
+  const knowledgeTotalCount = knowledgeSummaryQuery.data
+    ? (knowledgeSummaryQuery.data.total_files ?? 0) + (knowledgeSummaryQuery.data.promoted_memories_count ?? 0)
+    : null;
 
   useEffect(() => {
     if (!isConnectOpen) return;
@@ -445,9 +432,13 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
                 datapackId={routeDatapackId}
                 open={isUploadOpen}
                 onOpenChange={setIsUploadOpen}
-                onKnowledgeBaseCreated={() =>
-                  setKnowledgeSummaryRefreshTick((t) => t + 1)
-                }
+
+                callerUserId={currentUser?.account_id ?? null}
+                datapackGrant={datapackGrant}
+                onKnowledgeBaseCreated={() => {
+                  void qc.invalidateQueries({ queryKey: kbSummaryKey(routeDatapackId) });
+                  void qc.invalidateQueries({ queryKey: kbFilesKeys.documentsAll(routeDatapackId) });
+                }}
               />
               <DatapackConnectDialog
                 open={isConnectOpen}
@@ -587,6 +578,7 @@ export default function DatapackDetailPage({ datapackId, currentUser }: Props) {
             totalFileCount={knowledgeFileCount}
             canAddSource={isDatapackGrantEligibleToAddKnowledgeBase({ grant: datapackGrant })}
             onAddSource={() => setIsUploadOpen(true)}
+            highlightDocumentId={highlightDocId}
           />
           <DatapackDetailAgentsTile datapackId={routeDatapackId} />
           <DatapackDetailConnectTile

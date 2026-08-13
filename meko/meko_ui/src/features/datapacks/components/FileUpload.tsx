@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2, Database, Clock } from "lucide-react";
+import { Upload, X, FileText, CheckCircle2, AlertCircle, Loader2, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { cn } from "@/lib/utils";
@@ -47,6 +47,7 @@ function nextFileEntryId(): string {
   return `f${fileEntryIdCounter}`;
 }
 
+
 /** Why a process run was queued: a fresh upload finished, or a leftover
  *  S3 orphan was found. */
 const PROCESS_TRIGGER_REASON = {
@@ -74,6 +75,36 @@ type Props = {
   initialFiles?: File[];
   /** Called after createKnowledgeBase succeeds. */
   onKnowledgeBaseCreated?: () => void;
+  /** Files not yet showing up as a real row wherever the parent renders
+   *  its own list (e.g. the persistent Files table, which is otherwise
+   *  blind to a datapack's very first upload until dist_rag's
+   *  CREATE_SOURCE worker discovers it — see the isNewSource comment in
+   *  CreateKB). Status comes from `pipelineDetails` once dist_rag has
+   *  picked the file up (so a placeholder can show "Processing", not
+   *  just "Queued" forever); falls back to QUEUED for names dist_rag
+   *  hasn't reported on at all yet. */
+  onQueuedDocsChange?: (docs: { name: string; status: string }[]) => void;
+  /** Mirrors this component's own `pollingActive` -- true for as long as
+   *  it is actively polling getKBStatus for an in-flight upload. A parent
+   *  section rendering its own document list can key its refetch polling
+   *  off this directly instead of independently reconstructing "is
+   *  anything still processing?" from `onQueuedDocsChange`, whose queued
+   *  names get cleared out (see setQueuedDocNames([]) below) as soon as
+   *  dist_rag reports *any* pipeline row, well before the specific file
+   *  is actually done -- too early a signal to safely stop polling on. */
+  onProcessingActiveChange?: (active: boolean) => void;
+  /** Bumped by the parent after a document is removed from the KB (or a
+   *  new one is created) elsewhere -- e.g. the "Remove from KB" action in
+   *  the persistent Files table below. Forces a fresh getKBStatus fetch
+   *  so a deleted file's row in the "Knowledge Base" progress list above
+   *  actually disappears instead of lingering until the next poll tick
+   *  (or forever, once polling has already stopped because everything
+   *  looked done). */
+  refreshKey?: number;
+  /** Shared pulse from the parent -- bumped every 3s during processing.
+   *  Triggers a fresh getKBStatus fetch so the widget and the parent's
+   *  document list stay in perfect sync. */
+  pollTick?: number;
 };
 
 export default function FileUpload({
@@ -81,6 +112,10 @@ export default function FileUpload({
   datapackId,
   initialFiles,
   onKnowledgeBaseCreated,
+  onQueuedDocsChange,
+  onProcessingActiveChange,
+  refreshKey,
+  pollTick,
 }: Props) {
   const { data: currentUser } = useCurrentUser();
   // Session-scoped caches (see KnowledgeUploadCacheProvider). Radix unmounts
@@ -105,8 +140,12 @@ export default function FileUpload({
   const warningTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const [kbCreated, setKbCreated] = useState(() => statusCache.get(datapackId)?.kbCreated ?? false);
-  const [creatingKB, setCreatingKB] = useState(false);
   const [pollingActive, setPollingActive] = useState(false);
+  const onProcessingActiveChangeRef = useRef(onProcessingActiveChange);
+  onProcessingActiveChangeRef.current = onProcessingActiveChange;
+  useEffect(() => {
+    onProcessingActiveChangeRef.current?.(pollingActive);
+  }, [pollingActive]);
   const [sourceStatuses, setSourceStatuses] = useState<SourceStatus[]>(
     () => statusCache.get(datapackId)?.sourceStatuses ?? [],
   );
@@ -117,76 +156,99 @@ export default function FileUpload({
     statusCache.set(datapackId, { sourceStatuses, pipelineDetails, kbCreated });
   }, [datapackId, sourceStatuses, pipelineDetails, kbCreated]);
 
-  // Scrolls a doc into view and flashes it once, the first time it leaves
-  // QUEUED (shows up PROCESSING, COMPLETED or FAILED). Keying on the
-  // "left QUEUED" transition rather than strictly PROCESSING matters because a
-  // small file can go QUEUED -> PROCESSING -> COMPLETED entirely within one
-  // poll interval, so its PROCESSING snapshot is never observed -- keying only
-  // on PROCESSING would silently skip its flash (e.g. every upload after the
-  // first, once the source already exists and files index instantly). With one
-  // worker docs leave QUEUED one at a time, so this still plays out as
-  // "previous doc finishes, next one lights up". Docs already present on the
-  // first fetch each mount are the baseline (seeded silently by fetchStatus)
-  // and never flash.
-  const docRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const flashedDocsRef = useRef<Set<string>>(new Set());
   const initialStatusLoadedRef = useRef(false);
-  const [flashingDocs, setFlashingDocs] = useState<Set<string>>(new Set());
-  // Un-cleared timers would keep firing (and their closures alive) after
-  // unmount; track by doc name so they can all be cancelled at once.
-  const flashTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  useEffect(() => {
-    const timers = flashTimersRef.current;
-    return () => {
-      timers.forEach(clearTimeout);
-      timers.clear();
-    };
-  }, []);
-  useEffect(() => {
-    if (!initialStatusLoadedRef.current) return;
-    const flashed = flashedDocsRef.current;
-    const started = pipelineDetails.filter(
-      (d) => d.document_status !== KB_DOCUMENT_STATUS.QUEUED && !flashed.has(d.document_name),
-    );
-    if (started.length === 0) return;
-    for (const d of started) flashed.add(d.document_name);
-    // More than one doc can flip to PROCESSING in the same refresh --
-    // calling scrollIntoView once per doc would just have each call
-    // cancel the previous one's smooth scroll, landing on whichever
-    // happened to run last. Scroll to only the first; every one still
-    // gets its own independent flash-fade below.
-    docRowRefs.current
-      .get(started[0].document_name)
-      ?.scrollIntoView({ behavior: "smooth", block: "center" });
-    for (const d of started) {
-      setFlashingDocs((prev) => new Set(prev).add(d.document_name));
-      const timer = setTimeout(() => {
-        flashTimersRef.current.delete(d.document_name);
-        setFlashingDocs((prev) => {
-          if (!prev.has(d.document_name)) return prev;
-          const next = new Set(prev);
-          next.delete(d.document_name);
-          return next;
-        });
-      }, 1600);
-      flashTimersRef.current.set(d.document_name, timer);
-    }
-  }, [pipelineDetails]);
 
   const [queuedDocNames, setQueuedDocNames] = useState<string[]>([]);
+  // Ref indirection so fetchStatus (a useCallback that must stay stable
+  // across polls) can read the current queued list without depending on
+  // it directly -- see the "truly empty vs. not-yet-discovered" check
+  // inside fetchStatus below.
+  const queuedDocNamesRef = useRef(queuedDocNames);
+  queuedDocNamesRef.current = queuedDocNames;
+  // Pairs each queued name with its live pipeline status when dist_rag has
+  // reported one (matched the same way doneAwaitingPipeline below matches
+  // a raw upload against pipelineDetails), falling back to QUEUED for a
+  // name dist_rag hasn't discovered at all yet.
+  //
+  // Three sources, most-authoritative first, so the parent (Files table)
+  // has an unbroken placeholder from the moment a file's upload succeeds
+  // until its real row shows up in ListDistRagDocuments -- each handoff
+  // between them was a window where the file appeared nowhere:
+  //   1. names dist_rag has discovered but not finished (non-terminal
+  //      details), covering "discovered" -> "listed"
+  //   2. optimistic names in queuedDocNames, covering "batch uploaded" ->
+  //      "discovered"
+  //   3. individual files whose upload has succeeded, covering "this file
+  //      uploaded" -> "whole batch uploaded"
+  const queuedDocsWithStatus = useMemo(() => {
+    // Keyed by sanitized name for stable matching across the lifecycle.
+    const results = new Map<string, { displayName: string; status: string }>();
+
+    // 1. Start with everything dist_rag has discovered but not finished yet.
+    // These are the "most real" placeholders we have.
+    for (const d of pipelineDetails) {
+      const status = d.document_status;
+      if (status !== KB_DOCUMENT_STATUS.COMPLETED && status !== KB_DOCUMENT_STATUS.FAILED) {
+        const displayName = pipelineDocumentDisplayName(d.document_name);
+        results.set(sanitizeFilenameForMatch(displayName), { displayName, status });
+      }
+    }
+
+    // 2. Overlay anything still in queuedDocNames (optimistic).
+    // If it's already in results from above, its status was already set correctly.
+    // If not, it's still QUEUED.
+    for (const name of queuedDocNames) {
+      const sanitized = sanitizeFilenameForMatch(name);
+      if (!results.has(sanitized)) {
+        results.set(sanitized, { displayName: name, status: KB_DOCUMENT_STATUS.QUEUED });
+      }
+    }
+
+    // 3. Files whose own upload has succeeded (confirmUpload returned, so
+    // the bytes are in S3 and claimed) but which aren't in queuedDocNames
+    // yet. runProcess is what populates that list, and it runs once after
+    // the whole batch finishes -- so on a multi-file upload the first file
+    // to land would otherwise show nothing until the slowest one caught
+    // up. Keyed off each file's own DONE, this flips it to Queued the
+    // moment its own upload succeeds. Files still uploading are
+    // deliberately absent: nothing is queued until the bytes are actually
+    // there, and the upload widget already shows their progress.
+    for (const f of files) {
+      if (f.status !== KNOWLEDGE_UPLOAD_STATUS.DONE) continue;
+      const sanitized = sanitizeFilenameForMatch(f.file.name);
+      if (!results.has(sanitized)) {
+        results.set(sanitized, { displayName: f.file.name, status: KB_DOCUMENT_STATUS.QUEUED });
+      }
+    }
+
+    return Array.from(results.values()).map(({ displayName, status }) => ({
+      name: displayName,
+      status,
+    }));
+  }, [queuedDocNames, pipelineDetails, files]);
+  // Ref indirection so the effect below doesn't need onQueuedDocsChange as
+  // a dependency -- an unmemoized parent callback would otherwise thrash it.
+  const onQueuedDocsChangeRef = useRef(onQueuedDocsChange);
+  onQueuedDocsChangeRef.current = onQueuedDocsChange;
+  useEffect(() => {
+    onQueuedDocsChangeRef.current?.(queuedDocsWithStatus);
+  }, [queuedDocsWithStatus]);
   // S3-side orphans: PUT to S3 but never registered with dist_rag.
   // Fetched on mount and after each successful Create/Add-to-KB.
   const [pendingOrphans, setPendingOrphans] = useState<PendingUpload[]>([]);
   const [deletingOrphanKeys, setDeletingOrphanKeys] = useState<Set<string>>(() => new Set());
   const nowMs: number = useNowMs();
-  const pollRef = useRef<ReturnType<typeof setInterval>>(undefined);
   // Armed on a fresh Create-KB action; fires onKnowledgeBaseCreated once
   // polling confirms all docs reached a terminal status.
   const pendingKBReadyNotificationRef = useRef(false);
+  // Ensures we only fire the "indexing complete" callback once per
+  // transition, preventing the infinite refresh loop seen when refreshKey
+  // and fetchStatus trigger each other. Reset whenever a fresh process
+  // starts (runProcess).
+  const didNotifyCreatedRef = useRef(false);
   // While a source is discovering, the backend skips syncing new uploads --
   // re-trigger a create once it flips to COMPLETED so they aren't stranded.
   const sourceWasDiscoveringRef = useRef(false);
-  const [newUploadsAfterKB, setNewUploadsAfterKB] = useState(0);
   const pollGraceRef = useRef(0);
   // Telemetry bookkeeping: byte sizes by filename, and doc_names already
   // seen, so document_uploaded fires once per genuinely new COMPLETED doc.
@@ -219,7 +281,6 @@ export default function FileUpload({
   // the whole queue per pass rather than one trigger per run.
   const processQueueRef = useRef<Queue<ProcessTrigger>>(new Queue());
   const processInFlightRef = useRef(false);
-  const [processError, setProcessError] = useState<string | null>(null);
   // Ref indirection so the stable fetchPendingOrphans can reach the latest
   // scheduleProcess closure without being recreated itself.
   const scheduleProcessRef = useRef<(reason?: ProcessTrigger["reason"]) => void>(() => {});
@@ -335,7 +396,6 @@ export default function FileUpload({
   // Runs (or queues via scheduleProcess) the create/add-to-KB step. Plain
   // function so it always closes over the latest state when it fires.
   const runProcess = async () => {
-    setProcessError(null);
     // Read from filesRef (not `files`) so an async invocation — e.g. at the
     // end of handleUpload or via the process queue — filters the latest
     // statuses rather than a stale closure snapshot.
@@ -354,12 +414,23 @@ export default function FileUpload({
 
     // Flip UI state immediately for instant feedback. Merge, don't
     // overwrite, queued names in case an earlier pass hasn't shown up yet.
-    setQueuedDocNames((prev) => Array.from(new Set([...prev, ...queuedNames])));
+    const nextQueuedNames = Array.from(new Set([...queuedDocNamesRef.current, ...queuedNames]));
+    setQueuedDocNames(nextQueuedNames);
+
+    // Notify parent immediately so the "Queued" placeholders show up at the
+    // same moment as the widget's "Queued" list.
+    const queuedDocs = nextQueuedNames.map((name) => ({ name, status: KB_DOCUMENT_STATUS.QUEUED }));
+    onQueuedDocsChangeRef.current?.(queuedDocs);
+
+    // Only reset the latch if this is a fresh UPLOAD (user clicked a button)
+    // or ORPHAN check (page load). Terminal indexing completion itself
+    // (branch "all-done") sets it to true; resetting it here ensures that
+    // if the user then uploads a *second* batch, we are ready to notify
+    // again when that batch finishes.
+    didNotifyCreatedRef.current = false;
     setKbCreated(true);
     setPollingActive(true);
-    setNewUploadsAfterKB(0);
     pollGraceRef.current = 3;
-    setCreatingKB(true);
     try {
       await createKnowledgeBase(datapackId, {});
       // Arm the post-poll notification; fetchStatus fires it once docs
@@ -370,11 +441,8 @@ export default function FileUpload({
     } catch (err) {
       setKbCreated(previousKbCreated);
       if (!previousKbCreated) setPollingActive(false);
-      const message = getApiErrorMessage(err, "Failed to process uploaded files.");
-      setProcessError(message);
-      showWarning(message);
+      showWarning(getApiErrorMessage(err, "Failed to process uploaded files."));
     } finally {
-      setCreatingKB(false);
       processInFlightRef.current = false;
       // Drain again: a trigger enqueued mid-run needs its own pass.
       drainProcessQueue();
@@ -474,7 +542,6 @@ export default function FileUpload({
 
     if (uploaded > 0) {
       setTotalUploaded((prev) => prev + uploaded);
-      if (kbCreated) setNewUploadsAfterKB((prev) => prev + uploaded);
     }
 
     // Upload and process are a single action -- auto-trigger create/add-to-KB.
@@ -521,10 +588,9 @@ export default function FileUpload({
     try {
       const resp = await listPendingUploads(datapackId);
       setPendingOrphans(resp.items);
-      // Auto-queue leftover orphans too, same as a fresh upload.
-      if (resp.items.length > 0) scheduleProcessRef.current(PROCESS_TRIGGER_REASON.ORPHAN);
+      return resp.items;
     } catch {
-      // ignore
+      return [];
     }
   }, [datapackId]);
 
@@ -562,32 +628,59 @@ export default function FileUpload({
   );
 
 
+  const kbCreatedRef = useRef(kbCreated);
+  kbCreatedRef.current = kbCreated;
+  const pollingActiveRef = useRef(pollingActive);
+  pollingActiveRef.current = pollingActive;
+
   const fetchStatus = useCallback(async () => {
     try {
       const status = await getKBStatus(datapackId, {});
       const sources = status.source_statuses ?? [];
       const details = status.pipeline_details ?? [];
       if (!initialStatusLoadedRef.current) {
-        // First status fetch this mount: every doc already present started
-        // before the modal opened, so it's baseline, not a fresh transition --
-        // only docs that show up *after* this point should flash. Seed all of
-        // them regardless of status; otherwise pre-existing COMPLETED docs
-        // would all flash on open, since the flash now keys on "not QUEUED".
         initialStatusLoadedRef.current = true;
-        flashedDocsRef.current = new Set(details.map((d) => d.document_name));
       }
       setSourceStatuses(sources);
       setPipelineDetails(details);
+      // Prune individually, by name -- not "any details exist, so drop
+      // everything". A KB with pre-existing docs has details.length > 0
+      // from the very first poll, before dist_rag has even discovered
+      // *this* upload's files; wholesale-clearing here would zero out
+      // queuedDocNames (and, via queuedDocsWithStatus below, the parent's
+      // placeholder Map) before the parent's own document fetch has any
+      // chance to pick the new files up, permanently freezing their
+      // reported status one poll cycle too early. Keeping a name until
+      // dist_rag reports *that specific* document means the parent
+      // keeps getting fresh QUEUED/PROCESSING updates for it right up
+      // until its real row exists.
       if (details.length > 0) {
-        setQueuedDocNames([]);
-      }
-
-      if (!kbCreated && (sources.length > 0 || details.length > 0)) {
-        setKbCreated(true);
+        const discovered = new Set(details.map((d) => pipelineDocumentDisplayName(d.document_name)));
+        setQueuedDocNames((prev) => {
+          const next = prev.filter((name) => !discovered.has(sanitizeFilenameForMatch(name)));
+          return next.length === prev.length ? prev : next;
+        });
       }
 
       const sourcesReady =
         sources.length > 0 && sources.every((s) => s.status === KB_DOCUMENT_STATUS.COMPLETED);
+
+      // Hydrate kbCreated from the backend (e.g. a fresh mount/reload) --
+      // but only for signals that mean "there's real activity or content
+      // here", not "a source row for this datapack merely exists". A
+      // source registration is created once and never removed even after
+      // every document under it is deleted, so `sources.length > 0` alone
+      // is true forever; using it here caused a live infinite loop (see
+      // the reset-to-empty branch below): this check would flip kbCreated
+      // back to true every time that branch had just flipped it to false,
+      // because the still-there-forever source row looked like "new
+      // content" on the very next poll. `!sourcesReady` (still
+      // discovering) is the part of "sources exist" that's actually
+      // transient and worth hydrating for.
+      if (!kbCreatedRef.current && (details.length > 0 || (sources.length > 0 && !sourcesReady))) {
+        setKbCreated(true);
+      }
+
       const allDocsDone =
         details.length > 0 &&
         details.every(
@@ -611,13 +704,26 @@ export default function FileUpload({
           d.document_status === KB_DOCUMENT_STATUS.QUEUED,
       );
 
+      let branch = "none-matched";
       if (pollGraceRef.current > 0) {
+        branch = "grace-decrement";
         pollGraceRef.current--;
       } else if (sourcesReady && allDocsDone) {
+        branch = "all-done";
+        // Real moment indexing is done. We call the created callback if
+        // we were actively polling (transition from Processing to Done)
+        // or if a fresh Create-KB was just armed. Bumping the callback
+        // triggers a parent refetch; because we also setPollingActive(false)
+        // here, the parent's poll tick stops, preventing an infinite
+        // refresh loop.
+        const wasPolling = pollingActiveRef.current;
         setPollingActive(false);
-        // Real moment indexing is done -- ref guard fires this once per
-        // Create-KB action, not on every reopen/poll.
-        if (pendingKBReadyNotificationRef.current) {
+
+        if (
+          (wasPolling || pendingKBReadyNotificationRef.current) &&
+          !didNotifyCreatedRef.current
+        ) {
+          didNotifyCreatedRef.current = true;
           pendingKBReadyNotificationRef.current = false;
           emitDocumentUploadedEvents(details);
           onKnowledgeBaseCreatedRef.current?.();
@@ -629,51 +735,98 @@ export default function FileUpload({
         // where polling was only ever armed by runProcess). Re-arm the poll
         // loop so we catch the terminal transition live instead of freezing
         // on the mount snapshot until the next close/reopen.
+        branch = "still-in-flight";
         setPollingActive(true);
+      } else if (kbCreatedRef.current && details.length === 0 && queuedDocNamesRef.current.length === 0) {
+        // Every document was deleted. Deliberately keyed on details.length
+        // alone, not sources.length too: a live repro showed sources
+        // staying at length 1 forever after the only document was
+        // deleted -- source_statuses tracks the datapack's S3 source
+        // registration itself (created once, independent of how many
+        // documents currently live under it), not a per-document row, so
+        // it never goes back to 0 just because the last document did.
+        // Requiring sources.length === 0 here meant this branch could
+        // never fire post-delete, leaving kbCreated (which nothing else
+        // ever clears) stuck true forever with docsTotal pinned at 0 --
+        // none of the phase branches above matched, so the widget showed
+        // "Initializing..." indefinitely with nothing left to initialize.
+        // By this point in the if/else-if chain, the earlier branches
+        // have already ruled out "still discovering" and "docs in
+        // flight" (both would have matched above), so details.length
+        // being the only thing that's actually 0 here is enough on its
+        // own to call this a genuine empty KB and reset to the
+        // pre-upload state. The grace window (decremented above) and the
+        // queuedDocNamesRef check still guard the transient window right
+        // after a fresh upload, before dist_rag has discovered the new
+        // document rows yet.
+        branch = "reset-to-empty";
+        setKbCreated(false);
+        setPollingActive(false);
       }
-    } catch {
-      // silently retry on next interval
+    } catch (err) {
+      // noop
     }
-  }, [datapackId, kbCreated, emitDocumentUploadedEvents, fetchPendingOrphans]);
+  }, [datapackId, emitDocumentUploadedEvents, fetchPendingOrphans]);
 
+  // Auto-prune successfully uploaded files (status=DONE) once dist_rag has
+  // finalized them -- either indexed (COMPLETED) or FAILED -- since the
+  // Files table below is now the single source of truth for that status;
+  // leaving a "Staged…"/checkmark row sitting here after that just
+  // duplicates it. Also prunes a DONE entry that's neither finalized nor
+  // in-flight at all, meaning it was deleted from the KB before dist_rag
+  // ever reported a terminal status for it.
+  useEffect(() => {
+    if (!initialStatusLoadedRef.current || pollGraceRef.current > 0) return;
+
+    const known = new Set([
+      ...pipelineDetails.map((d) => pipelineDocumentDisplayName(d.document_name)),
+      ...queuedDocNames.map((name) => sanitizeFilenameForMatch(name)),
+    ]);
+    const finalized = new Set(
+      pipelineDetails
+        .filter(
+          (d) =>
+            d.document_status === KB_DOCUMENT_STATUS.COMPLETED ||
+            d.document_status === KB_DOCUMENT_STATUS.FAILED,
+        )
+        .map((d) => sanitizeFilenameForMatch(pipelineDocumentDisplayName(d.document_name))),
+    );
+
+    setFiles((prev) => {
+      const next = prev.filter((f) => {
+        if (f.status !== KNOWLEDGE_UPLOAD_STATUS.DONE) return true;
+        const key = sanitizeFilenameForMatch(f.file.name);
+        if (finalized.has(key)) return false;
+        // If it's neither in the real backend list nor in our "about to be real"
+        // queued list, it was likely deleted or never registered.
+        return known.has(key);
+      });
+      return next.length === prev.length ? prev : next;
+    });
+  }, [pipelineDetails, queuedDocNames, refreshKey]);
+
+  // Background polling for status + orphans list.
   useEffect(() => {
     fetchStatus();
     void fetchPendingOrphans();
-  }, [fetchStatus, fetchPendingOrphans]);
+    // refreshKey and pollTick aren't read inside fetchStatus/
+    // fetchPendingOrphans -- they are only here to force this effect to
+    // re-run after a change in the parent (e.g. the 3s synchronized poll
+    // tick, or a delete elsewhere).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchStatus, fetchPendingOrphans, refreshKey, pollTick]);
 
+  // One-time orphan auto-queue on mount.
   useEffect(() => {
-    if (pollingActive) {
-      pollRef.current = setInterval(fetchStatus, 5000);
-    } else {
-      clearInterval(pollRef.current);
-    }
-    return () => clearInterval(pollRef.current);
-  }, [pollingActive, fetchStatus]);
+    void fetchPendingOrphans().then((items) => {
+      if (items.length > 0) {
+        scheduleProcessRef.current(PROCESS_TRIGGER_REASON.ORPHAN);
+      }
+    });
+  }, [fetchPendingOrphans]);
 
   const doneCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.DONE).length;
   const errorCount = files.filter((f) => f.status === KNOWLEDGE_UPLOAD_STATUS.ERROR).length;
-
-  // Phase computation
-  const sourcesDiscovering =
-    sourceStatuses.length > 0 &&
-    sourceStatuses.some((s) => s.status !== KB_DOCUMENT_STATUS.COMPLETED);
-  const sourcesReady =
-    sourceStatuses.length > 0 &&
-    sourceStatuses.every((s) => s.status === KB_DOCUMENT_STATUS.COMPLETED);
-
-  const docsTotal = pipelineDetails.length;
-  const docsCompleted = pipelineDetails.filter(
-    (d) => d.document_status === KB_DOCUMENT_STATUS.COMPLETED,
-  ).length;
-  const docsFailed = pipelineDetails.filter(
-    (d) => d.document_status === KB_DOCUMENT_STATUS.FAILED,
-  ).length;
-  const docsFinished = docsCompleted + docsFailed;
-  const totalChunks = pipelineDetails.reduce((sum, d) => sum + (d.chunks_processed ?? 0), 0);
-
-  const allDone = sourcesReady && docsTotal > 0 && docsFinished === docsTotal;
-  const docsProcessing = kbCreated && sourcesReady && docsTotal > 0 && !allDone;
-  const progressPct = docsTotal > 0 ? Math.round((docsFinished / docsTotal) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -838,6 +991,7 @@ export default function FileUpload({
                       />
                     )}
                     {(entry.status === KNOWLEDGE_UPLOAD_STATUS.PENDING ||
+                      entry.status === KNOWLEDGE_UPLOAD_STATUS.DONE ||
                       entry.status === KNOWLEDGE_UPLOAD_STATUS.SKIPPED ||
                       entry.status === KNOWLEDGE_UPLOAD_STATUS.ERROR) && (
                       <button
@@ -931,169 +1085,6 @@ export default function FileUpload({
           </ul>
         )}
       </div>
-
-      {/* Knowledge Base section -- status-only, process is automatic.
-          Retry covers the one manual case: the auto attempt itself failed. */}
-      {(totalUploaded > 0 || kbCreated || pendingOrphans.length > 0) && (
-        <div className="rounded-xl border border-border bg-card p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Database className="w-5 h-5 text-purple-400" />
-              <h3 className="text-sm font-medium text-foreground">Knowledge Base</h3>
-            </div>
-            {processError && (
-              <Button
-                className="gap-2 bg-purple-100 hover:bg-purple-200 text-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 dark:text-white"
-                onClick={() => scheduleProcess()}
-                disabled={creatingKB}
-              >
-                {creatingKB ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Database className="w-4 h-4" />
-                )}
-                {creatingKB ? "Retrying..." : "Retry"}
-              </Button>
-            )}
-          </div>
-
-          {/* Phase-aware status */}
-          {kbCreated && !allDone && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400 shrink-0" />
-                <span className="text-xs text-muted-foreground">
-                  {sourcesDiscovering
-                    ? "Discovering files..."
-                    : docsProcessing
-                      ? `Processing documents — ${docsFinished} of ${docsTotal} complete`
-                      : "Initializing..."}
-                </span>
-              </div>
-              {docsProcessing && (
-                <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-purple-500 transition-all duration-500"
-                    style={{ width: `${progressPct}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
-          {kbCreated && allDone && (
-            <p className="text-xs text-muted-foreground">Knowledge base ready</p>
-          )}
-
-          {!kbCreated && !creatingKB && !processError && (
-            <p className="text-xs text-muted-foreground">
-              Upload files to automatically build the knowledge base.
-            </p>
-          )}
-
-          {!kbCreated && creatingKB && (
-            <div className="flex items-center gap-2">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400 shrink-0" />
-              <span className="text-xs text-muted-foreground">Creating knowledge base...</span>
-            </div>
-          )}
-
-          {kbCreated && allDone && newUploadsAfterKB > 0 && (
-            <div className="flex items-center gap-2">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400 shrink-0" />
-              <span className="text-xs text-muted-foreground">
-                {newUploadsAfterKB} new file{newUploadsAfterKB !== 1 ? "s" : ""} uploaded — adding to
-                knowledge base...
-              </span>
-            </div>
-          )}
-
-          {processError && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-700 dark:text-red-300">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              {processError}
-            </div>
-          )}
-
-          {/* Per-document details -- capped height, scrolls for large batches. */}
-          {(pipelineDetails.length > 0 || (queuedDocNames.length > 0 && kbCreated && !allDone)) && (
-            <div className="max-h-36 space-y-1.5 overflow-y-auto pr-1">
-              {pipelineDetails.length === 0 &&
-                queuedDocNames.map((name, i) => (
-                  <div
-                    key={`queued-${i}-${name}`}
-                    className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Clock className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                      <span className="text-xs text-foreground truncate">{name}</span>
-                    </div>
-                    <span className="text-xs font-medium shrink-0 ml-3 text-muted-foreground">
-                      Queued
-                    </span>
-                  </div>
-                ))}
-              {pipelineDetails.map((d) => {
-                const displayName = pipelineDocumentDisplayName(d.document_name);
-                return (
-                  <div
-                    key={d.document_name}
-                    ref={(el) => {
-                      if (el) docRowRefs.current.set(d.document_name, el);
-                      else docRowRefs.current.delete(d.document_name);
-                    }}
-                    className={cn(
-                      "flex items-center justify-between rounded-lg border border-border bg-card px-4 py-2 transition-colors duration-700",
-                      flashingDocs.has(d.document_name) && "bg-yellow-500/10 dark:bg-yellow-400/10",
-                    )}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {/* -600 for light mode, -400 washes out there. Backend
-                          (dist_rag) reports QUEUED separately from PROCESSING
-                          -- a single worker only actively works one document
-                          at a time, so the rest behind it are waiting, not
-                          "processing". Distinguishing them here also means
-                          this is already correct if/when the worker pool
-                          processes several documents in parallel: each one
-                          genuinely PROCESSING gets its own spinner. */}
-                      {d.document_status === KB_DOCUMENT_STATUS.COMPLETED ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-green-600 dark:text-green-400 shrink-0" />
-                      ) : d.document_status === KB_DOCUMENT_STATUS.FAILED ? (
-                        <AlertCircle className="w-3.5 h-3.5 text-red-600 dark:text-red-400 shrink-0" />
-                      ) : d.document_status === KB_DOCUMENT_STATUS.QUEUED ? (
-                        <Clock className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                      ) : (
-                        <Loader2 className="w-3.5 h-3.5 text-yellow-600 dark:text-yellow-400 animate-spin shrink-0" />
-                      )}
-                      <span className="text-xs text-foreground truncate">{displayName}</span>
-                    </div>
-                    <span
-                      className={cn(
-                        "text-xs font-medium shrink-0 ml-3",
-                        d.document_status === KB_DOCUMENT_STATUS.COMPLETED
-                          ? "text-green-600 dark:text-green-400"
-                          : d.document_status === KB_DOCUMENT_STATUS.FAILED
-                            ? "text-red-600 dark:text-red-400"
-                            : d.document_status === KB_DOCUMENT_STATUS.QUEUED
-                              ? "text-muted-foreground"
-                              : "text-yellow-600 dark:text-yellow-400",
-                      )}
-                    >
-                      {d.document_status === KB_DOCUMENT_STATUS.COMPLETED
-                        ? `Ready${d.chunks_processed ? ` · ${d.chunks_processed} ${d.chunks_processed === 1 ? "chunk" : "chunks"}` : ""}`
-                        : d.document_status === KB_DOCUMENT_STATUS.FAILED
-                          ? "Failed"
-                          : d.document_status === KB_DOCUMENT_STATUS.QUEUED
-                            ? "Queued"
-                            : "Processing"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

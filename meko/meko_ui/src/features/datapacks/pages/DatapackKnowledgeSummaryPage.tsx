@@ -9,11 +9,15 @@
 // from the most recent activity-log item when available, falling
 // back to the summary's last_file_uploaded_at while the log loads.
 
-import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileText, Search, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+
+import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 
 // Underline tab variant: TabsTrigger className that strips the default
 // shadcn "blue pill" active state (bg-blue-600 + shadow + ring) and
@@ -28,7 +32,6 @@ const UNDERLINE_TAB_TRIGGER_CLASS =
   "gap-2 rounded-none border-b-2 border-transparent px-3 py-2 " +
   "data-[state=active]:border-emerald-400 data-[state=active]:bg-transparent " +
   "data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:ring-0";
-import { AppWorkspaceHeader } from "@/features/layout/AppWorkspaceHeader";
 import { DatapackBreadcrumbs } from "@/features/datapacks/components/datapack-detail/DatapackBreadcrumbs";
 import { CollectiveMemoryPanel } from "@/features/datapacks/components/collective-memory/CollectiveMemoryPanel";
 import { KnowledgeSummaryHeader } from "@/features/datapacks/components/knowledge-documents/KnowledgeSummaryHeader";
@@ -36,48 +39,81 @@ import { KnowledgeFilesTab } from "@/features/datapacks/components/knowledge-doc
 import { KnowledgeActivityLog } from "@/features/datapacks/components/knowledge-documents/KnowledgeActivityLog";
 import { datapackDetailPath, ROUTES } from "@/app/routes/paths";
 import {
-  getApiErrorMessage,
-  getCurrentUser,
   getDatapack,
   getKnowledgeBaseActivityLog,
   getKnowledgeBaseSummary,
   listMemories,
-  type CurrentUser,
-  type Datapack,
   type KBActivityLogItem,
-  type KnowledgeBaseSummary,
 } from "@/lib/api/mekoApi";
+import { datapackKey, kbLatestActivityKey, kbSummaryKey } from "@/features/datapacks/lib/knowledgeQueryKeys";
 
 type Props = {
   datapackId: string;
 };
 
 export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
-  const [datapack, setDatapack] = useState<Datapack | null>(null);
-  const [datapackLoading, setDatapackLoading] = useState(true);
-  const [datapackError, setDatapackError] = useState<string | null>(null);
+  const qc = useQueryClient();
 
-  const [summary, setSummary] = useState<KnowledgeBaseSummary | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(true);
+  // Cached (staleTime 30s) so navigating away and back to this datapack
+  // -- or between its sub-pages -- doesn't re-show a loading state for
+  // data that hasn't gone stale.
+  const datapackQuery = useQuery({
+    queryKey: datapackKey(datapackId),
+    queryFn: ({ signal }) => getDatapack(datapackId, { signal }),
+    staleTime: 30_000,
+  });
+  const datapack = datapackQuery.data ?? null;
+  const datapackLoading = datapackQuery.isLoading;
+  const datapackError = datapackQuery.isError ? "Failed to load datapack." : null;
+
+  // Short staleTime -- this backs live-ish stats (total files, promoted
+  // count) that should feel current shortly after an upload, but still
+  // benefits from not re-fetching on every render/tab switch.
+  const summaryQuery = useQuery({
+    queryKey: kbSummaryKey(datapackId),
+    queryFn: ({ signal }) => getKnowledgeBaseSummary(datapackId, { signal }),
+    staleTime: 10_000,
+  });
+  const summary = summaryQuery.data ?? null;
+  const summaryLoading = summaryQuery.isLoading;
 
   // Caller identity is needed to decide whether the Delete button on
   // each file row is shown. The button is visible when the caller is
   // the datapack owner / a maintainer / the file's uploader; the BE
-  // re-enforces this on the request itself. Failing the fetch is
-  // non-fatal — we just hide Delete entirely for safety.
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  // re-enforces this on the request itself. Shared cache with the rest
+  // of the app (sidebar, session bootstrap, …) via useCurrentUser --
+  // this page no longer runs its own duplicate `/me` fetch.
+  const { data: currentUser } = useCurrentUser();
 
   // The activity-log first page is fetched here so the header's
   // "Last activity" cell can derive its relative-time string from
   // `items[0].timestamp`. The full ActivityLog component owns its own
   // pagination state and fetches its own pages.
-  const [latestActivityAt, setLatestActivityAt] = useState<string | null>(null);
+  const latestActivityQuery = useQuery({
+    queryKey: kbLatestActivityKey(datapackId),
+    // First page only — we just need the newest row's timestamp for the
+    // "Last activity" header cell, no pagination from here.
+    queryFn: ({ signal }) => getKnowledgeBaseActivityLog(datapackId, { limit: 1 }, { signal }),
+    staleTime: 10_000,
+  });
+  const latestActivityAt: string | null =
+    (latestActivityQuery.data?.items[0] as KBActivityLogItem | undefined)?.timestamp ?? null;
 
-  const [pendingMemoryCount, setPendingMemoryCount] = useState(0);
+  const pendingMemoryCount = datapack?.learnings_count ?? 0;
 
   // Incremented after createKnowledgeBase succeeds to trigger document
   // and activity-log re-fetches without unmounting the components.
   const [refreshKey, setRefreshKey] = useState(0);
+  // Small debounce on manual refresh triggers to prevent request storms
+  // when multiple components (or multiple status polls) fire at once.
+  const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const triggerRefresh = (delay = 100) => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      setRefreshKey((k) => k + 1);
+    }, delay);
+  };
 
   // Shared across both tabs. Active-tab-aware filtering inside each
   // tab component (files filter by document_name, promoted memories
@@ -87,39 +123,105 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
   // Deep-link params (e.g. from the trace drawer's "Promoted to KB"):
   // `tab` selects the active tab, `promotedMemoryId` is the entry to
   // scroll to + shimmer inside the Promoted memories tab.
-  const [searchParams] = useSearchParams();
-  const promotedMemoryId = searchParams.get("promotedMemoryId") ?? "";
+  //
+  // The three "flash-once" params below are captured into local state
+  // via a lazy initializer -- read *once*, on this mount, never again --
+  // and then stripped from the URL (see the effect further down). If we
+  // instead kept reading them straight off `searchParams` on every
+  // render, they'd survive in the URL/history indefinitely, so
+  // navigating away and back to this exact page (browser Back, or a
+  // link that lands on the same URL) would redeliver the same param and
+  // re-trigger the shimmer every time instead of once. `tab` deliberately
+  // isn't treated this way -- it's not one-shot, it's "which tab is
+  // active", and should stay in the URL for as long as you're here.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const state = location.state as {
+    highlightDocId?: string;
+    flashFiles?: boolean;
+    promotedMemoryId?: string;
+    tab?: string;
+  } | null;
+
+  // Track "consumed" flash intents at the page level. This survives
+  // internal pagination and tab switching, ensuring a deep-link arrival
+  // only ever flashes once regardless of how much the user navigates
+  // around inside this datapack.
+  const flashedIdsRef = useRef<Set<string>>(new Set());
+  const [flashFilesConsumed, setFlashFilesConsumed] = useState(false);
+
+  // Deep-link intent: capture from location.state (modern internal jump)
+  // or URL params (legacy/external link).
+  const highlightDocId =
+    (state?.highlightDocId || searchParams.get("highlightDocId")) ?? undefined;
+  const flashFiles = state?.flashFiles || searchParams.get("flashFiles") === "1";
+  const promotedMemoryId =
+    (state?.promotedMemoryId || searchParams.get("promotedMemoryId")) ?? "";
+
+  useEffect(() => {
+    console.log(
+      "[arrival-flash] SummaryPage intent",
+      JSON.stringify(
+        {
+          locationState: state,
+          searchParams: Object.fromEntries(searchParams.entries()),
+          highlightDocId: highlightDocId ?? null,
+          flashFiles,
+          promotedMemoryId: promotedMemoryId || null,
+          alreadyFlashed: Array.from(flashedIdsRef.current),
+          flashFilesConsumed,
+        },
+        null,
+        2,
+      ),
+    );
+  }, [state, searchParams, highlightDocId, flashFiles, promotedMemoryId, flashFilesConsumed]);
+
   const initialTab =
-    searchParams.get("tab") === "promoted-memories" || promotedMemoryId
+    state?.tab === "promoted-memories" ||
+    searchParams.get("tab") === "promoted-memories" ||
+    promotedMemoryId
       ? "promoted-memories"
       : "files";
   const [activeTab, setActiveTab] = useState(initialTab);
   // Re-apply when the deep-link changes while the page is already mounted.
   useEffect(() => {
-    if (searchParams.get("tab") === "promoted-memories" || promotedMemoryId) {
-      setActiveTab("promoted-memories");
+    const nextTab =
+      state?.tab === "promoted-memories" ||
+      searchParams.get("tab") === "promoted-memories" ||
+      promotedMemoryId
+        ? "promoted-memories"
+        : "files";
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab);
     }
-  }, [searchParams, promotedMemoryId]);
+  }, [state?.tab, searchParams, promotedMemoryId, activeTab]);
 
-  // Caller identity — used by KnowledgeFilesTab for per-row Delete
-  // visibility. Lives on the page (not deeper) so the children get a
-  // stable prop and we don't refetch on tab switch.
+  // Strip the flash-once params from the URL right after capturing them
+  // above -- `replace: true` so this doesn't add a history entry, and so
+  // a later browser Back to "this page" lands on the already-stripped
+  // URL rather than resurrecting the params that would re-fire the
+  // shimmer on remount.
   useEffect(() => {
-    const ac = new AbortController();
-    void getCurrentUser({ signal: ac.signal })
-      .then((u) => {
-        if (!ac.signal.aborted) setCurrentUser(u);
-      })
-      .catch(() => {
-        // Silent: Delete just stays hidden if we can't resolve the
-        // caller. The session-bootstrap path also fetches this, so
-        // a transient failure here is recoverable on next navigation.
-      });
-    return () => ac.abort();
-  }, []);
+    if (
+      !searchParams.has("promotedMemoryId") &&
+      !searchParams.has("flashFiles") &&
+      !searchParams.has("highlightDocId")
+    ) {
+      return;
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("promotedMemoryId");
+    next.delete("flashFiles");
+    next.delete("highlightDocId");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Fetch un-promoted memory count for the "X pending" badge.
-  // page_size=1 minimises payload — we only need `total`.
+  // page_size=1 minimises payload — we only need `total`. Currently
+  // fire-and-forget (nothing reads the response) -- pendingMemoryCount
+  // itself comes from datapack.learnings_count above; kept as a cache
+  // warm-up for the Promoted memories tab's own listMemories call.
   useEffect(() => {
     const dpId = datapack?.datapack_id ?? datapackId;
     if (!dpId || !currentUser?.account_id) return;
@@ -128,77 +230,25 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
       { datapack_id: dpId, user_id: currentUser.account_id, page: 1, page_size: 1 },
       { signal: ac.signal },
     )
-      .then((r) => { })
-      .catch(() => { });
+      .then(() => {})
+      .catch(() => {});
     return () => ac.abort();
   }, [datapack?.datapack_id, datapackId, currentUser?.account_id]);
 
-  // Resolve the datapack once to confirm existence + get its id (needed
-  // by the Promoted memories tab below).
+  // Bridge `refreshKey` (bumped after createKnowledgeBase / a document
+  // delete elsewhere) into cache invalidation for the three queries
+  // above -- react-query then refetches them in the background
+  // (isFetching, not isLoading/a full reload) since they already have
+  // cached data. Guarded so mount doesn't invalidate what it just
+  // populated.
+  const prevRefreshKeyRef = useRef(refreshKey);
   useEffect(() => {
-    let cancelled = false;
-    setDatapackLoading(true);
-    setDatapackError(null);
-    void getDatapack(datapackId, {})
-      .then((d) => {
-        setPendingMemoryCount(d.learnings_count ?? 0);
-        if (!cancelled) setDatapack(d);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setDatapack(null);
-          setDatapackError(getApiErrorMessage(e, "Failed to load datapack."));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setDatapackLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [datapackId]);
-
-  useEffect(() => {
-    const ac = new AbortController();
-    setSummaryLoading(true);
-    void getKnowledgeBaseSummary(datapackId, { signal: ac.signal })
-      .then((s) => {
-        if (ac.signal.aborted) return;
-        setSummary(s);
-      })
-      .catch((e) => {
-        if (ac.signal.aborted) return;
-        if ((e as { name?: string })?.name === "CanceledError") return;
-        setSummary(null);
-      })
-      .finally(() => {
-        if (!ac.signal.aborted) setSummaryLoading(false);
-      });
-    return () => ac.abort();
-  }, [datapackId]);
-
-  // First-page activity-log fetch JUST for the "Last activity" header
-  // cell. Best-effort: we don't surface errors here because the full
-  // ActivityLog component does its own fetch + shows its own banner.
-  useEffect(() => {
-    const ac = new AbortController();
-    void getKnowledgeBaseActivityLog(
-      datapackId,
-      // First page only — we just need the newest row's timestamp
-      // for the "Last activity" header cell, no pagination from here.
-      { limit: 1 },
-      { signal: ac.signal },
-    )
-      .then((resp) => {
-        if (ac.signal.aborted) return;
-        const first: KBActivityLogItem | undefined = resp.items[0];
-        setLatestActivityAt(first?.timestamp ?? null);
-      })
-      .catch(() => {
-        // Silent; the header falls back to summary.last_file_uploaded_at.
-      });
-    return () => ac.abort();
-  }, [datapackId]);
+    if (prevRefreshKeyRef.current === refreshKey) return;
+    prevRefreshKeyRef.current = refreshKey;
+    void qc.invalidateQueries({ queryKey: kbSummaryKey(datapackId) });
+    void qc.invalidateQueries({ queryKey: kbLatestActivityKey(datapackId) });
+    void qc.invalidateQueries({ queryKey: datapackKey(datapackId) });
+  }, [refreshKey, datapackId, qc]);
 
   const resolvedDatapackId = datapack?.datapack_id ?? datapackId;
   const displayDatapackName = datapack?.datapack_name ?? "";
@@ -296,16 +346,21 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
                 datapackGrant={datapack?.grant ?? null}
                 refreshKey={refreshKey}
                 onDocumentDeleted={() => {
-                  // Non-optimistic: increment refreshKey to re-fetch
-                  // /documents and /activity-log, then also refresh /summary.
-                  setRefreshKey((k) => k + 1);
-                  setSummaryLoading(true);
-                  void getKnowledgeBaseSummary(datapackId, {})
-                    .then((s) => setSummary(s))
-                    .catch(() => { })
-                    .finally(() => setSummaryLoading(false));
+                  // Non-optimistic: increment refreshKey, which invalidates
+                  // /documents, /summary, and /activity-log's caches above.
+                  triggerRefresh(150);
                 }}
-                onKnowledgeBaseCreated={() => setRefreshKey((k) => k + 1)}
+                onKnowledgeBaseCreated={() => {
+                  triggerRefresh(100);
+                }}
+                flash={flashFiles && !flashFilesConsumed}
+                onFlashConsumed={() => setFlashFilesConsumed(true)}
+                highlightDocumentId={
+                  highlightDocId && !flashedIdsRef.current.has(highlightDocId)
+                    ? highlightDocId
+                    : undefined
+                }
+                onHighlightConsumed={(id) => flashedIdsRef.current.add(id)}
               />
             </TabsContent>
 
@@ -318,7 +373,12 @@ export default function DatapackKnowledgeSummaryPage({ datapackId }: Props) {
                 embeddingModel={summary?.embedding_model ?? null}
                 embeddingDimensions={summary?.embedding_dimensions ?? null}
                 aiProvider={summary?.ai_provider ?? null}
-                highlightMemoryId={promotedMemoryId || undefined}
+                highlightMemoryId={
+                  promotedMemoryId && !flashedIdsRef.current.has(promotedMemoryId)
+                    ? promotedMemoryId
+                    : undefined
+                }
+                onHighlightConsumed={(id) => flashedIdsRef.current.add(id)}
               />
             </TabsContent>
           </Tabs>

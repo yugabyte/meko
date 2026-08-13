@@ -18,7 +18,7 @@
 //   - /datapack/<name>         → pending count (mem0 memories not yet
 //                                 promoted) passed in as `pendingCount`
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
@@ -37,6 +37,7 @@ import {
   datapackConversationsPathWithSource,
   datapackLearningsPathFrom,
 } from "@/app/routes/paths";
+import { useArrivalFlash } from "@/hooks/useArrivalFlash";
 import { PAGE_SIZE_OPTIONS } from "@/features/datapacks/components/memory-promotion/useMemoryPromotion";
 import { usePromotedMemoryList } from "./usePromotedMemoryList";
 import { PromotedMemoryCard } from "./PromotedMemoryCard";
@@ -63,8 +64,9 @@ type Props = {
    *  When this id matches a loaded promoted memory, that card is scrolled
    *  into view and given a one-time shimmer sweep. */
   highlightMemoryId?: string;
+  /** Fired after the highlight card has genuinely been found and shimmered. */
+  onHighlightConsumed?: (id: string) => void;
 };
-
 
 export function CollectiveMemoryPanel({
   datapackName,
@@ -74,7 +76,8 @@ export function CollectiveMemoryPanel({
   embeddingModel = null,
   embeddingDimensions = null,
   aiProvider = null,
-  highlightMemoryId, }: Props) {
+  highlightMemoryId,
+  onHighlightConsumed, }: Props) {
   const navigate = useNavigate();
   const {
     loading,
@@ -102,26 +105,16 @@ export function CollectiveMemoryPanel({
   }, [memories, searchQuery]);
 
   // Deep-link highlight: when highlightMemoryId matches a card on the
-  // currently-loaded page, scroll it into view and run a one-time shimmer
-  // sweep. Tracked per-id so it fires once per arrival, not on every render.
-  const targetRef = useRef<HTMLLIElement>(null);
-  const [shimmerId, setShimmerId] = useState<string | null>(null);
-  const shimmeredForRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!highlightMemoryId) return;
-    if (shimmeredForRef.current === highlightMemoryId) return;
-    if (!visibleMemories.some((m) => m.id === highlightMemoryId)) return;
-    shimmeredForRef.current = highlightMemoryId;
-    const raf = window.requestAnimationFrame(() => {
-      targetRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      setShimmerId(highlightMemoryId);
-    });
-    const t = window.setTimeout(() => setShimmerId(null), 1800);
-    return () => {
-      window.cancelAnimationFrame(raf);
-      window.clearTimeout(t);
-    };
-  }, [highlightMemoryId, visibleMemories]);
+  // currently-loaded page, scroll it into view and flash it once.
+  // `active` is what makes this wait for the right page -- the target
+  // may be several pages in, or filtered out by the search box.
+  const targetOnPage = visibleMemories.some((m) => m.id === highlightMemoryId);
+  const { ref: targetRef, flashing } = useArrivalFlash<HTMLLIElement>({
+    flashKey: highlightMemoryId,
+    active: targetOnPage,
+    onDone: onHighlightConsumed,
+    debugLabel: "PromotedMemoryCard",
+  });
 
   const showPagination = total > 0;
   const hasPending = pendingCount > 0;
@@ -133,15 +126,23 @@ export function CollectiveMemoryPanel({
           blue tint (matching the memories accent) instead. */}
       <style>{`
         @keyframes meko-promoted-shimmer {
-          0%   { transform: translateX(-120%); }
-          100% { transform: translateX(120%); }
+          0%   { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+        @keyframes meko-promoted-glow {
+          0%   { background-color: rgba(56,189,248,0.22); }
+          70%  { background-color: rgba(56,189,248,0.12); }
+          100% { background-color: rgba(56,189,248,0); }
         }
         .meko-promoted-shimmer {
-          animation: meko-promoted-shimmer 1.4s ease-in-out forwards;
-          background: linear-gradient(105deg, transparent 30%, rgba(37,99,235,0.22) 50%, rgba(37,99,235,0.10) 58%, transparent 70%);
+          animation: meko-promoted-shimmer 1.2s ease-in-out forwards;
+          background: linear-gradient(100deg, transparent 20%, rgba(37,99,235,0.40) 50%, transparent 80%);
         }
         .dark .meko-promoted-shimmer {
-          background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,0.20) 50%, rgba(255,255,255,0.08) 58%, transparent 70%);
+          background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,0.32) 50%, transparent 80%);
+        }
+        .meko-promoted-glow {
+          animation: meko-promoted-glow 1.6s ease-out forwards;
         }
       `}</style>
       {/* AUTO summary banner. Always rendered (even when there's
@@ -324,18 +325,28 @@ export function CollectiveMemoryPanel({
                 )
               : undefined;
             const isTarget = !!highlightMemoryId && m.id === highlightMemoryId;
-            const isShimmering = shimmerId === m.id;
+            const isShimmering = isTarget && flashing;
             return (
               <li
                 key={m.id}
                 ref={isTarget ? targetRef : undefined}
-                className={cn("relative", isShimmering && "overflow-hidden rounded-lg")}
+                className={cn(
+                  "relative transition-shadow duration-300",
+                  isShimmering &&
+                    "z-10 overflow-hidden rounded-lg ring-2 ring-sky-500/60 dark:ring-sky-400/60",
+                )}
               >
                 {isShimmering ? (
-                  <span
-                    aria-hidden
-                    className="meko-promoted-shimmer pointer-events-none absolute inset-0 z-10 rounded-lg"
-                  />
+                  <>
+                    <span
+                      aria-hidden
+                      className="meko-promoted-glow pointer-events-none absolute inset-0 z-10 rounded-lg"
+                    />
+                    <span
+                      aria-hidden
+                      className="meko-promoted-shimmer pointer-events-none absolute inset-0 z-10 rounded-lg"
+                    />
+                  </>
                 ) : null}
                 <div className="rounded-lg border border-border bg-card px-4 py-3">
                   <PromotedMemoryCard

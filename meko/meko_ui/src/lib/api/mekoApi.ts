@@ -1515,7 +1515,8 @@ export type KnowledgeBaseDocumentsPage = {
  * @param page_size  items per page (default 50, max 200)
  * @param q          filename substring search
  * @param type_filter file-extension suffix, e.g. ".md"
- * @param indexed_only restrict to fully-indexed (COMPLETED) documents
+ * @param status_filter exact status match: "NOT_STARTED" | "QUEUED" |
+ *   "PROCESSING" | "COMPLETED" | "FAILED" | "RETRY"
  */
 export async function getKnowledgeBaseDocuments(
   datapackId: string,
@@ -1524,16 +1525,16 @@ export async function getKnowledgeBaseDocuments(
     page_size?: number;
     q?: string;
     type_filter?: string;
-    indexed_only?: boolean;
+    status_filter?: string;
   } = {},
 ): Promise<KnowledgeBaseDocumentsPage> {
-  const { page, page_size, q, type_filter, indexed_only, ...rest } = options;
+  const { page, page_size, q, type_filter, status_filter, ...rest } = options;
   const qs = new URLSearchParams();
   if (page != null) qs.set("page", String(page));
   if (page_size != null) qs.set("page_size", String(page_size));
   if (q) qs.set("q", q);
   if (type_filter) qs.set("type_filter", type_filter);
-  if (indexed_only) qs.set("indexed_only", "true");
+  if (status_filter) qs.set("status_filter", status_filter);
   const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
   const resp = await request<KnowledgeBaseDocumentsPage>(
     `${datapackRoute(datapackId)}/knowledge-bases/documents${suffix}`,

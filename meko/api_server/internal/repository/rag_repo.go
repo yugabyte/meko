@@ -329,9 +329,14 @@ func (r *RagRepo) GetPipelineStatus(sourceURIs []string) (*PipelineStatus, error
 		"status_source", "documents+latest_pipeline+active_work_queue",
 	)
 
+	// document_status alone lags pipeline_status: the row-level check
+	// below (dist_rag.documents.status, surfaced by ListDistRagDocuments
+	// and admin_kb.go via the same COALESCE) reflects completion sooner
+	// than document_status does.
 	rows, err := r.db.Query(
 		`SELECT DISTINCT ON (document_uri)
-		        schema_name, index_name, source_uri, document_name, document_status,
+		        schema_name, index_name, source_uri, document_name,
+		        COALESCE(pipeline_status::text, document_status::text) AS document_status,
 		        chunks_processed
 		 FROM dist_rag.vector_index_pipeline_details
 		 WHERE schema_name = $1
