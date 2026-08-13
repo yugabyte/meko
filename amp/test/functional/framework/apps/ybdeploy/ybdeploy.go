@@ -28,6 +28,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybk8s"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybpod"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
 	"github.com/yugabyte/amp/test/functional/framework/env/universe"
 )
 
@@ -79,22 +80,50 @@ func Requested(cfg *core.Config) bool {
 // own background scope, released solely by the returned teardown (AGENTS.md §5).
 // The teardown, when non-nil, runs on the caller's own teardown deadline.
 func Provision(ctx context.Context, cfg *core.Config, mode, runTag string, logf func(string, ...any)) (ybbacking.BackingStore, func(context.Context) error, error) {
+	store, td, _, err := ProvisionWithPlan(ctx, cfg, mode, runTag, logf)
+	return store, td, err
+}
+
+// ProvisionWithPlan is Provision plus the serializable reap.Plan naming what it
+// created, so a LATER process can reclaim it when this one is killed before its
+// teardown runs. An empty plan means the mode provisioned nothing reapable.
+func ProvisionWithPlan(ctx context.Context, cfg *core.Config, mode, runTag string, logf func(string, ...any)) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error) {
 	switch mode {
 	case "", ModeBuiltin:
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	case ModeExternal:
-		return provisionExternal(cfg)
+		store, td, err := provisionExternal(cfg)
+		return store, td, nil, err
 	case ModeYBK8s:
-		return provisionYBK8s(ctx, cfg, runTag, logf)
+		store, td, err := provisionYBK8s(ctx, cfg, runTag, logf)
+		return store, td, ybk8sPlan(cfg, store), err
 	case ModeYBPod:
-		return provisionYBPod(ctx, cfg, runTag, logf)
+		store, td, err := provisionYBPod(ctx, cfg, runTag, logf)
+		return store, td, nil, err
 	case ModeYBAUniverse:
-		return provisionYBAUniverse(ctx, cfg, logf)
+		store, td, err := provisionYBAUniverse(ctx, cfg, logf)
+		return store, td, nil, err
 	case ModeYBAProvisioned:
-		return provisionYBAProvisioned(ctx, cfg, runTag, logf)
+		return provisionYBAProvisionedWithPlan(ctx, cfg, runTag, logf)
 	default:
-		return nil, nil, fmt.Errorf("unknown env.yb_deploy %q: valid values are %s", mode, strings.Join(ValidModes, ", "))
+		return nil, nil, nil, fmt.Errorf("unknown env.yb_deploy %q: valid values are %s", mode, strings.Join(ValidModes, ", "))
 	}
+}
+
+// ybk8sPlan names the co-located deploy's namespace so a killed run's YB pods
+// are reclaimed.
+func ybk8sPlan(cfg *core.Config, store ybbacking.BackingStore) *reap.Plan {
+	ns := ""
+	if kc, ok := store.(interface{ KubeColocation() (string, string) }); ok {
+		ns, _ = kc.KubeColocation()
+	}
+	if ns == "" {
+		return nil
+	}
+	k := ybk8s.FromConfig(cfg)
+	return &reap.Plan{Namespaces: []reap.NSReap{{
+		Kind: reap.KindYBK8s, KubeContext: k.KubeContext, Kubeconfig: k.Kubeconfig, Namespace: ns,
+	}}}
 }
 
 // provisionExternal points the control plane at a cluster owned elsewhere, read
@@ -225,9 +254,14 @@ func provisionYBAUniverse(ctx context.Context, cfg *core.Config, logf func(strin
 // provisioners_helper.go's provisionYBAProvisioned (no reap plan, no T). The
 // per-runTag seed keeps naming deterministic.
 func provisionYBAProvisioned(ctx context.Context, cfg *core.Config, runTag string, logf func(string, ...any)) (ybbacking.BackingStore, func(context.Context) error, error) {
+	store, td, _, err := provisionYBAProvisionedWithPlan(ctx, cfg, runTag, logf)
+	return store, td, err
+}
+
+func provisionYBAProvisionedWithPlan(ctx context.Context, cfg *core.Config, runTag string, logf func(string, ...any)) (ybbacking.BackingStore, func(context.Context) error, *reap.Plan, error) {
 	secrets, err := core.NewSecrets(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("secrets: %w", err)
+		return nil, nil, nil, fmt.Errorf("secrets: %w", err)
 	}
 	ucfg := universe.FromConfig(cfg)
 	ucfg.Mode = universe.ModeProvisionYBA
@@ -238,7 +272,7 @@ func provisionYBAProvisioned(ctx context.Context, cfg *core.Config, runTag strin
 	seed := core.NewRunSeed(0, true).Fork("yb_deploy/" + runTag)
 	env, err := prov.Provision(ctx, core.EnvSpec{Sharing: core.Exclusive, Shape: core.Universe}, seed)
 	if err != nil {
-		return nil, nil, fmt.Errorf("provision owned yba universe: %w", err)
+		return nil, nil, nil, fmt.Errorf("provision owned yba universe: %w", err)
 	}
 	teardown := func(ctx context.Context) error { return prov.Teardown(ctx, env) }
 
@@ -247,7 +281,7 @@ func provisionYBAProvisioned(ctx context.Context, cfg *core.Config, runTag strin
 		NodeAddrs() []string
 	})
 	if !ok {
-		return nil, teardown, fmt.Errorf("provisioned yba env does not expose a YSQL endpoint (%T)", env)
+		return nil, teardown, nil, fmt.Errorf("provisioned yba env does not expose a YSQL endpoint (%T)", env)
 	}
 	// A kubernetes-provider universe exposes its tserver in-cluster addresses
 	// separately from the operator-reachable pod IPs (env/universe.Env). When
@@ -256,7 +290,41 @@ func provisionYBAProvisioned(ctx context.Context, cfg *core.Config, runTag strin
 	if k, ok := env.(interface{ InClusterAddrs() []string }); ok {
 		inCluster = k.InClusterAddrs()
 	}
-	return ybaProvisionedBacking(acc.PGEndpoint(), acc.NodeAddrs(), inCluster), teardown, nil
+	return ybaProvisionedBacking(acc.PGEndpoint(), acc.NodeAddrs(), inCluster), teardown, ybaReapPlan(env), nil
+}
+
+// ybaReapPlan names the YBA control plane and, for a kubernetes universe, the
+// namespace YBA created for its nodes; a VM universe reaps by ownership tag
+// instead. The handles come from the env that provisioned them, so nothing is
+// derived from a naming convention.
+func ybaReapPlan(env core.Environment) *reap.Plan {
+	h, ok := env.(interface {
+		ProvisionedHandles() universe.ProvisionedHandles
+	})
+	if !ok {
+		return nil
+	}
+	ph := h.ProvisionedHandles()
+	p := &reap.Plan{}
+	if ph.YBANamespace != "" {
+		p.Namespaces = append(p.Namespaces, reap.NSReap{
+			Kind: reap.KindYBAStack, KubeContext: ph.KubeContext, Kubeconfig: ph.Kubeconfig,
+			Namespace: ph.YBANamespace, CRBs: ph.CRBs, HelmRelease: ph.HelmRelease,
+		})
+	}
+	if ph.UniverseName != "" {
+		p.Namespaces = append(p.Namespaces, reap.NSReap{
+			Kind: reap.KindDiscover, KubeContext: ph.KubeContext, Kubeconfig: ph.Kubeconfig,
+			Namespace: ph.UniverseName,
+		})
+	}
+	if ph.RunTag != "" && ph.ProviderType != "" && ph.ProviderType != "kubernetes" {
+		p.Cloud = &reap.CloudReap{Cloud: ph.ProviderType, RunTag: ph.RunTag, Region: ph.Region}
+	}
+	if p.Empty() {
+		return nil
+	}
+	return p
 }
 
 // ybaProvisionedBacking adapts a provisioned-universe endpoint into a backing

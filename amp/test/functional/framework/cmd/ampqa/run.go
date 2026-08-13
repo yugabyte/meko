@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -33,6 +34,7 @@ func newRunCmd() *cobra.Command {
 		fakeEnv     bool
 		dryRun      bool
 		outDir      string
+		reapPlan    string
 		junitPath   string
 		htmlPath    string
 		portalURL   string
@@ -298,6 +300,11 @@ available), distinct from a genuine all-pass.`,
 			// c.Context() is the signal-cancelled root context: on SIGINT/SIGTERM
 			// the scheduler stops taking new work and in-flight tests run their
 			// (background-deadline) teardown before Run returns — no orphaned infra.
+			if reapPlan == "" && outDir != "" {
+				reapPlan = filepath.Join(outDir, "reap-plan.json")
+			}
+			writeReapPlan(reapPlan, opts.Provider, func(f string, a ...any) { fmt.Fprintf(c.ErrOrStderr(), f+"\n", a...) })
+
 			summary, results := sched.Run(c.Context(), tests, opts)
 			// Teardown ownership: build/attach close the provider (build tears the
 			// owned control plane down; attach only frees the local forward, leaving
@@ -310,7 +317,9 @@ available), distinct from a genuine all-pass.`,
 					return &exitError{code: 1, err: err}
 				}
 			} else if closer, ok := opts.Provider.(interface{ Close() error }); ok {
-				_ = closer.Close()
+				if err := closer.Close(); err == nil {
+					dropReapPlan(reapPlan)
+				}
 			}
 			var reporterDropped int64
 			if reporter != nil {
@@ -352,6 +361,7 @@ available), distinct from a genuine all-pass.`,
 	cmd.Flags().DurationVar(&envTTL, "ttl", 0, "auto-reap a kept/setup-only env after this long (default 0: never — reap explicitly with env rm)")
 	cmd.Flags().StringVar(&regPath, "registry", "", "registry file path for --env / kept envs (default ~/.ampqa/envs.json)")
 	cmd.Flags().StringVar(&outDir, "out-dir", "", "write per-result JSON files under <out-dir>/<runid> (e.g. ./ampqa-out); default from report.out_dir")
+	cmd.Flags().StringVar(&reapPlan, "reap-plan", "", "write this run's reap plan here so a killed run can be cleaned up later (default <out-dir>/reap-plan.json)")
 	cmd.Flags().StringVar(&junitPath, "junit", "", "write a JUnit XML report to this path; default from report.junit_path")
 	cmd.Flags().StringVar(&portalURL, "portal", "", "amp report portal base URL — stream the run to it live as it executes; default from report.portal.url")
 	cmd.Flags().StringVar(&reportName, "report", "", "portal report bucket to file the run under; default from report.portal.report")

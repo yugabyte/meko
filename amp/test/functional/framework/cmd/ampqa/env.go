@@ -126,6 +126,7 @@ func newEnvReapCmd() *cobra.Command {
 		cloudName   string
 		stale       time.Duration
 		tag         string
+		planFile    string
 		noDefaults  bool
 	)
 	cmd := &cobra.Command{
@@ -139,13 +140,20 @@ cloud driver's ownership-tag and age-based safety nets:
   --stale <dur>    terminate managed autoclean instances older than <dur> whose
                    run tag is unknown (an operator lost track of a run).
 
-At least one of --tag / --stale is required; both may be given. The cloud is
---cloud (default: env.vm.cloud, else aws).`,
+  --plan <file>    reclaim exactly what a killed run recorded (its namespaces
+                   and/or cloud tag) — the file "ampqa run --reap-plan" leaves
+                   behind when it never reached its own teardown.
+
+At least one of --tag / --stale / --plan is required. The cloud is --cloud
+(default: env.vm.cloud, else aws).`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			staleSet := c.Flags().Changed("stale")
-			if tag == "" && !staleSet {
-				return &exitError{code: 2, err: fmt.Errorf("env reap needs --tag <runTag> and/or --stale <dur>")}
+			if tag == "" && !staleSet && planFile == "" {
+				return &exitError{code: 2, err: fmt.Errorf("env reap needs --plan <file>, --tag <runTag> and/or --stale <dur>")}
+			}
+			if planFile != "" {
+				return reapPlanFile(c, planFile, configFiles, jsonConfigs, overrides, noDefaults)
 			}
 			loadConfig := core.LoadConfig
 			if noDefaults {
@@ -202,6 +210,7 @@ At least one of --tag / --stale is required; both may be given. The cloud is
 	cmd.Flags().StringVar(&cloudName, "cloud", "", "cloud to reap: aws|gcp (default: env.vm.cloud, else aws)")
 	cmd.Flags().DurationVar(&stale, "stale", 0, "reap managed autoclean instances older than this (age-based net)")
 	cmd.Flags().StringVar(&tag, "tag", "", "reap every instance of this run's ownership tag (ampqa-run=<tag>)")
+	cmd.Flags().StringVar(&planFile, "plan", "", "reclaim what this recorded reap plan names (written by ampqa run --reap-plan)")
 	cmd.Flags().BoolVar(&noDefaults, "no-default-config", false, "skip the embedded configs/default.yaml base layer (debugging only)")
 	return cmd
 }

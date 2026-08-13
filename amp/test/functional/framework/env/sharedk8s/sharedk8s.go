@@ -31,6 +31,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/env/reap"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -178,7 +179,10 @@ type Provider struct {
 	// selector reads (env.yb_deploy, knob only — a shared control plane cannot vary
 	// its backing per test); ybDeployTeardown reaps what Prepare provisioned, run
 	// in Close AFTER the control plane (LIFO).
-	ybDeployCfg      *core.Config
+	ybDeployCfg *core.Config
+	// backingPlan reaps the backing this provider provisioned, from a process
+	// that shares no memory with it (an aborted CI build).
+	backingPlan      *reap.Plan
 	ybDeployTeardown func(context.Context) error
 
 	ctrl controllerConn // one long-lived controller forward shared by all tests
@@ -460,7 +464,7 @@ func (p *Provider) prepareYBDeploy() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p.cfg.DeployTimeout)
 	defer cancel()
-	store, td, err := ybdeploy.Provision(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
+	store, td, plan, err := ybdeploy.ProvisionWithPlan(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
 	if err != nil && mode == ybdeploy.ModeYBAProvisioned && ybdeploy.Requested(p.ybDeployCfg) {
 		// The run ASKED for YBA (env.yb_deploy was set explicitly), so a
 		// downgrade would answer a different question than the one it was
@@ -477,12 +481,13 @@ func (p *Provider) prepareYBDeploy() error {
 		// default backing) so the run still proceeds instead of failing the env.
 		p.log("sharedk8s: yba_provisioned backing failed (%v); falling back to built-in yugabyted", err)
 		mode = ybdeploy.ModeBuiltin
-		store, td, err = ybdeploy.Provision(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
+		store, td, plan, err = ybdeploy.ProvisionWithPlan(ctx, p.ybDeployCfg, mode, p.ampCfg.Namespace, p.logf)
 	}
 	if err != nil {
 		return fmt.Errorf("sharedk8s: provision %s deployment: %w", mode, err)
 	}
 	p.ybDeployTeardown = td
+	p.backingPlan = plan
 	if store != nil {
 		p.ampCfg.Backing = ybbacking.ExternalBacking(store)
 	}
@@ -1205,6 +1210,29 @@ func (e *Env) AmpPoolID() string { return e.poolID }
 // the controller is reached by a direct URL (no context), in which case that
 // feature cannot run.
 func (e *Env) AmpKube() *k8s.Kubectl { return e.kube }
+
+// ReapPlan names everything this provider stood up: the amp control-plane
+// namespace and whatever backing it provisioned. Serializable on purpose — a
+// killed run leaves it behind for `ampqa env rm --plan`.
+func (p *Provider) ReapPlan() *reap.Plan {
+	if !p.deploy {
+		return nil
+	}
+	out := &reap.Plan{}
+	if p.backingPlan != nil {
+		out.Cloud = p.backingPlan.Cloud
+		out.Namespaces = append(out.Namespaces, p.backingPlan.Namespaces...)
+	}
+	if ns := p.ampCfg.Namespace; ns != "" {
+		out.Namespaces = append(out.Namespaces, reap.NSReap{
+			Kind: reap.KindAmp, KubeContext: p.ampCfg.Context, Namespace: ns,
+		})
+	}
+	if out.Empty() {
+		return nil
+	}
+	return out
+}
 
 // BackingKube is a kube handle scoped to the namespace the backing
 // YugabyteDB's pods actually run in — its own for an external backing that
