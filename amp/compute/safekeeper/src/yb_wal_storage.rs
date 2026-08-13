@@ -523,8 +523,7 @@ impl YbWalStorage {
         // Replay the decoder to the last complete record boundary <=
         // max_offset — where Postgres crash recovery also stops — and use
         // THAT as write_lsn, discarding the torn tail (the compute
-        // re-streams from here and overwrites it). On scan failure, fall
-        // back to the raw offset so startup is never worse than before.
+        // re-streams from here and overwrites it).
         let write_lsn = {
             let pg_version = postgres_ffi::PgMajorVersion::try_from(state.server.pg_version)
                 .unwrap_or(postgres_ffi::PgMajorVersion::PG18);
@@ -537,9 +536,7 @@ impl YbWalStorage {
             // YB keeps no persisted record-boundary flush_lsn to start from
             // (the upstream safekeeper read it from the control file), so
             // anchor on a recent fresh-record page at or below the raw end,
-            // then scan forward to the true end of WAL via `find_end_of_wal`
-            // (the same scan Neon ran over local segments). On any scan
-            // failure, fall back to the raw offset so startup is never worse.
+            // then scan forward to the true end of WAL via `find_end_of_wal`.
             use postgres_ffi::wal_record_boundary::{find_anchor, find_end_of_wal};
             let scanned = if max_offset <= state.timeline_start_lsn {
                 Ok(max_offset)
@@ -549,7 +546,10 @@ impl YbWalStorage {
                 // boundary; pass it as the anchor-scan floor so a record spanning
                 // back to a mid-page start (wal_craft's XLOG_SWITCH padding)
                 // doesn't overshoot below the store (#181).
-                match find_anchor(&src, max_offset, state.timeline_start_lsn).await {
+                // `find_anchor`'s target is inclusive and `max_offset` is one past
+                // the last persisted byte (#678).
+                let last_byte = Lsn(max_offset.0 - 1);
+                match find_anchor(&src, last_byte, state.timeline_start_lsn).await {
                     Ok(anchor) => find_end_of_wal(&src, anchor, pg_version).await,
                     Err(e) => Err(e),
                 }
@@ -586,10 +586,13 @@ impl YbWalStorage {
                 }
                 Ok(_) => max_offset,
                 Err(e) => {
+                    // Unvalidated: a mid-record `max_offset` wedges every `wait_lsn` (#678).
+                    // Matched by the integration harness's FATAL_MARKERS.
                     tracing::warn!(
                         branch_id = %branch_id_str,
                         %max_offset,
-                        "YbWalStorage::new — end-of-WAL record-boundary scan failed, using raw max offset: {e:#}",
+                        "YbWalStorage::new — end-of-WAL record-boundary scan failed; advertising \
+                         the raw max offset unvalidated, which wedges readers if it is mid-record: {e:#}",
                     );
                     max_offset
                 }
@@ -2893,22 +2896,98 @@ mod tests {
         state.timeline_start_lsn = start_lsn;
 
         let tmp = camino_tempfile::tempdir().expect("tempdir");
-        let yb_wal = Arc::new(YbWalConn {
-            fpu_client: client.clone(),
-            read_client: client.clone(),
-            system_client: client,
-            table: table.to_string(),
-            cache: None,
-            yb_thinclient: None,
-            codec: payload_codec::Codec::Lz4,
-        });
-        let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
+        let storage = YbWalStorage::new(&branch_id, &state, wal_conn(&client, table))
             .await
             .expect("YbWalStorage::new");
         (storage, tmp)
     }
 
+    /// One shared connection across all three lanes, no cache, no thin client.
+    fn wal_conn(client: &Arc<YsqlClient>, table: &str) -> Arc<YbWalConn> {
+        Arc::new(YbWalConn {
+            fpu_client: client.clone(),
+            read_client: client.clone(),
+            system_client: client.clone(),
+            table: table.to_string(),
+            cache: None,
+            yb_thinclient: None,
+            codec: payload_codec::Codec::Lz4,
+        })
+    }
+
     const SEG_SIZE: u64 = 16 * 1024 * 1024;
+
+    /// Regression for #678: `max_offset` is an exclusive end, so a page-aligned
+    /// one must not be handed to the inclusive-target `find_anchor`.
+    #[tokio::test]
+    async fn rehydrate_truncates_page_aligned_torn_tail() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
+
+        let table = scratch_table("wals_test_page_aligned_tail");
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), true)
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        );
+        make_wals_table(&client, &table).await;
+
+        // Real WAL from the start of segment 1.
+        let start = Lsn(SEG_SIZE);
+        let mut g = WalGenerator::new(LogicalMessageGenerator::new(c"t", &[]), start);
+        let mut buf: Vec<u8> = Vec::new();
+        let mut starts: Vec<Lsn> = Vec::new();
+        for _ in 0..400 {
+            let (lsn, bytes) = g.append_logical_message(c"t", &[7u8; 16]);
+            starts.push(lsn);
+            buf.extend_from_slice(&bytes);
+        }
+
+        // Trim to a page boundary — page-aligned by construction, since `start`
+        // is — landing mid-record, which is the torn tail #678 must truncate.
+        let len = buf.len() / XLOG_BLCKSZ * XLOG_BLCKSZ;
+        let cut = Lsn(start.0 + len as u64);
+        let full_end = Lsn(start.0 + buf.len() as u64);
+        assert!(
+            !starts.contains(&cut) && cut != full_end,
+            "test needs a mid-record cut"
+        );
+
+        let branch_id = BranchId::generate();
+        let branch_s = branch_id.to_string();
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                                     chunk_size, data, last_modified_us) \
+                     VALUES ($1, 0, 1, 0, $2, $3, 0)",
+                    quote_relation(&table)
+                ),
+                &[&branch_s, &(len as i32), &enc(&buf[..len])],
+            )
+            .await
+            .expect("insert WAL chunk");
+
+        let mut state = TimelinePersistentState::empty();
+        state.branch_id = branch_id;
+        state.timeline_start_lsn = start;
+
+        let storage = YbWalStorage::new(&branch_id, &state, wal_conn(&client, &table))
+            .await
+            .expect("YbWalStorage::new");
+
+        let got = storage.write_lsn();
+        assert!(
+            got < cut,
+            "rehydrated write_lsn {got} must fall below the page-aligned torn end {cut}"
+        );
+        assert!(
+            starts.contains(&got),
+            "rehydrated write_lsn {got} must be a real record boundary"
+        );
+
+        drop_wals_table(&client, &table).await;
+    }
 
     /// Like [`make_storage`] but with a populated `WalCache` and a real
     /// `wal_seg_size`, so tests can assert how `truncate_wal` interacts

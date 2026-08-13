@@ -636,8 +636,9 @@ loses nothing but logs.
      never streams. The decoder's answer is honored — clamping to the raw
      end would put `write_lsn` inside the padding, where the compute
      resumes, the reader reads zeros, and the safekeeper wedges (#181).
-   - On any scan failure the raw max is used, so startup never gets worse
-     than the probe.
+   - On any scan failure the raw max is used — not automatically safe: a raw
+     max that is not a record boundary advertises an unreachable `flush_lsn`,
+     and the pageserver's `wait_lsn` never completes (#678).
 3. **GC lower bound**: `load_min_segno` seeds `delete_lower_bound` so the
    first post-restart GC DELETE is range-bounded.
 4. The durability watermark and `durable_lsn` start at the rehydrated

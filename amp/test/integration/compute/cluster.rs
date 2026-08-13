@@ -88,7 +88,7 @@ pub const MARKERS: &str = "MATERIALIZER REDO ERROR|ABORT|PANIC|early eof|specifi
 /// `panic\{thread`: the panic hook logs inside `error_span!("panic", %thread, …)`,
 /// so a caught worker panic contains neither "panicked at" nor
 /// "thread '…' panicked" (#588).
-pub const FATAL_MARKERS: &str = r"interpreted wal reader: failed to decode|invalid xlog page header|panicked at|thread '[^']*' panicked|panic\{thread";
+pub const FATAL_MARKERS: &str = r"interpreted wal reader: failed to decode|invalid xlog page header|panicked at|thread '[^']*' panicked|panic\{thread|record-boundary scan failed";
 
 /// Print a step banner to stdout and the run log.
 pub fn step(msg: &str) {

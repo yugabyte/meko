@@ -81,6 +81,10 @@ pub fn page_header_size(lsn: Lsn, seg: u64) -> usize {
 /// does, so the boundaries it then reports use the same (page-boundary)
 /// representation that gets persisted.
 ///
+/// `target` is **inclusive** — the last byte of interest, not a one-past-the-end
+/// offset. A caller holding an exclusive end passes `end - 1`; passing the end
+/// itself probes a page that holds no bytes and errors on the hole (#678).
+///
 /// The magic check is load-bearing: `pg_switch_wal()` (an XLOG_SWITCH
 /// record) zero-pads the rest of the segment, so the pages after it have
 /// `xlp_magic == 0` and, incidentally, `xlp_info == 0` — the contrecord
@@ -377,6 +381,57 @@ mod tests {
             info & XLP_FIRST_IS_CONTRECORD,
             0,
             "anchor page must begin a fresh record"
+        );
+    }
+
+    /// WAL that stops mid-record — the partial tail record must not be counted.
+    #[tokio::test]
+    async fn partial_tail_record_not_counted() {
+        let (buf, starts) = gen_wal(4000, 16);
+        let len = buf.len() / XLOG_BLCKSZ * XLOG_BLCKSZ;
+        let cut = Lsn(START.0 + len as u64);
+        // Boundaries are the record starts plus the last record's end.
+        let full_end = Lsn(START.0 + buf.len() as u64);
+        assert!(
+            !starts.contains(&cut) && cut != full_end,
+            "test needs a mid-record cut"
+        );
+        let src = MemWal {
+            start: START,
+            buf: buf[..len].to_vec(),
+        };
+
+        let anchor = find_anchor(&src, Lsn(cut.0 - 1), START).await.unwrap();
+        assert!(anchor < cut, "anchor {anchor} must fall below {cut}");
+
+        let end = find_end_of_wal(&src, anchor, PgMajorVersion::PG18)
+            .await
+            .unwrap();
+        assert!(end < cut, "torn tail must be truncated below {cut}");
+        assert!(
+            starts.contains(&end),
+            "end-of-WAL {end} must be a real record boundary"
+        );
+    }
+
+    /// `target` is inclusive: an exclusive end must fail loudly rather than
+    /// silently anchoring somewhere plausible, so callers convert (#678).
+    #[tokio::test]
+    async fn find_anchor_rejects_exclusive_page_aligned_end() {
+        let (buf, _starts) = gen_wal(4000, 16);
+        let len = buf.len() / XLOG_BLCKSZ * XLOG_BLCKSZ;
+        let exclusive_end = Lsn(START.0 + len as u64);
+        let src = MemWal {
+            start: START,
+            buf: buf[..len].to_vec(),
+        };
+
+        let err = find_anchor(&src, exclusive_end, START)
+            .await
+            .expect_err("an exclusive end has no bytes on its own page");
+        assert!(
+            format!("{err:#}").contains("WAL hole"),
+            "expected a hole past end-of-WAL, got: {err:#}"
         );
     }
 
