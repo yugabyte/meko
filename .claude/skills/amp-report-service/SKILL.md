@@ -50,17 +50,8 @@ From a `qa-services` checkout: `cd yb-cli && ./install.sh` (or
 `YB_FROM_SOURCE=1 ./install.sh` to build). Update = re-run the installer.
 
 Command families (`yb amp --help` for the live list): `run`, `result`, `files`,
-`perf`, `issue`, `report`, `fleet`, `build`, `builds`, `schedule`, `catalog`,
-`settings`, `status`, `stats`. Verbs that arrived with the tooling's growth and
-are easy to miss: `run trigger` (launch; `--wait` follows it), `run restart`
-(re-run with the exact same params, any of them overridable, `--dry-run` to
-preview), `run rerun` (replay picked tests — results land back on the SAME run
-as retry attempts, superseding the failed ones), `run wait`/`run stop`,
-`result metrics` / `result metric <key>` (the per-test server-metric series:
-backing tserver/master and endpoint CPU, memory, WAL, page-request latency —
-collected for every test since meko#726), `issue sync`/`detach`, `builds`
-(branch + commit behind each image tag), and the whole `schedule` family
-(list/create/update/enable/disable/run/preview).
+`perf`, `issue`, `report`, `fleet`, `build`, `schedule`, `catalog`, `status`,
+`stats`.
 
 Conventions that hold across all of them:
 
@@ -139,42 +130,33 @@ yb amp result get <result-id>         # error, steps, attachments, KI chips
 yb amp files read <source>            # read an attachment (log, phases.txt)
 yb amp files search-in <source> "..." # grep inside one attachment
 yb amp result history <result-id>     # flaky, or new with this build?
-yb amp result metrics <result-id>     # server-metric series collected during
-yb amp result metric <result-id> "<key>"   # ... the run: was the backing loaded?
 ```
 
-The run's REAL parameters live in the Jenkins tracker, not in `run.data` —
-`yb amp run status <id> --json` → `jenkins.data.params` is the source of truth
-for what branch/image/options a run actually got (`OPTIONS: None` from a
-schedule means every default applied, backing topology included).
+Then decide whether the failure is the PRODUCT's or OURS, because that decides
+what happens next and they are not symmetrical.
 
-Then either attach an existing known issue or file a GitHub issue (follow the
-`create-amp-issue` skill: area label + AMP milestone) and register it:
+**Product defect** — amp or the backing behaved wrongly. Attach the existing
+known issue, or file a GitHub issue (follow the `create-amp-issue` skill: area
+label + AMP milestone) and register it:
 
 ```bash
 yb amp issue create --url <github-url> --result <id> --notes "..." --yes
 ```
 
-**Release / scheduled-run triage — leave a breadcrumb on the GitHub issue.**
-When the triage target is a RELEASE or SCHEDULED run (`triggered_by:
-schedule:*` in the Jenkins params, a product-status column, or the user asked
-to "triage the release / nightly failures") and a failure matches an EXISTING
-known issue, do both halves — attach the KI on the portal AND post a short
-comment on that GitHub issue recording the fresh reproduction:
+**Test or framework defect** — the test asserted the wrong thing, the harness
+lost a port-forward, a chaos action injected nothing, a client pod died, a
+budget was too short. **Do not file a GitHub issue. Fix the code.** GitHub
+issues are the product's defect log, and filling it with our own harness bugs
+buries the real ones and wastes the reader's time. Fix it on a branch, and if
+the fix has to wait, say so in the test's own doc comment where the next person
+to run it will see it.
 
-```bash
-yb amp issue attach <issue-id> --result <result-id> --yes
-gh issue comment <n> --repo yugabyte/meko --body   "Reproduced on <image-tag> (scheduled <kind> run): http://10.150.1.93/results/<result-id> — <one line: which step/signature matched>."
-```
+The tell: if the answer to "would a customer ever hit this?" is no, it is ours.
+A `needs-area-label` issue with no product area to assign is usually the same
+signal — nothing in the product owns it because the bug is not in the product.
 
-The comment is what tells the engineer the bug is still alive on current
-builds without them watching the portal. Keep it to 2–3 lines: image tag, the
-result link, and which signature matched — no analysis dumps. Before posting,
-glance at the issue's recent comments: one breadcrumb per run — if this run
-(or today's run of the same schedule) is already recorded, the attach alone is
-enough. Scope guard: this is ONLY for release/scheduled-run triage — ad-hoc
-runs, dev-branch runs and one-off debugging do NOT get GitHub comments unless
-the user explicitly asks.
+Either way the portal still needs the failure explained, so a framework defect
+you are fixing gets a note on the result rather than a fabricated issue link.
 
 **Perf question** ("did X regress?"):
 
@@ -207,5 +189,8 @@ and links it; deep failure diagnosis continues in the Jenkins console.
   envelopes, and your incantation breaks on the next release.
 - **Marking a failure triaged without a known issue.** The KI link is what
   makes tomorrow's identical failure arrive pre-explained.
+- **Filing a GitHub issue for our own test or framework bug.** The issue
+  tracker is the product's defect log. A harness bug goes in a branch, not in
+  it.
 - **Editing portal state to "fix" a result.** Results are records of what ran;
   if the outcome is wrong, fix the test or the product and re-run.
