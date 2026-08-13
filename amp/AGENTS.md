@@ -148,7 +148,9 @@ Code anchors:
 
 - Unit/workspace tests: `cargo test`. Several live-DB tests
   (`pageserver::page_store::tests`, `pageserver::page_writer::tests`,
-  `safekeeper::yb_wal_storage::tests`, and the direct-lane live suite
+  `safekeeper::yb_wal_storage::tests`,
+  `utils::write_fence::tests::live` — the write-fencing resource-token
+  store in `amp_registry` — and the direct-lane live suite
   `compute/libs/yb_thin_client/tests/live.rs`) need a live YB with the
   production schema migrated — they default to a developer cluster on
   `5433`/`yb_storage`; without one, run them via

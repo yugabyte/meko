@@ -55,6 +55,8 @@ walkdir.workspace = true
 pq_proto.workspace = true
 postgres_connection.workspace = true
 metrics.workspace = true
+# `write_fence` talks to the resource-token store in `amp_registry` over YSQL.
+ysql_client.workspace = true
 
 const_format.workspace = true
 
@@ -66,7 +68,7 @@ hex-literal.workspace = true
 camino-tempfile.workspace = true
 pprof.workspace = true
 serde_assert.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 
 [[bench]]
 name = "benchmarks"

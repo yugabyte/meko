@@ -6040,6 +6040,7 @@ dependencies = [
  "tracing-utils",
  "uuid",
  "walkdir",
+ "ysql_client",
 ]
 
 [[package]]

@@ -22,6 +22,7 @@ subsystem has its own page.
 | [`pageserver.md`](pageserver.md) | The pageserver: row-per-page store, materialiser, and write path |
 | [`pageserver-lsns.md`](pageserver-lsns.md) | PS-side LSN inventory + flows |
 | [`pageserver-gc.md`](pageserver-gc.md) | PageServer garbage collection: candidate queue, drain, cutoff, config, metrics |
+| [`compute-fencing.md`](compute-fencing.md) | Single-writer fencing: the YSQL resource token, how it reaches the services, what they do with it |
 | [`remote-storage.md`](remote-storage.md) | The `RemoteStorage` abstraction + `YbStore` |
 | [`yugabyte.md`](yugabyte.md) | What lives in YB: schemas, tables, connection paths, the retry contract |
 | [`single-container-endpoint.md`](single-container-endpoint.md) | Packaging an endpoint as one pod (`deploy/`): the supervisor, bootstrap |

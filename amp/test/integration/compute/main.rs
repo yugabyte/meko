@@ -323,7 +323,10 @@ fn push_category<'a>(c: &'a Cluster, cat: Category, items: &mut Vec<(String, Ite
 ///
 /// 1. The pageserver/safekeeper module tests (`page_store::tests`,
 ///    `page_writer::tests`, `yb_wal_storage::tests`) — assert against the
-///    production `amp_storage` schema over YSQL.
+///    production `amp_storage` schema over YSQL — plus
+///    `utils::write_fence::tests::live`, which races the resource-token store
+///    in `amp_registry` (the write fence's mutual-exclusion guarantee lives in
+///    one SQL statement, so only a real cluster can confirm it holds).
 /// 2. The `yb_thin_client` live integration suite (`tests/live.rs`, all
 ///    `#[ignore]` "requires a live YugabyteDB") — the hot-path client
 ///    (PgClientService on port 9100), which creates its own tables; its
@@ -340,6 +343,8 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
         "pageserver",
         "-p",
         "safekeeper",
+        "-p",
+        "utils",
         // Match the exact feature set run.sh built the cluster binaries with
         // (both testing features) so cargo reuses those artifacts instead of
         // recompiling safekeeper under a different feature set.
@@ -350,6 +355,7 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
         "page_store::tests::",
         "page_writer::tests::",
         "yb_wal_storage::tests::",
+        "write_fence::tests::live::",
     ]);
     ps_sk
         .env("YB_TEST_HOST", c.yb_host())

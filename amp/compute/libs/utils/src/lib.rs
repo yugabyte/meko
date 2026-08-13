@@ -61,6 +61,10 @@ pub mod pageserver_feedback;
 // Tagged compression envelope for the BYTEA payload columns stored in YB.
 pub mod payload_codec;
 
+// The process-wide single-writer fence: the YSQL-issued write token and the
+// "may I still write?" check the storage daemons make against it.
+pub mod write_fence;
+
 pub mod postgres_client;
 
 pub mod tracing_span_assert;
