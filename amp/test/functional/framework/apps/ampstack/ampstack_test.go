@@ -1278,6 +1278,110 @@ func TestRemoteBackingStillDialsItsAdminHostPorts(t *testing.T) {
 	}
 }
 
+// lastHelmCmd returns the argv of the most recent `helm template` invocation.
+func lastHelmCmd(calls []call) string {
+	last := ""
+	for _, c := range calls {
+		if strings.Contains(c.argv, "helm template") {
+			last = c.argv
+		}
+	}
+	return last
+}
+
+// TestUpgradeImagesRerendersAndWaitsRollout: an in-place upgrade re-renders the
+// chart with both new images, applies what was rendered, and waits on the
+// controller rollout.
+func TestUpgradeImagesRerendersAndWaitsRollout(t *testing.T) {
+	rec := newRecorder()
+	// Keyed on the new tag, so the assertion below proves the APPLIED manifest is
+	// the one rendered from the upgraded images.
+	rec.on("controller.image.tag=v2", exec.Result{
+		Stdout: strings.ReplaceAll(renderedChart, "amp/controller:test", QuayNamespace+"/amp-controller:v2"),
+	})
+	a := testApp(Config{
+		Registry:        RegistryQuay,
+		ControllerImage: "amp-controller:v1",
+		EndpointImage:   "amp-endpoint:v1",
+		HelmShim:        false,
+	}, rec)
+
+	if err := a.UpgradeImages(context.Background(), "amp-controller:v2", "amp-endpoint:v2"); err != nil {
+		t.Fatalf("UpgradeImages: %v", err)
+	}
+	calls := rec.snapshot()
+
+	helmCmd := lastHelmCmd(calls)
+	if !strings.Contains(helmCmd, "controller.image.tag=v2") {
+		t.Errorf("controller image not re-rendered: %s", helmCmd)
+	}
+	if !strings.Contains(helmCmd, "controller.endpoint.image.tag=v2") {
+		t.Errorf("endpoint image not re-rendered: %s", helmCmd)
+	}
+	if !anyContains(appliedManifests(calls), QuayNamespace+"/amp-controller:v2") {
+		t.Errorf("applied manifests carry no new controller image: %v", appliedManifests(calls))
+	}
+	if !hasCall(calls, "rollout status deployment/"+DefaultControllerName) {
+		t.Error("no rollout wait issued: a crash-looping new image would pass unnoticed")
+	}
+}
+
+// An empty argument leaves that image untouched.
+func TestUpgradeImagesEmptyArgKeepsImage(t *testing.T) {
+	rec := newRecorder()
+	a := testApp(Config{
+		Registry:        RegistryQuay,
+		ControllerImage: "amp-controller:v1",
+		EndpointImage:   "amp-endpoint:v1",
+		HelmShim:        false,
+	}, rec)
+
+	if err := a.UpgradeImages(context.Background(), "amp-controller:v2", ""); err != nil {
+		t.Fatalf("UpgradeImages: %v", err)
+	}
+	if a.cfg.EndpointImage != "amp-endpoint:v1" {
+		t.Errorf("endpoint image = %q, want it unchanged", a.cfg.EndpointImage)
+	}
+	helmCmd := lastHelmCmd(rec.snapshot())
+	if !strings.Contains(helmCmd, "controller.image.tag=v2") {
+		t.Errorf("controller image not upgraded: %s", helmCmd)
+	}
+	if !strings.Contains(helmCmd, "controller.endpoint.image.tag=v1") {
+		t.Errorf("endpoint image changed: %s", helmCmd)
+	}
+}
+
+// A rollout that never completes must fail the upgrade, not be swallowed.
+func TestUpgradeImagesRolloutFailureIsAnError(t *testing.T) {
+	rec := newRecorder()
+	rec.on("rollout status", exec.Result{ExitCode: 1, Stderr: "error: timed out waiting for the condition"})
+	a := testApp(Config{
+		Registry:        RegistryQuay,
+		ControllerImage: "amp-controller:v1",
+		EndpointImage:   "amp-endpoint:v1",
+		HelmShim:        false,
+	}, rec)
+
+	err := a.UpgradeImages(context.Background(), "amp-controller:v2", "")
+	if err == nil {
+		t.Fatal("a stalled rollout must fail the upgrade")
+	}
+	if !strings.Contains(err.Error(), "rollout") {
+		t.Errorf("error = %q, want it to name the rollout", err)
+	}
+}
+
+func TestUpgradeImagesWithoutAnyImageErrors(t *testing.T) {
+	rec := newRecorder()
+	a := testApp(Config{HelmShim: false}, rec)
+	if err := a.UpgradeImages(context.Background(), "", ""); err == nil {
+		t.Fatal("want an error when no image is given")
+	}
+	if hasCall(rec.snapshot(), "apply") {
+		t.Error("must not re-apply anything when no image changes")
+	}
+}
+
 // A sampler (and anything else looking for the backing's pods) must be pointed
 // at the namespace those pods are actually in. The amp namespace holds no
 // tserver when the backing is a co-located ybk8s deploy or a provisioned YBA

@@ -105,8 +105,8 @@ func runOneVariant(ctx context.Context, v resolvedVariant, prov variantProvision
 // from it (never mutating the shared config). It requires at least two variants
 // (a comparison needs a reference and at least one arm) and unique, non-empty
 // labels. The load signature is shared (held constant) across every variant.
-func resolveVariants(t *core.T, base perfConfig, cc compareConfig, loadSig, commit string) ([]resolvedVariant, error) {
-	return resolveVariantList(t, base, cc.Variants, loadSig, commit, "comparison")
+func resolveVariants(t *core.T, base perfConfig, cc compareConfig, load LoadFields, commit string) ([]resolvedVariant, error) {
+	return resolveVariantList(t, base, cc.Variants, load, commit, "comparison")
 }
 
 // resolveVariantList is the shared resolver for both comparison and bisect: it
@@ -116,7 +116,7 @@ func resolveVariants(t *core.T, base perfConfig, cc compareConfig, loadSig, comm
 // comparison and a bisect need a reference and at least one arm) and unique,
 // non-empty labels. The load signature is shared (held constant) across every
 // variant. `what` names the caller for the error messages.
-func resolveVariantList(t *core.T, base perfConfig, variants []Variant, loadSig, commit, what string) ([]resolvedVariant, error) {
+func resolveVariantList(t *core.T, base perfConfig, variants []Variant, load LoadFields, commit, what string) ([]resolvedVariant, error) {
 	if len(variants) < 2 {
 		return nil, fmt.Errorf("perf.compare.variants needs at least 2 variants for a %s (got %d)", what, len(variants))
 	}
@@ -134,7 +134,7 @@ func resolveVariantList(t *core.T, base perfConfig, variants []Variant, loadSig,
 		derived := t.Options.Derive(v.Overrides)
 		ybCfg := clampBackingRF(ybk8s.FromConfig(derived), base.RF)
 		amp := ampstack.FromConfig(derived)
-		id := buildIdentity(v.Label, ybCfg, amp.ControllerImage, amp.EndpointImage, commit, loadSig)
+		id := buildIdentity(v.Label, ybCfg, amp.ControllerImage, amp.EndpointImage, commit, LoadSignature(load), LoadShapeSignature(load))
 		out = append(out, resolvedVariant{Label: v.Label, YBK8s: ybCfg, Amp: amp, Identity: id})
 	}
 	return out, nil
@@ -148,7 +148,7 @@ type comparisonSpec struct {
 	perf       perfConfig
 	cmp        compareConfig
 	bc         BenchConfig
-	loadSig    string
+	load       LoadFields
 	commit     string
 	podPrefix  string
 	deliver    func(ctx context.Context, podExec exec.RemoteExecutor) error
@@ -164,7 +164,7 @@ type comparisonSpec struct {
 // variant fails to provision/benchmark — or fail_on_regression is set and a
 // variant regressed significantly vs the reference.
 func runComparisonSuite(t *core.T, spec comparisonSpec) error {
-	variants, err := resolveVariants(t, spec.perf, spec.cmp, spec.loadSig, spec.commit)
+	variants, err := resolveVariants(t, spec.perf, spec.cmp, spec.load, spec.commit)
 	if err != nil {
 		return err
 	}
@@ -201,7 +201,7 @@ func emitComparison(t *core.T, spec comparisonSpec, results []variantResult) err
 	t.SetPerfIdentity(core.PerfIdentity{
 		Variant:       fmt.Sprintf("comparison of %d variants (reference %q)", len(results), cmp.Reference),
 		Commit:        spec.commit,
-		LoadSignature: spec.loadSig,
+		LoadSignature: LoadSignature(spec.load),
 	})
 	for _, r := range results {
 		for _, dp := range variantDatapoints(r) {

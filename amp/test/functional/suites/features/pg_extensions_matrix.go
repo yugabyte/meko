@@ -1,0 +1,406 @@
+// Extension availability is a shipping contract, and it broke in the field
+// twice ("extension btree_gin is not available"). The expected set is pinned in
+// config Go-side, never read back from the database: enumerating whatever
+// pg_available_extensions happens to report cannot detect a missing extension.
+package features
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
+	"github.com/yugabyte/amp/test/functional/framework/core"
+)
+
+// DefaultExtensionsBaked is the contrib set built into the compute image, which
+// every endpoint must serve with no opt-in.
+// test_decoding is deliberately absent: postgres.mk builds it, but it has no
+// control file, so the only way to exercise it is to create a logical
+// replication slot, which asserts working logical decoding over amp storage.
+// That is a separate capability with no product commitment and no other test.
+var DefaultExtensionsBaked = []string{
+	"pg_prewarm", "pg_buffercache", "pg_visibility", "pageinspect",
+	"pg_trgm", "btree_gin", "amcheck",
+}
+
+// DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName. The
+// two differ: the pgvector image ships the "vector" extension.
+var DefaultExtensionsCatalog = []string{"pgvector:vector", "pg_cron:pg_cron"}
+
+// pgCronCatalogName must be in shared_preload_libraries (the endpoint chart
+// appends it), so it is created last.
+const pgCronCatalogName = "pg_cron"
+
+// Kubernetes serves ImageVolume as beta from 1.33 (the endpoint chart's volumes
+// stanza states the same bound). Below it a kubelet brings the pod up with no
+// mount and no API error, which is the one environment condition this test
+// tolerates.
+const (
+	imageVolumeMajor = 1
+	imageVolumeMinor = 33
+)
+
+func init() {
+	core.Register(core.Test{
+		Name:        "features/pg_extensions_matrix",
+		Suite:       "features",
+		Category:    core.Functional,
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Tags:        []string{"regression", "nightly"},
+		OwningTeam:  core.TeamCompute,
+		Description: "Assert every extension the release commits to shipping is available on an endpoint: the baked contrib set with no opt-in, plus the catalog set on a branch opted into all of it, each created, version-matched and canary-queried.",
+		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
+		Timeout:     20 * time.Minute,
+		Run:         runPgExtensionsMatrix,
+	})
+}
+
+// catalogExt is one externalized extension: its catalog name (the opt-in and
+// image name) and its SQL name (CREATE EXTENSION / pg_extension.extname).
+type catalogExt struct {
+	catalog string
+	sql     string
+	preload bool
+}
+
+func runPgExtensionsMatrix(t *core.T) error {
+	baked := t.Options.GetStringSlice("functional.extensions.baked", DefaultExtensionsBaked)
+	catalog, err := parseCatalogExts(t.Options.GetStringSlice("functional.extensions.catalog", DefaultExtensionsCatalog))
+	if err != nil {
+		return err
+	}
+	requireCatalog := t.Options.GetBool("functional.extensions.require_catalog", false)
+	record := func(name string, props map[string]any) {
+		_ = t.Step(name, func(h *core.StepHandle) error {
+			for k, v := range props {
+				h.Set(k, v)
+			}
+			return nil
+		})
+	}
+	return runAmpFeature(t, func(a *ampFeatureRun) []phase {
+		return []phase{{"pg_extensions_matrix", func(ctx context.Context) error {
+			cl, err := a.f.controllerClient(ctx)
+			if err != nil {
+				return err
+			}
+			return extensionsMatrixSteps(ctx, cl, a.proj, baked, catalog, requireCatalog,
+				"extm_"+a.f.suffix(), a.f.endpointSQL, a.recordEndpointImage,
+				a.endpointImageVolumeSupport, record, a.f.logf)
+		}}}
+	})
+}
+
+// recordEndpointImage logs the compute image the endpoint actually runs; the
+// whole test only proves something about the image that was deployed.
+// Best-effort: kubectl being unavailable is not a product signal.
+func (a *ampFeatureRun) recordEndpointImage(ctx context.Context, endpointID string) {
+	images, err := a.f.ampKube().GetSelector(ctx, "pod",
+		"app.kubernetes.io/instance="+endpointDeployName(endpointID),
+		"{.items[*].spec.containers[*].image}")
+	if err != nil {
+		a.f.logf("pg_extensions_matrix: could not read the endpoint pod's container image (best-effort): %v", err)
+		return
+	}
+	a.f.logf("pg_extensions_matrix: endpoint %s pod images: %s", endpointID, strings.TrimSpace(images))
+}
+
+// endpointImageVolumeSupport reads the ImageVolume capability of the node running
+// the endpoint pod, plus the image volume references the controller rendered into
+// that pod. This is what tells an incapable cluster apart from a product
+// regression that drops the opt-in.
+func (a *ampFeatureRun) endpointImageVolumeSupport(ctx context.Context, endpointID string) (kubelet, volumes string, err error) {
+	kube := a.f.ampKube()
+	if kube == nil {
+		return "", "", fmt.Errorf("no kubectl is available for the amp namespace")
+	}
+	selector := "app.kubernetes.io/instance=" + endpointDeployName(endpointID)
+	volumes, verr := kube.GetSelector(ctx, "pod", selector, "{.items[*].spec.volumes[*].image.reference}")
+	if verr != nil {
+		volumes = "unreadable: " + verr.Error()
+	}
+	node, err := kube.GetSelector(ctx, "pod", selector, "{.items[0].spec.nodeName}")
+	if err != nil {
+		return "", volumes, fmt.Errorf("read the node of the endpoint pod (%s): %w", selector, err)
+	}
+	if strings.TrimSpace(node) == "" {
+		return "", volumes, fmt.Errorf("no pod matched %s, so its node cannot be resolved", selector)
+	}
+	kubelet, err = kube.Get(ctx, "node", strings.TrimSpace(node), "{.status.nodeInfo.kubeletVersion}")
+	if err != nil {
+		return "", volumes, fmt.Errorf("read the kubelet version of node %s: %w", node, err)
+	}
+	return strings.TrimSpace(kubelet), strings.TrimSpace(volumes), nil
+}
+
+// imageVolumeCapableKubelet reports whether a kubelet version can mount an
+// ImageVolume, and whether the version string was parseable at all.
+func imageVolumeCapableKubelet(version string) (capable, known bool) {
+	v := strings.TrimSpace(version)
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 {
+		return false, false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return false, false
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return false, false
+	}
+	if major != imageVolumeMajor {
+		return major > imageVolumeMajor, true
+	}
+	return minor >= imageVolumeMinor, true
+}
+
+// renderedImageVolumes describes what the controller put in the endpoint pod, so
+// a failure says whether the opt-in was dropped before or after rendering.
+func renderedImageVolumes(volumes string) string {
+	if strings.TrimSpace(volumes) == "" {
+		return "the endpoint pod carries no image volume at all, so the opt-in was accepted and then dropped before the pod spec was rendered"
+	}
+	return "the endpoint pod carries image volumes [" + volumes + "], so they were rendered but their extensions did not reach PostgreSQL"
+}
+
+// parseCatalogExts parses the catalogName:sqlName knob entries.
+func parseCatalogExts(entries []string) ([]catalogExt, error) {
+	out := make([]catalogExt, 0, len(entries))
+	for _, e := range entries {
+		name, sql, ok := strings.Cut(strings.TrimSpace(e), ":")
+		if !ok || name == "" || sql == "" {
+			return nil, fmt.Errorf("functional.extensions.catalog entry %q is not catalogName:sqlName", e)
+		}
+		out = append(out, catalogExt{catalog: name, sql: sql, preload: name == pgCronCatalogName})
+	}
+	return out, nil
+}
+
+// extensionsMatrixSteps drives the assertions over the ampCtl and
+// endpoint-connector seams. It never skips the test: a control plane with no
+// extension catalog, or a cluster whose kubelet cannot mount ImageVolumes, drops
+// the catalog half only, because the baked contrib set needs no catalog and must
+// hold regardless. Every other reason the catalog extensions are missing is a
+// product failure.
+func extensionsMatrixSteps(ctx context.Context, cl ampCtl, proj ampCluster, baked []string, catalog []catalogExt,
+	requireCatalog bool, table string, connect endpointConnector, recordImage func(context.Context, string),
+	capability func(context.Context, string) (string, string, error), record func(string, map[string]any),
+	logf func(string, ...any)) error {
+	optIn := make([]string, 0, len(catalog))
+	for _, e := range catalog {
+		optIn = append(optIn, e.catalog)
+	}
+	catalogOK := len(catalog) > 0
+	skipReason := ""
+	ep, err := createEndpointReq(ctx, cl, proj.poolID, proj.projID, proj.branchID, controller.CreateEndpointRequest{
+		Role:       roleReadWrite,
+		Extensions: optIn,
+	})
+	if err != nil {
+		if !extensionsUnavailable(err) {
+			return fmt.Errorf("create endpoint opted into the catalog extensions [%s]: %w", strings.Join(optIn, " "), err)
+		}
+		if requireCatalog {
+			return fmt.Errorf("this control plane rejects the catalog extension opt-in [%s] as unsupported, and functional.extensions.require_catalog demands the catalog half: the release commits to serving externalized extensions: %w",
+				strings.Join(optIn, " "), err)
+		}
+		skipReason = "the control plane reports externalized extensions as unsupported: " + err.Error()
+		logf("pg_extensions_matrix: this control plane has no extension catalog, so the catalog half [%s] is not asserted; the baked contrib set still is: %v",
+			strings.Join(optIn, " "), err)
+		catalogOK = false
+		ep, err = createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
+		if err != nil {
+			return fmt.Errorf("create a plain endpoint after the catalog opt-in was rejected: %w", err)
+		}
+	}
+	recordImage(ctx, ep.ID)
+
+	c, err := connect(ctx, ep)
+	if err != nil {
+		return fmt.Errorf("connect endpoint: %w", err)
+	}
+	defer c.Close()
+
+	avail, err := availableExtensions(ctx, c)
+	if err != nil {
+		return err
+	}
+
+	// Zero mounted catalog extensions is softened only where the kubelet provably
+	// cannot mount an ImageVolume. On a capable cluster the same symptom is the
+	// controller or the chart dropping the opt-in, which is what this test exists
+	// to catch. A PARTIAL mount always falls through to the assertions below.
+	if catalogOK && countAvailable(avail, catalogSQLNames(catalog)) == 0 {
+		kubelet, volumes, cerr := capability(ctx, ep.ID)
+		capable, known := imageVolumeCapableKubelet(kubelet)
+		switch {
+		case cerr != nil:
+			return fmt.Errorf("none of the catalog extensions [%s] is available on an endpoint that opted into all of them, and this cluster's ImageVolume capability could not be verified (%v), so the missing extensions cannot be attributed to an old kubelet: %s. Available extensions were: %s",
+				strings.Join(optIn, " "), cerr, renderedImageVolumes(volumes), strings.Join(sortedNames(avail), " "))
+		case !known:
+			return fmt.Errorf("none of the catalog extensions [%s] is available on an endpoint that opted into all of them, and the node's kubelet version %q does not parse, so the missing extensions cannot be attributed to a kubelet older than v%d.%d: %s. Available extensions were: %s",
+				strings.Join(optIn, " "), kubelet, imageVolumeMajor, imageVolumeMinor, renderedImageVolumes(volumes), strings.Join(sortedNames(avail), " "))
+		case capable:
+			return fmt.Errorf("none of the catalog extensions [%s] is available on an endpoint that opted into all of them, on a node whose kubelet %s can mount ImageVolumes (beta since v%d.%d): %s. Available extensions were: %s",
+				strings.Join(optIn, " "), kubelet, imageVolumeMajor, imageVolumeMinor, renderedImageVolumes(volumes), strings.Join(sortedNames(avail), " "))
+		case requireCatalog:
+			return fmt.Errorf("none of the catalog extensions [%s] is available: the node's kubelet %s predates ImageVolume support (beta since v%d.%d), and functional.extensions.require_catalog demands the catalog half be asserted: run this test on a cluster whose kubelet is at least v%d.%d",
+				strings.Join(optIn, " "), kubelet, imageVolumeMajor, imageVolumeMinor, imageVolumeMajor, imageVolumeMinor)
+		default:
+			skipReason = fmt.Sprintf("the node's kubelet %s predates ImageVolume support (beta since v%d.%d)", kubelet, imageVolumeMajor, imageVolumeMinor)
+			logf("pg_extensions_matrix: none of the catalog extensions [%s] mounted and %s, so the catalog half is not asserted", strings.Join(optIn, " "), skipReason)
+			catalogOK = false
+		}
+	}
+	record("extensions_scope", map[string]any{
+		"catalog_asserted":    catalogOK,
+		"catalog_extensions":  strings.Join(optIn, " "),
+		"baked_extensions":    strings.Join(baked, " "),
+		"catalog_skip_reason": skipReason,
+	})
+
+	want := expectedExtensions(baked, catalog, catalogOK)
+	for _, e := range want {
+		if _, ok := avail[e.sql]; !ok {
+			return fmt.Errorf("extension %q is not available on this endpoint: pg_available_extensions does not list it, and the release commits to shipping it (%s). Available extensions were: %s",
+				e.sql, extClass(e), strings.Join(sortedNames(avail), " "))
+		}
+	}
+
+	for _, e := range want {
+		if _, err := c.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS "+quoteExtIdent(e.sql)); err != nil {
+			return fmt.Errorf("CREATE EXTENSION %s failed on an endpoint where pg_available_extensions lists it at version %s (%s): %w",
+				e.sql, avail[e.sql], extClass(e), err)
+		}
+		installed, err := c.QueryString(ctx, "SELECT coalesce(max(extversion), '') FROM pg_extension WHERE extname = $1", e.sql)
+		if err != nil {
+			return fmt.Errorf("read pg_extension.extversion for %s: %w", e.sql, err)
+		}
+		if installed != avail[e.sql] {
+			return fmt.Errorf("extension %s installed version %q, want %q: pg_available_extensions advertises %q as the default version, so the SQL scripts the image ships do not match its control file",
+				e.sql, installed, avail[e.sql], avail[e.sql])
+		}
+	}
+
+	return extensionCanaries(ctx, c, table)
+}
+
+// availableExtensions reads pg_available_extensions into a Go map of name to
+// default_version. One aggregated row keeps this on the QueryString seam.
+func availableExtensions(ctx context.Context, c sqlConn) (map[string]string, error) {
+	agg, err := c.QueryString(ctx,
+		"SELECT coalesce(string_agg(name || '=' || coalesce(default_version, ''), ' ' ORDER BY name), '') FROM pg_available_extensions")
+	if err != nil {
+		return nil, fmt.Errorf("read pg_available_extensions: %w", err)
+	}
+	out := map[string]string{}
+	for _, field := range strings.Fields(agg) {
+		name, version, _ := strings.Cut(field, "=")
+		out[name] = version
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("pg_available_extensions is empty on this endpoint: the compute image ships no extension control files at all")
+	}
+	return out, nil
+}
+
+// expectedExtension is one pinned name with the class that must supply it.
+type expectedExtension struct {
+	sql     string
+	catalog string // "" for a baked contrib
+	preload bool
+}
+
+func expectedExtensions(baked []string, catalog []catalogExt, catalogOK bool) []expectedExtension {
+	out := make([]expectedExtension, 0, len(baked)+len(catalog))
+	for _, n := range baked {
+		out = append(out, expectedExtension{sql: n})
+	}
+	if catalogOK {
+		for _, e := range catalog {
+			out = append(out, expectedExtension{sql: e.sql, catalog: e.catalog, preload: e.preload})
+		}
+	}
+	// A preload extension needs shared_preload_libraries and is created last.
+	sort.SliceStable(out, func(i, j int) bool { return !out[i].preload && out[j].preload })
+	return out
+}
+
+func extClass(e expectedExtension) string {
+	if e.catalog == "" {
+		return "baked into the compute image as PG contrib, no opt-in"
+	}
+	return "catalog extension " + e.catalog + ", mounted because the branch opted in"
+}
+
+func catalogSQLNames(catalog []catalogExt) []string {
+	out := make([]string, 0, len(catalog))
+	for _, e := range catalog {
+		out = append(out, e.sql)
+	}
+	return out
+}
+
+func countAvailable(avail map[string]string, names []string) int {
+	n := 0
+	for _, name := range names {
+		if _, ok := avail[name]; ok {
+			n++
+		}
+	}
+	return n
+}
+
+func sortedNames(avail map[string]string) []string {
+	out := make([]string, 0, len(avail))
+	for name := range avail {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func quoteExtIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// extensionCanaries runs the cheapest real query for the two customer-committed
+// extensions: a btree_gin GIN index over an int column, and pg_trgm similarity.
+func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
+	if _, err := c.Exec(ctx, "CREATE TABLE "+table+" (id int primary key, status int)"); err != nil {
+		return fmt.Errorf("create the canary table: %w", err)
+	}
+	for id := 1; id <= 20; id++ {
+		if _, err := c.Exec(ctx, "INSERT INTO "+table+" (id, status) VALUES ($1, $2)", id, id%4); err != nil {
+			return fmt.Errorf("seed the canary table: %w", err)
+		}
+	}
+	if _, err := c.Exec(ctx, "CREATE INDEX "+table+"_gin ON "+table+" USING gin (status)"); err != nil {
+		return fmt.Errorf("a GIN index over an int column needs btree_gin's int4 operator class, and the release commits to shipping btree_gin: %w", err)
+	}
+	n, err := c.QueryInt(ctx, "SELECT count(*) FROM "+table+" WHERE status = 1")
+	if err != nil {
+		return fmt.Errorf("query the btree_gin canary index: %w", err)
+	}
+	if n != 5 {
+		return fmt.Errorf("the btree_gin canary query counted %d rows with status = 1, want 5 out of the 20 seeded (ids 1,5,9,13,17)", n)
+	}
+
+	sim, err := c.QueryInt(ctx, "SELECT (similarity('abc','abd') > 0 AND similarity('abc','abd') < 1)::int")
+	if err != nil {
+		return fmt.Errorf("pg_trgm's similarity() is not callable, and the release commits to shipping pg_trgm: %w", err)
+	}
+	if sim != 1 {
+		return fmt.Errorf("similarity('abc','abd') is not strictly between 0 and 1: pg_trgm's trigram similarity is not computing")
+	}
+	return nil
+}

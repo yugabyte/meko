@@ -362,3 +362,43 @@ func TestSinkScalarMetricOmitsSeriesFields(t *testing.T) {
 		}
 	}
 }
+
+// TestStepFinishedCarriesPropertiesSetInTheBody: properties are recorded while a
+// step runs, so the started POST cannot carry them. Without them on the finish
+// PATCH every step property a test records is lost.
+func TestStepFinishedCarriesPropertiesSetInTheBody(t *testing.T) {
+	fp, srv := newFakePortal(t)
+	s := New(srv.URL, Meta{Report: "regression", Branch: "main"})
+
+	start := time.Now()
+	_ = s.RunStarted(core.RunInfo{Seed: 1, Total: 1, StartedAt: start})
+	res := &core.Result{TestName: "stress/x", Status: core.StatusPassed, StartedAt: start}
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventTestStarted, TestName: "stress/x", Result: res})
+
+	step := &core.Step{Name: "chaos", Status: core.StatusPassed, StartedAt: start}
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventStepStarted, TestName: "stress/x", Step: step})
+	// What a step body does: record evidence, then return.
+	step.Properties = map[string]any{"injects": 4, "cancels_delivered": 2}
+	step.EndedAt = start.Add(time.Second)
+	_ = s.ResultEvent(core.ResultEvent{Kind: core.EventStepFinished, TestName: "stress/x", Step: step})
+
+	var patch struct {
+		Properties map[string]any `json:"properties"`
+		Status     string         `json:"status"`
+	}
+	if err := json.Unmarshal(fp.has(t, "PATCH /api/v1/steps/step-1"), &patch); err != nil {
+		t.Fatal(err)
+	}
+	if patch.Status != "passed" {
+		t.Errorf("status = %q, want passed", patch.Status)
+	}
+	if got := patch.Properties["injects"]; got != float64(4) {
+		t.Errorf("injects = %v, want 4: a property set in the step body did not reach the portal", got)
+	}
+	if got := patch.Properties["cancels_delivered"]; got != float64(2) {
+		t.Errorf("cancels_delivered = %v, want 2", got)
+	}
+	if patch.Properties["step_name"] != "chaos" {
+		t.Errorf("step_name = %v, want chaos", patch.Properties["step_name"])
+	}
+}

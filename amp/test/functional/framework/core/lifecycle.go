@@ -307,11 +307,7 @@ func finishResult(sink Sink, name string, result *Result, masker *Masker) {
 func maskSteps(steps []*Step, masker *Masker) {
 	for _, s := range steps {
 		s.Name = masker.Mask(s.Name)
-		for k, v := range s.Properties {
-			if str, ok := v.(string); ok {
-				s.Properties[k] = masker.Mask(str)
-			}
-		}
+		s.maskProps(masker)
 		maskSteps(s.Steps, masker)
 	}
 }

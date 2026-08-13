@@ -33,6 +33,7 @@ type Identity struct {
 	AmpEndpointImage   string
 	Commit             string // framework rev, best-effort ("" when unavailable)
 	LoadSignature      string // deterministic hash of the load config (see LoadFields)
+	LoadShape          string // hash of the load SHAPE only (see LoadShapeSignature)
 }
 
 // LoadFields is the load configuration that MUST be identical for two results to
@@ -66,6 +67,19 @@ func LoadSignature(f LoadFields) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// LoadShapeSignature hashes the load SHAPE only: the same fields minus the
+// harness cadence (iterations, warmup, measurement duration). Two runs with the
+// same shape drove the same work at the same concurrency and their rates are
+// still comparable, so the gate may fall back to a shape match when no exact
+// load signature is stored — loudly, because a different measurement window is
+// itself a source of variance. Any field describing the load ITSELF (scale,
+// clients, jobs, RF, warehouses, tables, script, rows, cycles) still has to be
+// identical.
+func LoadShapeSignature(f LoadFields) string {
+	f.Iterations, f.WarmupMS, f.MeasurementMS = 0, 0, 0
+	return LoadSignature(f)
+}
+
 // loadFieldsTPCC is the perf/tpcc load: the shared bench cadence plus RF and the
 // TPC-C warehouse scalefactor. There is no connection-shape field: every
 // workload drives ONE host, the compute endpoint, so nothing about the
@@ -95,9 +109,9 @@ func loadFieldsPgbench(bc BenchConfig, cfg perfConfig, params pgbenchParams) Loa
 }
 
 // buildIdentity assembles the identity from a resolved ybk8s Config and the amp
-// image refs, the framework commit, and the load signature. Pure — commit and
-// loadSig are injected so it is deterministic under test.
-func buildIdentity(variant string, ybCfg ybk8s.Config, ampCtrl, ampEndpoint, commit, loadSig string) Identity {
+// image refs, the framework commit, and the load signatures. Pure — commit and
+// the signatures are injected so it is deterministic under test.
+func buildIdentity(variant string, ybCfg ybk8s.Config, ampCtrl, ampEndpoint, commit, loadSig, loadShape string) Identity {
 	return Identity{
 		Variant:            variant,
 		YBVersion:          ybCfg.ChartVersion,
@@ -106,15 +120,17 @@ func buildIdentity(variant string, ybCfg ybk8s.Config, ampCtrl, ampEndpoint, com
 		AmpEndpointImage:   ampEndpoint,
 		Commit:             commit,
 		LoadSignature:      loadSig,
+		LoadShape:          loadShape,
 	}
 }
 
 // identityFromConfig resolves the single-run identity from a config: the ybk8s
-// image/version of the backing and the amp controller/endpoint images the run
-// measures through.
-func identityFromConfig(c *core.Config, variant, commit, loadSig string) Identity {
+// image/version of the backing, the amp controller/endpoint images the run
+// measures through, and both signatures of the load it drives.
+func identityFromConfig(c *core.Config, variant, commit string, load LoadFields) Identity {
 	amp := ampstack.FromConfig(c)
-	return buildIdentity(variant, ybk8s.FromConfig(c), amp.ControllerImage, amp.EndpointImage, commit, loadSig)
+	return buildIdentity(variant, ybk8s.FromConfig(c), amp.ControllerImage, amp.EndpointImage, commit,
+		LoadSignature(load), LoadShapeSignature(load))
 }
 
 // ybImageRef is the resolved "registry:tag" YB image, or "" when neither is set.
@@ -138,10 +154,15 @@ func (id Identity) core() core.PerfIdentity {
 	}
 }
 
-// meta is the identity in the baseline store's shape (the comparability key +
+// meta is the identity in the baseline store's shape (the comparability keys +
 // image/commit for the mismatch WARN).
 func (id Identity) meta() baseline.Meta {
-	return baseline.Meta{LoadSignature: id.LoadSignature, YBImage: id.YBImage, Commit: id.Commit}
+	return baseline.Meta{
+		LoadSignature: id.LoadSignature,
+		LoadShape:     id.LoadShape,
+		YBImage:       id.YBImage,
+		Commit:        id.Commit,
+	}
 }
 
 // frameworkCommit best-effort resolves the framework git revision (short SHA).

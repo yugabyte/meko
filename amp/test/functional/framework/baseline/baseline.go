@@ -4,10 +4,11 @@
 // a pure Compare over core.Datapoint slices.
 //
 // The store is version-keyed: an entry lives under a product version (so a
-// newer build compares against its own line) with a version-agnostic ""
-// fallback used when no version-specific entry exists. Compare never touches
-// the filesystem; Load/Save do, and a missing file loads as an empty store (a
-// first run then emits datapoints and WARNs rather than failing).
+// newer build compares against its own line). Resolve picks which version
+// bucket a run gates against — its own, the version-agnostic "" bucket, or the
+// nearest other version — and Compare gates against exactly that bucket.
+// Neither touches the filesystem; Load/Save do, and a missing file loads as an
+// empty store (a first run then emits datapoints and WARNs rather than failing).
 package baseline
 
 import (
@@ -35,16 +36,18 @@ type Entry struct {
 	UpdatedAt string  `json:"updated_at,omitempty"`
 
 	LoadSignature string `json:"load_signature,omitempty"`
+	LoadShape     string `json:"load_shape,omitempty"`
 	YBImage       string `json:"yb_image,omitempty"`
 	Commit        string `json:"commit,omitempty"`
 }
 
 // Meta is the run identity stamped onto a test's baseline entries: the
-// load_signature that gates comparability plus the image/commit under test (for
-// the mismatch WARN). A run is comparable to a stored baseline iff their
-// LoadSignature matches.
+// load_signature that gates comparability, the coarser load_shape that says the
+// load itself was the same even when the harness cadence differed, plus the
+// image/commit under test (for the mismatch WARN).
 type Meta struct {
 	LoadSignature string
+	LoadShape     string
 	YBImage       string
 	Commit        string
 }
@@ -108,48 +111,36 @@ func Save(path string, f *File) error {
 	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
-// lookup resolves a baseline for (version, test, name), preferring the exact
-// version and falling back to the version-agnostic "" bucket.
-func (f *File) lookup(version, test, name string) (Entry, bool) {
-	buckets := []string{version}
-	if version != "" {
-		buckets = append(buckets, "")
-	}
-	for _, v := range buckets {
-		byTest, ok := f.Baselines[v]
-		if !ok {
-			continue
-		}
-		if e, ok := byTest[test][name]; ok {
-			return e, true
-		}
-	}
-	return Entry{}, false
+// lookup resolves a baseline for (bucket, test, name) in exactly that version
+// bucket. Choosing the bucket is Resolve's job.
+func (f *File) lookup(bucket, test, name string) (Entry, bool) {
+	e, ok := f.Baselines[bucket][test][name]
+	return e, ok
 }
 
-// StoredMeta returns the run identity stamped on test's baseline entries at
-// version (with the version-agnostic "" fallback lookup preferred exactly as
-// Compare's), and whether any entry existed. All of a test's entries share one
-// run identity, so the first entry found carries it.
-func (f *File) StoredMeta(version, test string) (Meta, bool) {
-	buckets := []string{version}
-	if version != "" {
-		buckets = append(buckets, "")
-	}
-	for _, v := range buckets {
-		byTest, ok := f.Baselines[v]
-		if !ok {
-			continue
-		}
-		byName, ok := byTest[test]
-		if !ok || len(byName) == 0 {
-			continue
-		}
-		for _, e := range byName {
-			return Meta{LoadSignature: e.LoadSignature, YBImage: e.YBImage, Commit: e.Commit}, true
-		}
+// metaIn returns the run identity stamped on test's entries in exactly one
+// version bucket. All of a test's entries share one run identity, so the first
+// entry found carries it. Map iteration order is irrelevant: the fields read are
+// identical across the entries StampMeta wrote.
+func (f *File) metaIn(bucket, test string) (Meta, bool) {
+	for _, e := range f.Baselines[bucket][test] {
+		return Meta{LoadSignature: e.LoadSignature, LoadShape: e.LoadShape, YBImage: e.YBImage, Commit: e.Commit}, true
 	}
 	return Meta{}, false
+}
+
+// StoredMeta returns the run identity stamped on test's baseline entries on this
+// version's OWN line: the version bucket, else the version-agnostic "" bucket.
+// It answers "does this line already have a baseline", which is what decides
+// whether a run may start one.
+func (f *File) StoredMeta(version, test string) (Meta, bool) {
+	if m, ok := f.metaIn(version, test); ok {
+		return m, true
+	}
+	if version == "" {
+		return Meta{}, false
+	}
+	return f.metaIn("", test)
 }
 
 // StampMeta writes the run identity onto every entry for test at version. Call
@@ -166,15 +157,17 @@ func (f *File) StampMeta(version, test string, m Meta) {
 	}
 	for name, e := range byName {
 		e.LoadSignature = m.LoadSignature
+		e.LoadShape = m.LoadShape
 		e.YBImage = m.YBImage
 		e.Commit = m.Commit
 		byName[name] = e
 	}
 }
 
-// Compare gates dps for test at version against the store. It returns a copy of
-// dps with each Baseline comparison filled where a baseline existed; it never
-// mutates the input slice or the store.
+// Compare gates dps for test against the baselines in exactly one version
+// bucket (the one Resolve picked). It returns a copy of dps with each Baseline
+// comparison filled where a baseline existed; it never mutates the input slice
+// or the store.
 func Compare(f *File, version, test string, dps []core.Datapoint, th Thresholds) Report {
 	out := make([]core.Datapoint, len(dps))
 	copy(out, dps)

@@ -72,7 +72,7 @@ func runTPCC(t *core.T) (err error) {
 	}
 
 	bc := benchConfigFromConfig(t.Options)
-	loadSig := LoadSignature(loadFieldsTPCC(bc, cfg))
+	load := loadFieldsTPCC(bc, cfg)
 	commit := frameworkCommit()
 
 	// Comparison mode: run the SAME TPC-C at the SAME load across labelled
@@ -93,12 +93,12 @@ func runTPCC(t *core.T) (err error) {
 		mk := func(conn pg.ConnInfo) Workload { return tpccWorkloadFor(cfg, conn) }
 		if cmp.Mode == CompareModeBisect {
 			return runBisectSuite(t, bisectSpec{
-				perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
+				perf: cfg, cmp: cmp, bc: bc, load: load, commit: commit,
 				podPrefix: "ampqa-perf", deliver: deliver, mkWorkload: mk, sink: sink, logf: logf,
 			})
 		}
 		return runComparisonSuite(t, comparisonSpec{
-			perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
+			perf: cfg, cmp: cmp, bc: bc, load: load, commit: commit,
 			podPrefix: "ampqa-perf", deliver: deliver, mkWorkload: mk, sink: sink, logf: logf,
 		})
 	}
@@ -110,7 +110,7 @@ func runTPCC(t *core.T) (err error) {
 		gates:   benchGatesFromConfig(t.Options),
 		hcfg:    historyConfigFromConfig(t.Options),
 		version: chartVersion(t.Options),
-		id:      identityFromConfig(t.Options, "", commit, loadSig),
+		id:      identityFromConfig(t.Options, "", commit, load),
 		td:      &teardownStack{},
 		logf:    t.Masker().Logf(log.Printf),
 	}
@@ -395,30 +395,61 @@ func (r *perfRun) gateBaseline(_ context.Context) error {
 }
 
 // gateOutcome is the pure result of the baseline gate: the datapoints (with
-// comparisons filled) and which branch fired. It mutates the passed baseline
-// file in place when establishing/updating (the caller saves it).
+// comparisons filled), which baseline the verdict came from, and which branch
+// fired. It mutates the passed baseline file in place when establishing/updating
+// (the caller saves it when Wrote).
 type gateOutcome struct {
 	Datapoints  []core.Datapoint
-	Established bool // no baseline existed → wrote one, no gate
-	Updated     bool // --update-baseline → refreshed, no gate
-	Regressed   bool // gated against an existing baseline and a datapoint regressed
+	Selection   baseline.Selection // which stored baseline was gated against
+	Gated       bool               // a comparison actually happened
+	Established bool               // this line had no baseline → wrote one, no gate
+	Updated     bool               // --update-baseline → refreshed, no gate
+	Ungated     bool               // a baseline exists but none is load-comparable
+	Regressed   bool               // gated and a datapoint regressed
+	Wrote       bool               // the store was modified and must be saved
 }
 
-// gatePerf is the pure gate: Compare, then decide whether to update/establish
-// the baseline or assert against it. Pure and unit-tested with an in-memory
-// baseline file.
-func gatePerf(f *baseline.File, version, test string, dps []core.Datapoint, cfg perfConfig) gateOutcome {
-	rep := baseline.Compare(f, version, test, dps, cfg.thresholds())
-	out := gateOutcome{Datapoints: rep.Datapoints}
+// gatePerf is the pure gate: resolve which stored baseline this run may be
+// judged against, compare against exactly that one, and decide whether to also
+// start this version's own line. Pure and unit-tested with an in-memory baseline
+// file.
+//
+// A run whose own version has no baseline gates against the nearest preceding
+// version instead of self-establishing, which is what makes a regression landing
+// AT a version bump visible; it still writes its own line so the next run on
+// this version gates against itself.
+func gatePerf(f *baseline.File, version, test string, dps []core.Datapoint, cfg perfConfig, want baseline.Meta) gateOutcome {
+	now := time.Now()
+	if cfg.UpdateBaseline {
+		f.Update(version, test, dps, now)
+		return gateOutcome{Datapoints: dps, Updated: true, Wrote: true}
+	}
+
+	_, hasOwnLine := f.StoredMeta(version, test)
+	sel, ok := baseline.Resolve(f, version, test, want)
+	if !ok {
+		if hasOwnLine {
+			// This line has a baseline, at a load nothing here can be compared
+			// against. Gating on it would be dishonest; overwriting it would lose it.
+			return gateOutcome{Datapoints: dps, Ungated: true}
+		}
+		f.Update(version, test, dps, now)
+		return gateOutcome{Datapoints: dps, Established: true, Wrote: true}
+	}
+
+	rep := baseline.Compare(f, sel.Version, test, dps, cfg.thresholds())
+	out := gateOutcome{Datapoints: rep.Datapoints, Selection: sel, Gated: rep.HadBaseline}
 	switch {
-	case cfg.UpdateBaseline:
-		f.Update(version, test, dps, time.Now())
-		out.Updated = true
-	case !rep.HadBaseline:
-		f.Update(version, test, dps, time.Now())
-		out.Established = true
-	case rep.Regressed:
+	case rep.HadBaseline && rep.Regressed:
 		out.Regressed = true
+	case !rep.HadBaseline && !hasOwnLine:
+		out.Established = true
+	case !rep.HadBaseline:
+		out.Ungated = true
+	}
+	if !hasOwnLine {
+		f.Update(version, test, dps, now)
+		out.Wrote = true
 	}
 	return out
 }

@@ -186,6 +186,9 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if acfg.Backing.Mode != ampstack.BackingBuiltinYugabyted {
 		t.Errorf("ampstack Backing.Mode = %q, want %q", acfg.Backing.Mode, ampstack.BackingBuiltinYugabyted)
 	}
+	if acfg.ControllerRollTimeout != ampstack.DefaultControllerRollTimeout {
+		t.Errorf("ampstack ControllerRollTimeout = %v, want %v", acfg.ControllerRollTimeout, ampstack.DefaultControllerRollTimeout)
+	}
 	if acfg.Backing.HostPorts != "" {
 		t.Errorf("ampstack Backing.HostPorts = %q, want empty (external-only)", acfg.Backing.HostPorts)
 	}
@@ -467,6 +470,49 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if fcfg.ClusterDeployDir != features.DefaultClusterDeployDir {
 		t.Errorf("functional ClusterDeployDir = %q, want %q", fcfg.ClusterDeployDir, features.DefaultClusterDeployDir)
+	}
+	if cfg.GetBool("functional.extensions.require_catalog", true) {
+		t.Errorf("functional.extensions.require_catalog = true, want false (opt-in)")
+	}
+	if got := cfg.GetStringSlice("functional.extensions.baked", nil); !slices.Equal(got, features.DefaultExtensionsBaked) {
+		t.Errorf("functional.extensions.baked = %v, want %v", got, features.DefaultExtensionsBaked)
+	}
+	if got := cfg.GetStringSlice("functional.extensions.catalog", nil); !slices.Equal(got, features.DefaultExtensionsCatalog) {
+		t.Errorf("functional.extensions.catalog = %v, want %v", got, features.DefaultExtensionsCatalog)
+	}
+	if cfg.GetBool("functional.byoc.require_impersonation", true) {
+		t.Errorf("functional.byoc.require_impersonation = true, want false (opt-in)")
+	}
+	if cfg.GetBool("functional.byoc.assert_no_public_lb", true) {
+		t.Errorf("functional.byoc.assert_no_public_lb = true, want false (the framework's own backing creates LoadBalancers)")
+	}
+	if got := cfg.GetStringSlice("functional.otel.collectors", nil); !slices.Equal(got, features.DefaultOtelCollectors) {
+		t.Errorf("functional.otel.collectors = %v, want %v", got, features.DefaultOtelCollectors)
+	}
+	if !cfg.GetBool("functional.otel.expect_collectors", false) {
+		t.Errorf("functional.otel.expect_collectors = false, want true (a cluster that renders the collectors must run them)")
+	}
+	if got := cfg.GetDuration("functional.otel.ready_timeout", 0); got != features.DefaultOtelReadyTimeout {
+		t.Errorf("functional.otel.ready_timeout = %s, want %s", got, features.DefaultOtelReadyTimeout)
+	}
+	if got := cfg.GetInt("functional.otel.max_collector_restarts", -1); got != features.DefaultOtelMaxCollectorRestarts {
+		t.Errorf("functional.otel.max_collector_restarts = %d, want %d", got, features.DefaultOtelMaxCollectorRestarts)
+	}
+	if got := cfg.GetInt("functional.gin_search.rows", -1); got != features.DefaultGinSearchRows {
+		t.Errorf("functional.gin_search.rows = %d, want %d", got, features.DefaultGinSearchRows)
+	}
+	if got := cfg.GetInt("functional.gin_search.extra_rows", -1); got != features.DefaultGinSearchExtraRows {
+		t.Errorf("functional.gin_search.extra_rows = %d, want %d", got, features.DefaultGinSearchExtraRows)
+	}
+	if got := cfg.GetInt("functional.upgrade.rows", -1); got != features.DefaultUpgradeRows {
+		t.Errorf("functional.upgrade.rows = %d, want %d", got, features.DefaultUpgradeRows)
+	}
+	// Present and empty: naming a specific previous release has no sane default,
+	// and an empty value is what skips the upgrade test.
+	for _, k := range []string{"functional.upgrade.from_controller_image", "functional.upgrade.from_endpoint_image"} {
+		if got := cfg.GetString(k, "__MISSING__"); got != "" {
+			t.Errorf("%s = %q, want present and empty", k, got)
+		}
 	}
 
 	// --- apps.yba ---
@@ -1101,15 +1147,20 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		t.Errorf("stress.combined.enabled = true, want false (opt-in)")
 	}
 	stressInts := map[string]int{
-		"stress.combined.rf":                   3,
-		"stress.combined.sample_tables":        2,
-		"stress.combined.sample_value_columns": 10,
-		"stress.combined.sample_threads_read":  1,
-		"stress.combined.sample_threads_write": 2,
-		"stress.combined.benchbase_warehouses": 1,
-		"stress.combined.benchbase_terminals":  2,
-		"stress.combined.verify_tables":        4,
-		"stress.combined.verify_rows":          500,
+		"stress.combined.rf":                           3,
+		"stress.combined.sample_tables":                2,
+		"stress.combined.sample_value_columns":         10,
+		"stress.combined.sample_threads_read":          1,
+		"stress.combined.sample_threads_write":         2,
+		"stress.combined.benchbase_warehouses":         1,
+		"stress.combined.benchbase_terminals":          2,
+		"stress.combined.verify_tables":                4,
+		"stress.combined.verify_rows":                  500,
+		"stress.commit_durability.tenants":             3,
+		"stress.commit_durability.payload_bytes":       256,
+		"stress.storage_proc_nemesis.tenants":          2,
+		"stress.storage_proc_nemesis.kills_per_daemon": 1,
+		"stress.storage_proc_nemesis.payload_bytes":    256,
 	}
 	for key, want := range stressInts {
 		if got := cfg.GetInt(key, -1); got != want {
@@ -1135,14 +1186,32 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.combined.ready_timeout":  5 * time.Minute,
 		"stress.combined.verify_timeout": 5 * time.Minute,
 		"stress.combined.health_timeout": 5 * time.Minute,
+
+		"stress.commit_durability.baseline_duration": 20 * time.Second,
+		"stress.commit_durability.duration":          3 * time.Minute,
+		"stress.commit_durability.settle_timeout":    10 * time.Minute,
+		"stress.commit_durability.resume_duration":   30 * time.Second,
+		"stress.commit_durability.cancel_delay_max":  50 * time.Millisecond,
+
+		"stress.storage_proc_nemesis.baseline_duration": 20 * time.Second,
+		"stress.storage_proc_nemesis.fault_duration":    90 * time.Second,
+		"stress.storage_proc_nemesis.kill_gap":          15 * time.Second,
+		"stress.storage_proc_nemesis.settle_timeout":    10 * time.Minute,
+		"stress.storage_proc_nemesis.resume_duration":   30 * time.Second,
 	}
 	for key, want := range stressDurs {
 		if got := cfg.GetDuration(key, -1); got != want {
 			t.Errorf("%s = %s, want %s", key, got, want)
 		}
 	}
+	if got := cfg.GetFloat("stress.commit_durability.cancel_probability", -1); got != 0.1 {
+		t.Errorf("stress.commit_durability.cancel_probability = %v, want 0.1", got)
+	}
 	if actions := cfg.GetStringSlice("stress.combined.chaos_actions", nil); strings.Join(actions, ",") != "pod_delete,process_kill,process_restart" {
 		t.Errorf("stress.combined.chaos_actions = %v, want [pod_delete process_kill process_restart]", actions)
+	}
+	if d := cfg.GetStringSlice("stress.storage_proc_nemesis.daemons", nil); strings.Join(d, ",") != "pageserver,safekeeper" {
+		t.Errorf("stress.storage_proc_nemesis.daemons = %v, want [pageserver safekeeper]", d)
 	}
 
 	// --- perf suite (perf/tpcc) ---

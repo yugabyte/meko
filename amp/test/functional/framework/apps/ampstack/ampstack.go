@@ -73,13 +73,17 @@ const (
 	DefaultYBReadyTimeout = 20 * time.Minute
 	// DefaultControllerReadyTimeout: small image, and the node is already warm.
 	DefaultControllerReadyTimeout = 5 * time.Minute
-	DefaultControllerService      = "amp-controller"
-	DefaultControllerName         = "amp-controller"
-	DefaultControllerContainer    = "controller"
-	DefaultControllerPort         = 8080
-	DefaultHelmRelease            = "yb-amp-controller"
-	DefaultDBName                 = "yb_storage"
-	DefaultECRRegistry            = "454529406029.dkr.ecr.us-west-2.amazonaws.com"
+	// DefaultControllerRollTimeout bounds a roll of an ALREADY-deployed controller.
+	// Unlike the initial deploy it cannot assume a warm node: a long-lived env may
+	// have scaled its pool down, so the new pod can pay a node add plus image pull.
+	DefaultControllerRollTimeout = 20 * time.Minute
+	DefaultControllerService     = "amp-controller"
+	DefaultControllerName        = "amp-controller"
+	DefaultControllerContainer   = "controller"
+	DefaultControllerPort        = 8080
+	DefaultHelmRelease           = "yb-amp-controller"
+	DefaultDBName                = "yb_storage"
+	DefaultECRRegistry           = "454529406029.dkr.ecr.us-west-2.amazonaws.com"
 	// Registry flavors for env.ampstack.registry — where bare image refs
 	// resolve and which auth lands in the pull secret. Quay is the default:
 	// release and custom builds publish to quay.io/yugabyte/amp-*.
@@ -285,6 +289,7 @@ type Config struct {
 
 	YBReadyTimeout         time.Duration
 	ControllerReadyTimeout time.Duration
+	ControllerRollTimeout  time.Duration
 
 	// ExtraNamespaceLabels are merged onto the namespace ampstack creates (in
 	// addition to ampqa=1 and the managed-by label) — e.g. a reaper timestamp.
@@ -411,6 +416,7 @@ func FromConfig(get Getter) Config {
 		LocalPort:                 get.GetInt("env.ampstack.local_port", 0),
 		YBReadyTimeout:            get.GetDuration("env.ampstack.yb_ready_timeout", DefaultYBReadyTimeout),
 		ControllerReadyTimeout:    get.GetDuration("env.ampstack.controller_ready_timeout", DefaultControllerReadyTimeout),
+		ControllerRollTimeout:     get.GetDuration("env.ampstack.controller_roll_timeout", DefaultControllerRollTimeout),
 	}
 }
 
@@ -525,6 +531,10 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.ControllerReadyTimeout == 0 {
 		cfg.ControllerReadyTimeout = DefaultControllerReadyTimeout
+	}
+	// A zero duration reaches kubectl as --timeout=0, which means wait forever.
+	if cfg.ControllerRollTimeout <= 0 {
+		cfg.ControllerRollTimeout = DefaultControllerRollTimeout
 	}
 }
 
@@ -1018,6 +1028,12 @@ func (a *App) RefreshPullSecret(ctx context.Context, roll bool) error {
 		if err := a.kube.Patch(ctx, "deployment", a.cfg.ControllerName, "strategic", rolloutRestartPatch()); err != nil {
 			return fmt.Errorf("roll controller %s: %w", a.cfg.ControllerName, err)
 		}
+		// condition=Available stays true on the old ReplicaSet through a rolling
+		// update, so only a rollout wait can see the new pod fail to come up.
+		if err := a.kube.RolloutStatus(ctx, "deployment", a.cfg.ControllerName, a.cfg.ControllerRollTimeout); err != nil {
+			return fmt.Errorf("rolled controller %s did not come back up within %s (the refreshed pull secret may still not pull): %w%s",
+				a.cfg.ControllerName, a.cfg.ControllerRollTimeout, err, a.controllerWaitDiagnostics(ctx))
+		}
 	}
 	return nil
 }
@@ -1073,6 +1089,31 @@ func (a *App) deployController(ctx context.Context) error {
 	}
 	if err := a.kube.Apply(ctx, manifest); err != nil {
 		return fmt.Errorf("apply controller manifest: %w", err)
+	}
+	return nil
+}
+
+// UpgradeImages re-renders and re-applies the control plane with new controller
+// and/or endpoint images (an empty argument leaves that image as it is), then
+// blocks until the controller rollout completes.
+func (a *App) UpgradeImages(ctx context.Context, controllerImage, endpointImage string) error {
+	if controllerImage == "" && endpointImage == "" {
+		return fmt.Errorf("ampstack: UpgradeImages needs at least one image")
+	}
+	if controllerImage != "" {
+		a.cfg.ControllerImage = controllerImage
+	}
+	if endpointImage != "" {
+		a.cfg.EndpointImage = endpointImage
+	}
+	if err := a.deployController(ctx); err != nil {
+		return err
+	}
+	// Deploy's condition=Available wait stays true on the OLD ReplicaSet for the
+	// whole rolling update, so a crash-looping new image would sail past it.
+	if err := a.kube.RolloutStatus(ctx, "deployment", a.cfg.ControllerName, a.cfg.ControllerRollTimeout); err != nil {
+		return fmt.Errorf("controller rollout to %s never completed: %w%s",
+			a.images()["controller"], err, a.controllerWaitDiagnostics(ctx))
 	}
 	return nil
 }

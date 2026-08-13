@@ -334,76 +334,149 @@ func emitMetricSeries(t *core.T, s *metrics.Sampler) {
 // emitAndGate loads the baseline, runs the pure gate (gatePerf) on the gated
 // datapoints, emits each with its comparison filled, then emits the
 // informational datapoints (e.g. the per-metric .cv noise signal) UNGATED,
-// persists a newly established/updated baseline, and turns a regression into a
-// test failure — the shared body of every perf workload's baseline gate. Only
-// gated datapoints participate in the baseline (Compare/establish/update);
-// info datapoints are recorded and emitted for the report but never gated.
+// records which stored baseline the verdict came from, persists a newly
+// established/updated baseline, and turns a regression into a test failure — the
+// shared body of every perf workload's baseline gate. Only gated datapoints
+// participate in the baseline (Compare/establish/update); info datapoints are
+// recorded and emitted for the report but never gated.
 //
-// It first enforces COMPARABILITY: a stored baseline is only gated against when
-// its load_signature matches this run's (id). A baseline established at a
-// different YB version/image or a different load config is NOT a valid gate —
-// gating against it produces the bogus "regressions" this redesign removes — so
-// on a mismatch it emits the datapoints UNGATED and WARNs instead of failing.
+// Comparability is enforced by baseline.Resolve, not skipped: a run is judged
+// against the nearest baseline whose LOAD is comparable, which may be the
+// previous version's (a version bump) or a same-shape one measured on a
+// different harness cadence. Both are WARNed and named in the provenance
+// artifact. Only when no stored baseline is load-comparable at all are the
+// datapoints recorded ungated, and that too is WARNed and recorded.
 func emitAndGate(t *core.T, cfg perfConfig, version, testName string, gated, info []core.Datapoint, id Identity, logf func(string, ...any)) error {
 	f, err := baseline.Load(cfg.BaselinePath)
 	if err != nil {
 		return fmt.Errorf("load baseline: %w", err)
 	}
 
-	stored, hasStored := f.StoredMeta(version, testName)
-	if !comparableToBaseline(stored, hasStored, cfg.UpdateBaseline, id) {
-		// Not comparable: emit the datapoints raw (no baseline comparison) and
-		// WARN — do not touch the stored baseline, do not fail.
-		for _, dp := range gated {
-			t.Datapoint(dp)
-		}
-		for _, dp := range info {
-			t.Datapoint(dp)
-		}
-		logf("perf: baseline not comparable for %s — stored(load=%s image=%s) vs current(load=%s image=%s); skipping gate, recording datapoints only",
-			testName, orNone(stored.LoadSignature), orNone(stored.YBImage), orNone(id.LoadSignature), orNone(id.YBImage))
-		return nil
-	}
-
-	out := gatePerf(f, version, testName, gated, cfg)
+	out := gatePerf(f, version, testName, gated, cfg, id.meta())
 	for _, dp := range out.Datapoints {
 		t.Datapoint(dp)
 	}
 	for _, dp := range info {
 		t.Datapoint(dp)
 	}
-	if out.Updated || out.Established {
+
+	t.AttachBytes(baselineProvenanceFile, "log", []byte(baselineProvenance(version, testName, cfg, id, out)))
+	logf("%s", gateSummary(version, testName, cfg, out))
+
+	if out.Wrote {
 		// Stamp the run identity so a later run can decide comparability.
 		f.StampMeta(version, testName, id.meta())
 		if err := baseline.Save(cfg.BaselinePath, f); err != nil {
 			return fmt.Errorf("save baseline: %w", err)
 		}
 	}
-	switch {
-	case out.Updated:
-		logf("perf: baseline updated at %s (--update-baseline)", cfg.BaselinePath)
-	case out.Established:
-		logf("perf: no baseline for %s@%s — established at %s (WARN, not gated)", testName, version, cfg.BaselinePath)
-	case out.Regressed:
-		return fmt.Errorf("perf regression vs baseline: %s", regressionSummary(out.Datapoints))
-	default:
-		logf("perf: all datapoints within thresholds vs baseline %s", cfg.BaselinePath)
+	if out.Regressed {
+		return fmt.Errorf("perf regression vs baseline %s: %s", gatedAgainst(out.Selection), regressionSummary(out.Datapoints))
 	}
 	return nil
 }
 
-// comparableToBaseline is the PURE comparability decision for the single-run
-// gate: a run is comparable to a stored baseline only when their load_signature
-// matches. With no stored baseline (a first run) or --update-baseline there is
-// nothing to be incomparable with, so the gate proceeds (to establish/refresh).
-// A stored baseline whose load_signature differs from the current run's (a
-// different YB version/image or a different load config) is NOT comparable — the
-// caller then skips the gate and WARNs instead of raising a bogus regression.
-func comparableToBaseline(stored baseline.Meta, hasStored, updateBaseline bool, id Identity) bool {
-	if !hasStored || updateBaseline {
-		return true
+// baselineProvenanceFile is the artifact naming the baseline a perf verdict came
+// from, so a triager never has to guess which numbers produced it.
+const baselineProvenanceFile = "perf-baseline-provenance.txt"
+
+// gatedAgainst names the baseline a verdict used, in one phrase.
+func gatedAgainst(sel baseline.Selection) string {
+	where := "version " + sel.Version
+	if sel.Version == "" {
+		where = "the version-agnostic baseline"
 	}
-	return stored.LoadSignature == id.LoadSignature
+	if sel.Fallback {
+		where += " (FALLBACK)"
+	}
+	return fmt.Sprintf("%s, load match %s", where, sel.Match)
+}
+
+// gateSummary is the one-line log the run emits, WARN-prefixed on every path
+// where the verdict did not come from this version's own like-for-like baseline.
+func gateSummary(version, testName string, cfg perfConfig, out gateOutcome) string {
+	switch {
+	case out.Updated:
+		return fmt.Sprintf("perf: baseline updated at %s (--update-baseline)", cfg.BaselinePath)
+	case out.Established:
+		return fmt.Sprintf("perf: WARN no baseline for %s@%s and none comparable elsewhere — established at %s, this run is NOT gated",
+			testName, orNone(version), cfg.BaselinePath)
+	case out.Ungated:
+		return fmt.Sprintf("perf: WARN a baseline exists for %s@%s but none matches this run's load (sig=%s) — datapoints recorded UNGATED",
+			testName, orNone(version), orNone(out.Selection.Meta.LoadSignature))
+	case out.Selection.Fallback || out.Selection.Match == baseline.LoadShape:
+		return fmt.Sprintf("perf: WARN gated against %s, not this run's own like-for-like baseline — see %s",
+			gatedAgainst(out.Selection), baselineProvenanceFile)
+	default:
+		return fmt.Sprintf("perf: gated against %s (%s)", gatedAgainst(out.Selection), cfg.BaselinePath)
+	}
+}
+
+// baselineProvenance is the recorded evidence of WHICH baseline this verdict
+// came from: the run's own load identity, the bucket that was gated against, how
+// closely its load matched, and whether a new line was written. Pure, so the
+// exact text a triager reads is unit-tested.
+func baselineProvenance(version, testName string, cfg perfConfig, id Identity, out gateOutcome) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "perf baseline provenance\n")
+	fmt.Fprintf(&b, "store: %s\n", cfg.BaselinePath)
+	fmt.Fprintf(&b, "test: %s\n", testName)
+	fmt.Fprintf(&b, "run version: %s\n", orNone(version))
+	fmt.Fprintf(&b, "run load: signature=%s shape=%s image=%s commit=%s\n",
+		orNone(id.LoadSignature), orNone(id.LoadShape), orNone(id.YBImage), orNone(id.Commit))
+
+	switch {
+	case out.Updated:
+		fmt.Fprintf(&b, "gated against: nothing — --update-baseline refreshed version %s\n", orNone(version))
+	case out.Established:
+		fmt.Fprintf(&b, "gated against: nothing — no load-comparable baseline in the store\n")
+	case out.Ungated:
+		fmt.Fprintf(&b, "gated against: nothing — a baseline exists for this test but none matches this run's load\n")
+	default:
+		sel := out.Selection
+		bucket := "version " + sel.Version
+		if sel.Version == "" {
+			bucket = "the version-agnostic (\"\") bucket"
+		}
+		fmt.Fprintf(&b, "gated against: %s\n", bucket)
+		fmt.Fprintf(&b, "fallback: %v%s\n", sel.Fallback, fallbackReason(version, sel))
+		fmt.Fprintf(&b, "load match: %s%s\n", sel.Match, loadMatchNote(sel.Match))
+		fmt.Fprintf(&b, "baseline load: signature=%s shape=%s image=%s commit=%s\n",
+			orNone(sel.Meta.LoadSignature), orNone(sel.Meta.LoadShape), orNone(sel.Meta.YBImage), orNone(sel.Meta.Commit))
+	}
+
+	fmt.Fprintf(&b, "baseline written: %v\n", out.Wrote)
+	fmt.Fprintf(&b, "outcome: %s\n", gateVerdict(out))
+	return b.String()
+}
+
+func fallbackReason(version string, sel baseline.Selection) string {
+	if !sel.Fallback {
+		return ""
+	}
+	return fmt.Sprintf(" (version %s has no load-comparable baseline of its own)", orNone(version))
+}
+
+func loadMatchNote(m baseline.LoadMatch) string {
+	if m == baseline.LoadShape {
+		return " (same load shape, different harness cadence — the measurement window differs)"
+	}
+	return " (identical load)"
+}
+
+func gateVerdict(out gateOutcome) string {
+	switch {
+	case out.Updated:
+		return "baseline refreshed, not gated"
+	case out.Established:
+		return "baseline established, not gated"
+	case out.Ungated:
+		return "not gated"
+	case out.Regressed:
+		return "REGRESSION"
+	default:
+		return "within thresholds"
+	}
 }
 
 // orNone renders an empty identity field as "(none)" for a log line.

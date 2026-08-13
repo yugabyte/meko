@@ -133,8 +133,7 @@ func runMicrobench(t *core.T) error {
 		return nil
 	}
 
-	id := identityFromConfig(t.Options, "", frameworkCommit(),
-		LoadSignature(loadFieldsMicrobench(params)))
+	id := identityFromConfig(t.Options, "", frameworkCommit(), loadFieldsMicrobench(params))
 	t.SetPerfIdentity(id.core())
 
 	client, err := core.ConnectPG(t, env, cfg.ReadyTimeout)

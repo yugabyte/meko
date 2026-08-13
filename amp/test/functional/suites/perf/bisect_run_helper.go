@@ -103,7 +103,7 @@ type bisectSpec struct {
 	perf       perfConfig
 	cmp        compareConfig
 	bc         BenchConfig
-	loadSig    string
+	load       LoadFields
 	commit     string
 	podPrefix  string
 	deliver    func(ctx context.Context, podExec exec.RemoteExecutor) error
@@ -123,7 +123,7 @@ func runBisectSuite(t *core.T, spec bisectSpec) error {
 	if err != nil {
 		return err
 	}
-	cands, err := resolveVariantList(t, spec.perf, spec.cmp.Variants, spec.loadSig, spec.commit, "bisect")
+	cands, err := resolveVariantList(t, spec.perf, spec.cmp.Variants, spec.load, spec.commit, "bisect")
 	if err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func emitBisect(t *core.T, spec bisectSpec, o bisectOutcome) error {
 	t.SetPerfIdentity(core.PerfIdentity{
 		Variant:       fmt.Sprintf("bisect of %d candidates → first regressed %q", len(o.Candidates), firstBadLabel(o)),
 		Commit:        spec.commit,
-		LoadSignature: spec.loadSig,
+		LoadSignature: LoadSignature(spec.load),
 	})
 	for _, p := range o.Probed {
 		if p.Metric == 0 {

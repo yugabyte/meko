@@ -33,6 +33,26 @@ func TestRefreshPullSecretRemintsAndRolls(t *testing.T) {
 	if !hasCall(calls, "patch deployment "+DefaultControllerName) {
 		t.Error("did not roll (patch) the controller deployment")
 	}
+	if !hasCall(calls, "rollout status deployment/"+DefaultControllerName) {
+		t.Error("rolled the controller but did not wait for the rollout: condition=Available stays true on the old ReplicaSet, so a new pod that never comes up would go unnoticed")
+	}
+}
+
+// TestRefreshPullSecretRollFailureIsAnError: a roll whose new pod never becomes
+// ready must fail rather than report a healed control plane.
+func TestRefreshPullSecretRollFailureIsAnError(t *testing.T) {
+	rec := newRecorder()
+	rec.on("get namespace", exec.Result{Stdout: ManagedByValue})
+	rec.on("rollout status", exec.Result{ExitCode: 1, Stderr: "timed out waiting for the condition"})
+	a := testApp(Config{}, rec)
+
+	err := a.RefreshPullSecret(context.Background(), true)
+	if err == nil {
+		t.Fatal("want an error when the rolled controller never becomes ready, got nil")
+	}
+	if !strings.Contains(err.Error(), "did not come back up") {
+		t.Errorf("error does not name the failed roll: %v", err)
+	}
 }
 
 // TestRefreshPullSecretNoRollSkipsPatch: --no-roll refreshes the secret without

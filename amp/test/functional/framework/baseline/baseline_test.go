@@ -84,13 +84,18 @@ func TestCompareLatencyRiseRegresses(t *testing.T) {
 	}
 }
 
-// TestVersionFallback: a version with no bucket falls back to the "" bucket.
+// TestVersionFallback: a version with no bucket of its own resolves to the
+// version-agnostic "" bucket, and Compare then gates against exactly that one.
 func TestVersionFallback(t *testing.T) {
 	f := Empty()
 	f.Update("", "perf/tpcc", dps(), time.Now()) // version-agnostic default
-	rep := Compare(f, "2099.9.9.9", "perf/tpcc", dps(), Thresholds{DropPct: 10, RisePct: 20})
+	sel, ok := Resolve(f, "2099.9.9.9", "perf/tpcc", Meta{})
+	if !ok || sel.Version != "" || !sel.Fallback {
+		t.Fatalf("Resolve = %+v ok=%v, want the version-agnostic bucket as a fallback", sel, ok)
+	}
+	rep := Compare(f, sel.Version, "perf/tpcc", dps(), Thresholds{DropPct: 10, RisePct: 20})
 	if !rep.HadBaseline {
-		t.Errorf("HadBaseline = false, want true (fell back to the version-agnostic bucket)")
+		t.Errorf("HadBaseline = false, want true (gated against the version-agnostic bucket)")
 	}
 }
 

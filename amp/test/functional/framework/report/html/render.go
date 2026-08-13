@@ -260,13 +260,14 @@ func buildStepView(s *core.Step) stepView {
 		Duration:    s.Duration().Round(time.Millisecond).String(),
 		Depth:       s.Depth,
 	}
-	keys := make([]string, 0, len(s.Properties))
-	for k := range s.Properties {
+	props := s.PropsSnapshot()
+	keys := make([]string, 0, len(props))
+	for k := range props {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		sv.Properties = append(sv.Properties, kv{Key: k, Value: fmt.Sprintf("%v", s.Properties[k])})
+		sv.Properties = append(sv.Properties, kv{Key: k, Value: fmt.Sprintf("%v", props[k])})
 	}
 	for _, c := range s.Steps {
 		sv.Children = append(sv.Children, buildStepView(c))

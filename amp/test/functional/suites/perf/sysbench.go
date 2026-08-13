@@ -105,7 +105,7 @@ func runSysbench(t *core.T) (err error) {
 
 	bc := benchConfigFromConfig(t.Options)
 	params := sysbenchParamsFromConfig(t.Options)
-	loadSig := LoadSignature(loadFieldsSysbench(bc, cfg, params))
+	load := loadFieldsSysbench(bc, cfg, params)
 	commit := frameworkCommit()
 
 	// Comparison mode: run the SAME sysbench at the SAME load across labelled
@@ -126,12 +126,12 @@ func runSysbench(t *core.T) (err error) {
 		mk := func(conn pg.ConnInfo) Workload { return sysbenchWorkloadFor(params, conn) }
 		if cmp.Mode == CompareModeBisect {
 			return runBisectSuite(t, bisectSpec{
-				perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
+				perf: cfg, cmp: cmp, bc: bc, load: load, commit: commit,
 				podPrefix: "ampqa-sysbench", deliver: deliver, mkWorkload: mk, sink: sink, logf: logf,
 			})
 		}
 		return runComparisonSuite(t, comparisonSpec{
-			perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
+			perf: cfg, cmp: cmp, bc: bc, load: load, commit: commit,
 			podPrefix: "ampqa-sysbench", deliver: deliver, mkWorkload: mk, sink: sink, logf: logf,
 		})
 	}
@@ -144,7 +144,7 @@ func runSysbench(t *core.T) (err error) {
 		hcfg:    historyConfigFromConfig(t.Options),
 		params:  params,
 		version: chartVersion(t.Options),
-		id:      identityFromConfig(t.Options, "", commit, loadSig),
+		id:      identityFromConfig(t.Options, "", commit, load),
 		td:      &teardownStack{},
 		logf:    t.Masker().Logf(log.Printf),
 	}

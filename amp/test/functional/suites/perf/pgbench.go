@@ -127,7 +127,7 @@ func runPgbench(t *core.T) (err error) {
 
 	bc := benchConfigFromConfig(t.Options)
 	params := pgbenchParamsFromConfig(t.Options)
-	loadSig := LoadSignature(loadFieldsPgbench(bc, cfg, params))
+	load := loadFieldsPgbench(bc, cfg, params)
 	commit := frameworkCommit()
 
 	// Comparison mode: run the SAME pgbench at the SAME load across labelled
@@ -148,12 +148,12 @@ func runPgbench(t *core.T) (err error) {
 		mk := func(conn pg.ConnInfo) Workload { return pgbenchWorkloadFor(params, conn) }
 		if cmp.Mode == CompareModeBisect {
 			return runBisectSuite(t, bisectSpec{
-				perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
+				perf: cfg, cmp: cmp, bc: bc, load: load, commit: commit,
 				podPrefix: "ampqa-pgbench", deliver: deliver, mkWorkload: mk, sink: sink, logf: logf,
 			})
 		}
 		return runComparisonSuite(t, comparisonSpec{
-			perf: cfg, cmp: cmp, bc: bc, loadSig: loadSig, commit: commit,
+			perf: cfg, cmp: cmp, bc: bc, load: load, commit: commit,
 			podPrefix: "ampqa-pgbench", deliver: deliver, mkWorkload: mk, sink: sink, logf: logf,
 		})
 	}
@@ -166,7 +166,7 @@ func runPgbench(t *core.T) (err error) {
 		hcfg:    historyConfigFromConfig(t.Options),
 		params:  params,
 		version: chartVersion(t.Options),
-		id:      identityFromConfig(t.Options, "", commit, loadSig),
+		id:      identityFromConfig(t.Options, "", commit, load),
 		td:      &teardownStack{},
 		logf:    t.Masker().Logf(log.Printf),
 	}

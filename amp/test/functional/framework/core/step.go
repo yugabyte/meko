@@ -15,10 +15,37 @@ type Step struct {
 	StartedAt  time.Time
 	EndedAt    time.Time
 	Steps      []*Step
+
+	// Guards Properties. Events carry this *Step and sinks drain them on their own
+	// goroutines, so a sink can read the map while the body is still setting it.
+	propMu sync.Mutex
 }
 
 // Duration is the wall-clock span of the step.
 func (s *Step) Duration() time.Duration { return s.EndedAt.Sub(s.StartedAt) }
+
+// PropsSnapshot returns a copy of the step's properties. Every event consumer
+// must read properties through this, never the live Properties map.
+func (s *Step) PropsSnapshot() map[string]any {
+	s.propMu.Lock()
+	defer s.propMu.Unlock()
+	out := make(map[string]any, len(s.Properties))
+	for k, v := range s.Properties {
+		out[k] = v
+	}
+	return out
+}
+
+// maskProps rewrites string-valued properties in place under the step's lock.
+func (s *Step) maskProps(masker *Masker) {
+	s.propMu.Lock()
+	defer s.propMu.Unlock()
+	for k, v := range s.Properties {
+		if str, ok := v.(string); ok {
+			s.Properties[k] = masker.Mask(str)
+		}
+	}
+}
 
 // StepHandle is passed to a step body; it carries properties, allows nesting,
 // and mediates recording under the test's lock.
@@ -31,8 +58,8 @@ type StepHandle struct {
 
 // Set records a property on the step.
 func (h *StepHandle) Set(key string, val any) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.step.propMu.Lock()
+	defer h.step.propMu.Unlock()
 	if h.step.Properties == nil {
 		h.step.Properties = map[string]any{}
 	}

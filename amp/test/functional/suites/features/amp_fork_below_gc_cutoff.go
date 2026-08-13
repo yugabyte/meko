@@ -6,30 +6,49 @@ package features
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
+	"github.com/yugabyte/amp/test/functional/framework/apps/pageserver"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 const (
 	// cutoffTable is the table the churn phase writes and truncates to push WAL
 	// through the ancestor branch.
 	cutoffTable = "amp_gc_cutoff"
-	// cutoffChurnBudget bounds the WAL churn that tries to drive the ancestor's GC
-	// cutoff past the captured LSN. It is a best-effort phase: the test reports its
-	// outcome honestly rather than failing when the cutoff did not move.
-	cutoffChurnBudget = 4 * time.Minute
+	// cutoffHistoryRounds is how many churn rounds run AFTER the fork LSN is
+	// captured, so GC has history past it to reclaim.
+	cutoffHistoryRounds = 3
 	// cutoffChurnRows is how many wide rows one churn round writes before deleting
 	// them again — insert + delete + CHECKPOINT is WAL the GC horizon can move past.
 	cutoffChurnRows = 20000
+	// cutoffForceGCHorizonBytes is the space-based retention the forced GC runs
+	// with, small enough that the cutoff lands just behind the write frontier
+	// (the amp integration suite forces GC the same way).
+	cutoffForceGCHorizonBytes = 1024
 	// cutoffDoomedEndpointBudget bounds the endpoint deploy on a fork the system
 	// ACCEPTED, so a crash-looping compute fails the test inside the test's own
 	// budget instead of burning the controller's full helm --wait.
 	cutoffDoomedEndpointBudget = 6 * time.Minute
+	// gcDrainTicksMetric counts the pageserver's GC drain ticks by outcome. The
+	// "disabled" outcome is how a pageserver reports that its GC drain is switched
+	// off, so nothing it is asked to reclaim can ever be reclaimed.
+	gcDrainTicksMetric = "pageserver_yb_gc_drain_ticks_total"
+	// endpointPodContainer is the endpoint pod's amp container (the pod also
+	// carries a postgres-exporter sidecar, and only this one answers on the
+	// pageserver's management port).
+	endpointPodContainer = "endpoint"
 )
+
+// errNoPageserverAccess marks a deployment that cannot reach a pageserver's
+// management port at all: no kube context, no pod, or nothing listening. That is
+// an environment condition. An HTTP error FROM the pageserver is not.
+var errNoPageserverAccess = errors.New("pageserver management API unreachable")
 
 func init() {
 	core.Register(core.Test{
@@ -39,10 +58,10 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Churn an ancestor's WAL past a captured LSN and assert a fork at that reclaimed LSN is rejected at registration rather than registered and left unusable.",
+		Description: "Force the ancestor's GC past a captured LSN, then assert a fork at that reclaimed LSN is rejected at registration rather than registered and left unusable.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		// Churn (4m) plus a doomed-endpoint deploy (6m) cannot fit the category
-		// default; timing out mid-classification reads as a hang, not a verdict.
+		// A doomed-endpoint deploy (6m) on top of two endpoint creates cannot fit
+		// the category default; timing out mid-classification reads as a hang.
 		Timeout: 20 * time.Minute,
 		Run:     runAmpForkBelowGCCutoff,
 	})
@@ -54,24 +73,13 @@ func init() {
 // ancestor's applied GC cutoff is rejected (the create_branch task fails naming
 // the cutoff), and no endpoint is ever deployed on such a branch.
 //
-// Nothing exposes the ancestor's applied GC cutoff — not the controller API, not
-// the endpoint's SQL surface — so the test cannot pick an LSN it KNOWS is below
-// it. It churns WAL for a bounded budget to drive the cutoff forward instead, and
-// then classifies what the fork attempt did:
-//
-//   - rejected naming the cutoff / fork point  → the guarantee holds (pass);
-//   - rejected for an unrelated reason         → fail;
-//   - accepted AND its endpoint serves reads   → the cutoff never passed the
-//     captured LSN in the budget, so nothing was proven (skip, reason recorded);
-//   - accepted AND its endpoint never comes up → a fork was registered that
-//     cannot be used (fail) — exactly the outcome the validation exists to
-//     prevent.
-//
-// The stronger, deterministic form of this test needs the ancestor's applied GC
-// cutoff to be observable (an API or pageserver read) or forceable (a GC trigger),
-// so the fork LSN can be chosen below a KNOWN cutoff and the skip branch deleted.
-// It asserts rejection semantics only: the typed pageserver error for an
-// out-of-range fork LSN is not implemented.
+// The fork LSN is captured first, more history is written past it, and the
+// ancestor's GC is then FORCED so the cutoff moves deterministically instead of
+// being churned at and hoped for. The pageserver reports the applied cutoff, so
+// "the cutoff passed the fork LSN" is observed, not assumed. A rejection that
+// does not name the cutoff or the fork point is still a failure: the fork has to
+// be refused for the right reason. Only a FAILED task is evidence about the
+// product: a pod the cluster never placed is an environment failure.
 func runAmpForkBelowGCCutoff(t *core.T) error {
 	return runAmpFeature(t, func(a *ampFeatureRun) []phase {
 		return []phase{{"fork_below_gc_cutoff", a.forkBelowGCCutoff}}
@@ -83,10 +91,56 @@ func (a *ampFeatureRun) forkBelowGCCutoff(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return forkBelowGCCutoffSteps(ctx, cl, a.proj, "gc-fork-"+a.f.suffix(), a.f.endpointSQL, a.f.logf, a.f.t.Skip)
+	return forkBelowGCCutoffSteps(ctx, cl, a.proj, "gc-fork-"+a.f.suffix(), a.f.endpointSQL,
+		a.f.endpointPageserver, a.f.logf, a.f.t.Skip)
 }
 
-func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector, logf func(string, ...any), skip func(string)) error {
+// pageserverAdmin is the pageserver management surface this test drives.
+type pageserverAdmin interface {
+	BranchInfo(ctx context.Context, branchID string) (pageserver.BranchInfo, error)
+	ForceGC(ctx context.Context, branchID string, gcHorizonBytes uint64) (pageserver.GCResult, error)
+	FlushBranch(ctx context.Context, branchID, lsn string) error
+	Metrics(ctx context.Context) (pageserver.Samples, error)
+}
+
+// pageserverFinder reaches the pageserver serving an endpoint's branch.
+type pageserverFinder func(ctx context.Context, ep controller.Endpoint) (pageserverAdmin, error)
+
+// endpointPageserver is the live pageserverFinder: the pageserver serving a
+// branch runs inside that branch's endpoint pod, and its management port is
+// container-local, so requests go over an exec into that pod.
+func (f *flow) endpointPageserver(ctx context.Context, ep controller.Endpoint) (pageserverAdmin, error) {
+	kube := f.ampKube()
+	if kube == nil {
+		return nil, fmt.Errorf("%w: this control plane is reached by a direct URL, so there is no kube context to exec into endpoint %s's pod", errNoPageserverAccess, ep.ID)
+	}
+	pod, err := (&kubeComputeRoller{kube: kube}).podName(ctx, ep.ID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errNoPageserverAccess, err)
+	}
+	return pageserver.New(podPageserverExec(kube, pod), pageserver.DefaultHTTPPort), nil
+}
+
+// podPageserverExec runs a pageserver request script inside the endpoint pod,
+// separating a transport/shape failure from an error the pageserver returned.
+func podPageserverExec(kube *k8s.Kubectl, pod string) pageserver.ExecFunc {
+	return func(ctx context.Context, script string) (string, error) {
+		res, err := kube.ForPod(pod, endpointPodContainer).Run(ctx, script)
+		if err != nil {
+			return "", fmt.Errorf("%w: exec in pod %s: %w", errNoPageserverAccess, pod, err)
+		}
+		switch res.ExitCode {
+		case 0:
+			return res.Stdout, nil
+		case pageserver.ConnectRefusedExit:
+			return "", fmt.Errorf("%w: nothing answers on the pageserver's management port in pod %s", errNoPageserverAccess, pod)
+		default:
+			return "", fmt.Errorf("pageserver request in pod %s exited %d: %s", pod, res.ExitCode, strings.TrimSpace(res.Stderr))
+		}
+	}
+}
+
+func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector, findPS pageserverFinder, logf func(string, ...any), skip func(string)) error {
 	baseEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
 		return fmt.Errorf("create ancestor endpoint: %w", err)
@@ -97,23 +151,86 @@ func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 	}
 	defer base.Close()
 
+	ps, err := findPS(ctx, baseEP)
+	if err != nil {
+		if skipUnreachablePageserver(err, skip) {
+			return nil
+		}
+		return err
+	}
+	// The pageserver addresses a branch by the id its own endpoint reports.
+	branchID, err := base.QueryString(ctx, "SELECT current_setting('yb_amp.branch_id')")
+	if err != nil {
+		return fmt.Errorf("read the ancestor endpoint's branch id: %w", err)
+	}
+
 	if _, err := base.Exec(ctx, "CREATE TABLE "+cutoffTable+" (id int primary key, payload text)"); err != nil {
 		return fmt.Errorf("create table: %w", err)
 	}
 	if _, err := base.Exec(ctx, "INSERT INTO "+cutoffTable+" (id, payload) VALUES (1, 'anchor')"); err != nil {
 		return fmt.Errorf("write the anchor row: %w", err)
 	}
-	// The fork point: captured BEFORE the churn, so every byte of churned WAL is
-	// history the GC may reclaim from under it.
+	// The fork point: captured BEFORE the churn, so every byte churned after it is
+	// history GC may reclaim from under it.
 	earlyLSN, err := currentLSN(ctx, base)
 	if err != nil {
 		return err
 	}
-	rounds, err := churnWAL(ctx, base, cutoffChurnBudget)
+	if err := churnWAL(ctx, base, cutoffHistoryRounds); err != nil {
+		return err
+	}
+	frontierLSN, err := currentLSN(ctx, base)
 	if err != nil {
 		return err
 	}
-	logf("churned %d WAL round(s) of %d rows on the ancestor after capturing fork LSN %s", rounds, cutoffChurnRows, earlyLSN)
+	// Ingest has to have reached the frontier before GC can reclaim up to it.
+	if err := ps.FlushBranch(ctx, branchID, frontierLSN); err != nil {
+		if skipUnreachablePageserver(err, skip) {
+			return nil
+		}
+		return err
+	}
+
+	forced, err := ps.ForceGC(ctx, branchID, cutoffForceGCHorizonBytes)
+	if err != nil {
+		if skipUnreachablePageserver(err, skip) {
+			return nil
+		}
+		return err
+	}
+	info, err := ps.BranchInfo(ctx, branchID)
+	if err != nil {
+		if skipUnreachablePageserver(err, skip) {
+			return nil
+		}
+		return err
+	}
+	logf("forced GC on branch %s at gc_horizon %d bytes after %d churn round(s) of %d rows: %d candidate(s) dequeued, %d row(s) deleted; applied cutoff %s, min readable %s, last record %s, fork LSN %s",
+		branchID, cutoffForceGCHorizonBytes, cutoffHistoryRounds, cutoffChurnRows,
+		forced.CandidatesDequeued, forced.RowsDeleted,
+		info.AppliedGCCutoffLSN, info.MinReadableLSN, info.LastRecordLSN, earlyLSN)
+
+	passed, err := cutoffPassed(info.AppliedGCCutoffLSN, earlyLSN)
+	if err != nil {
+		return err
+	}
+	if !passed {
+		samples, mErr := ps.Metrics(ctx)
+		if mErr != nil {
+			if skipUnreachablePageserver(mErr, skip) {
+				return nil
+			}
+			return mErr
+		}
+		if ticks, known := gcDrainDisabled(samples); known && ticks > 0 {
+			skip(fmt.Sprintf("this deployment's pageserver has its GC drain switched off (%s{outcome=\"disabled\"} = %.0f), so branch %s's applied GC cutoff stays at %s whatever is forced and no fork point can be below it. Exercising the below-cutoff rejection needs the endpoint's pageserver born with the GC drain on and a short pitr_interval, which no runtime route exposes today: blocked on meko#751",
+				gcDrainTicksMetric, ticks, branchID, info.AppliedGCCutoffLSN))
+			return nil
+		}
+		return fmt.Errorf("branch %s's applied GC cutoff is %s, at or below the captured fork LSN %s, after %d churn round(s) of %d rows and a forced GC at gc_horizon %d bytes (last record %s, min readable %s, GC reported %d candidate(s) dequeued and %d row(s) deleted). The pageserver does not report its GC drain as switched off, so the cutoff was expected to advance past the fork LSN and the below-cutoff rejection could not be exercised; the branch's pitr_interval is authoritative over the space-based horizon and defaults to 1 day",
+			branchID, info.AppliedGCCutoffLSN, earlyLSN, cutoffHistoryRounds, cutoffChurnRows, cutoffForceGCHorizonBytes,
+			info.LastRecordLSN, info.MinReadableLSN, forced.CandidatesDequeued, forced.RowsDeleted)
+	}
 
 	_, forkErr := cl.CreateBranchAndWait(ctx, proj.poolID, proj.projID, controller.CreateBranchRequest{
 		Name:           childName,
@@ -122,14 +239,14 @@ func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 	})
 	if forkErr != nil {
 		if !mentionsGCCutoff(forkErr) {
-			return fmt.Errorf("forking at LSN %s (below the ancestor's churned-past history) was rejected, but for an unrelated reason — want a rejection naming the GC cutoff / fork point: %w", earlyLSN, forkErr)
+			return fmt.Errorf("forking at LSN %s (below branch %s's applied GC cutoff %s) was rejected, but for an unrelated reason, want a rejection naming the GC cutoff / fork point: %w", earlyLSN, branchID, info.AppliedGCCutoffLSN, forkErr)
 		}
 		logf("fork at %s rejected as expected: %v", earlyLSN, forkErr)
 		return nil
 	}
 
-	// Accepted. Either the cutoff genuinely never passed earlyLSN (nothing proven)
-	// or a doomed fork was registered — the endpoint tells them apart.
+	// ACCEPTED below a cutoff we observed. The endpoint says whether the fork is
+	// merely useless or the cluster never got to place a pod.
 	child, err := findBranchCtl(ctx, cl, proj.poolID, proj.projID, childName)
 	if err != nil {
 		return err
@@ -139,16 +256,13 @@ func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 	childEP, err := createEndpointReq(ectx, cl, proj.poolID, proj.projID, child.BranchID,
 		controller.CreateEndpointRequest{Role: roleReadWrite})
 	if err != nil {
-		// A doomed fork's endpoint FAILS — the task records an error. This one
-		// merely never finished, which on a cluster that cannot place a pod looks
-		// identical and says nothing about the fork. Only a failed task is
-		// evidence, so anything else is reported as an environment failure rather
-		// than as a verdict on the product.
+		// Only a FAILED create_endpoint task is evidence: a pod the cluster never
+		// placed looks identical and says nothing about the fork.
 		if !hasFailedEndpointTask(ctx, cl, proj.projID) {
 			return core.AsEnvFailure(fmt.Errorf("the fork at LSN %s was accepted, but its endpoint neither came up nor failed within %s — no create_endpoint task failed, so the cluster never placed the pod and whether the fork is usable stays unknown: %w",
 				earlyLSN, cutoffDoomedEndpointBudget, err))
 		}
-		return fmt.Errorf("the fork at LSN %s was ACCEPTED but its endpoint FAILED to come up — a fork the system registers must be usable, so a fork point the ancestor's GC already reclaimed has to be rejected at registration instead: %w", earlyLSN, err)
+		return fmt.Errorf("the fork at LSN %s (below branch %s's applied GC cutoff %s) was ACCEPTED but its endpoint FAILED to come up. Such a fork point has to be rejected at registration instead: %w", earlyLSN, branchID, info.AppliedGCCutoffLSN, err)
 	}
 	kid, err := connect(ectx, childEP)
 	if err != nil {
@@ -158,34 +272,56 @@ func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 	if _, err := kid.QueryInt(ectx, "SELECT count(*) FROM "+cutoffTable); err != nil {
 		return fmt.Errorf("the fork at LSN %s was ACCEPTED but reading its inherited data fails: %w", earlyLSN, err)
 	}
-	skip(fmt.Sprintf("the ancestor's GC cutoff did not pass the captured fork LSN %s within %s of WAL churn (%d rounds), so the fork was legitimately accepted and served reads — the below-cutoff rejection was not exercised",
-		earlyLSN, cutoffChurnBudget, rounds))
-	return nil
+	return fmt.Errorf("forking at LSN %s was ACCEPTED and its endpoint serves reads, but branch %s's applied GC cutoff is %s, above the fork point, so that history is already reclaimed and the fork had to be rejected at registration", earlyLSN, branchID, info.AppliedGCCutoffLSN)
 }
 
-// churnWAL writes and deletes wide rows in a CHECKPOINTed loop until the budget
-// is spent, returning how many rounds it completed. It is the only lever the test
-// has on the ancestor's GC cutoff.
-func churnWAL(ctx context.Context, c sqlConn, budget time.Duration) (int, error) {
-	deadline := time.Now().Add(budget)
-	rounds := 0
-	for time.Now().Before(deadline) {
+// skipUnreachablePageserver records an environment skip when the pageserver's
+// management port cannot be reached at all, and reports whether it did. An HTTP
+// error from the pageserver itself falls through to the caller as a failure.
+func skipUnreachablePageserver(err error, skip func(string)) bool {
+	if !errors.Is(err, errNoPageserverAccess) {
+		return false
+	}
+	skip("cannot reach the pageserver's management API in this deployment, so the ancestor's GC cannot be forced or observed: " + err.Error())
+	return true
+}
+
+// cutoffPassed reports whether the applied GC cutoff has advanced past the
+// captured fork LSN.
+func cutoffPassed(cutoff, forkLSN string) (bool, error) {
+	c, err := pageserver.ParseLSN(cutoff)
+	if err != nil {
+		return false, fmt.Errorf("read the applied GC cutoff: %w", err)
+	}
+	f, err := pageserver.ParseLSN(forkLSN)
+	if err != nil {
+		return false, fmt.Errorf("read the captured fork LSN: %w", err)
+	}
+	return c > f, nil
+}
+
+// gcDrainDisabled reports the pageserver's count of GC ticks that did nothing
+// because the drain is switched off, and whether it exports that counter at all.
+func gcDrainDisabled(s pageserver.Samples) (ticks float64, known bool) {
+	return s.Value(gcDrainTicksMetric, map[string]string{"outcome": "disabled"})
+}
+
+// churnWAL writes and deletes wide rows in a CHECKPOINTed loop, leaving history
+// past the fork LSN for GC to reclaim.
+func churnWAL(ctx context.Context, c sqlConn, rounds int) error {
+	for round := range rounds {
 		if _, err := c.Exec(ctx, "INSERT INTO "+cutoffTable+" (id, payload) SELECT g, repeat('x', 512) FROM generate_series($1::int, $2::int) g",
-			rounds*cutoffChurnRows+2, (rounds+1)*cutoffChurnRows+1); err != nil {
-			return rounds, fmt.Errorf("churn round %d insert: %w", rounds, err)
+			round*cutoffChurnRows+2, (round+1)*cutoffChurnRows+1); err != nil {
+			return fmt.Errorf("churn round %d insert: %w", round, err)
 		}
 		if _, err := c.Exec(ctx, "DELETE FROM "+cutoffTable+" WHERE id > 1"); err != nil {
-			return rounds, fmt.Errorf("churn round %d delete: %w", rounds, err)
+			return fmt.Errorf("churn round %d delete: %w", round, err)
 		}
 		if _, err := c.Exec(ctx, "CHECKPOINT"); err != nil {
-			return rounds, fmt.Errorf("churn round %d checkpoint: %w", rounds, err)
-		}
-		rounds++
-		if err := ctx.Err(); err != nil {
-			return rounds, err
+			return fmt.Errorf("churn round %d checkpoint: %w", round, err)
 		}
 	}
-	return rounds, nil
+	return nil
 }
 
 // mentionsGCCutoff reports a rejection that names why the fork point is invalid.

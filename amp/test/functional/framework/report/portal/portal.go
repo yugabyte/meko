@@ -223,6 +223,15 @@ type resultView struct {
 	DurationMS   int64  `json:"duration_ms"`
 }
 
+// stepProps is a step's recorded properties plus the two the portal indexes on.
+func stepProps(st *core.Step) map[string]any {
+	props := map[string]any{"depth": st.Depth, "step_name": st.Name}
+	for k, v := range st.PropsSnapshot() {
+		props[k] = v
+	}
+	return props
+}
+
 func (s *Sink) stepStarted(ev core.ResultEvent) {
 	rid := s.results[ev.TestName]
 	if rid == "" || ev.Step == nil {
@@ -230,10 +239,7 @@ func (s *Sink) stepStarted(ev core.ResultEvent) {
 	}
 	ord := s.ordinal[ev.TestName]
 	s.ordinal[ev.TestName] = ord + 1
-	props := map[string]any{"depth": ev.Step.Depth, "step_name": ev.Step.Name}
-	for k, v := range ev.Step.Properties {
-		props[k] = v
-	}
+	props := stepProps(ev.Step)
 	var out struct {
 		StepID string `json:"step_id"`
 	}
@@ -255,8 +261,11 @@ func (s *Sink) stepFinished(ev core.ResultEvent) {
 		return
 	}
 	delete(s.steps, ev.Step)
+	// Properties are set while the body runs, so the started POST carried none of
+	// them. Resend on finish or every property a step records is lost.
 	_ = s.call(http.MethodPatch, "/api/v1/steps/"+sid, map[string]any{
 		"status": string(ev.Step.Status), "end_time": ev.Step.EndedAt,
+		"properties": stepProps(ev.Step),
 	}, nil)
 }
 

@@ -386,6 +386,35 @@ func waitUntil(cond func() bool, d time.Duration) bool {
 	return cond()
 }
 
+// TestRolloutStatus: the argv is the plain `rollout status kind/name` with a
+// kubectl-shaped timeout, and a failed rollout errors with kubectl's own output
+// attached instead of being swallowed.
+func TestRolloutStatus(t *testing.T) {
+	sr := &scriptRunner{}
+	k := testKubectl(sr)
+	if err := k.RolloutStatus(context.Background(), "deployment", "amp-controller", 90*time.Second); err != nil {
+		t.Fatalf("RolloutStatus: %v", err)
+	}
+	assertHas(t, sr.argvs(), "rollout status deployment/amp-controller --timeout=90s")
+
+	failing := &scriptRunner{}
+	failing.on("rollout status", execpkg.Result{
+		ExitCode: 1,
+		Stdout:   "Waiting for deployment \"amp-controller\" rollout to finish: 1 old replicas are pending termination...\n",
+		Stderr:   "error: timed out waiting for the condition",
+	})
+	err := testKubectl(failing).RolloutStatus(context.Background(), "deployment", "amp-controller", time.Second)
+	if err == nil {
+		t.Fatal("a failed rollout must error")
+	}
+	if !strings.Contains(err.Error(), "timed out waiting for the condition") {
+		t.Errorf("error = %q, want kubectl's stderr in it", err)
+	}
+	if !strings.Contains(err.Error(), "old replicas are pending termination") {
+		t.Errorf("error = %q, want kubectl's progress output in it", err)
+	}
+}
+
 func assertHas(t *testing.T, argvs []string, sub string) {
 	t.Helper()
 	for _, a := range argvs {

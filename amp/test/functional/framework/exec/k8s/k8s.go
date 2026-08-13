@@ -347,6 +347,18 @@ func (k *Kubectl) WaitFor(ctx context.Context, target, condition string, timeout
 	return err
 }
 
+// RolloutStatus blocks until a workload's rollout completes (`kubectl rollout
+// status <kind>/<name>`). It gates on the NEW ReplicaSet becoming ready, which a
+// `condition=Available` wait does not: Available stays true on the old one for
+// the whole rolling update.
+func (k *Kubectl) RolloutStatus(ctx context.Context, kind, name string, timeout time.Duration) error {
+	res, err := k.exec(ctx, nil, "rollout", "status", kind+"/"+name, "--timeout="+durationArg(timeout))
+	if err != nil {
+		return fmt.Errorf("%w%s", err, LogTail("out", res.Stdout))
+	}
+	return nil
+}
+
 // Logs returns up to tail lines of a pod's (or workload's) logs (0 → all).
 func (k *Kubectl) Logs(ctx context.Context, target, container string, tail int) (string, error) {
 	extra := []string{"logs", target}

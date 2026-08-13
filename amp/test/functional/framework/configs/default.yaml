@@ -281,6 +281,9 @@ env:
     local_port_base: 0
     yb_ready_timeout: 20m
     controller_ready_timeout: 5m
+    # Rolling an already-deployed controller cannot assume a warm node the way the
+    # initial deploy can: a long-lived env may have scaled its pool down.
+    controller_roll_timeout: 20m
 
 # --- Functional suite: amp-on-backing tests (suites/functional) ---
 # End-to-end: for one YugabyteDB backing store, provision the cluster, run a
@@ -330,6 +333,68 @@ functional:
     endpoint_password: "cloud_admin"
     endpoint_db: "postgres"
     endpoint_sslmode: ""
+  # The extension set the release commits to shipping, pinned here rather than
+  # read back from the database (a test that enumerates pg_available_extensions
+  # cannot detect a missing extension).
+  #   baked: PG contrib built into the compute image, available with no opt-in.
+  #   catalog: externalized, opt-in per branch, as catalogName:sqlName — the two
+  #     differ (the pgvector image ships the "vector" extension).
+  extensions:
+    # require_catalog turns the two catalog softenings (control plane reports no
+    # extension catalog, node's kubelet predates ImageVolume) into hard failures.
+    # On for envs where the externalized catalog is a shipping commitment.
+    require_catalog: false
+    baked:
+      - pg_prewarm
+      - pg_buffercache
+      - pg_visibility
+      - pageinspect
+      - pg_trgm
+      - btree_gin
+      - amcheck
+    catalog:
+      - "pgvector:vector"
+      - "pg_cron:pg_cron"
+  # features/amp_byoc_scope: the namespace-scoped (BYOC) permission shape.
+  #   require_impersonation: fail instead of falling back to the weaker
+  #     binding-level check when `kubectl auth can-i --as` is not permitted.
+  #   assert_no_public_lb: also FAIL on any LoadBalancer Service in the run's
+  #     namespaces (meko#709). Off: the ybk8s backing creates three by design,
+  #     so the count is only recorded.
+  byoc:
+    require_impersonation: false
+    assert_no_public_lb: false
+  # features/amp_otel_pipeline: health of the metrics pipeline the control-plane
+  # chart deploys.
+  #   collectors: the collector CR name suffixes the chart renders (chart values
+  #     otel.collectors.<name>.enabled). Drop one for an install that disables it.
+  #   expect_collectors: on a cluster whose opentelemetry.io CRDs let the chart
+  #     render the collectors, a missing or unhealthy one FAILS. Set false only for
+  #     an install that deploys with otel.enabled=false; the state is then only
+  #     recorded.
+  #   ready_timeout: how long the collectors get to come up ready, and the
+  #     postgres-exporter sidecar to start serving.
+  #   max_collector_restarts: restart budget per collector pod.
+  otel:
+    collectors:
+      - controller
+      - compute
+    expect_collectors: true
+    ready_timeout: "5m"
+    max_collector_restarts: 0
+  # GIN search dataset: rows seeded before the index, extra_rows inserted after
+  # it exists (the GIN pending-list merge path).
+  gin_search:
+    rows: 5000
+    extra_rows: 1000
+  # features/amp_upgrade: the release to upgrade FROM. No default is possible (it
+  # names a specific previous release), and an empty value skips the test. The
+  # images to upgrade TO are the run's ordinary env.ampstack.*_image. Use adjacent
+  # releases only: chart and controller move in lockstep.
+  upgrade:
+    from_controller_image: ""
+    from_endpoint_image: ""
+    rows: 2000
 
 # --- Apps ---
 apps:
@@ -1151,6 +1216,38 @@ stress:
     # works again — the probe for a backing that came back but can no longer
     # commit anything (meko#727).
     resume_duration: "30s"
+  # commit_durability: journals every commit's acknowledgement per id under faults,
+  # then holds storage to the EXACT acked set. A count check cannot do this: a lost
+  # acked row net-cancelled by an unacknowledged one passes it.
+  commit_durability:
+    tenants: 3
+    baseline_duration: "20s"
+    duration: "3m"
+    settle_timeout: "10m"
+    resume_duration: "30s"
+    payload_bytes: 256
+    # cancel_probability is the share of inserts cancelled mid-flight. A commit the
+    # server acks despite an in-flight cancel becomes a durability obligation.
+    cancel_probability: 0.1
+    cancel_delay_max: "50ms"
+  # storage_proc_nemesis: kills the pageserver/safekeeper PROCESSES inside a
+  # tenant's endpoint pod, under a live postgres, and holds the endpoint
+  # supervisor to respawning them in place within its restart budget.
+  storage_proc_nemesis:
+    tenants: 2
+    baseline_duration: "20s"
+    # fault_duration is the write window the kills land inside.
+    fault_duration: "90s"
+    # daemons are the supervised children aimed at; only these two are storage.
+    daemons: ["pageserver", "safekeeper"]
+    # kills_per_daemon stays under the supervisor's budget of 5 restarts per
+    # 180s, above which it exits and the pod is recreated instead.
+    kills_per_daemon: 1
+    kill_gap: "15s"
+    settle_timeout: "10m"
+    # resume_duration is the post-kill write window proving COMMIT works again.
+    resume_duration: "30s"
+    payload_bytes: 256
   combined:
     # enabled gates the whole scenario (self-provisioning + private jar + k8s).
     enabled: false

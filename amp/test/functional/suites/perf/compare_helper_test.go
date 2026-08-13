@@ -146,7 +146,7 @@ func TestComparePortalPayloadResolves(t *testing.T) {
 	}
 
 	base := perfFromConfig(cfg)
-	vs, err := resolveVariantList(&core.T{Options: cfg}, base, cc.Variants, "loadsig", "commit", "comparison")
+	vs, err := resolveVariantList(&core.T{Options: cfg}, base, cc.Variants, LoadFields{Scale: 10}, "commit", "comparison")
 	if err != nil {
 		t.Fatalf("resolveVariantList: %v", err)
 	}
