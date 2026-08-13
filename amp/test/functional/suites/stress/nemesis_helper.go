@@ -11,31 +11,22 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
-// Shared machinery of the nemesis tests: aim a chaos loop at a set of pods
-// while every tenant writes, and afterwards hold storage to exactly what the
-// writers were acknowledged for.
+// Shared machinery of the nemesis tests.
 
-// backingKubeEnv is the capability a backing-directed nemesis needs: a kube
-// handle scoped to wherever the backing YugabyteDB's pods actually run.
+// backingKubeEnv: a kube handle scoped to the backing's own namespace.
 type backingKubeEnv interface {
 	BackingKube() *k8s.Kubectl
 }
 
-// backingPodSelectors matches the backing's serving pods across every backing
-// this framework deploys: the ybk8s chart labels its tservers app=yb-tserver,
-// a YBA-provisioned universe labels them app.kubernetes.io/name=yb-tserver,
-// and the built-in single-pod yugabyted is app=yugabyted. Masters are left
-// alone on purpose — this tier aims at the WAL/data path the endpoints write
-// through, and a master quorum loss is its own future test.
+// One selector per backing shape (ybk8s, YBA universe, built-in yugabyted).
+// Masters are left alone: this tier aims at the WAL/data path.
 var backingPodSelectors = []string{
 	"app=yb-tserver",
 	"app.kubernetes.io/name=yb-tserver",
 	"app=yugabyted",
 }
 
-// backingPods lists the backing's serving pods, trying each known selector in
-// the backing's own namespace. The first selector that matches wins: one
-// backing never carries two of these shapes at once.
+// First selector that matches wins: a backing never has two shapes at once.
 func backingPods(t *core.T, kube *k8s.Kubectl) ([]string, error) {
 	for _, sel := range backingPodSelectors {
 		names, err := kube.GetSelector(t.Context, "pod", sel, "{.items[*].metadata.name}")
@@ -49,11 +40,9 @@ func backingPods(t *core.T, kube *k8s.Kubectl) ([]string, error) {
 	return nil, nil
 }
 
-// chaosOnPods runs the fault loop against pods while every tenant writes for
-// d, and fails when no fault was actually injected — a chaos step that never
-// fired proves nothing and must say so rather than pass. pod_delete only: it
-// is the strongest recoverable fault (the pod's owner must fully replace it),
-// and the only one meaningful against every target this suite aims at.
+// chaosOnPods faults pods while tenants write, and fails when nothing was
+// injected: a chaos step that never fired proves nothing. pod_delete only —
+// the strongest recoverable fault, and the only one meaningful everywhere.
 func chaosOnPods(t *core.T, s *core.StepHandle, env ampTenantEnv, fleet *tenantFleet,
 	kube *k8s.Kubectl, pods []string, seedName string, d time.Duration, payloadBytes int,
 	logf func(string, ...any)) error {
@@ -97,12 +86,9 @@ func chaosOnPods(t *core.T, s *core.StepHandle, env ampTenantEnv, fleet *tenantF
 	return nil
 }
 
-// verifyTenantData reads every tenant's table back over a FRESH connection and
-// holds storage to what the writer was acknowledged for: at least Written
-// distinct rows (an error the client counted as unacknowledged may still have
-// committed, so more is legal — fewer is loss), every row's v equal to id*7
-// and its pad exactly payloadBytes long (v is a pure function of id precisely
-// so corruption is checkable without knowing which ids landed).
+// verifyTenantData reads each tenant's table back over a FRESH connection:
+// at least Written rows (an unacknowledged write may still have committed, so
+// more is legal, fewer is loss), and every row v = id*7 with the right pad.
 func verifyTenantData(t *core.T, s *core.StepHandle, env ampTenantEnv, tenants []tenant, payloadBytes int) error {
 	var total int64
 	for i := range tenants {

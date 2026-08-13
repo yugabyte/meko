@@ -132,7 +132,10 @@ func startTenantClients(ctx context.Context, t *core.T, cfg perfConfig, kube *k8
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			podName := fmt.Sprintf("ampqa-mt-%s-%d", t.ResourceSuffix(), i)
+			// Named by the tenant's own Index, not the slice position: a caller
+			// adding tenants one stage at a time passes a one-element slice, and
+			// slice-positional names would collide on the second stage's pod.
+			podName := fmt.Sprintf("ampqa-mt-%s-%d", t.ResourceSuffix(), tenants[i].Index)
 			podExec, err := startPerfClientPod(ctx, kube, sink, td, podName, cfg.ClientImage, cfg.ClientPullSecret)
 			if err != nil {
 				errs[i] = fmt.Errorf("tenant %d client pod: %w", i, err)
@@ -159,7 +162,7 @@ func startTenantClients(ctx context.Context, t *core.T, cfg perfConfig, kube *k8
 	for i := range tenants {
 		conn := endpointConn(kube.Namespace(), tenants[i].Endpoint.ID, tenants[i].Endpoint.Address)
 		w, err := mixWorkloadFor(names[i], cfg, t.Options, conn,
-			mixDeps{jarPath: jarPath, marker: fmt.Sprintf("mt-%s-%d", t.ResourceSuffix(), i), logf: logfFor(t)})
+			mixDeps{jarPath: jarPath, marker: fmt.Sprintf("mt-%s-%d", t.ResourceSuffix(), tenants[i].Index), logf: logfFor(t)})
 		if err != nil {
 			return nil, fmt.Errorf("tenant %d: %w", i, err)
 		}

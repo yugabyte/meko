@@ -226,11 +226,13 @@ func defaultNSReap(ctx context.Context, n NSReap) error {
 	}
 }
 
-// discoverAndDelete deletes every namespace on the target cluster named after a
-// YBA-created universe (the exact name or a "<name>-" prefix), the analogue of
-// env/universe's namespace backstop for a universe standing up ON k8s: YBA names
-// the universe namespace after the universe, and the universe name is the unique
-// ampqa-<runTag>, so this match is safe.
+// discoverAndDelete deletes every namespace on the target cluster whose name
+// CONTAINS the YBA-created universe's name — the same match env/universe uses
+// to find that universe's pods. Contains, not prefix: YBA prepends its own
+// nodePrefix, so the namespace reads yb-dev-ampqa-<runTag> and a prefix match
+// silently reaped nothing, leaving the six-pod universe behind. The universe
+// name is the seed-unique ampqa-<runTag>, so containment cannot reach another
+// run's namespace.
 func discoverAndDelete(ctx context.Context, kubeContext, kubeconfig, universeName string) error {
 	if universeName == "" {
 		return fmt.Errorf("discover reap: empty universe name")
@@ -242,7 +244,7 @@ func discoverAndDelete(ctx context.Context, kubeContext, kubeconfig, universeNam
 	}
 	var bad []string
 	for _, ns := range strings.Fields(out) {
-		if ns == universeName || strings.HasPrefix(ns, universeName+"-") {
+		if strings.Contains(ns, universeName) {
 			if derr := kube.DeleteNamespace(ctx, ns); derr != nil {
 				bad = append(bad, fmt.Sprintf("delete namespace %s: %v", ns, derr))
 			}

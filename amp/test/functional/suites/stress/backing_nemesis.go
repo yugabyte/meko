@@ -1,19 +1,8 @@
-// Chaos aimed at the YugabyteDB under amp.
-//
-// stress/amp_nemesis kills the compute pods amp deploys; nothing killed the
-// database they all write THROUGH. Every endpoint's WAL and pages live in the
-// backing YugabyteDB, so a backing pod going down is the fault a customer's
-// amp deployment will actually meet — and the one that has already produced
-// the worst real failure this suite has seen: a tserver restart after which
-// the safekeeper's WAL path never recovered and every COMMIT hung on SyncRep
-// forever (yugabyte/meko#727).
-//
-// This test kills the backing's serving pods — whichever backing the run
-// deployed: a YBA-provisioned universe's tservers, a ybk8s deploy's tservers,
-// or the built-in single-pod yugabyted — while tenants write through their
-// endpoints, then demands full recovery: every endpoint serves again, writes
-// FLOW again, and every acknowledged row is still exactly what its writer
-// committed.
+// Chaos aimed at the YugabyteDB under amp: amp_nemesis kills amp's compute
+// pods, nothing killed the database they write THROUGH. Kills the backing's
+// serving pods (whichever backing the run deployed) while tenants write, then
+// demands full recovery — endpoints serve, writes FLOW again, rows verify.
+// meko#727 is why the write probe exists.
 package stress
 
 import (
@@ -45,9 +34,7 @@ type backingNemesisParams struct {
 	// SettleTimeout bounds how long recovery may take once the faults stop.
 	SettleTimeout time.Duration
 	PayloadBytes  int
-	// ResumeDuration is the post-chaos write window that proves the WAL path
-	// actually works again — the phase that catches meko#727, where every
-	// pre-chaos row survives but nothing can commit ever again.
+	// ResumeDuration: the post-chaos write window (the meko#727 probe).
 	ResumeDuration time.Duration
 }
 
@@ -128,9 +115,7 @@ func runBackingNemesis(t *core.T) error {
 		return err
 	}
 
-	// The phase meko#727 fails: the backing is back, SELECT 1 answers (reads
-	// come from the pageserver), but the safekeeper's WAL path never recovered
-	// and no COMMIT ever returns. Writing again is the only probe that sees it.
+	// meko#727: reads answer from the pageserver while no COMMIT returns.
 	if err := t.Step("writes_flow_again", func(s *core.StepHandle) error {
 		before := totalWritten(fleet.Tenants)
 		runWriters(t.Context, env, fleet.Tenants, params.ResumeDuration, params.PayloadBytes)

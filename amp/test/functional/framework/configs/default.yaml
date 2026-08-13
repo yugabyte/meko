@@ -1473,6 +1473,59 @@ perf:
     # against real hardware: treat the first runs as establishing what the healthy
     # ratio is on your target. 0 disables the assertion, keeping the datapoint.
     max_phase_ratio: 2.0
+  # scale is the shape every ladder shares: ONE tenant (one cluster, one
+  # branch, one endpoint) that keeps getting more concurrent drivers —
+  # perf/scale_tpcc, scale_ycsb, scale_pgbench escalate copies of one workload,
+  # scale_apps alternates the two sample-app drivers. Each driver gets its own
+  # DATABASE on that shared endpoint (benchbase always names its tables the
+  # same, so copies would otherwise load over each other). Hitting the ceiling
+  # is a passing outcome; the datapoints record where it is.
+  scale:
+    # max_drivers is how far the ladder climbs: stage N runs N drivers at once.
+    max_drivers: 10
+    stage_duration: "6m"
+    # floor_pct stops the ladder when the slowest driver falls below this share
+    # of what a single driver achieved alone.
+    floor_pct: 25.0
+    # read_timeout bounds the post-stage storage probe (a write, then a read of
+    # it): a wedged WAL path never answers, so the deadline IS the detector.
+    read_timeout: "2m"
+    # The endpoint is the thing under test, so it is sized to be worth loading.
+    endpoint_cpu: "4"
+    endpoint_memory: "8Gi"
+  # scale_depth is the perf/scale_depth_tpcc shape: ONE endpoint whose dataset
+  # and concurrency grow stage by stage. This is the axis that finds
+  # storage-layer walls — meko#739 wedged a WAL fetch at TPC-C SF 150 / 75
+  # terminals against a single endpoint, a scale no breadth test reaches.
+  scale_depth:
+    # warehouses and terminals pair index for index: stage i loads
+    # warehouses[i] and drives it with terminals[i] clients.
+    # The rungs to walk explicitly; past the last one the ladder keeps
+    # multiplying by growth until something fails, so there is no fixed top.
+    warehouses: ["25", "50", "100", "150", "250"]
+    terminals: ["16", "32", "50", "75", "100"]
+    growth: 1.6
+    # min_tps is the no-throughput floor: a stage this slow has found the wall
+    # even without an error.
+    min_tps: 1.0
+    # stage_duration is one stage's drive window (the reload before it is not
+    # timed and grows with the scale factor).
+    stage_duration: "15m"
+    # read_timeout bounds the post-stage read that must be served above what
+    # the stage just wrote. A wedged replay never answers, so this deadline IS
+    # the detector — keep it well above a healthy read and well below a hang.
+    read_timeout: "2m"
+    # load_timeout bounds a stage's dataset load: unbounded, a load that makes
+    # no progress eats the run instead of reporting a ceiling (the first depth
+    # run sat at 0.06 cores for 1h47m before its connection broke).
+    load_timeout: "45m"
+    # ... and grows with the dataset, because a flat budget kills a big stage
+    # that is loading perfectly well.
+    load_timeout_per_warehouse: "90s"
+    # A dataset this size needs compute; the ladder is pointless if the client
+    # is throttled before storage is.
+    endpoint_cpu: "4"
+    endpoint_memory: "8Gi"
   # multitenant is the perf/multitenant load shape: N tenants on ONE control
   # plane, each its own cluster + endpoint driven by its own real benchmark
   # client, measured alone and then all together. Everything here is overridable

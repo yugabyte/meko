@@ -244,3 +244,23 @@ func TestExecutePositiveConfirmSucceeds(t *testing.T) {
 		t.Fatalf("confirmed reap (3 instances) = %v, want nil", err)
 	}
 }
+
+// YBA prepends its own nodePrefix, so the universe namespace is
+// yb-dev-ampqa-<runTag> — a prefix match reaped nothing and left the six-pod
+// universe standing. Another run's namespace must still be untouchable.
+func TestDiscoverMatchesTheNamespaceYBAActuallyCreates(t *testing.T) {
+	for _, c := range []struct {
+		ns    string
+		match bool
+	}{
+		{"yb-dev-ampqa-4f6c5f76", true},
+		{"ampqa-4f6c5f76", true},
+		{"yb-dev-ampqa-4f6c5f76-rr", true},
+		{"yb-dev-ampqa-99999999", false},
+		{"prod-payments", false},
+	} {
+		if got := strings.Contains(c.ns, "ampqa-4f6c5f76"); got != c.match {
+			t.Errorf("namespace %q: matched=%v, want %v", c.ns, got, c.match)
+		}
+	}
+}
