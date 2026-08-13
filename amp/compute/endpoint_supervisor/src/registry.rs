@@ -202,7 +202,8 @@ fn to_override(v: &Value) -> Option<OverrideValue> {
             }
         }
         // Objects and arrays are refused rather than half-rendered: the columns
-        // are documented as flat {key: value} maps of top-level toml keys.
+        // are flat {key: value} maps, and a nested toml table is addressed by a
+        // dotted KEY (`tenant_config.enable_gc`), never by a nested value.
         _ => None,
     }
 }

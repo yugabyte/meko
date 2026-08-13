@@ -176,4 +176,73 @@ pub(crate) mod tests {
             ["foo.[0].bar"],
         );
     }
+
+    /// `test_impl` for any number of expected paths, including none.
+    fn expect_paths(original: &str, parsed: &str, expect: &[&str]) {
+        let original: toml_edit::DocumentMut = original.parse().expect("parse original config");
+        let parsed: toml_edit::DocumentMut = parsed.parse().expect("parse re-serialized config");
+
+        let super::Paths { paths: actual } = super::find(original, parsed);
+        assert_eq!(actual, expect);
+    }
+
+    /// The endpoint supervisor writes overrides as dotted keys, while serde
+    /// re-serializes in the section form, so the two spellings meet here and must
+    /// compare equal. If they stop doing so, every dotted override becomes an
+    /// "unknown configuration item" and a working endpoint turns into a crash loop.
+    #[test]
+    fn dotted_key_matches_the_section_form() {
+        expect_paths(
+            r#"
+                scale_factor = 4.0
+                tenant_config.enable_gc = true
+                tenant_config.gc_horizon = 1024
+            "#,
+            r#"
+                scale_factor = 4.0
+
+                [tenant_config]
+                enable_gc = true
+                gc_horizon = 1024
+            "#,
+            &[],
+        );
+    }
+
+    /// The other half: dotted spelling must not blind the check. A genuinely
+    /// unknown nested key is still reported, so a typo in an override is caught
+    /// rather than silently ignored.
+    #[test]
+    fn an_unknown_dotted_key_is_still_reported() {
+        expect_paths(
+            r#"
+                tenant_config.enable_gc = true
+                tenant_config.enable_gc_typo = true
+            "#,
+            r#"
+                [tenant_config]
+                enable_gc = true
+            "#,
+            &["tenant_config.enable_gc_typo"],
+        );
+    }
+
+    /// A known blind spot, pinned so nobody assumes otherwise: the stack is joined
+    /// with ".", so a quoted key containing a dot is indistinguishable from a
+    /// nested one. Serde drops such a key and this check cannot see it, so the
+    /// setting goes missing with no error anywhere — which is why the supervisor
+    /// emits real nested tables rather than relying on this check.
+    #[test]
+    fn a_literal_dotted_key_is_indistinguishable_from_a_nested_one() {
+        expect_paths(
+            r#"
+                "tenant_config.enable_gc" = true
+            "#,
+            r#"
+                [tenant_config]
+                enable_gc = true
+            "#,
+            &[],
+        );
+    }
 }

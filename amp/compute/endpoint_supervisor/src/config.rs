@@ -30,6 +30,9 @@ use toml_edit::{DocumentMut, Item, Value};
 /// Overriding `branch_id` would point the endpoint at another branch's data;
 /// overriding a listen address or the YB connection would unbind it from the rest
 /// of the pod. Tuning knobs are open by design — this is the whole deny-list.
+///
+/// Matched against the first segment of a dotted path, so `branch_id.anything` is
+/// refused too.
 pub const PROTECTED_KEYS: &[&str] = &[
     "branch_id",
     "pg_distrib_dir",
@@ -87,15 +90,20 @@ pub fn render(
         doc.insert(key, Item::Value(value));
     }
     for (key, value) in overrides {
-        if PROTECTED_KEYS.contains(&key.as_str()) {
+        let root = key.split('.').next().unwrap_or(key.as_str());
+        if PROTECTED_KEYS.contains(&root) {
             // Refused, not merged: an override must not be able to repoint an
             // endpoint at another branch's data.
             tracing::warn!(key = %key, "refusing override of an identity/wiring key");
             continue;
         }
-        let replaced = doc.contains_key(key);
-        doc.insert(key, Item::Value(value.clone().into_value()));
-        tracing::info!(key = %key, replaced, "applied override");
+        if let Err(e) = insert_path(&mut doc, key, value.clone().into_value()) {
+            // Dropped rather than fatal: emitting it anyway would produce a
+            // document the daemon refuses to parse.
+            tracing::warn!(key = %key, error = %e, "ignoring override");
+            continue;
+        }
+        tracing::info!(key = %key, "applied override");
     }
     let rendered = doc.to_string();
 
@@ -115,6 +123,40 @@ pub fn render(
         bail!("rendered an empty config document");
     }
     Ok(rendered)
+}
+
+/// Inserts `value` at a dotted `path`, creating intermediate tables.
+///
+/// Not `Table::insert`: that treats `tenant_config.enable_gc` as one literal key
+/// and emits it quoted, which the daemon then drops as unknown.
+///
+/// Intermediate tables are marked dotted so the output stays `a.b = v` rather
+/// than growing a `[a]` header — the derived keys are written first, and a header
+/// after them would swallow everything following it into that table.
+fn insert_path(doc: &mut DocumentMut, path: &str, value: Value) -> Result<()> {
+    if path.is_empty() {
+        bail!("empty override key");
+    }
+    let mut segments = path.split('.').peekable();
+    let mut table = doc.as_table_mut();
+    while let Some(segment) = segments.next() {
+        if segment.is_empty() {
+            bail!("empty segment in override key `{path}`");
+        }
+        if segments.peek().is_none() {
+            table.insert(segment, Item::Value(value));
+            return Ok(());
+        }
+        let entry = table.entry(segment).or_insert_with(|| {
+            let mut intermediate = toml_edit::Table::new();
+            intermediate.set_dotted(true);
+            Item::Table(intermediate)
+        });
+        table = entry.as_table_mut().with_context(|| {
+            format!("`{segment}` is already a value, so `{path}` cannot be set")
+        })?;
+    }
+    bail!("override key `{path}` has no final segment")
 }
 
 #[cfg(test)]
@@ -252,5 +294,80 @@ mod tests {
         .unwrap();
         assert!(out.contains("current_thread_runtime = true"), "{out}");
         assert!(out.contains("max_global_disk_usage_ratio = 0.5"), "{out}");
+    }
+
+    /// The motivating case: the GC knobs live in `ConfigToml.tenant_config`, so a
+    /// dotted path is the only way to reach them.
+    #[test]
+    fn a_dotted_override_lands_in_the_nested_table() {
+        let out = render(
+            Daemon::Pageserver,
+            ps_base(),
+            &overrides(&[
+                ("tenant_config.enable_gc", OverrideValue::Bool(true)),
+                ("tenant_config.gc_horizon", OverrideValue::Int(1024)),
+            ]),
+        )
+        .unwrap();
+
+        // Not quoted as a single key: `"tenant_config.enable_gc" = true` parses
+        // as a top-level key whose name contains a dot, which is exactly the
+        // stray key the pageserver bails on.
+        assert!(!out.contains(r#""tenant_config"#), "{out}");
+
+        let parsed: pageserver_api::config::ConfigToml = toml_edit::de::from_str(&out).unwrap();
+        assert!(parsed.tenant_config.enable_gc, "{out}");
+        assert_eq!(parsed.tenant_config.gc_horizon, 1024, "{out}");
+    }
+
+    /// Two paths under one root coexist: the second finds the table the first
+    /// created rather than redefining it, which toml would reject.
+    #[test]
+    fn dotted_overrides_sharing_a_root_do_not_duplicate_it() {
+        let out = render(
+            Daemon::Pageserver,
+            ps_base(),
+            &overrides(&[
+                ("tenant_config.enable_gc", OverrideValue::Bool(true)),
+                ("tenant_config.gc_horizon", OverrideValue::Int(7)),
+            ]),
+        )
+        .unwrap();
+        let k = keys(&out);
+        let mut sorted = k.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(k.len(), sorted.len(), "duplicate key in {out}");
+    }
+
+    /// Protection is decided on the first segment, so a dotted path cannot be
+    /// used to smuggle an identity key past the deny-list.
+    #[test]
+    fn a_dotted_path_under_a_protected_root_is_refused() {
+        let out = render(
+            Daemon::Pageserver,
+            ps_base(),
+            &overrides(&[(
+                "branch_id.sneaky",
+                OverrideValue::Str("someone-elses".into()),
+            )]),
+        )
+        .unwrap();
+        assert!(out.contains(BRANCH), "{out}");
+        assert!(!out.contains("someone-elses"), "{out}");
+    }
+
+    /// Defining a name as both a value and a table is a document toml_edit
+    /// rejects, so the override is dropped rather than taking the daemon down.
+    #[test]
+    fn a_dotted_path_colliding_with_a_scalar_is_dropped() {
+        let out = render(
+            Daemon::Pageserver,
+            ps_base(),
+            &overrides(&[("scale_factor.nested", OverrideValue::Int(1))]),
+        )
+        .unwrap();
+        assert!(out.contains("scale_factor = 4.0"), "{out}");
+        assert!(!out.contains("nested"), "{out}");
     }
 }
