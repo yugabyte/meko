@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
-	"github.com/yugabyte/amp/controller/internal/registry"
 	"github.com/yugabyte/amp/controller/local/cfg"
 	"github.com/yugabyte/amp/controller/local/client"
 	"github.com/yugabyte/amp/controller/local/config"
@@ -175,53 +173,10 @@ func ancestorDurableLSN(ctx context.Context, env *config.LocalEnv, branchID conf
 	return status.FlushLSN, nil
 }
 
-// createTimelineOnSafekeeper creates a timeline on the safekeeper co-located
-// with the branch, at startLSN. Shared by bootstrap and branch provisioning.
-func createTimelineOnSafekeeper(ctx context.Context, env *config.LocalEnv, conf *config.SafekeeperConf, branchID config.BranchID, pgVersion int, startLSN config.Lsn) error {
-	listenAddr := "127.0.0.1"
-	if conf.ListenAddr != nil {
-		listenAddr = *conf.ListenAddr
-	}
-	// The safekeeper's pg_version is a PgVersionId — the *full* PostgreSQL
-	// version (e.g. 180002), not the major (18). Sending the bare major makes
-	// the safekeeper panic (from_full_pg_version rejects it) and drop the
-	// connection (EOF). Shares the controller's mapping so this and the
-	// branch_state seed cannot drift apart.
-	fullPgVersion, err := registry.FullPgVersionID(pgVersion)
-	if err != nil {
-		return fmt.Errorf("create timeline on safekeeper: %w", err)
-	}
-	c := client.NewSafekeeper(fmt.Sprintf("%s:%d", listenAddr, conf.HTTPPort), httpClient())
-	return c.CreateTimeline(ctx, client.SafekeeperTimelineCreateRequest{
-		BranchID:  branchID,
-		PgVersion: uint32(fullPgVersion),
-		StartLSN:  startLSN,
-	})
-}
-
-// waitTimelineActive polls the pageserver until the branch's timeline is
-// Active, returning its last_record_lsn. Mirrors the Active-wait loops in Rust
-// `provision_bootstrap` / `provision_branch`.
-func waitTimelineActive(ctx context.Context, conf *config.PageServerConf, branchID config.BranchID, timeout time.Duration) (config.Lsn, error) {
-	c := client.NewPageserver(conf.ListenHTTPAddr, httpClient())
-	deadline := time.Now().Add(timeout)
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", fmt.Errorf("wait timeline active cancelled: %w", err)
-		}
-		info, err := c.TimelineInfo(ctx, branchID)
-		if err == nil && info.State == "Active" {
-			return info.LastRecordLSN, nil
-		}
-		if time.Now().After(deadline) {
-			if err != nil {
-				return "", fmt.Errorf("branch did not become Active in time: %w", err)
-			}
-			return "", fmt.Errorf("branch did not become Active in time (state: %s)", info.State)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-}
+// Creating the branch on the safekeeper, and waiting for the pageserver to report
+// it Active, are the supervisor's: it does both between starting the pageserver
+// and starting the compute, which is where they have to happen. See
+// compute/endpoint_supervisor/src/coordinate.rs.
 
 // provisionTimelineForEndpoint provisions the pageserver + safekeeper pair
 // serving branchID, co-located under endpointID, from the branch's creation
@@ -257,11 +212,15 @@ func provisionTimelineForEndpoint(ctx context.Context, env *config.LocalEnv, end
 		config.BranchID(hex32UUID(*branch.ParentBranchId)), forkLSN, branch.PgVersion)
 }
 
-// provisionBootstrap brings up the main branch's pair: start the safekeeper,
-// start the pageserver (runs initdb + import), wait Active, create the
-// timeline on the safekeeper at the bootstrap LSN, and register the branch.
-// Mirrors Rust `provision_bootstrap`.
-func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID string, branchID config.BranchID, pgVersion int) error {
+// provisionBootstrap lays out the main branch's pair: allocate their ports,
+// write their config, and bake the pageserver's branch identity. Mirrors Rust
+// `provision_bootstrap`.
+//
+// Nothing is started here. `endpoint start` runs the supervisor, which starts the
+// safekeeper, then the pageserver (which runs initdb + import), then waits for
+// the branch to go Active and creates the timeline on the safekeeper at the LSN
+// it reports.
+func provisionBootstrap(_ context.Context, env *config.LocalEnv, endpointID string, branchID config.BranchID, _ int) error {
 	psConf, err := allocatePageserverConf(env, endpointID)
 	if err != nil {
 		return err
@@ -270,23 +229,12 @@ func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID st
 	if err != nil {
 		return err
 	}
-	env.Safekeepers = append(env.Safekeepers, skConf)
 
 	fmt.Printf("Provisioning safekeeper (pg port %d) for endpoint '%s'\n", skConf.PgPort, endpointID)
-	if err := startSafekeeper(env, &skConf, 30*time.Second); err != nil {
-		return fmt.Errorf("start main safekeeper: %w", err)
+	if err := writeSafekeeperFiles(env, &skConf); err != nil {
+		return err
 	}
-
-	// On any failure past this point the config mutation is discarded, so a
-	// retry reuses these ports — stop the daemons we started so it doesn't
-	// collide with orphans. stop* on a not-yet-started daemon is a no-op.
-	success := false
-	defer func() {
-		if !success {
-			_ = stopSafekeeper(env, &skConf, true)
-			_ = stopPageserver(&psConf, true)
-		}
-	}()
+	env.Safekeepers = append(env.Safekeepers, skConf)
 
 	fmt.Printf("Provisioning pageserver (pg %s) for endpoint '%s'\n", psConf.ListenPgAddr, endpointID)
 	if err := os.MkdirAll(psConf.DataDir, 0o755); err != nil {
@@ -295,35 +243,27 @@ func provisionBootstrap(ctx context.Context, env *config.LocalEnv, endpointID st
 	if err := writePageserverFiles(env, &psConf, &skConf); err != nil {
 		return err
 	}
-	// Bake the identity, then start (register + spawn). How to create the
-	// timeline comes from the controller-seeded branch_state row, not from here.
+	// Bake the identity. How to create the timeline comes from the
+	// controller-seeded branch_state row, not from here.
 	branchIDCopy := branchID
 	psConf.BranchID = &branchIDCopy
 	if err := cfg.SetPageserverIdentity(filepath.Join(psConf.DataDir, "pageserver.toml"), branchID); err != nil {
 		return err
 	}
-	if err := startPageserver(ctx, env, &psConf, 60*time.Second); err != nil {
-		return fmt.Errorf("start main pageserver: %w", err)
-	}
-
-	startLSN, err := waitTimelineActive(ctx, &psConf, branchID, 120*time.Second)
-	if err != nil {
-		return err
-	}
-
-	if err := createTimelineOnSafekeeper(ctx, env, &skConf, branchID, pgVersion, startLSN); err != nil {
-		return fmt.Errorf("create bootstrap timeline on safekeeper: %w", err)
-	}
 
 	env.Pageservers = append(env.Pageservers, psConf)
-	success = true
 	return nil
 }
 
-// provisionBranch brings up a fork's pair: create the safekeeper at the branch
-// LSN, start the pageserver cloned from the ancestor with a Branch identity,
-// wait Active, and register the branch. Mirrors Rust `provision_branch`.
-func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID string, branchID, ancestorBranchID config.BranchID, startLSN config.Lsn, pgVersion int) error {
+// provisionBranch lays out a fork's pair: allocate their ports, clone the
+// pageserver's config from the ancestor with a Branch identity, and flush the
+// ancestor up to the branch point. Mirrors Rust `provision_branch`.
+//
+// Like provisionBootstrap, nothing is started: the supervisor brings the pair up
+// and creates the branch on the safekeeper once the pageserver reports Active.
+// The ancestor flush belongs here because it is a request to a *different*
+// endpoint's pageserver, which is already running.
+func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID string, branchID, ancestorBranchID config.BranchID, startLSN config.Lsn, _ int) error {
 	ancestorConf := env.PageserverConfForBranch(ancestorBranchID)
 	if ancestorConf == nil {
 		return fmt.Errorf("no pageserver serves ancestor branch %s", ancestorBranchID)
@@ -337,27 +277,12 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 	if err != nil {
 		return err
 	}
-	env.Safekeepers = append(env.Safekeepers, skConf)
 
 	fmt.Printf("Provisioning safekeeper (pg port %d) for endpoint '%s'\n", skConf.PgPort, endpointID)
-	if err := startSafekeeper(env, &skConf, 30*time.Second); err != nil {
-		return fmt.Errorf("start branch safekeeper: %w", err)
+	if err := writeSafekeeperFiles(env, &skConf); err != nil {
+		return err
 	}
-
-	// On any failure past this point the config mutation is discarded, so a
-	// retry reuses these ports — stop the daemons we started. stop* on a
-	// not-yet-started daemon is a no-op.
-	success := false
-	defer func() {
-		if !success {
-			_ = stopSafekeeper(env, &skConf, true)
-			_ = stopPageserver(&psConf, true)
-		}
-	}()
-
-	if err := createTimelineOnSafekeeper(ctx, env, &skConf, branchID, pgVersion, startLSN); err != nil {
-		return fmt.Errorf("create branch timeline on safekeeper: %w", err)
-	}
+	env.Safekeepers = append(env.Safekeepers, skConf)
 
 	fmt.Printf("Provisioning pageserver (pg %s) for endpoint '%s'\n", psConf.ListenPgAddr, endpointID)
 	if err := os.MkdirAll(psConf.DataDir, 0o755); err != nil {
@@ -380,15 +305,7 @@ func provisionBranch(ctx context.Context, env *config.LocalEnv, endpointID strin
 		fmt.Printf("branch: best-effort ancestor flush failed (relying on startup retry): %v\n", err)
 	}
 
-	if err := startPageserver(ctx, env, &psConf, 60*time.Second); err != nil {
-		return fmt.Errorf("start branch pageserver: %w", err)
-	}
-	if _, err := waitTimelineActive(ctx, &psConf, branchID, 120*time.Second); err != nil {
-		return err
-	}
-
 	env.Pageservers = append(env.Pageservers, psConf)
-	success = true
 	return nil
 }
 

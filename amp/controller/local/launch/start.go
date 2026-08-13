@@ -37,7 +37,7 @@ func startAllImpl(ctx context.Context, env *config.LocalEnv, timeout time.Durati
 	// Phase 1 — provision the external yb_storage database.
 	//
 	// Create-if-missing on purpose: `start` must not drop the database. The
-	// pageservers Phase 3 starts are rediscovered from disk
+	// pageservers Phase 3 brings up are rediscovered from disk
 	// (endpoints/*/pageserver/pageserver.toml) and each claims a generation
 	// against amp_storage.branch_state at startup, so wiping the database here
 	// would leave those rows gone and every start after the first `endpoint
@@ -55,22 +55,26 @@ func startAllImpl(ctx context.Context, env *config.LocalEnv, timeout time.Durati
 		return fmt.Errorf("start controller: %w", err)
 	}
 
-	// Phase 3 — pageservers (only those with a baked branch identity),
-	// safekeepers.
-	for i := range env.Pageservers {
-		ps := &env.Pageservers[i]
-		if ps.BranchID == nil {
-			fmt.Printf("Skipping pageserver at %s: no timeline identity yet\n", ps.DataDir)
-			continue
-		}
-		if err := startPageserver(ctx, env, ps, timeout); err != nil {
-			return fmt.Errorf("start pageserver at %s: %w", ps.DataDir, err)
-		}
+	// Phase 3 — one supervisor per endpoint, which brings up that endpoint's
+	// safekeeper, pageserver and compute in dependency order.
+	//
+	// Computes included: an endpoint is up or down as a unit, because the compute
+	// cannot serve without the two below it.
+	endpoints, err := loadEndpoints(ctx, env)
+	if err != nil {
+		return fmt.Errorf("load endpoints: %w", err)
 	}
-	for i := range env.Safekeepers {
-		sk := &env.Safekeepers[i]
-		if err := startSafekeeper(env, sk, timeout); err != nil {
-			return fmt.Errorf("start safekeeper for endpoint %s: %w", sk.EndpointID, err)
+	for _, ep := range endpoints.all {
+		// Config first: an endpoint that was created but never started has no
+		// compute spec yet, and the supervisor refuses to start without one.
+		if err := renderDaemonConfig(env, ep, "safekeeper"); err != nil {
+			return fmt.Errorf("render safekeeper config for %s: %w", ep.conf.EndpointID, err)
+		}
+		if err := renderComputeSpec(ctx, env, ep); err != nil {
+			return fmt.Errorf("render compute spec for %s: %w", ep.conf.EndpointID, err)
+		}
+		if err := startEndpointSupervisor(env, ep, timeout); err != nil {
+			return fmt.Errorf("start endpoint %s: %w", ep.conf.EndpointID, err)
 		}
 	}
 	return nil
@@ -96,14 +100,12 @@ func StopAll(ctx context.Context, env *config.LocalEnv, immediate bool) {
 		fmt.Printf("postgres stop failed, could not restore control plane data from env: %v\n", err)
 	}
 
-	for i := range env.Pageservers {
-		if err := stopPageserver(&env.Pageservers[i], immediate); err != nil {
-			fmt.Printf("pageserver at %s stop failed: %v\n", env.Pageservers[i].DataDir, err)
-		}
-	}
-	for i := range env.Safekeepers {
-		if err := stopSafekeeper(env, &env.Safekeepers[i], immediate); err != nil {
-			fmt.Printf("safekeeper for endpoint %s stop failed: %v\n", env.Safekeepers[i].EndpointID, err)
+	// Then the supervisors, which take the pageservers and safekeepers with them.
+	// After the computes above: a supervisor that goes first takes its compute's
+	// storage away mid-shutdown.
+	for _, sk := range env.Safekeepers {
+		if err := stopEndpointSupervisor(env, sk.EndpointID, immediate); err != nil {
+			fmt.Printf("supervisor for endpoint %s stop failed: %v\n", sk.EndpointID, err)
 		}
 	}
 	ids, err := controllerInstances(env)

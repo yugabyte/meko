@@ -26,6 +26,16 @@ const (
 	stopRetries      = int(stopRetryTimeout / retryInterval)
 )
 
+// Running reports whether "<dataDir>/<name>.pid" is held by a live process.
+//
+// The flock is what makes this a liveness answer rather than a guess: a pidfile
+// left by a process that died is not held by anyone, and its pid may since have
+// been reused by something unrelated.
+func Running(name string, dataDir string) bool {
+	kind, _, err := readPidFile(filepath.Join(dataDir, name+".pid"))
+	return err == nil && kind == pidLocked
+}
+
 // StopProcess reads the pid from "<dataDir>/<name>.pid" and signals the process
 // to stop (SIGTERM for StopFast, SIGQUIT for StopImmediate), then waits until it
 // is gone. It returns nil if the process is already stopped. Mirrors

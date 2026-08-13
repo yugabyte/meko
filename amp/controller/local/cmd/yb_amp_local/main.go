@@ -299,6 +299,13 @@ func endpointOrMain(posArgs []string) string {
 	return "main"
 }
 
+// daemonStartTimeout is how long `pageserver|safekeeper start` waits, and it is
+// the endpoint supervisor's own health gate: the supervisor is what starts these
+// daemons and decides when one is serving, so a shorter deadline here would give
+// up on a start it is still working on. It also covers bringing the supervisor up
+// from cold when the endpoint is down, which runs initdb.
+const daemonStartTimeout = 120 * time.Second
+
 func pageserverCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "pageserver", Short: "Manage pageservers"}
 	cmd.AddCommand(pageserverStartCmd(), pageserverStopCmd(), pageserverRestartCmd())
@@ -317,7 +324,7 @@ func pageserverStartCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", 10*time.Second, "start timeout")
+	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", daemonStartTimeout, "start timeout")
 	return cmd
 }
 
@@ -328,8 +335,8 @@ func pageserverStopCmd() *cobra.Command {
 		Short: "Stop a pageserver (addressed by the endpoint it serves; default main)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, posArgs []string) error {
-			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.PageserverStop(env, endpointOrMain(posArgs), mode == "immediate")
+			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
+				return launch.PageserverStop(ctx, env, endpointOrMain(posArgs), mode == "immediate")
 			})
 		},
 	}
@@ -349,7 +356,7 @@ func pageserverRestartCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", 10*time.Second, "start timeout")
+	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", daemonStartTimeout, "start timeout")
 	return cmd
 }
 
@@ -368,8 +375,8 @@ func safekeeperStopCmd() *cobra.Command {
 		Short: "Stop a safekeeper (addressed by the endpoint it serves; default main)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, posArgs []string) error {
-			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.SafekeeperStop(env, endpointOrMain(posArgs), mode == "immediate")
+			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
+				return launch.SafekeeperStop(ctx, env, endpointOrMain(posArgs), mode == "immediate")
 			})
 		},
 	}
@@ -385,13 +392,13 @@ func safekeeperRestartCmd() *cobra.Command {
 		Short: "Restart a safekeeper (addressed by the endpoint it serves; default main)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, posArgs []string) error {
-			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.SafekeeperRestart(env, endpointOrMain(posArgs), mode == "immediate", timeout)
+			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
+				return launch.SafekeeperRestart(ctx, env, endpointOrMain(posArgs), mode == "immediate", timeout)
 			})
 		},
 	}
 	cmd.Flags().StringVarP(&mode, "mode", "m", "fast", "stop mode: fast | immediate")
-	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", 10*time.Second, "start timeout")
+	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", daemonStartTimeout, "start timeout")
 	return cmd
 }
 
@@ -402,12 +409,12 @@ func safekeeperStartCmd() *cobra.Command {
 		Short: "Start a safekeeper (addressed by the endpoint it serves; default main)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, posArgs []string) error {
-			return withEnv(func(_ context.Context, env *config.LocalEnv) error {
-				return launch.SafekeeperStart(env, endpointOrMain(posArgs), timeout)
+			return withEnv(func(ctx context.Context, env *config.LocalEnv) error {
+				return launch.SafekeeperStart(ctx, env, endpointOrMain(posArgs), timeout)
 			})
 		},
 	}
-	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", 10*time.Second, "start timeout")
+	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", daemonStartTimeout, "start timeout")
 	return cmd
 }
 
@@ -431,7 +438,7 @@ func controllerStartCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", 10*time.Second, "start timeout")
+	cmd.Flags().DurationVarP(&timeout, "start-timeout", "t", daemonStartTimeout, "start timeout")
 	cmd.Flags().Uint8Var(&instanceID, "instance-id", 1, "controller instance id")
 	return cmd
 }

@@ -2,8 +2,13 @@
 //! pageserver + safekeeper live under the endpoint that owns them
 //! (`endpoints/<endpoint>/{pageserver,safekeeper}`), each endpoint also
 //! no legacy top-level `pageserver_*/` or `safekeepers/` dirs exist,
-//! and a branch's pair is provisioned at `endpoint create` and torn
+//! and a branch's pair is laid out at `endpoint create` and torn
 //! down at `endpoint stop --destroy`.
+//!
+//! `endpoint create` writes config and starts nothing. The three processes are
+//! the endpoint supervisor's and share one lifetime, so there is no state where
+//! the pair runs and the compute does not — an endpoint is up or it is down.
+//! `endpoint start` is what runs it.
 
 use std::path::Path;
 
@@ -75,12 +80,32 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &format!("endpoints/{LAYOUT_EP}/pageserver/pageserver.toml"),
     )?;
     must_exist(
-        &ep_dir.join("safekeeper/safekeeper.pid"),
-        &format!("endpoints/{LAYOUT_EP}/safekeeper/safekeeper.pid"),
+        &ep_dir.join("safekeeper/safekeeper.toml"),
+        &format!("endpoints/{LAYOUT_EP}/safekeeper/safekeeper.toml"),
     )?;
-    // pgdata is only laid down on `endpoint start`, not at create time.
-    if ep_dir.join("pgdata").exists() {
-        bail!("pgdata should not exist before endpoint start");
+    // Config only: nothing runs until `endpoint start`, pgdata included.
+    for (path, what) in [
+        ("safekeeper/safekeeper.pid", "safekeeper"),
+        ("pageserver/pageserver.pid", "pageserver"),
+        ("pgdata", "pgdata"),
+    ] {
+        if ep_dir.join(path).exists() {
+            bail!("{what} should not exist before endpoint start ({path})");
+        }
+    }
+
+    step(&format!("endpoint start {LAYOUT_EP} runs the whole endpoint"));
+    c.yb(&["endpoint", "start", LAYOUT_EP])?;
+    for (path, what) in [
+        ("endpoint_supervisor.pid", "the supervisor"),
+        ("safekeeper/safekeeper.pid", "the safekeeper"),
+        ("pageserver/pageserver.pid", "the pageserver"),
+        ("pgdata", "pgdata"),
+    ] {
+        must_exist(
+            &ep_dir.join(path),
+            &format!("{what} after endpoint start ({path})"),
+        )?;
     }
 
     step("endpoint stop --destroy tears the pair down (deprovision)");

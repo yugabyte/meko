@@ -119,16 +119,16 @@ type YbConnConfig struct {
 	TserverRPCAddrs *string `toml:"tserver_rpc_addrs,omitempty"`
 }
 
-// effectiveUser / effectiveDbname apply the serde defaults without
+// EffectiveUser / EffectiveDbname apply the serde defaults without
 // mutating the struct (so serialized output stays faithful).
-func (c *YbConnConfig) effectiveUser() string {
+func (c *YbConnConfig) EffectiveUser() string {
 	if c.User == "" {
 		return "yugabyte"
 	}
 	return c.User
 }
 
-func (c *YbConnConfig) effectiveDbname() string {
+func (c *YbConnConfig) EffectiveDbname() string {
 	if c.Dbname == "" {
 		return "yb_storage"
 	}
@@ -142,7 +142,7 @@ func (c *YbConnConfig) effectiveDbname() string {
 func (c *YbConnConfig) ToDatabaseURL() (string, error) {
 	var sb strings.Builder
 	sb.WriteString("postgresql://")
-	sb.WriteString(percentEncode(c.effectiveUser()))
+	sb.WriteString(percentEncode(c.EffectiveUser()))
 	if c.PasswordEnv != nil {
 		pw, ok := os.LookupEnv(*c.PasswordEnv)
 		if !ok {
@@ -162,7 +162,7 @@ func (c *YbConnConfig) ToDatabaseURL() (string, error) {
 	}
 	sb.WriteString(strings.Join(hosts, ","))
 	sb.WriteByte('/')
-	sb.WriteString(percentEncode(c.effectiveDbname()))
+	sb.WriteString(percentEncode(c.EffectiveDbname()))
 	var params []string
 	if c.Sslmode != nil {
 		params = append(params, "sslmode="+percentEncode(*c.Sslmode))

@@ -17,45 +17,9 @@ import (
 	"github.com/yugabyte/amp/controller/local/proc"
 )
 
-// --- pageserver ---
-
-// startPageserver spawns pageserver. The process claims its own generation
-// from `amp_storage.branch_state` at startup, so there is nothing to arrange
-// here first.
-func startPageserver(ctx context.Context, env *config.LocalEnv, conf *config.PageServerConf, timeout time.Duration) error {
-	_ = ctx
-	return startPageserverNode(env, conf, timeout)
-}
-
-// startPageserverNode spawns pageserver (no attach), mirroring Rust
-// `PageServerNode::start_node`.
-func startPageserverNode(env *config.LocalEnv, conf *config.PageServerConf, timeout time.Duration) error {
-	statusCheck := func() error {
-		ps := client.NewPageserver(conf.ListenHTTPAddr, httpClient())
-		return ps.Status(context.Background())
-	}
-	// Trust path: no auth token env. (Rust sets YBAMP_AUTH_TOKEN only when
-	// http_auth_type != Trust, which never happens in the minimal port.)
-	return proc.StartProcess(
-		"pageserver",
-		conf.DataDir,
-		env.PageserverBin(),
-		[]string{"-D", conf.DataDir},
-		nil,
-		proc.PidExpect,
-		statusCheck,
-		timeout,
-	)
-}
-
-// stopPageserver signals the pageserver to stop.
-func stopPageserver(conf *config.PageServerConf, immediate bool) error {
-	mode := proc.StopFast
-	if immediate {
-		mode = proc.StopImmediate
-	}
-	return proc.StopProcess("pageserver", conf.DataDir, mode)
-}
+// The pageserver and the safekeeper are the supervisor's children. The launcher
+// asks the endpoint's supervisor rather than signalling them, since that is the
+// only way a stop sticks. See supervisor.go.
 
 // --- safekeeper ---
 
@@ -74,10 +38,14 @@ func safekeeperControlFileSaveInterval() (*time.Duration, error) {
 	return &dur, nil
 }
 
-// startSafekeeper writes safekeeper.toml then spawns safekeeper, mirroring
-// Rust `SafekeeperNode::start`. It does NOT create the timeline (provisioning
-// does that separately).
-func startSafekeeper(env *config.LocalEnv, conf *config.SafekeeperConf, timeout time.Duration) error {
+// writeSafekeeperFiles creates the safekeeper's datadir and writes its
+// safekeeper.toml.
+//
+// Provisioning-time, not start-time: the supervisor starts the safekeeper from a
+// config that must already be on disk. Rendering it here also keeps every
+// local-only knob (the test-only control-file cadence below, the launcher's port
+// allocations) on the launcher's side of the line.
+func writeSafekeeperFiles(env *config.LocalEnv, conf *config.SafekeeperConf) error {
 	dataDir := env.SafekeeperDataDir(conf.EndpointID)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return fmt.Errorf("create safekeeper datadir %q: %w", dataDir, err)
@@ -101,38 +69,7 @@ func startSafekeeper(env *config.LocalEnv, conf *config.SafekeeperConf, timeout 
 		WalCacheSizeMib:         conf.WalCacheSizeMib,
 		ControlFileSaveInterval: cfsi,
 	}
-	if err := cfg.WriteSafekeeperToml(filepath.Join(dataDir, "safekeeper.toml"), params); err != nil {
-		return err
-	}
-
-	// The safekeeper writes a fixed "safekeeper.pid" into its datadir (one
-	// safekeeper per endpoint datadir), and proc derives the pidfile it polls
-	// from this name — so it must be "safekeeper", not "safekeeper-<id>".
-	name := "safekeeper"
-	statusCheck := func() error {
-		sk := client.NewSafekeeper(fmt.Sprintf("%s:%d", listenAddr, conf.HTTPPort), httpClient())
-		_, err := sk.Status(context.Background())
-		return err
-	}
-	return proc.StartProcess(
-		name,
-		dataDir,
-		env.SafekeeperBin(),
-		[]string{"-D", dataDir},
-		nil,
-		proc.PidExpect,
-		statusCheck,
-		timeout,
-	)
-}
-
-// stopSafekeeper signals the safekeeper to stop.
-func stopSafekeeper(env *config.LocalEnv, conf *config.SafekeeperConf, immediate bool) error {
-	mode := proc.StopFast
-	if immediate {
-		mode = proc.StopImmediate
-	}
-	return proc.StopProcess("safekeeper", env.SafekeeperDataDir(conf.EndpointID), mode)
+	return cfg.WriteSafekeeperToml(filepath.Join(dataDir, "safekeeper.toml"), params)
 }
 
 // --- controller ---

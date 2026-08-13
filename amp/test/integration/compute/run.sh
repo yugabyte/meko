@@ -110,6 +110,10 @@ CLUSTER_BINS=(
     --bin pageserver
     --bin safekeeper
     --bin compute-ctl
+    # yb_amp_local runs each endpoint's three daemons under this, the same
+    # binary that is PID 1 of a deployed endpoint pod. Without it `endpoint
+    # start` fails on a missing executable.
+    --bin endpoint-supervisor
 )
 TOOL_BINS=(--bin dump-pages --bin dump-wals --bin reset-consistent-lsn)
 

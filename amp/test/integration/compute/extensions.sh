@@ -168,7 +168,9 @@ fi
 #    server binaries are cargo targets; yb_amp_local and the controller are Go
 #    (controller/local/cmd, controller/cmd), built separately below. Mirrors run.sh.
 CLUSTER_BINS=(--bin pageserver --bin safekeeper
-              --bin compute-ctl)
+              --bin compute-ctl
+              # yb_amp_local runs the three daemons under this.
+              --bin endpoint-supervisor)
 echo ">>> building cluster binaries ($PROFILE)..."
 if [[ $PROFILE == release ]]; then
     cargo build --release "${CLUSTER_BINS[@]}"

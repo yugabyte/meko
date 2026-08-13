@@ -35,6 +35,28 @@ A crashed service is restarted with backoff (default 2 s); more than
 `SUPERVISOR_RESTART_WINDOW_SECONDS` (180) fails the whole pod so
 Kubernetes replaces it.
 
+### The same supervisor runs local endpoints
+
+`yb_amp_local` starts one `endpoint-supervisor` per endpoint, so the
+local stack has the process tree, the startup order and the restart
+behaviour of the deployed one. It sets `PRERENDERED_CONFIG=true`: the
+launcher writes all three config files itself — from ports it allocated,
+a Postgres install outside any image, and per-endpoint settings held in
+the control plane, none of which the supervisor can see — and the
+supervisor supervises without rendering. That mode also gives each child
+its own log file (`endpoints/<id>/pageserver/pageserver.log` and
+siblings) rather than the single interleaved stream `kubectl logs`
+wants.
+
+The launcher exits after each command, so it cannot signal a daemon
+directly: the supervisor would restart it. `yb_amp_local pageserver
+stop` and its siblings go over a Unix control socket in the endpoint's
+run directory (`supervisor.sock`), which is what makes a stop stick —
+the supervisor records the service as *not wanted* and leaves it alone
+until asked to start it again. An endpoint is up or down as a unit:
+`endpoint create` writes config and starts nothing, `endpoint start`
+runs it.
+
 All durable state is in YugabyteDB; the pod's `/data` volume holds only
 configs, logs, and the compute's ephemeral `pgdata`, so the pod
 is stateless — a `Deployment`, not a `StatefulSet`. The volume is an

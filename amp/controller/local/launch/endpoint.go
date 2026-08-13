@@ -9,9 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -21,7 +19,6 @@ import (
 	"github.com/yugabyte/amp/controller/local/cfg"
 	"github.com/yugabyte/amp/controller/local/client"
 	"github.com/yugabyte/amp/controller/local/config"
-	"github.com/yugabyte/amp/controller/local/proc"
 )
 
 // endpointBasePort is the compute port-allocation base (Rust
@@ -29,8 +26,8 @@ import (
 const endpointBasePort uint16 = 55431
 
 // endpointDir is where an endpoint's local process state lives: its pgdata, its
-// co-located daemons' data dirs, its compute_ctl pidfile. `endpoint stop
-// --destroy` removes it wholesale.
+// co-located daemons' data dirs, and its supervisor's pidfile and log.
+// `endpoint stop --destroy` removes it wholesale.
 func endpointDir(env *config.LocalEnv, endpointID string) string {
 	return filepath.Join(env.EndpointsPath(), endpointID)
 }
@@ -257,25 +254,14 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 		return err
 	}
 
-	// The pair is committed to env now. On any failure past this point the
-	// config mutation is discarded and a retry reuses these ports, so stop the
-	// co-located daemons (the pair) to avoid orphans. stop* on a
-	// not-yet-started daemon is a no-op.
+	// The pair is committed to env now. On any failure past this point the config
+	// mutation is discarded and a retry reuses these ports, so stop the endpoint's
+	// supervisor to avoid orphans holding them. A no-op unless `endpoint create`
+	// was re-run over an endpoint that is already up.
 	success := false
 	defer func() {
-		if success {
-			return
-		}
-		endpointDir := endpointDir(env, endpointID)
-		for i := range env.Safekeepers {
-			if env.Safekeepers[i].EndpointID == endpointID {
-				_ = stopSafekeeper(env, &env.Safekeepers[i], true)
-			}
-		}
-		for i := range env.Pageservers {
-			if strings.HasPrefix(env.Pageservers[i].DataDir, endpointDir) {
-				_ = stopPageserver(&env.Pageservers[i], true)
-			}
+		if !success {
+			_ = stopEndpointSupervisor(env, endpointID, true)
 		}
 	}()
 
@@ -440,18 +426,38 @@ func checkConflictingEndpoints(endpoints launcherEndpoints, branchID config.Bran
 	return nil
 }
 
-// EndpointStart builds the compute config, spawns compute-ctl, and waits
-// for the compute to reach Running. Mirrors the `EndpointCmd::Start` arm of
-// Rust `handle_endpoint` + `Endpoint::start`.
-func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string, timeout time.Duration) error {
+// resolveEndpoint looks up one of the launcher's endpoints by handle.
+func resolveEndpoint(ctx context.Context, env *config.LocalEnv, endpointID string) (launcherEndpoint, error) {
 	endpoints, err := loadEndpoints(ctx, env)
 	if err != nil {
-		return err
+		return launcherEndpoint{}, err
 	}
-	le, err := endpoints.lookup(endpointID)
+	return endpoints.lookup(endpointID)
+}
+
+// EndpointStart builds the compute config, brings the endpoint's supervisor up,
+// and waits for the compute to reach Running. Mirrors the `EndpointCmd::Start`
+// arm of Rust `handle_endpoint` + `Endpoint::start`.
+func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string, timeout time.Duration) error {
+	le, err := resolveEndpoint(ctx, env, endpointID)
 	if err != nil {
 		return err
 	}
+	if err := renderComputeSpec(ctx, env, le); err != nil {
+		return err
+	}
+	return startCompute(ctx, env, le, timeout)
+}
+
+// renderComputeSpec writes the compute spec the supervisor starts compute_ctl
+// from.
+//
+// Every path that brings the supervisor up has to call this first: the
+// supervisor runs with PRERENDERED_CONFIG and refuses to start against a spec
+// that is not there, and `endpoint create` does not write one. Without it,
+// `start` or `pageserver start` on an endpoint that was created but never
+// started aborts the supervisor before any daemon runs.
+func renderComputeSpec(ctx context.Context, env *config.LocalEnv, le launcherEndpoint) error {
 	conf := le.conf
 	// The compute's settings are the branch's baseline with this endpoint's own
 	// merged over it — the same rule the deployed path applies (core.EffectivePgSettings).
@@ -507,7 +513,7 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 		PostgresqlConf:               pgConf,
 		CreateTestUser:               false,
 		StorageBranchID:              conf.BranchID,
-		EndpointID:                   endpointID,
+		EndpointID:                   conf.EndpointID,
 		Mode:                         cfg.ComputeModePrimary,
 		PageserverConnInfo:           connInfo,
 		PageserverConnstring:         pageserverConnstring,
@@ -527,7 +533,8 @@ func EndpointStart(ctx context.Context, env *config.LocalEnv, endpointID string,
 		return err
 	}
 
-	return spawnComputeCtl(ctx, env, &conf, computeConfig, timeout)
+	// At the path the supervisor's layout expects.
+	return cfg.WriteComputeConfigJSON(computeSpecPath(env, conf.EndpointID), computeConfig)
 }
 
 // pageserverConnInfo builds the compute's pageserver connection block from a
@@ -579,14 +586,31 @@ func computeJWT(env *config.LocalEnv, endpointID string) (string, error) {
 	})
 }
 
-// spawnComputeCtl writes config.json, launches compute-ctl (hand-rolled
-// pidfile, full inherited env — unlike the storage daemons), and polls
+// startCompute writes the compute spec, brings up the endpoint's supervisor —
+// which starts the safekeeper, the pageserver and then compute_ctl — and polls
 // /status until Running. Mirrors the process-launch half of Rust
 // `Endpoint::start`.
-func spawnComputeCtl(ctx context.Context, env *config.LocalEnv, conf *endpointConf, computeConfig cfg.ComputeConfig, timeout time.Duration) error {
+//
+// The supervisor spawns compute_ctl; the launcher decides when the compute is
+// *up*. Only compute_ctl's own status distinguishes a compute that is serving
+// from one that failed its startup, which a health probe on the port cannot.
+func startCompute(ctx context.Context, env *config.LocalEnv, le launcherEndpoint, timeout time.Duration) error {
+	conf := le.conf
 	endpointDir := endpointDir(env, conf.EndpointID)
 	if err := os.MkdirAll(endpointDir, 0o755); err != nil {
 		return fmt.Errorf("create endpoint dir %q: %w", endpointDir, err)
+	}
+	// Only ever wipe pgdata with the compute stopped. The supervisor restarts a
+	// compute_ctl that died, so a Postgres killed a moment ago is running again
+	// by now — and removing the directory under a live postmaster fails
+	// part-way, leaving a pgdata that is neither the old one nor a clean slate.
+	if supervisorRunning(env, conf.EndpointID) {
+		if err := supervisorStop(env, conf.EndpointID, "disable", "compute_ctl", false); err != nil {
+			return err
+		}
+		if err := supervisorStop(env, conf.EndpointID, "stop", "compute_ctl", true); err != nil {
+			return err
+		}
 	}
 	pgdata := filepath.Join(endpointDir, "pgdata")
 	if _, err := os.Stat(pgdata); err == nil {
@@ -595,54 +619,22 @@ func spawnComputeCtl(ctx context.Context, env *config.LocalEnv, conf *endpointCo
 		}
 	}
 
-	configPath := filepath.Join(endpointDir, "config.json")
-	if err := cfg.WriteComputeConfigJSON(configPath, computeConfig); err != nil {
+	// The supervisor starts the safekeeper from a config this process owns, so
+	// rewrite it first — see renderDaemonConfig.
+	if err := renderDaemonConfig(env, le, "safekeeper"); err != nil {
 		return err
 	}
-
-	logFile, err := os.OpenFile(filepath.Join(endpointDir, "compute.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open compute.log: %w", err)
+	if err := startEndpointSupervisor(env, le, timeout); err != nil {
+		return err
 	}
-	defer logFile.Close()
-
-	connStr := fmt.Sprintf("postgresql://cloud_admin@127.0.0.1:%d/postgres", conf.PgPort)
-	pgBin := filepath.Join(env.PgBinDir(conf.PgVersion), "postgres")
-	args := []string{
-		"--external-http-port", strconv.Itoa(int(conf.ExternalHTTPPort)),
-		"--internal-http-port", strconv.Itoa(int(conf.InternalHTTPPort)),
-		"--pgdata", pgdata,
-		"--connstr", connStr,
-		"--config", configPath,
-		"--pgbin", pgBin,
-		"--compute-id", conf.EndpointID,
-	}
-	if conf.PrivilegedRoleName != nil {
-		args = append(args, "--privileged-role-name", *conf.PrivilegedRoleName)
-	}
-
-	cmd := exec.Command(filepath.Join(env.YbAmpDistribDir, "compute-ctl"), args...)
-	cmd.Stdin = nil
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	// compute_ctl inherits the launcher's full environment (Rust does NOT
-	// env_clear it, unlike the storage daemons).
-	cmd.Env = os.Environ()
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("spawn compute-ctl: %w", err)
-	}
-	pid := cmd.Process.Pid
-
-	// Record the pid so `endpoint stop` can find it (raw pidfile, no flock).
-	if err := os.WriteFile(filepath.Join(endpointDir, "compute_ctl.pid"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("write compute_ctl.pid: %w", err)
+	// The supervisor starts the compute as part of its own startup; this covers an
+	// endpoint whose daemons are up with the compute deliberately stopped.
+	if err := supervisorStart(env, conf.EndpointID, "compute_ctl", timeout); err != nil {
+		return err
 	}
 
 	token, err := computeJWT(env, conf.EndpointID)
 	if err != nil {
-		_ = cmd.Process.Kill()
 		return err
 	}
 	// external_http_address binds 0.0.0.0; connect there like Rust does.
@@ -658,18 +650,20 @@ func spawnComputeCtl(ctx context.Context, env *config.LocalEnv, conf *endpointCo
 			case "running":
 				return nil
 			case "failed":
-				_ = cmd.Process.Kill()
 				msg := "<no error from compute_ctl>"
 				if resp.Error != nil {
 					msg = *resp.Error
 				}
+				// Stop it through the supervisor, which would otherwise restart a
+				// compute that has already said it cannot start.
+				_ = supervisorStop(env, conf.EndpointID, "stop", "compute_ctl", true)
 				return fmt.Errorf("compute startup failed: %s", msg)
 			default:
 				// Init / Empty / Configuration* / Terminated: keep polling.
 			}
 		}
 		if time.Now().After(deadline) {
-			_ = cmd.Process.Kill()
+			_ = supervisorStop(env, conf.EndpointID, "stop", "compute_ctl", true)
 			if err != nil {
 				return fmt.Errorf("timed out %s waiting to connect to compute_ctl HTTP: %w", timeout, err)
 			}
@@ -677,6 +671,12 @@ func spawnComputeCtl(ctx context.Context, env *config.LocalEnv, conf *endpointCo
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// computeSpecPath is where the supervisor looks for the compute spec — see
+// `Layout::compute_spec` in compute/endpoint_supervisor/src/boot.rs.
+func computeSpecPath(env *config.LocalEnv, endpointID string) string {
+	return filepath.Join(endpointDir(env, endpointID), "compute_spec.json")
 }
 
 // EndpointStopMode selects how `endpoint stop` terminates the compute.
@@ -719,6 +719,18 @@ func stopEndpoint(ctx context.Context, env *config.LocalEnv, le launcherEndpoint
 	pgdata := filepath.Join(endpointDir, "pgdata")
 	started := fileExists(pgdata)
 
+	// Stop supervising the compute before touching it. Everything below takes
+	// Postgres down directly, and how Postgres goes is what decides whether a
+	// clean shutdown's state survives — `compute_ctl` turns every signal it gets
+	// into a *fast* shutdown, so routing a stop through it can never produce the
+	// crash stop `immediate` means. Without this the monitor loop would restart
+	// compute_ctl the moment its Postgres died.
+	if started && supervisorRunning(env, endpointID) {
+		if err := supervisorStop(env, endpointID, "disable", "compute_ctl", false); err != nil {
+			return err
+		}
+	}
+
 	var lsn *string
 	switch {
 	case !started:
@@ -738,15 +750,26 @@ func stopEndpoint(ctx context.Context, env *config.LocalEnv, le launcherEndpoint
 		}
 		lsn = resp.LSN
 	default:
+		// `pg_ctl -w` waits for the postmaster itself, and the wait is the point: a
+		// caller that restarts while Postgres is still writing its shutdown
+		// checkpoint gets a compute whose basebackup predates it, silently losing
+		// everything that shutdown persists.
+		//
+		// A postmaster that is already gone is the end state being asked for, so
+		// only that complaint is tolerated. Anything else — a missing pg_ctl, an
+		// unreadable pgdata — is a stop that did not happen, and reporting it as
+		// "already down" would hide a compute still running.
 		if err := pgCtlStop(env, &conf, pgdata, string(mode)); err != nil {
-			return err
+			if !postgresAlreadyStopped(err) {
+				return fmt.Errorf("stop postgres for endpoint %s: %w", endpointID, err)
+			}
+			fmt.Printf("postgres for endpoint %s was already stopped\n", endpointID)
 		}
 	}
 
-	// Reap compute_ctl so the client port frees for the next compute.
-	if started {
-		sendSigterm := destroy || mode != StopModeFast
-		if err := waitComputeCtlExit(endpointDir, sendSigterm); err != nil {
+	// Then reap compute_ctl, which has usually exited with its Postgres.
+	if started && supervisorRunning(env, endpointID) {
+		if err := supervisorStop(env, endpointID, "stop", "compute_ctl", true); err != nil {
 			return err
 		}
 	}
@@ -807,23 +830,15 @@ func deleteEndpointRecord(ctx context.Context, env *config.LocalEnv, le launcher
 // continues), then removes the safekeepers from config and
 // persists (pageservers are not persisted — rediscovered from disk).
 func deprovisionColocatedStorage(env *config.LocalEnv, endpointID string) error {
-	endpointPath := endpointDir(env, endpointID)
-
-	for i := range env.Pageservers {
-		ps := &env.Pageservers[i]
-		if strings.HasPrefix(ps.DataDir, endpointPath) {
-			if err := proc.StopProcess("pageserver", ps.DataDir, proc.StopImmediate); err != nil {
-				fmt.Fprintf(os.Stderr, "pageserver at %s stop failed: %v\n", ps.DataDir, err)
-			}
-		}
+	// One stop takes both daemons down: they are the supervisor's children and
+	// it stops them in reverse order on the way out.
+	if err := stopEndpointSupervisor(env, endpointID, true); err != nil {
+		fmt.Fprintf(os.Stderr, "supervisor for endpoint %s stop failed: %v\n", endpointID, err)
 	}
 
 	var keptSK []config.SafekeeperConf
 	for _, sk := range env.Safekeepers {
 		if sk.EndpointID == endpointID {
-			if err := proc.StopProcess("safekeeper", env.SafekeeperDataDir(sk.EndpointID), proc.StopImmediate); err != nil {
-				fmt.Fprintf(os.Stderr, "safekeeper for endpoint %s stop failed: %v\n", sk.EndpointID, err)
-			}
 			continue
 		}
 		keptSK = append(keptSK, sk)
@@ -831,6 +846,15 @@ func deprovisionColocatedStorage(env *config.LocalEnv, endpointID string) error 
 
 	env.Safekeepers = keptSK
 	return env.PersistConfig()
+}
+
+// postgresAlreadyStopped reports whether pg_ctl failed only because there was no
+// server to stop. pg_ctl exits non-zero either way, so the message is the only
+// thing that separates "the end state you asked for" from "this did not work".
+func postgresAlreadyStopped(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "Is server running?") ||
+		strings.Contains(msg, "does not exist")
 }
 
 // pgCtlStop runs `pg_ctl -D <pgdata> -w -m <mode> stop`, mirroring Rust
@@ -848,50 +872,4 @@ func pgCtlStop(env *config.LocalEnv, conf *endpointConf, pgdata, mode string) er
 		return fmt.Errorf("pg_ctl failed: %w, output: %s", err, string(out))
 	}
 	return nil
-}
-
-// waitComputeCtlExit reads compute_ctl.pid and waits for the process to exit,
-// optionally SIGTERMing it first. Mirrors Rust
-// `Endpoint::wait_for_compute_ctl_to_exit`.
-func waitComputeCtlExit(endpointDir string, sendSigterm bool) error {
-	data, err := os.ReadFile(filepath.Join(endpointDir, "compute_ctl.pid"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	pid, err := strconv.Atoi(string(bytesTrimSpace(data)))
-	if err != nil {
-		return fmt.Errorf("parse compute_ctl.pid: %w", err)
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return nil
-	}
-	if sendSigterm {
-		_ = proc.Signal(syscall.SIGTERM)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
-			return nil // gone
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("compute_ctl (pid %d) did not stop in 10s", pid)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-func bytesTrimSpace(b []byte) []byte {
-	start := 0
-	for start < len(b) && (b[start] == ' ' || b[start] == '\n' || b[start] == '\t' || b[start] == '\r') {
-		start++
-	}
-	end := len(b)
-	for end > start && (b[end-1] == ' ' || b[end-1] == '\n' || b[end-1] == '\t' || b[end-1] == '\r') {
-		end--
-	}
-	return b[start:end]
 }

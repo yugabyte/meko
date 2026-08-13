@@ -170,9 +170,9 @@ pgbouncer/local_proxy config, remote-extension index, swap/disk-quota sizes, and
 `compute_ctl_config` carries the JWKS (and optional TLS cert paths) that the
 external HTTP server's auth verifies against. The config is acquired two ways:
 
-- **From a file** — `--config <path>` (a `config.json`). This is how `yb_amp_local`
-  drives it: `controller/local/cfg` writes `config.json` into the endpoint dir and
-  `controller/local/launch/endpoint.go` passes `--config`.
+- **From a file** — `--config <path>`. This is how `yb_amp_local` drives it:
+  `controller/local/cfg` writes `compute_spec.json` into the endpoint dir and the
+  endpoint's `endpoint-supervisor` passes `--config`.
 - **From the control plane** — `--control-plane-uri <base>` (with `--compute-id`),
   which GETs `{base}/compute/api/v2/computes/{id}/spec` with 3 attempts (`spec.rs`),
   sending `Bearer $YBAMP_CONTROL_PLANE_TOKEN` if that env var is set. The response
@@ -421,7 +421,7 @@ compute-ctl \
     --connstr 'postgresql://cloud_admin@.../postgres' \   # -C
     --pgbin   <pg_install>/bin/postgres \       # -b, env POSTGRES_PATH
     --compute-id <endpoint_id> \                # -i
-    --config  <endpoint>/config.json \          # -c; XOR with:
+    --config  <endpoint>/compute_spec.json \    # -c; XOR with:
     --control-plane-uri <base_url> \            # -p
     [--external-http-port 3080] [--internal-http-port 3081] \
     [--remote-ext-base-url <url>] \             # -r
@@ -434,10 +434,14 @@ compute-ctl \
 
 `BUILD_TAG` (compile-time) stamps metrics and remote-extension paths.
 
-In the dev cluster, `yb_amp_local` launches the binary
-(`controller/local/launch/endpoint.go`), writes the `config.json` via
-`controller/local/cfg`, polls `GET /status` until `running`, and stops endpoints
-with `POST /terminate?mode=immediate` using a self-minted `compute_ctl:admin` JWT.
+In the dev cluster, `yb_amp_local` writes the spec (`compute_spec.json`, via
+`controller/local/cfg`) and the endpoint's `endpoint-supervisor` runs the binary,
+the same way a pod does — see
+[single-container-endpoint.md](single-container-endpoint.md). The launcher
+decides when the compute is *up*, polling `GET /status` until `running`, since
+only that distinguishes a compute that is serving from one that failed its
+startup; it stops endpoints with `POST /terminate?mode=immediate` using a
+self-minted `compute_ctl:admin` JWT.
 
 ## How it fits amp-controller
 
@@ -478,6 +482,6 @@ on `compute_ctl` in a few concrete places:
 - `compute/libs/compute_api/src/{spec,requests,responses}.rs` — `ComputeSpec` /
   `ComputeMode` / `ComputeStatus` and the API request/response types, shared with
   the control plane.
-- `controller/local/launch/endpoint.go`, `controller/local/cfg` — the
-  `yb_amp_local` endpoint lifecycle that launches the binary and writes
-  `config.json`.
+- `controller/local/launch/endpoint.go`, `controller/local/launch/supervisor.go`,
+  `controller/local/cfg` — the `yb_amp_local` endpoint lifecycle: it writes
+  `compute_spec.json` and runs the binary under `endpoint-supervisor`.

@@ -192,7 +192,7 @@ walredo). See [`pageserver.md`](pageserver.md).
 | Endpoint scratch (LFC prewarm) | YB `amp_storage.blobs` | `{branch_id}/{endpoint_id}/lfc_state`, written by `compute_ctl` |
 | Control-plane resource model | YB `amp_registry` schema | users, pools, clusters, grants, and the single `branch` / `endpoint` tables both the product API and the storage-layer surface read |
 | Task log | YB `controller` schema | `task`, `task_step` |
-| Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, pidfile, `config.json`); created on `endpoint create`, removed on destroy |
+| Compute `pgdata` + runtime | local FS | `.yb_amp/endpoints/<endpoint>/` — runtime working state only (`pgdata/` catalogs + ephemeral WAL pre-ship buffer, logs, the supervisor's pidfile and control socket, `compute_spec.json`); the directory and its configs come from `endpoint create`, `pgdata` from `endpoint start`, and all of it goes on destroy |
 | Pageserver / safekeeper local FS | local FS | `.yb_amp/endpoints/<endpoint>/{pageserver,safekeeper}/` — configs (`pageserver.toml`, `metadata.json`, `safekeeper.toml`), logs, pidfiles. No pages, no WAL, no control file. |
 
 Everything in the local-FS rows is reconstructible; everything that
@@ -215,11 +215,17 @@ endpoint that owns the branch. The PS+SK pair is provisioned at
 `endpoint create` —
 Branch creation only records the branch's init recipe (branch id,
 branch name, pg version, optional ancestor + start LSN) in the
-controller's `amp_registry.branches` row; the pair comes up
+controller's `amp_registry.branches` row; the pair is laid out
 under `endpoints/<endpoint>/{pageserver,safekeeper}` when the first
 endpoint for that branch is created, which reads the recipe back and
 deletes the pending row. Sibling endpoints on the same branch share the
 PS+SK pair.
+
+`endpoint start` runs one `endpoint-supervisor` per endpoint — the
+binary that is PID 1 of a deployed endpoint pod — which starts the
+safekeeper, the pageserver and the compute in dependency order and
+restarts any that die. See
+[single-container-endpoint.md](single-container-endpoint.md).
 
 ```
 yugabyted                        :7100 (master), :5433 (ysql), :9100 (tserver RPC)
