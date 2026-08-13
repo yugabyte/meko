@@ -8,8 +8,25 @@
 
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Copy, KeyRound, Loader2, Mail, User as UserIcon } from "lucide-react";
+import {
+  ArrowUpRight,
+  Copy,
+  KeyRound,
+  Loader2,
+  LifeBuoy,
+  Mail,
+  Trash2,
+  User as UserIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 import { getApiErrorMessage } from "@/lib/api/mekoApi";
 import { queryClient } from "@/lib/queryClient";
@@ -20,12 +37,20 @@ import { UpdatePasswordDialog } from "@/features/settings/components/UpdatePassw
 import { SecurityTokensSection } from "@/features/settings/components/SecurityTokensSection";
 import { PricingSection } from "@/features/settings/components/PricingSection";
 
+// Where users go to request account deletion. There is no self-serve
+// delete flow today — a support engineer verifies identity and reason
+// before the account + owned datapacks are removed, so the CTA opens a
+// support ticket instead of firing a DELETE call. Single constant so a
+// future URL change is one edit.
+const SUPPORT_URL = "https://support.yugabyte.com/";
+
 export default function SettingsPage() {
   // Shared, session-cached identity — usually already warmed by the
   // header, so deep-linking into /settings reads from cache.
   const { data: user = null, isLoading: loading, error } = useCurrentUser();
   const errorMessage = error ? getApiErrorMessage(error, "Failed to load your account.") : null;
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [deleteAccountDialogOpen, setDeleteAccountDialogOpen] = useState(false);
 
   // AWS Marketplace welcome landing. api_server's /marketplace/register
   // redirects the buyer here with `?source=aws-marketplace&plan=<tier>`
@@ -137,6 +162,47 @@ export default function SettingsPage() {
                     }
                   />
                 </dl>
+
+                {/* Delete-account row — sibling to the <dl> (not inside
+                    it) because it isn't a name/value pair, it's an
+                    action; and rendered outside the `Field` grid so the
+                    "Delete account" title doesn't fight Field's fixed
+                    w-32 uppercase label column. Layout mirrors the
+                    Update-password section: icon + title + description
+                    on the left, action button on the right. Divider
+                    keeps visual separation from the identity rows above
+                    without dropping into a brand-new <section>. Button
+                    uses the brand colour (not red) — this is a request
+                    handed off to support, not a one-click destructive
+                    action, so red would over-signal danger. */}
+                <div className="mt-4 flex items-center justify-between gap-3 border-t border-border/40 pt-4">
+                  <div className="flex min-w-0 items-start gap-2.5">
+                    <Trash2
+                      className="mt-0.5 h-4 w-4 shrink-0 text-brand"
+                      aria-hidden
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">Delete account</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Deletion is handled by our support team.
+                      </p>
+                    </div>
+                  </div>
+                  {/* Primary CTA. Uses the `default` Button variant
+                      (bg-primary / brand orange filled) — same pattern
+                      as "Add Datapack" on the datapacks page and the
+                      AWS-Marketplace "Upgrade" chip on the pricing
+                      card. `hover:bg-primary/90` matches Add Datapack's
+                      hover treatment for consistency. */}
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setDeleteAccountDialogOpen(true)}
+                    className="shrink-0 gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    Request deletion
+                  </Button>
+                </div>
               </section>
 
               {/* Security section — password + API keys. The tokens
@@ -182,6 +248,74 @@ export default function SettingsPage() {
         onOpenChange={setPasswordDialogOpen}
         username={user?.email}
       />
+
+      {/* Delete-account request dialog. The primary CTA opens a support
+          ticket (new tab) rather than firing a self-serve DELETE — a
+          support engineer verifies identity and the reason before any
+          data is removed, so this dialog is deliberately a hand-off
+          rather than a confirm-then-destroy flow. Copy is calm rather
+          than alarmist because at this point nothing has happened yet. */}
+      <Dialog open={deleteAccountDialogOpen} onOpenChange={setDeleteAccountDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          {/* Icon + title on one horizontal row (not stacked). The Radix
+              DialogHeader defaults to `flex flex-col` so the trash icon
+              was landing above the title on two lines; overriding with
+              a row layout lands them side-by-side and stays consistent
+              with the other primary-action dialogs in the app. */}
+          <DialogHeader className="flex-row items-center gap-3 space-y-0">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand/10">
+              <Trash2 className="h-4 w-4 text-brand" aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <DialogTitle>Request account deletion</DialogTitle>
+            </div>
+          </DialogHeader>
+
+          <DialogDescription>
+            We handle account deletion through Yugabyte support so we can verify identity and
+            remove your datapacks, memories, and knowledge base together.
+          </DialogDescription>
+
+          <div className="rounded-md border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">Before you file the ticket:</span> mention
+            the email <span className="font-mono text-foreground">{user?.email || "on your account"}</span>{" "}
+            and your account ID so support can locate it faster.
+          </div>
+
+          <DialogFooter className="gap-2 sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleteAccountDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            {/* Primary CTA. `bg-primary text-primary-foreground`
+                (same tokens `Add Datapack` and every other primary
+                button on the app uses) — NOT `bg-brand text-brand-fg`.
+                The two tokens map to the same orange fill, but
+                `--brand-foreground` is WHITE in light mode
+                (index.css:148) while `--primary-foreground` is navy —
+                and only navy-on-orange passes WCAG AA (see the
+                explanatory comment on `--primary-foreground` right
+                above it). Sticking with `primary` here keeps every
+                orange filled button in the app rendering the same
+                dark-on-orange text. */}
+            <Button
+              asChild
+              type="button"
+              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
+              onClick={() => setDeleteAccountDialogOpen(false)}
+            >
+              <a href={SUPPORT_URL} target="_blank" rel="noopener noreferrer">
+                <LifeBuoy className="h-3.5 w-3.5" aria-hidden />
+                Contact support
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </a>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

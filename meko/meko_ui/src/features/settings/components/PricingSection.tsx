@@ -8,7 +8,7 @@
 // by lib/freeTier.ts on the FE and api_server/internal/service/free_tier.go on the BE.
 
 import { useState } from "react";
-import { ArrowUpRight, Check } from "lucide-react";
+import { ArrowUpRight, Check, CreditCard, Cloud, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,6 +19,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import {
@@ -50,7 +56,6 @@ const TIER_ROWS: ReadonlyArray<Row> = [
   { label: "Support", values: { free: "Community", standard: "Email", pro: "Priority" } },
   { label: "Decision trace", values: { free: "Supported", standard: "Supported", pro: "Supported" } },
   { label: "On-prem deployment", values: { free: null, standard: null, pro: null } },
-  { label: "Audit logs", values: { free: null, standard: "30 days", pro: "Included" } },
   { label: "Custom integrations", values: { free: null, standard: null, pro: "Included" } },
   { label: "SSO", values: { free: null, standard: null, pro: "Included" } },
 ];
@@ -78,32 +83,38 @@ export function PricingSection() {
         </p>
       </header>
 
-      {/* Desktop (≥ md): tiles side-by-side. */}
-      <div className={cn("hidden md:grid md:gap-4", gridCols)}>
-        <TierCard column="free" activeTier={activeTier} />
-        {showStandard && <TierCard column="standard" activeTier={activeTier} />}
-        <TierCard column="pro" activeTier={activeTier} />
-      </div>
-
-      {/* Mobile (< md): tabs so one card renders at full viewport width. */}
-      <Tabs defaultValue={activeTier === "pro" ? "pro" : activeTier === "standard" ? "standard" : "free"} className="md:hidden">
-        <TabsList className={cn("grid w-full", showStandard ? "grid-cols-3" : "grid-cols-2")}>
-          <TabsTrigger value="free">Free</TabsTrigger>
-          {showStandard && <TabsTrigger value="standard">Standard</TabsTrigger>}
-          <TabsTrigger value="pro">Pro</TabsTrigger>
-        </TabsList>
-        <TabsContent value="free" className="mt-3">
+      {/* TooltipProvider wraps the tier grid so the Stripe "Coming soon"
+          tooltip inside the Standard tier's purchase-options strip renders.
+          Kept at this level (rather than per-button) so a future card can
+          also use tooltips without re-adding a provider. */}
+      <TooltipProvider delayDuration={150}>
+        {/* Desktop (≥ md): tiles side-by-side. */}
+        <div className={cn("hidden md:grid md:gap-4", gridCols)}>
           <TierCard column="free" activeTier={activeTier} />
-        </TabsContent>
-        {showStandard && (
-          <TabsContent value="standard" className="mt-3">
-            <TierCard column="standard" activeTier={activeTier} />
-          </TabsContent>
-        )}
-        <TabsContent value="pro" className="mt-3">
+          {showStandard && <TierCard column="standard" activeTier={activeTier} />}
           <TierCard column="pro" activeTier={activeTier} />
-        </TabsContent>
-      </Tabs>
+        </div>
+
+        {/* Mobile (< md): tabs so one card renders at full viewport width. */}
+        <Tabs defaultValue={activeTier === "pro" ? "pro" : activeTier === "standard" ? "standard" : "free"} className="md:hidden">
+          <TabsList className={cn("grid w-full", showStandard ? "grid-cols-3" : "grid-cols-2")}>
+            <TabsTrigger value="free">Free</TabsTrigger>
+            {showStandard && <TabsTrigger value="standard">Standard</TabsTrigger>}
+            <TabsTrigger value="pro">Pro</TabsTrigger>
+          </TabsList>
+          <TabsContent value="free" className="mt-3">
+            <TierCard column="free" activeTier={activeTier} />
+          </TabsContent>
+          {showStandard && (
+            <TabsContent value="standard" className="mt-3">
+              <TierCard column="standard" activeTier={activeTier} />
+            </TabsContent>
+          )}
+          <TabsContent value="pro" className="mt-3">
+            <TierCard column="pro" activeTier={activeTier} />
+          </TabsContent>
+        </Tabs>
+      </TooltipProvider>
     </section>
   );
 }
@@ -115,19 +126,32 @@ function TierCard({ column, activeTier }: { column: TierColumn; activeTier: Tier
   return (
     <article
       className={cn(
-        "rounded-lg border p-4",
+        "flex flex-col rounded-lg border p-4",
         column === "standard"
           ? "border-brand/40 bg-brand/[0.05]"
           : "border-border bg-background/40",
       )}
     >
-      <header className="mb-3 flex min-h-7 items-center justify-between gap-2">
-        <div className="flex flex-col">
-          <h3 className="text-base font-semibold text-foreground">{meta.title}</h3>
-          <p className="text-xs text-muted-foreground">{meta.price}</p>
-        </div>
-        <TierBadge column={column} isCurrent={isCurrent} />
+      <header className="mb-3 flex min-h-7 flex-col">
+        <h3 className="text-base font-semibold text-foreground">{meta.title}</h3>
+        <p className="text-xs text-muted-foreground">{meta.price}</p>
       </header>
+
+      {/*
+        CTA banner slot — a fixed-height strip that ALWAYS renders on
+        every card so the tier rows below start at the same Y across
+        Free / Standard / Pro. Before this, Standard's purchase strip
+        pushed its own row list down and the same-named rows
+        ("Datapacks", "Add conversations", ...) stopped aligning
+        horizontally across columns. `min-h-[4.5rem]` (72px) is chosen
+        to fit the tallest content (Standard's 3-way purchase chip row
+        with icon-over-label) without cutting any variant off; simpler
+        contents (a single Current chip, a Talk-to-team link) centre
+        vertically in the same slot.
+      */}
+      <div className="mb-4 flex min-h-[4.5rem] items-center">
+        <TierCtaBanner column={column} activeTier={activeTier} isCurrent={isCurrent} />
+      </div>
 
       <dl
         className={cn(
@@ -174,29 +198,46 @@ function tierMeta(column: TierColumn): { title: string; price: string } {
 const AWS_BUYER_SUBSCRIPTIONS_URL =
   "https://console.aws.amazon.com/marketplace/home?#/subscriptions";
 
-// Badge in the top-right of each card. "Current" wins for the active
-// tier; Standard shows an Upgrade button that deep-links to AWS
-// Marketplace, Pro shows "Talk to our team", Free shows nothing.
-// When Standard is the CURRENT plan we also surface a "Manage
-// subscription" link so users have a one-click path to change / cancel
-// the sub.
-function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boolean }) {
+// CTA banner rendered inside every tier card's fixed-height CTA slot.
+// Content varies by (column, activeTier); the slot itself has a
+// min-height (see TierCard) so tier rows below stay aligned across
+// Free / Standard / Pro. The banner content always fills the slot's
+// width so the visual weight matches across columns.
+//
+// Routing:
+//   isCurrent + free       → "Current plan" chip
+//   isCurrent + standard   → "Current" chip + "Manage subscription" link
+//                            (AWS Marketplace is the only cancel path)
+//   isCurrent + pro        → "Current plan" chip
+//   free viewer + standard → StandardPurchaseOptions (3 chips)
+//   free viewer + pro      → "Talk to our team" button
+//   any other combination  → subtle "Included in your plan" or empty spacer
+//                            so the row still occupies its slot
+function TierCtaBanner({
+  column,
+  activeTier,
+  isCurrent,
+}: {
+  column: TierColumn;
+  activeTier: TierName;
+  isCurrent: boolean;
+}) {
   if (isCurrent) {
     const chip = (
       <span
-        className="inline-flex items-center gap-1 rounded-full border border-brand/40 bg-brand/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-brand"
+        className="inline-flex items-center gap-1 rounded-full border border-brand/40 bg-brand/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-brand"
         aria-label="Your current plan"
       >
         <Check className="h-3 w-3" aria-hidden />
-        Current
+        Current plan
       </span>
     );
-    // Standard subscribers manage or cancel via AWS Marketplace, not
-    // Meko — surface a link to the buyer console right beside the
-    // Current chip.
     if (column === "standard") {
+      // Standard subscribers see the Current chip PLUS a link to the
+      // AWS Marketplace buyer console — cancel/change of a Contract
+      // subscription can only happen there, so surface it inline.
       return (
-        <div className="flex flex-col items-end gap-1">
+        <div className="flex w-full flex-col items-start gap-1.5">
           {chip}
           <a
             href={AWS_BUYER_SUBSCRIPTIONS_URL}
@@ -211,34 +252,17 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
         </div>
       );
     }
-    return chip;
+    return <div className="flex w-full">{chip}</div>;
   }
-  if (column === "standard") {
-    // If the URL isn't wired yet, disable the button instead of
-    // shipping a link that reloads the current page. Tile visibility
-    // is a separate flag (STANDARD_TIER_ENABLED) so the tile can
-    // render for UI testing before the real listing URL lands.
-    if (!AWS_MARKETPLACE_LISTING_URL) {
-      return (
-        <Button
-          type="button"
-          size="sm"
-          disabled
-          className="h-7 gap-1 px-2.5 text-xs font-medium"
-          title="AWS Marketplace URL not configured yet"
-        >
-          Upgrade
-        </Button>
-      );
-    }
-    // Show a dialog before deep-linking to AWS so users understand
-    // the two-step flow (subscribe on AWS, then click "Set up your
-    // account" to activate the entitlement in Meko). Without this
-    // primer, buyers routinely subscribe, close the AWS tab, and
-    // wonder why their tier hasn't changed.
-    return <UpgradeToStandardButton />;
+
+  if (column === "standard" && activeTier === "free") {
+    return <StandardPurchaseOptions />;
   }
+
   if (column === "pro") {
+    // Pro is "custom pricing / talk to us" for everyone who isn't
+    // already on Pro — Standard subscribers upgrading, Free viewers
+    // scoping the ceiling. Compact link-style CTA fills the slot.
     return (
       <Button
         asChild
@@ -253,79 +277,205 @@ function TierBadge({ column, isCurrent }: { column: TierColumn; isCurrent: boole
       </Button>
     );
   }
-  return null;
+
+  // Free column when the viewer isn't on Free (Standard/Pro users
+  // looking down at the base tier). Empty — the slot's min-height still
+  // reserves space so rows below stay aligned.
+  return <div aria-hidden />;
 }
 
-// Standard-tile Upgrade CTA. Opens a primer dialog before deep-linking
-// to AWS Marketplace so users know what to expect on the other side:
-// the AWS subscribe step alone does NOT activate their tier -- they
-// have to explicitly click "Set up your account" on AWS's confirmation
-// page for AWS to POST the fulfillment token to our /marketplace/register
-// handler. Without this primer, buyers subscribe, close the AWS tab,
-// and are surprised their tier is still Free.
-function UpgradeToStandardButton() {
-  const [open, setOpen] = useState(false);
-
-  const handleContinue = () => {
-    // Open in a new tab so users can flip back to Meko without losing
-    // the settings page they were on. Same-tab would work too but is
-    // more disorienting.
-    window.open(AWS_MARKETPLACE_LISTING_URL, "_blank", "noopener,noreferrer");
-    setOpen(false);
-  };
+// Purchase-options strip — three mutually-exclusive payment paths for
+// upgrading to Standard, rendered inside the Standard card's CTA banner
+// slot for viewers on Free. Slim horizontal 3-up so the strip is the
+// same vertical size as the "Current" chip on Free's card and the
+// "Talk to our team" link on Pro's card, keeping the tier rows below
+// aligned across all three columns.
+//
+// The wrapping container has no visible border/heading anymore — the
+// slot's minimum height and the tier card's own brand tint already
+// signal "this is the CTA area", and dropping the extra chrome saves
+// vertical space so the chips fit alongside icons + labels without
+// getting taller than the sibling banners.
+function StandardPurchaseOptions() {
+  const [awsDialogOpen, setAwsDialogOpen] = useState(false);
+  const awsDisabled = !AWS_MARKETPLACE_LISTING_URL;
 
   return (
     <>
-      <Button
-        type="button"
-        size="sm"
-        onClick={() => setOpen(true)}
-        className="h-7 gap-1 bg-brand px-2.5 text-xs font-medium text-brand-foreground hover:bg-brand/90"
-      >
-        Upgrade
-        <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
-      </Button>
+      <div className="grid w-full grid-cols-3 gap-1.5">
+        {/* AWS Marketplace — primary route today. Opens the same primer
+            dialog as before so the two-step "subscribe → Set up your
+            account" explainer isn't duplicated inline. */}
+        <PurchaseChip
+          icon={<Cloud className="h-3.5 w-3.5" aria-hidden />}
+          label="AWS Marketplace"
+          onClick={() => setAwsDialogOpen(true)}
+          disabled={awsDisabled}
+          disabledTooltip={awsDisabled ? "AWS Marketplace URL not configured yet" : undefined}
+        />
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Upgrade to Standard on AWS Marketplace</DialogTitle>
-            <DialogDescription>
-              Meko Standard is billed through AWS Marketplace. You'll finish signup on AWS in a new
-              tab, then come back here.
-            </DialogDescription>
-          </DialogHeader>
+        {/* Stripe — coming soon. Kept in the strip (rather than hidden)
+            so the roadmap stays visible to buyers evaluating tiers
+            today. Tooltip explains the state; click is disabled. */}
+        <PurchaseChip
+          icon={<CreditCard className="h-3.5 w-3.5" aria-hidden />}
+          label="Stripe"
+          disabled
+          disabledTooltip="Coming soon"
+        />
 
-          <ol className="ml-5 list-decimal space-y-2 text-sm text-foreground">
-            <li>
-              We'll open the Meko listing on AWS Marketplace. Sign in with the AWS account you want
-              to bill.
-            </li>
-            <li>Accept the contract to subscribe.</li>
-            <li>
-              <span className="font-semibold text-foreground">Important:</span> after AWS shows the
-              purchase confirmation, click{" "}
-              <span className="font-semibold">&ldquo;Set up your account&rdquo;</span> to activate
-              your Standard tier in Meko. Without this step your plan stays on Free.
-            </li>
-          </ol>
+        {/* Contact Us — deep-links to the same sales form Pro's "Talk
+            to our team" uses. Buyers with procurement rules that
+            require an order form / MSA end up here. */}
+        <PurchaseChip
+          icon={<Mail className="h-3.5 w-3.5" aria-hidden />}
+          label="Contact Us"
+          href={SALES_CONTACT_URL}
+        />
+      </div>
 
-          <p className="text-xs text-muted-foreground">
-            You can close and reopen this dialog if you need to. Your Meko session stays signed in
-            in this tab.
-          </p>
-
-          <DialogFooter className="gap-2 sm:justify-end">
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button type="button" onClick={handleContinue} className="gap-1">
-              Continue to AWS Marketplace
-              <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <UpgradeToStandardDialog open={awsDialogOpen} onOpenChange={setAwsDialogOpen} />
     </>
   );
 }
+
+// One button in the purchase-options grid. Absorbs three shapes:
+//   href      — external link (Contact Us)
+//   onClick   — opens a dialog (AWS Marketplace)
+//   disabled  — surfaces `disabledTooltip` and swallows clicks (Stripe)
+// so the visual chip stays identical across all three states.
+function PurchaseChip({
+  icon,
+  label,
+  href,
+  onClick,
+  disabled,
+  disabledTooltip,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  href?: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  disabledTooltip?: string;
+}) {
+  const base =
+    "flex h-full flex-col items-center justify-center gap-1 rounded-md border px-2 py-2 text-center text-[11px] font-medium leading-tight transition-colors";
+  const enabledCls =
+    "border-brand/40 bg-background text-foreground hover:border-brand hover:bg-brand/10";
+  const disabledCls =
+    "cursor-not-allowed border-border/60 bg-background/40 text-muted-foreground opacity-70";
+
+  // Icon + label + external arrow (only for enabled).
+  const body = (
+    <>
+      <span className={cn("text-brand", disabled && "text-muted-foreground")}>{icon}</span>
+      <span className="line-clamp-2">
+        {label}
+        {!disabled && href ? (
+          <ArrowUpRight className="ml-0.5 inline h-2.5 w-2.5" aria-hidden />
+        ) : null}
+      </span>
+    </>
+  );
+
+  if (disabled) {
+    // Wrap the disabled chip in a Tooltip so hover explains why it's
+    // greyed out. Radix tooltip needs a focusable trigger; a plain div
+    // works because TooltipTrigger sets tabIndex on its child.
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className={cn(base, disabledCls)} aria-disabled tabIndex={0}>
+            {body}
+          </div>
+        </TooltipTrigger>
+        {disabledTooltip ? (
+          <TooltipContent side="bottom" className="max-w-[180px] text-center">
+            {disabledTooltip}
+          </TooltipContent>
+        ) : null}
+      </Tooltip>
+    );
+  }
+
+  if (href) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cn(base, enabledCls)}
+      >
+        {body}
+      </a>
+    );
+  }
+
+  return (
+    <button type="button" onClick={onClick} className={cn(base, enabledCls)}>
+      {body}
+    </button>
+  );
+}
+
+// AWS Marketplace primer dialog. Same copy as the original single-button
+// primer — factored out so `StandardPurchaseOptions` can drive it from
+// the chip click without duplicating the two-step explainer, and so a
+// future test can mount it in isolation.
+function UpgradeToStandardDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const handleContinue = () => {
+    window.open(AWS_MARKETPLACE_LISTING_URL, "_blank", "noopener,noreferrer");
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Upgrade to Standard on AWS Marketplace</DialogTitle>
+          <DialogDescription>
+            Meko Standard is billed through AWS Marketplace. You'll finish signup on AWS in a new
+            tab, then come back here.
+          </DialogDescription>
+        </DialogHeader>
+
+        <ol className="ml-5 list-decimal space-y-2 text-sm text-foreground">
+          <li>
+            We'll open the Meko listing on AWS Marketplace. Sign in with the AWS account you want
+            to bill.
+          </li>
+          <li>Accept the contract to subscribe.</li>
+          <li>
+            <span className="font-semibold text-foreground">Important:</span> after AWS shows the
+            purchase confirmation, click{" "}
+            <span className="font-semibold">&ldquo;Set up your account&rdquo;</span> to activate
+            your Standard tier in Meko. Without this step your plan stays on Free.
+          </li>
+        </ol>
+
+        <p className="text-xs text-muted-foreground">
+          You can close and reopen this dialog if you need to. Your Meko session stays signed in
+          in this tab.
+        </p>
+
+        <DialogFooter className="gap-2 sm:justify-end">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={handleContinue} className="gap-1">
+            Continue to AWS Marketplace
+            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+

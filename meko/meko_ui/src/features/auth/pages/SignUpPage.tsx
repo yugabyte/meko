@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { getApiErrorMessage, signup, confirmSignup } from "@/lib/api/mekoApi";
 import { AUTH_METHODS, TELEMETRY_EVENTS } from "@/lib/telemetry/events";
 import { identifyThenTrack } from "@/lib/telemetry/rudderstack";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Network, Share2, ScanLine, Gauge } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ROUTES } from "@/app/routes/paths";
@@ -14,6 +14,20 @@ import {
   PasswordPolicyPanel,
 } from "@/features/auth/components/PasswordPolicyPanel";
 import { safeReturnTo } from "@/features/auth/returnTo";
+
+// Marketing pitch shown alongside the sign-up form. Copy is owned by
+// the marketing team; keep this list in sync with the "Sign up for
+// Meko" mock in the brand deck. Icon per bullet so the four benefits
+// scan quickly.
+const SIGNUP_HIGHLIGHTS: ReadonlyArray<{
+  icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
+  text: string;
+}> = [
+  { icon: Network, text: "Share context instantly across fleets of agents" },
+  { icon: Share2, text: "Share datapacks with any agent or human" },
+  { icon: ScanLine, text: "Spot agent issues fast with decision traces" },
+  { icon: Gauge, text: "Cut token burn by up to 45%" },
+];
 
 export default function SignUpPage() {
   const navigate = useNavigate();
@@ -113,12 +127,25 @@ export default function SignUpPage() {
   // doesn't show an error while it's still empty.
   const confirmMismatch = confirmPassword.length > 0 && password !== confirmPassword;
 
+  // Layout:
+  //   - Initial sign-up step: two-column (marketing left, form right)
+  //     from `lg` up; stacked on md / mobile with marketing above the
+  //     form so first-visit visitors read the pitch before scrolling.
+  //   - Confirmation code step: single-column card (existing width) so
+  //     the code entry stays the sole focus — the marketing pitch is
+  //     noise once someone has already committed to signing up.
+  const outerCls = awaitingCode
+    ? "w-full flex justify-center"
+    : "grid w-full max-w-6xl grid-cols-1 items-center gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,560px)] lg:gap-12";
+
   return (
     <AuthPageShell>
       <div className="fixed top-4 right-4 z-10">
         <ThemeToggleButton />
       </div>
-      <div className="w-full max-w-[560px] rounded-2xl border border-border bg-card p-8 shadow-sm">
+      <div className={outerCls}>
+        {!awaitingCode && <SignUpMarketing />}
+        <div className="w-full max-w-[560px] justify-self-center rounded-2xl border border-border bg-card p-8 shadow-sm lg:justify-self-end">
         <h1 className="mb-6 text-center text-3xl font-semibold text-foreground">
           {awaitingCode ? "Confirm your account" : "Sign up for Meko"}
         </h1>
@@ -302,7 +329,42 @@ export default function SignUpPage() {
             </p>
           </>
         ) : null}
+        </div>
       </div>
     </AuthPageShell>
+  );
+}
+
+// Marketing pane rendered next to the sign-up form on the initial step.
+// Kept in-file (rather than a shared component) because this copy is
+// specific to Sign up — the marketing team calibrates it per-page
+// (Sign in stays clean; Reset password stays clean).
+function SignUpMarketing() {
+  return (
+    <section className="max-w-xl px-1 lg:px-0">
+      <h2 className="text-3xl font-semibold leading-tight text-foreground sm:text-4xl">
+        Shared context, delivered as infrastructure
+      </h2>
+      <p className="mt-3 text-base italic text-muted-foreground">
+        Meko is an agent-native data infrastructure for collective memory, shared knowledge, and
+        decision traces.
+      </p>
+      <p className="mt-6 text-sm font-medium text-foreground">
+        Switch Meko on and, in less than ten minutes:
+      </p>
+      <ul className="mt-3 space-y-2.5">
+        {SIGNUP_HIGHLIGHTS.map((h) => (
+          <li key={h.text} className="flex items-start gap-3">
+            {/* Circular icon chip picks up the brand tint so the four
+                bullets read as a set. Small enough not to compete with
+                the form on the right at desktop widths. */}
+            <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand/12 text-brand ring-1 ring-brand/25">
+              <h.icon className="h-3.5 w-3.5" aria-hidden />
+            </span>
+            <span className="text-sm leading-6 text-foreground">{h.text}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
