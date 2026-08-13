@@ -4,6 +4,13 @@
 //! pageserver, and `compute_ctl` with Postgres. This binary renders their config
 //! and supervises them.
 //!
+//! `PRERENDERED_CONFIG=true` keeps the supervising and drops the rendering, for a
+//! caller that has already written all three config files. That is how
+//! `yb_amp_local` runs an endpoint: its config comes from a local environment this
+//! process cannot see — ports it allocated, a Postgres install outside any image,
+//! per-endpoint settings held in the control plane — but the process tree it wants
+//! is the same one the pod runs.
+//!
 //! # Modules
 //!
 //! - [`resources`] — what the pod has: the container's cgroup CPU and memory
@@ -37,15 +44,15 @@
 //! The sequence in [`run`] is load-bearing, not incidental:
 //!
 //! 1. Signal handlers, so a pod delete during a slow startup still stops cleanly.
-//! 2. Resources and the GUCs derived from them.
-//! 3. **Wait for YugabyteDB.** Everything below needs it, and the two things that
+//! 2. **Wait for YugabyteDB.** Everything below needs it, and the two things that
 //!    have their own retry budget are not sized to absorb an outage — see
 //!    [`boot::YB_WAIT_TIMEOUT`].
-//! 4. The registry overrides, *after* the wait, so a transient outage does not
-//!    silently cost the endpoint its operator settings.
-//! 5. Render and write every config file, before any child starts. A render that
-//!    fails is a bad config, so it must fail here rather than crash-loop a daemon.
-//! 6. Start the children in dependency order, then supervise them.
+//! 3. [`render_config`]: the resources, the GUCs derived from them, the registry
+//!    overrides (*after* the wait, so a transient outage does not silently cost
+//!    the endpoint its operator settings), and every config file — all before any
+//!    child starts, because a render that fails is a bad config and must fail here
+//!    rather than crash-loop a daemon.
+//! 4. Start the children in dependency order, then supervise them.
 
 use std::collections::BTreeMap;
 
@@ -54,8 +61,10 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 pub mod boot;
 pub mod config;
+pub mod control;
 pub mod coordinate;
 pub mod pg_settings;
+pub mod pidfile;
 pub mod registry;
 pub mod remote_auth;
 pub mod resources;
@@ -124,11 +133,48 @@ struct Env {
     /// Extension paths and the like, computed by the chart from the ImageVolumes
     /// it mounted. Not derivable here and not in the database.
     chart_settings: BTreeMap<String, String>,
+    /// The caller has already written every config file, so this process
+    /// supervises and does not render. See [`run`].
+    prerendered: bool,
+}
+
+/// `--run-dir <path>`, the one command-line argument this binary takes.
+///
+/// The pod passes nothing and the environment says everything, which is what a
+/// ConfigMap is for. `yb_amp_local` passes it because several supervisors share
+/// a host: it puts the endpoint's directory in the process's argv, so `ps` says
+/// which endpoint a supervisor belongs to — and so tools that reap a cluster by
+/// path anchor (`pkill -f <run dir>`, which is how the integration suite tears
+/// one down) match the supervisor along with the daemons it started. Without it
+/// the supervisor survives the sweep and restarts everything just killed.
+fn run_dir_from_args() -> Result<Option<Utf8PathBuf>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    parse_run_dir(&args.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+fn parse_run_dir(args: &[&str]) -> Result<Option<Utf8PathBuf>> {
+    let mut args = args.iter();
+    let mut found = None;
+    while let Some(arg) = args.next() {
+        let value = match arg.strip_prefix("--run-dir") {
+            Some("") => (*args.next().context("--run-dir needs a path")?).to_string(),
+            Some(rest) => rest
+                .strip_prefix('=')
+                .with_context(|| format!("expected --run-dir=<path>, got {arg:?}"))?
+                .to_string(),
+            None => anyhow::bail!("unexpected argument {arg:?}; only --run-dir is accepted"),
+        };
+        found = Some(Utf8PathBuf::from(value));
+    }
+    Ok(found)
 }
 
 impl Env {
     fn read() -> Result<Self> {
-        let run_dir: Utf8PathBuf = env_or("RUN_DIR", "/data").into();
+        let run_dir: Utf8PathBuf = match run_dir_from_args()? {
+            Some(dir) => dir,
+            None => env_or("RUN_DIR", "/data").into(),
+        };
         let bin_dir: Utf8PathBuf = env_or("BIN_DIR", "/usr/local/bin").into();
         let pg_distrib_dir: Utf8PathBuf = env_or("PG_DISTRIB_DIR", "/usr/local").into();
 
@@ -141,6 +187,12 @@ impl Env {
 
         let branch_id = env_opt("BRANCH_ID").context("BRANCH_ID is required")?;
 
+        // One switch for "a caller is driving this, not a pod": it renders the
+        // config and it reads each daemon's log on its own.
+        let prerendered = env_bool("PRERENDERED_CONFIG");
+
+        let compute_ctl_http_port = env_port("COMPUTE_CTL_HTTP_PORT", 3080)?;
+
         let layout = boot::Layout {
             run_dir,
             bin_dir,
@@ -152,12 +204,21 @@ impl Env {
             pageserver_grpc_port: env_port("PAGESERVER_GRPC_PORT", 51051)?,
             safekeeper_pg_port: env_port("SAFEKEEPER_PG_PORT", 5454)?,
             safekeeper_http_port: env_port("SAFEKEEPER_HTTP_PORT", 7676)?,
-            compute_ctl_http_port: env_port("COMPUTE_CTL_HTTP_PORT", 3080)?,
+            compute_ctl_http_port,
+            // The pod allocates the pair contiguously; `yb_amp_local` takes each
+            // from the first free port it finds, so it passes both.
+            compute_ctl_internal_http_port: env_port(
+                "COMPUTE_CTL_INTERNAL_HTTP_PORT",
+                compute_ctl_http_port + 1,
+            )?,
             pg_version_major: env_or("ENDPOINT_PG_VERSION", "18")
                 .parse()
                 .context("ENDPOINT_PG_VERSION is not a major version number")?,
             bind_host: bind_host.to_string(),
             control_plane_api: env_or("CONTROL_PLANE_API", "http://localhost:6666"),
+            compute_id: env_or("COMPUTE_ID", boot::COMPUTE_ID),
+            privileged_role_name: env_opt("PRIVILEGED_ROLE_NAME"),
+            log_files: prerendered,
         };
 
         // A malformed id means the overrides cannot be read, which is a warning
@@ -191,6 +252,7 @@ impl Env {
             offload_lfc_interval_seconds: env_u64("OFFLOAD_LFC_INTERVAL_SECONDS")?,
             shared_preload_libraries: env_or("SHARED_PRELOAD_LIBRARIES", "yb_amp"),
             chart_settings: chart_settings()?,
+            prerendered,
         })
     }
 
@@ -284,34 +346,11 @@ fn run() -> Result<std::process::ExitCode> {
     let env = Env::read()?;
     let l = &env.layout;
 
-    let cgroup_root: Utf8PathBuf = env_or("CGROUP_ROOT", "/sys/fs/cgroup").into();
-    let res = Resources::resolve(
-        &Cgroup::new(cgroup_root),
-        env_opt("ENDPOINT_CPU").as_deref(),
-        env_opt("ENDPOINT_MEMORY").as_deref(),
-        env_opt("ENDPOINT_DATA_VOLUME_SIZE").as_deref(),
-        resources::statvfs_total_bytes(&l.run_dir),
-    );
-    tracing::info!(
-        memory_bytes = res.memory_bytes,
-        vcpu = res.vcpu,
-        data_volume_bytes = res.data_volume_bytes,
-        "resolved endpoint resources"
-    );
-
-    let (settings, skipped) = pg_settings::derive(&res);
-    for s in &settings {
-        tracing::info!(name = %s.name, value = %s.value, "derived");
-    }
-    if skipped.memory_unknown {
-        tracing::warn!("endpoint memory unknown; shared_buffers left at the Postgres default");
-    }
-    if skipped.cpu_unknown {
-        tracing::warn!("endpoint CPU unknown; parallel-worker GUCs left at their defaults");
-    }
-    if skipped.volume_unknown {
-        tracing::warn!("data volume budget unknown; the LFC stays disabled");
-    }
+    std::fs::create_dir_all(&l.run_dir).with_context(|| format!("create {}", l.run_dir))?;
+    // Before anything is started, and held for the life of the process: it is
+    // both this supervisor's claim on the run directory and how `yb_amp_local`
+    // tells a live supervisor from a stale one.
+    let _pidfile = pidfile::claim(&l.run_dir)?;
 
     // The daemons and the compute load the bundled Postgres libraries.
     prepend_ld_library_path(&l.pg_lib());
@@ -335,55 +374,16 @@ fn run() -> Result<std::process::ExitCode> {
         return Ok(std::process::ExitCode::SUCCESS);
     }
 
-    let overrides = fetch_overrides(&env);
-
-    // Every config file is written before anything starts: a render failure is a
-    // bad config, and failing here beats crash-looping a daemon against it.
-    let scale = res
-        .vcpu
-        .map(|v| ("scale_factor", toml_edit::Value::from(v)));
-    if scale.is_none() {
-        tracing::warn!("endpoint CPU unknown; leaving the daemons' scale_factor at their default");
+    if env.prerendered {
+        // `yb_amp_local` renders every one of these itself, from a local
+        // environment this process cannot see: ports it allocated, a Postgres
+        // install outside the image, per-endpoint settings held in the control
+        // plane. Rendering over them would replace a working local config with
+        // one derived from container defaults.
+        require_prerendered(l)?;
+    } else {
+        render_config(&env)?;
     }
-
-    let mut ps_base = boot::pageserver_base(l, env.yb_conn());
-    ps_base.extend(scale.clone());
-    let ps_toml = config::render(config::Daemon::Pageserver, ps_base, &overrides.pageserver)
-        .context("rendering pageserver.toml")?;
-    write(&l.ps_datadir().join("pageserver.toml"), &ps_toml)?;
-
-    // The safekeeper's yb_storage_conn is a string-encoded inline table rather
-    // than a table, which is the shape its config type expects.
-    let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string());
-    sk_base.extend(scale);
-    let sk_toml = config::render(config::Daemon::Safekeeper, sk_base, &overrides.safekeeper)
-        .context("rendering safekeeper.toml")?;
-    write(&l.sk_datadir().join("safekeeper.toml"), &sk_toml)?;
-
-    let compute_spec = spec::render_compute_spec(
-        &spec::ComputeSpecParams {
-            compute_port: l.compute_port,
-            branch_id: &l.branch_id,
-            safekeeper_addr: &l.safekeeper_addr(),
-            pageserver_connstring: &l.pageserver_connstring(),
-            shared_preload_libraries: &env.shared_preload_libraries,
-            cloud_admin_password_md5: &spec::md5_role_password(
-                &env.compute_password,
-                "cloud_admin",
-            ),
-            endpoint_id: env.endpoint_id.as_deref(),
-            yb_storage_conn: env.yb_conn_typed_json(),
-            autoprewarm: env.autoprewarm,
-            offload_lfc_interval_seconds: env.offload_lfc_interval_seconds,
-        },
-        &settings,
-        &env.chart_settings,
-        &overrides.pg,
-    );
-    write(
-        &l.run_dir.join("compute_spec.json"),
-        &serde_json::to_string(&compute_spec)?,
-    )?;
 
     // The compute starts last, after the pageserver/safekeeper handshake: the
     // safekeeper only learns about the branch over its HTTP API, and the LSN to
@@ -438,15 +438,40 @@ fn run() -> Result<std::process::ExitCode> {
     // here would stop the monitor loop from restarting a sibling that crashed
     // meanwhile. The controller's Docker deployer treats the line it logs as the
     // endpoint's readiness signal — see remote_auth::READY_MARKER.
-    remote_auth::spawn(
-        &l.pg_bin().join("psql"),
-        l.compute_port,
-        &env.compute_password,
-    );
+    //
+    // Skipped when the caller rendered the config: the password exists so a client
+    // outside the pod can authenticate, and a `yb_amp_local` endpoint is reached
+    // over loopback, by a spec that already says how its roles are set up.
+    if !env.prerendered {
+        remote_auth::spawn(
+            &l.pg_bin().join("psql"),
+            l.compute_port,
+            &env.compute_password,
+        );
+    }
+
+    // The control socket goes up last, once every service exists, so a caller
+    // cannot ask about one that has not been added yet. Sharing the supervisor
+    // means the monitor loop takes the lock a pass at a time — see `control`.
+    let sup: control::Shared = std::sync::Arc::new(std::sync::Mutex::new(sup));
+    // Not fatal, at either step: the endpoint serves fine without a control
+    // surface, and taking it down over one would trade a working database for a
+    // missing convenience. `thread::spawn` panics when the process is out of
+    // threads, which is exactly the moment that trade is worst.
+    match control::bind(&l.run_dir).and_then(|listener| {
+        let sup = sup.clone();
+        std::thread::Builder::new()
+            .name("control".into())
+            .spawn(move || control::serve(listener, sup))
+            .context("spawning the control thread")
+    }) {
+        Ok(_handle) => {}
+        Err(e) => tracing::warn!("control socket unavailable: {e:#}"),
+    }
 
     tracing::info!("all services are up");
 
-    match sup.run(std::time::Duration::from_millis(500))? {
+    match control::run_shared(&sup, std::time::Duration::from_millis(500))? {
         Outcome::Shutdown => {
             tracing::info!("stopped on signal");
             Ok(std::process::ExitCode::SUCCESS)
@@ -458,6 +483,111 @@ fn run() -> Result<std::process::ExitCode> {
             Ok(std::process::ExitCode::FAILURE)
         }
     }
+}
+
+/// Sizes the endpoint from its cgroup and writes every config file: both daemons'
+/// TOML and the compute spec.
+///
+/// All of it happens before anything starts, because a render failure is a bad
+/// config — failing here beats crash-looping a daemon against it.
+fn render_config(env: &Env) -> Result<()> {
+    let l = &env.layout;
+
+    let cgroup_root: Utf8PathBuf = env_or("CGROUP_ROOT", "/sys/fs/cgroup").into();
+    let res = Resources::resolve(
+        &Cgroup::new(cgroup_root),
+        env_opt("ENDPOINT_CPU").as_deref(),
+        env_opt("ENDPOINT_MEMORY").as_deref(),
+        env_opt("ENDPOINT_DATA_VOLUME_SIZE").as_deref(),
+        resources::statvfs_total_bytes(&l.run_dir),
+    );
+    tracing::info!(
+        memory_bytes = res.memory_bytes,
+        vcpu = res.vcpu,
+        data_volume_bytes = res.data_volume_bytes,
+        "resolved endpoint resources"
+    );
+
+    let (settings, skipped) = pg_settings::derive(&res);
+    for s in &settings {
+        tracing::info!(name = %s.name, value = %s.value, "derived");
+    }
+    if skipped.memory_unknown {
+        tracing::warn!("endpoint memory unknown; shared_buffers left at the Postgres default");
+    }
+    if skipped.cpu_unknown {
+        tracing::warn!("endpoint CPU unknown; parallel-worker GUCs left at their defaults");
+    }
+    if skipped.volume_unknown {
+        tracing::warn!("data volume budget unknown; the LFC stays disabled");
+    }
+
+    let overrides = fetch_overrides(env);
+
+    let scale = res
+        .vcpu
+        .map(|v| ("scale_factor", toml_edit::Value::from(v)));
+    if scale.is_none() {
+        tracing::warn!("endpoint CPU unknown; leaving the daemons' scale_factor at their default");
+    }
+
+    let mut ps_base = boot::pageserver_base(l, env.yb_conn());
+    ps_base.extend(scale.clone());
+    let ps_toml = config::render(config::Daemon::Pageserver, ps_base, &overrides.pageserver)
+        .context("rendering pageserver.toml")?;
+    write(&l.ps_datadir().join("pageserver.toml"), &ps_toml)?;
+
+    // The safekeeper's yb_storage_conn is a string-encoded inline table rather
+    // than a table, which is the shape its config type expects.
+    let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string());
+    sk_base.extend(scale);
+    let sk_toml = config::render(config::Daemon::Safekeeper, sk_base, &overrides.safekeeper)
+        .context("rendering safekeeper.toml")?;
+    write(&l.sk_datadir().join("safekeeper.toml"), &sk_toml)?;
+
+    let compute_spec = spec::render_compute_spec(
+        &spec::ComputeSpecParams {
+            compute_port: l.compute_port,
+            branch_id: &l.branch_id,
+            safekeeper_addr: &l.safekeeper_addr(),
+            pageserver_connstring: &l.pageserver_connstring(),
+            shared_preload_libraries: &env.shared_preload_libraries,
+            cloud_admin_password_md5: &spec::md5_role_password(
+                &env.compute_password,
+                "cloud_admin",
+            ),
+            endpoint_id: env.endpoint_id.as_deref(),
+            yb_storage_conn: env.yb_conn_typed_json(),
+            autoprewarm: env.autoprewarm,
+            offload_lfc_interval_seconds: env.offload_lfc_interval_seconds,
+        },
+        &settings,
+        &env.chart_settings,
+        &overrides.pg,
+    );
+    write(&l.compute_spec(), &serde_json::to_string(&compute_spec)?)?;
+    Ok(())
+}
+
+/// Checks that the caller really did write the files it said it would.
+///
+/// Cheap, and it converts the whole failure mode of `PRERENDERED_CONFIG` into one
+/// message. Without it a missing file surfaces as a daemon that exits on a
+/// default config it silently invented, or a `compute_ctl` that panics on a spec
+/// it cannot open — neither of which names the file that is missing.
+fn require_prerendered(l: &boot::Layout) -> Result<()> {
+    for path in [
+        l.ps_datadir().join("pageserver.toml"),
+        l.sk_datadir().join("safekeeper.toml"),
+        l.compute_spec(),
+    ] {
+        anyhow::ensure!(
+            path.exists(),
+            "PRERENDERED_CONFIG is set but {path} does not exist"
+        );
+    }
+    tracing::info!("running on the caller's config; rendering nothing");
+    Ok(())
 }
 
 /// Reads the operator overrides. A failure is a warning: an endpoint that cannot
@@ -620,9 +750,13 @@ mod tests {
                 safekeeper_pg_port: 5454,
                 safekeeper_http_port: 7676,
                 compute_ctl_http_port: 3080,
+                compute_ctl_internal_http_port: 3081,
                 pg_version_major: 18,
                 bind_host: "127.0.0.1".into(),
                 control_plane_api: "http://localhost:6666".into(),
+                compute_id: boot::COMPUTE_ID.into(),
+                privileged_role_name: None,
+                log_files: false,
             },
             yb_host_ports: "127.0.0.1:5433".into(),
             yb_user: "yugabyte".into(),
@@ -636,6 +770,7 @@ mod tests {
             offload_lfc_interval_seconds: None,
             shared_preload_libraries: "yb_amp".into(),
             chart_settings: BTreeMap::new(),
+            prerendered: false,
         }
     }
 
@@ -660,6 +795,52 @@ mod tests {
         let json = serde_json::to_string(&conn).unwrap();
         serde_json::from_str::<remote_storage::TypedRemoteStorageKind>(&json)
             .unwrap_or_else(|e| panic!("compute_ctl could not parse {json}: {e}"));
+    }
+
+    /// The launcher passes the run directory on the command line so the
+    /// endpoint's path is in the supervisor's argv — `ps` says which endpoint it
+    /// belongs to, and a teardown that reaps by path anchor (`pkill -f <run
+    /// dir>`) matches it instead of leaving it to restart what it just killed.
+    #[test]
+    fn the_run_directory_can_come_from_the_command_line() {
+        // The pod passes nothing; the environment decides.
+        assert_eq!(parse_run_dir(&[]).unwrap(), None);
+        assert_eq!(
+            parse_run_dir(&["--run-dir", "/repo/endpoints/main"]).unwrap(),
+            Some(Utf8PathBuf::from("/repo/endpoints/main"))
+        );
+        assert_eq!(
+            parse_run_dir(&["--run-dir=/repo/endpoints/main"]).unwrap(),
+            Some(Utf8PathBuf::from("/repo/endpoints/main"))
+        );
+        // A typo must not boot an endpoint against /data.
+        assert!(parse_run_dir(&["--run-dir"]).is_err());
+        assert!(parse_run_dir(&["--runn-dir=/x"]).is_err());
+        assert!(parse_run_dir(&["/repo"]).is_err());
+    }
+
+    /// `PRERENDERED_CONFIG` promises three files exist. A missing one has to be
+    /// named here: further down it becomes a daemon exiting on an invented
+    /// default, or a `compute_ctl` panic on a spec it cannot open.
+    #[test]
+    fn prerendered_config_names_the_file_the_caller_did_not_write() {
+        let dir = camino_tempfile::tempdir().unwrap();
+        let mut l = test_env().layout;
+        l.run_dir = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(l.ps_datadir()).unwrap();
+        std::fs::create_dir_all(l.sk_datadir()).unwrap();
+
+        let err = require_prerendered(&l).unwrap_err().to_string();
+        assert!(err.contains("pageserver.toml"), "{err}");
+
+        std::fs::write(l.ps_datadir().join("pageserver.toml"), "").unwrap();
+        std::fs::write(l.sk_datadir().join("safekeeper.toml"), "").unwrap();
+        let err = require_prerendered(&l).unwrap_err().to_string();
+        assert!(err.contains("compute_spec.json"), "{err}");
+
+        std::fs::write(l.compute_spec(), "{}").unwrap();
+        require_prerendered(&l).expect("all three present");
     }
 
     /// The optional connection fields are omitted rather than emitted as null,

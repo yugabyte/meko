@@ -27,21 +27,38 @@ use anyhow::{Context, Result, bail};
 /// touch async-signal-safe state, so it does nothing but flip this.
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
+/// Set when the shutdown arrived as SIGQUIT: stop the children without waiting
+/// out the drain.
+static IMMEDIATE: AtomicBool = AtomicBool::new(false);
+
 extern "C" fn on_term(_sig: libc::c_int) {
     SHUTDOWN.store(true, Ordering::SeqCst);
 }
 
-/// Installs handlers for SIGTERM/SIGINT so a pod delete stops the children
+extern "C" fn on_quit(_sig: libc::c_int) {
+    IMMEDIATE.store(true, Ordering::SeqCst);
+    SHUTDOWN.store(true, Ordering::SeqCst);
+}
+
+/// Installs handlers for SIGTERM/SIGINT/SIGQUIT so a delete stops the children
 /// instead of having them killed out from under their datadirs.
 ///
 /// Failure is an error, not a warning: without a handler a pod delete would kill
 /// this process outright and leave its children running against a datadir nobody
 /// is closing. For PID 1 that is the whole point of installing them.
+///
+/// SIGQUIT is what `yb_amp_local` sends for an immediate stop, and its default
+/// action is to terminate — so leaving it unhandled would make that path the one
+/// that orphans a pageserver.
 pub fn install_signal_handlers() -> Result<()> {
-    for sig in [libc::SIGTERM, libc::SIGINT] {
-        // SAFETY: `on_term` only stores to an AtomicBool, which is
+    for (sig, handler) in [
+        (libc::SIGTERM, on_term as libc::sighandler_t),
+        (libc::SIGINT, on_term as libc::sighandler_t),
+        (libc::SIGQUIT, on_quit as libc::sighandler_t),
+    ] {
+        // SAFETY: both handlers only store to an AtomicBool, which is
         // async-signal-safe.
-        let prev = unsafe { libc::signal(sig, on_term as libc::sighandler_t) };
+        let prev = unsafe { libc::signal(sig, handler) };
         if prev == libc::SIG_ERR {
             bail!(
                 "installing the handler for signal {sig} failed: {}",
@@ -54,6 +71,11 @@ pub fn install_signal_handlers() -> Result<()> {
 
 pub fn shutdown_requested() -> bool {
     SHUTDOWN.load(Ordering::SeqCst)
+}
+
+/// Whether the shutdown in flight asked for speed over a clean drain.
+pub fn shutdown_is_immediate() -> bool {
+    IMMEDIATE.load(Ordering::SeqCst)
 }
 
 /// How the supervisor decides a child came up, rather than merely started. A
@@ -70,6 +92,21 @@ pub struct Service {
     child: Option<Child>,
     /// Restart instants inside the rolling window, oldest first.
     restarts: VecDeque<Instant>,
+    /// Whether this service is *supposed* to be running.
+    ///
+    /// The monitor loop restarts anything it finds dead, which is right for a
+    /// crash and wrong for a deliberate stop — without this, asking the
+    /// supervisor to stop the pageserver just starts a fight it wins. Set false
+    /// by an operator stop and true again by an operator start; a crash never
+    /// touches it.
+    wanted: bool,
+    /// Where this child's output goes. `None` inherits, which in the pod means
+    /// the stream `kubectl logs` shows.
+    log_file: Option<PathBuf>,
+    /// Which signal the last stop sent, so a test can assert the choice without
+    /// depending on how promptly a loaded machine delivers it.
+    #[cfg(test)]
+    pub last_stop_signal: Option<libc::c_int>,
 }
 
 impl Service {
@@ -82,7 +119,16 @@ impl Service {
             health: None,
             child: None,
             restarts: VecDeque::new(),
+            wanted: true,
+            log_file: None,
+            #[cfg(test)]
+            last_stop_signal: None,
         }
+    }
+
+    /// Is this service supposed to be running?
+    pub fn wanted(&self) -> bool {
+        self.wanted
     }
 
     pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
@@ -100,6 +146,17 @@ impl Service {
         self
     }
 
+    /// Send this child's output to its own file, appending across restarts.
+    /// `None` inherits this process's stdout.
+    ///
+    /// For a caller that runs several endpoints on one host: one interleaved
+    /// stream is the right answer in a pod and the wrong one on a developer's
+    /// machine, where each daemon's log is read on its own.
+    pub fn logging_to(mut self, path: Option<impl Into<PathBuf>>) -> Self {
+        self.log_file = path.map(Into::into);
+        self
+    }
+
     pub fn spawn(&mut self) -> Result<()> {
         let (program, args) = self
             .argv
@@ -113,14 +170,34 @@ impl Service {
         for (k, v) in &self.env {
             cmd.env(k, v);
         }
-        // stdout/stderr are inherited on purpose: every child logs to the pod's
-        // stream, which is what `kubectl logs` shows.
+        // With no log file the child inherits this process's stdout, which in the
+        // pod is the stream `kubectl logs` shows.
+        if let Some(path) = &self.log_file {
+            // Append, so a restart adds to the log rather than truncating the
+            // evidence of why the last one died.
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .with_context(|| format!("open {} for {}", path.display(), self.name))?;
+            let err = file
+                .try_clone()
+                .with_context(|| format!("duplicate the log handle for {}", self.name))?;
+            cmd.stdout(file).stderr(err);
+        }
         let child = cmd
             .spawn()
             .with_context(|| format!("spawn {}", self.name))?;
         tracing::info!(service = %self.name, pid = child.id(), "started");
         self.child = Some(child);
         Ok(())
+    }
+
+    /// Where this child's output goes, for tests that pin the paths the launcher
+    /// reads.
+    #[cfg(test)]
+    pub fn log_file_for_test(&self) -> Option<&PathBuf> {
+        self.log_file.as_ref()
     }
 
     /// The argv, for tests that pin a child's command line against the flags the
@@ -200,16 +277,25 @@ impl Service {
         self.restarts.len()
     }
 
-    /// SIGTERM, then SIGKILL if it does not go quietly within `grace`, so a child
-    /// gets a chance to flush and close its datadir before it is killed outright.
-    pub fn stop(&mut self, grace: Duration) {
+    /// `signal`, then SIGKILL if the child does not go within `grace`, so it gets
+    /// a chance to flush and close its datadir before it is killed outright.
+    ///
+    /// The signal is the caller's choice because the daemons distinguish them:
+    /// SIGTERM drains, SIGQUIT stops now without one, and both leave a datadir
+    /// that reopens cleanly. SIGKILL leaves the mess a crash leaves, so it is the
+    /// last resort and never the request.
+    pub fn stop(&mut self, signal: libc::c_int, grace: Duration) {
         let Some(child) = self.child.as_mut() else {
             return;
         };
         let pid = child.id() as libc::pid_t;
-        // SAFETY: `pid` is our own child, and SIGTERM is a valid signal.
+        #[cfg(test)]
+        {
+            self.last_stop_signal = Some(signal);
+        }
+        // SAFETY: `pid` is our own child, and both signals are valid.
         unsafe {
-            libc::kill(pid, libc::SIGTERM);
+            libc::kill(pid, signal);
         }
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
@@ -223,7 +309,7 @@ impl Service {
                 Err(_) => break,
             }
         }
-        tracing::warn!(service = %self.name, "did not exit on SIGTERM; killing");
+        tracing::warn!(service = %self.name, signal, "did not exit on the stop signal; killing");
         let _ = child.kill();
         let _ = child.wait();
         self.child = None;
@@ -355,69 +441,198 @@ impl Supervisor {
     /// Restarts crashed children until shutdown or a service exhausts its budget.
     pub fn run(&mut self, poll: Duration) -> Result<Outcome> {
         loop {
-            if shutdown_requested() {
-                self.stop_all();
-                return Ok(Outcome::Shutdown);
-            }
-            for i in 0..self.services.len() {
-                match self.services[i].exited() {
-                    // Still running.
-                    Ok(None) => continue,
-                    Ok(Some(_)) => {}
-                    // Whether the child is alive is unknown, so do neither of the
-                    // two things that could be wrong: restarting a process that is
-                    // actually running, or exiting the pod over a failed
-                    // `try_wait`. Re-check on the next tick instead.
-                    Err(e) => {
-                        tracing::warn!(
-                            service = %self.services[i].name,
-                            error = %e,
-                            "could not determine status; re-checking next tick"
-                        );
-                        continue;
-                    }
-                }
-                let name = self.services[i].name.clone();
-                let count = self.services[i].record_restart(Instant::now(), self.policy.window);
-                if count > self.policy.max_restarts {
-                    tracing::error!(
-                        service = %name,
-                        restarts = count,
-                        window_secs = self.policy.window.as_secs(),
-                        "exceeded its restart budget; exiting so the pod is recreated"
-                    );
-                    self.stop_all();
-                    return Ok(Outcome::BudgetExceeded {
-                        service: name,
-                        restarts: count,
-                    });
-                }
-                tracing::warn!(service = %name, restarts = count, "exited; restarting");
-                std::thread::sleep(self.policy.backoff);
-                if let Err(e) = self.services[i].spawn() {
-                    // A failed respawn must not escape this loop: propagating it
-                    // would exit the pod on the first transient `fork`/`exec`
-                    // failure, skipping the very budget that exists to bound this.
-                    // The child stays `None`, so the next tick counts another
-                    // restart and tries again — and a permanent failure still
-                    // exhausts the budget and exits, just by the intended route.
-                    tracing::error!(
-                        service = %name,
-                        error = %e,
-                        "respawn failed; retrying against the restart budget"
-                    );
-                }
+            if let Some(outcome) = self.poll_once()? {
+                return Ok(outcome);
             }
             std::thread::sleep(poll);
         }
     }
 
+    /// One pass of the monitor loop: `Some` when the loop should stop.
+    ///
+    /// Split out from [`Self::run`] so a caller that shares the supervisor with
+    /// a control socket can take the lock per pass instead of holding it for the
+    /// process's lifetime — see [`crate::control`].
+    pub fn poll_once(&mut self) -> Result<Option<Outcome>> {
+        if shutdown_requested() {
+            self.stop_all();
+            return Ok(Some(Outcome::Shutdown));
+        }
+        for i in 0..self.services.len() {
+            // A service an operator asked to stop stays stopped. Restarting it
+            // here would make `pageserver stop` unwinnable.
+            if !self.services[i].wanted() {
+                continue;
+            }
+            match self.services[i].exited() {
+                // Still running.
+                Ok(None) => continue,
+                Ok(Some(_)) => {}
+                // Whether the child is alive is unknown, so do neither of the two
+                // things that could be wrong: restarting a process that is
+                // actually running, or exiting the pod over a failed `try_wait`.
+                // Re-check on the next tick instead.
+                Err(e) => {
+                    tracing::warn!(
+                        service = %self.services[i].name,
+                        error = %e,
+                        "could not determine status; re-checking next tick"
+                    );
+                    continue;
+                }
+            }
+            let name = self.services[i].name.clone();
+            let count = self.services[i].record_restart(Instant::now(), self.policy.window);
+            if count > self.policy.max_restarts {
+                tracing::error!(
+                    service = %name,
+                    restarts = count,
+                    window_secs = self.policy.window.as_secs(),
+                    "exceeded its restart budget; exiting so the pod is recreated"
+                );
+                self.stop_all();
+                return Ok(Some(Outcome::BudgetExceeded {
+                    service: name,
+                    restarts: count,
+                }));
+            }
+            tracing::warn!(service = %name, restarts = count, "exited; restarting");
+            std::thread::sleep(self.policy.backoff);
+            if let Err(e) = self.services[i].spawn() {
+                // A failed respawn must not escape this loop: propagating it
+                // would exit the pod on the first transient `fork`/`exec`
+                // failure, skipping the very budget that exists to bound this.
+                // The child stays `None`, so the next tick counts another restart
+                // and tries again — and a permanent failure still exhausts the
+                // budget and exits, just by the intended route.
+                tracing::error!(
+                    service = %name,
+                    error = %e,
+                    "respawn failed; retrying against the restart budget"
+                );
+            }
+        }
+        Ok(None)
+    }
+
+    /// One service by name, for tests that assert on its state.
+    #[cfg(test)]
+    pub fn service_for_test(&mut self, name: &str) -> &mut Service {
+        self.services
+            .iter_mut()
+            .find(|s| s.name == name)
+            .expect("no such service")
+    }
+
+    /// Stop supervising one service, without signalling it.
+    ///
+    /// For a caller that wants to take the process down its own way: a compute is
+    /// stopped through Postgres, and how Postgres goes decides what survives —
+    /// `compute_ctl` turns every signal it gets into a *fast* shutdown, so asking
+    /// it to stop can never produce a crash stop. Clearing `wanted` first is what
+    /// keeps the monitor loop from restarting whatever the caller then kills.
+    pub fn disable(&mut self, name: &str) -> Result<()> {
+        let svc = self
+            .services
+            .iter_mut()
+            .find(|s| s.name == name)
+            .with_context(|| format!("no service named {name}"))?;
+        svc.wanted = false;
+        tracing::info!(service = name, "no longer supervised, on request");
+        Ok(())
+    }
+
+    /// Stop one service and keep it stopped.
+    ///
+    /// Distinct from a crash: `wanted` goes false, so the monitor loop leaves it
+    /// alone until [`Self::start_one`]. This is what `yb_amp_local pageserver
+    /// stop` reaches.
+    ///
+    /// `drain` false sends SIGQUIT instead of SIGTERM: stop now, without the
+    /// shutdown checkpoint. That is the launcher's `--mode immediate` — a signal
+    /// the daemons implement, not a shorter deadline before SIGKILL, which would
+    /// hand them a crash to recover from.
+    pub fn stop_one(&mut self, name: &str, drain: bool) -> Result<()> {
+        let grace = self.policy.stop_grace;
+        let signal = if drain { libc::SIGTERM } else { libc::SIGQUIT };
+        let svc = self
+            .services
+            .iter_mut()
+            .find(|s| s.name == name)
+            .with_context(|| format!("no service named {name}"))?;
+        // Before the signal, not after: otherwise the monitor loop sees the child
+        // gone and restarts the very thing being stopped.
+        svc.wanted = false;
+        svc.stop(signal, grace);
+        tracing::info!(service = name, drain, "stopped on request");
+        Ok(())
+    }
+
+    /// Start one service and gate on its health probe, so the caller knows it is
+    /// serving rather than merely spawned.
+    ///
+    /// `budget` is how long the caller is willing to wait. It has to be the
+    /// caller's, not this policy's: a caller that gives up first gets a timeout
+    /// while the supervisor is still working, reports a failure that is not one,
+    /// and cannot say why. `None` uses the policy's own gate.
+    pub fn start_one(&mut self, name: &str, budget: Option<Duration>) -> Result<()> {
+        let timeout = budget.unwrap_or(self.policy.health_timeout);
+        let interval = self.policy.health_interval;
+        let svc = self
+            .services
+            .iter_mut()
+            .find(|s| s.name == name)
+            .with_context(|| format!("no service named {name}"))?;
+        svc.wanted = true;
+        // `started()` alone is not enough: a child that has exited stays `Some`
+        // until the monitor loop reaps it, so a service that crashed a moment ago
+        // reads as running. `exited()` reaps it, which also keeps the replacement
+        // below from orphaning a zombie.
+        if svc.started() && matches!(svc.exited(), Ok(None)) {
+            return Ok(());
+        }
+        svc.spawn()?;
+        svc.wait_healthy(timeout, interval)?;
+        tracing::info!(service = name, "started on request");
+        Ok(())
+    }
+
+    /// One name per line, `<name> running|down|stopped`.
+    ///
+    /// `down` and `stopped` are both not-running, and the difference is the
+    /// whole point: `down` is a service that is supposed to be up, so the
+    /// monitor loop is about to restart it; `stopped` is one an operator asked
+    /// to stay down.
+    pub fn status(&mut self) -> String {
+        let mut out = String::new();
+        for s in &mut self.services {
+            let alive = matches!(s.exited(), Ok(None)) && s.started();
+            let state = if alive {
+                "running"
+            } else if s.wanted {
+                "down"
+            } else {
+                "stopped"
+            };
+            out.push_str(&format!("{} {}\n", s.name, state));
+        }
+        out
+    }
+
     /// Stops children in reverse start order, so a dependency outlives its
     /// dependents.
+    ///
+    /// A shutdown that arrived as SIGQUIT is passed on as one: the caller asked
+    /// to stop now rather than drain, and the daemons implement that.
     pub fn stop_all(&mut self) {
         let grace = self.policy.stop_grace;
+        let signal = if shutdown_is_immediate() {
+            libc::SIGQUIT
+        } else {
+            libc::SIGTERM
+        };
         for s in self.services.iter_mut().rev() {
-            s.stop(grace);
+            s.stop(signal, grace);
         }
     }
 }
@@ -439,6 +654,33 @@ mod tests {
             health_interval: Duration::from_millis(10),
             stop_grace: Duration::from_millis(200),
         }
+    }
+
+    /// `pageserver start` on a service that crashed a moment ago has to actually
+    /// start it. The crashed child is still `Some` until the monitor loop reaps
+    /// it, so a check on "was it ever spawned" reports it running and returns
+    /// having done nothing — and the caller goes on to probe a dead port.
+    #[test]
+    fn starting_a_crashed_service_replaces_it() {
+        let mut sup = Supervisor::new(fast_policy());
+        let mut svc = Service::new("pageserver", sh("exit 7"));
+        svc.spawn().unwrap();
+        // Let it die, without giving the monitor loop a chance to reap it.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && matches!(svc.exited(), Ok(None)) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Re-spawn it as a child that stays up, so the restart is observable.
+        svc.argv = sh("sleep 60");
+        sup.add(svc);
+
+        sup.start_one("pageserver", None)
+            .expect("start a crashed service");
+        assert!(
+            matches!(sup.services[0].exited(), Ok(None)),
+            "start_one returned with the service still dead"
+        );
+        sup.stop_all();
     }
 
     #[test]
@@ -475,13 +717,46 @@ mod tests {
         );
     }
 
+    /// `--mode immediate` means SIGQUIT to these daemons, and they implement it:
+    /// stop now, no drain, datadir still reopenable. SIGTERM with no grace — kill
+    /// it the moment it does not go — hands the daemon a crash to recover from,
+    /// and it comes back slower than the caller is willing to wait.
+    #[test]
+    fn an_immediate_stop_asks_rather_than_kills() {
+        // The signal it selects, not the child's fate: which signal ends a
+        // process depends on how promptly a loaded machine delivers it, while
+        // the choice is the thing this has to get right. What SIGQUIT then does
+        // to a real daemon is what the integration suite covers.
+        let mut svc = Service::new("safekeeper", sh("sleep 60"));
+        svc.spawn().unwrap();
+        let mut sup = Supervisor::new(fast_policy());
+        sup.add(svc);
+
+        sup.stop_one("safekeeper", false).unwrap();
+        assert_eq!(
+            sup.service_for_test("safekeeper").last_stop_signal,
+            Some(libc::SIGQUIT),
+            "an immediate stop must ask with SIGQUIT"
+        );
+
+        let mut svc = Service::new("pageserver", sh("sleep 60"));
+        svc.spawn().unwrap();
+        sup.add(svc);
+        sup.stop_one("pageserver", true).unwrap();
+        assert_eq!(
+            sup.service_for_test("pageserver").last_stop_signal,
+            Some(libc::SIGTERM),
+            "a draining stop must ask with SIGTERM"
+        );
+    }
+
     #[test]
     fn health_probe_gates_startup() {
         let mut s = Service::new("sleeper", sh("sleep 30")).health(Box::new(|| true));
         s.spawn().unwrap();
         s.wait_healthy(Duration::from_secs(2), Duration::from_millis(10))
             .unwrap();
-        s.stop(Duration::from_millis(500));
+        s.stop(libc::SIGTERM, Duration::from_millis(500));
     }
 
     #[test]
@@ -492,7 +767,7 @@ mod tests {
             .wait_healthy(Duration::from_millis(200), Duration::from_millis(10))
             .expect_err("must time out");
         assert!(format!("{err:#}").contains("did not become healthy"));
-        s.stop(Duration::from_millis(500));
+        s.stop(libc::SIGTERM, Duration::from_millis(500));
     }
 
     /// The budget is what converts a crash-looping child into a pod restart, so

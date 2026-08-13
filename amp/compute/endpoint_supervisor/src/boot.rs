@@ -26,22 +26,39 @@ pub struct Layout {
     pub pageserver_grpc_port: u16,
     pub safekeeper_pg_port: u16,
     pub safekeeper_http_port: u16,
-    /// `compute_ctl`'s own HTTP surface. Its internal port is this plus one.
+    /// `compute_ctl`'s own HTTP surface.
     pub compute_ctl_http_port: u16,
+    /// `compute_ctl`'s internal HTTP surface. In the pod this is
+    /// [`Self::compute_ctl_http_port`] plus one; `yb_amp_local` allocates the two
+    /// independently, so it is carried rather than derived.
+    pub compute_ctl_internal_http_port: u16,
     /// Postgres major version. The install is version-qualified inside
     /// `pg_distrib_dir`, so this is needed to find `bin/` and `lib/`.
     pub pg_version_major: u32,
     /// `0.0.0.0` when the controller must reach in, loopback otherwise.
     pub bind_host: String,
     pub control_plane_api: String,
+    /// The identity `compute_ctl` reports itself under. One compute per pod, so
+    /// [`COMPUTE_ID`] is enough there; `yb_amp_local` runs many on one host and
+    /// passes the endpoint id.
+    pub compute_id: String,
+    /// `--privileged-role-name`, when the caller wants one. Absent in the pod.
+    pub privileged_role_name: Option<String>,
+    /// Give each child its own log file beside its datadir instead of letting it
+    /// inherit this process's stdout.
+    ///
+    /// A pod wants one interleaved stream, which is what `kubectl logs` shows.
+    /// `yb_amp_local` wants `endpoints/<id>/pageserver/pageserver.log`, because
+    /// several endpoints share a host and each daemon's log is read on its own.
+    pub log_files: bool,
 }
 
 /// Loopback is what the compute and the supervisor's own probes use, even when
 /// the daemons bind `0.0.0.0` — a wildcard listener accepts it too.
 pub const LISTEN_HOST: &str = "127.0.0.1";
 
-/// The identity `compute_ctl` reports itself under. One compute per pod, so a
-/// fixed name is enough — but the flag is required, not optional.
+/// The default identity `compute_ctl` reports itself under. One compute per pod,
+/// so a fixed name is enough — but the flag is required, not optional.
 pub const COMPUTE_ID: &str = "yb-amp-endpoint";
 
 impl Layout {
@@ -53,6 +70,11 @@ impl Layout {
     }
     pub fn pgdata(&self) -> Utf8PathBuf {
         self.run_dir.join("pgdata")
+    }
+    /// The compute spec `compute_ctl` loads — written by this process in the pod,
+    /// and by the caller when the config is pre-rendered.
+    pub fn compute_spec(&self) -> Utf8PathBuf {
+        self.run_dir.join("compute_spec.json")
     }
     /// The Postgres binaries: `<pg_distrib_dir>/v<major>/bin`.
     ///
@@ -260,6 +282,42 @@ fn probe_addr(host: &str, port: u16) -> bool {
         .any(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_millis(500)).is_ok())
 }
 
+/// The compute's argv.
+///
+/// Every flag here is one `compute-ctl` actually declares. The spec file is
+/// `--config`; `--compute-id` is a required `String` with no default, so omitting
+/// it fails clap parsing and the process exits before it does anything. `--dev`
+/// skips the VM-specific operations (killing pgbouncer and local_proxy on the way
+/// down) — neither exists in a container nor under `yb_amp_local`.
+pub fn compute_ctl_argv(l: &Layout) -> Vec<String> {
+    let mut argv = vec![
+        l.bin_dir.join("compute-ctl").to_string(),
+        "--pgdata".into(),
+        l.pgdata().to_string(),
+        "--connstr".into(),
+        format!(
+            "postgresql://cloud_admin@{LISTEN_HOST}:{}/postgres",
+            l.compute_port
+        ),
+        "--pgbin".into(),
+        l.pg_bin().join("postgres").to_string(),
+        "--compute-id".into(),
+        l.compute_id.clone(),
+        "--config".into(),
+        l.compute_spec().to_string(),
+        "--external-http-port".into(),
+        l.compute_ctl_http_port.to_string(),
+        "--internal-http-port".into(),
+        l.compute_ctl_internal_http_port.to_string(),
+        "--dev".into(),
+    ];
+    if let Some(role) = &l.privileged_role_name {
+        argv.push("--privileged-role-name".into());
+        argv.push(role.clone());
+    }
+    argv
+}
+
 /// The three services, in the order they must start.
 ///
 /// The order is a real dependency chain, not a preference: `compute_ctl`'s first
@@ -271,6 +329,10 @@ fn probe_addr(host: &str, port: u16) -> bool {
 /// and the compute starting. The caller starts the first two, coordinates, then
 /// starts the compute.
 pub fn services(l: &Layout) -> Vec<Service> {
+    // Each daemon's log, at the path `yb_amp_local` and the integration suite
+    // already read. `None` in a pod, where one interleaved stream is what
+    // `kubectl logs` shows.
+    let log = |dir: Utf8PathBuf, name: &str| l.log_files.then(|| dir.join(format!("{name}.log")));
     vec![
         Service::new(
             "safekeeper",
@@ -281,7 +343,8 @@ pub fn services(l: &Layout) -> Vec<Service> {
             ],
         )
         .cwd(l.sk_datadir())
-        .health(status_probe(l.safekeeper_http_port, "/v1/status")),
+        .health(status_probe(l.safekeeper_http_port, "/v1/status"))
+        .logging_to(log(l.sk_datadir(), "safekeeper")),
         Service::new(
             "pageserver",
             vec![
@@ -291,38 +354,12 @@ pub fn services(l: &Layout) -> Vec<Service> {
             ],
         )
         .cwd(l.ps_datadir())
-        .health(status_probe(l.pageserver_http_port, "/v1/status")),
-        // Every flag here is one `compute-ctl` actually declares. The spec file
-        // is `--config`; `--compute-id` is a required `String` with no default, so
-        // omitting it fails clap parsing and the process exits before it does
-        // anything. `--dev` skips the VM-specific operations that have no meaning
-        // in a container.
-        Service::new(
-            "compute_ctl",
-            vec![
-                l.bin_dir.join("compute-ctl").to_string(),
-                "--pgdata".into(),
-                l.pgdata().to_string(),
-                "--connstr".into(),
-                format!(
-                    "postgresql://cloud_admin@{LISTEN_HOST}:{}/postgres",
-                    l.compute_port
-                ),
-                "--pgbin".into(),
-                l.pg_bin().join("postgres").to_string(),
-                "--compute-id".into(),
-                COMPUTE_ID.into(),
-                "--config".into(),
-                l.run_dir.join("compute_spec.json").to_string(),
-                "--external-http-port".into(),
-                l.compute_ctl_http_port.to_string(),
-                "--internal-http-port".into(),
-                (l.compute_ctl_http_port + 1).to_string(),
-                "--dev".into(),
-            ],
-        )
-        .cwd(l.run_dir.clone())
-        .health(tcp_probe(l.compute_port)),
+        .health(status_probe(l.pageserver_http_port, "/v1/status"))
+        .logging_to(log(l.ps_datadir(), "pageserver")),
+        Service::new("compute_ctl", compute_ctl_argv(l))
+            .cwd(l.run_dir.clone())
+            .health(tcp_probe(l.compute_port))
+            .logging_to(log(l.run_dir.clone(), "compute")),
     ]
 }
 
@@ -343,9 +380,13 @@ mod tests {
             safekeeper_pg_port: 5454,
             safekeeper_http_port: 7676,
             compute_ctl_http_port: 3080,
+            compute_ctl_internal_http_port: 3081,
             pg_version_major: 18,
             bind_host: "0.0.0.0".into(),
             control_plane_api: "http://localhost:6666".into(),
+            compute_id: COMPUTE_ID.into(),
+            privileged_role_name: None,
+            log_files: false,
         }
     }
 
@@ -424,6 +465,84 @@ mod tests {
         );
 
         assert!(argv.contains(&"--dev".to_string()), "{argv:?}");
+    }
+
+    /// `yb_amp_local` and the integration suite read each daemon's log at a fixed
+    /// path — `endpoints/<id>/pageserver/pageserver.log` and its siblings. A pod
+    /// wants one interleaved stream instead, so the paths are only attached when
+    /// the caller asked for them.
+    #[test]
+    fn per_service_logs_land_where_the_launcher_reads_them() {
+        let mut l = layout();
+        l.run_dir = "/repo/endpoints/main".into();
+        assert!(
+            services(&l).iter().all(|s| s.log_file_for_test().is_none()),
+            "a pod must keep inheriting stdout"
+        );
+
+        l.log_files = true;
+        let got: Vec<_> = services(&l)
+            .iter()
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    s.log_file_for_test().map(|p| p.display().to_string()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "safekeeper".to_string(),
+                    Some("/repo/endpoints/main/safekeeper/safekeeper.log".to_string())
+                ),
+                (
+                    "pageserver".to_string(),
+                    Some("/repo/endpoints/main/pageserver/pageserver.log".to_string())
+                ),
+                (
+                    "compute_ctl".to_string(),
+                    Some("/repo/endpoints/main/compute.log".to_string())
+                ),
+            ]
+        );
+    }
+
+    /// `yb_amp_local` runs many endpoints on one host: each compute needs its own
+    /// identity, and its two HTTP ports come from a free-port search rather than
+    /// being contiguous. Deriving either one would collide.
+    #[test]
+    fn the_caller_can_name_the_compute_and_place_its_ports() {
+        let mut l = layout();
+        l.compute_id = "ep_main".into();
+        l.compute_ctl_internal_http_port = 47119;
+        l.privileged_role_name = Some("yb_amp_admin".into());
+
+        let argv = compute_ctl_argv(&l);
+        let flag = |name: &str| {
+            argv.iter()
+                .position(|a| a == name)
+                .map(|i| argv[i + 1].clone())
+        };
+        assert_eq!(flag("--compute-id").as_deref(), Some("ep_main"));
+        assert_eq!(flag("--internal-http-port").as_deref(), Some("47119"));
+        assert_eq!(flag("--external-http-port").as_deref(), Some("3080"));
+        assert_eq!(
+            flag("--privileged-role-name").as_deref(),
+            Some("yb_amp_admin")
+        );
+    }
+
+    /// The pod passes no privileged role, and an empty flag is not the same as an
+    /// absent one — `compute-ctl` would take the empty string as the role name.
+    #[test]
+    fn no_privileged_role_means_no_flag() {
+        let argv = compute_ctl_argv(&layout());
+        assert!(
+            !argv.iter().any(|a| a == "--privileged-role-name"),
+            "{argv:?}"
+        );
     }
 
     /// The daemons bind the public address, but the compute and the probes reach

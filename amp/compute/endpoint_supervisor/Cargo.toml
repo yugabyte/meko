@@ -31,6 +31,7 @@ tracing-subscriber.workspace = true
 workspace_hack.workspace = true
 
 [dev-dependencies]
+camino-tempfile.workspace = true
 # The compute spec's storage connection is deserialized into the type compute_ctl
 # parses it with, so a wrong shape fails here rather than at the compute's startup.
 remote_storage.workspace = true
