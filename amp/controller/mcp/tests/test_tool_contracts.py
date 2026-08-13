@@ -169,6 +169,48 @@ def test_create_endpoint_partial_resources(wire):
     assert handler.last_json() == {"resources": {"cpu": "1500m"}}
 
 
+def test_create_endpoint_sends_the_three_settings_maps(wire):
+    # Each goes at the top level of the body, not nested under `resources`.
+    handler = wire({f"POST {B}/endpoints": (202, TASK)})
+    tools.create_endpoint(
+        pool_id="p1", cluster_id="pr1", branch_id="b1",
+        pg_settings={"work_mem": "64MB"},
+        pageserver_settings={"tenant_config.enable_gc": True},
+        safekeeper_settings={"wal_cache_size_mib": 512},
+    )
+    assert handler.last_json() == {
+        "pg_settings": {"work_mem": "64MB"},
+        "pageserver_settings": {"tenant_config.enable_gc": True},
+        "safekeeper_settings": {"wal_cache_size_mib": 512},
+    }
+
+
+def test_create_endpoint_passes_dotted_keys_through_verbatim(wire):
+    # Splitting the dotted key into a nested object here would be rejected by the
+    # controller as a non-scalar value.
+    handler = wire({f"POST {B}/endpoints": (202, TASK)})
+    tools.create_endpoint(
+        pool_id="p1", cluster_id="pr1", branch_id="b1",
+        pageserver_settings={
+            "tenant_config.enable_gc": True,
+            "tenant_config.pitr_interval": "7 days",
+        },
+    )
+    assert handler.last_json()["pageserver_settings"] == {
+        "tenant_config.enable_gc": True,
+        "tenant_config.pitr_interval": "7 days",
+    }
+
+
+def test_create_endpoint_omits_empty_settings_maps(wire):
+    handler = wire({f"POST {B}/endpoints": (202, TASK)})
+    tools.create_endpoint(
+        pool_id="p1", cluster_id="pr1", branch_id="b1",
+        pg_settings={}, pageserver_settings={}, safekeeper_settings={},
+    )
+    assert handler.last_json() == {}
+
+
 # ---- Query params (lists) ----
 
 def test_list_omits_pagination_when_unset(wire):

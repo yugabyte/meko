@@ -142,6 +142,9 @@ def create_endpoint(
     disk_type: Optional[str] = None,
     cpu: Optional[str] = None,
     memory: Optional[str] = None,
+    pg_settings: Optional[dict[str, str]] = None,
+    pageserver_settings: Optional[dict[str, Any]] = None,
+    safekeeper_settings: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Create and deploy an endpoint (compute) on a branch. ASYNCHRONOUS.
 
@@ -153,9 +156,31 @@ def create_endpoint(
     `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`, then call
     `get_endpoint` to read its `address` (and `tailnet_address`, if the endpoint
     is exposed on the tailnet).
+
+    Three optional settings maps configure what runs inside the pod, all
+    create-time only — to change one, create another endpoint.
+
+    `pg_settings` is `{name: value}` PostgreSQL GUCs, values all strings, e.g.
+    `{"work_mem": "64MB"}`. They merge over the branch's and win.
+
+    `pageserver_settings` and `safekeeper_settings` override the two storage
+    daemons. **Keys may be dotted paths, and for the pageserver's GC knobs they
+    must be** — those live under `tenant_config`, not at the top level:
+
+        pageserver_settings={"tenant_config.enable_gc": True,
+                             "tenant_config.pitr_interval": "7 days"}
+
+    A flat `{"enable_gc": True}` is a 400, not a silent no-op. Values are scalars
+    (bool/int/float/str) — the nesting goes in the key — with durations and sizes
+    as strings in the daemons' format ("7 days", "1 GiB"). Unknown keys,
+    wrong-typed values and protected identity/wiring keys (`branch_id`, the
+    `listen_*` addresses, `yb_storage_conn`, `pg_distrib_dir`,
+    `control_plane_api`, `safekeeper_pg_addr`) all 400 naming the key — read that
+    message rather than retrying, since it often suggests the dotted form.
     """
     return controller_client.create_endpoint(
-        pool_id, cluster_id, branch_id, role, disk_type, cpu, memory
+        pool_id, cluster_id, branch_id, role, disk_type, cpu, memory,
+        pg_settings, pageserver_settings, safekeeper_settings
     )
 
 

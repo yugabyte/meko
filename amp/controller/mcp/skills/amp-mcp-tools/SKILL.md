@@ -74,6 +74,38 @@ same branch is rejected with `conflict`. Provision additional compute as
 `network` (`local` is not yet supported and is rejected with
 `unsupported_disk_type`).
 
+## Settings: dotted keys reach the nested ones
+
+`create_endpoint` takes three settings maps, all **create-time only** — there is
+no update surface, so changing one means creating another endpoint.
+
+`pg_settings={"work_mem": "64MB"}` are PostgreSQL GUCs (values are strings) and
+merge over the branch's, winning on a shared key.
+
+`pageserver_settings` / `safekeeper_settings` configure the two storage daemons
+in the pod. **A key may be a dotted path into a nested toml table, and for the
+pageserver's GC knobs it must be** — they live under `tenant_config`, not at the
+top level:
+
+```
+create_endpoint(..., pageserver_settings={"tenant_config.enable_gc": True,
+                                          "tenant_config.pitr_interval": "7 days"})
+```
+
+A flat `{"enable_gc": True}` is a `400`, not a silent no-op. Values must be
+scalars — the nesting goes in the **key**, never in the value — with durations
+and sizes as strings in the daemons' own format (`"7 days"`, `"1 GiB"`).
+
+Unknown keys, wrong types, and the protected identity/wiring keys (`branch_id`,
+the `listen_*` addresses, `yb_storage_conn`, `pg_distrib_dir`,
+`control_plane_api`, `safekeeper_pg_addr`) all return `400` naming the key.
+**Read that message rather than retrying** — when a flat key has a nested form it
+suggests it. Validation is against a key set generated from the daemons' own
+config types, so it tracks the binaries rather than a hand-kept list.
+
+These apply at pod start, which is why they are create-time: the supervisor
+reads them from the endpoint's row when the pod comes up.
+
 ## Resize outcomes
 
 `resize_endpoint(cpu?, memory?)` works for either role. Pass **at least one** of

@@ -239,6 +239,9 @@ class ControllerClient:
         disk_type: Optional[str] = None,
         cpu: Optional[str] = None,
         memory: Optional[str] = None,
+        pg_settings: Optional[dict[str, str]] = None,
+        pageserver_settings: Optional[dict[str, Any]] = None,
+        safekeeper_settings: Optional[dict[str, Any]] = None,
     ) -> dict:
         body: dict[str, Any] = {}
         if role is not None:
@@ -252,6 +255,13 @@ class ControllerClient:
             resources["memory"] = memory
         if resources:
             body["resources"] = resources
+        # Omitted when empty: there is nothing to say by sending `{}`.
+        if pg_settings:
+            body["pg_settings"] = pg_settings
+        if pageserver_settings:
+            body["pageserver_settings"] = pageserver_settings
+        if safekeeper_settings:
+            body["safekeeper_settings"] = safekeeper_settings
         return self._request(
             "POST",
             f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/endpoints",
