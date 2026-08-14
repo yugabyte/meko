@@ -1520,6 +1520,14 @@ async fn consumer_main(
 
         let highest_lsn = batch.last().map(|c| c.end_lsn).expect("batch is non-empty");
 
+        // Simulates the batch INSERT stalling — what a YB tablet-split storm
+        // does to this path (integration sk_yb_durable_wait_stall). The stall
+        // has to sit here, before the watermark advance below, because it is
+        // the watermark standing still that makes `wait_for_durable` block
+        // while its caller holds the timeline write lock. Configure with
+        // return(<millis>).
+        utils::failpoint_support::sleep_millis_async!("sk-yb-wal-flush");
+
         match flush_batch(
             &ysql_fpu_client,
             yb_thinclient.as_deref(),
