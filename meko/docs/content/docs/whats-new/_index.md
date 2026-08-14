@@ -8,13 +8,13 @@ body_class: full-width
 notoc: true
 ---
 
-Highlights from the most recent release on each of Meko's two tracks. For the full history, see the [Changelog](../changelog/).
+Highlights from recent releases on each of Meko's two tracks. For the full history, see the [Changelog](../changelog/).
 
 {{< card-group variant="half" >}}
   {{< card
-    href="changelog/meko/v0.9.5/"
-    title="Meko v0.9.5 — July 31, 2026"
-    desc="Token Burn savings, conversation-embedding quotas, and MCP server 2.1.0."
+    href="changelog/meko/v0.9.6/"
+    title="Meko v0.9.6 — August 13, 2026"
+    desc="Token Burn savings, live usage, artifacts, and knowledge-base status."
     cta="View release notes &rarr;"
   >}}
   {{< card
@@ -25,8 +25,10 @@ Highlights from the most recent release on each of Meko's two tracks. For the fu
   >}}
 {{< /card-group >}}
 
-## Meko portal and platform — v0.9.5
+## Meko portal and platform — v0.9.5–v0.9.6
 
+- **Track usage against your plan** — a dedicated Usage page shows live consumed versus plan limits for datapacks, conversations, workbench tokens, knowledge-base storage, and MCP memory and search activity.
+- **Find generated files and follow indexing progress** — each datapack now has an Artifacts page, while knowledge-base files show their progress from queued through ready.
 - **See what Meko saves you** — contextual prominence search is live in production. The Datapacks overview and each datapack detail page show the context reduction from unified retrieval across conversation, memory, and knowledge base, with a per-model estimate of the resulting cost savings.
 - **Conversation-embedding quotas** — conversation search and embedding usage is governed by plan-tier quotas as the conversation-search rollout continues.
 - **Claude Desktop recall works on plain questions** — the Meko skill now activates for simple recall prompts, and adding messages to a conversation from Claude Desktop no longer errors.

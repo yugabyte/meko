@@ -14,6 +14,12 @@ Release notes for the Meko portal, API, and platform. For Installer, MCP server,
 
 {{< card-group >}}
   {{< card
+    href="changelog/meko/v0.9.6/"
+    title="v0.9.6 — August 13, 2026"
+    desc="Usage page, account deletion requests, live KB file status, and artifacts in the portal."
+    cta="View release notes &rarr;"
+  >}}
+  {{< card
     href="changelog/meko/v0.9.5/"
     title="v0.9.5 — July 31, 2026"
     desc="Token Burn, Admin console, conversation-embedding quotas, and MCP server 2.1.0."
