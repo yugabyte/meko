@@ -248,6 +248,18 @@ pub static WAL_CACHE_BYTES: Lazy<IntGauge> = Lazy::new(|| {
     )
     .expect("Failed to register safekeeper_wal_cache_bytes gauge")
 });
+/// Retries of a WAL consumer batch INSERT into `amp_storage.wals`. Zero in
+/// steady state; a non-zero rate means the consumer is failing its current
+/// batch and retrying (#770) — WAL durability is not advancing while it does.
+/// Alert on this, not on the log line.
+pub static WAL_CONSUMER_BATCH_RETRIES: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "safekeeper_wal_consumer_batch_retries_total",
+        "WAL consumer batch flush retries after a failure"
+    )
+    .expect("failed to define a metric")
+});
+
 /// Per-fetch latency to `amp_storage.wals`. One observation per round
 /// trip the `YbSegmentReader` makes when the cache misses — covers
 /// both single-chunk and batched (range) fetches. Combined with

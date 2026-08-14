@@ -60,6 +60,7 @@ through to YB via `YbSegmentReader`.
 | `safekeeper_wal_cache_misses_total` | IntCounter | — | Lookups that fell through to YB. |
 | `safekeeper_wal_cache_evictions_total` | IntCounter | — | Chunks evicted by the FIFO over-capacity policy. |
 | `safekeeper_wal_cache_bytes` | IntGauge | — | Current cache occupancy in bytes (sum across cache instances). |
+| `safekeeper_wal_consumer_batch_retries_total` | IntCounter | — | WAL consumer batch flush retries after a failure. Zero in steady state; a non-zero rate means the consumer is retrying a failing batch (#770) and WAL durability is not advancing. Alert on this. |
 | `safekeeper_wal_cache_yb_fetch_seconds` | HistogramVec | `path` (`ysql` \| `yb_thin_client`) | Latency per `amp_storage.wals` fetch round trip (covering chunk + forward prefetch window). |
 | `safekeeper_wal_cache_yb_fetch_chunks` | Histogram | — | Chunks returned per fetch (pegged at 1 = no prefetch amortization; >1 = the range fetch is amortizing round trips). |
 | `safekeeper_wal_cache_yb_fetch_bytes` | Histogram | — | Bytes returned per fetch. |

@@ -376,13 +376,17 @@ Key properties:
   (`compute/safekeeper/src/remove_wal.rs` + the manager's laggard clamp) —
   WAL lives only in these rows, so trimming past a reader would be
   unrecoverable data loss for it.
-- **Failure handling.** On a batch write error (after `YsqlClient`'s own
-  reconnect-and-retry-once has given up), the consumer publishes
-  `DurableState::Failed(msg)` and exits. Every durability surface then
-  fails loudly: blocking waiters propagate the error, the producer's next
-  `tx.send` fails and `write_wal` returns the captured error, and the
-  acceptor's durability-watch arm bails so the connection terminates rather
-  than hanging on a frozen watermark. The walproposer reconnects.
+- **Failure handling.** On a batch write error the consumer retries the
+  batch with capped backoff until it lands — the chunks are not durable, so
+  the batch can be neither dropped nor allowed to end the task. Once the
+  failure has persisted past its fail-fast bound, `Failed(msg)` is
+  published so blocked waiters error out and connections drop instead of
+  holding the timeline lock; a later success republishes `Healthy`, so
+  `Failed` means "currently failing", not "dead". The producer's `send` is
+  bounded too (`YB_SEND_BACKPRESSURE_MAX`) — it also runs under the
+  timeline lock, and a consumer stuck on a failing batch holds the chunk
+  channel full. The walproposer reconnects throughout and resumes when the
+  consumer recovers.
 - **`initialize_first_segment(init_lsn)`** generates the standard 16 MiB
   segment header via `postgres_ffi::generate_wal_segment` and pushes it
   through the consumer like a regular write, waiting for durability before
@@ -776,5 +780,6 @@ Deleting the whole directory and restarting rebuilds everything from YB.
   replay over the trailing chunks; independent of total WAL size.
 - **YB connection failures** — absorbed by `YsqlClient` (lazy reconnect,
   one in-flight retry); a sustained outage surfaces as
-  `DurableState::Failed`, a dropped walproposer connection, and clean
-  consumer exit.
+  `DurableState::Failed` and dropped walproposer connections, while the
+  consumer keeps retrying its batch and the timeline recovers on its own
+  when writes succeed again.

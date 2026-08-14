@@ -677,11 +677,14 @@ impl WalAcceptor {
                 }, if durable_rx.is_some() && elected => {
                     if changed {
                         // A published `DurableState::Failed` means the consumer
-                        // hit a non-recoverable error and the watermark will
-                        // never advance again. Terminate the connection so
-                        // walproposer reconnects and the failure surfaces —
-                        // parity with the blocking `flush_wal` / `wait_for_durable`
-                        // path, which returns this error to the same effect.
+                        // has been failing its batch past its fail-fast bound
+                        // (it keeps retrying underneath, and publishes
+                        // `Healthy` again on success — #770). Terminate the
+                        // connection so the walproposer reconnects and the
+                        // failure surfaces — parity with the blocking
+                        // `flush_wal` / `wait_for_durable` path, which returns
+                        // this error to the same effect. The reconnect finds a
+                        // recovered consumer or fails fast again.
                         let state = durable_rx.as_ref().unwrap().borrow().clone();
                         if let crate::yb_wal_storage::DurableState::Failed(msg) = state {
                             anyhow::bail!("YB WAL consumer failed: {msg}");

@@ -85,12 +85,13 @@
 //!
 //! ## Failure handling
 //!
-//! On a batch INSERT failure (after `YsqlClient`'s own auto-retry has
-//! given up — e.g. persistent auth / schema / connectivity failure),
-//! the consumer publishes [`DurableState::Failed`] onto the watermark
-//! and exits. The producer's next `tx.send()` then fails (rx dropped),
-//! `write_wal` returns the captured error, the walproposer reconnects,
-//! and the safekeeper handles the rest on that reconnect handshake.
+//! On a batch INSERT failure the consumer retries the batch with capped
+//! backoff until it lands — the chunks are not durable, so the batch can
+//! be neither dropped nor allowed to end the task (#770). Once the batch
+//! has been failing for `CONSUMER_RETRY_SIGNAL_AFTER` the failure is
+//! published so blocked waiters fail fast and the walproposer reconnects;
+//! a later success publishes `Healthy` again, so `Failed` means
+//! "currently failing", not "dead".
 //! Both durability paths surface the failure: blocking `flush_wal` waiters
 //! propagate it, and the WAL acceptor's durable-watch arm bails on `Failed`
 //! (or on the watch channel closing) so the connection terminates rather
@@ -410,9 +411,12 @@ pub enum DurableState {
     /// Every `PendingChunk` whose `end_lsn <= self.0` has been durably
     /// INSERT'd into YugabyteDB.
     Healthy(Lsn),
-    /// The consumer task hit a non-recoverable error and stopped
-    /// processing. The string is the rendered error chain for
-    /// propagation up through `flush_wal` / `write_wal`.
+    /// The consumer's current batch has been failing past its fail-fast
+    /// bound. The consumer keeps retrying underneath and publishes
+    /// [`Self::Healthy`] again on success; waiters treat this as an error
+    /// now rather than blocking on a watermark that isn't moving. The
+    /// string is the rendered error chain for propagation up through
+    /// `flush_wal` / `write_wal`.
     Failed(String),
 }
 
@@ -825,19 +829,39 @@ impl YbWalStorage {
                 end_lsn,
             };
 
-            // tx.send().await may block on backpressure (bounded channel).
-            // The walproposer side stalls here until the consumer drains —
-            // intended behaviour when YB can't keep up.
-            if self.tx.send(pc).await.is_err() {
-                // Consumer task exited. The watermark should carry the
-                // captured error string.
-                let state = self.watermark_rx.borrow().clone();
-                match state {
-                    DurableState::Failed(msg) => {
-                        anyhow::bail!("YB WAL consumer task failed: {msg}");
-                    }
-                    DurableState::Healthy(_) => {
-                        anyhow::bail!("YB WAL consumer task gone (channel closed)");
+            // send() blocks on backpressure (bounded channel) — intended
+            // while YB is merely slow, but NOT open-ended: this runs inside
+            // `process_msg` under the timeline shared_state write lock, so an
+            // unbounded block here starves the manager exactly like an
+            // unbounded `wait_for_durable` (#765) — and, unlike that path,
+            // no published `DurableState::Failed` can unblock a send. The
+            // timeout converts a consumer stuck retrying a failing batch
+            // (#770) into a dropped connection: lock released, walproposer
+            // retries, and ingest resumes when the consumer drains.
+            match self.tx.send_timeout(pc, YB_SEND_BACKPRESSURE_MAX).await {
+                Ok(()) => {}
+                Err(mpsc::error::SendTimeoutError::Timeout(_)) => {
+                    let state = self.watermark_rx.borrow().clone();
+                    let detail = match state {
+                        DurableState::Failed(msg) => format!("consumer failing: {msg}"),
+                        DurableState::Healthy(d) => format!("durable {d}, channel full"),
+                    };
+                    anyhow::bail!(
+                        "YB WAL chunk queue made no room in {YB_SEND_BACKPRESSURE_MAX:?} \
+                         ({detail}); dropping the connection so the timeline lock is released"
+                    );
+                }
+                Err(mpsc::error::SendTimeoutError::Closed(_)) => {
+                    // Consumer task exited. The watermark should carry the
+                    // captured error string.
+                    let state = self.watermark_rx.borrow().clone();
+                    match state {
+                        DurableState::Failed(msg) => {
+                            anyhow::bail!("YB WAL consumer task failed: {msg}");
+                        }
+                        DurableState::Healthy(_) => {
+                            anyhow::bail!("YB WAL consumer task gone (channel closed)");
+                        }
                     }
                 }
             }
@@ -893,12 +917,15 @@ impl YbWalStorage {
                     };
                     if started.elapsed() >= self.durable_wait_max {
                         anyhow::bail!(
-                            "YB WAL durability wait timed out after {:?}: target {target},                              durable {durable} (YB slow or wals tablet splitting?);                              dropping the connection so the timeline lock is released",
+                            "YB WAL durability wait timed out after {:?}: target {target}, \
+                             durable {durable} (YB slow or wals tablet splitting?); \
+                             dropping the connection so the timeline lock is released",
                             started.elapsed(),
                         );
                     }
                     tracing::warn!(
-                        "still waiting for YB WAL durability: target {target}, durable                          {durable}, elapsed {:?}",
+                        "still waiting for YB WAL durability: target {target}, \
+                         durable {durable}, elapsed {:?}",
                         started.elapsed(),
                     );
                     continue;
@@ -1435,9 +1462,10 @@ async fn truncate_wals_above(
 /// doesn't pay for accumulation while still letting throughput-oriented
 /// background streaming accumulate naturally.
 ///
-/// On a batch failure, publishes `DurableState::Failed` and exits. The
-/// producer (`upsert_writes`) detects the closed `rx` on its next
-/// `tx.send().await` and propagates the captured error string upward.
+/// On a batch failure, retries with capped backoff until the batch lands,
+/// publishing `DurableState::Failed` once the failure has persisted past
+/// `CONSUMER_RETRY_SIGNAL_AFTER` so waiters fail fast (#770). Exits on
+/// failure only when the producer is already gone and nothing is queued.
 ///
 /// Exits cleanly when `tx` is dropped (channel closes from the
 /// producer side, `rx.recv()` returns `None`).
@@ -1528,57 +1556,162 @@ async fn consumer_main(
         // return(<millis>).
         utils::failpoint_support::sleep_millis_async!("sk-yb-wal-flush");
 
-        match flush_batch(
-            &ysql_fpu_client,
-            yb_thinclient.as_deref(),
-            &table_name,
-            &branch_id,
-            &batch,
-            codec,
-        )
-        .await
-        {
-            Ok(()) => {
-                // Populate the read-side cache from the batch BEFORE
-                // publishing the durability advance. The cache is the
-                // WAL sender's fast path; we only insert chunks here
-                // (after a successful INSERT) so the cache never
-                // serves bytes that aren't durable in
-                // `amp_storage.wals` — the invariant that pre-INSERT
-                // cache population violated (the 2026-06 PS-restart
-                // WAL replay bug). Deliberately the ORIGINAL chunks,
-                // not the coalesced rows `flush_batch` wrote:
-                // coalescing exists only at the YB row layer, and the
-                // cache keeps the producer's chunk boundaries (shared
-                // `Arc<Vec<u8>>` allocations, no copy).
-                if let Some(c) = &cache {
-                    let mut guard = c.lock().unwrap();
-                    for pc in &batch {
-                        guard.insert(pc.segno, pc.chunk_offset as u64, pc.data.clone());
+        // Retry the batch until it lands. Exiting instead would make a single
+        // failed batch permanent: nothing respawns this task, the watch
+        // channel retains `DurableState::Failed`, and every later WAL push
+        // would replay that captured string without ever calling YB — one
+        // transient write error costing the endpoint all write availability
+        // until a safekeeper restart (#770).
+        //
+        // Retrying keeps the durability invariant intact: the watermark still
+        // advances only after a batch actually lands. That is recoverable —
+        // when YB comes back the batch lands and progress resumes on its own.
+        //
+        // Retrying is NOT the same as making callers wait for it. Once the
+        // batch has been failing for `CONSUMER_RETRY_SIGNAL_AFTER` the failure
+        // is published so waiters fail fast instead of sitting on a watermark
+        // that isn't moving: `wait_for_durable` bails immediately rather than
+        // burning its full 60s bound, which releases the timeline write lock
+        // and lets the manager breathe (the starvation in #765). The task
+        // keeps retrying behind that, and a later success publishes `Healthy`
+        // again, so the state is a transient "currently failing", not the
+        // absorbing state it used to be. Wall-clock, not attempts: a
+        // timeout-class failure burns up to the full RPC timeout per attempt,
+        // and an attempt count would push the signal past the very bound it
+        // exists to beat.
+        //
+        // What is deliberately NOT bounded is the data: the batch is not
+        // durable, so abandoning it after N attempts would leave a hole the
+        // rehydration path's max-end scan accepts silently. The bound is on how
+        // long callers block, never on whether the chunks eventually land.
+        let mut attempt: u32 = 0;
+        let mut signalled = false;
+        let mut failing_since: Option<std::time::Instant> = None;
+        let flushed = loop {
+            match flush_batch(
+                &ysql_fpu_client,
+                yb_thinclient.as_deref(),
+                &table_name,
+                &branch_id,
+                &batch,
+                codec,
+            )
+            .await
+            {
+                Ok(()) => break true,
+                Err(e) => {
+                    attempt += 1;
+                    crate::metrics::WAL_CONSUMER_BATCH_RETRIES.inc();
+                    // The batch is NOT durable, so it cannot be dropped or
+                    // skipped — that would leave a hole the rehydration path's
+                    // max-end scan would silently accept. The only options are
+                    // retry or stop, and stopping is what #770 was.
+                    let msg = format!("{e:#}");
+                    // Chatty for the first few, then every
+                    // CONSUMER_RETRY_LOG_EVERY, so a long outage doesn't drown
+                    // the log while a short blip is still visible.
+                    if attempt <= 3 || attempt % CONSUMER_RETRY_LOG_EVERY == 0 {
+                        tracing::warn!(
+                            rows = batch.len(),
+                            bytes = batch_bytes,
+                            attempt,
+                            "YB WAL consumer batch failed, retrying: {msg}"
+                        );
                     }
+                    if rx.is_closed() && rx.is_empty() {
+                        // Producer is gone and nothing is queued behind us:
+                        // this is shutdown, not an outage. Publish the error so
+                        // a waiter unblocks rather than hanging on a watermark
+                        // that will never move again, then exit.
+                        tracing::error!(
+                            attempt,
+                            "YB WAL consumer batch failed and the producer is gone: {msg}"
+                        );
+                        let _ = watermark_tx.send(DurableState::Failed(msg));
+                        break false;
+                    }
+                    // Unblock waiters once, then keep retrying underneath them.
+                    let since = *failing_since.get_or_insert_with(std::time::Instant::now);
+                    if !signalled && since.elapsed() >= CONSUMER_RETRY_SIGNAL_AFTER {
+                        tracing::error!(
+                            attempt,
+                            "YB WAL consumer batch still failing after {attempt} attempts; \
+                             failing waiters fast while retrying: {msg}"
+                        );
+                        let _ = watermark_tx.send(DurableState::Failed(msg));
+                        signalled = true;
+                    }
+                    tokio::time::sleep(consumer_retry_backoff(attempt)).await;
                 }
-                // Publish durability advance. The atomic is the
-                // authoritative source for `YbWalStorage::flush_lsn()`'s
-                // cap and `truncate_wal`'s precondition — must be set
-                // BEFORE the watch send so a `wait_for_durable` waiter
-                // can't observe the watch advance and then read a stale
-                // `durable_lsn`. Failure on the watch send means all
-                // receivers have dropped — only during shutdown — ignore.
-                durable_lsn.store(highest_lsn.0, Ordering::Release);
-                let _ = watermark_tx.send(DurableState::Healthy(highest_lsn));
             }
-            Err(e) => {
-                let msg = format!("{e:#}");
-                tracing::error!(
-                    rows = batch.len(),
-                    bytes = batch_bytes,
-                    "YB WAL consumer batch failed: {msg}"
-                );
-                let _ = watermark_tx.send(DurableState::Failed(msg));
-                return;
+        };
+        if !flushed {
+            return;
+        }
+        {
+            // Populate the read-side cache from the batch BEFORE
+            // publishing the durability advance. The cache is the
+            // WAL sender's fast path; we only insert chunks here
+            // (after a successful INSERT) so the cache never
+            // serves bytes that aren't durable in
+            // `amp_storage.wals` — the invariant that pre-INSERT
+            // cache population violated (the 2026-06 PS-restart
+            // WAL replay bug). Deliberately the ORIGINAL chunks,
+            // not the coalesced rows `flush_batch` wrote:
+            // coalescing exists only at the YB row layer, and the
+            // cache keeps the producer's chunk boundaries (shared
+            // `Arc<Vec<u8>>` allocations, no copy).
+            if let Some(c) = &cache {
+                let mut guard = c.lock().unwrap();
+                for pc in &batch {
+                    guard.insert(pc.segno, pc.chunk_offset as u64, pc.data.clone());
+                }
             }
+            // Publish durability advance. The atomic is the
+            // authoritative source for `YbWalStorage::flush_lsn()`'s
+            // cap and `truncate_wal`'s precondition — must be set
+            // BEFORE the watch send so a `wait_for_durable` waiter
+            // can't observe the watch advance and then read a stale
+            // `durable_lsn`. Failure on the watch send means all
+            // receivers have dropped — only during shutdown — ignore.
+            durable_lsn.store(highest_lsn.0, Ordering::Release);
+            let _ = watermark_tx.send(DurableState::Healthy(highest_lsn));
         }
     }
+}
+
+/// Longest a producer `send` may block on chunk-channel backpressure before
+/// erroring out and dropping the connection. The send runs under the timeline
+/// write lock, so this is a lock-hold bound like `YB_DURABLE_WAIT_MAX`, and
+/// sits inside it for the same reason `CONSUMER_RETRY_SIGNAL_AFTER` does: the
+/// caller should give up on our terms, with the lock released, before anything
+/// upstream starts timing out. Ordinary backpressure (YB slow, consumer
+/// draining) clears in milliseconds; only a consumer that cannot land its
+/// batch at all holds the channel full this long.
+const YB_SEND_BACKPRESSURE_MAX: Duration = Duration::from_secs(20);
+
+/// Log every Nth consumer batch retry once past the first few, so a long YB
+/// outage leaves a readable trail instead of a flood.
+const CONSUMER_RETRY_LOG_EVERY: u32 = 20;
+
+/// How long a batch may keep failing before the consumer publishes the
+/// failure and lets waiters fail fast. Comfortably inside
+/// `YB_DURABLE_WAIT_MAX` (60s), so a caller blocked in `wait_for_durable`
+/// gives up on our signal rather than on its own timeout and releases the
+/// timeline write lock roughly three times sooner. Wall-clock deliberately:
+/// timeout-class failures reach only a handful of attempts per minute, so an
+/// attempt-count bound would fire after the 60s it exists to undercut.
+///
+/// It does not bound the retrying itself: the batch is not durable, so it is
+/// retried until it lands or the producer goes away.
+const CONSUMER_RETRY_SIGNAL_AFTER: Duration = Duration::from_secs(20);
+
+/// Backoff before re-flushing a failed consumer batch: quick at first so a
+/// blip costs almost nothing, capped so a long outage doesn't spin.
+fn consumer_retry_backoff(attempt: u32) -> Duration {
+    const CAP: Duration = Duration::from_secs(5);
+    let ms = 50u64.saturating_mul(1u64 << attempt.min(7));
+    std::cmp::min(Duration::from_millis(ms), CAP)
 }
 
 /// Persist one batch of chunks into `amp_storage.wals` over the configured
