@@ -212,6 +212,52 @@ In the Meko portal, select **Connect** and follow the steps.
     List my datapacks in Meko
     ```
 
+### Updating the skills plugin
+
+Skill content (the behavioral guides that teach the agent how to use Meko's MCP tools) ships in the `meko-agent-skills` plugin and versions independently of the MCP server. The marketplace source is `https://github.com/yugabyte/meko-skills.git`.
+
+##### Inside an active Claude Code session
+
+```text
+/plugin marketplace update meko-agent-skills
+/plugin update meko-agent-skills@meko-agent-skills
+/reload-plugins
+```
+
+If `/reload-plugins` warns that it would re-read the conversation, rerun it as `/reload-plugins --force`. Then run `/doctor` to confirm there are no plugin load errors.
+
+##### From the shell
+
+```sh
+claude plugin marketplace update meko-agent-skills
+claude plugin update meko-agent-skills@meko-agent-skills
+```
+
+The qualified `plugin@marketplace` form is required. Re-running the installer (`npx @yugabytedb/meko-mcp@latest`) updates an existing install automatically.
+
+##### Enable auto-update
+
+Auto-update is per-marketplace and **disabled by default** for third-party marketplaces. To opt in:
+
+1. Open `/plugin`, switch to the **Marketplaces** tab, select `meko-agent-skills`, and toggle **Enable auto-update**.
+1. Or add `"autoUpdate": true` to the existing `meko-agent-skills` entry in `~/.claude/settings.json` (user scope) or a project's `.claude/settings.json`. Keep the `source` field — an `autoUpdate`-only replacement drops the marketplace source:
+
+    ```json
+    {
+      "extraKnownMarketplaces": {
+        "meko-agent-skills": {
+          "source": {
+            "source": "git",
+            "url": "https://github.com/yugabyte/meko-skills.git"
+          },
+          "autoUpdate": true
+        }
+      }
+    }
+    ```
+
+Once enabled, Claude Code refreshes the marketplace and updates installed plugins in the background after startup. The running session keeps the versions it loaded at launch; you'll be prompted to `/reload-plugins`, or the new versions load on the next launch.
+
 ## Open AI Codex Desktop
 
 ##### Automated setup

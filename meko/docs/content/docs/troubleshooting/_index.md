@@ -52,11 +52,14 @@ If you have problems with your setup, check the following common issues:
 
     ```text
     /plugin marketplace update meko-agent-skills
+    /plugin update meko-agent-skills@meko-agent-skills
     /reload-plugins
     /doctor
     ```
 
-    The installer now uses the public HTTPS marketplace at `https://github.com/yugabyte/meko-skills.git`; GitHub SSH credentials aren't required.
+    If `/reload-plugins` warns that it would re-read the conversation, rerun it as `/reload-plugins --force`. See [Updating the skills plugin](../../integrations/connect-to-ai-agent/#updating-the-skills-plugin) for the shell and auto-update paths.
+
+    The installer uses the public HTTPS marketplace at `https://github.com/yugabyte/meko-skills.git`; GitHub SSH credentials aren't required.
 
 - Tool calls still send a `scope` argument after upgrading to v2.1.0.
 
