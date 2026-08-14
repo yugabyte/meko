@@ -646,9 +646,19 @@ loses nothing but logs.
      never streams. The decoder's answer is honored — clamping to the raw
      end would put `write_lsn` inside the padding, where the compute
      resumes, the reader reads zeros, and the safekeeper wedges (#181).
-   - On any scan failure the raw max is used — not automatically safe: a raw
-     max that is not a record boundary advertises an unreachable `flush_lsn`,
-     and the pageserver's `wait_lsn` never completes (#678).
+   - **Scan failure**: `YbWalStorage::new` fails and the walproposer handshake
+     retries it. Neither guess is safe — truncating to the boundary reached so
+     far deletes durable rows whose commits were acked (#756), and using the
+     raw max advertises a `flush_lsn` that may sit mid-record, where the
+     pageserver's `wait_lsn` never completes (#678). Only a chunk that is
+     *absent* ends the scan; a chunk that could not be *read* is a failure.
+     Retrying only helps a transient failure. A deterministic one (unknown codec
+     tag, `find_anchor`'s `MAX_ANCHOR_SCAN_BYTES` bail) recurs on every attempt,
+     and since `START_REPLICATION` resolves the timeline through
+     `GlobalTimelines::get` — which never creates — the branch stays unavailable
+     until the cause is fixed. That trade is deliberate, and the diagnosis and
+     recovery per cause are in
+     [`runbooks/startup-failures.md`](../../runbooks/startup-failures.md) §P.
 3. **GC lower bound**: `load_min_segno` seeds `delete_lower_bound` so the
    first post-restart GC DELETE is range-bounded.
 4. The durability watermark and `durable_lsn` start at the rehydrated

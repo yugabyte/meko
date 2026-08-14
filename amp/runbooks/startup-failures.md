@@ -68,6 +68,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SC connects to YB and fails: `password missing` / `building database URL from --yb-config` | init omits `password_env`/`sslmode` from the YB conn blocks | **M** |
 | `pageserver.toml` top-level knob rejected at startup as `<section>.<key>` | a top-level key was placed **after** a `[section]` header | **N** |
 | PS/SK panics at startup: `OS can't spawn worker thread: Resource temporarily unavailable` | per-user process/thread limit (`ulimit -u` / cgroup `pids.max`) exhausted | **O** |
+| SK: `failed to load timeline` / `end-of-WAL record-boundary scan failed`; compute reconnects in a loop and the PS can't stream | the safekeeper won't trust a scan it couldn't finish, so it fails the load rather than delete or misreport durable WAL. Deterministic causes (unknown codec tag, anchor bail) keep the branch down until fixed | **P** |
 
 ---
 
@@ -287,3 +288,34 @@ ps -eo pid,nlwp,comm --sort=-nlwp | head    # top per-process consumers
 Raise via `/etc/security/limits.d/` (`<user> soft nproc 8192`) or the systemd
 user slice (`TasksMax=`). Rule of thumb per direct-RPC-mode endpoint pair:
 ~90 threads (PS ~55, SK ~36) plus the compute's postgres processes.
+
+## P. SK: `end-of-WAL record-boundary scan failed` — branch never loads
+
+The safekeeper refuses to load a timeline whose end-of-WAL scan it could not
+complete, because both ways of guessing are unsafe: truncating to the boundary
+reached so far deletes durable rows whose commits were already acked (#756), and
+advertising the raw max offset publishes a `flush_lsn` that may sit mid-record,
+where every `wait_lsn` hangs (#678). **This is deliberate — do not "fix" it by
+deleting `wals` rows to make the branch start. That is the data loss the check
+exists to prevent.**
+
+Failing closed costs availability when the failure is deterministic. `load_one_timeline`
+logs and leaves the slot empty, and only the walproposer handshake can create/load
+it — `START_REPLICATION` and `IDENTIFY_SYSTEM` go through `GlobalTimelines::get`,
+which never creates. So a scan error that recurs on every attempt leaves the branch
+unavailable: the compute reconnects in a loop and the pageserver cannot stream WAL
+that is sitting durable in `wals`.
+
+Read the error chain in `failed to load timeline <branch>` to tell the three apart:
+
+| Chain mentions | Cause | Recovery |
+|---|---|---|
+| `end-of-WAL scan: reading wals` + a YB error | transient query failure | none needed — the next handshake retries and succeeds |
+| `decoding stored WAL chunk` / `unknown payload codec tag 0x<NN>` | the row was written by a build whose codec this one doesn't know (version skew), or the payload is damaged | run a safekeeper build that understands the tag — usually roll forward to the version that wrote it. The offending row is named in the chain (`segno=N offset=M`); inspect it with `dump-wals --branch <id>`, which reports each chunk's stored codec |
+| `no fresh-record WAL page found within 64 MiB below` | `find_anchor` hit `MAX_ANCHOR_SCAN_BYTES` — an unusually large record, or `max_offset` points outside the persisted range | check `min(segno)`/`max(segno)` in `wals` against `branch_state.consistent_lsn`; a `max_offset` far above the stored rows means the row set and the branch state disagree, which is the thing to investigate |
+| `reading WAL page header at <LSN>: WAL hole at <LSN>: no covering chunk` | the anchor walk descended past the lowest surviving `segno`, into WAL that retention has already trimmed. Its floor is `timeline_start_lsn`, which sits below the retained window, so a long run of continuation pages (one large record) can push the probe into segments that are legitimately gone | compare the LSN in the message with `min(segno) * wal_seg_size` from `wals`. Below it, no operator action helps — the walk needs flooring at the lowest surviving chunk rather than `timeline_start_lsn`, which is a code fix. Escalate; deleting rows only removes more WAL |
+
+If a branch must be brought up before the underlying cause is fixed, the only safe
+lever is to make the scan succeed — not to delete rows. Escalate rather than
+improvise: the acked WAL above the failure point is still there, and any manual
+truncation forfeits it permanently.

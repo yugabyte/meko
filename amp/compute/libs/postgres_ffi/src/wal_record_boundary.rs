@@ -43,16 +43,24 @@ pub trait WalSource {
     fn seg(&self) -> u64;
 
     /// Fetch the chunk covering `lsn`: its absolute start LSN and raw
-    /// bytes. Errors if no chunk covers `lsn` (a WAL hole).
-    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)>;
+    /// bytes, or `None` when no chunk covers it — the WAL ends here.
+    ///
+    /// `Err` means the *read* failed. The bytes may well be there; this
+    /// attempt could not see them, so no caller may conclude anything about
+    /// where the WAL ends from it (#756).
+    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>>;
 
     /// Read exactly `len` bytes starting at `lsn`, assembling across
-    /// chunk (and segment) boundaries. Errors on a hole.
+    /// chunk (and segment) boundaries. Errors on a hole: the caller asked
+    /// for a span it already expects to be there.
     async fn read_exact(&self, lsn: Lsn, len: usize) -> anyhow::Result<Vec<u8>> {
         let mut out = Vec::with_capacity(len);
         let mut pos = lsn;
         while out.len() < len {
-            let (chunk_start, data) = self.chunk_at(pos).await?;
+            let (chunk_start, data) = self
+                .chunk_at(pos)
+                .await?
+                .with_context(|| format!("WAL hole at {pos}: no covering chunk"))?;
             let from = (pos.0 - chunk_start.0) as usize;
             let take = min(data.len() - from, len - out.len());
             out.extend_from_slice(&data[from..from + take]);
@@ -177,15 +185,20 @@ pub async fn decode_forward<S: WalSource>(
                 }
             }
         }
-        // Feed the next chunk of WAL bytes.
-        match reader.chunk_at(pos).await {
-            Ok((chunk_start, data)) => {
+        // Feed the next chunk of WAL bytes. A failed read is not a stop
+        // reason — it is not evidence about the WAL's shape at all.
+        match reader
+            .chunk_at(pos)
+            .await
+            .with_context(|| format!("reading the WAL chunk at {pos}"))?
+        {
+            Some((chunk_start, data)) => {
                 let from = (pos.0 - chunk_start.0) as usize;
                 decoder.feed_bytes(&data[from..]);
                 pos = Lsn(chunk_start.0 + data.len() as u64);
             }
-            Err(e) => {
-                stop = Some(format!("WAL ended before reaching target: {e}"));
+            None => {
+                stop = Some(format!("WAL ended at {pos} before reaching target"));
                 break 'outer;
             }
         }
@@ -198,13 +211,20 @@ pub async fn decode_forward<S: WalSource>(
 // the next record). If no valid record after is found, start_lsn is returned
 // back.
 //
-// A line-by-line port of upstream Neon's
-// `postgres_ffi::xlog_utils::find_end_of_wal` — the local-segment-file scanner
-// the safekeeper used to recompute flush_lsn on restart before WAL moved to
-// YB. The decode loop is identical; only the byte source differs: WAL chunks
-// from a `WalSource` instead of `read`s from segment files. A torn trailing
-// page makes the decoder error, and `result` (the end of the last complete
-// record) is returned — exactly as upstream truncated a partial tail.
+// A port of upstream Neon's `postgres_ffi::xlog_utils::find_end_of_wal` — the
+// local-segment-file scanner the safekeeper used to recompute flush_lsn on
+// restart before WAL moved to YB. The decode loop is identical; only the byte
+// source differs: WAL chunks from a `WalSource` instead of `read`s from segment
+// files. A torn trailing page makes the decoder error, and `result` (the end of
+// the last complete record) is returned — exactly as upstream truncated a
+// partial tail.
+//
+// Upstream could also treat a failed *read* as the end of the WAL, because a
+// read error against a local segment file really did mean there were no more
+// segments. Against a `wals` table it does not: the rows may be there and
+// durable while a query fails. Hence the `Option` in `chunk_at` — only `None`
+// ends the scan, and a read failure propagates (#756). Returning a short
+// boundary instead would make the caller DELETE durable WAL above it.
 pub async fn find_end_of_wal<S: WalSource>(
     reader: &S,
     start_lsn: Lsn, // start reading WAL at this point; must point at record start_lsn.
@@ -216,10 +236,14 @@ pub async fn find_end_of_wal<S: WalSource>(
 
     // loop over WAL chunks
     loop {
-        let (chunk_start, data) = match reader.chunk_at(curr_lsn).await {
+        let (chunk_start, data) = match reader
+            .chunk_at(curr_lsn)
+            .await
+            .with_context(|| format!("end-of-WAL scan: reading the chunk at {curr_lsn}"))?
+        {
             // no more WAL
-            Err(_) => return Ok(result),
-            Ok(chunk) => chunk,
+            None => return Ok(result),
+            Some(chunk) => chunk,
         };
         let seg_offs = (curr_lsn.0 - chunk_start.0) as usize;
         curr_lsn = Lsn(chunk_start.0 + data.len() as u64);
@@ -258,16 +282,12 @@ mod tests {
         fn seg(&self) -> u64 {
             WAL_SEGMENT_SIZE as u64
         }
-        async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
+        async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
             let end = self.start.0 + self.buf.len() as u64;
             if lsn.0 < self.start.0 || lsn.0 >= end {
-                bail!(
-                    "WAL hole at {lsn} (mem buffer is [{}, {}))",
-                    self.start,
-                    Lsn(end)
-                );
+                return Ok(None);
             }
-            Ok((self.start, self.buf.clone()))
+            Ok(Some((self.start, self.buf.clone())))
         }
     }
 
@@ -331,6 +351,107 @@ mod tests {
         assert!(
             starts.contains(&got),
             "stop point {got} must be a real record boundary"
+        );
+    }
+
+    /// Serves `buf` in `chunk`-sized pieces below `fail_at`, then fails the
+    /// *read* — the shape of a failed `wals` query or a stored chunk this
+    /// build can't decode, not the "no covering chunk" hole that legitimately
+    /// ends a scan.
+    struct FlakyWal {
+        start: Lsn,
+        buf: Vec<u8>,
+        chunk: usize,
+        fail_at: Lsn,
+    }
+
+    impl WalSource for FlakyWal {
+        fn seg(&self) -> u64 {
+            WAL_SEGMENT_SIZE as u64
+        }
+        async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
+            if lsn >= self.fail_at {
+                bail!("injected wals read failure at {lsn}");
+            }
+            let served = min(self.buf.len(), (self.fail_at.0 - self.start.0) as usize);
+            let off = (lsn.0 - self.start.0) as usize;
+            let piece = off / self.chunk * self.chunk;
+            let end = min(piece + self.chunk, served);
+            Ok(Some((
+                Lsn(self.start.0 + piece as u64),
+                self.buf[piece..end].to_vec(),
+            )))
+        }
+    }
+
+    /// A failed read is not the end of the WAL (#756). `chunk_at` errors both
+    /// when the WAL genuinely ended (no covering chunk — [`clean_wal_reaches_end`])
+    /// and when the read itself failed, and this scan cannot tell them apart:
+    /// it hands back the boundary it had reached. `YbWalStorage::new` trusts
+    /// that short answer and DELETEs every `wals` row above it — rows whose
+    /// commits the safekeeper already acked, and which no peer can restore.
+    #[tokio::test]
+    async fn read_failure_is_not_end_of_wal() {
+        let (buf, starts) = gen_wal(4000, 16);
+        let durable_end = *starts.last().unwrap();
+        let buf = buf[..(durable_end.0 - START.0) as usize].to_vec();
+
+        // Everything below the midpoint reads back fine, so a scan that takes
+        // the failure for end-of-WAL stops around there while the WAL is
+        // durable all the way up to `durable_end`.
+        let fail_at = Lsn(START.0 + (buf.len() / 2) as u64);
+        let src = FlakyWal {
+            start: START,
+            buf,
+            chunk: XLOG_BLCKSZ,
+            fail_at,
+        };
+
+        let err = match find_end_of_wal(&src, START, PgMajorVersion::PG18).await {
+            Err(e) => e,
+            Ok(end) => panic!(
+                "a failed read was reported as end-of-WAL at {end}, {} bytes below the durable \
+                 end {durable_end}; every wals row above {end} then gets DELETEd",
+                durable_end.0 - end.0
+            ),
+        };
+        assert!(
+            format!("{err:#}").contains("injected wals read failure"),
+            "the read failure must propagate, got: {err:#}"
+        );
+    }
+
+    /// The same distinction one layer up. `decode_forward` reports a stop reason
+    /// when the WAL runs out, and `reset-consistent-lsn` prints that as a note
+    /// and still picks a boundary from the walk it got. A failed read must not
+    /// look like that: the boundaries collected so far say nothing about where
+    /// the WAL ends, so a `consistent_lsn` derived from them rewinds further
+    /// than necessary on evidence that doesn't exist.
+    #[tokio::test]
+    async fn decode_forward_propagates_a_read_failure() {
+        let (buf, starts) = gen_wal(4000, 16);
+        let durable_end = *starts.last().unwrap();
+        let buf = buf[..(durable_end.0 - START.0) as usize].to_vec();
+
+        let fail_at = Lsn(START.0 + (buf.len() / 2) as u64);
+        let src = FlakyWal {
+            start: START,
+            buf,
+            chunk: XLOG_BLCKSZ,
+            fail_at,
+        };
+
+        let err = match decode_forward(&src, START, durable_end, PgMajorVersion::PG18).await {
+            Err(e) => e,
+            Ok((boundaries, stop)) => panic!(
+                "a failed read was reported as a stop reason ({stop:?}); the walk stopped at \
+                 {:?}, below the durable end {durable_end}",
+                boundaries.last()
+            ),
+        };
+        assert!(
+            format!("{err:#}").contains("injected wals read failure"),
+            "the read failure must propagate, got: {err:#}"
         );
     }
 

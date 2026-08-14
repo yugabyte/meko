@@ -281,7 +281,7 @@ impl WalSource for WalReader<'_> {
         self.seg
     }
 
-    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
+    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
         // A chunk's placement bucket is a rotating per-batch counter, so it
@@ -296,25 +296,23 @@ impl WalSource for WalReader<'_> {
                      AND segno = $2 AND chunk_offset <= $3 \
                    ORDER BY chunk_offset DESC LIMIT 1";
         let params: [&(dyn ToSql + Sync); 3] = [&self.branch, &segno, &off];
-        let row = self
+        // A missing row ends the WAL; a failed query is a failed read and stays
+        // an `Err` — see `WalSource::chunk_at`.
+        let Some(row) = self
             .client
             .query_opt(sql, &params)
             .await
             .context("reading amp_storage.wals")?
-            .with_context(|| {
-                format!("WAL hole at {lsn} (segno {segno} offset {off}): no covering chunk in amp_storage.wals")
-            })?;
+        else {
+            return Ok(None);
+        };
         let chunk_offset = row.get::<_, i64>(0) as u64;
         let data: Vec<u8> = row.get::<_, Vec<u8>>(1);
         let chunk_start = segno as u64 * self.seg + chunk_offset;
         if lsn.0 >= chunk_start + data.len() as u64 {
-            bail!(
-                "WAL hole at {lsn}: nearest chunk covers [{}, {}) only",
-                Lsn(chunk_start),
-                Lsn(chunk_start + data.len() as u64)
-            );
+            return Ok(None);
         }
-        Ok((Lsn(chunk_start), data))
+        Ok(Some((Lsn(chunk_start), data)))
     }
 }
 
@@ -336,16 +334,12 @@ mod tests {
         fn seg(&self) -> u64 {
             WAL_SEGMENT_SIZE as u64
         }
-        async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
+        async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
             let end = self.start.0 + self.buf.len() as u64;
             if lsn.0 < self.start.0 || lsn.0 >= end {
-                bail!(
-                    "WAL hole at {lsn} (mem buffer is [{}, {}))",
-                    self.start,
-                    Lsn(end)
-                );
+                return Ok(None);
             }
-            Ok((self.start, self.buf.clone()))
+            Ok(Some((self.start, self.buf.clone())))
         }
     }
 

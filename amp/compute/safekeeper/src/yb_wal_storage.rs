@@ -590,15 +590,17 @@ impl YbWalStorage {
                 }
                 Ok(_) => max_offset,
                 Err(e) => {
-                    // Unvalidated: a mid-record `max_offset` wedges every `wait_lsn` (#678).
-                    // Matched by the integration harness's FATAL_MARKERS.
-                    tracing::warn!(
-                        branch_id = %branch_id_str,
-                        %max_offset,
-                        "YbWalStorage::new — end-of-WAL record-boundary scan failed; advertising \
-                         the raw max offset unvalidated, which wedges readers if it is mid-record: {e:#}",
-                    );
-                    max_offset
+                    // Neither guess is safe: truncating to the boundary reached so
+                    // far DELETEs durable rows whose commits were acked (#756), and
+                    // the raw max offset may sit mid-record, where every `wait_lsn`
+                    // hangs (#678). Availability cost: runbooks/startup-failures.md
+                    // §P. The integration harness's FATAL_MARKERS greps this text.
+                    return Err(e).with_context(|| {
+                        format!(
+                            "YbWalStorage::new — end-of-WAL record-boundary scan failed for \
+                             branch {branch_id_str} below max_offset {max_offset}"
+                        )
+                    });
                 }
             }
         };
@@ -1171,7 +1173,7 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         self.seg
     }
 
-    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<(Lsn, Vec<u8>)> {
+    async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
         // The bucket of a chunk can't be derived, so probe all buckets (an
@@ -1185,12 +1187,16 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
             bucket_in_list()
         );
         let params: [&(dyn ToSql + Sync); 3] = [&self.branch_id, &segno, &off];
-        let row = self
+        // Only a missing row ends the WAL. A failed query is a failed read and
+        // must stay an `Err` — see `WalSource::chunk_at` (#756).
+        let Some(row) = self
             .client
             .query_opt(&sql, &params)
             .await
             .context("end-of-WAL scan: reading wals")?
-            .with_context(|| format!("WAL hole at {lsn}: no covering chunk in wals"))?;
+        else {
+            return Ok(None);
+        };
         let chunk_offset = row.get::<_, i64>(0) as u64;
         let stored: Vec<u8> = row.get::<_, Vec<u8>>(1);
         // Decode before any length arithmetic below — the coverage check
@@ -1201,13 +1207,10 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         )?;
         let chunk_start = segno as u64 * self.seg + chunk_offset;
         if lsn.0 >= chunk_start + data.len() as u64 {
-            anyhow::bail!(
-                "WAL hole at {lsn}: nearest chunk covers [{}, {}) only",
-                Lsn(chunk_start),
-                Lsn(chunk_start + data.len() as u64)
-            );
+            // The nearest chunk stops short of `lsn`: the WAL ends here.
+            return Ok(None);
         }
-        Ok((Lsn(chunk_start), data))
+        Ok(Some((Lsn(chunk_start), data)))
     }
 }
 
@@ -3128,6 +3131,153 @@ mod tests {
         );
 
         drop_wals_table(&client, &table).await;
+    }
+
+    /// #756: a failed *read* during the end-of-WAL scan is indistinguishable
+    /// from the WAL having ended, so the scan reports a short boundary and the
+    /// rehydration DELETEs every `wals` row above it. Those rows are the only
+    /// copy of WAL whose commits were already acked to the client — `wals` is
+    /// keyed without a safekeeper id, so no peer can restore them.
+    ///
+    /// The injected fault is a durable chunk this build cannot decode (one of
+    /// `chunk_at`'s error paths). It has to begin inside the last WAL page, past
+    /// that page's header, which `find_anchor` is the only reader of: an anchor
+    /// probe that failed would abort the scan before the forward walk, leaving
+    /// the arm under test unexercised. The `anchored` assertion below enforces it.
+    #[tokio::test]
+    async fn failed_scan_read_must_not_delete_durable_wal() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
+        use postgres_ffi::wal_record_boundary::{find_anchor, page_header_size};
+
+        let table = scratch_table("wals_test_scan_read_fail");
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), true)
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        );
+        make_wals_table(&client, &table).await;
+
+        // A clean WAL ending exactly on a record boundary: the state after the
+        // last commit was acked, with every byte durable in `wals`.
+        let start = Lsn(SEG_SIZE);
+        let mut g = WalGenerator::new(LogicalMessageGenerator::new(c"t", &[]), start);
+        let mut buf: Vec<u8> = Vec::new();
+        let mut starts: Vec<Lsn> = Vec::new();
+        for _ in 0..400 {
+            let (lsn, bytes) = g.append_logical_message(c"t", &[7u8; 16]);
+            starts.push(lsn);
+            buf.extend_from_slice(&bytes);
+        }
+        let durable_end = *starts.last().expect("generated records");
+        buf.truncate((durable_end.0 - start.0) as usize);
+
+        let page = Lsn((durable_end.0 - 1) - (durable_end.0 - 1) % XLOG_BLCKSZ as u64);
+        let hdr = page_header_size(page, SEG_SIZE) as u64;
+        assert!(
+            page > start && durable_end.0 > page.0 + hdr + 8,
+            "geometry: the last page {page} leaves no room for a split below {durable_end}"
+        );
+        let split = Lsn(page.0 + hdr + (durable_end.0 - page.0 - hdr) / 2);
+
+        let branch_id = BranchId::generate();
+        let branch_s = branch_id.to_string();
+        let readable = (split.0 - start.0) as usize;
+        let ins = format!(
+            "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                             chunk_size, data, last_modified_us) \
+             VALUES ($1, 0, 1, $2, $3, $4, 0)",
+            quote_relation(&table)
+        );
+        client
+            .execute(
+                &ins,
+                &[&branch_s, &0i64, &(readable as i32), &enc(&buf[..readable])],
+            )
+            .await
+            .expect("insert readable WAL chunk");
+        // The same WAL bytes under a codec tag this build doesn't know: the row
+        // is durable and its declared range still counts toward the end-of-WAL,
+        // only reading it back fails.
+        let mut undecodable = vec![0x7fu8];
+        undecodable.extend_from_slice(&buf[readable..]);
+        client
+            .execute(
+                &ins,
+                &[
+                    &branch_s,
+                    &(readable as i64),
+                    &((buf.len() - readable) as i32),
+                    &undecodable,
+                ],
+            )
+            .await
+            .expect("insert undecodable WAL chunk");
+
+        let mut state = TimelinePersistentState::empty();
+        state.branch_id = branch_id;
+        state.timeline_start_lsn = start;
+        state.server.wal_seg_size = SEG_SIZE as u32;
+
+        let anchored = find_anchor(
+            &YbWalSource {
+                client: client.as_ref(),
+                table: &table,
+                branch_id: &branch_s,
+                seg: SEG_SIZE,
+            },
+            Lsn(durable_end.0 - 1),
+            start,
+        )
+        .await;
+
+        let res = YbWalStorage::new(&branch_id, &state, wal_conn(&client, &table)).await;
+        let write_lsn = res.as_ref().ok().map(|s| s.write_lsn());
+        let failure = res.as_ref().err().map(|e| format!("{e:#}"));
+
+        let persisted_end: Option<i64> = client
+            .query_opt(
+                &format!(
+                    "SELECT max(segno * {} + chunk_offset + chunk_size)::BIGINT FROM {} \
+                     WHERE branch_id = $1",
+                    SEG_SIZE,
+                    quote_relation(&table)
+                ),
+                &[&branch_s],
+            )
+            .await
+            .expect("read back the persisted end-of-WAL")
+            .and_then(|row| row.get::<_, Option<i64>>(0));
+
+        drop_wals_table(&client, &table).await;
+
+        anchored.expect("anchor probe must be served by the readable chunk below the split");
+        // Whichever way the scan resolves — refusing to trust the failed read
+        // (startup retries) or trusting a boundary at the durable end — the
+        // acked WAL must still be there.
+        assert_eq!(
+            persisted_end.map(|e| Lsn(e as u64)),
+            Some(durable_end),
+            "durable WAL was DELETEd: `wals` now ends at {:?}, below the acked end \
+             {durable_end}; the scan stopped at {write_lsn:?}",
+            persisted_end.map(|e| Lsn(e as u64)),
+        );
+        if let Some(got) = write_lsn {
+            assert_eq!(
+                got, durable_end,
+                "the advertised end-of-WAL regressed below the acked end {durable_end}"
+            );
+        }
+        // The fault is permanent — no implementation can decode a tag it doesn't
+        // know — so reaching `durable_end` is impossible and refusing the load is
+        // the only correct outcome. Requiring the failure, and pinning it to this
+        // chunk, is what stops the assertions above from passing on a run where
+        // the scan was never exercised at all.
+        let chain = failure.expect("the injected undecodable chunk must fail the scan");
+        assert!(
+            chain.contains("unknown payload codec tag"),
+            "`new` failed, but not on the injected undecodable chunk: {chain}"
+        );
     }
 
     /// Like [`make_storage`] but with a populated `WalCache` and a real

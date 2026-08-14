@@ -206,6 +206,13 @@ timeline starts at a nonzero LSN.
    switch case back to the raw max — or letting the anchor walk overshoot a
    mid-page `timeline_start_lsn` — wedges the safekeeper (#181); see
    [`safekeeper.md`](safekeeper.md) §"Restart".
+   The scan separates the WAL *ending* (no chunk covers the LSN) from a
+   failed *read* of it, and a failed read fails `YbWalStorage::new` instead
+   of yielding a boundary: truncating to the boundary reached so far would
+   delete durable rows whose commits were already acked (#756), and
+   advertising the raw max offset can publish a mid-record `flush_lsn` no
+   reader can reach (#678). The walproposer handshake retries the load, so a
+   transient read failure costs a reconnect.
 3. Rows past the refined `write_lsn` are deleted (best-effort; a failed
    cleanup is absorbed on the next restart), and `durable_lsn` +
    `DurableState::Healthy` are seeded at `write_lsn` so an immediate
