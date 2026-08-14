@@ -1,7 +1,10 @@
 package features
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/core"
@@ -51,10 +54,13 @@ func init() {
 	})
 
 	core.Register(core.Test{
-		Name:        "features/pg_read_cold_cache",
-		Suite:       "features",
-		Category:    core.Functional,
-		Env:         core.EnvSpec{Sharing: core.Shared, Shape: core.SingleContainer},
+		Name:     "features/pg_read_cold_cache",
+		Suite:    "features",
+		Category: core.Functional,
+		// Exclusive since this test restarts the compute: on a shared endpoint
+		// that deletes the pod out from under every other test using it. The
+		// other restart tests are Exclusive for the same reason.
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SingleContainer},
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamCompute,
 		Description: "Write a large set, CHECKPOINT, reconnect on a cold Local File Cache, and verify full-scan count+sum and a point lookup (forces Pageserver GetPage reconstruction).",
@@ -327,13 +333,56 @@ func runIndex(t *core.T) error {
 
 const coldRows = 5000
 
-// runReadColdCache writes a large set, checkpoints, reconnects on a cold Local
-// File Cache, and verifies full-scan count+sum and a point lookup — forcing the
-// Pageserver GetPage read path rather than a cache hit.
+// lfcMisses reads the compute's Local File Cache miss counter. The second
+// return is false when the counter cannot be read, which the caller must
+// report rather than treat as zero.
+//
+// The view ships with the yb_amp extension, which is AVAILABLE but not
+// installed in a fresh database (observed: pg_available_extensions lists
+// yb_amp 1.0 while pg_extension has no row), so the first read has to create
+// it. Creating it is not fatal: an endpoint that refuses leaves the caller
+// saying the reads were not proven cold rather than inventing a number.
+func lfcMisses(t *core.T, c *pg.Client) (int64, bool) {
+	// Bounded: CREATE EXTENSION writes the catalog through the amp storage
+	// path, so on an endpoint whose commits are parked it hangs rather than
+	// failing. Observed on a live endpoint with 23 of 34 backends in
+	// IPC/SyncRep: "canceling statement due to statement timeout ... while
+	// inserting index tuple in pg_extension_name_index". A diagnostic must
+	// never be the thing that hangs the test it is diagnosing.
+	ctx, cancel := context.WithTimeout(t.Context, lfcStatsTimeout)
+	defer cancel()
+	if n, err := c.QueryInt(ctx, lfcMissesQuery); err == nil {
+		return n, true
+	}
+	if _, err := c.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS yb_amp"); err != nil {
+		return 0, false
+	}
+	n, err := c.QueryInt(ctx, lfcMissesQuery)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+const lfcStatsTimeout = 30 * time.Second
+
+const lfcMissesQuery = "SELECT file_cache_misses FROM ybamp_stat_file_cache"
+
+// runReadColdCache writes a large set, checkpoints, RESTARTS the compute, and
+// verifies full-scan count+sum and a point lookup — forcing the Pageserver
+// GetPage read path rather than a cache hit.
+//
+// It used to reconnect instead of restarting, on the belief that a fresh pool
+// starts cold. It does not: the Local File Cache is instance-scoped shared
+// memory (compute/pgxn/yb_amp/file_cache.c), so every "cold" read was served
+// from a cache the previous connection had just filled, and this test never
+// touched page reconstruction at all. Restarting the compute is what actually
+// empties it, and the miss counter below is what proves it — an assertion that
+// cannot pass while the read path is bypassed.
 func runReadColdCache(t *core.T) error {
-	env, ok := t.Env.(pgEnv)
+	env, ok := t.Env.(computeRestarter)
 	if !ok {
-		t.Skip("requires an env that exposes a PGEndpoint (sharedk8s or universe)")
+		t.Skip("requires an env with compute-restart capability (sharedk8s): a reconnect does not empty the instance-scoped LFC")
 		return nil
 	}
 	client, err := connect(t, env)
@@ -360,9 +409,15 @@ func runReadColdCache(t *core.T) error {
 		client.Close()
 		return err
 	}
-	// Drop the compute-side cache: a fresh pool starts with a cold Local File
-	// Cache, so read-back must reconstruct pages from the Pageserver.
 	client.Close()
+
+	// Empty the Local File Cache for real. Nothing short of losing the instance
+	// does it.
+	if err := t.Step("restart_compute", func(s *core.StepHandle) error {
+		return env.RestartCompute(t.Context)
+	}); err != nil {
+		return err
+	}
 
 	return t.Step("verify_cold", func(s *core.StepHandle) error {
 		cold, err := connect(t, env)
@@ -371,6 +426,12 @@ func runReadColdCache(t *core.T) error {
 		}
 		defer cold.Close()
 		defer func() { _, _ = cold.Exec(t, "DROP TABLE IF EXISTS "+table) }()
+
+		// The miss counter is the self-check: if these reads are served from
+		// cache, the read path under test never ran and a green here would mean
+		// nothing. Best-effort only in that an env without the yb_amp extension
+		// reports no baseline and the assertion stands down loudly.
+		missesBefore, haveStats := lfcMisses(t, cold)
 
 		count, err := cold.QueryInt(t, "SELECT count(*) FROM "+table)
 		if err != nil {
@@ -396,6 +457,20 @@ func runReadColdCache(t *core.T) error {
 			return fmt.Errorf("cold point lookup on %s id=%d returned v=%d, want %d (Pageserver GetPage reconstructed the wrong value)", table, knownID, gotV, rows[knownID])
 		}
 		s.Set("checksum", gotSum)
+
+		if !haveStats {
+			s.Set("lfc_misses", "unavailable")
+			logf := t.Masker().Logf(log.Printf)
+			logf("pg_read_cold_cache: ybamp_stat_file_cache unavailable; the reads were not proven cold")
+			return nil
+		}
+		missesAfter, _ := lfcMisses(t, cold)
+		s.Set("lfc_misses_before", missesBefore)
+		s.Set("lfc_misses_after", missesAfter)
+		if missesAfter <= missesBefore {
+			return fmt.Errorf("the cold reads missed the Local File Cache 0 times (%d → %d): they were served from cache, so Pageserver page reconstruction was never exercised and this test proved nothing",
+				missesBefore, missesAfter)
+		}
 		return nil
 	})
 }

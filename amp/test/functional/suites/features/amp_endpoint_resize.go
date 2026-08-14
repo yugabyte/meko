@@ -365,8 +365,16 @@ func (a *ampFeatureRun) endpointResizeReadOnly(ctx context.Context) error {
 	}
 	ep, err := createRoleEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID, roleReadOnly)
 	if err != nil {
-		a.f.t.Skip("no read_only endpoint came up to resize: " + err.Error())
-		return nil
+		// Skip ONLY for the known unsupported path — the controller refusing
+		// the role with a terminal 4xx. Skipping on any error at all let this
+		// coverage vanish with no red anywhere: a 500, a timeout or a broken
+		// transport read exactly like "not plumbed yet".
+		var apiErr *controller.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
+			a.f.t.Skip(fmt.Sprintf("the controller refuses a %s endpoint (%s): the role is not plumbed to a compute mode yet", roleReadOnly, apiErr))
+			return nil
+		}
+		return fmt.Errorf("create %s endpoint to resize: %w", roleReadOnly, err)
 	}
 	if ep.Role != roleReadOnly {
 		return fmt.Errorf("the endpoint created for role %s reports role %q, want %s", roleReadOnly, ep.Role, roleReadOnly)

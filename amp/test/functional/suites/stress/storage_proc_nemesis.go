@@ -260,6 +260,11 @@ func killStorageDaemons(t *core.T, s *core.StepHandle, env ampTenantEnv, kube *k
 		return nil, fmt.Errorf("nothing to kill: %d tenant(s), %d daemon(s)", len(fleet.Tenants), len(params.Daemons))
 	}
 
+	// The journals already carry the seed writes, and seed_writes refuses to
+	// pass with none, so only the DELTA over this window says whether anything
+	// was committed while a daemon was dying.
+	ackedBefore := totalAcked(journals)
+
 	writers := make(chan struct{})
 	go func() {
 		defer close(writers)
@@ -307,10 +312,18 @@ func killStorageDaemons(t *core.T, s *core.StepHandle, env ampTenantEnv, kube *k
 	s.Set("targets", strings.Join(targets, ","))
 	s.Set("kills_landed", len(records))
 	s.Set("kills_planned", len(plan)*params.KillsPerDaemon)
-	s.Set("acked_under_fault", totalAcked(journals))
+	ackedUnderFault := totalAcked(journals) - ackedBefore
+	s.Set("acked_under_fault", ackedUnderFault)
 	if len(records) == 0 {
 		return nil, fmt.Errorf("not one kill landed on a storage daemon in %s, so this run injected no fault and proves nothing: %s",
 			params.FaultDuration, strings.Join(failed, "; "))
+	}
+	// Faults landing is half of it: with nothing committed while they landed,
+	// the exact-set verification afterwards has no commit that crossed a fault
+	// to check, and the run passes having proven nothing about durability.
+	if ackedUnderFault == 0 {
+		return nil, fmt.Errorf("%d kill(s) landed but no tenant committed a single row during the %s fault window, so nothing was written across a daemon death and the verification below has nothing to prove",
+			len(records), params.FaultDuration)
 	}
 	return records, nil
 }

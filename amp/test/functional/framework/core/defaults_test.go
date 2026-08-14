@@ -471,8 +471,11 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if fcfg.ClusterDeployDir != features.DefaultClusterDeployDir {
 		t.Errorf("functional ClusterDeployDir = %q, want %q", fcfg.ClusterDeployDir, features.DefaultClusterDeployDir)
 	}
-	if cfg.GetBool("functional.extensions.require_catalog", true) {
-		t.Errorf("functional.extensions.require_catalog = true, want false (opt-in)")
+	// ON by default: the externalized catalog is a shipping commitment, and
+	// with it off the field incident pg_extensions_matrix exists for —
+	// btree_gin missing from the catalog — passes.
+	if !cfg.GetBool("functional.extensions.require_catalog", false) {
+		t.Errorf("functional.extensions.require_catalog = false, want true (the catalog half must assert by default)")
 	}
 	if got := cfg.GetStringSlice("functional.extensions.baked", nil); !slices.Equal(got, features.DefaultExtensionsBaked) {
 		t.Errorf("functional.extensions.baked = %v, want %v", got, features.DefaultExtensionsBaked)

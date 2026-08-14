@@ -289,8 +289,11 @@ func assertEndpointsServe(t *core.T, env ampTenantEnv, tenants []tenant, settle 
 // "amp stopped working" this tier is here to catch. Pods that completed
 // (Succeeded) are ignored: a finished job is not a failure.
 func assertAmpHealthy(t *core.T, kube *k8s.Kubectl) (string, error) {
+	// No kube context means this check did not run. Reporting success for it
+	// is how a "the deployment still stands" step passes without looking at
+	// the deployment at all.
 	if kube == nil {
-		return "no kube context: pod health not checked", nil
+		return "", core.AsEnvFailure(fmt.Errorf("no kube context: pod health could not be checked, so this run cannot claim the deployment survived"))
 	}
 	states, err := kube.PodStates(t.Context)
 	if err != nil {

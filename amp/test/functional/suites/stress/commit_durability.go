@@ -231,7 +231,8 @@ func commitDurabilityChaos(t *core.T, s *core.StepHandle, env ampTenantEnv, ampE
 	defer mu.Unlock()
 	attempted, delivered, undelivered := cancels.Attempted.Load(), cancels.Delivered.Load(), cancels.Undelivered.Load()
 	s.Set("injects", injects)
-	s.Set("acked_under_fault", totalAcked(journals)-before)
+	ackedUnderFault := totalAcked(journals) - before
+	s.Set("acked_under_fault", ackedUnderFault)
 	s.Set("cancelled", totalCancelled(journals))
 	s.Set("cancels_attempted", attempted)
 	s.Set("cancels_delivered", delivered)
@@ -239,6 +240,13 @@ func commitDurabilityChaos(t *core.T, s *core.StepHandle, env ampTenantEnv, ampE
 	s.Set("acked_despite_cancel", cancels.AckedDespiteCancel.Load())
 	if injects == 0 {
 		return fmt.Errorf("the chaos loop injected no fault in %s, so this run proves nothing about durability under fault", params.Duration)
+	}
+	// A fault window nobody wrote through is a green that means nothing: the
+	// exact-set check afterwards would be verifying commits that never met a
+	// fault.
+	if ackedUnderFault == 0 {
+		return fmt.Errorf("%d fault(s) were injected but no commit was acknowledged during the %s window, so no acked commit crossed a fault and the exact-set verification proves nothing",
+			injects, params.Duration)
 	}
 	if params.CancelProbability == 0 {
 		return nil

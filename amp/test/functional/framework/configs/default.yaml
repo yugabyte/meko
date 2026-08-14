@@ -342,8 +342,11 @@ functional:
   extensions:
     # require_catalog turns the two catalog softenings (control plane reports no
     # extension catalog, node's kubelet predates ImageVolume) into hard failures.
-    # On for envs where the externalized catalog is a shipping commitment.
-    require_catalog: false
+    # ON by default: the externalized catalog is a shipping commitment, and with
+    # this off the exact field incident this test exists for — btree_gin absent
+    # from the catalog — still passes. Turn it off for a cluster whose kubelet
+    # genuinely predates ImageVolume, and say so in the run.
+    require_catalog: true
     baked:
       - pg_prewarm
       - pg_buffercache

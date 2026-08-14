@@ -55,7 +55,7 @@ Under `--fake-env` every regression test skips cleanly.
 | `pg_mutations` | non-insert WAL broken — UPDATE/DELETE deltas don't materialise |
 | `pg_transaction` | transaction semantics broken — commit not durable, rollback leaks, or a statement error fails to abort the tx |
 | `pg_index` | index pages don't reconstruct — a point lookup / range count over a secondary index disagrees |
-| `pg_read_cold_cache` | cold read path broken — after reconnect (empty LFC) a full scan+lookup can't be rebuilt from the Pageserver |
+| `pg_read_cold_cache` | cold read path broken — after a compute restart (the only thing that empties the instance-scoped LFC) a full scan+lookup can't be rebuilt from the Pageserver, or the reads never missed the cache at all |
 | `pg_ddl_survives_restart` | catalog/index durability broken — table, index, index-backed lookup, or data don't survive the `consistent_lsn` boundary |
 | `pg_multi_db_workload` | **the main use case** — separate databases on one endpoint don't run correct, distinct, isolated workloads |
 
