@@ -23,28 +23,13 @@ import (
 
 // --- safekeeper ---
 
-// safekeeperControlFileSaveInterval reads the optional test-only cadence
-// override (Rust YB_SK_CONTROL_FILE_SAVE_INTERVAL); nil keeps the default.
-func safekeeperControlFileSaveInterval() (*time.Duration, error) {
-	s, ok := os.LookupEnv("YB_SK_CONTROL_FILE_SAVE_INTERVAL")
-	if !ok {
-		return nil, nil
-	}
-	var d config.HumantimeDuration
-	if err := d.UnmarshalText([]byte(s)); err != nil {
-		return nil, fmt.Errorf("parse YB_SK_CONTROL_FILE_SAVE_INTERVAL=%q: %w", s, err)
-	}
-	dur := d.Duration()
-	return &dur, nil
-}
-
 // writeSafekeeperFiles creates the safekeeper's datadir and writes its
 // safekeeper.toml.
 //
 // Provisioning-time, not start-time: the supervisor starts the safekeeper from a
-// config that must already be on disk. Rendering it here also keeps every
-// local-only knob (the test-only control-file cadence below, the launcher's port
-// allocations) on the launcher's side of the line.
+// config that must already be on disk. Rendering it here also keeps the
+// launcher's local-only knobs (its port allocations) on the launcher's side of
+// the line.
 func writeSafekeeperFiles(env *config.LocalEnv, conf *config.SafekeeperConf) error {
 	dataDir := env.SafekeeperDataDir(conf.EndpointID)
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
@@ -54,20 +39,15 @@ func writeSafekeeperFiles(env *config.LocalEnv, conf *config.SafekeeperConf) err
 	if conf.ListenAddr != nil {
 		listenAddr = *conf.ListenAddr
 	}
-	cfsi, err := safekeeperControlFileSaveInterval()
-	if err != nil {
-		return err
-	}
 	params := cfg.SafekeeperParams{
-		BranchID:                conf.BranchID,
-		ListenAddr:              listenAddr,
-		PgPort:                  conf.PgPort,
-		PgTenantOnlyPort:        conf.PgTenantOnlyPort,
-		HTTPPort:                conf.HTTPPort,
-		HTTPSPort:               conf.HTTPSPort,
-		YbStorageConn:           conf.YbStorageConn,
-		WalCacheSizeMib:         conf.WalCacheSizeMib,
-		ControlFileSaveInterval: cfsi,
+		BranchID:         conf.BranchID,
+		ListenAddr:       listenAddr,
+		PgPort:           conf.PgPort,
+		PgTenantOnlyPort: conf.PgTenantOnlyPort,
+		HTTPPort:         conf.HTTPPort,
+		HTTPSPort:        conf.HTTPSPort,
+		YbStorageConn:    conf.YbStorageConn,
+		WalCacheSizeMib:  conf.WalCacheSizeMib,
 	}
 	return cfg.WriteSafekeeperToml(filepath.Join(dataDir, "safekeeper.toml"), params)
 }

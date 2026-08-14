@@ -156,8 +156,6 @@ components:
           type: string
         commit_lsn:
           type: string
-        remote_consistent_lsn:
-          type: string
 
     TimelineDeleteResult:
       type: object

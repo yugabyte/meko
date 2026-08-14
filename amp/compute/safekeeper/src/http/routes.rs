@@ -79,7 +79,7 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
 
     let global_timelines = get_global_timelines(&request);
     let tli = global_timelines.get(branch_id).map_err(ApiError::from)?;
-    let (inmem, state) = tli.get_state().await;
+    let state = tli.get_state().await;
     let flush_lsn = tli.get_flush_lsn().await;
 
     let conf = get_conf(&request);
@@ -91,7 +91,6 @@ async fn timeline_status_handler(request: Request<Body>) -> Result<Response<Body
         timeline_start_lsn: state.timeline_start_lsn,
         // yb-amp: commit_lsn ≡ flush_lsn (single-SK).
         commit_lsn: flush_lsn,
-        remote_consistent_lsn: inmem.remote_consistent_lsn,
         peers: tli.get_peers(conf).await,
         walsenders: tli.get_walsenders().get_all_public(),
         walreceivers: tli.get_walreceivers().get_all(),
@@ -115,24 +114,6 @@ async fn patch_control_file_handler(
         .map_err(ApiError::InternalServerError)?;
 
     json_response(StatusCode::OK, response)
-}
-
-/// Force persist control file.
-async fn timeline_checkpoint_handler(request: Request<Body>) -> Result<Response<Body>, ApiError> {
-    check_permission(&request, None)?;
-
-    let branch_id = parse_request_param(&request, "branch_id")?;
-
-    let global_timelines = get_global_timelines(&request);
-    let tli = global_timelines.get(branch_id)?;
-    tli.write_shared_state()
-        .await
-        .sk
-        .state_mut()
-        .flush()
-        .await
-        .map_err(ApiError::InternalServerError)?;
-    json_response(StatusCode::OK, ())
 }
 
 fn parse_kv_str<E: fmt::Display, T: FromStr<Err = E>>(k: &str, v: &str) -> Result<T, ApiError> {
@@ -285,9 +266,6 @@ pub fn make_router(
         })
         .patch("/v1/branch/:branch_id/control_file", |r| {
             request_span(r, patch_control_file_handler)
-        })
-        .post("/v1/branch/:branch_id/checkpoint", |r| {
-            request_span(r, timeline_checkpoint_handler)
         })
         .get("/v1/debug_dump", |r| request_span(r, dump_debug_handler))
 }

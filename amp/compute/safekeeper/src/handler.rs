@@ -379,7 +379,7 @@ impl SafekeeperPostgresHandler {
         // branches return the same value.
         let lsn = tli.get_flush_lsn().await.to_string();
 
-        let sysid = tli.get_state().await.1.server.system_id.to_string();
+        let sysid = tli.get_state().await.server.system_id.to_string();
         let lsn_bytes = lsn.as_bytes();
         let tli = PG_TLI.to_string();
         let tli_bytes = tli.as_bytes();

@@ -235,7 +235,6 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
     -- safekeeper-owned group; NULL until the safekeeper creates its control file.
     safekeeper_initialized BOOLEAN     NOT NULL DEFAULT false,
     timeline_start_lsn     BIGINT,
-    remote_consistent_lsn  BIGINT,
     system_id              BIGINT,
     wal_seg_size           INT,
     creation_ts            TIMESTAMPTZ,

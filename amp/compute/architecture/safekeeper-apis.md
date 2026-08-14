@@ -46,14 +46,13 @@ router is not kept authoritative.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | POST | `/v1/branch` | Create a branch. Body = `TimelineCreateRequest` (`branch_id`, `pg_version`, optional `system_id`, `wal_seg_size`, `start_lsn`). Defaults: `system_id=0`, `wal_seg_size=WAL_SEGMENT_SIZE`. Writes the branch's `amp_storage.branch_state` row; returns the existing timeline if already present. Branch scope. |
-| GET | `/v1/branch/:branch_id` | Branch status: `TimelineStatus` with `pg_info`, `flush_lsn`, `commit_lsn` (reported equal to `flush_lsn` — every flushed LSN is committed), `timeline_start_lsn`, `remote_consistent_lsn`, peers, walsenders, walreceivers. In-memory values. Branch scope. |
+| GET | `/v1/branch/:branch_id` | Branch status: `TimelineStatus` with `pg_info`, `flush_lsn`, `commit_lsn` (reported equal to `flush_lsn` — every flushed LSN is committed), `timeline_start_lsn`, peers, walsenders, walreceivers. In-memory values. Branch scope. |
 
 ### Timeline maintenance / debug
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| PATCH | `/v1/branch/:branch_id/control_file` | Patch control-file fields via JSON diff. Body = `patch_control_file::Request { updates, apply_fields }`; applies only the named fields and persists the row. Returns old + new state. Global scope. |
-| POST | `/v1/branch/:branch_id/checkpoint` | Force-persist the control file (flush in-memory state to the `branch_state` row). Global scope. |
+| PATCH | `/v1/branch/:branch_id/control_file` | Patch control-file fields via JSON diff. Body = `patch_control_file::Request { updates, apply_fields }`; applies only the named fields and persists the row. Returns old + new state. An `apply_fields` naming a field the row no longer carries — `remote_consistent_lsn`, `local_start_lsn` — errors with "key not found in original object"; the WAL-retention floor is in-memory and derived from the pageserver, so it is deliberately not patchable here. Global scope. |
 
 ### Failpoints / global debug dump
 

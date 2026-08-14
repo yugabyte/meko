@@ -60,7 +60,6 @@ CREATE TABLE amp_storage.branch_state (
     safekeeper_initialized BOOLEAN     NOT NULL DEFAULT false,
 
     timeline_start_lsn     BIGINT,
-    remote_consistent_lsn  BIGINT,
     system_id              BIGINT,
     wal_seg_size           INT,
     creation_ts            TIMESTAMPTZ,
@@ -85,35 +84,44 @@ one typed column per scalar of `TimelinePersistentState`
 
 - `timeline_start_lsn` — where the branch's persisted WAL begins
   (a guaranteed record boundary).
-- `remote_consistent_lsn` — the pageserver's durable ingest frontier,
-  advertised via `PageserverFeedback`; WAL below it is eligible for GC.
 - `pg_version` / `system_id` / `wal_seg_size` — server identity, validated
   against every walproposer greeting.
 
 There is no consensus state in the row — no term, no vote, no term history,
-no membership — because the acceptor runs none.
+no membership — because the acceptor runs none. Nor is the WAL-retention
+floor here: the pageserver already records it authoritatively one column
+over as `consistent_lsn`, and the safekeeper reads *that* rather than
+keeping a lagging copy (see **WAL-retention floor** below).
 
 Persistence paths:
 
 - `Storage::persist()` — full-row `UPDATE`, run synchronously under the
   timeline `shared_state` write lock by state transitions that must be
   durable before replying (`handle_elected`, `handle_greeting`'s system-id
-  update, `map_control_file`, the HTTP checkpoint route).
-- `AdvisoryPersist::persist_remote_consistent_lsn()` — the periodic save
-  (every `control_file_save_interval`, default 300 s) persists **only**
-  `remote_consistent_lsn`, as a monotonic single-column
-  `UPDATE ... SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2)`.
-  The timeline manager runs it as a background task **without** the
-  shared_state lock, then folds the result back into the in-memory row
-  mirror under a brief lock (`note_advisory_persisted`). Rationale: the
-  manager loop is the sole servicer of residence-guard requests, and WAL
-  appends need the shared_state write lock — holding that lock across a slow
-  YB round trip freezes commits and times out every new WAL receiver.
-  `GREATEST` makes the advisory write safe under any interleaving with the
-  full-row persists: a late-landing advisory update can never regress the
-  row. A failed save retries at most once per interval (the manager gates on
-  both the persisted clock and the last-attempt clock, so a YB outage does
-  not turn into a 300 ms retry storm).
+  update, `map_control_file`).
+
+That is the only persistence path. There is no periodic save: the one field
+that used to need one — the WAL-retention floor — is no longer stored by the
+safekeeper at all.
+
+### WAL-retention floor
+
+`TimelineMemState::consistent_lsn` is the pageserver's durable-ingest
+frontier and the bound on WAL GC. It is held **in memory only**:
+
+- **seeded at startup** from `amp_storage.branch_state.consistent_lsn`, the
+  pageserver's own column, floored at `timeline_start_lsn` (which is where it
+  lands when that daemon has not initialised yet, retaining all WAL until the
+  first feedback);
+- **advanced** by `PageserverFeedback.disk_consistent_lsn` on the
+  replication stream.
+
+Both sources carry the same fact. The pageserver commits the generation-fenced
+`advance_consistent_lsn` UPDATE *before* publishing the value as feedback, so
+every floor the safekeeper ever holds is one the pageserver has already made
+durable. A safekeeper crash therefore resumes at or above where it stopped
+trimming, which is why no safekeeper-side copy has to be persisted — and why
+trimming survives a safekeeper restart taken while the pageserver is down.
 
 ### WAL: `amp_storage.wals`
 
@@ -364,7 +372,7 @@ Key properties:
   It does not wait on the watermark — by construction it only targets
   segments far below the writer's position. The matching `WalCache` ranges
   are dropped first. The GC horizon is
-  `min(cfile remote_consistent_lsn, flush_lsn, slowest active walsender)`
+  `min(consistent_lsn, flush_lsn, slowest active walsender)`
   (`compute/safekeeper/src/remove_wal.rs` + the manager's laggard clamp) —
   WAL lives only in these rows, so trimming past a reader would be
   unrecoverable data loss for it.
@@ -487,9 +495,8 @@ between these two components. Message flow on every (re)connect:
   the first segment if this is the timeline's first WAL, truncates its WAL
   to `start_streaming_at`, seeds `timeline_start_lsn`
   on the very first election (where `start_streaming_at` is the timeline's
-  WAL start), floors `remote_consistent_lsn` at the timeline start, and
-  force-persists the control file so `postgres --sync-safekeepers` polls a
-  durable, aligned LSN.
+  WAL start), and floors the in-memory retention horizon at the timeline
+  start so post-restart catch-up never reads a pre-timeline LSN.
 - **`AppendRequest`** (P→A, tag `a`): `begin_lsn`, `end_lsn`, WAL bytes
   (bounded by `MAX_SEND_SIZE`). Gap/rewrite guards reject non-sequential
   writes — a reconnect must go through `ProposerElected` to move the
@@ -547,7 +554,7 @@ periodic flush ticks and the durability watch carry the acks.
 - **Pageserver feedback**: pageservers reply on the replication stream with
   `PageserverFeedback` (keyed by the `NEON_STATUS_UPDATE_TAG_BYTE` message
   tag, `compute/safekeeper/src/send_wal.rs`). The safekeeper records it
-  per-walsender, advances the in-memory `remote_consistent_lsn`, and
+  per-walsender, advances the in-memory `consistent_lsn`, and
   broadcasts the feedback to all connected walproposers, which use it for
   compute-side backpressure. `corruption_detected` in the feedback latches
   the `safekeeper_ps_corruption_detected` gauge.
@@ -592,9 +599,8 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
   only the config, log, and pidfile.
 - **Activity**: the per-timeline manager task
   (`compute/safekeeper/src/timeline_manager.rs`) recomputes `is_active`
-  (live computes, or pageserver `remote_consistent_lsn` behind `flush_lsn`)
-  on every iteration, drives the periodic control-file save and WAL GC, and
-  services residence-guard requests. The active set feeds the per-timeline
+  (live computes, or pageserver `consistent_lsn` behind `flush_lsn`)
+  on every iteration, drives WAL GC, and services residence-guard requests. The active set feeds the per-timeline
   metrics collector.
 
 ## Recovery and restart
@@ -673,8 +679,8 @@ branch_id = "77ffde89..."
 listen_pg = "127.0.0.1:5474"
 listen_http = "127.0.0.1:7686"
 yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 'yb_storage', sslmode = 'require' }"
-# tuning knobs (heartbeat_timeout, control_file_save_interval,
-# wal_cache_size_mib, scale_factor, ssl_*, ...) default when omitted.
+# tuning knobs (heartbeat_timeout, wal_cache_size_mib, scale_factor,
+# ssl_*, ...) default when omitted.
 ```
 
 - `yb_storage_conn` is the single YB connection block (a string-encoded
@@ -696,8 +702,8 @@ yb_storage_conn = "{ host_ports = '127.0.0.1:5433', user = 'yugabyte', dbname = 
   [`data` is compressed](#data-is-compressed). Only the safekeeper restart
   is needed to change it; nothing is rewritten.
 - Defaults: `listen_pg` 127.0.0.1:5454, `listen_http` 127.0.0.1:7676,
-  `control_file_save_interval` 300 s, `wal_cache_size_mib` 128 scaled by
-  `scale_factor`, `heartbeat_timeout` 5 s, `yb_wal_compression` `lz4`.
+  `wal_cache_size_mib` 128 scaled by `scale_factor`, `heartbeat_timeout` 5 s,
+  `yb_wal_compression` `lz4`.
 
 The process runs three additional tokio runtimes (`WAL_SERVICE_RUNTIME`,
 `HTTP_RUNTIME`, `BACKGROUND_RUNTIME`); `SIGUSR2` dumps suspended tasks from
@@ -731,7 +737,7 @@ Deleting the whole directory and restarting rebuilds everything from YB.
 - `compute/safekeeper/src/receive_wal.rs` — walproposer connection handling,
   the `WalAcceptor` loop (flush ticker, durability-watch acks).
 - `compute/safekeeper/src/control_file.rs` — `YbControlFileStorage`
-  (= `ControlFileStorage`) + `AdvisoryPersist`.
+  (= `ControlFileStorage`).
 - `compute/safekeeper/src/wal_storage.rs` — WAL `Storage` trait,
   `WalBookkeeping`, `WalReader`.
 - `compute/safekeeper/src/yb_wal_storage.rs` — `YbWalConn`, `YbWalStorage`

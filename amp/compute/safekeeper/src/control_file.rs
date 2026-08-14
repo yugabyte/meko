@@ -7,7 +7,6 @@
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -26,9 +25,6 @@ use crate::state::TimelinePersistentState;
 pub trait Storage: Deref<Target = TimelinePersistentState> {
     /// Persist safekeeper state and update internal state.
     fn persist(&mut self, s: &TimelinePersistentState) -> impl Future<Output = Result<()>> + Send;
-
-    /// Timestamp of last persist.
-    fn last_persist_at(&self) -> Instant;
 }
 
 /// Control-file storage backed by a YB row in
@@ -39,7 +35,6 @@ pub struct YbControlFileStorage {
     client: Arc<YsqlClient>,
     branch_id: BranchId,
     state: TimelinePersistentState,
-    last_persist_at: Instant,
 }
 
 impl std::fmt::Debug for YbControlFileStorage {
@@ -50,7 +45,9 @@ impl std::fmt::Debug for YbControlFileStorage {
     }
 }
 
-const COLUMNS: &str = "timeline_start_lsn, remote_consistent_lsn, \
+/// `consistent_lsn` is the *pageserver's* column, read here to seed the
+/// WAL-retention floor; it is NULL until that daemon initialises.
+const COLUMNS: &str = "timeline_start_lsn, consistent_lsn, \
                        pg_version, system_id, wal_seg_size, creation_ts";
 
 impl YbControlFileStorage {
@@ -70,11 +67,16 @@ impl YbControlFileStorage {
     /// made the same bet on `consistent_lsn`, which does not, and silently lost
     /// its creation write (#552). An explicit flag doesn't depend on the bet,
     /// and it keeps the non-nullable `try_get`s below honest: `write_row` sets
-    /// the flag in the same statement that fills all five columns.
+    /// the flag in the same statement that fills all four columns.
+    ///
+    /// Returns the storage paired with the WAL-retention floor read out of
+    /// the pageserver's `consistent_lsn`, floored at `timeline_start_lsn` (which
+    /// is where it lands when that daemon has not initialised yet — all WAL is
+    /// retained until the first feedback).
     pub async fn restore_opt(
         client: Arc<YsqlClient>,
         branch_id: &BranchId,
-    ) -> Result<Option<YbControlFileStorage>> {
+    ) -> Result<Option<(YbControlFileStorage, Lsn)>> {
         let sql = format!(
             "SELECT {COLUMNS} FROM amp_storage.branch_state \
              WHERE branch_id = $1 AND safekeeper_initialized"
@@ -88,7 +90,14 @@ impl YbControlFileStorage {
         };
 
         let timeline_start_lsn = Lsn(row.try_get::<_, i64>(0)? as u64);
-        let remote_consistent_lsn = Lsn(row.try_get::<_, i64>(1)? as u64);
+        // Floor at `timeline_start_lsn` here, not just in `handle_elected`, so
+        // the invariant holds from load rather than from the first election —
+        // a branch whose pageserver has not written `consistent_lsn` yet would
+        // otherwise sit at 0 until a compute connects.
+        let retention_floor = std::cmp::max(
+            Lsn(row.try_get::<_, Option<i64>>(1)?.unwrap_or(0) as u64),
+            timeline_start_lsn,
+        );
         let pg_version: PgVersionId =
             PgVersionId::from_full_pg_version(row.try_get::<_, i32>(2)? as u32);
         let system_id = row.try_get::<_, i64>(3)? as u64;
@@ -104,16 +113,17 @@ impl YbControlFileStorage {
                 wal_seg_size,
             },
             timeline_start_lsn,
-            remote_consistent_lsn,
             creation_ts,
         };
 
-        Ok(Some(YbControlFileStorage {
-            client,
-            branch_id: *branch_id,
-            state,
-            last_persist_at: Instant::now(),
-        }))
+        Ok(Some((
+            YbControlFileStorage {
+                client,
+                branch_id: *branch_id,
+                state,
+            },
+            retention_floor,
+        )))
     }
 
     /// Populate the safekeeper's column group on the branch's
@@ -131,14 +141,13 @@ impl YbControlFileStorage {
             client,
             branch_id: *branch_id,
             state: state.clone(),
-            last_persist_at: Instant::now(),
         };
         store.write_row(&state, /* create= */ true).await?;
         Ok(store)
     }
 
     /// UPDATE our column group, flipping `safekeeper_initialized` with it —
-    /// this is that flag's only writer, so it means exactly "these six columns
+    /// this is that flag's only writer, so it means exactly "these four columns
     /// are populated". `create` adds `NOT safekeeper_initialized` so the first
     /// write fills the group exactly once; a later `persist` rewrites it
     /// unconditionally. Either way the row must already exist — if the UPDATE
@@ -148,10 +157,9 @@ impl YbControlFileStorage {
         let creation_ts: DateTime<Utc> = s.creation_ts.into();
 
         let branch_id = self.branch_id.to_string();
-        let params: [&(dyn ToSql + Sync); 6] = [
+        let params: [&(dyn ToSql + Sync); 5] = [
             &branch_id,
             &(s.timeline_start_lsn.0 as i64),
-            &(s.remote_consistent_lsn.0 as i64),
             &(s.server.system_id as i64),
             &(s.server.wal_seg_size as i32),
             &creation_ts,
@@ -163,10 +171,9 @@ impl YbControlFileStorage {
         // *major* versions only, so there is nothing for us to refine.
         let set_clause = "UPDATE amp_storage.branch_state SET \
                  timeline_start_lsn    = $2, \
-                 remote_consistent_lsn = $3, \
-                 system_id             = $4, \
-                 wal_seg_size          = $5, \
-                 creation_ts           = $6, \
+                 system_id             = $3, \
+                 wal_seg_size          = $4, \
+                 creation_ts           = $5, \
                  safekeeper_initialized = true \
              WHERE branch_id           = $1";
         let sql = if create {
@@ -205,68 +212,6 @@ impl YbControlFileStorage {
     }
 }
 
-/// Client + branch id cloned out of a [`YbControlFileStorage`] so the
-/// timeline manager can persist the advisory control-file field
-/// without holding the timeline `shared_state`
-/// lock. Holding that lock across a YB round trip freezes WAL appends
-/// and starves residence-guard issuance (the 2026-07 TPC-C safekeeper
-/// wedge, second occurrence: manager stuck in `UpdateControlFile`).
-#[derive(Clone)]
-pub struct AdvisoryPersist {
-    client: Arc<YsqlClient>,
-    branch_id: BranchId,
-}
-
-impl AdvisoryPersist {
-    /// Persist `remote_consistent_lsn` with a narrow, monotonic UPDATE.
-    ///
-    /// `GREATEST()` makes the statement safe under any interleaving
-    /// with the full-row persists issued under the shared_state lock
-    /// (`handle_elected`, `map_control_file`): a late-landing advisory
-    /// write can never regress the row, and it touches none of the
-    /// other columns.
-    ///
-    /// Scoped to `safekeeper_initialized` so it can only ever refine a group
-    /// that exists. Unscoped it was the one write that could put a value into
-    /// our group before the creation write ran — the same shape as the
-    /// pageserver's `advance_consistent_lsn`, which is what dropped that
-    /// daemon's creation write in #552. Here it never falsified the old
-    /// `timeline_start_lsn` discriminator (it doesn't touch that column), so it
-    /// was latent rather than live; the flag closes it either way.
-    pub async fn persist_remote_consistent_lsn(&self, lsn: Lsn) -> Result<()> {
-        let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
-        self.client
-            .execute(
-                "UPDATE amp_storage.branch_state \
-                 SET remote_consistent_lsn = GREATEST(remote_consistent_lsn, $2) \
-                 WHERE branch_id = $1 AND safekeeper_initialized",
-                &[&self.branch_id.to_string(), &(lsn.0 as i64)],
-            )
-            .await
-            .context("UPDATE amp_storage.branch_state (advisory)")?;
-        Ok(())
-    }
-}
-
-impl YbControlFileStorage {
-    /// Handle for lock-free advisory persists; see [`AdvisoryPersist`].
-    pub fn advisory_persist_handle(&self) -> AdvisoryPersist {
-        AdvisoryPersist {
-            client: self.client.clone(),
-            branch_id: self.branch_id,
-        }
-    }
-
-    /// Fold a completed [`AdvisoryPersist`] write back into the
-    /// in-memory mirror of the row. `max()` because a full-row persist
-    /// (e.g. on ProposerElected) may have advanced the mirror while the
-    /// advisory write was in flight.
-    pub fn note_advisory_persisted(&mut self, lsn: Lsn) {
-        self.state.remote_consistent_lsn = std::cmp::max(self.state.remote_consistent_lsn, lsn);
-        self.last_persist_at = Instant::now();
-    }
-}
-
 impl Deref for YbControlFileStorage {
     type Target = TimelinePersistentState;
     fn deref(&self) -> &Self::Target {
@@ -279,16 +224,7 @@ impl Storage for YbControlFileStorage {
         let _timer = PERSIST_CONTROL_FILE_SECONDS.start_timer();
         self.write_row(s, /* create= */ false).await?;
         self.state = s.clone();
-        // Reset the save-interval clock: without this the manager
-        // re-persisted every loop iteration (300ms) once the first
-        // interval elapsed, hammering YB with row UPDATEs for as long
-        // as remote_consistent_lsn kept advancing.
-        self.last_persist_at = Instant::now();
         Ok(())
-    }
-
-    fn last_persist_at(&self) -> Instant {
-        self.last_persist_at
     }
 }
 

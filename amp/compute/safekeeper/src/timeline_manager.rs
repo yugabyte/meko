@@ -15,33 +15,25 @@ use postgres_ffi::XLogSegNo;
 use safekeeper_api::models::PeerInfo;
 use serde::{Deserialize, Serialize};
 use tokio::task::{JoinError, JoinHandle};
-use tokio::time::Instant;
 use tracing::{Instrument, debug, info, info_span, instrument, warn};
 use utils::lsn::Lsn;
 
 use crate::SafeKeeperConf;
-use crate::control_file::{AdvisoryPersist, ControlFileStorage, Storage};
 use crate::metrics::{MANAGER_ACTIVE_CHANGES, MANAGER_ITERATIONS_TOTAL, MISC_OPERATION_SECONDS};
 use crate::remove_wal::calc_horizon_lsn;
 use crate::send_wal::WalSenders;
-use crate::state::TimelineState;
 use crate::timeline::{ManagerTimeline, ReadGuardSharedState, StateSK, WalResidentTimeline};
 use crate::timeline_guard::{AccessService, GuardId, ResidenceGuard};
 use crate::yb_wal_storage::YbWalConn;
 
 pub(crate) struct StateSnapshot {
-    // inmem values
-    pub(crate) remote_consistent_lsn: Lsn,
-
-    // persistent control file values
-    pub(crate) cfile_remote_consistent_lsn: Lsn,
+    /// WAL-retention floor; see [`crate::state::TimelineState::consistent_lsn`].
+    pub(crate) consistent_lsn: Lsn,
 
     // latest state
     pub(crate) flush_lsn: Lsn,
 
     // misc
-    pub(crate) cfile_last_persist_at: std::time::Instant,
-    pub(crate) inmem_flush_pending: bool,
     pub(crate) wal_removal_on_hold: bool,
     #[allow(dead_code)]
     pub(crate) peers: Vec<PeerInfo>,
@@ -52,18 +44,11 @@ impl StateSnapshot {
     fn new(read_guard: ReadGuardSharedState, heartbeat_timeout: Duration) -> Self {
         let state = read_guard.sk.state();
         Self {
-            remote_consistent_lsn: state.inmem.remote_consistent_lsn,
-            cfile_remote_consistent_lsn: state.remote_consistent_lsn,
+            consistent_lsn: state.consistent_lsn,
             flush_lsn: read_guard.sk.flush_lsn(),
-            cfile_last_persist_at: state.pers.last_persist_at(),
-            inmem_flush_pending: Self::has_unflushed_inmem_state(state),
             wal_removal_on_hold: read_guard.wal_removal_on_hold,
             peers: read_guard.get_peers(heartbeat_timeout),
         }
-    }
-
-    fn has_unflushed_inmem_state(state: &TimelineState<ControlFileStorage>) -> bool {
-        state.inmem.remote_consistent_lsn > state.remote_consistent_lsn
     }
 }
 
@@ -173,21 +158,6 @@ pub(crate) struct Manager {
 
     // background tasks
     pub(crate) wal_removal_task: Option<JoinHandle<anyhow::Result<u64>>>,
-    /// In-flight periodic control-file save (at most one). Runs WITHOUT
-    /// the shared_state lock — holding that lock across a YB round trip
-    /// froze WAL appends and starved residence-guard issuance (2026-07
-    /// TPC-C wedge, `UpdateControlFile`). Resolves to the persisted
-    /// `remote_consistent_lsn` on success, `None` on failure.
-    pub(crate) cfile_save_task: Option<JoinHandle<Option<Lsn>>>,
-    /// When the last periodic save was *attempted* (spawned), regardless of
-    /// outcome. Gates the next spawn independently of the persisted clock: a
-    /// FAILED save never advances the persisted watermark, so without this a
-    /// failing save would re-spawn every manager tick (~300 ms) — a retry
-    /// storm hammering YB during an outage. With it, a failed save retries at
-    /// most once per `control_file_save_interval`. `None` = never attempted.
-    cfile_last_attempt: Option<std::time::Instant>,
-    /// Lock-free persist handle for the task above.
-    cfile_persist: AdvisoryPersist,
 
     // misc
     pub(crate) access_service: AccessService,
@@ -223,16 +193,12 @@ pub async fn main_task(
         mgr.set_status(Status::StateSnapshot);
         let state_snapshot = mgr.state_snapshot().await;
 
-        let mut next_event: Option<Instant> = None;
         {
             let num_computes = *mgr.num_computes_rx.borrow();
 
             mgr.set_status(Status::UpdateBackup);
             let is_wal_backup_required = mgr.update_backup(num_computes, &state_snapshot).await;
             mgr.update_is_active(is_wal_backup_required, num_computes, &state_snapshot);
-
-            mgr.set_status(Status::UpdateControlFile);
-            mgr.update_control_file_save(&state_snapshot, &mut next_event);
 
             mgr.set_status(Status::UpdateWalRemoval);
             mgr.update_wal_removal(&state_snapshot).await;
@@ -256,20 +222,11 @@ pub async fn main_task(
             _ = mgr.num_computes_rx.changed() => {
                 // number of connected computes was updated
             }
-            _ = sleep_until(&next_event) => {
-                // we were waiting for some event (e.g. cfile save)
-            }
             res = await_task_finish(mgr.wal_removal_task.as_mut()) => {
                 // WAL removal task finished
                 mgr.wal_removal_task = None;
                 mgr.update_wal_removal_end(res);
             }
-            res = await_task_finish(mgr.cfile_save_task.as_mut()) => {
-                // control-file save task finished
-                mgr.cfile_save_task = None;
-                mgr.update_cfile_save_end(res).await;
-            }
-
             msg = manager_rx.recv() => {
                 mgr.set_status(Status::HandleMessage);
                 mgr.handle_message(msg).await;
@@ -286,12 +243,6 @@ pub async fn main_task(
         mgr.update_wal_removal_end(res);
     }
 
-    // The advisory save is safe to abandon: it's a monotonic UPDATE of a
-    // row the timeline-delete flow removes anyway.
-    if let Some(cfile_save_task) = &mgr.cfile_save_task {
-        cfile_save_task.abort();
-    }
-
     mgr.set_status(Status::Finished);
 }
 
@@ -302,13 +253,6 @@ impl Manager {
         manager_tx: tokio::sync::mpsc::UnboundedSender<ManagerCtlMessage>,
         yb_wal: Option<Arc<YbWalConn>>,
     ) -> Manager {
-        let cfile_persist = tli
-            .read_shared_state()
-            .await
-            .sk
-            .state()
-            .pers
-            .advisory_persist_handle();
         Manager {
             wal_seg_size: tli.get_wal_seg_size().await,
             walsenders: tli.get_walsenders().clone(),
@@ -317,9 +261,6 @@ impl Manager {
             num_computes_rx: tli.get_walreceivers().get_num_rx(),
             last_removed_segno: 0,
             wal_removal_task: None,
-            cfile_save_task: None,
-            cfile_last_attempt: None,
-            cfile_persist,
             access_service: AccessService::new(manager_tx),
             tli,
             conf,
@@ -377,15 +318,14 @@ impl Manager {
         state: &StateSnapshot,
     ) {
         // yb-amp: commit_lsn ≡ flush_lsn (single safekeeper).
-        let is_active = is_wal_backup_required
-            || num_computes > 0
-            || state.remote_consistent_lsn < state.flush_lsn;
+        let is_active =
+            is_wal_backup_required || num_computes > 0 || state.consistent_lsn < state.flush_lsn;
 
         if self.set_broker_active(is_active) {
             // write log if state has changed
             info!(
-                "timeline active={} now, remote_consistent_lsn={}, flush_lsn={}",
-                is_active, state.remote_consistent_lsn, state.flush_lsn,
+                "timeline active={} now, consistent_lsn={}, flush_lsn={}",
+                is_active, state.consistent_lsn, state.flush_lsn,
             );
 
             MANAGER_ACTIVE_CHANGES.inc();
@@ -401,91 +341,6 @@ impl Manager {
             .broker_active
             .swap(active, std::sync::atomic::Ordering::Relaxed)
             != active
-    }
-
-    /// Kick off the periodic control-file save if needed; sets `next_event`
-    /// when the save is due in the future.
-    ///
-    /// The save runs as a background task holding NO shared_state lock.
-    /// This loop is the sole servicer of residence-guard requests, and
-    /// WAL appends need the shared_state write lock — the previous
-    /// in-loop, under-lock `flush()` meant one slow
-    /// `amp_storage.branch_state` UPDATE froze commits and timed out
-    /// every new WAL receiver (2026-07 TPC-C wedge, manager status
-    /// `UpdateControlFile`). Only `remote_consistent_lsn` needs this
-    /// periodic persist; it goes through a monotonic single-column
-    /// UPDATE that is safe to land concurrently with the full-row
-    /// persists (see [`AdvisoryPersist`]).
-    fn update_control_file_save(
-        &mut self,
-        state: &StateSnapshot,
-        next_event: &mut Option<Instant>,
-    ) {
-        if !state.inmem_flush_pending || self.cfile_save_task.is_some() {
-            return;
-        }
-
-        let interval = self.conf.control_file_save_interval;
-        // Gate on BOTH the persisted watermark AND the last *attempt*. A failed
-        // save never advances the persisted clock, so gating on it alone would
-        // re-spawn every manager tick (~300 ms) once the interval first elapses
-        // — a retry storm on YB during an outage. The attempt clock, advanced
-        // on every spawn (success or failure), bounds retries to one per
-        // interval. (This is the async twin of the sync clock-reset guard in
-        // control_file.rs.)
-        let persist_due = state.cfile_last_persist_at.elapsed() > interval;
-        let attempt_due = self
-            .cfile_last_attempt
-            .is_none_or(|t| t.elapsed() > interval);
-        if persist_due && attempt_due {
-            self.cfile_last_attempt = Some(std::time::Instant::now());
-            let persist = self.cfile_persist.clone();
-            let lsn = state.remote_consistent_lsn;
-            let branch_id = self.tli.branch_id;
-            self.cfile_save_task = Some(tokio::spawn(
-                async move {
-                    // Simulates the YB write stalling under load (integration
-                    // sk_cfile_stall); configure with return(<millis>).
-                    utils::failpoint_support::sleep_millis_async!("sk-cfile-save");
-                    // Simulates the save FAILING (integration sk_cfile_save_retry_storm),
-                    // to exercise the failure-retry gate without a real YB
-                    // outage; configure with `return`.
-                    fail::fail_point!("sk-cfile-save-fail", |_| {
-                        warn!("sk-cfile-save-fail: injected control-file save failure");
-                        None
-                    });
-                    match persist.persist_remote_consistent_lsn(lsn).await {
-                        Ok(()) => Some(lsn),
-                        Err(e) => {
-                            warn!("failed to save control file: {:?}", e);
-                            None
-                        }
-                    }
-                }
-                .instrument(info_span!("cfile save", branch_id=%branch_id)),
-            ));
-        } else {
-            // Wake when whichever gate clears last has elapsed.
-            let mut next = state.cfile_last_persist_at + interval;
-            if let Some(t) = self.cfile_last_attempt {
-                next = next.max(t + interval);
-            }
-            update_next_event(next_event, next.into());
-        }
-    }
-
-    /// Fold a finished control-file save back into the in-memory row
-    /// mirror (brief write lock, no I/O under it). A failed save was
-    /// already logged by the task; the interval check retries it.
-    async fn update_cfile_save_end(&self, res: Result<Option<Lsn>, JoinError>) {
-        match res {
-            Ok(Some(lsn)) => {
-                let mut write_guard = self.tli.write_shared_state().await;
-                write_guard.sk.state_mut().pers.note_advisory_persisted(lsn);
-            }
-            Ok(None) => {}
-            Err(e) => warn!("control file save task failed: {:?}", e),
-        }
     }
 
     /// Spawns WAL removal task if needed.
@@ -591,14 +446,6 @@ impl Manager {
 }
 
 // utility functions
-async fn sleep_until(option: &Option<tokio::time::Instant>) {
-    if let Some(timeout) = option {
-        tokio::time::sleep_until(*timeout).await;
-    } else {
-        futures::future::pending::<()>().await;
-    }
-}
-
 /// Future that resolves when the task is finished or never if the task is None.
 ///
 /// Note: it accepts Option<&mut> instead of &mut Option<> because mapping the
@@ -611,17 +458,6 @@ async fn await_task_finish<T>(option: Option<&mut JoinHandle<T>>) -> Result<T, J
     }
 }
 
-/// Update next_event if candidate is earlier.
-fn update_next_event(next_event: &mut Option<Instant>, candidate: Instant) {
-    if let Some(next) = next_event {
-        if candidate < *next {
-            *next = candidate;
-        }
-    } else {
-        *next_event = Some(candidate);
-    }
-}
-
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {
@@ -629,7 +465,6 @@ pub enum Status {
     Started,
     StateSnapshot,
     UpdateBackup,
-    UpdateControlFile,
     UpdateWalRemoval,
     Wait,
     HandleMessage,

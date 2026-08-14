@@ -6,7 +6,9 @@ use crate::timeline_manager::StateSnapshot;
 ///
 /// yb-amp: WAL is durably mirrored into `amp_storage.wals` on every
 /// `flush_wal()`, so the only horizon constraints are:
-///   1. `remote_consistent_lsn` — pageserver hasn't ingested past this yet.
+///   1. `consistent_lsn` — pageserver hasn't ingested past this yet. Read
+///      from the pageserver's own durable column, so it is safe to trim on
+///      even though the safekeeper keeps no persisted copy.
 ///   2. `flush_lsn` — local end-of-WAL; we can't trim past durability.
 ///   3. Optional caller-supplied `extra_horizon_lsn` (e.g. a stalled
 ///      walsender's position).
@@ -17,8 +19,8 @@ use crate::timeline_manager::StateSnapshot;
 pub(crate) fn calc_horizon_lsn(state: &StateSnapshot, extra_horizon_lsn: Option<Lsn>) -> Lsn {
     use std::cmp::min;
 
-    let mut horizon_lsn = state.cfile_remote_consistent_lsn;
-    // Min by flush_lsn so a stale `remote_consistent_lsn` never
+    let mut horizon_lsn = state.consistent_lsn;
+    // Min by flush_lsn so a stale `consistent_lsn` never
     // licenses trimming past local end-of-WAL.
     horizon_lsn = min(horizon_lsn, state.flush_lsn);
     if let Some(extra_horizon_lsn) = extra_horizon_lsn {

@@ -4892,11 +4892,16 @@ mod tests {
             .await
             .expect("creation write");
 
-        let restored = ControlFileStorage::restore_opt(client.clone(), &branch_id)
+        let (restored, floor) = ControlFileStorage::restore_opt(client.clone(), &branch_id)
             .await
             .expect("restore")
             .expect("the flag is set, so the control file is visible");
         assert_eq!(restored.timeline_start_lsn, state.timeline_start_lsn);
+        assert_eq!(
+            floor, state.timeline_start_lsn,
+            "the pageserver has not written consistent_lsn, so the retention \
+             floor falls back to the timeline start and all WAL is kept"
+        );
 
         // Second create is a no-op — the group is already populated.
         let mut second = state.clone();
@@ -4904,7 +4909,7 @@ mod tests {
         ControlFileStorage::write_initial_state(client.clone(), &branch_id, second)
             .await
             .expect("re-create is a no-op, not an error");
-        let again = ControlFileStorage::restore_opt(client.clone(), &branch_id)
+        let (again, _) = ControlFileStorage::restore_opt(client.clone(), &branch_id)
             .await
             .expect("restore")
             .expect("still visible");

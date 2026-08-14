@@ -28,10 +28,6 @@ pub struct TimelinePersistentState {
     /// Since which LSN this timeline starts: the branch point, latched at
     /// creation or on the first `ProposerElected`. Persisted WAL begins here.
     pub timeline_start_lsn: Lsn,
-    /// LSN of the oldest known checkpoint made by pageserver. We don't
-    /// remove WAL beyond it. The pageserver advertises this via
-    /// `PageserverFeedback.disk_consistent_lsn`.
-    pub remote_consistent_lsn: Lsn,
     pub creation_ts: SystemTime,
 }
 
@@ -55,7 +51,6 @@ impl TimelinePersistentState {
             branch_id: *branch_id,
             server: server_info,
             timeline_start_lsn: start_lsn,
-            remote_consistent_lsn: Lsn(0),
             creation_ts: SystemTime::now(),
         })
     }
@@ -74,64 +69,51 @@ impl TimelinePersistentState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-// In memory safekeeper state. Fields mirror ones in `SafeKeeperPersistentState`; values
-// are not flushed yet.
-pub struct TimelineMemState {
-    pub remote_consistent_lsn: Lsn,
-}
-
-/// Safekeeper persistent state plus in memory layer.
+/// Safekeeper state: the persisted control-file row plus the one value the
+/// safekeeper tracks in memory.
 ///
-/// Allows us to avoid frequent fsyncs when we update fields like commit_lsn
-/// which don't need immediate persistence. Provides transactional like API
-/// to atomically update the state.
-///
-/// Implements Deref into *persistent* part.
+/// Implements Deref into the *persistent* part.
 pub struct TimelineState<CTRL: control_file::Storage> {
-    pub inmem: TimelineMemState,
-    pub pers: CTRL, // persistent
+    /// The WAL-retention floor: the pageserver's durable-ingest frontier, and
+    /// the bound on WAL GC.
+    ///
+    /// Deliberately not persisted here. The pageserver already records it
+    /// authoritatively in `amp_storage.branch_state.consistent_lsn`, which it
+    /// writes — generation-fenced — *before* echoing the same value back as
+    /// `PageserverFeedback.disk_consistent_lsn`. So every value this holds is
+    /// one the pageserver has already committed: seeded from that column at
+    /// startup, advanced by feedback thereafter, and a crash can only resume at
+    /// or above where it left off.
+    pub consistent_lsn: Lsn,
+    pub pers: CTRL,
 }
 
 impl<CTRL> TimelineState<CTRL>
 where
     CTRL: control_file::Storage,
 {
-    pub fn new(state: CTRL) -> Self {
+    /// `retention_floor` seeds [`Self::consistent_lsn`] from the pageserver's
+    /// `branch_state` column, floored at `timeline_start_lsn` — which is where
+    /// it lands when that daemon has not written it yet, so all WAL is retained
+    /// until the first feedback.
+    pub fn new(state: CTRL, retention_floor: Lsn) -> Self {
         TimelineState {
-            inmem: TimelineMemState {
-                remote_consistent_lsn: state.remote_consistent_lsn,
-            },
+            consistent_lsn: retention_floor,
             pers: state,
         }
     }
 
-    /// Start atomic change. Returns SafeKeeperPersistentState with in memory
-    /// values applied; the protocol is to 1) change returned struct as desired
-    /// 2) atomically persist it with finish_change.
+    /// Snapshot the persisted state for editing; pair with `finish_change`.
     pub fn start_change(&self) -> TimelinePersistentState {
-        let mut s = self.pers.clone();
-        s.remote_consistent_lsn = self.inmem.remote_consistent_lsn;
-        s
+        self.pers.clone()
     }
 
-    /// Persist given state. c.f. start_change.
+    /// Write `s` back, skipping the round trip when nothing changed.
     pub async fn finish_change(&mut self, s: &TimelinePersistentState) -> Result<()> {
-        if s.eq(&*self.pers) {
-            // nothing to do if state didn't change
-        } else {
+        if !s.eq(&*self.pers) {
             self.pers.persist(s).await?;
         }
-
-        // keep in memory values up to date
-        self.inmem.remote_consistent_lsn = s.remote_consistent_lsn;
         Ok(())
-    }
-
-    /// Flush in memory values.
-    pub async fn flush(&mut self) -> Result<()> {
-        let s = self.start_change();
-        self.finish_change(&s).await
     }
 }
 

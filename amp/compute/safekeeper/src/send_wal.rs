@@ -509,8 +509,7 @@ impl SafekeeperPostgresHandler {
                 compression,
             } => {
                 let pg_version =
-                    PgMajorVersion::try_from(tli.tli.get_state().await.1.server.pg_version)
-                        .unwrap();
+                    PgMajorVersion::try_from(tli.tli.get_state().await.server.pg_version).unwrap();
                 let end_watch_view = end_watch.view();
                 let wal_residence_guard = tli.wal_residence_guard().await?;
                 let (tx, rx) = tokio::sync::mpsc::channel::<Batch>(2);
@@ -733,9 +732,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> ReplyReader<IO> {
                     .walsenders
                     .record_ps_feedback(self.ws_guard.id, &ps_feedback);
                 self.tli
-                    .update_remote_consistent_lsn(ps_feedback.disk_consistent_lsn)
+                    .update_consistent_lsn(ps_feedback.disk_consistent_lsn)
                     .await;
-                // in principle new remote_consistent_lsn could allow to
+                // in principle new consistent_lsn could allow to
                 // deactivate the timeline, but we check that regularly through
                 // broker updated, not need to do it here
             }

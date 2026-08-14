@@ -231,8 +231,9 @@ first flush.
   with "No previous WAL position".
 
 **Safekeeper behavior:** `send_wal.rs` feeds
-`ps_feedback.disk_consistent_lsn` into `update_remote_consistent_lsn`
-(the WAL-retention bound); `last_received_lsn` from feedback is used for
+`ps_feedback.disk_consistent_lsn` into `update_consistent_lsn`
+(the WAL-retention bound, which the safekeeper also seeds at startup
+straight from this daemon's `branch_state.consistent_lsn`); `last_received_lsn` from feedback is used for
 metrics and walsender-laggard clamping, not truncation. Since
 `disk_consistent_lsn` carries the durable `consistent_lsn`, the truncation
 bound is correct by construction.
@@ -433,7 +434,7 @@ makes the format extensible.
 | Wire key | Struct field | Source | Safekeeper use |
 |----------|--------------|--------|----------------|
 | `ps_writelsn` | `last_received_lsn` | end of last ingested record | Backpressure relay to compute; walsender laggard clamp for WAL removal; `safekeeper_ps_last_received_lsn` metric |
-| `ps_flushlsn` | `disk_consistent_lsn` | `Timeline::get_consistent_lsn()` | Relayed to compute (backpressure + standby slot apply position); metrics; **WAL truncation bound** — `update_remote_consistent_lsn` |
+| `ps_flushlsn` | `disk_consistent_lsn` | `Timeline::get_consistent_lsn()` | Relayed to compute (backpressure + standby slot apply position); metrics; **WAL truncation bound** — `update_consistent_lsn` |
 | `ps_replytime` | `replytime` | send time | staleness checks |
 | `current_timeline_size` | `current_timeline_size` | logical size calc | relayed to compute for size limiting |
 | `corruption_detected` | `corruption_detected` | `Timeline.corruption_detected: AtomicBool` (latched by walingest failures) | relayed to compute so walproposer + postgres stop sending WAL |
@@ -598,7 +599,7 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 - `compute/pgxn/yb_amp/walproposer.c` / `walproposer_pg.c` — feedback
   parsing, shared-memory relay, backpressure lag computation.
 - `compute/safekeeper/src/send_wal.rs` — feedback intake,
-  `update_remote_consistent_lsn`.
+  `update_consistent_lsn`.
 - `controller/migrations/0003_compute_storage.up.sql` —
   `amp_storage.branch_state` schema.
 - [`safekeeper-lsns.md`](safekeeper-lsns.md) — the safekeeper side of the

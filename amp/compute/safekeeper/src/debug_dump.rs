@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 
-use crate::state::{TimelineMemState, TimelinePersistentState};
+use crate::state::TimelinePersistentState;
 use crate::{GlobalTimelines, SafeKeeperConf, timeline_manager};
 
 /// Various filters that influence the resulting JSON output.
@@ -69,7 +69,7 @@ impl Serialize for TimelineDumpSer {
 
 async fn build_from_tli_dump(timeline: &Arc<crate::timeline::Timeline>, args: &Args) -> Timeline {
     let control_file = if args.dump_control_file {
-        let state = timeline.get_state().await.1;
+        let state = timeline.get_state().await;
         Some(state)
     } else {
         None
@@ -111,7 +111,6 @@ pub struct Memory {
     pub active: bool,
     pub num_computes: u32,
     pub last_removed_segno: XLogSegNo,
-    pub mem_state: TimelineMemState,
     pub mgr_status: timeline_manager::Status,
 
     // WalBookkeeping state.

@@ -26,7 +26,7 @@ use crate::disk_usage::GLOBAL_DISK_LIMIT_EXCEEDED;
 use crate::receive_wal::WalReceivers;
 use crate::safekeeper::{AcceptorProposerMessage, ProposerAcceptorMessage, SafeKeeper};
 use crate::send_wal::{WalSenders, WalSendersTimelineMetricValues};
-use crate::state::{TimelineMemState, TimelinePersistentState, TimelineState};
+use crate::state::{TimelinePersistentState, TimelineState};
 use crate::timeline_guard::ResidenceGuard;
 use crate::timeline_manager::{AtomicStatus, ManagerCtl};
 use crate::wal_storage::{Storage as wal_storage_iface, WalReader};
@@ -202,7 +202,7 @@ impl SharedState {
         let yb_wal = yb_wal
             .cloned()
             .context("control-file restore requires yb_storage_conn")?;
-        let Some(control_store) =
+        let Some((control_store, retention_floor)) =
             control_file::ControlFileStorage::restore_opt(yb_wal.system_client.clone(), branch_id)
                 .await?
         else {
@@ -214,7 +214,7 @@ impl SharedState {
 
         let wal_store = YbWalStorage::new(branch_id, &control_store, yb_wal.clone()).await?;
         let sk = StateSK::Loaded(SafeKeeper::new(
-            TimelineState::new(control_store),
+            TimelineState::new(control_store, retention_floor),
             wal_store,
         )?);
 
@@ -330,7 +330,7 @@ pub struct Timeline {
 
     // timeline_manager controlled state
     /// True iff the timeline is doing useful work: has live computes,
-    /// is mid-flush, or the pageserver's `remote_consistent_lsn` is
+    /// is mid-flush, or the pageserver's `consistent_lsn` is
     /// behind `flush_lsn`. Drives `safekeeper_active_timelines` +
     /// the `safekeeper_timeline_active` gauge. Naming inherited from
     /// upstream Neon's "is this timeline in the broker active set"
@@ -509,13 +509,10 @@ impl Timeline {
         self.read_shared_state().await.get_wal_seg_size()
     }
 
-    /// Returns state of the timeline.
-    pub async fn get_state(&self) -> (TimelineMemState, TimelinePersistentState) {
+    /// Returns the timeline's persisted state.
+    pub async fn get_state(&self) -> TimelinePersistentState {
         let state = self.read_shared_state().await;
-        (
-            state.sk.state().inmem.clone(),
-            TimelinePersistentState::clone(state.sk.state()),
-        )
+        TimelinePersistentState::clone(state.sk.state())
     }
 
     /// Snapshot of local SK timeline state. Previously broadcast to the
@@ -568,7 +565,7 @@ impl Timeline {
             num_computes: self.walreceivers.get_num() as u32,
             last_removed_segno: self.last_removed_segno.load(Ordering::Relaxed),
             interpreted_wal_reader_tasks,
-            mem_state: state.sk.state().inmem.clone(),
+            consistent_lsn: state.sk.state().consistent_lsn,
             persisted_state: TimelinePersistentState::clone(state.sk.state()),
             flush_lsn: state.sk.flush_lsn(),
             wal_storage: state.sk.wal_storage_metrics(),
@@ -589,7 +586,6 @@ impl Timeline {
             active: self.broker_active.load(Ordering::Relaxed),
             num_computes: self.walreceivers.get_num() as u32,
             last_removed_segno: self.last_removed_segno.load(Ordering::Relaxed),
-            mem_state: state.sk.state().inmem.clone(),
             mgr_status: self.mgr_status.get(),
             write_lsn,
             write_record_lsn,
@@ -804,7 +800,7 @@ impl WalResidentTimeline {
         start_lsn: Lsn,
         flush_lsn: Arc<std::sync::atomic::AtomicU64>,
     ) -> Result<WalReader> {
-        let (_, persisted_state) = self.get_state().await;
+        let persisted_state = self.get_state().await;
 
         WalReader::new(
             &self.branch_id,
@@ -815,13 +811,12 @@ impl WalResidentTimeline {
         )
     }
 
-    /// Update in memory remote consistent lsn.
-    pub async fn update_remote_consistent_lsn(&self, candidate: Lsn) {
+    /// Raise the WAL-retention floor from pageserver feedback. Monotonic:
+    /// feedback can arrive out of order across walsender reconnects.
+    pub async fn update_consistent_lsn(&self, candidate: Lsn) {
         let mut shared_state = self.write_shared_state().await;
-        shared_state.sk.state_mut().inmem.remote_consistent_lsn = max(
-            shared_state.sk.state().inmem.remote_consistent_lsn,
-            candidate,
-        );
+        shared_state.sk.state_mut().consistent_lsn =
+            max(shared_state.sk.state().consistent_lsn, candidate);
     }
 }
 

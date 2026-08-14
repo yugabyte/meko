@@ -54,7 +54,6 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_id = c.cluster_create(CLUSTER)?;
     c.endpoint_create_on_branch(ENDPOINT_ID, &branch_id, pg_port)?;
     let compute = db::compute_conn(pg_port);
-    let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
     let ps_http = c.endpoint_ps_http_port(ENDPOINT_ID)?;
     let sk_pid = c
         .repo_dir()
@@ -92,7 +91,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         sleep(WARMUP).await;
         tee_println!(
             "  round {round}: durable frontier {}",
-            consistent_lsn(&yb, &branch_id).await?
+            c.consistent_lsn(&branch_id).await?.unwrap_or(0)
         );
 
         // Pageserver stays up: its in-memory position, ahead of the durable
@@ -182,15 +181,3 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     }
 }
 
-/// The branch's durable ingest frontier. The GC cutoff never exceeds it, and a
-/// reconnect rewinds the apply position to it.
-async fn consistent_lsn(yb: &str, branch_id: &str) -> anyhow::Result<i64> {
-    db::query_i64(
-        yb,
-        &format!(
-            "SELECT COALESCE(consistent_lsn, 0) FROM amp_storage.branch_state \
-              WHERE branch_id = '{branch_id}'"
-        ),
-    )
-    .await
-}

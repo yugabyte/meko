@@ -21,7 +21,7 @@ use utils::pageserver_feedback::PageserverFeedback;
 
 use crate::GlobalTimelines;
 use crate::receive_wal::MSG_QUEUE_SIZE;
-use crate::state::{TimelineMemState, TimelinePersistentState};
+use crate::state::TimelinePersistentState;
 
 // Global metrics across all timelines.
 pub static WRITE_WAL_BYTES: Lazy<Histogram> = Lazy::new(|| {
@@ -576,7 +576,7 @@ pub struct FullTimelineInfo {
     pub last_removed_segno: XLogSegNo,
     pub interpreted_wal_reader_tasks: usize,
 
-    pub mem_state: TimelineMemState,
+    pub consistent_lsn: Lsn,
     pub persisted_state: TimelinePersistentState,
 
     pub flush_lsn: Lsn,
@@ -590,7 +590,7 @@ pub struct TimelineCollector {
     descs: Vec<Desc>,
     commit_lsn: GenericGaugeVec<AtomicU64>,
     flush_lsn: GenericGaugeVec<AtomicU64>,
-    remote_consistent_lsn: GenericGaugeVec<AtomicU64>,
+    consistent_lsn: GenericGaugeVec<AtomicU64>,
     ps_last_received_lsn: GenericGaugeVec<AtomicU64>,
     feedback_last_time_seconds: GenericGaugeVec<AtomicU64>,
     ps_feedback_count: GenericGaugeVec<AtomicU64>,
@@ -631,15 +631,15 @@ impl TimelineCollector {
         .unwrap();
         descs.extend(flush_lsn.desc().into_iter().cloned());
 
-        let remote_consistent_lsn = GenericGaugeVec::new(
+        let consistent_lsn = GenericGaugeVec::new(
             Opts::new(
-                "safekeeper_remote_consistent_lsn",
-                "LSN which is persisted to the remote storage in pageserver",
+                "safekeeper_consistent_lsn",
+                "Pageserver durable-ingest frontier — the WAL-retention floor",
             ),
             &["branch_id"],
         )
         .unwrap();
-        descs.extend(remote_consistent_lsn.desc().into_iter().cloned());
+        descs.extend(consistent_lsn.desc().into_iter().cloned());
 
         let ps_last_received_lsn = GenericGaugeVec::new(
             Opts::new(
@@ -775,7 +775,7 @@ impl TimelineCollector {
             descs,
             commit_lsn,
             flush_lsn,
-            remote_consistent_lsn,
+            consistent_lsn,
             ps_last_received_lsn,
             feedback_last_time_seconds,
             ps_feedback_count,
@@ -805,7 +805,7 @@ impl Collector for TimelineCollector {
         // reset all metrics to clean up inactive timelines
         self.commit_lsn.reset();
         self.flush_lsn.reset();
-        self.remote_consistent_lsn.reset();
+        self.consistent_lsn.reset();
         self.ps_last_received_lsn.reset();
         self.feedback_last_time_seconds.reset();
         self.ps_feedback_count.reset();
@@ -848,9 +848,9 @@ impl Collector for TimelineCollector {
             self.flush_lsn
                 .with_label_values(labels)
                 .set(tli.flush_lsn.into());
-            self.remote_consistent_lsn
+            self.consistent_lsn
                 .with_label_values(labels)
-                .set(tli.mem_state.remote_consistent_lsn.into());
+                .set(tli.consistent_lsn.into());
             self.timeline_active
                 .with_label_values(labels)
                 .set(tli.timeline_is_active as u64);
@@ -905,7 +905,7 @@ impl Collector for TimelineCollector {
         let mut mfs = Vec::new();
         mfs.extend(self.commit_lsn.collect());
         mfs.extend(self.flush_lsn.collect());
-        mfs.extend(self.remote_consistent_lsn.collect());
+        mfs.extend(self.consistent_lsn.collect());
         mfs.extend(self.ps_last_received_lsn.collect());
         mfs.extend(self.feedback_last_time_seconds.collect());
         mfs.extend(self.ps_feedback_count.collect());

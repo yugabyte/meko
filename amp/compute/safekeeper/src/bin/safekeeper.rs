@@ -263,7 +263,6 @@ async fn main() -> anyhow::Result<()> {
         http_auth,
         sk_auth_token,
         current_thread_runtime: cfg.current_thread_runtime,
-        control_file_save_interval: cfg.control_file_save_interval,
         wal_reader_fanout: cfg.wal_reader_fanout,
         max_delta_for_fanout: cfg.max_delta_for_fanout,
         ssl_key_file: Utf8PathBuf::from(cfg.ssl_key_file),

@@ -33,7 +33,7 @@ one branch, so this is one series per metric per process.
 | `safekeeper_proposer_acceptor_messages_total` | IntCounterVec | `outcome` (`success` \| `error`) | ProposerAcceptorMessages processed by the acceptor. |
 | `safekeeper_wal_storage_operation_seconds` | HistogramVec | `operation` | WAL-storage operation timings. Observed operations: `initialize_first_segment`, `truncate_wal`. |
 | `safekeeper_misc_operation_seconds` | HistogramVec | `operation` | Miscellaneous timings. Observed operations: `handle_elected`, `state_snapshot`, `wal_residence_guard`, `try_wal_residence_guard`. |
-| `safekeeper_persist_control_file_seconds` | Histogram | — | Latency of persisting the control file: full-row `UPDATE`s (`Storage::persist`) and the advisory `remote_consistent_lsn` UPDATE (`AdvisoryPersist`), both against `amp_storage.branch_state`. |
+| `safekeeper_persist_control_file_seconds` | Histogram | — | Latency of persisting the control file: full-row `UPDATE`s (`Storage::persist`) against `amp_storage.branch_state`. |
 | `safekeeper_wal_storage_limit_errors` | IntCounter | — | Appends rejected because the timeline's retained-WAL estimate exceeds `max_timeline_disk_usage_bytes`. |
 | `safekeeper_yb_wal_payload_logical_bytes_total` | IntCounter | — | Uncompressed WAL run bytes handed to the `amp_storage.wals` writer. Numerator of the compression ratio. |
 | `safekeeper_yb_wal_payload_stored_bytes_total` | IntCounter | — | Encoded WAL run bytes written to `amp_storage.wals` (compression envelope included) — what DocDB, the Raft log and every compaction move. `logical / stored` is the realized compression ratio (e.g. 3.0x); `1 - stored / logical` the equivalent space saving. Measured rather than assumed. |
@@ -102,7 +102,7 @@ reset each scrape.
 | --- | --- | --- |
 | `safekeeper_commit_lsn` | GaugeVec | Commit LSN. Set to the same value as `safekeeper_flush_lsn`: with a single safekeeper per branch, every YB-durable flush is committed. |
 | `safekeeper_flush_lsn` | GaugeVec | Durable end-of-WAL (capped at what has landed in `amp_storage.wals`). |
-| `safekeeper_remote_consistent_lsn` | GaugeVec | In-memory pageserver durable-ingest frontier (from feedback). |
+| `safekeeper_consistent_lsn` | GaugeVec | Pageserver durable-ingest frontier — the WAL-retention floor. Seeded from `branch_state.consistent_lsn` at startup, advanced by feedback. |
 | `safekeeper_ps_last_received_lsn` | GaugeVec | Last LSN the pageserver acknowledged in feedback. |
 | `safekeeper_feedback_last_time_seconds` | GaugeVec | Unix timestamp of the last pageserver feedback. |
 | `safekeeper_ps_feedback_count_total` | GaugeVec | Pageserver feedbacks received for this timeline. |

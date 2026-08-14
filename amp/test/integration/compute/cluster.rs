@@ -685,6 +685,48 @@ impl Cluster {
         Ok(sum)
     }
 
+    /// Value of the exported gauge `name` for exactly one `branch_id` label,
+    /// from the metrics endpoint on `http_port`. `None` while the series has
+    /// not materialized yet. Unlike [`Self::metric_sum`] this is scoped to a
+    /// single branch, so it stays correct on a safekeeper serving more than
+    /// one.
+    pub async fn branch_metric(
+        &self,
+        http_port: u16,
+        name: &str,
+        branch_id: &str,
+    ) -> anyhow::Result<Option<i64>> {
+        let body = reqwest::get(format!("http://127.0.0.1:{http_port}/metrics"))
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        let needle = format!("{name}{{branch_id=\"{branch_id}\"}}");
+        Ok(body
+            .lines()
+            .filter_map(|l| l.strip_prefix(&needle))
+            .filter_map(|rest| rest.trim().parse::<f64>().ok())
+            .map(|v| v as i64)
+            .next())
+    }
+
+    /// The branch's durable ingest frontier as the pageserver has recorded it
+    /// in `amp_storage.branch_state`. `None` until that daemon initialises.
+    pub async fn consistent_lsn(&self, branch_id: &str) -> anyhow::Result<Option<i64>> {
+        let conninfo = crate::db::yb_conn(&self.yb_host, self.yb_port, &self.db_name);
+        let client = crate::db::connect(&conninfo)
+            .await
+            .context("connect to the run's YB db")?;
+        let row = client
+            .query_one(
+                "SELECT consistent_lsn FROM amp_storage.branch_state WHERE branch_id = $1",
+                &[&branch_id],
+            )
+            .await
+            .context("consistent_lsn query")?;
+        Ok(row.get(0))
+    }
+
     /// Run a diagnostic tool binary (built next to `yb_amp_local` in
     /// `target/<profile>/`) with this run's YB connection flags + `extra`.
     /// Returns stdout; fails on a non-zero exit. Exercises the shared

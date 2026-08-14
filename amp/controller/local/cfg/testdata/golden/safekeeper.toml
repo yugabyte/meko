@@ -9,7 +9,6 @@ global_disk_check_interval = "1m"
 max_global_disk_usage_ratio = 0.0
 log_format = "plain"
 current_thread_runtime = false
-control_file_save_interval = "5m"
 wal_reader_fanout = false
 ssl_key_file = "server.key"
 ssl_cert_file = "server.crt"

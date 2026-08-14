@@ -87,7 +87,6 @@
     "yb_payload_compression": "string"
   },
   "safekeeper": {
-    "control_file_save_interval": "string",
     "current_thread_runtime": "boolean",
     "dev": "boolean",
     "enable_tls_wal_service_api": "boolean",

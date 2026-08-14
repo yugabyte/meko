@@ -4327,7 +4327,7 @@ mod tests {
 
         // After a real flush, the slot reaches the max successfully
         // flushed LSN. That contract is exercised by
-        // `flush_publishes_remote_consistent_lsn`; the cross-check
+        // `flush_publishes_consistent_lsn`; the cross-check
         // here is just that put→flush ordering is the only path that
         // can move the slot.
         w.flush().await.unwrap();
@@ -4347,7 +4347,7 @@ mod tests {
     /// safekeeper WAL truncation — regression on the publish path
     /// would silently freeze WAL retention.
     #[tokio::test]
-    async fn flush_publishes_remote_consistent_lsn() {
+    async fn flush_publishes_consistent_lsn() {
         let (store, schema) = make_store("rclsn_publish").await;
         let (w, t) = writer(store.clone(), FlushPolicy::default());
         seed_branch_state_row(&store, t).await;

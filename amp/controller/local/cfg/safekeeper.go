@@ -12,7 +12,6 @@ import (
 const (
 	skDefaultHeartbeatTimeout        = 5000 * time.Millisecond // "5s"
 	skDefaultGlobalDiskCheck         = 60 * time.Second        // "1m"
-	skDefaultControlFileSaveInterval = 300 * time.Second       // "5m"
 	skDefaultSslCertReloadPeriod     = 60 * time.Second        // "1m"
 	skDefaultScaleFactor             = 1.0
 	skDefaultMaxGlobalDiskUsageRatio = 0.0
@@ -55,11 +54,10 @@ type safekeeperConfigToml struct {
 	HTTPAuthPublicKeyPath         *string `toml:"http_auth_public_key_path,omitempty"`
 	AuthTokenPath                 *string `toml:"auth_token_path,omitempty"`
 
-	LogFormat               string                   `toml:"log_format"`
-	CurrentThreadRuntime    bool                     `toml:"current_thread_runtime"`
-	ControlFileSaveInterval config.HumantimeDuration `toml:"control_file_save_interval"`
-	WalReaderFanout         bool                     `toml:"wal_reader_fanout"`
-	MaxDeltaForFanout       *uint64                  `toml:"max_delta_for_fanout,omitempty"`
+	LogFormat            string  `toml:"log_format"`
+	CurrentThreadRuntime bool    `toml:"current_thread_runtime"`
+	WalReaderFanout      bool    `toml:"wal_reader_fanout"`
+	MaxDeltaForFanout    *uint64 `toml:"max_delta_for_fanout,omitempty"`
 
 	SslKeyFile             string                   `toml:"ssl_key_file"`
 	SslCertFile            string                   `toml:"ssl_cert_file"`
@@ -84,7 +82,6 @@ func defaultSafekeeperConfigToml() safekeeperConfigToml {
 		MaxGlobalDiskUsageRatio:       skDefaultMaxGlobalDiskUsageRatio,
 		LogFormat:                     skDefaultLogFormat,
 		CurrentThreadRuntime:          false,
-		ControlFileSaveInterval:       config.HumantimeDuration(skDefaultControlFileSaveInterval),
 		WalReaderFanout:               false,
 		SslKeyFile:                    skDefaultSslKeyFile,
 		SslCertFile:                   skDefaultSslCertFile,
@@ -116,10 +113,6 @@ type SafekeeperParams struct {
 	// WalCacheSizeMib maps the SafekeeperConf's Option<u32> to the toml
 	// usize; nil omits the key (daemon derives it from scale_factor).
 	WalCacheSizeMib *uint32
-	// ControlFileSaveInterval overrides the default 5m cadence (the
-	// YB_SK_CONTROL_FILE_SAVE_INTERVAL env override); nil keeps the default.
-	ControlFileSaveInterval *time.Duration
-
 	// Auth (JWT) paths. In the minimal Trust path all are nil. When set,
 	// AuthPublicKeyPath populates all three surface key paths (pg /
 	// pg_tenant_only / http), matching Rust.
@@ -152,9 +145,6 @@ func WriteSafekeeperToml(path string, p SafekeeperParams) error {
 	if p.WalCacheSizeMib != nil {
 		v := uint64(*p.WalCacheSizeMib)
 		cfg.WalCacheSizeMib = &v
-	}
-	if p.ControlFileSaveInterval != nil {
-		cfg.ControlFileSaveInterval = config.HumantimeDuration(*p.ControlFileSaveInterval)
 	}
 	cfg.PgAuthPublicKeyPath = p.AuthPublicKeyPath
 	cfg.PgTenantOnlyAuthPublicKeyPath = p.AuthPublicKeyPath

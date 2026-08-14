@@ -494,17 +494,15 @@ where
                 );
             }
 
-            // Seed remote_consistent_lsn at the timeline start so that
-            // post-restart catch-up doesn't read a pre-timeline LSN.
-            state.remote_consistent_lsn =
-                max(state.remote_consistent_lsn, state.timeline_start_lsn);
-
             self.state.finish_change(&state).await?;
-        }
 
-        // Force a control-file sync at the truncation/resume point so
-        // `postgres --sync-safekeepers` polls a durable, aligned LSN.
-        self.state.flush().await?;
+            // Floor the retention horizon at the timeline start so
+            // post-restart catch-up never reads a pre-timeline LSN. The
+            // seed from `consistent_lsn` is 0 on a branch the pageserver
+            // has not initialised yet.
+            let start = self.state.timeline_start_lsn;
+            self.state.consistent_lsn = max(self.state.consistent_lsn, start);
+        }
 
         info!("start receiving WAL since {:?}", msg.start_streaming_at);
 
@@ -601,7 +599,7 @@ where
 mod tests {
     use std::ops::Deref;
     use std::str::FromStr;
-    use std::time::{Instant, UNIX_EPOCH};
+    use std::time::UNIX_EPOCH;
 
     use futures::future::BoxFuture;
     use postgres_ffi::{WAL_SEGMENT_SIZE, XLogSegNo};
@@ -620,10 +618,6 @@ mod tests {
         async fn persist(&mut self, s: &TimelinePersistentState) -> Result<()> {
             self.persisted_state = s.clone();
             Ok(())
-        }
-
-        fn last_persist_at(&self) -> Instant {
-            Instant::now()
         }
     }
 
@@ -689,7 +683,7 @@ mod tests {
         };
         let wal_store = DummyWalStore { lsn: Lsn(0) };
 
-        let mut sk = SafeKeeper::new(TimelineState::new(storage), wal_store).unwrap();
+        let mut sk = SafeKeeper::new(TimelineState::new(storage, Lsn(0)), wal_store).unwrap();
 
         let pem = ProposerElected {
             start_streaming_at: Lsn(1),
@@ -735,7 +729,6 @@ mod tests {
                 wal_seg_size: 0x12345678,
             },
             timeline_start_lsn: Lsn(0x12345600),
-            remote_consistent_lsn: Lsn(1234560000),
             creation_ts: UNIX_EPOCH,
         };
 

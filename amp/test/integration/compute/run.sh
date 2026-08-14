@@ -157,8 +157,8 @@ export LD_LIBRARY_PATH="$("$REPO/scripts/fetch-yb-thin-client.sh")${LD_LIBRARY_P
 env -u PROFILE "$REPO/build.sh" --pg-only
 
 # The safekeeper is built with its `testing` feature so failpoints
-# (`PUT /v1/failpoints`) are usable by fault-injection scenarios (e.g.
-# sk_cfile_stall). Failpoints are inert unless configured, so the binary
+# (`PUT /v1/failpoints`) are usable by fault-injection scenarios.
+# Failpoints are inert unless configured, so the binary
 # behaves identically to the production build otherwise.
 if [[ $PROFILE == release ]]; then
     cargo build --release --features pageserver/testing,safekeeper/testing \

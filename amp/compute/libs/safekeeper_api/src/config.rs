@@ -61,8 +61,6 @@ pub mod defaults {
     /// no local-FS WAL anyway.
     pub const DEFAULT_MAX_TIMELINE_DISK_USAGE_BYTES: u64 = 0;
 
-    pub const DEFAULT_CONTROL_FILE_SAVE_INTERVAL: &str = "300s";
-
     pub const DEFAULT_SSL_KEY_FILE: &str = "server.key";
     pub const DEFAULT_SSL_CERT_FILE: &str = "server.crt";
     pub const DEFAULT_SSL_CERT_RELOAD_PERIOD: &str = "60s";
@@ -136,8 +134,6 @@ pub struct SafekeeperConfigToml {
 
     pub log_format: String,
     pub current_thread_runtime: bool,
-    #[serde(with = "humantime_serde")]
-    pub control_file_save_interval: Duration,
     pub wal_reader_fanout: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_delta_for_fanout: Option<u64>,
@@ -179,7 +175,6 @@ impl Default for SafekeeperConfigToml {
             auth_token_path: None,
             log_format: DEFAULT_LOG_FORMAT.to_string(),
             current_thread_runtime: false,
-            control_file_save_interval: Duration::from_secs(300),
             wal_reader_fanout: false,
             max_delta_for_fanout: None,
             ssl_key_file: DEFAULT_SSL_KEY_FILE.to_string(),
@@ -235,7 +230,6 @@ mod tests {
         let cfg = SafekeeperConfigToml::from_toml_str("listen_pg = '127.0.0.1:5474'\n").unwrap();
         assert_eq!(cfg.listen_pg, "127.0.0.1:5474");
         assert_eq!(cfg.heartbeat_timeout, Duration::from_millis(5000));
-        assert_eq!(cfg.control_file_save_interval, Duration::from_secs(300));
         assert!(cfg.yb_storage_conn.is_none());
     }
 

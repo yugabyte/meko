@@ -106,7 +106,6 @@ pub struct SafeKeeperConf {
     /// JWT token to connect to other safekeepers with.
     pub sk_auth_token: Option<SecretString>,
     pub current_thread_runtime: bool,
-    pub control_file_save_interval: Duration,
     pub wal_reader_fanout: bool,
     pub max_delta_for_fanout: Option<u64>,
     pub ssl_key_file: Utf8PathBuf,
@@ -163,7 +162,6 @@ impl SafeKeeperConf {
             global_disk_check_interval: Duration::from_secs(60),
             max_global_disk_usage_ratio: defaults::DEFAULT_MAX_GLOBAL_DISK_USAGE_RATIO,
             current_thread_runtime: false,
-            control_file_save_interval: Duration::from_secs(1),
             wal_reader_fanout: false,
             max_delta_for_fanout: None,
             ssl_key_file: Utf8PathBuf::from(defaults::DEFAULT_SSL_KEY_FILE),

@@ -463,10 +463,11 @@ took the *load* path over a half-imported datadir. The flag is false until the
 import completes, so that retry now re-bootstraps correctly.
 
 The safekeeper's group has a single writer, so its version of the trick happened
-to hold — but `AdvisoryPersist::persist_remote_consistent_lsn` was unscoped and
-could put a value into the group before the creation write ran, the same shape
-one step short of the pageserver's bug. It is now scoped to
-`safekeeper_initialized`.
+to hold. The one write that could have put a value into the group before the
+creation write ran — the unscoped advisory `remote_consistent_lsn` UPDATE, the
+same shape one step short of the pageserver's bug — no longer exists: the
+safekeeper does not persist a retention floor at all, and reads the
+pageserver's `consistent_lsn` instead.
 
 The flag columns are declared in `0003` rather than added by a follow-on
 migration, so **a database provisioned before them has to be recreated**
@@ -530,7 +531,6 @@ CREATE TABLE amp_storage.branch_state (
 
     -- safekeeper-owned; NULL until the safekeeper creates its control file
     timeline_start_lsn     BIGINT,
-    remote_consistent_lsn  BIGINT,
     system_id              BIGINT,
     wal_seg_size           INT,
     creation_ts            TIMESTAMPTZ,
