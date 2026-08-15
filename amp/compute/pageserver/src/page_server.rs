@@ -156,9 +156,6 @@ pub(crate) struct TenantPreload {
 }
 
 /// Build a `TimelineMetadata` from a `amp_storage.branch_state` row.
-/// In yb-amp the row *is* the timeline metadata; everything that
-/// used to ride on `index_part.json` either lives in the row or is
-/// dead weight.
 fn synth_timeline_metadata_from_row(
     row: &crate::page_store::BranchStateRow,
 ) -> anyhow::Result<TimelineMetadata> {
@@ -172,6 +169,12 @@ fn synth_timeline_metadata_from_row(
             v
         ),
     };
+    // WAL records are 8-byte aligned, so an unaligned consistent_lsn is corrupt state.
+    anyhow::ensure!(
+        row.consistent_lsn.is_aligned(),
+        "branch_state.consistent_lsn {} is not 8-byte aligned",
+        row.consistent_lsn
+    );
     Ok(TimelineMetadata::new(
         row.consistent_lsn,
         // Persisted on flush; see PageWriter::take_prev_at_or_below.

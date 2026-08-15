@@ -43,8 +43,6 @@ use tracing::{info, info_span};
 /// This is embedded in the header of all the layer files.
 /// If you make any backwards-incompatible changes to the storage
 /// format, bump this!
-/// Note that TimelineMetadata uses its own version number to track
-/// backwards-compatible changes to the metadata format.
 pub const STORAGE_FORMAT_VERSION: u16 = 3;
 
 pub const DEFAULT_PG_VERSION: PgMajorVersion = PgMajorVersion::PG18;
