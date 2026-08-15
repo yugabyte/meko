@@ -724,14 +724,14 @@ impl WalResidentTimeline {
     /// there is no computes. While there might be nothing to stream already, we
     /// learn about that LSN through replication feedback, and we want
     /// to stop pushing to the broker if pageserver is fully caughtup.
-    pub async fn should_walsender_stop(&self, reported_disk_consistent_lsn: Lsn) -> bool {
+    pub async fn should_walsender_stop(&self, reported_consistent_lsn: Lsn) -> bool {
         if self.is_cancelled() {
             return true;
         }
         let shared_state = self.read_shared_state().await;
         if self.walreceivers.get_num() == 0 {
             let flush_lsn = shared_state.sk.flush_lsn();
-            return flush_lsn == Lsn(0) || reported_disk_consistent_lsn >= flush_lsn;
+            return flush_lsn == Lsn(0) || reported_consistent_lsn >= flush_lsn;
         }
         false
     }

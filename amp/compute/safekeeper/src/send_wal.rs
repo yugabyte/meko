@@ -244,11 +244,11 @@ impl WalSenders {
 
     /// Get the durable LSN reported by the pageserver. Returns None if
     /// client is not pageserver.
-    pub fn get_ws_disk_consistent_lsn(self: &Arc<WalSenders>, id: WalSenderId) -> Option<Lsn> {
+    pub fn get_ws_consistent_lsn(self: &Arc<WalSenders>, id: WalSenderId) -> Option<Lsn> {
         let shared = self.mutex.lock();
         let slot = shared.get_slot(id);
         match slot.get_feedback() {
-            ReplicationFeedback::Pageserver(feedback) => Some(feedback.disk_consistent_lsn),
+            ReplicationFeedback::Pageserver(feedback) => Some(feedback.consistent_lsn),
             _ => None,
         }
     }
@@ -732,7 +732,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> ReplyReader<IO> {
                     .walsenders
                     .record_ps_feedback(self.ws_guard.id, &ps_feedback);
                 self.tli
-                    .update_consistent_lsn(ps_feedback.disk_consistent_lsn)
+                    .update_consistent_lsn(ps_feedback.consistent_lsn)
                     .await;
                 // in principle new consistent_lsn could allow to
                 // deactivate the timeline, but we check that regularly through

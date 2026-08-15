@@ -760,11 +760,11 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> InterpretedWalSender<'_, IO> {
                 // Send a periodic keep alive when the connection has been idle for a while.
                 // Since we've been idle, also check if we can stop streaming.
                 _ = keepalive_ticker.tick() => {
-                    if let Some(disk_consistent_lsn) = self.wal_sender_guard
+                    if let Some(consistent_lsn) = self.wal_sender_guard
                         .walsenders()
-                        .get_ws_disk_consistent_lsn(self.wal_sender_guard.id())
+                        .get_ws_consistent_lsn(self.wal_sender_guard.id())
                     {
-                        if self.tli.should_walsender_stop(disk_consistent_lsn).await {
+                        if self.tli.should_walsender_stop(consistent_lsn).await {
                             // Stop streaming if the receivers are caught up and
                             // there's no active compute. This causes the loop in
                             // [`crate::send_interpreted_wal::InterpretedWalSender::run`]

@@ -819,7 +819,7 @@ impl YbWalStorage {
             // stream chunks to the pageserver that the safekeeper had
             // not yet flushed to YB — and on safekeeper crash before
             // the consumer drained, the pageserver was left holding a
-            // persisted disk_consistent_lsn for WAL the restarted SK
+            // persisted consistent_lsn for WAL the restarted SK
             // could no longer serve.
 
             let pc = PendingChunk {

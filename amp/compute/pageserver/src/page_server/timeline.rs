@@ -165,7 +165,7 @@ pub struct Timeline {
     // `remote_state.consistent_lsn` (advanced only after a successful
     // gen-fenced UPSERT in `page_writer::flush`). Use that for any
     // value that leaves the process (SK feedback, restart resume
-    // position, HTTP API "disk_consistent_lsn" field).
+    // position, HTTP API "consistent_lsn" field).
     applied_lsn: AtomicLsn,
 
     // Parent timeline that this timeline was branched from, and the LSN
@@ -234,7 +234,7 @@ pub struct Timeline {
     /// against attach-replay-window state (#240).
     replay_caught_up_tx: tokio::sync::watch::Sender<bool>,
 
-    /// End of the attach-time replay window: the `disk_consistent_lsn`
+    /// End of the attach-time replay window: the `consistent_lsn`
     /// this timeline was constructed with (also the seed for
     /// `last_record_lsn`). After a restart the walreceiver re-ingests
     /// `(remote_state.consistent_lsn, this]` to rebuild in-memory state;
@@ -1115,7 +1115,7 @@ impl Timeline {
     /// `page_writer::flush` — i.e., every record with LSN ≤ this is in
     /// `amp_storage.pages` AND the `branch_state` row has been
     /// updated. Use this for SK feedback, restart resume position, and
-    /// the HTTP API `disk_consistent_lsn` field.
+    /// the HTTP API `consistent_lsn` field.
     pub(crate) fn get_consistent_lsn(&self) -> Lsn {
         self.remote_state.consistent_lsn.load()
     }
@@ -1230,7 +1230,7 @@ impl Timeline {
             .context("update_branch_initial_state")?;
         pw.seed_consistent_lsn_watermark(dc_lsn);
         // Seed the in-memory `remote_state.consistent_lsn` slot too: for a
-        // fresh bootstrap, `Timeline::new` ran with disk_consistent_lsn=0 in
+        // fresh bootstrap, `Timeline::new` ran with consistent_lsn=0 in
         // metadata (the real value is only known after import_datadir), so
         // the slot is still 0 here even though the durable row we just wrote
         // has dc_lsn. Without this, the walreceiver reads
@@ -1509,7 +1509,7 @@ impl Timeline {
     /// [`Self::flush`] the row buffer to YB **and** force the durable
     /// `consistent_lsn` UPDATE through immediately, bypassing the per-`max_age`
     /// upsert throttle that `flush()` alone is subject to. Use when the
-    /// persisted `disk_consistent_lsn` must reflect everything just flushed
+    /// persisted `consistent_lsn` must reflect everything just flushed
     /// right away: graceful shutdown (so the next attach doesn't redo WAL) and
     /// the branch-time flush endpoint (so a freshly-branching descendant sees
     /// the ancestor's advance at once). The throttled periodic flush and the
@@ -1643,7 +1643,7 @@ impl Timeline {
             // buffer before shutdown.
             {
                 // `force_flush` (not plain `flush`) so the persisted
-                // `disk_consistent_lsn` reflects everything just drained —
+                // `consistent_lsn` reflects everything just drained —
                 // otherwise a clean shutdown could leave it up to one upsert
                 // throttle window behind, costing extra WAL replay (and log
                 // noise) on the next attach.
@@ -1903,7 +1903,7 @@ impl Timeline {
         create_idempotency: crate::page_server::CreateTimelineIdempotency,
         cancel: CancellationToken,
     ) -> Arc<Self> {
-        let disk_consistent_lsn = metadata.disk_consistent_lsn();
+        let consistent_lsn = metadata.consistent_lsn();
         let (state, _) = watch::channel(state);
 
         // Embedded threshold for the EvictionsWithLowResidenceDuration
@@ -2072,7 +2072,7 @@ impl Timeline {
                     // feedback (and any HTTP query before a flush runs)
                     // reports the correct durable LSN rather than 0.
                     let state = Arc::new(remote_state::TimelineRemoteState::new());
-                    state.consistent_lsn.fetch_max(disk_consistent_lsn);
+                    state.consistent_lsn.fetch_max(consistent_lsn);
                     state
                 },
 
@@ -2084,10 +2084,10 @@ impl Timeline {
                 // initialize the eager in-memory 'last_record_lsn' from the
                 // durable 'consistent_lsn' seed loaded from `branch_state`.
                 last_record_lsn: SeqWait::new(RecordLsn {
-                    last: disk_consistent_lsn,
+                    last: consistent_lsn,
                     prev: metadata.prev_record_lsn().unwrap_or(Lsn(0)),
                 }),
-                applied_lsn: AtomicLsn::new(disk_consistent_lsn.0),
+                applied_lsn: AtomicLsn::new(consistent_lsn.0),
 
                 ancestor_branch_id: metadata.ancestor_timeline(),
                 ancestor_lsn: metadata.ancestor_lsn(),
@@ -2113,10 +2113,10 @@ impl Timeline {
                 },
                 initdb_lsn: metadata.initdb_lsn(),
 
-                current_logical_size: if disk_consistent_lsn.is_valid() {
+                current_logical_size: if consistent_lsn.is_valid() {
                     // we're creating timeline data with some layer files existing locally,
                     // need to recalculate timeline's logical size based on data in the layers.
-                    LogicalSize::deferred_initial(disk_consistent_lsn)
+                    LogicalSize::deferred_initial(consistent_lsn)
                 } else {
                     // we're creating timeline data without any layers existing locally,
                     // initial logical size is 0.
@@ -2126,7 +2126,7 @@ impl Timeline {
                 last_received_wal: Mutex::new(None),
                 rel_size_latest_cache: RwLock::new(HashMap::new()),
                 rel_size_snapshot_cache: Mutex::new(LruCache::new(relsize_snapshot_cache_capacity)),
-                rel_size_cache_horizon: disk_consistent_lsn,
+                rel_size_cache_horizon: consistent_lsn,
                 replay_caught_up_tx,
 
                 state,
@@ -2160,7 +2160,7 @@ impl Timeline {
             result
                 .metrics
                 .last_record_lsn_gauge
-                .set(disk_consistent_lsn.0 as i64);
+                .set(consistent_lsn.0 as i64);
             result
         })
     }
@@ -2746,7 +2746,7 @@ impl Timeline {
         self.metrics.last_record_lsn_gauge.set(new_lsn.0 as i64);
         // Snapshot the current `last` before advancing — that's the
         // record's `prev_record_lsn`. PageWriter will pair it with
-        // `disk_consistent_lsn` when persisting `branch_state`, so
+        // `consistent_lsn` when persisting `branch_state`, so
         // a restart can hand the safekeeper the correct `xl_prev`.
         let prev_for_new = self.last_record_lsn.load().last;
         self.last_record_lsn.advance(new_lsn);

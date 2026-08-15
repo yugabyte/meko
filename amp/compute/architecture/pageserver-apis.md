@@ -109,10 +109,9 @@ Details per handler:
 - **List / detail** accept optional bool query params
   `include-non-incremental-logical-size`,
   `force-await-initial-logical-size`, and
-  `include-image-consistent-lsn`. In the returned `TimelineInfo`, the
-  `disk_consistent_lsn` field (wire name kept for client compatibility)
-  is populated with the durable `consistent_lsn` (gap-free,
-  post-flush), and `last_record_lsn` holds the applied ingest position.
+  `include-image-consistent-lsn`. In the returned `TimelineInfo`,
+  `consistent_lsn` is the durable watermark (gap-free, post-flush) and
+  `last_record_lsn` holds the applied ingest position.
   `image_consistent_lsn`, when requested, is the applied LSN
   (`Timeline::compute_image_consistent_lsn` — there are no image
   layers, so applied is image-consistent by definition).

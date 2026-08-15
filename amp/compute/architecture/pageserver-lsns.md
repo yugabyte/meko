@@ -21,7 +21,7 @@ They answer different questions and must never be substituted for each other:
 | Watermark | Advances when | Answers |
 |---|---|---|
 | **`applied_lsn`** (eager, in-memory) | walreceiver puts a record batch into the `PageWriter` buffer (`put_batch` → `applied_lsn.fetch_max`) | "Can a read at LSN X be served from buffer+YB right now?" Read-path waits (`wait_lsn`, GetPage@LSN, `compute_image_consistent_lsn`) use this so reads never stall behind YB INSERT latency. |
-| **`consistent_lsn`** (durable, gap-free) | a gen-fenced `PageStore::advance_consistent_lsn` UPDATE of `branch_state.consistent_lsn` succeeds inside `PageWriter::flush` | "What survives a crash?" Everything that leaves the process — safekeeper feedback (the `disk_consistent_lsn` wire field), the walreceiver `START_REPLICATION` resume position, the HTTP API `disk_consistent_lsn` field — reads this. |
+| **`consistent_lsn`** (durable, gap-free) | a gen-fenced `PageStore::advance_consistent_lsn` UPDATE of `branch_state.consistent_lsn` succeeds inside `PageWriter::flush` | "What survives a crash?" Everything that leaves the process — safekeeper feedback, the walreceiver `START_REPLICATION` resume position, the HTTP API — reads this. |
 
 `applied_lsn ≥ consistent_lsn` at all times; the gap is exactly the contents
 of the in-RAM `PageWriter` buffer. Advertising `applied_lsn` to the
@@ -106,7 +106,7 @@ the persisted `prev_record_lsn` column (or `Lsn(0)`):
 
 ```rust
 last_record_lsn: SeqWait::new(RecordLsn {
-    last: disk_consistent_lsn,
+    last: consistent_lsn,
     prev: metadata.prev_record_lsn().unwrap_or(Lsn(0)),
 }),
 ```
@@ -209,16 +209,16 @@ establishes "YB column == our generation" so the strict fence holds from the
 first flush.
 
 **Read by:**
-- SK feedback: `disk_consistent_lsn` in `PageserverFeedback` is populated
+- SK feedback: `consistent_lsn` in `PageserverFeedback` is populated
   from `Timeline::get_consistent_lsn()` (see the feedback table below).
 - Walreceiver `START_REPLICATION` startpoint
   (`walreceiver_connection.rs`) — plus record-boundary padding and
   `normalize_lsn(_, WAL_SEGMENT_SIZE)` page-header normalization.
-- HTTP API `TimelineInfo.disk_consistent_lsn` (`http/routes.rs`).
+- HTTP API `TimelineInfo.consistent_lsn` (`http/routes.rs`).
 
 **Seeding:**
 - Attach: `Timeline::new` runs
-  `state.consistent_lsn.fetch_max(disk_consistent_lsn)` from the metadata
+  `state.consistent_lsn.fetch_max(consistent_lsn)` from the metadata
   synthesized off the YB row (`synth_timeline_metadata_from_row`,
   `compute/pageserver/src/page_server.rs`), so the very first feedback
   message already advertises the correct value. The `PageWriter` watermark
@@ -231,12 +231,11 @@ first flush.
   with "No previous WAL position".
 
 **Safekeeper behavior:** `send_wal.rs` feeds
-`ps_feedback.disk_consistent_lsn` into `update_consistent_lsn`
+`ps_feedback.consistent_lsn` into `update_consistent_lsn`
 (the WAL-retention bound, which the safekeeper also seeds at startup
 straight from this daemon's `branch_state.consistent_lsn`); `last_received_lsn` from feedback is used for
-metrics and walsender-laggard clamping, not truncation. Since
-`disk_consistent_lsn` carries the durable `consistent_lsn`, the truncation
-bound is correct by construction.
+metrics and walsender-laggard clamping, not truncation. The value on the wire is
+the durable watermark, so the truncation bound is correct by construction.
 
 ---
 
@@ -245,10 +244,11 @@ bound is correct by construction.
 **Where:** `Timeline.rel_size_cache_horizon: Lsn` (immutable per process)
 and `Timeline.replay_caught_up_tx: watch::Sender<bool>`.
 
-**Meaning:** `rel_size_cache_horizon` is the `disk_consistent_lsn` this
-`Timeline` was constructed with — the end of the attach-time replay window.
-After a restart the walreceiver re-ingests `(consistent_lsn, horizon]` to
-rebuild in-memory state. Records replayed inside that window seed
+**Meaning:** `rel_size_cache_horizon` is the `consistent_lsn` this `Timeline` was
+constructed with, frozen for the life of the process while the live watermark
+advances past it — the end of the attach-time replay window. After a restart the
+walreceiver resumes below it (record-boundary padding, segment normalization) and
+re-ingests up to it to rebuild in-memory state. Records replayed inside that window seed
 `rel_size_latest_cache` with sizes that were only current mid-window while
 `last_record_lsn` already sits at the horizon, so `wait_lsn` passes and a
 reader could be served a stale size. `get_cached_rel_size` therefore only
@@ -315,7 +315,7 @@ drain.
 **Where:** `Timeline.initdb_lsn` + `branch_state.initdb_lsn` (nullable).
 
 **Meaning:** LSN at which initdb/import seeded the timeline. On load, falls
-back to `disk_consistent_lsn` when NULL. Used in pre-initdb-LSN error
+back to `consistent_lsn` when NULL. Used in pre-initdb-LSN error
 checks; low traffic otherwise.
 
 ---
@@ -434,12 +434,12 @@ makes the format extensible.
 | Wire key | Struct field | Source | Safekeeper use |
 |----------|--------------|--------|----------------|
 | `ps_writelsn` | `last_received_lsn` | end of last ingested record | Backpressure relay to compute; walsender laggard clamp for WAL removal; `safekeeper_ps_last_received_lsn` metric |
-| `ps_flushlsn` | `disk_consistent_lsn` | `Timeline::get_consistent_lsn()` | Relayed to compute (backpressure + standby slot apply position); metrics; **WAL truncation bound** — `update_consistent_lsn` |
+| `ps_flushlsn` | `consistent_lsn` | `Timeline::get_consistent_lsn()` | Relayed to compute (backpressure + standby slot apply position); metrics; **WAL truncation bound** — `update_consistent_lsn` |
 | `ps_replytime` | `replytime` | send time | staleness checks |
 | `current_timeline_size` | `current_timeline_size` | logical size calc | relayed to compute for size limiting |
 | `corruption_detected` | `corruption_detected` | `Timeline.corruption_detected: AtomicBool` (latched by walingest failures) | relayed to compute so walproposer + postgres stop sending WAL |
 
-`disk_consistent_lsn` is the only durability field on the wire, and it serves
+`consistent_lsn` is the only durability field on the wire, and it serves
 both consumers: compute backpressure and safekeeper WAL truncation. It is
 durable and gap-free — every record at or below it is in `amp_storage.pages`
 with `branch_state.consistent_lsn` updated — which is what makes it safe as a
@@ -450,7 +450,7 @@ truncation bound.
 stores them in shared memory (`record_pageserver_feedback`,
 `walproposer_pg.c`). `backpressure_lag_impl` reads them via
 `replication_feedback_get_lsns` — `writePtr = last_received_lsn`,
-`flushPtr = disk_consistent_lsn` — and
+`flushPtr = consistent_lsn` — and
 throttles backends when the compute's own flush position exceeds
 `writePtr + max_replication_write_lag` or `flushPtr +
 max_replication_flush_lag`. This is what stops the compute from running
@@ -541,7 +541,7 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 
 **Why each invariant matters:**
 - *slot ≤ durable column state*: the slot feeds
-  `PageserverFeedback.disk_consistent_lsn`, the safekeeper's only
+  `PageserverFeedback.consistent_lsn`, the safekeeper's only
   truncation input. If the slot ever ran ahead of YB, the safekeeper could
   delete WAL whose pages exist only in RAM; a pageserver crash would then
   lose them with no replay source.

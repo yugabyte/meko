@@ -113,7 +113,7 @@ frontier and the bound on WAL GC. It is held **in memory only**:
   pageserver's own column, floored at `timeline_start_lsn` (which is where it
   lands when that daemon has not initialised yet, retaining all WAL until the
   first feedback);
-- **advanced** by `PageserverFeedback.disk_consistent_lsn` on the
+- **advanced** by `PageserverFeedback.consistent_lsn` on the
   replication stream.
 
 Both sources carry the same fact. The pageserver commits the generation-fenced

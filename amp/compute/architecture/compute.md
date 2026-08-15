@@ -417,7 +417,7 @@ YugabyteDB, its durable store). The walproposer
 registers with `synchronous_standby_names` under application name `walproposer`.
 `PageserverFeedback` LSNs are recorded in shared memory and read back by
 `replication_feedback_get_lsns()` (surfaced through the `backpressure_lsns()` SQL
-function as `received_lsn` / `disk_consistent_lsn`).
+function as `received_lsn` / `consistent_lsn`).
 
 Backpressure throttles backends when the pageserver or safekeeper falls behind:
 `backpressure_lag_impl()` compares the local flush pointer against the feedback

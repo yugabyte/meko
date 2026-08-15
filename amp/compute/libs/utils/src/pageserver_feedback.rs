@@ -23,7 +23,7 @@ pub struct PageserverFeedback {
     pub last_received_lsn: Lsn,
     /// LSN up to which the pageserver has made data durable. Controls
     /// backpressure, and bounds the WAL a safekeeper may remove.
-    pub disk_consistent_lsn: Lsn,
+    pub consistent_lsn: Lsn,
     // Serialize with RFC3339 format.
     #[serde(with = "serde_systemtime")]
     pub replytime: SystemTime,
@@ -37,7 +37,7 @@ impl PageserverFeedback {
         PageserverFeedback {
             current_timeline_size: 0,
             last_received_lsn: Lsn::INVALID,
-            disk_consistent_lsn: Lsn::INVALID,
+            consistent_lsn: Lsn::INVALID,
             replytime: *PG_EPOCH,
             corruption_detected: false,
         }
@@ -73,7 +73,7 @@ impl PageserverFeedback {
         nkeys += 1;
         buf.put_slice(b"ps_flushlsn\0");
         buf.put_i32(8);
-        buf.put_u64(self.disk_consistent_lsn.0);
+        buf.put_u64(self.consistent_lsn.0);
 
         let timestamp = self
             .replytime
@@ -117,7 +117,7 @@ impl PageserverFeedback {
                 b"ps_flushlsn" => {
                     let len = buf.get_i32();
                     assert_eq!(len, 8);
-                    rf.disk_consistent_lsn = Lsn(buf.get_u64());
+                    rf.consistent_lsn = Lsn(buf.get_u64());
                 }
                 b"ps_replytime" => {
                     let len = buf.get_i32();
@@ -200,7 +200,7 @@ mod tests {
         let mut rf = PageserverFeedback::empty();
         rf.current_timeline_size = 12345678;
         rf.last_received_lsn = Lsn(23456789);
-        rf.disk_consistent_lsn = Lsn(34567890);
+        rf.consistent_lsn = Lsn(34567890);
         rf.replytime = *PG_EPOCH + Duration::from_secs(100_000_000);
         rf.corruption_detected = true;
 

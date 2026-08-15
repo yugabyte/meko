@@ -184,7 +184,7 @@ fn synth_timeline_metadata_from_row(
         row.ancestor_branch_id,
         row.ancestor_lsn.unwrap_or(Lsn(0)),
         row.applied_gc_cutoff_lsn,
-        // initdb_lsn falls back to disk_consistent_lsn — only consulted
+        // initdb_lsn falls back to consistent_lsn — only consulted
         // by the bootstrap-time image-layer optimisation (dead code in
         // yb-amp) and consumption metrics.
         row.initdb_lsn.unwrap_or(row.consistent_lsn),
@@ -534,7 +534,7 @@ impl PageServer {
 
         assert_eq!(
             consistent_lsn_seed,
-            metadata.disk_consistent_lsn(),
+            metadata.consistent_lsn(),
             "applied_lsn is seeded from the persisted consistent_lsn at construction"
         );
 
@@ -1625,7 +1625,7 @@ impl PageServer {
     /// Creates intermediate timeline structure and its files.
     ///
     /// An empty layer map is initialized, and new data and WAL can be imported starting
-    /// at 'disk_consistent_lsn'. After any initial data has been imported, call
+    /// at 'consistent_lsn'. After any initial data has been imported, call
     /// `finish_creation` to insert the Timeline into the timelines map.
     #[allow(clippy::too_many_arguments)]
     async fn prepare_new_timeline<'a>(

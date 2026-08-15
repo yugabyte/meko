@@ -90,7 +90,7 @@ timeline doesn't pin the horizon at 0. The safekeeper never writes it back.
 
 **Why no safekeeper-side copy:** the pageserver commits its generation-fenced
 `advance_consistent_lsn` UPDATE *before* echoing the same value as
-`PageserverFeedback.disk_consistent_lsn`, so every value the safekeeper ever
+`PageserverFeedback.consistent_lsn`, so every value the safekeeper ever
 holds is already durable in a column the pageserver owns. Restart therefore
 resumes at or above the last floor trimmed on, and WAL trimming keeps working
 across a safekeeper restart taken while the pageserver is down. A `NULL`
@@ -235,7 +235,7 @@ On receiving feedback, `walprop_pg_process_safekeeper_feedback` advances
 the compute's replication slot via `ProcessStandbyReply(standby_flush_lsn,
 standby_flush_lsn, standby_apply_lsn, ...)` where `standby_flush_lsn =
 wp->commitLsn` (durable in the safekeeper ⇒ in YB) and `standby_apply_lsn =
-ps_feedback.disk_consistent_lsn` (processed and durable at the pageserver).
+ps_feedback.consistent_lsn` (processed and durable at the pageserver).
 Backpressure LSN handling is covered in
 [`pageserver-lsns.md`](pageserver-lsns.md) §"Walreceiver LSNs and the
 feedback wire format".
@@ -293,16 +293,16 @@ walsender slot, and applies exactly one field to retention:
 
 | Field (wire key) | Safekeeper use |
 |------------------|----------------|
-| `disk_consistent_lsn` (`ps_flushlsn`) | **`update_consistent_lsn`** — the WAL retention bound. Also relayed to the compute (slot apply position, backpressure); metrics. |
+| `consistent_lsn` (`ps_flushlsn`) | **`update_consistent_lsn`** — the WAL retention bound. Also relayed to the compute (slot apply position, backpressure); metrics. |
 | `last_received_lsn` (`ps_writelsn`) | `laggard_lsn()` clamp for WAL removal (min across pageserver walsenders); `safekeeper_ps_last_received_lsn` metric. |
 | `current_timeline_size`, `replytime`, `corruption_detected` | Relayed to the compute via `AppendResponse.pageserver_feedback`. |
 
-The pageserver populates `disk_consistent_lsn` from its single durable
+The pageserver populates `consistent_lsn` from its single durable
 watermark (`Timeline::get_consistent_lsn()`), so the truncation bound is
-durable by construction. The safekeeper's own field carries the same name,
-`consistent_lsn`, because it holds the same fact.
+durable by construction. The safekeeper's own field carries the same name
+because it holds the same fact.
 
-`should_walsender_stop(reported_disk_consistent_lsn)` terminates an
+`should_walsender_stop(reported_consistent_lsn)` terminates an
 inactive walsender once the reported value reaches `flush_lsn` — nothing
 left to stream, nothing left to wait for.
 
@@ -403,7 +403,7 @@ truncate_wal end_pos ≤ durable_lsn    (refused otherwise)
 4. Pageserver ingests; its applied frontier races ahead at WAL speed while
    its durable slot waits for flushes.
 5. After each successful gen-fenced `advance_consistent_lsn`, the
-   pageserver's next `PageserverFeedback.disk_consistent_lsn` advances.
+   pageserver's next `PageserverFeedback.consistent_lsn` advances.
 6. Safekeeper bumps `consistent_lsn` immediately and
    `calc_horizon_lsn` allows WAL removal up to it.
 

@@ -722,7 +722,7 @@ backpressure_lsns(PG_FUNCTION_ARGS)
 
 	tupdesc = CreateTemplateTupleDesc(2);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "received_lsn", PG_LSNOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "disk_consistent_lsn", PG_LSNOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "consistent_lsn", PG_LSNOID, -1, 0);
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	MemSet(nulls, 0, sizeof(nulls));

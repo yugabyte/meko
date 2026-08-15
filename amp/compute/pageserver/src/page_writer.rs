@@ -272,7 +272,7 @@ pub struct PageWriter {
     /// Highest LSN actually durabilised in `amp_storage.pages` /
     /// `slru_pages` / `meta`. Advances on every successful flush,
     /// even when the throttle skips the YB UPDATE on
-    /// `disk_consistent_lsn`. Used by `force_upsert_consistent_lsn_if_advanced`
+    /// `consistent_lsn`. Used by `force_upsert_consistent_lsn_if_advanced`
     /// at shutdown to persist any tail the throttle deferred.
     consistent_lsn_observed: std::sync::atomic::AtomicU64,
     /// Wall-clock timestamp of the most recent successful
@@ -304,8 +304,8 @@ pub struct PageWriter {
     /// re-derives prev on restart.
     record_lsn_history: std::sync::Mutex<std::collections::BTreeMap<Lsn, Lsn>>,
     /// `Arc<AtomicLsn>` of the timeline's `consistent_lsn` — the value
-    /// the walreceiver loop forwards to the safekeeper as
-    /// `disk_consistent_lsn` in `PageserverFeedback`, which drives
+    /// the walreceiver loop forwards to the safekeeper in
+    /// `PageserverFeedback`, which drives
     /// safekeeper WAL truncation. Bumped on every successful
     /// generation-gated `advance_consistent_lsn`. Set lazily
     /// after `init_upload_queue` runs (PageWriter is constructed
@@ -467,7 +467,7 @@ impl PageWriter {
         }
     }
 
-    /// Seed the in-memory `disk_consistent_lsn` watermark from the
+    /// Seed the in-memory `consistent_lsn` watermark from the
     /// persisted timeline row at attach time. Without this, the first
     /// post-restart flush would upsert a smaller LSN than what's
     /// already in YB (a no-op write but wasted round-trip). Idempotent
@@ -1629,7 +1629,7 @@ impl PageWriter {
         // lsn ≤ frontier. Rows from records still mid-put can be
         // captured only partially (sharded-map iteration races the
         // put), so no durability watermark may be derived from them:
-        // computing `flush_horizon_lsn` / `disk_consistent_lsn` from
+        // computing `flush_horizon_lsn` / `consistent_lsn` from
         // max(snapshot lsns) is how #22's bug B lost rows — the
         // checkpoint passed a row that had missed the snapshot, and
         // replay never re-ingested it.
@@ -1697,7 +1697,7 @@ impl PageWriter {
             // snapshots we just wrote (see the frontier capture above).
             // The frontier — NOT the max lsn of the flushed rows — is
             // the new candidate for `flush_horizon_lsn` and
-            // `disk_consistent_lsn`: the snapshot can contain a row at
+            // `consistent_lsn`: the snapshot can contain a row at
             // lsn X while missing a concurrently-put row at lsn < X,
             // so max(snapshot) is not a durability frontier.
             // Promote rel rows in-place: flip durable on the exact
@@ -1931,7 +1931,7 @@ impl PageWriter {
                             // Publish the just-advanced LSN as the
                             // safekeeper-truncation bound. The walreceiver
                             // loop forwards this slot to the safekeeper
-                            // in PageserverFeedback.disk_consistent_lsn,
+                            // in PageserverFeedback.consistent_lsn,
                             // bounding `truncate_lsn` / `peer_horizon_lsn`.
                             // The gen-fenced UPDATE above is the
                             // durability commit point — this publish
@@ -2072,7 +2072,7 @@ impl PageWriter {
     /// Record that the walreceiver has applied a record ending at
     /// `last_record_lsn`, whose predecessor record ended at
     /// `prev_record_lsn`. The flush path looks this up when it
-    /// persists `disk_consistent_lsn` so the matching
+    /// persists `consistent_lsn` so the matching
     /// `prev_record_lsn` column gets a non-NULL value on restart.
     ///
     /// Called from `Timeline::finish_write` after each WAL record
@@ -2320,7 +2320,7 @@ impl PageWriter {
                     tracing::error!(
                         "PAGEWRITER PERIODIC FLUSH FAILED — rows may not have \
                          reached YB; walreceiver will retry on resume but \
-                         disk_consistent_lsn may stall: {e:?}"
+                         consistent_lsn may stall: {e:?}"
                     );
                 }
             }
@@ -2347,7 +2347,7 @@ impl PageWriter {
                         .inc();
                     tracing::error!(
                         "PAGEWRITER FINAL DC_LSN UPSERT FAILED — persisted \
-                         disk_consistent_lsn is stale on disk; next attach \
+                         consistent_lsn is stale on disk; next attach \
                          will redo extra WAL: {e:?}"
                     );
                 }
@@ -4476,7 +4476,7 @@ mod tests {
         assert_eq!(
             row.prev_record_lsn,
             Some(Lsn(40)),
-            "prev_record_lsn must be persisted alongside disk_consistent_lsn"
+            "prev_record_lsn must be persisted alongside consistent_lsn"
         );
 
         drop_schema(&store, &schema).await;

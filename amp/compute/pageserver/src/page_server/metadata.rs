@@ -9,17 +9,17 @@ use utils::lsn::Lsn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineMetadata {
-    disk_consistent_lsn: Lsn,
+    consistent_lsn: Lsn,
     // This is only set if we know it. We track it in memory when the page
     // server is running, but we only track the value corresponding to
-    // 'last_record_lsn', not 'disk_consistent_lsn' which can lag behind by a
+    // 'last_record_lsn', not 'consistent_lsn' which can lag behind by a
     // lot. We only store it in the metadata file when we flush *all* the
     // in-memory data so that 'last_record_lsn' is the same as
-    // 'disk_consistent_lsn'.  That's OK, because after page server restart, as
+    // 'consistent_lsn'.  That's OK, because after page server restart, as
     // soon as we reprocess at least one record, we will have a valid
     // 'prev_record_lsn' value in memory again. This is only really needed when
     // doing a clean shutdown, so that there is no more WAL beyond
-    // 'disk_consistent_lsn'
+    // 'consistent_lsn'
     prev_record_lsn: Option<Lsn>,
     ancestor_timeline: Option<BranchId>,
     ancestor_lsn: Lsn,
@@ -33,7 +33,7 @@ pub struct TimelineMetadata {
 
 impl TimelineMetadata {
     pub fn new(
-        disk_consistent_lsn: Lsn,
+        consistent_lsn: Lsn,
         prev_record_lsn: Option<Lsn>,
         ancestor_timeline: Option<BranchId>,
         ancestor_lsn: Lsn,
@@ -42,7 +42,7 @@ impl TimelineMetadata {
         pg_version: PgMajorVersion,
     ) -> Self {
         Self {
-            disk_consistent_lsn,
+            consistent_lsn,
             prev_record_lsn,
             ancestor_timeline,
             ancestor_lsn,
@@ -52,10 +52,10 @@ impl TimelineMetadata {
         }
     }
 
-    /// [`Lsn`] that corresponds to the corresponding timeline directory
-    /// contents, stored locally in the pageserver workdir.
-    pub fn disk_consistent_lsn(&self) -> Lsn {
-        self.disk_consistent_lsn
+    /// Durable watermark: every record at or below this is in `amp_storage.pages`
+    /// with `branch_state.consistent_lsn` updated.
+    pub fn consistent_lsn(&self) -> Lsn {
+        self.consistent_lsn
     }
 
     pub fn prev_record_lsn(&self) -> Option<Lsn> {

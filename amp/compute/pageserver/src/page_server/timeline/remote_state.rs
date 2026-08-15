@@ -11,9 +11,8 @@
 //!   `set_consistent_lsn_slot` and bumps it on every successful
 //!   gen-fenced UPSERT, so every record with LSN ≤ this is durably
 //!   in `amp_storage.pages` AND the `branch_state` row has been
-//!   updated. Used for SK feedback (`disk_consistent_lsn` wire
-//!   field), restart resume position, and the HTTP API
-//!   `disk_consistent_lsn` field. Seeded at attach from the durable
+//!   updated. Used for SK feedback, restart resume position and the
+//!   HTTP API. Seeded at attach from the durable
 //!   `branch_state.consistent_lsn` column so it's correct from the
 //!   first feedback.
 //! - **`shutting_down`** — set by `Timeline::shutdown`, read only by

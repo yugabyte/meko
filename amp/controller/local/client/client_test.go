@@ -162,7 +162,7 @@ func TestAPIIsNotFound(t *testing.T) {
 func TestPageserverTimelineInfo(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusOK,
-		`{"branch_id":"b1","last_record_lsn":"0/16B3E10","disk_consistent_lsn":"0/16B3D00"}`)
+		`{"branch_id":"b1","last_record_lsn":"0/16B3E10","consistent_lsn":"0/16B3D00"}`)
 	p := NewPageserver(srv.URL, nil)
 
 	info, err := p.TimelineInfo(context.Background(), "b1")
@@ -172,7 +172,7 @@ func TestPageserverTimelineInfo(t *testing.T) {
 	if cap.method != http.MethodGet || cap.path != "/v1/branch/b1" {
 		t.Fatalf("hit %s %s", cap.method, cap.path)
 	}
-	if info.BranchID != "b1" || info.LastRecordLSN != "0/16B3E10" || info.DiskConsistentLSN != "0/16B3D00" {
+	if info.BranchID != "b1" || info.LastRecordLSN != "0/16B3E10" || info.ConsistentLSN != "0/16B3D00" {
 		t.Fatalf("unexpected info: %+v", info)
 	}
 }

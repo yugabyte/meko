@@ -960,7 +960,7 @@ pub struct TimelineInfo {
     #[serde(default)]
     pub min_readable_lsn: Lsn,
 
-    pub disk_consistent_lsn: Lsn,
+    pub consistent_lsn: Lsn,
 
     /// The LSN from the start of the root timeline (never changes)
     pub initdb_lsn: Lsn,

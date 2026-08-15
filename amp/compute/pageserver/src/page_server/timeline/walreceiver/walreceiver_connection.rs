@@ -244,7 +244,7 @@ pub(super) async fn handle_walreceiver_connection(
     // eager value can be ahead of YB; if we asked SK to resume from
     // there and then crashed before flushing the buffer, those records
     // would be lost: on restart durable `consistent_lsn` is the smaller
-    // value, but we already advertised the larger one to SK and `disk_consistent_lsn`
+    // value, but we already advertised the larger one to SK and `consistent_lsn`
     // in `amp_storage.pages` is missing the gap rows. Resuming from the
     // durable watermark makes a crash-restart loop self-healing —
     // walreceiver re-streams from there and UPSERTs fill any gap.
@@ -593,12 +593,10 @@ pub(super) async fn handle_walreceiver_connection(
         if let Some(last_lsn) = status_update {
             // The last LSN we processed. It is not guaranteed to survive pageserver crash.
             let last_received_lsn = last_lsn;
-            // Wire field name kept as `disk_consistent_lsn` for SK
-            // protocol compat, but semantically this is `consistent_lsn`
-            // (durable, gap-free). Do NOT report `applied_lsn` here —
-            // SK / restart logic must see a value that's actually in
-            // `amp_storage.pages`: safekeepers remove WAL preceding it.
-            let disk_consistent_lsn = timeline.get_consistent_lsn();
+            // Do NOT report `applied_lsn` here — SK / restart logic must see a
+            // value that's actually in `amp_storage.pages`: safekeepers remove
+            // WAL preceding it.
+            let consistent_lsn = timeline.get_consistent_lsn();
             let ts = SystemTime::now();
 
             // Update the status about what we just received. This is shown in the mgmt API.
@@ -625,7 +623,7 @@ pub(super) async fn handle_walreceiver_connection(
             let status_update = PageserverFeedback {
                 current_timeline_size,
                 last_received_lsn,
-                disk_consistent_lsn,
+                consistent_lsn,
                 replytime: ts,
                 corruption_detected: timeline
                     .corruption_detected

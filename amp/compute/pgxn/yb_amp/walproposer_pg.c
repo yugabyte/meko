@@ -624,7 +624,7 @@ replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn)
 {
 	SpinLockAcquire(&walprop_shared->mutex);
 	*writeLsn = walprop_shared->min_ps_feedback.last_received_lsn;
-	*flushLsn = walprop_shared->min_ps_feedback.disk_consistent_lsn;
+	*flushLsn = walprop_shared->min_ps_feedback.consistent_lsn;
 	SpinLockRelease(&walprop_shared->mutex);
 }
 
@@ -1978,9 +1978,9 @@ walprop_pg_process_safekeeper_feedback(WalProposer *wp, Safekeeper *sk)
 		if (sk->appendResponse.ps_feedback.currentClusterSize > 0)
 			SetYbAmpCurrentClusterSize(sk->appendResponse.ps_feedback.currentClusterSize);
 
-		if (feedback.disk_consistent_lsn != standby_apply_lsn)
+		if (feedback.consistent_lsn != standby_apply_lsn)
 		{
-			standby_apply_lsn = feedback.disk_consistent_lsn;
+			standby_apply_lsn = feedback.consistent_lsn;
 			needToAdvanceSlot = true;
 		}
 	}

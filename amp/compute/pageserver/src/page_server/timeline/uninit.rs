@@ -103,18 +103,18 @@ impl<'t> UninitializedTimeline<'t> {
         }
 
         // Check that the caller initialized the timeline LSN seed.
-        let new_disk_consistent_lsn = self
+        let new_applied_lsn = self
             .raw_timeline
             .as_ref()
             .expect("checked above")
             .0
             .get_applied_lsn();
 
-        if !new_disk_consistent_lsn.is_valid() {
+        if !new_applied_lsn.is_valid() {
             self.abort().await;
 
             return Err(anyhow::anyhow!(
-                "new timeline {branch_id} has invalid consistent_lsn seed"
+                "new timeline {branch_id} has invalid applied_lsn seed"
             ));
         }
 
@@ -140,7 +140,7 @@ impl<'t> UninitializedTimeline<'t> {
         // Hand the timeline's `remote_state.consistent_lsn` slot to
         // PageWriter so its flush success path can advance it directly.
         // That slot feeds Timeline::get_consistent_lsn(), which the
-        // walreceiver uses for the SK `disk_consistent_lsn` field and
+        // walreceiver uses for the SK `consistent_lsn` field and
         // for START_REPLICATION resume position.
         {
             let tl = &self.raw_timeline.as_ref().expect("checked above").0;

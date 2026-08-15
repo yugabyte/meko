@@ -1159,6 +1159,11 @@ ParsePageserverFeedbackMessage(WalProposer *wp, StringInfo reply_message, Pagese
 			ps_feedback->currentClusterSize = pq_getmsgint64(reply_message);
 			psfeedback_log(UINT64_FORMAT, key, ps_feedback->currentClusterSize);
 		}
+		/*
+		 * The descriptive alternatives below are forward-compat aliases from
+		 * Neon's 2023 field rename; nothing has ever emitted them. Removing
+		 * them is meko#787, together with the serializer switch they wait on.
+		 */
 		else if ((strcmp(key, "ps_writelsn") == 0) || (strcmp(key, "last_received_lsn") == 0))
 		{
 			Assert(value_len == sizeof(int64));
@@ -1168,8 +1173,8 @@ ParsePageserverFeedbackMessage(WalProposer *wp, StringInfo reply_message, Pagese
 		else if ((strcmp(key, "ps_flushlsn") == 0) || (strcmp(key, "disk_consistent_lsn") == 0))
 		{
 			Assert(value_len == sizeof(int64));
-			ps_feedback->disk_consistent_lsn = pq_getmsgint64(reply_message);
-			psfeedback_log("%X/%X", key, LSN_FORMAT_ARGS(ps_feedback->disk_consistent_lsn));
+			ps_feedback->consistent_lsn = pq_getmsgint64(reply_message);
+			psfeedback_log("%X/%X", key, LSN_FORMAT_ARGS(ps_feedback->consistent_lsn));
 		}
 		else if ((strcmp(key, "ps_replytime") == 0) || (strcmp(key, "replytime") == 0))
 		{

@@ -910,7 +910,7 @@ components:
       required:
         - branch_id
         - last_record_lsn
-        - disk_consistent_lsn
+        - consistent_lsn
         - state
         - min_readable_lsn
       properties:
@@ -920,7 +920,7 @@ components:
         last_record_lsn:
           type: string
           format: hex
-        disk_consistent_lsn:
+        consistent_lsn:
           type: string
           format: hex
         ancestor_branch_id:

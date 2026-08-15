@@ -25,11 +25,11 @@ func NewPageserver(base string, hc *http.Client) *Pageserver {
 // TimelineState variant name ("Loading"/"Active"/…); PgVersion is the bare
 // major version integer (PgVersionId serializes transparently).
 type PageserverTimelineInfo struct {
-	BranchID          string `json:"branch_id"`
-	LastRecordLSN     string `json:"last_record_lsn"`
-	DiskConsistentLSN string `json:"disk_consistent_lsn"`
-	State             string `json:"state"`
-	PgVersion         int    `json:"pg_version"`
+	BranchID      string `json:"branch_id"`
+	LastRecordLSN string `json:"last_record_lsn"`
+	ConsistentLSN string `json:"consistent_lsn"`
+	State         string `json:"state"`
+	PgVersion     int    `json:"pg_version"`
 }
 
 // Status hits GET /v1/status; a nil error means the pageserver is up.

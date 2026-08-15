@@ -198,10 +198,8 @@ async fn build_timeline_info_common(
         branch_id: timeline.branch_id,
         ancestor_branch_id,
         ancestor_lsn,
-        // HTTP API field name kept as `disk_consistent_lsn` for back-compat
-        // but populated with the durable `consistent_lsn` (gap-free, post-flush).
         // `applied_lsn` is exposed separately via `last_record_lsn`.
-        disk_consistent_lsn: timeline.get_consistent_lsn(),
+        consistent_lsn: timeline.get_consistent_lsn(),
         initdb_lsn,
         last_record_lsn,
         prev_record_lsn: Some(timeline.get_prev_record_lsn()),

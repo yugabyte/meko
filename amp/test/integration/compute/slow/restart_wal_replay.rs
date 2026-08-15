@@ -1,5 +1,5 @@
 //! (slow) Restarted pageserver catches up to a safekeeper that is well
-//! ahead of the PS's persisted `disk_consistent_lsn`. Reproduces the
+//! ahead of the PS's persisted `consistent_lsn`. Reproduces the
 //! PS-WAL-replay-restart failure mode: PS stops while the compute keeps
 //! writing into the SK, so on PS restart the SK holds a sizeable WAL
 //! backlog above the PS's resume LSN. With the fix the walreceiver

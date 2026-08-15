@@ -18,7 +18,7 @@ useless for catching the bug class that motivates this skill:
 **corruption that only manifests across the seams** — between the
 walreceiver and the page writer; between the flush loop and the
 generation fence; between two safekeeper restarts; between
-`disk_consistent_lsn` and `applied_lsn`; between what YB durably
+`consistent_lsn` and `applied_lsn`; between what YB durably
 holds and what the in-process buffer believes.
 
 Those seams aren't exercised in any unit test. They're only
@@ -116,7 +116,7 @@ enough." This skill is the operational form of that memory.
 - **"cargo test --workspace passes"** — that's table stakes, not
   evidence. The corruption bugs in this codebase have, repeatedly,
   passed unit tests and failed integration. Examples on file: the
-  PS-restart `disk_consistent_lsn`-from-eager-frontier bug, the
+  PS-restart `consistent_lsn`-from-eager-frontier bug, the
   walproposer commit_lsn divergence, the flush-race that lost
   records buffered between `put_batch` and the next `advance_*`.
   All passed unit tests.
@@ -134,7 +134,7 @@ enough." This skill is the operational form of that memory.
 ## Failure mode this prevents
 
 The 2026-06 PS-restart WAL replay bug — the eager
-`applied_lsn` was wired into `disk_consistent_lsn` on the
+`applied_lsn` was wired into `consistent_lsn` on the
 `PageserverFeedback` wire, so the safekeeper truncated WAL the
 pageserver had buffered-but-not-flushed. A PS crash-restart between
 the eager bump and the durable flush lost those records
