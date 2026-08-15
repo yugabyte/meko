@@ -191,7 +191,7 @@ Query-string commands (`PageServiceCmd::parse`):
 
 | Command | Behavior |
 | --- | --- |
-| `pagestream_v2 <branch_id>` / `pagestream_v3 <branch_id>` | Enter the COPY-both pagestream subprotocol. Messages: `Exists` (rel exists?), `Nblocks` (rel size), `DbSize`, `GetSlruSegment`, `GetPage`, and the testing-only `Test`. V3 carries per-request ids. Requests are batched and pipelined per `page_service_pipelining` (default `pipeline_depth` 16); on client disconnect, in-flight reads are aborted rather than drained. |
+| `pagestream <branch_id>` | Enter the COPY-both pagestream subprotocol. Messages: `Exists` (rel exists?), `Nblocks` (rel size), `DbSize`, `GetSlruSegment`, `GetPage`, and the testing-only `Test`. Every request carries a request id, echoed in the response. Requests are batched and pipelined per `page_service_pipelining` (default `pipeline_depth` 16); on client disconnect, in-flight reads are aborted rather than drained. |
 | `basebackup <branch_id> [<lsn>\|latest] [--gzip] [--replica]` | Stream a base backup tarball at the given (or latest) LSN. Waits for the replay-quarantine latch and pre-flushes the PageWriter first; ships no SLRU pages when `lazy_slru_download` is true (the default). |
 | `fullbackup <branch_id> [<lsn> [<prev_lsn>]]` | Like basebackup but includes relation data files — a self-contained pgdata. |
 | `lease lsn <branch_id> <lsn>` | Acquire an LSN lease. |

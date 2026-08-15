@@ -32,7 +32,7 @@ use pageserver_api::pagestream_api::{
     PagestreamErrorResponse, PagestreamExistsRequest, PagestreamExistsResponse,
     PagestreamFeMessage, PagestreamGetPageRequest, PagestreamGetSlruSegmentRequest,
     PagestreamGetSlruSegmentResponse, PagestreamNblocksRequest, PagestreamNblocksResponse,
-    PagestreamProtocolVersion, PagestreamRequest,
+    PagestreamRequest,
 };
 use pageserver_api::reltag::SlruKind;
 use pageserver_page_api::proto;
@@ -937,10 +937,7 @@ impl PageServerHandler {
     /// graceful shutdown so the compute knows to abandon in-flight
     /// requests and reconnect immediately, rather than waiting out the
     /// `pageserver_response_disconnect_timeout` safety net.
-    async fn send_going_away<IO>(
-        pgb: &mut PostgresBackend<IO>,
-        protocol_version: PagestreamProtocolVersion,
-    ) -> anyhow::Result<()>
+    async fn send_going_away<IO>(pgb: &mut PostgresBackend<IO>) -> anyhow::Result<()>
     where
         IO: AsyncRead + AsyncWrite + Send + Sync + Unpin,
     {
@@ -951,9 +948,7 @@ impl PageServerHandler {
             reason: GoingAwayReason::Shutdown,
         });
         info!("writing GoingAway frame on graceful shutdown");
-        pgb.write_message_noflush(&pq_proto::BeMessage::CopyData(
-            &frame.serialize(protocol_version),
-        ))?;
+        pgb.write_message_noflush(&pq_proto::BeMessage::CopyData(&frame.serialize()))?;
         pgb.flush().await?;
         Ok(())
     }
@@ -966,7 +961,6 @@ impl PageServerHandler {
         conn_perf_span_fields: &ConnectionPerfSpanFields,
         cancel: &CancellationToken,
         ctx: &RequestContext,
-        protocol_version: PagestreamProtocolVersion,
         parent_span: Span,
         hold_gc_cutoff_guard: HoldAppliedGcCutoffGuard,
     ) -> Result<Option<BatchedFeMessage>, QueryError>
@@ -1002,8 +996,7 @@ impl PageServerHandler {
         fail::fail_point!("ps::handle-pagerequest-message");
 
         // parse request
-        let neon_fe_msg =
-            PagestreamFeMessage::parse(&mut copy_data_bytes.reader(), protocol_version)?;
+        let neon_fe_msg = PagestreamFeMessage::parse(&mut copy_data_bytes.reader())?;
 
         let batched_msg = match neon_fe_msg {
             PagestreamFeMessage::Exists(req) => {
@@ -1368,15 +1361,13 @@ impl PageServerHandler {
         pgb_writer: &mut PostgresBackend<IO>,
         batch: BatchedFeMessage,
         cancel: &CancellationToken,
-        protocol_version: PagestreamProtocolVersion,
         ctx: &RequestContext,
     ) -> Result<(), QueryError>
     where
         IO: AsyncRead + AsyncWrite + Send + Sync + Unpin,
     {
         let (handler_results, span) = Self::execute_batch(batch, ctx.attached_child()).await?;
-        Self::write_batch_responses(pgb_writer, handler_results, span, protocol_version, cancel)
-            .await
+        Self::write_batch_responses(pgb_writer, handler_results, span, cancel).await
     }
 
     /// Run a batch's page reads (get_vectored) and return the response data + span,
@@ -1426,7 +1417,6 @@ impl PageServerHandler {
             Result<(PagestreamBeMessage, SmgrOpTimer, RequestContext), BatchedPageStreamError>,
         >,
         span: Span,
-        protocol_version: PagestreamProtocolVersion,
         cancel: &CancellationToken,
     ) -> Result<(), QueryError>
     where
@@ -1562,9 +1552,7 @@ impl PageServerHandler {
             // marshal & transmit response message
             //
 
-            pgb_writer.write_message_noflush(&BeMessage::CopyData(
-                &response_msg.serialize(protocol_version),
-            ))?;
+            pgb_writer.write_message_noflush(&BeMessage::CopyData(&response_msg.serialize()))?;
 
             failpoint_support::sleep_millis_async!("before-pagestream-msg-flush", cancel);
 
@@ -1780,7 +1768,6 @@ impl PageServerHandler {
         &mut self,
         pgb: &mut PostgresBackend<IO>,
         branch_id: BranchId,
-        protocol_version: PagestreamProtocolVersion,
         ctx: RequestContext,
     ) -> Result<(), QueryError>
     where
@@ -1830,7 +1817,6 @@ impl PageServerHandler {
                     timeline_handles,
                     request_span,
                     pipelining_config,
-                    protocol_version,
                     hold_gc_cutoff_guard,
                     &ctx,
                 )
@@ -1843,7 +1829,6 @@ impl PageServerHandler {
                     branch_id,
                     timeline_handles,
                     request_span,
-                    protocol_version,
                     hold_gc_cutoff_guard,
                     &ctx,
                 )
@@ -1870,7 +1855,6 @@ impl PageServerHandler {
         branch_id: BranchId,
         mut timeline_handles: TimelineHandles,
         request_span: Span,
-        protocol_version: PagestreamProtocolVersion,
         hold_gc_cutoff_guard: HoldAppliedGcCutoffGuard,
         ctx: &RequestContext,
     ) -> (
@@ -1890,9 +1874,7 @@ impl PageServerHandler {
                     // Graceful shutdown: write GoingAway and exit cleanly
                     // so the compute reconnects immediately instead of
                     // hanging on its disconnect timeout.
-                    if let Err(e) =
-                        Self::send_going_away(pgb_writer, protocol_version).await
-                    {
+                    if let Err(e) = Self::send_going_away(pgb_writer).await {
                         debug!("failed to write GoingAway frame: {e}");
                     }
                     return ((pgb_reader, timeline_handles), Ok(()));
@@ -1904,7 +1886,6 @@ impl PageServerHandler {
                     &self.perf_span_fields,
                     &cancel,
                     ctx,
-                    protocol_version,
                     request_span.clone(),
                     hold_gc_cutoff_guard,
                 ) => read,
@@ -1922,7 +1903,7 @@ impl PageServerHandler {
             };
 
             let result = self
-                .pagestream_handle_batched_message(pgb_writer, msg, &cancel, protocol_version, ctx)
+                .pagestream_handle_batched_message(pgb_writer, msg, &cancel, ctx)
                 .await;
             match result {
                 Ok(()) => {}
@@ -1944,7 +1925,6 @@ impl PageServerHandler {
         mut timeline_handles: TimelineHandles,
         request_span: Span,
         pipelining_config: PageServicePipeliningConfigPipelined,
-        protocol_version: PagestreamProtocolVersion,
         hold_gc_cutoff_guard: HoldAppliedGcCutoffGuard,
         ctx: &RequestContext,
     ) -> (
@@ -2069,7 +2049,6 @@ impl PageServerHandler {
                             &perf_span_fields,
                             &cancel_batcher,
                             &ctx,
-                            protocol_version,
                             request_span.clone(),
                             hold_gc_cutoff_guard,
                         ) => r,
@@ -2126,9 +2105,7 @@ impl PageServerHandler {
                         // now — after every response is on the wire, so the compute does
                         // not disconnect before reading them — then exit.
                         if graceful_cancel_executor.is_cancelled() {
-                            if let Err(e) =
-                                Self::send_going_away(pgb_writer, protocol_version).await
-                            {
+                            if let Err(e) = Self::send_going_away(pgb_writer).await {
                                 debug!("failed to write GoingAway frame: {e}");
                             }
                         }
@@ -2147,14 +2124,8 @@ impl PageServerHandler {
                         // Drain the oldest completed read and write its responses (in order).
                         Some(read_res) = inflight.next(), if has_inflight => {
                             let (handler_results, span) = read_res?;
-                            Self::write_batch_responses(
-                                pgb_writer,
-                                handler_results,
-                                span,
-                                protocol_version,
-                                &cancel,
-                            )
-                            .await?;
+                            Self::write_batch_responses(pgb_writer, handler_results, span, &cancel)
+                                .await?;
                         }
                         // Accept a new batch and start its read, if we have capacity.
                         maybe_batch = batch_rx.recv(), if can_accept => {
@@ -2861,11 +2832,10 @@ struct FullBackupCmd {
     prev_lsn: Option<Lsn>,
 }
 
-/// `pagestream_v2 tenant timeline`
+/// `pagestream tenant timeline`
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct PageStreamCmd {
     branch_id: BranchId,
-    protocol_version: PagestreamProtocolVersion,
 }
 
 /// `lease lsn tenant timeline lsn`
@@ -2885,7 +2855,7 @@ enum PageServiceCmd {
 }
 
 impl PageStreamCmd {
-    fn parse(query: &str, protocol_version: PagestreamProtocolVersion) -> anyhow::Result<Self> {
+    fn parse(query: &str) -> anyhow::Result<Self> {
         let parameters = query.split_whitespace().collect_vec();
         if parameters.len() != 1 {
             bail!(
@@ -2895,10 +2865,7 @@ impl PageStreamCmd {
         }
         let branch_id = BranchId::from_str(parameters[0])
             .with_context(|| format!("Failed to parse branch id from {}", parameters[0]))?;
-        Ok(Self {
-            branch_id,
-            protocol_version,
-        })
+        Ok(Self { branch_id })
     }
 }
 
@@ -3023,14 +2990,7 @@ impl PageServiceCmd {
             bail!("cannot parse query: {query}")
         };
         match cmd.to_ascii_lowercase().as_str() {
-            "pagestream_v2" => Ok(Self::PageStream(PageStreamCmd::parse(
-                other,
-                PagestreamProtocolVersion::V2,
-            )?)),
-            "pagestream_v3" => Ok(Self::PageStream(PageStreamCmd::parse(
-                other,
-                PagestreamProtocolVersion::V3,
-            )?)),
+            "pagestream" => Ok(Self::PageStream(PageStreamCmd::parse(other)?)),
             "basebackup" => Ok(Self::BaseBackup(BaseBackupCmd::parse(other)?)),
             "fullbackup" => Ok(Self::FullBackup(FullBackupCmd::parse(other)?)),
             "lease" => {
@@ -3178,21 +3138,15 @@ where
         debug!("process query {query_string}");
         let query = PageServiceCmd::parse(query_string)?;
         match query {
-            PageServiceCmd::PageStream(PageStreamCmd {
-                branch_id,
-                protocol_version,
-            }) => {
+            PageServiceCmd::PageStream(PageStreamCmd { branch_id }) => {
                 tracing::Span::current().record("branch_id", field::display(branch_id));
 
                 self.check_permission(Some(branch_id))?;
-                let command_kind = match protocol_version {
-                    PagestreamProtocolVersion::V2 => ComputeCommandKind::PageStreamV2,
-                    PagestreamProtocolVersion::V3 => ComputeCommandKind::PageStreamV3,
-                };
-                COMPUTE_COMMANDS_COUNTERS.for_command(command_kind).inc();
+                COMPUTE_COMMANDS_COUNTERS
+                    .for_command(ComputeCommandKind::PageStream)
+                    .inc();
 
-                self.handle_pagerequests(pgb, branch_id, protocol_version, ctx)
-                    .await?;
+                self.handle_pagerequests(pgb, branch_id, ctx).await?;
             }
             PageServiceCmd::BaseBackup(BaseBackupCmd {
                 branch_id,
@@ -4205,14 +4159,8 @@ mod tests {
     #[test]
     fn pageservice_cmd_parse() {
         let branch_id = BranchId::generate();
-        let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}")).unwrap();
-        assert_eq!(
-            cmd,
-            PageServiceCmd::PageStream(PageStreamCmd {
-                branch_id,
-                protocol_version: PagestreamProtocolVersion::V2,
-            })
-        );
+        let cmd = PageServiceCmd::parse(&format!("pagestream {branch_id}")).unwrap();
+        assert_eq!(cmd, PageServiceCmd::PageStream(PageStreamCmd { branch_id }));
         let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id}")).unwrap();
         assert_eq!(
             cmd,
@@ -4316,11 +4264,9 @@ mod tests {
         let branch_id = BranchId::generate();
         let cmd = PageServiceCmd::parse("unknown_command");
         assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse("pagestream_v2");
+        let cmd = PageServiceCmd::parse("pagestream");
         assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}xxx"));
-        assert!(cmd.is_err());
-        let cmd = PageServiceCmd::parse(&format!("pagestream_v2 {branch_id}xxx"));
+        let cmd = PageServiceCmd::parse(&format!("pagestream {branch_id}xxx"));
         assert!(cmd.is_err());
         let cmd = PageServiceCmd::parse(&format!("basebackup {branch_id} --gzip --gzip"));
         assert!(cmd.is_err());

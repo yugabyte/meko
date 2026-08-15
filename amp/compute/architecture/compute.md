@@ -228,9 +228,8 @@ ever returning a stale page.
 ## Talking to the pageserver
 
 [`libpagestore.c`](../pgxn/yb_amp/libpagestore.c) owns the pageserver connection
-and the getpage protocol. The connection query is `pagestream_v3 <branch_id>`;
-the protocol version is `yb_amp.protocol_version`, which accepts `2` or `3` and
-defaults to `3`. The communicator background process pumps the request/response
+and the getpage protocol. The connection query is `pagestream <branch_id>`.
+The communicator background process pumps the request/response
 stream and the prefetch ring; `communicator.h` exposes the operations the smgr
 calls: `communicator_read_at_lsnv()` (getpage), `communicator_prefetch_*`,
 `communicator_nblocks()`, `communicator_dbsize()`, and
@@ -243,10 +242,9 @@ The pageserver-facing GUCs (all in `pg_init_libpagestore()`):
 | GUC | Context | Default | Purpose |
 | --- | --- | --- | --- |
 | `yb_amp.pageserver_connstring` | SIGHUP | `""` | Pageserver connection string; also the switch that installs the smgr |
-| `yb_amp.branch_id` | POSTMASTER | `""` | Branch identifier sent in `pagestream_v3` and to the safekeeper |
+| `yb_amp.branch_id` | POSTMASTER | `""` | Branch identifier sent in `pagestream` and to the safekeeper |
 | `yb_amp.cluster_id` | POSTMASTER | `""` | Cluster the compute belongs to |
 | `yb_amp.endpoint_id` | POSTMASTER | `""` | Endpoint identifier |
-| `yb_amp.protocol_version` | SU_BACKEND | `3` | compute↔pageserver protocol version (`2`–`3`) |
 | `yb_amp.max_cluster_size` | SIGHUP | `-1` | Cluster size limit (MB); `-1` disables |
 | `yb_amp.flush_output_after` | USERSET | `8` | Flush the request buffer after N unflushed requests |
 | `yb_amp.max_reconnect_attempts` | USERSET | `60` | Reconnect attempts (1s each) before giving up |

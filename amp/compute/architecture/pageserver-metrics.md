@@ -163,7 +163,7 @@ GC metrics live with the GC docs — see
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `pageserver_basebackup_query_seconds` | HistogramVec | `result` | basebackup query durations, by `result` (`ok`, `error`, `client_error`). |
-| `pageserver_compute_commands` | IntCounterVec | `command` | compute→pageserver commands processed. `command` ∈ `PageStreamV2`, `PageStreamV3`, `Basebackup`, `Fullbackup`, `LeaseLsn`. |
+| `pageserver_compute_commands` | IntCounterVec | `command` | compute→pageserver commands processed. `command` ∈ `PageStream`, `Basebackup`, `Fullbackup`, `LeaseLsn`. |
 | `pageserver_basebackup_cache_read_total` | IntCounterVec | `result` | basebackup cache reads, by `result` (`hit` / `miss` / `error`). |
 | `pageserver_basebackup_cache_prepare_total` | IntCounterVec | `result` | basebackup cache prepare requests, by `result` (`ok` / `skip` / `error`). |
 | `pageserver_basebackup_cache_entries_total` | UIntGauge | — | Entries in the basebackup cache. |

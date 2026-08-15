@@ -83,13 +83,11 @@ typedef enum {
  * can skip traversing through recent layers which we know to not contain any
  * versions for the requested page.
  *
- * These structs describe the V2 of these requests. (The old now-defunct V1
- * protocol contained just one LSN and a boolean 'latest' flag.)
- *
- * V3 version of protocol adds request ID to all requests. This request ID is also included in response
- * as well as other fields from requests, which allows to verify that we receive response for our request.
- * We copy fields from request to response to make checking more reliable: request ID is formed from process ID
- * and local counter, so in principle there can be duplicated requests IDs if process PID is reused.
+ * Every request also carries a request ID, echoed back in the response along
+ * with the other request fields, so we can check that a response fills the
+ * request we think it does. The fields are echoed rather than the ID alone
+ * because the ID is formed from the process ID and a local counter, so IDs can
+ * repeat once a PID is reused.
  */
 typedef YbAmpMessage YbAmpRequest;
 
@@ -178,7 +176,7 @@ typedef struct
  * cue to abandon in-flight requests and reconnect now (vs waiting out
  * the pageserver_response_disconnect_timeout safety net).
  *
- * `req` is zero-filled padding so the V3 echo-header parser stays
+ * `req` is zero-filled padding so the echo-header parser stays
  * symmetric — there's no request being echoed.
  */
 typedef enum
@@ -253,7 +251,6 @@ extern int	flush_every_n_requests;
 extern int	readahead_buffer_size;
 extern char *yb_amp_branch_id;
 extern int32 max_cluster_size;
-extern int  yb_amp_protocol_version;
 
 #if PG_MAJORVERSION_NUM >= 18
 extern bool yb_amp_read_slru_segment(const char *path, int64 segno);

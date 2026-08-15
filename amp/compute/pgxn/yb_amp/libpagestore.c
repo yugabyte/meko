@@ -73,8 +73,6 @@ char	   *yb_amp_auth_token;
 int			readahead_buffer_size = 128;
 int			flush_every_n_requests = 8;
 
-int         yb_amp_protocol_version = 3;
-
 static int	yb_amp_compute_mode = 0;
 static int	max_reconnect_attempts = 60;
 static int	max_sockets;
@@ -441,17 +439,7 @@ pageserver_connect(int elevel)
 		AddWaitEventToSet(ps->wes_read, WL_SOCKET_READABLE, PQsocket(ps->conn), NULL, NULL);
 
 
-		switch (yb_amp_protocol_version)
-		{
-		case 3:
-			pagestream_query = psprintf("pagestream_v3 %s", yb_amp_branch_id);
-			break;
-		case 2:
-			pagestream_query = psprintf("pagestream_v2 %s", yb_amp_branch_id);
-			break;
-		default:
-			elog(ERROR, "unexpected yb_amp_protocol_version %d", yb_amp_protocol_version);
-		}
+		pagestream_query = psprintf("pagestream %s", yb_amp_branch_id);
 
 		if (PQstatus(ps->conn) == CONNECTION_BAD)
 		{
@@ -539,7 +527,7 @@ pageserver_connect(int elevel)
 		ps->delay_us = MIN_RECONNECT_INTERVAL_USEC;
 
 		yb_amp_log(DEBUG5, "Connection state: Connected");
-		yb_amp_log(LOG, "libpagestore: connected to '%s' with protocol version %d", connstr, yb_amp_protocol_version);
+		yb_amp_log(LOG, "libpagestore: connected to '%s'", connstr);
 		return true;
 	default:
 		yb_amp_log(ERROR, "libpagestore: invalid connection state %d", ps->state);
@@ -1182,17 +1170,6 @@ pg_init_libpagestore(void)
 							PGC_USERSET,
 							GUC_UNIT_MS,
 							NULL, NULL, NULL);
-	DefineCustomIntVariable("yb_amp.protocol_version",
-							"Version of compute<->page server protocol",
-							NULL,
-							&yb_amp_protocol_version,
-							3,	/* use protocol version 3 */
-							2,	/* min */
-							3,	/* max */
-							PGC_SU_BACKEND,
-							0,	/* no flags required */
-							NULL, NULL, NULL);
-
 	DefineCustomIntVariable("yb_amp.pageserver_response_log_timeout",
 							"pageserver response log timeout",
 							"If the pageserver doesn't respond to a request within this timeout, "

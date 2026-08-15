@@ -51,7 +51,7 @@ impl Client {
     pub async fn pagestream(self, branch_id: BranchId) -> anyhow::Result<PagestreamClient> {
         let copy_both: tokio_postgres::CopyBothDuplex<bytes::Bytes> = self
             .client
-            .copy_both_simple(&format!("pagestream_v3 {branch_id}"))
+            .copy_both_simple(&format!("pagestream {branch_id}"))
             .await?;
         let (sink, stream) = copy_both.split(); // TODO: actually support splitting of the CopyBothDuplex so the lock inside this split adaptor goes away.
         let Client {

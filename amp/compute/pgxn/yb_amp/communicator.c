@@ -410,38 +410,36 @@ compact_prefetch_buffers(void)
 static void
 check_getpage_response(PrefetchRequest* slot, YbAmpResponse* resp)
 {
+	NRelFileInfo rinfo = BufTagGetNRelFileInfo(slot->buftag);
+
 	if (resp->tag != T_YbAmpGetPageResponse && resp->tag != T_YbAmpErrorResponse)
 	{
 		yb_amp_log(PANIC, "Unexpected prefetch response %d, ring_receive=" UINT64_FORMAT ", ring_flush=" UINT64_FORMAT ", ring_unused=" UINT64_FORMAT "",
 					   resp->tag, MyPState->ring_receive, MyPState->ring_flush, MyPState->ring_unused);
 	}
-	if (yb_amp_protocol_version >= 3)
+	if (resp->tag == T_YbAmpGetPageResponse)
 	{
-		NRelFileInfo rinfo = BufTagGetNRelFileInfo(slot->buftag);
-		if (resp->tag == T_YbAmpGetPageResponse)
+		YbAmpGetPageResponse * getpage_resp = (YbAmpGetPageResponse *)resp;
+		if (resp->reqid != slot->reqid ||
+			resp->lsn != slot->request_lsns.request_lsn ||
+			resp->not_modified_since != slot->request_lsns.not_modified_since ||
+			!RelFileInfoEquals(getpage_resp->req.rinfo, rinfo) ||
+			getpage_resp->req.forknum != slot->buftag.forkNum ||
+			getpage_resp->req.blkno != slot->buftag.blockNum)
 		{
-			YbAmpGetPageResponse * getpage_resp = (YbAmpGetPageResponse *)resp;
-			if (resp->reqid != slot->reqid ||
-				resp->lsn != slot->request_lsns.request_lsn ||
-				resp->not_modified_since != slot->request_lsns.not_modified_since ||
-				!RelFileInfoEquals(getpage_resp->req.rinfo, rinfo) ||
-				getpage_resp->req.forknum != slot->buftag.forkNum ||
-				getpage_resp->req.blkno != slot->buftag.blockNum)
-			{
-				YBAMP_PANIC_CONNECTION_STATE(PANIC,
-											"Receive unexpected getpage response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u, block=%u} to get page request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u, block=%u}",
-											resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(getpage_resp->req.rinfo), getpage_resp->req.forknum, getpage_resp->req.blkno,
-											slot->reqid, LSN_FORMAT_ARGS(slot->request_lsns.request_lsn), LSN_FORMAT_ARGS(slot->request_lsns.not_modified_since), RelFileInfoFmt(rinfo), slot->buftag.forkNum, slot->buftag.blockNum);
-			}
+			YBAMP_PANIC_CONNECTION_STATE(PANIC,
+										"Receive unexpected getpage response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u, block=%u} to get page request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u, block=%u}",
+										resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(getpage_resp->req.rinfo), getpage_resp->req.forknum, getpage_resp->req.blkno,
+										slot->reqid, LSN_FORMAT_ARGS(slot->request_lsns.request_lsn), LSN_FORMAT_ARGS(slot->request_lsns.not_modified_since), RelFileInfoFmt(rinfo), slot->buftag.forkNum, slot->buftag.blockNum);
 		}
-		else if (resp->reqid != slot->reqid ||
-				 resp->lsn != slot->request_lsns.request_lsn ||
-				 resp->not_modified_since != slot->request_lsns.not_modified_since)
-		{
-			elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match exists request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
-				 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
-				 slot->reqid, LSN_FORMAT_ARGS(slot->request_lsns.request_lsn), LSN_FORMAT_ARGS(slot->request_lsns.not_modified_since));
-		}
+	}
+	else if (resp->reqid != slot->reqid ||
+			 resp->lsn != slot->request_lsns.request_lsn ||
+			 resp->not_modified_since != slot->request_lsns.not_modified_since)
+	{
+		elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match get page request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
+			 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
+			 slot->reqid, LSN_FORMAT_ARGS(slot->request_lsns.request_lsn), LSN_FORMAT_ARGS(slot->request_lsns.not_modified_since));
 	}
 }
 
@@ -1454,10 +1452,7 @@ nm_pack_request(YbAmpRequest *msg)
 	initStringInfo(&s);
 
 	pq_sendbyte(&s, msg->tag);
-	if (yb_amp_protocol_version >= 3)
-	{
-		pq_sendint64(&s, msg->reqid);
-	}
+	pq_sendint64(&s, msg->reqid);
 	pq_sendint64(&s, msg->lsn);
 	pq_sendint64(&s, msg->not_modified_since);
 
@@ -1540,12 +1535,9 @@ nm_unpack_response(StringInfo s)
 	YbAmpResponse *resp = NULL;
 
 	resp_hdr.tag = tag;
-	if (yb_amp_protocol_version >= 3)
-	{
-		resp_hdr.reqid = pq_getmsgint64(s);
-		resp_hdr.lsn = pq_getmsgint64(s);
-		resp_hdr.not_modified_since = pq_getmsgint64(s);
-	}
+	resp_hdr.reqid = pq_getmsgint64(s);
+	resp_hdr.lsn = pq_getmsgint64(s);
+	resp_hdr.not_modified_since = pq_getmsgint64(s);
 	switch (tag)
 	{
 			/* pagestore -> pagestore_client */
@@ -1553,13 +1545,10 @@ nm_unpack_response(StringInfo s)
 			{
 				YbAmpExistsResponse *msg_resp = palloc0(sizeof(YbAmpExistsResponse));
 
-				if (yb_amp_protocol_version >= 3)
-				{
-					NInfoGetSpcOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					NInfoGetDbOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					NInfoGetRelNumber(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					msg_resp->req.forknum = pq_getmsgbyte(s);
-				}
+				NInfoGetSpcOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				NInfoGetDbOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				NInfoGetRelNumber(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				msg_resp->req.forknum = pq_getmsgbyte(s);
 				msg_resp->req.hdr = resp_hdr;
 				msg_resp->exists = pq_getmsgbyte(s);
 				pq_getmsgend(s);
@@ -1572,13 +1561,10 @@ nm_unpack_response(StringInfo s)
 			{
 				YbAmpNblocksResponse *msg_resp = palloc0(sizeof(YbAmpNblocksResponse));
 
-				if (yb_amp_protocol_version >= 3)
-				{
-					NInfoGetSpcOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					NInfoGetDbOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					NInfoGetRelNumber(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					msg_resp->req.forknum = pq_getmsgbyte(s);
-				}
+				NInfoGetSpcOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				NInfoGetDbOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				NInfoGetRelNumber(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				msg_resp->req.forknum = pq_getmsgbyte(s);
 				msg_resp->req.hdr = resp_hdr;
 				msg_resp->n_blocks = pq_getmsgint(s, 4);
 				pq_getmsgend(s);
@@ -1592,14 +1578,11 @@ nm_unpack_response(StringInfo s)
 				YbAmpGetPageResponse *msg_resp;
 
 				msg_resp = MemoryContextAllocZero(MyPState->bufctx, PS_GETPAGERESPONSE_SIZE);
-				if (yb_amp_protocol_version >= 3)
-				{
-					NInfoGetSpcOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					NInfoGetDbOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					NInfoGetRelNumber(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
-					msg_resp->req.forknum = pq_getmsgbyte(s);
-					msg_resp->req.blkno = pq_getmsgint(s, 4);
-				}
+				NInfoGetSpcOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				NInfoGetDbOid(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				NInfoGetRelNumber(msg_resp->req.rinfo) = pq_getmsgint(s, 4);
+				msg_resp->req.forknum = pq_getmsgbyte(s);
+				msg_resp->req.blkno = pq_getmsgint(s, 4);
 				msg_resp->req.hdr = resp_hdr;
 				/* XXX:	should be varlena */
 				memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ);
@@ -1615,10 +1598,7 @@ nm_unpack_response(StringInfo s)
 			{
 				YbAmpDbSizeResponse *msg_resp = palloc0(sizeof(YbAmpDbSizeResponse));
 
-				if (yb_amp_protocol_version >= 3)
-				{
-					msg_resp->req.dbNode = pq_getmsgint(s, 4);
-				}
+				msg_resp->req.dbNode = pq_getmsgint(s, 4);
 				msg_resp->req.hdr = resp_hdr;
 				msg_resp->db_size = pq_getmsgint64(s);
 				pq_getmsgend(s);
@@ -1651,11 +1631,8 @@ nm_unpack_response(StringInfo s)
 				int n_blocks;
 				msg_resp = palloc0(sizeof(YbAmpGetSlruSegmentResponse));
 
-				if (yb_amp_protocol_version >= 3)
-				{
-					msg_resp->req.kind = pq_getmsgbyte(s);
-					msg_resp->req.segno = pq_getmsgint(s, 4);
-				}
+				msg_resp->req.kind = pq_getmsgbyte(s);
+				msg_resp->req.segno = pq_getmsgint(s, 4);
 				msg_resp->req.hdr = resp_hdr;
 
 				n_blocks = pq_getmsgint(s, 4);
@@ -2022,30 +1999,24 @@ communicator_exists(NRelFileInfo rinfo, ForkNumber forkNum, yb_amp_request_lsns 
 			case T_YbAmpExistsResponse:
 			{
 				YbAmpExistsResponse* exists_resp = (YbAmpExistsResponse *) resp;
-				if (yb_amp_protocol_version >= 3)
+				if (!equal_requests(resp, &request.hdr) ||
+					!RelFileInfoEquals(exists_resp->req.rinfo, request.rinfo) ||
+					exists_resp->req.forknum != request.forknum)
 				{
-					if (!equal_requests(resp, &request.hdr) ||
-						!RelFileInfoEquals(exists_resp->req.rinfo, request.rinfo) ||
-						exists_resp->req.forknum != request.forknum)
-					{
-						YBAMP_PANIC_CONNECTION_STATE(PANIC,
-													"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u} to exits request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u}",
-													resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(exists_resp->req.rinfo), exists_resp->req.forknum,
-													request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), RelFileInfoFmt(request.rinfo), request.forknum);
-					}
+					YBAMP_PANIC_CONNECTION_STATE(PANIC,
+												"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u} to exits request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u}",
+												resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(exists_resp->req.rinfo), exists_resp->req.forknum,
+												request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), RelFileInfoFmt(request.rinfo), request.forknum);
 				}
 				exists = exists_resp->exists;
 				break;
 			}
 			case T_YbAmpErrorResponse:
-				if (yb_amp_protocol_version >= 3)
+				if (!equal_requests(resp, &request.hdr))
 				{
-					if (!equal_requests(resp, &request.hdr))
-					{
-						elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match exists request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
-							 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
-							 request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since));
-					}
+					elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match exists request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
+						 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
+						 request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since));
 				}
 				ereport(ERROR,
 						(errcode(ERRCODE_IO_ERROR),
@@ -2271,30 +2242,24 @@ communicator_nblocks(NRelFileInfo rinfo, ForkNumber forknum, yb_amp_request_lsns
 			case T_YbAmpNblocksResponse:
 			{
 				YbAmpNblocksResponse * relsize_resp = (YbAmpNblocksResponse *) resp;
-				if (yb_amp_protocol_version >= 3)
+				if (!equal_requests(resp, &request.hdr) ||
+					!RelFileInfoEquals(relsize_resp->req.rinfo, request.rinfo) ||
+					relsize_resp->req.forknum != forknum)
 				{
-					if (!equal_requests(resp, &request.hdr) ||
-						!RelFileInfoEquals(relsize_resp->req.rinfo, request.rinfo) ||
-						relsize_resp->req.forknum != forknum)
-					{
-						YBAMP_PANIC_CONNECTION_STATE(PANIC,
-													"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u} to get relsize request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u}",
-													resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(relsize_resp->req.rinfo), relsize_resp->req.forknum,
-													request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), RelFileInfoFmt(request.rinfo), forknum);
-					}
+					YBAMP_PANIC_CONNECTION_STATE(PANIC,
+												"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u} to get relsize request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, rel=%u/%u/%u.%u}",
+												resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), RelFileInfoFmt(relsize_resp->req.rinfo), relsize_resp->req.forknum,
+												request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), RelFileInfoFmt(request.rinfo), forknum);
 				}
 				n_blocks = relsize_resp->n_blocks;
 				break;
 			}
 			case T_YbAmpErrorResponse:
-				if (yb_amp_protocol_version >= 3)
+				if (!equal_requests(resp, &request.hdr))
 				{
-					if (!equal_requests(resp, &request.hdr))
-					{
-						elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match get relsize request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
-							 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
-							 request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since));
-					}
+					elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match get relsize request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
+						 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
+						 request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since));
 				}
 				ereport(ERROR,
 						(errcode(ERRCODE_IO_ERROR),
@@ -2342,29 +2307,23 @@ communicator_dbsize(Oid dbNode, yb_amp_request_lsns *request_lsns)
 			case T_YbAmpDbSizeResponse:
 			{
 				YbAmpDbSizeResponse* dbsize_resp = (YbAmpDbSizeResponse *) resp;
-				if (yb_amp_protocol_version >= 3)
+				if (!equal_requests(resp, &request.hdr) ||
+					dbsize_resp->req.dbNode != dbNode)
 				{
-					if (!equal_requests(resp, &request.hdr) ||
-						dbsize_resp->req.dbNode != dbNode)
-					{
-						YBAMP_PANIC_CONNECTION_STATE(PANIC,
-													"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, dbNode=%u} to get DB size request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, dbNode=%u}",
-													resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), dbsize_resp->req.dbNode,
-													request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), dbNode);
-					}
+					YBAMP_PANIC_CONNECTION_STATE(PANIC,
+												"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, dbNode=%u} to get DB size request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, dbNode=%u}",
+												resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), dbsize_resp->req.dbNode,
+												request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), dbNode);
 				}
 				db_size = dbsize_resp->db_size;
 				break;
 			}
 			case T_YbAmpErrorResponse:
-				if (yb_amp_protocol_version >= 3)
+				if (!equal_requests(resp, &request.hdr))
 				{
-					if (!equal_requests(resp, &request.hdr))
-					{
-						elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match get DB size request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
-							 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
-							 request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since));
-					}
+					elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match get DB size request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
+						 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
+						 request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since));
 				}
 				ereport(ERROR,
 						(errcode(ERRCODE_IO_ERROR),
@@ -2431,31 +2390,25 @@ communicator_read_slru_segment(SlruKind kind, int64 segno, yb_amp_request_lsns *
 		case T_YbAmpGetSlruSegmentResponse:
 		{
 			YbAmpGetSlruSegmentResponse* slru_resp = (YbAmpGetSlruSegmentResponse *) resp;
-			if (yb_amp_protocol_version >= 3)
+			if (!equal_requests(resp, &request.hdr) ||
+				slru_resp->req.kind != kind ||
+				slru_resp->req.segno != segno)
 			{
-				if (!equal_requests(resp, &request.hdr) ||
-					slru_resp->req.kind != kind ||
-					slru_resp->req.segno != segno)
-				{
-					YBAMP_PANIC_CONNECTION_STATE(PANIC,
-												"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, kind=%u, segno=%u} to get SLRU segment request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, kind=%u, segno=%lluu}",
-												resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), slru_resp->req.kind, slru_resp->req.segno,
-												request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), kind, (unsigned long long) segno);
-				}
+				YBAMP_PANIC_CONNECTION_STATE(PANIC,
+											"Unexpect response {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, kind=%u, segno=%u} to get SLRU segment request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X, kind=%u, segno=%lluu}",
+											resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since), slru_resp->req.kind, slru_resp->req.segno,
+											request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since), kind, (unsigned long long) segno);
 			}
 			n_blocks = slru_resp->n_blocks;
 			memcpy(buffer, slru_resp->data, n_blocks*BLCKSZ);
 			break;
 		}
 		case T_YbAmpErrorResponse:
-			if (yb_amp_protocol_version >= 3)
+			if (!equal_requests(resp, &request.hdr))
 			{
-				if (!equal_requests(resp, &request.hdr))
-				{
-					elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match get SLRU segment request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
-						 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
-						 request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since));
-				}
+				elog(WARNING, YBAMP_TAG "Error message {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X} doesn't match get SLRU segment request {reqid=" UINT64_HEX_FORMAT ",lsn=%X/%08X, since=%X/%08X}",
+					 resp->reqid, LSN_FORMAT_ARGS(resp->lsn), LSN_FORMAT_ARGS(resp->not_modified_since),
+					 request.hdr.reqid, LSN_FORMAT_ARGS(request.hdr.lsn), LSN_FORMAT_ARGS(request.hdr.not_modified_since));
 			}
 			ereport(ERROR,
 					(errcode(ERRCODE_IO_ERROR),

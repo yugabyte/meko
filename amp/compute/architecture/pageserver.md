@@ -1013,7 +1013,7 @@ Computes fetch pages over two equivalent surfaces
 (`page_service.rs`):
 
 **libpq** (`listen_pg_addr`, default `127.0.0.1:64000`). Commands:
-`pagestream_v2` / `pagestream_v3` (COPY-both subprotocol carrying
+`pagestream` (COPY-both subprotocol carrying
 Exists / Nblocks / DbSize / GetSlruSegment / GetPage / Test messages),
 `basebackup`, `fullbackup`, `lease lsn`, `set`. The pipelined executor
 (`page_service_pipelining`, defaults: `max_batch_size` 32,

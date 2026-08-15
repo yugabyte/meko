@@ -124,28 +124,11 @@ impl TryFrom<u8> for PagestreamBeMessageTag {
 // passing an earlier LSN can speed up the request, by allowing the pageserver to process the
 // request without waiting for 'request_lsn' to arrive.
 //
-// The now-defunct V1 interface contained only one LSN, and a boolean 'latest' flag. The V1 interface was
-// sufficient for the primary; the 'lsn' was equivalent to the 'not_modified_since' value, and
-// 'latest' was set to true. The V2 interface was added because there was no correct way for a
-// standby to request a page at a particular non-latest LSN, and also include the
-// 'not_modified_since' hint. That led to an awkward choice of either using an old LSN in the
-// request, if the standby knows that the page hasn't been modified since, and risk getting an error
-// if that LSN has fallen behind the GC horizon, or requesting the current replay LSN, which could
-// require the pageserver unnecessarily to wait for the WAL to arrive up to that point. The new V2
-// interface allows sending both LSNs, and let the pageserver do the right thing. There was no
-// difference in the responses between V1 and V2.
+// Every request also carries a request ID, echoed back in the response along with the other request
+// fields, so the compute can check that a response fills the request it thinks it does. The fields
+// are echoed rather than the ID alone because the ID is formed from the process ID and a local
+// counter, so IDs can repeat once a PID is reused.
 //
-// V3 version of protocol adds request ID to all requests. This request ID is also included in response
-// as well as other fields from requests, which allows to verify that we receive response for our request.
-// We copy fields from request to response to make checking more reliable: request ID is formed from process ID
-// and local counter, so in principle there can be duplicated requests IDs if process PID is reused.
-//
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum PagestreamProtocolVersion {
-    V2,
-    V3,
-}
-
 pub type RequestId = u64;
 
 #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
@@ -262,7 +245,7 @@ pub struct PagestreamTestResponse {
 
 impl PagestreamFeMessage {
     /// Serialize a compute -> pageserver message. This is currently only used in testing
-    /// tools. Always uses protocol version 3.
+    /// tools.
     pub fn serialize(&self) -> Bytes {
         let mut bytes = BytesMut::new();
 
@@ -333,27 +316,15 @@ impl PagestreamFeMessage {
         bytes.into()
     }
 
-    pub fn parse<R: std::io::Read>(
-        body: &mut R,
-        protocol_version: PagestreamProtocolVersion,
-    ) -> anyhow::Result<PagestreamFeMessage> {
+    pub fn parse<R: std::io::Read>(body: &mut R) -> anyhow::Result<PagestreamFeMessage> {
         // these correspond to the NeonMessageTag enum in pagestore_client.h
         //
         // TODO: consider using protobuf or serde bincode for less error prone
         // serialization.
         let msg_tag = body.read_u8()?;
-        let (reqid, request_lsn, not_modified_since) = match protocol_version {
-            PagestreamProtocolVersion::V2 => (
-                0,
-                Lsn::from(body.read_u64::<BigEndian>()?),
-                Lsn::from(body.read_u64::<BigEndian>()?),
-            ),
-            PagestreamProtocolVersion::V3 => (
-                body.read_u64::<BigEndian>()?,
-                Lsn::from(body.read_u64::<BigEndian>()?),
-                Lsn::from(body.read_u64::<BigEndian>()?),
-            ),
-        };
+        let reqid = body.read_u64::<BigEndian>()?;
+        let request_lsn = Lsn::from(body.read_u64::<BigEndian>()?);
+        let not_modified_since = Lsn::from(body.read_u64::<BigEndian>()?);
 
         match PagestreamFeMessageTag::try_from(msg_tag)
             .map_err(|tag: u8| anyhow::anyhow!("invalid tag {tag}"))?
@@ -445,150 +416,97 @@ impl PagestreamFeMessage {
 }
 
 impl PagestreamBeMessage {
-    pub fn serialize(&self, protocol_version: PagestreamProtocolVersion) -> Bytes {
+    pub fn serialize(&self) -> Bytes {
         let mut bytes = BytesMut::new();
 
         use PagestreamBeMessageTag as Tag;
-        match protocol_version {
-            PagestreamProtocolVersion::V2 => {
-                match self {
-                    Self::Exists(resp) => {
-                        bytes.put_u8(Tag::Exists as u8);
-                        bytes.put_u8(resp.exists as u8);
-                    }
-
-                    Self::Nblocks(resp) => {
-                        bytes.put_u8(Tag::Nblocks as u8);
-                        bytes.put_u32(resp.n_blocks);
-                    }
-
-                    Self::GetPage(resp) => {
-                        bytes.put_u8(Tag::GetPage as u8);
-                        bytes.put(&resp.page[..])
-                    }
-
-                    Self::Error(resp) => {
-                        bytes.put_u8(Tag::Error as u8);
-                        bytes.put(resp.message.as_bytes());
-                        bytes.put_u8(0); // null terminator
-                    }
-                    Self::DbSize(resp) => {
-                        bytes.put_u8(Tag::DbSize as u8);
-                        bytes.put_i64(resp.db_size);
-                    }
-
-                    Self::GetSlruSegment(resp) => {
-                        bytes.put_u8(Tag::GetSlruSegment as u8);
-                        bytes.put_u32((resp.segment.len() / BLCKSZ) as u32);
-                        bytes.put(&resp.segment[..]);
-                    }
-
-                    Self::GoingAway(resp) => {
-                        bytes.put_u8(Tag::GoingAway as u8);
-                        bytes.put_u8(resp.reason as u8);
-                    }
-
-                    #[cfg(feature = "testing")]
-                    Self::Test(resp) => {
-                        bytes.put_u8(Tag::Test as u8);
-                        bytes.put_u64(resp.req.batch_key);
-                        let message = resp.req.message.as_bytes();
-                        bytes.put_u64(message.len() as u64);
-                        bytes.put_slice(message);
-                    }
-                }
+        match self {
+            Self::Exists(resp) => {
+                bytes.put_u8(Tag::Exists as u8);
+                bytes.put_u64(resp.req.hdr.reqid);
+                bytes.put_u64(resp.req.hdr.request_lsn.0);
+                bytes.put_u64(resp.req.hdr.not_modified_since.0);
+                bytes.put_u32(resp.req.rel.spcnode);
+                bytes.put_u32(resp.req.rel.dbnode);
+                bytes.put_u32(resp.req.rel.relnode);
+                bytes.put_u8(resp.req.rel.forknum);
+                bytes.put_u8(resp.exists as u8);
             }
-            PagestreamProtocolVersion::V3 => {
-                match self {
-                    Self::Exists(resp) => {
-                        bytes.put_u8(Tag::Exists as u8);
-                        bytes.put_u64(resp.req.hdr.reqid);
-                        bytes.put_u64(resp.req.hdr.request_lsn.0);
-                        bytes.put_u64(resp.req.hdr.not_modified_since.0);
-                        bytes.put_u32(resp.req.rel.spcnode);
-                        bytes.put_u32(resp.req.rel.dbnode);
-                        bytes.put_u32(resp.req.rel.relnode);
-                        bytes.put_u8(resp.req.rel.forknum);
-                        bytes.put_u8(resp.exists as u8);
-                    }
 
-                    Self::Nblocks(resp) => {
-                        bytes.put_u8(Tag::Nblocks as u8);
-                        bytes.put_u64(resp.req.hdr.reqid);
-                        bytes.put_u64(resp.req.hdr.request_lsn.0);
-                        bytes.put_u64(resp.req.hdr.not_modified_since.0);
-                        bytes.put_u32(resp.req.rel.spcnode);
-                        bytes.put_u32(resp.req.rel.dbnode);
-                        bytes.put_u32(resp.req.rel.relnode);
-                        bytes.put_u8(resp.req.rel.forknum);
-                        bytes.put_u32(resp.n_blocks);
-                    }
+            Self::Nblocks(resp) => {
+                bytes.put_u8(Tag::Nblocks as u8);
+                bytes.put_u64(resp.req.hdr.reqid);
+                bytes.put_u64(resp.req.hdr.request_lsn.0);
+                bytes.put_u64(resp.req.hdr.not_modified_since.0);
+                bytes.put_u32(resp.req.rel.spcnode);
+                bytes.put_u32(resp.req.rel.dbnode);
+                bytes.put_u32(resp.req.rel.relnode);
+                bytes.put_u8(resp.req.rel.forknum);
+                bytes.put_u32(resp.n_blocks);
+            }
 
-                    Self::GetPage(resp) => {
-                        bytes.put_u8(Tag::GetPage as u8);
-                        bytes.put_u64(resp.req.hdr.reqid);
-                        bytes.put_u64(resp.req.hdr.request_lsn.0);
-                        bytes.put_u64(resp.req.hdr.not_modified_since.0);
-                        bytes.put_u32(resp.req.rel.spcnode);
-                        bytes.put_u32(resp.req.rel.dbnode);
-                        bytes.put_u32(resp.req.rel.relnode);
-                        bytes.put_u8(resp.req.rel.forknum);
-                        bytes.put_u32(resp.req.blkno);
-                        bytes.put(&resp.page[..])
-                    }
+            Self::GetPage(resp) => {
+                bytes.put_u8(Tag::GetPage as u8);
+                bytes.put_u64(resp.req.hdr.reqid);
+                bytes.put_u64(resp.req.hdr.request_lsn.0);
+                bytes.put_u64(resp.req.hdr.not_modified_since.0);
+                bytes.put_u32(resp.req.rel.spcnode);
+                bytes.put_u32(resp.req.rel.dbnode);
+                bytes.put_u32(resp.req.rel.relnode);
+                bytes.put_u8(resp.req.rel.forknum);
+                bytes.put_u32(resp.req.blkno);
+                bytes.put(&resp.page[..])
+            }
 
-                    Self::Error(resp) => {
-                        bytes.put_u8(Tag::Error as u8);
-                        bytes.put_u64(resp.req.reqid);
-                        bytes.put_u64(resp.req.request_lsn.0);
-                        bytes.put_u64(resp.req.not_modified_since.0);
-                        bytes.put(resp.message.as_bytes());
-                        bytes.put_u8(0); // null terminator
-                    }
-                    Self::DbSize(resp) => {
-                        bytes.put_u8(Tag::DbSize as u8);
-                        bytes.put_u64(resp.req.hdr.reqid);
-                        bytes.put_u64(resp.req.hdr.request_lsn.0);
-                        bytes.put_u64(resp.req.hdr.not_modified_since.0);
-                        bytes.put_u32(resp.req.dbnode);
-                        bytes.put_i64(resp.db_size);
-                    }
+            Self::Error(resp) => {
+                bytes.put_u8(Tag::Error as u8);
+                bytes.put_u64(resp.req.reqid);
+                bytes.put_u64(resp.req.request_lsn.0);
+                bytes.put_u64(resp.req.not_modified_since.0);
+                bytes.put(resp.message.as_bytes());
+                bytes.put_u8(0); // null terminator
+            }
+            Self::DbSize(resp) => {
+                bytes.put_u8(Tag::DbSize as u8);
+                bytes.put_u64(resp.req.hdr.reqid);
+                bytes.put_u64(resp.req.hdr.request_lsn.0);
+                bytes.put_u64(resp.req.hdr.not_modified_since.0);
+                bytes.put_u32(resp.req.dbnode);
+                bytes.put_i64(resp.db_size);
+            }
 
-                    Self::GetSlruSegment(resp) => {
-                        bytes.put_u8(Tag::GetSlruSegment as u8);
-                        bytes.put_u64(resp.req.hdr.reqid);
-                        bytes.put_u64(resp.req.hdr.request_lsn.0);
-                        bytes.put_u64(resp.req.hdr.not_modified_since.0);
-                        bytes.put_u8(resp.req.kind);
-                        bytes.put_u32(resp.req.segno);
-                        bytes.put_u32((resp.segment.len() / BLCKSZ) as u32);
-                        bytes.put(&resp.segment[..]);
-                    }
+            Self::GetSlruSegment(resp) => {
+                bytes.put_u8(Tag::GetSlruSegment as u8);
+                bytes.put_u64(resp.req.hdr.reqid);
+                bytes.put_u64(resp.req.hdr.request_lsn.0);
+                bytes.put_u64(resp.req.hdr.not_modified_since.0);
+                bytes.put_u8(resp.req.kind);
+                bytes.put_u32(resp.req.segno);
+                bytes.put_u32((resp.segment.len() / BLCKSZ) as u32);
+                bytes.put(&resp.segment[..]);
+            }
 
-                    Self::GoingAway(resp) => {
-                        // Unsolicited frame; no request to echo. V3
-                        // readers blindly drain 24 bytes of header
-                        // after the tag, so we send zeros to keep the
-                        // parser symmetric.
-                        bytes.put_u8(Tag::GoingAway as u8);
-                        bytes.put_u64(0); // reqid
-                        bytes.put_u64(0); // request_lsn
-                        bytes.put_u64(0); // not_modified_since
-                        bytes.put_u8(resp.reason as u8);
-                    }
+            Self::GoingAway(resp) => {
+                // Unsolicited frame; no request to echo. Readers
+                // blindly drain 24 bytes of header after the tag,
+                // so we send zeros to keep the parser symmetric.
+                bytes.put_u8(Tag::GoingAway as u8);
+                bytes.put_u64(0); // reqid
+                bytes.put_u64(0); // request_lsn
+                bytes.put_u64(0); // not_modified_since
+                bytes.put_u8(resp.reason as u8);
+            }
 
-                    #[cfg(feature = "testing")]
-                    Self::Test(resp) => {
-                        bytes.put_u8(Tag::Test as u8);
-                        bytes.put_u64(resp.req.hdr.reqid);
-                        bytes.put_u64(resp.req.hdr.request_lsn.0);
-                        bytes.put_u64(resp.req.hdr.not_modified_since.0);
-                        bytes.put_u64(resp.req.batch_key);
-                        let message = resp.req.message.as_bytes();
-                        bytes.put_u64(message.len() as u64);
-                        bytes.put_slice(message);
-                    }
-                }
+            #[cfg(feature = "testing")]
+            Self::Test(resp) => {
+                bytes.put_u8(Tag::Test as u8);
+                bytes.put_u64(resp.req.hdr.reqid);
+                bytes.put_u64(resp.req.hdr.request_lsn.0);
+                bytes.put_u64(resp.req.hdr.not_modified_since.0);
+                bytes.put_u64(resp.req.batch_key);
+                let message = resp.req.message.as_bytes();
+                bytes.put_u64(message.len() as u64);
+                bytes.put_slice(message);
             }
         }
         bytes.into()
@@ -731,7 +649,7 @@ impl PagestreamBeMessage {
                     })
                 }
                 Tag::GoingAway => {
-                    // V3 echo header (zeros — see serialize).
+                    // Echo header (zeros — see serialize).
                     let _reqid = buf.read_u64::<BigEndian>()?;
                     let _request_lsn = buf.read_u64::<BigEndian>()?;
                     let _not_modified_since = buf.read_u64::<BigEndian>()?;
@@ -845,19 +763,17 @@ mod tests {
         ];
         for msg in messages {
             let bytes = msg.serialize();
-            let reconstructed =
-                PagestreamFeMessage::parse(&mut bytes.reader(), PagestreamProtocolVersion::V3)
-                    .unwrap();
+            let reconstructed = PagestreamFeMessage::parse(&mut bytes.reader()).unwrap();
             assert!(msg == reconstructed);
         }
     }
 
     #[test]
-    fn going_away_v3_roundtrip() {
+    fn going_away_roundtrip() {
         let frame = PagestreamBeMessage::GoingAway(PagestreamGoingAwayResponse {
             reason: GoingAwayReason::Shutdown,
         });
-        let bytes = frame.serialize(PagestreamProtocolVersion::V3);
+        let bytes = frame.serialize();
         let back = PagestreamBeMessage::deserialize(bytes).unwrap();
         match back {
             PagestreamBeMessage::GoingAway(r) => {
@@ -867,17 +783,19 @@ mod tests {
         }
     }
 
+    /// The compute parses this frame in C (`nm_unpack_response`), which drains the
+    /// 24-byte echo header unconditionally before reading the reason. The padding is
+    /// therefore load-bearing, and a Rust-only round-trip would still pass if both
+    /// sides dropped it together.
     #[test]
-    fn going_away_v2_wire_shape() {
-        // V2 has no echo header: tag byte + reason byte = 2 bytes total.
-        // We don't deserialize V2 in Rust (compute parses it in C), but
-        // pin the wire shape so the C parser stays in sync.
+    fn going_away_wire_shape() {
         let frame = PagestreamBeMessage::GoingAway(PagestreamGoingAwayResponse {
             reason: GoingAwayReason::Shutdown,
         });
-        let bytes = frame.serialize(PagestreamProtocolVersion::V2);
-        assert_eq!(bytes.len(), 2);
+        let bytes = frame.serialize();
+        assert_eq!(bytes.len(), 1 + 24 + 1);
         assert_eq!(bytes[0], PagestreamBeMessageTag::GoingAway as u8);
-        assert_eq!(bytes[1], GoingAwayReason::Shutdown as u8);
+        assert!(bytes[1..25].iter().all(|&b| b == 0));
+        assert_eq!(bytes[25], GoingAwayReason::Shutdown as u8);
     }
 }
