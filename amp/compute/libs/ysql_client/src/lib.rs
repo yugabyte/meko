@@ -217,6 +217,68 @@ pub struct YbConnConfig {
     /// unset, defaults to 4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tsclient_sessions_per_conn: Option<usize>,
+    /// Bound on how long opening one connection may take, in milliseconds.
+    /// Defaults to [`DEFAULT_CONNECT_TIMEOUT_MS`]; `0` is no bound, matching
+    /// the libpq key this is named after.
+    ///
+    /// It covers the whole open, not just the socket.
+    /// `tokio_postgres::Config::connect_timeout` bounds only
+    /// `TcpStream::connect`, which leaves TLS, the startup handshake,
+    /// authentication and the session GUCs unbounded — and a peer that
+    /// completes the TCP handshake and then stops answering is precisely
+    /// the case worth bounding, because nothing ever fails and so the
+    /// retry loop never engages. See [`open_no_tls`] / [`open_tls`].
+    #[serde(default = "default_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+    /// Server-side `statement_timeout` for every connection this config
+    /// opens, in milliseconds, sent as `-c statement_timeout=N` in the
+    /// startup `options`. `0` is no bound, matching the GUC's own semantics,
+    /// and is the default — see [`DEFAULT_STATEMENT_TIMEOUT_MS`] for why.
+    ///
+    /// It applies to *every* statement on the connection, including the cold
+    /// paths, so it is set per connection block by a caller that knows what it
+    /// issues rather than globally.
+    ///
+    /// The server enforces it, so a statement a wedged tablet would
+    /// otherwise hold open is cancelled server-side (`57014`) rather than
+    /// waiting on the client to lose patience. It bounds a *slow* answer,
+    /// not a *silent* peer: a backend that stops responding mid-statement
+    /// is bounded by TCP keepalives, not by this.
+    #[serde(default = "default_statement_timeout_ms")]
+    pub statement_timeout_ms: u64,
+}
+
+/// Default [`YbConnConfig::connect_timeout_ms`]. Generous next to a healthy
+/// connect and far under any human's patience: the case it exists for is a
+/// peer that never answers at all, not a slow one.
+pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+
+/// Default [`YbConnConfig::statement_timeout_ms`]: **off**.
+///
+/// Several statements the daemons issue legitimately run for minutes, and a
+/// server-side cancellation of one of them is not a transient error — `57014`
+/// is fatal here, so nothing retries it. The GC drop/shrink deletes
+/// (`page_store::gc_act_drop_fork`, `gc_act_shrink_fork`) delete every version
+/// of every block of a fork in one unbatched statement, and the candidate is
+/// only dequeued once the action succeeds — a cancelled delete is re-selected
+/// forever, so GC stops and storage is never reclaimed. `truncate_wals_above`
+/// filters on a computed expression over the key columns, so it scans a
+/// branch's whole WAL, on the torn-tail correctness path. `list_rels` runs an
+/// unbounded `DISTINCT` per database on the basebackup path, so a cap there
+/// fails compute startup. Blob upload/download already carry their own 120s
+/// budget, which a shorter statement bound would silently preempt.
+///
+/// Turning this on globally wants those paths batched and made sargable
+/// first. Until then it is opt-in per connection block, where a caller that
+/// knows its statements are short can set it.
+pub const DEFAULT_STATEMENT_TIMEOUT_MS: u64 = 0;
+
+fn default_connect_timeout_ms() -> u64 {
+    DEFAULT_CONNECT_TIMEOUT_MS
+}
+
+fn default_statement_timeout_ms() -> u64 {
+    DEFAULT_STATEMENT_TIMEOUT_MS
 }
 
 /// See [`YbConnConfig::hot_path`].
@@ -330,6 +392,18 @@ impl YbConnConfig {
         }
         if let Some(n) = self.tsclient_write_sessions {
             parts.push(format!("tsclient_write_sessions = {n}"));
+        }
+        if let Some(n) = self.tsclient_sessions_per_conn {
+            parts.push(format!("tsclient_sessions_per_conn = {n}"));
+        }
+        if self.connect_timeout_ms != DEFAULT_CONNECT_TIMEOUT_MS {
+            parts.push(format!("connect_timeout_ms = {}", self.connect_timeout_ms));
+        }
+        if self.statement_timeout_ms != DEFAULT_STATEMENT_TIMEOUT_MS {
+            parts.push(format!(
+                "statement_timeout_ms = {}",
+                self.statement_timeout_ms
+            ));
         }
         format!("{{ {} }}", parts.join(", "))
     }
@@ -473,6 +547,12 @@ impl YbConnArgs {
             tsclient_read_sessions: None,
             tsclient_write_sessions: None,
             tsclient_sessions_per_conn: None,
+            // Unbounded, unlike a daemon. These tools are run by hand during
+            // an incident and do the long scans the daemons never issue —
+            // reset-consistent-lsn replays the WAL decoder over
+            // `amp_storage.wals` — so the operator watching it is the timeout.
+            connect_timeout_ms: 0,
+            statement_timeout_ms: 0,
         }
     }
 }
@@ -533,7 +613,7 @@ mod cli_tests {
 
 #[cfg(test)]
 mod database_url_tests {
-    use super::{YbConnConfig, rpc_addrs_from_hosts};
+    use super::{Duration, YbConnConfig, YsqlClient, build_pg_config, rpc_addrs_from_hosts};
 
     fn cfg(host_ports: &str) -> YbConnConfig {
         YbConnConfig {
@@ -549,6 +629,8 @@ mod database_url_tests {
             tsclient_read_sessions: None,
             tsclient_write_sessions: None,
             tsclient_sessions_per_conn: None,
+            connect_timeout_ms: super::DEFAULT_CONNECT_TIMEOUT_MS,
+            statement_timeout_ms: super::DEFAULT_STATEMENT_TIMEOUT_MS,
         }
     }
 
@@ -623,6 +705,90 @@ mod database_url_tests {
         assert!(
             c.to_inline_toml()
                 .contains("disable_transactional_writes = true")
+        );
+    }
+
+    /// A connection block that says nothing still gets the connect bound —
+    /// every deployment that exists today omits the key, and they are the
+    /// deployments it is for. The statement bound stays off; it is not safe to
+    /// apply to statements nobody has checked the length of.
+    #[test]
+    fn a_silent_connection_block_gets_the_connect_bound_only() {
+        let cfg: YbConnConfig =
+            toml::from_str("host_ports = \"h:5433\"\nuser = \"u\"\ndbname = \"d\"\n").unwrap();
+        assert_eq!(cfg.connect_timeout_ms, super::DEFAULT_CONNECT_TIMEOUT_MS);
+        assert_eq!(cfg.statement_timeout_ms, super::DEFAULT_STATEMENT_TIMEOUT_MS);
+
+        let pg = build_pg_config(&cfg, "test").unwrap();
+        assert_eq!(
+            pg.get_connect_timeout(),
+            Some(&Duration::from_millis(super::DEFAULT_CONNECT_TIMEOUT_MS))
+        );
+        assert_eq!(pg.get_options(), None);
+    }
+
+    #[test]
+    fn timeouts_reach_the_driver_config() {
+        let cfg: YbConnConfig = toml::from_str(
+            "host_ports = \"h:5433\"\nuser = \"u\"\ndbname = \"d\"\n\
+             connect_timeout_ms = 3000\nstatement_timeout_ms = 5000\n",
+        )
+        .unwrap();
+
+        let pg = build_pg_config(&cfg, "test").unwrap();
+        assert_eq!(pg.get_connect_timeout(), Some(&Duration::from_millis(3000)));
+        // The server applies `statement_timeout` in milliseconds, so the
+        // config value goes across unscaled.
+        assert_eq!(pg.get_options(), Some("-c statement_timeout=5000"));
+    }
+
+    /// Zero is "no bound" for both — the escape hatch out of the defaults,
+    /// following libpq's `connect_timeout` and the server's own
+    /// `statement_timeout`. Worth pinning: read the other way, a zero connect
+    /// bound would fail every connection instantly.
+    #[test]
+    fn zero_means_no_bound() {
+        let cfg: YbConnConfig = toml::from_str(
+            "host_ports = \"h:5433\"\nuser = \"u\"\ndbname = \"d\"\n\
+             connect_timeout_ms = 0\nstatement_timeout_ms = 0\n",
+        )
+        .unwrap();
+
+        let pg = build_pg_config(&cfg, "test").unwrap();
+        assert_eq!(pg.get_connect_timeout(), None);
+        assert_eq!(pg.get_options(), None);
+    }
+
+    /// A server that completes the TCP handshake and then says nothing is
+    /// the case the driver's own `connect_timeout` does not cover — it is
+    /// spent entirely on `TcpStream::connect`, which already succeeded.
+    /// Without [`with_connect_timeout`] this call never returns.
+    #[tokio::test]
+    async fn a_silent_server_cannot_hang_the_connect() {
+        use std::io::Read;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            std::thread::sleep(Duration::from_secs(120));
+        });
+
+        let cfg: YbConnConfig = toml::from_str(&format!(
+            "host_ports = \"127.0.0.1:{port}\"\nuser = \"u\"\ndbname = \"d\"\n\
+             connect_timeout_ms = 500\n"
+        ))
+        .unwrap();
+
+        let started = std::time::Instant::now();
+        let res = YsqlClient::from_yb_config(&cfg, "test", false).await;
+        assert!(res.is_err(), "a silent server must not look like a connect");
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "connect was not bounded: took {:?}",
+            started.elapsed()
         );
     }
 
@@ -1051,8 +1217,9 @@ impl YsqlClient {
     ///   — safe to retry. Backoff with jitter, capped at
     ///   [`MAX_TOTAL_ATTEMPTS`].
     /// - **`Fatal`** — application/logic errors (`25006`, `25P02`,
-    ///   `2D000`, `3B001`, any `42xxx`) and anything else. Returned
-    ///   directly.
+    ///   `2D000`, `3B001`, any `42xxx`), `57014` (the server cancelling a
+    ///   statement that outran `statement_timeout`), and anything else.
+    ///   Returned directly.
     ///
     /// **Idempotency assumption.** Nearly all callers (pageserver
     /// `PageStore`, safekeeper WAL backup, `YbStore` blob ops, storage
@@ -1293,6 +1460,14 @@ fn classify_error(err: &tokio_postgres::Error, is_closed: bool) -> RetryClass {
         if matches!(c, "25006" | "25P02" | "2D000" | "3B001") || c.starts_with("42") {
             return RetryClass::Fatal;
         }
+        // 57014 is the server cancelling a statement that outran
+        // `statement_timeout` (see `YbConnConfig::statement_timeout_ms`).
+        // Fatal deliberately: the point of the bound is to give the caller
+        // its answer inside a known window, and retrying a statement that
+        // just exhausted the window spends the budget to hit the same wall.
+        if c == "57014" {
+            return RetryClass::Fatal;
+        }
         // XX000 and unrecognized codes: fall through. YB packs several
         // distinct transients into XX000, so we have to inspect the
         // message.
@@ -1485,6 +1660,21 @@ fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_p
             .with_context(|| format!("YsqlClient: password env var `{env_name}` is not set"))?;
         pg_config.password(password);
     }
+    // Both bounds are off unless the connection block asks for them, and
+    // both read zero as "no bound" — libpq's for connect_timeout, the
+    // server's own for statement_timeout.
+    //
+    // The driver applies connect_timeout to the socket connect alone;
+    // `open_no_tls` / `open_tls` read it back off the config and apply it to
+    // the whole open. Setting it here as well keeps the per-address bound
+    // the driver documents, so a host that blackholes SYNs is skipped
+    // without spending the caller's entire budget on it.
+    if cfg.connect_timeout_ms > 0 {
+        pg_config.connect_timeout(Duration::from_millis(cfg.connect_timeout_ms));
+    }
+    if cfg.statement_timeout_ms > 0 {
+        pg_config.options(&format!("-c statement_timeout={}", cfg.statement_timeout_ms));
+    }
     Ok(pg_config)
 }
 
@@ -1533,24 +1723,54 @@ async fn set_fast_path_upsert_gucs(
     Ok(())
 }
 
+/// Apply the config's `connect_timeout` to a whole open.
+///
+/// The driver spends it on `TcpStream::connect` only (`connect_socket.rs`),
+/// so everything after the socket — TLS, the startup handshake, auth, the
+/// session GUCs — is unbounded on its own. A peer that accepts the
+/// connection, reads the startup packet and then says nothing hangs the
+/// caller forever, and no retry budget is spent because nothing fails.
+///
+/// Reading the bound back off the `Config` rather than taking it as an
+/// argument means every path gets it, including the callers that build a
+/// `Config` by hand instead of going through [`build_pg_config`].
+async fn with_connect_timeout<F>(
+    config: &tokio_postgres::Config,
+    what: &str,
+    open: F,
+) -> Result<tokio_postgres::Client>
+where
+    F: std::future::Future<Output = Result<tokio_postgres::Client>>,
+{
+    let Some(limit) = config.get_connect_timeout().copied() else {
+        return open.await;
+    };
+    tokio::time::timeout(limit, open)
+        .await
+        .with_context(|| format!("YsqlClient: {what} did not finish within {limit:?}"))?
+}
+
 async fn open_no_tls(
     config: &tokio_postgres::Config,
     set_fast_path_upsert: bool,
     disable_transactional_writes: bool,
 ) -> Result<tokio_postgres::Client> {
-    let (client, connection) = config
-        .connect(tokio_postgres::NoTls)
-        .await
-        .context("YsqlClient: connect (NoTls)")?;
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tracing::warn!("YsqlClient connection (NoTls) ended: {e}");
+    with_connect_timeout(config, "connect (NoTls)", async {
+        let (client, connection) = config
+            .connect(tokio_postgres::NoTls)
+            .await
+            .context("YsqlClient: connect (NoTls)")?;
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                tracing::warn!("YsqlClient connection (NoTls) ended: {e}");
+            }
+        });
+        if set_fast_path_upsert {
+            set_fast_path_upsert_gucs(&client, disable_transactional_writes).await?;
         }
-    });
-    if set_fast_path_upsert {
-        set_fast_path_upsert_gucs(&client, disable_transactional_writes).await?;
-    }
-    Ok(client)
+        Ok(client)
+    })
+    .await
 }
 
 async fn open_tls(
@@ -1559,19 +1779,22 @@ async fn open_tls(
     set_fast_path_upsert: bool,
     disable_transactional_writes: bool,
 ) -> Result<tokio_postgres::Client> {
-    let (client, connection) = config
-        .connect(tls.clone())
-        .await
-        .context("YsqlClient: connect (rustls)")?;
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tracing::warn!("YsqlClient connection (rustls) ended: {e}");
+    with_connect_timeout(config, "connect (rustls)", async {
+        let (client, connection) = config
+            .connect(tls.clone())
+            .await
+            .context("YsqlClient: connect (rustls)")?;
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                tracing::warn!("YsqlClient connection (rustls) ended: {e}");
+            }
+        });
+        if set_fast_path_upsert {
+            set_fast_path_upsert_gucs(&client, disable_transactional_writes).await?;
         }
-    });
-    if set_fast_path_upsert {
-        set_fast_path_upsert_gucs(&client, disable_transactional_writes).await?;
-    }
-    Ok(client)
+        Ok(client)
+    })
+    .await
 }
 
 #[cfg(test)]

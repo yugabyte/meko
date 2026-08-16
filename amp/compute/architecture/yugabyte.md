@@ -139,6 +139,61 @@ yb_storage_conn = { host_ports = "...", tserver_rpc_addrs = "host:9100,...", tsc
   Each daemon logs the effective counts in its
   `thin-client hot path ready …` line at startup.
 
+### Bounding a call (`connect_timeout_ms` / `statement_timeout_ms`)
+
+Two more keys on the same block bound how long a YSQL call may take. Both
+read `0` as "no bound". The connect bound is **on by default** at 5s; the
+statement bound is **off** by default and opt-in per block:
+
+```toml
+yb_storage_conn = { host_ports = "...", connect_timeout_ms = 5000, statement_timeout_ms = 30000 }
+```
+
+- `connect_timeout_ms` — a ceiling on opening one connection. It covers
+  the **whole** open: the driver's own `connect_timeout` is spent on
+  `TcpStream::connect` alone, which leaves TLS, the startup handshake,
+  authentication and the session GUCs unbounded, so `YsqlClient` applies
+  the same value again around the lot. A peer that completes the TCP
+  handshake and then goes quiet is the case that matters — nothing
+  fails, so the retry budget below is never spent and the caller waits
+  forever.
+- `statement_timeout_ms` — the server-side `statement_timeout` GUC, sent
+  as `-c statement_timeout=N` in the startup packet. The server enforces
+  it, so a statement a wedged tablet would otherwise hold open is
+  cancelled at the far end rather than waiting on the client to lose
+  patience. It bounds a *slow* answer, not a *silent* peer: a backend
+  that stops responding mid-statement is bounded by TCP keepalives, not
+  by this. The cancellation arrives as `57014`, which is fatal — see the
+  retry contract below.
+
+**`statement_timeout_ms` is off by default, deliberately.** It applies to
+**every** statement on the connection, and several the daemons issue
+legitimately run for minutes:
+
+- the GC drop/shrink deletes (`gc_act_drop_fork`, `gc_act_shrink_fork`)
+  remove every version of every block of a fork in one unbatched
+  statement — and because a candidate is dequeued only once its action
+  succeeds, a cancelled delete is re-selected forever. GC stops and the
+  storage is never reclaimed.
+- `truncate_wals_above` filters on `segno * 16777216 + chunk_offset`, a
+  computed expression DocDB cannot push into the index condition, so it
+  scans a branch's entire WAL — on the torn-tail correctness path.
+- `list_rels` runs an unbounded `DISTINCT` over a database's reldir range
+  on the basebackup path, so a cap there fails compute startup.
+- blob upload/download already carry their own 120s budget
+  (`RemoteStorageConfig::DEFAULT_TIMEOUT`), which a shorter statement
+  bound would silently preempt — mid-stream, for a download.
+
+Turning it on globally wants those paths batched and made sargable first.
+Until then a caller that knows its statements are short sets it on its own
+block. The cancellation arrives as `57014`, which is fatal — see the retry
+contract below — so this is not a knob that degrades gracefully.
+
+The diagnostic tools in `compute/tools` set both to `0`. They are run by
+hand during an incident and issue the long scans the daemons never do —
+`reset-consistent-lsn` replays the WAL decoder over `amp_storage.wals` —
+so the operator watching it is the timeout.
+
 At startup each daemon resolves its hot tables' DocDB ids via a one-time
 catalog lookup over YSQL (`lookup_table_oids`), failing hard if any
 table is missing — a daemon never runs with a partially-enabled direct
@@ -781,7 +836,14 @@ Total budget per call: `MAX_TOTAL_ATTEMPTS = 10`, backoff starting at
 50 ms and doubling to a 1 s cap, with 0–25% random jitter (pooled
 callers otherwise retry in lockstep after a shared cluster event).
 Errors surface only once the budget is spent; application/logic errors
-(`42xxx` and friends) are fatal immediately.
+(`42xxx` and friends) are fatal immediately, as is `57014` — the server
+cancelling a statement that outran `statement_timeout`, where retrying
+would spend the budget to hit the same wall.
+
+The budget bounds *attempts*, not *duration*: nothing here fires against
+a server that accepts a statement and never answers, because no attempt
+ever fails. `connect_timeout_ms` / `statement_timeout_ms` above are what
+bound the clock.
 
 **The catch**: the connection-drop arm reconnects without any way to
 know whether the pre-drop statement committed before the socket died.

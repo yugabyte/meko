@@ -48,6 +48,8 @@ async fn main() -> anyhow::Result<()> {
             tsclient_read_sessions: None,
             tsclient_write_sessions: None,
             tsclient_sessions_per_conn: None,
+            connect_timeout_ms: ysql_client::DEFAULT_CONNECT_TIMEOUT_MS,
+            statement_timeout_ms: ysql_client::DEFAULT_STATEMENT_TIMEOUT_MS,
         }),
         timeout: Duration::from_secs(60),
         small_timeout: Duration::from_secs(10),

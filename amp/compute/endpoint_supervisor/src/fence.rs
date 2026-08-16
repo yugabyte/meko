@@ -508,9 +508,11 @@ mod tests {
     }
 
     /// A YB that accepts the connection and then never answers must not hang the
-    /// renewal: `YsqlClient` sets no connect or statement timeout, so without the
-    /// bound in `call_budget` the lease-loss path is unreachable and the
-    /// supervisor sits believing it holds a lease that has lapsed.
+    /// renewal: without the bound in `call_budget` the lease-loss path is
+    /// unreachable and the supervisor sits believing it holds a lease that has
+    /// lapsed. (`YbConnConfig` can carry the same bounds, but the supervisor
+    /// takes the connection block as the operator wrote it, so the budget here
+    /// is what makes the guarantee unconditional.)
     #[test]
     fn a_yb_that_never_answers_does_not_hang_the_call() {
         use std::io::Read;

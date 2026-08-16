@@ -35,3 +35,6 @@ rustls-pemfile.workspace = true
 
 [dev-dependencies]
 toml.workspace = true
+# `a_silent_server_cannot_hang_the_connect` drives a real connect against a
+# listener that never answers, so the tests need a runtime and a clock.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

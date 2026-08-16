@@ -49,6 +49,11 @@ async fn ysql() -> YsqlClient {
         tsclient_read_sessions: None,
         tsclient_write_sessions: None,
         tsclient_sessions_per_conn: None,
+        // A live test against a cluster that never answers should hang
+        // visibly rather than fail as a timeout that reads like a bug in
+        // the code under test.
+        connect_timeout_ms: 0,
+        statement_timeout_ms: 0,
     };
     YsqlClient::from_yb_config(&conf, "yb_thin_client_live", false)
         .await
