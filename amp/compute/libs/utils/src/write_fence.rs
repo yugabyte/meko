@@ -339,14 +339,14 @@ impl std::fmt::Display for FenceLapsed {
 /// Two states matter, and the difference between them is the whole safety
 /// argument:
 ///
-/// - **Disarmed** (the default). Nobody is issuing tokens — `yb_amp_local`,
-///   the integration harness, unit tests — and every check passes. Behaviour
-///   is exactly what it was before the fence existed.
+/// - **Disarmed**. Nobody is issuing tokens — in-process tests, and any
+///   deployment that has set `require_write_token = false` to work around a
+///   fencing bug — and every check passes.
 /// - **Armed** ([`WriteFence::arm`], from `require_write_token` in the
-///   service's config). Checks are real, and the fence starts out holding the
-///   zero token, which reads as already expired. An armed service that never
-///   hears from its supervisor therefore refuses to write rather than treating
-///   silence as permission.
+///   service's config, and the default everywhere a supervisor runs). Checks
+///   are real, and the fence starts out holding the zero token, which reads as
+///   already expired. An armed service that never hears from its supervisor
+///   therefore refuses to write rather than treating silence as permission.
 #[derive(Debug, Default)]
 pub struct WriteFence {
     armed: AtomicBool,

@@ -4430,9 +4430,9 @@ impl PageStore {
 
     /// The write fence, checked immediately before a write reaches YugabyteDB.
     ///
-    /// Disarmed unless `require_write_token` is set, so the dev topologies are
-    /// unaffected and the check is one relaxed load. Armed, a lapsed endpoint
-    /// lease ends this process here rather than letting the write land — the
+    /// Armed unless `require_write_token` is turned off, and one relaxed load
+    /// either way. A lapsed endpoint lease ends this process here rather than
+    /// letting the write land — the
     /// fence has to remove the writer, not the write. See
     /// `compute/architecture/compute-fencing.md`.
     #[inline]

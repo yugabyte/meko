@@ -97,10 +97,10 @@ func ybInlineTOML(c *config.YbConnConfig) string {
 //
 // The database reset lives here rather than in `start` because the two halves
 // of a local instance have to be reset together. Pageservers are rediscovered
-// from endpoints/*/pageserver/pageserver.toml on every load and claim a
-// generation against amp_storage.branch_state at startup; dropping the database
-// while those directories survive leaves each one pointing at a row that no
-// longer exists. init is the one command that has already emptied the on-disk
+// from endpoints/*/pageserver/pageserver.toml on every load and read their
+// amp_storage.branch_state row at startup; dropping the database while those
+// directories survive leaves each one pointing at a row that no longer
+// exists. init is the one command that has already emptied the on-disk
 // state (prepareBaseDir), so resetting the database here keeps the pair
 // consistent by construction.
 func Init(ctx context.Context, args InitArgs) error {
