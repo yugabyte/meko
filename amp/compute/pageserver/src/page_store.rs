@@ -333,7 +333,6 @@ pub struct BranchStateRow {
     pub applied_gc_cutoff_lsn: Lsn,
     pub ancestor_branch_id: Option<BranchId>,
     pub ancestor_lsn: Option<Lsn>,
-    pub current_generation: i32,
     /// Full `PgVersionId` (e.g. 180002), not a major version — divide by 10000
     /// for the PG major version.
     ///
@@ -356,37 +355,6 @@ pub struct BranchStateRow {
 }
 
 pub const DEFAULT_SCHEMA: &str = "amp_storage";
-
-/// Result of `PageStore::advance_consistent_lsn`. Distinguishes a
-/// successful UPDATE from generation-fence failure, the latter being
-/// fatal: a higher-generation pageserver has taken over and this one
-/// must shut down (its in-flight YB INSERTs will start being rejected
-/// by the same generation check, so it can't make forward progress).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdvanceConsistentLsnOutcome {
-    Updated,
-    StaleGeneration { live_generation: u32 },
-}
-
-/// Result of [`PageStore::publish_gc_cutoff`]. Same generation-fence
-/// semantics as [`AdvanceConsistentLsnOutcome`]: a stale pageserver's
-/// publish matches no row, and it must not proceed to the GC drain —
-/// its in-memory lease set is not the live one, so deleting anything
-/// based on its cutoff could trim under a lease granted by the
-/// current-generation pageserver.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublishGcCutoffOutcome {
-    /// The fence held. `applied` is the post-UPDATE column value —
-    /// `GREATEST(existing, requested)`, i.e. the monotone read floor
-    /// the drain may delete below (it can exceed the requested value
-    /// when inputs regressed, e.g. a raised pitr_interval).
-    Published {
-        applied: Lsn,
-    },
-    StaleGeneration {
-        live_generation: u32,
-    },
-}
 
 #[derive(Debug, Clone)]
 pub struct PageStoreConfig {
@@ -1637,6 +1605,7 @@ impl PageStore {
     // ------------------- pages ---------------------------------------------
 
     pub async fn put_pages(&self, branch_id: BranchId, rows: &[Arc<PageRow>]) -> Result<()> {
+        self.write_gate("write to amp_storage.pages");
         // Encode once, ahead of the lane split: EVERY lane binds these bytes.
         // A lane that binds `row.payload` directly writes plaintext with no
         // codec tag, which the read path then rejects — so a newly added lane
@@ -2373,6 +2342,7 @@ impl PageStore {
     // ------------------- slru_pages ---------------------------------------
 
     pub async fn put_slru_pages(&self, branch_id: BranchId, rows: &[SlruPageRow]) -> Result<()> {
+        self.write_gate("write to amp_storage.slru_pages");
         let (encoded, tally) = self.encode_payloads("slru_pages", rows.iter().map(|r| &r.payload));
         if let Some(p) = &self.thinclient {
             let started = std::time::Instant::now();
@@ -2760,6 +2730,7 @@ impl PageStore {
     // ------------------- meta ---------------------------------------------
 
     pub async fn put_meta(&self, branch_id: BranchId, rows: &[MetaRow]) -> Result<()> {
+        self.write_gate("write to amp_storage.meta");
         const COLS: usize = 4;
         // Encode once, ahead of the lane split: EVERY lane binds these bytes
         // (same discipline as `put_pages`). Most meta payloads — rel-size
@@ -3453,6 +3424,7 @@ impl PageStore {
         blknums: &[i64],
         cutoff: Lsn,
     ) -> Result<u64> {
+        self.write_gate("GC trim of amp_storage.pages");
         if blknums.is_empty() {
             return Ok(0);
         }
@@ -3555,6 +3527,7 @@ impl PageStore {
         (spcnode, dbnode, relnode, forknum): GcForkIdent,
         due_lsn: Lsn,
     ) -> Result<u64> {
+        self.write_gate("GC drop of an amp_storage.pages fork");
         let branch_s = branch_id.to_string();
         let due = due_lsn.0 as i64;
         let pages_sql = format!(
@@ -3608,6 +3581,7 @@ impl PageStore {
         relsize: i64,
         due_lsn: Lsn,
     ) -> Result<u64> {
+        self.write_gate("GC shrink of an amp_storage.pages fork");
         let sql = format!(
             "DELETE FROM \"{schema}\".pages \
              WHERE bucket_id=$8 AND branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
@@ -3652,6 +3626,7 @@ impl PageStore {
         blknums: &[i64],
         cutoff: Lsn,
     ) -> Result<u64> {
+        self.write_gate("GC trim of amp_storage.slru_pages");
         if blknums.is_empty() {
             return Ok(0);
         }
@@ -3703,6 +3678,7 @@ impl PageStore {
         seg_size_key: Vec<u8>,
         due_lsn: Lsn,
     ) -> Result<u64> {
+        self.write_gate("GC drop of amp_storage.slru_pages");
         let branch_s = branch_id.to_string();
         let due = due_lsn.0 as i64;
         let pages_sql = format!(
@@ -3738,6 +3714,7 @@ impl PageStore {
         keys: &[Vec<u8>],
         cutoff: Lsn,
     ) -> Result<u64> {
+        self.write_gate("GC trim of amp_storage.meta");
         if keys.is_empty() {
             return Ok(0);
         }
@@ -3769,17 +3746,18 @@ impl PageStore {
         keys: &[Key],
         due_lsn: Lsn,
     ) -> Result<u64> {
+        self.write_gate("GC drop of amp_storage.meta");
         let key_bytes: Vec<Vec<u8>> = keys.iter().map(key_to_bytes).collect();
         self.delete_meta_up_to_lsn(branch_id, &key_bytes, due_lsn)
             .await
             .with_context(|| format!("gc_act_drop_meta branch={branch_id} keys={}", keys.len()))
     }
 
-    /// Persist the GC read floor, monotonically and generation-fenced,
-    /// BEFORE any drain deletes. `GREATEST` keeps the column monotone
-    /// even if the freshly-computed cutoff regressed (inputs can move
-    /// backwards — e.g. a raised pitr_interval — while deletion can't).
-    /// The fence makes a superseded pageserver stop before draining:
+    /// Persist the GC read floor, monotonically, BEFORE any drain
+    /// deletes. `GREATEST` keeps the column monotone even if the
+    /// freshly-computed cutoff regressed (inputs can move backwards —
+    /// e.g. a raised pitr_interval — while deletion can't).
+    /// The write fence makes a superseded pageserver stop before draining:
     /// its in-memory lease set is stale, so its cutoff must not be
     /// allowed to delete anything.
     ///
@@ -3799,12 +3777,9 @@ impl PageStore {
     /// conflict this statement re-executes at a fresh read time (read
     /// committed) or errors and the next GC tick retries — either way
     /// the child min is re-read past the fork's commit.
-    pub async fn publish_gc_cutoff(
-        &self,
-        branch_id: BranchId,
-        generation: utils::generation::Generation,
-        cutoff: Lsn,
-    ) -> Result<PublishGcCutoffOutcome> {
+    pub async fn publish_gc_cutoff(&self, branch_id: BranchId, cutoff: Lsn) -> Result<Lsn> {
+        self.write_gate("GC cutoff publish (the gate on every GC delete)");
+
         let sql = format!(
             "UPDATE \"{schema}\".branch_state \
              SET applied_gc_cutoff_lsn = GREATEST(applied_gc_cutoff_lsn, \
@@ -3812,53 +3787,21 @@ impl PageStore {
                             FROM \"{schema}\".branch_state \
                             WHERE ancestor_branch_id = $1))) \
              WHERE branch_id = $1 \
-               AND current_generation = $3 \
              RETURNING applied_gc_cutoff_lsn",
             schema = self.schema
         );
-        let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let row = self
             .ysql_client
-            .query_opt(
-                &sql,
-                &[&branch_id.to_string(), &(cutoff.0 as i64), &gen_i32],
-            )
+            .query_opt(&sql, &[&branch_id.to_string(), &(cutoff.0 as i64)])
             .await
-            .context("publish_gc_cutoff")?;
-        match row {
-            Some(r) => Ok(PublishGcCutoffOutcome::Published {
-                applied: Lsn(r.get::<_, i64>(0) as u64),
-            }),
-            None => {
-                // Fenced UPDATE matched no row ⇒ our generation is
-                // stale. Probe the live generation for the caller's log.
-                // Best-effort: current_generation can change again
-                // between the UPDATE and this SELECT, so the reported
-                // value is informational, not authoritative.
-                let probe_sql = format!(
-                    "SELECT current_generation FROM \"{}\".branch_state \
-                     WHERE branch_id = $1 AND pageserver_initialized",
-                    self.schema
-                );
-                let row = self
-                    .ysql_client
-                    .query_opt(&probe_sql, &[&branch_id.to_string()])
-                    .await
-                    .context("publish_gc_cutoff probe")?;
-                match row {
-                    None => anyhow::bail!(
-                        "no timeline row for {branch_id} — \
-                         publish_gc_cutoff called before timeline_create wrote the row"
-                    ),
-                    Some(r) => {
-                        let live_gen: i32 = r.get(0);
-                        Ok(PublishGcCutoffOutcome::StaleGeneration {
-                            live_generation: live_gen as u32,
-                        })
-                    }
-                }
-            }
-        }
+            .context("publish_gc_cutoff")?
+            .with_context(|| {
+                format!(
+                    "no branch_state row for {branch_id} — \
+                     publish_gc_cutoff called before the creation write ran"
+                )
+            })?;
+        Ok(Lsn(row.get::<_, i64>(0) as u64))
     }
 
     // ------------------- lineage-aware reads -------------------------------
@@ -4148,16 +4091,12 @@ impl PageStore {
     ///
     /// **Not for incremental updates.** Per-flush `consistent_lsn` UPDATEs go
     /// through `advance_consistent_lsn` and the GC cutoff through
-    /// [`Self::publish_gc_cutoff`]; both are gen-fenced. This one isn't, because
-    /// at creation the group isn't populated yet.
+    /// [`Self::publish_gc_cutoff`].
     pub async fn update_branch_initial_state(&self, row: &BranchStateRow) -> Result<()> {
         let sql = format!(
-            // Two columns are deliberately absent, each with a single writer
-            // elsewhere: `pg_version`, seeded by the controller at branch
-            // create; and `current_generation`, claimed by this process at
-            // startup (`claim_generation`). Writing either here would clobber
-            // its owner — the generation especially, since our fenced writes
-            // are checked against the claimed value.
+            // `pg_version` is deliberately absent: the controller seeds it at
+            // branch create and is its only writer, so setting it here would
+            // clobber its owner.
             "UPDATE \"{}\".branch_state SET \
                  consistent_lsn        = COALESCE(consistent_lsn, $2), \
                  prev_record_lsn       = COALESCE(prev_record_lsn, $7), \
@@ -4198,26 +4137,6 @@ impl PageStore {
                 row.branch_id
             );
         }
-        Ok(())
-    }
-
-    /// Test-only: pin `current_generation` to an exact value. Production only
-    /// ever increments it via [`Self::claim_generation`]; tests need a specific
-    /// generation to exercise the fencing predicates.
-    #[cfg(test)]
-    pub(crate) async fn set_generation_for_test(
-        &self,
-        branch_id: BranchId,
-        generation: i32,
-    ) -> Result<()> {
-        let sql = format!(
-            "UPDATE \"{}\".branch_state SET current_generation = $2 WHERE branch_id = $1",
-            self.schema
-        );
-        self.ysql_client
-            .execute(&sql, &[&branch_id.to_string(), &generation])
-            .await
-            .context("set_generation_for_test")?;
         Ok(())
     }
 
@@ -4399,7 +4318,6 @@ impl PageStore {
         new_branch: BranchId,
         ancestor: BranchId,
         ancestor_lsn: Lsn,
-        generation: i32,
     ) -> Result<BranchStateRow> {
         let anc = self.get_branch_state(ancestor).await?.with_context(|| {
             format!("create_branch_row: ancestor {ancestor} has no branch_state row")
@@ -4441,7 +4359,6 @@ impl PageStore {
             applied_gc_cutoff_lsn: anc.applied_gc_cutoff_lsn,
             ancestor_branch_id: Some(ancestor),
             ancestor_lsn: Some(ancestor_lsn),
-            current_generation: generation,
             pg_version: anc.pg_version,
             initdb_lsn: anc.initdb_lsn,
             prev_record_lsn,
@@ -4462,39 +4379,24 @@ impl PageStore {
     /// signals "flush ran before timeline_create wrote the row",
     /// which is a wiring bug worth surfacing.
     ///
-    /// Scoped to one column → safe to run concurrently with
-    /// `bump_generation_for_test` / `advance_gc_cutoff_lsn` /
-    /// `upsert_timeline`. Each touches disjoint columns.
+    /// Scoped to two columns → safe to run concurrently with
+    /// `advance_gc_cutoff_lsn` / `upsert_timeline`. Each touches disjoint
+    /// columns.
     ///
-    /// **Generation-fenced**: the UPDATE's WHERE clause checks
-    /// `current_generation = $4`. The invariant `YB.current_generation
-    /// == our_gen` is established at startup by
-    /// [`Self::claim_generation`], which increments the column and returns
-    /// what this process got, and holds for the lifetime of the attached
-    /// PS: only a claim writes the column, and a claim only moves it
-    /// forward. So a stale PS's flush
-    /// finds `YB.current_generation > our_gen` → zero rows → probe
-    /// → [`AdvanceConsistentLsnOutcome::StaleGeneration`] → fatal shutdown.
-    ///
-    /// History: an earlier draft of this predicate paired with
-    /// nothing in the attach path; a controller re-attach bumped the
-    /// PS's gen but the YB column lagged, and the strict `=` check
-    /// mis-fired as "stale" on every restart. We considered making
-    /// the predicate self-healing (`<=` + SET current_generation),
-    /// but the eager attach-time CAS is sufficient and the strict
-    /// `=` here is a sharper fence (it fails the moment a newer PS
-    /// bumps past us, no race window where a stale PS could still
-    /// write redundant rows).
+    /// Not fenced by this statement: the endpoint's write lease is checked by
+    /// [`Self::write_gate`] just below, before the write rather than being
+    /// discovered after it, and it covers every process in the endpoint.
     pub async fn advance_consistent_lsn(
         &self,
         branch_id: BranchId,
-        generation: utils::generation::Generation,
         new_dc_lsn: Lsn,
         new_prev_record_lsn: Option<Lsn>,
-    ) -> Result<AdvanceConsistentLsnOutcome> {
+    ) -> Result<()> {
+        self.write_gate("durability commit (branch_state.consistent_lsn)");
+
         // Persist `prev_record_lsn` alongside `consistent_lsn`
         // so a restart can hand the safekeeper the right `xl_prev`
-        // for the record at `consistent_lsn`. `COALESCE($4,
+        // for the record at `consistent_lsn`. `COALESCE($3,
         // prev_record_lsn)` keeps the existing column value when
         // the caller didn't resolve a fresh pairing (race —
         // pages flushed before their record's `finish_write` ran;
@@ -4504,131 +4406,38 @@ impl PageStore {
         let sql = format!(
             "UPDATE \"{}\".branch_state \
              SET consistent_lsn = $2, \
-                 prev_record_lsn      = COALESCE($4, prev_record_lsn) \
-             WHERE branch_id = $1 \
-               AND current_generation = $3",
+                 prev_record_lsn      = COALESCE($3, prev_record_lsn) \
+             WHERE branch_id = $1",
             self.schema
         );
-        let gen_i32: i32 = generation.into().map(|v: u32| v as i32).unwrap_or(0);
         let prev_i64: Option<i64> = new_prev_record_lsn.map(|l| l.0 as i64);
         let n = self
             .ysql_client
             .execute(
                 &sql,
-                &[
-                    &branch_id.to_string(),
-                    &(new_dc_lsn.0 as i64),
-                    &gen_i32,
-                    &prev_i64,
-                ],
+                &[&branch_id.to_string(), &(new_dc_lsn.0 as i64), &prev_i64],
             )
             .await
             .context("advance_consistent_lsn")?;
         if n == 0 {
-            // Distinguish "row missing entirely" (init bug) from
-            // "generation moved on" (we got fenced). One extra single-row
-            // SELECT to disambiguate. Only runs on the unhappy path.
-            let probe_sql = format!(
-                "SELECT current_generation FROM \"{}\".branch_state \
-                 WHERE branch_id = $1 AND pageserver_initialized",
-                self.schema
+            anyhow::bail!(
+                "no branch_state row for {branch_id} — \
+                 advance_consistent_lsn called before the creation write ran"
             );
-            let row = self
-                .ysql_client
-                .query_opt(&probe_sql, &[&branch_id.to_string()])
-                .await
-                .context("advance_consistent_lsn probe")?;
-            match row {
-                None => anyhow::bail!(
-                    "no timeline row for {branch_id} — \
-                     advance_consistent_lsn called before timeline_create wrote the row"
-                ),
-                Some(r) => {
-                    let live_gen: i32 = r.get(0);
-                    Ok(AdvanceConsistentLsnOutcome::StaleGeneration {
-                        live_generation: live_gen as u32,
-                    })
-                }
-            }
-        } else {
-            Ok(AdvanceConsistentLsnOutcome::Updated)
         }
+        Ok(())
     }
 
-    /// Claim this process's generation for `branch_id`, atomically.
+    /// The write fence, checked immediately before a write reaches YugabyteDB.
     ///
-    /// The pageserver is its own generation authority: one statement increments
-    /// the counter and returns what it got, so two processes racing to attach
-    /// necessarily receive different numbers and the loser's gen-fenced writes
-    /// stop matching. Nothing issues the number from outside, so there is no CAS
-    /// against an externally-chosen value to lose.
-    ///
-    /// `COALESCE(current_generation, 0) + 1` because the column is NULL until
-    /// the pageserver's group exists — a first attach claims generation 1, and
-    /// the row itself was provisioned by the controller at branch create.
-    ///
-    /// Returns the new generation — not necessarily previous + 1: the `+ 1`
-    /// applies twice if `YsqlClient` retries the statement after a dropped
-    /// connection.
-    pub async fn claim_generation(&self, branch_id: BranchId) -> Result<i32> {
-        let sql = format!(
-            "UPDATE \"{}\".branch_state \
-             SET current_generation = COALESCE(current_generation, 0) + 1 \
-             WHERE branch_id = $1 \
-             RETURNING current_generation",
-            self.schema
-        );
-        let row = self
-            .ysql_client
-            .query_opt(&sql, &[&branch_id.to_string()])
-            .await
-            .context("claim_generation")?
-            .with_context(|| {
-                format!(
-                    "no branch_state row for {branch_id} — the controller provisions it \
-                     at branch create, so this pageserver started against an \
-                     unprovisioned branch"
-                )
-            })?;
-        Ok(row.get::<_, i32>(0))
-    }
-
-    /// Test-only: take the next generation the way a rival pageserver's attach
-    /// would, to drive the fencing predicates from the losing side.
-    #[cfg(test)]
-    pub(crate) async fn bump_generation_for_test(&self, branch_id: BranchId) -> Result<i32> {
-        let sql = format!(
-            // Scoped to rows where our group exists: `current_generation + 1`
-            // over a NULL yields NULL, so without this predicate a
-            // safekeeper-created row would match and have its generation
-            // blanked instead of reporting "no pageserver state".
-            "UPDATE \"{}\".branch_state \
-             SET current_generation = current_generation + 1 \
-             WHERE branch_id = $1 AND pageserver_initialized \
-             RETURNING current_generation",
-            self.schema
-        );
-        let row = self
-            .ysql_client
-            .query_opt(&sql, &[&branch_id.to_string()])
-            .await
-            .context("bump_generation_for_test")?
-            .with_context(|| format!("no timeline row for {branch_id}"))?;
-        Ok(row.get::<_, i32>(0))
-    }
-
-    pub async fn read_generation(&self, branch_id: BranchId) -> Result<Option<i32>> {
-        let sql = format!(
-            "SELECT current_generation FROM \"{}\".branch_state \
-             WHERE branch_id = $1 AND pageserver_initialized",
-            self.schema
-        );
-        let row = self
-            .ysql_client
-            .query_opt(&sql, &[&branch_id.to_string()])
-            .await
-            .context("read_generation")?;
-        Ok(row.map(|r| r.get::<_, i32>(0)))
+    /// Disarmed unless `require_write_token` is set, so the dev topologies are
+    /// unaffected and the check is one relaxed load. Armed, a lapsed endpoint
+    /// lease ends this process here rather than letting the write land — the
+    /// fence has to remove the writer, not the write. See
+    /// `compute/architecture/compute-fencing.md`.
+    #[inline]
+    fn write_gate(&self, what: &str) {
+        utils::write_fence::global().enforce(what);
     }
 
     /// Test-only escape hatch — runs raw SQL on the underlying ysql_client.
@@ -5166,7 +4975,7 @@ fn row_to_slru_page(r: tokio_postgres::Row) -> Result<SlruPageRow> {
 /// `try_get` indices.
 const BRANCH_STATE_COLUMNS: &str = "branch_id, consistent_lsn, \
      applied_gc_cutoff_lsn, ancestor_branch_id, ancestor_lsn, \
-     current_generation, pg_version, initdb_lsn, prev_record_lsn";
+     pg_version, initdb_lsn, prev_record_lsn";
 
 fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
     let branch_s: String = r.try_get(0)?;
@@ -5185,10 +4994,9 @@ fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
     let applied_gc_cutoff_lsn: i64 = r.try_get::<_, Option<i64>>(2)?.unwrap_or(0);
     let ancestor_tl: Option<String> = r.try_get(3)?;
     let ancestor_lsn: Option<i64> = r.try_get(4)?;
-    let current_generation: i32 = r.try_get(5)?;
-    let pg_version: i32 = r.try_get(6)?;
-    let initdb_lsn: Option<i64> = r.try_get(7)?;
-    let prev_record_lsn: Option<i64> = r.try_get(8)?;
+    let pg_version: i32 = r.try_get(5)?;
+    let initdb_lsn: Option<i64> = r.try_get(6)?;
+    let prev_record_lsn: Option<i64> = r.try_get(7)?;
 
     Ok(BranchStateRow {
         branch_id: branch_s.parse().context("parsing branch_id")?,
@@ -5199,7 +5007,6 @@ fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
             .transpose()
             .context("parsing ancestor_branch_id")?,
         ancestor_lsn: ancestor_lsn.map(|l| Lsn(l as u64)),
-        current_generation,
         pg_version: pg_version as u32,
         initdb_lsn: initdb_lsn.map(|l| Lsn(l as u64)),
         prev_record_lsn: prev_record_lsn.map(|l| Lsn(l as u64)),
@@ -5250,25 +5057,14 @@ mod tests {
     // the surviving rows instead; `== 0` counts are retry-safe.
     const PROD_SCHEMA: &str = "amp_storage";
 
-    /// Create a timeline the way production does: the controller provisions the
+    /// Create a branch the way production does: the controller provisions the
     /// row, then the pageserver fills in its own column group.
-    /// Mirror the production order for a branch's first attach: the controller
-    /// provisions the row, the pageserver claims its generation, and only then
-    /// fills in the rest of its column group. The claim is what makes
-    /// `current_generation` non-NULL — `update_branch_initial_state` no longer
-    /// writes it — so it cannot be skipped. The claim is then pinned to the
-    /// generation the caller's `row` asks for, since tests exercise fencing at
-    /// specific generations.
     async fn create_branch_state_row(
         store: &PageStore,
         row: &BranchStateRow,
     ) -> anyhow::Result<()> {
         store
             .provision_branch_row_for_test(row.branch_id, row.pg_version)
-            .await?;
-        store.claim_generation(row.branch_id).await?;
-        store
-            .set_generation_for_test(row.branch_id, row.current_generation)
             .await?;
         store.update_branch_initial_state(row).await
     }
@@ -5943,7 +5739,6 @@ mod tests {
             applied_gc_cutoff_lsn: Lsn(50),
             ancestor_branch_id: None,
             ancestor_lsn: None,
-            current_generation: 1,
             pg_version: 180_002,
             initdb_lsn: None,
             prev_record_lsn: None,
@@ -5999,44 +5794,34 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// #552: the bootstrap write order, reproduced exactly. `claim_generation`
-    /// satisfies the gen fence before the group exists, then the initdb
-    /// import's flush lands `consistent_lsn` via `advance_consistent_lsn` —
-    /// which writes that column and nothing else — and only then does
-    /// `finish_creation` run the creation write. Scoped `WHERE consistent_lsn
-    /// IS NULL` it matched zero rows and silently dropped the whole group;
-    /// per-column `COALESCE` fills in what is still missing.
+    /// #552: the bootstrap write order, reproduced exactly. The initdb import's
+    /// flush lands `consistent_lsn` via `advance_consistent_lsn` — which writes
+    /// that column and nothing else — and only then does `finish_creation` run
+    /// the creation write. Scoped `WHERE consistent_lsn IS NULL` it matched zero
+    /// rows and silently dropped the whole group; per-column `COALESCE` fills in
+    /// what is still missing.
     #[tokio::test]
     async fn creation_write_fills_columns_left_by_a_prior_consistent_lsn() {
-        use utils::generation::Generation;
-
         let (store, schema) = make_store("creation_after_flush").await;
         let branch = rand_branch();
         let row = sample_branch_state_row(branch);
 
-        // 1. Controller seeds the row; 2. the pageserver claims its generation.
+        // 1. The controller seeds the row.
         store
             .provision_branch_row_for_test(branch, row.pg_version)
             .await
             .unwrap();
-        let generation = store.claim_generation(branch).await.unwrap();
 
-        // 3. The bootstrap import's flush sets `consistent_lsn` alone.
+        // 2. The bootstrap import's flush sets `consistent_lsn` alone — the
+        //    write that falsifies the old `consistent_lsn IS NULL` predicate.
         let flushed = Lsn(row.consistent_lsn.0 + 4096);
-        let outcome = store
-            .advance_consistent_lsn(branch, Generation::new(generation as u32), flushed, None)
+        store
+            .advance_consistent_lsn(branch, flushed, None)
             .await
             .unwrap();
-        assert_eq!(
-            outcome,
-            AdvanceConsistentLsnOutcome::Updated,
-            "the gen fence is satisfied by claim_generation alone — this is the \
-             write that falsifies the old `consistent_lsn IS NULL` predicate"
-        );
 
-        // 4. finish_creation's write must still populate the rest.
+        // 3. finish_creation's write must still populate the rest.
         let mut created = row.clone();
-        created.current_generation = generation;
         created.initdb_lsn = Some(Lsn(0x2000));
         store.update_branch_initial_state(&created).await.unwrap();
 
@@ -6059,8 +5844,6 @@ mod tests {
     /// datadir.
     #[tokio::test]
     async fn consistent_lsn_alone_does_not_mark_the_branch_initialized() {
-        use utils::generation::Generation;
-
         let (store, schema) = make_store("init_flag").await;
         let branch = rand_branch();
         let row = sample_branch_state_row(branch);
@@ -6069,14 +5852,8 @@ mod tests {
             .provision_branch_row_for_test(branch, row.pg_version)
             .await
             .unwrap();
-        let generation = store.claim_generation(branch).await.unwrap();
         store
-            .advance_consistent_lsn(
-                branch,
-                Generation::new(generation as u32),
-                Lsn(0x9000),
-                None,
-            )
+            .advance_consistent_lsn(branch, Lsn(0x9000), None)
             .await
             .unwrap();
 
@@ -6085,18 +5862,10 @@ mod tests {
             "consistent_lsn is set, but the creation write never ran — attach \
              must still choose bootstrap"
         );
-        // Generation reads are scoped the same way, so they agree.
-        assert!(store.read_generation(branch).await.unwrap().is_none());
 
         // Completing creation flips the flag and the branch becomes loadable.
-        let mut created = row.clone();
-        created.current_generation = generation;
-        store.update_branch_initial_state(&created).await.unwrap();
+        store.update_branch_initial_state(&row).await.unwrap();
         assert!(store.get_branch_state(branch).await.unwrap().is_some());
-        assert_eq!(
-            store.read_generation(branch).await.unwrap(),
-            Some(generation)
-        );
 
         drop_schema(&store, &schema).await;
     }
@@ -6136,94 +5905,55 @@ mod tests {
 
         // And the next cutoff publish stamps the real value over the NULL —
         // `GREATEST(NULL, x)` is `x` in SQL, so the row self-heals.
-        let published = store
-            .publish_gc_cutoff(
-                branch,
-                utils::generation::Generation::new(row.current_generation as u32),
-                Lsn(80),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            published,
-            PublishGcCutoffOutcome::Published { applied: Lsn(80) }
-        );
+        let published = store.publish_gc_cutoff(branch, Lsn(80)).await.unwrap();
+        assert_eq!(published, Lsn(80));
 
         drop_schema(&store, &schema).await;
     }
 
+    /// `advance_consistent_lsn` persists the pair and reports a missing row as
+    /// an error rather than silently doing nothing. Fencing is the endpoint's
+    /// write lease (compute/architecture/compute-fencing.md), so the only
+    /// failure here is "the creation write never ran".
     #[tokio::test]
-    async fn advance_consistent_lsn_gen_gate() {
-        use utils::generation::Generation;
+    async fn advance_consistent_lsn_persists_and_needs_a_row() {
         use utils::lsn::Lsn;
 
-        let (store, schema) = make_store("dc_gate").await;
+        let (store, schema) = make_store("dc_advance").await;
         let branch = rand_branch();
         let mut row = sample_branch_state_row(branch);
-        row.current_generation = 5;
         row.consistent_lsn = Lsn(0x1000);
         create_branch_state_row(&store, &row).await.unwrap();
 
-        // Matching generation → Updated, persisted value advances.
-        let res = store
-            .advance_consistent_lsn(branch, Generation::new(5), Lsn(0x2000), Some(Lsn(0x1F00)))
+        store
+            .advance_consistent_lsn(branch, Lsn(0x2000), Some(Lsn(0x1F00)))
             .await
             .unwrap();
-        assert_eq!(res, AdvanceConsistentLsnOutcome::Updated);
         let got = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(got.consistent_lsn, Lsn(0x2000));
         assert_eq!(got.prev_record_lsn, Some(Lsn(0x1F00)));
 
-        // Stale generation → StaleGeneration { live = 5 }, value unchanged.
-        let res = store
-            .advance_consistent_lsn(branch, Generation::new(4), Lsn(0x3000), Some(Lsn(0x2F00)))
+        // A NULL `prev` keeps whatever was there — the walreceiver re-derives
+        // it, and overwriting a good value with NULL on every throttled flush
+        // window is what the COALESCE exists to prevent.
+        store
+            .advance_consistent_lsn(branch, Lsn(0x3000), None)
             .await
             .unwrap();
-        assert_eq!(
-            res,
-            AdvanceConsistentLsnOutcome::StaleGeneration { live_generation: 5 }
-        );
         let got = store.get_branch_state(branch).await.unwrap().unwrap();
-        assert_eq!(
-            got.consistent_lsn,
-            Lsn(0x2000),
-            "stale-gen UPDATE must not advance"
-        );
+        assert_eq!(got.consistent_lsn, Lsn(0x3000));
+        assert_eq!(got.prev_record_lsn, Some(Lsn(0x1F00)));
 
-        // Generation ahead of persisted (we bumped in-memory but the
-        // row hasn't been UPSERT'd yet) → also stale: persisted row is
-        // the source of truth.
-        let res = store
-            .advance_consistent_lsn(branch, Generation::new(6), Lsn(0x4000), None)
+        // No row at all is a wiring bug, not a no-op.
+        let err = store
+            .advance_consistent_lsn(rand_branch(), Lsn(0x4000), None)
             .await
-            .unwrap();
-        assert_eq!(
-            res,
-            AdvanceConsistentLsnOutcome::StaleGeneration { live_generation: 5 }
+            .expect_err("advance against a nonexistent branch must fail");
+        assert!(
+            format!("{err:#}").contains("no branch_state row"),
+            "{err:#}"
         );
-        let got = store.get_branch_state(branch).await.unwrap().unwrap();
-        assert_eq!(got.consistent_lsn, Lsn(0x2000));
 
-        drop_schema(&store, &schema).await;
-    }
-
-    #[tokio::test]
-    async fn bump_generation_is_monotonic() {
-        let (store, schema) = make_store("gen").await;
-        let branch = rand_branch();
-        let row = sample_branch_state_row(branch);
-        create_branch_state_row(&store, &row).await.unwrap();
-        // Increasing, not consecutive: the `+ 1` applies twice if YsqlClient
-        // retries it after a dropped connection (#564).
-        let mut prev = row.current_generation;
-        for _ in 0..4 {
-            let g = store.bump_generation_for_test(branch).await.unwrap();
-            assert!(
-                g > prev,
-                "bump must advance the generation: got {g} after {prev}"
-            );
-            prev = g;
-        }
         drop_schema(&store, &schema).await;
     }
 
@@ -6859,21 +6589,21 @@ mod tests {
 
         // Branch point above the durable head → rejected.
         let err = store
-            .create_branch_row(rand_branch(), anc, Lsn(95), 1)
+            .create_branch_row(rand_branch(), anc, Lsn(95))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not yet durable"), "{err}");
 
         // Branch point below the gc cutoff → rejected.
         let err = store
-            .create_branch_row(rand_branch(), anc, Lsn(40), 1)
+            .create_branch_row(rand_branch(), anc, Lsn(40))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("gc cutoff"), "{err}");
 
         // Missing ancestor → rejected.
         let err = store
-            .create_branch_row(rand_branch(), rand_branch(), Lsn(70), 1)
+            .create_branch_row(rand_branch(), rand_branch(), Lsn(70))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no branch_state row"), "{err}");
@@ -6884,17 +6614,10 @@ mod tests {
             .provision_branch_row_for_test(child, anc_row.pg_version)
             .await
             .unwrap();
-        // Production claims the generation at startup, before creating the row.
-        store.claim_generation(child).await.unwrap();
-        store.set_generation_for_test(child, 3).await.unwrap();
-        let row = store
-            .create_branch_row(child, anc, Lsn(70), 3)
-            .await
-            .unwrap();
+        let row = store.create_branch_row(child, anc, Lsn(70)).await.unwrap();
         assert_eq!(row.consistent_lsn, Lsn(70), "walreceiver resume point");
         assert_eq!(row.ancestor_branch_id, Some(anc));
         assert_eq!(row.ancestor_lsn, Some(Lsn(70)));
-        assert_eq!(row.current_generation, 3);
         assert_eq!(row.pg_version, anc_row.pg_version);
         assert_eq!(row.prev_record_lsn, None);
         let persisted = store.get_branch_state(child).await.unwrap().unwrap();
@@ -6906,17 +6629,13 @@ mod tests {
             .provision_branch_row_for_test(child2, anc_row.pg_version)
             .await
             .unwrap();
-        store.claim_generation(child2).await.unwrap();
-        let row = store
-            .create_branch_row(child2, anc, Lsn(90), 1)
-            .await
-            .unwrap();
+        let row = store.create_branch_row(child2, anc, Lsn(90)).await.unwrap();
         assert_eq!(row.prev_record_lsn, Some(Lsn(85)));
 
         // Branching below the ancestor's own branch point → rejected.
         let grandchild_bad = rand_branch();
         let err = store
-            .create_branch_row(grandchild_bad, child, Lsn(60), 1)
+            .create_branch_row(grandchild_bad, child, Lsn(60))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("own branch point"), "{err}");
@@ -8440,51 +8159,40 @@ mod tests {
         assert_eq!(none, 0);
     }
 
-    /// Scenario: the persisted read floor is monotone (GREATEST — a
-    /// recomputed cutoff can regress when inputs move backwards, the
-    /// column must not) and generation-fenced (a superseded pageserver
-    /// must stop before draining — its in-memory lease set is stale).
+    /// Scenario: the persisted read floor is monotone (GREATEST — a recomputed
+    /// cutoff can regress when inputs move backwards, the column must not). It
+    /// used to be generation-fenced too; keeping a superseded pageserver from
+    /// draining under a live one's leases is the endpoint's write lease now
+    /// (compute/architecture/compute-fencing.md).
     #[tokio::test]
-    async fn publish_gc_cutoff_monotone_and_generation_fenced() {
-        use utils::generation::Generation;
-
+    async fn publish_gc_cutoff_is_monotone() {
         let (store, _schema) = make_store("gc_publish").await;
         let branch = rand_branch();
         let mut row = sample_branch_state_row(branch);
-        row.current_generation = 5;
         row.applied_gc_cutoff_lsn = Lsn(50);
         create_branch_state_row(&store, &row).await.unwrap();
 
         // Advance.
-        let out = store
-            .publish_gc_cutoff(branch, Generation::new(5), Lsn(80))
-            .await
-            .unwrap();
-        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(80) });
-
-        // Regressing input → floor holds (GREATEST).
-        let out = store
-            .publish_gc_cutoff(branch, Generation::new(5), Lsn(60))
-            .await
-            .unwrap();
-        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(80) });
-
-        // Stale generation → fenced, floor untouched.
-        let out = store
-            .publish_gc_cutoff(branch, Generation::new(4), Lsn(200))
-            .await
-            .unwrap();
         assert_eq!(
-            out,
-            PublishGcCutoffOutcome::StaleGeneration { live_generation: 5 }
+            store.publish_gc_cutoff(branch, Lsn(80)).await.unwrap(),
+            Lsn(80)
         );
+
+        // A regressing input leaves the floor where it was (GREATEST), and the
+        // returned value is the authoritative floor rather than what was asked
+        // for.
+        assert_eq!(
+            store.publish_gc_cutoff(branch, Lsn(60)).await.unwrap(),
+            Lsn(80)
+        );
+
         let reread = store.get_branch_state(branch).await.unwrap().unwrap();
         assert_eq!(reread.applied_gc_cutoff_lsn, Lsn(80));
 
-        // Missing row → hard error (wiring bug, not a fence).
+        // Missing row → hard error: the publish ran before the creation write.
         assert!(
             store
-                .publish_gc_cutoff(rand_branch(), Generation::new(1), Lsn(10))
+                .publish_gc_cutoff(rand_branch(), Lsn(10))
                 .await
                 .is_err()
         );
@@ -8499,12 +8207,9 @@ mod tests {
     /// publishes advance unclamped.)
     #[tokio::test]
     async fn publish_gc_cutoff_clamps_to_child_rows() {
-        use utils::generation::Generation;
-
         let (store, _schema) = make_store("gc_publish_clamp").await;
         let parent = rand_branch();
         let mut row = sample_branch_state_row(parent);
-        row.current_generation = 5;
         row.applied_gc_cutoff_lsn = Lsn(50);
         create_branch_state_row(&store, &row).await.unwrap();
 
@@ -8514,11 +8219,8 @@ mod tests {
         let lowest = create_child_row(&store, parent, 90).await;
 
         // The lowest child pins: 105 clamps to 90.
-        let out = store
-            .publish_gc_cutoff(parent, Generation::new(5), Lsn(105))
-            .await
-            .unwrap();
-        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(90) });
+        let out = store.publish_gc_cutoff(parent, Lsn(105)).await.unwrap();
+        assert_eq!(out, Lsn(90));
 
         // Removing its row releases the pin: the same target advances.
         let delete_sql = format!("DELETE FROM \"{PROD_SCHEMA}\".branch_state WHERE branch_id = $1");
@@ -8527,19 +8229,13 @@ mod tests {
             .execute(&delete_sql, &[&lowest.to_string()])
             .await
             .unwrap();
-        let out = store
-            .publish_gc_cutoff(parent, Generation::new(5), Lsn(105))
-            .await
-            .unwrap();
-        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(105) });
+        let out = store.publish_gc_cutoff(parent, Lsn(105)).await.unwrap();
+        assert_eq!(out, Lsn(105));
 
         // Target past the remaining children clamps to their MIN fork
         // point (110, not 150).
-        let out = store
-            .publish_gc_cutoff(parent, Generation::new(5), Lsn(200))
-            .await
-            .unwrap();
-        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: Lsn(110) });
+        let out = store.publish_gc_cutoff(parent, Lsn(200)).await.unwrap();
+        assert_eq!(out, Lsn(110));
     }
 
     /// A child `branch_state` row of `parent` forked at `lsn`. Returns
@@ -8626,15 +8322,12 @@ mod tests {
     /// the whole test runs in about a second.
     #[tokio::test]
     async fn fork_registration_vs_cutoff_advance_race() {
-        use utils::generation::Generation;
-
         const ROUNDS: u64 = 30;
         const STEP: u64 = 1_000;
 
         let (store, _schema) = make_store("gc_interlock_race").await;
         let parent = rand_branch();
         let mut row = sample_branch_state_row(parent);
-        row.current_generation = 5;
         row.applied_gc_cutoff_lsn = Lsn(0);
         create_branch_state_row(&store, &row).await.unwrap();
         let parent_key = parent.to_string();
@@ -8652,7 +8345,7 @@ mod tests {
             let target = Lsn(cutoff.0 + STEP);
             let child_key = rand_branch().to_string();
 
-            let publish = || store.publish_gc_cutoff(parent, Generation::new(5), target);
+            let publish = || store.publish_gc_cutoff(parent, target);
             let (forked, out) = match round % 3 {
                 // Fork committed first: the publish must see the child.
                 0 => {
@@ -8688,9 +8381,7 @@ mod tests {
                     (forked.unwrap(), out)
                 }
             };
-            let PublishGcCutoffOutcome::Published { applied } = out.unwrap() else {
-                panic!("race: generation must stay 5");
-            };
+            let applied = out.unwrap();
 
             if forked {
                 assert!(
@@ -8711,11 +8402,8 @@ mod tests {
         // All children were unpinned by row removal; the parent must be
         // free to advance exactly to a fresh target.
         let target = Lsn((ROUNDS + 10) * STEP * 2);
-        let out = store
-            .publish_gc_cutoff(parent, Generation::new(5), target)
-            .await
-            .unwrap();
-        assert_eq!(out, PublishGcCutoffOutcome::Published { applied: target });
+        let out = store.publish_gc_cutoff(parent, target).await.unwrap();
+        assert_eq!(out, target);
 
         // branch_state is shared with the whole suite: remove this run's
         // parent (children are already gone — accepted ones deleted,

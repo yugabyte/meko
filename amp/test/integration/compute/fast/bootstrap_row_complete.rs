@@ -2,13 +2,12 @@
 //! each daemon's whole column group, and say so via that daemon's explicit
 //! `*_initialized` flag.
 //!
-//! `update_branch_initial_state` is the only writer of `initdb_lsn`,
-//! `pageserver_initialized`, and used to be
-//! scoped `WHERE consistent_lsn IS NULL`. On the bootstrap path that predicate
-//! is already false by the time it runs — `claim_generation` satisfies the gen
-//! fence before the branch is opened, and the initdb import's flush lands
-//! `consistent_lsn` via `advance_consistent_lsn` — so the statement matched
-//! zero rows and the whole creation write was silently dropped.
+//! `update_branch_initial_state` is the only writer of `initdb_lsn` and
+//! `pageserver_initialized`, and used to be scoped
+//! `WHERE consistent_lsn IS NULL`. On the bootstrap path that predicate is
+//! already false by the time it runs — the initdb import's flush lands
+//! `consistent_lsn` via `advance_consistent_lsn` first — so the statement
+//! matched zero rows and the whole creation write was silently dropped.
 //!
 //! `applied_gc_cutoff_lsn` is deliberately NOT asserted here: the harness runs
 //! with `enable_gc = true`, so a GC tick stamps that column within a second and
@@ -27,7 +26,7 @@ use crate::db;
 use crate::tee_println;
 
 /// Columns that must be non-NULL once the branch is up.
-const POPULATED: &[&str] = &["initdb_lsn", "consistent_lsn", "current_generation"];
+const POPULATED: &[&str] = &["initdb_lsn", "consistent_lsn"];
 
 /// Each daemon's explicit "my group exists" discriminator. These are booleans,
 /// so "present" is not the assertion — `false` is a perfectly non-NULL value

@@ -1,10 +1,9 @@
 //! The single-branch holder: this pageserver process serves exactly one
 //! branch for its entire lifetime, identified by the `branch_id` baked into
-//! `pageserver.toml` by the launcher. The generation it fences with is not
-//! configured — the process claims its own at startup. The branch is opened
-//! synchronously at startup, before any listener accepts traffic.
+//! `pageserver.toml` by the launcher. The branch is opened synchronously at
+//! startup, before any listener accepts traffic.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -16,7 +15,6 @@ use tokio::fs;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
 use utils::crashsafe::path_with_suffix_extension;
-use utils::generation::Generation;
 use utils::id::BranchId;
 
 use super::TenantSharedResources;
@@ -139,7 +137,7 @@ pub struct TenantManager {
 /// and basebackup caches in yb-amp, so removing them is always safe.
 async fn purge_stale_tenant_dirs(
     conf: &'static PageServerConf,
-    attached: &HashMap<BranchId, Generation>,
+    attached: &HashSet<BranchId>,
     background_purges: &BackgroundPurges,
 ) {
     let branches_dir = conf.branches_path();
@@ -174,7 +172,7 @@ async fn purge_stale_tenant_dirs(
             );
             continue;
         };
-        if attached.contains_key(&branch_id) {
+        if attached.contains(&branch_id) {
             continue;
         }
         info!(%branch_id, "Purging local branch dir not owned by the configured branch");
@@ -207,20 +205,10 @@ pub async fn init_tenant_mgr(
         );
     };
 
-    // Claim our generation. The pageserver is its own authority: the increment
-    // and the read are one atomic statement against the branch's row, so two
-    // processes racing to attach cannot come away with the same number, and the
-    // loser's gen-fenced writes stop matching. This has to happen before the
-    // branch is opened — every write the page store makes is fenced on it.
-    let generation = Generation::new(
-        resources
-            .fpu_page_store
-            .claim_generation(identity.branch_id)
-            .await? as u32,
-    );
-    info!(branch_id = %identity.branch_id, ?generation, "claimed generation");
-
-    let attached = HashMap::from([(identity.branch_id, generation)]);
+    // No fencing state is claimed at attach: the endpoint's write lease
+    // (`utils::write_fence`) covers every process in the endpoint, and each
+    // write checks it at the moment it happens.
+    let attached = HashSet::from([identity.branch_id]);
 
     purge_stale_tenant_dirs(conf, &attached, &background_purges).await;
 
@@ -240,7 +228,7 @@ pub async fn init_tenant_mgr(
         conf,
         branch_id,
         resources,
-        AttachedTenantConf::new(conf, tenant_conf, generation),
+        AttachedTenantConf::new(conf, tenant_conf),
         &ctx,
     )
     .await?;

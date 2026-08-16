@@ -54,8 +54,8 @@ impl CandidateRejectionReason {
 
 impl Timeline {
     /// PageServer GC. One iteration:
-    /// - **compute & publish** the cutoff (generation-fenced,
-    ///   monotone);
+    /// - **compute & publish** the cutoff (monotone, durable before any
+    ///   delete);
     /// - **wait** out in-flight reads holding the old cutoff;
     /// - **drain** due `pending_gc` candidates — drop dead forks,
     ///   shrink truncated ones, trim each listed block down to its
@@ -113,9 +113,9 @@ impl Timeline {
         cutoff.max(self.get_ancestor_lsn())
     }
 
-    /// Publish `cutoff` (generation-fenced, monotone), then advance the
-    /// in-memory floor and wait out every read admitted under the old
-    /// one (RCU grace). Returns the authoritative `applied` floor.
+    /// Publish `cutoff` (monotone), then advance the in-memory floor and wait
+    /// out every read admitted under the old one (RCU grace). Returns the
+    /// authoritative `applied` floor.
     ///
     /// Durable BEFORE any delete: restart seeds the read floor from the
     /// persisted column, so deleting beyond it would re-admit reads into
@@ -128,17 +128,10 @@ impl Timeline {
         store: &Arc<crate::page_store::PageStore>,
         cutoff: Lsn,
     ) -> Result<Lsn, GcError> {
-        use crate::page_store::PublishGcCutoffOutcome;
-        let applied = match store
-            .publish_gc_cutoff(self.branch_id, self.generation, cutoff)
+        let applied = store
+            .publish_gc_cutoff(self.branch_id, cutoff)
             .await
-            .map_err(GcError::Persistence)?
-        {
-            PublishGcCutoffOutcome::Published { applied } => applied,
-            PublishGcCutoffOutcome::StaleGeneration { live_generation } => {
-                return Err(GcError::StaleGeneration { live_generation });
-            }
-        };
+            .map_err(GcError::Persistence)?;
         let waitlist = {
             let write_guard = self.applied_gc_cutoff_lsn.lock_for_write();
             if applied > *write_guard {

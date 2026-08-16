@@ -39,7 +39,14 @@ use crate::task_mgr::TaskKind;
 
 pub struct State {
     conf: &'static PageServerConf,
-    tenant_manager: Arc<TenantManager>,
+    /// Set once the tenant manager exists.
+    ///
+    /// The HTTP server starts before it does, so that `POST /v1/write_token`
+    /// answers from the moment the process can write — a pageserver bootstrapping
+    /// a branch writes for many seconds before it would otherwise be listening,
+    /// and a write fence it cannot be pushed to is one it cannot keep alive.
+    /// Every route that needs a tenant reports "still starting" until then.
+    tenant_manager: std::sync::OnceLock<Arc<TenantManager>>,
     auth: Option<Arc<SwappableJwtAuth>>,
     allowlist_routes: &'static [&'static str],
     #[allow(dead_code)]
@@ -49,7 +56,6 @@ pub struct State {
 impl State {
     pub fn new(
         conf: &'static PageServerConf,
-        tenant_manager: Arc<TenantManager>,
         auth: Option<Arc<SwappableJwtAuth>>,
         remote_storage: GenericRemoteStorage,
     ) -> anyhow::Result<Self> {
@@ -63,10 +69,27 @@ impl State {
         ];
         Ok(Self {
             conf,
-            tenant_manager,
+            tenant_manager: std::sync::OnceLock::new(),
             auth,
             allowlist_routes,
             remote_storage,
+        })
+    }
+}
+
+impl State {
+    /// Hand the router its tenant manager, once startup has produced one.
+    pub fn set_tenant_manager(&self, tenant_manager: Arc<TenantManager>) {
+        if self.tenant_manager.set(tenant_manager).is_err() {
+            tracing::warn!("the router already had a tenant manager");
+        }
+    }
+
+    /// The tenant manager, or a 503 while the pageserver is still opening its
+    /// branch. Routes that need a tenant cannot be served before then.
+    fn tenant_manager(&self) -> Result<&Arc<TenantManager>, ApiError> {
+        self.tenant_manager.get().ok_or_else(|| {
+            ApiError::ResourceUnavailable("pageserver is still opening its branch".into())
         })
     }
 }
@@ -309,7 +332,9 @@ async fn timeline_detail_handler(
     let state = get_state(&request);
 
     let timeline_info = async {
-        let tenant = state.tenant_manager.get_attached_tenant_shard(branch_id)?;
+        let tenant = state
+            .tenant_manager()?
+            .get_attached_tenant_shard(branch_id)?;
 
         let timeline = tenant.get_timeline(branch_id, false)?;
         let ctx = &ctx.with_scope_timeline(&timeline);
@@ -352,7 +377,7 @@ async fn get_lsn_by_timestamp_handler(
 
     let with_lease = parse_query_param(&request, "with_lease")?.unwrap_or(false);
 
-    let timeline = active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
+    let timeline = active_timeline_of_active_tenant(state.tenant_manager()?, branch_id).await?;
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
     let result = timeline
@@ -416,7 +441,7 @@ async fn get_timestamp_of_lsn_handler(
         .with_context(|| format!("Invalid LSN: {lsn_str:?}"))
         .map_err(ApiError::BadRequest)?;
 
-    let timeline = active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
+    let timeline = active_timeline_of_active_tenant(state.tenant_manager()?, branch_id).await?;
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
         .with_scope_timeline(&timeline);
     let result = timeline.get_timestamp_for_lsn(lsn, &ctx).await?;
@@ -457,7 +482,7 @@ async fn lsn_lease_handler(
 
     let state = get_state(&request);
 
-    let timeline = active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
+    let timeline = active_timeline_of_active_tenant(state.tenant_manager()?, branch_id).await?;
 
     let result = async {
         timeline
@@ -488,7 +513,7 @@ async fn timeline_gc_handler(
 
     let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download);
     let gc_result = state
-        .tenant_manager
+        .tenant_manager()?
         .immediate_gc(branch_id, gc_req, cancel, &ctx)
         .await?;
 
@@ -512,7 +537,7 @@ async fn timeline_flush_handler(
     let state = get_state(&request);
 
     async {
-        let timeline = active_timeline_of_active_tenant(&state.tenant_manager, branch_id).await?;
+        let timeline = active_timeline_of_active_tenant(state.tenant_manager()?, branch_id).await?;
         let ctx = RequestContext::new(TaskKind::MgmtRequest, DownloadBehavior::Download)
             .with_scope_timeline(&timeline);
 

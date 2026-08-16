@@ -262,8 +262,8 @@ with GC enabled and tuned for prompt reclaim on small test workloads
 `gc_horizon`, `gc_candidate_every_n_bases=1`),
 injected into each generated `pageserver.toml` via the
 `YB_PAGESERVER_TEST_EXTRA_TOML` boot seam (set in `cluster.rs`; born-with
-because `enable_gc` is read once at attach and a restart to change it
-would bump the generation and fence the RW compute). So GC runs under
+because `enable_gc` is read once at attach, so changing it needs a
+restart). So GC runs under
 *every* scenario — the whole suite doubles as a live check that trimming
 stays invisible to reads — and the `gc_*` scenarios exercise it directly
 (reclaim, branch-point pinning, teardown, crash recovery). GC scenarios

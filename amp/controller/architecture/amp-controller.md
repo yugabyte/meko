@@ -203,7 +203,7 @@ Every process in a running placement group belongs to exactly one of two tiers:
 Placement group
 ├── Global services (one of each, §5.1)
 │   ├── amp-controller    — the control plane (this doc)
-│   └── controller        — storage-layer registry + generation fencing (§11.1)
+│   └── controller        — storage-layer registry (§11.1)
 └── Endpoints (0+)            — one self-contained blob each (§5.4)
     └── per endpoint (§5.2):
         ├── compute / pg      — the Postgres users connect to

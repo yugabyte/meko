@@ -21,9 +21,10 @@ expressed in cAmp's resource model. **Precondition:** the storage pool already e
   its *own* pageserver and safekeeper — deployed by cAmp's provisioner
   (`internal/deploy`).
 - The **controller** — which cAmp runs as a managed subprocess; client in
-  `internal/registry` — is the branch registry and the
-  generation-fencing authority. cAmp drives it over the flat
-  `/v1/branch/{branch_id}` surface.
+  `internal/registry` — is the branch registry. cAmp drives it over the flat
+  `/v1/branch/{branch_id}` surface. It is not the fencing authority: write
+  fencing is a lease the writing endpoint takes for itself
+  (compute/architecture/compute-fencing.md).
 
 ## Principle: declare at create, materialize at the first endpoint
 
@@ -66,9 +67,9 @@ endpoint materializes the branch, and cAmp finalizes.
   `BOOTSTRAP=true`.
 
 **The endpoint materializes** (its supervisor, during bring-up):
-1. Starts its pageserver, which claims its **generation** from
-   `amp_storage.branch_state`. (Neither the pageserver node nor the
-   safekeeper is registered with the controller — the endpoint owns them.)
+1. Takes the branch's **write lease** and starts its pageserver.
+   (Neither the pageserver node nor the safekeeper is registered with the
+   controller — the endpoint owns them.)
 2. Runs **`initdb`** — the pageserver bootstraps the branch, taking its init
    mode from the branch's seeded `amp_storage.branch_state` row.
 3. Once the branch is `Active`, reads its `start_lsn` and creates the branch on
@@ -140,7 +141,7 @@ writes are synchronous today and move onto the task framework under #113.
 |---|---|
 | `record_branch` (per branch) | `create-cluster` → `cluster` + default `branch` **and** that branch's `amp_storage.branch_state` seed, keyed by the flat `branch_id`, written by the `record_branch_recipe` step. A root branch is a branch row with a NULL parent. |
 | control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |
-| control plane inits PS + `register_and_attach` | the **endpoint** starts its pageserver, which claims its own generation |
+| control plane inits PS + `register_and_attach` | the **endpoint** starts its pageserver, under the write lease its supervisor holds |
 | PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb`, driven by the seeded `branch_state` row |
 | SK branch create + SC `timeline_register` | the **endpoint** creates the branch on its safekeeper; there is no register call back to the controller |
 | `endpoint.start` after provisioning | the endpoint starts compute once the branch is `Active` |

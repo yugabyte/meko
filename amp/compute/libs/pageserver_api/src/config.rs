@@ -164,13 +164,22 @@ pub struct ConfigToml {
     /// Single-branch identity: the one branch this pageserver
     /// process serves for its entire lifetime. Set by the launcher
     /// (the controller) before spawning the process.
-    ///
-    /// The attachment's generation is NOT configured here: the pageserver
-    /// claims it itself at startup, by incrementing
-    /// `amp_storage.branch_state.current_generation` and taking what that
-    /// statement returns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch_id: Option<BranchId>,
+
+    /// Arm the single-writer write fence (`utils::write_fence`). When set, the
+    /// endpoint supervisor is expected to push a YSQL write token over
+    /// `POST /v1/write_token` and keep renewing it; a write that would land
+    /// after the current token's deadline is not made, and the process exits
+    /// instead. An armed pageserver that never receives a token writes nothing
+    /// — silence is not permission. See
+    /// `compute/architecture/compute-fencing.md`.
+    ///
+    /// Defaults to **true**: a pageserver that is never told about fencing
+    /// should refuse to write without a token rather than assume it may. Turning
+    /// it off is a deliberate act, for a topology whose single writer is
+    /// guaranteed some other way.
+    pub require_write_token: bool,
     // types mapped 1:1 into the runtime PageServerConfig type
     pub listen_pg_addr: String,
     pub listen_http_addr: String,
@@ -835,6 +844,7 @@ impl Default for ConfigToml {
 
         Self {
             branch_id: None,
+            require_write_token: true,
             listen_pg_addr: (DEFAULT_PG_LISTEN_ADDR.to_string()),
             listen_http_addr: (DEFAULT_HTTP_LISTEN_ADDR.to_string()),
             listen_https_addr: (None),

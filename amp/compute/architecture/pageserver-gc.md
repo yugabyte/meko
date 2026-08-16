@@ -127,7 +127,7 @@ runs:
 1. **Cutoff.** Compute `min(retention window, live leases,
    consistent_lsn)`, floored at the branch's own ancestor LSN. Persist
    `applied_gc_cutoff_lsn = max(old, new)` to `branch_state`
-   (generation-fenced, monotone), then publish it to the in-memory
+   (monotone), then publish it to the in-memory
    `Rcu<Lsn>`.
 
    The `consistent_lsn` term is load-bearing for **correctness**, not just

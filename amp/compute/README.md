@@ -114,8 +114,8 @@ against both a local no-TLS cluster (default) and a TLS-required one
   X/Y` it anchors on a fresh-record WAL page, replays the real WAL decoder
   over `amp_storage.wals`, and reports the largest record boundary `<= target`
   plus its matching `prev_record_lsn`. Defaults to a dry run; `--set`
-  writes the pair back (`--expect-generation N` to generation-fence the
-  write, `--null-prev` to let the walreceiver re-derive prev). Use it to
+  writes the pair back (`--null-prev` to let the walreceiver re-derive
+  prev). Use it to
   rewind past a bad replay point — picking an arbitrary segment/page-aligned
   LSN instead makes PS loop forever on `YB WAL hole` or `invalid xlog page
   header: xlp_rem_len`.

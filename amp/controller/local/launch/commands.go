@@ -3,9 +3,11 @@ package launch
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/yugabyte/amp/controller/local/cfg"
 	"github.com/yugabyte/amp/controller/local/config"
 )
 
@@ -63,8 +65,8 @@ func daemonStop(ctx context.Context, env *config.LocalEnv, endpointID, service s
 // The launcher renders these files and the supervisor only reads them, so a
 // start is the moment to write them: the config can depend on the launcher's
 // environment at the time of the command. `REQUIRE_WRITE_TOKEN=false` — the
-// fencing escape hatch — has to reach the safekeeper's own config this way, or
-// it arms itself from its default and refuses every write the unfenced
+// fencing escape hatch — has to reach both daemons' own configs this way, or
+// they arm themselves from their defaults and refuse every write the unfenced
 // supervisor never sends a token for.
 func renderDaemonConfig(env *config.LocalEnv, le launcherEndpoint, _ string) error {
 	for i := range env.Safekeepers {
@@ -73,6 +75,12 @@ func renderDaemonConfig(env *config.LocalEnv, le launcherEndpoint, _ string) err
 				return err
 			}
 			break
+		}
+	}
+	if psConf := env.PageserverConfForBranch(le.conf.BranchID); psConf != nil {
+		tomlPath := filepath.Join(psConf.DataDir, "pageserver.toml")
+		if err := cfg.SetPageserverFencing(tomlPath, fencingOverride()); err != nil {
+			return err
 		}
 	}
 	return nil

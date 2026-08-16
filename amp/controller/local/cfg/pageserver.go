@@ -47,7 +47,7 @@ type PageserverParams struct {
 // (pg_distrib_dir / safekeeper_pg_addr / control_plane_api / optional JWT +
 // TLS keys / verbatim yb_storage_conn) plus the serialized init conf with
 // `yb_storage_conn` removed. The single-branch identity
-// (branch_id / generation) is baked in afterwards by
+// (branch_id) is baked in afterwards by
 // SetPageserverIdentity, matching the Rust two-step (init then
 // set_timeline_identity).
 //
@@ -121,8 +121,8 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 	// Boot-time config seam: a TOML fragment from YB_PAGESERVER_TEST_EXTRA_TOML
 	// merged (top-level keys) into the generated pageserver.toml, so a
 	// pageserver can be BORN with extra config — the integration harness
-	// sets GC on here (editing the toml after boot would need a restart,
-	// which bumps the generation and fences the RW compute). The fragment's
+	// sets GC on here (editing the toml after boot would need a restart of
+	// the pageserver). The fragment's
 	// top-level keys are merged one by one. Unset in production.
 	if extra := strings.TrimSpace(os.Getenv("YB_PAGESERVER_TEST_EXTRA_TOML")); extra != "" {
 		var frag map[string]any
@@ -140,11 +140,12 @@ func pageserverTomlMap(p PageserverParams) (map[string]any, error) {
 // pageserver.toml (read-modify-write), injecting/overwriting `branch_id`. Any
 // other keys already in the file are preserved.
 //
-// Neither the generation nor how to create the branch's timeline is configured
-// here. The pageserver claims its generation itself at startup, by incrementing
-// `amp_storage.branch_state.current_generation`; and it reads its init mode
-// from the same controller-seeded row (a NULL ancestor means bootstrap, a set
-// one means branch off it).
+// How to create the branch's timeline is not configured here: the pageserver
+// reads its init mode from the same controller-seeded row (a NULL ancestor
+// means bootstrap, a set one means branch off it). Neither is fencing — the
+// daemon's own default (`require_write_token = true`) applies, and the
+// endpoint's supervisor holds the lease and pushes the tokens
+// (compute/architecture/compute-fencing.md).
 func SetPageserverIdentity(path string, branchID config.BranchID) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -155,6 +156,33 @@ func SetPageserverIdentity(path string, branchID config.BranchID) error {
 		return fmt.Errorf("parse %q: %w", path, err)
 	}
 	doc["branch_id"] = branchID
+	out, err := encodeTOML(doc)
+	if err != nil {
+		return fmt.Errorf("serialize %q: %w", path, err)
+	}
+	return writeFile(path, out)
+}
+
+// SetPageserverFencing writes or removes `require_write_token` in an existing
+// pageserver.toml (read-modify-write, like SetPageserverIdentity). nil removes
+// the key so the daemon's own default (on) rules; a value pins it — false is
+// the fencing escape hatch (REQUIRE_WRITE_TOKEN=false) written through to the
+// daemon. Applied on every start, so the file always reflects the operator's
+// current setting rather than a previous session's.
+func SetPageserverFencing(path string, require *bool) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %q: %w", path, err)
+	}
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parse %q: %w", path, err)
+	}
+	if require == nil {
+		delete(doc, "require_write_token")
+	} else {
+		doc["require_write_token"] = *require
+	}
 	out, err := encodeTOML(doc)
 	if err != nil {
 		return fmt.Errorf("serialize %q: %w", path, err)

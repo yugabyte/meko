@@ -134,7 +134,11 @@ pub fn yb_conn_inline(
 /// How the branch's timeline is created is deliberately absent: the controller
 /// seeds `amp_storage.branch_state` at branch-create time and the pageserver
 /// reads its init mode off that row.
-pub fn pageserver_base(l: &Layout, yb_conn: Value) -> Vec<(&'static str, Value)> {
+pub fn pageserver_base(
+    l: &Layout,
+    yb_conn: Value,
+    require_write_token: bool,
+) -> Vec<(&'static str, Value)> {
     vec![
         ("pg_distrib_dir", l.pg_distrib_dir.as_str().into()),
         (
@@ -155,6 +159,7 @@ pub fn pageserver_base(l: &Layout, yb_conn: Value) -> Vec<(&'static str, Value)>
         ("control_plane_api", l.control_plane_api.clone().into()),
         ("yb_storage_conn", yb_conn),
         ("branch_id", l.branch_id.clone().into()),
+        ("require_write_token", require_write_token.into()),
     ]
 }
 
@@ -555,7 +560,7 @@ mod tests {
     #[test]
     fn daemons_bind_public_while_internal_wiring_stays_loopback() {
         let l = layout();
-        let base = pageserver_base(&l, Value::from("x"));
+        let base = pageserver_base(&l, Value::from("x"), true);
         let get = |k: &str| {
             base.iter()
                 .find(|(n, _)| *n == k)

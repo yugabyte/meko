@@ -116,16 +116,18 @@ PG18 path GUCs, and branch-fork inheritance — is in
 ## Controller coordination + addressing
 
 With `controller.url` set (the controller path), the endpoint pod runs its branch
-bookkeeping against the controller. Its pageserver's **generation is not part of
-that**: the process claims its own from `amp_storage.branch_state` at startup, so
-a restart always outranks the instance it replaces. (The safekeeper is
-endpoint-owned and not registered with the controller.)
+bookkeeping against the controller. **Write fencing is not part of that**: the
+pod's supervisor holds a YSQL lease on the branch and passes it to its services
+as their write deadline (compute/architecture/compute-fencing.md), so a
+replacement pod waits out the outgoing one's lease rather than being ranked
+against it by the controller. (The safekeeper is endpoint-owned and not
+registered with the controller.)
 
 > **Planned direction:** the remaining calls move *out of the pod and into amp's
 > deploy code*, so the pod stops self-registering. This evolves toward a
 > **create-then-configure / pre-warm** model: pods are created unassigned and
 > bound to a branch on demand via
-> a push `configure` (amp mints `branch_id` + `generation`; the pod returns
+> a push `configure` (amp mints `branch_id`; the pod returns
 > `start_lsn`). See
 > [`sc-integration.md`](sc-integration.md).
 
@@ -390,9 +392,10 @@ The deploy is **demo-grade**. What it currently takes for granted:
 - **No reconciliation / drift detection** (intent vs. live k8s state,
   amp-controller.md principle 6); deploy/retire are one-shot reconciles.
 - **No attach/detach handoff.** Retire is kill-before-create, correct absent a
-  network partition (ac-highlvl.md §4 partition gap). Generation fencing is the
-  pageserver's own (it claims a fresh generation on every start), but live
-  migration of a branch between endpoints is not built.
+  network partition (ac-highlvl.md §4 partition gap). Write fencing is the
+  endpoint supervisor's own lease (compute/architecture/compute-fencing.md),
+  which is what makes kill-before-create safe under a partition; live migration
+  of a branch between endpoints is still not built.
 - **Pre-fix endpoints don't self-heal.** An endpoint registered before the stable
   Service-DNS change (#121) has a stale node address in the SC and will still
   `409` on reschedule; redeploy it (new endpoints are unaffected).

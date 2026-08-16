@@ -20,9 +20,8 @@
 //! just before it is reported as the matching `prev_record_lsn`.
 //!
 //! By default it only prints. `--set` writes the pair back to
-//! `amp_storage.branch_state` (stop the pageserver for this timeline
-//! first — a running one will overwrite this on its next flush, and may
-//! be generation-fenced against this write).
+//! `amp_storage.branch_state` (stop the pageserver for this branch first —
+//! a running one overwrites this on its next flush).
 
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -55,11 +54,6 @@ struct Args {
     /// the boundary this tool computed.
     #[arg(long)]
     null_prev: bool,
-    /// When writing, fence the UPDATE on this `current_generation`. The
-    /// write affects 0 rows (and warns) if the row's generation differs.
-    #[arg(long)]
-    expect_generation: Option<i32>,
-
     #[command(flatten)]
     conn: ysql_client::YbConnArgs,
 }
@@ -70,7 +64,6 @@ struct BranchState {
     prev_record_lsn: Option<Lsn>,
     applied_gc_cutoff_lsn: Lsn,
     pg_version: i32,
-    current_generation: i32,
 }
 
 #[tokio::main]
@@ -98,7 +91,6 @@ async fn main() -> anyhow::Result<()> {
 
     println!("branch   {branch}");
     println!("pg_version            {}", state.pg_version);
-    println!("current_generation    {}", state.current_generation);
     println!("applied_gc_cutoff_lsn {}", state.applied_gc_cutoff_lsn);
     println!("current consistent_lsn  {}", state.consistent_lsn);
     println!(
@@ -177,26 +169,9 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "NULL".into())
     );
 
-    let affected = write_branch_state(
-        &client,
-        &branch,
-        consistent,
-        prev_to_write,
-        args.expect_generation,
-    )
-    .await?;
+    let affected = write_branch_state(&client, &branch, consistent, prev_to_write).await?;
     if affected == 0 {
-        bail!(
-            "UPDATE affected 0 rows{}",
-            match args.expect_generation {
-                Some(g) => format!(
-                    " — current_generation != {g} (row is at {}); re-run without --expect-generation \
-                     or with the right value",
-                    state.current_generation
-                ),
-                None => " — row not found (branch mismatch?)".into(),
-            }
-        );
+        bail!("UPDATE affected 0 rows — row not found (branch mismatch?)");
     }
     println!();
     println!("done: updated {affected} row(s) in amp_storage.branch_state");
@@ -208,8 +183,7 @@ async fn read_branch_state(client: &YsqlClient, branch: &str) -> anyhow::Result<
     // columns are populated. The row is shared with the safekeeper, so without
     // this a branch that has WAL but no page-store state yet would return a row
     // of NULLs and panic on the gets below.
-    let sql = "SELECT consistent_lsn, prev_record_lsn, applied_gc_cutoff_lsn, pg_version, \
-               current_generation \
+    let sql = "SELECT consistent_lsn, prev_record_lsn, applied_gc_cutoff_lsn, pg_version \
                FROM amp_storage.branch_state \
                WHERE branch_id = $1 AND pageserver_initialized";
     let params: [&(dyn ToSql + Sync); 1] = [&branch];
@@ -230,13 +204,11 @@ async fn read_branch_state(client: &YsqlClient, branch: &str) -> anyhow::Result<
     // NULL means nothing has been GC'd yet, so 0.
     let applied_gc_cutoff_lsn = Lsn(row.get::<_, Option<i64>>(2).unwrap_or(0) as u64);
     let pg_version = row.get::<_, i32>(3);
-    let current_generation = row.get::<_, i32>(4);
     Ok(BranchState {
         consistent_lsn,
         prev_record_lsn,
         applied_gc_cutoff_lsn,
         pg_version,
-        current_generation,
     })
 }
 
@@ -245,27 +217,16 @@ async fn write_branch_state(
     branch: &str,
     consistent: Lsn,
     prev: Option<Lsn>,
-    expect_generation: Option<i32>,
 ) -> anyhow::Result<u64> {
     let consistent_i = consistent.0 as i64;
     let prev_i = prev.map(|l| l.0 as i64);
-    if let Some(generation) = expect_generation {
-        let sql = "UPDATE amp_storage.branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
-                   WHERE branch_id = $1 AND current_generation = $4";
-        let params: [&(dyn ToSql + Sync); 4] = [&branch, &consistent_i, &prev_i, &generation];
-        client
-            .execute(sql, &params)
-            .await
-            .context("UPDATE branch_state")
-    } else {
-        let sql = "UPDATE amp_storage.branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
-                   WHERE branch_id = $1";
-        let params: [&(dyn ToSql + Sync); 3] = [&branch, &consistent_i, &prev_i];
-        client
-            .execute(sql, &params)
-            .await
-            .context("UPDATE branch_state")
-    }
+    let sql = "UPDATE amp_storage.branch_state SET consistent_lsn = $2, prev_record_lsn = $3 \
+               WHERE branch_id = $1";
+    let params: [&(dyn ToSql + Sync); 3] = [&branch, &consistent_i, &prev_i];
+    client
+        .execute(sql, &params)
+        .await
+        .context("UPDATE branch_state")
 }
 
 /// Reads raw WAL bytes by LSN from `amp_storage.wals`, mapping each LSN to

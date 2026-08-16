@@ -521,10 +521,11 @@ fn serve_one_lease(
     for svc in services {
         sup.add(svc);
     }
-    // Renewing runs for the whole bring-up, not just once it is over. Opening a
-    // branch writes for longer than one lease, so a token that is never renewed
-    // during startup lapses partway through — and every child is seeded from the
-    // token this keeps current.
+    // Renewing runs for the whole bring-up, not just once it is over. Starting a
+    // pageserver on a fresh branch runs initdb and imports the initial page set,
+    // which takes longer than one lease — so the token a child is seeded with at
+    // spawn expires mid-import unless something keeps renewing it, and each
+    // renewal is what carries a fresh token to the daemons as they come up.
     //
     // Losing the lease here is not a half-built endpoint torn down for no
     // reason: it means another endpoint owns the branch, and this one has to
@@ -538,6 +539,8 @@ fn serve_one_lease(
     // exits and the TTL runs out on its own.
     let outcome_res = (|| -> Result<Outcome> {
         sup.start_all()?;
+        // Both daemons get the live token as soon as they are up, rather than
+        // waiting out a renewal tick holding whatever they were seeded with.
         fence::push_current();
 
         // Wrapped so a failure — or a SIGTERM landing mid-handshake — stops the
@@ -688,7 +691,7 @@ fn render_config(env: &Env, fence_cfg: &fence::Config) -> Result<()> {
         tracing::warn!("endpoint CPU unknown; leaving the daemons' scale_factor at their default");
     }
 
-    let mut ps_base = boot::pageserver_base(l, env.yb_conn());
+    let mut ps_base = boot::pageserver_base(l, env.yb_conn(), fence_cfg.required);
     ps_base.extend(scale.clone());
     let ps_toml = config::render(config::Daemon::Pageserver, ps_base, &overrides.pageserver)
         .context("rendering pageserver.toml")?;

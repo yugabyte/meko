@@ -101,10 +101,10 @@ CREATE TABLE amp_registry.user_cluster_grants (
 -- key. Lineage staying in-cluster is now an application invariant (the API
 -- resolves a parent within the cluster before forking), not a schema one.
 --
--- There is deliberately NO generation here. Fencing is the pageserver's own
--- concern: it claims a generation at startup by incrementing
--- `amp_storage.branch_state.current_generation`, so the counter lives in the same
--- row as the writes it fences and there is no second copy to keep in step.
+-- There is deliberately NO fencing state on a branch row. Write fencing is a
+-- lease on the branch held by the endpoint that writes it, in
+-- `amp_registry.resource_token` (migration 0006), not a column here — see
+-- compute/architecture/compute-fencing.md.
 --
 -- A dropped branch is TOMBSTONED, not deleted: `dropped_at` is stamped and the
 -- row stays, because a branch id is never reused, the record of what the id was

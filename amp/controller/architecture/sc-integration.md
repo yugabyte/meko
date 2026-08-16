@@ -6,12 +6,11 @@ schema it uses, and the HTTP surface it serves.
 
 ## What it owns
 
-- ~~Generation authority~~ — **no longer the controller's.** The per-branch
-  fencing counter lives in `amp_storage.branch_state.current_generation`, and the
-  pageserver claims its own at startup (`UPDATE ... SET current_generation =
-  COALESCE(current_generation, 0) + 1 RETURNING current_generation`). Keeping the
-  counter in the same row as the writes it fences means there is no second copy to
-  keep in step, and no round trip to issue one.
+- ~~Fencing authority~~ — **not the controller's.** Write fencing is a lease the
+  writing endpoint takes for itself, in `amp_registry.resource_token`
+  (see [`compute-fencing.md`](../../compute/architecture/compute-fencing.md)).
+  The controller neither issues it nor arbitrates it, so there is no second copy
+  of the fencing state to keep in step and no round trip to issue one.
 - **Branch and endpoint bookkeeping** — branch records + name mappings, seeding
   the per-branch state a pageserver needs to attach, and the launcher's durable
   endpoint records. Not a registry of its own: these are the control plane's own
@@ -74,31 +73,33 @@ controller is, today — auth is deferred, #189).
 - **Endpoint pods** (Kubernetes/Docker deploy) make **no** calls to the
   controller. They are handed `BRANCH_ID` and `CONTROLLER_URL` and need neither:
   the branch's `amp_storage.branch_state` row is seeded before the pod starts,
-  and the pageserver claims its own generation.
+  and the pod's supervisor takes the branch's write lease itself.
 - **The controller's own task framework** seeds branch state through the same store
   **in-process** (not over HTTP) — the `RecipeStore` port in
   `controller/internal/task` is satisfied by an in-process adapter, and it passes
   the cluster id along with the branch id because the row it writes is
   cluster-scoped.
 
-## Why the generation is minted per spawn (not injected at deploy)
+## Why fencing is taken by the endpoint, not injected at deploy
 
-The generation is claimed on the **pageserver-spawn path**: the pageserver process
-increments the counter itself at boot and takes what the statement returns, before
-opening the branch. This is deliberate and load-bearing for fencing — the generation
-must advance on **every** pageserver incarnation so that a restarted or rescheduled
-pod fences its predecessor. Kubernetes restarts-in-place and node-failure reschedules
-happen **outside** the controller's deploy flow (kubelet drives them), so the process
-claiming a fresh generation on every boot is exactly what keeps those safe: a
-lingering old instance holds a lower generation and its next generation-checked write
-aborts (see [pageserver.md](../../compute/architecture/pageserver.md)
-§ "Generation fencing").
+The fencing value is acquired on the **endpoint's own path**: its supervisor takes
+a lease on the branch before it starts anything, under a client id generated per
+process. This is deliberate and load-bearing — the fence must distinguish **every**
+incarnation, so that a restarted or rescheduled pod cannot be mistaken for the one
+it replaces. Kubernetes restarts-in-place and node-failure reschedules happen
+**outside** the controller's deploy flow (kubelet drives them), so a value the
+endpoint mints for itself at process start is what keeps those safe: a lingering
+old instance holds a lease that has stopped being renewed, and its services stop
+writing when it lapses.
 
-Rejected alternative (closed #206 / #207 / #212 / #213): have amp mint the generation once
-at deploy time and inject it into the pod (a `GENERATION` env value). A kubelet restart
-would then **reuse** the injected generation and fail to fence the still-live old
-instance — a split-brain / corruption risk. Claiming at process start has the same
-per-incarnation property the controller's attach-hook had, without the round trip or
-the second copy of the counter. For the same reason, pageserver-node registration stays pod-driven rather than
+Rejected alternative (closed #206 / #207 / #212 / #213): have amp mint the fencing
+value once at deploy time and inject it into the pod (originally a `GENERATION` env
+value). A kubelet restart would then **reuse** the injected value and fail to fence
+the still-live old instance — a split-brain / corruption risk. That argument is
+unchanged by the move from a per-spawn generation counter to a per-process lease,
+and is exactly why `WRITE_TOKEN_CLIENT_ID` defaults to a per-process id rather than
+anything the chart or the controller could template: two instances sharing one id
+are both "the holder", and `token_acquire` grants to the holder unconditionally.
+For the same reason, pageserver-node registration stays pod-driven rather than
 moving in-process, and there is no liveness heartbeater (nothing consumes node
 availability — the `nodes` registry is bookkeeping only).

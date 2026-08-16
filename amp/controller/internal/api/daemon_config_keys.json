@@ -47,6 +47,7 @@
     "page_service_pipelining.mode": "string",
     "page_service_pipelining.pipeline_depth": "integer",
     "pg_auth_type": "string",
+    "require_write_token": "boolean",
     "s3_upload_limit_bytes": "integer",
     "scale_factor": "float",
     "secondary_download_concurrency": "integer",

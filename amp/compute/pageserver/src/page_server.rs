@@ -58,7 +58,6 @@ use crate::{TEMP_FILE_SUFFIX, import_datadir, span, task_mgr, walredo};
 
 static INIT_DB_SEMAPHORE: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(8));
 use utils::crashsafe;
-use utils::generation::Generation;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 
@@ -107,12 +106,10 @@ pub struct TenantSharedResources {
 }
 
 /// The tenant's effective configuration: the `[tenant_config]` section
-/// of pageserver.toml plus the generation this process claimed at startup.
+/// of pageserver.toml.
 #[derive(Clone)]
 pub(super) struct AttachedTenantConf {
     tenant_conf: pageserver_api::models::BranchConfig,
-    /// The generation this process claimed at startup, used to fence YB writes.
-    pub(super) generation: Generation,
     /// The deadline before which we are blocked from GC so that
     /// leases have a chance to be renewed.
     lsn_lease_deadline: Option<tokio::time::Instant>,
@@ -122,7 +119,6 @@ impl AttachedTenantConf {
     fn new(
         conf: &'static PageServerConf,
         tenant_conf: pageserver_api::models::BranchConfig,
-        generation: Generation,
     ) -> Self {
         // Sets a deadline before which we cannot proceed to GC due to lsn lease.
         // The leases mapping is not persisted to disk; delaying GC by one
@@ -134,7 +130,6 @@ impl AttachedTenantConf {
 
         Self {
             tenant_conf,
-            generation,
             lsn_lease_deadline,
         }
     }
@@ -205,11 +200,6 @@ pub struct PageServer {
     tenant_conf: Arc<ArcSwap<AttachedTenantConf>>,
 
     id: BranchId,
-
-    /// The generation this process claimed at startup, used to fence YB writes
-    /// against stale pageservers. Does not change over the lifetime of the
-    /// process.
-    generation: Generation,
 
     /// THE timeline this process serves. Set exactly once during startup
     /// (open-existing or create-if-missing), before listeners start.
@@ -468,12 +458,6 @@ pub(crate) enum GcError {
     // was dequeued without its action having succeeded.
     #[error("gc persistence: {0:#}")]
     Persistence(anyhow::Error),
-
-    // The generation-fenced cutoff publish matched no row: a newer
-    // pageserver owns the branch. This pageserver's in-memory lease
-    // set is stale, so it must not drain.
-    #[error("gc fenced by newer generation {live_generation}")]
-    StaleGeneration { live_generation: u32 },
 }
 
 impl From<PageReconstructError> for GcError {
@@ -584,8 +568,6 @@ impl PageServer {
             gc_page_store,
         } = resources;
 
-        let generation = attached_conf.generation;
-
         let tenant = Arc::new(PageServer::new(
             conf,
             attached_conf,
@@ -624,9 +606,7 @@ impl PageServer {
             tenant_clone.activate(&ctx);
             anyhow::Ok(())
         }
-        .instrument(
-            tracing::info_span!(parent: None, "attach", branch_id=%branch_id, gen=?generation),
-        )
+        .instrument(tracing::info_span!(parent: None, "attach", branch_id=%branch_id))
         .await?;
         Ok(tenant)
     }
@@ -823,8 +803,6 @@ impl PageServer {
                     ancestor_lsn,
                 } => {
                     let (ancestor_branch_id, ancestor_lsn) = (&ancestor_branch_id, &ancestor_lsn);
-                    let generation_i32: i32 =
-                        self.generation.into().map(|g: u32| g as i32).unwrap_or(0);
                     info!(
                         branch_id = %identity.branch_id,
                         ancestor = %ancestor_branch_id,
@@ -845,7 +823,6 @@ impl PageServer {
                                 identity.branch_id,
                                 *ancestor_branch_id,
                                 *ancestor_lsn,
-                                generation_i32,
                             )
                             .await
                         {
@@ -1074,10 +1051,6 @@ impl PageServer {
         }
     }
 
-    pub fn generation(&self) -> Generation {
-        self.generation
-    }
-
     /// Activate the opened timeline: launch its walreceiver and the
     /// tenant background loops. Runs synchronously at the end of startup,
     /// before listeners accept traffic.
@@ -1221,7 +1194,6 @@ impl PageServer {
             Arc::clone(&self.tenant_conf),
             new_metadata,
             new_branch_id,
-            self.generation,
             self.walredo_mgr.clone(),
             resources,
             pg_version,
@@ -1255,11 +1227,8 @@ impl PageServer {
         fpu_page_store: Arc<crate::page_store::PageStore>,
         gc_page_store: Arc<crate::page_store::PageStore>,
     ) -> PageServer {
-        assert!(!attached_conf.generation.is_none());
-
         PageServer {
             id,
-            generation: attached_conf.generation,
             conf,
             timeline: std::sync::OnceLock::new(),
             timelines_creating: Mutex::new(None),

@@ -84,11 +84,10 @@ In this pod, concretely:
   token and re-runs the whole bring-up when it wins one. A clean SIGTERM
   releases the lease, so a replacement starts immediately instead of
   waiting out the TTL.
-- The safekeeper is armed via `require_write_token = true` in the
-  `safekeeper.toml` the supervisor renders, and kills itself rather than
-  flush WAL past its token's deadline — including when it has never been
-  given one. The pageserver is handed the token but does not yet act on
-  it; it starts enforcing in a follow-up.
+- The safekeeper and pageserver are armed via `require_write_token = true`
+  in the configs the supervisor renders, and kill themselves rather than
+  write past their token's deadline — including when they have never been
+  given one.
 
 `REQUIRE_WRITE_TOKEN=false` runs the endpoint unfenced (no lease, no
 pushes, `require_write_token = false`). It is the escape hatch for a
@@ -134,9 +133,8 @@ The supervisor materializes the branch itself:
 
 - **Pageserver identity + initial branch.** The pageserver's
   single-branch identity (`branch_id`) is baked into the
-  `pageserver.toml` the supervisor renders; the generation is not — the
-  pageserver claims its own at startup (see GENERATION below). The init
-  mode is chosen from the environment:
+  `pageserver.toml` the supervisor renders, alongside
+  `require_write_token`. The init mode is chosen from the environment:
   - `BRANCH_ID` unset → generate a fresh 32-hex id and bake
     the controller-seeded `branch_state` row with a NULL ancestor (the pageserver runs `initdb`
     and imports the initial page set on start).
@@ -165,14 +163,14 @@ The supervisor materializes the branch itself:
   waits for that log line as the readiness signal
   (`remote_auth::READY_MARKER`).
 
-## GENERATION
+## Fencing is the supervisor's, not the pageserver's
 
-Not a supervisor concern in either mode. The pageserver claims its own
-generation when it starts, by incrementing
-`amp_storage.branch_state.current_generation` and taking what that
-statement returns, so nothing about fencing passes through the pod's
-environment or `pageserver.toml`. A restarted or rescheduled pod
-therefore always outranks the instance it replaces.
+The supervisor holds the lease for the whole endpoint and every service
+enforces it (see "The write fence" above and
+[`compute-fencing.md`](compute-fencing.md)). A replacement pod waits out
+the lease rather than outranking the instance it replaces — one fence
+for every process in the endpoint, the WAL path included, not per-service
+state.
 
 Setting `CONTROLLER_URL` still selects controller coordination for
 everything else — but the controller tracks neither safekeepers nor

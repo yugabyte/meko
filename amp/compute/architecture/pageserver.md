@@ -26,8 +26,8 @@ entire lifetime**. The identity is baked into `pageserver.toml` by the
 launcher before spawn:
 
 ```toml
-branch_id   = "77ffde89..."   # required
-generation  = 7               # required; launcher bumps on EVERY spawn
+branch_id            = "77ffde89..."   # required
+require_write_token  = true            # optional; arms the write fence
 ```
 
 How to *create* the timeline is not configured here. It comes from the
@@ -36,8 +36,7 @@ controller-seeded part of the branch's `amp_storage.branch_state` row: a NULL
 `pg_version`), a set one means branch off that ancestor at `ancestor_lsn`. The
 controller writes that seed at branch create, before any pageserver starts.
 
-`PageServerConf::parse_and_validate` (`compute/pageserver/src/config.rs`)
-rejects `branch_id` without `generation` (and vice versa). `main()` also refuses to
+`main()` refuses to
 start on any unknown key in `pageserver.toml` — the config is
 launcher-generated against the same build, so a misspelled key is an
 operator mistake worth failing loudly on.
@@ -71,8 +70,6 @@ in-protocol wait-for-active. Failure to open is fatal to the process.
   (below).
 - No `branch_state` row at all → fatal: the controller never provisioned the branch.
 
-The generation is claimed before any of this, by `PageStore::claim_generation`
-(see "Generation fencing") — nothing issues it from outside.
 Inbound page-service requests (libpq query string / gRPC metadata) are
 validated against the configured identity and rejected as misrouted on
 mismatch (`MISROUTED_PAGESTREAM_REQUESTS`).
@@ -277,7 +274,6 @@ CREATE TABLE amp_storage.branch_state (
     applied_gc_cutoff_lsn  BIGINT,
     ancestor_branch_id     TEXT,
     ancestor_lsn           BIGINT,
-    current_generation     INT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
     PRIMARY KEY ((branch_id) HASH)
@@ -300,8 +296,6 @@ CREATE TABLE amp_storage.branch_state (
   walreceiver streams from `consistent_lsn` forward and the in-memory
   value re-derives within seconds.
 - `applied_gc_cutoff_lsn` — reads below this LSN are not supported.
-- `current_generation` — incremented by the pageserver itself at startup,
-  before the branch is opened; the fence column (see "Generation fencing").
 - `prev_record_lsn` — the `xl_prev` pointer paired with
   `consistent_lsn`, persisted best-effort so restart can hand the
   safekeeper the right value; `COALESCE` on update keeps a good value
@@ -943,69 +937,33 @@ size reads still error on a missing key. FSM/VM are advisory
 (VACUUM-rebuilt), so an imprecise post-recovery size is harmless.
 Exercised by the `torn_wal_write` integration scenario.
 
-## Generation fencing
+## Write fencing
 
-`current_generation` on the `amp_storage.branch_state` row is the
-fence. **The pageserver is its own generation authority** — nothing
-issues the number from outside, so there is no CAS against an
-externally-chosen value to lose. `pageserver.toml` carries the
-`branch_id` and not the generation. The YB-side sequence is:
+The endpoint supervisor holds a YSQL lease on the branch and pushes the token —
+the epoch micros that are simultaneously the lease and the write deadline — to
+this process over `POST /v1/write_token`. With `require_write_token = true`,
+`utils::write_fence` is armed and `PageStore`'s `write_gate` checks it
+immediately before every write reaches YugabyteDB:
 
-1. **Startup:** `PageStore::claim_generation` runs, from
-   `page_server::mgr`, *before* the branch is opened — every write the
-   page store makes is fenced on the result, so it cannot come later:
-   ```sql
-   UPDATE amp_storage.branch_state
-   SET current_generation = COALESCE(current_generation, 0) + 1
-   WHERE branch_id = $1
-   RETURNING current_generation
-   ```
-   One statement increments and returns, so two processes racing to
-   attach necessarily come away with different numbers and the loser's
-   fenced writes stop matching. `COALESCE` because the column is NULL
-   until the pageserver's group exists — a first attach *usually* claims
-   1. Only usually: the increment is relative and `YsqlClient` replays a
-   dropped connection, so the statement can run twice and advance the
-   column by two — a first attach then returns 2. Harmless, because it
-   returns whatever it landed on and that is what `mgr.rs` attaches with:
-   the fence needs the returned value to match the persisted one and to
-   move forward, not to be dense (#564). Zero rows means the controller
-   never provisioned the branch: fatal.
-2. **Data writes are not individually fenced.** Row INSERTs run as
-   independent parallel chunks with no `BEGIN/COMMIT` wrapper. The
-   fence is the **subsequent standalone UPDATE** in
-   `PageStore::advance_consistent_lsn`:
-   ```sql
-   UPDATE amp_storage.branch_state
-   SET consistent_lsn = $2,
-       prev_record_lsn = COALESCE($4, prev_record_lsn)
-   WHERE branch_id = $1 AND current_generation = $3
-   ```
-   Zero rows → a one-shot probe SELECT disambiguates "row missing"
-   (wiring bug, hard error) from `StaleGeneration { live_generation }`;
-   on the latter the flush path calls
-   `task_mgr::shutdown_for_stale_generation` and the process shuts
-   down. A stale pageserver's data rows are either redundant (the live
-   pageserver overwrites them with identical upserts) or harmless — the
-   damage a stale writer could do is advancing `consistent_lsn` (which
-   drives safekeeper truncation), and exactly that write is fenced.
-3. **The GC cutoff publish is fenced the same way.**
-   `PageStore::publish_gc_cutoff` carries the same
-   `current_generation = $3` predicate, and it has to: that write is
-   what makes a read floor durable *before* anything is deleted, so a
-   stale pageserver must not move it. Zero rows → the same probe →
-   `PublishGcCutoffOutcome::StaleGeneration`, which surfaces as
-   `GcError::StaleGeneration`. The GC loop treats it as an ordinary
-   error — exponential backoff and retry, no process shutdown; the
-   flush path above is what terminates a fenced-out process.
+- `put_pages`, `put_slru_pages`, `put_meta` — the data writes;
+- `advance_consistent_lsn` — the durability commit;
+- `publish_gc_cutoff`, and each of the seven `gc_act_*` deletes. The deletes
+  are gated separately from the publish that authorises them because the drain
+  runs after an RCU grace wait, so the lease can lapse in between.
 
-`advance_consistent_lsn` and `publish_gc_cutoff` are the only two
-gen-fenced statements. `claim_generation` is the only writer of the
-column in production: `bump_generation_for_test` is `#[cfg(test)]`, so
-nothing else can move a generation in a shipped build.
+Past the deadline the process **exits** (code 66) rather than returning an
+error, because an error would go back to a client that reconnects and retries
+against this same stranded process. An armed pageserver that has never been
+pushed a token holds the zero token, which reads as expired — silence is not
+permission.
 
-Generation state lives entirely in this one column — there is no
-per-file or per-object generation stamping anywhere.
+Armed is the default (`require_write_token = true`), including under
+`yb_amp_local` and the integration harness, whose supervisor holds the lease and
+pushes the tokens. Disarming (`require_write_token = false`) makes every check a
+no-op, and is only safe for a topology whose single writer is guaranteed some
+other way.
+
+The full design is in [`compute-fencing.md`](compute-fencing.md).
 
 ## Page services: libpq and gRPC
 
@@ -1085,7 +1043,7 @@ the flush path's `prev_record_lsn` pairing.
 
 The periodic feedback message (`PageserverFeedback`) reports
 `consistent_lsn` (wire key `ps_flushlsn`) from the slot that `PageWriter` bumps
-after every successful generation-fenced `advance_consistent_lsn` — that value
+after every successful `advance_consistent_lsn` — that value
 bounds safekeeper WAL truncation, and it only ever echoes a fact already
 durable in YB.
 `validate_wal_contiguity` optionally cross-checks the raw-WAL start/end
@@ -1120,7 +1078,7 @@ on-demand logical-size calculation:
   `find_gc_cutoffs`), culls expired LSN leases, and updates
   PITR-related metrics. With `enable_gc` on for the branch, each tick
   also persists `applied_gc_cutoff_lsn = max(old, fresh cutoff)` to
-  `branch_state` (generation-fenced, monotone, durable **before**
+  `branch_state` (monotone, durable **before**
   anything is deleted) and drains the due `pending_gc` candidates,
   deleting the superseded `pages` rows they name. With `enable_gc` off
   (the default) the tick deletes nothing and superseded deltas and old
@@ -1216,7 +1174,7 @@ The compute opens libpq connections to the pageserver per backend
 
 - `compute/pageserver/src/page_store.rs` — `PageStore`: the four-table
   row store, image-anchored read SQL, lineage walks, timeline-state
-  CRUD, generation CAS + fenced UPDATEs, direct-RPC lane.
+  CRUD, the branch-state UPDATEs, direct-RPC lane.
 - `compute/pageserver/src/page_writer.rs` — `PageWriter`: buffered
   write path, flush + `consistent_lsn` advance, backpressure,
   materialise triggers, blended reads.

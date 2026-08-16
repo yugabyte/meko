@@ -436,21 +436,23 @@ NULL`. That trick is only sound while the chosen column has exactly one writer,
 and the pageserver's did not — so **on the bootstrap path its creation write
 never landed**:
 
-1. `claim_generation` (`mgr.rs`, before the branch is opened) sets
-   `current_generation` on the controller-seeded row. The gen fence is now
-   satisfied even though the rest of the group is NULL.
+1. `claim_generation` (`mgr.rs`, before the branch is opened) set
+   `current_generation` on the controller-seeded row, satisfying the generation
+   fence even though the rest of the group was NULL. (That fence is gone — see
+   [`compute-fencing.md`](compute-fencing.md) — but the shape of the bug below
+   is why the flags exist, so the sequence is kept as it was.)
 2. Bootstrap imports the initdb datadir. `DatadirModification::commit` calls
    `finish_write` → `note_record_lsn`, so `record_lsn_history` is non-empty.
 3. `UninitializedTimeline::write` spawns the flush loop and flushes **before**
    `finish_creation`. That flush sees a non-empty ingest frontier and calls
-   `advance_consistent_lsn`, which is fenced only on `current_generation` — it
-   matches, and **sets `consistent_lsn` alone**.
+   `advance_consistent_lsn`, which was fenced only on `current_generation` — it
+   matched, and **set `consistent_lsn` alone**.
 4. `finish_creation` → `write_timeline_row_to_yb` → `update_branch_initial_state`
    was `WHERE consistent_lsn IS NULL`, by then false. It matched zero rows, the
    existence probe passed, and it **silently no-oped**.
 
-A freshly bootstrapped branch therefore carried `consistent_lsn` and
-`current_generation` and nothing else: `applied_gc_cutoff_lsn` and
+A freshly bootstrapped branch therefore carried `consistent_lsn` and the
+generation and nothing else: `applied_gc_cutoff_lsn` and
 `initdb_lsn` stayed NULL (#552). `enable_gc` defaults to
 false, so no GC tick stamped the cutoff afterwards either — only the integration
 harness, which sets `enable_gc = true`, converged the row, which is why CI never
@@ -487,11 +489,10 @@ crash-loop. Widening a predicate is the wrong repair for a NULL either way: it
 would hide a branch with live data behind the *bootstrap* path.
 
 The pageserver group is the page store's durable index record: consistent /
-GC-cutoff / initdb LSNs, ancestry, and generation. `current_generation` is the
-gate that fences a stale pageserver: every flush runs in a transaction that
-conditionally updates this row (`... WHERE current_generation = $expected`), so
-a pageserver holding an old generation cannot clobber state owned by a newer
-attachment.
+GC-cutoff / initdb LSNs, and ancestry. There is no fencing state here: the
+endpoint's write lease fences every process in the endpoint before it writes,
+not one service's columns after the fact (see
+[`compute-fencing.md`](compute-fencing.md)).
 
 The safekeeper group is its control file. Hot-update LSN scalars get their own
 BIGINT columns so a control-file save is a column-scoped UPDATE rather than a
@@ -525,7 +526,6 @@ CREATE TABLE amp_storage.branch_state (
     applied_gc_cutoff_lsn  BIGINT,
     ancestor_branch_id     TEXT,
     ancestor_lsn           BIGINT,
-    current_generation     INT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
 
@@ -680,7 +680,7 @@ tables; the task log (`controller.*`) and the data plane
 | Table | Purpose |
 |---|---|
 | `amp_registry.users`, `storage_pools`, `clusters`, `user_pool_grants`, `user_cluster_grants` | The resource ladder above a branch. `clusters` is tombstoned (`dropped_at`) rather than deleted, because its branches are. |
-| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — it is the storage layer's globally-unique `BranchId`, and branches are not sharded across pageservers (YB tablet-shards the keyspace itself), so nothing needs a composite key. `cluster_id` is an ordinary scoping column, indexed by `branches_by_cluster`. Carries the branch's *creation record* (`name`, `pg_version`, `parent_branch_id`, `fork_lsn`), written at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL parent = bootstrap, non-NULL = fork that ancestor at `fork_lsn`). Also holds `extensions` (a JSONB array): the branch's opted-in externalized-extension set, seeded from the ancestor on fork by `RecordBranch` and unioned by the create_endpoint opt-in, so forks and read replicas inherit it (compute/architecture/extensions.md). The storage layer addresses the row as `replace(branch_id::text, '-', '')`. No generation lives here — fencing is the pageserver's own, in `amp_storage.branch_state.current_generation`. A dropped branch is tombstoned via `dropped_at`, never deleted; the name and default-branch uniqueness indexes are partial on that, so a drop frees the name. |
+| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — it is the storage layer's globally-unique `BranchId`, and branches are not sharded across pageservers (YB tablet-shards the keyspace itself), so nothing needs a composite key. `cluster_id` is an ordinary scoping column, indexed by `branches_by_cluster`. Carries the branch's *creation record* (`name`, `pg_version`, `parent_branch_id`, `fork_lsn`), written at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL parent = bootstrap, non-NULL = fork that ancestor at `fork_lsn`). Also holds `extensions` (a JSONB array): the branch's opted-in externalized-extension set, seeded from the ancestor on fork by `RecordBranch` and unioned by the create_endpoint opt-in, so forks and read replicas inherit it (compute/architecture/extensions.md). The storage layer addresses the row as `replace(branch_id::text, '-', '')`. No fencing state lives here — write fencing is a lease on the branch in `amp_registry.resource_token` (compute/architecture/compute-fencing.md), held by whichever endpoint is writing it. A dropped branch is tombstoned via `dropped_at`, never deleted; the name and default-branch uniqueness indexes are partial on that, so a drop frees the name. |
 | `amp_registry.endpoints` | One row per compute endpoint, keyed by `id` and belonging to a branch — there is no `cluster_id` column, so an endpoint and its branch can never disagree about the cluster. Every endpoint is created the same way, through `/api/v1`, whether the instance it names is a pod the controller deploys or a local process `yb_amp_local` spawns (`--deploy-driver=local`); the only difference is that a local compute has no controller-assigned `address`. `endpoints_one_writer_per_branch` applies to both. |
 
 Semantics are documented in
@@ -797,21 +797,14 @@ Nearly every YB-talking call site in this codebase satisfies that contract:
   / `DO UPDATE`; plain `INSERT` running under
   [`yb_enable_upsert_mode = true`](#yb_enable_upsert_mode) (same
   semantics — the conflict path is a no-op upsert; this covers the
-  `pages` / `slru_pages` / `meta` / `wals` / `blobs` write paths); or
-  generation-fenced `UPDATE amp_storage.branch_state SET ... WHERE
-  current_generation = $expected` (a replay sees the same generation
-  and applies the same row state).
+  `pages` / `slru_pages` / `meta` / `wals` / `blobs` write paths); or an
+  absolute `UPDATE amp_storage.branch_state SET ... WHERE branch_id =
+  $1` (a replay writes the same row state, so it is a no-op).
 - **DELETEs** are key-scoped (`DELETE FROM ... WHERE id = $1`); replay
   against an already-deleted row is a no-op.
 
-**One exception**: `PageStore::claim_generation` is the relative increment
-the rules below forbid, and a replayed drop does apply it twice.
-Tolerated, not compliant: its caller consumes the number the statement
-`RETURNING`s, so a skipped number is unobservable — the fence only needs
-"returned == persisted, and monotonic". A caller that hardcodes an
-expected generation is silently fenced instead (#564). The other
-increment, `bump_generation_for_test`, is `#[cfg(test)]` and so is not on
-the production surface at all.
+There is no exception: every production write is one of the shapes
+above, so a replay lands the same row state.
 
 **New code touching YB must keep this invariant.** Concrete rules for
 contributors:
@@ -821,18 +814,15 @@ contributors:
   need to distinguish apply from replay).
 - Don't issue `UPDATE foo SET counter = counter + 1`. Replay
   double-counts. Make the update absolute (`SET counter = $new`) with
-  the read-modify-write in the application. `claim_generation` above is
-  the standing exception, and only because `RETURNING` makes the
-  double-count invisible to its caller.
+  the read-modify-write in the application.
 - Don't depend on a `SELECT ... FOR UPDATE` lock surviving a retry —
   a reconnect drops the implicit transaction.
 - If you genuinely need a non-idempotent write through `YsqlClient`,
   add a code path that does **not** retry the connection-drop class
   (the Transient and Fatal branches stay safe — those are
-  server-confirmed no-ops). No production path needs this today:
-  `claim_generation` absorbs over-application instead. The case that
-  does want it is bare DDL, where a replay raises `42P07` rather than
-  doing something harmless twice — see #508.
+  server-confirmed no-ops). No production path needs this today. The
+  case that does want it is bare DDL, where a replay raises `42P07`
+  rather than doing something harmless twice — see #508.
 
 The Prometheus series `yb_client_errors_total{op,class,sqlstate}`,
 `yb_client_retries_exhausted_total{reason}`, and

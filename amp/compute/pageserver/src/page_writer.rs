@@ -208,10 +208,6 @@ pub struct PageWriter {
     /// is shared (see [`Self::set_lineage`]); defaults to the trivial
     /// single-segment lineage.
     lineage: Vec<LineageSegment>,
-    /// Controller-assigned generation for this attach. Carried
-    /// through to `advance_consistent_lsn` so the persisting UPDATE
-    /// can fail-fast if a higher generation has taken over.
-    generation: utils::generation::Generation,
     compute_page_store: Arc<PageStore>,
     fpu_page_store: Arc<PageStore>,
     policy: FlushPolicy,
@@ -307,9 +303,8 @@ pub struct PageWriter {
     /// the walreceiver loop forwards to the safekeeper in
     /// `PageserverFeedback`, which drives
     /// safekeeper WAL truncation. Bumped on every successful
-    /// generation-gated `advance_consistent_lsn`. Set lazily
-    /// after `init_upload_queue` runs (PageWriter is constructed
-    /// before the upload queue is initialized), via
+    /// `advance_consistent_lsn`. Set lazily after `init_upload_queue` runs
+    /// (PageWriter is constructed before the upload queue is initialized), via
     /// [`Self::set_consistent_lsn_slot`]. If unset at flush
     /// time (smoke tests, init-race), the publish is a no-op; the
     /// next flush retries.
@@ -424,7 +419,6 @@ impl PageWriter {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         branch_id: BranchId,
-        generation: utils::generation::Generation,
         compute_page_store: Arc<PageStore>,
         fpu_page_store: Arc<PageStore>,
         policy: FlushPolicy,
@@ -434,7 +428,6 @@ impl PageWriter {
         Self {
             branch_id,
             lineage: LineageSegment::single(branch_id),
-            generation,
             compute_page_store,
             fpu_page_store,
             policy,
@@ -484,8 +477,8 @@ impl PageWriter {
 
     /// Borrow the internal-traffic `PageStore`. Used by
     /// `Timeline::write_timeline_row_to_yb` (Phase 5b) and other
-    /// callers that need to issue side-effects (timeline-row upsert,
-    /// generation bump) on the same connection the flush path uses.
+    /// callers that need to issue side-effects (the timeline-row upsert)
+    /// on the same connection the flush path uses.
     pub fn fpu_page_store(&self) -> &Arc<PageStore> {
         &self.fpu_page_store
     }
@@ -509,30 +502,12 @@ impl PageWriter {
         // noted for this record. `None` falls through to a NULL
         // column — the walreceiver re-derives prev on restart.
         let prev = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
-        match self
-            .fpu_page_store
-            .advance_consistent_lsn(self.branch_id, self.generation, lsn, prev)
-            .await?
-        {
-            crate::page_store::AdvanceConsistentLsnOutcome::Updated => {
-                self.consistent_lsn_watermark.store(observed, Relaxed);
-                *self.last_consistent_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
-                self.publish_consistent_lsn(lsn);
-            }
-            crate::page_store::AdvanceConsistentLsnOutcome::StaleGeneration { live_generation } => {
-                // Shutdown path: another PS owns the timeline. Don't
-                // trigger a global shutdown here (we're already in
-                // one), but surface the fact so the operator can see
-                // why the shutdown-time catch-up failed.
-                tracing::warn!(
-                    branch_id = %self.branch_id,
-                    our_generation = ?self.generation,
-                    live_generation,
-                    "force_upsert_consistent_lsn_if_advanced fenced by newer generation — \
-                     leaving dc_lsn at previous watermark"
-                );
-            }
-        }
+        self.fpu_page_store
+            .advance_consistent_lsn(self.branch_id, lsn, prev)
+            .await?;
+        self.consistent_lsn_watermark.store(observed, Relaxed);
+        *self.last_consistent_lsn_upsert_at.lock().unwrap() = Some(Instant::now());
+        self.publish_consistent_lsn(lsn);
         Ok(())
     }
 
@@ -1916,15 +1891,10 @@ impl PageWriter {
                     let prev_record_lsn = self.take_prev_at_or_below(lsn).map(|(_, p)| p);
                     match self
                         .fpu_page_store
-                        .advance_consistent_lsn(
-                            self.branch_id,
-                            self.generation,
-                            lsn,
-                            prev_record_lsn,
-                        )
+                        .advance_consistent_lsn(self.branch_id, lsn, prev_record_lsn)
                         .await
                     {
-                        Ok(crate::page_store::AdvanceConsistentLsnOutcome::Updated) => {
+                        Ok(()) => {
                             self.consistent_lsn_watermark.store(new_lsn, Relaxed);
                             *self.last_consistent_lsn_upsert_at.lock().unwrap() =
                                 Some(Instant::now());
@@ -1933,29 +1903,10 @@ impl PageWriter {
                             // loop forwards this slot to the safekeeper
                             // in PageserverFeedback.consistent_lsn,
                             // bounding `truncate_lsn` / `peer_horizon_lsn`.
-                            // The gen-fenced UPDATE above is the
-                            // durability commit point — this publish
-                            // only echoes a fact that's already in YB.
+                            // The UPDATE above is the durability commit
+                            // point — this publish only echoes a fact
+                            // that's already in YB.
                             self.publish_consistent_lsn(lsn);
-                        }
-                        Ok(crate::page_store::AdvanceConsistentLsnOutcome::StaleGeneration {
-                            live_generation,
-                        }) => {
-                            // Fatal: a higher-generation pageserver has
-                            // taken over. Forward progress is
-                            // impossible — the dc_lsn UPDATE is the
-                            // gen fence on the data write side; once
-                            // we lose it any subsequent writes are
-                            // either redundant (live PS will overwrite)
-                            // or actively wrong (stale dc_lsn would
-                            // shrink the safekeeper truncation
-                            // horizon). See compute/architecture/
-                            // pageserver.md "Generation fencing".
-                            crate::task_mgr::shutdown_for_stale_generation(
-                                self.branch_id,
-                                self.generation,
-                                live_generation,
-                            );
                         }
                         Err(e) => {
                             // Transient YB / network error. Pages are
@@ -2760,15 +2711,7 @@ mod tests {
         (
             // Tests don't exercise the connection split — pass the
             // same PageStore arc as both compute + internal.
-            PageWriter::new(
-                branch,
-                utils::generation::Generation::new(1),
-                store.clone(),
-                store,
-                policy,
-                64 * 1024 * 1024,
-                0,
-            ),
+            PageWriter::new(branch, store.clone(), store, policy, 64 * 1024 * 1024, 0),
             branch,
         )
     }
@@ -2782,15 +2725,7 @@ mod tests {
     ) -> (PageWriter, BranchId) {
         let t = BranchId::generate();
         (
-            PageWriter::new(
-                t,
-                utils::generation::Generation::new(1),
-                store.clone(),
-                store,
-                policy,
-                64 * 1024 * 1024,
-                entries,
-            ),
+            PageWriter::new(t, store.clone(), store, policy, 64 * 1024 * 1024, entries),
             t,
         )
     }
@@ -2846,15 +2781,7 @@ mod tests {
         slru_count_limit: u32,
     ) -> MaterializerFixture {
         let t = BranchId::generate();
-        let mut w = PageWriter::new(
-            t,
-            utils::generation::Generation::new(1),
-            store.clone(),
-            store,
-            policy,
-            64 * 1024 * 1024,
-            0,
-        );
+        let mut w = PageWriter::new(t, store.clone(), store, policy, 64 * 1024 * 1024, 0);
         let (tx, rx) = tokio::sync::mpsc::channel(64);
         let in_flight = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
         // Tests exercise steady-state dispatch: open the attach
@@ -3359,7 +3286,6 @@ mod tests {
         };
         let w = Arc::new(PageWriter::new(
             t,
-            utils::generation::Generation::new(1),
             store.clone(),
             store.clone(),
             policy,
@@ -3411,7 +3337,6 @@ mod tests {
         };
         let w = Arc::new(PageWriter::new(
             t,
-            utils::generation::Generation::new(1),
             store.clone(),
             store.clone(),
             policy,
@@ -4259,25 +4184,18 @@ mod tests {
         drop_schema(&store, &schema).await;
     }
 
-    /// Helper: populate a `branch_state` row with `current_generation = 1`
-    /// matching the generation used by the `writer` helper. Required
-    /// for any test that wants `PageWriter::flush` to land its
-    /// generation-gated `advance_consistent_lsn` UPDATE.
+    /// Helper: populate a `branch_state` row so `PageWriter::flush` has
+    /// somewhere to land its `advance_consistent_lsn` UPDATE.
     async fn seed_branch_state_row(store: &PageStore, branch: BranchId) {
         // The controller provisions the row at branch create; tests stand in
         // for it before the pageserver fills in its own column group. That
-        // provisioning is what sets `pg_version`, and the claim below is what
-        // makes `current_generation` non-NULL — the row passed to
-        // update_branch_initial_state carries both only to match, since that
-        // call writes neither.
+        // provisioning is what sets `pg_version` — the row passed to
+        // update_branch_initial_state carries it only to match, since that
+        // call does not write it.
         store
             .provision_branch_row_for_test(branch, 180_002)
             .await
             .unwrap();
-        store.claim_generation(branch).await.unwrap();
-        // Must equal writer()'s hardcoded Generation::new(1); the claim's +1
-        // applies twice if YsqlClient retries it after a dropped connection (#564).
-        store.set_generation_for_test(branch, 1).await.unwrap();
         store
             .update_branch_initial_state(&crate::page_store::BranchStateRow {
                 branch_id: branch,
@@ -4285,7 +4203,6 @@ mod tests {
                 applied_gc_cutoff_lsn: Lsn(0),
                 ancestor_branch_id: None,
                 ancestor_lsn: None,
-                current_generation: 1, // inert: not in this UPDATE's SET list
                 pg_version: 180_002,
                 initdb_lsn: None,
                 prev_record_lsn: None,
@@ -4297,7 +4214,7 @@ mod tests {
     /// `consistent_lsn` slot must stay at its seed value through any
     /// number of `put()` calls. It only advances inside the flush
     /// success path, AFTER `try_write_rows` has landed the rows in YB
-    /// AND the gen-fenced `advance_consistent_lsn` UPSERT has updated
+    /// AND the `advance_consistent_lsn` UPSERT has updated
     /// `branch_state`. Wiring a buffer-write to the slot would
     /// reintroduce the 2026-06 gap-on-crash bug: SK feedback /
     /// restart-resume would see an LSN whose rows aren't actually in
@@ -4342,7 +4259,7 @@ mod tests {
 
     /// `PageWriter::flush` advances the `consistent_lsn`
     /// slot installed via `set_consistent_lsn_slot` whenever
-    /// the generation-gated `advance_consistent_lsn` UPDATE
+    /// the `advance_consistent_lsn` UPDATE
     /// succeeds. Walreceiver feedback reads that slot to drive
     /// safekeeper WAL truncation — regression on the publish path
     /// would silently freeze WAL retention.
@@ -4516,14 +4433,13 @@ mod tests {
     /// to preserve the prior value in that case.
     #[tokio::test]
     async fn flush_with_no_pairing_preserves_persisted_prev() {
-        use utils::generation::Generation;
         let (store, schema) = make_store("flush_preserve_prev").await;
         let (_w, t) = writer(store.clone(), FlushPolicy::default());
         seed_branch_state_row(&store, t).await;
 
         // First advance with a real prev.
         store
-            .advance_consistent_lsn(t, Generation::new(1), Lsn(0x200), Some(Lsn(0x180)))
+            .advance_consistent_lsn(t, Lsn(0x200), Some(Lsn(0x180)))
             .await
             .unwrap();
         let row = store.get_branch_state(t).await.unwrap().unwrap();
@@ -4532,7 +4448,7 @@ mod tests {
         // Second advance with no pairing (None). dc_lsn moves forward
         // but prev_record_lsn must retain its prior value.
         store
-            .advance_consistent_lsn(t, Generation::new(1), Lsn(0x300), None)
+            .advance_consistent_lsn(t, Lsn(0x300), None)
             .await
             .unwrap();
         let row = store.get_branch_state(t).await.unwrap().unwrap();
@@ -4541,58 +4457,6 @@ mod tests {
             row.prev_record_lsn,
             Some(Lsn(0x180)),
             "NULL-prev advance must not clobber the persisted value"
-        );
-
-        drop_schema(&store, &schema).await;
-    }
-
-    /// When the persisted `current_generation` has moved past ours
-    /// (another pageserver took over), `PageWriter::flush` calls
-    /// `task_mgr::shutdown_for_stale_generation` which cancels the
-    /// global shutdown token. The whole process is expected to exit.
-    /// Here we just verify the cancellation lands.
-    #[tokio::test]
-    async fn stale_gen_triggers_shutdown_request() {
-        use tokio_util::sync::CancellationToken;
-
-        let (store, schema) = make_store("stale_gen_shutdown").await;
-        let (w, t) = writer(store.clone(), FlushPolicy::default());
-        seed_branch_state_row(&store, t).await;
-        // Bump the persisted generation past the writer's gen=1.
-        store.bump_generation_for_test(t).await.unwrap();
-        store.bump_generation_for_test(t).await.unwrap();
-
-        // Install a fresh global shutdown token so we can observe
-        // cancellation. The OnceLock `init` no-ops on a re-set, so use
-        // a child token of the existing global if it's already
-        // initialized in this test binary's process; otherwise install
-        // one.
-        let token = CancellationToken::new();
-        // Best-effort install. If another test already initialized
-        // the global, this set is a no-op and we'll fall through to
-        // the existing token, which we don't have a handle to — so
-        // the assertion below would not fire. To make the test
-        // hermetic, plumb a per-PageWriter override would be cleaner;
-        // skipping that here to keep the change focused. If the
-        // OnceLock rejects, we observe the side effect (warn log)
-        // rather than the cancellation.
-        crate::task_mgr::init_global_shutdown_token(token.clone());
-
-        // Put + flush at our (now-stale) gen=1. The gen-gated UPDATE
-        // returns `StaleGeneration` and the flush path calls
-        // `shutdown_for_stale_generation`.
-        w.put(&[(k(1), Lsn(10), image())]).await.unwrap();
-        w.note_record_lsn(Lsn(10), Lsn(8));
-        w.flush().await.unwrap();
-
-        // Either the token we installed got cancelled (init won the
-        // race) or a previously-installed token got cancelled
-        // (someone else's). The first case is what we assert; the
-        // second is a known non-hermetic outcome from cargo test's
-        // shared process.
-        assert!(
-            token.is_cancelled(),
-            "stale-gen detection must cancel the global shutdown token"
         );
 
         drop_schema(&store, &schema).await;

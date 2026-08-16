@@ -264,6 +264,16 @@ fn initialize_config(
     };
 
     // Construct the runtime god object (it's called PageServerConf but actually is just global shared state).
+    // Arm before any listener binds. From here on a page, SLRU, meta, GC or
+    // durability write needs a live write token, seeded by the supervisor at
+    // spawn and refreshed by its pushes — see
+    // compute/architecture/compute-fencing.md.
+    // Done here rather than in parse_and_validate: arming is a process-global
+    // side effect, and config parsing is pure (and unit-tested) everywhere else.
+    if config_toml.require_write_token {
+        utils::write_fence::arm_with_initial_token();
+    }
+
     let conf = PageServerConf::parse_and_validate(config_toml, workdir)
         .context("runtime-validation of config toml")?;
     let conf = Box::leak(Box::new(conf));
@@ -473,55 +483,17 @@ fn start_pageserver(
     );
     let background_purges = mgr::BackgroundPurges::default();
 
-    // Open the configured (tenant, timeline) SYNCHRONOUSLY, before any
-    // listener accepts traffic. Computes get ECONNREFUSED until the
-    // timeline is open and active; failure to open is fatal.
-    let tenant_manager = Arc::new(BACKGROUND_RUNTIME.block_on(mgr::init_tenant_mgr(
-        conf,
-        background_purges.clone(),
-        TenantSharedResources {
-            remote_storage: remote_storage.clone(),
-            basebackup_cache: Arc::clone(&basebackup_cache),
-            compute_page_store: compute_page_store.clone(),
-            fpu_page_store: fpu_page_store.clone(),
-            gc_page_store: gc_page_store.clone(),
-        },
-        shutdown_pageserver.clone(),
-    ))?);
-    STARTUP_IS_LOADING.set(0);
-    startup_checkpoint(
-        started_startup_at,
-        "initial_tenant_load",
-        "Initial load completed",
-    );
-    startup_checkpoint(started_startup_at, "complete", "Startup complete");
-
-    basebackup_cache.spawn_background_task(
-        BACKGROUND_RUNTIME.handle(),
-        basebackup_prepare_receiver,
-        Arc::clone(&tenant_manager),
-        shutdown_pageserver.child_token(),
-    );
-
-    // Disk-usage eviction is gone (Phase 4d.2). pageserver has no
-    // local layer files to evict — all storage is in YB.
-
     // Start up the service to handle HTTP mgmt API request. We created the
     // listener earlier already.
-    let (http_endpoint_listener, https_endpoint_listener) = {
+    let (router_state, http_endpoint_listener, https_endpoint_listener) = {
         let _rt_guard = MGMT_REQUEST_RUNTIME.enter(); // for hyper
 
         let router_state = Arc::new(
-            http::routes::State::new(
-                conf,
-                tenant_manager.clone(),
-                http_auth.clone(),
-                remote_storage.clone(),
-            )
-            .context("Failed to initialize router state")?,
+            http::routes::State::new(conf, http_auth.clone(), remote_storage.clone())
+                .context("Failed to initialize router state")?,
         );
 
-        let router = http::make_router(router_state, launch_ts, http_auth.clone())?
+        let router = http::make_router(router_state.clone(), launch_ts, http_auth.clone())?
             .build()
             .map_err(|err| anyhow!(err))?;
 
@@ -561,8 +533,48 @@ fn start_pageserver(
             None => None,
         };
 
-        (http_task, https_task)
+        (router_state, http_task, https_task)
     };
+
+    // Open the configured (tenant, timeline) SYNCHRONOUSLY, before the page
+    // service accepts traffic. Computes get ECONNREFUSED until the timeline is
+    // open and active; failure to open is fatal.
+    //
+    // The HTTP mgmt API is already serving by now, on purpose: opening a branch
+    // writes for many seconds, and those writes need a write fence that the
+    // supervisor can still push renewals to. Routes that need a tenant answer
+    // 503 until the line below hands the router its manager.
+    let tenant_manager = Arc::new(BACKGROUND_RUNTIME.block_on(mgr::init_tenant_mgr(
+        conf,
+        background_purges.clone(),
+        TenantSharedResources {
+            remote_storage: remote_storage.clone(),
+            basebackup_cache: Arc::clone(&basebackup_cache),
+            compute_page_store: compute_page_store.clone(),
+            fpu_page_store: fpu_page_store.clone(),
+            gc_page_store: gc_page_store.clone(),
+        },
+        shutdown_pageserver.clone(),
+    ))?);
+    STARTUP_IS_LOADING.set(0);
+    startup_checkpoint(
+        started_startup_at,
+        "initial_tenant_load",
+        "Initial load completed",
+    );
+    startup_checkpoint(started_startup_at, "complete", "Startup complete");
+
+    basebackup_cache.spawn_background_task(
+        BACKGROUND_RUNTIME.handle(),
+        basebackup_prepare_receiver,
+        Arc::clone(&tenant_manager),
+        shutdown_pageserver.child_token(),
+    );
+
+    // Disk-usage eviction is gone (Phase 4d.2). pageserver has no
+    // local layer files to evict — all storage is in YB.
+
+    router_state.set_tenant_manager(tenant_manager.clone());
 
     let metrics_collection_task = {
         let cancel = shutdown_pageserver.child_token();
@@ -633,11 +645,6 @@ fn start_pageserver(
     BACKGROUND_RUNTIME.block_on(async move {
         let signal_token = CancellationToken::new();
         let signal_cancel = signal_token.child_token();
-
-        // Publish the signal token so any background task (e.g. the
-        // generation-fence detector in PageWriter::flush) can request
-        // an orderly shutdown via task_mgr::request_global_shutdown.
-        pageserver::task_mgr::init_global_shutdown_token(signal_token.clone());
 
         tokio::spawn(utils::signals::signal_handler(signal_token));
 

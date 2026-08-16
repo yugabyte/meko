@@ -45,8 +45,7 @@ use crate::page_server::BRANCHES_SEGMENT_NAME;
 /// For fields that require additional validation or filling in of defaults at runtime,
 /// check for examples in the [`PageServerConf::parse_and_validate`] method.
 /// The single branch a pageserver process serves for its entire lifetime,
-/// parsed from the `branch_id` field of `pageserver.toml`. The generation is
-/// not part of it — the process claims that itself at startup.
+/// parsed from the `branch_id` field of `pageserver.toml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimelineIdentity {
     pub branch_id: BranchId,
@@ -317,6 +316,7 @@ impl PageServerConf {
     ) -> anyhow::Result<Self> {
         let pageserver_api::config::ConfigToml {
             branch_id,
+            require_write_token: _,
             listen_pg_addr,
             listen_http_addr,
             listen_https_addr,

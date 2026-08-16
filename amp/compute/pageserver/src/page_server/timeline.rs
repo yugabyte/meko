@@ -32,7 +32,6 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::*;
-use utils::generation::Generation;
 use utils::id::BranchId;
 use utils::logging::{MonitorSlowFutureCallback, monitor_slow_future};
 use utils::lsn::{AtomicLsn, Lsn, RecordLsn};
@@ -95,13 +94,6 @@ pub struct Timeline {
 
     pub branch_id: BranchId,
 
-    /// The generation of the tenant that instantiated us: this is used for safety when writing remote objects.
-    /// Never changes for the lifetime of this [`Timeline`] object.
-    ///
-    /// This duplicates the generation in AttachedTenantConf, but that structure is mutable:
-    /// this copy enforces the invariant that generatio doesn't change during a Tenant's lifetime.
-    pub(crate) generation: Generation,
-
     pub pg_version: PgMajorVersion,
 
     #[allow(dead_code)]
@@ -163,7 +155,7 @@ pub struct Timeline {
     //
     // The gap-free, crash-safe durability watermark is
     // `remote_state.consistent_lsn` (advanced only after a successful
-    // gen-fenced UPSERT in `page_writer::flush`). Use that for any
+    // UPSERT in `page_writer::flush`). Use that for any
     // value that leaves the process (SK feedback, restart resume
     // position, HTTP API "consistent_lsn" field).
     applied_lsn: AtomicLsn,
@@ -1111,7 +1103,7 @@ impl Timeline {
     }
 
     /// Durable, gap-free consistency watermark. Advances only after a
-    /// successful gen-fenced `advance_consistent_lsn` UPSERT in
+    /// successful `advance_consistent_lsn` UPSERT in
     /// `page_writer::flush` — i.e., every record with LSN ≤ this is in
     /// `amp_storage.pages` AND the `branch_state` row has been
     /// updated. Use this for SK feedback, restart resume position, and
@@ -1216,10 +1208,6 @@ impl Timeline {
             applied_gc_cutoff_lsn: gc_cutoff,
             ancestor_branch_id: ancestor_id,
             ancestor_lsn,
-            // Generation::into() returns None for `Generation::None`; in
-            // attached state we always have a Valid generation from the
-            // controller's most recent attach.
-            current_generation: self.generation.into().unwrap_or(0) as i32,
             pg_version: self.pg_version.major_version_num(),
             initdb_lsn: Some(self.initdb_lsn),
             prev_record_lsn: None,
@@ -1894,7 +1882,6 @@ impl Timeline {
         tenant_conf: Arc<ArcSwap<AttachedTenantConf>>,
         metadata: &TimelineMetadata,
         branch_id: BranchId,
-        generation: Generation,
         walredo_mgr: Option<Arc<super::WalRedoManager>>,
         resources: TimelineResources,
         pg_version: PgMajorVersion,
@@ -1961,7 +1948,6 @@ impl Timeline {
             let pw_cfg = &conf.yb_page_writer;
             let mut writer = crate::page_writer::PageWriter::new(
                 branch_id,
-                generation,
                 compute_ps.clone(),
                 internal_ps.clone(),
                 crate::page_writer::FlushPolicy {
@@ -2060,7 +2046,6 @@ impl Timeline {
                 tenant_conf,
                 myself: myself.clone(),
                 branch_id,
-                generation,
                 pg_version,
 
                 walredo_mgr,
@@ -3090,7 +3075,7 @@ impl TimelineWriter<'_> {
         // GetPage@LSN waits on. This advances per put_batch so reads
         // don't stall behind YB INSERT latency. NOT a durability
         // claim; the durable watermark is `consistent_lsn`, advanced
-        // only after a successful gen-fenced UPSERT in
+        // only after a successful UPSERT in
         // `page_writer::flush`. Outward-facing reports (SK feedback,
         // restart resume, HTTP API durability field) must read
         // `Timeline::get_consistent_lsn()`, not this.

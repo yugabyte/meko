@@ -198,15 +198,10 @@ throttle), invoked from `Timeline::force_flush` (used by
 `Timeline::shutdown`'s `Flush` mode and the branch-time flush endpoint) and
 by the `FlushTask`'s final drain pass.
 
-**Generation fencing:** `advance_consistent_lsn` carries
-`WHERE current_generation = $our_gen`. A `StaleGeneration` outcome means a
-higher-generation pageserver owns the row; the losing process calls
-`shutdown_for_stale_generation` — a stale writer must not shrink the
-safekeeper truncation bound or overwrite a live writer's progress.
-`claim_generation` (an atomic increment-and-return on
-`branch_state.current_generation`, run before the branch is opened)
-establishes "YB column == our generation" so the strict fence holds from the
-first flush.
+**Write fencing:** the process checks `utils::write_fence` immediately before
+this UPDATE and exits if the endpoint's lease has lapsed, so a stale writer is
+gone rather than merely rejected — and the page writes ahead of the commit are
+fenced the same way (see [`compute-fencing.md`](compute-fencing.md)).
 
 **Read by:**
 - SK feedback: `consistent_lsn` in `PageserverFeedback` is populated
@@ -281,7 +276,7 @@ applied_gc_cutoff_lsn` unless an LSN lease covers it.
 each GC tick (`Timeline::gc_iteration`,
 [`pageserver-gc.md`](pageserver-gc.md)) when `enable_gc` is on: the tick
 persists `applied_gc_cutoff_lsn = max(old, fresh cutoff)` to
-`branch_state` (generation-fenced, monotone) **before** publishing it
+`branch_state` (monotone) **before** publishing it
 to the in-memory `Rcu` and deleting anything — the read floor is durable
 before any delete.
 
@@ -565,7 +560,6 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 | `applied_gc_cutoff_lsn` | `update_branch_initial_state` at creation; `publish_gc_cutoff` on GC ticks | Yes |
 | `ancestor_lsn` / `ancestor_branch_id` | `update_branch_initial_state` (an UPDATE — the controller seeds the row) | Yes |
 | `initdb_lsn` | `update_branch_initial_state` | Yes (falls back to `consistent_lsn`) |
-| `current_generation` | `claim_generation` at startup | Yes (fence predicate) |
 | `applied_lsn` / `last_record_lsn` | never | seeded from `consistent_lsn` (+ persisted `prev`) |
 | `remote_state.consistent_lsn` slot | never | seeded from `consistent_lsn` |
 | Per-page `lsn` | `try_write_rows` (pages / slru_pages / meta INSERTs) | on read |
@@ -577,8 +571,7 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
 - `compute/pageserver/src/page_server/timeline.rs` — `applied_lsn`,
   `last_record_lsn`, `finish_write`, `get_consistent_lsn`,
   `applied_gc_cutoff_lsn`, `rel_size_cache_horizon`, replay-window gates,
-  `write_timeline_row_to_yb`, `bump_generation_on_attach`,
-  `flush_for_basebackup`.
+  `write_timeline_row_to_yb`, `flush_for_basebackup`.
 - `compute/pageserver/src/page_server/timeline/remote_state.rs` —
   `TimelineRemoteState.consistent_lsn` slot contract.
 - `compute/pageserver/src/page_writer.rs` — `flush`, ingest-frontier
@@ -587,7 +580,7 @@ applied_lsn  ≥  consistent_lsn         (gap = in-RAM PageWriter buffer,
   `note_record_lsn` / `record_lsn_history`, `flush_horizon_lsn`,
   `await_backpressure`.
 - `compute/pageserver/src/page_store.rs` — `advance_consistent_lsn`,
-  `update_branch_initial_state`, `create_branch_row`, `claim_generation`,
+  `update_branch_initial_state`, `create_branch_row`,
   `LineageSegment` + `*_lineage` reads.
 - `compute/pageserver/src/page_server/timeline/walreceiver/walreceiver_connection.rs`
   — startpoint selection, ingest loop, feedback assembly, replay-window
