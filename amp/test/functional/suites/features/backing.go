@@ -22,6 +22,12 @@ import (
 
 const pgReadyTimeout = 5 * time.Minute
 
+// endpointReadyTimeout bounds the wait for a self-provisioned endpoint's compute
+// workload before its Service is port-forwarded. A cold endpoint waits on a
+// freshly autoscaled node (10 to 19 minutes observed on amp-dev, meko#698)
+// against a warm median of seconds.
+const endpointReadyTimeout = 20 * time.Minute
+
 func init() {
 	core.Register(core.Test{
 		Name:        "features/amp_on_yugabyted_aws",
@@ -361,6 +367,41 @@ func (f *flow) provisionBacking(ctx context.Context) error {
 // harmless no-op.
 func (f *flow) recordReapPlan() {
 	f.regID = recordRunReapPlan(f.reg, f.reap, ampstack.FromConfig(f.t.Options).Context, f.namespace(), f.suffix(), f.logf)
+}
+
+// addAmpNamespaceToReapPlan extends this run's crash-recovery record with
+// another amp namespace.
+//
+// The plan is recorded once, at provision time, naming the one namespace the
+// flow knows about. A test that REINSTALLS the control plane stands it up in a
+// namespace that did not exist then, and a run killed after that would leave it
+// (its controller, its endpoint compute pods) untracked by `ampqa env reap`.
+// The registry has no update, so the record is replaced: the new one is added
+// before the old is removed, because a duplicate reaps twice harmlessly while a
+// gap loses the infrastructure.
+func (f *flow) addAmpNamespaceToReapPlan(namespace string) {
+	if f.reg == nil || f.regID == "" || f.reap == nil {
+		return
+	}
+	planJSON, err := withAmpNamespaceReap(f.reap, ampstack.FromConfig(f.t.Options).Context, namespace).JSON()
+	if err != nil || planJSON == "" {
+		return
+	}
+	entry, err := f.reg.Add(registry.Entry{
+		Name:     "run-" + f.suffix(),
+		Shape:    "functional-run",
+		Provider: "functional",
+		Data:     map[string]string{"reap_plan": planJSON},
+	})
+	if err != nil {
+		f.logf("foundation: re-record crash-recovery reap plan for %s (best-effort): %v", namespace, err)
+		return
+	}
+	old := f.regID
+	f.regID = entry.ID
+	if _, err := f.reg.Remove(old); err != nil {
+		f.logf("foundation: remove superseded crash-recovery reap record %s (best-effort): %v", old, err)
+	}
 }
 
 // onTeardownDone drops the crash-recovery record ONLY when teardown positively

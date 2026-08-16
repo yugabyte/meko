@@ -25,6 +25,18 @@ func (s attachSink) Add(name, kind string, content []byte) error {
 	return nil
 }
 
+// prefixedSink namespaces every artifact it forwards. A run that collects the
+// same app more than once (a control plane replaced mid-run) would otherwise
+// write both copies to one name and keep whichever landed last.
+type prefixedSink struct {
+	to     attachSink
+	prefix string
+}
+
+func (s prefixedSink) Add(name, kind string, content []byte) error {
+	return s.to.Add(s.prefix+name, kind, content)
+}
+
 // collectDiagnostics is the runLifecycle pre-teardown hook: before any cleanup
 // deletes the amp namespace, gather the k8s failure evidence (controller +
 // endpoint + co-located YB pod logs, events, describe of unhealthy pods) into the

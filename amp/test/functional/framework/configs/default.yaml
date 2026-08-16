@@ -398,6 +398,22 @@ functional:
     from_controller_image: ""
     from_endpoint_image: ""
     rows: 2000
+  # features/amp_upgrade_chain: rolling upgrades across REAL releases.
+  # hops upgrades in a row, so hops+1 releases are installed and walked, oldest
+  # first. The releases come from the report portal's /releases (the ones
+  # amp-build actually cut); versions overrides that with an explicit
+  # oldest-first list of release tags when the portal cannot be reached or a
+  # specific window is wanted. portal_url empty → report.portal.url.
+  # reinstall_on_failure keeps the chain going after a failed hop by installing
+  # that release clean and re-seeding; the failed hop stays failed and the test
+  # still ends red.
+  upgrade_chain:
+    hops: 5
+    rows: 2000
+    wide_rows: 50
+    versions: []
+    portal_url: ""
+    reinstall_on_failure: true
 
 # --- Apps ---
 apps:

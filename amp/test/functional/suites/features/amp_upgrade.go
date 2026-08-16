@@ -32,6 +32,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 const (
@@ -441,7 +442,12 @@ func (u *upgradeRun) newEndpointUsesNewImage(ctx context.Context) error {
 // endpointPod returns the endpoint's compute pod name and its container image
 // refs (space separated when the pod has more than one container).
 func (u *upgradeRun) endpointPod(ctx context.Context, endpointID string) (string, string, error) {
-	kube := u.f.ampKube()
+	return endpointPodImages(ctx, u.f.ampKube(), endpointID)
+}
+
+// endpointPodImages resolves an endpoint's running compute pod and the image
+// refs its containers carry.
+func endpointPodImages(ctx context.Context, kube *k8s.Kubectl, endpointID string) (string, string, error) {
 	if kube == nil {
 		return "", "", fmt.Errorf("no kubectl is available for the amp namespace, so endpoint pod %s* cannot be read", ampstack.EndpointWorkloadName(endpointID))
 	}

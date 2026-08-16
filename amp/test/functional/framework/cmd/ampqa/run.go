@@ -149,6 +149,10 @@ available), distinct from a genuine all-pass.`,
 			if !c.Flags().Changed("portal") {
 				portalURL = cfg.GetString("report.portal.url", portalURL)
 			}
+			// --portal wins over the config key, so a test that reads the key
+			// (features/amp_upgrade_chain reads the portal's release list) would
+			// otherwise see nothing on every run the pipeline launches.
+			cfg.Set("report.portal.url", portalURL)
 			if !c.Flags().Changed("report") {
 				reportName = cfg.GetString("report.portal.report", reportName)
 			}

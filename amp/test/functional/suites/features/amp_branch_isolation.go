@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/ampstack"
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
 
 // isolationTable is the table the branch-isolation test seeds on the base branch
@@ -128,9 +130,16 @@ func branchIsolationSteps(ctx context.Context, cl ampCtl, proj ampCluster, child
 	return nil
 }
 
-// endpointSQL opens a pooled SQL connection to an amp endpoint at its resolved
-// address (the co-located tailnet-reachable pod IP:port), with the configured
-// cloud_admin/postgres credentials. It waits for YSQL readiness first.
+// endpointSQL opens a pooled SQL connection to an amp endpoint with the
+// configured cloud_admin/postgres credentials, waiting for YSQL readiness first.
+//
+// A self-provisioned endpoint is reached through a kubectl port-forward of its
+// Service, the same way the sharedk8s provider reaches one. The controller
+// reports a cluster-internal address, and on a cluster whose pod range is not
+// routable from the coordinator (amp-dev's is shadowed by an unrelated tailnet
+// route) dialling it does not refuse — it times out, burning the whole readiness
+// budget before failing. Only a run with no kubectl at all falls back to the
+// address as given.
 func (f *flow) endpointSQL(ctx context.Context, ep controller.Endpoint) (sqlConn, error) {
 	if f.ampEnv != nil {
 		return f.ampEnv.ConnectEndpoint(ctx, ep)
@@ -139,7 +148,50 @@ func (f *flow) endpointSQL(ctx context.Context, ep controller.Endpoint) (sqlConn
 	if err != nil {
 		return nil, err
 	}
-	return connectEndpoint(ctx, ci)
+	kube := f.endpointKube()
+	if kube == nil {
+		return connectEndpoint(ctx, ci)
+	}
+	// kubectl port-forward exits the instant the Service has no ready backing
+	// pod, so the workload is waited on first: a start-up race becomes a bounded
+	// wait, and a compute that never comes up a clear failure.
+	if err := ampstack.WaitEndpointWorkloadReady(ctx, kube, ep.ID, endpointReadyTimeout); err != nil {
+		return nil, fmt.Errorf("endpoint %s compute never became ready: %w", ep.ID, err)
+	}
+	pf, err := kube.PortForward(ctx, "svc/"+ampstack.EndpointWorkloadName(ep.ID), 0, ci.Port)
+	if err != nil {
+		return nil, fmt.Errorf("port-forward endpoint %s: %w", ep.ID, err)
+	}
+	ci.Host, ci.Port = "127.0.0.1", pf.LocalPort()
+	conn, err := connectEndpoint(ctx, ci)
+	if err != nil {
+		_ = pf.Close()
+		return nil, err
+	}
+	return forwardedConn{sqlConn: conn, pf: pf}, nil
+}
+
+// endpointKube is kubectl in the namespace the amp stack this run deployed lives
+// in. It is taken from the stack itself rather than from the flow, because a
+// test that reinstalls the control plane moves it to a new namespace.
+func (f *flow) endpointKube() *k8s.Kubectl {
+	if f.ampApp != nil {
+		return f.ampApp.Kube()
+	}
+	return f.ampKube()
+}
+
+// forwardedConn ties a connection to the port-forward carrying it, so closing
+// the connection closes the forward. Every caller already defers Close; a
+// forward left behind would outlive the endpoint it points at.
+type forwardedConn struct {
+	sqlConn
+	pf *k8s.PortForward
+}
+
+func (c forwardedConn) Close() {
+	c.sqlConn.Close()
+	_ = c.pf.Close()
 }
 
 // connectEndpoint waits for YSQL readiness then opens a pg client (returned as the

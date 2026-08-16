@@ -280,6 +280,12 @@ func (c *Config) lookup(dottedKey string) (any, bool) {
 	return cur, true
 }
 
+// Set records a value at a dotted key. It exists for values the RUNNER resolves
+// that a test then has to read — a command-line flag whose winner is decided in
+// cmd/ampqa, not in the config. Writing it back is what keeps the test and the
+// runner reading the same value instead of the test rediscovering it.
+func (c *Config) Set(key string, val any) { c.set(key, val) }
+
 // Has reports whether a value is present at the dotted key (regardless of its
 // value — an explicit empty string counts as present).
 func (c *Config) Has(key string) bool {

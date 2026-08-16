@@ -78,3 +78,26 @@ func readSource(t *testing.T, name string) string {
 	}
 	return string(b)
 }
+
+// Dialling the controller-reported endpoint address does not refuse on a
+// cluster whose pod range is unroutable from the coordinator — it times out,
+// and every self-provisioned test burned its whole readiness budget before
+// failing. The connection goes through a port-forward whenever kubectl is
+// available.
+func TestSelfProvisionedEndpointIsReachedThroughAForward(t *testing.T) {
+	body := readSource(t, "amp_branch_isolation.go")
+	i := strings.Index(body, "func (f *flow) endpointSQL(")
+	if i < 0 {
+		t.Fatal("endpointSQL is gone")
+	}
+	fn := body[i:]
+	if !strings.Contains(fn, "kube.PortForward(") {
+		t.Error("the endpoint is dialled at its reported address again; on an unroutable pod range that times out rather than refusing")
+	}
+	if !strings.Contains(fn, "WaitEndpointWorkloadReady(") {
+		t.Error("the forward no longer waits for the compute: kubectl port-forward exits at once when the Service has no ready pod")
+	}
+	if !strings.Contains(fn, "forwardedConn{") {
+		t.Error("the forward is no longer tied to the connection, so it outlives the endpoint it points at")
+	}
+}
