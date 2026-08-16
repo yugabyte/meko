@@ -489,6 +489,40 @@ fn overdue_at(token: WriteToken, now: SystemTime) -> Duration {
         .unwrap_or(Duration::ZERO)
 }
 
+/// The environment variable a supervisor seeds a child's first token with.
+///
+/// A daemon arms before it does anything, and an armed fence holding no token
+/// refuses every write — which for a pageserver is the bootstrap import, long
+/// before the supervisor can push a token over HTTP. The supervisor holds the
+/// lease before it starts any child, so it hands the token over at spawn and
+/// uses the HTTP pushes for renewals.
+pub const INITIAL_TOKEN_ENV: &str = "WRITE_TOKEN";
+
+/// Arm the process's fence, seeded with the token its supervisor passed at
+/// spawn.
+///
+/// Missing or unparseable seeds arm anyway: refusing to write until a token
+/// arrives is the safe direction, and it is what an unsupervised daemon with
+/// fencing switched on should do.
+pub fn arm_with_initial_token() {
+    let fence = global();
+    fence.arm();
+    match std::env::var(INITIAL_TOKEN_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<WriteToken>().ok())
+    {
+        Some(token) => {
+            fence.set_token(token);
+            tracing::info!(
+                token,
+                remaining_ms = fence.remaining().as_millis() as u64,
+                "write fence armed with the token from the supervisor"
+            );
+        }
+        None => tracing::info!("write fence armed; waiting for a write token from the supervisor"),
+    }
+}
+
 static GLOBAL: WriteFence = WriteFence::new();
 
 /// The process's fence. One process serves one branch, so there is exactly one.

@@ -58,6 +58,15 @@ pub enum Daemon {
     Safekeeper,
 }
 
+impl Daemon {
+    fn file_name(self) -> &'static str {
+        match self {
+            Daemon::Pageserver => "pageserver.toml",
+            Daemon::Safekeeper => "safekeeper.toml",
+        }
+    }
+}
+
 /// Applies `overrides` over `base` and renders the document.
 ///
 /// `base` is what the supervisor derived, as already-typed toml values. Both maps
@@ -91,15 +100,39 @@ pub fn render(
 
     // Type-check against the struct the daemon actually parses, so a wrong-typed
     // override fails here rather than in the daemon's startup path.
-    match daemon {
+    //
+    // Deserializing alone is NOT enough: neither config struct denies unknown
+    // fields, so a key the daemon has never heard of parses cleanly here and
+    // then aborts its startup — the pageserver diffs the on-disk keys against
+    // its own re-serialization and refuses to boot on any that do not round
+    // trip. So round-trip the keys here too, and fail in the supervisor's tests
+    // rather than in a pod that will not come up.
+    let round_tripped = match daemon {
         Daemon::Pageserver => {
-            toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(&rendered)
+            let parsed: pageserver_api::config::ConfigToml = toml_edit::de::from_str(&rendered)
                 .context("rendered pageserver.toml does not deserialize as ConfigToml")?;
+            toml_edit::ser::to_document(&parsed).context("re-serializing pageserver.toml")?
         }
         Daemon::Safekeeper => {
-            toml_edit::de::from_str::<safekeeper_api::config::SafekeeperConfigToml>(&rendered)
-                .context("rendered safekeeper.toml does not deserialize as SafekeeperConfigToml")?;
+            let parsed: safekeeper_api::config::SafekeeperConfigToml = toml_edit::de::from_str(
+                &rendered,
+            )
+            .context("rendered safekeeper.toml does not deserialize as SafekeeperConfigToml")?;
+            toml_edit::ser::to_document(&parsed).context("re-serializing safekeeper.toml")?
         }
+    };
+    let unknown: Vec<&str> = doc
+        .iter()
+        .map(|(k, _)| k)
+        .filter(|k| !round_tripped.contains_key(k))
+        .collect();
+    if !unknown.is_empty() {
+        bail!(
+            "rendered {} has key(s) the daemon does not define: {}. \
+             A key it cannot parse aborts its startup, so this must not ship.",
+            daemon.file_name(),
+            unknown.join(", ")
+        );
     }
     if rendered.trim().is_empty() {
         bail!("rendered an empty config document");
@@ -144,6 +177,48 @@ fn insert_path(doc: &mut DocumentMut, path: &str, value: Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The check that would have caught writing `require_write_token` into
+    /// `pageserver.toml` before the pageserver had a field for it: the daemon
+    /// aborts startup on a key it cannot parse, and deserializing here does not
+    /// notice because neither config struct denies unknown fields.
+    #[test]
+    fn a_key_the_daemon_does_not_define_is_refused() {
+        let err = render(
+            Daemon::Pageserver,
+            vec![
+                ("branch_id", Value::from("77ffde89f43d4ca08ef0a0ed1f089eaa")),
+                ("not_a_real_pageserver_key", Value::from(true)),
+            ],
+            &BTreeMap::new(),
+        )
+        .expect_err("an unknown key must not render");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("not_a_real_pageserver_key"), "{msg}");
+        assert!(msg.contains("pageserver.toml"), "{msg}");
+
+        // Same for the safekeeper, whose struct is equally permissive.
+        let err = render(
+            Daemon::Safekeeper,
+            vec![("not_a_real_safekeeper_key", Value::from(1))],
+            &BTreeMap::new(),
+        )
+        .expect_err("an unknown key must not render");
+        assert!(format!("{err:#}").contains("not_a_real_safekeeper_key"));
+
+        // And the guard must not fire on a real key at either value — the
+        // supervisor writes `require_write_token = false` when fencing is off,
+        // and a `skip_serializing_if` on the field would drop it from the round
+        // trip and make this reject a config that is perfectly valid.
+        for on in [true, false] {
+            render(
+                Daemon::Safekeeper,
+                vec![("require_write_token", Value::from(on))],
+                &BTreeMap::new(),
+            )
+            .unwrap_or_else(|e| panic!("require_write_token = {on} must render: {e:#}"));
+        }
+    }
 
     /// A real 32-hex BranchId: ConfigToml validates the format, so a made-up
     /// value fails the render (which the type check correctly caught).

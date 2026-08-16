@@ -26,6 +26,7 @@ use tracing::*;
 use utils::auth::SwappableJwtAuth;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
+use utils::write_fence::WriteTokenRequest;
 
 use crate::config::PageServerConf;
 use crate::context::{DownloadBehavior, RequestContext};
@@ -235,6 +236,29 @@ async fn status_handler(
 ) -> Result<Response<Body>, ApiError> {
     check_permission(&request, None)?;
     json_response(StatusCode::OK, StatusResponse {})
+}
+
+/// Accept a write token from the endpoint supervisor.
+///
+/// The supervisor holds the branch's lease and renews it ahead of expiry, so
+/// this arrives every few seconds. Idempotent, and monotonic in the fence: a
+/// push that lost a race with a newer one is recorded as a no-op rather than
+/// walking the deadline backwards.
+///
+/// Accepted even when the fence is disarmed — the response says so, which is
+/// how a supervisor discovers it is pushing tokens at a service that will not
+/// act on them. See `compute/architecture/compute-fencing.md`.
+async fn write_token_handler(
+    mut request: Request<Body>,
+    _cancel: CancellationToken,
+) -> Result<Response<Body>, ApiError> {
+    check_permission(&request, None)?;
+    let body: WriteTokenRequest = json_request(&mut request).await?;
+
+    json_response(
+        StatusCode::OK,
+        utils::write_fence::global().accept_push(body.token),
+    )
 }
 
 async fn reload_auth_validation_keys_handler(
@@ -739,6 +763,7 @@ pub fn make_router(
         .get("/profile/cpu", |r| request_span(r, profile_cpu_handler))
         .get("/profile/heap", |r| request_span(r, profile_heap_handler))
         .get("/v1/status", |r| api_handler(r, status_handler))
+        .post("/v1/write_token", |r| api_handler(r, write_token_handler))
         .put("/v1/failpoints", |r| {
             testing_api_handler("manage failpoints", r, failpoints_handler)
         })

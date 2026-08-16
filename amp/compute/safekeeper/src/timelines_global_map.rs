@@ -53,7 +53,7 @@ impl GlobalTimelinesState {
 
     /// Get the timeline. Returns error if it isn't ours, doesn't exist, or
     /// creation is in progress.
-    fn get(&self, branch_id: &BranchId) -> Result<Arc<Timeline>, TimelineError> {
+    fn get(&self, branch_id: &BranchId, loaded: bool) -> Result<Arc<Timeline>, TimelineError> {
         if !self.is_ours(branch_id) {
             return Err(TimelineError::NotFound(*branch_id));
         }
@@ -62,6 +62,10 @@ impl GlobalTimelinesState {
             Some(GlobalMapTimeline::CreationInProgress) => {
                 Err(TimelineError::CreationInProgress(*branch_id))
             }
+            // Before the startup load has run, an empty slot means "not read
+            // yet". Saying "not found" then is a wrong answer rather than a slow
+            // one, and callers treat it as final.
+            None if !loaded => Err(TimelineError::StillLoading(*branch_id)),
             None => Err(TimelineError::NotFound(*branch_id)),
         }
     }
@@ -69,6 +73,13 @@ impl GlobalTimelinesState {
 
 /// A struct used to manage access to the process's timeline slot.
 pub struct GlobalTimelines {
+    /// Whether [`GlobalTimelines::init`] has finished.
+    ///
+    /// The HTTP server starts before the load, so that a write fence can be
+    /// pushed to before the load writes anything. Until the load is done, an
+    /// empty slot means "not read yet", not "no such branch" — and answering a
+    /// lookup with 404 in that window is a wrong answer, not a slow one.
+    initialized: std::sync::atomic::AtomicBool,
     state: Mutex<GlobalTimelinesState>,
 }
 
@@ -76,6 +87,7 @@ impl GlobalTimelines {
     /// Create a new instance of the timeline registry.
     pub fn new(conf: Arc<SafeKeeperConf>, yb_wal: Option<Arc<YbWalConn>>) -> Self {
         Self {
+            initialized: std::sync::atomic::AtomicBool::new(false),
             state: Mutex::new(GlobalTimelinesState {
                 timeline: None,
                 conf,
@@ -108,7 +120,15 @@ impl GlobalTimelines {
             "loaded {} timelines from amp_storage.branch_state",
             self.state.lock().unwrap().timeline.is_some() as usize
         );
+        self.initialized
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(())
+    }
+
+    /// Whether the startup load has finished. Callers that would report a
+    /// missing timeline have to check this first.
+    pub fn is_initialized(&self) -> bool {
+        self.initialized.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Load a single timeline by branch_id and register it in the slot.
@@ -157,6 +177,20 @@ impl GlobalTimelines {
         server_info: ServerInfo,
         start_lsn: Lsn,
     ) -> Result<Arc<Timeline>> {
+        // Wait out the startup load first. HTTP serves before [`Self::init`]
+        // runs (so the write fence can be pushed to during it), which re-opens a
+        // race the old ordering excluded structurally: a create that lands while
+        // the load's read is in flight can have its freshly published timeline
+        // overwritten by the load's own copy of the same row. Creation is a
+        // once-per-branch event, so waiting a moment is the correct price.
+        let load_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !self.is_initialized() {
+            if tokio::time::Instant::now() >= load_deadline {
+                bail!(TimelineError::StillLoading(branch_id));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
         let (conf, yb_wal) = {
             let mut state = self.state.lock().unwrap();
             if !state.is_ours(&branch_id) {
@@ -231,7 +265,11 @@ impl GlobalTimelines {
     /// Get the timeline. Returned timeline is always valid, i.e. loaded in
     /// memory and not cancelled.
     pub(crate) fn get(&self, branch_id: BranchId) -> Result<Arc<Timeline>, TimelineError> {
-        let tli = self.state.lock().unwrap().get(&branch_id)?;
+        let tli = self
+            .state
+            .lock()
+            .unwrap()
+            .get(&branch_id, self.is_initialized())?;
         if tli.is_cancelled() {
             return Err(TimelineError::Cancelled(branch_id));
         }

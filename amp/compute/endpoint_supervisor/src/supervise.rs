@@ -170,6 +170,13 @@ impl Service {
         for (k, v) in &self.env {
             cmd.env(k, v);
         }
+        // Seeded at every spawn, not just the first: a child restarted mid-lease
+        // arms itself before the supervisor can push anything over HTTP, and one
+        // that came up holding no token would refuse its first write.
+        let token = crate::fence::current_token();
+        if token != 0 {
+            cmd.env(utils::write_fence::INITIAL_TOKEN_ENV, token.to_string());
+        }
         // With no log file the child inherits this process's stdout, which in the
         // pod is the stream `kubectl logs` shows.
         if let Some(path) = &self.log_file {
@@ -389,7 +396,13 @@ fn env_usize(name: &str) -> Option<usize> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     Shutdown,
-    BudgetExceeded { service: String, restarts: usize },
+    BudgetExceeded {
+        service: String,
+        restarts: usize,
+    },
+    /// The endpoint's write lease is gone. Every child has been stopped; the
+    /// caller waits for the lease again and brings the endpoint back up.
+    FenceLost,
 }
 
 pub struct Supervisor {
@@ -458,6 +471,12 @@ impl Supervisor {
             self.stop_all();
             return Ok(Some(Outcome::Shutdown));
         }
+        // Before the restart pass, so a child that exits because it fenced itself
+        // out is not restarted into the same wall.
+        if crate::fence::lost() {
+            self.stop_all();
+            return Ok(Some(Outcome::FenceLost));
+        }
         for i in 0..self.services.len() {
             // A service an operator asked to stop stays stopped. Restarting it
             // here would make `pageserver stop` unwinnable.
@@ -498,6 +517,9 @@ impl Supervisor {
             }
             tracing::warn!(service = %name, restarts = count, "exited; restarting");
             std::thread::sleep(self.policy.backoff);
+            // Same as an operator start: the replacement needs a token that
+            // outlasts its startup, not the remainder of this interval.
+            crate::fence::renew_now();
             if let Err(e) = self.services[i].spawn() {
                 // A failed respawn must not escape this loop: propagating it
                 // would exit the pod on the first transient `fork`/`exec`
@@ -510,6 +532,11 @@ impl Supervisor {
                     error = %e,
                     "respawn failed; retrying against the restart budget"
                 );
+            } else {
+                // Seeded at spawn with whatever was current, which may be nearly
+                // spent by now; hand it the live one rather than leaving it to
+                // write against a token that is about to lapse.
+                crate::fence::push_current();
             }
         }
         Ok(None)
@@ -591,8 +618,12 @@ impl Supervisor {
         if svc.started() && matches!(svc.exited(), Ok(None)) {
             return Ok(());
         }
+        // Before the spawn, so the child is seeded with a full-TTL token: what is
+        // left of the current one may not outlast its startup writes.
+        crate::fence::renew_now();
         svc.spawn()?;
         svc.wait_healthy(timeout, interval)?;
+        crate::fence::push_current();
         tracing::info!(service = name, "started on request");
         Ok(())
     }
@@ -681,6 +712,47 @@ mod tests {
             "start_one returned with the service still dead"
         );
         sup.stop_all();
+    }
+
+    /// A child has to come up already holding the lease. It arms before it does
+    /// anything, and an armed fence with no token refuses every write — which
+    /// for a pageserver is the bootstrap import, long before a token could
+    /// arrive over HTTP. Seeded at every spawn, so a restart mid-lease is
+    /// covered too.
+    #[test]
+    fn a_spawned_child_is_handed_the_current_token() {
+        let dir = camino_tempfile::tempdir().unwrap();
+        let seen = dir.path().join("seen");
+        let mut svc = Service::new(
+            "pageserver",
+            sh(&format!(
+                "printf '%s' \"${{{}:-none}}\" > {seen}",
+                utils::write_fence::INITIAL_TOKEN_ENV
+            )),
+        );
+
+        // No lease held: nothing to hand over, and the child must not be told a
+        // token it does not have.
+        svc.spawn().unwrap();
+        wait_for_exit(&mut svc);
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "none");
+
+        crate::fence::set_current_for_test(Some(4_242_424_242));
+        svc.spawn().unwrap();
+        wait_for_exit(&mut svc);
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "4242424242");
+        crate::fence::set_current_for_test(None);
+    }
+
+    fn wait_for_exit(svc: &mut Service) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            if matches!(svc.exited(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("child never exited");
     }
 
     #[test]

@@ -207,6 +207,12 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 	for k, v := range pgLibEnv(env) {
 		out[k] = v
 	}
+	// The fencing escape hatch must be reachable here too: with a fencing bug,
+	// this is where an operator turns it off, and proc's env scrub would
+	// otherwise drop it (it is neither YB_-prefixed nor allowlisted).
+	if v, ok := os.LookupEnv("REQUIRE_WRITE_TOKEN"); ok {
+		out["REQUIRE_WRITE_TOKEN"] = v
+	}
 	// proc's allowlist covers what the daemons read (RUST_LOG, FAILPOINTS, YB_*)
 	// but not these two, and compute_ctl shells out to initdb and postgres, which
 	// expect a PATH and a HOME.

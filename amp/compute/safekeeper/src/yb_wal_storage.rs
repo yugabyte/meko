@@ -1738,6 +1738,17 @@ async fn flush_batch(
     if batch.is_empty() {
         return Ok(());
     }
+
+    // The write fence, at the single point every WAL byte crosses on its way
+    // into `amp_storage.wals` — both lanes below funnel through here. If the
+    // endpoint's lease has lapsed, this process exits rather than returning an
+    // error: an error goes back to the walproposer, which reconnects and
+    // retries against this same stranded safekeeper. The fence has to remove
+    // the writer, not the write. Disarmed unless `require_write_token` is set,
+    // so the dev topologies are unaffected. See
+    // `compute/architecture/compute-fencing.md`.
+    utils::write_fence::global().enforce("WAL flush to amp_storage.wals");
+
     let runs = coalesce_runs(batch);
     // Encode once, ahead of the lane split, so EVERY lane binds
     // identical bytes by construction rather than by convention.

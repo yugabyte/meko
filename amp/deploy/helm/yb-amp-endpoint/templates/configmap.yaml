@@ -113,3 +113,12 @@ data:
   SUPERVISOR_RESTART_BACKOFF_SECONDS: {{ .Values.supervisor.restartBackoffSeconds | quote }}
   SUPERVISOR_MAX_RESTARTS: {{ .Values.supervisor.maxRestarts | quote }}
   SUPERVISOR_RESTART_WINDOW_SECONDS: {{ .Values.supervisor.restartWindowSeconds | quote }}
+
+  # --- Write fencing (compute/architecture/compute-fencing.md) ---
+  # The supervisor holds a YSQL lease on the branch and pushes it to the
+  # services as their write deadline. The pod's client id is generated per
+  # process, not templated: two instances of this Deployment must NOT share one,
+  # or they would both be granted the lease.
+  REQUIRE_WRITE_TOKEN: {{ .Values.supervisor.requireWriteToken | quote }}
+  WRITE_TOKEN_TTL_MS: {{ .Values.supervisor.writeTokenTtlMs | quote }}
+  WRITE_TOKEN_RENEW_SECONDS: {{ .Values.supervisor.writeTokenRenewSeconds | quote }}

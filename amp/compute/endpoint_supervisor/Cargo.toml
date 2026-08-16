@@ -32,8 +32,13 @@ pageserver_api.workspace = true
 # safekeeper's branch create.
 reqwest = { workspace = true, features = ["blocking", "json"] }
 safekeeper_api.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
 toml_edit.workspace = true
 tracing.workspace = true
+# The write fence: the token store client, the wire types, and the deadline
+# arithmetic — one definition shared with the daemons that enforce it.
+utils.workspace = true
+ysql_client.workspace = true
 tracing-subscriber.workspace = true
 workspace_hack.workspace = true
 

@@ -149,6 +149,14 @@ async fn main() -> anyhow::Result<()> {
     info!("version: {}", utils::amp_version());
     info!("buld_tag: {BUILD_TAG}");
 
+    // Arm before anything can write. From here on a WAL flush needs a live write
+    // token, seeded by the supervisor at spawn and refreshed by its pushes — so
+    // an armed safekeeper that never hears from its supervisor writes nothing
+    // rather than treating the silence as permission.
+    if cfg.require_write_token {
+        utils::write_fence::arm_with_initial_token();
+    }
+
     // Change into the data directory.
     std::env::set_current_dir(&workdir)?;
 
@@ -360,6 +368,22 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
         .current_thread_runtime
         .then(|| Handle::try_current().expect("no runtime in main"));
 
+    // Serve HTTP before loading timelines, not after. Loading writes — and every
+    // write goes through the write fence, whose token only stays live while the
+    // supervisor can push renewals to `POST /v1/write_token`. A safekeeper that
+    // is not listening yet cannot be pushed to, so it would fence itself out
+    // partway through its own startup.
+    let http_handle = current_thread_rt
+        .as_ref()
+        .unwrap_or_else(|| HTTP_RUNTIME.handle())
+        .spawn(http::task_main_http(
+            conf.clone(),
+            http_listener,
+            global_timelines.clone(),
+        ))
+        .map(|res| ("HTTP service main".to_owned(), res));
+    tasks_handles.push(Box::pin(http_handle));
+
     // Load all timelines from disk to memory.
     global_timelines.init().await?;
 
@@ -472,17 +496,6 @@ async fn start_safekeeper(conf: Arc<SafeKeeperConf>) -> Result<()> {
             .map(|res| ("WAL service tenant only main".to_owned(), res));
         tasks_handles.push(Box::pin(wal_service_handle));
     }
-
-    let http_handle = current_thread_rt
-        .as_ref()
-        .unwrap_or_else(|| HTTP_RUNTIME.handle())
-        .spawn(http::task_main_http(
-            conf.clone(),
-            http_listener,
-            global_timelines.clone(),
-        ))
-        .map(|res| ("HTTP service main".to_owned(), res));
-    tasks_handles.push(Box::pin(http_handle));
 
     if let Some(https_listener) = https_listener {
         let https_handle = current_thread_rt

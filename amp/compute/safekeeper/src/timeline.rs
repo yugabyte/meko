@@ -261,6 +261,8 @@ pub enum TimelineError {
     NotFound(BranchId),
     #[error("Timeline {0} creation is in progress")]
     CreationInProgress(BranchId),
+    #[error("Timeline {0} has not been loaded yet")]
+    StillLoading(BranchId),
     #[error("Timeline {0} is not initialized, wal_seg_size is zero")]
     UninitializedWalSegSize(BranchId),
     #[error("Timeline {0} is not initialized, pg_version is unknown")]
@@ -274,6 +276,11 @@ impl From<TimelineError> for ApiError {
             TimelineError::NotFound(branch_id) => {
                 ApiError::NotFound(anyhow!("timeline {} not found", branch_id).into())
             }
+            // Not 404: the answer is not known yet, and a caller told "no such
+            // timeline" during startup would take that as final.
+            TimelineError::StillLoading(branch_id) => ApiError::ResourceUnavailable(
+                format!("timeline {branch_id} has not been loaded yet").into(),
+            ),
             _ => ApiError::InternalServerError(anyhow!("{}", te)),
         }
     }

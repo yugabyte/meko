@@ -57,6 +57,44 @@ until asked to start it again. An endpoint is up or down as a unit:
 `endpoint create` writes config and starts nothing, `endpoint start`
 runs it.
 
+## The write fence
+
+The supervisor also holds the endpoint's **lease on its branch** — a
+YSQL-issued token that doubles as the write deadline it passes to the
+services. This is what keeps a rescheduled-but-not-yet-dead pod from
+writing the same branch as its replacement; the full design is in
+[`compute-fencing.md`](compute-fencing.md).
+
+In this pod, concretely:
+
+- Nothing starts until `amp_registry.token_acquire` grants the lease on
+  `branch:<BRANCH_ID>`. A pod that cannot get it logs who holds it and
+  waits — it is a pod waiting its turn, not a failed pod, so it never
+  exits on that account.
+- The client id is generated **per process**
+  (`<hostname>-<pid>-<nonce>-<branch>`, override with
+  `WRITE_TOKEN_CLIENT_ID`), never per endpoint: the lease grants
+  unconditionally to its current holder, so two pods sharing a client id
+  would both be granted it.
+- 10 s TTL (`WRITE_TOKEN_TTL_MS`), renewed every 8 s
+  (`WRITE_TOKEN_RENEW_SECONDS`). Each renewal is pushed to the
+  safekeeper and pageserver over `POST /v1/write_token`.
+- Losing the lease — a denial, or renewals failing until the token runs
+  out — SIGTERMs **every** child, then goes back to waiting for the
+  token and re-runs the whole bring-up when it wins one. A clean SIGTERM
+  releases the lease, so a replacement starts immediately instead of
+  waiting out the TTL.
+- The safekeeper is armed via `require_write_token = true` in the
+  `safekeeper.toml` the supervisor renders, and kills itself rather than
+  flush WAL past its token's deadline — including when it has never been
+  given one. The pageserver is handed the token but does not yet act on
+  it; it starts enforcing in a follow-up.
+
+`REQUIRE_WRITE_TOKEN=false` runs the endpoint unfenced (no lease, no
+pushes, `require_write_token = false`). It is the escape hatch for a
+fencing bug, not an operating mode: while it is set, nothing stops a
+second endpoint writing the same branch.
+
 All durable state is in YugabyteDB; the pod's `/data` volume holds only
 configs, logs, and the compute's ephemeral `pgdata`, so the pod
 is stateless — a `Deployment`, not a `StatefulSet`. The volume is an

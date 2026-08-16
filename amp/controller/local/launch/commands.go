@@ -2,6 +2,8 @@ package launch
 
 import (
 	"context"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/yugabyte/amp/controller/local/config"
@@ -55,25 +57,36 @@ func daemonStop(ctx context.Context, env *config.LocalEnv, endpointID, service s
 	return supervisorStop(env, le.conf.EndpointID, "stop", service, immediate)
 }
 
-// renderDaemonConfig rewrites the config the launcher owns for one daemon,
-// before it is started.
+// renderDaemonConfig rewrites the config the launcher owns for the endpoint's
+// daemons, before any of them is started.
 //
 // The launcher renders these files and the supervisor only reads them, so a
-// start is the moment to write one: the config can depend on the launcher's
-// environment at the time of the command, which is how the integration suite
-// pins the safekeeper's control-file cadence
-// (`YB_SK_CONTROL_FILE_SAVE_INTERVAL` on `safekeeper restart`). Rendering only
-// at provisioning time would make that override unreachable.
-func renderDaemonConfig(env *config.LocalEnv, le launcherEndpoint, service string) error {
-	if service != "safekeeper" {
-		return nil
-	}
+// start is the moment to write them: the config can depend on the launcher's
+// environment at the time of the command. `REQUIRE_WRITE_TOKEN=false` — the
+// fencing escape hatch — has to reach the safekeeper's own config this way, or
+// it arms itself from its default and refuses every write the unfenced
+// supervisor never sends a token for.
+func renderDaemonConfig(env *config.LocalEnv, le launcherEndpoint, _ string) error {
 	for i := range env.Safekeepers {
 		if env.Safekeepers[i].EndpointID == le.conf.EndpointID {
-			return writeSafekeeperFiles(env, &env.Safekeepers[i])
+			if err := writeSafekeeperFiles(env, &env.Safekeepers[i]); err != nil {
+				return err
+			}
+			break
 		}
 	}
 	return nil
+}
+
+// fencingOverride reads REQUIRE_WRITE_TOKEN from the launcher's environment:
+// nil when unset (the daemons' own default, on, rules), a value when set.
+func fencingOverride() *bool {
+	v, ok := os.LookupEnv("REQUIRE_WRITE_TOKEN")
+	if !ok || strings.TrimSpace(v) == "" {
+		return nil
+	}
+	b := v == "true" || v == "1"
+	return &b
 }
 
 // daemonStopTimeout bounds a stop request. The supervisor drains the child

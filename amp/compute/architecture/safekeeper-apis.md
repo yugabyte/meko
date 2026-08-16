@@ -41,6 +41,18 @@ router is not kept authoritative.
 | GET | `/profile/cpu` | CPU profile (pprof). Auth-exempt. |
 | GET | `/profile/heap` | Heap profile (jemalloc). Auth-exempt. |
 
+### Write fencing
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/v1/write_token` | Hand the process a write token (the epoch micros at which the lease expires, issued by YSQL and held by the endpoint supervisor). Body = `{"token": <u64>}`; returns `{token, expires_in_ms, armed}` where `token` is what the process now holds and `expires_in_ms` is measured against **its** clock. Monotonic — a push older than the token held is a no-op — so a retry cannot walk the deadline backwards. Accepted even when the fence is disarmed (`armed: false` says so). Global scope. See [`compute-fencing.md`](compute-fencing.md). |
+
+With `require_write_token = true` in `safekeeper.toml`, WAL that would land
+after the current token's deadline is not written and the process **exits**
+(code 66) rather than returning an error to the walproposer — the fence has to
+remove the writer, not the write. A safekeeper that is armed and has never been
+pushed a token writes nothing at all: silence is not permission.
+
 ### Timeline lifecycle
 
 | Method | Path | Purpose |

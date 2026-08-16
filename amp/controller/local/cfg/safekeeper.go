@@ -41,9 +41,10 @@ type safekeeperConfigToml struct {
 
 	HeartbeatTimeout config.HumantimeDuration `toml:"heartbeat_timeout"`
 
-	YbStorageConn   *string `toml:"yb_storage_conn,omitempty"`
-	WalCacheSizeMib *uint64 `toml:"wal_cache_size_mib,omitempty"`
-	ScaleFactor     float64 `toml:"scale_factor"`
+	YbStorageConn     *string `toml:"yb_storage_conn,omitempty"`
+	RequireWriteToken *bool   `toml:"require_write_token,omitempty"`
+	WalCacheSizeMib   *uint64 `toml:"wal_cache_size_mib,omitempty"`
+	ScaleFactor       float64 `toml:"scale_factor"`
 
 	MaxTimelineDiskUsageBytes uint64                   `toml:"max_timeline_disk_usage_bytes"`
 	GlobalDiskCheckInterval   config.HumantimeDuration `toml:"global_disk_check_interval"`
@@ -113,6 +114,11 @@ type SafekeeperParams struct {
 	// WalCacheSizeMib maps the SafekeeperConf's Option<u32> to the toml
 	// usize; nil omits the key (daemon derives it from scale_factor).
 	WalCacheSizeMib *uint32
+	// RequireWriteToken overrides the daemon's own default (on) when set.
+	// nil omits the key, so the default rules; false is the fencing escape
+	// hatch (REQUIRE_WRITE_TOKEN=false) written through to the daemon.
+	RequireWriteToken *bool
+
 	// Auth (JWT) paths. In the minimal Trust path all are nil. When set,
 	// AuthPublicKeyPath populates all three surface key paths (pg /
 	// pg_tenant_only / http), matching Rust.
@@ -142,6 +148,7 @@ func WriteSafekeeperToml(path string, p SafekeeperParams) error {
 		cfg.ListenHTTPS = &s
 	}
 	cfg.YbStorageConn = p.YbStorageConn
+	cfg.RequireWriteToken = p.RequireWriteToken
 	if p.WalCacheSizeMib != nil {
 		v := uint64(*p.WalCacheSizeMib)
 		cfg.WalCacheSizeMib = &v

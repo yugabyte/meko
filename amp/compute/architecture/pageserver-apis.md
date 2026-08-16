@@ -68,6 +68,12 @@ Routes exempt from auth even when JWT is enabled
 | GET | `/v1/doc` | Swagger UI HTML for the embedded OpenAPI spec. |
 | GET | `/swagger.yml` | Raw OpenAPI spec (`openapi_spec.yml`, embedded at compile time). **Not authoritative** — `make_router()` is the source of truth for the route set; the spec still lists paths the router does not serve. |
 
+### Write fencing
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| POST | `/v1/write_token` | Hand the process a write token (the epoch micros at which the lease expires, issued by YSQL and held by the endpoint supervisor). Body `{"token": <u64>}`; returns `{token, expires_in_ms, armed}` where `token` is what the process now holds and `expires_in_ms` is measured against **its** clock. Monotonic — a push older than the token held is a no-op — so a retry cannot walk the deadline backwards. Instance-wide scope. See [`compute-fencing.md`](compute-fencing.md). |
+
 ### Profiling / debug
 
 | Method | Path | Behavior |

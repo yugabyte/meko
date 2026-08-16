@@ -93,7 +93,7 @@ pub type Shared = Arc<Mutex<Supervisor>>;
 /// A leftover socket file is the normal case after a hard kill: the path exists,
 /// nothing is listening, and `bind` fails with `AddrInUse`. Removing it is safe
 /// because the run directory belongs to exactly one supervisor.
-pub fn bind(run_dir: &Utf8Path) -> Result<UnixListener> {
+pub fn bind(run_dir: &Utf8Path) -> Result<(UnixListener, u64)> {
     let path = socket_path(run_dir);
     if path.exists() {
         std::fs::remove_file(&path)
@@ -101,21 +101,45 @@ pub fn bind(run_dir: &Utf8Path) -> Result<UnixListener> {
     }
     let listener = UnixListener::bind(&path)
         .with_context(|| format!("binding the control socket at {path}"))?;
+    // Non-blocking, so the serve loop can notice it has been superseded: a
+    // listener whose socket file was replaced never receives another
+    // connection, and a thread blocked in accept() on it would live — holding
+    // its supervisor — for the rest of the process.
+    listener
+        .set_nonblocking(true)
+        .context("setting the control socket non-blocking")?;
+    let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     tracing::info!(socket = %path, "control socket listening");
-    Ok(listener)
+    Ok((listener, generation))
 }
 
+/// Bumped by every [`bind`]. The endpoint is brought up once per lease, and each
+/// bring-up binds afresh so the socket's presence keeps meaning "everything is
+/// up" — this is how the previous lease's serve thread learns to exit.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Serve control requests until the process stops. One connection, one command.
-pub fn serve(listener: UnixListener, sup: Shared) {
-    for conn in listener.incoming() {
-        if crate::supervise::shutdown_requested() {
+pub fn serve(listener: UnixListener, sup: Shared, generation: u64) {
+    loop {
+        if crate::supervise::shutdown_requested()
+            || GENERATION.load(std::sync::atomic::Ordering::Relaxed) != generation
+        {
             return;
         }
-        match conn {
-            Ok(stream) => {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // The listener is non-blocking only so this loop can poll; each
+                // request is served synchronously.
+                if let Err(e) = stream.set_nonblocking(false) {
+                    tracing::warn!("control stream: {e}");
+                    continue;
+                }
                 if let Err(e) = handle(stream, &sup) {
                     tracing::warn!("control request failed: {e:#}");
                 }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
             // A failed accept is not worth taking the pod down for; the daemons
             // are running and only the control surface is affected.
@@ -351,7 +375,7 @@ mod tests {
         let dir = camino_tempfile::tempdir().unwrap();
         let path = socket_path(dir.path());
         std::fs::write(&path, b"stale").unwrap();
-        let listener = bind(dir.path()).expect("a stale socket must not block bind");
+        let (listener, _) = bind(dir.path()).expect("a stale socket must not block bind");
         drop(listener);
     }
 
@@ -379,6 +403,30 @@ mod tests {
         );
     }
 
+    /// A rebind supersedes the previous serve thread. The endpoint is brought up
+    /// once per lease, each bring-up binds afresh, and a thread left blocked on
+    /// the replaced listener would hold its supervisor for the rest of the
+    /// process — one leaked thread per lease loss.
+    #[test]
+    fn a_rebind_makes_the_old_serve_thread_exit() {
+        let dir = camino_tempfile::tempdir().unwrap();
+        let (first, first_gen) = bind(dir.path()).unwrap();
+        let sup = shared_with(Service::new("pageserver", sh("sleep 60")));
+        let old = std::thread::spawn(move || serve(first, sup, first_gen));
+
+        // Supersede it. The old thread must notice and return on its own — no
+        // connection, no shutdown flag.
+        let (_second, _second_gen) = bind(dir.path()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !old.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            old.is_finished(),
+            "the superseded serve thread never exited"
+        );
+    }
+
     /// The fallback has to actually bind, not merely be short: it is a real path
     /// in a real directory, and `/tmp` is the one place both a pod and a
     /// developer's machine can be relied on to have.
@@ -388,9 +436,9 @@ mod tests {
         let path = socket_path(&deep);
         let _ = std::fs::remove_file(&path);
 
-        let listener = bind(&deep).expect("the fallback path must bind");
+        let (listener, generation) = bind(&deep).expect("the fallback path must bind");
         let sup = shared_with(Service::new("pageserver", sh("sleep 60")));
-        std::thread::spawn(move || serve(listener, sup));
+        std::thread::spawn(move || serve(listener, sup, generation));
 
         let mut stream = UnixStream::connect(&path).expect("connect to the fallback socket");
         stream.write_all(b"status\n").unwrap();

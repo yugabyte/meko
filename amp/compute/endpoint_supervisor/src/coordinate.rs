@@ -15,6 +15,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use utils::write_fence::{WriteToken, WriteTokenRequest, WriteTokenResponse};
 
 /// How long the pageserver's branch may take to reach `Active`. Generous: on a
 /// Bootstrap recipe this runs `initdb`, and on a Branch recipe it forks the
@@ -153,6 +154,29 @@ pub fn create_safekeeper_branch(
         "safekeeper branch create returned {status}: {}",
         detail.chars().take(200).collect::<String>()
     );
+}
+
+/// Hands a daemon the endpoint's write token.
+///
+/// Returns whether that daemon's fence is actually armed, which is how the
+/// supervisor discovers it is pushing tokens at a service that will not act on
+/// them. See `compute/architecture/compute-fencing.md`.
+pub fn post_write_token(url: &str, token: WriteToken) -> Result<bool> {
+    let resp = client()
+        .post(url)
+        .json(&WriteTokenRequest { token })
+        .send()
+        .context("POST write token")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let detail = resp.text().unwrap_or_default();
+        bail!(
+            "write token push returned {status}: {}",
+            detail.chars().take(200).collect::<String>()
+        );
+    }
+    let body: WriteTokenResponse = resp.json().context("decoding the write-token response")?;
+    Ok(body.armed)
 }
 
 #[cfg(test)]

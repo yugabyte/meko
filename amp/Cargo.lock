@@ -1189,10 +1189,13 @@ dependencies = [
  "safekeeper_api",
  "serde",
  "serde_json",
+ "tokio",
  "toml_edit",
  "tracing",
  "tracing-subscriber",
+ "utils",
  "workspace_hack",
+ "ysql_client",
 ]
 
 [[package]]

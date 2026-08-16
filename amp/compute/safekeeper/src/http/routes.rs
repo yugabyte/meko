@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info_span;
 use utils::auth::SwappableJwtAuth;
 use utils::id::BranchId;
+use utils::write_fence::WriteTokenRequest;
 
 use crate::{GlobalTimelines, SafeKeeperConf, debug_dump, patch_control_file};
 
@@ -30,6 +31,26 @@ async fn status_handler(request: Request<Body>) -> Result<Response<Body>, ApiErr
     check_permission(&request, None)?;
     let status = SafekeeperStatus {};
     json_response(StatusCode::OK, status)
+}
+
+/// Accept a write token from the endpoint supervisor.
+///
+/// The supervisor holds the branch's lease and renews it ahead of expiry, so
+/// this arrives every few seconds. Idempotent, and monotonic in the fence: a
+/// push that lost a race with a newer one is recorded as a no-op rather than
+/// walking the deadline backwards.
+///
+/// Accepted even when the fence is disarmed — the response says so, which is
+/// how a supervisor discovers it is pushing tokens at a service that will not
+/// act on them.
+async fn write_token_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
+    check_permission(&request, None)?;
+    let body: WriteTokenRequest = json_request(&mut request).await?;
+
+    json_response(
+        StatusCode::OK,
+        utils::write_fence::global().accept_push(body.token),
+    )
 }
 
 fn get_conf(request: &Request<Body>) -> &SafeKeeperConf {
@@ -259,6 +280,7 @@ pub fn make_router(
                 failpoints_handler(r, cancel).await
             })
         })
+        .post("/v1/write_token", |r| request_span(r, write_token_handler))
         // Will be used in the future instead of implicit timeline creation
         .post("/v1/branch", |r| request_span(r, timeline_create_handler))
         .get("/v1/branch/:branch_id", |r| {

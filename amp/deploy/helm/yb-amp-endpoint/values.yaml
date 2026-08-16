@@ -129,6 +129,21 @@ supervisor:
   maxRestarts: 5
   # -- Sliding window (seconds) over which maxRestarts is counted.
   restartWindowSeconds: 180
+  # -- Hold a YSQL lease on the branch and pass it to the services as their
+  # write deadline, so at most one endpoint can ever write it
+  # (compute/architecture/compute-fencing.md). Nothing starts before the lease
+  # is held; losing it stops every service and the pod waits for its turn.
+  # Setting this false runs the endpoint unfenced — only safe for a topology
+  # that is single-writer by construction.
+  requireWriteToken: true
+  # -- Lease length in milliseconds. The token is a deadline the safekeeper
+  # enforces against its own clock, so this bounds how long a stranded endpoint
+  # can keep writing.
+  writeTokenTtlMs: 10000
+  # -- How often to renew, in seconds. Must leave slack under the TTL: the
+  # difference is how long a failing renewal may be retried before anything
+  # downstream stops writing.
+  writeTokenRenewSeconds: 8
 
 # Metrics: expose the compute's Postgres stats for the amp metrics pipeline
 # (controller/architecture/ac-metrics.md). The Neon-derived services in this pod

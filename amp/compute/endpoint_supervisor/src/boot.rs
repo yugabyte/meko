@@ -160,7 +160,11 @@ pub fn pageserver_base(l: &Layout, yb_conn: Value) -> Vec<(&'static str, Value)>
 
 /// The base `safekeeper.toml` keys. Its `yb_storage_conn` is a *string*-encoded
 /// inline table rather than a table, which is the shape its config type expects.
-pub fn safekeeper_base(l: &Layout, yb_conn_str: String) -> Vec<(&'static str, Value)> {
+pub fn safekeeper_base(
+    l: &Layout,
+    yb_conn_str: String,
+    require_write_token: bool,
+) -> Vec<(&'static str, Value)> {
     vec![
         ("branch_id", l.branch_id.clone().into()),
         (
@@ -172,6 +176,7 @@ pub fn safekeeper_base(l: &Layout, yb_conn_str: String) -> Vec<(&'static str, Va
             format!("{}:{}", l.bind_host, l.safekeeper_http_port).into(),
         ),
         ("yb_storage_conn", yb_conn_str.into()),
+        ("require_write_token", require_write_token.into()),
     ]
 }
 

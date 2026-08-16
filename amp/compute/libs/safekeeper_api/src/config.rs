@@ -149,6 +149,20 @@ pub struct SafekeeperConfigToml {
 
     pub force_metric_collection_on_scrape: bool,
     pub dev: bool,
+
+    /// Arm the single-writer write fence (`utils::write_fence`). When set, the
+    /// endpoint supervisor is expected to push a YSQL write token over
+    /// `POST /v1/write_token` and keep renewing it; WAL that would land after
+    /// the current token's deadline is not written, and the process exits
+    /// instead. An armed safekeeper that never receives a token writes nothing
+    /// — silence is not permission. See
+    /// `compute/architecture/compute-fencing.md`.
+    ///
+    /// Defaults to **true**: a safekeeper that is never told about fencing
+    /// should refuse to write without a token rather than assume it may. Off is
+    /// the escape hatch for a fencing bug, not an operating mode — an unfenced
+    /// safekeeper has nothing stopping a second writer on its branch.
+    pub require_write_token: bool,
 }
 
 impl Default for SafekeeperConfigToml {
@@ -185,6 +199,7 @@ impl Default for SafekeeperConfigToml {
             enable_tls_wal_service_api: false,
             force_metric_collection_on_scrape: true,
             dev: false,
+            require_write_token: true,
         }
     }
 }

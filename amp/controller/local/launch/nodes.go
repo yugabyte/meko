@@ -40,14 +40,15 @@ func writeSafekeeperFiles(env *config.LocalEnv, conf *config.SafekeeperConf) err
 		listenAddr = *conf.ListenAddr
 	}
 	params := cfg.SafekeeperParams{
-		BranchID:         conf.BranchID,
-		ListenAddr:       listenAddr,
-		PgPort:           conf.PgPort,
-		PgTenantOnlyPort: conf.PgTenantOnlyPort,
-		HTTPPort:         conf.HTTPPort,
-		HTTPSPort:        conf.HTTPSPort,
-		YbStorageConn:    conf.YbStorageConn,
-		WalCacheSizeMib:  conf.WalCacheSizeMib,
+		BranchID:          conf.BranchID,
+		ListenAddr:        listenAddr,
+		PgPort:            conf.PgPort,
+		PgTenantOnlyPort:  conf.PgTenantOnlyPort,
+		HTTPPort:          conf.HTTPPort,
+		HTTPSPort:         conf.HTTPSPort,
+		YbStorageConn:     conf.YbStorageConn,
+		WalCacheSizeMib:   conf.WalCacheSizeMib,
+		RequireWriteToken: fencingOverride(),
 	}
 	return cfg.WriteSafekeeperToml(filepath.Join(dataDir, "safekeeper.toml"), params)
 }

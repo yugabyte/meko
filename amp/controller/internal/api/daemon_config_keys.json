@@ -99,6 +99,7 @@
     "max_delta_for_fanout": "integer",
     "max_global_disk_usage_ratio": "float",
     "max_timeline_disk_usage_bytes": "integer",
+    "require_write_token": "boolean",
     "scale_factor": "float",
     "ssl_cert_file": "string",
     "ssl_cert_reload_period": "string",

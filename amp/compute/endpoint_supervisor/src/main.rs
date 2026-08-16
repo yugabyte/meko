@@ -63,6 +63,7 @@ pub mod boot;
 pub mod config;
 pub mod control;
 pub mod coordinate;
+pub mod fence;
 pub mod pg_settings;
 pub mod pidfile;
 pub mod protected_keys;
@@ -76,7 +77,7 @@ pub mod supervise;
 use resources::{Cgroup, Resources};
 use supervise::{Outcome, Policy, Supervisor};
 
-fn env_opt(name: &str) -> Option<String> {
+pub(crate) fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
@@ -100,12 +101,22 @@ fn env_port(name: &str, default: u16) -> Result<u16> {
 /// A boolean the chart may render as `true`/`false`; anything else is false, so a
 /// blank ConfigMap value means "off" rather than a boot failure.
 fn env_bool(name: &str) -> bool {
-    env_opt(name).is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"))
+    env_bool_or(name, false)
+}
+
+/// Same, but for a knob whose safe state is *on*: an unset or blank value keeps
+/// the default rather than silently disabling it. Used for the write fence,
+/// where "off" means an unfenced endpoint and must be asked for explicitly.
+pub fn env_bool_or(name: &str, default: bool) -> bool {
+    match env_opt(name) {
+        None => default,
+        Some(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1"),
+    }
 }
 
 /// An optional count of seconds. A malformed value is an error: silently not
 /// offloading is the kind of thing nobody notices until the cache is cold.
-fn env_u64(name: &str) -> Result<Option<u64>> {
+pub(crate) fn env_u64(name: &str) -> Result<Option<u64>> {
     match env_opt(name) {
         None => Ok(None),
         Some(v) => v
@@ -290,6 +301,18 @@ impl Env {
         serde_json::Value::Object(map)
     }
 
+    /// The same connection as the typed config the store client takes. Built
+    /// from the JSON above rather than restated, so the two cannot drift; the
+    /// `type` tag is the storage-kind discriminator, which `YbConnConfig` does
+    /// not carry (and rejects, since it denies unknown fields).
+    fn yb_conn_config(&self) -> Result<ysql_client::YbConnConfig> {
+        let mut v = self.yb_conn_typed_json();
+        v.as_object_mut()
+            .expect("yb_conn_typed_json builds an object")
+            .remove("type");
+        serde_json::from_value(v).context("building the YB connection for the write fence")
+    }
+
     /// Host and port for the readiness wait, taken from the first entry of the
     /// comma-separated `host:port` list.
     fn yb_probe_target(&self) -> Result<(String, u16)> {
@@ -346,6 +369,13 @@ fn run() -> Result<std::process::ExitCode> {
 
     let env = Env::read()?;
     let l = &env.layout;
+    let fence_cfg = fence::Config::from_env(&l.branch_id)?;
+    if !fence_cfg.required {
+        tracing::warn!(
+            "REQUIRE_WRITE_TOKEN is off: this endpoint runs unfenced, and nothing stops a \
+             second endpoint writing the same branch"
+        );
+    }
 
     std::fs::create_dir_all(&l.run_dir).with_context(|| format!("create {}", l.run_dir))?;
     // Before anything is started, and held for the life of the process: it is
@@ -383,8 +413,96 @@ fn run() -> Result<std::process::ExitCode> {
         // one derived from container defaults.
         require_prerendered(l)?;
     } else {
-        render_config(&env)?;
+        render_config(&env, &fence_cfg)?;
     }
+
+    // Nothing starts before the endpoint holds its branch's write lease, and
+    // losing it takes every child down. A pod that cannot get the lease is a pod
+    // waiting its turn, so this loops rather than failing — it wins the lease,
+    // serves under it, and on loss goes back to waiting.
+    // REQUIRE_WRITE_TOKEN=false is the escape hatch for a fencing bug, so it
+    // must not depend on any of the fencing machinery — including the token
+    // store, whose brokenness may be exactly why it was set. With fencing off,
+    // nothing here is connected to, acquired, renewed, or released.
+    let mut fence = if fence_cfg.required {
+        Some(fence::Fence::connect(
+            fence_cfg.clone(),
+            &env.yb_conn_config()?,
+            &l.branch_id,
+            vec![
+                (
+                    "safekeeper",
+                    format!(
+                        "http://{}:{}/v1/write_token",
+                        boot::LISTEN_HOST,
+                        l.safekeeper_http_port
+                    ),
+                ),
+                (
+                    "pageserver",
+                    format!(
+                        "http://{}:{}/v1/write_token",
+                        boot::LISTEN_HOST,
+                        l.pageserver_http_port
+                    ),
+                ),
+            ],
+        )?)
+    } else {
+        None
+    };
+
+    loop {
+        if let Some(f) = fence.as_mut() {
+            if !f.acquire_blocking() {
+                tracing::info!("shutdown requested while waiting for the write token");
+                return Ok(std::process::ExitCode::SUCCESS);
+            }
+        }
+        let (outcome, returned) = serve_one_lease(&env, fence)?;
+        fence = returned;
+        match outcome {
+            Outcome::Shutdown => {
+                tracing::info!("stopped on signal");
+                if let Some(f) = fence.as_mut() {
+                    f.release();
+                }
+                return Ok(std::process::ExitCode::SUCCESS);
+            }
+            // Non-zero so the kubelet recreates the pod: a service that cannot
+            // stay up is not something this process can fix by restarting it
+            // again.
+            Outcome::BudgetExceeded { service, restarts } => {
+                tracing::error!(service, restarts, "exiting so the pod is recreated");
+                if let Some(f) = fence.as_mut() {
+                    f.release();
+                }
+                return Ok(std::process::ExitCode::FAILURE);
+            }
+            // Only reachable with a fence: `fence::lost` is raised by its
+            // renewal thread.
+            Outcome::FenceLost => {
+                tracing::warn!(
+                    "every service stopped; waiting for the write token to bring the \
+                     endpoint back up"
+                );
+            }
+        }
+    }
+}
+
+/// Brings the endpoint up under one lease and supervises it until that lease
+/// ends, the process is asked to stop, or a service exhausts its restart budget.
+///
+/// Called once per lease, so everything it does has to be idempotent across
+/// restarts: the configs are already written, the safekeeper's branch create
+/// tolerates its own 409, and the pageserver reads its init mode off a row that
+/// exists by then.
+fn serve_one_lease(
+    env: &Env,
+    fence: Option<fence::Fence>,
+) -> Result<(Outcome, Option<fence::Fence>)> {
+    let l = &env.layout;
 
     // The compute starts last, after the pageserver/safekeeper handshake: the
     // safekeeper only learns about the branch over its HTTP API, and the LSN to
@@ -403,85 +521,123 @@ fn run() -> Result<std::process::ExitCode> {
     for svc in services {
         sup.add(svc);
     }
-    sup.start_all()?;
-
-    // Wrapped so a failure — or a SIGTERM landing mid-handshake — stops the two
-    // daemons that are already up. Returning straight out would leave them running
-    // against datadirs nobody is closing, which is the situation the signal
-    // handlers exist to prevent, and `Supervisor` does not reap on drop.
-    let handshake = (|| -> Result<String> {
-        let start_lsn = coordinate::wait_branch_active(
-            boot::LISTEN_HOST,
-            l.pageserver_http_port,
-            &l.branch_id,
-            coordinate::BRANCH_ACTIVE_TIMEOUT,
-            coordinate::BRANCH_ACTIVE_INTERVAL,
-        )?;
-        coordinate::create_safekeeper_branch(
-            boot::LISTEN_HOST,
-            l.safekeeper_http_port,
-            &l.branch_id,
-            l.pg_version_major,
-            &start_lsn,
-        )?;
-        Ok(start_lsn)
-    })();
-    if let Err(e) = handshake {
-        sup.stop_all();
-        return Err(e).context("the pageserver/safekeeper handshake");
-    }
-
-    sup.add(compute);
-    // Skips the two that are already running.
-    sup.start_all()?;
-
-    // On its own thread: this waits for Postgres to answer queries, and blocking
-    // here would stop the monitor loop from restarting a sibling that crashed
-    // meanwhile. The controller's Docker deployer treats the line it logs as the
-    // endpoint's readiness signal — see remote_auth::READY_MARKER.
+    // Renewing runs for the whole bring-up, not just once it is over. Opening a
+    // branch writes for longer than one lease, so a token that is never renewed
+    // during startup lapses partway through — and every child is seeded from the
+    // token this keeps current.
     //
-    // Skipped when the caller rendered the config: the password exists so a client
-    // outside the pod can authenticate, and a `yb_amp_local` endpoint is reached
-    // over loopback, by a spec that already says how its roles are set up.
-    if !env.prerendered {
-        remote_auth::spawn(
-            &l.pg_bin().join("psql"),
-            l.compute_port,
-            &env.compute_password,
-        );
-    }
+    // Losing the lease here is not a half-built endpoint torn down for no
+    // reason: it means another endpoint owns the branch, and this one has to
+    // stop at whatever stage it reached.
+    let renewals = fence.map(fence::spawn_renewals);
 
-    // The control socket goes up last, once every service exists, so a caller
-    // cannot ask about one that has not been added yet. Sharing the supervisor
-    // means the monitor loop takes the lock a pass at a time — see `control`.
-    let sup: control::Shared = std::sync::Arc::new(std::sync::Mutex::new(sup));
-    // Not fatal, at either step: the endpoint serves fine without a control
-    // surface, and taking it down over one would trade a working database for a
-    // missing convenience. `thread::spawn` panics when the process is out of
-    // threads, which is exactly the moment that trade is worst.
-    match control::bind(&l.run_dir).and_then(|listener| {
-        let sup = sup.clone();
-        std::thread::Builder::new()
-            .name("control".into())
-            .spawn(move || control::serve(listener, sup))
-            .context("spawning the control thread")
-    }) {
-        Ok(_handle) => {}
-        Err(e) => tracing::warn!("control socket unavailable: {e:#}"),
-    }
+    // Every fallible step runs inside this closure so there is exactly one way
+    // out of the function, and the fence always comes back through it. An error
+    // that returned directly would leave the renewal thread holding the fence —
+    // renewing a lease for daemons that are gone, unreleased until the process
+    // exits and the TTL runs out on its own.
+    let outcome_res = (|| -> Result<Outcome> {
+        sup.start_all()?;
+        fence::push_current();
 
-    tracing::info!("all services are up");
-
-    match control::run_shared(&sup, std::time::Duration::from_millis(500))? {
-        Outcome::Shutdown => {
-            tracing::info!("stopped on signal");
-            Ok(std::process::ExitCode::SUCCESS)
+        // Wrapped so a failure — or a SIGTERM landing mid-handshake — stops the
+        // two daemons that are already up. Returning straight out would leave
+        // them running against datadirs nobody is closing, which is the
+        // situation the signal handlers exist to prevent, and `Supervisor` does
+        // not reap on drop.
+        let handshake = (|| -> Result<String> {
+            let start_lsn = coordinate::wait_branch_active(
+                boot::LISTEN_HOST,
+                l.pageserver_http_port,
+                &l.branch_id,
+                coordinate::BRANCH_ACTIVE_TIMEOUT,
+                coordinate::BRANCH_ACTIVE_INTERVAL,
+            )?;
+            coordinate::create_safekeeper_branch(
+                boot::LISTEN_HOST,
+                l.safekeeper_http_port,
+                &l.branch_id,
+                l.pg_version_major,
+                &start_lsn,
+            )?;
+            Ok(start_lsn)
+        })();
+        if let Err(e) = handshake {
+            sup.stop_all();
+            return Err(e).context("the pageserver/safekeeper handshake");
         }
-        // Non-zero so the kubelet recreates the pod: a service that cannot stay
-        // up is not something this process can fix by restarting it again.
-        Outcome::BudgetExceeded { service, restarts } => {
-            tracing::error!(service, restarts, "exiting so the pod is recreated");
-            Ok(std::process::ExitCode::FAILURE)
+
+        sup.add(compute);
+        // Skips the two that are already running.
+        sup.start_all()?;
+
+        // On its own thread: this waits for Postgres to answer queries, and
+        // blocking here would stop the monitor loop from restarting a sibling
+        // that crashed meanwhile. The controller's Docker deployer treats the
+        // line it logs as the endpoint's readiness signal — see
+        // remote_auth::READY_MARKER.
+        //
+        // Skipped when the caller rendered the config: the password exists so a
+        // client outside the pod can authenticate, and a `yb_amp_local` endpoint
+        // is reached over loopback, by a spec that already says how its roles
+        // are set up.
+        if !env.prerendered {
+            remote_auth::spawn(
+                &l.pg_bin().join("psql"),
+                l.compute_port,
+                &env.compute_password,
+            );
+        }
+
+        // The control socket goes up last, once every service exists, so a
+        // caller cannot ask about one that has not been added yet. Sharing the
+        // supervisor means the monitor loop takes the lock a pass at a time —
+        // see `control`.
+        let sup: control::Shared = std::sync::Arc::new(std::sync::Mutex::new(sup));
+        // Not fatal, at either step: the endpoint serves fine without a control
+        // surface, and taking it down over one would trade a working database
+        // for a missing convenience. `thread::spawn` panics when the process is
+        // out of threads, which is exactly the moment that trade is worst.
+        match control::bind(&l.run_dir).and_then(|(listener, generation)| {
+            let sup = sup.clone();
+            std::thread::Builder::new()
+                .name("control".into())
+                .spawn(move || control::serve(listener, sup, generation))
+                .context("spawning the control thread")
+        }) {
+            Ok(_handle) => {}
+            Err(e) => tracing::warn!("control socket unavailable: {e:#}"),
+        }
+
+        tracing::info!("all services are up");
+
+        const POLL: std::time::Duration = std::time::Duration::from_millis(500);
+        control::run_shared(&sup, POLL)
+    })();
+
+    // The serving is over, however it ended; nothing else stops the renewal
+    // thread when the daemons died for a spent restart budget — the process is
+    // not shutting down and the lease is not lost, so it would renew forever
+    // and this join would never return.
+    fence::stop_renewals();
+    let mut fence = renewals
+        .map(|handle| {
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("the write-token renewal thread panicked"))
+        })
+        .transpose()?;
+
+    match outcome_res {
+        Ok(outcome) => Ok((outcome, fence)),
+        Err(e) => {
+            // The caller never sees the fence on this path, so the lease is
+            // handed back here — without this, a replacement waits out the TTL
+            // for a lease whose holder is already exiting.
+            if let Some(f) = fence.as_mut() {
+                f.release();
+            }
+            Err(e)
         }
     }
 }
@@ -491,7 +647,7 @@ fn run() -> Result<std::process::ExitCode> {
 ///
 /// All of it happens before anything starts, because a render failure is a bad
 /// config — failing here beats crash-looping a daemon against it.
-fn render_config(env: &Env) -> Result<()> {
+fn render_config(env: &Env, fence_cfg: &fence::Config) -> Result<()> {
     let l = &env.layout;
 
     let cgroup_root: Utf8PathBuf = env_or("CGROUP_ROOT", "/sys/fs/cgroup").into();
@@ -540,7 +696,7 @@ fn render_config(env: &Env) -> Result<()> {
 
     // The safekeeper's yb_storage_conn is a string-encoded inline table rather
     // than a table, which is the shape its config type expects.
-    let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string());
+    let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string(), fence_cfg.required);
     sk_base.extend(scale);
     let sk_toml = config::render(config::Daemon::Safekeeper, sk_base, &overrides.safekeeper)
         .context("rendering safekeeper.toml")?;
