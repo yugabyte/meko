@@ -18,8 +18,9 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::Value;
+use ysql_client::{YbConnConfig, YsqlClient};
 
 use crate::config::OverrideValue;
 use crate::retry::Backoff;
@@ -33,121 +34,82 @@ pub struct Overrides {
     pub safekeeper: BTreeMap<String, OverrideValue>,
 }
 
-/// How to reach YugabyteDB with the bundled `psql`.
-pub struct PsqlTarget {
-    pub psql: camino::Utf8PathBuf,
-    pub host: String,
-    pub port: String,
-    pub user: String,
-    pub dbname: String,
-    /// Name of the env var holding the password, if any (`YbConnConfig`'s
-    /// `password_env` convention). Its value is passed through as `PGPASSWORD`.
-    pub password_env: Option<String>,
-}
-
-/// A well-formed endpoint id, checked before it is interpolated into SQL.
+/// The lookup, with the endpoint id bound rather than interpolated.
 ///
-/// `psql -c` takes no bind parameters, so the id is validated rather than
-/// trusted: anything that is not a plain UUID is refused.
-pub fn valid_endpoint_id(raw: &str) -> Option<String> {
-    let s = raw.trim();
-    let hex_and_dashes = s.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
-    let shape = s.len() == 36
-        && s.as_bytes().iter().enumerate().all(|(i, b)| {
-            if matches!(i, 8 | 13 | 18 | 23) {
-                *b == b'-'
-            } else {
-                b.is_ascii_hexdigit()
-            }
-        });
-    (hex_and_dashes && shape).then(|| s.to_string())
-}
+/// `e.id` is `uuid` and the parameter arrives as text, so the cast is on the
+/// parameter — casting the column instead would cost the primary-key index on
+/// a table with a row per endpoint in the fleet.
+///
+/// `::text` on the result keeps [`parse`] the one place the document is
+/// interpreted.
+const QUERY: &str = "SELECT jsonb_build_object(\
+     'pg', coalesce(b.pg_settings,'{}'::jsonb) || coalesce(e.pg_settings,'{}'::jsonb),\
+     'pageserver', coalesce(e.pageserver_settings,'{}'::jsonb),\
+     'safekeeper', coalesce(e.safekeeper_settings,'{}'::jsonb))::text \
+     FROM amp_registry.endpoints e \
+     LEFT JOIN amp_registry.branches b ON b.branch_id = e.branch_id \
+     WHERE e.id = $1::uuid";
 
-fn query(endpoint_id: &str) -> String {
-    format!(
-        "SELECT jsonb_build_object(\
-         'pg', coalesce(b.pg_settings,'{{}}'::jsonb) || coalesce(e.pg_settings,'{{}}'::jsonb),\
-         'pageserver', coalesce(e.pageserver_settings,'{{}}'::jsonb),\
-         'safekeeper', coalesce(e.safekeeper_settings,'{{}}'::jsonb)) \
-         FROM amp_registry.endpoints e \
-         LEFT JOIN amp_registry.branches b ON b.branch_id = e.branch_id \
-         WHERE e.id = '{endpoint_id}'"
-    )
-}
-
-/// How long `psql` may spend opening the connection. Without this it blocks
+/// How long opening the connection may take. Without a bound this blocks
 /// indefinitely against an address that accepts nothing, and this read happens
-/// before any daemon starts — so an unbounded wait here is an endpoint that never
-/// comes up and has nothing listening for a probe to fail against.
-const CONNECT_TIMEOUT_SECS: u32 = 3;
+/// before any daemon starts — so an unbounded wait here is an endpoint that
+/// never comes up and has nothing listening for a probe to fail against.
+///
+/// Tighter than [`ysql_client::DEFAULT_CONNECT_TIMEOUT_MS`]: this one is on the
+/// boot path, and its failure mode is "carry on with derived defaults".
+const CONNECT_TIMEOUT_MS: u64 = 3_000;
 
 /// Ceiling on the query itself, for the case where the connection opens but the
-/// statement never returns.
-const STATEMENT_TIMEOUT_MS: u32 = 5_000;
+/// statement never returns. Set here rather than inherited, because the client
+/// default is off — the daemons' bulk paths cannot carry a statement bound, and
+/// this one indexed single-row read can.
+const STATEMENT_TIMEOUT_MS: u64 = 5_000;
 
-/// Runs the lookup. `Ok(None)` means "nothing to apply" (no row, or no id);
-/// `Err` means the lookup itself failed and the caller should warn and continue.
+/// The endpoint's own connection, with both bounds applied.
+fn bounded(yb: &YbConnConfig) -> YbConnConfig {
+    YbConnConfig {
+        connect_timeout_ms: CONNECT_TIMEOUT_MS,
+        statement_timeout_ms: STATEMENT_TIMEOUT_MS,
+        ..yb.clone()
+    }
+}
+
+/// Runs the lookup. `Ok(None)` means "nothing to apply" (no row); `Err` means
+/// the lookup itself failed and the caller should warn and continue.
 ///
-/// The psql invocation is retried, because losing an operator's settings to a YB
-/// leader election means an endpoint silently running on derived defaults. The two
-/// deterministic failures — a malformed id and unparseable output — are checked
-/// outside the retry, since repeating them only delays the same error.
-pub fn fetch(target: &PsqlTarget, endpoint_id: &str) -> Result<Option<Overrides>> {
-    let id = valid_endpoint_id(endpoint_id)
-        .with_context(|| format!("endpoint id {endpoint_id:?} is not a UUID"))?;
-    let stdout = crate::retry::retry("registry override read", &Backoff::registry(), || {
-        run_psql(target, &id)
+/// The read is retried, because losing an operator's settings to a YB leader
+/// election means an endpoint silently running on derived defaults. Its one
+/// deterministic failure — an unparseable document — is handled outside the
+/// retry, since repeating it only delays the same error.
+///
+/// A fresh client per attempt, deliberately: this runs once at boot and never
+/// again, and reconnecting is most of what makes a retry worth taking.
+pub fn fetch(yb: &YbConnConfig, endpoint_id: &str) -> Result<Option<Overrides>> {
+    let yb = bounded(yb);
+    let id = endpoint_id.trim().to_string();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building the registry-read runtime")?;
+    let doc = crate::retry::retry("registry override read", &Backoff::registry(), || {
+        rt.block_on(read(&yb, &id))
     })?;
-    parse(&stdout)
+    match doc {
+        Some(d) => parse(&d),
+        None => Ok(None),
+    }
 }
 
-/// One `psql` invocation, returning its stdout.
-fn run_psql(target: &PsqlTarget, id: &str) -> Result<String> {
-    let out = psql_command(target, id).output().context("run psql")?;
-    if !out.status.success() {
-        bail!(
-            "override lookup failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    String::from_utf8(out.stdout).context("psql output is not utf-8")
-}
-
-/// Builds the invocation. Split out so the timeouts, which are the difference
-/// between a bounded read and a pod that hangs, are assertable in a test.
-fn psql_command(target: &PsqlTarget, id: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new(&target.psql);
-    cmd.args([
-        "-h",
-        &target.host,
-        "-p",
-        &target.port,
-        "-U",
-        &target.user,
-        "-d",
-        &target.dbname,
-        "-v",
-        "ON_ERROR_STOP=1",
-        "--no-psqlrc",
-        // -t (tuples only) -A (unaligned) so stdout is exactly the JSON document.
-        "-t",
-        "-A",
-        "-c",
-        &query(id),
-    ]);
-    // Both bounds go through libpq's environment rather than the connstring, so
-    // they apply without having to rebuild the target's arguments.
-    cmd.env("PGCONNECT_TIMEOUT", CONNECT_TIMEOUT_SECS.to_string());
-    cmd.env(
-        "PGOPTIONS",
-        format!("-c statement_timeout={STATEMENT_TIMEOUT_MS}"),
-    );
-    if let Some(var) = &target.password_env {
-        if let Ok(pw) = std::env::var(var) {
-            cmd.env("PGPASSWORD", pw);
-        }
-    }
-    cmd
+/// One connect-and-read. `None` is no row for this endpoint.
+async fn read(yb: &YbConnConfig, id: &str) -> Result<Option<String>> {
+    let client = YsqlClient::from_yb_config(yb, "endpoint-supervisor", false)
+        .await
+        .context("connecting to amp_registry")?;
+    let row = client
+        .query_opt(QUERY, &[&id])
+        .await
+        .context("override lookup")?;
+    Ok(row.map(|r| r.get::<_, String>(0)))
 }
 
 /// Parses the single JSON document the query returns.
@@ -214,37 +176,37 @@ mod tests {
 
     const ID: &str = "3f2b1c4e-0000-4000-8000-000000000001";
 
-    #[test]
-    fn only_a_uuid_is_accepted() {
-        assert_eq!(valid_endpoint_id(ID).as_deref(), Some(ID));
-        assert_eq!(valid_endpoint_id(&format!("  {ID}  ")).as_deref(), Some(ID));
-        // The interesting cases: anything that could change the statement.
-        for bad in [
-            "",
-            "not-a-uuid",
-            "'; DROP TABLE amp_registry.endpoints; --",
-            "3f2b1c4e-0000-4000-8000-00000000000", // too short
-            "3f2b1c4e-0000-4000-8000-0000000000011", // too long
-            "3f2b1c4e_0000_4000_8000_000000000001", // wrong separators
-            "zzzzzzzz-0000-4000-8000-000000000001", // non-hex
-        ] {
-            assert_eq!(valid_endpoint_id(bad), None, "accepted {bad:?}");
-        }
+    fn conn(host_ports: &str) -> YbConnConfig {
+        toml_edit::de::from_str(&format!(
+            "host_ports = \"{host_ports}\"\nuser = \"u\"\ndbname = \"d\"\n"
+        ))
+        .unwrap()
     }
 
     /// The SQL is the contract with the schema: the operand order of `||` is what
     /// makes the endpoint win, and swapping it would silently invert precedence.
     #[test]
     fn the_query_merges_both_rows_endpoint_last() {
-        let q = query(ID);
         assert!(
-            q.contains(
+            QUERY.contains(
                 "coalesce(b.pg_settings,'{}'::jsonb) || coalesce(e.pg_settings,'{}'::jsonb)"
             ),
-            "{q}"
+            "{QUERY}"
         );
-        assert!(q.contains("LEFT JOIN amp_registry.branches b"), "{q}");
-        assert!(q.contains(&format!("WHERE e.id = '{ID}'")), "{q}");
+        assert!(
+            QUERY.contains("LEFT JOIN amp_registry.branches b"),
+            "{QUERY}"
+        );
+    }
+
+    /// The id is bound, not interpolated — which is what makes it impossible
+    /// for an id to change the statement, and why this module no longer checks
+    /// the id's shape before using it.
+    #[test]
+    fn the_endpoint_id_is_a_bind_parameter() {
+        assert!(QUERY.contains("WHERE e.id = $1::uuid"), "{QUERY}");
+        // The cast is on the parameter, so the primary-key index still applies.
+        assert!(!QUERY.contains("e.id::text"), "{QUERY}");
     }
 
     #[test]
@@ -294,38 +256,27 @@ mod tests {
     }
 
     /// The read must be bounded on both axes. Without these an unreachable YB
-    /// blocks `psql` forever, and this runs before any daemon starts — so the pod
-    /// would hang with nothing listening for a probe to fail against.
+    /// blocks the client forever, and this runs before any daemon starts — so
+    /// the pod would hang with nothing listening for a probe to fail against.
+    ///
+    /// Both are asked for rather than inherited: the client's statement default
+    /// is off, because the daemons' bulk paths cannot carry one.
     #[test]
     fn the_lookup_is_bounded_by_a_connect_and_statement_timeout() {
-        let target = PsqlTarget {
-            psql: "psql".into(),
-            host: "h".into(),
-            port: "5433".into(),
-            user: "u".into(),
-            dbname: "d".into(),
-            password_env: None,
-        };
-        let cmd = psql_command(&target, ID);
-        let env: std::collections::BTreeMap<_, _> = cmd
-            .get_envs()
-            .filter_map(|(k, v)| Some((k.to_str()?, v?.to_str()?)))
-            .collect();
-        assert_eq!(
-            env.get("PGCONNECT_TIMEOUT").copied(),
-            Some(CONNECT_TIMEOUT_SECS.to_string().as_str())
-        );
-        assert_eq!(
-            env.get("PGOPTIONS").copied(),
-            Some(format!("-c statement_timeout={STATEMENT_TIMEOUT_MS}").as_str())
-        );
+        let yb = bounded(&conn("127.0.0.1:5433"));
+        assert_eq!(yb.connect_timeout_ms, CONNECT_TIMEOUT_MS);
+        assert_eq!(yb.statement_timeout_ms, STATEMENT_TIMEOUT_MS);
+        // Zero would mean "no bound" for either, which is the thing this read
+        // must never inherit.
+        assert_ne!(CONNECT_TIMEOUT_MS, 0);
+        assert_ne!(STATEMENT_TIMEOUT_MS, 0);
+
         // Whole-read worst case: every attempt stalls the full connect timeout,
         // plus the sleeps between them. This is startup latency before Postgres
         // exists, so it must stay small.
         let b = Backoff::registry();
         let sleeps: std::time::Duration = (1..b.attempts).map(|a| b.delay_after(a)).sum();
-        let worst =
-            std::time::Duration::from_secs(u64::from(CONNECT_TIMEOUT_SECS)) * b.attempts + sleeps;
+        let worst = std::time::Duration::from_millis(CONNECT_TIMEOUT_MS) * b.attempts + sleeps;
         assert!(
             worst <= std::time::Duration::from_secs(30),
             "worst-case read is {worst:?}"
@@ -333,21 +284,14 @@ mod tests {
     }
 
     /// An unreachable host must surface an error after a bounded number of
-    /// attempts rather than hanging, and must not be mistaken for "no overrides".
+    /// attempts rather than hanging, and must not be mistaken for "no
+    /// overrides" — an endpoint quietly running on derived defaults looks
+    /// exactly like one that has none configured.
     #[test]
     fn an_unreachable_registry_is_an_error_not_an_empty_result() {
-        let target = PsqlTarget {
-            // Any path that is not an executable: this exercises the retry and
-            // error plumbing without needing a psql or a server.
-            psql: "/nonexistent/psql".into(),
-            host: "127.0.0.1".into(),
-            port: "1".into(),
-            user: "yugabyte".into(),
-            dbname: "yb_storage".into(),
-            password_env: None,
-        };
+        // Port 1: nothing listens, so every attempt fails to connect.
         let started = std::time::Instant::now();
-        let err = fetch(&target, ID).expect_err("must not report success");
+        let err = fetch(&conn("127.0.0.1:1"), ID).expect_err("must not report success");
         assert!(
             format!("{err:#}").contains("failed after"),
             "should report the exhausted budget: {err:#}"
@@ -356,27 +300,6 @@ mod tests {
             started.elapsed() < std::time::Duration::from_secs(30),
             "took {:?}",
             started.elapsed()
-        );
-    }
-
-    /// A malformed id is deterministic, so it must fail once rather than be
-    /// retried — and it must not reach the shell at all.
-    #[test]
-    fn a_bad_id_fails_without_retrying() {
-        let target = PsqlTarget {
-            psql: "/nonexistent/psql".into(),
-            host: "127.0.0.1".into(),
-            port: "1".into(),
-            user: "u".into(),
-            dbname: "d".into(),
-            password_env: None,
-        };
-        let err = fetch(&target, "'; DROP TABLE x; --").expect_err("must reject");
-        let msg = format!("{err:#}");
-        assert!(msg.contains("is not a UUID"), "{msg}");
-        assert!(
-            !msg.contains("failed after"),
-            "must not have retried: {msg}"
         );
     }
 

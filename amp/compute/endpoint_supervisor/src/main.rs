@@ -238,7 +238,7 @@ impl Env {
         // quietly ignoring the operator's settings.
         let endpoint_id = match env_opt("ENDPOINT_ID") {
             None => None,
-            Some(raw) => match registry::valid_endpoint_id(&raw) {
+            Some(raw) => match well_formed_endpoint_id(&raw) {
                 Some(id) => Some(id),
                 None => {
                     tracing::warn!(
@@ -752,6 +752,28 @@ fn require_prerendered(l: &boot::Layout) -> Result<()> {
 
 /// Reads the operator overrides. A failure is a warning: an endpoint that cannot
 /// reach the registry must still start on its derived defaults, since refusing to
+/// A well-formed endpoint id, or `None`.
+///
+/// Not about SQL any more — the registry read binds the id as a parameter, so
+/// nothing it contains can reach the statement. This is about the **compute
+/// spec**: `env.endpoint_id` is also what `compute_ctl` keys its LFC prewarm and
+/// offload blobs by (see `spec::Params::endpoint_id`). An id that is absent
+/// disables prewarm, which is a defined state; an arbitrary string becomes a
+/// blob key, which is not. Checking it here keeps both consumers seeing only
+/// ids the control plane could have issued.
+fn well_formed_endpoint_id(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    let shape = s.len() == 36
+        && s.as_bytes().iter().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                *b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        });
+    shape.then(|| s.to_string())
+}
+
 /// boot because an override *might* exist would turn a registry blip into an
 /// outage.
 fn fetch_overrides(env: &Env) -> registry::Overrides {
@@ -759,18 +781,14 @@ fn fetch_overrides(env: &Env) -> registry::Overrides {
         tracing::info!("no ENDPOINT_ID; running on derived defaults");
         return registry::Overrides::default();
     };
-    let Ok((host, port)) = env.yb_probe_target() else {
-        return registry::Overrides::default();
+    let yb = match env.yb_conn_config() {
+        Ok(yb) => yb,
+        Err(e) => {
+            tracing::warn!("could not build the registry connection: {e:#}");
+            return registry::Overrides::default();
+        }
     };
-    let target = registry::PsqlTarget {
-        psql: env.layout.pg_bin().join("psql"),
-        host,
-        port: port.to_string(),
-        user: env.yb_user.clone(),
-        dbname: env.yb_dbname.clone(),
-        password_env: env.yb_password_env.clone(),
-    };
-    match registry::fetch(&target, id) {
+    match registry::fetch(&yb, id) {
         Ok(Some(o)) => {
             tracing::info!(
                 pg = o.pg.len(),
@@ -931,6 +949,30 @@ mod tests {
             shared_preload_libraries: "yb_amp".into(),
             chart_settings: BTreeMap::new(),
             prerendered: false,
+        }
+    }
+
+    /// The id reaches the compute spec as well as the registry read, and
+    /// `compute_ctl` keys its LFC blobs by it. An id that is absent disables
+    /// prewarm; an arbitrary string would become a blob key instead.
+    #[test]
+    fn only_a_uuid_becomes_an_endpoint_id() {
+        const ID: &str = "3f2b1c4e-0000-4000-8000-000000000001";
+        assert_eq!(well_formed_endpoint_id(ID).as_deref(), Some(ID));
+        assert_eq!(
+            well_formed_endpoint_id(&format!("  {ID}  ")).as_deref(),
+            Some(ID)
+        );
+        for bad in [
+            "",
+            "not-a-uuid",
+            "'; DROP TABLE amp_registry.endpoints; --",
+            "3f2b1c4e-0000-4000-8000-00000000000", // too short
+            "3f2b1c4e-0000-4000-8000-0000000000011", // too long
+            "3f2b1c4e_0000_4000_8000_000000000001", // wrong separators
+            "zzzzzzzz-0000-4000-8000-000000000001", // non-hex
+        ] {
+            assert_eq!(well_formed_endpoint_id(bad), None, "accepted {bad:?}");
         }
     }
 

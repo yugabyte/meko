@@ -81,8 +81,8 @@ impl Layout {
     /// Version-qualified, because that is how the image lays the install out —
     /// `pg_distrib_dir` itself holds one directory per major version. Flattening
     /// this to `<pg_distrib_dir>/bin` finds nothing, and the failure is indirect:
-    /// `compute_ctl` panics on a missing `pg_config` and the registry read cannot
-    /// find `psql`.
+    /// `compute_ctl` panics on a missing `pg_config`, and `remote_auth` cannot
+    /// find the `psql` it sets the compute's password with.
     pub fn pg_bin(&self) -> Utf8PathBuf {
         self.pg_distrib_dir
             .join(format!("v{}", self.pg_version_major))
@@ -411,7 +411,7 @@ mod tests {
     /// The image lays Postgres out under `<pg_distrib_dir>/v<major>`, so every
     /// path derived from it must carry the version. Flattening it to
     /// `<pg_distrib_dir>/bin` produced a pod that crash-looped: `compute_ctl`
-    /// panicked on a missing `pg_config` and the registry read could not find
+    /// panicked on a missing `pg_config`, and `remote_auth` could not find
     /// `psql`. Neither failure names the path, so this is pinned here.
     #[test]
     fn the_postgres_paths_are_version_qualified() {

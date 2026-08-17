@@ -14,9 +14,9 @@
 //! The store client is [`utils::write_fence::TokenStore`] — the same one the
 //! live tests race against a real cluster, so the acquire/deny/release contract
 //! is specified once rather than restated here. It is async and this crate is
-//! not, hence the current-thread runtime; `tokio` and `ysql_client` are already
-//! in this binary's dependency graph through `pageserver_api`, so a hand-rolled
-//! `psql` client would have saved nothing.
+//! not, hence the current-thread runtime. `tokio` and `ysql_client` are already
+//! in this binary's dependency graph through `pageserver_api`, and every other
+//! read this binary makes against YugabyteDB goes through the same client.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
