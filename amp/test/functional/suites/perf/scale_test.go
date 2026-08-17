@@ -2,6 +2,7 @@ package perf
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -20,6 +21,9 @@ func TestScaleParamsDeclaredInDefaults(t *testing.T) {
 	}
 	for _, key := range []string{
 		"perf.scale.max_drivers",
+		"perf.scale.budget",
+		"perf.scale.min_tps",
+		"perf.scale.collapse_pct",
 		"perf.scale.stage_duration",
 		"perf.scale.floor_pct",
 		"perf.scale.read_timeout",
@@ -45,9 +49,16 @@ func TestScaleParamsDeclaredInDefaults(t *testing.T) {
 	if p.ReadTimeout <= 0 {
 		t.Error("read_timeout must be positive: it is the wedge detector, not a nicety")
 	}
-	// The whole ladder must fit the registered timeout.
-	if budget := time.Duration(p.MaxDrivers) * p.StageDuration; budget > 3*time.Hour {
-		t.Errorf("defaults spend %s on measured windows alone, leaving no room for provisioning in the 4h timeout", budget)
+	// The ladder is open-ended by design, so what must fit the registered 4h
+	// timeout is the wall-clock budget, not max_drivers × stage_duration.
+	if p.Budget <= 0 || p.Budget > 3*time.Hour {
+		t.Errorf("budget = %s, want positive and inside the 4h timeout with room to provision", p.Budget)
+	}
+	if p.MinTPS <= 0 {
+		t.Error("min_tps must be positive: it is the no-throughput stop")
+	}
+	if p.CollapsePct <= 0 || p.CollapsePct >= 100 {
+		t.Errorf("collapse_pct = %v, want inside (0,100)", p.CollapsePct)
 	}
 }
 
@@ -235,28 +246,60 @@ func TestTPCCTablesCoverWhatBenchbaseCreates(t *testing.T) {
 	}
 }
 
-// A stage that ERRORED measured nothing, so the ladder must not report it as a
-// ceiling and pass. The first version did: a dead port-forward at stage 2 came
-// back as "ceiling = 1 driver" with a green result and a failed step inside it.
-// Ceilings come from measurements (floor_pct, aggregate drop, min_tps); an
-// error is a failure to explain.
-func TestStageErrorIsNotACeiling(t *testing.T) {
+// A load that stops being served IS the ceiling — that is what a stress ladder
+// is for. A harness failure is NOT: a dead port-forward at stage 2 once came
+// back as "ceiling = 1 driver" in a green run with a failed step inside it, and
+// the wallError split is what keeps those apart.
+func TestOnlyLoadFailuresCountAsTheWall(t *testing.T) {
+	var wall error = wallError{errors.New("driver 2 stopped serving")}
+	var w wallError
+	if !errors.As(wall, &w) {
+		t.Fatal("a load failure must be recognisable as the wall")
+	}
+	if !errors.As(fmt.Errorf("stage: %w", wall), &w) {
+		t.Error("wrapping must not hide the wall")
+	}
+	if errors.As(errors.New("client pod never started"), &w) {
+		t.Error("a harness failure must NOT read as the wall")
+	}
+
 	src, err := os.ReadFile("scale.go")
 	if err != nil {
 		t.Fatalf("read scale.go: %v", err)
 	}
 	body := string(src)
-	// The error branch must return, not set a stop reason and break.
-	i := strings.Index(body, "if err != nil {\n\t\t\t// A stage that ERRORED")
-	if i < 0 {
-		t.Fatal("the stage-error branch no longer explains why an error is not a ceiling")
+	// A transport failure reaching a driver is the harness, never the product.
+	if !strings.Contains(body, "isTransportErr(errs[i])") {
+		t.Error("a lost exec transport is being counted as a driver breaking")
 	}
-	tail := body[i : i+700]
-	if !strings.Contains(tail, "return fmt.Errorf(") {
-		t.Error("a stage error no longer fails the ladder")
+	// Stage 1 has no ceiling to report, so it must still fail the test.
+	if !strings.Contains(body, "a single driver could not be measured") {
+		t.Error("stage 1 failing must fail the ladder, not report a ceiling of zero")
 	}
-	if strings.Contains(tail, "stopReason =") {
-		t.Error("a stage error is being turned into a stop reason again")
+}
+
+// Diminishing returns are a finding, not a stop: the ladder that quit at 2
+// drivers with the endpoint healthy answered a capacity question, not a stress
+// one.
+func TestSoftSignalsDoNotStopTheLadder(t *testing.T) {
+	src, err := os.ReadFile("scale.go")
+	if err != nil {
+		t.Fatalf("read scale.go: %v", err)
+	}
+	body := string(src)
+	for _, marker := range []string{"firstDropAt = n", "firstStarvedAt = n"} {
+		i := strings.Index(body, marker)
+		if i < 0 {
+			t.Fatalf("%s no longer recorded", marker)
+		}
+		if strings.Contains(body[i:i+220], "break") {
+			t.Errorf("%s still ends the ladder; it must be recorded and climbed past", marker)
+		}
+	}
+	for _, hard := range []string{"throughput collapsed to", "aggregate collapsed to", "stopped committing"} {
+		if !strings.Contains(body, hard) {
+			t.Errorf("hard stop %q is missing; the ladder would never end on its own", hard)
+		}
 	}
 }
 
@@ -267,5 +310,128 @@ func TestLadderCurveReportsWhatWasMeasured(t *testing.T) {
 	got := ladderCurve([]core.ChartPoint{{X: 1, Y: 251.9}, {X: 2, Y: 261.4}})
 	if !strings.Contains(got, "1:251.9tps") || !strings.Contains(got, "2:261.4tps") {
 		t.Errorf("curve = %q, want both stages", got)
+	}
+}
+
+// Every knob perf/scale_tables reads must be declared, and the ladder must end
+// on the product rather than on the config.
+func TestScaleTablesParamsDeclaredInDefaults(t *testing.T) {
+	cfg, err := core.LoadConfig(nil, nil, nil)
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	for _, key := range []string{
+		"perf.scale_tables.batch_size", "perf.scale_tables.max_tables",
+		"perf.scale_tables.rows_per_table", "perf.scale_tables.budget",
+		"perf.scale_tables.batch_timeout", "perf.scale_tables.catalog_timeout",
+		"perf.scale_tables.endpoint_cpu", "perf.scale_tables.endpoint_memory",
+	} {
+		if !cfg.Has(key) {
+			t.Errorf("%s is read by the test but not declared in configs/default.yaml", key)
+		}
+	}
+	p := scaleTablesParamsFromConfig(cfg)
+	if p.BatchSize <= 0 {
+		t.Errorf("batch_size = %d", p.BatchSize)
+	}
+	// A backstop that a real endpoint hits first would make the config the
+	// answer instead of the product.
+	if p.MaxTables < 10000 {
+		t.Errorf("max_tables = %d: too low to be a backstop rather than the ceiling", p.MaxTables)
+	}
+	if p.RowsPerTable <= 0 || p.RowsPerTable > 100 {
+		t.Errorf("rows_per_table = %d: this ladder measures relations, not data", p.RowsPerTable)
+	}
+	if p.Budget <= 0 || p.Budget > 6*time.Hour {
+		t.Errorf("budget = %s, want positive and inside the registered 6h timeout", p.Budget)
+	}
+	if p.CatalogTimeout <= 0 || p.CatalogTimeout >= p.BatchTimeout {
+		t.Errorf("catalog_timeout = %s must be positive and tighter than batch_timeout %s", p.CatalogTimeout, p.BatchTimeout)
+	}
+}
+
+// The count must survive a batch that fails halfway, or the reported ceiling is
+// wrong in the one case that matters.
+func TestScaleTablesReportsWhatItActuallyCreated(t *testing.T) {
+	src, err := os.ReadFile("scale_tables.go")
+	if err != nil {
+		t.Fatalf("read scale_tables.go: %v", err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "return made, fmt.Errorf(\"create table") {
+		t.Error("a failed create no longer reports how many tables were made before it")
+	}
+	if !strings.Contains(body, "created += made") {
+		t.Error("the running total no longer counts a partial batch")
+	}
+	for _, wall := range []string{"pg_class did not answer", "probeWriteRead"} {
+		if !strings.Contains(body, wall) {
+			t.Errorf("the ladder no longer checks %q; creates succeeding is not the same as the endpoint working", wall)
+		}
+	}
+}
+
+// A drive window that recorded zero transactions is a measurement that did not
+// happen, not a product at its limit. It reached the portal once as "25
+// warehouses: 0.00 tps — no throughput left" on a rung two earlier runs had
+// driven at 161 and 229 tps, because the driver skipped its execute phase.
+func TestZeroThroughputIsNotACeiling(t *testing.T) {
+	src, err := os.ReadFile("scale_depth.go")
+	if err != nil {
+		t.Fatalf("read scale_depth.go: %v", err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "sample.TPS <= 0") {
+		t.Error("a stage that drove no transactions at all is no longer rejected; it would be reported as the wall")
+	}
+	if !strings.Contains(body, "params.MinTPS && i == 0") {
+		t.Error("the smallest rung falling under the floor must fail: there is nothing to scale from")
+	}
+}
+
+// An endpoint that stops serving must take its own evidence with it. Three
+// consecutive depth runs failed at 50 warehouses with "connection refused" and
+// none could say whether the pod was evicted, OOM-killed or crashed, because
+// the env only collects the endpoint IT provisioned and these ladders create
+// their own.
+func TestLaddersCaptureTheEndpointThatDied(t *testing.T) {
+	for _, f := range []string{"scale_depth.go", "scale.go", "scale_tables.go"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if !strings.Contains(string(src), "captureEndpointDiag(") {
+			t.Errorf("%s does not capture the endpoint's state when it stops serving", f)
+		}
+	}
+	diag, err := os.ReadFile("endpoint_diag.go")
+	if err != nil {
+		t.Fatalf("read endpoint_diag.go: %v", err)
+	}
+	body := string(diag)
+	// Eviction, OOM and a clean crash each report in a different place.
+	for _, want := range []string{"Reason", "LastState", "RestartCount", "LogsPrevious("} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the endpoint verdict ignores %s, so one of evicted/OOMKilled/crashed would go unexplained", want)
+		}
+	}
+}
+
+// A ladder tagged "perf" would rejoin the nightly schedule silently.
+func TestScaleLaddersAreNotOnThePerfSchedule(t *testing.T) {
+	for _, tc := range core.Default().List() {
+		if !strings.HasPrefix(tc.Name, "perf/scale") {
+			continue
+		}
+		var tags []string
+		tags = append(tags, tc.Tags...)
+		for _, tag := range tags {
+			if tag == "perf" || tag == "nightly" {
+				t.Errorf("%s carries tag %q; scale ladders run on demand (--tag %s), not from a schedule", tc.Name, tag, scaleTier)
+			}
+		}
+		if len(tags) == 0 {
+			t.Errorf("%s carries no tag at all, so nothing can select it", tc.Name)
+		}
 	}
 }

@@ -319,6 +319,18 @@ func mixWorkloadFor(name string, cfg perfConfig, opts *core.Config, conn pg.Conn
 		if deps.jarPath == "" {
 			return nil, fmt.Errorf("%q needs the sample-app jar, which was not delivered", name)
 		}
+		props := sampleAppProps(name, conn)
+		// Schema-shaping flags, forwarded only when they carry a real value. The
+		// embedded config ships num_value_columns: 0, and passing that through
+		// made SqlTransactions emit "INSERT INTO SqlTransactions(k, ) VALUES
+		// (..., )" — a syntax error on every operation, reported as a driver
+		// that ran and committed nothing.
+		if v := opts.GetInt("apps.sampleapp.num_value_columns", 0); v > 0 {
+			props["num_value_columns"] = strconv.Itoa(v)
+		}
+		if v := opts.GetString("apps.sampleapp.use_datatypes", ""); v != "" && v != "false" {
+			props["use_datatypes"] = v
+		}
 		return &sampleappWorkload{
 			name: name, workload: wl, jarPath: deps.jarPath, conn: conn,
 			// The jar connects from a client pod, i.e. remotely, and an amp compute
@@ -326,7 +338,7 @@ func mixWorkloadFor(name string, cfg perfConfig, opts *core.Config, conn pg.Conn
 			// Without these it retries the connection forever and says nothing —
 			// the jar hides connection errors by default — so the workload simply
 			// never starts and the log holds only its config dump.
-			props:  sampleAppProps(name, conn),
+			props:  props,
 			tables: opts.GetInt("apps.sampleapp.num_tables", 1),
 			// Its OWN knob, not apps.sampleapp.num_threads_*: those are 0 in the
 			// embedded config (meaning "let the jar decide"), which is fine for a

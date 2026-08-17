@@ -1,12 +1,15 @@
 // Escalation on ONE tenant: every stage adds another driver against the same
-// endpoint until an app stops committing, the aggregate stops growing, or the
-// storage layer stops advancing. Hitting the ceiling is a PASSING outcome; only
-// a stage-1 failure fails the test. perf/scale_depth_tpcc grows the same
-// endpoint along the other axis, dataset size.
+// endpoint until it stops doing useful work — throughput at or below min_tps,
+// aggregate collapsed under collapse_pct of its peak, a driver that stops
+// committing or falls over, or storage that stops advancing. A falling
+// aggregate is recorded and climbed past. Hitting the ceiling is a PASSING
+// outcome; only a stage-1 failure fails the test. perf/scale_depth_tpcc grows
+// the same endpoint along the other axis, dataset size.
 package perf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -17,6 +20,17 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
+
+// wallError marks a stage failure that IS the ceiling: the load stopped being
+// served. Anything else — a client pod that would not start, artifacts that
+// would not deliver, a dead exec transport — is the harness failing to ask the
+// question, and must fail the test instead of being recorded as a product
+// limit. The first version of this ladder had no such split and reported a dead
+// port-forward at stage 2 as "ceiling = 1 driver" in a green run.
+type wallError struct{ err error }
+
+func (w wallError) Error() string { return w.err.Error() }
+func (w wallError) Unwrap() error { return w.err }
 
 // A MIX: identical clients only ever find one wall.
 var appLadderMix = []string{mixSqlTransactions, mixBankTransfer}
@@ -29,6 +43,10 @@ var scaleLadders = map[string][]string{
 	"scale_apps":    appLadderMix,
 }
 
+// scaleTier keeps the ladders off the perf schedule: a wall costs hours and a
+// cluster, and reaching one is a finding, not a regression. Run with --tag scale.
+const scaleTier = "scale"
+
 func init() {
 	for name, mix := range scaleLadders {
 		name, mix := name, mix
@@ -37,9 +55,9 @@ func init() {
 			Suite:       "perf",
 			Category:    core.Perf,
 			Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-			Tags:        []string{"perf"},
+			Tags:        []string{scaleTier},
 			OwningTeam:  core.TeamControlPlane,
-			Description: "Add one more concurrent driver against the SAME endpoint every stage (" + strings.Join(mix, ", ") + "), drive them all for a full window, and stop when a driver stops committing, the aggregate stops growing, or the endpoint's storage layer stops advancing. Reports how much concurrent load one tenant carried.",
+			Description: "Add one more concurrent driver against the SAME endpoint every stage (" + strings.Join(mix, ", ") + "), drive them all for a full window, and keep climbing past diminishing returns: the ladder ends only when throughput falls to min_tps, the aggregate collapses under collapse_pct of its peak, a driver stops committing or falls over, or the storage layer stops advancing. Reports how much concurrent load one tenant carried, and which wall ended it.",
 			Params:      []string{"perf.scale"},
 			Timeout:     4 * time.Hour,
 			Run: func(t *core.T) error {
@@ -52,6 +70,15 @@ func init() {
 type scaleParams struct {
 	MaxDrivers    int
 	StageDuration time.Duration
+	// Budget caps the whole ladder in wall-clock: an endpoint that never breaks
+	// must still hand the run back.
+	Budget time.Duration
+	// MinTPS is "no useful work": at or below it the endpoint has stopped
+	// serving, which is a hard stop.
+	MinTPS float64
+	// CollapsePct is the share of the PEAK aggregate below which throughput
+	// counts as collapsed rather than merely degraded.
+	CollapsePct float64
 	// FloorPct: stop when the slowest driver falls below this share of one alone.
 	FloorPct float64
 	// ReadTimeout bounds the storage probe; a wedged WAL path never answers, so
@@ -83,7 +110,10 @@ func scaleVersion(t *core.T) string {
 
 func scaleParamsFromConfig(c *core.Config) scaleParams {
 	return scaleParams{
-		MaxDrivers:    c.GetInt("perf.scale.max_drivers", 10),
+		MaxDrivers:    c.GetInt("perf.scale.max_drivers", 64),
+		Budget:        c.GetDuration("perf.scale.budget", 3*time.Hour),
+		MinTPS:        c.GetFloat("perf.scale.min_tps", 1.0),
+		CollapsePct:   c.GetFloat("perf.scale.collapse_pct", 25),
 		StageDuration: c.GetDuration("perf.scale.stage_duration", 6*time.Minute),
 		FloorPct:      c.GetFloat("perf.scale.floor_pct", 25),
 		ReadTimeout:   c.GetDuration("perf.scale.read_timeout", 2*time.Minute),
@@ -218,9 +248,20 @@ func runScaleLadder(t *core.T, ladder string, mix []string) error {
 	var aggAt []core.ChartPoint
 	var reached int
 	baseline := 0.0
-	stopReason := fmt.Sprintf("carried all %d concurrent drivers", params.MaxDrivers)
+	// Peak is the efficiency ceiling: the most this endpoint ever carried.
+	// Passing it is a finding, NOT a reason to stop — the question this test
+	// answers is where the endpoint breaks, and diminishing returns are a long
+	// way from broken. First* record where each softer signal was crossed.
+	peakAgg, peakAt := 0.0, 0
+	firstDropAt, firstStarvedAt, brokeAt := 0, 0, 0
+	stopReason := fmt.Sprintf("carried all %d concurrent drivers without breaking", params.MaxDrivers)
+	deadline := time.Now().Add(params.Budget)
 
 	for n := 1; n <= params.MaxDrivers; n++ {
+		if n > 1 && time.Now().After(deadline) {
+			stopReason = fmt.Sprintf("%d drivers: ran out of the %s ladder budget before anything broke", n-1, params.Budget)
+			break
+		}
 		stage := fmt.Sprintf("stage_%02d_drivers%d", n, n)
 		var agg, worst float64
 		err := t.Step(stage, func(s *core.StepHandle) error {
@@ -244,7 +285,17 @@ func runScaleLadder(t *core.T, ladder string, mix []string) error {
 			worst = -1
 			for i := range drivers {
 				if errs[i] != nil {
-					return fmt.Errorf("driver %d (%s): %w", i, drivers[i].name, errs[i])
+					// A driver that fell over under load is the wall; a driver
+					// we could not even talk to is not.
+					if isTransportErr(errs[i]) {
+						return fmt.Errorf("driver %d (%s): lost its exec transport: %w", i, drivers[i].name, errs[i])
+					}
+					diag := captureEndpointDiag(t, kube, tenants[0], fmt.Sprintf("%s-drivers%d", ladder, n), logf)
+					if diag != "" {
+						s.Set("endpoint_state", strings.ReplaceAll(diag, "\n", " | "))
+					}
+					return wallError{fmt.Errorf("driver %d (%s) stopped serving [endpoint: %s]: %w",
+						i, drivers[i].name, strings.ReplaceAll(diag, "\n", " | "), errs[i])}
 				}
 				agg += samples[i].TPS
 				if worst < 0 || samples[i].TPS < worst {
@@ -254,18 +305,60 @@ func runScaleLadder(t *core.T, ladder string, mix []string) error {
 			s.Set("drivers", len(drivers))
 			s.Set("aggregate_tps", fmt.Sprintf("%.1f", agg))
 			s.Set("slowest_driver_tps", fmt.Sprintf("%.1f", worst))
+			// Zero with output = a starved driver, the wall. Zero with NO output
+			// = the driver failed to measure; treating that as a wall reported
+			// phantom ceilings on healthy endpoints twice.
+			if worst <= params.MinTPS {
+				for i := range samples {
+					if samples[i].TPS > params.MinTPS {
+						continue
+					}
+					diag := captureEndpointDiag(t, kube, tenants[0], fmt.Sprintf("%s-drivers%d-zero", ladder, n), logf)
+					if diag != "" {
+						s.Set("endpoint_state", strings.ReplaceAll(diag, "\n", " | "))
+					}
+					if strings.TrimSpace(samples[i].Raw) == "" {
+						return fmt.Errorf("driver %d (%s) reported 0 tps and produced no output at all; that is a measurement that did not happen, not a wall [endpoint: %s]",
+							i, drivers[i].name, strings.ReplaceAll(diag, "\n", " | "))
+					}
+					return wallError{fmt.Errorf("driver %d (%s) stopped committing (0.0 tps) while still reporting [endpoint: %s]",
+						i, drivers[i].name, strings.ReplaceAll(diag, "\n", " | "))}
+				}
+			}
 			// A fan-in wall and a storage wall look alike from the client side.
-			return assertStorageAdvances(t, s, kube, env, tenants[0], n, params.ReadTimeout, logf)
+			if err := assertStorageAdvances(t, s, kube, env, tenants[0], n, params.ReadTimeout, logf); err != nil {
+				// Same split as the driver path: a probe that lost its transport
+				// (including a reconnect that failed) is the harness, not a wall.
+				if isTransportErr(err) {
+					return fmt.Errorf("post-stage storage probe lost its transport: %w", err)
+				}
+				return wallError{err}
+			}
+			return nil
 		})
 		if err != nil {
-			// A stage that ERRORED measured nothing, so it cannot be called a
-			// ceiling: the first version reported one, passed, and hid a dead
-			// port-forward behind "ceiling = 1 driver". Ceilings come from the
-			// measurements below; an error is a failure to explain.
-			return fmt.Errorf("%d drivers (ceiling so far %d, %s): %w", n, reached, ladderCurve(aggAt), err)
+			// Stage 1 failing means the ladder never started: nothing was
+			// measured and there is nothing to report, so that is a test
+			// failure. Past stage 1, a driver that errors or hangs under load IS
+			// the wall this test hunts for — recording it as the breaking point
+			// is the whole point of a stress ladder.
+			var wall wallError
+			if !errors.As(err, &wall) {
+				// The harness could not ask the question. Not a ceiling.
+				return fmt.Errorf("%d drivers (ceiling so far %d, %s): %w", n, reached, ladderCurve(aggAt), err)
+			}
+			if n == 1 {
+				return fmt.Errorf("a single driver could not be measured: %w", err)
+			}
+			stopReason = fmt.Sprintf("%d drivers: broke — %v", n, err)
+			brokeAt = n
+			break
 		}
 		reached = n
 		aggAt = append(aggAt, core.ChartPoint{X: float64(n), Y: agg})
+		if agg > peakAgg {
+			peakAgg, peakAt = agg, n
+		}
 		if n == 1 {
 			baseline = agg
 			if baseline <= 0 {
@@ -273,14 +366,29 @@ func runScaleLadder(t *core.T, ladder string, mix []string) error {
 			}
 			continue
 		}
-		if floor := baseline * params.FloorPct / 100; worst < floor {
-			stopReason = fmt.Sprintf("%d drivers: the slowest fell to %.1f tps, below %.0f%% of one alone (%.1f)",
-				n, worst, params.FloorPct, baseline)
+		// Softer signals are RECORDED and passed through. Stopping here is what
+		// made this ladder quit at 2 drivers with the endpoint perfectly
+		// healthy, which answers a capacity-planning question, not a stress one.
+		if floor := baseline * params.FloorPct / 100; worst < floor && firstStarvedAt == 0 {
+			firstStarvedAt = n
+			logf("%s: %d drivers: the slowest fell to %.1f tps, below %.0f%% of one alone (%.1f) — continuing",
+				ladder, n, worst, params.FloorPct, baseline)
+		}
+		if prev := aggAt[len(aggAt)-2].Y; agg < prev && firstDropAt == 0 {
+			firstDropAt = n
+			logf("%s: %d drivers: aggregate fell to %.1f tps from %.1f — past the efficiency ceiling, continuing",
+				ladder, n, agg, prev)
+		}
+		// HARD stops: the endpoint has actually stopped serving useful work.
+		if agg <= params.MinTPS {
+			stopReason = fmt.Sprintf("%d drivers: throughput collapsed to %.1f tps", n, agg)
+			brokeAt = n
 			break
 		}
-		if prev := aggAt[len(aggAt)-2].Y; agg < prev {
-			stopReason = fmt.Sprintf("%d drivers: aggregate fell to %.1f tps from %.1f while adding one",
-				n, agg, prev)
+		if peakAgg > 0 && agg < peakAgg*params.CollapsePct/100 {
+			stopReason = fmt.Sprintf("%d drivers: aggregate collapsed to %.1f tps, under %.0f%% of the %.1f peak at %d drivers",
+				n, agg, params.CollapsePct, peakAgg, peakAt)
+			brokeAt = n
 			break
 		}
 	}
@@ -291,6 +399,11 @@ func runScaleLadder(t *core.T, ladder string, mix []string) error {
 		}
 		s.Set("stop_reason", stopReason)
 		s.Set("max_drivers", reached)
+		s.Set("peak_aggregate_tps", fmt.Sprintf("%.1f", peakAgg))
+		s.Set("peak_at_drivers", peakAt)
+		s.Set("broke_at_drivers", brokeAt)
+		s.Set("first_aggregate_drop_at", firstDropAt)
+		s.Set("first_starved_at", firstStarvedAt)
 		// Gated, not merely emitted: a ceiling that collapses from 10 drivers to
 		// 2 is the regression this test exists to catch, and an ungated number
 		// reports it as a green run with a smaller figure in it.

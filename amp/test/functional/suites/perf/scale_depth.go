@@ -47,12 +47,16 @@ func init() {
 		Suite:       "perf",
 		Category:    core.Perf,
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
-		Tags:        []string{"perf"},
+		Tags:        []string{scaleTier},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Grow ONE endpoint's TPC-C dataset and concurrency stage by stage (warehouses x terminals), driving each for a full window, and after every stage prove the storage layer still advances: a read above the freshly written LSN on a bounded deadline, plus a scan of the endpoint log for WAL-wedge markers. Reports the largest scale that stayed healthy.",
 		Params:      []string{"perf.scale_depth"},
-		Timeout:     4 * time.Hour,
-		Run:         runScaleDepth,
+		// 12h, because the point is to keep growing the dataset until the
+		// product stops, and loading alone runs ~60s per warehouse: 4h could
+		// not reach 200 warehouses, let alone find a wall past it. The ladder
+		// stops itself on perf.scale_depth.budget well before this.
+		Timeout: 12 * time.Hour,
+		Run:     runScaleDepth,
 	})
 }
 
@@ -66,6 +70,9 @@ type scaleDepthParams struct {
 	// budget kills a big stage that is loading perfectly well.
 	LoadTimeout    time.Duration
 	LoadPerWarehse time.Duration
+	// Budget caps the whole ladder in wall-clock, so a dataset that never
+	// breaks still hands the run back.
+	Budget time.Duration
 	// Growth continues the ladder past the configured list, multiplying the last
 	// rung until something fails — "more and more" has no fixed top.
 	Growth float64
@@ -84,6 +91,7 @@ func scaleDepthParamsFromConfig(c *core.Config) scaleDepthParams {
 		ReadTimeout:    c.GetDuration("perf.scale_depth.read_timeout", 2*time.Minute),
 		LoadTimeout:    c.GetDuration("perf.scale_depth.load_timeout", 45*time.Minute),
 		LoadPerWarehse: c.GetDuration("perf.scale_depth.load_timeout_per_warehouse", 90*time.Second),
+		Budget:         c.GetDuration("perf.scale_depth.budget", 10*time.Hour),
 		Growth:         c.GetFloat("perf.scale_depth.growth", 1.6),
 		MinTPS:         c.GetFloat("perf.scale_depth.min_tps", 1),
 		EndpointCPU:    c.GetString("perf.scale_depth.endpoint_cpu", "4"),
@@ -168,9 +176,17 @@ func runScaleDepth(t *core.T) error {
 	var tpsAt []core.ChartPoint
 	stopReason := "completed every configured stage without wedging"
 
+	deadline := time.Now().Add(params.Budget)
 	for i := 0; ; i++ {
 		wh, term, ok := params.rung(i)
 		if !ok {
+			break
+		}
+		// The rungs are open-ended, so wall-clock is what ends a ladder the
+		// product never stops. Checked before a stage, never mid-load: a
+		// half-loaded dataset measures nothing.
+		if i > 0 && time.Now().After(deadline) {
+			stopReason = fmt.Sprintf("%d warehouses: ran out of the %s ladder budget before anything broke", reached, params.Budget)
 			break
 		}
 		stage := fmt.Sprintf("stage_%02d_wh%d_t%d", i+1, wh, term)
@@ -190,10 +206,20 @@ func runScaleDepth(t *core.T) error {
 			// benchbase always creates the same table names, so reloading over
 			// the previous stage's dataset leaves rows its own workers then
 			// cannot find ("C_D_ID=4 C_ID=639 not found!").
+			// A FRESH DATABASE per rung, not a table drop. Dropping benchbase's
+			// tables left something behind that its own workers then could not
+			// find ("C_D_ID=3 ... not found!") at 15 warehouses after 10, which
+			// reads as a product failure and is not one. A new database cannot
+			// carry the previous rung's rows by construction.
 			if i > 0 {
-				if err := dropTPCCSchema(t.Context, tenants[0]); err != nil {
-					return fmt.Errorf("drop the previous stage's dataset: %w", err)
+				db := fmt.Sprintf("depth_wh%d", wh)
+				if _, err := tenants[0].Conn.Exec(t.Context, "DROP DATABASE IF EXISTS "+db); err != nil {
+					return fmt.Errorf("drop stale database %s: %w", db, err)
 				}
+				if _, err := tenants[0].Conn.Exec(t.Context, "CREATE DATABASE "+db); err != nil {
+					return fmt.Errorf("create database %s for this rung: %w", db, err)
+				}
+				w.conn.Database = db
 			}
 			loadCtx, cancelLoad := context.WithTimeout(t.Context, params.loadBudget(wh))
 			loadStart := time.Now()
@@ -209,8 +235,15 @@ func runScaleDepth(t *core.T) error {
 				if m, line, full, _ := scanEndpointLogFor(t, kube, tenants[0], backingFullMarkers); full {
 					s.Set("stop_reason", "backing out of disk")
 					t.AttachBytes(fmt.Sprintf("backing-full-wh%d.txt", wh), "text/plain", []byte(line))
-					return fmt.Errorf("the backing ran out of disk loading %d warehouses (%q): raise apps.yba.k8s.volume_size_gb — see backing-full-wh%d.txt: %w",
-						wh, m, wh, loadErr)
+					// Capture the endpoint too: a full backing is where the
+					// product's behaviour under exhaustion is decided, and
+					// "it hung for the whole budget" needs the endpoint's own
+					// log to say what it was doing.
+					if diag := captureEndpointDiag(t, kube, tenants[0], fmt.Sprintf("wh%d-diskfull", wh), logf); diag != "" {
+						s.Set("endpoint_state", strings.ReplaceAll(diag, "\n", " | "))
+					}
+					return fmt.Errorf("the backing ran out of disk loading %d warehouses (%q) after %.0fs — the load did not fail, it HUNG until the budget expired: raise apps.yba.k8s.volume_size_gb: %w",
+						wh, m, msSince(loadStart)/1000, loadErr)
 				}
 				marker, line, found, scanErr := scanEndpointLog(t, kube, tenants[0])
 				if scanErr != nil {
@@ -231,6 +264,11 @@ func runScaleDepth(t *core.T) error {
 							wh, wh, loadErr)
 					}
 				}
+				if diag := captureEndpointDiag(t, kube, tenants[0], fmt.Sprintf("wh%d", wh), logf); diag != "" {
+					s.Set("endpoint_state", strings.ReplaceAll(diag, "\n", " | "))
+					return fmt.Errorf("load %d warehouses after %.0fs [endpoint: %s]: %w",
+						wh, msSince(loadStart)/1000, strings.ReplaceAll(diag, "\n", " | "), loadErr)
+				}
 				return fmt.Errorf("load %d warehouses after %.0fs: %w", wh, msSince(loadStart)/1000, loadErr)
 			}
 
@@ -238,11 +276,32 @@ func runScaleDepth(t *core.T) error {
 				RunParams{Duration: params.StageDuration, SampleInterval: time.Second})
 			recordDriverRun(t, logf, fmt.Sprintf("tpcc-wh%d", wh), stage, sample, params.StageDuration)
 			if err != nil {
+				if diag := captureEndpointDiag(t, kube, tenants[0], fmt.Sprintf("wh%d-drive", wh), logf); diag != "" {
+					s.Set("endpoint_state", strings.ReplaceAll(diag, "\n", " | "))
+				}
 				return fmt.Errorf("drive %d warehouses / %d terminals: %w", wh, term, err)
 			}
 			tps = sample.TPS
 			s.Set("tps", fmt.Sprintf("%.1f", sample.TPS))
+			if used, avail, ok := backingDiskGB(t, env); ok {
+				s.Set("backing_used_gb", fmt.Sprintf("%.1f", used))
+				s.Set("backing_avail_gb", fmt.Sprintf("%.1f", avail))
+				// ~100 MB logical per TPC-C warehouse; the ratio is the number a
+				// customer needs to size storage from their own data size.
+				if logical := float64(wh) * 0.1; logical > 0 {
+					s.Set("amplification_x", fmt.Sprintf("%.1f", used/logical))
+				}
+			}
 			s.Set("latency_ms", fmt.Sprintf("%.1f", sample.LatencyAvgMS))
+			// Zero transactions in a full drive window is a measurement that did
+			// not happen, not a product at its limit. It reached the portal once
+			// as "25 warehouses: 0.00 tps — no throughput left" on a rung two
+			// earlier runs had driven at 161 and 229 tps, because the driver
+			// skipped its execute phase and nothing noticed.
+			if sample.TPS <= 0 {
+				return fmt.Errorf("the driver reported no transactions at all over the %s window: the workload did not run, so this stage measured nothing (a real limit still commits something)",
+					params.StageDuration)
+			}
 
 			// The storage-layer check the throughput number cannot make.
 			return assertStorageAdvances(t, s, kube, env, tenants[0], i+1, params.ReadTimeout, logf)
@@ -256,6 +315,12 @@ func runScaleDepth(t *core.T) error {
 		}
 		reached, reachedTerminals = wh, term
 		tpsAt = append(tpsAt, core.ChartPoint{X: float64(wh), Y: tps})
+		// The floor is only a ceiling once a rung has actually been driven:
+		// on the FIRST rung it means the ladder never got started.
+		if tps <= params.MinTPS && i == 0 {
+			return fmt.Errorf("the smallest rung (%d warehouses / %d terminals) drove only %.2f tps, under the %.2f floor: nothing was established to scale from",
+				wh, term, tps, params.MinTPS)
+		}
 		if tps <= params.MinTPS {
 			stopReason = fmt.Sprintf("%d warehouses / %d terminals: %.2f tps — no throughput left", wh, term, tps)
 			break
@@ -369,6 +434,37 @@ func assertStorageAdvances(t *core.T, s *core.StepHandle, kube *k8s.Kubectl, env
 	}
 	s.Set("readback_ms", fmt.Sprintf("%.0f", msSince(start)))
 	return nil
+}
+
+// backingDiskGB reads one backing tserver's data volume. Disk is per-node and
+// the replicas hold the same data, so one node is the measurement; the caller
+// turns it into an amplification ratio against the logical dataset.
+func backingDiskGB(t *core.T, env ampMultitenantEnv) (used, avail float64, ok bool) {
+	be, has := env.(interface{ BackingKube() *k8s.Kubectl })
+	if !has || be.BackingKube() == nil {
+		return 0, 0, false
+	}
+	kb := be.BackingKube()
+	pods, err := kb.ListPods(t.Context)
+	if err != nil {
+		return 0, 0, false
+	}
+	for _, p := range pods {
+		if !strings.Contains(p, "yb-tserver-0") {
+			continue
+		}
+		res, err := kb.ForPod(p, "yb-tserver").Run(t.Context,
+			"df -BG --output=used,avail /mnt/disk0 | tail -1")
+		if err != nil || res.ExitCode != 0 {
+			return 0, 0, false
+		}
+		var u, a float64
+		if _, err := fmt.Sscanf(strings.ReplaceAll(strings.TrimSpace(res.Stdout), "G", ""), "%f %f", &u, &a); err != nil {
+			return 0, 0, false
+		}
+		return u, a, true
+	}
+	return 0, 0, false
 }
 
 // readRemoteFile tails a file out of a client pod, best-effort.

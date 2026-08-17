@@ -600,7 +600,15 @@ apps:
       num_nodes: 1
       replication_factor: 1
       volume_count: 1
-      volume_size_gb: 50
+      # 200G, not the old 50. Measured on the depth ladder: 25 TPC-C warehouses
+      # (~2.5G logical) put 36G on EACH tserver before YugabyteDB started
+      # rejecting writes below its 5% free threshold — roughly 14x amplification
+      # once WAL retention and uncollected page versions are counted. A 50G
+      # volume could not survive the SMALLEST rung.
+      # 200 fits what runs by default (every functional and stress test writes
+      # single-digit GB) and clears the ladder's first rungs. The high rungs
+      # want more than any sane default: pass volume_size_gb explicitly there.
+      volume_size_gb: 200
       # master/tserver K8SNodeResourceSpec cpu cores + memory GiB (within YBA's
       # MIN_CPU 0.5 / MIN_MEMORY 2.0 GiB bounds).
       master_cpu: 2
@@ -1501,8 +1509,19 @@ perf:
   # is a passing outcome; the datapoints record where it is.
   scale:
     # max_drivers is how far the ladder climbs: stage N runs N drivers at once.
-    max_drivers: 10
+    # High on purpose — this is a stress ladder, so the run ends when the
+    # endpoint breaks, not when the config runs out. budget is the wall-clock
+    # backstop for an endpoint that never breaks.
+    max_drivers: 64
+    budget: "3h"
     stage_duration: "6m"
+    # Hard stops. Diminishing returns (a falling aggregate, a starved driver)
+    # are RECORDED and climbed past; only these end the ladder.
+    #   min_tps      — at or below this the endpoint is serving nothing.
+    #   collapse_pct — share of the PEAK aggregate under which throughput counts
+    #                  as collapsed rather than merely degraded.
+    min_tps: 1.0
+    collapse_pct: 25
     # floor_pct stops the ladder when the slowest driver falls below this share
     # of what a single driver achieved alone.
     floor_pct: 25.0
@@ -1516,14 +1535,70 @@ perf:
   # and concurrency grow stage by stage. This is the axis that finds
   # storage-layer walls — meko#739 wedged a WAL fetch at TPC-C SF 150 / 75
   # terminals against a single endpoint, a scale no breadth test reaches.
+  # perf/scale_tables grows the CATALOG on one endpoint: how many relations can
+  # a single compute carry? Different pressure from the other two ladders —
+  # pg_class/pg_attribute rows, a relfilenode per table for the storage layer to
+  # track, and relcache in every backend. Each table stays tiny on purpose.
+  scale_tables:
+    # batch_size is how many tables one stage adds.
+    batch_size: 500
+    # max_tables is a backstop; the ladder is meant to end on the product.
+    # 250k, not 100k: measured endpoint memory grows ~63Mi per 1000 tables in
+    # this access pattern (2072Mi at 21k, 2906Mi at 34k), so an 8Gi endpoint is
+    # projected to run out somewhere past 110k — a 100k backstop would have
+    # stopped the ladder just short of the wall it exists to find.
+    max_tables: 250000
+    rows_per_table: 3
+    budget: "4h"
+    # batch_timeout bounds one batch, catalog_timeout the count(*) after it. A
+    # catalog that stops answering is a wall even while creates still succeed,
+    # and it is what a customer notices first.
+    batch_timeout: "30m"
+    catalog_timeout: "2m"
+    endpoint_cpu: "4"
+    endpoint_memory: "8Gi"
+
+  # perf/scale_connections holds connections open INSIDE the endpoint pod until
+  # a batch stops landing or a fresh probe connection fails. The wall is
+  # max_connections or memory-per-backend, whichever arrives first.
+  scale_connections:
+    batch_size: 50
+    max_connections: 5000
+    budget: "1h"
+    probe_timeout: "30s"
+    hold_seconds: 7200
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+
+  # perf/scale_tenants grows the POPULATION on one control plane and one
+  # backing: clusters + branches + endpoints, a few at a time, writing to a
+  # sample of the existing ones after every batch. The wall is the control
+  # plane, the k8s pool's ability to schedule another endpoint pod, or the
+  # shared YugabyteDB — which one it is, is the finding.
+  scale_tenants:
+    batch_size: 3
+    max_tenants: 200
+    seed_rows: 50
+    budget: "3h"
+    # verify_sample: oldest, middle and newest. Checking every tenant every
+    # batch is quadratic and would spend the budget verifying instead of
+    # growing.
+    verify_sample: 3
+    endpoint_cpu: "2"
+    endpoint_memory: "4Gi"
+
   scale_depth:
     # warehouses and terminals pair index for index: stage i loads
     # warehouses[i] and drives it with terminals[i] clients.
     # The rungs to walk explicitly; past the last one the ladder keeps
     # multiplying by growth until something fails, so there is no fixed top.
-    warehouses: ["25", "50", "100", "150", "250"]
-    terminals: ["16", "32", "50", "75", "100"]
-    growth: 1.6
+    warehouses: ["25", "50", "100", "200", "400", "800"]
+    terminals: ["16", "32", "50", "75", "100", "150"]
+    growth: 2.0
+    # budget caps the whole ladder in wall-clock. Loading runs ~60s per
+    # warehouse (measured: 25 warehouses in 28m), so the rungs above are hours
+    # of loading before any driving happens, and the registered timeout is 12h.
+    budget: "10h"
     # min_tps is the no-throughput floor: a stage this slow has found the wall
     # even without an error.
     min_tps: 1.0

@@ -61,8 +61,19 @@ const (
 	// tserver), overridable for RF3.
 	DefaultK8sNumNodes    = 1
 	DefaultK8sReplication = 1
-	// DefaultK8sVolumeSizeGB is the per-node PVC size (small — cheap).
-	DefaultK8sVolumeSizeGB = 50
+	// DefaultK8sVolumeSizeGB is the per-node PVC size. 200, not the old 50:
+	// measured on the depth ladder, 25 TPC-C warehouses (~2.5G logical) put 36G
+	// on EACH tserver before YugabyteDB rejected writes under its 5% free
+	// threshold — about 14x amplification once WAL retention and uncollected
+	// page versions count. At 50G the smallest rung ran the disk out, so every
+	// storage test measured the volume instead of the product.
+	//
+	// 200 is sized for what runs by default: every functional and stress test
+	// writes single-digit GB, and it clears the ladder's first rungs with room
+	// to spare. The high rungs need more than any sane default — pass
+	// apps.yba.k8s.volume_size_gb explicitly for those rather than making every
+	// 10-minute test provision a terabyte.
+	DefaultK8sVolumeSizeGB = 200
 	// Default master/tserver K8SNodeResourceSpec cpu (cores) + memory (GiB) —
 	// small but within YBA's K8SNodeResourceSpec bounds (MIN_CPU 0.5, MIN_MEMORY
 	// 2.0).

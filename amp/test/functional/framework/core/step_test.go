@@ -3,8 +3,10 @@ package core_test
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/env/fake"
@@ -15,6 +17,8 @@ import (
 // until the body signals it is done, the way a real async sink races the body.
 type propSpinSink struct {
 	stop      chan struct{}
+	reading   chan struct{} // closed after the first snapshot
+	once      sync.Once
 	snapshots atomic.Int64
 }
 
@@ -34,17 +38,27 @@ func (p *propSpinSink) ResultEvent(ev core.ResultEvent) error {
 		for range ev.Step.PropsSnapshot() {
 		}
 		p.snapshots.Add(1)
+		p.once.Do(func() { close(p.reading) })
 	}
 }
 
 func TestStepPropertiesSurviveConcurrentSinkReads(t *testing.T) {
 	const keys = 32
-	sink := &propSpinSink{stop: make(chan struct{})}
+	sink := &propSpinSink{stop: make(chan struct{}), reading: make(chan struct{})}
 	rep := report.NewReporter(sink)
 
 	test := core.Test{Name: "core/step-props", Suite: "core", Run: func(tt *core.T) error {
 		return tt.Step("props", func(h *core.StepHandle) error {
 			defer close(sink.stop)
+			// Wait for the sink to actually be reading before writing, instead
+			// of hoping it gets scheduled inside the body. Without this the
+			// body could finish first and the race window went unexercised —
+			// the test then failed for its own timing, roughly one run in five.
+			select {
+			case <-sink.reading:
+			case <-time.After(30 * time.Second):
+				return fmt.Errorf("the sink never started reading the step's properties")
+			}
 			for i := 0; i < 20000; i++ {
 				h.Set(fmt.Sprintf("k%d", i%keys), i)
 			}

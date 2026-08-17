@@ -885,7 +885,9 @@ portal outage never fails a run. The run carries `tags`, `build_tag`,
 `report.portal.*` config keys — `run_id`, `branch`, `commit`, `build_tag`,
 `trigger_type`, `triggered_by`); the portal's status page associates runs to
 releases by `build_tag` and by tag (`regression`→functional, `stress`→stress,
-`perf`→perf).
+`perf`→perf). `scale` maps to nothing on purpose: the scale ladders answer where
+an endpoint breaks, which is a finding rather than a number to compare against
+yesterday's, so they run on demand (`--tag scale`) and never from a schedule.
 
 ### 7.2 Data model (Postgres) — proposed core tables
 Adapted from the stress portal's `stress_tests / steps / metrics / attachments /
