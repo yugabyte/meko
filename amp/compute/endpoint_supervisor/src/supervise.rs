@@ -672,6 +672,40 @@ impl Supervisor {
 mod tests {
     use super::*;
 
+    /// Serializes the tests that touch the process-wide fence flag against the
+    /// ones that run the monitor loop.
+    ///
+    /// `poll_once` reads `fence::lost()`, which is a static: a test that sets it
+    /// is setting it for every test running in parallel. That is how a
+    /// lease-loss test made an unrelated restart-budget test see `FenceLost`
+    /// instead of the outcome it was asserting on.
+    static FENCE_FLAG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Take the fence flag for the duration of a test. Poisoning is ignored: a
+    /// panic in one test must not cascade into every later one.
+    fn fence_flag() -> std::sync::MutexGuard<'static, ()> {
+        FENCE_FLAG.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Declare the lease lost, and put it back on the way out — including on a
+    /// panic, which a bare `set_lost_for_test(false)` at the end of a test does
+    /// not cover. A leaked `true` would fail every later monitor-loop test.
+    struct LeaseLost(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl LeaseLost {
+        fn declare() -> Self {
+            let held = fence_flag();
+            crate::fence::set_lost_for_test(true);
+            Self(held)
+        }
+    }
+
+    impl Drop for LeaseLost {
+        fn drop(&mut self) {
+            crate::fence::set_lost_for_test(false);
+        }
+    }
+
     fn sh(script: &str) -> Vec<String> {
         vec!["/bin/sh".into(), "-c".into(), script.into()]
     }
@@ -859,6 +893,8 @@ mod tests {
     /// the outcome the caller turns into a non-zero exit.
     #[test]
     fn a_crash_looping_service_exhausts_its_budget() {
+        // Runs the monitor loop, which reads the fence flag.
+        let _fence = fence_flag();
         let mut sup = Supervisor::new(fast_policy());
         sup.add(Service::new("crasher", sh("exit 1")));
         sup.start_all().unwrap();
@@ -877,6 +913,8 @@ mod tests {
     /// escaping `run` skips it entirely.
     #[test]
     fn an_unspawnable_service_exits_by_the_budget_not_by_an_error() {
+        // Runs the monitor loop, which reads the fence flag.
+        let _fence = fence_flag();
         let mut sup = Supervisor::new(fast_policy());
         // Spawned once so start_all succeeds, then made unspawnable, so every
         // respawn in the monitor loop fails at `exec`.
@@ -993,9 +1031,9 @@ mod tests {
         sup.start_all().unwrap();
         assert!(sup.services.iter().all(|s| s.started()));
 
-        crate::fence::set_lost_for_test(true);
+        let lost = LeaseLost::declare();
         let outcome = sup.poll_once().expect("a lost lease is not an error");
-        crate::fence::set_lost_for_test(false);
+        drop(lost);
 
         assert!(
             matches!(outcome, Some(Outcome::FenceLost)),
@@ -1018,9 +1056,9 @@ mod tests {
         }
         sup.start_all().unwrap();
 
-        crate::fence::set_lost_for_test(true);
+        let lost = LeaseLost::declare();
         let outcome = sup.poll_once().unwrap();
-        crate::fence::set_lost_for_test(false);
+        drop(lost);
         assert!(matches!(outcome, Some(Outcome::FenceLost)));
 
         sup.start_all()
