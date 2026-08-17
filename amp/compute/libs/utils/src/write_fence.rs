@@ -593,6 +593,56 @@ mod tests {
         assert!(fence.check_at(now + Duration::from_secs(7)).is_ok());
     }
 
+    /// The reply `POST /v1/write_token` sends back, which is the supervisor's
+    /// only way to find out it is pushing at a service that will not act on
+    /// the token. A disarmed daemon accepting a push and reporting
+    /// `armed: true` would make an unfenced endpoint indistinguishable from a
+    /// fenced one.
+    #[test]
+    fn a_push_reports_what_the_daemon_will_do_with_it() {
+        let now = SystemTime::now();
+        let token = token_at(now + Duration::from_secs(10));
+
+        let disarmed = WriteFence::new();
+        let reply = disarmed.accept_push(token);
+        assert_eq!(reply.token, token);
+        assert!(!reply.armed, "a disarmed daemon must not claim to be fenced");
+
+        let armed = WriteFence::new();
+        armed.arm();
+        let reply = armed.accept_push(token);
+        assert_eq!(reply.token, token);
+        assert!(reply.armed);
+        assert!(reply.expires_in_ms > 0, "{}", reply.expires_in_ms);
+    }
+
+    /// The enforcement decision the route feeds, without the exit: an armed
+    /// daemon pushed a token that has already expired must refuse the next
+    /// write. This is the state a daemon is left in when its supervisor loses
+    /// the lease and stops renewing.
+    #[test]
+    fn an_expired_push_closes_an_armed_fence() {
+        let now = SystemTime::now();
+        let fence = WriteFence::new();
+        fence.arm();
+        fence.accept_push(token_at(now + Duration::from_secs(10)));
+        assert!(fence.check_at(now).is_ok());
+
+        // Time passes and no supervisor pushes again.
+        let err = fence
+            .check_at(now + Duration::from_secs(11))
+            .expect_err("an armed fence past its deadline let a write through");
+        assert!(err.overdue >= Duration::from_secs(1), "{:?}", err.overdue);
+
+        // A stale push does not reopen it: `set_token` keeps the newer of the
+        // two, so the reply echoes the token still held rather than the one
+        // just pushed, and the fence stays shut.
+        let held = fence.token();
+        let reply = fence.accept_push(token_at(now - Duration::from_secs(1)));
+        assert_eq!(reply.token, held);
+        assert!(fence.check_at(now + Duration::from_secs(11)).is_err());
+    }
+
     #[test]
     fn remaining_saturates_rather_than_underflowing() {
         let now = SystemTime::now();

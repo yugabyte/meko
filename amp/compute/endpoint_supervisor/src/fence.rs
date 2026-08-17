@@ -54,6 +54,13 @@ pub fn set_current_for_test(token: Option<WriteToken>) {
     set_current(token);
 }
 
+/// Declare the lease lost (or held again), for tests that exercise what the
+/// monitor loop does about it without standing up a token store.
+#[cfg(test)]
+pub fn set_lost_for_test(lost: bool) {
+    LOST.store(lost, Ordering::Relaxed);
+}
+
 /// Set when a caller needs the lease renewed now rather than at the next tick.
 static RENEW_NOW: AtomicBool = AtomicBool::new(false);
 

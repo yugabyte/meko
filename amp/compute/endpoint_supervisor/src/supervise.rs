@@ -979,6 +979,57 @@ mod tests {
         }
     }
 
+    /// Losing the lease has to stop every child, and stop them *before* the
+    /// restart pass. A daemon that exited because it fenced itself out
+    /// (`FENCE_LAPSED_EXIT_CODE`) looks exactly like a crash from here, and
+    /// restarting it would put it straight back into the wall it just hit —
+    /// against a branch some other endpoint now owns.
+    #[test]
+    fn losing_the_lease_stops_every_child() {
+        let mut sup = Supervisor::new(fast_policy());
+        for n in ["safekeeper", "pageserver", "compute_ctl"] {
+            sup.add(Service::new(n, sh("sleep 30")).health(Box::new(|| true)));
+        }
+        sup.start_all().unwrap();
+        assert!(sup.services.iter().all(|s| s.started()));
+
+        crate::fence::set_lost_for_test(true);
+        let outcome = sup.poll_once().expect("a lost lease is not an error");
+        crate::fence::set_lost_for_test(false);
+
+        assert!(
+            matches!(outcome, Some(Outcome::FenceLost)),
+            "monitor loop kept going without the lease: {outcome:?}"
+        );
+        for s in &mut sup.services {
+            assert!(s.child.is_none(), "{} was left writing", s.name);
+        }
+    }
+
+    /// Losing the lease is not the end of the endpoint: the supervisor waits
+    /// for the lease and brings it back, so the stop has to leave a stack that
+    /// can start again. Clearing `wanted` on the way out, or leaving a spent
+    /// child handle behind, would strand the endpoint until the pod restarted.
+    #[test]
+    fn an_endpoint_comes_back_when_the_lease_does() {
+        let mut sup = Supervisor::new(fast_policy());
+        for n in ["safekeeper", "pageserver"] {
+            sup.add(Service::new(n, sh("sleep 30")).health(Box::new(|| true)));
+        }
+        sup.start_all().unwrap();
+
+        crate::fence::set_lost_for_test(true);
+        let outcome = sup.poll_once().unwrap();
+        crate::fence::set_lost_for_test(false);
+        assert!(matches!(outcome, Some(Outcome::FenceLost)));
+
+        sup.start_all()
+            .expect("the endpoint could not be brought back after the lease returned");
+        for s in &mut sup.services {
+            assert!(s.started(), "{} did not come back", s.name);
+        }
+    }
+
     #[test]
     fn stop_all_is_reverse_order() {
         let mut sup = Supervisor::new(fast_policy());
