@@ -105,10 +105,11 @@ pub fn page_header_size(lsn: Lsn, seg: u64) -> usize {
 /// (zeroed magic, no preceding switch): the scan lands on the last real
 /// page and `find_end_of_wal` stops at the last complete record.
 ///
-/// `floor` is the lowest known WAL record boundary — the start of the
-/// persisted WAL (`Lsn(0)` if the caller has none). The backward walk stops
-/// there: probing below `floor` reads a hole (the store never held those
-/// bytes), and when a single record spans all the way back to the WAL start
+/// `floor` is the lowest record boundary the caller knows still *exists* — the
+/// oldest surviving one, not the oldest the branch ever had, since retention
+/// drops whole segments from underneath (#788). `Lsn(0)` if the caller has none.
+/// The backward walk stops there: probing below `floor` reads a hole (the store no
+/// longer holds those bytes), and when a single record spans all the way back
 /// — e.g. wal_craft's segment-filling padding record right before an
 /// XLOG_SWITCH — no fresh-record page exists above `floor` to anchor on.
 /// `floor` is itself a valid seed even when it lands mid-page: the decoder

@@ -633,10 +633,13 @@ loses nothing but logs.
      leaves a torn trailing page) or **short of the true end** (after an
      `XLOG_SWITCH`, whose zero padding is never stored as rows). A decoder
      replay refines it: `find_anchor` walks back to the nearest fresh-record
-     page — floored at `timeline_start_lsn`, a guaranteed record boundary, so a
-     record spanning all the way back to a mid-page branch start cannot
-     drive the walk below the store (#181) — then `find_end_of_wal` scans
-     forward to the last complete record boundary.
+     page — floored at the `retention_floor` `restore_opt` returns (the
+     pageserver's `consistent_lsn`, which GC never trims below, or
+     `timeline_start_lsn` before it has one), so the walk cannot descend into
+     segments `remove_up_to` has dropped (#788) or below a mid-page branch start
+     (#181) — then `find_end_of_wal` scans forward to the last complete record
+     boundary. Exhausting `MAX_ANCHOR_SCAN_BYTES` seeds at the floor rather than
+     failing.
    - **Torn tail** (`end < raw`): truncate back to the boundary; the compute
      re-streams from there. The torn rows are physically deleted
      (`truncate_wals_above`) so they are not re-counted next restart;
@@ -652,8 +655,9 @@ loses nothing but logs.
      raw max advertises a `flush_lsn` that may sit mid-record, where the
      pageserver's `wait_lsn` never completes (#678). Only a chunk that is
      *absent* ends the scan; a chunk that could not be *read* is a failure.
-     Retrying only helps a transient failure. A deterministic one (unknown codec
-     tag, `find_anchor`'s `MAX_ANCHOR_SCAN_BYTES` bail) recurs on every attempt,
+     Retrying only helps a transient failure. A deterministic one (an unknown
+     codec tag; `find_anchor`'s `MAX_ANCHOR_SCAN_BYTES` bail, now only without
+     a floor) recurs on every attempt,
      and since `START_REPLICATION` resolves the timeline through
      `GlobalTimelines::get` — which never creates — the branch stays unavailable
      until the cause is fixed. That trade is deliberate, and the diagnosis and

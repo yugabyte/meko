@@ -199,12 +199,13 @@ timeline starts at a nonzero LSN.
    durable row set is a contiguous prefix — the max end is the end of WAL.
 2. That raw byte offset can point inside a torn record or a torn trailing
    page (#61), so it is refined to a record boundary by replaying the
-   decoder: `find_anchor` walks back (floored at `timeline_start_lsn`), then
+   decoder: `find_anchor` walks back (floored at the pageserver's
+   `consistent_lsn`, which GC never trims below), then
    `find_end_of_wal` scans forward. A torn tail truncates `write_lsn`
    *back*; a trailing `XLOG_SWITCH` advances it *forward* to the next
    segment boundary, past padding the compute never streamed. Clamping the
    switch case back to the raw max — or letting the anchor walk overshoot a
-   mid-page `timeline_start_lsn` — wedges the safekeeper (#181); see
+   mid-page floor — wedges the safekeeper (#181); see
    [`safekeeper.md`](safekeeper.md) §"Restart".
    The scan separates the WAL *ending* (no chunk covers the LSN) from a
    failed *read* of it, and a failed read fails `YbWalStorage::new` instead

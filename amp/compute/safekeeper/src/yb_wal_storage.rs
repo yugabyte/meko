@@ -491,9 +491,12 @@ pub struct YbWalStorage {
 }
 
 impl YbWalStorage {
+    /// `retention_floor` — the pageserver's `consistent_lsn`, see
+    /// `ControlFileStorage::restore_opt` — floors the end-of-WAL scan (#788).
     pub async fn new(
         branch_id: &BranchId,
         state: &TimelinePersistentState,
+        retention_floor: Lsn,
         yb_wal: Arc<YbWalConn>,
     ) -> Result<Self> {
         // `read_client` is reserved for `YbSegmentReader` (owned via
@@ -545,15 +548,21 @@ impl YbWalStorage {
             let scanned = if max_offset <= state.timeline_start_lsn {
                 Ok(max_offset)
             } else {
-                // `timeline_start_lsn` is where this branch's persisted WAL
-                // begins (see `TimelinePersistentState`) and a guaranteed record
-                // boundary; pass it as the anchor-scan floor so a record spanning
-                // back to a mid-page start (wal_craft's XLOG_SWITCH padding)
-                // doesn't overshoot below the store (#181).
+                // The floor must be a boundary that still exists: `remove_up_to`
+                // drops whole segnos above `timeline_start_lsn`, so anchoring
+                // there walks into a hole and fails the load (#788). GC never
+                // trims below `consistent_lsn`, which `retention_floor` carries.
+                //
+                // Passed through unclamped: a trailing XLOG_SWITCH legitimately
+                // puts it *above* `max_offset`, and clamping would land
+                // `write_lsn` in the segment padding (#181). `find_anchor`
+                // returns a floor at or above its target, and `find_end_of_wal`
+                // hands it back, so the `end > max_offset` arm below honors it.
+                //
                 // `find_anchor`'s target is inclusive and `max_offset` is one past
                 // the last persisted byte (#678).
                 let last_byte = Lsn(max_offset.0 - 1);
-                match find_anchor(&src, last_byte, state.timeline_start_lsn).await {
+                match find_anchor(&src, last_byte, retention_floor).await {
                     Ok(anchor) => find_end_of_wal(&src, anchor, pg_version).await,
                     Err(e) => Err(e),
                 }
@@ -574,17 +583,20 @@ impl YbWalStorage {
                     // boundary, past the segment's trailing zero padding. The
                     // compute doesn't stream that padding, so the persisted
                     // byte range stops at (or inside) it while the true flush
-                    // position is the next segment. find_end_of_wal decodes the
-                    // switch and reports that next-segment LSN; honor it rather
-                    // than clamping back to max_offset — clamping leaves
-                    // write_lsn inside the padding, where the compute resumes
-                    // streaming, the reader hits `invalid xl_tot_len 0`, and the
-                    // safekeeper wedges (#181).
+                    // position is the next segment. Honor it rather than clamping
+                    // back to max_offset — clamping leaves write_lsn inside the
+                    // padding, where the compute resumes streaming, the reader hits
+                    // `invalid xl_tot_len 0`, and the safekeeper wedges (#181).
+                    //
+                    // The boundary reaches here two ways, and neither is verified as
+                    // a switch: find_end_of_wal decoded one, or `retention_floor`
+                    // already sat above max_offset and was handed straight back. So
+                    // the log names the observation, not the cause.
                     tracing::info!(
                         branch_id = %branch_id_str,
                         max_offset = %max_offset,
-                        switch_end = %end,
-                        "YbWalStorage::new — trailing XLOG_SWITCH advances end-of-WAL past segment padding",
+                        end_of_wal = %end,
+                        "YbWalStorage::new — end-of-WAL is past the stored WAL end (expected after pg_switch_wal)",
                     );
                     end
                 }
@@ -633,6 +645,7 @@ impl YbWalStorage {
             branch_id = %branch_id_str,
             %write_lsn,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
+            %retention_floor,
             "YbWalStorage::new — rehydrated write_lsn from amp_storage.wals \
              (last valid record boundary; falls back to timeline_start_lsn on empty)",
         );
@@ -3050,9 +3063,14 @@ mod tests {
         state.timeline_start_lsn = start_lsn;
 
         let tmp = camino_tempfile::tempdir().expect("tempdir");
-        let storage = YbWalStorage::new(&branch_id, &state, wal_conn(&client, table))
-            .await
-            .expect("YbWalStorage::new");
+        let storage = YbWalStorage::new(
+            &branch_id,
+            &state,
+            state.timeline_start_lsn,
+            wal_conn(&client, table),
+        )
+        .await
+        .expect("YbWalStorage::new");
         (storage, tmp)
     }
 
@@ -3126,9 +3144,14 @@ mod tests {
         state.branch_id = branch_id;
         state.timeline_start_lsn = start;
 
-        let storage = YbWalStorage::new(&branch_id, &state, wal_conn(&client, &table))
-            .await
-            .expect("YbWalStorage::new");
+        let storage = YbWalStorage::new(
+            &branch_id,
+            &state,
+            state.timeline_start_lsn,
+            wal_conn(&client, &table),
+        )
+        .await
+        .expect("YbWalStorage::new");
 
         let got = storage.write_lsn();
         assert!(
@@ -3139,6 +3162,112 @@ mod tests {
             starts.contains(&got),
             "rehydrated write_lsn {got} must be a real record boundary"
         );
+
+        drop_wals_table(&client, &table).await;
+    }
+
+    /// #788: once GC has run, `wals` begins far above `timeline_start_lsn`, so
+    /// anchoring the walk there descends into dropped segments; the hole errors,
+    /// and since #756 that fails the load outright — the branch never comes up
+    /// while its WAL sits durable (`runbooks/startup-failures.md` §P).
+    ///
+    /// Two large records back to back make every page in the retained window a
+    /// continuation, so the walk finds no anchor above the hole and can only
+    /// stop on the floor.
+    #[tokio::test]
+    async fn rehydrate_survives_wal_trimmed_below_timeline_start() {
+        use postgres_ffi::XLOG_BLCKSZ;
+        use postgres_ffi::v18::wal_generator::{LogicalMessageGenerator, WalGenerator};
+        use postgres_ffi::v18::xlog_utils::XLP_FIRST_IS_CONTRECORD;
+
+        let table = scratch_table("wals_test_trimmed_below_start");
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), true)
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        );
+        make_wals_table(&client, &table).await;
+
+        // GC kept segno 2 and dropped everything below it.
+        let retained_start = Lsn(2 * SEG_SIZE);
+
+        // Start mid-page in segno 1 so the first record spans the segment
+        // boundary — that is what makes segno 2's opening page a continuation
+        // rather than an anchor.
+        let gen_start = Lsn(retained_start.0 - XLOG_BLCKSZ as u64 / 2);
+        let mut g = WalGenerator::new(LogicalMessageGenerator::new(c"t", &[]), gen_start);
+        let mut buf: Vec<u8> = Vec::new();
+
+        let (_, bytes) = g.append_logical_message(c"t", &vec![7u8; 100 * 1024]);
+        buf.extend_from_slice(&bytes);
+        let (record_b, bytes) = g.append_logical_message(c"t", &vec![7u8; 100 * 1024]);
+        buf.extend_from_slice(&bytes);
+        let end = Lsn(gen_start.0 + buf.len() as u64);
+
+        // Everything below `retained_start` is gone; keep only what survives.
+        let kept = buf.split_off((retained_start.0 - gen_start.0) as usize);
+        assert_eq!(
+            Lsn(retained_start.0 + kept.len() as u64),
+            end,
+            "the retained slice must end where the last record does"
+        );
+        assert!(
+            record_b > retained_start && record_b < end,
+            "record_b {record_b} must be a boundary strictly inside the retained window"
+        );
+
+        // The premise: no page in the retained window starts a fresh record, so
+        // the walk cannot stop above the hole on its own.
+        for page_off in (0..kept.len()).step_by(XLOG_BLCKSZ) {
+            let xlp_info = u16::from_le_bytes([kept[page_off + 2], kept[page_off + 3]]);
+            assert!(
+                xlp_info & XLP_FIRST_IS_CONTRECORD != 0,
+                "page at {} starts a fresh record — the walk would anchor there and never \
+                 reach the trimmed segment this test is about",
+                Lsn(retained_start.0 + page_off as u64)
+            );
+        }
+
+        let branch_id = BranchId::generate();
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                                     chunk_size, data, last_modified_us) \
+                     VALUES ($1, 0, 2, 0, $2, $3, 0)",
+                    quote_relation(&table)
+                ),
+                &[&branch_id.to_string(), &(kept.len() as i32), &enc(&kept)],
+            )
+            .await
+            .expect("insert retained WAL chunk");
+
+        let mut state = TimelinePersistentState::empty();
+        state.branch_id = branch_id;
+        // Where the *branch* starts — two segments below where its WAL now does.
+        state.timeline_start_lsn = Lsn(SEG_SIZE);
+
+        // What the pageserver's `consistent_lsn` would hold: a boundary inside
+        // the surviving window.
+        let storage = YbWalStorage::new(&branch_id, &state, record_b, wal_conn(&client, &table))
+            .await
+            .expect("a branch whose WAL was trimmed by GC must still load");
+
+        assert_eq!(
+            storage.write_lsn(),
+            end,
+            "rehydrated write_lsn must reach the true end of the retained WAL; anything \
+             short of it gets DELETEd by the torn-tail cleanup"
+        );
+        drop(storage);
+
+        // A pageserver caught all the way up leaves `consistent_lsn == max_offset`
+        // — the common restart. The floor is then the end itself, which the scan
+        // must accept rather than treat as out of range and fall back from.
+        let caught_up = YbWalStorage::new(&branch_id, &state, end, wal_conn(&client, &table))
+            .await
+            .expect("a floor at the end of the WAL is the caught-up case, not a disagreement");
+        assert_eq!(caught_up.write_lsn(), end);
 
         drop_wals_table(&client, &table).await;
     }
@@ -3241,7 +3370,13 @@ mod tests {
         )
         .await;
 
-        let res = YbWalStorage::new(&branch_id, &state, wal_conn(&client, &table)).await;
+        let res = YbWalStorage::new(
+            &branch_id,
+            &state,
+            state.timeline_start_lsn,
+            wal_conn(&client, &table),
+        )
+        .await;
         let write_lsn = res.as_ref().ok().map(|s| s.write_lsn());
         let failure = res.as_ref().err().map(|e| format!("{e:#}"));
 
@@ -3320,7 +3455,7 @@ mod tests {
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
-        let storage = YbWalStorage::new(&branch_id, &state, yb_wal)
+        let storage = YbWalStorage::new(&branch_id, &state, state.timeline_start_lsn, yb_wal)
             .await
             .expect("YbWalStorage::new");
         (storage, tmp)
@@ -5011,9 +5146,10 @@ mod tests {
             })),
             codec: payload_codec::Codec::Lz4,
         });
-        let mut storage = YbWalStorage::new(&branch_id, &state, yb_wal.clone())
-            .await
-            .expect("YbWalStorage::new");
+        let mut storage =
+            YbWalStorage::new(&branch_id, &state, state.timeline_start_lsn, yb_wal.clone())
+                .await
+                .expect("YbWalStorage::new");
 
         // Distinctive position-dependent byte stream through the producer.
         let mut stream: Vec<u8> = Vec::new();

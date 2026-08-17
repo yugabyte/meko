@@ -212,7 +212,8 @@ impl SharedState {
             bail!(TimelineError::UninitializedWalSegSize(*branch_id));
         }
 
-        let wal_store = YbWalStorage::new(branch_id, &control_store, yb_wal.clone()).await?;
+        let wal_store =
+            YbWalStorage::new(branch_id, &control_store, retention_floor, yb_wal.clone()).await?;
         let sk = StateSK::Loaded(SafeKeeper::new(
             TimelineState::new(control_store, retention_floor),
             wal_store,
