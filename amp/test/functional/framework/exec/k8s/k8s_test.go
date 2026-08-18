@@ -275,9 +275,14 @@ func TestPortForwardAutoLocalPort(t *testing.T) {
 	sr := &scriptRunner{}
 	port := 20000 + rand.Intn(40000) // the port kubectl "chose"
 	proc := &fakeProc{out: strings.NewReader(fmt.Sprintf("Forwarding from 127.0.0.1:%d -> 5432\n", port)), killed: make(chan struct{})}
+	// Guarded: a forward that dies is relaunched from the watcher goroutine, so
+	// the starter is called again while the test is still reading what it saw.
+	var argvMu sync.Mutex
 	var gotArgv []string
 	k := testKubectl(sr).WithStarter(func(_ context.Context, argv []string) (Process, error) {
+		argvMu.Lock()
 		gotArgv = argv
+		argvMu.Unlock()
 		return proc, nil
 	})
 	pf, err := k.PortForward(context.Background(), "svc/yb-ep-1", 0, 5432)
@@ -290,7 +295,10 @@ func TestPortForwardAutoLocalPort(t *testing.T) {
 	if pf.LocalAddr() != fmt.Sprintf("127.0.0.1:%d", port) {
 		t.Errorf("LocalAddr = %q, want the bound port", pf.LocalAddr())
 	}
-	if joined := strings.Join(gotArgv, " "); !strings.HasSuffix(joined, "port-forward svc/yb-ep-1 :5432") {
+	argvMu.Lock()
+	joinedArgv := strings.Join(gotArgv, " ")
+	argvMu.Unlock()
+	if joined := joinedArgv; !strings.HasSuffix(joined, "port-forward svc/yb-ep-1 :5432") {
 		t.Errorf("auto request must use kubectl ':remote' form, argv = %q", joined)
 	}
 }

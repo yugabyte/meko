@@ -1450,3 +1450,119 @@ func TestRefreshYBStorageWithoutForward(t *testing.T) {
 		t.Errorf("err = %v, want ErrNoStorageForward", err)
 	}
 }
+
+// diagRec answers every kubectl call with non-empty output, so the collector's
+// "skip what came back empty" rule doesn't hide what it asked for.
+type diagRec struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (d *diagRec) run(_ context.Context, _ io.Reader, argv []string) (execpkg.Result, error) {
+	joined := strings.Join(argv, " ")
+	d.mu.Lock()
+	d.calls = append(d.calls, joined)
+	d.mu.Unlock()
+	switch {
+	case strings.Contains(joined, "-o name"):
+		return execpkg.Result{Stdout: "pod/yb-ep-ep-1-pod0\npod/amp-controller-0\n"}, nil
+	case strings.Contains(joined, "jsonpath") && strings.Contains(joined, "conditions"):
+		return execpkg.Result{Stdout: "yb-ep-ep-1-pod0\tRunning\tFalse\n"}, nil
+	default:
+		return execpkg.Result{Stdout: "output\n"}, nil
+	}
+}
+
+func (d *diagRec) recorded() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, len(d.calls))
+	copy(out, d.calls)
+	return out
+}
+
+// collectSink records what an env attached.
+type collectSink struct{ names []string }
+
+func (c *collectSink) Add(name, _ string, _ []byte) error {
+	c.names = append(c.names, name)
+	return nil
+}
+
+// What Collect gathers decides whether a failure can be explained at all. It
+// used to attach the controller log and the CURRENT pod of the env's OWN
+// endpoint — so a compute that crashed and was replaced took its cause with it,
+// a pod that never scheduled produced nothing, and endpoints a test created for
+// itself were invisible. Events, node state, describes and previous-container
+// logs are what separate "unschedulable" from "crash-looping".
+func TestCollectGathersFailureEvidence(t *testing.T) {
+	rec := &diagRec{}
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run)
+	e := &Env{kube: kube, endpointID: "ep-1", logf: nil}
+
+	sink := &collectSink{}
+	if err := e.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	joined := strings.Join(sink.names, "\n")
+	for _, want := range []string{
+		"controller/controller.log", // the stable name triage starts from
+		"Amp events.txt",            // FailedScheduling / OOMKilled / Killing
+		"Amp nodes.txt",             // a starved node is indistinguishable from a hang
+		"Amp node-usage.txt",
+		"Amp resources/pods.txt",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Collect did not attach %q; got:\n%s", want, joined)
+		}
+	}
+
+	// Every kubectl logs call the collector makes must have a --previous twin:
+	// the cause of a restart is in the container that died, not the one serving.
+	var cur, prev int
+	for _, c := range rec.recorded() {
+		if strings.Contains(c, " logs ") {
+			if strings.Contains(c, "--previous") {
+				prev++
+			} else {
+				cur++
+			}
+		}
+	}
+	if prev == 0 {
+		t.Errorf("no --previous logs collected (%d current); a crashed container's log is where the cause is", cur)
+	}
+}
+
+// A backing in its OWN namespace has no pods in the amp namespace, so a failure
+// the amp side reports ("writes stopped", "pod not ready") would come with no
+// evidence about the database that actually stopped.
+func TestCollectReachesTheBackingNamespace(t *testing.T) {
+	rec := &diagRec{}
+	kube := k8s.New(k8s.Config{Context: "x", Namespace: "amp"}).WithRunner(rec.run)
+	p := New(Config{Deploy: true, AmpStack: ampstack.Config{
+		Namespace: "amp",
+		Backing:   ampstack.Backing{Mode: ampstack.BackingExternal, KubeNamespace: "yb-dev-ampqa-1"},
+	}})
+	p.logf = nil
+	e := &Env{kube: kube, prov: p, endpointID: "ep-1"}
+
+	sink := &collectSink{}
+	if err := e.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.Contains(strings.Join(sink.names, "\n"), "Universe logs/") {
+		t.Errorf("nothing collected from the backing namespace; got: %v", sink.names)
+	}
+	var sawBackingNS bool
+	for _, c := range rec.recorded() {
+		if strings.Contains(c, "-n yb-dev-ampqa-1") {
+			sawBackingNS = true
+			break
+		}
+	}
+	if !sawBackingNS {
+		t.Error("no kubectl call was made in the backing's namespace")
+	}
+}

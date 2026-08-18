@@ -31,6 +31,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybbacking"
 	"github.com/yugabyte/amp/test/functional/framework/apps/ybdeploy"
 	"github.com/yugabyte/amp/test/functional/framework/core"
+	"github.com/yugabyte/amp/test/functional/framework/diag"
 	"github.com/yugabyte/amp/test/functional/framework/env/reap"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
@@ -1592,37 +1593,47 @@ func (e *Env) Handles() core.EnvHandles        { return e.handles }
 // pod shell (chaos, which needs one, runs only on exclusive stacks).
 func (e *Env) Exec() exec.RemoteExecutor { return nil }
 
-// Collect gathers controller and endpoint pod logs when a kube context is
-// configured; otherwise it is a no-op. Best-effort — failures are logged.
+// Collect gathers the namespace's failure evidence — events, node state, wide
+// listings, and every pod's current and previous container logs and describe —
+// plus the backing's own namespace when it has one. No-op without a kube
+// context; best-effort throughout, so a failed probe never replaces the failure
+// it was called to explain.
 func (e *Env) Collect(ctx context.Context, into core.ArtifactSink) error {
 	if e.kube == nil {
 		return nil
 	}
+	// The controller log keeps its own stable name: it is the first thing every
+	// triage reads, and the diagnostics tree buries it per-container.
 	if logs, err := e.kube.Logs(ctx, "deployment/"+DefaultControllerService, "", 0); err != nil {
 		e.log("sharedk8s collect: controller logs: %v", err)
 	} else if err := into.Add("controller/controller.log", "log", []byte(logs)); err != nil {
 		return err
 	}
-	pods, err := e.kube.ListPods(ctx)
-	if err != nil {
-		e.log("sharedk8s collect: list pods: %v", err)
-		return nil
-	}
-	for _, pod := range pods {
-		if !strings.Contains(pod, "yb-ep-"+e.endpointID) {
-			continue
-		}
-		logs, err := e.kube.Logs(ctx, pod, "", 0)
-		if err != nil {
-			e.log("sharedk8s collect: endpoint logs %s: %v", pod, err)
-			continue
-		}
-		if err := into.Add(pod+"/endpoint.log", "log", []byte(logs)); err != nil {
-			return err
-		}
+
+	// Everything else comes from the shared collector, which this env used to do
+	// without: it logged the CURRENT pod of its OWN endpoint and nothing more. So
+	// a compute that crashed and was replaced took its cause with it (no
+	// --previous, and the dead pod is gone from the pod list), a pod that never
+	// scheduled produced no evidence at all (no events, no describe — run
+	// 1c907adb could not tell an unschedulable pod from a crash-looping one), and
+	// the endpoints a TEST creates for itself were never collected, which is
+	// every multi-endpoint test in the perf and stress suites.
+	diag.CollectK8sDiagnostics(ctx, e.kube, e.kube.Namespace(), sinkFn(into.Add), e.logf)
+
+	// The backing YugabyteDB, when it lives in its own namespace: a failure the
+	// amp side reports ("writes stopped", "pod not ready") is regularly the
+	// backing's, and its pods are not in the amp namespace to be collected above.
+	if ns := e.backingNamespace(); ns != "" && ns != e.kube.Namespace() {
+		diag.CollectUniverseK8sDiagnostics(ctx, e.kube.InNamespace(ns), ns, sinkFn(into.Add), e.logf)
 	}
 	return nil
 }
+
+// sinkFn adapts core.ArtifactSink's Add to the apps.ArtifactSink the diagnostics
+// collector takes (identical method, different package).
+type sinkFn func(name, kind string, content []byte) error
+
+func (f sinkFn) Add(name, kind string, content []byte) error { return f(name, kind, content) }
 
 func (e *Env) log(format string, args ...any) {
 	if e.logf != nil {
