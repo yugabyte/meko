@@ -55,6 +55,9 @@ async fn ysql() -> YsqlClient {
         connect_timeout_ms: 0,
         statement_timeout_ms: 0,
         tcp_user_timeout_ms: 0,
+        // A live test's connection outlives nothing; recycling it mid-test
+        // would only add a reconnect to the thing under test.
+        connection_lifetime_ms: 0,
     };
     YsqlClient::from_yb_config(&conf, "yb_thin_client_live", false)
         .await

@@ -37,6 +37,24 @@ pub static YB_RETRIES_EXHAUSTED: Lazy<IntCounterVec> = Lazy::new(|| {
     .expect("register yb_client_retries_exhausted_total")
 });
 
+/// Counts lifetime-driven connection recycles (see
+/// `YbConnConfig::connection_lifetime_ms`). Label `outcome`: `ok` when the
+/// slot's connection was replaced, `failed` when the reopen did not succeed
+/// and the existing connection kept serving. A steadily climbing `failed`
+/// means the pool is stuck on connections it cannot replace — the shape of
+/// the incident the bound exists to end (#811).
+///
+/// Reconnects driven by a dead socket are NOT counted here; they show up as
+/// `yb_client_errors_total{class="connection_drop"}`.
+pub static YB_CONNECTION_RECYCLES: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "yb_client_connection_recycles_total",
+        "YsqlClient connections recycled on reaching their configured lifetime, by outcome",
+        &["outcome"],
+    )
+    .expect("register yb_client_connection_recycles_total")
+});
+
 /// Per-attempt latency of YsqlClient operations. Observed for every
 /// completed call to `tokio_postgres::Client::{execute,query,query_opt}`,
 /// regardless of success or failure — so the histogram reflects the

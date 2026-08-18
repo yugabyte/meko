@@ -66,6 +66,32 @@ when the buffers read 0). Corroborate: `ss -tmi` (Recv-Q/Send-Q both full) +
 the 0 gauges. Recover by restarting the pageserver — but capture the dump
 first.
 
+### Ingest dead, walreceiver `disconnected` (stale tserver addresses)
+Symptom looks like the wedge above — `last_record_lsn` frozen, every
+`compute_request` parked in `wait_lsn` — but nothing is parked on a lock and
+`GET /v1/branch/<id>` reports `walreceiver_status: disconnected` while the
+safekeeper's `flush_lsn`/`commit_lsn` run far ahead. The logs reconnect every
+~5s and fail instantly:
+
+```
+Failed to establish control connection to Some("…-yb-tserver-1.…"):
+  failed to lookup address information: Name or service not known
+Failed to establish control connection to available servers
+```
+
+That is a connection outliving the tservers it discovered — the StatefulSet
+was replaced and the per-pod DNS names went with it. Confirm from inside the
+pod: `getent hosts <cached name>` returns nothing while `getent hosts
+<host_ports name>` resolves. `connection_lifetime_ms` (default 15 min) ages
+these connections out — but on the **YSQL** lane the smart driver's discovered
+host list is process-global, so a recycled connection can be handed the same
+stale topology and this may not clear on its own (see
+`compute/architecture/yugabyte.md` → "Bounding a connection's life"). Check
+`yb_client_connection_recycles_total{outcome="failed"}` on `/metrics` to tell
+that apart from a cluster that is simply unreachable. Recovery is a pod restart,
+and it is lossless — the WAL is durable in the safekeeper and
+`amp_storage.wals`; the pageserver is a materialization that fell behind (#811).
+
 ### getpage / wait_lsn stall
 Symptom: `compute_request` tasks all parked in `Timeline::wait_lsn`
 (`last_record_lsn.wait_for_timeout`). That's usually a *symptom* of ingest

@@ -18,7 +18,10 @@
 //! `execute` / `query` / `query_opt` call:
 //!
 //!   1. Checks `is_closed()`; reconnects first if the previous client is
-//!      dead.
+//!      dead. A connection that is alive but has outlived
+//!      [`YbConnConfig::connection_lifetime_ms`] is recycled here too, so
+//!      the smart driver's once-per-connection topology discovery cannot
+//!      outlive the topology (#811).
 //!   2. Looks up the SQL string in a per-connection prepared-statement
 //!      cache. On miss, `tokio_postgres::Client::prepare()` is invoked
 //!      once and the resulting `Statement` is cached. On hit, the
@@ -54,7 +57,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use metrics::{YB_CLIENT_ERRORS, YB_QUERY_SECONDS, YB_RETRIES_EXHAUSTED};
+use metrics::{YB_CLIENT_ERRORS, YB_CONNECTION_RECYCLES, YB_QUERY_SECONDS, YB_RETRIES_EXHAUSTED};
 use yb_tokio_postgres::Statement;
 use yb_tokio_postgres::types::ToSql;
 
@@ -263,6 +266,28 @@ pub struct YbConnConfig {
     /// is alive. Linux-only; other platforms ignore it.
     #[serde(default)]
     pub tcp_user_timeout_ms: u64,
+    /// How long one pooled connection may stay open before it is recycled,
+    /// in milliseconds. Defaults to [`DEFAULT_CONNECTION_LIFETIME_MS`]; `0`
+    /// is no bound.
+    ///
+    /// The bound exists because the smart driver's topology is discovered
+    /// ONCE per connection: the driver runs `yb_servers()` over a control
+    /// connection and from then on addresses tservers by the per-pod
+    /// hostnames it learned. Replace the tserver StatefulSet — as a K8s
+    /// rollout that renames the pods does — and every cached hostname becomes
+    /// NXDOMAIN while the configured bootstrap host
+    /// (a headless service) still resolves. Nothing in the driver forces
+    /// rediscovery, so a connection that opened before the swap keeps dialing
+    /// names that no longer exist.
+    ///
+    /// Recycling is best-effort and checked lazily, on the next use of the
+    /// slot: an expired connection is replaced before the call runs, and if
+    /// the reopen fails the existing connection keeps serving and the next
+    /// attempt is rate-limited to [`RECYCLE_RETRY_COOLDOWN`]. A lifetime
+    /// bound can therefore only ever add a reconnect, never subtract
+    /// availability.
+    #[serde(default = "default_connection_lifetime_ms")]
+    pub connection_lifetime_ms: u64,
 }
 
 /// Default [`YbConnConfig::connect_timeout_ms`]. Generous next to a healthy
@@ -294,12 +319,26 @@ pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 /// knows its statements are short can set it.
 pub const DEFAULT_STATEMENT_TIMEOUT_MS: u64 = 0;
 
+/// Default [`YbConnConfig::connection_lifetime_ms`]: 15 minutes.
+///
+/// Long enough that recycling is invisible next to the work a connection
+/// does — one reopen per slot per quarter hour, each paying a TCP+TLS
+/// handshake and re-priming that slot's prepared-statement cache — and short
+/// enough to bound how long a stale topology can be believed. The failure it
+/// exists for is measured in days (#811), so minutes is the right order of
+/// magnitude; there is nothing to gain from being tighter.
+pub const DEFAULT_CONNECTION_LIFETIME_MS: u64 = 15 * 60 * 1_000;
+
 fn default_connect_timeout_ms() -> u64 {
     DEFAULT_CONNECT_TIMEOUT_MS
 }
 
 fn default_statement_timeout_ms() -> u64 {
     DEFAULT_STATEMENT_TIMEOUT_MS
+}
+
+fn default_connection_lifetime_ms() -> u64 {
+    DEFAULT_CONNECTION_LIFETIME_MS
 }
 
 /// See [`YbConnConfig::hot_path`].
@@ -332,6 +371,16 @@ impl YbConnConfig {
                 .collect();
         }
         rpc_addrs_from_hosts(self.host_ports.0.iter().map(|h| h.host.clone()))
+    }
+
+    /// [`Self::connection_lifetime_ms`] as a `Duration`, or `None` when the
+    /// operator turned the bound off with `0`. Both transports read the bound
+    /// through here — the YSQL pool ([`YsqlClient::with_max_connection_lifetime`])
+    /// and the thin-client lane, which recycles its shim client and table
+    /// handles on the same cadence — so one key governs both.
+    pub fn max_connection_lifetime(&self) -> Option<Duration> {
+        (self.connection_lifetime_ms > 0)
+            .then(|| Duration::from_millis(self.connection_lifetime_ms))
     }
     /// Render this connection config as a libpq/diesel `postgresql://` URL.
     ///
@@ -430,6 +479,12 @@ impl YbConnConfig {
             parts.push(format!(
                 "statement_timeout_ms = {}",
                 self.statement_timeout_ms
+            ));
+        }
+        if self.connection_lifetime_ms != DEFAULT_CONNECTION_LIFETIME_MS {
+            parts.push(format!(
+                "connection_lifetime_ms = {}",
+                self.connection_lifetime_ms
             ));
         }
         format!("{{ {} }}", parts.join(", "))
@@ -581,6 +636,11 @@ impl YbConnArgs {
             connect_timeout_ms: 0,
             statement_timeout_ms: 0,
             tcp_user_timeout_ms: 0,
+            // Unbounded too: these tools open a connection, do one pass and
+            // exit, so there is no stale topology to age out — and recycling
+            // mid-scan would drop the prepared statements a long replay is
+            // riding on.
+            connection_lifetime_ms: 0,
         }
     }
 }
@@ -660,6 +720,7 @@ mod database_url_tests {
             connect_timeout_ms: super::DEFAULT_CONNECT_TIMEOUT_MS,
             statement_timeout_ms: super::DEFAULT_STATEMENT_TIMEOUT_MS,
             tcp_user_timeout_ms: 0,
+            connection_lifetime_ms: super::DEFAULT_CONNECTION_LIFETIME_MS,
         }
     }
 
@@ -797,6 +858,56 @@ mod database_url_tests {
             Some(&Duration::from_millis(2_000))
         );
         assert!(cfg.to_inline_toml().contains("tcp_user_timeout_ms = 2000"));
+    }
+
+    /// A connection block that says nothing gets the 15-minute lifetime, and
+    /// the bound reaches the pool. Every deployment that exists today omits
+    /// the key, and they are the ones wedged by a stale host list (#811).
+    #[test]
+    fn a_silent_connection_block_gets_the_lifetime_bound() {
+        let cfg: YbConnConfig =
+            toml::from_str("host_ports = \"h:5433\"\nuser = \"u\"\ndbname = \"d\"\n").unwrap();
+        assert_eq!(
+            cfg.connection_lifetime_ms,
+            super::DEFAULT_CONNECTION_LIFETIME_MS
+        );
+        assert_eq!(
+            cfg.max_connection_lifetime(),
+            Some(Duration::from_secs(15 * 60))
+        );
+    }
+
+    /// `0` turns recycling off, and it round-trips — an operator who has to
+    /// pin a connection open (a long manual replay through `YsqlClient`) must
+    /// be able to, and must be able to see that they did.
+    #[test]
+    fn zero_connection_lifetime_is_unbounded_and_round_trips() {
+        let cfg: YbConnConfig = toml::from_str(
+            "host_ports = \"h:5433\"\nuser = \"u\"\ndbname = \"d\"\nconnection_lifetime_ms = 0\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.max_connection_lifetime(), None);
+
+        let t = cfg.to_inline_toml();
+        assert!(t.contains("connection_lifetime_ms = 0"), "{t}");
+        let back: YbConnConfig = toml::from_str(&format!("v = {t}"))
+            .map(|v: std::collections::HashMap<String, YbConnConfig>| v["v"].clone())
+            .unwrap();
+        assert_eq!(back, cfg);
+    }
+
+    /// The default is omitted from the wire form (so existing configs stay
+    /// byte-identical) but must survive a `Serialize` round trip, which is
+    /// what the pageserver's unknown-key check diffs against — the same trap
+    /// `hot_path` fell into.
+    #[test]
+    fn default_connection_lifetime_is_omitted_inline_but_serializes() {
+        let c = cfg("127.0.0.1:5433");
+        assert!(!c.to_inline_toml().contains("connection_lifetime_ms"));
+        let ser = toml::to_string(&c).expect("serialize");
+        assert!(ser.contains("connection_lifetime_ms"), "{ser}");
+        let back: YbConnConfig = toml::from_str(&ser).expect("deserialize");
+        assert_eq!(back, c);
     }
 
     /// Zero is "no bound" for both — the escape hatch out of the defaults,
@@ -957,6 +1068,12 @@ pub struct YsqlClient {
     /// across slots).
     pool: Vec<tokio::sync::Mutex<State>>,
     next: std::sync::atomic::AtomicUsize,
+    /// Bound on how long one slot's connection may stay open, from
+    /// [`YbConnConfig::connection_lifetime_ms`]. `None` (the default for the
+    /// `connect_*` constructors, which take a bare driver `Config` and so
+    /// have no connection block to read) leaves connections unbounded, as
+    /// they were before #811.
+    max_lifetime: Option<Duration>,
 }
 
 /// The live connection and its per-connection prepared-statement cache.
@@ -969,7 +1086,90 @@ struct State {
     /// SQL string → cached prepared `Statement`. `Statement` is `Clone`
     /// and internally `Arc` so the clone we hand out is cheap.
     prepared: HashMap<String, Statement>,
+    /// When the connection currently in this slot was opened. Compared
+    /// against the slot's [`Self::lifetime`] to decide a recycle.
+    opened_at: std::time::Instant,
+    /// This slot's own lifetime: the client-wide bound plus 0–25% jitter,
+    /// re-rolled on every open. Without it a pool recycles in lockstep, and
+    /// so does every daemon that started in the same deploy — a synchronized
+    /// reconnect storm against the cluster the bound exists to stay
+    /// connected to.
+    lifetime: Option<Duration>,
+    /// Set when a lifetime-driven reopen failed: no further recycle is
+    /// attempted on this slot until then, so a cluster that is briefly
+    /// unreachable isn't hammered with one reopen per call.
+    recycle_after: Option<std::time::Instant>,
 }
+
+impl State {
+    fn new(client: tokio_postgres::Client, max_lifetime: Option<Duration>) -> State {
+        State {
+            client: Arc::new(client),
+            prepared: HashMap::new(),
+            opened_at: std::time::Instant::now(),
+            lifetime: max_lifetime.map(jittered),
+            recycle_after: None,
+        }
+    }
+
+    /// Whether this slot's connection has outlived its lifetime and no
+    /// cooldown from a failed reopen is in force.
+    fn recycle_due(&self) -> bool {
+        recycle_due_at(
+            self.opened_at,
+            self.lifetime,
+            self.recycle_after,
+            std::time::Instant::now(),
+        )
+    }
+
+    /// Install a freshly-opened connection, dropping the prepared-statement
+    /// cache (its `Statement`s belong to the connection being replaced) and
+    /// restarting the lifetime clock.
+    fn replace(&mut self, client: tokio_postgres::Client, max_lifetime: Option<Duration>) {
+        self.client = Arc::new(client);
+        self.prepared.clear();
+        self.opened_at = std::time::Instant::now();
+        self.lifetime = max_lifetime.map(jittered);
+        self.recycle_after = None;
+    }
+}
+
+/// The recycle predicate, with `now` and the slot's timestamps passed in so
+/// it can be exercised without a live connection (`tokio_postgres::Client`
+/// has no public constructor).
+///
+/// `lifetime: None` is the unbounded case. `recycle_after` is the cooldown a
+/// failed reopen installed: while it is in the future the connection stays
+/// past its lifetime deliberately, because replacing it is what just failed.
+fn recycle_due_at(
+    opened_at: std::time::Instant,
+    lifetime: Option<Duration>,
+    recycle_after: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    let Some(lifetime) = lifetime else {
+        return false;
+    };
+    if now.saturating_duration_since(opened_at) < lifetime {
+        return false;
+    }
+    match recycle_after {
+        Some(at) => now >= at,
+        None => true,
+    }
+}
+
+/// `base` plus 0–25% random jitter — the same envelope
+/// [`sleep_with_jitter`] uses, for the same reason: to break a herd.
+fn jittered(base: Duration) -> Duration {
+    base.mul_f64(1.0 + rand::random::<f64>() * 0.25)
+}
+
+/// How long to wait before retrying a lifetime-driven reopen that failed.
+/// The old connection keeps serving in the meantime, so this only paces the
+/// retry; it does not delay any caller.
+const RECYCLE_RETRY_COOLDOWN: Duration = Duration::from_secs(10);
 
 impl YsqlClient {
     /// Build a `YsqlClient` with a single connection (no pool).
@@ -1088,7 +1288,7 @@ impl YsqlClient {
     ) -> Result<Self> {
         let pg_config = build_pg_config(cfg, application_name)?;
         let disable_transactional_writes = cfg.disable_transactional_writes;
-        match cfg.sslmode.as_deref() {
+        let client = match cfg.sslmode.as_deref() {
             None | Some("disable") => {
                 Self::connect_no_tls_pooled(
                     pg_config,
@@ -1096,7 +1296,7 @@ impl YsqlClient {
                     set_fast_path_upsert,
                     disable_transactional_writes,
                 )
-                .await
+                .await?
             }
             Some(_mode) => {
                 let tls = build_yb_rustls_connector(cfg.sslrootcert.as_deref())?;
@@ -1107,9 +1307,13 @@ impl YsqlClient {
                     set_fast_path_upsert,
                     disable_transactional_writes,
                 )
-                .await
+                .await?
             }
-        }
+        };
+        Ok(match cfg.max_connection_lifetime() {
+            Some(max) => client.with_max_connection_lifetime(max),
+            None => client,
+        })
     }
 
     async fn from_open(open: OpenFn, pool_size: usize) -> Result<Self> {
@@ -1117,16 +1321,35 @@ impl YsqlClient {
         let mut pool = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
             let client = (open)().await?;
-            pool.push(tokio::sync::Mutex::new(State {
-                client: Arc::new(client),
-                prepared: HashMap::new(),
-            }));
+            pool.push(tokio::sync::Mutex::new(State::new(client, None)));
         }
         Ok(Self {
             open,
             pool,
             next: std::sync::atomic::AtomicUsize::new(0),
+            max_lifetime: None,
         })
+    }
+
+    /// Bound how long each pooled connection may stay open before it is
+    /// recycled — see [`YbConnConfig::connection_lifetime_ms`] for why one
+    /// exists. `Duration::ZERO` leaves connections unbounded.
+    ///
+    /// [`Self::from_yb_config`] / [`Self::from_yb_config_pooled`] apply the
+    /// connection block's value through here, so daemons get the bound
+    /// without asking. The `connect_no_tls*` / `connect_rustls*`
+    /// constructors take a bare driver `Config` with no connection block to
+    /// read, so a caller on those paths that wants the bound sets it here.
+    ///
+    /// Applied after the pool is open, which is exactly right: each slot's
+    /// clock starts when its connection opened, not when the bound was set.
+    #[must_use]
+    pub fn with_max_connection_lifetime(mut self, max: Duration) -> Self {
+        self.max_lifetime = (!max.is_zero()).then_some(max);
+        for slot in &mut self.pool {
+            slot.get_mut().lifetime = self.max_lifetime.map(jittered);
+        }
+        self
     }
 
     /// Round-robin pick a pool slot index.
@@ -1154,15 +1377,46 @@ impl YsqlClient {
     }
 
     /// Return the live client at a specific pool slot, reconnecting
-    /// first if it's dead. The reconnect clears that slot's prepared-
-    /// statement cache because cached `Statement`s belong to the old
-    /// (now-dead) connection. Other slots are unaffected.
+    /// first if it's dead — or if it has outlived
+    /// [`YbConnConfig::connection_lifetime_ms`]. Either reconnect clears
+    /// that slot's prepared-statement cache because cached `Statement`s
+    /// belong to the old connection. Other slots are unaffected.
+    ///
+    /// The two reconnects differ in how a failure is treated. A dead
+    /// connection has nothing to fall back to, so the error propagates and
+    /// the caller's retry budget handles it. An expired one is still usable,
+    /// so a failed reopen is logged, the old connection keeps serving, and
+    /// the next attempt waits out [`RECYCLE_RETRY_COOLDOWN`] — the bound
+    /// exists to improve availability and must not be able to cost any.
     async fn current_client_at(&self, slot: usize) -> Result<Arc<tokio_postgres::Client>> {
         let mut guard = self.pool[slot].lock().await;
         if guard.client.is_closed() {
             tracing::info!(slot, "YsqlClient: previous client closed, reconnecting");
-            guard.client = Arc::new((self.open)().await?);
-            guard.prepared.clear();
+            let client = (self.open)().await?;
+            guard.replace(client, self.max_lifetime);
+        } else if guard.recycle_due() {
+            let age = guard.opened_at.elapsed();
+            match (self.open)().await {
+                Ok(client) => {
+                    tracing::info!(
+                        slot,
+                        age_secs = age.as_secs(),
+                        "YsqlClient: recycling connection past its lifetime"
+                    );
+                    guard.replace(client, self.max_lifetime);
+                    YB_CONNECTION_RECYCLES.with_label_values(&["ok"]).inc();
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        slot,
+                        age_secs = age.as_secs(),
+                        "YsqlClient: could not recycle connection past its lifetime, \
+                         keeping the current one: {e:#}"
+                    );
+                    guard.recycle_after = Some(std::time::Instant::now() + RECYCLE_RETRY_COOLDOWN);
+                    YB_CONNECTION_RECYCLES.with_label_values(&["failed"]).inc();
+                }
+            }
         }
         Ok(guard.client.clone())
     }
@@ -1178,8 +1432,8 @@ impl YsqlClient {
             return Ok(guard.client.clone());
         }
         tracing::info!(slot, "YsqlClient: forcing reconnect after failed op");
-        guard.client = Arc::new((self.open)().await?);
-        guard.prepared.clear();
+        let client = (self.open)().await?;
+        guard.replace(client, self.max_lifetime);
         Ok(guard.client.clone())
     }
 
@@ -1918,6 +2172,61 @@ mod retry_class_tests {
             assert!(total >= base);
             assert!(total <= base.mul_f64(1.25));
         }
+    }
+
+    #[test]
+    fn recycle_is_due_only_past_the_lifetime() {
+        let now = std::time::Instant::now();
+        let opened = now - Duration::from_secs(1_000);
+        // Unbounded: never due, however old.
+        assert!(!recycle_due_at(opened, None, None, now));
+        // Younger than its lifetime: not due.
+        assert!(!recycle_due_at(
+            opened,
+            Some(Duration::from_secs(2_000)),
+            None,
+            now
+        ));
+        // Past it: due.
+        assert!(recycle_due_at(
+            opened,
+            Some(Duration::from_secs(900)),
+            None,
+            now
+        ));
+    }
+
+    /// A failed reopen must not turn into a reopen attempt per call: the
+    /// cooldown suppresses the recycle until it expires, while the existing
+    /// connection keeps serving.
+    #[test]
+    fn a_failed_recycle_holds_off_until_its_cooldown_expires() {
+        let now = std::time::Instant::now();
+        let opened = now - Duration::from_secs(1_000);
+        let lifetime = Some(Duration::from_secs(900));
+
+        let cooling = Some(now + Duration::from_secs(5));
+        assert!(!recycle_due_at(opened, lifetime, cooling, now));
+
+        let expired = Some(now - Duration::from_millis(1));
+        assert!(recycle_due_at(opened, lifetime, expired, now));
+    }
+
+    /// The per-slot lifetime carries the same 0–25% jitter the retry backoff
+    /// does. Without it every slot in a pool — and every daemon deployed
+    /// together — recycles in the same instant.
+    #[test]
+    fn jittered_lifetime_stays_inside_its_envelope() {
+        let base = Duration::from_secs(900);
+        let mut seen_distinct = false;
+        let first = jittered(base);
+        for _ in 0..50 {
+            let j = jittered(base);
+            assert!(j >= base);
+            assert!(j <= base.mul_f64(1.25));
+            seen_distinct |= j != first;
+        }
+        assert!(seen_distinct, "lifetimes are not being jittered at all");
     }
 
     #[test]

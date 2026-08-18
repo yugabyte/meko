@@ -209,7 +209,14 @@ pub struct YbWalConn {
     /// path. Opened and health-checked at startup; carries the hot-path WAL
     /// write/read dispatch. Control file, GC, and rehydration stay on the
     /// YSQL lanes regardless.
-    pub yb_thinclient: Option<Arc<YbThinClient>>,
+    ///
+    /// Held through a [`yb_thin_client::Recycling`], which re-connects the shim
+    /// client and re-opens `wals` once the current generation passes
+    /// `YbConnConfig::connection_lifetime_ms` — re-resolving the configured
+    /// tserver addresses, so a connection cannot outlive the tservers it was
+    /// aimed at (#811). Each write/read takes the current generation for the
+    /// duration of its call.
+    pub yb_thinclient: Option<Arc<YbThinPool>>,
     /// Codec applied to the `data` column on the way out to YB, from
     /// `yb_wal_compression`. Write-side only — the read path decodes
     /// whatever tag each stored row carries, so rows written under
@@ -217,11 +224,16 @@ pub struct YbWalConn {
     pub codec: payload_codec::Codec,
 }
 
-/// See [`YbWalConn::yb_thinclient`]. The `yb_thin_client` (shim) lane.
+/// See [`YbWalConn::yb_thinclient`]. The `yb_thin_client` (shim) lane. One
+/// generation of [`YbThinPool`]: `wals` belongs to `client`, so the two are
+/// replaced together.
 pub struct YbThinClient {
     pub client: Arc<yb_thin_client::TsClient>,
     pub wals: Arc<yb_thin_client::TableHandle>,
 }
+
+/// The recycled holder of [`YbThinClient`] — see [`YbWalConn::yb_thinclient`].
+pub type YbThinPool = yb_thin_client::Recycling<YbThinClient>;
 
 impl YbWalConn {
     /// Build from the SK config. Returns `None` when
@@ -315,7 +327,7 @@ impl YbWalConn {
     async fn connect_thin(
         yb: &ysql_client::YbConnConfig,
         system_client: &Arc<ysql_client::YsqlClient>,
-    ) -> anyhow::Result<Arc<YbThinClient>> {
+    ) -> anyhow::Result<Arc<YbThinPool>> {
         use anyhow::Context;
         let (db_oid, wals_oid) = Self::lookup_wals_oids(system_client).await?;
         // WAL lane: one read + one write session by default (low-concurrency —
@@ -326,23 +338,36 @@ impl YbWalConn {
         let sessions_per_conn = yb.tsclient_sessions_per_conn.unwrap_or(4);
         let tserver_addrs = yb.effective_tserver_rpc_addrs();
         let tserver_count = tserver_addrs.len();
-        let client = yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
+        let config = yb_thin_client::TsClientConfig {
             tserver_addrs,
             read_sessions: read_sessions as u32,
             write_sessions: write_sessions as u32,
             sessions_per_conn: sessions_per_conn as u32,
             ..Default::default()
-        })
+        };
+        // The OID lookup above runs once (OIDs don't move); connect and
+        // `open_table` go into the closure the pool re-runs on each recycle.
+        let pool = yb_thin_client::Recycling::new(
+            "safekeeper WAL",
+            config,
+            yb.max_connection_lifetime(),
+            move |client: Arc<yb_thin_client::TsClient>| {
+                let wals = client.open_table(db_oid, wals_oid).map_err(|e| {
+                    yb_thin_client::YbError::Other(format!(
+                        "opening {WALS_TABLE} via the yb_thin_client lane: {e}"
+                    ))
+                })?;
+                Ok(Arc::new(YbThinClient { client, wals }))
+            },
+        )
+        .await
         .context("connecting the thin-client (yb_thin_client) client")?;
-        let wals = client
-            .open_table(db_oid, wals_oid)
-            .with_context(|| format!("opening {WALS_TABLE} via the yb_thin_client lane"))?;
         tracing::info!(
             "thin-client (yb_thin_client) hot path ready: {WALS_TABLE} opened \
              ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
              connection, across {tserver_count} configured tserver(s))",
         );
-        Ok(Arc::new(YbThinClient { client, wals }))
+        Ok(pool)
     }
 }
 
@@ -1527,7 +1552,7 @@ async fn truncate_wals_above(
 async fn consumer_main(
     mut rx: mpsc::Receiver<PendingChunk>,
     ysql_fpu_client: Arc<YsqlClient>,
-    yb_thinclient: Option<Arc<YbThinClient>>,
+    yb_thinclient: Option<Arc<YbThinPool>>,
     table_name: String,
     branch_id: BranchId,
     watermark_tx: watch::Sender<DurableState>,
@@ -1641,9 +1666,16 @@ async fn consumer_main(
         let mut signalled = false;
         let mut failing_since: Option<std::time::Instant> = None;
         let flushed = loop {
+            // Resolved per attempt, not once per batch: a batch that retries
+            // for a long time is exactly when the lifetime bound should be
+            // allowed to hand this loop a freshly-connected client (#811).
+            let thin = match &yb_thinclient {
+                Some(pool) => Some(pool.current().await),
+                None => None,
+            };
             match flush_batch(
                 &ysql_fpu_client,
-                yb_thinclient.as_deref(),
+                thin.as_deref(),
                 &table_name,
                 branch_id,
                 &batch,
@@ -2056,7 +2088,7 @@ pub struct YbSegmentReader {
     read_client: Arc<YsqlClient>,
     /// Thin-client lane (`hot_path = "yb_thin_client"`); when set, fetches
     /// use it. `None` unless the thin-client hot path is selected.
-    yb_thinclient: Option<Arc<YbThinClient>>,
+    yb_thinclient: Option<Arc<YbThinPool>>,
     table: String,
     branch_id: BranchId,
 
@@ -2145,15 +2177,11 @@ impl YbSegmentReader {
         let yb_thinclient = self.yb_thinclient.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let res = fetch_chunks(
-                &client,
-                yb_thinclient.as_deref(),
-                &table,
-                branch_id,
-                segno,
-                pos,
-            )
-            .await;
+            let thin = match &yb_thinclient {
+                Some(pool) => Some(pool.current().await),
+                None => None,
+            };
+            let res = fetch_chunks(&client, thin.as_deref(), &table, branch_id, segno, pos).await;
             let covering = match res {
                 Ok(fetched) => {
                     // Warm the cache with what we just read — but ONLY chunks
@@ -5427,10 +5455,12 @@ mod tests {
             system_client: client.clone(),
             table: table.clone(),
             cache: None,
-            yb_thinclient: Some(Arc::new(YbThinClient {
+            // No lifetime bound: the test wants the connection it opened for
+            // as long as it runs. `Recycling::fixed` never rebuilds.
+            yb_thinclient: Some(yb_thin_client::Recycling::fixed(Arc::new(YbThinClient {
                 client: thin_client,
                 wals,
-            })),
+            }))),
             codec: payload_codec::Codec::Lz4,
         });
         let mut storage =

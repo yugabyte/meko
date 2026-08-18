@@ -191,6 +191,41 @@ hand during an incident and issue the long scans the daemons never do —
 `reset-consistent-lsn` replays the WAL decoder over `amp_storage.wals` —
 so the operator watching it is the timeout.
 
+### Bounding a connection's life (`connection_lifetime_ms`)
+
+A third key on the same block caps how long any one connection may stay
+open — **15 minutes** by default, `0` for no bound. It governs **both**
+transports:
+
+```toml
+yb_storage_conn = { host_ports = "...", connection_lifetime_ms = 900000 }
+```
+
+- `YsqlClient` recycles a pool slot lazily, on the slot's next use: the
+  expired connection is replaced (dropping that slot's prepared-statement
+  cache, whose `Statement`s belong to it) before the call runs.
+- the `yb_thin_client` lane recycles the whole generation — the shim
+  client and the table handles opened on it, which belong to that client —
+  re-resolving `tserver_rpc_addrs` in the process.
+
+Each slot's lifetime carries 0–25% jitter so a pool, and a fleet deployed
+together, do not recycle in lockstep.
+
+**Why a connection needs an expiry date.** Both transports discover where
+the tservers are exactly once. The smart driver runs `yb_servers()` over a
+control connection and from then on addresses tservers by the per-pod
+hostnames it learned; the shim resolves `tserver_rpc_addrs` when it builds
+its session pool. Neither revisits that answer. Replace the tserver
+StatefulSet — a rollout that renames the pods, `…-tserver-0` becoming
+`…-tserver-1-0` — and every discovered name is NXDOMAIN while the configured
+bootstrap endpoint (the headless service) resolves correctly the whole time.
+Nothing forces rediscovery, so the staleness has no end.
+
+Recycling is **best-effort and cannot cost availability**: a reopen that
+fails leaves the existing connection serving and is retried no more than
+once every 10s (`RECYCLE_RETRY_COOLDOWN`), logged at WARN and counted by
+`yb_client_connection_recycles_total{outcome="failed"}`.
+
 At startup each daemon resolves its hot tables' DocDB ids via a one-time
 catalog lookup over YSQL (`lookup_table_oids`), failing hard if any
 table is missing — a daemon never runs with a partially-enabled direct
@@ -913,6 +948,11 @@ what the client can absorb.
   the retry budget; the compute's own request retries take over.
   Recently-written WAL reads on the safekeeper are served from its
   in-memory cache and survive short YB outages.
+- **tservers replaced, not restarted** (a StatefulSet rollout that renames
+  the pods): the addresses a long-lived connection discovered at startup
+  stop resolving, and nothing about that looks like an outage from the
+  cluster's side. Bounded by `connection_lifetime_ms` above, which ages
+  every connection out on both transports.
 - **YB unavailable on the controller**: its HTTP API returns 5xx;
   running pageservers / safekeepers / computes keep operating and only
   block on the controller when they need a fresh cluster decision

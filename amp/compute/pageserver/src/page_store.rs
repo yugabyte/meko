@@ -413,11 +413,22 @@ pub struct PageStore {
     /// tables this store owns, batching reads/writes into one Perform
     /// per call. `None` on the YSQL path; when set, per-op dispatch takes this
     /// lane and falls back to YSQL. Populated and health-checked at startup.
-    pub thinclient: Option<Arc<ThinClientTables>>,
+    ///
+    /// Held through a [`yb_thin_client::Recycling`], which re-connects the shim
+    /// client and re-opens these tables once the current generation passes
+    /// `YbConnConfig::connection_lifetime_ms` — re-resolving the configured
+    /// tserver addresses, so a connection cannot outlive the tservers it was
+    /// aimed at (#811). Each dispatch site takes the current generation for
+    /// the duration of its call.
+    pub thinclient: Option<Arc<ThinClientPool>>,
 }
 
+/// The recycled holder of [`ThinClientTables`] — see [`PageStore::thinclient`].
+pub type ThinClientPool = yb_thin_client::Recycling<ThinClientTables>;
+
 /// Opened `yb_thin_client` table handles (the batch-first Perform client).
-/// See [`PageStore::thinclient`].
+/// One generation of [`ThinClientPool`]: the handles all belong to `client`,
+/// so they are replaced together. See [`PageStore::thinclient`].
 pub struct ThinClientTables {
     pub client: Arc<yb_thin_client::TsClient>,
     pub pages: Arc<yb_thin_client::TableHandle>,
@@ -906,6 +917,11 @@ impl ThinClientTables {
     /// Connects the `yb_thin_client` (shim) client and opens the store's
     /// tables — the startup healthcheck for `hot_path = "yb_thin_client"`.
     /// `connect`/`open_table` are synchronous (a one-shot startup RPC).
+    ///
+    /// Returns the recycling holder rather than the tables themselves: the
+    /// catalog lookup that resolves the table OIDs happens once here (OIDs
+    /// don't move), while the connect + `open_table` calls are packaged into a
+    /// closure the holder re-runs on each lifetime-driven recycle.
     async fn connect(
         yb: &YbConnConfig,
         schema: &str,
@@ -913,7 +929,7 @@ impl ThinClientTables {
         read_sessions: usize,
         write_sessions: usize,
         sessions_per_conn: usize,
-    ) -> Result<Arc<ThinClientTables>> {
+    ) -> Result<Arc<ThinClientPool>> {
         let (db_oid, oids) = ysql_client::lookup_table_oids(
             ysql_client,
             schema,
@@ -922,32 +938,43 @@ impl ThinClientTables {
         .await?;
         let tserver_addrs = yb.effective_tserver_rpc_addrs();
         let tserver_count = tserver_addrs.len();
-        let client = yb_thin_client::TsClient::connect(&yb_thin_client::TsClientConfig {
+        let config = yb_thin_client::TsClientConfig {
             tserver_addrs,
             read_sessions: read_sessions as u32,
             write_sessions: write_sessions as u32,
             sessions_per_conn: sessions_per_conn as u32,
             ..Default::default()
-        })
-        .context("connecting the yb_thin_client")?;
-        let open = |table: &str| {
-            client
-                .open_table(db_oid, oids[table])
-                .with_context(|| format!("opening {schema}.{table} via the thin-client lane"))
         };
-        let tables = Arc::new(ThinClientTables {
-            pages: open("pages")?,
-            slru_pages: open("slru_pages")?,
-            meta: open("meta")?,
-            pending_gc: open("pending_gc")?,
-            client,
-        });
+        let schema_owned = schema.to_string();
+        let pool = yb_thin_client::Recycling::new(
+            "pageserver",
+            config,
+            yb.max_connection_lifetime(),
+            move |client: Arc<yb_thin_client::TsClient>| {
+                let open = |table: &str| {
+                    client.open_table(db_oid, oids[table]).map_err(|e| {
+                        yb_thin_client::YbError::Other(format!(
+                            "opening {schema_owned}.{table} via the thin-client lane: {e}"
+                        ))
+                    })
+                };
+                Ok(Arc::new(ThinClientTables {
+                    pages: open("pages")?,
+                    slru_pages: open("slru_pages")?,
+                    meta: open("meta")?,
+                    pending_gc: open("pending_gc")?,
+                    client,
+                }))
+            },
+        )
+        .await
+        .context("connecting the yb_thin_client")?;
         tracing::info!(
             "yb_thin_client hot path ready: {schema}.pages/slru_pages/meta/pending_gc opened \
              ({read_sessions} read + {write_sessions} write sessions, {sessions_per_conn} per \
              connection, across {tserver_count} configured tserver(s))",
         );
-        Ok(tables)
+        Ok(pool)
     }
 }
 
@@ -1611,9 +1638,10 @@ impl PageStore {
         // codec tag, which the read path then rejects — so a newly added lane
         // must be threaded through here too.
         let (encoded, tally) = self.encode_payloads("pages", rows.iter().map(|r| &r.payload));
-        if let Some(p) = &self.thinclient {
+        if let Some(pool) = &self.thinclient {
+            let p = pool.current().await;
             let started = std::time::Instant::now();
-            self.put_pages_thin(p, branch_id, rows, &encoded).await?;
+            self.put_pages_thin(&p, branch_id, rows, &encoded).await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_pages", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
@@ -1876,10 +1904,11 @@ impl PageStore {
         // trim below truncates at the first `will_init=true` row walking
         // LSN-desc, so the no-image case keeps full-chain semantics and an
         // init-delta between image and target_lsn shortens the chain.
-        if let Some(p) = &self.thinclient {
+        if let Some(pool) = &self.thinclient {
+            let p = pool.current().await;
             let started = std::time::Instant::now();
             let chain = self
-                .read_chain_thin(p, branch_id, sp, db, rel, fork, blk, target)
+                .read_chain_thin(&p, branch_id, sp, db, rel, fork, blk, target)
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["read_chain", "yb_thin_client"])
@@ -2184,10 +2213,11 @@ impl PageStore {
             let fork = range.start.field5 as i16;
             let blk_lo = range.start.field6 as i64;
             let blk_hi = range.end.field6 as i64;
-            if let Some(p) = &self.thinclient {
+            if let Some(pool) = &self.thinclient {
+                let p = pool.current().await;
                 let started = std::time::Instant::now();
                 let by_key = self
-                    .scan_one_fork_thin(p, branch_id, sp, db, rel, fork, blk_lo, blk_hi, target)
+                    .scan_one_fork_thin(&p, branch_id, sp, db, rel, fork, blk_lo, blk_hi, target)
                     .await?;
                 crate::metrics::YB_STORE_OP_SECONDS
                     .with_label_values(&["scan_range", "yb_thin_client"])
@@ -2342,9 +2372,10 @@ impl PageStore {
     pub async fn put_slru_pages(&self, branch_id: BranchId, rows: &[SlruPageRow]) -> Result<()> {
         self.write_gate("write to amp_storage.slru_pages");
         let (encoded, tally) = self.encode_payloads("slru_pages", rows.iter().map(|r| &r.payload));
-        if let Some(p) = &self.thinclient {
+        if let Some(pool) = &self.thinclient {
+            let p = pool.current().await;
             let started = std::time::Instant::now();
-            self.put_slru_pages_thin(p, branch_id, rows, &encoded)
+            self.put_slru_pages_thin(&p, branch_id, rows, &encoded)
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_slru_pages", "yb_thin_client"])
@@ -2444,10 +2475,11 @@ impl PageStore {
         let blk_i = blknum as i64;
         let target = target_lsn.0 as i64;
 
-        if let Some(p) = &self.thinclient {
+        if let Some(pool) = &self.thinclient {
+            let p = pool.current().await;
             let started = std::time::Instant::now();
             let chain = self
-                .read_slru_chain_thin(p, branch_id, kind, kind_i, segno_i, blk_i, target)
+                .read_slru_chain_thin(&p, branch_id, kind, kind_i, segno_i, blk_i, target)
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["read_slru_chain", "yb_thin_client"])
@@ -2596,10 +2628,11 @@ impl PageStore {
         let blk_hi = blknum_range.end as i64;
         let target = target_lsn.0 as i64;
 
-        if let Some(p) = &self.thinclient {
+        if let Some(pool) = &self.thinclient {
+            let p = pool.current().await;
             let started = std::time::Instant::now();
             let by_block = self
-                .scan_slru_range_thin(p, branch_id, kind, kind_i, segno_i, blk_lo, blk_hi, target)
+                .scan_slru_range_thin(&p, branch_id, kind, kind_i, segno_i, blk_lo, blk_hi, target)
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["scan_slru_range", "yb_thin_client"])
@@ -2733,9 +2766,10 @@ impl PageStore {
         // sentinels are 4 bytes — fall under `MIN_COMPRESS_BYTES` and stay
         // raw; directory listings and aux files are the ones that benefit.
         let (encoded, tally) = self.encode_payloads("meta", rows.iter().map(|r| &r.payload));
-        if let Some(p) = &self.thinclient {
+        if let Some(pool) = &self.thinclient {
+            let p = pool.current().await;
             let started = std::time::Instant::now();
-            self.put_meta_thin(p, branch_id, rows, &encoded).await?;
+            self.put_meta_thin(&p, branch_id, rows, &encoded).await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["put_meta", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
@@ -2893,9 +2927,10 @@ impl PageStore {
         if key.len() != KEY_SIZE {
             bail!("read_meta: key bytes wrong length ({})", key.len());
         }
-        if let Some(p) = &self.thinclient {
+        if let Some(pool) = &self.thinclient {
+            let p = pool.current().await;
             let started = std::time::Instant::now();
-            let row = self.read_meta_thin(p, branch_id, key, target_lsn).await?;
+            let row = self.read_meta_thin(&p, branch_id, key, target_lsn).await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["read_meta", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
@@ -3033,9 +3068,10 @@ impl PageStore {
         if rows.is_empty() {
             return Ok(());
         }
-        if let Some(p) = &self.thinclient {
+        if let Some(pool) = &self.thinclient {
+            let p = pool.current().await;
             let started = std::time::Instant::now();
-            self.gc_enqueue_candidates_thin(p, branch_id, rows).await?;
+            self.gc_enqueue_candidates_thin(&p, branch_id, rows).await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["gc_enqueue_candidates", "yb_thin_client"])
                 .observe(started.elapsed().as_secs_f64());
@@ -5003,6 +5039,7 @@ mod tests {
             connect_timeout_ms: ysql_client::DEFAULT_CONNECT_TIMEOUT_MS,
             statement_timeout_ms: ysql_client::DEFAULT_STATEMENT_TIMEOUT_MS,
             tcp_user_timeout_ms: 0,
+            connection_lifetime_ms: ysql_client::DEFAULT_CONNECTION_LIFETIME_MS,
         }
     }
 
@@ -6645,13 +6682,17 @@ mod tests {
                 .open_table(db_oid, oids[t])
                 .unwrap_or_else(|e| panic!("open {t} via thin client: {e}"))
         };
-        store.thinclient = Some(Arc::new(ThinClientTables {
-            pages: open("pages"),
-            slru_pages: open("slru_pages"),
-            meta: open("meta"),
-            pending_gc: open("pending_gc"),
-            client,
-        }));
+        // No lifetime bound: these tests want the connection they opened, for
+        // as long as the test runs. `Recycling::fixed` never rebuilds.
+        store.thinclient = Some(yb_thin_client::Recycling::fixed(Arc::new(
+            ThinClientTables {
+                pages: open("pages"),
+                slru_pages: open("slru_pages"),
+                meta: open("meta"),
+                pending_gc: open("pending_gc"),
+                client,
+            },
+        )));
         store
     }
 

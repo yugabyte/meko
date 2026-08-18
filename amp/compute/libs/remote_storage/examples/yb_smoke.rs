@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
             connect_timeout_ms: ysql_client::DEFAULT_CONNECT_TIMEOUT_MS,
             statement_timeout_ms: ysql_client::DEFAULT_STATEMENT_TIMEOUT_MS,
             tcp_user_timeout_ms: 0,
+            connection_lifetime_ms: ysql_client::DEFAULT_CONNECTION_LIFETIME_MS,
         }),
         timeout: Duration::from_secs(60),
         small_timeout: Duration::from_secs(10),

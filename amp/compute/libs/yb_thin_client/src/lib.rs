@@ -11,9 +11,11 @@
 mod client;
 mod error;
 mod ffi;
+mod recycle;
 
 pub use client::{
     BindValue, ColKind, Column, CondOp, RangeRead, ReadBatch, ReadOp, ReadPage, ReadResult, Row,
     TableHandle, TlsOpts, TsClient, TsClientConfig, UpsertRow, Value, ValueType,
 };
 pub use error::YbError;
+pub use recycle::{RECYCLE_RETRY_COOLDOWN, Recycling};
