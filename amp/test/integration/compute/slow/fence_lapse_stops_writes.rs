@@ -52,7 +52,11 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     // fails on a port the earlier one is still bound to. Unique-by-construction
     // rather than cleanup at the end, because a scenario that bails midway
     // never reaches its cleanup and would leave the same trap behind.
-    let branch_pg_port = c.compute_port() + 300;
+    //
+    // Small enough, too, that the endpoint's whole footprint stays in this
+    // run's port block: it takes three ports upward from this one (pg + two
+    // HTTP), the compute lane is base+700, and the run owns base+0..=base+900.
+    let branch_pg_port = c.compute_port() + 195;
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("Dedicated branch + endpoint");
