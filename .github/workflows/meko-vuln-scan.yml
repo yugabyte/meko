@@ -47,8 +47,8 @@ jobs:
       meko_admin: ${{ steps.filter.outputs.meko_admin }}
       api_server: ${{ steps.filter.outputs.api_server }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -68,8 +68,8 @@ jobs:
     if: needs.changes.outputs.meko_ui == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
       # --audit-level=high covers HIGH + CRITICAL; MODERATE / LOW don't
@@ -86,8 +86,8 @@ jobs:
     if: needs.changes.outputs.meko_admin == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
       - name: npm audit (high + critical, prod only)
@@ -100,8 +100,8 @@ jobs:
     if: needs.changes.outputs.api_server == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: meko/api_server/go.mod
           cache-dependency-path: meko/api_server/go.sum
@@ -132,7 +132,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/ci-gate
         with:
           needs: ${{ toJSON(needs) }}

@@ -45,8 +45,8 @@ jobs:
       amp_ui: ${{ steps.filter.outputs.amp_ui }}
       amp_controller: ${{ steps.filter.outputs.amp_controller }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -63,8 +63,8 @@ jobs:
     if: needs.changes.outputs.amp_ui == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
       # See meko-vuln-scan for the flag rationale — same threshold /
@@ -79,8 +79,8 @@ jobs:
     if: needs.changes.outputs.amp_controller == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: amp/controller/go.mod
           cache-dependency-path: amp/controller/go.sum
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/ci-gate
         with:
           needs: ${{ toJSON(needs) }}
