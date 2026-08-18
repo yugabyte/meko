@@ -508,7 +508,7 @@
   // inventory changes — a bare heartbeat tick leaves it untouched.
   let detailId = null, detailSig = "";
   function detailSigFor(e) {
-    return e ? JSON.stringify([e.state, e.live, e.stale, (e.resources || []).length, e.components]) : "";
+    return e ? JSON.stringify([e.state, e.live, e.stale, (e.resources || []).map(r => [r.id, r.state, r.error]), e.components]) : "";
   }
 
   function renderRows(filter) {
@@ -597,7 +597,8 @@
       (byParent[parentId] || []).sort((a,b)=>(RES_ORDER[a.kind]??9)-(RES_ORDER[b.kind]??9)).map(r => {
         const nm = r.name || (r.id||"").slice(0,8);
         const meta = r.state ? ` <span style="color:var(--ink-faint)">· ${r.state}</span>` : "";
-        return `<div class="comp" style="padding-left:${depth*14}px"><span class="cn">${RES_LABEL[r.kind]||r.kind} / ${nm}</span>${meta}</div>` + render(r.id, depth+1);
+        const err = r.error ? `<div style="padding-left:${depth*14+12}px;color:var(--warn);font-size:11px">${r.error}</div>` : "";
+        return `<div class="comp" style="padding-left:${depth*14}px"><span class="cn">${RES_LABEL[r.kind]||r.kind} / ${nm}</span>${meta}</div>${err}` + render(r.id, depth+1);
       }).join("");
     return `<div class="sect-l">Resources <span style="font-weight:400;color:var(--ink-faint)">— ${res.length}</span></div>` + render("", 0);
   }

@@ -3,8 +3,10 @@
 # This is api_server run with --control-plane-mode — the real control plane the amp
 # controller registers against, NOT a stand-in — backed by a plain Postgres. It is
 # deployed into the same per-PR CI namespace as the amp stack and torn down with it
-# (the namespace delete removes everything here), so its Postgres is an emptyDir: no
-# PVC to leak, nothing to reach it from outside the cluster.
+# (the namespace delete removes everything here), so by default its Postgres is an
+# emptyDir: no PVC to leak, nothing to reach it from outside the cluster. Set
+# YCP_POSTGRES_PVC_SIZE (ycp-up.sh) to back it with a PVC instead — for a long-lived
+# dev environment the fleet registry must survive a postgres restart / node recycle.
 #
 # Postgres rather than YugabyteDB: control-plane mode only runs the portable
 # migrations/controlplane set, so it needs no YB-specific DDL. That is also why the
@@ -15,8 +17,10 @@
 #   ${YCP_IMAGE}      quay.io/yugabyte/ycp-api-server:<tag> (built from PR source)
 #   ${YCP_ADMIN_KEY}  the generated admin secret gating the fleet/console routes
 #   ${YCP_IPS}        imagePullSecrets in flow style: [{name: <secret>}] or []
+#   ${YCP_PG_DATA_VOLUME}  the postgres data volume in flow style: `emptyDir: {}`
+#                     (default) or `persistentVolumeClaim: { claimName: ... }`
 # The k8s `$(DB_PASSWORD)` env-var references below are NOT touched (envsubst is
-# scoped to the four vars above), so they interpolate at runtime as intended.
+# scoped to the five vars above), so they interpolate at runtime as intended.
 #
 # The db-password / mcp secret are fixed and weak on purpose: this cluster lives and
 # dies inside one CI run and is never reachable. The admin key is the one credential
@@ -70,7 +74,7 @@ spec:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: "1", memory: 512Mi }
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
-      volumes: [{ name: data, emptyDir: {} }]
+      volumes: [{ name: data, ${YCP_PG_DATA_VOLUME} }]
 ---
 apiVersion: v1
 kind: Service

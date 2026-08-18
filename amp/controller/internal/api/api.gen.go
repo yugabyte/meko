@@ -131,6 +131,14 @@ type Branch struct {
 	ClusterId openapi_types.UUID `json:"cluster_id"`
 	CreatedAt time.Time          `json:"created_at"`
 
+	// Extensions Externalized PostgreSQL extensions opted into on this branch, by
+	// catalog name (e.g. `pgvector`). Durable branch state: a fork inherits
+	// its parent's set, and every endpoint on the branch mounts them.
+	// Enabled via createEndpoint's `extensions` (there is no branch-create
+	// field); empty when none. Excludes the catalog defaults, which are
+	// added per endpoint at deploy time.
+	Extensions *[]string `json:"extensions,omitempty"`
+
 	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
 	ForkLsn *string `json:"fork_lsn,omitempty"`
 

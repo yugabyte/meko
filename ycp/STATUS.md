@@ -202,6 +202,14 @@ an image without `--control-plane-mode`, then one without
 `-only-controlplane-migrate`. The e2e also builds it from source on every PR
 touching `ycp/`, so the flags cannot silently disappear.
 
+The **reconcile-agent** (`cmd/reconcile-agent`, the amp backend) ships the same
+on-demand way: `ycp/build-reconciler-agent-image.sh` pushes
+`quay.io/yugabyte/ycp-reconciler-agent` (tags `custom-<sha>` + `latest`), wrapped
+by `.github/workflows/ycp-reconciler-agent-image.yml` on `main` and
+`workflow_dispatch`, build-only when `QUAY_TOKEN` is absent. Quay rather than the
+ECR registry `meko-agent` uses, so a cluster pulls it without ECR cross-account
+pull-secret setup — the same reason the control plane ships on Quay.
+
 ## Open
 
 | | |
@@ -251,7 +259,7 @@ databases, branches and compute endpoints it owns. Registration takes a
 `kind` (`amp` | `meko`, default meko); a meko id stays a bare `<slug>` while an
 amp id is prefixed `amp-<slug>`, and the enroll handshake checks the kind, so the
 two coexist in one fleet and neither attaches to the other's environment. An amp environment seeds no `meko-stack`;
-its install hint installs the `yb-amp-controller` chart with `controller.ycp.*`
-turned on. The controller's design for this is
+its install hint installs the `yb-amp-controller` chart with the reconcile-agent
+(`agent.enabled=true`) turned on — the agent is the sole YCP client and drives the
+controller over its REST API. The controller's design for this is
 [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md).
-Reconciling YCP-declared desired state back into an amp cluster is a later phase.

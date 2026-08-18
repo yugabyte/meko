@@ -109,36 +109,10 @@ controller:
       # strings (joined into the AMP_DEPLOY_SERVICE_ANNOTATIONS CSV).
       annotations: []
 
-  # YCP fleet control plane registration + reporting. Off by default: a
-  # standalone amp controller needs none of this. When enabled the controller
-  # enrolls itself as an "amp" environment with the control plane and reports the
-  # storage pools / databases / branches / endpoints it owns on a heartbeat. It
-  # does not reconcile YCP-declared desired state (a later phase).
-  ycp:
-    # -- Register with and report to YCP (AMP_YCP_ENABLED).
-    enabled: false
-    # -- YCP control-plane base URL, e.g. https://devcloud.yugabyte.com/ycp
-    # (AMP_YCP_URL). Required when enabled.
-    url: ""
-    # -- Environment name to enroll as; must match the environment registered in
-    # the YCP console (AMP_YCP_ENV_NAME). Required when enabled.
-    envName: ""
-    # -- Placement reported to YCP: cloud | onprem (AMP_YCP_PLACEMENT).
-    placement: "cloud"
-    # -- Inventory heartbeat cadence (AMP_YCP_REPORT_INTERVAL). Empty => the
-    # binary's default (30s).
-    reportInterval: ""
-    # The one-time enrollment token is read from a Secret, not set inline, so it
-    # never lands in the release values. Create it before install, e.g.:
-    #   kubectl -n <ns> create secret generic <name> \
-    #     --from-literal=enrollment-token=<ycp_enr_...>
-    # A restart after the token is consumed/removed still works: the controller
-    # resumes from the status token it persisted, and the env var is optional.
-    enrollTokenSecret:
-      # -- Secret name holding the enrollment token. Empty => "<release>-ycp-enrollment".
-      name: ""
-      # -- Key within the Secret holding the token.
-      key: "enrollment-token"
+  # YCP integration is no longer wired on the controller itself: the standalone
+  # reconcile-agent (the `agent` block below) is the sole YCP client for the
+  # environment. It drives this controller over the REST API and pins itself via
+  # the write-once binding endpoint. A standalone controller needs no YCP config.
 
   # -- Compute resources for the controller container.
   resources: {}
@@ -148,6 +122,53 @@ controller:
   readinessProbe:
     initialDelaySeconds: 5
     periodSeconds: 5
+
+# reconcile-agent: the standalone YCP client that converges this environment to
+# YCP's desired state, driving the controller over its REST API. Off by default.
+# It is the SOLE YCP client for the environment (YCP allows one status token per
+# environment); the controller itself no longer talks to YCP.
+agent:
+  # -- Deploy the reconcile-agent (Deployment + ServiceAccount + RBAC).
+  enabled: false
+  # -- Number of agent pods. Keep at 1: single YCP client, unsharded loop.
+  replicaCount: 1
+
+  image:
+    # -- Reconcile-agent image repository.
+    repository: quay.io/yugabyte/ycp-reconciler-agent
+    # -- Image tag. This image publishes as custom-<sha> and latest (its own
+    # build, not the controller's), so pin custom-<sha> in production. Empty falls
+    # back to the chart appVersion, which this image does not publish.
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  # -- YCP control-plane base URL, e.g. https://devcloud.yugabyte.com/ycp
+  # (YCP_URL). Required when enabled.
+  ycpUrl: ""
+  # -- Environment name to enroll as; must match the environment registered in
+  # the YCP console (ENV_NAME). Required when enabled.
+  envName: ""
+  # -- Placement reported to YCP: cloud | onprem (ENV_PLACEMENT).
+  placement: "cloud"
+  # -- Controller REST base URL the agent drives (AMP_CONTROLLER_URL). Empty =>
+  # the in-cluster controller Service DNS on the api port, with /api/v1.
+  controllerUrl: ""
+  # -- Reconcile loop interval (RECONCILE_INTERVAL). Empty => the binary's default (10s).
+  reconcileInterval: ""
+  # The one-time enrollment token is read from a Secret, not set inline, so it
+  # never lands in the release values. Create it before install, e.g.:
+  #   kubectl -n <ns> create secret generic <name> \
+  #     --from-literal=enrollment-token=<ycp_enr_...>
+  # A restart after the token is consumed still works: the agent resumes from the
+  # status token it persisted in its state Secret, and the env var is optional.
+  enrollTokenSecret:
+    # -- Secret name holding the enrollment token. Empty => "amp-reconcile-agent-enrollment".
+    name: ""
+    # -- Key within the Secret holding the token.
+    key: "enrollment-token"
+
+  # -- Compute resources for the agent container.
+  resources: {}
 
 # MCP server: a thin, stateless HTTP wrapper of the controller REST API, in its
 # own pod. Reaches the controller over the in-cluster Service DNS.

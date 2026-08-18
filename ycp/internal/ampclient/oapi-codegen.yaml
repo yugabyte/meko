@@ -1,0 +1,17 @@
+# oapi-codegen configuration for the reconcile agent's amp client.
+#
+# openapi_spec.yaml is a vendored copy of
+# amp/controller/internal/api/openapi_spec.yaml. amp/controller and meko/ycp are
+# separate Go modules that must not cross-import, so the shared artifact is the
+# spec file, not the generated Go: copy the spec over and regenerate here when
+# the controller's API changes. Client + models only (no echo server), so this
+# package stays a thin HTTP client with no server dependency.
+#
+# Regenerate with `go -C ycp generate ./internal/ampclient/...`.
+package: ampclient
+output: ampclient.gen.go
+generate:
+  models: true
+  client: true
+output-options:
+  skip-prune: true

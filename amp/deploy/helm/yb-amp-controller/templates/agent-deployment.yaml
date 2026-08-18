@@ -1,0 +1,76 @@
+{{- if .Values.agent.enabled }}
+{{- if not .Values.agent.ycpUrl }}{{ fail "agent.ycpUrl is required when agent.enabled" }}{{- end }}
+{{- if not .Values.agent.envName }}{{ fail "agent.envName is required when agent.enabled" }}{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yb-amp-controller.agentName" . }}
+  labels:
+    {{- include "yb-amp-controller.agentSelectorLabels" . | nindent 4 }}
+spec:
+  # Single YCP client for the environment; the reconcile loop is not sharded.
+  replicas: {{ .Values.agent.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "yb-amp-controller.agentSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "yb-amp-controller.agentSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "yb-amp-controller.agentName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: reconcile-agent
+          image: {{ include "yb-amp-controller.agentImage" . }}
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          env:
+            - name: YCP_URL
+              value: {{ .Values.agent.ycpUrl | quote }}
+            - name: AMP_CONTROLLER_URL
+              value: {{ include "yb-amp-controller.agentControllerUrl" . | quote }}
+            - name: ENV_NAME
+              value: {{ .Values.agent.envName | quote }}
+            - name: ENV_PLACEMENT
+              value: {{ .Values.agent.placement | quote }}
+            - name: AGENT_VERSION
+              value: {{ .Values.agent.image.tag | default .Chart.AppVersion | quote }}
+            {{- with .Values.agent.reconcileInterval }}
+            - name: RECONCILE_INTERVAL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agent.enrollTokenSecret.name | default (printf "%s-enrollment" (include "yb-amp-controller.agentName" .)) | quote }}
+                  key: {{ .Values.agent.enrollTokenSecret.key | quote }}
+                  # Optional so a restart resumes from the persisted status token
+                  # even after the one-time enrollment token has been removed.
+                  optional: true
+          {{- with .Values.agent.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

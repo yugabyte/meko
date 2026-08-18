@@ -16,7 +16,7 @@ deploy/
     redeploy.sh     # (re-)deploy the controller via the yb-amp-controller chart (assumes ns/YB/pull-secret exist)
   helm/
     yb-amp-endpoint/     # Helm chart for an endpoint (Deployment + ConfigMap + Secret + Service)
-    yb-amp-controller/   # Helm chart for the controller layer + the MCP server pod (mcp.enabled) + the amp_ui pod (ui.enabled)
+    yb-amp-controller/   # Helm chart for the controller layer + the MCP server pod (mcp.enabled) + the amp_ui pod (ui.enabled) + the reconcile-agent pod (agent.enabled)
 ```
 
 ## One-shot bring-up — `up.sh`
@@ -105,7 +105,11 @@ API as MCP tools for AI agents; see
 [`controller/architecture/ac-mcp.md`](../controller/architecture/ac-mcp.md)) as
 its own pod, gated by `mcp.enabled` (default on), and the **[`amp_ui`](../amp_ui/README.md)
 web UI** (the React SPA served by nginx, reverse-proxying `/api/` to the
-controller) as its own pod, gated by `ui.enabled` (default on).
+controller) as its own pod, gated by `ui.enabled` (default on). It can also
+deploy the **reconcile-agent** (the YCP data-plane client that converges the
+environment to YCP's desired state; see
+[`controller/architecture/ac-ycp.md`](../controller/architecture/ac-ycp.md)) as
+its own pod, gated by `agent.enabled` (default off).
 
 ## GKE / GCR bring-up — `up-gke.sh`
 
@@ -201,18 +205,24 @@ every push while it is present. Fork PRs are always skipped (no secrets). It:
 
 A superset directive, **`/ci amp_deploy_gke_ycp`**, additionally proves the amp↔YCP
 integration end to end. On top of the plain deploy it builds + pushes the YCP
-control-plane image (`meko/api_server` → `quay.io/yugabyte/ycp-api-server`) from the
-PR source, then [`ycp-up.sh`](ycp-up.sh) stands up an ephemeral control plane
-(`api_server --control-plane-mode` + a throwaway Postgres, from
-[`ycp/controlplane.yaml`](ycp/controlplane.yaml)) in the same `ci-pr-<n>` namespace,
+control-plane image (`meko/api_server` → `quay.io/yugabyte/ycp-api-server`) and the
+reconcile-agent image (`ycp/Dockerfile.reconcile-agent` →
+`quay.io/yugabyte/ycp-reconciler-agent`) from the PR source, then
+[`ycp-up.sh`](ycp-up.sh) stands up an ephemeral control plane
+(`api_server --control-plane-mode` + a throwaway `emptyDir` Postgres, from
+[`ycp/controlplane.yaml`](ycp/controlplane.yaml); set `YCP_POSTGRES_PVC_SIZE` to back
+it with a PVC for a long-lived dev control plane instead) in the same `ci-pr-<n>` namespace,
 registers a `kind=amp` environment, and drops the enrollment token into the
-`amp-controller-ycp-enrollment` Secret. `up-gke.sh` is then run with `YCP_ENABLED=1`
-(which sets `controller.ycp.*` — `url` to the in-cluster Service, `envName` to the
-registered id, `reportInterval=5s`), and the smoke test runs with `YCP_ASSERT=1`:
-after it creates a compute endpoint it polls `GET /api/v1/environments` and asserts
-the environment is `READY` with that endpoint present in the reported `resources`.
-The whole control plane is torn down with the namespace. This directive is opt-in
-only — it does **not** run nightly.
+`amp-reconcile-agent-enrollment` Secret. `up-gke.sh` is then run with `YCP_ENABLED=1`,
+which deploys the reconcile-agent (`agent.*` — `ycpUrl` to the in-cluster Service,
+`envName` to the registered id, `reconcileInterval=5s`, and the enrollment secret).
+Instead of the API-driven smoke, [`ycp-reconcile-smoke.sh`](ycp-reconcile-smoke.sh)
+runs: it declares a pool→cluster→branch→endpoint through YCP desired state and asserts
+the authoritative agent creates the tree, reports it `READY` in
+`GET /api/v1/environments`, and garbage-collects it when the cluster is withdrawn. (The
+API-driven `smoke-test.sh` is skipped in this mode — the agent would GC any resource it
+creates out-of-band.) The whole control plane is torn down with the namespace. This
+directive is opt-in only — it does **not** run nightly.
 
 Stale `ci-pr-*` namespaces (from a run cancelled before teardown) are swept every
 6 h by [`amp-control-plane-gke-cleanup.yml`](../../.github/workflows/amp-control-plane-gke-cleanup.yml).
@@ -249,8 +259,9 @@ Required repo secrets (both workflows):
 - **`QUAY_TOKEN`** — a Quay robot credential as a **`robot-user:token`** string.
   CI splits it to `docker login quay.io` (push) and derives the in-namespace pull
   secret from it (the `.dockerconfigjson` auth is `base64(QUAY_TOKEN)`). The robot
-  needs **push + pull** on the four `amp-*` repos — plus **`ycp-api-server`** if you
-  use `/ci amp_deploy_gke_ycp` (it builds + pulls the control-plane image there).
+  needs **push + pull** on the four `amp-*` repos — plus **`ycp-api-server`** and
+  **`ycp-reconciler-agent`** if you use `/ci amp_deploy_gke_ycp` (it builds + pulls the
+  control-plane and reconcile-agent images there).
 
 Fork PRs are skipped (secrets aren't exposed to them).
 

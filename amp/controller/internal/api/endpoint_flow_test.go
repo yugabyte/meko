@@ -276,6 +276,32 @@ func TestEndpointExtensions(t *testing.T) {
 	if len(persisted) != 1 || persisted[0] != "pgvector" {
 		t.Errorf("branch extensions = %v, want [pgvector] persisted", persisted)
 	}
+	// ...and the set is now visible on the Branch API response. It used to be
+	// write-only: stored on the branch, returned by no endpoint.
+	gotBranch, err := client.GetBranchWithResponse(ctx, pool.Id, clusterID, branchID)
+	if err != nil {
+		t.Fatalf("GetBranch: %v", err)
+	}
+	if gotBranch.JSON200 == nil || gotBranch.JSON200.Extensions == nil ||
+		len(*gotBranch.JSON200.Extensions) != 1 || (*gotBranch.JSON200.Extensions)[0] != "pgvector" {
+		t.Errorf("GetBranch extensions = %v, want [pgvector]", gotBranch.JSON200.Extensions)
+	}
+	listed, err := client.ListBranchesWithResponse(ctx, pool.Id, clusterID, nil)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	if listed.JSON200 == nil {
+		t.Fatalf("ListBranches: nil 200 body = %s", listed.Body)
+	}
+	var apiExts *[]string
+	for _, br := range listed.JSON200.Branches {
+		if br.BranchId == branchID {
+			apiExts = br.Extensions
+		}
+	}
+	if apiExts == nil || len(*apiExts) != 1 || (*apiExts)[0] != "pgvector" {
+		t.Errorf("ListBranches extensions for %s = %v, want [pgvector]", branchID, apiExts)
+	}
 
 	// A preload extension (pg_cron) opts in the same way and is mounted with
 	// Preload:true so the chart can extend shared_preload_libraries. Use a fresh

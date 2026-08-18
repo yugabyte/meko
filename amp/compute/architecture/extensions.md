@@ -232,6 +232,9 @@ the feature is additive.
   resolving mounts, so the opt-in is durable: a recreate resolves the same set
   and a fork inherits it (below). The endpoint then mounts
   **catalog defaults ∪ the branch's set**.
+- The opted-in set (not the catalog defaults) is **readable** on the `Branch`
+  response — `getBranch`/`listBranches` return `extensions`. The opt-in stays
+  write-only through `createEndpoint`; there is no branch-level mutate API.
 
 ## Branch fork inheritance
 

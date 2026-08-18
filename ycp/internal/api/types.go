@@ -140,10 +140,17 @@ type DesiredState struct {
 //   - Kind: the resource type (e.g. "datapack"); dispatched to a reconciler.
 //   - Name: the resource's stable name within the environment.
 //   - Spec: kind-specific desired config (references secret NAMES only, never values).
+//   - Generation: bumped by the control plane whenever Spec changes, so a
+//     reconciler can tell an unchanged resource (skip) from a mutated one
+//     (re-apply) by comparing it to the last generation it observed. Zero for a
+//     control plane that does not stamp it (meko today), which a generation-diff
+//     engine treats as "always newer than an unset observed generation" only on
+//     first sight — see meko/ycp/reconcile.
 type DesiredResource struct {
-	Kind string          `json:"kind"`
-	Name string          `json:"name"`
-	Spec json.RawMessage `json:"spec,omitempty"`
+	Kind       string          `json:"kind"`
+	Name       string          `json:"name"`
+	Generation int64           `json:"generation,omitempty"`
+	Spec       json.RawMessage `json:"spec,omitempty"`
 }
 
 // StatusReport is the agent's heartbeat + phases (drives the fleet registry).
@@ -162,12 +169,19 @@ type StatusReport struct {
 // omits it. Kind-agnostic and flat — Parent links a resource to its owner by id
 // (project→pool, branch→project, endpoint→branch).
 type ResourceStatus struct {
-	Kind   string            `json:"kind"`
-	ID     string            `json:"id"`
-	Name   string            `json:"name,omitempty"`
-	Parent string            `json:"parent,omitempty"`
-	State  string            `json:"state,omitempty"`
-	Attrs  map[string]string `json:"attrs,omitempty"`
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Parent string `json:"parent,omitempty"`
+	State  string `json:"state,omitempty"`
+	// Error is why this resource is not converged, when the agent can say: the
+	// controller's rejection of a create/update/delete, a resource stuck
+	// non-Ready past the reconcile deadline, or drift the agent cannot fix
+	// (a kind with no update/delete path). Empty when the resource is fine.
+	// Without it a stuck resource reads as a bare state in the console and the
+	// reason lives only in the agent's and controller's logs.
+	Error string            `json:"error,omitempty"`
+	Attrs map[string]string `json:"attrs,omitempty"`
 }
 
 // BootstrapProgress is the pre-agent installer's outbound report.

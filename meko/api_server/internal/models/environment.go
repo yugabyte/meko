@@ -61,6 +61,11 @@ type DesiredResource struct {
 	Kind string          `json:"kind"`
 	Name string          `json:"name"`
 	Spec json.RawMessage `json:"spec,omitempty"`
+	// Generation is bumped by the control plane whenever Spec changes, so the
+	// reconcile-agent can tell an unchanged resource (skip) from a mutated one
+	// (re-apply). Starts at 0 (see ReplaceDesired: the amp backend's cache-cold
+	// NoOp depends on it); maintained by ReplaceDesired.
+	Generation int64 `json:"generation,omitempty"`
 }
 
 // Entitlement is the plan/limits envelope the console reads to decide what it may

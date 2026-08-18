@@ -2,15 +2,21 @@
 #
 # Stand up an ephemeral YCP control plane in an existing namespace, register an
 # `amp` environment on it, and drop the resulting enrollment token into the Secret
-# the yb-amp-controller Helm chart reads — the control-plane half of the
-# amp_deploy_gke_ycp smoke path (see .github/workflows/amp-control-plane-gke.yml).
+# the reconcile-agent reads — the control-plane half of the amp_deploy_gke_ycp
+# smoke path (see .github/workflows/amp-control-plane-gke.yml).
 #
 # It is deliberately namespace-scoped and self-cleaning by proxy: everything it
-# creates lands in $NS, which the workflow deletes at the end of the run. There is
-# no PVC and no external Service — the control plane is reached over in-cluster DNS
-# (meko-api-server.$NS.svc.cluster.local) by the amp controller, and over a
-# transient port-forward by this script (to register) and by smoke-test.sh (to
+# creates lands in $NS, which the workflow deletes at the end of the run. By default
+# there is no PVC and no external Service — the control plane is reached over
+# in-cluster DNS (meko-api-server.$NS.svc.cluster.local) by the amp controller, and
+# over a transient port-forward by this script (to register) and by smoke-test.sh (to
 # assert). Nothing outside the cluster ever talks to it.
+#
+# For a long-lived dev environment (not the throwaway CI namespace), set
+# YCP_POSTGRES_PVC_SIZE (e.g. 5Gi) to back Postgres with a PVC so the fleet registry
+# — the environment record, its desired state, and the agent's enrollment — survives
+# a postgres restart or node recycle. Without it a reschedule wipes the registry and
+# every enrolled agent is left unauthorized until re-registered.
 #
 # In order it:
 #   1. ensures the namespace and, if PULL_SECRET_DOCKERCONFIGJSON is set, mints the
@@ -19,7 +25,7 @@
 #   3. waits for Postgres + api-server to be Ready;
 #   4. port-forwards the api-server and POSTs a kind=amp environment, capturing the
 #      environment id and the one-time enrollment token;
-#   5. creates the Secret amp-controller-ycp-enrollment (key: enrollment-token);
+#   5. creates the Secret amp-reconcile-agent-enrollment (key: enrollment-token);
 #   6. emits YCP_URL / YCP_ENV_ID / YCP_ADMIN_KEY / YCP_ENROLL_SECRET — appended to
 #      $GITHUB_ENV when running in Actions, and always echoed as a summary.
 #
@@ -48,9 +54,16 @@ YCP_REGION="${YCP_REGION:-us-west1}"
 # ycp-up.sh, the controller (never — it uses the enrollment token) and smoke-test.sh
 # are the only things that see it, and it dies with the namespace.
 YCP_ADMIN_KEY="${YCP_ADMIN_KEY:-$(openssl rand -hex 24)}"
-# Secret the controller chart reads the enrollment token from (must match the
-# controller.ycp.enrollTokenSecret.name that up-gke.sh sets).
-YCP_ENROLL_SECRET="${YCP_ENROLL_SECRET:-amp-controller-ycp-enrollment}"
+# Secret the reconcile-agent reads the enrollment token from (must match the
+# agent.enrollTokenSecret.name that up-gke.sh sets).
+YCP_ENROLL_SECRET="${YCP_ENROLL_SECRET:-amp-reconcile-agent-enrollment}"
+
+# Postgres persistence for the control-plane state (fleet registry). Empty ->
+# emptyDir: ephemeral, the CI default, wiped on a pod reschedule. A size such as
+# "5Gi" -> a PVC named ycp-postgres-data so the registry survives a restart / node
+# recycle. YCP_POSTGRES_STORAGE_CLASS picks the class (empty -> cluster default).
+YCP_POSTGRES_PVC_SIZE="${YCP_POSTGRES_PVC_SIZE:-}"
+YCP_POSTGRES_STORAGE_CLASS="${YCP_POSTGRES_STORAGE_CLASS:-}"
 
 # Pull auth for the api-server image (Quay). Two modes:
 #   PULL_SECRET + PULL_SECRET_DOCKERCONFIGJSON -> (re)mint that dockerconfigjson
@@ -105,10 +118,32 @@ else
 fi
 
 # --- 2. render + apply the control plane ---
+# Postgres data volume: a PVC when YCP_POSTGRES_PVC_SIZE is set, else the emptyDir
+# default. The manifest takes it as ${YCP_PG_DATA_VOLUME} in flow style.
+if [ -n "${YCP_POSTGRES_PVC_SIZE}" ]; then
+  say "postgres persistence: PVC ycp-postgres-data (${YCP_POSTGRES_PVC_SIZE}${YCP_POSTGRES_STORAGE_CLASS:+, class ${YCP_POSTGRES_STORAGE_CLASS}})"
+  kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ycp-postgres-data
+  namespace: ${NS}
+  labels: { app: postgres, app.kubernetes.io/part-of: ycp-smoke }
+spec:
+  accessModes: ["ReadWriteOnce"]
+$([ -n "${YCP_POSTGRES_STORAGE_CLASS}" ] && printf '  storageClassName: %s\n' "${YCP_POSTGRES_STORAGE_CLASS}")
+  resources: { requests: { storage: ${YCP_POSTGRES_PVC_SIZE} } }
+EOF
+  YCP_PG_DATA_VOLUME="persistentVolumeClaim: { claimName: ycp-postgres-data }"
+else
+  say "postgres persistence: none (emptyDir — wiped on a pod reschedule)"
+  YCP_PG_DATA_VOLUME="emptyDir: {}"
+fi
+
 say "control plane (Postgres + api_server --control-plane-mode)"
 # Scope envsubst to exactly our vars so the k8s $(DB_PASSWORD) refs pass through.
-NS="${NS}" YCP_IMAGE="${YCP_IMAGE}" YCP_ADMIN_KEY="${YCP_ADMIN_KEY}" YCP_IPS="${YCP_IPS}" \
-  envsubst '${NS} ${YCP_IMAGE} ${YCP_ADMIN_KEY} ${YCP_IPS}' < "${MANIFEST}" \
+NS="${NS}" YCP_IMAGE="${YCP_IMAGE}" YCP_ADMIN_KEY="${YCP_ADMIN_KEY}" YCP_IPS="${YCP_IPS}" YCP_PG_DATA_VOLUME="${YCP_PG_DATA_VOLUME}" \
+  envsubst '${NS} ${YCP_IMAGE} ${YCP_ADMIN_KEY} ${YCP_IPS} ${YCP_PG_DATA_VOLUME}' < "${MANIFEST}" \
   | kubectl apply -f -
 
 # --- 3. wait for readiness ---

@@ -25,7 +25,8 @@ const defaultAgentNamespace = "ycp-agent"
 //
 // The hint is kind-specific: a meko environment installs the meko-agent (a
 // component of the `meko` chart), an amp environment installs the amp controller
-// (the yb-amp-controller chart) with its YCP reporting turned on.
+// and its reconcile-agent (the yb-amp-controller chart's `agent` block) — the
+// agent is the sole YCP client and drives the controller over its REST API.
 func installHint(c echo.Context, kind, envID, token string) string {
 	if kind == "amp" {
 		return ampInstallHint(c, envID, token)
@@ -74,15 +75,17 @@ func mekoInstallHint(c echo.Context, envID, token string) string {
 // when the operator does not choose otherwise.
 const ampInstallNamespace = "amp"
 
-// ampEnrollSecretName is the Secret the amp controller reads the enrollment
-// token from. It is passed to the chart's controller.ycp.enrollTokenSecret.name
-// so the created Secret and the Deployment's secretKeyRef agree.
-const ampEnrollSecretName = "amp-controller-ycp-enrollment"
+// ampEnrollSecretName is the Secret the reconcile-agent reads the enrollment
+// token from. It is passed to the chart's agent.enrollTokenSecret.name so the
+// created Secret and the agent Deployment's secretKeyRef agree; it is the chart's
+// default name, but we set it explicitly so the two can't drift.
+const ampEnrollSecretName = "amp-reconcile-agent-enrollment"
 
-// ampInstallHint attaches the amp controller to an amp environment. The
-// controller enrolls with YCP and reports the storage pools / databases /
-// branches / endpoints it owns; a YugabyteDB foundation cluster must already be
-// running in the target cluster (the controller's state store).
+// ampInstallHint attaches an amp environment to this control plane. It installs
+// the amp controller plus its reconcile-agent: the agent enrolls, binds the
+// controller, and converges it to the environment's desired state, driving it
+// over the REST API. The controller itself no longer talks to YCP. A YugabyteDB
+// foundation cluster must already be running (the controller's state store).
 func ampInstallHint(c echo.Context, envID, token string) string {
 	ycpURL := controlPlaneURL(c)
 	ns := ampInstallNamespace
@@ -91,21 +94,25 @@ func ampInstallHint(c echo.Context, envID, token string) string {
 	fmt.Fprintf(&b, "# Prerequisite: a YugabyteDB foundation cluster already running in this\n")
 	fmt.Fprintf(&b, "# cluster — it is the amp controller's state store.\n\n")
 
-	fmt.Fprintf(&b, "# 1 — hand the cluster this one-time enrollment token (30-minute TTL, so install promptly)\n")
+	fmt.Fprintf(&b, "# 1 — hand the cluster this one-time enrollment token (30-minute TTL, so install\n")
+	fmt.Fprintf(&b, "#      promptly). The reconcile-agent reads it, not the controller.\n")
 	fmt.Fprintf(&b, "kubectl create namespace %s\n", ns)
 	fmt.Fprintf(&b, "kubectl -n %s create secret generic %s \\\n", ns, ampEnrollSecretName)
 	fmt.Fprintf(&b, "  --from-literal=enrollment-token=%s\n\n", token)
 
-	fmt.Fprintf(&b, "# 2 — install the amp controller (from an amp checkout), pointed at this control plane\n")
+	fmt.Fprintf(&b, "# 2 — install the amp controller and its reconcile-agent (from an amp checkout).\n")
+	fmt.Fprintf(&b, "#      The agent is the sole YCP client; the controller only serves its REST API.\n")
 	fmt.Fprintf(&b, "helm upgrade --install amp-controller amp/deploy/helm/yb-amp-controller -n %s \\\n", ns)
-	fmt.Fprintf(&b, "  --set controller.ycp.enabled=true \\\n")
-	fmt.Fprintf(&b, "  --set controller.ycp.url=%s \\\n", ycpURL)
-	fmt.Fprintf(&b, "  --set controller.ycp.envName=%s \\\n", envID)
-	fmt.Fprintf(&b, "  --set controller.ycp.enrollTokenSecret.name=%s \\\n", ampEnrollSecretName)
-	fmt.Fprintf(&b, "  --set controller.databaseUrl=<your YugabyteDB DSN>\n\n")
+	fmt.Fprintf(&b, "  --set controller.databaseUrl=<your YugabyteDB DSN> \\\n")
+	fmt.Fprintf(&b, "  --set agent.enabled=true \\\n")
+	fmt.Fprintf(&b, "  --set agent.ycpUrl=%s \\\n", ycpURL)
+	fmt.Fprintf(&b, "  --set agent.envName=%s \\\n", envID)
+	fmt.Fprintf(&b, "  --set agent.enrollTokenSecret.name=%s \\\n", ampEnrollSecretName)
+	fmt.Fprintf(&b, "  --set-string agent.image.tag=<reconcile-agent tag>\n\n")
 
-	fmt.Fprintf(&b, "# The controller enrolls, then reports the resources it owns to this console.\n")
-	fmt.Fprintf(&b, "#   kubectl -n %s logs -f deploy/amp-controller\n", ns)
+	fmt.Fprintf(&b, "# The agent enrolls, binds this controller, then converges it to the environment's\n")
+	fmt.Fprintf(&b, "# desired state and reports the result to this console.\n")
+	fmt.Fprintf(&b, "#   kubectl -n %s logs -f deploy/amp-reconcile-agent\n", ns)
 	return b.String()
 }
 

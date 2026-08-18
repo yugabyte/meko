@@ -1,0 +1,20 @@
+# Build the reconcile-agent image — the standalone agent that converges an amp
+# environment to YCP's desired state (ycp/cmd/reconcile-agent). Built and pushed
+# as quay.io/yugabyte/ycp-reconciler-agent by build-reconciler-agent-image.sh.
+#
+# Cross-compiles: the builder runs on the BUILD platform and Go emits a binary
+# for the TARGET one, so `--platform linux/amd64` from an arm64 laptop compiles
+# natively instead of under emulation. On an amd64 CI runner both platforms are
+# identical.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+ARG TARGETOS=linux
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w" -o /reconcile-agent ./cmd/reconcile-agent
+FROM gcr.io/distroless/static:nonroot
+COPY --from=build /reconcile-agent /reconcile-agent
+ENTRYPOINT ["/reconcile-agent"]

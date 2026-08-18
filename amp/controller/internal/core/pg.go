@@ -324,7 +324,7 @@ func (b *PgBackend) getBranchByID(ctx context.Context, clusterID, branchID uuid.
 // `b`, so a column added to the projection cannot reach one scanBranch caller
 // and miss another — which is exactly how a query and its scanner drift out of
 // step and start answering 500.
-const branchColumns = `b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.pg_settings, b.created_at`
+const branchColumns = `b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.pg_settings, b.extensions, b.created_at`
 
 // branchSelect joins branch -> cluster -> storage_pools so a branch is only
 // visible through the cluster (and pool) it belongs to. Tombstoned clusters are
@@ -693,9 +693,10 @@ func scanBranch(r scanRow) (Branch, error) {
 		parentStr   sql.NullString // NULL for the default branch
 		forkLSN     sql.NullString // NULL for the default branch
 		settingsRaw []byte
+		extRaw      []byte
 		br          Branch
 	)
-	if err := r.Scan(&clusterStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &settingsRaw, &br.CreatedAt); err != nil {
+	if err := r.Scan(&clusterStr, &branchStr, &br.Name, &br.PgVersion, &br.IsDefault, &parentStr, &forkLSN, &settingsRaw, &extRaw, &br.CreatedAt); err != nil {
 		return Branch{}, err
 	}
 	clusterID, err := uuid.Parse(clusterStr)
@@ -718,6 +719,11 @@ func scanBranch(r scanRow) (Branch, error) {
 	br.ForkLSN = forkLSN.String // "" when NULL
 	if br.PgSettings, err = decodePgSettings(settingsRaw, "branch"); err != nil {
 		return Branch{}, err
+	}
+	if len(extRaw) > 0 {
+		if err := json.Unmarshal(extRaw, &br.Extensions); err != nil {
+			return Branch{}, fmt.Errorf("decode branch extensions: %w", err)
+		}
 	}
 	return br, nil
 }

@@ -11,7 +11,7 @@ import (
 )
 
 func desiredRows() *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"kind", "name", "spec"})
+	return sqlmock.NewRows([]string{"kind", "name", "spec", "generation"})
 }
 
 // The stack is handed to an agent when it enrolls, which is what makes bringing Meko up
@@ -27,7 +27,7 @@ func TestEnrolledStack_ReturnsTheStackTheEnvironmentWasRegisteredWith(t *testing
 	const spec = `{"images":{"database":"registry/yugabyte-db/ybdb-meko-release:t"},"secret_ref":"creds"}`
 	mock.ExpectQuery(`SELECT kind, name, .* FROM meko_system\.environment_desired_resources`).
 		WithArgs("acme-prod").
-		WillReturnRows(desiredRows().AddRow("meko-stack", "meko", spec))
+		WillReturnRows(desiredRows().AddRow("meko-stack", "meko", spec, int64(0)))
 
 	got, err := svc.EnrolledStack("acme-prod")
 	if err != nil {
@@ -60,7 +60,7 @@ func TestEnrolledStack_ReflectsAReplacedStack(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT kind, name, .* FROM meko_system\.environment_desired_resources`).
 		WithArgs("acme-prod").
-		WillReturnRows(desiredRows().AddRow("meko-stack", "meko", `{"images":{"ui":"operators-own-ui:1"}}`))
+		WillReturnRows(desiredRows().AddRow("meko-stack", "meko", `{"images":{"ui":"operators-own-ui:1"}}`, int64(0)))
 
 	got, err := svc.EnrolledStack("acme-prod")
 	if err != nil {
@@ -88,7 +88,7 @@ func TestEnrolledStack_AbsentIsNil(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT kind, name, .* FROM meko_system\.environment_desired_resources`).
 		WithArgs("acme-prod").
-		WillReturnRows(desiredRows().AddRow("database", "byo", `{"mode":"external","host":"db"}`))
+		WillReturnRows(desiredRows().AddRow("database", "byo", `{"mode":"external","host":"db"}`, int64(0)))
 
 	got, err := svc.EnrolledStack("acme-prod")
 	if err != nil {

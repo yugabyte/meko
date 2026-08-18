@@ -1075,6 +1075,9 @@ func branchToAPI(b core.Branch) Branch {
 	if len(b.PgSettings) > 0 {
 		out.PgSettings = &b.PgSettings
 	}
+	if len(b.Extensions) > 0 {
+		out.Extensions = &b.Extensions
+	}
 	return out
 }
 

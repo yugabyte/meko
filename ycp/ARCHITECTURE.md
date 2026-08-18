@@ -36,7 +36,9 @@ The e2e in `test/e2e/` now runs `api_server --control-plane-mode`.
 
 | Path | Binary | Role |
 |------|--------|------|
-| `cmd/agent` | `meko-agent` | Per-environment pull agent. Reads cluster facts from the in-cluster k8s API, enrolls, reconciles the environment's declared stack, reports status. |
+| `cmd/agent` | `meko-agent` | Per-environment pull agent for a **Meko** data plane. Reads cluster facts from the in-cluster k8s API, enrolls, reconciles the environment's declared stack directly against k8s, reports status. |
+| `cmd/reconcile-agent` | `ycp-reconciler-agent` | The same pull-agent shape for an **amp** data plane (`kind=amp`): it enrolls, reads desired state, and drives the amp controller's REST API — rather than k8s — to converge it, then reports the controller's inventory back. The sole YCP client for its environment; see [`amp/controller/architecture/ac-ycp.md`](../amp/controller/architecture/ac-ycp.md). |
+| `reconcile` | — | Backend-agnostic reconcile engine `cmd/reconcile-agent` is built on: a generation-diff planner over a pluggable `Backend` (amp's is `reconcile/ampbackend`). Level-triggered, so a missed tick self-heals. |
 | `internal/api` | — | Wire types + lifecycle states; JSON tags mirror the OpenAPI. The agent's half of the contract `api_server` implements. |
 | `test/e2e` | — | Build-and-deploy smoke test on kind against `api_server --control-plane-mode`. |
 
@@ -90,7 +92,9 @@ agent → YCP. YCP never dials into a customer cluster.
    at all. Nothing has to be commanded, and a control plane that is down cannot stop an
    already-enrolled agent from reconciling.
 4. **Reconcile** — on each tick the agent `GET`s `/api/v1/agent/desired-state` (bearer:
-   status token). Desired state is a generic, resource-typed set (`{kind, name, spec}`);
+   status token). Desired state is a generic, resource-typed set (`{kind, name, spec,
+   generation}`, where the control plane bumps `generation` only when a resource's spec
+   changes, so an agent can skip an unchanged resource without keeping its own store);
    it is where registration wrote the stack and where an operator's later changes go, so
    **when it can be read it is authoritative** — including when it is empty, which is how
    an environment is told to run nothing. **When it cannot be read the enrolled stack

@@ -281,6 +281,8 @@ func runServe(args []string) error {
 	// The API creates tasks and reads their status through the task service (which
 	// wraps the same store the worker drains).
 	srv := api.NewServer(cfg, backend, task.NewService(store), prov, metricsReg, logger)
+	// The write-once YCP binding endpoint the reconcile-agent pins itself to.
+	srv.RegisterYCPBinding(ycp.NewBindingStore(pool.Pool))
 
 	// Reclaims clusters whose create_cluster failed, by enqueueing the same
 	// delete_cluster task an operator's delete would. Runs beside the worker
@@ -302,28 +304,6 @@ func runServe(args []string) error {
 		defer wg.Done()
 		sweeper.Run(ctx)
 	}()
-
-	// YCP fleet registration + reporting (opt-in via --ycp). The controller
-	// enrolls itself as an "amp" environment and reports the storage pools /
-	// databases / branches / endpoints it owns on a heartbeat, reading them from
-	// the same backend the API serves. It reconciles no desired state yet.
-	if cfg.YCP.Enabled {
-		ycpLoop := ycp.NewLoop(
-			cfg.YCP,
-			ycp.NewClient(cfg.YCP.URL, nil),
-			ycp.NewStore(pool.Pool),
-			backend,
-			ycp.ClusterFacts{},
-			version.Get().Version,
-			logger,
-		)
-		logger.Info("ycp reporting enabled", "url", cfg.YCP.URL, "env_name", cfg.YCP.EnvName, "interval", cfg.YCP.ReportInterval)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ycpLoop.Run(ctx)
-		}()
-	}
 
 	// The branch-drop reaper: reclaim a dropped branch's amp_storage rows once its
 	// retention window has passed. A goroutine of its own beside the worker, on the

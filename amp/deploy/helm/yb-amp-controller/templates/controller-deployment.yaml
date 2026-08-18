@@ -90,32 +90,6 @@ spec:
             # pool). The controller parses this as a "k=v,k=v" CSV.
             - name: AMP_DEPLOY_NODE_SELECTOR
               value: {{ join "," (.Values.controller.endpoint.nodeSelector | default (list)) | quote }}
-            {{- if .Values.controller.ycp.enabled }}
-            # YCP fleet registration + reporting. The controller enrolls as an
-            # "amp" environment and reports its resource inventory to the control
-            # plane; it reconciles no desired state yet. The enrollment token is
-            # mounted from a Secret (below), not baked into the pod spec.
-            - name: AMP_YCP_ENABLED
-              value: "true"
-            - name: AMP_YCP_URL
-              value: {{ required "controller.ycp.url is required when controller.ycp.enabled" .Values.controller.ycp.url | quote }}
-            - name: AMP_YCP_ENV_NAME
-              value: {{ required "controller.ycp.envName is required when controller.ycp.enabled" .Values.controller.ycp.envName | quote }}
-            - name: AMP_YCP_PLACEMENT
-              value: {{ .Values.controller.ycp.placement | quote }}
-            {{- with .Values.controller.ycp.reportInterval }}
-            - name: AMP_YCP_REPORT_INTERVAL
-              value: {{ . | quote }}
-            {{- end }}
-            - name: AMP_YCP_ENROLLMENT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.controller.ycp.enrollTokenSecret.name | default (printf "%s-ycp-enrollment" (include "yb-amp-controller.controllerName" .)) | quote }}
-                  key: {{ .Values.controller.ycp.enrollTokenSecret.key | quote }}
-                  # Optional so a restart resumes from the persisted status token
-                  # even after the one-time enrollment token has been removed.
-                  optional: true
-            {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz

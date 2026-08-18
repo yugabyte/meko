@@ -229,8 +229,16 @@ func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
 	if res == nil {
 		res = []models.DesiredResource{}
 	}
+	// Revision tracks the desired set as a whole: the max per-resource generation,
+	// so the agent's reported AppliedRevision advances whenever any spec changes.
+	var revision int64 = 1
+	for _, d := range res {
+		if d.Generation > revision {
+			revision = d.Generation
+		}
+	}
 	return ok(c, http.StatusOK, map[string]any{
-		"revision":        1,
+		"revision":        revision,
 		"target_versions": map[string]string{"agent": "v1.4.2", "mcp": "v1.4.2", "rag": "v1.4.2"},
 		"resources":       res,
 	})

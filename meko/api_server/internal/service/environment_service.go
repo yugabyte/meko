@@ -169,12 +169,16 @@ type EnrollRequest struct {
 // links a resource to its owner (project→pool, branch→project, endpoint→branch)
 // by id — so new resource kinds need no schema change.
 type ResourceStatus struct {
-	Kind   string            `json:"kind"`
-	ID     string            `json:"id"`
-	Name   string            `json:"name,omitempty"`
-	Parent string            `json:"parent,omitempty"`
-	State  string            `json:"state,omitempty"`
-	Attrs  map[string]string `json:"attrs,omitempty"`
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Parent string `json:"parent,omitempty"`
+	State  string `json:"state,omitempty"`
+	// Error is why the resource is not converged, when the agent can say (a
+	// controller rejection, a resource stuck non-Ready, or drift it cannot fix).
+	// Stored and echoed for the console; empty when the resource is fine.
+	Error string            `json:"error,omitempty"`
+	Attrs map[string]string `json:"attrs,omitempty"`
 }
 
 // StatusReport is the agent's heartbeat + phases.

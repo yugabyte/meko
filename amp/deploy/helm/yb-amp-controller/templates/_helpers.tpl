@@ -97,6 +97,34 @@ Image references; tags fall back to the chart appVersion.
 {{- printf "%s:%s" .Values.ui.image.repository $tag -}}
 {{- end }}
 
+{{- define "yb-amp-controller.agentName" -}}
+amp-reconcile-agent
+{{- end }}
+
+{{- define "yb-amp-controller.agentSelectorLabels" -}}
+{{ include "yb-amp-controller.selectorLabels" . }}
+app.kubernetes.io/component: reconcile-agent
+app: amp-reconcile-agent
+{{- end }}
+
+{{- define "yb-amp-controller.agentImage" -}}
+{{- $tag := .Values.agent.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.agent.image.repository $tag -}}
+{{- end }}
+
+{{/*
+Controller REST base URL the reconcile-agent drives (AMP_CONTROLLER_URL): the
+explicit override if set, else the in-cluster controller Service DNS on the api
+port, WITH the /api/v1 base path the agent's client expects.
+*/}}
+{{- define "yb-amp-controller.agentControllerUrl" -}}
+{{- if .Values.agent.controllerUrl -}}
+{{- .Values.agent.controllerUrl -}}
+{{- else -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v/api/v1" (include "yb-amp-controller.controllerName" .) .Release.Namespace .Values.controller.ports.api -}}
+{{- end -}}
+{{- end }}
+
 {{/*
 In-cluster URL deployed endpoints use to reach the controller's storage-layer
 control surface (AMP_DEPLOY_CONTROLLER_URL). The surface is served on the

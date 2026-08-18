@@ -50,6 +50,7 @@ CONTROLLER_IMAGE_REPO="${CONTROLLER_IMAGE_REPO:-amp-controller}"
 ENDPOINT_IMAGE_REPO="${ENDPOINT_IMAGE_REPO:-amp-endpoint}"
 UI_IMAGE_REPO="${UI_IMAGE_REPO:-amp-controller-ui}"
 MCP_IMAGE_REPO="${MCP_IMAGE_REPO:-amp-mcp}"
+AGENT_IMAGE_REPO="${AGENT_IMAGE_REPO:-ycp-reconciler-agent}"  # reconcile-agent (YCP_ENABLED=1)
 
 # Pull auth. Four modes, selected by PULL_SECRET / GCR_KEY_FILE /
 # PULL_SECRET_DOCKERCONFIGJSON (checked in that order when PULL_SECRET is set):
@@ -88,6 +89,11 @@ ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
 MCP_ENABLED="${MCP_ENABLED:-true}"
 UI_ENABLED="${UI_ENABLED:-true}"
+# Deploy the OTel collector CRs (chart default true). Set false where the
+# cluster's OpenTelemetry Operator is unavailable — its admission webhook has
+# failurePolicy: Fail, so a broken operator rejects the whole install even
+# though the smoke doesn't exercise metrics.
+OTEL_ENABLED="${OTEL_ENABLED:-true}"
 
 say()  { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31merror: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -310,30 +316,38 @@ HELM_SET=(
   "ui.enabled=${UI_ENABLED}"
   "ui.image.repository=${REGISTRY}/${UI_IMAGE_REPO}"
   "ui.image.tag=${TAG}"
+  "otel.enabled=${OTEL_ENABLED}"
 )
 [ -n "${PULL_SECRET}" ] && HELM_SET+=("imagePullSecrets[0].name=${PULL_SECRET}")
 
-# YCP fleet registration + reporting (off by default). When YCP_ENABLED=1, wire the
-# controller.ycp.* values so the controller enrolls with the control plane at
-# YCP_URL as environment YCP_ENV_ID, using the enrollment token in the Secret
-# YCP_ENROLL_SECRET (amp/deploy/ycp-up.sh creates all of these). The amp_deploy_gke_ycp
-# smoke path forces a fast report interval so the endpoint-inventory assertion
-# resolves quickly.
+# YCP reconciliation (off by default). When YCP_ENABLED=1, deploy the
+# reconcile-agent: it enrolls with the control plane at YCP_URL as environment
+# YCP_ENV_ID (using the enrollment token in the Secret YCP_ENROLL_SECRET), then
+# converges the environment to YCP's desired state over the controller's REST API
+# and reports its inventory back. amp/deploy/ycp-up.sh creates the control plane,
+# the environment, and the secret. The amp_deploy_gke_ycp smoke forces a fast
+# reconcile interval so the create + inventory assertions resolve quickly.
+#
+# The agent is the SOLE YCP client for the environment and is authoritative: it
+# garbage-collects anything not in desired state, so the environment is driven
+# entirely through YCP, never the amp API. See amp/deploy/ycp-reconcile-smoke.sh.
 YCP_ENABLED="${YCP_ENABLED:-0}"
 if [ "${YCP_ENABLED}" = "1" ]; then
   : "${YCP_URL:?YCP_ENABLED=1 requires YCP_URL}"
   : "${YCP_ENV_ID:?YCP_ENABLED=1 requires YCP_ENV_ID}"
-  YCP_REPORT_INTERVAL="${YCP_REPORT_INTERVAL:-5s}"
-  YCP_ENROLL_SECRET="${YCP_ENROLL_SECRET:-amp-controller-ycp-enrollment}"
+  YCP_RECONCILE_INTERVAL="${YCP_RECONCILE_INTERVAL:-${YCP_REPORT_INTERVAL:-5s}}"
+  YCP_ENROLL_SECRET="${YCP_ENROLL_SECRET:-amp-reconcile-agent-enrollment}"
   YCP_PLACEMENT="${YCP_PLACEMENT:-cloud}"
-  say "YCP reporting enabled (url=${YCP_URL} env=${YCP_ENV_ID} interval=${YCP_REPORT_INTERVAL})"
+  say "YCP reconcile-agent enabled (url=${YCP_URL} env=${YCP_ENV_ID} interval=${YCP_RECONCILE_INTERVAL} image=${REGISTRY}/${AGENT_IMAGE_REPO}:${TAG})"
   HELM_SET+=(
-    "controller.ycp.enabled=true"
-    "controller.ycp.url=${YCP_URL}"
-    "controller.ycp.envName=${YCP_ENV_ID}"
-    "controller.ycp.placement=${YCP_PLACEMENT}"
-    "controller.ycp.reportInterval=${YCP_REPORT_INTERVAL}"
-    "controller.ycp.enrollTokenSecret.name=${YCP_ENROLL_SECRET}"
+    "agent.enabled=true"
+    "agent.image.repository=${REGISTRY}/${AGENT_IMAGE_REPO}"
+    "agent.image.tag=${TAG}"
+    "agent.ycpUrl=${YCP_URL}"
+    "agent.envName=${YCP_ENV_ID}"
+    "agent.placement=${YCP_PLACEMENT}"
+    "agent.reconcileInterval=${YCP_RECONCILE_INTERVAL}"
+    "agent.enrollTokenSecret.name=${YCP_ENROLL_SECRET}"
   )
 fi
 

@@ -141,26 +141,75 @@ func (r *EnvironmentRepo) EnrollLookup(tokenHash string) (id string, found bool,
 	return id, true, nil
 }
 
-// ReplaceDesired atomically replaces the desired resource set for an environment.
+// ReplaceDesired atomically replaces the desired resource set for an environment,
+// maintaining a per-resource generation. A resource whose spec is unchanged keeps
+// its generation (so the agent skips it); a changed spec bumps it (so the agent
+// re-applies); a new resource starts at 0; a withdrawn resource is deleted. This
+// is an upsert-and-prune rather than a delete-and-reinsert precisely so the
+// generation survives a replace. The spec comparison is JSONB `IS DISTINCT FROM`,
+// so it is semantic (key order / whitespace do not spuriously bump the generation).
+//
+// New rows start at 0, not 1, on purpose: a backend that cannot echo the applied
+// generation back on List (the amp backend) relies on the engine's in-process
+// cache to skip no-op ticks, and that cache is empty after a restart. At
+// generation 0 the diff is a clean no-op cache-cold; a resource only crosses into
+// "re-apply" territory once its spec has actually changed.
 func (r *EnvironmentRepo) ReplaceDesired(envID string, res []models.DesiredResource) error {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`DELETE FROM meko_system.environment_desired_resources WHERE env_id = $1`, envID); err != nil {
-		return fmt.Errorf("clear desired: %w", err)
+
+	// Existing keys, so we can prune the ones no longer desired.
+	type key struct{ kind, name string }
+	existing := map[key]bool{}
+	rows, err := tx.Query(`SELECT kind, name FROM meko_system.environment_desired_resources WHERE env_id = $1`, envID)
+	if err != nil {
+		return fmt.Errorf("list existing desired: %w", err)
 	}
+	for rows.Next() {
+		var k key
+		if err := rows.Scan(&k.kind, &k.name); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan existing desired: %w", err)
+		}
+		existing[k] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate existing desired: %w", err)
+	}
+
+	desired := make(map[key]bool, len(res))
 	for _, d := range res {
 		spec := d.Spec
 		if len(spec) == 0 {
 			spec = json.RawMessage("{}")
 		}
 		if _, err := tx.Exec(
-			`INSERT INTO meko_system.environment_desired_resources (env_id, kind, name, spec)
-			 VALUES ($1,$2,$3,$4) ON CONFLICT (env_id, kind, name) DO UPDATE SET spec = EXCLUDED.spec`,
+			`INSERT INTO meko_system.environment_desired_resources (env_id, kind, name, spec, generation)
+			 VALUES ($1,$2,$3,$4,0)
+			 ON CONFLICT (env_id, kind, name) DO UPDATE
+			   SET spec = EXCLUDED.spec,
+			       generation = CASE
+			         WHEN meko_system.environment_desired_resources.spec IS DISTINCT FROM EXCLUDED.spec
+			         THEN meko_system.environment_desired_resources.generation + 1
+			         ELSE meko_system.environment_desired_resources.generation
+			       END`,
 			envID, d.Kind, d.Name, []byte(spec)); err != nil {
-			return fmt.Errorf("insert desired: %w", err)
+			return fmt.Errorf("upsert desired: %w", err)
+		}
+		desired[key{d.Kind, d.Name}] = true
+	}
+	for k := range existing {
+		if desired[k] {
+			continue
+		}
+		if _, err := tx.Exec(
+			`DELETE FROM meko_system.environment_desired_resources WHERE env_id=$1 AND kind=$2 AND name=$3`,
+			envID, k.kind, k.name); err != nil {
+			return fmt.Errorf("prune desired %s/%s: %w", k.kind, k.name, err)
 		}
 	}
 	return tx.Commit()
@@ -169,7 +218,7 @@ func (r *EnvironmentRepo) ReplaceDesired(envID string, res []models.DesiredResou
 // ListDesired returns the desired resources for an environment.
 func (r *EnvironmentRepo) ListDesired(envID string) ([]models.DesiredResource, error) {
 	rows, err := r.db.Query(
-		`SELECT kind, name, COALESCE(spec::text, '{}') FROM meko_system.environment_desired_resources
+		`SELECT kind, name, COALESCE(spec::text, '{}'), generation FROM meko_system.environment_desired_resources
 		 WHERE env_id = $1 ORDER BY kind, name`, envID)
 	if err != nil {
 		return nil, fmt.Errorf("list desired: %w", err)
@@ -179,7 +228,7 @@ func (r *EnvironmentRepo) ListDesired(envID string) ([]models.DesiredResource, e
 	for rows.Next() {
 		var d models.DesiredResource
 		var spec string
-		if err := rows.Scan(&d.Kind, &d.Name, &spec); err != nil {
+		if err := rows.Scan(&d.Kind, &d.Name, &spec, &d.Generation); err != nil {
 			return nil, fmt.Errorf("scan desired: %w", err)
 		}
 		d.Spec = json.RawMessage(spec)

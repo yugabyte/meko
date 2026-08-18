@@ -44,9 +44,11 @@ func TestRegister_SeedsBootstrapDesiredState(t *testing.T) {
 	})
 
 	mock.ExpectExec(`INSERT INTO meko_system\.environments`).WillReturnResult(sqlmock.NewResult(0, 1))
+	// ReplaceDesired upserts-and-prunes: read existing keys (none on a fresh
+	// register), upsert the seeded meko-stack, prune nothing.
 	mock.ExpectBegin()
-	mock.ExpectExec(`DELETE FROM meko_system\.environment_desired_resources`).
-		WithArgs("acme-prod").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT kind, name FROM meko_system\.environment_desired_resources WHERE env_id = \$1`).
+		WithArgs("acme-prod").WillReturnRows(sqlmock.NewRows([]string{"kind", "name"}))
 	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
 		WithArgs("acme-prod", "meko-stack", "meko", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))

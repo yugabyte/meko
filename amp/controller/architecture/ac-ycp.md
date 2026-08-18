@@ -1,105 +1,127 @@
-# ac — YCP fleet registration & reporting
+# ac — YCP integration (reconcile-agent)
 
 **Status:** Draft
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-18
 
-How the amp controller registers itself with **YCP** (the Yugabyte Control Plane
-— meko's `api_server` run with `--control-plane-mode`) and reports the resources
-it owns, so a fleet operator sees every amp cluster and its inventory in one
-console.
+How an amp controller is driven by **YCP** (the Yugabyte Control Plane — meko's
+`api_server` run with `--control-plane-mode`), so a fleet operator declares an amp
+environment's resources in one console and sees the inventory converge there.
 
-This is the **register + report** half only. Reconciling YCP-declared desired
-state back into the cluster (YCP telling an amp controller to create a pool or a
-branch) is a **later phase** and nothing here reads desired state.
-
-## Shape
-
-YCP already runs a fleet registry and an agent protocol for meko environments
-(the datapack/stack agent enrolls, gets a status token, and heartbeats). The amp
-controller reuses that same protocol rather than inventing one:
+The controller does **not** talk to YCP itself. A standalone **reconcile-agent**
+(a separate pod, code in `ycp/cmd/reconcile-agent` + `ycp/reconcile`) is the sole
+YCP client for the environment: it enrolls, pulls YCP's desired state, and drives
+this controller over its REST API to converge, reporting the resulting inventory
+back on each heartbeat. The controller's only YCP-specific surface is the
+write-once binding endpoint the agent pins itself to.
 
 ```
-  amp controller (in the customer cluster)          YCP (api_server --control-plane-mode)
-  ┌───────────────────────────────┐                 ┌──────────────────────────────┐
-  │ ycp.Loop (background goroutine)│                 │ POST /api/v1/agent/enroll     │
-  │  1. ensureIdentity ────────────┼── enroll ──────►│   (kind=amp, enrollment token)│
-  │       (resume, else enroll)    │◄── status token │                               │
-  │  2. every --ycp-report-interval│                 │ POST /api/v1/agent/status     │
-  │     BuildInventory ────────────┼── report ──────►│   (resources[])               │
-  └───────────────────────────────┘                 └──────────────────────────────┘
-      state store: ycp_identity                          environments.kind = 'amp'
-      (migration 0004)                                    environments.resources = [...]
+  reconcile-agent (in the customer cluster)     amp controller            YCP (control-plane mode)
+  ┌─────────────────────────────────┐           ┌──────────────┐          ┌────────────────────────┐
+  │ enroll (kind=amp) ──────────────┼───────────┼──────────────┼─────────►│ POST /agent/enroll     │
+  │ pin binding ────────────────────┼──────────►│ POST /ycp/    │          │  -> status token       │
+  │                                 │           │      binding  │          │                        │
+  │ every reconcile interval:       │           │              │          │ GET  /agent/desired... │
+  │  1. GET desired state ──────────┼───────────┼──────────────┼─────────►│                        │
+  │  2. diff vs. controller List ───┼──────────►│ REST /api/v1 │          │                        │
+  │  3. create/update/delete ───────┼──────────►│  (async task)│          │                        │
+  │  4. report inventory ───────────┼───────────┼──────────────┼─────────►│ POST /agent/status     │
+  └─────────────────────────────────┘           └──────────────┘          └────────────────────────┘
+                                                  ycp_binding                environments.kind='amp'
+                                                  (migration 0007)           environments.resources=[…]
 ```
 
-### Environment `kind`
+The engine, the amp backend (how desired-state kinds map onto amp's
+pool → cluster → branch → endpoint hierarchy), and the enroll/report client all
+live in the `ycp` module (`ycp/reconcile`, `ycp/reconcile/ampbackend`,
+`ycp/internal/ycpclient`). The agent is authoritative: it garbage-collects any
+controller resource not present in desired state.
+
+## Convergence status
+
+Each heartbeat carries per-resource health, not just the inventory, so an
+operator sees *why* a resource has not converged without reading agent or
+controller logs. The engine distinguishes three cases and the agent folds each
+onto the resource's `ResourceStatus.Error` (`ycp/internal/api`):
+
+- **Failed** — a retryable rejection (the controller refused a create/resize, a
+  task failed). Retried on backoff; makes the environment `DEGRADED`.
+- **Stuck** — a resource sat non-Ready in the same backend state past
+  `Options.StuckAfter` (default 10m), e.g. an endpoint that never provisions.
+  Also `DEGRADED`, with a "no progress" reason.
+- **Permanent drift** — a verb the kind structurally does not support: a storage
+  pool has no delete, and pools/clusters/branches have no update. The engine
+  reports it once and stops re-issuing it (no backoff flap) rather than treating
+  an unfixable call as a failure; it does **not** by itself degrade the
+  environment. Backends flag these with `reconcile.Permanent`.
+
+The agent binds the controller with capped retry/backoff at startup (a binding
+*conflict* is still fatal), so a fresh install where the controller is not yet up
+does not crash-loop the agent pod.
+
+## Environment `kind`
 
 An environment is registered as **`amp`** or **`meko`**. The kind is fixed at
-registration. A meko id stays a bare `slug(name)` (unchanged — the existing meko
-agent/e2e/console depend on it); an amp id is prefixed **`amp-`**, so an amp and a
-meko environment of the same name never collide and the two can coexist in one
-fleet (the `kind` column disambiguates regardless). Enrollment carries the kind and YCP rejects a mismatch (409), so an amp
-controller cannot attach to a meko environment or vice versa. An amp environment
-seeds **no** desired state at registration (there is no meko-stack to bring up —
-it is a running controller reporting what it already owns).
+registration. A meko id stays a bare `slug(name)`; an amp id is prefixed **`amp-`**,
+so an amp and a meko environment of the same name never collide and the two coexist
+in one fleet. Enrollment carries the kind and YCP rejects a mismatch (409), so the
+agent cannot attach to a meko environment. An amp environment seeds **no** desired
+state at registration — an operator declares its resources afterwards through
+`POST /environments/{id}/desired`.
 
-### Enroll → status token, and resuming
+## Write-once binding
 
-`ycp.Loop.ensureIdentity` resumes a persisted identity if one exists, and
-enrolls otherwise:
+The controller records the single YCP environment it belongs to and refuses to be
+rebound to a different one, so a second agent pointed at another control plane
+cannot quietly take it over.
 
-- **Enroll** exchanges the one-time enrollment token (30-min TTL, delivered via a
-  mounted Secret) for a long-lived, environment-scoped **status token**, and
-  persists both in the controller's own schema (`ycp_identity`, migration 0004).
-- **Restart** loads that identity and reports directly. It does **not** re-enroll
-  — the enrollment token is short-lived and may be gone. A 401 on a report (the
-  status token was rotated/invalidated) is the one case that triggers a re-enroll.
+- **`POST /api/v1/ycp/binding`** `{ycp_url, environment_id}` — the reconcile-agent
+  pins the controller after it enrolls. First write wins; an identical re-bind is
+  idempotent (200); a bind that differs from the incumbent is rejected (409, body
+  carries the incumbent). **`GET`** returns the current binding or 404.
+- State lives in `ycp_binding` (migration 0007), a singleton row in the
+  controller's own schema. The routes sit outside the OpenAPI spec, like
+  `/healthz` and `/metrics` — the binding is operational state, not a resource.
 
-### Reporting the inventory
+Request-time enforcement (gating mutating calls on the binding) is deferred; today
+the binding is a durable record and a bind-time tripwire.
 
-On each tick `ycp.BuildInventory` walks the resource model through `core.Backend`
-— storage pools → projects ("databases") → branches → compute endpoints — and
-flattens it into a list of `ResourceStatus` (kind, id, name, parent, state,
-attrs), linked by `parent` id. That list rides the status heartbeat; YCP stores
-it verbatim on `environments.resources`, and the console renders it as a tree.
+## History: the retired outbound loop
 
-## Configuration
-
-Off by default. `--ycp` (env `AMP_YCP_ENABLED`) turns it on; then `--ycp-url` and
-`--ycp-env-name` are required. `--ycp-enrollment-token` is delivered via a Secret
-and is optional once the status token has been persisted. The `yb-amp-controller`
-Helm chart exposes this as `controller.ycp.*` and mounts the enrollment token
-from a Secret (`controller.ycp.enrollTokenSecret`).
-
-A YugabyteDB foundation cluster is a prerequisite regardless of YCP: it is the
-controller's own state store, and where `ycp_identity` lives.
+The controller used to enroll and report to YCP itself, on a background goroutine
+(`ycp.Loop`) with its identity persisted in `ycp_identity` (migration 0004). That
+was the "register + report" half of a design that always intended reconciliation
+to follow. When the standalone agent landed — which must be the *sole* YCP client
+(YCP mints one status token per environment) — the controller loop was retired
+(migration 0008 drops `ycp_identity`; the `--ycp-*` flags and `controller.ycp.*`
+Helm values are gone). The binding endpoint is all that remains on the controller.
 
 ## Deploying YCP itself
 
 The control plane is `api_server --control-plane-mode`. Its image is built and
-pushed on demand by `meko/api_server/build-image.sh` (Quay:
-`quay.io/yugabyte/ycp-api-server`), wrapped by the
-`.github/workflows/meko-control-plane-image.yml` workflow on `main`.
+pushed on demand (Quay: `quay.io/yugabyte/ycp-api-server`). The reconcile-agent
+image is `quay.io/yugabyte/ycp-reconciler-agent` (`ycp/Dockerfile.reconcile-agent`).
 
 ## Testing
 
-Unit coverage lives beside the code: the client envelope/error handling
-(`client_test.go`), the inventory flattening (`inventory_test.go`), the
-enroll/resume loop (`loop_test.go`), and the config validation
-(`config_ycp_test.go`); on the control-plane side, the `kind`-qualified id, enroll
-kind-mismatch, and `resources` round-trip (`meko/api_server/internal/service` and
-`.../repository`).
+The controller-side unit coverage is the binding store + endpoint
+(`internal/ycp/binding.go`, `internal/api/ycp_binding_test.go`) and, on the
+control-plane side, the `kind`-qualified id, enroll kind-mismatch, and desired /
+`resources` round-trip (`meko/api_server/internal/service` and `.../repository`).
+The engine, backend mapping, and agent live in the `ycp` module and are tested
+there.
 
 The end-to-end guard is the opt-in **`/ci amp_deploy_gke_ycp`** directive
 ([`amp-control-plane-gke.yml`](../../../.github/workflows/amp-control-plane-gke.yml),
 see [`amp/docs/ci-directives.md`](../../docs/ci-directives.md)): it stands up a real
-control plane next to a real amp deploy on GKE, registers this environment, and
-asserts that an endpoint the smoke test creates through the amp API shows up in the
-control plane's `GET /api/v1/environments` inventory — the register → enroll →
-report → store path, exercised against the shipped images.
+control plane next to a real amp deploy on GKE, deploys the reconcile-agent, and
+runs [`ycp-reconcile-smoke.sh`](../../deploy/ycp-reconcile-smoke.sh) — declare a
+pool → cluster → branch → endpoint through YCP desired state, assert the agent
+creates the tree, reports it `READY`, and GCs it on withdrawal — against the
+shipped images.
 
 ## Deferred
 
-- YCP → controller **desired state** (reconcile): YCP declaring resources for an
-  amp environment and the controller converging to them.
-- Cluster facts beyond the basics (the report currently sends an empty
-  `ClusterFacts`).
+- Request-time binding enforcement (gating mutating controller calls on the bind).
+- Cluster facts beyond the basics in the agent's status report.
+- A meko backend for the same agent (selected by environment kind), retiring the
+  standalone meko stack agent.

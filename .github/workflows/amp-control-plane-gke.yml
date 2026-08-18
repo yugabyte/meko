@@ -35,12 +35,16 @@ name: Amp control-plane GKE (itest-dev)
 #     nightly does NOT rebuild it.
 #   * `/ci amp_deploy_gke_ycp` — another superset of `amp_deploy_gke` that ALSO
 #     builds+pushes the YCP control-plane image (meko/api_server ->
-#     quay.io/yugabyte/ycp-api-server) from PR source, stands up an ephemeral
-#     control plane in the CI namespace (amp/deploy/ycp-up.sh: Postgres +
-#     api_server --control-plane-mode), registers an amp environment, wires the
-#     controller's controller.ycp.* Helm values + enrollment secret, and runs the
-#     smoke test with YCP_ASSERT=1 so it also proves the created endpoint shows up
-#     in GET /api/v1/environments. Directive/dispatch-only; NOT nightly.
+#     quay.io/yugabyte/ycp-api-server) AND the reconcile-agent image
+#     (ycp/Dockerfile.reconcile-agent -> quay.io/yugabyte/ycp-reconciler-agent)
+#     from PR source, stands up an ephemeral control plane in the CI namespace
+#     (amp/deploy/ycp-up.sh: Postgres + api_server --control-plane-mode),
+#     registers an amp environment, deploys the reconcile-agent (agent.* Helm
+#     values + enrollment secret), and runs the agent-driven reconcile smoke
+#     (amp/deploy/ycp-reconcile-smoke.sh) INSTEAD of the API-driven one: it
+#     declares desired state through YCP and asserts the authoritative agent
+#     creates the tree, reports it READY, and GCs it on withdrawal.
+#     Directive/dispatch-only; NOT nightly.
 # It touches the itest cluster and needs org secrets (KUBECONFIG_ITEST_DEV,
 # QUAY_AMP_TOKEN), so fork PRs (which get no secrets) are always skipped.
 # Stale ci-pr-* namespaces are swept by control-plane-gke-cleanup.yml.
@@ -242,6 +246,18 @@ jobs:
             -t "$QUAY_NS/ycp-api-server:${{ steps.tag.outputs.tag }}" \
             meko/api_server
 
+      # Reconcile-agent image (amp_deploy_gke_ycp only): the standalone YCP client
+      # that drives this controller, built from THIS PR's source and tagged with
+      # the same custom-<sha> so the deploy job pulls a matching set. The deploy
+      # wires it via up-gke.sh's agent.* Helm values (AGENT_IMAGE_REPO + TAG).
+      - name: Reconcile-agent image
+        if: fromJSON(needs.decide.outputs.ycp).amp_deploy_gke_ycp || github.event.inputs.push_ycp == 'true'
+        run: |
+          docker buildx build --push --platform linux/amd64 \
+            -f ycp/Dockerfile.reconcile-agent \
+            -t "$QUAY_NS/ycp-reconciler-agent:${{ steps.tag.outputs.tag }}" \
+            ycp
+
       # Externalized-extension images (amp_deploy_gke_extensions only): builds the
       # ABI-anchor PG18 base locally (~30 min cold, to compile against) and pushes
       # ONLY each manifest extension to Quay under
@@ -279,8 +295,9 @@ jobs:
       PULL_SECRET: quay-pull-secret
       TAG: ${{ needs.images.outputs.tag }}
       # '1' for the amp_deploy_gke_ycp superset (directive or manual push_ycp),
-      # gating the control-plane bring-up, the controller's ycp.* Helm wiring, and
-      # the smoke test's YCP_ASSERT block. '0' for a plain amp_deploy_gke.
+      # gating the control-plane bring-up, the reconcile-agent's Helm wiring, and
+      # running the agent-driven reconcile smoke instead of the API-driven one.
+      # '0' for a plain amp_deploy_gke.
       YCP: ${{ (fromJSON(needs.decide.outputs.ycp).amp_deploy_gke_ycp || github.event.inputs.push_ycp == 'true') && '1' || '0' }}
     steps:
       - uses: actions/checkout@v7
@@ -301,10 +318,10 @@ jobs:
 
       # YCP smoke only: stand up an ephemeral control plane (Postgres + api_server
       # --control-plane-mode) in this namespace, register an amp environment, and
-      # drop the enrollment token into the Secret the controller chart reads. Runs
-      # BEFORE up-gke.sh so the controller enrolls on first boot. ycp-up.sh appends
-      # YCP_URL / YCP_ENV_ID / YCP_ADMIN_KEY / YCP_ENROLL_SECRET to $GITHUB_ENV for
-      # the up-gke.sh (Helm values) and smoke-test.sh (assertion) steps below.
+      # drop the enrollment token into the Secret the reconcile-agent reads. Runs
+      # BEFORE up-gke.sh so the agent can enroll as soon as it is deployed. ycp-up.sh
+      # appends YCP_URL / YCP_ENV_ID / YCP_ADMIN_KEY / YCP_ENROLL_SECRET to
+      # $GITHUB_ENV for the up-gke.sh (Helm values) and reconcile-smoke steps below.
       - name: YCP control plane + register (amp_deploy_gke_ycp)
         if: env.YCP == '1'
         env:
@@ -328,6 +345,10 @@ jobs:
       # The pull secret carries the same QUAY_AMP_TOKEN robot creds used to push: a
       # dockerconfigjson whose quay.io "auth" is base64("robot-user:token") —
       # which is exactly base64(QUAY_AMP_TOKEN), since it already is that pair.
+      #
+      # OTEL_ENABLED=false: itest-dev's OpenTelemetry Operator admission webhook
+      # (failurePolicy: Fail) rejects the install when its serving cert is
+      # untrusted, and the smoke does not exercise the metrics pipeline.
       - name: Deploy (amp/deploy/up-gke.sh)
         env:
           QUAY_TOKEN: ${{ secrets.QUAY_AMP_TOKEN }}
@@ -344,17 +365,31 @@ jobs:
           PULL_SECRET="$PULL_SECRET" \
           CONTROLLER_EXPOSE=none \
           ENDPOINT_SERVICE_TYPE=ClusterIP \
+          OTEL_ENABLED=false \
           YCP_ENABLED="$YCP" \
           amp/deploy/up-gke.sh
 
+      # Plain amp_deploy_gke (+extensions): the API-driven smoke. Skipped in YCP
+      # mode — the reconcile-agent is authoritative and would garbage-collect the
+      # resources this smoke creates out-of-band via the amp API.
+      #
       # With amp_deploy_gke_extensions, the extension images were pushed above and
       # the controller's catalog resolves them — so exercise the ImageVolume
       # opt-in + fork inheritance (SMOKE_EXTENSIONS=1). Requires the cluster's
       # ImageVolume feature gate to be enabled on itest-dev.
       - name: Smoke test (amp/deploy/smoke-test.sh)
+        if: env.YCP != '1'
         env:
           SMOKE_EXTENSIONS: ${{ (fromJSON(needs.decide.outputs.ext).amp_deploy_gke_extensions || github.event.inputs.push_extensions == 'true') && '1' || '0' }}
-        run: NS="$NS" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" YCP_ASSERT="$YCP" amp/deploy/smoke-test.sh
+        run: NS="$NS" SMOKE_EXTENSIONS="$SMOKE_EXTENSIONS" amp/deploy/smoke-test.sh
+
+      # YCP mode: the agent-driven reconcile smoke. Declares desired state through
+      # the control plane and asserts the reconcile-agent creates the tree, reports
+      # it READY, and GCs it on withdrawal — the amp API is never touched to make
+      # resources. YCP_ENV_ID / YCP_ADMIN_KEY come from the ycp-up.sh step.
+      - name: Reconcile smoke (amp/deploy/ycp-reconcile-smoke.sh)
+        if: env.YCP == '1'
+        run: NS="$NS" YCP_ENV_ID="$YCP_ENV_ID" YCP_ADMIN_KEY="$YCP_ADMIN_KEY" amp/deploy/ycp-reconcile-smoke.sh
 
       - name: Dump controller/endpoint state on failure
         if: failure()
@@ -369,8 +404,10 @@ jobs:
             kubectl -n "$NS" logs "$p" -c endpoint --previous --tail=200 || true
           done
           kubectl -n "$NS" logs deploy/amp-controller --tail=200 || true
-          # YCP smoke: the control plane and what it thinks the fleet looks like.
+          # YCP smoke: the reconcile-agent, the control plane, and what the fleet
+          # looks like from the control plane's side.
           if [ "${YCP:-0}" = 1 ]; then
+            kubectl -n "$NS" logs deploy/amp-reconcile-agent --tail=200 || true
             kubectl -n "$NS" logs deploy/meko-api-server --tail=200 || true
             kubectl -n "$NS" logs deploy/postgres --tail=50 || true
             ( kubectl -n "$NS" port-forward svc/meko-api-server 18099:80 >/tmp/cp-pf.log 2>&1 & \

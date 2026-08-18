@@ -52,20 +52,22 @@ func TestInstallHint_IsRunnableAsPrinted(t *testing.T) {
 }
 
 // An amp environment gets a different hint: it installs the amp controller chart
-// with YCP reporting on, not the meko-agent. It must be runnable as printed and
-// must not leak the meko chart into an amp install.
+// with its reconcile-agent turned on (the agent is the sole YCP client), not the
+// meko-agent. It must be runnable as printed and must not leak the meko chart into
+// an amp install.
 func TestInstallHint_Amp(t *testing.T) {
 	hint := hintFor(t, "amp", "/api/v1/environments", "ycp.example.com", nil)
 
 	for _, want := range []string{
-		// The token, in a Secret the chart reads from.
+		// The token, in a Secret the agent reads from — the chart's default name.
 		"--from-literal=enrollment-token=ycp_enr_deadbeef",
-		"amp-controller-ycp-enrollment",
-		// The amp controller chart, with reporting turned on and pointed here.
+		"amp-reconcile-agent-enrollment",
+		// The amp controller chart, with the reconcile-agent turned on and pointed here.
 		"helm upgrade --install amp-controller amp/deploy/helm/yb-amp-controller",
-		"--set controller.ycp.enabled=true",
-		"--set controller.ycp.url=http://ycp.example.com",
-		"--set controller.ycp.envName=acme-prod",
+		"--set agent.enabled=true",
+		"--set agent.ycpUrl=http://ycp.example.com",
+		"--set agent.envName=acme-prod",
+		"--set agent.enrollTokenSecret.name=amp-reconcile-agent-enrollment",
 		// The YugabyteDB prerequisite is called out.
 		"YugabyteDB",
 	} {
@@ -74,10 +76,15 @@ func TestInstallHint_Amp(t *testing.T) {
 		}
 	}
 
-	// The meko-agent install must not bleed into an amp hint.
-	for _, unwanted := range []string{"meko-agent", "values-agent.yaml"} {
+	// The retired controller-side YCP loop must not reappear, and the meko-agent
+	// install must not bleed into an amp hint.
+	for _, unwanted := range []string{
+		"controller.ycp",                // the controller no longer talks to YCP
+		"amp-controller-ycp-enrollment", // renamed to the agent's secret
+		"meko-agent", "values-agent.yaml",
+	} {
 		if strings.Contains(hint, unwanted) {
-			t.Errorf("amp hint leaked the meko-agent install (%q):\n%s", unwanted, hint)
+			t.Errorf("amp hint contains retired/foreign string %q:\n%s", unwanted, hint)
 		}
 	}
 }

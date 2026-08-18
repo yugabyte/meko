@@ -31,11 +31,16 @@ can't be recovered; use a file, or an old SHA (all pre-move SHAs still resolve).
 
 ## `ycp/` — shared, top-level
 
-The BYOC **data plane** for YCP (Yugabyte Control Plane): the pull agent
+The BYOC **data plane** for YCP (Yugabyte Control Plane): the Meko pull agent
 (`cmd/agent`), the wire types both sides share (`internal/api`), and the kind e2e. Its
 own `go.mod`. The control plane itself is `meko/api_server --control-plane-mode`.
 
-It lives at the root rather than under `meko/` because it is shared with amp.
+It lives at the root rather than under `meko/` because it is shared with amp. amp's
+data plane uses the same contract through `cmd/reconcile-agent` (built on the
+backend-agnostic `reconcile` engine): instead of applying k8s directly like `cmd/agent`,
+it drives the amp controller's REST API to converge an environment to desired state. It
+is that environment's sole YCP client — see
+[`amp/controller/architecture/ac-ycp.md`](amp/controller/architecture/ac-ycp.md).
 
 An **environment** is the unit YCP manages — one namespace running a Meko stack.
 Registering one is the whole operator step: the control plane resolves the Meko release
