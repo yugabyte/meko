@@ -284,9 +284,9 @@ func runServe(args []string) error {
 	// The write-once YCP binding endpoint the reconcile-agent pins itself to.
 	srv.RegisterYCPBinding(ycp.NewBindingStore(pool.Pool))
 
-	// Reclaims clusters whose create_cluster failed, by enqueueing the same
-	// delete_cluster task an operator's delete would. Runs beside the worker
-	// rather than inside it: it produces tasks, it does not execute them.
+	// Reclaims clusters and endpoints whose create failed, by enqueueing the same
+	// delete task an operator's delete would. Runs beside the worker rather than
+	// inside it: it produces tasks, it does not execute them.
 	sweeper := gc.New(backend, task.NewService(store), gc.Config{
 		Enabled:    cfg.GC.Enabled,
 		Interval:   cfg.GC.Interval,

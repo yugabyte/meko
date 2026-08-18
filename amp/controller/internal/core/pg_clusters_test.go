@@ -11,7 +11,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/db"
 )
 
-// TestListClustersIncludeFailed covers the failed-creation filter: a cluster
+// TestPgListClustersIncludeFailed covers the failed-creation filter: a cluster
 // whose create_cluster task failed (its row written mid-provisioning before a
 // later step failed) is an orphan. ListClusters excludes it by default (usable
 // clusters only), and includes it only when the caller passes includeFailed=true
@@ -23,7 +23,7 @@ import (
 // safe against any reachable DB (e.g. a meko-dev YB universe). Set
 // AMP_TEST_DATABASE_URL to run; skipped otherwise so `go test ./...` stays green
 // without a database.
-func TestListClustersIncludeFailed(t *testing.T) {
+func TestPgListClustersIncludeFailed(t *testing.T) {
 	url := os.Getenv("AMP_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("set AMP_TEST_DATABASE_URL (e.g. postgres://yugabyte@host:5433/yb_storage?sslmode=disable) to run")

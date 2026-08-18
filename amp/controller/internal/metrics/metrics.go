@@ -81,8 +81,8 @@ func New() *Metrics {
 
 	m.gcOrphans = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace, Subsystem: "gc", Name: "orphans_total",
-		Help: "Failed-create orphans seen by the GC sweeper, by outcome: enqueued (teardown recorded), skipped (no longer reclaimable), failed (left for the next sweep).",
-	}, []string{"outcome"})
+		Help: "Failed-create orphans seen by the GC sweeper, by resource (cluster, endpoint) and outcome: enqueued (teardown recorded), skipped (no longer reclaimable), failed (left for the next sweep).",
+	}, []string{"resource", "outcome"})
 	m.gcSweeps = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: namespace, Subsystem: "gc", Name: "sweeps_total",
 		Help: "Completed GC sweeps. A sweep that found nothing still counts, so a flat orphans_total against a rising sweeps_total means the sweeper is running and idle rather than stuck.",
@@ -158,17 +158,24 @@ func (m *Metrics) TaskFinished(kind, status string, dur time.Duration) {
 	}
 }
 
-// GCSwept records one completed GC sweep: how many failed-create orphans it saw
-// and what became of each. found is not recorded as its own series — it is
-// enqueued+skipped+failed by construction, so a fourth counter could only
-// disagree with the other three.
-func (m *Metrics) GCSwept(found, enqueued, skipped, failed int, dur time.Duration) {
+// GCSwept records one completed GC sweep, covering every resource kind's pass.
+func (m *Metrics) GCSwept(dur time.Duration) {
 	if m == nil {
 		return
 	}
 	m.gcSweeps.Inc()
 	m.gcSweepDur.Observe(dur.Seconds())
-	m.gcOrphans.WithLabelValues("enqueued").Add(float64(enqueued))
-	m.gcOrphans.WithLabelValues("skipped").Add(float64(skipped))
-	m.gcOrphans.WithLabelValues("failed").Add(float64(failed))
+}
+
+// GCOrphans records what became of one resource kind's failed-create orphans in
+// a sweep. How many were found is not a series of its own — it is
+// enqueued+skipped+failed by construction, so a fourth counter could only
+// disagree with the other three.
+func (m *Metrics) GCOrphans(resource string, enqueued, skipped, failed int) {
+	if m == nil {
+		return
+	}
+	m.gcOrphans.WithLabelValues(resource, "enqueued").Add(float64(enqueued))
+	m.gcOrphans.WithLabelValues(resource, "skipped").Add(float64(skipped))
+	m.gcOrphans.WithLabelValues(resource, "failed").Add(float64(failed))
 }

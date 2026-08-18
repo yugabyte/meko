@@ -173,6 +173,48 @@ file the rest separately.
 
 ---
 
+## `ensure endpoint record: conflict` — a failed create is holding the writer slot
+
+A `create_endpoint` task that fails with **`ensure endpoint record: conflict`** on a
+branch with no working writer is almost always this: an *earlier* failed create left
+its row behind. The step records the endpoint before deploying, so the row already
+holds the branch's single-writer slot when the deploy fails, and
+`endpoints_one_writer_per_branch` rejects every later writer for that branch.
+(Note the failure is a **failed task**, not a synchronous 409 — the single-writer
+rule is enforced in the step, not the handler.)
+
+The tell is an endpoint row with no `address`, whose creating task failed:
+
+```sql
+-- Addressless endpoints on the branch, with the task that tried to create each.
+-- Run against the controller's database.
+SELECT e.id, e.branch_id, e.created_at, t.kind, t.status, t.updated_at AS failed_at
+  FROM amp_registry.endpoints e
+  JOIN task_steps s ON s.kind = 'create_endpoint' AND (s.args->>'endpoint_id')::uuid = e.id
+  JOIN tasks t ON t.id = s.task_id
+ WHERE e.branch_id = '<branch-uuid>' AND e.address IS NULL
+ ORDER BY t.updated_at DESC;
+```
+
+The GC sweeper reclaims it without help, but not promptly: it only considers an
+orphan **once `--gc-grace` (30m) has passed** since the failure, so the earliest a
+`delete_endpoint` appears is 30m after, plus up to one `--gc-interval` (5m). The
+window exists so a fresh failure can be inspected — so if you have finished
+inspecting and don't want to wait, delete it yourself:
+
+```bash
+curl -s -X DELETE "$BASE/storage-pools/$POOL/clusters/$PROJ/branches/$BR/endpoints/$EP"
+```
+
+If the row is *still* there long after the grace window, check the sweeper is
+running before digging further: `--gc-enabled` not turned off, and
+`amp_controller_gc_orphans_total{resource="endpoint"}` against a rising
+`amp_controller_gc_sweeps_total`. A skipped count that climbs means the precheck
+keeps disqualifying it — most often because the endpoint *does* have an address, in
+which case it is a real endpoint and GC is right to leave it alone.
+
+---
+
 ## Supervisor ↔ binary skew
 
 The recurring class the flow above exists to catch. The endpoint image bakes in **two things that must

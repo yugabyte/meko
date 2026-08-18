@@ -363,47 +363,83 @@ migrations against YugabyteDB directly.
 
 ## Failed-create GC (implemented)
 
-A cluster row is written mid-provisioning, before the storage steps run, so a
-`create_cluster` that fails afterwards leaves a half-built cluster. The read path
-hides those (`core`'s `clusterCreateNotFailed`, surfaced as `include_failed` on
-the list API for the operator fleet view), which keeps them from being mistaken
-for real clusters but leaves the rows and their Kubernetes resources in place
-indefinitely.
+A resource's row is written mid-provisioning, before the steps that build what it
+describes, so a create that fails afterwards leaves the row behind. Two kinds leak
+that way, and nothing else reclaims either:
 
-`internal/gc`'s **Sweeper** reclaims them. It cannot be a compensating step on
+- **clusters** — `create_cluster`'s `EnsureCluster` writes the row before the
+  storage steps run. The read path hides these (`core`'s
+  `clusterCreateNotFailed`, surfaced as `include_failed` on the list API for the
+  operator fleet view), which keeps them from being mistaken for real clusters but
+  leaves the rows and their Kubernetes resources in place indefinitely.
+- **endpoints** — `create_endpoint` records the row *before* deploying,
+  deliberately, so the row claims the branch's single-writer slot before any
+  compute is spent. A deploy that then fails leaves that slot held by an endpoint
+  with no pod, and `endpoints_one_writer_per_branch` makes every later attempt to
+  give the branch a writer conflict. This one is not merely untidy: the branch
+  cannot be written to again until the row is gone.
+
+**Storage pools are not swept.** Creating one is a single INSERT with nothing to
+provision, so a failed create leaves no row — there is no half-created pool to
+reclaim, and no delete-pool API to reclaim it with.
+
+`internal/gc`'s **Sweeper** reclaims both. It cannot be a compensating step on
 the failure path: the controller can crash *during* that path, and an inline
 rollback that never runs leaks silently. So it is a reconciler, and it borrows
-this framework's durability rather than adding its own — every tick it selects
-orphans past a grace window and enqueues an ordinary **`delete_cluster`** task
-for each. Teardown is therefore the same code an operator's delete runs, and a
-crash mid-teardown is recovered by the ordinary lease reclaim (a task running
-with an expired lease is claimable again).
+this framework's durability rather than adding its own — every tick it runs one
+pass per resource kind, selecting that kind's orphans past a grace window and
+enqueueing an ordinary **`delete_cluster`** or **`delete_endpoint`** for each.
+Teardown is therefore the same code an operator's delete runs, and a crash
+mid-teardown is recovered by the ordinary lease reclaim (a task running with an
+expired lease is claimable again).
 
-Selection is the positive form of `clusterCreateNotFailed`, resting on the same
-invariant: a cluster has exactly one `create_cluster` task, because a retry mints
-a fresh cluster id, so one failed task is definitive. Clusters with a
+Clusters are swept before endpoints, because a cluster teardown cascades to the
+endpoints under it. `BatchLimit` is per kind, so a backlog of one cannot starve
+the other. A broken selection query for one kind does not stop the other's pass;
+the errors are joined and reported.
+
+**Cluster selection** is the positive form of `clusterCreateNotFailed`, resting on
+the same invariant: a cluster has exactly one `create_cluster` task, because a
+retry mints a fresh cluster id, so one failed task is definitive. Clusters with a
 `delete_cluster` already pending or running are excluded, and a succeeded delete
 tombstones the row, which `dropped_at` excludes.
 
+**Endpoint selection** (`core`'s `failedCreateEndpoints`) keys off the
+`create_endpoint` *step*, not the task kind, because three kinds create endpoints:
+`create_cluster` and `branch` each plan one for `with_writer`, and
+`create_endpoint` is the standalone scale-up. Only the last carries the endpoint id
+in `tasks.target_ref`, so the step's `args` are what cover all three — which is how
+the pass sees a `with_writer` fork whose branch was recorded but whose endpoint
+never came up. Beyond "the creating task failed", an endpoint must also have
+`address IS NULL` (it never reached the point where an address was recorded, so
+nothing usable was handed out — an endpoint that *did* get one is left alone even
+if its task later failed, since it may be serving and its owner can delete it
+through the API) and a live branch. Endpoints are skipped when a `delete_endpoint`
+is already pending or running, and when their cluster is itself a failed-create
+orphan, since `delete_cluster` cascades and enqueueing both would spend a task to
+no effect.
+
 Before each destructive enqueue the sweeper re-checks that one orphan
-(`IsFailedCreateCluster`), so a batch that went stale — deleted by hand,
-tombstoned, or already claimed — cannot cause a redundant teardown. `Sweep` holds
-a mutex for the whole pass, which makes "one Sweeper enqueues a cluster once"
-hold however it is called. Two *separate* controllers could still both enqueue;
-that is left unguarded, because `delete_cluster` must be idempotent regardless
-(the worker re-runs steps after a crash) and the deployed topology is a single
-controller. Two controllers would want an atomic conditional insert in the store.
+(`IsFailedCreateCluster` / `IsFailedCreateEndpoint`), so a batch that went stale —
+deleted by hand, tombstoned, or already claimed — cannot cause a redundant
+teardown. `Sweep` holds a mutex for the whole pass, which makes "one Sweeper
+enqueues a resource once" hold however it is called. Two *separate* controllers
+could still both enqueue; that is left unguarded, because the teardown tasks must
+be idempotent regardless (the worker re-runs steps after a crash) and the deployed
+topology is a single controller. Two controllers would want an atomic conditional
+insert in the store.
 
 | flag | env | default | meaning |
 |---|---|---|---|
 | `--gc-enabled` | `AMP_GC_ENABLED` | `true` | run the sweeper |
 | `--gc-interval` | `AMP_GC_INTERVAL` | `5m` | how often a sweep runs |
 | `--gc-grace` | `AMP_GC_GRACE` | `30m` | how long an orphan is left alone after its create failed, so a fresh failure can be inspected and a manual retry is not raced |
-| `--gc-batch-limit` | `AMP_GC_BATCH_LIMIT` | `20` | max orphans enqueued per sweep |
+| `--gc-batch-limit` | `AMP_GC_BATCH_LIMIT` | `20` | max orphans enqueued per sweep, **per resource kind** |
 
 Observability: `amp_controller_gc_sweeps_total`,
 `amp_controller_gc_sweep_duration_seconds`, and
-`amp_controller_gc_orphans_total{outcome=enqueued|skipped|failed}`. A flat
-`orphans_total` against a rising `sweeps_total` means the sweeper is running and
-idle rather than stuck. Each orphan acted on is logged with its cluster id, pool
-id, and when its create failed.
+`amp_controller_gc_orphans_total{resource=cluster|endpoint,outcome=enqueued|skipped|failed}`.
+A flat `orphans_total` against a rising `sweeps_total` means the sweeper is running
+and idle rather than stuck; the `resource` label is what makes "endpoints are
+piling up while clusters are clean" answerable from the metric alone. Each orphan
+acted on is logged with its resource kind, its ids, and when its create failed.

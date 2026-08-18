@@ -214,10 +214,10 @@ func Load(args []string) (*Config, error) {
 	fs.DurationVar(&c.Task.LeaseTTL, "task-lease-ttl", envDuration("AMP_TASK_LEASE_TTL", 30*time.Second), "task ownership lease TTL")
 	fs.DurationVar(&c.Task.RenewInterval, "task-lease-renew-interval", envDuration("AMP_TASK_LEASE_RENEW_INTERVAL", 10*time.Second), "how often the worker renews the lease of a running task (must be < task-lease-ttl)")
 	fs.IntVar(&c.Task.MaxConcurrent, "task-max-concurrent", envInt("AMP_TASK_MAX_CONCURRENT", 50), "max tasks the worker executes concurrently")
-	fs.BoolVar(&c.GC.Enabled, "gc-enabled", envBool("AMP_GC_ENABLED", true), "sweep failed-create orphan clusters and enqueue their teardown")
+	fs.BoolVar(&c.GC.Enabled, "gc-enabled", envBool("AMP_GC_ENABLED", true), "sweep failed-create orphan clusters and endpoints and enqueue their teardown")
 	fs.DurationVar(&c.GC.Interval, "gc-interval", envDuration("AMP_GC_INTERVAL", 5*time.Minute), "how often the orphan sweeper runs")
 	fs.DurationVar(&c.GC.Grace, "gc-grace", envDuration("AMP_GC_GRACE", 30*time.Minute), "how long a failed-create orphan is left alone before teardown, so a fresh failure can be inspected and a manual retry is not raced")
-	fs.IntVar(&c.GC.BatchLimit, "gc-batch-limit", envInt("AMP_GC_BATCH_LIMIT", 20), "max orphans one sweep enqueues")
+	fs.IntVar(&c.GC.BatchLimit, "gc-batch-limit", envInt("AMP_GC_BATCH_LIMIT", 20), "max orphans one sweep enqueues per resource kind")
 	fs.DurationVar(&c.Task.ShutdownGrace, "task-shutdown-grace", envDuration("AMP_TASK_SHUTDOWN_GRACE", 10*time.Second), "max time to wait for in-flight tasks to finish on shutdown")
 
 	fs.BoolVar(&c.BranchGC.Enabled, "branch-gc", envBool("AMP_BRANCH_GC", true), "run the branch-drop reaper: reclaim a dropped branch's amp_storage rows once its retention window has passed")

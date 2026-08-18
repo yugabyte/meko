@@ -78,6 +78,9 @@ All under the `amp_controller_` namespace, following the Prometheus
 | `amp_controller_tasks_inflight` | gauge | — | Tasks currently executing. |
 | `amp_controller_registry_branches` | gauge | — | Branches currently recorded in the registry. |
 | `amp_controller_build_info` | gauge | `version`, `commit`, `build_date` | Constant 1; carries the build identity (from [`internal/version`](../internal/version), see `ac-versioning.md`) for joining onto other series. |
+| `amp_controller_gc_sweeps_total` | counter | — | Completed failed-create GC sweeps, one per tick regardless of how many resource kinds it swept (`ac-tasks.md`). |
+| `amp_controller_gc_sweep_duration_seconds` | histogram | — | Sweep duration, covering every kind's selection plus each per-orphan precheck and enqueue. |
+| `amp_controller_gc_orphans_total` | counter | `resource`, `outcome` | Failed-create orphans the sweeper saw, by `resource` (`cluster`, `endpoint`) and `outcome` (`enqueued`, `skipped`, `failed`). A flat `orphans_total` against a rising `sweeps_total` means the sweeper is running and idle rather than stuck. |
 
 Plus the standard Go runtime (`go_*`) and process (`process_*`) collectors.
 
