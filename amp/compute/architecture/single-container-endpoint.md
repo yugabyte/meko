@@ -76,7 +76,7 @@ In this pod, concretely:
   `WRITE_TOKEN_CLIENT_ID`), never per endpoint: the lease grants
   unconditionally to its current holder, so two pods sharing a client id
   would both be granted it.
-- 10 s TTL (`WRITE_TOKEN_TTL_MS`), renewed every 8 s
+- 15 s TTL (`WRITE_TOKEN_TTL_MS`), renewed every 5 s
   (`WRITE_TOKEN_RENEW_SECONDS`). Each renewal is pushed to the
   safekeeper and pageserver over `POST /v1/write_token`.
 - Losing the lease — a denial, or renewals failing until the token runs

@@ -23,13 +23,15 @@ use crate::db;
 
 /// How long the thief holds the branch for.
 ///
-/// Comfortably longer than the supervisor's 8s renewal interval, so at least
-/// one renewal is certainly refused even if a loaded runner delays the renewal
-/// thread — that refusal is the whole point of the scenario, and a lease that
-/// expired first would be handed straight back instead.
+/// Longer than two things, for two reasons. Longer than the 5s renewal interval,
+/// so at least one renewal is certainly refused even if a loaded runner delays
+/// the renewal thread — that refusal is the point of the scenario. And longer
+/// than the 15s TTL, so the supervisor's held token runs out while the thief
+/// still holds the row; a stolen lease that expired first would be handed
+/// straight back and nothing would ever stop writing.
 const STOLEN_LEASE_SECS: i64 = 30;
 
-/// The supervisor renews every 8s against a 10s TTL, so the refusal lands
+/// The supervisor renews every 5s against a 15s TTL, so the refusal lands
 /// within one interval. Allow several: the renewal thread's clock and ours are
 /// not the same clock.
 const LAPSE_BUDGET: Duration = Duration::from_secs(45);

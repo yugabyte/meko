@@ -47,10 +47,21 @@ use ysql_client::{YbConnConfig, YsqlClient};
 /// drift — and a token stays directly readable as a timestamp until then.
 pub type WriteToken = u64;
 
-/// The lease length the endpoint supervisor takes. It renews at 8s, so 2s of
-/// slack absorbs a slow round trip without the fence ever lapsing in the
-/// steady state.
-pub const DEFAULT_TOKEN_TTL: Duration = Duration::from_secs(10);
+/// The lease length the endpoint supervisor takes.
+///
+/// Sized by what it has to survive rather than by what a healthy renewal needs.
+/// At 10s against ~8s renewals the margin was ~2s, and #813 spent it: a routine
+/// load spike delayed a renewal, the token expired by **45ms**, and the
+/// safekeeper refused its flush and exited — correct behaviour on a margin that
+/// was 0.5% of the lease at the moment it mattered. The renewal path shares the
+/// endpoint with the workload it fences, so the busier the endpoint, the likelier
+/// a late renewal, which is exactly when killing the safekeeper costs most.
+///
+/// 15s against a 5s renewal interval leaves 10s: two whole renewals can fail
+/// outright before anything stops writing. The cost is that a stranded endpoint
+/// keeps its write window 5s longer, and a takeover waits that much longer for
+/// it — the fence still holds, it is just less eager.
+pub const DEFAULT_TOKEN_TTL: Duration = Duration::from_secs(15);
 
 /// The grace a NEW client waits past a lapsed token before it may take over,
 /// covering disagreement between two PG nodes' wall clocks. Matches
@@ -61,7 +72,7 @@ pub const DEFAULT_TOKEN_SKEW: Duration = Duration::from_millis(500);
 
 /// Bounds `token_acquire` enforces. Checked here too, so a caller gets a clear
 /// error without a round trip.
-const MAX_TOKEN_TTL: Duration = Duration::from_secs(300);
+pub const MAX_TOKEN_TTL: Duration = Duration::from_secs(300);
 const MAX_TOKEN_SKEW: Duration = Duration::from_secs(3);
 
 /// The resource id convention: one lease per branch, because the branch is the
@@ -606,7 +617,10 @@ mod tests {
         let disarmed = WriteFence::new();
         let reply = disarmed.accept_push(token);
         assert_eq!(reply.token, token);
-        assert!(!reply.armed, "a disarmed daemon must not claim to be fenced");
+        assert!(
+            !reply.armed,
+            "a disarmed daemon must not claim to be fenced"
+        );
 
         let armed = WriteFence::new();
         armed.arm();

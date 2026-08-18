@@ -142,6 +142,12 @@ CREATE TABLE amp_registry.branches (
     -- so this is the baseline, not the last word.
     pg_settings         jsonb       NOT NULL DEFAULT '{}'::jsonb,
 
+    -- Branch's write lease, as a flat object: `ttl_ms` and `renew_seconds`
+    -- (compute/architecture/compute-fencing.md). On the branch because the lease
+    -- is one row per branch and every endpoint on it contends for that row.
+    -- Empty means the supervisor's defaults; copied into a fork like `pg_settings`.
+    write_token_settings jsonb      NOT NULL DEFAULT '{}'::jsonb,
+
     created_at          timestamptz NOT NULL DEFAULT now(),
     dropped_at          timestamptz, -- tombstone; a branch id is never reused
 

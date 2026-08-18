@@ -11,9 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use compute_api::responses::TlsConfig;
-use compute_api::spec::{
-    Database, GenericOption, GenericOptions, PgIdent, Role,
-};
+use compute_api::spec::{Database, GenericOption, GenericOptions, PgIdent, Role};
 use futures::StreamExt;
 use indexmap::IndexMap;
 use ini::Ini;

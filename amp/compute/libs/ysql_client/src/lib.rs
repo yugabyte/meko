@@ -246,6 +246,23 @@ pub struct YbConnConfig {
     /// is bounded by TCP keepalives, not by this.
     #[serde(default = "default_statement_timeout_ms")]
     pub statement_timeout_ms: u64,
+    /// `TCP_USER_TIMEOUT` for this connection, in milliseconds. `0` (the
+    /// default) leaves it to the kernel, which is to say unset.
+    ///
+    /// This is the only bound that catches a peer that stops answering at the
+    /// *network* level rather than the protocol one. A tserver whose node dies
+    /// without closing its sockets sends no FIN and no RST, so the connection
+    /// stays open and healthy-looking: `is_closed()` is false, a statement
+    /// bound never fires because no server is there to fire it, and the client
+    /// waits on data that will never arrive. Keepalives would eventually
+    /// notice, but the driver's default idle is two hours.
+    ///
+    /// Set it and the kernel fails the socket once data has gone unacknowledged
+    /// for this long, which surfaces as a connection error — so the retry loop
+    /// reconnects, and the smart driver's next connect can land on a node that
+    /// is alive. Linux-only; other platforms ignore it.
+    #[serde(default)]
+    pub tcp_user_timeout_ms: u64,
 }
 
 /// Default [`YbConnConfig::connect_timeout_ms`]. Generous next to a healthy
@@ -398,6 +415,12 @@ impl YbConnConfig {
         }
         if self.connect_timeout_ms != DEFAULT_CONNECT_TIMEOUT_MS {
             parts.push(format!("connect_timeout_ms = {}", self.connect_timeout_ms));
+        }
+        if self.tcp_user_timeout_ms != 0 {
+            parts.push(format!(
+                "tcp_user_timeout_ms = {}",
+                self.tcp_user_timeout_ms
+            ));
         }
         if self.statement_timeout_ms != DEFAULT_STATEMENT_TIMEOUT_MS {
             parts.push(format!(
@@ -553,6 +576,7 @@ impl YbConnArgs {
             // `amp_storage.wals` — so the operator watching it is the timeout.
             connect_timeout_ms: 0,
             statement_timeout_ms: 0,
+            tcp_user_timeout_ms: 0,
         }
     }
 }
@@ -631,6 +655,7 @@ mod database_url_tests {
             tsclient_sessions_per_conn: None,
             connect_timeout_ms: super::DEFAULT_CONNECT_TIMEOUT_MS,
             statement_timeout_ms: super::DEFAULT_STATEMENT_TIMEOUT_MS,
+            tcp_user_timeout_ms: 0,
         }
     }
 
@@ -717,7 +742,10 @@ mod database_url_tests {
         let cfg: YbConnConfig =
             toml::from_str("host_ports = \"h:5433\"\nuser = \"u\"\ndbname = \"d\"\n").unwrap();
         assert_eq!(cfg.connect_timeout_ms, super::DEFAULT_CONNECT_TIMEOUT_MS);
-        assert_eq!(cfg.statement_timeout_ms, super::DEFAULT_STATEMENT_TIMEOUT_MS);
+        assert_eq!(
+            cfg.statement_timeout_ms,
+            super::DEFAULT_STATEMENT_TIMEOUT_MS
+        );
 
         let pg = build_pg_config(&cfg, "test").unwrap();
         assert_eq!(
@@ -740,6 +768,31 @@ mod database_url_tests {
         // The server applies `statement_timeout` in milliseconds, so the
         // config value goes across unscaled.
         assert_eq!(pg.get_options(), Some("-c statement_timeout=5000"));
+    }
+
+    /// The only bound that catches a peer which stops answering at the network
+    /// level. Off by default, because it is the kernel's business unless a
+    /// caller has a deadline of its own; the write-fence renewal is the caller
+    /// that does.
+    #[test]
+    fn a_tcp_user_timeout_reaches_the_driver() {
+        let mut cfg = cfg("h:5433");
+        assert_eq!(cfg.tcp_user_timeout_ms, 0);
+        assert_eq!(
+            build_pg_config(&cfg, "test")
+                .unwrap()
+                .get_tcp_user_timeout(),
+            None
+        );
+
+        cfg.tcp_user_timeout_ms = 2_000;
+        assert_eq!(
+            build_pg_config(&cfg, "test")
+                .unwrap()
+                .get_tcp_user_timeout(),
+            Some(&Duration::from_millis(2_000))
+        );
+        assert!(cfg.to_inline_toml().contains("tcp_user_timeout_ms = 2000"));
     }
 
     /// Zero is "no bound" for both — the escape hatch out of the defaults,
@@ -1673,7 +1726,13 @@ fn build_pg_config(cfg: &YbConnConfig, application_name: &str) -> Result<tokio_p
         pg_config.connect_timeout(Duration::from_millis(cfg.connect_timeout_ms));
     }
     if cfg.statement_timeout_ms > 0 {
-        pg_config.options(&format!("-c statement_timeout={}", cfg.statement_timeout_ms));
+        pg_config.options(&format!(
+            "-c statement_timeout={}",
+            cfg.statement_timeout_ms
+        ));
+    }
+    if cfg.tcp_user_timeout_ms > 0 {
+        pg_config.tcp_user_timeout(Duration::from_millis(cfg.tcp_user_timeout_ms));
     }
     Ok(pg_config)
 }

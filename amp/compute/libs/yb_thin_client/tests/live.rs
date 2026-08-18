@@ -54,6 +54,7 @@ async fn ysql() -> YsqlClient {
         // the code under test.
         connect_timeout_ms: 0,
         statement_timeout_ms: 0,
+        tcp_user_timeout_ms: 0,
     };
     YsqlClient::from_yb_config(&conf, "yb_thin_client_live", false)
         .await

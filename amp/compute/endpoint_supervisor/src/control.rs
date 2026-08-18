@@ -214,6 +214,21 @@ fn dispatch(line: &str, sup: &Shared) -> String {
             sup.stop_one(&name, drain)
                 .and_then(|()| sup.start_one(&name, budget)),
         ),
+        // Read-only. Retuning goes through the branch's `write_token_settings`,
+        // which the renewal loop picks up; this answers what a running endpoint
+        // actually has, which is the question a retune leaves behind. Two ways
+        // to set one value is how a pod ends up disagreeing with its branch.
+        ("lease", None) => {
+            let (ttl, renew) = crate::fence::timings();
+            format!(
+                "ttl_ms={} renew_ms={}\n",
+                ttl.as_millis(),
+                renew.as_millis()
+            )
+        }
+        ("lease", Some(_)) => {
+            "err: lease is read-only; set amp_registry.branches.write_token_settings\n".into()
+        }
         ("stop" | "start" | "restart" | "disable", None) => {
             format!("err: {verb} needs a service name\n")
         }
@@ -446,5 +461,29 @@ mod tests {
         BufReader::new(&stream).read_line(&mut reply).unwrap();
         assert!(reply.contains("pageserver"), "{reply}");
         let _ = std::fs::remove_file(&path);
+    }
+    /// Retuning goes through the branch's `write_token_settings`, so the socket
+    /// reports what is in force rather than offering a second way to set it: an
+    /// endpoint whose live lease disagreed with its branch row would be very
+    /// hard to explain to whoever changed the row.
+    #[test]
+    fn the_lease_verb_reports_but_does_not_set() {
+        use std::time::Duration;
+        let _live = crate::fence::timings_lock();
+        let sup = shared_with(Service::new("a", sh("sleep 30")));
+        crate::fence::set_timings(Duration::from_secs(10), Duration::from_secs(5)).unwrap();
+
+        assert_eq!(dispatch("lease", &sup), "ttl_ms=10000 renew_ms=5000\n");
+
+        // It reports a change that arrived from the branch.
+        crate::fence::set_timings(Duration::from_secs(20), Duration::from_secs(8)).unwrap();
+        assert_eq!(dispatch("lease", &sup), "ttl_ms=20000 renew_ms=8000\n");
+
+        // Setting it here is refused, and says where the knob is.
+        let refused = dispatch("lease 30000 9", &sup);
+        assert!(refused.contains("write_token_settings"), "{refused}");
+        assert_eq!(dispatch("lease", &sup), "ttl_ms=20000 renew_ms=8000\n");
+
+        crate::fence::reset_timings_for_test();
     }
 }

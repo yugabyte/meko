@@ -5036,6 +5036,7 @@ mod tests {
             tsclient_sessions_per_conn: None,
             connect_timeout_ms: ysql_client::DEFAULT_CONNECT_TIMEOUT_MS,
             statement_timeout_ms: ysql_client::DEFAULT_STATEMENT_TIMEOUT_MS,
+            tcp_user_timeout_ms: 0,
         }
     }
 

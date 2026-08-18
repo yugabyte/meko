@@ -32,6 +32,10 @@ pub struct Overrides {
     pub pg: BTreeMap<String, String>,
     pub pageserver: BTreeMap<String, OverrideValue>,
     pub safekeeper: BTreeMap<String, OverrideValue>,
+    /// How this endpoint's supervisor holds the branch's write lease. Off the
+    /// branch, not the endpoint: the lease is one row per branch, so this is
+    /// not a per-endpoint override and there is no endpoint column to merge.
+    pub write_token: BTreeMap<String, OverrideValue>,
 }
 
 /// The lookup, with the endpoint id bound rather than interpolated.
@@ -42,10 +46,19 @@ pub struct Overrides {
 ///
 /// `::text` on the result keeps [`parse`] the one place the document is
 /// interpreted.
+///
+/// `write_token_settings` is read through `to_jsonb(b) ->` rather than named
+/// directly. Its definition lives in migration `0002` and there is no repair
+/// migration for databases already past it, and naming a column that is not
+/// there is a parse error — in **one** statement, which would take the
+/// pageserver, safekeeper and pg overrides down with it, on every endpoint,
+/// over a key that is merely absent. Through `to_jsonb` a missing column is a
+/// missing key, which is what an unset override already looks like.
 const QUERY: &str = "SELECT jsonb_build_object(\
      'pg', coalesce(b.pg_settings,'{}'::jsonb) || coalesce(e.pg_settings,'{}'::jsonb),\
      'pageserver', coalesce(e.pageserver_settings,'{}'::jsonb),\
-     'safekeeper', coalesce(e.safekeeper_settings,'{}'::jsonb))::text \
+     'safekeeper', coalesce(e.safekeeper_settings,'{}'::jsonb),\
+     'write_token', coalesce(to_jsonb(b) -> 'write_token_settings','{}'::jsonb))::text \
      FROM amp_registry.endpoints e \
      LEFT JOIN amp_registry.branches b ON b.branch_id = e.branch_id \
      WHERE e.id = $1::uuid";
@@ -59,6 +72,13 @@ const QUERY: &str = "SELECT jsonb_build_object(\
 /// boot path, and its failure mode is "carry on with derived defaults".
 const CONNECT_TIMEOUT_MS: u64 = 3_000;
 
+/// Bound on a peer that stops answering at the network level. The statement
+/// ceiling below cannot cover it — a node that dies without closing its sockets
+/// leaves nothing to enforce a server-side timeout — and without this the kernel
+/// waits on a two-hour keepalive idle. Inherited from the caller's block it
+/// would be zero, i.e. off.
+const TCP_USER_TIMEOUT_MS: u64 = 3_000;
+
 /// Ceiling on the query itself, for the case where the connection opens but the
 /// statement never returns. Set here rather than inherited, because the client
 /// default is off — the daemons' bulk paths cannot carry a statement bound, and
@@ -70,6 +90,7 @@ fn bounded(yb: &YbConnConfig) -> YbConnConfig {
     YbConnConfig {
         connect_timeout_ms: CONNECT_TIMEOUT_MS,
         statement_timeout_ms: STATEMENT_TIMEOUT_MS,
+        tcp_user_timeout_ms: TCP_USER_TIMEOUT_MS,
         ..yb.clone()
     }
 }
@@ -82,8 +103,12 @@ fn bounded(yb: &YbConnConfig) -> YbConnConfig {
 /// deterministic failure — an unparseable document — is handled outside the
 /// retry, since repeating it only delays the same error.
 ///
-/// A fresh client per attempt, deliberately: this runs once at boot and never
-/// again, and reconnecting is most of what makes a retry worth taking.
+/// A fresh client per attempt, deliberately: reconnecting is most of what makes
+/// a retry worth taking, and this is not on a hot path.
+///
+/// Called on the boot path, before any daemon starts — which is why every bound
+/// in [`bounded`] matters: an unbounded read here is an endpoint that never
+/// comes up, with nothing listening for a probe to fail against.
 pub fn fetch(yb: &YbConnConfig, endpoint_id: &str) -> Result<Option<Overrides>> {
     let yb = bounded(yb);
     let id = endpoint_id.trim().to_string();
@@ -133,6 +158,7 @@ pub fn parse(stdout: &str) -> Result<Option<Overrides>> {
     for (surface, dest) in [
         ("pageserver", &mut out.pageserver),
         ("safekeeper", &mut out.safekeeper),
+        ("write_token", &mut out.write_token),
     ] {
         if let Some(map) = doc.get(surface).and_then(Value::as_object) {
             for (k, v) in map {
@@ -197,6 +223,18 @@ mod tests {
             QUERY.contains("LEFT JOIN amp_registry.branches b"),
             "{QUERY}"
         );
+    }
+
+    /// A database that has not re-run `0002` has no `write_token_settings`, and
+    /// naming a missing column would fail the whole read — taking the daemon and
+    /// pg overrides with it, on every endpoint, over a key that is merely unset.
+    #[test]
+    fn the_lease_settings_survive_a_database_without_the_column() {
+        assert!(
+            QUERY.contains("to_jsonb(b) -> 'write_token_settings'"),
+            "{QUERY}"
+        );
+        assert!(!QUERY.contains("b.write_token_settings"), "{QUERY}");
     }
 
     /// The id is bound, not interpolated — which is what makes it impossible

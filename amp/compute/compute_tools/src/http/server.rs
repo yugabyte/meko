@@ -79,9 +79,7 @@ impl From<&Server> for Router<Arc<ComputeNode>> {
                 router
             }
             Server::External {
-                config,
-                compute_id,
-                ..
+                config, compute_id, ..
             } => {
                 let unauthenticated_router = Router::<Arc<ComputeNode>>::new()
                     .route("/metrics", get(metrics::get_metrics))

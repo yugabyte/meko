@@ -18,17 +18,61 @@
 //! in this binary's dependency graph through `pageserver_api`, and every other
 //! read this binary makes against YugabyteDB goes through the same client.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use utils::write_fence::{
-    DEFAULT_TOKEN_TTL, TokenGrant, TokenStore, WriteToken, branch_resource_id, token_remaining,
+    DEFAULT_TOKEN_TTL, MAX_TOKEN_TTL, TokenGrant, TokenStore, WriteToken, branch_resource_id,
+    token_remaining,
 };
 
 /// How long a connect to the token store may take. No lease is held yet, so
 /// this cannot be derived from one.
 const CONNECT_BUDGET: Duration = Duration::from_secs(15);
+
+/// Bounds on the lease connection itself, tighter than the client's defaults
+/// because a renewal has a deadline nothing else here has: miss enough of them
+/// and the endpoint stops writing.
+///
+/// - `statement_timeout` bounds a live-but-slow YB. `token_acquire` is one
+///   indexed upsert, so a second is already generous; failing fast and retrying
+///   inside the TTL beats one long wait that spends it.
+/// - `TCP_USER_TIMEOUT` bounds a YB that is not there at all. A tserver whose
+///   node dies without closing its sockets sends no FIN and no RST: the
+///   statement bound never fires, because nothing is left to fire it, and the
+///   connection looks open. Without this the kernel waits on its keepalive
+///   idle, which the driver leaves at two hours, and every renewal until the
+///   lease runs out goes to the same dead socket.
+/// - `connect_timeout` bounds the reconnect that follows.
+///
+/// All three are what make a dead node cost a retry rather than the endpoint.
+/// Only the detection is actually spent on one: `run_with_retries` reconnects
+/// inside the same call, and both that connect and the retried statement go to
+/// a live node. Summing the three describes a sick replacement instead, which
+/// is a cluster-wide outage rather than the failure these are sized for.
+/// How often the lease is renewed, absent `WRITE_TOKEN_RENEW_SECONDS`.
+///
+/// A third of the TTL, so two renewals can fail outright before anything stops
+/// writing — the margin #813 did not have. Named rather than inline because the
+/// bounds below are sized against it, and a test that pinned a fixture instead
+/// of this would pass while the real budget stopped adding up.
+pub const DEFAULT_RENEW_SECONDS: u64 = 5;
+
+const LEASE_STATEMENT_TIMEOUT_MS: u64 = 2_000;
+const LEASE_TCP_USER_TIMEOUT_MS: u64 = 3_000;
+const LEASE_CONNECT_TIMEOUT_MS: u64 = 3_000;
+
+/// The token store's connection: the endpoint's own, bounded for renewal.
+fn lease_conn(yb: &ysql_client::YbConnConfig) -> ysql_client::YbConnConfig {
+    ysql_client::YbConnConfig {
+        statement_timeout_ms: LEASE_STATEMENT_TIMEOUT_MS,
+        tcp_user_timeout_ms: LEASE_TCP_USER_TIMEOUT_MS,
+        connect_timeout_ms: LEASE_CONNECT_TIMEOUT_MS,
+        ..yb.clone()
+    }
+}
 
 /// Set once the lease is gone. The renewal thread cannot reach the `Supervisor`
 /// — it belongs to the main thread — so it raises this and the monitor loop
@@ -59,6 +103,122 @@ pub fn set_current_for_test(token: Option<WriteToken>) {
 #[cfg(test)]
 pub fn set_lost_for_test(lost: bool) {
     LOST.store(lost, Ordering::Relaxed);
+}
+
+/// The lease timings in force right now, in milliseconds.
+///
+/// Seeded from the environment and then, once the registry has been read, from
+/// the branch's `write_token_settings` — which is why they are not simply the
+/// `Config` the environment produced.
+///
+/// Read on each use rather than captured, so the branch's values apply to the
+/// first token taken rather than only to a later one: the renewal loop takes the
+/// interval at the top of every tick, and `acquire` takes the TTL per call.
+/// Seeded with the defaults rather than zero, so anything that reads them
+/// before `Config::from_env` has run gets the lease this binary would take
+/// rather than "no lease at all".
+static TTL_MS: AtomicU64 = AtomicU64::new(DEFAULT_TOKEN_TTL.as_millis() as u64);
+static RENEW_MS: AtomicU64 = AtomicU64::new(DEFAULT_RENEW_SECONDS * 1_000);
+
+/// Serializes the tests that retune the live timings against each other.
+///
+/// They are process-wide, so a test that changes them changes them for every
+/// test running in parallel — the same shape of bug as the fence flag in #805.
+#[cfg(test)]
+pub(crate) fn timings_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Put the timings back to what this binary starts with.
+#[cfg(test)]
+pub(crate) fn reset_timings_for_test() {
+    TTL_MS.store(DEFAULT_TOKEN_TTL.as_millis() as u64, Ordering::Relaxed);
+    RENEW_MS.store(DEFAULT_RENEW_SECONDS * 1_000, Ordering::Relaxed);
+}
+
+/// The lease timings a token would be taken with now.
+pub fn timings() -> (Duration, Duration) {
+    (
+        Duration::from_millis(TTL_MS.load(Ordering::Relaxed)),
+        Duration::from_millis(RENEW_MS.load(Ordering::Relaxed)),
+    )
+}
+
+/// Set the lease timings. Rejected as a pair, so a half-applied change can never
+/// leave the renewal interval outside the lease it renews.
+///
+/// A TTL set after a token is held applies to the next one taken; the one
+/// already held keeps the deadline it was granted with, since the daemons were
+/// pushed that value and enforce it against their own clocks.
+pub fn set_timings(ttl: Duration, renew_every: Duration) -> Result<()> {
+    validate_timings(ttl, renew_every)?;
+    // TTL first: the renewal loop reads the interval at the top of a tick, so
+    // ordering it this way means a tick that races this call cannot take the
+    // new interval against the old TTL.
+    TTL_MS.store(ttl.as_millis() as u64, Ordering::Relaxed);
+    RENEW_MS.store(renew_every.as_millis() as u64, Ordering::Relaxed);
+    tracing::info!(
+        ttl_ms = ttl.as_millis() as u64,
+        renew_ms = renew_every.as_millis() as u64,
+        "write token: lease timings changed"
+    );
+    Ok(())
+}
+
+/// Apply the branch's `write_token_settings` to the live timings.
+///
+/// Absent keys keep what is in force, so a row naming only `ttl_ms` does not
+/// silently reset the interval to a default nobody asked for. The resulting
+/// pair still has to be legal together, and an illegal one is refused whole — a
+/// registry row is not a reason to run a lease that expires before anything
+/// renews it.
+///
+/// Returns whether anything changed, so a caller polling this can log a retune
+/// without logging every poll.
+pub fn apply_overrides(settings: &BTreeMap<String, crate::config::OverrideValue>) -> Result<bool> {
+    let (live_ttl, live_renew) = timings();
+    let (mut ttl, mut renew) = (live_ttl, live_renew);
+    for (key, value) in settings {
+        match (key.as_str(), value) {
+            ("ttl_ms", crate::config::OverrideValue::Int(n)) if *n > 0 => {
+                ttl = Duration::from_millis(*n as u64);
+            }
+            ("renew_seconds", crate::config::OverrideValue::Int(n)) if *n > 0 => {
+                renew = Duration::from_secs(*n as u64);
+            }
+            (k, v) => tracing::warn!(
+                key = %k,
+                "ignoring write_token setting: want ttl_ms / renew_seconds as positive \
+                 integers, got {v:?}"
+            ),
+        }
+    }
+    if (ttl, renew) == (live_ttl, live_renew) {
+        return Ok(false);
+    }
+    set_timings(ttl, renew)?;
+    Ok(true)
+}
+
+/// The one rule both the startup read and a runtime change have to satisfy.
+fn validate_timings(ttl: Duration, renew_every: Duration) -> Result<()> {
+    if ttl.is_zero() || ttl > MAX_TOKEN_TTL {
+        bail!(
+            "lease TTL {ttl:?} must be in (0, {MAX_TOKEN_TTL:?}] — the bound `token_acquire` \
+             itself enforces, so anything past it is refused by the store rather than by us"
+        );
+    }
+    if renew_every.is_zero() {
+        bail!("renewal interval must be non-zero, or the renewal loop would spin");
+    }
+    if renew_every >= ttl {
+        bail!(
+            "renewal interval {renew_every:?} must be under the lease TTL {ttl:?}: renewing no \
+             sooner than the lease expires leaves no slack to retry a failed renewal in"
+        );
+    }
+    Ok(())
 }
 
 /// Set when a caller needs the lease renewed now rather than at the next tick.
@@ -159,15 +319,14 @@ impl Config {
             Some(ms) => Duration::from_millis(ms),
             None => DEFAULT_TOKEN_TTL,
         };
-        let renew_every =
-            Duration::from_secs(crate::env_u64("WRITE_TOKEN_RENEW_SECONDS")?.unwrap_or(8));
-        if renew_every >= ttl {
-            bail!(
-                "WRITE_TOKEN_RENEW_SECONDS ({renew_every:?}) must be under WRITE_TOKEN_TTL_MS \
-                 ({ttl:?}): renewing no sooner than the lease expires leaves no slack to retry \
-                 a failed renewal in"
-            );
-        }
+        let renew_every = Duration::from_secs(
+            crate::env_u64("WRITE_TOKEN_RENEW_SECONDS")?.unwrap_or(DEFAULT_RENEW_SECONDS),
+        );
+        validate_timings(ttl, renew_every)
+            .context("WRITE_TOKEN_TTL_MS / WRITE_TOKEN_RENEW_SECONDS are not a usable pair")?;
+        // The startup values are also the first live ones.
+        TTL_MS.store(ttl.as_millis() as u64, Ordering::Relaxed);
+        RENEW_MS.store(renew_every.as_millis() as u64, Ordering::Relaxed);
         Ok(Self {
             required: crate::env_bool_or("REQUIRE_WRITE_TOKEN", true),
             ttl,
@@ -229,7 +388,7 @@ impl Fence {
         let store = rt.block_on(async {
             tokio::time::timeout(
                 CONNECT_BUDGET,
-                TokenStore::connect(yb, "endpoint-supervisor"),
+                TokenStore::connect(&lease_conn(yb), "endpoint-supervisor"),
             )
             .await
             .map_err(|_| {
@@ -341,12 +500,13 @@ impl Fence {
 
     /// The longest a single store call may take.
     ///
-    /// `YsqlClient` sets neither a connect nor a statement timeout, so a YB that
-    /// accepts the connection and then never answers would hang this call
-    /// forever — and an unbounded `renew` never reaches the branch that gives
-    /// the lease up, so the supervisor would sit there believing it still held a
-    /// lease that had in fact lapsed. Bounded by what is left on the lease (a
-    /// call cannot usefully outlive the thing it renews), with a floor so the
+    /// The backstop under [`lease_conn`]'s bounds, not a substitute for them: it
+    /// is one timeout around the whole call, so it cannot tell a slow answer
+    /// from a dead socket and leaves the connection to be reused either way.
+    /// What it guarantees is that `renew` always reaches the branch that gives
+    /// the lease up — an unbounded one would leave the supervisor believing it
+    /// still held a lease that had lapsed. Bounded by what is left on the lease
+    /// (a call cannot usefully outlive the thing it renews), with a floor so the
     /// paths that hold no token still get a real attempt.
     fn call_budget(&self) -> Duration {
         self.remaining().max(Duration::from_secs(5))
@@ -358,7 +518,7 @@ impl Fence {
             tokio::time::timeout(
                 budget,
                 self.store
-                    .acquire(&self.resource, &self.cfg.client_id, self.cfg.ttl),
+                    .acquire(&self.resource, &self.cfg.client_id, timings().0),
             )
             .await
             .map_err(|_| anyhow::anyhow!("token_acquire did not answer within {budget:?}"))?
@@ -451,9 +611,10 @@ fn renewal_sleep(total: Duration) {
 pub fn spawn_renewals(mut fence: Fence) -> std::thread::JoinHandle<Fence> {
     STOP_RENEWALS.store(false, Ordering::Relaxed);
     std::thread::spawn(move || {
-        let every = fence.cfg.renew_every;
         while !crate::supervise::shutdown_requested() && !STOP_RENEWALS.load(Ordering::Relaxed) {
-            renewal_sleep(every);
+            // Per tick, not captured once: that is what makes a retune apply
+            // without a restart.
+            renewal_sleep(timings().1);
             if crate::supervise::shutdown_requested() || STOP_RENEWALS.load(Ordering::Relaxed) {
                 break;
             }
@@ -475,7 +636,7 @@ mod tests {
         Config {
             required: true,
             ttl: DEFAULT_TOKEN_TTL,
-            renew_every: Duration::from_secs(8),
+            renew_every: Duration::from_secs(DEFAULT_RENEW_SECONDS),
             client_id: "test-client".into(),
         }
     }
@@ -508,10 +669,14 @@ mod tests {
                 }
             }
         }
-        let err = got
-            .expect_err("a renewal at the TTL must be refused")
-            .to_string();
+        // `{:#}` for the chain: `from_env` names the env vars, and the rule it
+        // broke is in the cause underneath.
+        let err = format!(
+            "{:#}",
+            got.expect_err("a renewal at the TTL must be refused")
+        );
         assert!(err.contains("must be under"), "{err}");
+        assert!(err.contains("WRITE_TOKEN_RENEW_SECONDS"), "{err}");
     }
 
     /// A YB that accepts the connection and then never answers must not hang the
@@ -549,6 +714,78 @@ mod tests {
             "call was not bounded: took {:?}",
             started.elapsed()
         );
+    }
+
+    /// A renewal has to fail faster than the lease it renews, on every axis.
+    /// Any of these exceeding the TTL means one stalled call spends the whole
+    /// lease and the endpoint fences itself out over a single node.
+    #[test]
+    fn the_lease_connection_fails_faster_than_the_lease() {
+        let yb: ysql_client::YbConnConfig =
+            toml_edit::de::from_str("host_ports = \"h:5433\"\nuser = \"u\"\ndbname = \"d\"\n")
+                .unwrap();
+        let c = lease_conn(&yb);
+
+        let ttl = DEFAULT_TOKEN_TTL.as_millis() as u64;
+        for (what, ms) in [
+            ("statement", c.statement_timeout_ms),
+            ("tcp_user", c.tcp_user_timeout_ms),
+            ("connect", c.connect_timeout_ms),
+        ] {
+            // Zero is "no bound" for all three, which is the state the client
+            // defaults to and the one a renewal must never inherit.
+            assert_ne!(ms, 0, "{what} bound is off");
+            assert!(ms < ttl, "{what} bound {ms}ms is not under the {ttl}ms TTL");
+        }
+        // Detection is what a dead node actually costs, and it has to fit in the
+        // slack between a renewal starting and the lease expiring. What follows
+        // it does not: `run_with_retries` reconnects inside the same call, and
+        // that connect and the retried statement land on a live node, so they
+        // take milliseconds rather than their ceilings. Those ceilings bind only
+        // when the replacement is sick too — a cluster-wide outage, where the
+        // endpoint is going down whatever these numbers say.
+        //
+        // Against the production default rather than the fixture: a fixture
+        // would let this pass while the real budget stopped adding up.
+        let slack = (DEFAULT_TOKEN_TTL.as_millis() as u64) - DEFAULT_RENEW_SECONDS * 1_000;
+        assert!(
+            c.tcp_user_timeout_ms < slack,
+            "detecting a dead node ({}ms) outlasts the {slack}ms a renewal has \
+             before the lease expires",
+            c.tcp_user_timeout_ms
+        );
+        // The rest of the connection block is the operator's.
+        assert_eq!(c.host_ports.to_string(), "h:5433");
+    }
+
+    /// The pair is validated as a pair. A renewal interval at or past the TTL
+    /// means the lease expires before anything tries to renew it, which is the
+    /// endpoint fencing itself out on a timer.
+    #[test]
+    fn a_retune_cannot_put_the_interval_outside_the_lease() {
+        let _live = timings_lock();
+        let ten = Duration::from_secs(10);
+        assert!(set_timings(ten, Duration::from_secs(5)).is_ok());
+        assert_eq!(timings(), (ten, Duration::from_secs(5)));
+
+        for (ttl, renew) in [
+            (ten, ten),                               // equal
+            (ten, Duration::from_secs(11)),           // past it
+            (ten, Duration::ZERO),                    // would spin
+            (Duration::ZERO, Duration::from_secs(1)), // no lease at all
+            (
+                MAX_TOKEN_TTL + Duration::from_secs(1),
+                Duration::from_secs(5),
+            ), // store refuses it
+        ] {
+            assert!(
+                set_timings(ttl, renew).is_err(),
+                "accepted ttl={ttl:?} renew={renew:?}"
+            );
+        }
+        // Every rejection left the working pair in place.
+        assert_eq!(timings(), (ten, Duration::from_secs(5)));
+        reset_timings_for_test();
     }
 
     /// The default id must differ between two processes on the same pod, or two

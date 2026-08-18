@@ -684,6 +684,26 @@ fn render_config(env: &Env, fence_cfg: &fence::Config) -> Result<()> {
 
     let overrides = fetch_overrides(env);
 
+    // The branch's lease timings, before the fence takes a token with them.
+    // `render_config` runs ahead of the acquire, so this is the one read that
+    // already has them — the alternative is a second registry round trip on the
+    // boot path to fetch what we are holding.
+    match fence::apply_overrides(&overrides.write_token) {
+        Ok(true) => {
+            let (ttl, renew) = fence::timings();
+            tracing::info!(
+                ttl_ms = ttl.as_millis() as u64,
+                renew_ms = renew.as_millis() as u64,
+                "write token: branch settings applied"
+            );
+        }
+        Ok(false) => {}
+        // Not fatal, for the same reason the rest of this read is not: an
+        // endpoint that cannot use the branch's settings must still come up on
+        // the ones it was started with.
+        Err(e) => tracing::warn!("write token: ignoring the branch's lease settings: {e:#}"),
+    }
+
     let scale = res
         .vcpu
         .map(|v| ("scale_factor", toml_edit::Value::from(v)));

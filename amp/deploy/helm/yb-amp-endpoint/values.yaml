@@ -138,12 +138,15 @@ supervisor:
   requireWriteToken: true
   # -- Lease length in milliseconds. The token is a deadline the safekeeper
   # enforces against its own clock, so this bounds how long a stranded endpoint
-  # can keep writing.
-  writeTokenTtlMs: 10000
+  # can keep writing. Sized against a late renewal rather than a healthy one:
+  # at 10000 with 8s renewals the margin was ~2s, and a routine load spike
+  # overshot it by 45ms and killed the safekeeper (#813).
+  writeTokenTtlMs: 15000
   # -- How often to renew, in seconds. Must leave slack under the TTL: the
   # difference is how long a failing renewal may be retried before anything
-  # downstream stops writing.
-  writeTokenRenewSeconds: 8
+  # downstream stops writing. At 5s against a 15s TTL two renewals can fail
+  # outright before the lease is spent.
+  writeTokenRenewSeconds: 5
 
 # Metrics: expose the compute's Postgres stats for the amp metrics pipeline
 # (controller/architecture/ac-metrics.md). The Neon-derived services in this pod
