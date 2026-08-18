@@ -89,8 +89,13 @@ func init() {
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Resize a read_only-role endpoint and assert it takes the new reservation the same way a read_write endpoint does.",
-		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
-		Run:         runAmpEndpointResizeReadOnly,
+		// Read replicas are not supported yet, so the endpoint this resizes
+		// cannot come up: it queues for the branch's write token, which the
+		// read_write endpoint holds, and its liveness probe restarts it until
+		// the test's budget runs out (meko#833). Drop this field with that fix.
+		Skip:   "read replicas are not supported yet: a read_only endpoint blocks on the branch write token and never becomes ready (meko#833)",
+		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
+		Run:    runAmpEndpointResizeReadOnly,
 	})
 }
 
