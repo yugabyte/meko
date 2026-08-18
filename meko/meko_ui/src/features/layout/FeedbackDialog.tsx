@@ -29,11 +29,14 @@ import {
   type FeedbackCategory,
 } from "@/lib/api/mekoApi";
 
+// Keys mirror the FeedbackCategory union derived from
+// FEEDBACK_CATEGORIES; a missing or renamed key here is a
+// Record<FeedbackCategory, string> type error.
 const CATEGORY_LABEL: Record<FeedbackCategory, string> = {
   bug: "Bug",
   confusion: "Confusion",
   feature_request: "Feature",
-  other: "Other",
+  Other: "Other",
 };
 
 const MAX_FEEDBACK_LENGTH = 2000;

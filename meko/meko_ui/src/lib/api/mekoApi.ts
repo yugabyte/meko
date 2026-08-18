@@ -2056,7 +2056,7 @@ export async function deleteMemory(
 // --- Feedback (POST /feedback) ---
 
 /** Allowed values for `category` — must match `meko_system.feedback_category`. */
-export const FEEDBACK_CATEGORIES = ["bug", "confusion", "feature_request", "other"] as const;
+export const FEEDBACK_CATEGORIES = ["bug", "confusion", "feature_request", "Other"] as const;
 export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number];
 
 /** Allowed values for `source` — must match `meko_system.feedback_source`. */

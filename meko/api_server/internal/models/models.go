@@ -209,9 +209,16 @@ func ValidFeedbackSource(s string) bool {
 }
 
 // ValidFeedbackCategory reports whether s is a meko_system.feedback_category value.
+// "Other" is capitalised on purpose: the enum on dev / prod still carries
+// the original 'Other' label from the initial 000002_meko_feedback
+// migration (an in-place edit to 'other' in a later commit only affected
+// installs that ran the migration after that point). The FE ships the
+// capitalised wire value (see FEEDBACK_CATEGORIES in
+// meko_ui/src/lib/api/mekoApi.ts); this validator must match, otherwise
+// legitimate submissions get rejected here before reaching the DB.
 func ValidFeedbackCategory(s string) bool {
 	switch s {
-	case "bug", "confusion", "feature_request", "other":
+	case "bug", "confusion", "feature_request", "Other":
 		return true
 	}
 	return false

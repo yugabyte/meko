@@ -155,7 +155,7 @@ func validateCreateFeedback(req *models.CreateFeedbackRequest, account *models.A
 		return fmt.Errorf("category is required")
 	}
 	if !models.ValidFeedbackCategory(strings.TrimSpace(req.Category)) {
-		return fmt.Errorf("category must be one of: bug, confusion, feature_request, other")
+		return fmt.Errorf("category must be one of: bug, confusion, feature_request, Other")
 	}
 
 	if strings.TrimSpace(req.UserID) == "" {
