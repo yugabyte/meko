@@ -2,11 +2,14 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::Context;
+use bytes::Bytes;
 use hex::FromHex;
 use rand::Rng;
 use serde::de::Visitor;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
+use ysql_client::tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 
 #[derive(Error, Debug)]
 pub enum IdError {
@@ -275,6 +278,65 @@ pub struct BranchId(Id);
 
 id_newtype!(BranchId);
 
+/// `branch_id` is `uuid` in every table that has one, so a `BranchId` binds and
+/// reads back as itself: `&branch_id` in a params array, `row.try_get::<_,
+/// BranchId>(i)` on the way out. That is the point of these impls — a rendering
+/// step at each call site is a step each site can get wrong, and a `String` there
+/// compiles against any column and fails only when the statement runs.
+///
+/// The thin-client lane is not Postgres and keeps binding the raw bytes
+/// ([`BranchId::to_bytes`]).
+impl ToSql for BranchId {
+    fn to_sql(
+        &self,
+        ty: &Type,
+        out: &mut bytes::BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        self.to_uuid().to_sql(ty, out)
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        <Uuid as ToSql>::accepts(ty)
+    }
+
+    to_sql_checked!();
+}
+
+impl<'a> FromSql<'a> for BranchId {
+    fn from_sql(
+        ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self::from_uuid(Uuid::from_sql(ty, raw)?))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        <Uuid as FromSql>::accepts(ty)
+    }
+}
+
+impl BranchId {
+    /// The id as the `uuid` every `branch_id` column holds — `amp_registry`
+    /// and `amp_storage` alike. Prefer binding the `BranchId` itself; this is for
+    /// the places that need the uuid on its own.
+    pub fn to_uuid(self) -> Uuid {
+        Uuid::from_bytes(self.as_arr())
+    }
+
+    /// Inverse of [`Self::to_uuid`]. Total — every 16-byte value is a
+    /// BranchId — so reading one back cannot fail.
+    pub fn from_uuid(id: Uuid) -> Self {
+        Self::from(*id.as_bytes())
+    }
+
+    /// The same 16 bytes, for the thin-client lane: the shim reports a
+    /// column's bind type from its DocDB type, and DocDB types `uuid`
+    /// exactly as `bytea` (binary), so a `uuid` column binds as bytes.
+    pub fn to_bytes(self) -> Bytes {
+        Bytes::copy_from_slice(&self.as_arr())
+    }
+}
+
 impl TryFrom<Option<&str>> for BranchId {
     type Error = anyhow::Error;
 
@@ -295,6 +357,29 @@ mod tests {
 
     use super::*;
     use crate::bin_ser::BeSer;
+
+    /// The flat 32-hex spelling (`Display` — what the API, the daemons' args
+    /// and `BRANCH_ID` carry) and the `uuid` every `branch_id` column holds are
+    /// the same 16 bytes in the same order. Everything in the storage layer
+    /// addresses a branch through one or the other, so a byte-order slip here
+    /// would point every query at a row that does not exist.
+    #[test]
+    fn branch_id_spellings_agree() {
+        let id = BranchId::from_array([
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ]);
+        assert_eq!(id.to_string(), "00112233445566778899aabbccddeeff");
+        assert_eq!(id.to_uuid().simple().to_string(), id.to_string());
+        assert_eq!(id.to_bytes().as_ref(), id.to_uuid().as_bytes());
+        assert_eq!(BranchId::from_uuid(id.to_uuid()), id);
+        // The uuid a column holds maps back to this id, whatever spelling it was
+        // written or printed in.
+        assert_eq!(
+            BranchId::from_uuid(Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap()),
+            id
+        );
+    }
 
     #[test]
     fn test_id_serde_non_human_readable() {

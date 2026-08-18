@@ -3552,6 +3552,7 @@ dependencies = [
  "postgres-protocol 0.6.10",
  "serde_core",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

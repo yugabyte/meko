@@ -2,7 +2,6 @@ package registry
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,15 +52,11 @@ func NewStore(pool *db.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// --- branch id rendering ----------------------------------------------------
+// --- branch id parsing ----------------------------------------------------
 
-// branchIDHex is the SQL projection of a branch's uuid as the storage layer's
-// flat BranchId: 32 lowercase hex digits, no dashes. The inverse is ParseBranchID.
-const branchIDHex = `replace(branch_id::text, '-', '')`
-
-// ParseBranchID parses a storage-layer BranchId into the uuid the resource model
-// keys on. It accepts the flat 32-hex form the storage layer uses (and, because
-// uuid.Parse does, the dashed form too).
+// ParseBranchID parses a storage-layer BranchId into the uuid every branch_id
+// column keys on — `amp_registry` and `amp_storage` alike. It accepts the flat
+// 32-hex form the wire uses (and, because uuid.Parse does, the dashed form too).
 //
 // The transform is lossless and total in both directions — a BranchId is 16
 // bytes either way — so there is no mapping to keep and no id that exists in one
@@ -74,11 +69,6 @@ func ParseBranchID(branchID string) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("%w: malformed branch id %q: %w", ErrInvalid, branchID, err)
 	}
 	return id, nil
-}
-
-// FormatBranchID renders a branch uuid as the storage layer's 32-hex BranchId.
-func FormatBranchID(id uuid.UUID) string {
-	return hex.EncodeToString(id[:])
 }
 
 // --- error classification ---------------------------------------------------
@@ -190,8 +180,9 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 	if err != nil {
 		return err
 	}
-	// The ancestor is addressed in the flat rendering on the wire and in
-	// amp_storage; the resource model's parent pointer is a uuid.
+	// One value addresses the ancestor everywhere below — the resource model's
+	// parent pointer and `amp_storage.branch_state.ancestor_branch_id` are both
+	// uuid. Only the wire spells it flat.
 	var ancestorUUID *string
 	if req.AncestorBranchID != nil {
 		anc, err := ParseBranchID(*req.AncestorBranchID)
@@ -362,8 +353,8 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 	// `pg_version` here holds a full PgVersionId, not the major the branch row
 	// carries. This is the column's only writer — both daemons just read it.
 	//
-	// Keyed by the flat branch id: amp_storage is the flat namespace, and it is
-	// deliberately NOT cluster-scoped (the storage layer has no clusters).
+	// Keyed by the same branch uuid the branch row carries, and deliberately NOT
+	// cluster-scoped (the storage layer has no clusters).
 	var ancestorLSN *string
 	if req.AncestorBranchID != nil {
 		ancestorLSN = &req.StartLSN
@@ -371,9 +362,9 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 	stateRow, err := tx.Exec(ctx,
 		`INSERT INTO amp_storage.branch_state
 		   (branch_id, pg_version, ancestor_branch_id, ancestor_lsn)
-		 VALUES ($1, $2, $3, ($4::pg_lsn - '0/0'::pg_lsn)::bigint)
+		 VALUES ($1::uuid, $2, $3::uuid, ($4::pg_lsn - '0/0'::pg_lsn)::bigint)
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		FormatBranchID(id), pgVersion, req.AncestorBranchID, ancestorLSN)
+		id.String(), pgVersion, ancestorUUID, ancestorLSN)
 	if err != nil {
 		return fmt.Errorf("record branch state: %w", err)
 	}
@@ -409,9 +400,9 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 		touched, err := tx.Exec(ctx,
 			`UPDATE amp_storage.branch_state
 			    SET applied_gc_cutoff_lsn = applied_gc_cutoff_lsn
-			  WHERE branch_id = $1
+			  WHERE branch_id = $1::uuid
 			    AND COALESCE(applied_gc_cutoff_lsn, 0) <= ($2::pg_lsn - '0/0'::pg_lsn)::bigint`,
-			*req.AncestorBranchID, req.StartLSN)
+			*ancestorUUID, req.StartLSN)
 		if err != nil {
 			return fmt.Errorf("validate fork point: %w", err)
 		}
@@ -419,8 +410,8 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 			// Rolled back with the txn: the child row above never lands.
 			var exists bool
 			err := tx.QueryRow(ctx,
-				`SELECT true FROM amp_storage.branch_state WHERE branch_id = $1`,
-				*req.AncestorBranchID).Scan(&exists)
+				`SELECT true FROM amp_storage.branch_state WHERE branch_id = $1::uuid`,
+				*ancestorUUID).Scan(&exists)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("%w: fork ancestor %s has no branch_state row",
 					ErrNotFound, *req.AncestorBranchID)

@@ -11,8 +11,6 @@
 -- a set of branches; it does NOT map to any storage object.
 --
 -- ONE branch table and ONE endpoint table, reached through one API (/api/v1).
--- The storage layer renders the same branch id flat (32-hex) rather than as a
--- uuid, but that is a rendering of one identity, not a second registry.
 --
 -- Keys are flat. A branch's `branch_id` IS the storage layer's `BranchId`, a
 -- 128-bit id carried here verbatim as `uuid` and globally unique on its own, so
@@ -88,7 +86,7 @@ CREATE TABLE amp_registry.user_cluster_grants (
 -- A branch is one logical Postgres database's data — what Postgres itself calls a
 -- cluster. `branch_id` is the storage-layer BranchId verbatim
 -- (the flat storage identity) and is globally unique, so it stands alone as the
--- primary key; the storage layer addresses it as `replace(branch_id::text,'-','')`.
+-- primary key; `amp_storage` keys on the same `uuid` value, unconverted.
 -- `cluster_id` is an ordinary scoping column, not part of the identity.
 --
 -- This is also the branch's CREATION RECORD — `name`, `pg_version`,

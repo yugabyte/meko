@@ -12,7 +12,7 @@
 //! ```sql
 //! CREATE TABLE amp_storage.pages (
 //!     bucket_id   SMALLINT NOT NULL,
-//!     branch_id   TEXT     NOT NULL,
+//!     branch_id   uuid     NOT NULL,
 //!     spcnode     BIGINT   NOT NULL,
 //!     dbnode      BIGINT   NOT NULL,
 //!     relnode     BIGINT   NOT NULL,
@@ -526,13 +526,13 @@ fn int_bind_thin(col: &yb_thin_client::Column, v: i64) -> yb_thin_client::BindVa
 /// conds. Callers append their own `blknum`/`lsn` conds and targets.
 fn slru_segment_read(
     slru: &yb_thin_client::TableHandle,
-    branch_s: &str,
+    branch_id: BranchId,
     kind_i: i16,
     segno_i: i64,
 ) -> Result<yb_thin_client::RangeRead> {
     use yb_thin_client::{BindValue, CondOp, RangeRead};
     Ok(
-        RangeRead::new(slru, vec![BindValue::Text(branch_s.to_string())])?
+        RangeRead::new(slru, vec![BindValue::Bytes(branch_id.to_bytes())])?
             .cond(
                 slru,
                 "kind",
@@ -1772,7 +1772,7 @@ impl PageStore {
         let col_rel = pages.col("relnode")?;
         let col_fork = pages.col("forknum")?;
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
-        let branch_s = branch_id.to_string();
+        let branch_b = branch_id.to_bytes();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for (chunk, enc_chunk) in rows
@@ -1795,7 +1795,7 @@ impl PageStore {
                     pages,
                     vec![
                         int_bind_thin(col_bucket, page_bucket_id(rel, blk) as i64),
-                        BindValue::Text(branch_s.clone()),
+                        BindValue::Bytes(branch_b.clone()),
                         int_bind_thin(col_spc, sp),
                         int_bind_thin(col_db, db),
                         int_bind_thin(col_rel, rel),
@@ -1865,7 +1865,6 @@ impl PageStore {
         target_lsn: Lsn,
     ) -> Result<Vec<Arc<PageRow>>> {
         let (sp, db, rel, fork, blk) = key_columns(&Key::from_slice(key))?;
-        let branch_s = branch_id.to_string();
         let target = target_lsn.0 as i64;
 
         // branch_id stays bound ($1), NOT baked: lineage reads call
@@ -1880,7 +1879,7 @@ impl PageStore {
         if let Some(p) = &self.thinclient {
             let started = std::time::Instant::now();
             let chain = self
-                .read_chain_thin(p, &branch_s, sp, db, rel, fork, blk, target)
+                .read_chain_thin(p, branch_id, sp, db, rel, fork, blk, target)
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["read_chain", "yb_thin_client"])
@@ -1896,7 +1895,7 @@ impl PageStore {
             .ysql_client
             .query(
                 &sql,
-                &[&branch_s, &sp, &db, &rel, &fork, &blk, &target, &bucket],
+                &[&branch_id, &sp, &db, &rel, &fork, &blk, &target, &bucket],
             )
             .await
             .context("read_chain")?;
@@ -1922,7 +1921,7 @@ impl PageStore {
     async fn read_chain_thin(
         &self,
         p: &ThinClientTables,
-        branch_s: &str,
+        branch_id: BranchId,
         sp: i64,
         db: i64,
         rel: i64,
@@ -1941,7 +1940,7 @@ impl PageStore {
             pages,
             vec![
                 int_bind_thin(pages.col("bucket_id")?, page_bucket_id(rel, blk) as i64),
-                BindValue::Text(branch_s.to_string()),
+                BindValue::Bytes(branch_id.to_bytes()),
                 int_bind_thin(pages.col("spcnode")?, sp),
                 int_bind_thin(pages.col("dbnode")?, db),
                 int_bind_thin(pages.col("relnode")?, rel),
@@ -1962,7 +1961,7 @@ impl PageStore {
     async fn scan_one_fork_thin(
         &self,
         p: &ThinClientTables,
-        branch_s: &str,
+        branch_id: BranchId,
         sp: i64,
         db: i64,
         rel: i64,
@@ -1984,13 +1983,14 @@ impl PageStore {
             return Ok(HashMap::new());
         }
         let mut reads: Vec<RangeRead> = Vec::with_capacity(buckets.len());
+        let branch_b = branch_id.to_bytes();
         for &bucket in &buckets {
             reads.push(
                 RangeRead::new_range(
                     pages,
                     vec![
                         int_bind_thin(pages.col("bucket_id")?, bucket as i64),
-                        BindValue::Text(branch_s.to_string()),
+                        BindValue::Bytes(branch_b.clone()),
                         int_bind_thin(pages.col("spcnode")?, sp),
                         int_bind_thin(pages.col("dbnode")?, db),
                         int_bind_thin(pages.col("relnode")?, rel),
@@ -2169,7 +2169,6 @@ impl PageStore {
 
         // branch_id stays bound ($1), NOT baked — same lineage
         // reason as `read_chain` (ancestor timelines hit this path).
-        let branch_s = branch_id.to_string();
         let target = target_lsn.0 as i64;
 
         // Per-block image anchor via CTE: for each block in the range,
@@ -2188,7 +2187,7 @@ impl PageStore {
             if let Some(p) = &self.thinclient {
                 let started = std::time::Instant::now();
                 let by_key = self
-                    .scan_one_fork_thin(p, &branch_s, sp, db, rel, fork, blk_lo, blk_hi, target)
+                    .scan_one_fork_thin(p, branch_id, sp, db, rel, fork, blk_lo, blk_hi, target)
                     .await?;
                 crate::metrics::YB_STORE_OP_SECONDS
                     .with_label_values(&["scan_range", "yb_thin_client"])
@@ -2216,7 +2215,7 @@ impl PageStore {
                     .query(
                         &sql,
                         &[
-                            &branch_s, &sp, &db, &rel, &fork, &blk_lo, &blk_hi, &target, &bucket,
+                            &branch_id, &sp, &db, &rel, &fork, &blk_lo, &blk_hi, &target, &bucket,
                         ],
                     )
                     .await
@@ -2255,7 +2254,7 @@ impl PageStore {
                     .query(
                         &sql,
                         &[
-                            &branch_s, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi, &db_hi,
+                            &branch_id, &sp_lo, &db_lo, &rel_lo, &fork_lo, &blk_lo, &sp_hi, &db_hi,
                             &rel_hi, &fork_hi, &blk_hi, &target, &bucket,
                         ],
                     )
@@ -2307,7 +2306,6 @@ impl PageStore {
 
         // branch_id stays bound ($1), NOT baked — same lineage reason
         // as `read_chain`/`scan_range` (ancestor timelines hit this).
-        let branch_s = branch_id.to_string();
         let target = target_lsn.0 as i64;
         let sql = build_scan_one_fork_scattered_sql(&self.schema);
         // Partition the blknums by bucket and send each group to its own
@@ -2329,7 +2327,7 @@ impl PageStore {
                 .ysql_client
                 .query(
                     &sql,
-                    &[&branch_s, &sp, &db, &rel, &fork, blks, &target, &bucket],
+                    &[&branch_id, &sp, &db, &rel, &fork, blks, &target, &bucket],
                 )
                 .await
                 .context("scan_scattered_set one-fork")?;
@@ -2441,7 +2439,6 @@ impl PageStore {
         blknum: u32,
         target_lsn: Lsn,
     ) -> Result<Vec<SlruPageRow>> {
-        let branch_s = branch_id.to_string();
         let kind_i = slru_kind_to_i16(kind);
         let segno_i = segno as i64;
         let blk_i = blknum as i64;
@@ -2450,7 +2447,7 @@ impl PageStore {
         if let Some(p) = &self.thinclient {
             let started = std::time::Instant::now();
             let chain = self
-                .read_slru_chain_thin(p, &branch_s, kind, kind_i, segno_i, blk_i, target)
+                .read_slru_chain_thin(p, branch_id, kind, kind_i, segno_i, blk_i, target)
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["read_slru_chain", "yb_thin_client"])
@@ -2479,7 +2476,7 @@ impl PageStore {
         let started = std::time::Instant::now();
         let rows = self
             .ysql_client
-            .query(&sql, &[&branch_s, &kind_i, &segno_i, &blk_i, &target])
+            .query(&sql, &[&branch_id, &kind_i, &segno_i, &blk_i, &target])
             .await
             .context("read_slru_chain")?;
         crate::metrics::YB_STORE_OP_SECONDS
@@ -2505,7 +2502,7 @@ impl PageStore {
     async fn read_slru_chain_thin(
         &self,
         p: &ThinClientTables,
-        branch_s: &str,
+        branch_id: BranchId,
         kind: SlruKind,
         kind_i: i16,
         segno_i: i64,
@@ -2514,7 +2511,7 @@ impl PageStore {
     ) -> Result<Vec<SlruPageRow>> {
         use yb_thin_client::{BindValue, CondOp};
         let slru = &p.slru_pages;
-        let read = slru_segment_read(slru, branch_s, kind_i, segno_i)?
+        let read = slru_segment_read(slru, branch_id, kind_i, segno_i)?
             .cond(slru, "blknum", CondOp::Eq, BindValue::I64(blk_i))?
             .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
             .targets(slru, &["lsn", "is_image", "will_init", "payload"])?
@@ -2535,7 +2532,7 @@ impl PageStore {
     async fn scan_slru_range_thin(
         &self,
         p: &ThinClientTables,
-        branch_s: &str,
+        branch_id: BranchId,
         kind: SlruKind,
         kind_i: i16,
         segno_i: i64,
@@ -2545,7 +2542,7 @@ impl PageStore {
     ) -> Result<HashMap<u32, Vec<SlruPageRow>>> {
         use yb_thin_client::{BindValue, CondOp};
         let slru = &p.slru_pages;
-        let read = slru_segment_read(slru, branch_s, kind_i, segno_i)?
+        let read = slru_segment_read(slru, branch_id, kind_i, segno_i)?
             .cond(slru, "blknum", CondOp::Ge, BindValue::I64(blk_lo))?
             .cond(slru, "blknum", CondOp::Lt, BindValue::I64(blk_hi))?
             .cond(slru, "lsn", CondOp::Le, BindValue::I64(target))?
@@ -2593,7 +2590,6 @@ impl PageStore {
             return Ok(out);
         }
 
-        let branch_s = branch_id.to_string();
         let kind_i = slru_kind_to_i16(kind);
         let segno_i = segno as i64;
         let blk_lo = blknum_range.start as i64;
@@ -2603,7 +2599,7 @@ impl PageStore {
         if let Some(p) = &self.thinclient {
             let started = std::time::Instant::now();
             let by_block = self
-                .scan_slru_range_thin(p, &branch_s, kind, kind_i, segno_i, blk_lo, blk_hi, target)
+                .scan_slru_range_thin(p, branch_id, kind, kind_i, segno_i, blk_lo, blk_hi, target)
                 .await?;
             crate::metrics::YB_STORE_OP_SECONDS
                 .with_label_values(&["scan_slru_range", "yb_thin_client"])
@@ -2642,7 +2638,7 @@ impl PageStore {
             .ysql_client
             .query(
                 &sql,
-                &[&branch_s, &kind_i, &segno_i, &blk_lo, &blk_hi, &target],
+                &[&branch_id, &kind_i, &segno_i, &blk_lo, &blk_hi, &target],
             )
             .await
             .context("scan_slru_range")?;
@@ -2678,7 +2674,7 @@ impl PageStore {
         let col_kind = slru.col("kind")?;
         let col_segno = slru.col("segno")?;
         let parallelism = pageserver_api::config::scale_count(1, self.scale_factor);
-        let branch_s = branch_id.to_string();
+        let branch_b = branch_id.to_bytes();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for (chunk, enc_chunk) in rows
@@ -2693,7 +2689,7 @@ impl PageStore {
                 batch.push(UpsertRow::new(
                     slru,
                     vec![
-                        BindValue::Text(branch_s.clone()),
+                        BindValue::Bytes(branch_b.clone()),
                         int_bind_thin(col_kind, slru_kind_to_i16(row.kind) as i64),
                         int_bind_thin(col_segno, row.segno as i64),
                         BindValue::I64(row.blknum as i64),
@@ -2749,7 +2745,6 @@ impl PageStore {
 
         let started = std::time::Instant::now();
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
-        let branch_s = branch_id.to_string();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for (chunk, enc_chunk) in rows
@@ -2783,7 +2778,7 @@ impl PageStore {
                         row.key.len()
                     );
                 }
-                params.push(Box::new(branch_s.clone()));
+                params.push(Box::new(branch_id));
                 params.push(Box::new(row.key.to_vec()));
                 params.push(Box::new(row.lsn.0 as i64));
                 params.push(Box::new(enc_chunk[i].to_vec()));
@@ -2836,7 +2831,7 @@ impl PageStore {
         use yb_thin_client::{BindValue, UpsertRow};
         let meta = &p.meta;
         let parallelism = pageserver_api::config::scale_count(2, self.scale_factor);
-        let branch_s = branch_id.to_string();
+        let branch_b = branch_id.to_bytes();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for (chunk, enc_chunk) in rows
@@ -2861,7 +2856,7 @@ impl PageStore {
                 batch.push(UpsertRow::new(
                     meta,
                     vec![
-                        BindValue::Text(branch_s.clone()),
+                        BindValue::Bytes(branch_b.clone()),
                         BindValue::Bytes(row.key.clone()),
                         BindValue::I64(row.lsn.0 as i64),
                     ],
@@ -2916,10 +2911,7 @@ impl PageStore {
         );
         let row_opt = self
             .ysql_client
-            .query_opt(
-                &sql,
-                &[&branch_id.to_string(), &key, &(target_lsn.0 as i64)],
-            )
+            .query_opt(&sql, &[&branch_id, &key, &(target_lsn.0 as i64)])
             .await
             .context("read_meta")?;
         crate::metrics::YB_STORE_OP_SECONDS
@@ -2938,7 +2930,7 @@ impl PageStore {
         use yb_thin_client::{BindValue, CondOp, RangeRead};
         let meta = &p.meta;
         // `branch_id` is the whole hash key; `key` is an equality cond.
-        let read = RangeRead::new(meta, vec![BindValue::Text(branch_id.to_string())])?
+        let read = RangeRead::new(meta, vec![BindValue::Bytes(branch_id.to_bytes())])?
             .cond(
                 meta,
                 "key",
@@ -2979,7 +2971,6 @@ impl PageStore {
         range: Range<Key>,
         target_lsn: Lsn,
     ) -> Result<HashMap<Bytes, MetaRow>> {
-        let branch_s = branch_id.to_string();
         let target = target_lsn.0 as i64;
 
         let mut start_bytes = vec![0u8; KEY_SIZE];
@@ -3015,7 +3006,7 @@ impl PageStore {
         );
         let rows = self
             .ysql_client
-            .query(&sql, &[&branch_s, &start_bytes, &end_bytes, &target])
+            .query(&sql, &[&branch_id, &start_bytes, &end_bytes, &target])
             .await
             .context("scan_meta_range")?;
         let mut out = HashMap::with_capacity(rows.len());
@@ -3053,7 +3044,6 @@ impl PageStore {
 
         let started = std::time::Instant::now();
         const COLS: usize = 6;
-        let branch_s = branch_id.to_string();
         // Sequential by design: candidate volume is tiny (a buffered
         // flush is ~one ≤500-row chunk); only the GC action deletes
         // get parallelism (`GC_ACTION_PARALLELISM`, own pool).
@@ -3084,7 +3074,7 @@ impl PageStore {
                     base + 5,
                 ));
                 let bucket = gc_bucket_id(&row.key);
-                params.push(Box::new(branch_s.clone()));
+                params.push(Box::new(branch_id));
                 params.push(Box::new(bucket));
                 params.push(Box::new(row.gc_kind.to_i16()));
                 params.push(Box::new(key_to_bytes(&row.key)));
@@ -3151,7 +3141,7 @@ impl PageStore {
         // Sequential, matching the YSQL lane: candidate volume is a
         // rounding error next to the page writes it trails.
         let parallelism = 1;
-        let branch_s = branch_id.to_string();
+        let branch_b = branch_id.to_bytes();
 
         let mut futs: Vec<futures::future::BoxFuture<'_, Result<()>>> = Vec::new();
         for chunk in rows.chunks(ROWS_PER_INSERT) {
@@ -3160,7 +3150,7 @@ impl PageStore {
                 batch.push(UpsertRow::new(
                     pending_gc,
                     vec![
-                        BindValue::Text(branch_s.clone()),
+                        BindValue::Bytes(branch_b.clone()),
                         int_bind_thin(col_bucket, gc_bucket_id(&row.key) as i64),
                         BindValue::I64(row.due_lsn.0 as i64),
                         BindValue::Bytes(Bytes::from(key_to_bytes(&row.key))),
@@ -3210,7 +3200,6 @@ impl PageStore {
         cutoff: Lsn,
         limit: usize,
     ) -> Result<GcSelectedCandidates> {
-        let branch_s = branch_id.to_string();
         let floor_i = floor.0 as i64;
         let cutoff_i = cutoff.0 as i64;
         let limit_i = limit as i64;
@@ -3246,7 +3235,7 @@ impl PageStore {
 
         let rows = self
             .ysql_client
-            .query(&sql, &[&branch_s, &cutoff_i, &limit_i, &floor_i])
+            .query(&sql, &[&branch_id, &cutoff_i, &limit_i, &floor_i])
             .await
             .context("gc_select_due_candidates")?;
         // Before the malformed filter, so a dropped row still counts (ASC
@@ -3314,7 +3303,6 @@ impl PageStore {
         if trims.is_empty() {
             return Ok(0);
         }
-        let branch_s = branch_id.to_string();
         let floor_i = floor.0 as i64;
         let cutoff_i = cutoff.0 as i64;
         // Bucket by key (bucket_id is the hash of the key); within a bucket,
@@ -3340,7 +3328,7 @@ impl PageStore {
                 .ysql_client
                 .execute(
                     &sql,
-                    &[&branch_s, &bucket, &floor_i, &cutoff_i, &keyb, &kinds],
+                    &[&branch_id, &bucket, &floor_i, &cutoff_i, &keyb, &kinds],
                 )
                 .await
                 .with_context(|| {
@@ -3360,7 +3348,6 @@ impl PageStore {
         if candidates.is_empty() {
             return Ok(0);
         }
-        let branch_s = branch_id.to_string();
         let mut by_bucket: std::collections::HashMap<i32, Vec<&GcDropShrinkCandidateId>> =
             std::collections::HashMap::new();
         for c in candidates {
@@ -3386,7 +3373,7 @@ impl PageStore {
             let n = cs.len();
             removed += self
                 .ysql_client
-                .execute(&sql, &[&branch_s, &bucket, &keyb, &kinds, &due])
+                .execute(&sql, &[&branch_id, &bucket, &keyb, &kinds, &due])
                 .await
                 .with_context(|| {
                     format!(
@@ -3457,7 +3444,6 @@ impl PageStore {
         for &blk in blknums {
             by_bucket[page_bucket_id(relnode, blk) as usize].push(blk);
         }
-        let branch_s = branch_id.to_string();
         let cutoff_i = cutoff.0 as i64;
         let mut deleted = 0u64;
         for (bucket, blks) in by_bucket.iter().enumerate() {
@@ -3470,7 +3456,7 @@ impl PageStore {
                 .execute(
                     &sql,
                     &[
-                        &branch_s, &spcnode, &dbnode, &relnode, &forknum, blks, &cutoff_i, &bucket,
+                        &branch_id, &spcnode, &dbnode, &relnode, &forknum, blks, &cutoff_i, &bucket,
                     ],
                 )
                 .await
@@ -3505,7 +3491,7 @@ impl PageStore {
             schema = self.schema
         );
         self.ysql_client
-            .execute(&sql, &[&branch_id.to_string(), &keys, &(due_lsn.0 as i64)])
+            .execute(&sql, &[&branch_id, &keys, &(due_lsn.0 as i64)])
             .await
     }
 
@@ -3528,7 +3514,6 @@ impl PageStore {
         due_lsn: Lsn,
     ) -> Result<u64> {
         self.write_gate("GC drop of an amp_storage.pages fork");
-        let branch_s = branch_id.to_string();
         let due = due_lsn.0 as i64;
         let pages_sql = format!(
             "DELETE FROM \"{schema}\".pages \
@@ -3546,7 +3531,7 @@ impl PageStore {
                 .execute(
                     &pages_sql,
                     &[
-                        &branch_s, &spcnode, &dbnode, &relnode, &forknum, &due, &bucket,
+                        &branch_id, &spcnode, &dbnode, &relnode, &forknum, &due, &bucket,
                     ],
                 )
                 .await
@@ -3591,7 +3576,6 @@ impl PageStore {
         // `blknum >= relsize` has no upper bound — the fork's old length is
         // unknown here — so every bucket can hold matching blocks. Fan out
         // over all of them rather than dropping the leading-column bound.
-        let branch_s = branch_id.to_string();
         let due = due_lsn.0 as i64;
         let mut deleted = 0u64;
         for bucket in 0..PAGE_BUCKETS as i16 {
@@ -3600,7 +3584,7 @@ impl PageStore {
                 .execute(
                     &sql,
                     &[
-                        &branch_s, &spcnode, &dbnode, &relnode, &forknum, &relsize, &due, &bucket,
+                        &branch_id, &spcnode, &dbnode, &relnode, &forknum, &relsize, &due, &bucket,
                     ],
                 )
                 .await
@@ -3649,13 +3633,7 @@ impl PageStore {
         self.ysql_client
             .execute(
                 &sql,
-                &[
-                    &branch_id.to_string(),
-                    &kind,
-                    &segno,
-                    &blknums,
-                    &(cutoff.0 as i64),
-                ],
+                &[&branch_id, &kind, &segno, &blknums, &(cutoff.0 as i64)],
             )
             .await
             .with_context(|| {
@@ -3679,7 +3657,6 @@ impl PageStore {
         due_lsn: Lsn,
     ) -> Result<u64> {
         self.write_gate("GC drop of amp_storage.slru_pages");
-        let branch_s = branch_id.to_string();
         let due = due_lsn.0 as i64;
         let pages_sql = format!(
             "DELETE FROM \"{schema}\".slru_pages \
@@ -3688,7 +3665,7 @@ impl PageStore {
         );
         let deleted = self
             .ysql_client
-            .execute(&pages_sql, &[&branch_s, &kind, &segno, &due])
+            .execute(&pages_sql, &[&branch_id, &kind, &segno, &due])
             .await
             .with_context(|| {
                 format!("gc_act_drop_slru pages branch={branch_id} kind={kind} segno={segno}")
@@ -3731,7 +3708,7 @@ impl PageStore {
             schema = self.schema
         );
         self.ysql_client
-            .execute(&sql, &[&branch_id.to_string(), &keys, &(cutoff.0 as i64)])
+            .execute(&sql, &[&branch_id, &keys, &(cutoff.0 as i64)])
             .await
             .with_context(|| format!("gc_act_trim_meta branch={branch_id} keys={}", keys.len()))
     }
@@ -3792,7 +3769,7 @@ impl PageStore {
         );
         let row = self
             .ysql_client
-            .query_opt(&sql, &[&branch_id.to_string(), &(cutoff.0 as i64)])
+            .query_opt(&sql, &[&branch_id, &(cutoff.0 as i64)])
             .await
             .context("publish_gc_cutoff")?
             .with_context(|| {
@@ -4113,10 +4090,10 @@ impl PageStore {
             .execute(
                 &sql,
                 &[
-                    &row.branch_id.to_string(),
+                    &row.branch_id,
                     &(row.consistent_lsn.0 as i64),
                     &(row.applied_gc_cutoff_lsn.0 as i64),
-                    &row.ancestor_branch_id.map(|id| id.to_string()),
+                    &row.ancestor_branch_id,
                     &row.ancestor_lsn.map(|l| l.0 as i64),
                     &row.initdb_lsn.map(|l| l.0 as i64),
                     &row.prev_record_lsn.map(|l| l.0 as i64),
@@ -4156,7 +4133,7 @@ impl PageStore {
             self.schema
         );
         self.ysql_client
-            .execute(&sql, &[&branch_id.to_string(), &(pg_version as i32)])
+            .execute(&sql, &[&branch_id, &(pg_version as i32)])
             .await
             .context("provision_branch_row_for_test")?;
         Ok(())
@@ -4175,19 +4152,14 @@ impl PageStore {
         );
         let Some(r) = self
             .ysql_client
-            .query_opt(&sql, &[&branch_id.to_string()])
+            .query_opt(&sql, &[&branch_id])
             .await
             .context("get_branch_seed")?
         else {
             return Ok(None);
         };
         let pg_version = r.try_get::<_, i32>(0)? as u32;
-        let ancestor_branch_id: Option<String> = r.try_get(1)?;
-        let ancestor_branch_id = ancestor_branch_id
-            .as_deref()
-            .map(str::parse::<BranchId>)
-            .transpose()
-            .context("get_branch_seed: parse ancestor_branch_id")?;
+        let ancestor_branch_id = r.try_get::<_, Option<BranchId>>(1)?;
         let ancestor_lsn: Option<i64> = r.try_get(2)?;
         Ok(Some(BranchSeed {
             pg_version,
@@ -4206,7 +4178,7 @@ impl PageStore {
         );
         let found = self
             .ysql_client
-            .query_opt(&sql, &[&branch_id.to_string()])
+            .query_opt(&sql, &[&branch_id])
             .await
             .context("branch_state existence probe")?;
         if found.is_none() {
@@ -4242,7 +4214,7 @@ impl PageStore {
         );
         let row = self
             .ysql_client
-            .query_opt(&sql, &[&branch_id.to_string()])
+            .query_opt(&sql, &[&branch_id])
             .await
             .context("get_branch_state")?;
         row.map(row_to_branch_state).transpose()
@@ -4413,10 +4385,7 @@ impl PageStore {
         let prev_i64: Option<i64> = new_prev_record_lsn.map(|l| l.0 as i64);
         let n = self
             .ysql_client
-            .execute(
-                &sql,
-                &[&branch_id.to_string(), &(new_dc_lsn.0 as i64), &prev_i64],
-            )
+            .execute(&sql, &[&branch_id, &(new_dc_lsn.0 as i64), &prev_i64])
             .await
             .context("advance_consistent_lsn")?;
         if n == 0 {
@@ -4978,7 +4947,7 @@ const BRANCH_STATE_COLUMNS: &str = "branch_id, consistent_lsn, \
      pg_version, initdb_lsn, prev_record_lsn";
 
 fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
-    let branch_s: String = r.try_get(0)?;
+    let branch_id: BranchId = r.try_get(0)?;
     let consistent_lsn: i64 = r.try_get(1)?;
     // Nullable on purpose, as defence in depth. `pageserver_initialized` plus
     // the `COALESCE` creation write mean a bootstrapped branch now always has
@@ -4992,20 +4961,17 @@ fn row_to_branch_state(r: tokio_postgres::Row) -> Result<BranchStateRow> {
     // `publish_gc_cutoff` (`GREATEST(applied_gc_cutoff_lsn, …)`, NULL-
     // tolerant) stamps the real value.
     let applied_gc_cutoff_lsn: i64 = r.try_get::<_, Option<i64>>(2)?.unwrap_or(0);
-    let ancestor_tl: Option<String> = r.try_get(3)?;
+    let ancestor_tl: Option<BranchId> = r.try_get(3)?;
     let ancestor_lsn: Option<i64> = r.try_get(4)?;
     let pg_version: i32 = r.try_get(5)?;
     let initdb_lsn: Option<i64> = r.try_get(6)?;
     let prev_record_lsn: Option<i64> = r.try_get(7)?;
 
     Ok(BranchStateRow {
-        branch_id: branch_s.parse().context("parsing branch_id")?,
+        branch_id,
         consistent_lsn: Lsn(consistent_lsn as u64),
         applied_gc_cutoff_lsn: Lsn(applied_gc_cutoff_lsn as u64),
-        ancestor_branch_id: ancestor_tl
-            .map(|s| s.parse::<BranchId>())
-            .transpose()
-            .context("parsing ancestor_branch_id")?,
+        ancestor_branch_id: ancestor_tl,
         ancestor_lsn: ancestor_lsn.map(|l| Lsn(l as u64)),
         pg_version: pg_version as u32,
         initdb_lsn: initdb_lsn.map(|l| Lsn(l as u64)),
@@ -7039,14 +7005,7 @@ mod tests {
                 .ysql_client
                 .query(
                     &sql,
-                    &[
-                        &branch_id.to_string(),
-                        &spcnode,
-                        &dbnode,
-                        &relnode,
-                        &forknum,
-                        &blknum,
-                    ],
+                    &[&branch_id, &spcnode, &dbnode, &relnode, &forknum, &blknum],
                 )
                 .await
                 .context("test_raw_block_versions")?;
@@ -7073,7 +7032,7 @@ mod tests {
             );
             let rows = self
                 .ysql_client
-                .query(&sql, &[&branch_id.to_string(), &kind, &segno, &blknum])
+                .query(&sql, &[&branch_id, &kind, &segno, &blknum])
                 .await
                 .context("test_raw_slru_versions")?;
             Ok(rows
@@ -8229,7 +8188,7 @@ mod tests {
         let delete_sql = format!("DELETE FROM \"{PROD_SCHEMA}\".branch_state WHERE branch_id = $1");
         store
             .ysql_client
-            .execute(&delete_sql, &[&lowest.to_string()])
+            .execute(&delete_sql, &[&lowest])
             .await
             .unwrap();
         let out = store.publish_gc_cutoff(parent, Lsn(105)).await.unwrap();
@@ -8276,8 +8235,8 @@ mod tests {
     /// lands), `Err` = transient (the caller just retries the attempt).
     async fn fork_txn(
         client: &mut tokio_postgres::Client,
-        parent_key: &str,
-        child_key: &str,
+        parent: BranchId,
+        child: BranchId,
         fork_lsn: i64,
     ) -> Result<bool> {
         let insert_sql = format!(
@@ -8292,9 +8251,9 @@ mod tests {
                AND COALESCE(applied_gc_cutoff_lsn, 0) <= $2"
         );
         let tx = client.transaction().await?;
-        tx.execute(&insert_sql, &[&child_key, &parent_key, &fork_lsn])
+        tx.execute(&insert_sql, &[&child, &parent, &fork_lsn])
             .await?;
-        let touched = tx.execute(&touch_sql, &[&parent_key, &fork_lsn]).await?;
+        let touched = tx.execute(&touch_sql, &[&parent, &fork_lsn]).await?;
         if touched == 1 {
             tx.commit().await?;
             Ok(true)
@@ -8333,7 +8292,7 @@ mod tests {
         let mut row = sample_branch_state_row(parent);
         row.applied_gc_cutoff_lsn = Lsn(0);
         create_branch_state_row(&store, &row).await.unwrap();
-        let parent_key = parent.to_string();
+
         let mut client = raw_pg_client().await;
         let delete_sql = format!("DELETE FROM \"{PROD_SCHEMA}\".branch_state WHERE branch_id = $1");
 
@@ -8346,13 +8305,13 @@ mod tests {
                 .applied_gc_cutoff_lsn;
             let fork_lsn = cutoff.0 as i64 + 1;
             let target = Lsn(cutoff.0 + STEP);
-            let child_key = rand_branch().to_string();
+            let child = rand_branch();
 
             let publish = || store.publish_gc_cutoff(parent, target);
             let (forked, out) = match round % 3 {
                 // Fork committed first: the publish must see the child.
                 0 => {
-                    let forked = fork_txn(&mut client, &parent_key, &child_key, fork_lsn)
+                    let forked = fork_txn(&mut client, parent, child, fork_lsn)
                         .await
                         .unwrap();
                     assert!(
@@ -8365,7 +8324,7 @@ mod tests {
                 // Publish committed first: the fork must see the cutoff.
                 1 => {
                     let out = publish().await;
-                    let forked = fork_txn(&mut client, &parent_key, &child_key, fork_lsn)
+                    let forked = fork_txn(&mut client, parent, child, fork_lsn)
                         .await
                         .unwrap();
                     assert!(
@@ -8377,10 +8336,8 @@ mod tests {
                 }
                 // Dead heat: the genuine race; either order is legal.
                 _ => {
-                    let (forked, out) = tokio::join!(
-                        fork_txn(&mut client, &parent_key, &child_key, fork_lsn),
-                        publish()
-                    );
+                    let (forked, out) =
+                        tokio::join!(fork_txn(&mut client, parent, child, fork_lsn), publish());
                     (forked.unwrap(), out)
                 }
             };
@@ -8396,7 +8353,7 @@ mod tests {
                 // the next round's cutoff can advance.
                 store
                     .ysql_client
-                    .execute(&delete_sql, &[&child_key])
+                    .execute(&delete_sql, &[&child])
                     .await
                     .unwrap();
             }
@@ -8413,7 +8370,7 @@ mod tests {
         // rejected ones rolled back).
         store
             .ysql_client
-            .execute(&delete_sql, &[&parent_key])
+            .execute(&delete_sql, &[&parent])
             .await
             .unwrap();
     }

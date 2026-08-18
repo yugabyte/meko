@@ -14,6 +14,11 @@
 -- endpoints — in `amp_registry` (0002). Every statement here is IF-NOT-EXISTS so
 -- the migration is idempotent. Objects are schema-qualified (the migrator's
 -- search_path is `amp_registry`).
+--
+-- `branch_id` is `uuid` in every table here — the same type, and the same 16
+-- bytes, `amp_registry.branches` keys on. One representation end to end: a
+-- malformed or differently-spelled id fails at the statement instead of quietly
+-- matching zero rows.
 
 CREATE SCHEMA IF NOT EXISTS amp_storage;
 
@@ -40,7 +45,7 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 CREATE TABLE IF NOT EXISTS amp_storage.blobs (
-    branch_id        TEXT                       NOT NULL,
+    branch_id        uuid                       NOT NULL,
     namespace        amp_storage.blob_namespace NOT NULL,
     key              TEXT                       NOT NULL,
     generation       INT,
@@ -106,7 +111,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.blobs (
 -- (image before delta at a tie).
 CREATE TABLE IF NOT EXISTS amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,
-    branch_id    TEXT     NOT NULL,
+    branch_id    uuid     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
     relnode      BIGINT   NOT NULL,
@@ -139,7 +144,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pages (
 -- `(kind, segno)` segment stays contiguous; versions `lsn DESC`, image
 -- first on ties (matching `pages`).
 CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
-    branch_id    TEXT     NOT NULL,
+    branch_id    uuid     NOT NULL,
     kind         SMALLINT NOT NULL,
     segno        BIGINT   NOT NULL,
     blknum       BIGINT   NOT NULL,
@@ -161,7 +166,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.slru_pages (
 -- `branch_id`-only hash (see the `blobs` header); `key` as a range
 -- column makes `scan_meta_range` contiguous.
 CREATE TABLE IF NOT EXISTS amp_storage.meta (
-    branch_id    TEXT     NOT NULL,
+    branch_id    uuid     NOT NULL,
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
     payload      BYTEA    NOT NULL,
@@ -219,14 +224,14 @@ CREATE TABLE IF NOT EXISTS amp_storage.meta (
 -- durability provided by YugabyteDB, so consensus state (term / term_history)
 -- and membership (mconf) are absent.
 CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
-    branch_id              TEXT        NOT NULL,
+    branch_id              uuid        NOT NULL,
     pg_version             INT         NOT NULL,
 
     -- pageserver-owned group; NULL until the pageserver creates its state.
     pageserver_initialized BOOLEAN     NOT NULL DEFAULT false,
     consistent_lsn         BIGINT,
     applied_gc_cutoff_lsn  BIGINT,
-    ancestor_branch_id     TEXT,
+    ancestor_branch_id     uuid,
     ancestor_lsn           BIGINT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
@@ -258,7 +263,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
 -- queue stays small (continuously drained); tablets (3) < buckets (10)
 -- bounds a statement's distributed-txn fan-out.
 CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
-    branch_id  TEXT     NOT NULL,
+    branch_id  uuid     NOT NULL,
     bucket_id  INT      NOT NULL,
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,   -- encoded Key: block (trim) or object (drop/shrink)
@@ -294,7 +299,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
 -- the first row while keeping each batch on one tablet.
 CREATE TABLE IF NOT EXISTS amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,
-    branch_id        TEXT     NOT NULL,
+    branch_id        uuid     NOT NULL,
     segno            BIGINT   NOT NULL,
     chunk_offset     BIGINT   NOT NULL,
     chunk_size       INT      NOT NULL,

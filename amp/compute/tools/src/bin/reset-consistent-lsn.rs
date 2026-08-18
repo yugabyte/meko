@@ -76,9 +76,9 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connecting to yb_storage")?;
 
-    let branch = args.branch.to_string();
+    let branch = args.branch;
 
-    let state = read_branch_state(&client, &branch).await?;
+    let state = read_branch_state(&client, branch).await?;
     // `branch_state.pg_version` holds a full PgVersionId (e.g. 180002); the
     // major version is the leading component.
     let pg_version = match state.pg_version / 10000 {
@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 
     let reader = WalReader {
         client: &client,
-        branch: &branch,
+        branch,
         seg,
     };
 
@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "NULL".into())
     );
 
-    let affected = write_branch_state(&client, &branch, consistent, prev_to_write).await?;
+    let affected = write_branch_state(&client, branch, consistent, prev_to_write).await?;
     if affected == 0 {
         bail!("UPDATE affected 0 rows — row not found (branch mismatch?)");
     }
@@ -178,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn read_branch_state(client: &YsqlClient, branch: &str) -> anyhow::Result<BranchState> {
+async fn read_branch_state(client: &YsqlClient, branch: BranchId) -> anyhow::Result<BranchState> {
     // `pageserver_initialized` scopes the read to a row whose pageserver-owned
     // columns are populated. The row is shared with the safekeeper, so without
     // this a branch that has WAL but no page-store state yet would return a row
@@ -214,7 +214,7 @@ async fn read_branch_state(client: &YsqlClient, branch: &str) -> anyhow::Result<
 
 async fn write_branch_state(
     client: &YsqlClient,
-    branch: &str,
+    branch: BranchId,
     consistent: Lsn,
     prev: Option<Lsn>,
 ) -> anyhow::Result<u64> {
@@ -233,7 +233,7 @@ async fn write_branch_state(
 /// `(segno, chunk_offset)` and resolving the chunk that covers it.
 struct WalReader<'a> {
     client: &'a YsqlClient,
-    branch: &'a str,
+    branch: BranchId,
     seg: u64,
 }
 

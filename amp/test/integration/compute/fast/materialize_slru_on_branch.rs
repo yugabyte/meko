@@ -48,7 +48,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let parent = db::query_text(
         &yb,
         &format!(
-            "SELECT ancestor_branch_id FROM amp_storage.branch_state \
+            "SELECT ancestor_branch_id::text FROM amp_storage.branch_state \
              WHERE branch_id = '{b}'"
         ),
     )

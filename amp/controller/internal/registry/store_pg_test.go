@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -33,7 +32,7 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 	// cluster to hang off — there is no separate flat registry to write into.
 	clusterID := seedCluster(t, pool)
 
-	newID := func() string { return strings.ReplaceAll(uuid.NewString(), "-", "") }
+	newID := uuid.NewString
 	parent := newID()
 
 	// A root branch, with a GC cutoff as the pageserver would have
@@ -138,7 +137,7 @@ func TestPgRecordBranchUnknownCluster(t *testing.T) {
 	ctx := t.Context()
 	pool := migratedPool(t)
 
-	err := NewStore(pool).RecordBranch(ctx, uuid.New(), strings.ReplaceAll(uuid.NewString(), "-", ""),
+	err := NewStore(pool).RecordBranch(ctx, uuid.New(), uuid.NewString(),
 		BranchCreateRecord{BranchName: "orphan", PgVersion: 18, StartLSN: "0/0"})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("record into an unknown cluster: want ErrNotFound, got %v", err)
@@ -232,7 +231,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	s := NewStore(pool)
 	clusterID := seedCluster(t, pool)
 
-	parent := FormatBranchID(uuid.New())
+	parent := uuid.NewString()
 	if err := s.RecordBranch(ctx, clusterID, parent, BranchCreateRecord{
 		BranchName: "settings-parent", PgVersion: 18, StartLSN: "0/0",
 		PgSettings: map[string]string{"work_mem": "16MB", "jit": "off"},
@@ -241,7 +240,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	}
 
 	// A fork that says nothing inherits the whole set.
-	plain := FormatBranchID(uuid.New())
+	plain := uuid.NewString()
 	if err := s.RecordBranch(ctx, clusterID, plain, BranchCreateRecord{
 		BranchName: "settings-plain", PgVersion: 18, StartLSN: "0/16B8",
 		AncestorBranchID: &parent,
@@ -253,7 +252,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	}
 
 	// A fork that overrides one keeps the rest.
-	over := FormatBranchID(uuid.New())
+	over := uuid.NewString()
 	if err := s.RecordBranch(ctx, clusterID, over, BranchCreateRecord{
 		BranchName: "settings-override", PgVersion: 18, StartLSN: "0/16B8",
 		AncestorBranchID: &parent,
@@ -273,7 +272,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	}
 
 	// A root branch starts empty — there is no ancestor to inherit from.
-	root := FormatBranchID(uuid.New())
+	root := uuid.NewString()
 	if err := s.RecordBranch(ctx, clusterID, root, BranchCreateRecord{
 		BranchName: "settings-root", PgVersion: 18, StartLSN: "0/0",
 	}); err != nil {
@@ -288,8 +287,8 @@ func readPgSettings(t *testing.T, pool *db.Pool, branchID string) map[string]str
 	t.Helper()
 	var raw []byte
 	if err := pool.QueryRow(t.Context(),
-		`SELECT pg_settings FROM amp_registry.branches
-		  WHERE replace(branch_id::text, '-', '') = $1`, branchID).Scan(&raw); err != nil {
+		`SELECT pg_settings FROM amp_registry.branches WHERE branch_id = $1`,
+		branchID).Scan(&raw); err != nil {
 		t.Fatalf("read pg_settings for %s: %v", branchID, err)
 	}
 	out := map[string]string{}

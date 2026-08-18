@@ -48,12 +48,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let yb = db::yb_conn(c.yb_host(), c.yb_port(), c.db_name());
 
     step("confirm the branch's branch_state row exists");
-    let row = db::query_text(
+    let rows = db::query_i64(
         &yb,
-        &format!("SELECT branch_id FROM amp_storage.branch_state WHERE branch_id='{branch}' LIMIT 1"),
+        &format!("SELECT count(*) FROM amp_storage.branch_state WHERE branch_id = '{branch}'"),
     )
     .await?;
-    if row.is_empty() {
+    if rows == 0 {
         bail!("no branch_state row for branch {branch}");
     }
 

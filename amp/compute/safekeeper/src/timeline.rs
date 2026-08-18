@@ -213,7 +213,7 @@ impl SharedState {
         }
 
         let wal_store =
-            YbWalStorage::new(branch_id, &control_store, retention_floor, yb_wal.clone()).await?;
+            YbWalStorage::new(*branch_id, &control_store, retention_floor, yb_wal.clone()).await?;
         let sk = StateSK::Loaded(SafeKeeper::new(
             TimelineState::new(control_store, retention_floor),
             wal_store,

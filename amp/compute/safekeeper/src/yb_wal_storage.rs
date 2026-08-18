@@ -442,7 +442,7 @@ pub struct YbWalStorage {
     /// run on the FPU lane owned by the consumer task; SELECTs run on
     /// the read lane (held by [`YbSegmentReader`]).
     ysql_system_client: Arc<YsqlClient>,
-    branch_id: String,
+    branch_id: BranchId,
     table_name: String,
     wal_seg_size: usize,
     /// Producer side of the chunk channel.
@@ -494,7 +494,7 @@ impl YbWalStorage {
     /// `retention_floor` — the pageserver's `consistent_lsn`, see
     /// `ControlFileStorage::restore_opt` — floors the end-of-WAL scan (#788).
     pub async fn new(
-        branch_id: &BranchId,
+        branch_id: BranchId,
         state: &TimelinePersistentState,
         retention_floor: Lsn,
         yb_wal: Arc<YbWalConn>,
@@ -508,7 +508,6 @@ impl YbWalStorage {
         let table_name = yb_wal.table.clone();
         let cache = yb_wal.cache.clone();
         let wal_seg_size = state.server.wal_seg_size as usize;
-        let branch_id_str = branch_id.to_string();
 
         // Rehydrate `write_lsn` from YB rather than scanning local FS. Take
         // the highest `chunk_offset + chunk_size` across all segnos for this
@@ -517,7 +516,7 @@ impl YbWalStorage {
         let max_offset = Self::load_write_lsn(
             &system_client,
             &table_name,
-            &branch_id_str,
+            branch_id,
             wal_seg_size,
             state.timeline_start_lsn,
         )
@@ -537,7 +536,7 @@ impl YbWalStorage {
             let src = YbWalSource {
                 client: &system_client,
                 table: &table_name,
-                branch_id: &branch_id_str,
+                branch_id,
                 seg: wal_seg_size as u64,
             };
             // YB keeps no persisted record-boundary flush_lsn to start from
@@ -570,7 +569,7 @@ impl YbWalStorage {
             match scanned {
                 Ok(end) if end < max_offset => {
                     tracing::warn!(
-                        branch_id = %branch_id_str,
+                        branch_id = %branch_id,
                         torn_end = %max_offset,
                         valid_end = %end,
                         "YbWalStorage::new — truncated torn WAL tail to the last valid record boundary",
@@ -593,7 +592,7 @@ impl YbWalStorage {
                     // already sat above max_offset and was handed straight back. So
                     // the log names the observation, not the cause.
                     tracing::info!(
-                        branch_id = %branch_id_str,
+                        branch_id = %branch_id,
                         max_offset = %max_offset,
                         end_of_wal = %end,
                         "YbWalStorage::new — end-of-WAL is past the stored WAL end (expected after pg_switch_wal)",
@@ -610,7 +609,7 @@ impl YbWalStorage {
                     return Err(e).with_context(|| {
                         format!(
                             "YbWalStorage::new — end-of-WAL record-boundary scan failed for \
-                             branch {branch_id_str} below max_offset {max_offset}"
+                             branch {branch_id} below max_offset {max_offset}"
                         )
                     });
                 }
@@ -627,14 +626,14 @@ impl YbWalStorage {
             if let Err(e) = truncate_wals_above(
                 &system_client,
                 &table_name,
-                &branch_id_str,
+                branch_id,
                 wal_seg_size,
                 write_lsn,
             )
             .await
             {
                 tracing::warn!(
-                    branch_id = %branch_id_str,
+                    branch_id = %branch_id,
                     %write_lsn,
                     %max_offset,
                     "YbWalStorage::new — failed to delete torn WAL tail (harmless; retried next restart): {e:#}",
@@ -642,7 +641,7 @@ impl YbWalStorage {
             }
         }
         tracing::info!(
-            branch_id = %branch_id_str,
+            branch_id = %branch_id,
             %write_lsn,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
             %retention_floor,
@@ -652,7 +651,7 @@ impl YbWalStorage {
 
         // WalBookkeeping holds the LSN tracker + WAL decoder for this
         // stream — durability is our job.
-        let inner = WalBookkeeping::new(branch_id, state, write_lsn)?;
+        let inner = WalBookkeeping::new(&branch_id, state, write_lsn)?;
 
         // Producer/consumer plumbing. The watermark starts at
         // `write_lsn` so an immediately-following `flush_wal()` with
@@ -667,7 +666,7 @@ impl YbWalStorage {
             fpu_client,
             yb_wal.yb_thinclient.clone(),
             table_name.clone(),
-            branch_id_str.clone(),
+            branch_id,
             watermark_tx,
             flush_notify.clone(),
             durable_lsn.clone(),
@@ -678,12 +677,12 @@ impl YbWalStorage {
         // Seed the DELETE lower bound from YB so post-restart removals
         // don't scan/tombstone the empty range below the first surviving
         // segno. Cheap: one tablet lookup keyed on branch.
-        let min_segno = Self::load_min_segno(&system_client, &table_name, &branch_id_str).await?;
+        let min_segno = Self::load_min_segno(&system_client, &table_name, branch_id).await?;
 
         let me = YbWalStorage {
             inner,
             ysql_system_client: system_client,
-            branch_id: branch_id_str,
+            branch_id,
             table_name,
             wal_seg_size,
             tx,
@@ -736,7 +735,7 @@ impl YbWalStorage {
     async fn load_write_lsn(
         client: &YsqlClient,
         table: &str,
-        branch_id: &str,
+        branch_id: BranchId,
         wal_seg_size: usize,
         commit_lsn: Lsn,
     ) -> Result<Lsn> {
@@ -770,7 +769,7 @@ impl YbWalStorage {
     /// seed [`Self::delete_lower_bound`] at construction so the first
     /// `remove_up_to(N)` DELETE after a safekeeper restart is bounded
     /// from below rather than scanning from 0.
-    async fn load_min_segno(client: &YsqlClient, table: &str, branch_id: &str) -> Result<u64> {
+    async fn load_min_segno(client: &YsqlClient, table: &str, branch_id: BranchId) -> Result<u64> {
         // Naming every bucket completes the key prefix for each, so the
         // aggregate resolves to per-bucket index probes rather than scanning
         // the whole branch. min(segno) is index-tight: within a
@@ -1050,7 +1049,7 @@ impl Storage for YbWalStorage {
         truncate_wals_above(
             &self.ysql_system_client,
             &self.table_name,
-            &self.branch_id,
+            self.branch_id,
             self.wal_seg_size,
             end_pos,
         )
@@ -1104,7 +1103,7 @@ impl Storage for YbWalStorage {
         let inner_fut = self.inner.remove_up_to(segno_up_to);
         let system_client = self.ysql_system_client.clone();
         let table = self.table_name.clone();
-        let branch_id = self.branch_id.clone();
+        let branch_id = self.branch_id;
         let cache = self.cache.clone();
         let delete_lower_bound = self.delete_lower_bound.clone();
         async move {
@@ -1135,7 +1134,7 @@ impl Storage for YbWalStorage {
                     quote_relation(&table),
                     bucket_in_list()
                 ),
-                &branch_id,
+                branch_id,
             );
             let lower_i: i64 = lower as i64;
             let upper_i: i64 = segno_up_to as i64;
@@ -1177,7 +1176,7 @@ fn quote_one(ident: &str) -> String {
 struct YbWalSource<'a> {
     client: &'a YsqlClient,
     table: &'a str,
-    branch_id: &'a str,
+    branch_id: BranchId,
     seg: u64,
 }
 
@@ -1234,8 +1233,9 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
 /// safekeeper does no lineage/ancestor reads, so the id is fixed for
 /// every query on this instance — baking drops the bind from the wire.
 /// The id renders as fixed-width hex (`BranchId` `Display`), so the
-/// literal is injection-safe.
-fn bake_branch_id(sql: &str, branch_id: &str) -> String {
+/// literal is injection-safe — and `branch_id` being `uuid` costs nothing
+/// here: Postgres parses the undashed spelling as one.
+fn bake_branch_id(sql: &str, branch_id: BranchId) -> String {
     let with_id = sql.replace("branch_id = $1", &format!("branch_id = '{branch_id}'"));
     // No bare `$1` may remain — it's branch_id only.
     regex::Regex::new(r"\$(\d+)")
@@ -1335,7 +1335,7 @@ fn decode_chunk_data(stored: &[u8], what: &str) -> Result<Vec<u8>> {
 async fn truncate_wals_above(
     client: &YsqlClient,
     table: &str,
-    branch_id: &str,
+    branch_id: BranchId,
     wal_seg_size: usize,
     end_pos: Lsn,
 ) -> Result<()> {
@@ -1492,7 +1492,7 @@ async fn consumer_main(
     ysql_fpu_client: Arc<YsqlClient>,
     yb_thinclient: Option<Arc<YbThinClient>>,
     table_name: String,
-    branch_id: String,
+    branch_id: BranchId,
     watermark_tx: watch::Sender<DurableState>,
     flush_notify: Arc<tokio::sync::Notify>,
     durable_lsn: Arc<AtomicU64>,
@@ -1608,7 +1608,7 @@ async fn consumer_main(
                 &ysql_fpu_client,
                 yb_thinclient.as_deref(),
                 &table_name,
-                &branch_id,
+                branch_id,
                 &batch,
                 codec,
             )
@@ -1744,7 +1744,7 @@ async fn flush_batch(
     ysql_fpu_client: &YsqlClient,
     yb_thinclient: Option<&YbThinClient>,
     table_name: &str,
-    branch_id: &str,
+    branch_id: BranchId,
     batch: &[PendingChunk],
     codec: payload_codec::Codec,
 ) -> Result<()> {
@@ -1832,7 +1832,7 @@ fn encode_run(chunks: &[PendingChunk], codec: payload_codec::Codec) -> bytes::By
 /// [`flush_batch`], 1:1 with `runs`.
 async fn flush_batch_thin(
     yb_thinclient: &YbThinClient,
-    branch_id: &str,
+    branch_id: BranchId,
     batch: &[PendingChunk],
     runs: &[std::ops::Range<usize>],
     encoded: &[bytes::Bytes],
@@ -1851,6 +1851,7 @@ async fn flush_batch_thin(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_micros() as i64)
         .unwrap_or(0);
+    let branch_b = branch_id.to_bytes();
     let rows = runs
         .iter()
         .zip(encoded)
@@ -1866,7 +1867,7 @@ async fn flush_batch_thin(
                 // PRIMARY KEY order: `bucket_id` leads the all-range key.
                 vec![
                     BindValue::I16(first.bucket_id),
-                    BindValue::Text(branch_id.to_string()),
+                    BindValue::Bytes(branch_b.clone()),
                     BindValue::I64(first.segno as i64),
                     BindValue::I64(first.chunk_offset),
                 ],
@@ -1907,7 +1908,7 @@ async fn flush_batch_thin(
 async fn flush_batch_ysql(
     ysql_fpu_client: &YsqlClient,
     table_name: &str,
-    branch_id: &str,
+    branch_id: BranchId,
     batch: &[PendingChunk],
     runs: &[std::ops::Range<usize>],
     encoded: &[bytes::Bytes],
@@ -2020,7 +2021,7 @@ pub struct YbSegmentReader {
     /// use it. `None` unless the thin-client hot path is selected.
     yb_thinclient: Option<Arc<YbThinClient>>,
     table: String,
-    branch_id: String,
+    branch_id: BranchId,
 
     current: Option<CurrentChunk>,
     /// In-flight YB fetch. A `oneshot::Receiver` (not a raw `BoxFuture`)
@@ -2063,7 +2064,7 @@ impl YbSegmentReader {
     /// sender stack like the `tokio::fs::File` it replaces.
     pub fn new(
         yb_wal: Arc<YbWalConn>,
-        branch_id: &BranchId,
+        branch_id: BranchId,
         segno: XLogSegNo,
         wal_seg_size: usize,
         start_xlogoff: usize,
@@ -2077,7 +2078,7 @@ impl YbSegmentReader {
             read_client: yb_wal.read_client.clone(),
             yb_thinclient: yb_wal.yb_thinclient.clone(),
             table: yb_wal.table.clone(),
-            branch_id: branch_id.to_string(),
+            branch_id,
             current: None,
             fetch: None,
             flush_lsn,
@@ -2097,7 +2098,7 @@ impl YbSegmentReader {
         let issued_flush = self.fetch_issued_flush;
         let client = self.read_client.clone();
         let table = self.table.clone();
-        let branch_id = self.branch_id.clone();
+        let branch_id = self.branch_id;
         let segno = self.segno;
         let pos = self.pos;
         // Base LSN of this segment, to bring segment-relative chunk offsets into
@@ -2111,7 +2112,7 @@ impl YbSegmentReader {
                 &client,
                 yb_thinclient.as_deref(),
                 &table,
-                &branch_id,
+                branch_id,
                 segno,
                 pos,
             )
@@ -2376,7 +2377,7 @@ async fn fetch_chunks(
     client: &YsqlClient,
     yb_thinclient: Option<&YbThinClient>,
     table: &str,
-    branch_id: &str,
+    branch_id: BranchId,
     segno: u64,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
@@ -2458,7 +2459,7 @@ fn merge_fetched_rows<'a>(
 /// flush-bound gating stays as defense in depth regardless.
 async fn fetch_chunks_thin(
     yb_thinclient: &YbThinClient,
-    branch_id: &str,
+    branch_id: BranchId,
     segno: u64,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
@@ -2481,12 +2482,13 @@ async fn fetch_chunks_thin(
     // could not be kept anyway: the key order changed to bucket-leading, so a
     // hash binding of `(branch_id, bucket_id)` would now be wrong rather than
     // merely unused.
+    let branch_b = branch_id.to_bytes();
     let base_read = |bucket: i16| -> anyhow::Result<RangeRead> {
         Ok(RangeRead::new_range(
             wals,
             vec![
                 BindValue::I16(bucket),
-                BindValue::Text(branch_id.to_string()),
+                BindValue::Bytes(branch_b.clone()),
                 BindValue::I64(segno_i),
             ],
         )?)
@@ -2657,7 +2659,7 @@ async fn fetch_chunks_thin(
 async fn fetch_chunks_from_yb(
     client: &YsqlClient,
     table: &str,
-    branch_id: &str,
+    branch_id: BranchId,
     segno: u64,
     byte_offset: u64,
 ) -> anyhow::Result<Vec<CurrentChunk>> {
@@ -2785,7 +2787,7 @@ mod tests {
 
     #[test]
     fn bake_branch_id_bakes_and_shifts() {
-        let b = "00112233445566778899aabbccddeeff";
+        let b: BranchId = "00112233445566778899aabbccddeeff".parse().unwrap();
         let sql = bake_branch_id(
             "SELECT chunk_offset FROM \"wals\" \
              WHERE branch_id = $1 AND segno = $2 \
@@ -2974,7 +2976,7 @@ mod tests {
                 &format!(
                     "CREATE TABLE IF NOT EXISTS {q} (\
                        bucket_id        SMALLINT NOT NULL,\
-                       branch_id        TEXT     NOT NULL,\
+                       branch_id        uuid     NOT NULL,\
                        segno            BIGINT   NOT NULL,\
                        chunk_offset     BIGINT   NOT NULL,\
                        chunk_size       INT      NOT NULL,\
@@ -3064,7 +3066,7 @@ mod tests {
 
         let tmp = camino_tempfile::tempdir().expect("tempdir");
         let storage = YbWalStorage::new(
-            &branch_id,
+            branch_id,
             &state,
             state.timeline_start_lsn,
             wal_conn(&client, table),
@@ -3126,7 +3128,6 @@ mod tests {
         );
 
         let branch_id = BranchId::generate();
-        let branch_s = branch_id.to_string();
         client
             .execute(
                 &format!(
@@ -3135,7 +3136,7 @@ mod tests {
                      VALUES ($1, 0, 1, 0, $2, $3, 0)",
                     quote_relation(&table)
                 ),
-                &[&branch_s, &(len as i32), &enc(&buf[..len])],
+                &[&branch_id, &(len as i32), &enc(&buf[..len])],
             )
             .await
             .expect("insert WAL chunk");
@@ -3145,7 +3146,7 @@ mod tests {
         state.timeline_start_lsn = start;
 
         let storage = YbWalStorage::new(
-            &branch_id,
+            branch_id,
             &state,
             state.timeline_start_lsn,
             wal_conn(&client, &table),
@@ -3237,7 +3238,7 @@ mod tests {
                      VALUES ($1, 0, 2, 0, $2, $3, 0)",
                     quote_relation(&table)
                 ),
-                &[&branch_id.to_string(), &(kept.len() as i32), &enc(&kept)],
+                &[&branch_id, &(kept.len() as i32), &enc(&kept)],
             )
             .await
             .expect("insert retained WAL chunk");
@@ -3249,7 +3250,7 @@ mod tests {
 
         // What the pageserver's `consistent_lsn` would hold: a boundary inside
         // the surviving window.
-        let storage = YbWalStorage::new(&branch_id, &state, record_b, wal_conn(&client, &table))
+        let storage = YbWalStorage::new(branch_id, &state, record_b, wal_conn(&client, &table))
             .await
             .expect("a branch whose WAL was trimmed by GC must still load");
 
@@ -3264,7 +3265,7 @@ mod tests {
         // A pageserver caught all the way up leaves `consistent_lsn == max_offset`
         // — the common restart. The floor is then the end itself, which the scan
         // must accept rather than treat as out of range and fall back from.
-        let caught_up = YbWalStorage::new(&branch_id, &state, end, wal_conn(&client, &table))
+        let caught_up = YbWalStorage::new(branch_id, &state, end, wal_conn(&client, &table))
             .await
             .expect("a floor at the end of the WAL is the caught-up case, not a disagreement");
         assert_eq!(caught_up.write_lsn(), end);
@@ -3320,7 +3321,6 @@ mod tests {
         let split = Lsn(page.0 + hdr + (durable_end.0 - page.0 - hdr) / 2);
 
         let branch_id = BranchId::generate();
-        let branch_s = branch_id.to_string();
         let readable = (split.0 - start.0) as usize;
         let ins = format!(
             "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
@@ -3331,7 +3331,12 @@ mod tests {
         client
             .execute(
                 &ins,
-                &[&branch_s, &0i64, &(readable as i32), &enc(&buf[..readable])],
+                &[
+                    &branch_id,
+                    &0i64,
+                    &(readable as i32),
+                    &enc(&buf[..readable]),
+                ],
             )
             .await
             .expect("insert readable WAL chunk");
@@ -3344,7 +3349,7 @@ mod tests {
             .execute(
                 &ins,
                 &[
-                    &branch_s,
+                    &branch_id,
                     &(readable as i64),
                     &((buf.len() - readable) as i32),
                     &undecodable,
@@ -3362,7 +3367,7 @@ mod tests {
             &YbWalSource {
                 client: client.as_ref(),
                 table: &table,
-                branch_id: &branch_s,
+                branch_id,
                 seg: SEG_SIZE,
             },
             Lsn(durable_end.0 - 1),
@@ -3371,7 +3376,7 @@ mod tests {
         .await;
 
         let res = YbWalStorage::new(
-            &branch_id,
+            branch_id,
             &state,
             state.timeline_start_lsn,
             wal_conn(&client, &table),
@@ -3388,7 +3393,7 @@ mod tests {
                     SEG_SIZE,
                     quote_relation(&table)
                 ),
-                &[&branch_s],
+                &[&branch_id],
             )
             .await
             .expect("read back the persisted end-of-WAL")
@@ -3455,7 +3460,7 @@ mod tests {
             yb_thinclient: None,
             codec: payload_codec::Codec::Lz4,
         });
-        let storage = YbWalStorage::new(&branch_id, &state, state.timeline_start_lsn, yb_wal)
+        let storage = YbWalStorage::new(branch_id, &state, state.timeline_start_lsn, yb_wal)
             .await
             .expect("YbWalStorage::new");
         (storage, tmp)
@@ -3658,7 +3663,7 @@ mod tests {
         let (fpu, _read, system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
 
-        let branch_s = BranchId::generate().to_string();
+        let branch_id = BranchId::generate();
         // Two contiguous chunks in segno 0, spread across two buckets
         // (this test is about cross-lane visibility; the per-bucket
         // max-end probe must take the max across both). End-offset is
@@ -3681,7 +3686,15 @@ mod tests {
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     quote_relation(&table)
                 ),
-                &[&branch_s, &bucket, segno, offset, size, &enc(blob), &now_us],
+                &[
+                    &branch_id,
+                    &bucket,
+                    segno,
+                    offset,
+                    size,
+                    &enc(blob),
+                    &now_us,
+                ],
             )
             .await
             .expect("INSERT via fpu");
@@ -3690,7 +3703,7 @@ mod tests {
         // Read via system_client — the lane that does the real
         // load_write_lsn at SK startup.
         let lsn =
-            YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
                 .expect("load_write_lsn via system_client");
         let expected = 1024u64 + 256u64;
@@ -3701,7 +3714,7 @@ mod tests {
         );
 
         // And load_min_segno — same cross-connection contract.
-        let min_segno = YbWalStorage::load_min_segno(&system, &table, &branch_s)
+        let min_segno = YbWalStorage::load_min_segno(&system, &table, branch_id)
             .await
             .expect("load_min_segno via system_client");
         assert_eq!(min_segno, 0, "min(segno) across lanes");
@@ -3718,7 +3731,7 @@ mod tests {
         let table = scratch_table("wals_test_trunc_above");
         let (fpu, _read, system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
-        let branch_s = BranchId::generate().to_string();
+        let branch_id = BranchId::generate();
 
         // Three chunks in segno 0 spanning [0, 20480): two full pages + a
         // partial. Cut at 10000 — mid the second chunk [8192, 16384).
@@ -3733,19 +3746,19 @@ mod tests {
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     quote_relation(&table)
                 ),
-                &[&branch_s, &bucket, segno, offset, size, &enc(&blob), &0i64],
+                &[&branch_id, &bucket, segno, offset, size, &enc(&blob), &0i64],
             )
             .await
             .expect("insert chunk");
         }
 
-        truncate_wals_above(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(10000))
+        truncate_wals_above(&system, &table, branch_id, SEG_SIZE as usize, Lsn(10000))
             .await
             .expect("truncate_wals_above");
 
         // End of WAL is now exactly the cut.
         let lsn =
-            YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
                 .expect("load_write_lsn");
         assert_eq!(
@@ -3761,7 +3774,7 @@ mod tests {
                     "SELECT count(*) FROM {} WHERE branch_id=$1",
                     quote_relation(&table)
                 ),
-                &[&branch_s],
+                &[&branch_id],
             )
             .await
             .expect("count")
@@ -3779,7 +3792,7 @@ mod tests {
                      WHERE branch_id=$1 AND chunk_offset=8192",
                     quote_relation(&table)
                 ),
-                &[&branch_s],
+                &[&branch_id],
             )
             .await
             .expect("straddling chunk")
@@ -3797,11 +3810,11 @@ mod tests {
         );
 
         // Idempotent: a second call is a no-op.
-        truncate_wals_above(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(10000))
+        truncate_wals_above(&system, &table, branch_id, SEG_SIZE as usize, Lsn(10000))
             .await
             .expect("truncate_wals_above (idempotent)");
         let lsn2 =
-            YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
                 .expect("load_write_lsn after re-run");
         assert_eq!(lsn2, Lsn(10000), "re-run must not change the end of WAL");
@@ -3825,7 +3838,7 @@ mod tests {
                     "SELECT bucket_id FROM {} WHERE branch_id=$1 AND chunk_offset=8192",
                     quote_relation(&table)
                 ),
-                &[&branch_s],
+                &[&branch_id],
             )
             .await
             .expect("bucket lookup")
@@ -3844,7 +3857,7 @@ mod tests {
                     quote_relation(&table)
                 ),
                 &[
-                    &branch_s,
+                    &branch_id,
                     &bucket_of_straddler,
                     &0i64,
                     &8192i64,
@@ -3871,7 +3884,7 @@ mod tests {
                     quote_relation(&table)
                 ),
                 &[
-                    &branch_s,
+                    &branch_id,
                     &bucket_of_straddler,
                     &0i64,
                     &8192i64,
@@ -3907,7 +3920,6 @@ mod tests {
         make_wals_table(&fpu, &table).await;
 
         let branch_id = BranchId::generate();
-        let branch_s = branch_id.to_string();
 
         let chunk_a: Vec<u8> = (0u8..=255).cycle().take(1024).collect();
         let chunk_b: Vec<u8> = (0u8..=255).cycle().take(2048).map(|b| b ^ 0xa5).collect();
@@ -3929,7 +3941,7 @@ mod tests {
                     quote_relation(&table)
                 ),
                 &[
-                    &branch_s,
+                    &branch_id,
                     &bucket,
                     &segno_i,
                     &offset_i,
@@ -3956,7 +3968,7 @@ mod tests {
         });
         let mut reader = YbSegmentReader::new(
             yb_wal,
-            &branch_id,
+            branch_id,
             0,
             SEG_SIZE as usize,
             0,
@@ -3989,7 +4001,6 @@ mod tests {
         make_wals_table(&fpu, &table).await;
 
         let branch_id = BranchId::generate();
-        let branch_s = branch_id.to_string();
 
         // One chunk spanning [0, 2048).
         let chunk: Vec<u8> = (0u8..=255).cycle().take(2048).collect();
@@ -4000,7 +4011,7 @@ mod tests {
                  VALUES ($1, 0, 0, 0, 2048, $2, 0)",
                 quote_relation(&table)
             ),
-            &[&branch_s, &enc(chunk.as_slice())],
+            &[&branch_id, &enc(chunk.as_slice())],
         )
         .await
         .expect("INSERT chunk");
@@ -4017,7 +4028,7 @@ mod tests {
         // Start the reader at byte offset 1024 — partway into the chunk.
         let mut reader = YbSegmentReader::new(
             yb_wal,
-            &branch_id,
+            branch_id,
             0,
             SEG_SIZE as usize,
             1024,
@@ -4065,7 +4076,6 @@ mod tests {
         make_wals_table(&fpu, &table).await;
 
         let branch_id = BranchId::generate();
-        let branch_s = branch_id.to_string();
 
         let seg: i64 = 0;
         let committed: Vec<u8> = vec![0xAA; 1024]; // [0,1024), below flush
@@ -4094,7 +4104,7 @@ mod tests {
             let slice = bytes.as_slice();
             fpu.execute(
                 &insert_sql,
-                &[&branch_s, &bucket, &seg, &off, &size, &enc(slice)],
+                &[&branch_id, &bucket, &seg, &off, &size, &enc(slice)],
             )
             .await
             .expect("INSERT chunk");
@@ -4116,7 +4126,7 @@ mod tests {
         let flush = Arc::new(AtomicU64::new(1024));
         let mut reader = YbSegmentReader::new(
             yb_wal.clone(),
-            &branch_id,
+            branch_id,
             0,
             SEG_SIZE as usize,
             0,
@@ -4147,7 +4157,7 @@ mod tests {
         // 3. A new term rewrites the once-uncommitted tail; flush then advances
         //    to cover it. (No cache invalidation is modeled — the point is that
         //    the tail was never cached, so there is nothing stale to shadow.)
-        fpu.execute(&delete_sql, &[&branch_s, &seg, &1024i64])
+        fpu.execute(&delete_sql, &[&branch_id, &seg, &1024i64])
             .await
             .expect("DELETE old tail");
         let tail_new_slice = tail_new.as_slice();
@@ -4155,7 +4165,7 @@ mod tests {
         fpu.execute(
             &insert_sql,
             &[
-                &branch_s,
+                &branch_id,
                 &1i16,
                 &seg,
                 &1024i64,
@@ -4201,7 +4211,6 @@ mod tests {
         make_wals_table(&fpu, &table).await;
 
         let branch_id = BranchId::generate();
-        let branch_s = branch_id.to_string();
 
         // Segment 0 holds real WAL in [0, 1024) (think: up to the switch
         // record). Nothing is stored in [1024, SEG_SIZE) — the padding gap.
@@ -4217,7 +4226,7 @@ mod tests {
         let head_size = head_bytes.len() as i32;
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &0i64, &head_size, &enc(head_slice)],
+            &[&branch_id, &0i16, &seg, &0i64, &head_size, &enc(head_slice)],
         )
         .await
         .expect("INSERT head chunk");
@@ -4236,7 +4245,7 @@ mod tests {
         let flush_past = Arc::new(AtomicU64::new(SEG_SIZE + 4096));
         let mut reader = YbSegmentReader::new(
             yb_wal.clone(),
-            &branch_id,
+            branch_id,
             0,
             SEG_SIZE as usize,
             1024,
@@ -4257,7 +4266,7 @@ mod tests {
         let flush_inside = Arc::new(AtomicU64::new(2048));
         let mut reader = YbSegmentReader::new(
             yb_wal.clone(),
-            &branch_id,
+            branch_id,
             0,
             SEG_SIZE as usize,
             1024,
@@ -4302,7 +4311,6 @@ mod tests {
         make_wals_table(&fpu, &table).await;
 
         let branch_id = BranchId::generate();
-        let branch_s = branch_id.to_string();
 
         let seg: i64 = 0;
         let off: i64 = 0;
@@ -4330,7 +4338,7 @@ mod tests {
         let old_slice = old.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &off, &size, &enc(old_slice)],
+            &[&branch_id, &0i16, &seg, &off, &size, &enc(old_slice)],
         )
         .await
         .expect("INSERT old chunk");
@@ -4349,7 +4357,7 @@ mod tests {
         let flush = Arc::new(AtomicU64::new(1024));
         let mut reader = YbSegmentReader::new(
             yb_wal.clone(),
-            &branch_id,
+            branch_id,
             0,
             SEG_SIZE as usize,
             0,
@@ -4367,13 +4375,13 @@ mod tests {
 
         // 3. A new term rewrites the once-uncommitted tail; flush then advances
         //    to cover it.
-        fpu.execute(&delete_sql, &[&branch_s, &seg, &off])
+        fpu.execute(&delete_sql, &[&branch_id, &seg, &off])
             .await
             .expect("DELETE old chunk");
         let new_slice = new.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &off, &size, &enc(new_slice)],
+            &[&branch_id, &0i16, &seg, &off, &size, &enc(new_slice)],
         )
         .await
         .expect("INSERT rewritten chunk");
@@ -4414,7 +4422,6 @@ mod tests {
         make_wals_table(&fpu, &table).await;
 
         let branch_id = BranchId::generate();
-        let branch_s = branch_id.to_string();
 
         // Segment 1: absolute LSN = SEG_SIZE + offset.
         let seg: i64 = 1;
@@ -4441,7 +4448,7 @@ mod tests {
         let old_slice = old.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &off, &size, &enc(old_slice)],
+            &[&branch_id, &0i16, &seg, &off, &size, &enc(old_slice)],
         )
         .await
         .expect("INSERT old chunk");
@@ -4460,7 +4467,7 @@ mod tests {
         let flush = Arc::new(AtomicU64::new(seg_base + 1024));
         let mut reader = YbSegmentReader::new(
             yb_wal.clone(),
-            &branch_id,
+            branch_id,
             1,
             SEG_SIZE as usize,
             0,
@@ -4474,13 +4481,13 @@ mod tests {
             .expect("read committed head");
         assert_eq!(head, old[..1024], "committed prefix must read back");
 
-        fpu.execute(&delete_sql, &[&branch_s, &seg, &off])
+        fpu.execute(&delete_sql, &[&branch_id, &seg, &off])
             .await
             .expect("DELETE old chunk");
         let new_slice = new.as_slice();
         fpu.execute(
             &insert_sql,
-            &[&branch_s, &0i16, &seg, &off, &size, &enc(new_slice)],
+            &[&branch_id, &0i16, &seg, &off, &size, &enc(new_slice)],
         )
         .await
         .expect("INSERT rewritten chunk");
@@ -4730,7 +4737,7 @@ mod tests {
         let table = scratch_table("wals_test_bucket_max");
         let (fpu, _read, system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
-        let branch_s = BranchId::generate().to_string();
+        let branch_id = BranchId::generate();
 
         // (bucket_id, segno, chunk_offset, chunk_size); rows never
         // overlap within a segno, per the writer invariant. Buckets must be
@@ -4754,14 +4761,14 @@ mod tests {
             let slice = blob.as_slice();
             fpu.execute(
                 &insert_sql,
-                &[&branch_s, bucket, segno, off, size, &enc(slice)],
+                &[&branch_id, bucket, segno, off, size, &enc(slice)],
             )
             .await
             .expect("insert adversarial row");
         }
 
         let got =
-            YbWalStorage::load_write_lsn(&system, &table, &branch_s, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
                 .expect("load_write_lsn");
         assert_eq!(
@@ -4772,9 +4779,9 @@ mod tests {
         );
 
         // Fresh-timeline fallback: an unknown branch yields commit_lsn.
-        let other = BranchId::generate().to_string();
+        let other = BranchId::generate();
         let fallback =
-            YbWalStorage::load_write_lsn(&system, &table, &other, SEG_SIZE as usize, Lsn(4242))
+            YbWalStorage::load_write_lsn(&system, &table, other, SEG_SIZE as usize, Lsn(4242))
                 .await
                 .expect("load_write_lsn (empty branch)");
         assert_eq!(
@@ -5003,7 +5010,7 @@ mod tests {
                 &format!(
                     "CREATE TABLE IF NOT EXISTS {q} (\
                        bucket_id        SMALLINT NOT NULL,\
-                       branch_id        TEXT     NOT NULL,\
+                       branch_id        uuid     NOT NULL,\
                        segno            BIGINT   NOT NULL,\
                        chunk_offset     BIGINT   NOT NULL,\
                        chunk_size       INT      NOT NULL,\
@@ -5039,7 +5046,7 @@ mod tests {
                            chunk_size, data, last_modified_us) \
                          VALUES ($1, 0, 1, $2, 1000, $3, 0)"
                     ),
-                    &[&branch_id.to_string(), &offset, &stored.as_ref()],
+                    &[&branch_id, &offset, &stored.as_ref()],
                 )
                 .await
                 .expect("insert chunk");
@@ -5068,7 +5075,7 @@ mod tests {
             wals,
         };
 
-        let got = fetch_chunks_thin(&thin, &branch_id.to_string(), 1, 1500)
+        let got = fetch_chunks_thin(&thin, branch_id, 1, 1500)
             .await
             .expect("fetch_chunks_thin against a range-sharded wals");
         let offsets: Vec<u64> = got.iter().map(|c| c.chunk_offset).collect();
@@ -5147,7 +5154,7 @@ mod tests {
             codec: payload_codec::Codec::Lz4,
         });
         let mut storage =
-            YbWalStorage::new(&branch_id, &state, state.timeline_start_lsn, yb_wal.clone())
+            YbWalStorage::new(branch_id, &state, state.timeline_start_lsn, yb_wal.clone())
                 .await
                 .expect("YbWalStorage::new");
 
@@ -5193,7 +5200,7 @@ mod tests {
         let lsn = YbWalStorage::load_write_lsn(
             &client,
             &table,
-            &storage.branch_id,
+            storage.branch_id,
             SEG_SIZE as usize,
             Lsn(0),
         )
@@ -5209,7 +5216,7 @@ mod tests {
         // snapshot by construction).
         let mut reader = YbSegmentReader::new(
             yb_wal,
-            &branch_id,
+            branch_id,
             1,
             SEG_SIZE as usize,
             0,
@@ -5298,7 +5305,7 @@ mod tests {
             .execute(
                 "INSERT INTO amp_storage.branch_state (branch_id, pg_version) \
                  VALUES ($1, $2) ON CONFLICT (branch_id) DO NOTHING",
-                &[&branch_id.to_string(), &180_002i32],
+                &[&branch_id, &180_002i32],
             )
             .await
             .expect("seed the row");
@@ -5350,7 +5357,7 @@ mod tests {
         client
             .execute(
                 "DELETE FROM amp_storage.branch_state WHERE branch_id = $1",
-                &[&branch_id.to_string()],
+                &[&branch_id],
             )
             .await
             .ok();

@@ -52,7 +52,7 @@ group in later, on the first walproposer handshake:
 
 ```sql
 CREATE TABLE amp_storage.branch_state (
-    branch_id              TEXT        NOT NULL,
+    branch_id              uuid        NOT NULL,
     pg_version             INT         NOT NULL,
 
     -- "my group exists" — set true by the creation write, in the same
@@ -128,7 +128,7 @@ trimming survives a safekeeper restart taken while the pageserver is down.
 ```sql
 CREATE TABLE amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,
-    branch_id        TEXT     NOT NULL,
+    branch_id        uuid     NOT NULL,
     segno            BIGINT   NOT NULL,
     chunk_offset     BIGINT   NOT NULL,   -- byte offset of `data` within the segment
     chunk_size       INT      NOT NULL,

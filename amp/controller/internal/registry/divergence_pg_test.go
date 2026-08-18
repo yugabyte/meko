@@ -22,7 +22,7 @@ func TestPgProductDeleteTombstonesTheBranch(t *testing.T) {
 	clusterID := seedCluster(t, pool)
 	branchUUID := uuid.New()
 
-	if err := store.RecordBranch(ctx, clusterID, FormatBranchID(branchUUID), BranchCreateRecord{
+	if err := store.RecordBranch(ctx, clusterID, branchUUID.String(), BranchCreateRecord{
 		BranchName: "divergence", PgVersion: 18, StartLSN: "0/0",
 	}); err != nil {
 		t.Fatalf("record branch: %v", err)
@@ -72,7 +72,7 @@ func TestPgTombstoneGuards(t *testing.T) {
 
 	// A live root branch with a live endpoint on it.
 	rootID := uuid.New()
-	if err := store.RecordBranch(ctx, clusterID, FormatBranchID(rootID), BranchCreateRecord{
+	if err := store.RecordBranch(ctx, clusterID, rootID.String(), BranchCreateRecord{
 		BranchName: "guards-root", PgVersion: 18, StartLSN: "0/0",
 	}); err != nil {
 		t.Fatalf("record root: %v", err)

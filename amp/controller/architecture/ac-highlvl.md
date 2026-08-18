@@ -379,8 +379,8 @@ CREATE INDEX endpoints_by_branch ON endpoints (branch_id);
 ```
 
 These are the *only* branch and endpoint tables, and `/api/v1` is the only way in.
-The storage layer renders `branch_id` flat (32-hex) rather than as a uuid, but it
-keeps no copies of its own. See [`sc-integration.md`](sc-integration.md).
+The storage layer keeps no copies of its own, and keys on the same `uuid`; only the
+wire spells it flat (32-hex). See [`sc-integration.md`](sc-integration.md).
 
 **Operational**
 

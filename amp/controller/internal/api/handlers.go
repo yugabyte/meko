@@ -283,8 +283,9 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 	}}, nil
 }
 
-// hex32 renders a UUID as the storage layer's 32-lowercase-hex BranchId (the
-// flat storage identity; the product branch_id is the storage branch_id verbatim).
+// hex32 renders a branch uuid as the flat 32-lowercase-hex spelling this API and
+// the daemons carry. Every `branch_id` column holds the uuid itself, so the two
+// are one identity in two spellings, not two ids.
 func hex32(id uuid.UUID) string {
 	return hex.EncodeToString(id[:])
 }

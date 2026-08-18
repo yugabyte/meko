@@ -208,6 +208,122 @@ async fn smoke_connect_open_upsert_read() {
         .unwrap();
 }
 
+/// A `uuid` key column binds as bytea, and the 16 raw bytes are the value.
+///
+/// This is what lets `amp_storage`'s `branch_id` be `uuid` while the thin lane
+/// still writes it: the shim reports a column's bind type from its DocDB type,
+/// and DocDB types `uuid` exactly as `bytea` (binary). Nothing in the pinned ABI
+/// names uuid, so this test is the contract — a shim that started reporting
+/// something else, or encoding the bytes differently, would leave every
+/// thin-lane page write under a branch id nobody can read back.
+///
+/// The YSQL cross-check is the half that matters: the row the thin lane wrote
+/// carries the uuid the control plane knows, not 16 bytes of garbage.
+#[tokio::test]
+#[ignore = "requires a live YugabyteDB + the real libyb_thin_client.so on LD_LIBRARY_PATH"]
+async fn uuid_key_column_binds_as_bytea() {
+    const TABLE: &str = "thin_uuid_key";
+    // Deliberately contains a 0x00 byte: the DocDB key encoding zero-escapes
+    // it, so a round trip that mangles escaping fails here.
+    const ID_BYTES: [u8; 16] = [
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+        0xff,
+    ];
+    const ID_HEX: &str = "00112233445566778899aabbccddeeff";
+
+    let ysql = ysql().await;
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
+        .await
+        .unwrap();
+    ysql.execute(
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {TABLE} (
+                 branch_id uuid NOT NULL,
+                 lsn BIGINT NOT NULL,
+                 payload BYTEA NOT NULL,
+                 PRIMARY KEY ((branch_id) HASH, lsn DESC))"
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    let (db_oid, table_oid) = table_oids(&ysql, TABLE).await;
+
+    let client = TsClient::connect(&TsClientConfig {
+        tserver_addrs: tserver_addrs(),
+        ..Default::default()
+    })
+    .expect("thin-client connect");
+    let table = client.open_table(db_oid, table_oid).expect("open_table");
+
+    let col = table
+        .columns
+        .iter()
+        .find(|c| c.name == "branch_id")
+        .expect("branch_id column");
+    assert_eq!(
+        col.value_type,
+        yb_thin_client::ValueType::Bytea,
+        "a uuid column must report as bytea — bytes are the correct bind"
+    );
+
+    let id = BindValue::Bytes(Bytes::from_static(&ID_BYTES));
+    client
+        .upsert(&[UpsertRow::new(
+            &table,
+            vec![id.clone(), BindValue::I64(7)],
+            &[("payload", BindValue::Bytes(Bytes::from_static(b"uuid-key")))],
+        )
+        .expect("build upsert row")])
+        .await
+        .expect("upsert");
+
+    // The same bytes address the row for a read.
+    let read = RangeRead::new(&table, vec![id])
+        .unwrap()
+        .targets(&table, &["lsn", "payload"])
+        .unwrap()
+        .limit(10);
+    let batch = client
+        .read(
+            &[ReadOp {
+                table: &table,
+                read: &read,
+                paging_state: None,
+            }],
+            0,
+        )
+        .await
+        .expect("read");
+    let rows = &batch.ops[0].rows;
+    assert_eq!(rows.len(), 1, "expected the one row we wrote");
+    assert_eq!(rows[0][0].as_i64().unwrap(), 7, "lsn");
+    assert_eq!(
+        rows[0][1].as_bytes().unwrap().as_ref(),
+        b"uuid-key",
+        "payload"
+    );
+
+    // ... and YSQL sees that row under the uuid those bytes spell.
+    let hex = ysql
+        .query(
+            &format!("SELECT replace(branch_id::text, '-', '') FROM {TABLE} WHERE lsn = 7"),
+            &[],
+        )
+        .await
+        .expect("ysql read-back");
+    assert_eq!(hex.len(), 1, "expected the one row we wrote");
+    assert_eq!(
+        hex[0].get::<_, String>(0),
+        ID_HEX,
+        "the thin lane's bytes must be the uuid the control plane knows"
+    );
+
+    ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
+        .await
+        .unwrap();
+}
+
 /// Repro for the `branch_ancestor` wedge: a forward `limit(1)` read on a table
 /// whose PK clusters `lsn DESC` must return the row with the HIGHEST lsn (the
 /// newest), because storage order == PK order == lsn-descending. This is

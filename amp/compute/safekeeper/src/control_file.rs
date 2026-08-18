@@ -82,7 +82,7 @@ impl YbControlFileStorage {
              WHERE branch_id = $1 AND safekeeper_initialized"
         );
         let Some(row) = client
-            .query_opt(&sql, &[&branch_id.to_string()])
+            .query_opt(&sql, &[&branch_id])
             .await
             .context("SELECT amp_storage.branch_state")?
         else {
@@ -156,9 +156,8 @@ impl YbControlFileStorage {
     async fn write_row(&self, s: &TimelinePersistentState, create: bool) -> Result<()> {
         let creation_ts: DateTime<Utc> = s.creation_ts.into();
 
-        let branch_id = self.branch_id.to_string();
         let params: [&(dyn ToSql + Sync); 5] = [
-            &branch_id,
+            &self.branch_id,
             &(s.timeline_start_lsn.0 as i64),
             &(s.server.system_id as i64),
             &(s.server.wal_seg_size as i32),
@@ -195,7 +194,7 @@ impl YbControlFileStorage {
                 .client
                 .query_opt(
                     "SELECT 1 FROM amp_storage.branch_state WHERE branch_id = $1",
-                    &[&branch_id],
+                    &[&self.branch_id],
                 )
                 .await
                 .context("branch_state existence probe")?;

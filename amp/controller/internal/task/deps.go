@@ -171,10 +171,11 @@ type Deps struct {
 	Extensions *extensions.Catalog
 }
 
-// hex32 renders a UUID as the storage layer's 32-lowercase-hex BranchId (no
-// dashes): a branch id becomes the storage branch id verbatim (the storage layer
-// is flat — no separate tenant). It matches the controller API layer's identical
-// rendering.
+// hex32 renders a branch uuid as the flat 32-lowercase-hex spelling the daemons
+// and the endpoint spec carry (no dashes). Every `branch_id` column holds the uuid
+// itself, so this is a wire rendering, not a second identity — and the id needs no
+// scoping either way, the storage layer being flat (no enclosing tenant). It
+// matches the controller API layer's identical rendering.
 func hex32(id uuid.UUID) string {
 	return hex.EncodeToString(id[:])
 }

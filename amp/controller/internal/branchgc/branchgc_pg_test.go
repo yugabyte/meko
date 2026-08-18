@@ -108,25 +108,25 @@ func seedCluster(t *testing.T, pool *db.Pool) uuid.UUID {
 }
 
 // seedBranch records a live branch through the production writer and returns its
-// uuid plus the flat 32-hex id the amp_storage tables key on. parent may be
+// uuid every statement below binds. parent may be
 // uuid.Nil for a root.
 //
 // registry.RecordBranch rather than a hand-written INSERT: it is the single writer
 // of a branch's creation record AND its `amp_storage.branch_state` seed, so the
 // fixture is the row shape the product actually produces — including the fork
 // validations, which a `parent` here goes through for real.
-func seedBranch(t *testing.T, pool *db.Pool, clusterID, parent uuid.UUID, name string) (uuid.UUID, string) {
+func seedBranch(t *testing.T, pool *db.Pool, clusterID, parent uuid.UUID, name string) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	rec := registry.BranchCreateRecord{BranchName: name, PgVersion: 18, StartLSN: "0/0"}
 	if parent != uuid.Nil {
-		ancestor := registry.FormatBranchID(parent)
+		ancestor := parent.String()
 		rec.AncestorBranchID = &ancestor
 	}
-	if err := registry.NewStore(pool).RecordBranch(t.Context(), clusterID, registry.FormatBranchID(id), rec); err != nil {
+	if err := registry.NewStore(pool).RecordBranch(t.Context(), clusterID, id.String(), rec); err != nil {
 		t.Fatalf("record branch %s: %v", name, err)
 	}
-	return id, registry.FormatBranchID(id)
+	return id
 }
 
 // storageTables is every amp_storage table a branch has rows in — the reaper's
@@ -151,7 +151,7 @@ var storageTables = []string{
 // it is fanned out over `kind`, so only rows in every kind prove the fan-out
 // covers all of them. Seeded with a single kind, a count that read low would
 // still pass — the same reason the bucketed tables are seeded in every bucket.
-func seedStorage(t *testing.T, pool *db.Pool, storageID string, n int) {
+func seedStorage(t *testing.T, pool *db.Pool, branchID uuid.UUID, n int) {
 	t.Helper()
 	ctx := t.Context()
 	for _, stmt := range []string{
@@ -175,7 +175,7 @@ func seedStorage(t *testing.T, pool *db.Pool, storageID string, n int) {
 		 SELECT $1, decode(lpad(to_hex(g), 36, '0'), 'hex'), 1000 + g, '\\x00'::bytea
 		   FROM generate_series(0, $2::int - 1) g`,
 	} {
-		if _, err := pool.Exec(ctx, stmt, storageID, n); err != nil {
+		if _, err := pool.Exec(ctx, stmt, branchID, n); err != nil {
 			t.Fatalf("seed storage rows (%.60s...): %v", stmt, err)
 		}
 	}
@@ -211,23 +211,23 @@ func leaveTheDueSet(t *testing.T, pool *db.Pool, branchID uuid.UUID) {
 }
 
 // storageRows counts the branch's rows in one amp_storage table.
-func storageRows(t *testing.T, pool *db.Pool, table, storageID string) int {
+func storageRows(t *testing.T, pool *db.Pool, table string, branchID uuid.UUID) int {
 	t.Helper()
 	var n int
 	if err := pool.QueryRow(t.Context(),
 		fmt.Sprintf(`SELECT count(*) FROM amp_storage.%s WHERE branch_id = $1`, table),
-		storageID).Scan(&n); err != nil {
+		branchID).Scan(&n); err != nil {
 		t.Fatalf("count %s: %v", table, err)
 	}
 	return n
 }
 
 // totalStorageRows counts the branch's rows across every table in the plan.
-func totalStorageRows(t *testing.T, pool *db.Pool, storageID string) int {
+func totalStorageRows(t *testing.T, pool *db.Pool, branchID uuid.UUID) int {
 	t.Helper()
 	total := 0
 	for _, table := range storageTables {
-		total += storageRows(t, pool, table, storageID)
+		total += storageRows(t, pool, table, branchID)
 	}
 	return total
 }
@@ -255,12 +255,12 @@ func TestPgReapDeletesDueBranchOnly(t *testing.T) {
 	pool := migratedPool(t)
 	clusterID := seedCluster(t, pool)
 
-	doomed, doomedHex := seedBranch(t, pool, clusterID, uuid.Nil, "doomed")
-	survivor, survivorHex := seedBranch(t, pool, clusterID, uuid.Nil, "survivor")
+	doomed := seedBranch(t, pool, clusterID, uuid.Nil, "doomed")
+	survivor := seedBranch(t, pool, clusterID, uuid.Nil, "survivor")
 	const rows = 40
-	seedStorage(t, pool, doomedHex, rows)
-	seedStorage(t, pool, survivorHex, rows)
-	before := totalStorageRows(t, pool, survivorHex)
+	seedStorage(t, pool, doomed, rows)
+	seedStorage(t, pool, survivor, rows)
+	before := totalStorageRows(t, pool, survivor)
 	tombstone(t, pool, doomed, -time.Minute)
 
 	stats, err := newReaper(t, pool, testCfg()).tick(t.Context())
@@ -275,14 +275,14 @@ func TestPgReapDeletesDueBranchOnly(t *testing.T) {
 	}
 
 	for _, table := range storageTables {
-		if n := storageRows(t, pool, table, doomedHex); n != 0 {
+		if n := storageRows(t, pool, table, doomed); n != 0 {
 			t.Errorf("amp_storage.%s still holds %d rows of the reaped branch, want 0", table, n)
 		}
 	}
 	if !gcCompleted(t, pool, doomed) {
 		t.Error("gc_completed_at is unset on the reaped branch")
 	}
-	if after := totalStorageRows(t, pool, survivorHex); after != before {
+	if after := totalStorageRows(t, pool, survivor); after != before {
 		t.Errorf("the live branch lost rows: %d -> %d", before, after)
 	}
 	if gcCompleted(t, pool, survivor) {
@@ -343,12 +343,12 @@ func TestPgReapHoldsBack(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := migratedPool(t)
 			clusterID := seedCluster(t, pool)
-			branch, hex := seedBranch(t, pool, clusterID, uuid.Nil, "held-back")
-			seedStorage(t, pool, hex, 10)
+			branch := seedBranch(t, pool, clusterID, uuid.Nil, "held-back")
+			seedStorage(t, pool, branch, 10)
 			if tc.refer != nil {
 				tc.refer(t, pool, clusterID, branch)
 			}
-			before := totalStorageRows(t, pool, hex)
+			before := totalStorageRows(t, pool, branch)
 			tombstone(t, pool, branch, tc.deadline)
 			// Held back or not yet due, this branch stays tombstoned-and-unreaped, so
 			// retire it from the due set for the tests that follow.
@@ -361,7 +361,7 @@ func TestPgReapHoldsBack(t *testing.T) {
 			if stats.RowsDeleted != 0 || stats.BranchesReclaimed != 0 {
 				t.Errorf("tick stats = %+v, want nothing deleted and nothing completed", stats)
 			}
-			if after := totalStorageRows(t, pool, hex); after != before {
+			if after := totalStorageRows(t, pool, branch); after != before {
 				t.Errorf("the branch lost rows: %d -> %d", before, after)
 			}
 			if gcCompleted(t, pool, branch) {
@@ -392,7 +392,7 @@ func TestPgReapBlockedBranchesDoNotStarveOthers(t *testing.T) {
 	const blockers = 5
 
 	for i := range blockers {
-		blocked, _ := seedBranch(t, pool, clusterID, uuid.Nil, fmt.Sprintf("blocker-%d", i))
+		blocked := seedBranch(t, pool, clusterID, uuid.Nil, fmt.Sprintf("blocker-%d", i))
 		// An endpoint on the branch is one of the two guards; the drop path refuses
 		// it, so reaching this state at all is a bug the reaper must not act on.
 		if _, err := pool.Exec(t.Context(),
@@ -405,8 +405,8 @@ func TestPgReapBlockedBranchesDoNotStarveOthers(t *testing.T) {
 		leaveTheDueSet(t, pool, blocked)
 	}
 
-	reapable, hex := seedBranch(t, pool, clusterID, uuid.Nil, "starved")
-	seedStorage(t, pool, hex, 10)
+	reapable := seedBranch(t, pool, clusterID, uuid.Nil, "starved")
+	seedStorage(t, pool, reapable, 10)
 	tombstone(t, pool, reapable, -time.Minute)
 	leaveTheDueSet(t, pool, reapable)
 
@@ -422,7 +422,7 @@ func TestPgReapBlockedBranchesDoNotStarveOthers(t *testing.T) {
 	if !gcCompleted(t, pool, reapable) {
 		t.Error("the reclaimable branch was starved by the blocked ones")
 	}
-	if rows := totalStorageRows(t, pool, hex); rows != 0 {
+	if rows := totalStorageRows(t, pool, reapable); rows != 0 {
 		t.Errorf("the reclaimable branch kept %d rows", rows)
 	}
 }
@@ -430,10 +430,10 @@ func TestPgReapBlockedBranchesDoNotStarveOthers(t *testing.T) {
 func TestPgReapChunksAcrossTicks(t *testing.T) {
 	pool := migratedPool(t)
 	clusterID := seedCluster(t, pool)
-	branch, hex := seedBranch(t, pool, clusterID, uuid.Nil, "chunked")
+	branch := seedBranch(t, pool, clusterID, uuid.Nil, "chunked")
 	const perTable = 12
-	seedStorage(t, pool, hex, perTable)
-	total := totalStorageRows(t, pool, hex)
+	seedStorage(t, pool, branch, perTable)
+	total := totalStorageRows(t, pool, branch)
 	tombstone(t, pool, branch, -time.Minute)
 
 	cfg := testCfg()
@@ -475,7 +475,7 @@ func TestPgReapChunksAcrossTicks(t *testing.T) {
 	if deleted != total {
 		t.Errorf("deleted %d rows across %d ticks, want the seeded %d", deleted, ticks, total)
 	}
-	if left := totalStorageRows(t, pool, hex); left != 0 {
+	if left := totalStorageRows(t, pool, branch); left != 0 {
 		t.Errorf("%d rows left after the branch was marked reclaimed", left)
 	}
 }
@@ -486,8 +486,8 @@ func TestPgReapChunksAcrossTicks(t *testing.T) {
 func TestPgReapIsIdempotent(t *testing.T) {
 	pool := migratedPool(t)
 	clusterID := seedCluster(t, pool)
-	branch, hex := seedBranch(t, pool, clusterID, uuid.Nil, "twice")
-	seedStorage(t, pool, hex, 10)
+	branch := seedBranch(t, pool, clusterID, uuid.Nil, "twice")
+	seedStorage(t, pool, branch, 10)
 	tombstone(t, pool, branch, -time.Minute)
 
 	r := newReaper(t, pool, testCfg())
@@ -701,7 +701,7 @@ func TestPgStampsReapDeadlines(t *testing.T) {
 	reaper := New(pool, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	clusterID := seedCluster(t, pool)
-	branchID, _ := seedBranch(t, pool, clusterID, uuid.Nil, "reap-deadline")
+	branchID := seedBranch(t, pool, clusterID, uuid.Nil, "reap-deadline")
 	if err := backend.DeleteBranch(ctx, clusterID, branchID); err != nil {
 		t.Fatalf("delete branch: %v", err)
 	}
@@ -719,7 +719,7 @@ func TestPgStampsReapDeadlines(t *testing.T) {
 
 	// The cluster cascade tombstones its branches the same way, so a cluster
 	// delete needs no reap path of its own.
-	cascadeID, _ := seedBranch(t, pool, clusterID, uuid.Nil, "reap-deadline-cascade")
+	cascadeID := seedBranch(t, pool, clusterID, uuid.Nil, "reap-deadline-cascade")
 	if err := backend.DeleteCluster(ctx, clusterID); err != nil {
 		t.Fatalf("delete cluster: %v", err)
 	}

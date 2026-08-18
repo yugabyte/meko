@@ -144,7 +144,7 @@ before delta at a tie).
 ```sql
 CREATE TABLE amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,    -- ((relnode/7)+(relnode/13)+(blknum/256))%6
-    branch_id    TEXT     NOT NULL,
+    branch_id    uuid     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
     relnode      BIGINT   NOT NULL,
@@ -256,7 +256,7 @@ state:
 
 ```sql
 CREATE TABLE amp_storage.branch_state (
-    branch_id              TEXT      NOT NULL,
+    branch_id              uuid      NOT NULL,
     pg_version             INT       NOT NULL,
     -- Set true by `update_branch_initial_state`, its only writer, in the
     -- same statement that fills the group below. This is the presence
@@ -272,7 +272,7 @@ CREATE TABLE amp_storage.branch_state (
     -- crash-loop on attach. See #531.
     consistent_lsn         BIGINT,
     applied_gc_cutoff_lsn  BIGINT,
-    ancestor_branch_id     TEXT,
+    ancestor_branch_id     uuid,
     ancestor_lsn           BIGINT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,

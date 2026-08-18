@@ -35,7 +35,6 @@ import (
 	"github.com/yugabyte/amp/controller/internal/config"
 	"github.com/yugabyte/amp/controller/internal/db"
 	applog "github.com/yugabyte/amp/controller/internal/log"
-	"github.com/yugabyte/amp/controller/internal/registry"
 )
 
 // gcBuckets and slruKinds are Go copies of Rust constants — GC_BUCKETS
@@ -235,7 +234,7 @@ func (s tableSpec) selectSQL(withCursor bool) string {
 	if len(s.cursorCols) > 0 {
 		proj += ", " + strings.Join(s.cursorCols, ", ")
 	}
-	where, next := "branch_id = $1", 2
+	where, next := "branch_id = $1::uuid", 2
 	if s.fanOut.count > 0 {
 		where += fmt.Sprintf(" AND %s = $2", s.fanOut.column)
 		next = 3
@@ -481,14 +480,11 @@ func (r *Reaper) reapBranch(ctx context.Context, id uuid.UUID, budget int) (int,
 		r.progress[id] = p
 	}
 	total := 0
-	// The 32-lowercase-hex rendering every amp_storage table keys on.
-	// registry.FormatBranchID is the one definition of it.
-	sid := registry.FormatBranchID(id)
 	for p.stepIdx < len(steps) {
 		if total >= budget {
 			return total, false, nil
 		}
-		deleted, drained, err := r.drainStep(ctx, steps[p.stepIdx], sid, budget-total, p)
+		deleted, drained, err := r.drainStep(ctx, steps[p.stepIdx], id, budget-total, p)
 		total += deleted
 		if err != nil {
 			return total, false, err
@@ -506,13 +502,13 @@ func (r *Reaper) reapBranch(ctx context.Context, id uuid.UUID, budget int) (int,
 // SELECT comes back empty (nothing of this branch is left where the statement
 // looks) or the budget is spent. Reports the rows deleted and whether it drained
 // rather than ran out of budget.
-func (r *Reaper) drainStep(ctx context.Context, st step, storageID string, budget int, p *resumePoint) (int, bool, error) {
+func (r *Reaper) drainStep(ctx context.Context, st step, branchID uuid.UUID, budget int, p *resumePoint) (int, bool, error) {
 	total := 0
 	for total < budget {
 		// Never exceed the budget just because the chunk size is bigger than what
 		// is left of it.
 		limit := min(r.cfg.RowsPerDelete, budget-total)
-		ids, last, err := r.selectRowKeys(ctx, st, storageID, limit, p.cursor)
+		ids, last, err := r.selectRowKeys(ctx, st, branchID, limit, p.cursor)
 		if err != nil {
 			return total, false, err
 		}
@@ -538,9 +534,11 @@ func (r *Reaper) drainStep(ctx context.Context, st step, storageID string, budge
 // cursor columns of the LAST row, since the batch is the lowest remaining rows in
 // key order. A nil `cursor` selects the cursor-free variant, which is how a
 // position starts.
-func (r *Reaper) selectRowKeys(ctx context.Context, st step, storageID string, limit int, cursor []any) ([][]byte, []any, error) {
+func (r *Reaper) selectRowKeys(ctx context.Context, st step, branchID uuid.UUID, limit int, cursor []any) ([][]byte, []any, error) {
 	sql := st.initSelectSQL
-	args := []any{storageID}
+	// Bound as text and cast in SQL (`branch_id = $1::uuid`), like every other
+	// statement here — see the note on `dueBranches`.
+	args := []any{branchID.String()}
 	if st.spec.fanOut.count > 0 {
 		args = append(args, st.bucket)
 	}

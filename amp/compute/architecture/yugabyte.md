@@ -225,7 +225,7 @@ derived from the blob's key), not by separate tables:
 CREATE TYPE amp_storage.blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
 CREATE TABLE amp_storage.blobs (
-    branch_id        TEXT                  NOT NULL,    -- branch id, or "" if not extractable
+    branch_id        uuid                  NOT NULL,    -- branch id; nil uuid if not extractable
     namespace        amp_storage.blob_namespace NOT NULL,    -- 'pageserver' or 'safekeeper'
     key              TEXT                  NOT NULL,    -- discriminating filename, generation suffix stripped
     generation       INT,                               -- pageserver attach gen; NULL for genless files
@@ -247,8 +247,8 @@ The column split is populated at write time by `YbStore::parse_key`
   lives in typed rows (`amp_storage.branch_state`, `amp_storage.wals`),
   so current safekeeper builds write no blobs.
 - **`branch_id`** — the branch-id-shaped token in the path (32 hex
-  chars, optionally with a `-<count>-<num>` shard suffix). Empty string
-  when absent.
+  chars, optionally with a `-<count>-<num>` shard suffix), stored as a
+  `uuid`. The nil uuid when the path carries no id.
 - **`key`** — the discriminating filename only: the path with the
   `branches` literal and the branch id removed.
   `split_key_generation` then peels a trailing or pre-extension
@@ -331,7 +331,7 @@ relfork stay tablet-local for any 2MB stretch. Clustering by
 ```sql
 CREATE TABLE amp_storage.pages (
     bucket_id    SMALLINT NOT NULL,    -- ((relnode/7)+(relnode/13)+(blknum/256))%6
-    branch_id    TEXT     NOT NULL,
+    branch_id    uuid     NOT NULL,
     spcnode      BIGINT   NOT NULL,
     dbnode       BIGINT   NOT NULL,
     relnode      BIGINT   NOT NULL,
@@ -417,7 +417,7 @@ ordered inside it.
 
 ```sql
 CREATE TABLE amp_storage.slru_pages (
-    branch_id    TEXT     NOT NULL,
+    branch_id    uuid     NOT NULL,
     kind         SMALLINT NOT NULL,
     segno        BIGINT   NOT NULL,
     blknum       BIGINT   NOT NULL,
@@ -446,7 +446,7 @@ contiguous.
 
 ```sql
 CREATE TABLE amp_storage.meta (
-    branch_id    TEXT     NOT NULL,
+    branch_id    uuid     NOT NULL,
     key          BYTEA    NOT NULL,
     lsn          BIGINT   NOT NULL,
     payload      BYTEA    NOT NULL,
@@ -575,7 +575,7 @@ needs no later refinement.
 
 ```sql
 CREATE TABLE amp_storage.branch_state (
-    branch_id              TEXT        NOT NULL,
+    branch_id              uuid        NOT NULL,
     pg_version             INT         NOT NULL,
 
     -- per-daemon "my group exists" flags; each set only by that daemon's
@@ -586,7 +586,7 @@ CREATE TABLE amp_storage.branch_state (
     -- pageserver-owned; NULL until the pageserver creates its state
     consistent_lsn         BIGINT,
     applied_gc_cutoff_lsn  BIGINT,
-    ancestor_branch_id     TEXT,
+    ancestor_branch_id     uuid,
     ancestor_lsn           BIGINT,
     initdb_lsn             BIGINT,
     prev_record_lsn        BIGINT,
@@ -611,7 +611,7 @@ to the compute only once its bytes are in this table.
 ```sql
 CREATE TABLE amp_storage.wals (
     bucket_id        SMALLINT NOT NULL,  -- per-batch placement bucket, 0..5
-    branch_id        TEXT     NOT NULL,
+    branch_id        uuid     NOT NULL,
     segno            BIGINT   NOT NULL,
     chunk_offset     BIGINT   NOT NULL,
     chunk_size       INT      NOT NULL,
@@ -694,7 +694,7 @@ CONFLICT` needed under `yb_enable_upsert_mode`.
 
 ```sql
 CREATE TABLE amp_storage.pending_gc (
-    branch_id  TEXT     NOT NULL,
+    branch_id  uuid     NOT NULL,
     bucket_id  INT      NOT NULL,  -- writer-computed: page_store::gc_bucket_id(key) % GC_BUCKETS
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,  -- encoded 18-byte Key: block (trim) or object (drop/shrink)
@@ -742,7 +742,7 @@ tables; the task log (`controller.*`) and the data plane
 | Table | Purpose |
 |---|---|
 | `amp_registry.users`, `storage_pools`, `clusters`, `user_pool_grants`, `user_cluster_grants` | The resource ladder above a branch. `clusters` is tombstoned (`dropped_at`) rather than deleted, because its branches are. |
-| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — it is the storage layer's globally-unique `BranchId`, and branches are not sharded across pageservers (YB tablet-shards the keyspace itself), so nothing needs a composite key. `cluster_id` is an ordinary scoping column, indexed by `branches_by_cluster`. Carries the branch's *creation record* (`name`, `pg_version`, `parent_branch_id`, `fork_lsn`), written at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL parent = bootstrap, non-NULL = fork that ancestor at `fork_lsn`). Also holds `extensions` (a JSONB array): the branch's opted-in externalized-extension set, seeded from the ancestor on fork by `RecordBranch` and unioned by the create_endpoint opt-in, so forks and read replicas inherit it (compute/architecture/extensions.md). The storage layer addresses the row as `replace(branch_id::text, '-', '')`. No fencing state lives here — write fencing is a lease on the branch in `amp_registry.resource_token` (compute/architecture/compute-fencing.md), held by whichever endpoint is writing it. A dropped branch is tombstoned via `dropped_at`, never deleted; the name and default-branch uniqueness indexes are partial on that, so a drop frees the name. The reaper then stamps `reap_after` (`dropped_at + --branch-gc-retention`), the deadline after which the controller's branch-drop reaper deletes the branch's rows from every table below and stamps `gc_completed_at` — the row itself still stays, because a branch id is never reused (`controller/internal/branchgc`, and controller/architecture/sc-integration.md § Branch-drop GC). The `branches_gc_due` partial index over those two columns is that reaper's due-scan. |
+| `amp_registry.branches` | One row per branch, keyed by `branch_id` alone — it is the storage layer's globally-unique `BranchId`, and branches are not sharded across pageservers (YB tablet-shards the keyspace itself), so nothing needs a composite key. `cluster_id` is an ordinary scoping column, indexed by `branches_by_cluster`. Carries the branch's *creation record* (`name`, `pg_version`, `parent_branch_id`, `fork_lsn`), written at branch create and read back by the launcher to materialize the pageserver + safekeeper pair (NULL parent = bootstrap, non-NULL = fork that ancestor at `fork_lsn`). Also holds `extensions` (a JSONB array): the branch's opted-in externalized-extension set, seeded from the ancestor on fork by `RecordBranch` and unioned by the create_endpoint opt-in, so forks and read replicas inherit it (compute/architecture/extensions.md). Every `branch_id` column in `amp_storage` holds this same `uuid`. No fencing state lives here — write fencing is a lease on the branch in `amp_registry.resource_token` (compute/architecture/compute-fencing.md), held by whichever endpoint is writing it. A dropped branch is tombstoned via `dropped_at`, never deleted; the name and default-branch uniqueness indexes are partial on that, so a drop frees the name. The reaper then stamps `reap_after` (`dropped_at + --branch-gc-retention`), the deadline after which the controller's branch-drop reaper deletes the branch's rows from every table below and stamps `gc_completed_at` — the row itself still stays, because a branch id is never reused (`controller/internal/branchgc`, and controller/architecture/sc-integration.md § Branch-drop GC). The `branches_gc_due` partial index over those two columns is that reaper's due-scan. |
 | `amp_registry.endpoints` | One row per compute endpoint, keyed by `id` and belonging to a branch — there is no `cluster_id` column, so an endpoint and its branch can never disagree about the cluster. Every endpoint is created the same way, through `/api/v1`, whether the instance it names is a pod the controller deploys or a local process `yb_amp_local` spawns (`--deploy-driver=local`); the only difference is that a local compute has no controller-assigned `address`. `endpoints_one_writer_per_branch` applies to both. |
 
 Semantics are documented in

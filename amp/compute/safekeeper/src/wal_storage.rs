@@ -442,7 +442,7 @@ impl WalReader {
             );
             return Ok(Box::pin(crate::yb_wal_storage::YbSegmentReader::new(
                 yb_wal,
-                &self.branch_id,
+                self.branch_id,
                 segno,
                 self.wal_seg_size,
                 xlogoff,

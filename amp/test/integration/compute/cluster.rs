@@ -735,7 +735,8 @@ impl Cluster {
             .context("connect to the run's YB db")?;
         let row = client
             .query_one(
-                "SELECT consistent_lsn FROM amp_storage.branch_state WHERE branch_id = $1",
+                "SELECT consistent_lsn FROM amp_storage.branch_state \
+                 WHERE branch_id = $1::text::uuid",
                 &[&branch_id],
             )
             .await
@@ -1178,7 +1179,7 @@ impl Cluster {
         let client = crate::db::connect(&conninfo)
             .await
             .context("wals overlap gate: connecting to the run's YB db")?;
-        let sql = "SELECT branch_id, segno, prev_off, prev_size, chunk_offset, chunk_size \
+        let sql = "SELECT branch_id::text, segno, prev_off, prev_size, chunk_offset, chunk_size \
                    FROM (SELECT branch_id, segno, chunk_offset, chunk_size, \
                                 lag(chunk_offset) OVER w AS prev_off, \
                                 lag(chunk_size)  OVER w AS prev_size \

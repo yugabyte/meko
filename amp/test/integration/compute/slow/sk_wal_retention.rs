@@ -183,7 +183,7 @@ async fn min_segno(yb: &str, branch: &str) -> anyhow::Result<Option<i64>> {
     let client = db::connect(yb).await.context("connect to the run's YB db")?;
     let row = client
         .query_one(
-            "SELECT min(segno)::BIGINT FROM amp_storage.wals WHERE branch_id = $1",
+            "SELECT min(segno)::BIGINT FROM amp_storage.wals WHERE branch_id = $1::text::uuid",
             &[&branch],
         )
         .await
@@ -195,7 +195,7 @@ async fn wal_seg_size(yb: &str, branch: &str) -> anyhow::Result<i64> {
     let client = db::connect(yb).await.context("connect to the run's YB db")?;
     let row = client
         .query_one(
-            "SELECT wal_seg_size FROM amp_storage.branch_state WHERE branch_id = $1",
+            "SELECT wal_seg_size FROM amp_storage.branch_state WHERE branch_id = $1::text::uuid",
             &[&branch],
         )
         .await

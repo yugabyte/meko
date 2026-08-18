@@ -38,6 +38,8 @@ use futures::stream::Stream;
 // YB smart-driver fork; aliased so the type names below stay
 // untouched. See pageserver/src/page_store.rs for the rationale.
 use tokio_util::sync::CancellationToken;
+use utils::id::BranchId;
+use uuid::Uuid;
 use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
 
@@ -265,13 +267,35 @@ impl YbStore {
         String::new()
     }
 
+    /// The `branch_id` column value for a path token: `blobs.branch_id` is
+    /// `uuid`, and `BranchId` owns both spellings of the id, so the token goes
+    /// through it rather than through a second parser. The token comes from
+    /// [`Self::extract_neon_id`] — 32 validated hex digits, or empty — so a
+    /// parse can only fail on the branchless case, which stores the nil uuid (a
+    /// minted BranchId is 16 random bytes and is never nil).
+    fn branch_uuid(token: &str) -> Uuid {
+        token
+            .parse::<BranchId>()
+            .map(BranchId::to_uuid)
+            .unwrap_or_else(|_| Uuid::nil())
+    }
+
+    /// Inverse of [`Self::branch_uuid`], for rebuilding a key path.
+    fn branch_token(branch_id: Uuid) -> String {
+        if branch_id.is_nil() {
+            String::new()
+        } else {
+            BranchId::from_uuid(branch_id).to_string()
+        }
+    }
+
     /// Map a full key to the three storage columns:
     ///   `(namespace, branch_id, key_body)`
     ///
     /// - `namespace`: `"pageserver"` / `"safekeeper"`. Derived from
     ///   `YbStoreConfig::prefix`.
-    /// - `branch_id`: the first Neon-id-shaped token in the path (empty
-    ///   when absent).
+    /// - `branch_id`: the first Neon-id-shaped token in the path, as the `uuid`
+    ///   the column holds (nil when the path carries no id).
     /// - `key_body`: the path *after the configured prefix is stripped*,
     ///   with these segments **dropped**:
     ///     - the literal `branches` marker,
@@ -283,7 +307,7 @@ impl YbStore {
     ///
     /// [`reconstruct_key`] is the inverse — it knows the per-namespace
     /// layout convention and reassembles the original path.
-    fn parse_key(&self, full_key: &str) -> (&'static str, String, String) {
+    fn parse_key(&self, full_key: &str) -> (&'static str, Uuid, String) {
         let cfg_prefix = self.prefix.as_deref().unwrap_or("");
         let rest = full_key.strip_prefix(cfg_prefix).unwrap_or(full_key);
         let namespace: &'static str =
@@ -292,15 +316,15 @@ impl YbStore {
             } else {
                 "pageserver"
             };
-        let branch_id = Self::extract_neon_id(rest);
+        let token = Self::extract_neon_id(rest);
 
         let key_body: String = rest
             .split('/')
-            .filter(|seg| *seg != "branches" && (branch_id.is_empty() || *seg != branch_id))
+            .filter(|seg| *seg != "branches" && (token.is_empty() || *seg != token))
             .collect::<Vec<_>>()
             .join("/");
 
-        (namespace, branch_id, key_body)
+        (namespace, Self::branch_uuid(&token), key_body)
     }
 
     /// Inverse of [`parse_key`]: rebuild the full key from
@@ -312,28 +336,29 @@ impl YbStore {
     /// - `pageserver`, no branch:    `<prefix><body>` (generic blob)
     /// - `safekeeper`, body is `safekeeper-control`: `<prefix>safekeeper-control/<branch_id>`
     /// - `safekeeper`, anything else (WAL backup):   `<prefix><branch_id>/<body>`
-    fn reconstruct_key(&self, namespace: &str, branch_id: &str, key_body: &str) -> String {
+    fn reconstruct_key(&self, namespace: &str, branch_id: Uuid, key_body: &str) -> String {
         let cfg_prefix = self.prefix.as_deref().unwrap_or("");
+        let token = Self::branch_token(branch_id);
         let body = if namespace == "safekeeper" {
             if key_body == "safekeeper-control" {
-                if branch_id.is_empty() {
+                if token.is_empty() {
                     "safekeeper-control".to_string()
                 } else {
-                    format!("safekeeper-control/{branch_id}")
+                    format!("safekeeper-control/{token}")
                 }
             } else if key_body.is_empty() {
-                branch_id.to_string()
+                token
             } else {
-                format!("{branch_id}/{key_body}")
+                format!("{token}/{key_body}")
             }
-        } else if branch_id.is_empty() {
+        } else if token.is_empty() {
             // pageserver-namespace blob with no branch — generic blob, no
             // `branches/` segment to synthesize.
             key_body.to_string()
         } else if key_body.is_empty() {
-            format!("branches/{branch_id}")
+            format!("branches/{token}")
         } else {
-            format!("branches/{branch_id}/{key_body}")
+            format!("branches/{token}/{key_body}")
         };
         format!("{cfg_prefix}{body}")
     }
@@ -448,9 +473,9 @@ impl RemoteStorage for YbStore {
         let mut where_clauses: Vec<String> =
             vec!["namespace = $1::text::amp_storage.blob_namespace".to_string()];
         let mut bind_params: Vec<Box<dyn ToSql + Sync + Send>> = vec![Box::new(namespace)];
-        if !branch_id.is_empty() {
+        if !branch_id.is_nil() {
             where_clauses.push(format!("branch_id = ${}", bind_params.len() + 1));
-            bind_params.push(Box::new(branch_id.clone()));
+            bind_params.push(Box::new(branch_id));
         }
         if key_body_is_filename {
             // Exact-key seek. If the caller named a specific
@@ -510,7 +535,7 @@ impl RemoteStorage for YbStore {
         match mode {
             ListingMode::NoDelimiter => {
                 for row in rows {
-                    let row_branch: String = row.get("branch_id");
+                    let row_branch: Uuid = row.get("branch_id");
                     let row_key_body: String = row.get("key");
                     let row_generation: Option<i32> = row.get("generation");
                     let size_bytes: i64 = row.get("size_bytes");
@@ -519,7 +544,7 @@ impl RemoteStorage for YbStore {
                     // full original path (`index_part.json-00000005`,
                     // `tenant-manifest-00000005.json`, etc.).
                     let key_with_gen = Self::rejoin_key_generation(&row_key_body, row_generation);
-                    let full_key = self.reconstruct_key(namespace, &row_branch, &key_with_gen);
+                    let full_key = self.reconstruct_key(namespace, row_branch, &key_with_gen);
                     let remote_path = self
                         .db_key_to_remote_path(&full_key)
                         .map_err(DownloadError::Other)?;
@@ -552,14 +577,14 @@ impl RemoteStorage for YbStore {
 
                 let mut prefixes: HashSet<String> = HashSet::new();
                 for row in rows {
-                    let row_branch: String = row.get("branch_id");
+                    let row_branch: Uuid = row.get("branch_id");
                     let row_key_body: String = row.get("key");
                     let row_generation: Option<i32> = row.get("generation");
                     let size_bytes: i64 = row.get("size_bytes");
                     let last_modified_us: i64 = row.get("last_modified_us");
 
                     let key_with_gen = Self::rejoin_key_generation(&row_key_body, row_generation);
-                    let full_key = self.reconstruct_key(namespace, &row_branch, &key_with_gen);
+                    let full_key = self.reconstruct_key(namespace, row_branch, &key_with_gen);
                     let relative = match full_key.strip_prefix(listing_prefix.as_str()) {
                         Some(r) => r.to_string(),
                         None => continue,
@@ -734,7 +759,7 @@ impl RemoteStorage for YbStore {
         let pipeline_fut = async {
             let futures = row_chunks.into_iter().map(|(idx, chunk)| {
                 let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
-                    Box::new(branch_id.clone()),
+                    Box::new(branch_id),
                     Box::new(namespace),
                     Box::new(key_body.clone()),
                     Box::new(generation),
@@ -865,7 +890,7 @@ impl RemoteStorage for YbStore {
             quote_relation(&table)
         );
         let timeout = self.timeout;
-        let stream_branch = branch_id.clone();
+        let stream_branch = branch_id;
         let stream_namespace = namespace;
         let stream_key = key_body.clone();
         let stream_gen = requested_gen;
@@ -964,7 +989,7 @@ impl RemoteStorage for YbStore {
         // fan out one DELETE per object pipelined via `execute_raw` +
         // `try_join_all`. Same wire-level batching trick as `upload`; each
         // DELETE binds the branch hash key and seeks the exact key range.
-        let parsed: Vec<(&'static str, String, String, Option<i32>)> = paths
+        let parsed: Vec<(&'static str, Uuid, String, Option<i32>)> = paths
             .iter()
             .map(|p| {
                 let (ns, branch, raw_body) = self.parse_key(&self.full_key(p));
@@ -1117,6 +1142,28 @@ mod tests {
 
     /// Real-shape branch id: bare 32-hex.
     const B_LEGACY: &str = "5b36a8400fc88e7eeec19878ef7fbe30";
+
+    /// `blobs.branch_id` is `uuid`, but a key path carries the flat spelling, so
+    /// `list()` re-renders every id it returns and the caller's `download`/`delete`
+    /// parses it straight back. If `branch_token` ever emitted uuid's own dashed
+    /// `Display`, `looks_like_neon_id` (32 bare hex) would stop recognising the
+    /// token, `branch_uuid` would fall back to nil, and every follow-up would
+    /// address the branchless row instead — silently.
+    #[test]
+    fn branch_token_round_trips_through_a_key_path() {
+        let id = YbStore::branch_uuid(B_LEGACY);
+        let token = YbStore::branch_token(id);
+        assert_eq!(token, B_LEGACY, "a key path carries the flat spelling");
+        assert!(
+            YbStore::looks_like_neon_id(&token),
+            "a re-rendered token must be extractable from the key it is put in"
+        );
+        assert_eq!(YbStore::branch_uuid(&token), id);
+        assert!(
+            YbStore::branch_token(Uuid::nil()).is_empty(),
+            "the branchless case must stay branchless"
+        );
+    }
 
     #[test]
     fn extract_neon_id_pageserver_branch_path() {

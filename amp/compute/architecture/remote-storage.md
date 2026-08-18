@@ -101,7 +101,7 @@ which the column names in `yb_store.rs` are hardcoded against:
 CREATE TYPE amp_storage.blob_namespace AS ENUM ('pageserver', 'safekeeper');
 
 CREATE TABLE amp_storage.blobs (
-    branch_id        TEXT                  NOT NULL,  -- 32-hex branch id, "" when none
+    branch_id        uuid                  NOT NULL,  -- branch id; nil uuid when none
     namespace        amp_storage.blob_namespace NOT NULL,  -- 'pageserver' or 'safekeeper'
     key              TEXT                  NOT NULL,  -- discriminating filename, generation stripped
     generation       INT,                             -- attach generation; NULL for genless files

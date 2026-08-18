@@ -66,8 +66,8 @@ func main() {
 // a branch creation record. It keeps the task package independent of the store type.
 type recipeStore struct{ s *registry.Store }
 
-// branchID is the 32-hex BranchId the controller maps a branch to (the storage
-// layer is flat — the branch_id is the whole storage identity), and clusterID is
+// branchID is the flat 32-hex spelling the wire carries; a `branch_id` is the
+// whole identity, the storage layer being flat (no enclosing tenant). clusterID is
 // the cluster whose branch table holds it.
 func (a recipeStore) RecordBranchRecipe(ctx context.Context, clusterID uuid.UUID, branchID string, r task.BranchRecipe) error {
 	var ancestor *string

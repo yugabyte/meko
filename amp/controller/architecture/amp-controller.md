@@ -805,8 +805,8 @@ the upstream multi-tenant machinery is dropped.
 - **One row per branch, one row per endpoint.** Tenancy, clusters, branches,
   and endpoints live in `amp_registry` (§10) and are reached by both surfaces; the
   write-ahead task log lives in `controller`, and the data plane in `amp_storage`.
-  There is no second copy of a branch anywhere — the storage layer's flat view is a
-  projection (`replace(branch_id::text, '-', '')`), not a table.
+  There is no second copy of a branch anywhere — the storage layer addresses the
+  same rows, by the same `uuid`.
 - **Dropped branches are tombstoned, not deleted.** `branch.dropped_at` is stamped
   and the row stays: a branch id is never reused, and its pages and WAL in
   `amp_storage` outlive the drop — until the branch-drop reaper reclaims them a

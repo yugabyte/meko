@@ -78,17 +78,17 @@ func TestPgForkVsDropSerializes(t *testing.T) {
 
 	recordRoot := func(id uuid.UUID, name string) {
 		t.Helper()
-		if err := store.RecordBranch(ctx, clusterID, registry.FormatBranchID(id), registry.BranchCreateRecord{
+		if err := store.RecordBranch(ctx, clusterID, id.String(), registry.BranchCreateRecord{
 			BranchName: name, PgVersion: 18, StartLSN: "0/0",
 		}); err != nil {
 			t.Fatalf("RecordBranch(%s): %v", name, err)
 		}
 	}
 	fork := func(child, parent uuid.UUID, name string) error {
-		parentHex := registry.FormatBranchID(parent)
-		return store.RecordBranch(ctx, clusterID, registry.FormatBranchID(child), registry.BranchCreateRecord{
+		parentStr := parent.String()
+		return store.RecordBranch(ctx, clusterID, child.String(), registry.BranchCreateRecord{
 			BranchName: name, PgVersion: 18,
-			AncestorBranchID: &parentHex, StartLSN: "0/16B8",
+			AncestorBranchID: &parentStr, StartLSN: "0/16B8",
 		})
 	}
 	// Liveness through the backend's own accessor rather than a hand-copied
@@ -107,7 +107,7 @@ func TestPgForkVsDropSerializes(t *testing.T) {
 		var n int
 		if err := pool.QueryRow(ctx,
 			`SELECT count(*) FROM amp_storage.branch_state WHERE branch_id = $1`,
-			registry.FormatBranchID(id)).Scan(&n); err != nil {
+			id.String()).Scan(&n); err != nil {
 			t.Fatalf("count branch_state: %v", err)
 		}
 		return n
