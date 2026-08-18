@@ -278,12 +278,16 @@ pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 /// (`page_store::gc_act_drop_fork`, `gc_act_shrink_fork`) delete every version
 /// of every block of a fork in one unbatched statement, and the candidate is
 /// only dequeued once the action succeeds — a cancelled delete is re-selected
-/// forever, so GC stops and storage is never reclaimed. `truncate_wals_above`
-/// filters on a computed expression over the key columns, so it scans a
-/// branch's whole WAL, on the torn-tail correctness path. `list_rels` runs an
+/// forever, so GC stops and storage is never reclaimed. `list_rels` runs an
 /// unbounded `DISTINCT` per database on the basebackup path, so a cap there
 /// fails compute startup. Blob upload/download already carry their own 120s
 /// budget, which a shorter statement bound would silently preempt.
+///
+/// `truncate_wals_above` used to be on this list for the same reason as the GC
+/// deletes — it filtered on a computed expression over the key columns and so
+/// scanned a branch's whole WAL, on the torn-tail correctness path. It is
+/// sargable now (#812); the scan was itself the bug, not something a timeout
+/// would have made safe.
 ///
 /// Turning this on globally wants those paths batched and made sargable
 /// first. Until then it is opt-in per connection block, where a caller that

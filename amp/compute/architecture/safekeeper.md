@@ -362,9 +362,13 @@ Key properties:
   a buffered chunk past `end_pos` cannot land after the cut. It refuses an
   `end_pos` above `durable_lsn` (accepting one would advertise WAL the row
   store cannot return). It then physically trims the table
-  (`truncate_wals_above`: DELETE chunks starting at/after `end_pos`, and an
-  UPDATE that shortens the one chunk straddling it via `substring`), drops
-  the affected `WalCache` range, and resets the bookkeeping watermarks.
+  (`truncate_wals_above`: DELETE chunks starting at/after `end_pos`, and a
+  read-modify-write UPDATE that shortens the one chunk straddling it), drops
+  the affected `WalCache` range, and resets the bookkeeping watermarks. Both
+  statements address the cut as `(segno, offset within segment)` rather than
+  as an LSN, so `segno` lands in the index condition; filtering on the
+  computed `segno * seg + chunk_offset` scanned the branch's whole WAL, here
+  while holding the timeline lock (#812).
 - **`remove_up_to(segno)`** is WAL GC: a DELETE of all rows with
   `segno < segno_up_to`, bounded below by `delete_lower_bound` (seeded from
   `min(segno)` at construction, advanced after each successful delete) so
@@ -644,7 +648,9 @@ loses nothing but logs.
    - **Torn tail** (`end < raw`): truncate back to the boundary; the compute
      re-streams from there. The torn rows are physically deleted
      (`truncate_wals_above`) so they are not re-counted next restart;
-     best-effort, since the reader is bounded by `write_lsn` anyway.
+     best-effort and bounded by `YB_TORN_TAIL_CLEANUP_MAX`, since the reader
+     is bounded by `write_lsn` anyway. Bounded because it runs inside
+     `load_timeline`.
    - **Trailing `XLOG_SWITCH`** (`end > raw`): `pg_switch_wal()` rounds the
      record's end up to the next segment boundary, past padding the compute
      never streams. The decoder's answer is honored — clamping to the raw

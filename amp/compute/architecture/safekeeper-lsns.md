@@ -178,8 +178,8 @@ accepting it would set `flush_record_lsn = end_pos` and advertise WAL the
 row store can't return. It deletes YB rows lying entirely past the cut,
 drops cached chunks past the cut (so a reader can't be served stale bytes
 that a subsequent write rewrites), and resets all four bookkeeping
-watermarks to `end_pos`. Rows straddling the cut stay; reads are capped at
-the flush frontier so the over-kept tail is never served.
+watermarks to `end_pos`. The chunk straddling the cut is trimmed to end
+exactly at it, so the table ends at `end_pos` with nothing past it.
 
 ### `SafeKeeper::flush_lsn()` wrapper (`safekeeper.rs`)
 

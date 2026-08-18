@@ -69,6 +69,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | `pageserver.toml` top-level knob rejected at startup as `<section>.<key>` | a top-level key was placed **after** a `[section]` header | **N** |
 | PS/SK panics at startup: `OS can't spawn worker thread: Resource temporarily unavailable` | per-user process/thread limit (`ulimit -u` / cgroup `pids.max`) exhausted | **O** |
 | SK: `failed to load timeline` / `end-of-WAL record-boundary scan failed`; compute reconnects in a loop and the PS can't stream | the safekeeper won't trust a scan it couldn't finish, so it fails the load rather than delete or misreport durable WAL. Deterministic causes (unknown codec tag, anchor bail) keep the branch down until fixed | **P** |
+| SK: `safekeeper_timelines` is 0, no error logged, walproposer and PS stuck `connecting`; writes block on `SyncRep` | `load_timeline` is blocked on a YB statement that never returns — no error, so nothing retries | **Q** |
 
 ---
 
@@ -319,3 +320,47 @@ If a branch must be brought up before the underlying cause is fixed, the only sa
 lever is to make the scan succeed — not to delete rows. Escalate rather than
 improvise: the acked WAL above the failure point is still there, and any manual
 truncation forfeits it permanently.
+
+---
+
+## Q. SK: `safekeeper_timelines` is 0 and `load_timeline` logged nothing further
+
+Distinct from **P**: there is no error. The safekeeper is up, serves HTTP and
+accepts TCP on 5454, and never answers on it. `load_timeline` logged its last
+line and stopped. Reads keep working from the pageserver; every commit blocks
+on `SyncRep` forever, and both the walproposer and the pageserver's
+`wal_connection_manager` sit in `connecting` and time out in a loop. CPU is
+idle — it is waiting on YB, not working.
+
+The tell is which `load_timeline` line came last, since the load is a straight
+line of YB statements:
+
+| Last line | Waiting on |
+|---|---|
+| `truncated torn WAL tail to the last valid record boundary` | the torn-tail cleanup delete (`truncate_wals_above`) |
+| `rehydrated write_lsn from amp_storage.wals` | `min(segno)` (`load_min_segno`) |
+| neither | the end-of-WAL scan (`load_write_lsn` / `find_anchor` / `find_end_of_wal`) |
+
+The known instance (#812) was the first row: before the fix, `truncate_wals_above`
+filtered on a computed expression over the key columns, so it scanned the
+branch's entire WAL to delete a handful of rows at the tail. On a busy timeline
+that never came back. Builds carrying the fix bound that cleanup
+(`YB_TORN_TAIL_CLEANUP_MAX`) and log `failed to delete torn WAL tail` on
+timeout rather than hanging, so a load stuck at that line on a current build is
+a **new** cause, not this one.
+
+Triage:
+
+1. Confirm the shape — `safekeeper_timelines 0` with a live `/metrics`, and no
+   `failed to load timeline` anywhere in the log. An error means **P**, not this.
+2. Find the statement on the YB side — all three of these run on the system
+   lane:
+   `SELECT query, state, xact_start FROM pg_stat_activity WHERE application_name = 'safekeeper:yb_wal_system'`.
+   A long-running statement there names the culprit directly.
+3. `EXPLAIN` that statement against the branch. `Storage Table Rows Scanned`
+   near the branch's whole row count in `wals`, with the filter under
+   `Storage Filter:` rather than `Index Cond:`, is the same class of bug.
+
+Restarting the safekeeper (the supervisor, or the pod) clears the state but does
+not fix the cause; it recurred on every restart that hit the torn-tail path and
+cleared on restarts that didn't.

@@ -175,9 +175,6 @@ legitimately run for minutes:
   statement — and because a candidate is dequeued only once its action
   succeeds, a cancelled delete is re-selected forever. GC stops and the
   storage is never reclaimed.
-- `truncate_wals_above` filters on `segno * 16777216 + chunk_offset`, a
-  computed expression DocDB cannot push into the index condition, so it
-  scans a branch's entire WAL — on the torn-tail correctness path.
 - `list_rels` runs an unbounded `DISTINCT` over a database's reldir range
   on the basebackup path, so a cap there fails compute startup.
 - blob upload/download already carry their own 120s budget

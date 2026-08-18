@@ -405,6 +405,14 @@ const YB_DURABLE_WAIT_LOG_EVERY: Duration = Duration::from_secs(10);
 /// unbounded wait wedges the whole safekeeper.
 const YB_DURABLE_WAIT_MAX: Duration = Duration::from_secs(60);
 
+/// Bound for the best-effort torn-tail cleanup in [`YbWalStorage::new`], which
+/// runs inside `load_timeline` where an unbounded wait hangs the load silently
+/// (#812). Giving up is safe at any point, including between the delete and the
+/// trim: readers are bounded by `write_lsn`, so leftover rows are inert and the
+/// next restart retries. Bounds the safekeeper, not YB — `statement_timeout` is
+/// off on these connections, so the statement runs on regardless.
+const YB_TORN_TAIL_CLEANUP_MAX: Duration = Duration::from_secs(60);
+
 /// Durability state published by the consumer onto the watch channel.
 #[derive(Clone, Debug)]
 pub enum DurableState {
@@ -623,20 +631,25 @@ impl YbWalStorage {
         // `write_lsn`, so a failed cleanup is harmless and retried next
         // restart.
         if write_lsn < max_offset {
-            if let Err(e) = truncate_wals_above(
+            let cleanup = truncate_wals_above(
                 &system_client,
                 &table_name,
                 branch_id,
                 wal_seg_size,
                 write_lsn,
-            )
-            .await
-            {
+            );
+            // Bounded: see `YB_TORN_TAIL_CLEANUP_MAX`. A timeout is reported
+            // like any other cleanup failure — the load carries on.
+            let outcome = match tokio::time::timeout(YB_TORN_TAIL_CLEANUP_MAX, cleanup).await {
+                Ok(res) => res.err().map(|e| format!("{e:#}")),
+                Err(_) => Some(format!("timed out after {YB_TORN_TAIL_CLEANUP_MAX:?}")),
+            };
+            if let Some(why) = outcome {
                 tracing::warn!(
                     branch_id = %branch_id,
                     %write_lsn,
                     %max_offset,
-                    "YbWalStorage::new — failed to delete torn WAL tail (harmless; retried next restart): {e:#}",
+                    "YbWalStorage::new — failed to delete torn WAL tail (harmless; retried next restart): {why}",
                 );
             }
         }
@@ -1301,6 +1314,43 @@ fn decode_chunk_data(stored: &[u8], what: &str) -> Result<Vec<u8>> {
         })
 }
 
+/// The `(delete, select)` pair [`truncate_wals_above`] issues, against an
+/// already-quoted `table`. Binds: `$1` branch_id, `$2` the segno holding the
+/// cut, `$3` its offset within that segment. Split out so
+/// `truncate_stmts_are_index_tight` can EXPLAIN the exact text production runs.
+///
+/// The cut is addressed as `(segno, offset)` rather than as one LSN because
+/// filtering on the computed `segno * seg + chunk_offset` cannot be pushed down
+/// as an index bound — it scanned every WAL row of the branch to reach a
+/// handful at the tail, which hung `load_timeline` (#812) and, on the
+/// `truncate_wal` path, held the timeline lock. `remove_up_to` carries the same
+/// rewrite.
+///
+/// The split is exact because `chunk_offset` is segment-relative and rows never
+/// span segments (`upsert_writes` splits at the boundary): the leading
+/// `segno >= $2` is the index bound and the disjunction only decides within the
+/// cut's own segment, which is also the only segment a straddling chunk can lie
+/// in. A segment-aligned cut has no straddler, and `chunk_offset < 0` matches
+/// nothing — which is that answer.
+fn truncate_stmts(table: &str) -> (String, String) {
+    let buckets = bucket_in_list();
+    let del = format!(
+        "DELETE FROM {table} WHERE branch_id = $1 AND {buckets} \
+         AND segno >= $2 AND (segno > $2 OR chunk_offset >= $3)"
+    );
+    // The predicate reads only `chunk_size`, which is LOGICAL length, so it
+    // needs no adjustment for compression — only the byte-slicing that
+    // follows the read moves to Rust.
+    let sel = format!(
+        "SELECT bucket_id, segno, chunk_offset, data \
+         FROM {table} \
+         WHERE branch_id = $1 AND {buckets} \
+           AND segno = $2 AND chunk_offset < $3 \
+           AND chunk_offset + chunk_size > $3"
+    );
+    (del, sel)
+}
+
 /// Discard all WAL strictly beyond `end_pos`: drop chunks that start at
 /// or after it, and truncate the chunk straddling it down to `end_pos`.
 /// After this, `max(chunk_offset + chunk_size)` for the timeline is
@@ -1341,30 +1391,18 @@ async fn truncate_wals_above(
     let table = quote_relation(table);
     let seg = wal_seg_size as i64;
     let end = end_pos.0 as i64;
-    let params: [&(dyn ToSql + Sync); 2] = [&branch_id, &end];
+    // Both statements address `end_pos` as `(end_segno, end_off)` rather than
+    // as a single LSN — see `truncate_stmts` for why.
+    let end_segno = end / seg;
+    let end_off = end % seg;
+    let params: [&(dyn ToSql + Sync); 3] = [&branch_id, &end_segno, &end_off];
+    let (del, sel) = truncate_stmts(&table);
 
-    let buckets = bucket_in_list();
-    // Chunks that begin at or after end_pos are entirely torn — drop them.
-    let del = format!(
-        "DELETE FROM {table} WHERE branch_id = $1 AND {buckets} \
-         AND segno * {seg} + chunk_offset >= $2"
-    );
     client
         .execute(&del, &params)
         .await
         .context("truncate_wals_above: delete chunks past end_pos")?;
 
-    // The chunk straddling end_pos keeps its bytes up to end_pos; trim the
-    // torn remainder so its end aligns exactly with end_pos. The predicate
-    // reads only `chunk_size`, which is LOGICAL length, so it needs no
-    // adjustment for compression — only the byte-slicing moves to Rust.
-    let sel = format!(
-        "SELECT bucket_id, segno, chunk_offset, data \
-         FROM {table} \
-         WHERE branch_id = $1 AND {buckets} \
-           AND segno * {seg} + chunk_offset < $2 \
-           AND segno * {seg} + chunk_offset + chunk_size > $2"
-    );
     let straddling = client
         .query(&sel, &params)
         .await
@@ -3899,6 +3937,249 @@ mod tests {
             "a blindly replayed trim must still match one row (post-image arm); \
              otherwise a lost ack turns a durable trim into a hard error"
         );
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// Stage chunks in three consecutive segments and cut mid-chunk in the
+    /// middle one. The cut compares `(segno, chunk_offset)` against
+    /// `(end_segno, end_off)` pairwise, so the fixture puts a row on each
+    /// side of both halves of that comparison: a survivor *below* the cut
+    /// whose offset is at or past `end_off`, and a casualty *above* it whose
+    /// offset is below `end_off`. Comparing either column alone gets one of
+    /// them wrong — and getting it wrong here either resurrects torn WAL or
+    /// deletes acked WAL, neither of which the single-segment fixture above
+    /// can see.
+    #[tokio::test]
+    async fn truncate_wals_above_cuts_across_segments() {
+        let table = scratch_table("wals_test_trunc_segments");
+        let (fpu, _read, system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+        let branch_id = BranchId::generate();
+
+        let seg = SEG_SIZE as i64;
+        // 8 KiB chunks across segnos 4, 5 and 6, cut mid-chunk at offset
+        // 12288 of segno 5. The interesting rows:
+        //   segno 4 offset 16384  survives  (below the cut, offset > end_off)
+        //   segno 5 offset 0      survives  (same segment, offset < end_off)
+        //   segno 5 offset 8192   trimmed   (straddles the cut)
+        //   segno 6 offset 0      deleted   (above the cut, offset < end_off)
+        let cut = Lsn((5 * seg + 12288) as u64);
+        let chunks: &[(i64, i64)] = &[
+            (4, 0),
+            (4, 8192),
+            (4, 16384),
+            (5, 0),
+            (5, 8192),
+            (6, 0),
+            (6, 8192),
+        ];
+        for (i, (segno, offset)) in chunks.iter().enumerate() {
+            let bucket = (i % 6) as i16;
+            let blob = vec![(i as u8) + 1; 8192];
+            fpu.execute(
+                &format!(
+                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                                     chunk_size, data, last_modified_us) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    quote_relation(&table)
+                ),
+                &[
+                    &branch_id,
+                    &bucket,
+                    segno,
+                    offset,
+                    &8192i32,
+                    &enc(&blob),
+                    &0i64,
+                ],
+            )
+            .await
+            .expect("insert chunk");
+        }
+
+        truncate_wals_above(&system, &table, branch_id, SEG_SIZE as usize, cut)
+            .await
+            .expect("truncate_wals_above");
+
+        let surviving: Vec<(i64, i64)> = system
+            .query(
+                &format!(
+                    "SELECT segno, chunk_offset FROM {} WHERE branch_id=$1 \
+                     ORDER BY segno, chunk_offset",
+                    quote_relation(&table)
+                ),
+                &[&branch_id],
+            )
+            .await
+            .expect("surviving rows")
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        assert_eq!(
+            surviving,
+            vec![(4, 0), (4, 8192), (4, 16384), (5, 0), (5, 8192)],
+            "everything at or past the cut goes, everything below it stays"
+        );
+
+        // The straddler is trimmed to 12288 - 8192 = 4096, and the end of WAL
+        // lands exactly on the cut. Trimming the wrong row — the failure mode
+        // if the straddling SELECT reached outside `end_segno` — shows up
+        // here, since `keep` is derived from the row's own segno.
+        let straddler_size: i32 = system
+            .query_opt(
+                &format!(
+                    "SELECT chunk_size FROM {} \
+                     WHERE branch_id=$1 AND segno=5 AND chunk_offset=8192",
+                    quote_relation(&table)
+                ),
+                &[&branch_id],
+            )
+            .await
+            .expect("straddling chunk")
+            .expect("straddling chunk exists")
+            .get(0);
+        assert_eq!(straddler_size, 4096, "the straddler is trimmed to the cut");
+        let lsn =
+            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+                .await
+                .expect("load_write_lsn");
+        assert_eq!(lsn, cut, "end of WAL must equal the cut");
+
+        // Re-cut at a segment boundary. Nothing can straddle a segment-aligned
+        // cut (rows never span segments), so this must drop segno 5 whole and
+        // leave segno 4 — including its rows above `end_off` — untouched.
+        truncate_wals_above(
+            &system,
+            &table,
+            branch_id,
+            SEG_SIZE as usize,
+            Lsn((5 * seg) as u64),
+        )
+        .await
+        .expect("truncate_wals_above at a segment boundary");
+        let surviving: Vec<(i64, i64)> = system
+            .query(
+                &format!(
+                    "SELECT segno, chunk_offset FROM {} WHERE branch_id=$1 \
+                     ORDER BY segno, chunk_offset",
+                    quote_relation(&table)
+                ),
+                &[&branch_id],
+            )
+            .await
+            .expect("surviving rows after boundary cut")
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        assert_eq!(
+            surviving,
+            vec![(4, 0), (4, 8192), (4, 16384)],
+            "a segment-aligned cut drops the segment above it and trims nothing"
+        );
+        let sizes: Vec<i32> = system
+            .query(
+                &format!(
+                    "SELECT chunk_size FROM {} WHERE branch_id=$1",
+                    quote_relation(&table)
+                ),
+                &[&branch_id],
+            )
+            .await
+            .expect("chunk sizes")
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+        assert_eq!(
+            sizes,
+            vec![8192, 8192, 8192],
+            "no surviving chunk was trimmed"
+        );
+
+        drop_wals_table(&fpu, &table).await;
+    }
+
+    /// The statements must resolve to an index range on `segno`, not a scan
+    /// of the branch's whole WAL. This is the actual content of the #812 fix
+    /// — the behavioural tests above pass either way, because a full scan is
+    /// only wrong in how long it takes, and on a loaded timeline that is long
+    /// enough to hang `load_timeline` outright.
+    ///
+    /// Asserted two ways, because either alone is weak: the plan must carry
+    /// `segno` in its **Index Cond** (a `Storage Filter` there is the
+    /// regression), and the scan must read far fewer rows than the branch
+    /// holds.
+    #[tokio::test]
+    async fn truncate_stmts_are_index_tight() {
+        let table = scratch_table("wals_test_trunc_plan");
+        let (fpu, _read, system) = open_three_lanes().await;
+        make_wals_table(&fpu, &table).await;
+        let branch_id = BranchId::generate();
+
+        // 3000 chunks spread over 30 segments and all six buckets: enough
+        // that a branch-wide scan is unmistakable next to a one-segment one.
+        const ROWS: i64 = 3000;
+        const PER_SEG: i64 = 100;
+        fpu.execute(
+            &format!(
+                "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                                 chunk_size, data, last_modified_us) \
+                 SELECT $1, (i % 6)::smallint, i / {PER_SEG}, (i % {PER_SEG}) * 8192, \
+                        8192, $2, 0 \
+                 FROM generate_series(0, {}) i",
+                quote_relation(&table),
+                ROWS - 1
+            ),
+            &[&branch_id, &enc(&[0x5au8; 64])],
+        )
+        .await
+        .expect("bulk insert chunks");
+
+        // Cut inside the last segment, the worst case for the old shape: the
+        // rows it must touch are at the very end of the branch's key range.
+        let end_segno = ROWS / PER_SEG - 1;
+        let end_off = 50 * 8192i64;
+        let (del, sel) = truncate_stmts(&quote_relation(&table));
+        for (what, stmt) in [("delete", del), ("select", sel)] {
+            let plan: String = system
+                .query(
+                    &format!("EXPLAIN (ANALYZE, DIST, COSTS OFF, TIMING OFF) {stmt}"),
+                    &[&branch_id, &end_segno, &end_off],
+                )
+                .await
+                .unwrap_or_else(|e| panic!("EXPLAIN the {what}: {e:#}"))
+                .iter()
+                .map(|r| r.get::<_, String>(0))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let index_cond = plan
+                .lines()
+                .find(|l| l.trim_start().starts_with("Index Cond:"))
+                .unwrap_or_else(|| panic!("the {what} plan has no Index Cond:\n{plan}"));
+            assert!(
+                index_cond.contains("segno"),
+                "the {what} must bound `segno` in its Index Cond, or it scans \
+                 the branch's whole WAL (#812); plan was:\n{plan}"
+            );
+
+            // The plan's own accounting, so this holds whatever the row width
+            // and however YB pages the scan.
+            let scanned: i64 = plan
+                .lines()
+                .find_map(|l| {
+                    l.trim()
+                        .strip_prefix("Storage Table Rows Scanned: ")?
+                        .parse()
+                        .ok()
+                })
+                .unwrap_or_else(|| panic!("the {what} plan reports no rows scanned:\n{plan}"));
+            assert!(
+                scanned < ROWS / 4,
+                "the {what} scanned {scanned} of {ROWS} rows — an index range \
+                 over one segment reads ~{PER_SEG}; plan was:\n{plan}"
+            );
+        }
 
         drop_wals_table(&fpu, &table).await;
     }
