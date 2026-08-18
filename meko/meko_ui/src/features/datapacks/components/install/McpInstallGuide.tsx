@@ -193,9 +193,8 @@ const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
     description:
       "Integrate the skills package with your AI tool to learn how to use Meko's MCP tools for memory, knowledge, and more.",
     code: [
-      "git clone https://github.com/yugabyte/meko-mcp-server.git",
-      "cd meko-mcp-server",
-      "git checkout add-skills",
+      "git clone https://github.com/yugabyte/meko-skills.git",
+      "cd meko-skills",
       "npx skills add ./skills -g",
     ].join("\n"),
     langLabel: "bash",
@@ -203,7 +202,7 @@ const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
   {
     title: "Select skills at the prompt",
     description:
-      "When prompted to select the skills to install, select both meko-mcp-tools and ysql.",
+      "When prompted to select the skills to install, select both meko-mcp-tools and meko-select-datapack.",
   },
 ];
 
