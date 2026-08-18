@@ -187,7 +187,10 @@ mod tests {
         let err = render(
             Daemon::Pageserver,
             vec![
-                ("branch_id", Value::from("77ffde89f43d4ca08ef0a0ed1f089eaa")),
+                (
+                    "branch_id",
+                    Value::from("77ffde89-f43d-4ca0-8ef0-a0ed1f089eaa"),
+                ),
                 ("not_a_real_pageserver_key", Value::from(true)),
             ],
             &BTreeMap::new(),
@@ -220,9 +223,9 @@ mod tests {
         }
     }
 
-    /// A real 32-hex BranchId: ConfigToml validates the format, so a made-up
+    /// A real BranchId: ConfigToml validates the format, so a made-up
     /// value fails the render (which the type check correctly caught).
-    const BRANCH: &str = "9a054903242f46bca0c9cc6b91a37e4c";
+    const BRANCH: &str = "9a054903-242f-46bc-a0c9-cc6b91a37e4c";
 
     fn overrides(pairs: &[(&str, OverrideValue)]) -> BTreeMap<String, OverrideValue> {
         pairs

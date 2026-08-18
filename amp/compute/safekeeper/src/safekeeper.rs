@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_sk_state_bincode_serde_roundtrip() {
-        let branch_id = BranchId::from_str("112ded66422aa5e953e5440fa5427ac4").unwrap();
+        let branch_id = BranchId::from_str("112ded66-422a-a5e9-53e5-440fa5427ac4").unwrap();
         let state = TimelinePersistentState {
             branch_id,
             server: ServerInfo {

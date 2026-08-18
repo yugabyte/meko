@@ -21,7 +21,6 @@ use crate::timeline::TimelineError;
 /// `crate::control_file::YbControlFileStorage`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelinePersistentState {
-    #[serde(with = "hex")]
     pub branch_id: BranchId,
     /// information about server
     pub server: ServerInfo,

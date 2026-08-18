@@ -8,19 +8,19 @@ import (
 	"github.com/yugabyte/amp/controller/local/config"
 )
 
-// The launcher is where the flat 32-hex spelling both leaves and re-enters the
-// process, so the two halves have to agree: `hex32UUID` renders what the API and
-// the endpoint's BRANCH_ID carry, `parseBranchID` reads it back into the uuid
-// every `branch_id` column holds.
+// The launcher is where a branch id leaves and re-enters the process as a
+// string, so the two halves have to agree: what the API and the endpoint's
+// BRANCH_ID carry is what `parseBranchID` reads back. One spelling now — the
+// uuid's own — but the parser stays lenient, so an id in any uuid form resolves.
 func TestBranchIDRoundTrip(t *testing.T) {
 	want := uuid.MustParse("9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60")
 
-	if got := hex32UUID(want); got != "9753168c7f0d4c8f9a3b1e2d3c4b5a60" {
-		t.Errorf("hex32UUID = %q, want the flat spelling", got)
+	if got := want.String(); got != "9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60" {
+		t.Errorf("branch id renders as %q, want the hyphenated spelling", got)
 	}
 	for _, spelling := range []config.BranchID{
-		"9753168c7f0d4c8f9a3b1e2d3c4b5a60", // flat: what the wire carries
-		"9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60",
+		"9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60", // what the wire carries
+		"9753168c7f0d4c8f9a3b1e2d3c4b5a60",
 	} {
 		got, err := parseBranchID(spelling)
 		if err != nil {

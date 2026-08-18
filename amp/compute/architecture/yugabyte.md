@@ -246,9 +246,9 @@ The column split is populated at write time by `YbStore::parse_key`
   `pageserver`. The `safekeeper` variant is reserved; safekeeper state
   lives in typed rows (`amp_storage.branch_state`, `amp_storage.wals`),
   so current safekeeper builds write no blobs.
-- **`branch_id`** — the branch-id-shaped token in the path (32 hex
-  chars, optionally with a `-<count>-<num>` shard suffix), stored as a
-  `uuid`. The nil uuid when the path carries no id.
+- **`branch_id`** — the branch-id-shaped token in the path (a uuid,
+  optionally with a `-<count>-<num>` shard suffix), stored as a `uuid`.
+  The nil uuid when the path carries no id.
 - **`key`** — the discriminating filename only: the path with the
   `branches` literal and the branch id removed.
   `split_key_generation` then peels a trailing or pre-extension

@@ -112,12 +112,6 @@ func awaitTask(ctx context.Context, api *client.API, taskID uuid.UUID, timeout t
 	}
 }
 
-// hex32UUID renders a uuid as the storage layer's flat 32-lowercase-hex BranchId,
-// matching the controller's own rendering at the storage seam.
-func hex32UUID(id uuid.UUID) string {
-	return fmt.Sprintf("%x", [16]byte(id))
-}
-
 // persistLadder writes env back to disk after EnsureLadder mutated it, reporting
 // a failure to stderr rather than aborting startup: the ids are re-resolvable on
 // the next run, so a config write failure is not fatal to a cluster that is
@@ -170,15 +164,24 @@ func (b *branchAPI) allBranches(ctx context.Context) ([]api.Branch, error) {
 	return out, nil
 }
 
-// resolveBranch returns the live branch with the given flat 32-hex id, from any
+// resolveBranch returns the live branch with the given id, from any
 // of the launcher's clusters.
-func (b *branchAPI) resolveBranch(ctx context.Context, hexID config.BranchID) (*api.Branch, error) {
+//
+// Compared as uuids, not as strings: an id typed or pasted in any spelling a
+// uuid accepts has to resolve, matching what `Id::from_str` does on the Rust
+// side. A raw string compare would silently fail to find a branch given in a
+// non-canonical spelling, which `branch drop` would then report as success.
+func (b *branchAPI) resolveBranch(ctx context.Context, id config.BranchID) (*api.Branch, error) {
+	want, err := parseBranchID(id)
+	if err != nil {
+		return nil, err
+	}
 	branches, err := b.allBranches(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for i := range branches {
-		if hex32UUID(branches[i].BranchId) == hexID {
+		if branches[i].BranchId == want {
 			return &branches[i], nil
 		}
 	}
@@ -201,12 +204,14 @@ func (b *branchAPI) resolveBranchInCluster(ctx context.Context, clusterID uuid.U
 	return nil, nil
 }
 
-// parseBranchID turns the launcher's flat 32-hex BranchId into the uuid the
-// product API keys on. Lossless in both directions — same 128 bits.
-func parseBranchID(hexID config.BranchID) (uuid.UUID, error) {
-	id, err := uuid.Parse(string(hexID))
+// parseBranchID turns the launcher's string BranchId into the uuid the product
+// API keys on. Lenient in the spellings it accepts, since the string reaches it
+// from a CLI flag or a config file: `uuid.Parse` takes the hyphenated form
+// everything prints, and the bare-hex one too.
+func parseBranchID(raw config.BranchID) (uuid.UUID, error) {
+	id, err := uuid.Parse(string(raw))
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("malformed branch id %q: %w", hexID, err)
+		return uuid.Nil, fmt.Errorf("malformed branch id %q: %w", raw, err)
 	}
 	return id, nil
 }

@@ -22,7 +22,7 @@ import (
 // NAME/type surface: the writer must reproduce the golden from these
 // literals.
 const (
-	goldBranchID     = "9a57cdcafd663c91ab83654f21378725"
+	goldBranchID     = "9a57cdca-fd66-3c91-ab83-654f21378725"
 	goldPgDistribDir = "/net/dev-server-hsunder/share/code/amp/pg_install"
 	goldControlPlane = "http://127.0.0.1:30000/upcall/v1/"
 	goldSafekeeperPg = "127.0.0.1:30100"

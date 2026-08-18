@@ -34,7 +34,7 @@ const BRANCH_NAME: &str = "reap_me";
 const REAP_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// The `amp_storage` tables a branch has rows in — the reaper's whole delete plan.
-/// Every one of them is branch-keyed by the flat 32-hex branch id.
+/// Every one of them is branch-keyed by the branch id.
 const TABLES: [&str; 7] = [
     "branch_state",
     "pages",
@@ -71,7 +71,7 @@ async fn reap_progress(yb: &str, branch_id: &str) -> anyhow::Result<(i64, i64)> 
     let sql = format!(
         "SELECT {sum} AS rows_left, \
                 (SELECT count(*) FROM amp_registry.branches \
-                  WHERE replace(branch_id::text, '-', '') = '{branch_id}' \
+                  WHERE branch_id = '{branch_id}' \
                     AND dropped_at IS NOT NULL AND gc_completed_at IS NOT NULL) AS marked",
         sum = per_table_counts(branch_id).join(" + "),
     );

@@ -940,7 +940,7 @@ mod tests {
                 run_dir: "/data".into(),
                 bin_dir: "/usr/local/bin".into(),
                 pg_distrib_dir: "/usr/local".into(),
-                branch_id: "9a054903242f46bca0c9cc6b91a37e4c".into(),
+                branch_id: "9a054903-242f-46bc-a0c9-cc6b91a37e4c".into(),
                 compute_port: 55433,
                 pageserver_pg_port: 64000,
                 pageserver_http_port: 9898,

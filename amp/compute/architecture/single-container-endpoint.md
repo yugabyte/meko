@@ -134,17 +134,14 @@ The supervisor materializes the branch itself:
 - **Pageserver identity + initial branch.** The pageserver's
   single-branch identity (`branch_id`) is baked into the
   `pageserver.toml` the supervisor renders, alongside
-  `require_write_token`. The init mode is chosen from the environment:
-  - `BRANCH_ID` unset → generate a fresh 32-hex id and bake
-    the controller-seeded `branch_state` row with a NULL ancestor (the pageserver runs `initdb`
-    and imports the initial page set on start).
-  - `BRANCH_ID` set (the production case, supplied by the controller) →
-    serve that branch. How its timeline is created is not a supervisor
-    concern: the pageserver reads it off the controller-seeded
-    `branch_state` row. A NULL `ancestor_branch_id` means `initdb` +
-    import; a set one means fork that ancestor at `ancestor_lsn`, where
-    pre-fork pages stay under the ancestor's branch id and are reached
-    via lineage-aware reads from shared storage (nothing is copied).
+  `require_write_token`. `BRANCH_ID` is required — the supervisor refuses to
+  start without it, so there is no generate-my-own mode; the branch always comes
+  from the controller. How its timeline is created is not a supervisor concern:
+  the pageserver reads it off the controller-seeded `branch_state` row. A NULL
+  `ancestor_branch_id` means `initdb` + import; a set one means fork that
+  ancestor at `ancestor_lsn`, where pre-fork pages stay under the ancestor's
+  branch id and are reached via lineage-aware reads from shared storage
+  (nothing is copied).
 - **Safekeeper timeline.** After the pageserver's branch reaches
   `Active`, the supervisor creates the timeline on the safekeeper's
   HTTP API (`POST /v1/branch`) at the pageserver's `last_record_lsn`,

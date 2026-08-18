@@ -4,8 +4,13 @@
 //! hands over on offload and loads back on prewarm. That blob lives in YB, behind
 //! [`remote_storage`], which `compute_ctl` already links for remote extensions.
 //!
-//! The key layout is `{branch_id}/{endpoint_id}/lfc_state`, unchanged, so a blob
-//! written before this code existed is still the one read after it.
+//! The key layout is `{branch_id}/{endpoint_id}/lfc_state`. Its *shape* is
+//! unchanged, but the branch component now spells the id as a uuid. That does not
+//! strand old blobs: `YbStore::parse_key` splits a key into `(namespace,
+//! branch_id uuid, key_body)` and strips the id out of the body, and
+//! `Uuid::parse_str` reads both spellings to the same 16 bytes — so a blob
+//! written under a flat token resolves to the same row when looked up under a
+//! hyphenated one.
 //!
 //! Retries here rather than at the caller: a prewarm that fails because YB was
 //! briefly unavailable would leave a cold cache and report `Failed`, which reads
@@ -133,9 +138,9 @@ impl LfcStorage {
 }
 
 /// An id safe to interpolate into a key: non-empty, bounded, and made only of
-/// characters that cannot traverse or split a path. Branch ids are 32 hex digits
-/// and endpoint ids are UUIDs or `ep-`-prefixed names, so nothing legitimate is
-/// excluded by allowing only alphanumerics, `-` and `_`.
+/// characters that cannot traverse or split a path. Branch and endpoint ids are
+/// uuids, or `ep-`-prefixed names, so nothing legitimate is excluded by allowing
+/// only alphanumerics, `-` and `_`.
 fn checked_id<'a>(id: &'a str, what: &str) -> Result<&'a str> {
     anyhow::ensure!(!id.is_empty(), "{what} is empty");
     anyhow::ensure!(id.len() <= 128, "{what} is too long ({} bytes)", id.len());
@@ -153,12 +158,14 @@ mod tests {
 
     /// The key must match what the HTTP service produced from its route, or an
     /// endpoint upgraded to this code cannot read back state it offloaded before.
+    /// The branch id's spelling changed with it; see the module doc for why that
+    /// does not strand a blob written under the old one.
     #[test]
     fn the_key_matches_the_previous_http_layout() {
-        let k = LfcStorage::key("9a054903242f46bca0c9cc6b91a37e4c", "ep-123").unwrap();
+        let k = LfcStorage::key("9a054903-242f-46bc-a0c9-cc6b91a37e4c", "ep-123").unwrap();
         assert_eq!(
             k.get_path().as_str(),
-            "9a054903242f46bca0c9cc6b91a37e4c/ep-123/lfc_state"
+            "9a054903-242f-46bc-a0c9-cc6b91a37e4c/ep-123/lfc_state"
         );
     }
 
@@ -188,17 +195,20 @@ mod tests {
         }
     }
 
-    /// The ids that actually occur must still be accepted: a 32-hex branch id and
-    /// a UUID or `ep-`-prefixed endpoint id.
+    /// The ids that actually occur must still be accepted: a uuid branch id and
+    /// a uuid or `ep-`-prefixed endpoint id.
     #[test]
     fn real_ids_are_accepted() {
         for (b, e) in [
             (
-                "9a054903242f46bca0c9cc6b91a37e4c",
+                "9a054903-242f-46bc-a0c9-cc6b91a37e4c",
                 "3f2b1c4e-0000-4000-8000-000000000001",
             ),
-            ("9a054903242f46bca0c9cc6b91a37e4c", "ep-quiet-forest-12345"),
-            ("9a054903242f46bca0c9cc6b91a37e4c", "some_endpoint_1"),
+            (
+                "9a054903-242f-46bc-a0c9-cc6b91a37e4c",
+                "ep-quiet-forest-12345",
+            ),
+            ("9a054903-242f-46bc-a0c9-cc6b91a37e4c", "some_endpoint_1"),
         ] {
             LfcStorage::key(b, e).unwrap_or_else(|err| panic!("rejected {b}/{e}: {err}"));
         }

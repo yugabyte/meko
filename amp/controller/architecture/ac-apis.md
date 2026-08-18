@@ -98,7 +98,7 @@ local checks stay synchronous: `400` (malformed body / bad parameter), `404`
 | `POST /storage-pools` | createStoragePool | Top-level; the owner is named in the body (`owner_user_id`). |
 | `GET /storage-pools` | listStoragePools | Paginated; lists **every** pool (no owner filter yet). |
 | `GET /storage-pools/{poolId}` | getStoragePool | By id; not owner-scoped. |
-| `POST /storage-pools/{poolId}/clusters` | createCluster | **Async** → `202` + `Task` + `Location: /api/v1/tasks/{id}`. Plans a task that creates a cluster + its default branch and records the controller pending-init recipe (keyed by the flat `branch_id`). Pass `with_writer: true` (optionally `resources` = cpu/memory) to also create and deploy the default branch's read_write endpoint in the **same** task — a one-call "create cluster"; the default (`with_writer: false`) deploys no endpoint (compute is a separate resource). Poll `getTask`, then `getCluster`/`listClusters` to read the ids/`default_branch`. Cheap validation is still synchronous: `400` (bad body / unsupported `pg_version`) / `404` (unknown pool). A duplicate cluster name no longer `409`s — it surfaces as a `failed` task. |
+| `POST /storage-pools/{poolId}/clusters` | createCluster | **Async** → `202` + `Task` + `Location: /api/v1/tasks/{id}`. Plans a task that creates a cluster + its default branch and records the controller pending-init recipe (keyed by `branch_id`). Pass `with_writer: true` (optionally `resources` = cpu/memory) to also create and deploy the default branch's read_write endpoint in the **same** task — a one-call "create cluster"; the default (`with_writer: false`) deploys no endpoint (compute is a separate resource). Poll `getTask`, then `getCluster`/`listClusters` to read the ids/`default_branch`. Cheap validation is still synchronous: `400` (bad body / unsupported `pg_version`) / `404` (unknown pool). A duplicate cluster name no longer `409`s — it surfaces as a `failed` task. |
 | `GET /storage-pools/{poolId}/clusters` | listClusters | Paginated; the pool's clusters, each with its `default_branch`. Scoped to usable clusters by default — failed-creation clusters (orphans left when a `create_cluster` task failed mid-provisioning) are excluded from both the page and its total; pass `include_failed=true` (e.g. from an operator's fleet view) to also surface them so they can be seen and deleted. `404` if the pool is unknown. |
 | `GET …/clusters/{clusterId}` | getCluster | One cluster (with its `default_branch`). `404` if the pool/cluster is unknown. |
 | `DELETE …/clusters/{clusterId}` | deleteCluster | **Async cascade** → `202` + `Task` + `Location`. Plans a `delete_cluster` task that retires every endpoint in the cluster, then drops its branches and the cluster row. Cheap pre-check: `404` if the pool/cluster is unknown. |
@@ -166,7 +166,7 @@ Because that work is now on the task, a **duplicate cluster name** is no longer 
 synchronous `409`: it surfaces when the `create_cluster` step's name insert
 fails, ending the task `status == "failed"`. The client polls `getTask`, then
 reads the cluster (and its embedded `default_branch`, whose `branch_id` *is* the
-storage-layer flat `branch_id`) back with `getCluster`/`listClusters`. The task
+storage-layer `branch_id`) back with `getCluster`/`listClusters`. The task
 does **not** eagerly materialize the branch on the controller or deploy
 an endpoint: compute is a separate resource (below), and the first endpoint
 deployed on the branch materializes it (the recipe is then dropped). See

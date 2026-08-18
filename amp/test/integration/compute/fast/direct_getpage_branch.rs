@@ -11,6 +11,7 @@
 use std::str::FromStr;
 
 use anyhow::{Context, ensure};
+use utils::id::BranchId;
 use utils::lsn::Lsn;
 
 use crate::cluster::{Cluster, step};
@@ -82,7 +83,7 @@ async fn run_branch_checks(
         .context("read branch id from the branch endpoint")?;
     let branch_id = branch_id.trim().to_string();
     ensure!(
-        branch_id.len() == 32,
+        branch_id.parse::<BranchId>().is_ok(),
         "unexpected branch id {branch_id:?}"
     );
     // This cluster runs one pageserver per endpoint, so the branch timeline

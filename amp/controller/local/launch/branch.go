@@ -16,6 +16,16 @@ import (
 // --branch-gc-retention window later; the endpoints are stopped first, so nothing
 // is left running over rows that reaper deletes.
 func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.BranchID) error {
+	// Canonicalize before anything compares it: an endpoint's stored branch_id is
+	// what the API printed, so a caller's non-canonical spelling would match no
+	// endpoint here and still resolve below — dropping the branch with its
+	// computes left running.
+	id, err := parseBranchID(branchID)
+	if err != nil {
+		return err
+	}
+	branchID = config.BranchID(id.String())
+
 	endpoints, err := loadEndpoints(ctx, env)
 	if err != nil {
 		return err
@@ -24,10 +34,10 @@ func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.Branc
 	// one whose name is also used on another branch and so is absent from the
 	// by-name index.
 	for _, ep := range endpoints.all {
-		if ep.conf.BranchID == branchID {
-			id := ep.conf.EndpointID
+		if config.SameBranch(ep.conf.BranchID, branchID) {
+			epID := ep.conf.EndpointID
 			if err := stopEndpoint(ctx, env, ep, StopModeImmediate, true); err != nil {
-				fmt.Fprintf(os.Stderr, "stop+destroy endpoint %s: %v\n", id, err)
+				fmt.Fprintf(os.Stderr, "stop+destroy endpoint %s: %v\n", epID, err)
 			}
 		}
 	}
@@ -42,10 +52,6 @@ func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.Branc
 	// Idempotent: a branch already gone (or never created) is not an error.
 	if branch == nil {
 		return nil
-	}
-	id, err := parseBranchID(branchID)
-	if err != nil {
-		return err
 	}
 	// Scoped to the branch's own cluster: a lineage is a cluster, so different
 	// branches live in different ones.
@@ -89,6 +95,9 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 	if ancestor == nil {
 		return fmt.Errorf("no live branch %s in any of the launcher's clusters", ancestorID)
 	}
+	// Use the resolved branch's own spelling from here: the lookups below key on
+	// the string, and `resolveBranch` accepts any spelling a uuid parses from.
+	ancestorID = config.BranchID(ancestor.BranchId.String())
 
 	// The ancestor has to be materialized: the fork point comes from its safekeeper.
 	if env.PageserverConfForBranch(ancestorID) == nil {
@@ -122,7 +131,7 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 	if created == nil {
 		return fmt.Errorf("branch task succeeded but branch %q is not listed", args.BranchName)
 	}
-	branchID := hex32UUID(created.BranchId)
+	branchID := created.BranchId.String()
 
 	fmt.Printf(
 		"Created branch '%s' (branch %s) at %s from %s; its pageserver + safekeeper come up at `endpoint create`\n",

@@ -38,7 +38,6 @@ use futures::stream::Stream;
 // YB smart-driver fork; aliased so the type names below stay
 // untouched. See pageserver/src/page_store.rs for the rationale.
 use tokio_util::sync::CancellationToken;
-use utils::id::BranchId;
 use uuid::Uuid;
 use yb_tokio_postgres as tokio_postgres;
 use yb_tokio_postgres::types::ToSql;
@@ -254,10 +253,18 @@ impl YbStore {
     /// doesn't carry one (e.g. future generic blobs that follow no branch
     /// convention).
     ///
-    /// A Neon id is 32 hex characters. The function is heuristic — it returns
-    /// the first such token it finds, in path order — which is sufficient for
-    /// every key the pageserver and safekeeper write today and benign (empty)
-    /// for any future key that doesn't follow the convention.
+    /// A Neon id is a uuid. The function is heuristic — it returns the first such
+    /// token it finds, in path order — which is sufficient for every key the
+    /// pageserver and safekeeper write today and benign (empty) for any future
+    /// key that doesn't follow the convention.
+    ///
+    /// The heuristic got weaker when branch ids became uuids: an **endpoint** id
+    /// is a uuid too, so a token that merely looks like one is no longer
+    /// necessarily a branch. What keeps this correct is that the branch leads
+    /// every key that carries both — `branches/<branch>/…` for the pageserver,
+    /// `<branch>/<segno>` for WAL backup, `<branch>/<endpoint>/lfc_state` for LFC
+    /// prewarm. A key that puts an endpoint first would be silently attributed to
+    /// the wrong branch, so put the branch first.
     fn extract_neon_id(key: &str) -> String {
         for part in key.split('/') {
             if Self::looks_like_neon_id(part) {
@@ -267,17 +274,12 @@ impl YbStore {
         String::new()
     }
 
-    /// The `branch_id` column value for a path token: `blobs.branch_id` is
-    /// `uuid`, and `BranchId` owns both spellings of the id, so the token goes
-    /// through it rather than through a second parser. The token comes from
-    /// [`Self::extract_neon_id`] — 32 validated hex digits, or empty — so a
-    /// parse can only fail on the branchless case, which stores the nil uuid (a
-    /// minted BranchId is 16 random bytes and is never nil).
+    /// The `branch_id` column value for a path token. The token comes from
+    /// [`Self::extract_neon_id`] — a validated uuid, or empty — so a parse can
+    /// only fail on the branchless case, which stores the nil uuid (a minted
+    /// branch id is 16 random bytes and is never nil).
     fn branch_uuid(token: &str) -> Uuid {
-        token
-            .parse::<BranchId>()
-            .map(BranchId::to_uuid)
-            .unwrap_or_else(|_| Uuid::nil())
+        Uuid::parse_str(token).unwrap_or_else(|_| Uuid::nil())
     }
 
     /// Inverse of [`Self::branch_uuid`], for rebuilding a key path.
@@ -285,7 +287,7 @@ impl YbStore {
         if branch_id.is_nil() {
             String::new()
         } else {
-            BranchId::from_uuid(branch_id).to_string()
+            branch_id.to_string()
         }
     }
 
@@ -363,9 +365,13 @@ impl YbStore {
         format!("{cfg_prefix}{body}")
     }
 
+    /// A path token that is a branch id. Must stay in step with what
+    /// [`Self::branch_token`] writes — `Display` for a uuid, i.e. hyphenated —
+    /// or `extract_neon_id` stops finding the token, `branch_uuid` falls back to
+    /// nil, and every download/delete after a `list()` addresses the branchless
+    /// row instead. Silently.
     fn looks_like_neon_id(s: &str) -> bool {
-        // bare 32-hex-char branch id
-        s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit())
+        Uuid::try_parse(s).is_ok_and(|id| s.len() == uuid::fmt::Hyphenated::LENGTH && !id.is_nil())
     }
 
     async fn with_timeout<F, T, E>(&self, fut: F, cancel: &CancellationToken) -> anyhow::Result<T>
@@ -1140,20 +1146,19 @@ fn escape_like(s: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Real-shape branch id: bare 32-hex.
-    const B_LEGACY: &str = "5b36a8400fc88e7eeec19878ef7fbe30";
+    /// Real-shape branch id: a uuid, in the one spelling.
+    const B_LEGACY: &str = "5b36a840-0fc8-8e7e-eec1-9878ef7fbe30";
 
-    /// `blobs.branch_id` is `uuid`, but a key path carries the flat spelling, so
-    /// `list()` re-renders every id it returns and the caller's `download`/`delete`
-    /// parses it straight back. If `branch_token` ever emitted uuid's own dashed
-    /// `Display`, `looks_like_neon_id` (32 bare hex) would stop recognising the
-    /// token, `branch_uuid` would fall back to nil, and every follow-up would
-    /// address the branchless row instead — silently.
+    /// `list()` re-renders every id it returns into a key path and the caller's
+    /// `download`/`delete` parses it straight back, so `branch_token` and
+    /// `looks_like_neon_id` have to agree on the spelling. If they ever drift,
+    /// the token stops being recognised, `branch_uuid` falls back to nil, and
+    /// every follow-up addresses the branchless row instead — silently.
     #[test]
     fn branch_token_round_trips_through_a_key_path() {
         let id = YbStore::branch_uuid(B_LEGACY);
         let token = YbStore::branch_token(id);
-        assert_eq!(token, B_LEGACY, "a key path carries the flat spelling");
+        assert_eq!(token, B_LEGACY, "a key path carries the id's one spelling");
         assert!(
             YbStore::looks_like_neon_id(&token),
             "a re-rendered token must be extractable from the key it is put in"

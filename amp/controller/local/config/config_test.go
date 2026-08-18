@@ -18,7 +18,7 @@ func u16Ptr(v uint16) *uint16 { return &v }
 // fullConfig builds an OnDiskConfig exercising every skip rule and the
 // nested sub-structs, for round-trip testing.
 func fullConfig() OnDiskConfig {
-	branch := BranchID("3d1f7595b468230304e0b73cecbcb081")
+	branch := BranchID("3d1f7595-b468-2303-04e0-b73cecbcb081")
 	yb := &YbConnConfig{
 		HostPorts:   "10.0.0.1:5433,10.0.0.2:5440",
 		User:        "yugabyte",
@@ -435,7 +435,7 @@ func TestAuthKeypairAndJWT(t *testing.T) {
 	}
 
 	env := &LocalEnv{BaseDataDir: tmp, PrivateKeyPath: "auth_private_key.pem", PublicKeyPath: "auth_public_key.pem"}
-	claims := NewStorageClaims(ScopeTenant, "3d1f7595b468230304e0b73cecbcb081")
+	claims := NewStorageClaims(ScopeTenant, "3d1f7595-b468-2303-04e0-b73cecbcb081")
 	token, err := env.GenerateAuthToken(claims)
 	if err != nil {
 		t.Fatal(err)
@@ -456,7 +456,7 @@ func TestAuthKeypairAndJWT(t *testing.T) {
 		t.Fatalf("verify: %v", err)
 	}
 	mc := parsed.Claims.(jwt.MapClaims)
-	if mc["scope"] != "tenant" || mc["tenant_id"] != "3d1f7595b468230304e0b73cecbcb081" {
+	if mc["scope"] != "tenant" || mc["tenant_id"] != "3d1f7595-b468-2303-04e0-b73cecbcb081" {
 		t.Errorf("claims: %+v", mc)
 	}
 	if parsed.Header["alg"] != "EdDSA" {
@@ -506,5 +506,36 @@ func TestYbConnConfigLoopbackOnly(t *testing.T) {
 				t.Errorf("LoopbackOnly(%q) = %v, want %v", tc.hostPorts, got, tc.want)
 			}
 		})
+	}
+}
+
+// SameBranch is what every launcher lookup uses to match a caller's branch id
+// against a stored one, so it has to accept any spelling a uuid parses from: a
+// raw compare would silently find nothing, and `branch drop` reads "nothing
+// found" as "already dropped".
+func TestSameBranch(t *testing.T) {
+	const (
+		dashed = BranchID("9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60")
+		flat   = BranchID("9753168c7f0d4c8f9a3b1e2d3c4b5a60")
+		upper  = BranchID("9753168C-7F0D-4C8F-9A3B-1E2D3C4B5A60")
+		other  = BranchID("00000000-0000-0000-0000-000000000001")
+	)
+	for _, c := range []struct {
+		a, b BranchID
+		want bool
+	}{
+		{dashed, dashed, true},
+		{dashed, flat, true},
+		{dashed, upper, true},
+		{dashed, other, false},
+		// Never stricter than a raw compare: equal strings match even when
+		// neither is a uuid.
+		{"not-an-id", "not-an-id", true},
+		{"not-an-id", dashed, false},
+		{"", "", true},
+	} {
+		if got := SameBranch(c.a, c.b); got != c.want {
+			t.Errorf("SameBranch(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
 	}
 }

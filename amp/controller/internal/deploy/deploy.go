@@ -34,8 +34,8 @@ type EndpointSpec struct {
 	// passed explicitly so the pod never has to parse its release name. Empty =>
 	// the pod runs on derived defaults with no override lookup.
 	EndpointID string
-	// BranchID is the storage-layer branch id this compute serves: 32 lowercase
-	// hex digits, no dashes (the flat single-id storage contract — no tenant).
+	// BranchID is the storage-layer branch id this compute serves, as the uuid
+	// every `branch_id` prints (the flat single-id storage contract — no tenant).
 	BranchID  string
 	PgVersion int
 	YB        YBConn

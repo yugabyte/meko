@@ -249,7 +249,7 @@ mod tests {
         let got = wait_branch_active(
             "127.0.0.1",
             port,
-            "9a054903242f46bca0c9cc6b91a37e4c",
+            "9a054903-242f-46bc-a0c9-cc6b91a37e4c",
             Duration::from_secs(10),
             Duration::from_millis(10),
         )

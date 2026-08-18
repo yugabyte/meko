@@ -130,7 +130,7 @@ tests:
       endpoint:
         pgVersion: "17"
         computePort: 5599
-        branchId: "deadbeefdeadbeefdeadbeefdeadbeef"
+        branchId: "deadbeef-dead-beef-dead-beefdeadbeef"
         sharedPreloadLibraries: "yb_amp,pg_stat_statements"
     asserts:
       - equal:
@@ -141,7 +141,7 @@ tests:
           value: "5599"
       - equal:
           path: data.BRANCH_ID
-          value: "deadbeefdeadbeefdeadbeefdeadbeef"
+          value: "deadbeef-dead-beef-dead-beefdeadbeef"
       - equal:
           path: data.SHARED_PRELOAD_LIBRARIES
           value: "yb_amp,pg_stat_statements"

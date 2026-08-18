@@ -11,7 +11,7 @@ import (
 // already been provisioned: the ports below are what the supervisor has to be
 // told about, because they are also in the config files it will not re-render.
 func envWithProvisionedEndpoint() (*config.LocalEnv, launcherEndpoint) {
-	branch := config.BranchID("9a054903242f46bca0c9cc6b91a37e4c")
+	branch := config.BranchID("9a054903-242f-46bc-a0c9-cc6b91a37e4c")
 	env := envWithTemplates()
 	env.Pageservers = []config.PageServerConf{{
 		ListenPgAddr:   "127.0.0.1:64010",
@@ -53,7 +53,7 @@ func TestSupervisorEnvCarriesTheAllocatedPorts(t *testing.T) {
 		"PRERENDERED_CONFIG":             "true",
 		"RUN_DIR":                        "/tmp/repo/endpoints/main",
 		"BIN_DIR":                        "/yb_amp",
-		"BRANCH_ID":                      "9a054903242f46bca0c9cc6b91a37e4c",
+		"BRANCH_ID":                      "9a054903-242f-46bc-a0c9-cc6b91a37e4c",
 		"COMPUTE_ID":                     "main",
 		"COMPUTE_PORT":                   "55433",
 		"COMPUTE_CTL_HTTP_PORT":          "3080",

@@ -138,7 +138,7 @@ func TestPageserverInitConfPreservesTemplateYbStorageConn(t *testing.T) {
 // integration harness scrapes: a line containing "successfully created" whose
 // 2nd whitespace token is the branch id.
 func TestSuccessfullyCreatedLineInvariant(t *testing.T) {
-	branchID := "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0"
+	branchID := "d0d0d0d0-d0d0-d0d0-d0d0-d0d0d0d0d0d0"
 	line := successfullyCreatedLine(branchID)
 	if !strings.Contains(line, "successfully created") {
 		t.Fatalf("line %q must contain 'successfully created'", line)

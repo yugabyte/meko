@@ -209,7 +209,7 @@ func provisionTimelineForEndpoint(ctx context.Context, env *config.LocalEnv, end
 		forkLSN = *branch.ForkLsn
 	}
 	return provisionBranch(ctx, env, endpointID, branchID,
-		config.BranchID(hex32UUID(*branch.ParentBranchId)), forkLSN, branch.PgVersion)
+		config.BranchID(branch.ParentBranchId.String()), forkLSN, branch.PgVersion)
 }
 
 // provisionBootstrap lays out the main branch's pair: allocate their ports,

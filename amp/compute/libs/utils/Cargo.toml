@@ -21,7 +21,6 @@ camino.workspace = true
 chrono.workspace = true
 diatomic-waker.workspace = true
 git-version.workspace = true
-hex = { workspace = true, features = ["serde"] }
 humantime.workspace = true
 fail.workspace = true
 futures = { workspace = true }
@@ -45,7 +44,6 @@ tracing.workspace = true
 tracing-error.workspace = true
 tracing-subscriber = { workspace = true, features = ["json", "registry"] }
 tracing-utils.workspace = true
-rand.workspace = true
 scopeguard.workspace = true
 uuid.workspace = true
 strum.workspace = true

@@ -24,11 +24,11 @@ func testKubernetesConfig() KubernetesConfig {
 }
 
 // testEndpointSpec returns an EndpointSpec as the API handler builds it: the
-// storage branch id is already a 32-hex string, and the YB connection is populated.
+// storage branch id is already a string, and the YB connection is populated.
 func testEndpointSpec() EndpointSpec {
 	return EndpointSpec{
-		Name:      "yb-ep-92331eedafb2a0ef3b2d724d649bee78",
-		BranchID:  "92331eedafb2a0ef3b2d724d649bee78",
+		Name:      "yb-ep-92331eed-afb2-a0ef-3b2d-724d649bee78",
+		BranchID:  "92331eed-afb2-a0ef-3b2d-724d649bee78",
 		PgVersion: 15,
 		YB: YBConn{
 			HostPorts: "yb-tserver:5433",
@@ -322,7 +322,7 @@ func TestParseANodeIP(t *testing.T) {
 func TestKubernetesAddress(t *testing.T) {
 	cfg := testKubernetesConfig()
 	k := NewKubernetesDeployer(cfg, nil)
-	release := "yb-ep-92331eedafb2a0ef3b2d724d649bee78"
+	release := "yb-ep-92331eed-afb2-a0ef-3b2d-724d649bee78"
 
 	want := fmt.Sprintf("%s.%s.svc.cluster.local:%d", release, cfg.Namespace, cfg.ComputePort)
 	if got := k.address(release); got != want {
@@ -334,7 +334,7 @@ func TestKubernetesAddress(t *testing.T) {
 // host the controller dials (CONTROLLER_REACHABLE_HOST): the Service DNS in k8s,
 // the container name on Docker — both at the fixed safekeeper HTTP port.
 func TestEndpointSafekeeperURL(t *testing.T) {
-	id := "yb-ep-92331eedafb2a0ef3b2d724d649bee78"
+	id := "yb-ep-92331eed-afb2-a0ef-3b2d-724d649bee78"
 
 	cfg := testKubernetesConfig()
 	k := NewKubernetesDeployer(cfg, nil)

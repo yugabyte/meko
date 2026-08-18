@@ -103,20 +103,22 @@ struct AmpClient {
     http: reqwest::Client,
 }
 
-/// A branch as the controller addresses + identifies it. `id` is the path id
-/// (a UUID); `timeline_hex` is the same id with dashes stripped — how the
-/// compute reports the timeline it serves via `yb_amp.timeline_id`.
+/// A branch as the controller addresses + identifies it. `id` is the path id;
+/// `timeline_hex` is what the compute reports for it. One spelling now, so the
+/// two are equal — the field is kept because `assert_identity` compares it
+/// against a GUC (`yb_amp.timeline_id`) that predates the flat model and is not
+/// registered by today's extension, so the assertion skips.
 #[derive(Clone)]
 struct BranchRef {
     id: String,
     timeline_hex: String,
 }
 
-/// A cluster: its path id (UUID = the storage-layer tenant id), the tenant hex
-/// the compute reports (`yb_amp.tenant_id`), and its default branch.
+/// A cluster: its path id and its default branch. No "as the compute reports it"
+/// field: the compute exposes `yb_amp.branch_id`, and nothing populates a cluster
+/// GUC, so there is nothing to compare a cluster id against.
 struct ClusterRef {
     id: String,
-    tenant_hex: String,
     default_branch: BranchRef,
 }
 
@@ -325,16 +327,11 @@ impl AmpClient {
 
         let v = self.find_cluster(pool, name).await?;
         let id = field(&v, "id")?;
-        let tenant_hex = id.replace('-', "");
         let default = v
             .get("default_branch")
             .context("cluster response missing default_branch")?;
         let default_branch = branch_ref(default)?;
-        Ok(ClusterRef {
-            id,
-            tenant_hex,
-            default_branch,
-        })
+        Ok(ClusterRef { id, default_branch })
     }
 
     /// List the pool's clusters and return the one named `name` (the cluster a
@@ -508,7 +505,7 @@ fn find_named(list: &Value, key: &str, name: &str) -> Result<Value> {
 
 fn branch_ref(v: &Value) -> Result<BranchRef> {
     let id = field(v, "branch_id")?;
-    let timeline_hex = id.replace('-', "");
+    let timeline_hex = id.clone();
     Ok(BranchRef { id, timeline_hex })
 }
 
@@ -542,19 +539,13 @@ fn assert_branch_meta(v: &Value, is_default: bool, parent: Option<&str>) -> Resu
 struct BranchEndpoint {
     label: &'static str,
     conn: String,
-    tenant_hex: String,
     timeline_hex: String,
 }
 
 impl BranchEndpoint {
     /// Build from the `host:port` the controller returned, with the endpoint's
     /// `cloud_admin` password (set by the endpoint supervisor).
-    fn from_address(
-        label: &'static str,
-        addr: &str,
-        tenant_hex: String,
-        timeline_hex: String,
-    ) -> Result<Self> {
+    fn from_address(label: &'static str, addr: &str, timeline_hex: String) -> Result<Self> {
         let (host, port) = addr
             .rsplit_once(':')
             .with_context(|| format!("endpoint address {addr:?} is not host:port"))?;
@@ -564,7 +555,6 @@ impl BranchEndpoint {
         Ok(Self {
             label,
             conn,
-            tenant_hex,
             timeline_hex,
         })
     }
@@ -595,9 +585,13 @@ impl BranchEndpoint {
         if !version.contains("PostgreSQL") {
             bail!("{}: unexpected version banner: {version}", self.label);
         }
-        self.assert_guc("yb_amp.tenant_id", &self.tenant_hex)
-            .await?;
-        self.assert_guc("yb_amp.timeline_id", &self.timeline_hex)
+        // Only `yb_amp.branch_id` is asserted: it is the one id GUC the supervisor
+        // actually sets (spec.rs). The extension also registers `yb_amp.cluster_id`
+        // and `yb_amp.endpoint_id`, but nothing populates the former, so asserting
+        // it would read NULL and skip forever. `yb_amp.tenant_id` /
+        // `yb_amp.timeline_id`, asserted here until now, are not registered at all
+        // — they predate the flat model, so both calls had been skipping silently.
+        self.assert_guc("yb_amp.branch_id", &self.timeline_hex)
             .await?;
         Ok(())
     }
@@ -742,12 +736,7 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
         .await
         .context("deploy main endpoint")?;
     deployed.push((main_b.id.clone(), main_ep));
-    let main = BranchEndpoint::from_address(
-        "main",
-        &main_addr,
-        cluster.tenant_hex.clone(),
-        main_b.timeline_hex.clone(),
-    )?;
+    let main = BranchEndpoint::from_address("main", &main_addr, main_b.timeline_hex.clone())?;
     main.wait_ready(readiness)
         .await
         .context("main endpoint readiness")?;
@@ -796,12 +785,7 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
         .await
         .context("deploy b1 endpoint")?;
     deployed.push((b1_b.id.clone(), b1_ep));
-    let b1 = BranchEndpoint::from_address(
-        "b1",
-        &b1_addr,
-        cluster.tenant_hex.clone(),
-        b1_b.timeline_hex.clone(),
-    )?;
+    let b1 = BranchEndpoint::from_address("b1", &b1_addr, b1_b.timeline_hex.clone())?;
     b1.wait_ready(readiness)
         .await
         .context("b1 endpoint readiness")?;
@@ -869,12 +853,7 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
         .await
         .context("deploy b2 endpoint")?;
     deployed.push((b2_b.id.clone(), b2_ep));
-    let b2 = BranchEndpoint::from_address(
-        "b2",
-        &b2_addr,
-        cluster.tenant_hex.clone(),
-        b2_b.timeline_hex.clone(),
-    )?;
+    let b2 = BranchEndpoint::from_address("b2", &b2_addr, b2_b.timeline_hex.clone())?;
     b2.wait_ready(readiness)
         .await
         .context("b2 endpoint readiness")?;
@@ -885,12 +864,7 @@ async fn branching_run(client: &AmpClient, pool: &str, iter: u32) -> Result<()> 
         .await
         .context("deploy b3 endpoint")?;
     deployed.push((b3_b.id.clone(), b3_ep));
-    let b3 = BranchEndpoint::from_address(
-        "b3",
-        &b3_addr,
-        cluster.tenant_hex.clone(),
-        b3_b.timeline_hex.clone(),
-    )?;
+    let b3 = BranchEndpoint::from_address("b3", &b3_addr, b3_b.timeline_hex.clone())?;
     b3.wait_ready(readiness)
         .await
         .context("b3 endpoint readiness")?;

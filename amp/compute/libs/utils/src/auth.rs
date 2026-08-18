@@ -244,12 +244,17 @@ MC4CAQAwBQYDK2VwBCIEID/Drmc1AA6U/znNRWpF3zEGegOATQxfkdWxitcOMsIH
     #[test]
     fn test_decode() {
         let expected_claims = Claims {
-            branch_id: Some(BranchId::from_str("3d1f7595b468230304e0b73cecbcb081").unwrap()),
+            branch_id: Some(BranchId::from_str("3d1f7595-b468-2303-04e0-b73cecbcb081").unwrap()),
             scope: Scope::Tenant,
             endpoint_id: None,
         };
 
-        // A test token containing the following payload, signed using TEST_PRIV_KEY_ED25519:
+        // A test token containing the following payload, signed using TEST_PRIV_KEY_ED25519.
+        // Its `tenant_id` is flat — the token is a fixed pre-signed literal that
+        // predates branch ids being uuids, and cannot be re-spelled without the
+        // private key. That it still decodes to the same id is the point: tokens
+        // minted before this change keep validating, because `FromStr` is
+        // `Uuid::parse_str`.
         //
         // ```
         // {
@@ -273,7 +278,7 @@ MC4CAQAwBQYDK2VwBCIEID/Drmc1AA6U/znNRWpF3zEGegOATQxfkdWxitcOMsIH
     #[test]
     fn test_encode() {
         let claims = Claims {
-            branch_id: Some(BranchId::from_str("3d1f7595b468230304e0b73cecbcb081").unwrap()),
+            branch_id: Some(BranchId::from_str("3d1f7595-b468-2303-04e0-b73cecbcb081").unwrap()),
             scope: Scope::Tenant,
             endpoint_id: None,
         };

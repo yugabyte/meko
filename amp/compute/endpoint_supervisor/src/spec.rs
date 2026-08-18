@@ -148,7 +148,7 @@ mod tests {
     fn params() -> ComputeSpecParams<'static> {
         ComputeSpecParams {
             compute_port: 55433,
-            branch_id: "9a054903242f46bca0c9cc6b91a37e4c",
+            branch_id: "9a054903-242f-46bc-a0c9-cc6b91a37e4c",
             safekeeper_addr: "127.0.0.1:5454",
             pageserver_connstring: "host=127.0.0.1 port=64000",
             shared_preload_libraries: "yb_amp",
@@ -233,7 +233,7 @@ mod tests {
         let spec = render_compute_spec(&params(), &[], &BTreeMap::new(), &BTreeMap::new());
         assert_eq!(
             last_value(&spec, "yb_amp.branch_id").as_deref(),
-            Some("9a054903242f46bca0c9cc6b91a37e4c")
+            Some("9a054903-242f-46bc-a0c9-cc6b91a37e4c")
         );
         assert_eq!(
             last_value(&spec, "yb_amp.pageserver_connstring").as_deref(),

@@ -1075,12 +1075,44 @@ pageserver_flush(void)
 	return true;
 }
 
+/*
+ * A branch id is a uuid, so accept the spelling uuid's Display writes:
+ * 8-4-4-4-12 hyphenated. The bare 32-hex form stays accepted because ids were
+ * written that way before, and because rejecting it here would leave the GUC at
+ * its "" default rather than failing loudly -- the pageserver would then be sent
+ * a bare `pagestream` with no id.
+ */
 static bool
 check_yb_amp_id(char **newval, void **extra, GucSource source)
 {
 	uint8		id[16];
+	char	   *s = *newval;
+	char		flat[33];
 
-	return **newval == '\0' || HexDecodeString(id, *newval, 16);
+	if (*s == '\0')
+		return true;
+
+	if (strlen(s) == 36 &&
+		s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-')
+	{
+		int			i;
+		int			j = 0;
+
+		for (i = 0; i < 36; i++)
+			if (s[i] != '-')
+				flat[j++] = s[i];
+		if (j != 32)
+			return false;		/* a dash outside the four known positions */
+		flat[32] = '\0';
+		return HexDecodeString(id, flat, 16);
+	}
+
+	/*
+	 * Length-checked: HexDecodeString stops at the NUL, so a short string is
+	 * rejected safely, but a longer one would decode its first 32 characters and
+	 * report success — accepting a truncated id.
+	 */
+	return strlen(s) == 32 && HexDecodeString(id, s, 16);
 }
 
 /*

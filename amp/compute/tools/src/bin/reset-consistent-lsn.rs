@@ -37,7 +37,7 @@ use ysql_client::tokio_postgres::types::ToSql;
     about = "Find (and optionally set) the max valid pageserver consistent_lsn <= a target LSN"
 )]
 struct Args {
-    /// Branch id (32 hex chars).
+    /// Branch id (uuid).
     #[arg(long)]
     branch: BranchId,
     /// Target max LSN in `X/Y` hex form. The result is the largest real

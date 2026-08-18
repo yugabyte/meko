@@ -23,13 +23,13 @@ const ORPHAN: &str = "branch_drop_orphan";
 const ENDPOINT: &str = "ep_branch_drop";
 
 /// Whether the branch is still live (row present, not tombstoned). The storage
-/// layer's flat branch id is the dashless rendering of the row's uuid.
+/// layer's branch id is the row's uuid, in the same spelling.
 async fn live(yb: &str, branch_id: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
             "SELECT count(*) FROM amp_registry.branches \
-             WHERE replace(branch_id::text, '-', '') = '{branch_id}' AND dropped_at IS NULL"
+             WHERE branch_id = '{branch_id}' AND dropped_at IS NULL"
         ),
     )
     .await
@@ -42,7 +42,7 @@ async fn rows_for(yb: &str, branch_id: &str) -> anyhow::Result<i64> {
         yb,
         &format!(
             "SELECT count(*) FROM amp_registry.branches \
-             WHERE replace(branch_id::text, '-', '') = '{branch_id}'"
+             WHERE branch_id = '{branch_id}'"
         ),
     )
     .await

@@ -51,7 +51,7 @@ func ClusterCreate(ctx context.Context, env *config.LocalEnv, args ClusterCreate
 	if cluster == nil {
 		return fmt.Errorf("create-cluster task succeeded but cluster %q is not listed", args.Name)
 	}
-	branchID := hex32UUID(cluster.DefaultBranch.BranchId)
+	branchID := cluster.DefaultBranch.BranchId.String()
 
 	fmt.Printf("Created cluster '%s' (branch %s)\n", args.Name, branchID)
 	// NB: harness invariant — the 2nd whitespace token is the branch id.

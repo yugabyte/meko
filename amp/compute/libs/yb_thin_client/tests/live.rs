@@ -229,7 +229,7 @@ async fn uuid_key_column_binds_as_bytea() {
         0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
         0xff,
     ];
-    const ID_HEX: &str = "00112233445566778899aabbccddeeff";
+    const ID_TEXT: &str = "00112233-4455-6677-8899-aabbccddeeff";
 
     let ysql = ysql().await;
     ysql.execute(&format!("DROP TABLE IF EXISTS {TABLE}"), &[])
@@ -305,17 +305,17 @@ async fn uuid_key_column_binds_as_bytea() {
     );
 
     // ... and YSQL sees that row under the uuid those bytes spell.
-    let hex = ysql
+    let text = ysql
         .query(
-            &format!("SELECT replace(branch_id::text, '-', '') FROM {TABLE} WHERE lsn = 7"),
+            &format!("SELECT branch_id::text FROM {TABLE} WHERE lsn = 7"),
             &[],
         )
         .await
         .expect("ysql read-back");
-    assert_eq!(hex.len(), 1, "expected the one row we wrote");
+    assert_eq!(text.len(), 1, "expected the one row we wrote");
     assert_eq!(
-        hex[0].get::<_, String>(0),
-        ID_HEX,
+        text[0].get::<_, String>(0),
+        ID_TEXT,
         "the thin lane's bytes must be the uuid the control plane knows"
     );
 

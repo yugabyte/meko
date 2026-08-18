@@ -318,7 +318,7 @@ func dropRaceCleanup(ctx context.Context, cl ampCtl, proj ampCluster, branchID s
 // endpoints in the CLUSTER and reports which of them still have a pod.
 //
 // An endpoint's release carries its branch in its ConfigMap (`BRANCH_ID`, the
-// flat 32-hex rendering of the branch uuid), and every object in the release
+// branch uuid), and every object in the release
 // carries `app.kubernetes.io/instance: yb-ep-<endpoint id>`. So the branch's
 // endpoints are the endpoint ConfigMaps whose BRANCH_ID matches, and their
 // compute is whatever pods carry the matching instance label. Both reads use a
@@ -332,11 +332,10 @@ func (f *flow) branchComputePods(ctx context.Context, branchID string) (map[stri
 	if err != nil {
 		return nil, fmt.Errorf("list endpoint configmaps: %w", err)
 	}
-	want := flatBranchID(branchID)
 	out := map[string]string{}
 	for _, line := range strings.Split(cms, "\n") {
 		instance, branch, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok || instance == "" || flatBranchID(branch) != want {
+		if !ok || instance == "" || branch != branchID {
 			continue
 		}
 		pods, err := kube.GetSelector(ctx, "pod", "app.kubernetes.io/instance="+instance,
@@ -353,11 +352,4 @@ func (f *flow) branchComputePods(ctx context.Context, branchID string) (map[stri
 		}
 	}
 	return out, nil
-}
-
-// flatBranchID normalizes a branch id for comparison: the control plane's API
-// speaks the dashed uuid, the storage layer (and so the endpoint's BRANCH_ID)
-// speaks the flat 32-hex rendering of the same 16 bytes.
-func flatBranchID(id string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(id), "-", ""))
 }

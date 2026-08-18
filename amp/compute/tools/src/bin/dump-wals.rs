@@ -21,7 +21,7 @@ use ysql_client::{YbConnArgs, YsqlClient};
 #[derive(Parser)]
 #[command(about = "Dump amp_storage.wals (safekeeper WAL-in-YB chunks)")]
 struct Args {
-    /// Branch id (32 hex chars).
+    /// Branch id (uuid).
     #[arg(long)]
     branch: BranchId,
 

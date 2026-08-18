@@ -9,4 +9,4 @@ pg_auth_type = "Trust"
 http_auth_type = "Trust"
 grpc_auth_type = "Trust"
 no_sync = true
-branch_id = "9a57cdcafd663c91ab83654f21378725"
+branch_id = "9a57cdca-fd66-3c91-ab83-654f21378725"

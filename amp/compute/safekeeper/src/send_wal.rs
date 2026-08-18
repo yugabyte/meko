@@ -752,7 +752,7 @@ mod tests {
     use super::*;
 
     fn mock_branch_id() -> BranchId {
-        BranchId::from_slice(&[0x00; 16]).unwrap()
+        BranchId::from_array([0x00; 16])
     }
 
     fn mock_addr() -> SocketAddr {

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -283,13 +282,6 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 	}}, nil
 }
 
-// hex32 renders a branch uuid as the flat 32-lowercase-hex spelling this API and
-// the daemons carry. Every `branch_id` column holds the uuid itself, so the two
-// are one identity in two spellings, not two ids.
-func hex32(id uuid.UUID) string {
-	return hex.EncodeToString(id[:])
-}
-
 // endpointDeployName is the deployer's stable instance handle for an endpoint
 // (the container/pod/Helm-release name). It is keyed by the endpoint id so each
 // endpoint on a branch (a writer plus read replicas) gets a distinct
@@ -566,7 +558,7 @@ func (c *Controllers) resolveForkLSN(ctx context.Context, poolID uuid.UUID, pare
 		return "", errResp
 	}
 	skURL := c.prov.Deployer.EndpointSafekeeperURL(endpointDeployName(rw.ID))
-	lsn, err := c.prov.Node.TimelineFlushLSN(ctx, skURL, hex32(parent.BranchID))
+	lsn, err := c.prov.Node.TimelineFlushLSN(ctx, skURL, parent.BranchID.String())
 	if err != nil {
 		// The parent's safekeeper is unreachable, does not serve the timeline, or
 		// reports no flush_lsn — there is nothing to branch from. Steer the caller

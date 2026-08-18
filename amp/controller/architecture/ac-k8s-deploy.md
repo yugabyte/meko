@@ -87,7 +87,7 @@ the branch's **creation record** (full detail in
 
 - **create-cluster** (and **create-branch**) records the branch in the
   control-plane DB (`branch`) **and** a creation record in the storage
-  controller, keyed by the flat `branch_id`. It does **not** deploy anything or
+  controller, keyed by `branch_id`. It does **not** deploy anything or
   eagerly materialize the branch's storage.
 - **create-endpoint** deploys the endpoint. On first materialization the pod's
   pageserver reads its init mode off the branch's `amp_storage.branch_state` row
@@ -97,10 +97,9 @@ the branch's **creation record** (full detail in
   is no separate create-database call — the first endpoint is what turns the
   declared branch into real storage.
 
-The storage layer identifies a branch by 32 lowercase hex chars; the
-control plane stores the same 16 bytes (the `branch_id`) as a SQL `uuid` and
-converts with `hex.EncodeToString(id[:])` when rendering chart values. (The endpoint
-image receives it as the flat `BRANCH_ID` env var, #168.)
+The storage layer and the control plane identify a branch the same way — a SQL
+`uuid`, rendered in the uuid's own spelling — so chart values carry it verbatim.
+(The endpoint image receives it as the `BRANCH_ID` env var, #168.)
 
 ### Extensions (ImageVolumes)
 
@@ -160,7 +159,7 @@ Two distinct network paths:
 
 The deployed endpoints reach their **backing YugabyteDB** by its in-cluster
 Service DNS (`--deploy-yb-host-ports`), which may differ from the controller's own
-`--database-url` path to its state. The flat `branch_id` is the shared key.
+`--database-url` path to its state. The `branch_id` is the shared key.
 
 ## Endpoint data volume (`--deploy-storage-class`)
 

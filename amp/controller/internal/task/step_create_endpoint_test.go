@@ -40,9 +40,9 @@ func TestCreateEndpointStepRecordsAndDeploys(t *testing.T) {
 	if spec.Name != EndpointDeployName(epID) {
 		t.Errorf("deploy name = %q, want %q", spec.Name, EndpointDeployName(epID))
 	}
-	// The deploy spec speaks the storage layer's flat branch id (hex32 of branch).
-	if spec.BranchID != hex32(branchID) {
-		t.Errorf("deploy spec branch id = %s, want hex32(branch) %s", spec.BranchID, hex32(branchID))
+	// The deploy spec carries the branch id verbatim, in the one spelling.
+	if spec.BranchID != branchID.String() {
+		t.Errorf("deploy spec branch id = %s, want %s", spec.BranchID, branchID)
 	}
 	wantAddr := EndpointDeployName(epID) + ".endpoints.svc:55433"
 	if state.endpointAddresses[epID] != wantAddr {

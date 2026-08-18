@@ -1232,9 +1232,8 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
 /// `YbWalStorage` is bound to one branch for its lifetime and the
 /// safekeeper does no lineage/ancestor reads, so the id is fixed for
 /// every query on this instance — baking drops the bind from the wire.
-/// The id renders as fixed-width hex (`BranchId` `Display`), so the
-/// literal is injection-safe — and `branch_id` being `uuid` costs nothing
-/// here: Postgres parses the undashed spelling as one.
+/// `BranchId`'s `Display` emits only hex digits and dashes, so the literal is
+/// injection-safe, and Postgres parses it as the `uuid` the column is.
 fn bake_branch_id(sql: &str, branch_id: BranchId) -> String {
     let with_id = sql.replace("branch_id = $1", &format!("branch_id = '{branch_id}'"));
     // No bare `$1` may remain — it's branch_id only.
@@ -2787,7 +2786,7 @@ mod tests {
 
     #[test]
     fn bake_branch_id_bakes_and_shifts() {
-        let b: BranchId = "00112233445566778899aabbccddeeff".parse().unwrap();
+        let b: BranchId = "00112233-4455-6677-8899-aabbccddeeff".parse().unwrap();
         let sql = bake_branch_id(
             "SELECT chunk_offset FROM \"wals\" \
              WHERE branch_id = $1 AND segno = $2 \

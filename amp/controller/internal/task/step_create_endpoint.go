@@ -141,12 +141,11 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 		return Fail(fmt.Errorf("ensure endpoint record: %w", err))
 	}
 
-	// The deploy spec speaks the storage layer's flat branch id: a branch's id is
-	// the storage branch id verbatim, rendered via hex32 (no enclosing tenant).
+	// A branch's id is the storage branch id verbatim (no enclosing tenant).
 	spec := deploy.EndpointSpec{
 		Name:          EndpointDeployName(s.EndpointID),
 		EndpointID:    s.EndpointID.String(),
-		BranchID:      hex32(s.BranchID),
+		BranchID:      s.BranchID.String(),
 		PgVersion:     s.PgVersion,
 		YB:            s.yb,
 		ControllerURL: s.scURL,

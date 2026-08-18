@@ -85,7 +85,7 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         &yb,
         &format!(
             "SELECT count(*) FROM amp_registry.branches \
-             WHERE replace(branch_id::text, '-', '') = '{branch_id}' \
+             WHERE branch_id = '{branch_id}' \
                AND dropped_at IS NOT NULL"
         ),
     )
@@ -106,14 +106,13 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 /// Count of *live* (not-tombstoned) `amp_registry.branches` rows for our branch.
 ///
 /// One branch table serves both the product API and the storage-layer control
-/// surface, so it is keyed by uuid; the flat 32-hex BranchId the launcher uses is
-/// that same value with the dashes taken out.
+/// surface, and a BranchId is the uuid it is keyed by — one spelling on both.
 async fn live_branch_rows(yb: &str, branch_id: &str) -> anyhow::Result<i64> {
     db::query_i64(
         yb,
         &format!(
             "SELECT count(*) FROM amp_registry.branches \
-             WHERE replace(branch_id::text, '-', '') = '{branch_id}' \
+             WHERE branch_id = '{branch_id}' \
                AND dropped_at IS NULL"
         ),
     )
@@ -126,7 +125,7 @@ async fn endpoint_rows(yb: &str, branch_id: &str) -> anyhow::Result<i64> {
         yb,
         &format!(
             "SELECT count(*) FROM amp_registry.endpoints \
-             WHERE replace(branch_id::text, '-', '') = '{branch_id}'"
+             WHERE branch_id = '{branch_id}'"
         ),
     )
     .await

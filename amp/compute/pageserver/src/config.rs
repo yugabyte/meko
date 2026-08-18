@@ -589,7 +589,7 @@ mod tests {
     fn test_timeline_identity_round_trip() {
         let input = r#"
             control_plane_api = "http://localhost:6666"
-            branch_id   = "77ffde89f43d4ca08ef0a0ed1f089eaa"
+            branch_id   = "77ffde89-f43d-4ca0-8ef0-a0ed1f089eaa"
         "#;
         let config_toml = toml_edit::de::from_str::<pageserver_api::config::ConfigToml>(input)
             .expect("identity config is valid");
@@ -599,7 +599,7 @@ mod tests {
         let ident = conf.timeline_identity.expect("identity parsed");
         assert_eq!(
             ident.branch_id.to_string(),
-            "77ffde89f43d4ca08ef0a0ed1f089eaa"
+            "77ffde89-f43d-4ca0-8ef0-a0ed1f089eaa"
         );
         // serialize → reparse → same identity fields survive the round trip
         let serialized = toml_edit::ser::to_string_pretty(&config_toml).expect("serializes");

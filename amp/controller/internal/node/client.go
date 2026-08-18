@@ -39,8 +39,7 @@ func NewClient() *Client {
 // authoritative "everything committed so far" position, the default branch fork
 // point yb_amp_local also branches at; unlike a pageserver's last_record_lsn
 // (an ingest position) it never lags durable WAL. skBaseURL is the safekeeper's
-// HTTP base URL; branchID is 32 lowercase hex digits (the storage-layer
-// BranchId).
+// HTTP base URL; branchID is the storage-layer BranchId, as the uuid it prints.
 func (c *Client) TimelineFlushLSN(ctx context.Context, skBaseURL, branchID string) (string, error) {
 	u := strings.TrimRight(skBaseURL, "/") +
 		"/v1/branch/" + url.PathEscape(branchID)

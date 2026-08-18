@@ -32,12 +32,11 @@ renderings of those same rows, not two copies:
 
 | | product API | this surface |
 |---|---|---|
-| branch key | `(cluster_id uuid, branch_id uuid)` | flat 32-lowercase-hex `branch_id` |
+| branch key | `(cluster_id uuid, branch_id uuid)` | `branch_id uuid` |
 | endpoint key | `id uuid` | caller-chosen handle in `endpoint.name` |
 
-The hex form is `replace(branch_id::text, '-', '')` — the same 128 bits, so the
-translation is lossless and total and there is nothing to keep in step. It is a
-wire rendering only: the `amp_storage` tables key on the `uuid` itself. A branch
+A branch id has one spelling — the uuid's own — on both surfaces and on the wire,
+so there is no rendering step and nothing to keep in step. A branch
 dropped through either surface is the same row with the same `dropped_at` stamp.
 
 Two companion schemas are fixed rather than configurable: `controller` holds the

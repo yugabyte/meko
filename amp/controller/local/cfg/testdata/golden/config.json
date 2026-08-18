@@ -17,7 +17,7 @@
     },
     "delta_operations": null,
     "skip_pg_catalog_updates": true,
-    "storage_branch_id": "9a57cdcafd663c91ab83654f21378725",
+    "storage_branch_id": "9a57cdca-fd66-3c91-ab83-654f21378725",
     "pageserver_connection_info": {
       "pageservers": [
         {

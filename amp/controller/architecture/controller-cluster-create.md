@@ -62,7 +62,7 @@ endpoint materializes the branch, and cAmp finalizes.
 **cAmp deploys:**
 - Records the `endpoint` row.
 - Deploys the endpoint (Helm pod or Docker container) with the endpoint image's
-  env-var contract — the flat `BRANCH_ID` (#168) — plus `pg_version`,
+  env-var contract — `BRANCH_ID` (#168) — plus `pg_version`,
   `CONTROLLER_URL` (the cAmp-managed controller), and
   `BOOTSTRAP=true`.
 
@@ -139,7 +139,7 @@ writes are synchronous today and move onto the task framework under #113.
 
 | `yb_amp_local` | Amp Controller (cAmp) |
 |---|---|
-| `record_branch` (per branch) | `create-cluster` → `cluster` + default `branch` **and** that branch's `amp_storage.branch_state` seed, keyed by the flat `branch_id`, written by the `record_branch_recipe` step. A root branch is a branch row with a NULL parent. |
+| `record_branch` (per branch) | `create-cluster` → `cluster` + default `branch` **and** that branch's `amp_storage.branch_state` seed, keyed by `branch_id`, written by the `record_branch_recipe` step. A root branch is a branch row with a NULL parent. |
 | control plane starts SK | the **endpoint** starts its safekeeper (not registered with the controller — see #171) |
 | control plane inits PS + `register_and_attach` | the **endpoint** starts its pageserver, under the write lease its supervisor holds |
 | PS `Bootstrap` runs `initdb` | the **endpoint** runs `initdb`, driven by the seeded `branch_state` row |

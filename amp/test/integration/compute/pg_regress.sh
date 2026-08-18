@@ -214,9 +214,9 @@ echo ">>> bringing up yb-amp cluster (db=$YB_DBNAME base=$BASE compute=$COMPUTE)
 yb() { "$YB_AMP" "$@"; }
 yb init --yb-dbname "$YB_DBNAME" --yb-host "$YB_HOST" --yb-port "$YB_PORT" --port-base "$BASE"
 yb start
-TID=$(yb tenant create --pg-version 18 | grep -oE '[0-9a-f]{32}' | head -1)
-[[ -n "$TID" ]] || { echo "tenant create failed" >&2; clean; exit 1; }
-yb endpoint create main --tenant-id "$TID" --branch-name main --pg-version 18 --pg-port "$COMPUTE"
+BID=$(yb cluster create pgregress --pg-version 18 | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+[[ -n "$BID" ]] || { echo "cluster create failed" >&2; clean; exit 1; }
+yb endpoint create main --branch-id "$BID" --pg-version 18 --pg-port "$COMPUTE"
 yb endpoint start main --start-timeout 600s
 
 echo ">>> running pg_regress (schedule=$(basename "$SCHEDULE") jobs=$JOBS) against 127.0.0.1:$COMPUTE"

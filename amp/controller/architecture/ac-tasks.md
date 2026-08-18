@@ -23,11 +23,10 @@ and return `202` + the `Task` + a `Location` header for the client to poll
 **Terminology.** The controller's user-facing ladder is **storage pool → cluster
 → branch → endpoint** ([#147](https://github.com/yugabyte/amp/issues/147)).
 A cluster is a purely control-plane grouping (it maps to no storage object); a
-branch's `branch_id` **is** the storage layer's flat `BranchId`. The controller
-carries that `branch_id` verbatim to the storage seam — the controller
-recipe and client, via `hex32` — and the controller is keyed by the flat
-`branch_id`. `deploy.EndpointSpec` likewise renders the flat `branch_id` as the
-endpoint image's `BRANCH_ID` env var (#168).
+branch's `branch_id` **is** the storage layer's `BranchId`, the same uuid in the
+same spelling. The controller carries it verbatim to the storage seam, and
+`deploy.EndpointSpec` passes it as the endpoint image's `BRANCH_ID` env var
+(#168).
 
 ## 1. Where it lives
 
@@ -197,9 +196,8 @@ A few invariants worth calling out:
   the endpoint clones from that ancestor at the fork LSN (`Bootstrap` forced off);
   otherwise a default branch runs `initdb` when the deployment's bootstrap flag is
   set. The deploy
-  spec carries the storage layer's flat branch id — `hex32(branch_id)` as the
-  spec's `BranchID` (and `hex32(ancestor_branch_id)` for a fork); a cluster no
-  longer maps to a storage tenant (#168).
+  spec carries the branch id verbatim as the spec's `BranchID` (and the ancestor's
+  for a fork); a cluster no longer maps to a storage tenant (#168).
 - **Clearing the recipe is best-effort.** A lingering recipe is harmless (nothing
   reads it once the branch is materialized), so a clear failure logs a warning and
   the step still succeeds.
@@ -282,7 +280,7 @@ context):
   would report success having created nothing; a cluster's default branch warns and
   continues, its row already written by create_cluster.
 - **`deploy.Deployer`** — the existing runtime-agnostic endpoint deployer, reused
-  as-is (its `EndpointSpec` renders the flat `branch_id` as the endpoint image's
+  as-is (its `EndpointSpec` passes the `branch_id` as the endpoint image's
   `BRANCH_ID` env var, #168).
 
 `ProductionRegistry(deps)` registers the catalog's builders and holds the deps,

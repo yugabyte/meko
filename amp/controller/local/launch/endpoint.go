@@ -222,6 +222,15 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 	if branchID == "" {
 		return fmt.Errorf("`endpoint create` requires --branch-id")
 	}
+	// Canonicalize before anything derives from or compares it: the default
+	// endpoint id below is built from this string, and the lookups further down
+	// compare it against stored ids, which carry the spelling the API printed.
+	parsed, err := parseBranchID(branchID)
+	if err != nil {
+		return err
+	}
+	branchID = config.BranchID(parsed.String())
+
 	endpointID := args.EndpointID
 	if endpointID == "" {
 		endpointID = "ep-" + string(branchID)
@@ -241,7 +250,6 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 	if branch == nil {
 		return fmt.Errorf("no live branch %s in any of the launcher's clusters", branchID)
 	}
-
 	// Primary mode only; conflict check unless allow_multiple (not exposed).
 	if err := checkConflictingEndpoints(endpoints, branchID); err != nil {
 		return err
@@ -281,7 +289,7 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 // duplicate primary is refused by the schema before any local state exists; and
 // it is what mints the endpoint id the config has to carry.
 func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch *api.Branch, endpoints launcherEndpoints, endpointID string, args EndpointCreateArgs) error {
-	branchID := config.BranchID(hex32UUID(branch.BranchId))
+	branchID := config.BranchID(branch.BranchId.String())
 	pgPort, err := resolvePort(args.PgPort, func() (uint16, error) {
 		return findFreePort(nextCandidatePort(endpoints))
 	})
@@ -418,7 +426,7 @@ func resolvePort(explicit *uint16, alloc func() (uint16, error)) (uint16, error)
 func checkConflictingEndpoints(endpoints launcherEndpoints, branchID config.BranchID) error {
 	for _, ep := range endpoints.all {
 		id := ep.conf.EndpointID
-		if ep.conf.BranchID == branchID && ep.conf.Mode == cfg.ComputeModePrimary {
+		if config.SameBranch(ep.conf.BranchID, branchID) && ep.conf.Mode == cfg.ComputeModePrimary {
 			return fmt.Errorf(
 				"attempting to create a duplicate primary endpoint on branch %s: endpoint %q exists already", branchID, id)
 		}

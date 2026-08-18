@@ -131,7 +131,7 @@ These correspond to real data or real running processes, and amp-controller trac
 - **YBDB universe** — the shared storage layer for a placement group; managed by YBA,
   driven by amp-controller through YBA's API.
 - **Branch** — the physical data of one logical Postgres database, held in YBDB and
-  addressed by its `branch_id` (the storage layer's flat branch id). Postgres itself
+  addressed by its `branch_id` (the storage layer's branch id). Postgres itself
   calls this a *cluster*; in this document "cluster" is always the control-plane
   resource that owns it, and the data is always a **branch** (§4.3). Each cluster has
   one **default** (root) branch, created with the cluster; every other branch under it
@@ -265,7 +265,7 @@ distributes — observability is provisioned with the endpoint, not bolted on af
 All durable data lives in YBDB. An endpoint's access to that data is purely
 **configuration** — the YBDB connection in its spec, plus its branch binding (the
 storage-layer `branch_id` of the branch it serves, delivered as the endpoint image's
-flat `BRANCH_ID` env var (#168) — see §5.6). Nothing on the
+`BRANCH_ID` env var (#168) — see §5.6). Nothing on the
 endpoint's node or pod is precious: if an endpoint goes away, creating a new one with the
 same spec — on a completely different node, pod, or even runtime — serves exactly the
 same data.
@@ -315,7 +315,7 @@ The unit of deployment, scheduling, replacement, and upgrade is the whole endpoi
 
 amp-controller is the source of every endpoint's spec. It assembles the spec from its
 state store (§5.3, §10) — YBDB connection, the branch binding (carried to the endpoint
-image as the flat `BRANCH_ID`, §5.6), role,
+image as `BRANCH_ID`, §5.6), role,
 version, TLS/cert references, otel config, the LFC state store's connection
 (§11.5) — and hands it to that endpoint's compute_ctl, the single point of contact (§5.2).
 compute_ctl accepts a spec by three transports that all carry the **same payload** (one
@@ -378,7 +378,7 @@ this interface, not a change to the workflow.
   `deploy/helm/yb-amp-endpoint` chart. VMs (via ybops) follow the same shape.
 
 The endpoint spec carried in `EndpointSpec` (the branch binding rendered as the
-endpoint image's flat `BRANCH_ID` env var (#168), plus PG version, the YBDB
+endpoint image's `BRANCH_ID` env var (#168), plus PG version, the YBDB
 connection, the controller URL, bootstrap flag) is delivered to the endpoint as
 environment today; §5.5's `compute_ctl` transports are the longer-term refinement.
 
@@ -741,9 +741,8 @@ the pageserver claims its own generation from `amp_storage.branch_state`.
 **Decision: the storage layer's view is a RENDERING of the product model, not a
 registry of its own.** There is one `branches` table and one `endpoints` table,
 in `amp_registry` (§10), reached through one API (`/api/v1`). The storage layer
-renders a branch id flat — 32 lowercase hex — where the product API renders it as
-a uuid, but those are the same 128 bits (`hex32` is lossless and total in both
-directions), so there is nothing to synchronize and nothing that can drift.
+and the product API render a branch id the same way — it is a uuid on both — so
+there is nothing to synchronize and nothing that can drift.
 
 This reverses an earlier decision to keep a separate flat registry in its own
 schema behind its own routes. The duplication bought no isolation and cost

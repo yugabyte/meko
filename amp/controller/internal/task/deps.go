@@ -2,7 +2,6 @@ package task
 
 import (
 	"context"
-	"encoding/hex"
 
 	"github.com/google/uuid"
 
@@ -23,8 +22,7 @@ import (
 // Naming: the controller's user-facing ladder is storage pool -> cluster ->
 // branch -> endpoint. The storage layer is flat: a branch's branch_id IS the
 // storage-layer BranchId (no enclosing tenant), so the controller carries it
-// verbatim as a uuid, rendering it to 32-hex via hex32 only where a string
-// leaves the process (the endpoint spec). A cluster no longer maps to a storage
+// verbatim as a uuid, in one spelling end to end. A cluster no longer maps to a storage
 // tenant.
 
 // StateStore is the set of *idempotent, id-keyed* cluster/branch operations the
@@ -142,8 +140,8 @@ type BranchRecipe struct {
 //
 // clusterID scopes the branch to its cluster: there is one branch table, shared
 // with the product API, so the write has to say which cluster's branch it means.
-// branchID is that branch's BranchId, carried as the uuid every `branch_id`
-// column holds.
+// branchID is that branch's BranchId — the uuid every `branch_id` column holds,
+// in the one spelling both sides use.
 //
 // It may be unavailable (no store wired), in which case the step no-ops with a
 // warning; the branch then exists in the control plane but has no
@@ -169,13 +167,4 @@ type Deps struct {
 	// disables externalized extensions (the endpoint ships only image-baked ones),
 	// e.g. under the Docker driver or when the feature is off.
 	Extensions *extensions.Catalog
-}
-
-// hex32 renders a branch uuid as the flat 32-lowercase-hex spelling the daemons
-// and the endpoint spec carry (no dashes). Every `branch_id` column holds the uuid
-// itself, so this is a wire rendering, not a second identity — and the id needs no
-// scoping either way, the storage layer being flat (no enclosing tenant). It
-// matches the controller API layer's identical rendering.
-func hex32(id uuid.UUID) string {
-	return hex.EncodeToString(id[:])
 }
