@@ -211,3 +211,49 @@ export async function fetchUserTierAudit(userId: string): Promise<TierAuditEntry
   const { data } = await http.get<TierAuditEntry[]>(`/usage/users/${userId}/tier-audit`);
   return data ?? [];
 }
+
+/* ---- feedback (paged, date-range filtered) ---- */
+
+/** One admin feedback row. Nullable columns arrive as `null` from the
+ *  JSON encoder (Go's `omitempty` drops the key, so the FE treats
+ *  "missing" and "null" the same). */
+export type AdminFeedbackItem = {
+  id: string;
+  created_at: string;
+  updated_at?: string | null;
+  user_id?: string | null;
+  source: string;
+  source_identifier?: string | null;
+  datapack_id?: string | null;
+  datapack_name?: string | null;
+  context_route?: string | null;
+  category: string;
+  body: string;
+  meko_version?: string | null;
+  status: string;
+};
+
+export type AdminFeedbackResponse = {
+  feedback: AdminFeedbackItem[];
+  pagination: { total: number; limit: number; offset: number };
+};
+
+/** GET /api/admin/feedback — paged product feedback filtered by
+ *  created_at range, newest first. `from` / `to` are YYYY-MM-DD;
+ *  `limit` is 1..100 (api_server clamps and defaults 50); `offset`
+ *  is a non-negative index. Undefined params are dropped so callers
+ *  can share one function across "default 30 days" and other views. */
+export async function fetchAdminFeedback(opts: {
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<AdminFeedbackResponse> {
+  const params: Record<string, string> = {};
+  if (opts.from) params.from = opts.from;
+  if (opts.to) params.to = opts.to;
+  if (opts.limit != null) params.limit = String(opts.limit);
+  if (opts.offset != null) params.offset = String(opts.offset);
+  const { data } = await http.get<AdminFeedbackResponse>("/feedback", { params });
+  return data;
+}

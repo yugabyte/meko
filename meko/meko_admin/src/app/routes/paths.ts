@@ -4,5 +4,6 @@ export const ROUTES = {
   users: "/users",
   metrics: "/metrics",
   executive: "/executive",
+  feedback: "/feedback",
   ampRegistration: "/amp",
 } as const;

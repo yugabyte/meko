@@ -53,6 +53,7 @@ type serviceRegistry struct {
 	billingSvc         *service.BillingService
 	adminMetricsSvc    *adminsvc.AdminMetricsService
 	adminDataPlaneSvc  *adminsvc.AdminDataPlaneService
+	adminFeedbackSvc   *adminsvc.AdminFeedbackService
 	artifactRepo       *repository.ArtifactRepo
 	artifactSvc        *service.ArtifactService
 	tokenSavingsRepo   *repository.TokenSavingsRepo
@@ -184,6 +185,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	// Langfuse) via a dedicated admin repo/service pair.
 	adminRepo := adminrepo.NewAdminRepo(cfg.SystemDB, cfg.DB, cfg.LangfuseDB)
 	adminMetricsSvc := adminsvc.NewAdminMetricsService(adminRepo)
+	adminFeedbackSvc := adminsvc.NewAdminFeedbackService(adminRepo)
 
 	// Data Plane tab: reads live universe config/metrics from YBA. The YBA
 	// client is nil when no token is set, in which case the endpoint reports
@@ -272,6 +274,7 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 		billingSvc:            billingSvc,
 		adminMetricsSvc:       adminMetricsSvc,
 		adminDataPlaneSvc:     adminDataPlaneSvc,
+		adminFeedbackSvc:      adminFeedbackSvc,
 		artifactRepo:          artifactRepo,
 		artifactSvc:           artifactSvc,
 		tokenSavingsRepo:      tokenSavingsRepo,
@@ -356,13 +359,14 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 	// Admin metrics routes consumed by meko_admin. Gated by the admin
 	// shared secret (X-Meko-Admin-Secret); 503 when the secret is unset.
 	adminGroup := v1.Group("/admin", auth.RequireAdminSecret(cfg.AdminAPIKey))
-	adminH := handlers.NewAdminHandler(reg.adminMetricsSvc, reg.adminDataPlaneSvc)
+	adminH := handlers.NewAdminHandler(reg.adminMetricsSvc, reg.adminDataPlaneSvc, reg.adminFeedbackSvc)
 	adminGroup.GET("/users", adminH.Users)
 	adminGroup.GET("/metrics", adminH.Metrics)
 	adminGroup.GET("/token-savings", adminH.Executive)
 	adminGroup.GET("/dataplane", adminH.DataPlane)
 	adminGroup.PATCH("/users/:id/tier", adminH.UpdateUserTier)
 	adminGroup.GET("/users/:id/tier-audit", adminH.TierAudit)
+	adminGroup.GET("/feedback", adminH.Feedback)
 
 	// AMP controller registration, managed by meko_admin through api_server so
 	// the write path shares api_server's system-DB connection.

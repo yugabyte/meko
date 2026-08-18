@@ -4,6 +4,7 @@ import metricsRouter from "./routes/metrics";
 import usageRouter from "./routes/usage";
 import authRouter from "./routes/auth";
 import ampRegistrationRouter from "./routes/ampRegistration";
+import feedbackRouter from "./routes/feedback";
 import { requireAdminAuth } from "./middleware/requireAdminAuth";
 import { serveStatic } from "./static";
 
@@ -38,6 +39,7 @@ app.use("/api/admin/auth", authRouter);
 app.use("/api/admin/metrics", requireAdminAuth, metricsRouter);
 app.use("/api/admin/usage", requireAdminAuth, usageRouter);
 app.use("/api/admin/amp-registration", requireAdminAuth, ampRegistrationRouter);
+app.use("/api/admin/feedback", requireAdminAuth, feedbackRouter);
 
 // Runtime feature flags, exposed to the client as window.__ADMIN_RUNTIME__ so
 // they can be flipped per-deployment without a rebuild. Read via readRuntimeEnv

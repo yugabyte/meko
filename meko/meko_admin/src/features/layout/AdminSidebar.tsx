@@ -1,7 +1,7 @@
 // Admin console sidebar: brand logo block, primary nav (Data Plane / Users /
 // Metrics / AMP), and a footer showing the signed-in user. App-level actions
 // (theme toggle, sign out) live in AdminHeader, not here.
-import { Server, Users, BarChart3, Database, LineChart } from "lucide-react";
+import { Server, Users, BarChart3, Database, LineChart, MessageSquareText } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import { ROUTES } from "@/app/routes/paths";
@@ -44,6 +44,7 @@ export function AdminSidebar() {
   const navItems: NavItem[] = [
     { to: ROUTES.dataPlane, label: "Data Plane", icon: Server },
     { to: ROUTES.users, label: "Users & tiers", icon: Users },
+    { to: ROUTES.feedback, label: "Feedback", icon: MessageSquareText },
     { to: ROUTES.metrics, label: "Metrics", icon: BarChart3 },
     { to: ROUTES.executive, label: "Executive Dashboard", icon: LineChart },
   ];

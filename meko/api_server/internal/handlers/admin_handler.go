@@ -6,6 +6,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,11 +36,16 @@ func parseDateParam(raw string) (*time.Time, error) {
 type AdminHandler struct {
 	svc   *adminsvc.AdminMetricsService
 	dpSvc *adminsvc.AdminDataPlaneService
+	fbSvc *adminsvc.AdminFeedbackService
 }
 
 // NewAdminHandler constructs an AdminHandler.
-func NewAdminHandler(svc *adminsvc.AdminMetricsService, dpSvc *adminsvc.AdminDataPlaneService) *AdminHandler {
-	return &AdminHandler{svc: svc, dpSvc: dpSvc}
+func NewAdminHandler(
+	svc *adminsvc.AdminMetricsService,
+	dpSvc *adminsvc.AdminDataPlaneService,
+	fbSvc *adminsvc.AdminFeedbackService,
+) *AdminHandler {
+	return &AdminHandler{svc: svc, dpSvc: dpSvc, fbSvc: fbSvc}
 }
 
 // DataPlane handles GET /api/v1/admin/dataplane — live universe configuration
@@ -195,4 +201,77 @@ func (h *AdminHandler) TierAudit(c echo.Context) error {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 	return ok(c, http.StatusOK, entries)
+}
+
+// Feedback query-parameter defaults and caps. Kept as file-local
+// constants (rather than a struct or config) because the values are
+// exposed to admins only and the tuning story is "change the code" if
+// the volume changes.
+const (
+	feedbackDefaultLimit = 50
+	feedbackMaxLimit     = 100
+)
+
+// Feedback handles GET /api/v1/admin/feedback — paged product feedback
+// filtered by created_at date range, newest first.
+//
+// Query params:
+//   - from (YYYY-MM-DD, optional): inclusive lower bound on created_at.
+//   - to   (YYYY-MM-DD, optional): inclusive upper bound. The handler
+//     normalises this to end-of-day (start of the following UTC day) so
+//     the SQL stays a pure < comparison against the timestamp column.
+//   - limit (int, default 50, cap 100).
+//   - offset (int, default 0).
+//
+//	@Summary	List product feedback (admin)
+//	@Tags		admin
+//	@Produce	json
+//	@Success	200	{object}	APIResponse
+//	@Failure	400	{object}	APIResponse
+//	@Failure	500	{object}	APIResponse
+//	@Router		/admin/feedback [get]
+func (h *AdminHandler) Feedback(c echo.Context) error {
+	start, err := parseDateParam(c.QueryParam("from"))
+	if err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "from must be YYYY-MM-DD")
+	}
+	to, err := parseDateParam(c.QueryParam("to"))
+	if err != nil {
+		return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "to must be YYYY-MM-DD")
+	}
+	// Inclusive upper bound is displayed to admins as "on or before
+	// <date>", so widen to the start of the next day for the exclusive
+	// comparison the repo uses. Preserving the original *time.Time
+	// pointer lets nil (unbounded) pass through unchanged.
+	var endExclusive *time.Time
+	if to != nil {
+		next := to.Add(24 * time.Hour)
+		endExclusive = &next
+	}
+
+	limit := feedbackDefaultLimit
+	if raw := strings.TrimSpace(c.QueryParam("limit")); raw != "" {
+		n, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || n <= 0 {
+			return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "limit must be a positive integer")
+		}
+		if n > feedbackMaxLimit {
+			n = feedbackMaxLimit
+		}
+		limit = n
+	}
+	offset := 0
+	if raw := strings.TrimSpace(c.QueryParam("offset")); raw != "" {
+		n, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || n < 0 {
+			return apiError(c, http.StatusBadRequest, "INVALID_PARAM", "offset must be a non-negative integer")
+		}
+		offset = n
+	}
+
+	resp, err := h.fbSvc.List(c.Request().Context(), start, endExclusive, limit, offset)
+	if err != nil {
+		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+	}
+	return ok(c, http.StatusOK, resp)
 }

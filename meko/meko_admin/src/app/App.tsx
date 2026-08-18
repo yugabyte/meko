@@ -9,6 +9,7 @@ import { DataPlanePage } from "@/features/dataplane/pages/DataPlanePage";
 import { MetricsPage } from "@/features/metrics/pages/MetricsPage";
 import { ExecutiveDashboardPage } from "@/features/exec/pages/ExecutiveDashboardPage";
 import { UsersPage } from "@/features/users/pages/UsersPage";
+import { FeedbackPage } from "@/features/feedback/pages/FeedbackPage";
 import { AmpRegistrationPage } from "@/features/amp/pages/AmpRegistrationPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { isAmpAdminEnabled } from "@/lib/amp";
@@ -41,6 +42,7 @@ function AppShell() {
             <Route path={ROUTES.users} element={<UsersPage />} />
             <Route path={ROUTES.metrics} element={<MetricsPage />} />
             <Route path={ROUTES.executive} element={<ExecutiveDashboardPage />} />
+            <Route path={ROUTES.feedback} element={<FeedbackPage />} />
             {isAmpAdminEnabled() && (
               <Route path={ROUTES.ampRegistration} element={<AmpRegistrationPage />} />
             )}
