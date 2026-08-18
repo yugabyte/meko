@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -64,5 +65,23 @@ func TestTimelineFlushLSNNotFound(t *testing.T) {
 
 	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br"); err == nil {
 		t.Fatal("expected an error on a 404 from the safekeeper")
+	}
+}
+
+// A node that never answered is ErrUnreachable — the signal callers retry on —
+// while a node that answered badly is not, however unwelcome the answer.
+func TestTimelineFlushLSNUnreachableIsDistinguished(t *testing.T) {
+	// Port 1 needs root to bind, so nothing is listening: the dial is refused.
+	_, err := NewClient().TimelineFlushLSN(context.Background(), "http://127.0.0.1:1", "br")
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("dial refused: err = %v, want ErrUnreachable", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br"); errors.Is(err, ErrUnreachable) {
+		t.Errorf("404 from the safekeeper: err = %v, want a non-ErrUnreachable error", err)
 	}
 }

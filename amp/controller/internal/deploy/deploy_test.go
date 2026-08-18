@@ -1,8 +1,11 @@
 package deploy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -347,5 +350,51 @@ func TestEndpointSafekeeperURL(t *testing.T) {
 	wantDocker := fmt.Sprintf("http://%s:%d", id, safekeeperHTTPPort)
 	if got := d.EndpointSafekeeperURL(id); got != wantDocker {
 		t.Errorf("docker EndpointSafekeeperURL(%s) = %q, want %q", id, got, wantDocker)
+	}
+}
+
+// One read of a Service's Endpoints answers "can the control plane reach this
+// endpoint": a ready address, serving the safekeeper's port (#724).
+func TestEndpointsServePort(t *testing.T) {
+	ready := []byte(`{"subsets":[{"addresses":[{"ip":"10.21.133.26"}],"ports":[{"port":55433},{"port":7676}]}]}`)
+	if !endpointsServePort(ready, 7676) {
+		t.Error("a ready address serving 7676 was not recognized")
+	}
+
+	// The #724 state: the pod is Ready but not yet a backend, so it is listed as
+	// notReady and kube-proxy still answers with a REJECT.
+	notReady := []byte(`{"subsets":[{"notReadyAddresses":[{"ip":"10.21.133.26"}],"ports":[{"port":7676}]}]}`)
+	if endpointsServePort(notReady, 7676) {
+		t.Error("a notReady-only Endpoints was treated as routable")
+	}
+
+	// A Service that publishes only the compute port: reachable for Postgres, not
+	// for the controller.
+	computeOnly := []byte(`{"subsets":[{"addresses":[{"ip":"10.21.133.26"}],"ports":[{"port":55433}]}]}`)
+	if endpointsServePort(computeOnly, 7676) {
+		t.Error("a Service without the safekeeper port was treated as reachable")
+	}
+
+	// Addresses and ports have to come from the SAME subset — a ready address in
+	// one subset does not back a port only another subset serves.
+	split := []byte(`{"subsets":[{"addresses":[{"ip":"10.21.133.26"}],"ports":[{"port":55433}]},` +
+		`{"notReadyAddresses":[{"ip":"10.21.133.27"}],"ports":[{"port":7676}]}]}`)
+	if endpointsServePort(split, 7676) {
+		t.Error("a ready address in one subset was credited to a port served by another")
+	}
+
+	if endpointsServePort([]byte("not json"), 7676) {
+		t.Error("unparseable body was treated as routable")
+	}
+}
+
+// verifyReady gates the create task, so it must be a no-op where there is no API
+// server to verify against — otherwise every non-in-cluster deploy fails.
+func TestVerifyReadySkipsOutsideCluster(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	k := NewKubernetesDeployer(testKubernetesConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := k.verifyReady(context.Background(), "yb-ep-1"); err != nil {
+		t.Errorf("verifyReady outside a cluster = %v, want nil", err)
 	}
 }

@@ -279,6 +279,12 @@ authoritative (`<bin> --help`, or the error names the bad key). Either way the f
   otherwise refresh it with the `dshubin_bot` creds via the idempotent `kubectl create
   secret docker-registry … | kubectl apply -f -` one-liner in `deploy/README.md`
   ("Refreshing the pull secret").
+- **`verify endpoint <release>: its Service had no ready backend for port 7676`** is the
+  post-deploy check failing *after* a Helm install that succeeded — so the pod is usually fine
+  and the Service in front of it is not. `kubectl -n "$NS" get endpoints <release>` should list
+  a ready address serving 7676; if it lists none, the pod is not in the EndpointSlice, so start
+  at its readiness. It leaves the release installed — clean it up with the one-liner below
+  before re-creating.
 - **Stale endpoint Helm releases pile up** from failed `create_endpoint` tasks (left `pending-install`).
   Clean up: `for r in $(helm -n "$NS" list -aq | grep '^yb-ep-'); do helm -n "$NS" uninstall "$r"; done`.
 

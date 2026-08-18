@@ -204,6 +204,12 @@ never lags durable WAL the way a pageserver's `last_record_lsn` can, #130. The
 parent must have a `read_write` endpoint to resolve a default — otherwise pass
 `fork_point_lsn`.)*
 
+A parent whose safekeeper never answers is **`503`**, not `400` (#724): the fork
+is well-formed and retrying is the caller's correct reaction, which
+`invalid_request` tells it not to do. Nothing is planned before the fork point
+resolves, so that retry is safe. A safekeeper that *does* answer — 404, no
+`flush_lsn` — is a verdict, and stays `400`.
+
 **`deleteCluster` and `deleteBranch` are real cascade-delete tasks.** Each runs a
 cheap pre-check that the target exists (`404` via `core.Backend` if not);
 `deleteBranch` additionally rejects a branch with child branches up front (`409`,

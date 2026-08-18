@@ -677,6 +677,9 @@ type InternalError = Error
 // NotFound defines model for NotFound.
 type NotFound = Error
 
+// ServiceUnavailable defines model for ServiceUnavailable.
+type ServiceUnavailable = Error
+
 // ListStoragePoolsParams defines parameters for ListStoragePools.
 type ListStoragePoolsParams struct {
 	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
@@ -2858,6 +2861,7 @@ type CreateBranchResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3973,6 +3977,13 @@ func ParseCreateBranchResponse(rsp *http.Response) (*CreateBranchResponse, error
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -5335,6 +5346,8 @@ type InternalErrorJSONResponse Error
 
 type NotFoundJSONResponse Error
 
+type ServiceUnavailableJSONResponse Error
+
 type ListStoragePoolsRequestObject struct {
 	Params ListStoragePoolsParams
 }
@@ -5918,6 +5931,20 @@ func (response CreateBranch500JSONResponse) VisitCreateBranchResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateBranch503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response CreateBranch503JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }

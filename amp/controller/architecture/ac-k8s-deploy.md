@@ -74,6 +74,21 @@ returns `201`. The row is inserted first so the single-writer rule is enforced
 before a Helm install is spent; if the deploy then fails, the just-inserted row
 is removed so it does not linger undeployed.
 
+`--wait` covers the pod, not the Service: Helm's readiness check for a Service
+verifies it has a ClusterIP (and, for a LoadBalancer, an ingress address) and
+never looks at its endpoints. So a release is ready while the ClusterIP still
+answers a REJECT — and the controller reaches an endpoint's pageserver/safekeeper
+over exactly that Service, which is how it came to report an endpoint ready and
+then refuse its own follow-up call (#724).
+
+So the deploy is `helm --wait` **and** `verifyReady`: the Service's `Endpoints`
+lists a ready address serving `sk-http`. Only then does the task succeed. One read
+answers it — the ports listed there are the Service's own and the addresses are
+the ready ones — and it retries every second for 30s, so neither a Service a beat
+behind nor a blip in the API server fails an otherwise good deploy. A failure
+leaves the release installed and the endpoint row addressless, the same shape as
+any other failed deploy; the create is idempotent, so re-issuing it converges.
+
 Retire is the mirror (`DELETE …/endpoints/{id}`): `helm uninstall
 --ignore-not-found --wait` then drop the row → `204`. This is the design's
 kill-before-create retire (ac-highlvl.md §4); `--wait` blocks until the

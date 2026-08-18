@@ -560,11 +560,19 @@ func (c *Controllers) resolveForkLSN(ctx context.Context, poolID uuid.UUID, pare
 	skURL := c.prov.Deployer.EndpointSafekeeperURL(endpointDeployName(rw.ID))
 	lsn, err := c.prov.Node.TimelineFlushLSN(ctx, skURL, parent.BranchID.String())
 	if err != nil {
-		// The parent's safekeeper is unreachable, does not serve the timeline, or
-		// reports no flush_lsn — there is nothing to branch from. Steer the caller
-		// rather than branching at a wrong point.
 		c.logger.LogAttrs(ctx, slog.LevelWarn, "could not resolve default fork point from parent safekeeper",
 			slog.String(applog.KeyBranchID, parent.BranchID.String()), slog.String("error", err.Error()))
+		// A safekeeper that never answered is a "not yet", not a bad request: the
+		// endpoint is deployed and the fork is well-formed, so retrying is the
+		// caller's correct reaction — which invalid_request tells it not to do
+		// (#724). Nothing has been planned at this point, so a retry is safe.
+		if errors.Is(err, node.ErrUnreachable) {
+			return "", CreateBranch503JSONResponse{ServiceUnavailableJSONResponse(apiError("service_unavailable",
+				"the parent branch's endpoint is not serving its safekeeper API yet; retry the fork"))}
+		}
+		// The safekeeper answered but does not serve the timeline, or reports no
+		// flush_lsn — there is nothing to branch from. Steer the caller rather than
+		// branching at a wrong point.
 		return "", CreateBranch400JSONResponse{BadRequestJSONResponse(apiError("invalid_request",
 			"cannot determine a fork point for the parent branch (deploy an endpoint on it first, or pass fork_point_lsn)"))}
 	}

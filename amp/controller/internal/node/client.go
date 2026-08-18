@@ -10,6 +10,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,14 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrUnreachable marks a request that never got an answer — the dial was
+// refused, reset, or timed out — as opposed to a node that replied. It is a
+// transient condition worth retrying: a just-deployed endpoint's Service still
+// refuses for a few seconds after the pod is Ready, because kube-proxy has not
+// yet programmed the pod as a backend, so the first fork off a fresh parent
+// dials into a REJECT rule (#724).
+var ErrUnreachable = errors.New("node unreachable")
 
 // Client reads LSNs from an endpoint's co-located nodes over plain HTTP. The
 // controller reaches those nodes over the same network/DNS the storage
@@ -49,7 +58,7 @@ func (c *Client) TimelineFlushLSN(ctx context.Context, skBaseURL, branchID strin
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", u, err)
+		return "", fmt.Errorf("GET %s: %w: %w", u, ErrUnreachable, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

@@ -211,8 +211,8 @@ share at all — `exclusive` and `persistent` always get a dedicated env.
 
 ## Suites
 
-Per the live `ampqa collect` output (34 tests: `canary` 6, `features` 19,
-`perf` 2, `presets` 5, `stress` 2).
+Per the live `ampqa collect` output (72 tests: `canary` 6, `features` 51,
+`perf` 5, `presets` 5, `stress` 5).
 
 **Four tier tags** — `nightly` is a **superset** of the other three:
 `regression` (the fast PR gate: basic functions + the main use case + "the PR

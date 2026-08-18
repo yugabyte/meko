@@ -192,9 +192,99 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 			addr = podAddr
 		}
 	}
+	// helm --wait covers the pod, not the Service in front of it: it has no
+	// endpoint check, so a release is "ready" before the pod is a backend the
+	// ClusterIP forwards to. The controller reaches this endpoint's
+	// pageserver/safekeeper over exactly that Service, so the deploy is not done
+	// until that Service is verified — otherwise the task reports success and the
+	// controller then refuses its own follow-up call (#724).
+	if err := k.verifyReady(ctx, release); err != nil {
+		return Endpoint{}, fmt.Errorf("verify endpoint %s: %w", release, err)
+	}
 	tailnet := k.tailnetAddress(release)
 	k.logger.Info("endpoint ready", "endpoint", release, "address", addr, "tailnet_address", tailnet)
 	return Endpoint{ID: release, Address: addr, TailnetAddress: tailnet}, nil
+}
+
+// verifyReadyBudget / verifyReadyInterval bound the confirmation that the
+// endpoint's Service is usable. Nothing here fails on one bad read: a Service
+// gains its backend a beat after the pod goes Ready (EndpointSlice, then
+// kube-proxy), and the API server can blip, so the check keeps looking for the
+// whole budget and only reports what it last saw once that runs out.
+const (
+	verifyReadyBudget   = 30 * time.Second
+	verifyReadyInterval = time.Second
+)
+
+// verifyReady confirms the deployed endpoint is one the control plane can reach:
+// its Service has a ready backend for the safekeeper's HTTP port. One read of the
+// Service's Endpoints answers both halves — the ports listed there are the
+// Service's own, and the addresses are the ready ones — which is exactly the
+// state kube-proxy programs a backend from, as opposed to the REJECT it installs
+// for a Service with none.
+//
+// It returns as soon as that holds (the common case is the first read) and an
+// error only after the budget. An error fails the create task: an endpoint the
+// controller cannot call is not created, whatever the pod is doing.
+func (k *KubernetesDeployer) verifyReady(ctx context.Context, release string) error {
+	if !inCluster() {
+		return nil // no API server to verify against (tests, dev)
+	}
+	path := fmt.Sprintf("/api/v1/namespaces/%s/endpoints/%s", k.cfg.Namespace, release)
+	deadline := time.Now().Add(verifyReadyBudget)
+	for {
+		if body, ok := k.k8sAPIGet(ctx, path); ok && endpointsServePort(body, safekeeperHTTPPort) {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("its Service had no ready backend for port %d after %s",
+				safekeeperHTTPPort, verifyReadyBudget)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(verifyReadyInterval):
+		}
+	}
+}
+
+// inCluster reports whether the controller is running inside Kubernetes, and so
+// has an API server to verify against. k8sAPIGet folds this in with its error
+// cases; verifyReady has to tell them apart, since one is "cannot know" and the
+// other is "not ready".
+func inCluster() bool {
+	return os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != ""
+}
+
+// endpointsServePort reports whether the Endpoints body lists a ready address
+// serving port. Both halves have to come from the same subset: a subset is a set
+// of addresses paired with the ports they serve, so a ready address in one and
+// the port in another would not be a backend for that port.
+func endpointsServePort(body []byte, port int) bool {
+	var eps struct {
+		Subsets []struct {
+			Addresses []struct {
+				IP string `json:"ip"`
+			} `json:"addresses"`
+			Ports []struct {
+				Port int `json:"port"`
+			} `json:"ports"`
+		} `json:"subsets"`
+	}
+	if json.Unmarshal(body, &eps) != nil {
+		return false
+	}
+	for _, sub := range eps.Subsets {
+		if len(sub.Addresses) == 0 {
+			continue
+		}
+		for _, p := range sub.Ports {
+			if p.Port == port {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // tailnetAddress derives the endpoint's Tailscale (tailnet) host:port when the

@@ -124,7 +124,8 @@ flow, forking an existing branch instead of bootstrapping a fresh one:
    never lags durable WAL the way a pageserver's `last_record_lsn` can (#130).
    The parent must therefore have a `read_write` endpoint; without one (or
    without a deployer configured) a default fork point can't be resolved and
-   `fork_point_lsn` is required.
+   `fork_point_lsn` is required. A parent whose safekeeper is unreachable is
+   `503` (retryable), not `400` (#724).
 3. cAmp records the pending-init recipe with `ancestor_branch_id = parent` and
    `start_lsn = fork_lsn` (vs. `null` / `0` for the default branch).
 

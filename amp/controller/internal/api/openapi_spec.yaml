@@ -335,9 +335,11 @@ paths:
         parent's latest LSN; pass `fork_point_lsn` to branch at an earlier point.
         Like create-cluster, the branch is recorded as a recipe and materialized
         lazily by the first endpoint deployed on it — no compute is started here.
-        Cheap validation is synchronous (`400` bad body / bad or unresolvable
-        `fork_point_lsn`, `404` unknown pool / cluster / parent); a duplicate branch
-        name surfaces as a `failed` task, not a `409`.
+        Cheap validation is synchronous (`400` bad body / bad `fork_point_lsn` /
+        no endpoint on the parent, `404` unknown pool / cluster / parent); a
+        duplicate branch name surfaces as a `failed` task, not a `409`. A parent
+        whose endpoint is deployed but whose safekeeper is not answering yet gets
+        `503` — the fork is valid, just not resolvable yet, so retry it.
       requestBody:
         required: true
         content:
@@ -351,6 +353,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -738,6 +742,12 @@ components:
             $ref: '#/components/schemas/Error'
     Conflict:
       description: The request conflicts with existing state (e.g. a duplicate name).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServiceUnavailable:
+      description: The request is valid but cannot be served yet; retry it.
       content:
         application/json:
           schema:

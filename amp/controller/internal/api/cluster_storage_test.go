@@ -641,3 +641,44 @@ func TestCreateBranchDefaultForkSafekeeperUnavailable(t *testing.T) {
 		t.Error("the parent safekeeper was not queried")
 	}
 }
+
+// TestCreateBranchDefaultForkSafekeeperUnreachable: a parent whose safekeeper
+// never answers gets 503, not 400 — the fork is well-formed and retrying is the
+// caller's correct reaction, which invalid_request tells it not to do (#724).
+func TestCreateBranchDefaultForkSafekeeperUnreachable(t *testing.T) {
+	recipes := &fakeRecipeStore{}
+	// Port 1 needs root to bind, so nothing is listening: the dial is refused.
+	dep := &fakeDeployer{skURL: "http://127.0.0.1:1"}
+	prov := api.Provisioning{Recipes: recipes, Deployer: dep, Node: node.NewClient()}
+	c, backend, store := newClusterControllersProv(t, prov)
+	poolID := seedUserPool(t, backend)
+	cluster := mustCreateClusterC(t, c, store, backend, prov, poolID, "main")
+	seedWriter(t, backend, cluster.Id, cluster.DefaultBranch.BranchId)
+
+	resp, err := c.CreateBranch(context.Background(), api.CreateBranchRequestObject{
+		PoolId:    poolID,
+		ClusterId: cluster.Id,
+		Body:      &api.CreateBranchJSONRequestBody{Name: "feature"},
+	})
+	if err != nil {
+		t.Fatalf("CreateBranch: %v", err)
+	}
+	got, ok := resp.(api.CreateBranch503JSONResponse)
+	if !ok {
+		t.Fatalf("response = %T, want CreateBranch503JSONResponse (parent not serving yet)", resp)
+	}
+	if got.Error.Code != "service_unavailable" {
+		t.Errorf("error code = %q, want service_unavailable", got.Error.Code)
+	}
+	// A branch whose fork point never resolved must not have been planned — which
+	// is what makes the caller's retry safe.
+	branches, _, err := backend.ListBranches(context.Background(), poolID, cluster.Id, 100, 0)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	for _, b := range branches {
+		if b.Name == "feature" {
+			t.Fatal("the rejected fork was recorded anyway; retrying it would not be safe")
+		}
+	}
+}
