@@ -274,12 +274,13 @@ context):
   the interface structurally; these are deliberately *not* on the `core.Backend`
   interface, so the synchronous API read/pre-check path keeps using the
   id-generating create methods.
-- **`RecipeStore`** — record/clear the controller's pending-init recipe,
-  keyed by the 32-hex flat `branch_id` the controller maps a branch to. A
-  `BranchRecipe` decouples the task package from the controller client
-  type; `cmd/controller` bridges the two (`scRecipeStore`, mapping `BranchRecipe →
-  PendingTimelineInit`). May be nil (no managed controller) — the steps
-  degrade with a warning.
+- **`RecipeStore`** — record the controller's pending-init recipe, keyed by the
+  branch's `branch_id` uuid. A `BranchRecipe` decouples the task package from the
+  registry store's types; `cmd/controller` bridges the two (`recipeStore`, mapping
+  `BranchRecipe → registry.BranchCreateRecord`). May be nil (no registry store):
+  a fork then **fails**, because this step is the branch's only creator and an Ok
+  would report success having created nothing; a cluster's default branch warns and
+  continues, its row already written by create_cluster.
 - **`deploy.Deployer`** — the existing runtime-agnostic endpoint deployer, reused
   as-is (its `EndpointSpec` renders the flat `branch_id` as the endpoint image's
   `BRANCH_ID` env var, #168).

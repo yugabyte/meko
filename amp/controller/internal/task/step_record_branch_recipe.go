@@ -77,14 +77,10 @@ func (s *recordBranchRecipeStep) Execute(ctx context.Context) StepResult {
 			applog.KeyClusterID, s.ClusterID.String(), applog.KeyBranchID, s.BranchID.String())
 		return Ok(mustResult(map[string]bool{"recorded": false}))
 	}
-	ancestor := ""
-	if s.AncestorBranchID != nil {
-		ancestor = hex32(*s.AncestorBranchID)
-	}
-	if err := s.recipes.RecordBranchRecipe(ctx, s.ClusterID, hex32(s.BranchID), BranchRecipe{
+	if err := s.recipes.RecordBranchRecipe(ctx, s.ClusterID, s.BranchID, BranchRecipe{
 		BranchName:       s.BranchName,
 		PgVersion:        s.PgVersion,
-		AncestorBranchID: ancestor,
+		AncestorBranchID: s.AncestorBranchID,
 		StartLSN:         s.StartLSN,
 		PgSettings:       s.PgSettings,
 	}); err != nil {

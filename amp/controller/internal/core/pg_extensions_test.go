@@ -64,11 +64,10 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	// cluster has to exist: the branch -> cluster FK is what enforces it.
 	clusterID := seedCoreCluster(t, ctx, pool)
 	rootID := uuid.New()
-	rootStr := rootID.String()
 
-	recordBranch := func(id uuid.UUID, name string, ancestor *string, startLSN string) {
+	recordBranch := func(id uuid.UUID, name string, ancestor *uuid.UUID, startLSN string) {
 		t.Helper()
-		if err := store.RecordBranch(ctx, clusterID, id.String(), registry.BranchCreateRecord{
+		if err := store.RecordBranch(ctx, clusterID, id, registry.BranchCreateRecord{
 			BranchName:       name,
 			PgVersion:        18,
 			AncestorBranchID: ancestor,
@@ -103,7 +102,7 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	// --- fork BEFORE any further opt-in: the child inherits the parent's set as
 	// a snapshot RecordBranch copies from the ancestor. ---
 	childID := uuid.New()
-	recordBranch(childID, "b1", &rootStr, "0/16B8")
+	recordBranch(childID, "b1", &rootID, "0/16B8")
 	if got := mustExts(childID); !reflect.DeepEqual(got, []string{"pgvector"}) {
 		t.Fatalf("forked child extensions = %v, want inherited [pgvector]", got)
 	}
@@ -133,13 +132,12 @@ func TestPgBranchExtensionsInheritance(t *testing.T) {
 	// set (including hexabridge); a second fork off the (still single-extension)
 	// root does not. ---
 	grandID := uuid.New()
-	childStr := childID.String()
-	recordBranch(grandID, "b2", &childStr, "0/1C90")
+	recordBranch(grandID, "b2", &childID, "0/1C90")
 	if got := mustExts(grandID); !reflect.DeepEqual(got, []string{"hexabridge", "pgvector", "rum"}) {
 		t.Fatalf("grandchild extensions = %v, want inherited [hexabridge pgvector rum]", got)
 	}
 	sibID := uuid.New()
-	recordBranch(sibID, "b3", &rootStr, "0/16B8")
+	recordBranch(sibID, "b3", &rootID, "0/16B8")
 	if got := mustExts(sibID); !reflect.DeepEqual(got, []string{"pgvector"}) {
 		t.Fatalf("second root fork extensions = %v, want inherited [pgvector]", got)
 	}

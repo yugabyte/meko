@@ -249,7 +249,7 @@ writes and reads — so a fork **and** a new read-replica endpoint both pick it 
 - `amp_registry.branches` has an `extensions jsonb` column
   ([migration 0003](../../controller/migrations/0003_registry.up.sql)) holding
   the branch's *opted-in* extensions (beyond the always-mounted catalog
-  defaults), keyed by the 32-hex storage branch id.
+  defaults), keyed by the branch's `branch_id` uuid.
 - On fork, `RecordBranch`
   ([`registry/store.go`](../../controller/internal/registry/store.go)) seeds the
   child's row with a snapshot of the ancestor's `extensions` (a scalar subquery

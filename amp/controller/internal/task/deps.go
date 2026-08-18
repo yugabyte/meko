@@ -23,8 +23,9 @@ import (
 // Naming: the controller's user-facing ladder is storage pool -> cluster ->
 // branch -> endpoint. The storage layer is flat: a branch's branch_id IS the
 // storage-layer BranchId (no enclosing tenant), so the controller carries it
-// verbatim, rendering it to 32-hex at the storage seam (the pending-init
-// recipe) via hex32. A cluster no longer maps to a storage tenant.
+// verbatim as a uuid, rendering it to 32-hex via hex32 only where a string
+// leaves the process (the endpoint spec). A cluster no longer maps to a storage
+// tenant.
 
 // StateStore is the set of *idempotent, id-keyed* cluster/branch operations the
 // step catalog drives. Unlike core.Backend's id-generating create methods (the
@@ -125,13 +126,12 @@ type StateStore interface {
 // BranchRecipe is the pending-init recipe a freshly-declared branch carries until
 // an endpoint materializes it (controller/architecture/controller-cluster-create.md).
 // It keeps the task package decoupled from the storage-layer store's types; the
-// adapter in cmd/controller bridges the two. AncestorBranchID is "" for a
-// cluster's default branch, set (with StartLSN) for a branch off another; the ids
-// it bridges are 32 lowercase hex digits.
+// adapter in cmd/controller bridges the two. AncestorBranchID is nil for a
+// cluster's default branch, set (with StartLSN) for a branch off another.
 type BranchRecipe struct {
 	BranchName       string
 	PgVersion        int
-	AncestorBranchID string
+	AncestorBranchID *uuid.UUID
 	StartLSN         string
 	// PgSettings merge over the ancestor's, the caller's winning.
 	PgSettings map[string]string
@@ -142,14 +142,14 @@ type BranchRecipe struct {
 //
 // clusterID scopes the branch to its cluster: there is one branch table, shared
 // with the product API, so the write has to say which cluster's branch it means.
-// branchID is that branch's 32-lowercase-hex BranchId — the flat rendering the
-// storage layer addresses.
+// branchID is that branch's BranchId, carried as the uuid every `branch_id`
+// column holds.
 //
 // It may be unavailable (no store wired), in which case the step no-ops with a
 // warning; the branch then exists in the control plane but has no
 // amp_storage.branch_state row, so nothing can materialize it.
 type RecipeStore interface {
-	RecordBranchRecipe(ctx context.Context, clusterID uuid.UUID, branchID string, r BranchRecipe) error
+	RecordBranchRecipe(ctx context.Context, clusterID, branchID uuid.UUID, r BranchRecipe) error
 }
 
 // Deps bundles the collaborators the production steps need. The Registry holds

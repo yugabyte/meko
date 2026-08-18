@@ -120,10 +120,9 @@ func seedBranch(t *testing.T, pool *db.Pool, clusterID, parent uuid.UUID, name s
 	id := uuid.New()
 	rec := registry.BranchCreateRecord{BranchName: name, PgVersion: 18, StartLSN: "0/0"}
 	if parent != uuid.Nil {
-		ancestor := parent.String()
-		rec.AncestorBranchID = &ancestor
+		rec.AncestorBranchID = &parent
 	}
-	if err := registry.NewStore(pool).RecordBranch(t.Context(), clusterID, id.String(), rec); err != nil {
+	if err := registry.NewStore(pool).RecordBranch(t.Context(), clusterID, id, rec); err != nil {
 		t.Fatalf("record branch %s: %v", name, err)
 	}
 	return id

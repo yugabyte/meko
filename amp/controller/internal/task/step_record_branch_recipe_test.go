@@ -20,11 +20,11 @@ func TestRecordBranchRecipeStepDefault(t *testing.T) {
 		t.Fatalf("recorded %d recipes, want 1", len(recipes.recorded))
 	}
 	got := recipes.recorded[0]
-	if got.branchID != hex32(branchID) {
-		t.Errorf("recipe branch id = %s, want hex32(branch) %s", got.branchID, hex32(branchID))
+	if got.branchID != branchID {
+		t.Errorf("recipe branch id = %s, want %s", got.branchID, branchID)
 	}
-	if got.recipe.AncestorBranchID != "" {
-		t.Errorf("default-branch recipe ancestor = %q, want empty", got.recipe.AncestorBranchID)
+	if got.recipe.AncestorBranchID != nil {
+		t.Errorf("default-branch recipe ancestor = %v, want nil", got.recipe.AncestorBranchID)
 	}
 	if got.recipe.StartLSN != "0/0" {
 		t.Errorf("default-branch recipe start_lsn = %q, want 0/0", got.recipe.StartLSN)
@@ -42,8 +42,8 @@ func TestRecordBranchRecipeStepFork(t *testing.T) {
 		t.Fatalf("Execute: %v", res.Err)
 	}
 	got := recipes.recorded[0].recipe
-	if got.AncestorBranchID != hex32(ancestor) {
-		t.Errorf("fork recipe ancestor = %q, want hex32 %q", got.AncestorBranchID, hex32(ancestor))
+	if got.AncestorBranchID == nil || *got.AncestorBranchID != ancestor {
+		t.Errorf("fork recipe ancestor = %v, want %s", got.AncestorBranchID, ancestor)
 	}
 	if got.StartLSN != "0/16ABCD0" {
 		t.Errorf("fork recipe start_lsn = %q, want the fork lsn", got.StartLSN)

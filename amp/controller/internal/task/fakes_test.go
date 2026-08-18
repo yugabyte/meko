@@ -356,7 +356,7 @@ func (e stringError) Error() string { return string(e) }
 
 type recordedRecipe struct {
 	clusterID uuid.UUID
-	branchID  string
+	branchID  uuid.UUID
 	recipe    BranchRecipe
 }
 
@@ -368,7 +368,7 @@ type fakeRecipeStore struct {
 
 func newFakeRecipeStore() *fakeRecipeStore { return &fakeRecipeStore{} }
 
-func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, clusterID uuid.UUID, branchID string, r BranchRecipe) error {
+func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, clusterID, branchID uuid.UUID, r BranchRecipe) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.errRecord != nil {

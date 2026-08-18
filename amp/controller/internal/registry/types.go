@@ -3,12 +3,14 @@
 // the controller's task framework; it serves no HTTP surface of its own.
 package registry
 
+import "github.com/google/uuid"
+
 // BranchCreateRecord records how to materialize a branch whose id + name are
 // allocated but whose pageserver/safekeeper don't exist yet.
 type BranchCreateRecord struct {
 	BranchName       string
 	PgVersion        int
-	AncestorBranchID *string
+	AncestorBranchID *uuid.UUID
 	StartLSN         string
 	// PgSettings merge over the ancestor's inherited set, the caller's winning.
 	// Nil inherits unchanged.

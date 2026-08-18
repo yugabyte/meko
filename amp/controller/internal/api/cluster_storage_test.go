@@ -2,7 +2,6 @@ package api_test
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,12 +37,12 @@ type fakeRecipeStore struct {
 	mu              sync.Mutex
 	recordHit       bool
 	recordedCluster uuid.UUID
-	recordedBranch  string
+	recordedBranch  uuid.UUID
 	recordedReq     task.BranchRecipe
 	failRecord      bool
 }
 
-func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, clusterID uuid.UUID, branchID string, r task.BranchRecipe) error {
+func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, clusterID, branchID uuid.UUID, r task.BranchRecipe) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failRecord {
@@ -57,20 +56,10 @@ func (f *fakeRecipeStore) RecordBranchRecipe(_ context.Context, clusterID uuid.U
 		return nil
 	}
 	// Mirror the real store: declare the branch as part of this call.
-	id, err := uuid.Parse(branchID)
-	if err != nil {
-		return fmt.Errorf("parse branch id %q: %w", branchID, err)
-	}
-	var parent uuid.UUID
-	if r.AncestorBranchID != "" {
-		if parent, err = uuid.Parse(r.AncestorBranchID); err != nil {
-			return fmt.Errorf("parse ancestor id %q: %w", r.AncestorBranchID, err)
-		}
-	}
-	if parent == uuid.Nil {
+	if r.AncestorBranchID == nil {
 		return nil // a cluster's default branch is created by create_cluster
 	}
-	return f.backend.EnsureBranch(context.Background(), parent, clusterID, id, r.BranchName, r.StartLSN, r.PgVersion)
+	return f.backend.EnsureBranch(context.Background(), *r.AncestorBranchID, clusterID, branchID, r.BranchName, r.StartLSN, r.PgVersion)
 }
 
 // newClusterControllersProv builds the controllers for the direct-call tests over
@@ -175,7 +164,7 @@ func acceptedClusterTask(t *testing.T, resp api.CreateClusterResponseObject) (ta
 // TestCreateClusterRecordsBranch: with a controller wired,
 // create-cluster plans a task that, once driven, records the pending-init recipe
 // for the default branch (no ancestor, start LSN 0/0, pg_version 17) keyed by the
-// 32-hex branch id, and does NOT delete it (deletion is deferred to
+// branch id, and does NOT delete it (deletion is deferred to
 // create-endpoint). The recipe is now recorded by the record_branch_recipe step.
 func TestCreateClusterRecordsBranch(t *testing.T) {
 	recipes := &fakeRecipeStore{}
@@ -204,8 +193,8 @@ func TestCreateClusterRecordsBranch(t *testing.T) {
 	if !recipes.recordHit {
 		t.Fatal("RecordBranch was not called")
 	}
-	if want := hex.EncodeToString(def.BranchId[:]); recipes.recordedBranch != want {
-		t.Errorf("recorded branch = %q, want %q", recipes.recordedBranch, want)
+	if recipes.recordedBranch != def.BranchId {
+		t.Errorf("recorded branch = %s, want %s", recipes.recordedBranch, def.BranchId)
 	}
 	if recipes.recordedReq.BranchName != "main" {
 		t.Errorf("branch_name = %q, want main", recipes.recordedReq.BranchName)
@@ -213,7 +202,7 @@ func TestCreateClusterRecordsBranch(t *testing.T) {
 	if recipes.recordedReq.PgVersion != 18 {
 		t.Errorf("pg_version = %d, want 18", recipes.recordedReq.PgVersion)
 	}
-	if recipes.recordedReq.AncestorBranchID != "" {
+	if recipes.recordedReq.AncestorBranchID != nil {
 		t.Errorf("ancestor_branch_id = %v, want nil (default branch)", recipes.recordedReq.AncestorBranchID)
 	}
 	if recipes.recordedReq.StartLSN != "0/0" {
@@ -348,8 +337,7 @@ func mustCreateClusterC(t *testing.T, c *api.Controllers, store *task.MemStore, 
 // no explicit parent defaults the fork point to the parent's durable WAL end
 // (the safekeeper's flush_lsn), read from the parent's read_write endpoint;
 // returns a non-default branch carrying the parent + fork LSN, and records a
-// branch recipe whose ancestor + start_lsn are set (keyed by the branch's 32-hex
-// id).
+// branch recipe whose ancestor + start_lsn are set (keyed by the branch's id).
 func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	recipes := &fakeRecipeStore{}
 	sk := &fakeSafekeeper{flushLSN: "0/16ABCD0"}
@@ -409,14 +397,14 @@ func TestCreateBranchDefaultsForkToFlushLSN(t *testing.T) {
 	if !recipes.recordHit {
 		t.Fatal("RecordBranch was not called for the branch")
 	}
-	if want := hex.EncodeToString(br.BranchId[:]); recipes.recordedBranch != want {
-		t.Errorf("recorded branch = %q, want the branch %q", recipes.recordedBranch, want)
+	if recipes.recordedBranch != br.BranchId {
+		t.Errorf("recorded branch = %s, want the branch %s", recipes.recordedBranch, br.BranchId)
 	}
-	if recipes.recordedReq.AncestorBranchID == "" {
+	if recipes.recordedReq.AncestorBranchID == nil {
 		t.Fatal("recipe ancestor_branch_id = nil, want the parent")
 	}
-	if want := hex.EncodeToString(def.BranchId[:]); recipes.recordedReq.AncestorBranchID != want {
-		t.Errorf("recipe ancestor = %q, want the default branch %q", recipes.recordedReq.AncestorBranchID, want)
+	if *recipes.recordedReq.AncestorBranchID != def.BranchId {
+		t.Errorf("recipe ancestor = %s, want the default branch %s", recipes.recordedReq.AncestorBranchID, def.BranchId)
 	}
 	if recipes.recordedReq.StartLSN != "0/16ABCD0" {
 		t.Errorf("recipe start_lsn = %q, want 0/16ABCD0", recipes.recordedReq.StartLSN)
@@ -463,8 +451,8 @@ func TestCreateBranchExplicitForkLSN(t *testing.T) {
 	if recipes.recordedReq.StartLSN != lsn {
 		t.Errorf("recipe start_lsn = %q, want %q", recipes.recordedReq.StartLSN, lsn)
 	}
-	if want := hex.EncodeToString(cluster.DefaultBranch.BranchId[:]); recipes.recordedReq.AncestorBranchID == "" || recipes.recordedReq.AncestorBranchID != want {
-		t.Errorf("recipe ancestor = %v, want the default branch %q", recipes.recordedReq.AncestorBranchID, want)
+	if want := cluster.DefaultBranch.BranchId; recipes.recordedReq.AncestorBranchID == nil || *recipes.recordedReq.AncestorBranchID != want {
+		t.Errorf("recipe ancestor = %v, want the default branch %s", recipes.recordedReq.AncestorBranchID, want)
 	}
 }
 

@@ -28,12 +28,11 @@ var (
 // SAME `branches` and `endpoints` tables the product API serves, addressed the
 // way the storage layer addresses them.
 //
-// There is no second copy of a branch. Both surfaces key on `branch_id` — it is
-// the storage layer's BranchId and globally unique, so it is the whole primary
-// key — and differ only in rendering: uuid on /api/v1, flat 32-lowercase-hex
-// here. This store is that translation, not a separate registry, which is what
-// makes the two views incapable of drifting: a branch dropped through either one
-// is the same row with the same `dropped_at` stamp.
+// There is no second copy of a branch, and no second spelling: both surfaces key
+// on the same `branch_id` uuid — it is the storage layer's BranchId and globally
+// unique, so it is the whole primary key. This store is that shared view, not a
+// separate registry, which is what makes the two incapable of drifting: a branch
+// dropped through either one is the same row with the same `dropped_at` stamp.
 //
 // A caller still has to say which cluster it means. Not to identify the branch —
 // the id alone does that — but to scope the operation: `cluster_id` is an
@@ -50,25 +49,6 @@ type Store struct {
 // NewStore returns a Store backed by pool.
 func NewStore(pool *db.Pool) *Store {
 	return &Store{pool: pool}
-}
-
-// --- branch id parsing ----------------------------------------------------
-
-// ParseBranchID parses a storage-layer BranchId into the uuid every branch_id
-// column keys on — `amp_registry` and `amp_storage` alike. It accepts the flat
-// 32-hex form the wire uses (and, because uuid.Parse does, the dashed form too).
-//
-// The transform is lossless and total in both directions — a BranchId is 16
-// bytes either way — so there is no mapping to keep and no id that exists in one
-// rendering but not the other. Note the ids minted by yb_amp_local and the
-// integration harness are 16 random bytes rather than UUIDv4, so nothing may
-// depend on the version/variant nibbles.
-func ParseBranchID(branchID string) (uuid.UUID, error) {
-	id, err := uuid.Parse(branchID)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("%w: malformed branch id %q: %w", ErrInvalid, branchID, err)
-	}
-	return id, nil
 }
 
 // --- error classification ---------------------------------------------------
@@ -162,7 +142,7 @@ func FullPgVersionID(major int) (int, error) {
 // its cutoff. Both are resolved the same way: the condition is the WHERE clause of
 // an UPDATE of the ancestor's row, so the two transactions conflict on that row
 // instead of both committing. Described per race in the body.
-func (s *Store) RecordBranch(ctx context.Context, clusterID uuid.UUID, branchID string, req BranchCreateRecord) error {
+func (s *Store) RecordBranch(ctx context.Context, clusterID, branchID uuid.UUID, req BranchCreateRecord) error {
 	err := s.recordBranch(ctx, clusterID, branchID, req)
 	// The validations above write the ancestor's row, so a concurrent drop or
 	// cutoff advance can abort this whole transaction with a serialization failure
@@ -175,23 +155,7 @@ func (s *Store) RecordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 	return err
 }
 
-func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID string, req BranchCreateRecord) error {
-	id, err := ParseBranchID(branchID)
-	if err != nil {
-		return err
-	}
-	// One value addresses the ancestor everywhere below — the resource model's
-	// parent pointer and `amp_storage.branch_state.ancestor_branch_id` are both
-	// uuid. Only the wire spells it flat.
-	var ancestorUUID *string
-	if req.AncestorBranchID != nil {
-		anc, err := ParseBranchID(*req.AncestorBranchID)
-		if err != nil {
-			return err
-		}
-		s := anc.String()
-		ancestorUUID = &s
-	}
+func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID, req BranchCreateRecord) error {
 	// pg_version is the branch's major; refuse an unmappable one here, before the
 	// branch exists, rather than seeding a version no build can serve (see
 	// FullPgVersionID).
@@ -212,17 +176,16 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 	// SELECT and passed as a plain parameter rather than a subquery in the INSERT
 	// VALUES: YB does not support a table-referencing subquery inside an
 	// `INSERT ... ON CONFLICT`. The scalar COALESCE always returns one row
-	// (NULL -> '[]'), so there is no ErrNoRows to handle. The ancestor is addressed
-	// by uuid here — one branch table, one key type — where the flat registry keyed
-	// on the 32-hex rendering. See compute/architecture/extensions.md#branch-fork.
+	// (NULL -> '[]'), so there is no ErrNoRows to handle.
+	// See compute/architecture/extensions.md#branch-fork.
 	inheritedExts := []byte("[]")
 	inheritedSettings := []byte("{}")
-	if ancestorUUID != nil {
+	if req.AncestorBranchID != nil {
 		var exts, settings []byte
 		if err := tx.QueryRow(ctx,
 			`SELECT COALESCE(extensions, '[]'::jsonb), COALESCE(pg_settings, '{}'::jsonb)
 			   FROM amp_registry.branches WHERE branch_id = $1::uuid`,
-			*ancestorUUID).Scan(&exts, &settings); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			req.AncestorBranchID.String()).Scan(&exts, &settings); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("read ancestor extensions and settings: %w", err)
 		} else if err == nil {
 			inheritedExts, inheritedSettings = exts, settings
@@ -263,7 +226,7 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 	// parent's row is still there.
 	//
 	var tag pgconn.CommandTag
-	if ancestorUUID != nil {
+	if req.AncestorBranchID != nil {
 		tag, err = tx.Exec(ctx,
 			`INSERT INTO amp_registry.branches
 			   (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions, pg_settings)
@@ -271,15 +234,15 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 			   FROM amp_registry.branches p
 			  WHERE p.branch_id = $5::uuid AND p.cluster_id = $1::uuid AND p.dropped_at IS NULL
 			 ON CONFLICT (branch_id) DO NOTHING`,
-			clusterID.String(), id.String(), req.BranchName, req.PgVersion,
-			ancestorUUID, req.StartLSN, string(inheritedExts), string(inheritedSettings))
+			clusterID.String(), branchID.String(), req.BranchName, req.PgVersion,
+			req.AncestorBranchID.String(), req.StartLSN, string(inheritedExts), string(inheritedSettings))
 	} else {
 		tag, err = tx.Exec(ctx,
 			`INSERT INTO amp_registry.branches
 			   (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions, pg_settings)
 			 VALUES ($1::uuid, $2::uuid, $3, $4, false, NULL, $5::pg_lsn, $6::jsonb, $7::jsonb)
 			 ON CONFLICT (branch_id) DO NOTHING`,
-			clusterID.String(), id.String(), req.BranchName, req.PgVersion,
+			clusterID.String(), branchID.String(), req.BranchName, req.PgVersion,
 			req.StartLSN, string(inheritedExts), string(inheritedSettings))
 	}
 	if err != nil {
@@ -287,12 +250,12 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 	}
 	// Zero rows is either an idempotent re-record (the branch already exists) or a
 	// parent that is gone or tombstoned. Only the latter is an error.
-	if tag.RowsAffected() == 0 && ancestorUUID != nil {
+	if tag.RowsAffected() == 0 && req.AncestorBranchID != nil {
 		var exists bool
 		if err := tx.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM amp_registry.branches
 			                 WHERE cluster_id = $1::uuid AND branch_id = $2::uuid)`,
-			clusterID.String(), id.String()).Scan(&exists); err != nil {
+			clusterID.String(), branchID.String()).Scan(&exists); err != nil {
 			return fmt.Errorf("classify branch declare no-op: %w", err)
 		}
 		if !exists {
@@ -334,7 +297,7 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 		live, err := tx.Exec(ctx,
 			`UPDATE amp_registry.branches SET dropped_at = dropped_at
 			  WHERE branch_id = $1::uuid AND cluster_id = $2::uuid AND dropped_at IS NULL`,
-			*ancestorUUID, clusterID.String())
+			req.AncestorBranchID.String(), clusterID.String())
 		if err != nil {
 			return fmt.Errorf("validate fork parent %s liveness: %w", *req.AncestorBranchID, err)
 		}
@@ -355,16 +318,19 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 	//
 	// Keyed by the same branch uuid the branch row carries, and deliberately NOT
 	// cluster-scoped (the storage layer has no clusters).
-	var ancestorLSN *string
+	// Both nullable args for this statement: NULL ancestor means bootstrap. Bound
+	// as text against the `::uuid` cast, like every other id in this file.
+	var ancestorID, ancestorLSN *string
 	if req.AncestorBranchID != nil {
-		ancestorLSN = &req.StartLSN
+		id := req.AncestorBranchID.String()
+		ancestorID, ancestorLSN = &id, &req.StartLSN
 	}
 	stateRow, err := tx.Exec(ctx,
 		`INSERT INTO amp_storage.branch_state
 		   (branch_id, pg_version, ancestor_branch_id, ancestor_lsn)
 		 VALUES ($1::uuid, $2, $3::uuid, ($4::pg_lsn - '0/0'::pg_lsn)::bigint)
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		id.String(), pgVersion, ancestorUUID, ancestorLSN)
+		branchID.String(), pgVersion, ancestorID, ancestorLSN)
 	if err != nil {
 		return fmt.Errorf("record branch state: %w", err)
 	}
@@ -402,7 +368,7 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 			    SET applied_gc_cutoff_lsn = applied_gc_cutoff_lsn
 			  WHERE branch_id = $1::uuid
 			    AND COALESCE(applied_gc_cutoff_lsn, 0) <= ($2::pg_lsn - '0/0'::pg_lsn)::bigint`,
-			*ancestorUUID, req.StartLSN)
+			req.AncestorBranchID.String(), req.StartLSN)
 		if err != nil {
 			return fmt.Errorf("validate fork point: %w", err)
 		}
@@ -411,7 +377,7 @@ func (s *Store) recordBranch(ctx context.Context, clusterID uuid.UUID, branchID 
 			var exists bool
 			err := tx.QueryRow(ctx,
 				`SELECT true FROM amp_storage.branch_state WHERE branch_id = $1::uuid`,
-				*ancestorUUID).Scan(&exists)
+				req.AncestorBranchID.String()).Scan(&exists)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("%w: fork ancestor %s has no branch_state row",
 					ErrNotFound, *req.AncestorBranchID)

@@ -32,7 +32,7 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 	// cluster to hang off — there is no separate flat registry to write into.
 	clusterID := seedCluster(t, pool)
 
-	newID := uuid.NewString
+	newID := uuid.New
 	parent := newID()
 
 	// A root branch, with a GC cutoff as the pageserver would have
@@ -44,36 +44,32 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx,
 		`UPDATE amp_storage.branch_state SET applied_gc_cutoff_lsn = 100 WHERE branch_id = $1`,
-		parent); err != nil {
+		parent.String()); err != nil {
 		t.Fatalf("seed cutoff: %v", err)
 	}
 
 	// Each fork needs its own name: branch names are unique among a cluster's live
 	// branches (branches_name_per_cluster), which the standalone registry did not
 	// enforce.
-	fork := func(id, name, lsn string) error {
+	fork := func(id uuid.UUID, name, lsn string) error {
 		return s.RecordBranch(ctx, clusterID, id, BranchCreateRecord{
 			BranchName: name, PgVersion: 18,
 			AncestorBranchID: &parent, StartLSN: lsn,
 		})
 	}
-	stateRows := func(id string) int {
+	stateRows := func(id uuid.UUID) int {
 		var n int
 		if err := pool.QueryRow(ctx,
-			`SELECT count(*) FROM amp_storage.branch_state WHERE branch_id = $1`, id).Scan(&n); err != nil {
+			`SELECT count(*) FROM amp_storage.branch_state WHERE branch_id = $1`, id.String()).Scan(&n); err != nil {
 			t.Fatalf("count branch_state: %v", err)
 		}
 		return n
 	}
-	branchRows := func(id string) int {
-		parsed, err := ParseBranchID(id)
-		if err != nil {
-			t.Fatalf("parse branch id %s: %v", id, err)
-		}
+	branchRows := func(id uuid.UUID) int {
 		var n int
 		if err := pool.QueryRow(ctx,
 			`SELECT count(*) FROM amp_registry.branches WHERE cluster_id = $1::uuid AND branch_id = $2::uuid`,
-			clusterID.String(), parsed.String()).Scan(&n); err != nil {
+			clusterID.String(), id.String()).Scan(&n); err != nil {
 			t.Fatalf("count branch: %v", err)
 		}
 		return n
@@ -112,7 +108,7 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 	// newly inserted.
 	if _, err := pool.Exec(ctx,
 		`UPDATE amp_storage.branch_state SET applied_gc_cutoff_lsn = 200 WHERE branch_id = $1`,
-		parent); err != nil {
+		parent.String()); err != nil {
 		t.Fatalf("advance cutoff: %v", err)
 	}
 	if err := fork(at, "fork-validation-at", "0/64"); err != nil {
@@ -137,7 +133,7 @@ func TestPgRecordBranchUnknownCluster(t *testing.T) {
 	ctx := t.Context()
 	pool := migratedPool(t)
 
-	err := NewStore(pool).RecordBranch(ctx, uuid.New(), uuid.NewString(),
+	err := NewStore(pool).RecordBranch(ctx, uuid.New(), uuid.New(),
 		BranchCreateRecord{BranchName: "orphan", PgVersion: 18, StartLSN: "0/0"})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("record into an unknown cluster: want ErrNotFound, got %v", err)
@@ -231,7 +227,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	s := NewStore(pool)
 	clusterID := seedCluster(t, pool)
 
-	parent := uuid.NewString()
+	parent := uuid.New()
 	if err := s.RecordBranch(ctx, clusterID, parent, BranchCreateRecord{
 		BranchName: "settings-parent", PgVersion: 18, StartLSN: "0/0",
 		PgSettings: map[string]string{"work_mem": "16MB", "jit": "off"},
@@ -240,7 +236,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	}
 
 	// A fork that says nothing inherits the whole set.
-	plain := uuid.NewString()
+	plain := uuid.New()
 	if err := s.RecordBranch(ctx, clusterID, plain, BranchCreateRecord{
 		BranchName: "settings-plain", PgVersion: 18, StartLSN: "0/16B8",
 		AncestorBranchID: &parent,
@@ -252,7 +248,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	}
 
 	// A fork that overrides one keeps the rest.
-	over := uuid.NewString()
+	over := uuid.New()
 	if err := s.RecordBranch(ctx, clusterID, over, BranchCreateRecord{
 		BranchName: "settings-override", PgVersion: 18, StartLSN: "0/16B8",
 		AncestorBranchID: &parent,
@@ -272,7 +268,7 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	}
 
 	// A root branch starts empty — there is no ancestor to inherit from.
-	root := uuid.NewString()
+	root := uuid.New()
 	if err := s.RecordBranch(ctx, clusterID, root, BranchCreateRecord{
 		BranchName: "settings-root", PgVersion: 18, StartLSN: "0/0",
 	}); err != nil {
@@ -283,12 +279,12 @@ func TestPgForkInheritsPgSettings(t *testing.T) {
 	}
 }
 
-func readPgSettings(t *testing.T, pool *db.Pool, branchID string) map[string]string {
+func readPgSettings(t *testing.T, pool *db.Pool, branchID uuid.UUID) map[string]string {
 	t.Helper()
 	var raw []byte
 	if err := pool.QueryRow(t.Context(),
 		`SELECT pg_settings FROM amp_registry.branches WHERE branch_id = $1`,
-		branchID).Scan(&raw); err != nil {
+		branchID.String()).Scan(&raw); err != nil {
 		t.Fatalf("read pg_settings for %s: %v", branchID, err)
 	}
 	out := map[string]string{}
