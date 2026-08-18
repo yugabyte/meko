@@ -141,7 +141,12 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     if named_rows(&yb, ORPHAN).await? != 0 {
         bail!("refused fork left an amp_registry.branches row behind");
     }
-    if child_state_rows(&yb, &parent_id).await? != states_before {
+    // `>`, not `!=`: the suite runs the reaper at zero retention, so both branches
+    // dropped above are due the moment they are tombstoned, and reaping the dropped
+    // CHILD deletes a `branch_state` row this count includes. A decrease is that
+    // reaper, not a leak; only an INCREASE is the failure this asserts — a refused
+    // fork that left its row behind.
+    if child_state_rows(&yb, &parent_id).await? > states_before {
         bail!("refused fork left an amp_storage.branch_state row behind");
     }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/amp/controller/internal/api"
+	"github.com/yugabyte/amp/controller/internal/branchgc"
 	"github.com/yugabyte/amp/controller/internal/config"
 	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/db"
@@ -328,6 +329,18 @@ func runServe(args []string) error {
 			ycpLoop.Run(ctx)
 		}()
 	}
+
+	// The branch-drop reaper: reclaim a dropped branch's amp_storage rows once its
+	// retention window has passed. A goroutine of its own beside the worker, on the
+	// same shutdown context — the task framework has neither retries nor a
+	// run_after column, so periodic work cannot be a task, and every replica
+	// running one is safe (the deletes are idempotent per branch).
+	reaper := branchgc.New(pool, cfg.BranchGC, logger)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		reaper.Run(ctx)
+	}()
 
 	srvErr := make(chan error, 1)
 	go func() { srvErr <- srv.Start() }()

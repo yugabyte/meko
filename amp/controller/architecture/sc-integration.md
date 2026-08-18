@@ -20,6 +20,8 @@ schema it uses, and the HTTP surface it serves.
   the page-store tables, the WAL mirror, and both per-branch state tables (the
   schema the compute daemons bind at startup — they create none of their own) —
   plus the control-plane schemas below.
+- **Branch-drop GC** — reclaiming a dropped branch's data out of `amp_storage`,
+  below.
 
 ## Schema
 
@@ -79,6 +81,106 @@ controller is, today — auth is deferred, #189).
   `controller/internal/task` is satisfied by an in-process adapter, and it passes
   the cluster id along with the branch id because the row it writes is
   cluster-scoped.
+
+## Branch-drop GC
+
+Reclaiming a dropped branch's `amp_storage` rows is the controller's, because a
+dropped branch's pageserver is terminated with it — so nothing would be left to
+drain a queued GC candidate. What the flow is, and why `branch_state` goes first,
+is documented with the rest of GC in
+[`compute/architecture/pageserver-gc.md`](../../compute/architecture/pageserver-gc.md#branch-drop-gc);
+the operator's triage query is in
+[`runbooks/controller_runbook.md`](../../runbooks/controller_runbook.md). What is
+controller-shaped, and lives here:
+
+**Shape.** A `Reaper` goroutine (`internal/branchgc`) beside the task worker in
+`cmd/controller`, on the same shutdown context. A ticker rather than a task,
+because the task framework has neither retries nor a `run_after` column and so
+cannot express periodic work. No leader election and no in-progress marker: the
+deletes are idempotent per branch and `gc_completed_at` is a conditional UPDATE, so
+every replica running a reaper is safe (concurrent reaps waste work; they cannot
+corrupt).
+
+**Two columns on `amp_registry.branches`** (`0002_resource_model.up.sql`): it is the
+only per-branch record that survives a reap, it already carries `dropped_at`, and
+the `branches_gc_due` partial index over the two covers only unreclaimed tombstones
+(leading column explicitly `ASC` — YSQL's default HASH cannot seek the
+`now() >= reap_after` range).
+
+| column | written by | meaning |
+|---|---|---|
+| `reap_after` | the reaper, as `dropped_at + retention` | the earliest the data may be deleted |
+| `gc_completed_at` | the reaper, after the last delete | the data is gone; the row is kept as the record that the id existed |
+
+The drop writes `dropped_at` alone; the reaper stamps `reap_after` each tick for
+every tombstone still missing one, so a tombstone from any path is picked up rather
+than stranded as never-due. Deriving it from the stored `dropped_at` rather than
+that tick's `now()` is what makes it a **snapshot** — a later change to
+`--branch-gc-retention` cannot move a deadline already written, which is what keeps
+this predicate and a future un-drop's strictly complementary.
+
+**Each tick** selects the due branches
+(`dropped_at IS NOT NULL AND gc_completed_at IS NULL AND now() >= reap_after`),
+then deletes each one's rows in bounded batches and marks it complete. The scan is
+capped at an internal `maxBranchesPerTick`, which bounds its result set rather than
+the tick's work — the row budget below does that.
+
+The scan also refuses any branch with a **live child fork** or a **surviving
+endpoint**: a child reads its pre-fork history under this branch's id, and an
+endpoint is a running compute. Neither can happen — the drop path refuses such a
+branch and the fork / endpoint-create interlocks close the races — but the
+predicate carries them anyway, because deleting is the only irreversible step
+here. Filtering rather than skipping also means such a branch cannot occupy the
+scan's window, which it otherwise would forever: it is permanently due and
+permanently among the oldest.
+
+A batch is a **key-only SELECT that yields `ybctid`s, then one
+`DELETE ... WHERE ybctid = ANY(...)`**. `ybctid` is the DocDB row key, so the
+delete is a direct point lookup per row and scans nothing itself.
+
+The SELECT resumes from a **cursor**, which is what keeps a reap linear. Without
+one, every batch restarts at the beginning of the branch's key range and
+re-traverses the tombstones the previous batches left — measured on a live cluster
+at 33 ms with nothing ahead of it, 615 ms behind 80k tombstones and 1015 ms behind
+95k, while the cursored form stays flat at ~33 ms. (`Storage Rows Scanned` reads
+the same in both: it counts live rows returned and hides tombstone traversal, so
+only execution time shows this.)
+
+Which cursor shape *seeks* is decided by the table's key, because YSQL turns a
+range comparison into a DocDB seek only when it can compute one start key from it:
+
+- `pages` / `wals` are **all-range**, led by `bucket_id`, so an anchored row
+  constructor over a leading prefix of the primary key seeks — and being a true
+  lexicographic "everything at or after this point", it crosses bucket and
+  relation boundaries by itself. **No per-bucket fan-out**, which is why the
+  reaper carries no `pages`/`wals` bucket count to drift out of step.
+- `meta` / `slru_pages` / `pending_gc` are **hash-keyed**, where a row constructor
+  cannot seek at all (the furthest DocDB can compute is the start of the branch's
+  hash partition). They use equality on every leading key column plus one range
+  comparison on the next. `pending_gc` additionally binds `bucket_id` by equality
+  and loops it, since its `bucket_id` is inside the hash key.
+- `blobs` needs no cursor (a branch's blob volume is initdb-archive-scale) and
+  `branch_state` is a single row.
+
+Termination is a **read** — the SELECT coming back empty — not an inference from
+how many rows a DELETE affected. That is what makes concurrent reaps safe: a
+second replica deleting rows out from under a batch cannot make this one conclude
+a table is drained while rows remain.
+
+| flag | default | |
+|---|---|---|
+| `--branch-gc` | true | run the reaper at all |
+| `--branch-gc-interval` | 30s | tick cadence |
+| `--branch-gc-retention` | 24h | window between the drop and the reap; matches the default PITR window |
+| `--branch-gc-rows-per-delete` | 5000 | rows one DELETE names: the SELECT's `LIMIT`, and so the size of its `ybctid` list |
+| `--branch-gc-rows-per-tick` | 20000 | pacing budget across every delete in the tick (~2.4M rows/hour at the default interval) |
+
+Pacing is **open-loop** — a fixed rows/tick, not a reaction to cluster load — so
+the defaults are deliberately conservative: this is garbage with no deadline, and
+the only cost of going slowly is disk.
+
+A dropped **cluster**'s branches are reclaimed too (its tombstone stamps them
+exactly as a branch delete does); nothing reclaims the cluster row itself.
 
 ## Why fencing is taken by the endpoint, not injected at deploy
 

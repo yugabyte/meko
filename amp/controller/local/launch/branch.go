@@ -11,7 +11,10 @@ import (
 )
 
 // BranchDrop stops+destroys every endpoint on the branch, then tombstones the
-// branch (idempotent; the pageserver/safekeeper YB data is left for later GC).
+// branch (idempotent). The branch's pageserver/safekeeper rows in YB are reclaimed
+// asynchronously by the controller's branch-drop reaper, one
+// --branch-gc-retention window later; the endpoints are stopped first, so nothing
+// is left running over rows that reaper deletes.
 func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.BranchID) error {
 	endpoints, err := loadEndpoints(ctx, env)
 	if err != nil {

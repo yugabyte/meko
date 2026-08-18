@@ -109,8 +109,10 @@ CREATE TABLE amp_registry.user_cluster_grants (
 -- A dropped branch is TOMBSTONED, not deleted: `dropped_at` is stamped and the
 -- row stays, because a branch id is never reused, the record of what the id was
 -- is worth keeping, and the branch's page/WAL data in amp_storage outlives the
--- drop (left for a later GC pass, #36). Every reader that answers "is this branch
--- live?" filters `dropped_at IS NULL`.
+-- drop — until the controller's branch-drop reaper reclaims it a retention window
+-- later (`reap_after` / `gc_completed_at` below, and
+-- controller/internal/branchgc). Every reader that answers "is this branch live?"
+-- filters `dropped_at IS NULL`.
 --
 -- The branch's data-plane state (consistent LSN, WAL start, the daemons' own
 -- column groups) lives in `amp_storage.branch_state`, keyed by the same id.
@@ -141,7 +143,14 @@ CREATE TABLE amp_registry.branches (
     pg_settings         jsonb       NOT NULL DEFAULT '{}'::jsonb,
 
     created_at          timestamptz NOT NULL DEFAULT now(),
-    dropped_at          timestamptz -- tombstone; a branch id is never reused
+    dropped_at          timestamptz, -- tombstone; a branch id is never reused
+
+    -- Branch-drop GC (controller/internal/branchgc). The drop leaves `reap_after`
+    -- NULL; the reaper stamps it `dropped_at + --branch-gc-retention`, from the
+    -- stored drop time so a later change to the flag cannot move a deadline already
+    -- written. `gc_completed_at` says the rows are gone; the row itself stays.
+    reap_after          timestamptz,
+    gc_completed_at     timestamptz
 );
 
 -- "The branches of this cluster" is the list endpoint, the storage-layer
@@ -161,6 +170,20 @@ CREATE UNIQUE INDEX branches_one_default_per_cluster ON amp_registry.branches (c
 
 -- Fork lineage: "the children of this branch" gates a branch delete.
 CREATE INDEX branches_by_parent ON amp_registry.branches (parent_branch_id);
+
+-- The branch-drop reaper's due-scan, run once per tick on every controller
+-- replica. Partial on exactly the reaper's predicate, so the index holds only
+-- branches that are tombstoned and not yet reclaimed — a handful of rows at any
+-- time, and nothing at all in a fleet that never drops a branch.
+--
+-- `reap_after ASC` is load-bearing, and the only index here that is not an
+-- equality lookup. YSQL defaults a secondary index's leading column to HASH,
+-- which cannot serve `now() >= reap_after ORDER BY reap_after`: the range
+-- predicate degrades to a storage filter over every unreclaimed tombstone plus a
+-- sort. Measured with 10k dropped-but-not-due branches, HASH scanned all 10k in
+-- 627 ms where ASC seeks the 5 due rows in 2 ms.
+CREATE INDEX branches_gc_due ON amp_registry.branches (reap_after ASC)
+    WHERE dropped_at IS NOT NULL AND gc_completed_at IS NULL;
 
 CREATE TYPE amp_registry.endpoint_role AS ENUM ('read_write', 'read_only');
 

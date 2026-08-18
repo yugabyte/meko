@@ -596,7 +596,8 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
   before the write keeps concurrent creators out; the marker is cleared on
   every failure path.
 - **Teardown**: a branch's rows (`amp_storage.branch_state`,
-  `amp_storage.wals`) are reclaimed by the deferred GC pass (#36), as are the
+  `amp_storage.wals`) are reclaimed by the controller's branch-drop reaper
+  (`controller/internal/branchgc`), a retention window after the drop, as are the
   pageserver's. Tearing down a branch is therefore process teardown: the
   launcher stops the safekeeper along with the endpoint it serves
   (`deprovisionColocatedStorage`) and removes the data directory, which holds

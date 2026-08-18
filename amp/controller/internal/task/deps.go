@@ -107,17 +107,18 @@ type StateStore interface {
 	// avoiding a half-deleted branch. An absent branch yields an empty slice.
 	ChildBranchIDs(ctx context.Context, clusterID, branchID uuid.UUID) ([]uuid.UUID, error)
 
-	// DeleteBranch removes the (clusterID, branchID) branch record (idempotent;
-	// absent row is a no-op). The caller (the delete_branch step) checks for child
-	// forks (ChildBranchIDs) and retires the branch's endpoints first; the parent
-	// FK is RESTRICT, so a still-referencing child fork makes this a real error
-	// (ErrConflict) — a belt-and-suspenders guard behind the step's pre-check.
+	// DeleteBranch TOMBSTONES the branch: `dropped_at` is stamped and the row stays,
+	// because a branch id is never reused. Idempotent — an absent or already
+	// tombstoned row is a no-op. A live child fork or a surviving endpoint is
+	// ErrConflict, backstopping the delete_branch step's own pre-check.
+	//
+	// Do NOT also stamp `reap_after`: internal/branchgc owns that deadline.
 	DeleteBranch(ctx context.Context, clusterID, branchID uuid.UUID) error
 
-	// DeleteCluster tombstones the cluster and all its branches (idempotent;
-	// absent rows are a no-op). The caller (the delete_cluster step) retires the
-	// cluster's endpoints first; this then stamps dropped_at on the branches and
-	// the cluster row.
+	// DeleteCluster tombstones the cluster and every branch under it, and revokes
+	// its grants (idempotent; absent rows are a no-op). It refuses while any of the
+	// cluster's branches still has an endpoint; delete_cluster retires them first.
+	// Branches are tombstoned exactly as DeleteBranch does — `dropped_at` only.
 	DeleteCluster(ctx context.Context, clusterID uuid.UUID) error
 }
 

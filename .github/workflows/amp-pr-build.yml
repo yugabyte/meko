@@ -131,15 +131,18 @@ jobs:
               - 'amp/controller/migrations/**'
               - 'amp/controller/internal/db/**'
               # The live-database tests of these packages run in the same job, on
-              # the same YugabyteDB container: the task store's resize lock, and the
+              # the same YugabyteDB container: the task store's resize lock, the
               # store logic the in-memory backends cannot exercise (branch
-              # extensions, the projections, and the fork-vs-drop race).
+              # extensions, the projections, and the fork-vs-drop race), and the
+              # branch-drop reaper, which is nothing but SQL over the real
+              # amp_storage tables and has no in-memory backend at all.
               - 'amp/controller/internal/task/**'
               # The Voyager migration store's live-database tests run in the same
               # job; its schema is embedded under internal/voyager/migrations.
               - 'amp/controller/internal/voyager/**'
               - 'amp/controller/internal/core/**'
               - 'amp/controller/internal/registry/**'
+              - 'amp/controller/internal/branchgc/**'
               - '.github/workflows/amp-pr-build.yml'
 
       # A change counts as "code" if at least one changed file is not a markdown
@@ -631,6 +634,15 @@ jobs:
         env:
           AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
         run: go -C amp/controller test ./internal/registry/... -run 'TestPg' -v
+
+      # The branch-drop reaper: bucket-pinned deletes over the real amp_storage
+      # tables, the chunk loop, and the guards that hold a reap back. There is no
+      # in-memory backend for any of it, so without this step the package has no
+      # coverage at all.
+      - name: Branch-drop GC — live-database tests
+        env:
+          AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
+        run: go -C amp/controller test ./internal/branchgc/... -run 'TestPg' -v
 
   # The single required check for this workflow — see the note on Meko CI gate in
   # meko-pr-build.yml. Add a job above, add it to `needs` here; the ruleset never

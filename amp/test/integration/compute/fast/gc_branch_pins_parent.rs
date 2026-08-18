@@ -3,10 +3,12 @@
 //! cutoff, so even after the parent overwrites those same blocks the
 //! branch-point versions survive — the child reads them back
 //! byte-for-byte on a COLD read (endpoint restarted, answer from the
-//! store). The child is dropped at the end only as teardown: the drop
-//! does NOT release the pin today (nothing marks the child's
-//! branch_state deleted), so parent reclaim after a child drop is out
-//! of scope here — a separate revision handles that.
+//! store). The child is dropped at the end only as teardown, and every
+//! read this test asserts on is captured BEFORE that drop — the drop
+//! releases the pin (the controller's reaper deletes the child's
+//! `branch_state` row, which is what pinned the parent), so the parent's
+//! cutoff is free to advance past the branch point afterwards. That
+//! reclamation is `gc_branch_drop_reclaims`'s subject, not this test's.
 
 use std::time::Duration;
 
@@ -66,8 +68,9 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
 
     // Tear down the child (branch drop + stop its pageserver) BEFORE
     // asserting, so a checksum mismatch can't leave the child endpoint
-    // running. NB: the drop does NOT unpin main — nothing marks the
-    // child's branch_state deleted yet — so the pin outlives this test.
+    // running. The checksum was already read above, so whether or not the
+    // drop goes on to unpin main — the reaper deleting the child's
+    // branch_state row is what would — cannot affect the verdict below.
     let _ = c.yb(&["branch", "drop", "--branch-id", &b1]);
     c.yb_quiet(&["pageserver", "stop", "ep_gc_pin", "-m", "immediate"]);
 

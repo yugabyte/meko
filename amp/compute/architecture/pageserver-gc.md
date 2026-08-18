@@ -22,6 +22,46 @@ to this.
 GC is **default off**; a branch turns it on with `enable_gc` — see
 [Config](#config).
 
+## Branch-drop GC
+
+Everything below reclaims garbage *within a live branch*. Reclaiming a **dropped
+branch** — all of its rows, in every table — is a separate flow, owned by the
+controller (`controller/internal/branchgc`), and this is the whole of it:
+
+1. The drop **tombstones** the branch (`amp_registry.branches.dropped_at`) and
+   writes nothing else. The reaper stamps `reap_after = dropped_at +
+   --branch-gc-retention` on the next tick that sees it (default 24 h, matching the
+   default `pitr_interval`, so a drop is no more destructive than the retention the
+   branch already ran with).
+2. Once that deadline passes, the reaper deletes the branch's rows from
+   `branch_state`, `pages`, `wals`, `pending_gc`, `blobs`, `slru_pages`, and `meta`
+   — skipping the branch entirely if a live child fork or an endpoint still
+   references it.
+3. It stamps `gc_completed_at`. The branch row itself stays: a branch id is never
+   reused, so "reclaimed" has to stay distinguishable from "never existed".
+
+**Why not the drain below.** A dropped branch's pageserver is terminated with the
+branch, so a candidate queued into `pending_gc` would never be dequeued — nothing
+is left running to drain it. The controller is the only component that outlives the
+branch, and `pending_gc` is one of the tables it deletes rather than a queue it
+uses.
+
+`branch_state` is deleted **first**, because that row is what pins an ancestor's
+cutoff at this branch's fork point (see [Drain](#drain) step 1) — so a dropped
+child stops holding its parent's cutoff one retention window after the drop, not
+never.
+
+Reaping a large branch is a write flood aimed at the same six `pages` / `wals`
+tablets live branches ingest into, so every batch is bounded — a key-only SELECT
+that yields `ybctid`s, then one `DELETE ... WHERE ybctid = ANY(...)`, resuming from
+a cursor so it never re-walks the tombstones it just wrote — and every tick has a
+row budget, so a big branch drains over many ticks.
+Cadence, pacing knobs and the operator's triage query:
+[`controller/architecture/sc-integration.md`](../../controller/architecture/sc-integration.md#branch-drop-gc)
+and [`runbooks/controller_runbook.md`](../../runbooks/controller_runbook.md).
+Un-drop/restore is **not** built — the window is a safety margin, not a recovery
+window.
+
 ## Model
 
 Finding garbage after the fact is expensive, so instead the write path
@@ -141,12 +181,14 @@ runs:
 
    **Child fork points** pin the cutoff too, but they are folded in only
    *inside the persist UPDATE itself*, which clamps to `min(ancestor_lsn)`
-   over every child row still present. A deleted child can still be read
-   until branch-deletion GC cleans it up (for instance, to restore it
-   within the PITR interval); only removing its `branch_state` row —
-   that GC's last step (no such flow yet — see
-   [#362](https://github.com/yugabyte/amp/issues/362)) — releases the
-   pin.
+   over every child row still present. A dropped child can still be read
+   until branch-drop GC cleans it up (for instance, to restore it
+   within the PITR interval); removing its `branch_state` row is what
+   releases the pin, and that is the FIRST thing the controller's reaper
+   deletes (`controller/internal/branchgc`, see
+   [controller/architecture/sc-integration.md](../../controller/architecture/sc-integration.md#branch-drop-gc))
+   — so a parent's cutoff starts moving again one retention window after
+   the child is dropped, not never.
    Reading the child min separately (a pre-read folded into the computed
    min) would be the fork ↔ cutoff race: a fork committing between the
    read and the write gets cut past.
@@ -445,9 +487,10 @@ the branch's ancestor LSN. Find the floor:
   basebackup, a client that never released) pins it at its read LSN; find
   and clear the holder.
 - **Child branch** — every child `branch_state` row pins its parent at
-  its fork point. The pin is the row's presence, so a dropped branch keeps
-  pinning its parent until branch-deletion GC removes the row (#435); that
-  flow does not exist yet.
+  its fork point. The pin is the row's presence, so a dropped child keeps
+  pinning its parent until the controller's branch-drop reaper deletes the
+  row, one `--branch-gc-retention` window later; past that, check the
+  reaper is running and not skipping the branch.
 - **`consistent_lsn`** — ingestion lagging (safekeeper/walreceiver behind)
   holds the cutoff back; not a GC problem.
 - **Retention** — a large `gc_horizon` / `pitr_interval` is intentional;

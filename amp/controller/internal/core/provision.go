@@ -373,9 +373,12 @@ func (b *PgBackend) ChildBranchIDs(ctx context.Context, clusterID, branchID uuid
 
 // DeleteBranch tombstones the (clusterID, branchID) branch: it stamps
 // `dropped_at` rather than deleting the row, because a branch id is never reused
-// and the branch's page/WAL data in amp_storage outlives the drop (#36). Every
+// and the branch's page/WAL data in amp_storage outlives the drop. Every
 // reader filters `dropped_at IS NULL`, so the branch stops existing as far as
 // both the product API and the storage-layer control surface are concerned.
+//
+// `dropped_at` is ALL this writes: the branch-drop reaper owns `reap_after` and
+// stamps it from this timestamp on its next tick (branchgc.stampDeadlines).
 //
 // Idempotent twice over: an absent row is a no-op, and the `dropped_at IS NULL`
 // guard keeps a re-run from moving an existing tombstone's timestamp.
@@ -444,7 +447,10 @@ func (b *PgBackend) DeleteBranch(ctx context.Context, clusterID, branchID uuid.U
 
 // DeleteCluster tombstones the cluster and every branch under it, and revokes
 // its grants (idempotent; absent rows are a no-op). The caller retires the
-// cluster's endpoints first.
+// cluster's endpoints first. Each branch it tombstones is left for the reaper
+// exactly as DeleteBranch leaves one, so a cluster's branches are reclaimed
+// without a cluster-shaped code path of its own — the cluster row itself is not
+// reclaimed by anything today.
 //
 // The cluster row has to be tombstoned rather than deleted *because* its branches
 // are: the branch -> cluster FK is RESTRICT, so a cluster whose branches survive

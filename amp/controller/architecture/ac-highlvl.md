@@ -306,7 +306,15 @@ CREATE TABLE branches (
     -- filters `dropped_at IS NULL`. Clusters tombstone for the follow-on reason:
     -- the FK above is RESTRICT, so a cluster whose branches survive as tombstones
     -- could never be deleted.
-    dropped_at          timestamptz
+    dropped_at          timestamptz,
+
+    -- Branch-drop GC (sc-integration.md § Branch-drop GC): `reap_after` is the
+    -- deadline, left NULL by the drop and stamped by the reaper as
+    -- `dropped_at + --branch-gc-retention`; `gc_completed_at` says the branch's
+    -- amp_storage rows are gone. The row itself is kept, so "reclaimed" stays
+    -- distinguishable from "never existed".
+    reap_after          timestamptz,
+    gc_completed_at     timestamptz
 );
 
 -- "The branches of this cluster" is the hottest access path and the primary key
@@ -321,6 +329,12 @@ CREATE UNIQUE INDEX branches_name_per_cluster ON branches (cluster_id, name)
     WHERE dropped_at IS NULL;
 CREATE UNIQUE INDEX branches_one_default_per_cluster ON branches (cluster_id)
     WHERE is_default AND dropped_at IS NULL;
+
+-- The branch-drop reaper's due-scan: partial on its exact predicate, so the index
+-- holds only tombstones that are not yet reclaimed. ASC because it is a range
+-- predicate (`now() >= reap_after`) — YSQL's default HASH cannot seek one.
+CREATE INDEX branches_gc_due ON branches (reap_after ASC)
+    WHERE dropped_at IS NOT NULL AND gc_completed_at IS NULL;
 
 CREATE TYPE endpoint_role  AS ENUM ('read_write', 'read_only');
 

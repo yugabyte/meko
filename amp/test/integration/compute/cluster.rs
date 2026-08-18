@@ -397,6 +397,22 @@ impl Cluster {
                  pitr_interval = \"0s\"\n\
                  gc_horizon = 1024\n\
                  lsn_lease_length = \"2s\"\n",
+            )
+            // The controller's own config namespace, forwarded to it as one of the
+            // launcher's children (controller/local/proc/env.go). Branch-drop GC
+            // waits a day in production (`--branch-gc-retention`, matching the
+            // pageserver's default PITR window); a test cannot, so drop the wait
+            // entirely and tick every few seconds. The whole suite runs with the
+            // reaper on — every scenario that drops a branch as teardown then also
+            // exercises reclamation, and a branch drop already stops the branch's
+            // daemons first, so nothing is left running over reclaimed rows.
+            .env(
+                "AMP_BRANCH_GC_RETENTION",
+                env_or(&["AMP_BRANCH_GC_RETENTION"], "0s"),
+            )
+            .env(
+                "AMP_BRANCH_GC_INTERVAL",
+                env_or(&["AMP_BRANCH_GC_INTERVAL"], "3s"),
             );
         cmd
     }

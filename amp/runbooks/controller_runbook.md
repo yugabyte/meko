@@ -275,6 +275,81 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
   missing the `pods/resize` subresource grant (older chart); re-deploy the
   `yb-amp-controller` chart.
 
+## A dropped branch's data isn't going away
+
+The drop itself only **tombstones** the branch (`dropped_at`). The controller's
+branch-drop reaper deletes the branch's `amp_storage` rows a retention window later
+— `--branch-gc-retention`, **24h** by default — and then stamps `gc_completed_at`
+([`../controller/architecture/sc-integration.md`](../controller/architecture/sc-integration.md#branch-drop-gc)).
+Storage that hasn't shrunk within that window, plus a compaction cycle, is what
+this section is for.
+
+```sql
+-- Where every tombstoned branch stands. Run against the controller's database.
+SELECT branch_id, dropped_at, reap_after, gc_completed_at,
+       now() >= reap_after AS due
+  FROM amp_registry.branches
+ WHERE dropped_at IS NOT NULL AND gc_completed_at IS NULL
+ ORDER BY reap_after;
+```
+
+Read it in this order:
+
+- **`reap_after` is NULL** (`due` is NULL too) — the branch is tombstoned and not
+  yet stamped. Normally transient: the reaper stamps every unstamped tombstone at
+  the start of each tick, from that row's own `dropped_at`, so this clears within
+  one `--branch-gc-interval`. Nothing to do by hand — writing a tombstone without
+  a deadline is fine, and that is the point.
+
+  Persisting past a tick means the reaper is not running at all (see below); the
+  deadline is not the problem.
+- **Not due yet** (`due = f`) — nothing is wrong; the window has not elapsed. To
+  reclaim sooner, **clear the deadline** (`UPDATE amp_registry.branches SET
+  reap_after = NULL WHERE branch_id = ...`) and let the next tick re-stamp it at
+  the current `--branch-gc-retention`; or set it directly (`SET reap_after =
+  now()`). Lowering the flag alone is not enough — an already-stamped deadline is
+  a snapshot and does not move.
+- **Due, and the branch is still listed** — either no reaper is running or it is
+  skipping this branch. Check both in the controller log:
+
+  ```bash
+  kubectl -n "$NS" logs deploy/amp-controller | grep component=branch_gc | tail -20
+  ```
+
+  - no `branch-drop reaper started` line ⇒ it is off (`--branch-gc=false`).
+  - the reaper is running but this branch never produces a `branch data reclaimed`
+    line ⇒ it is being **filtered out of the due scan**, which is silent by design:
+    the two guards are `NOT EXISTS` clauses inside the scan's own SELECT, so a
+    held-back branch is never fetched and never logged. There is nothing to grep
+    for — ask the database which guard holds it:
+
+    ```sql
+    SELECT (SELECT count(*) FROM amp_registry.branches c
+             WHERE c.parent_branch_id = :id AND c.dropped_at IS NULL) AS live_children,
+           (SELECT count(*) FROM amp_registry.endpoints e
+             WHERE e.branch_id = :id)                                 AS endpoints;
+    ```
+
+    Either count above zero means **do not delete the data by hand.** A live child
+    fork still reads this branch's pre-fork history; a surviving endpoint means a
+    compute may be serving it. Both mean the drop path let through something it
+    should have refused — retire the referencing resource first, and treat the skew
+    itself as a bug.
+  - `branch-drop reap paused on the tick's row budget` ⇒ working as intended on a
+    large branch: it drains over many ticks
+    (`--branch-gc-rows-per-tick`, 20 000/tick — with the default 30s
+    `--branch-gc-interval` that is ≈ 2.4M rows/hour, or ≈ 670 rows/s).
+    The rate is the budget divided by the interval, so raising the budget or
+    shortening the interval both speed it up — but remember these deletes land on
+    the same six `pages` / `wals` tablets live branches are ingesting into.
+- **`gc_completed_at` set but disk hasn't dropped** — the rows are gone; what
+  remains is DocDB tombstones, reclaimed at compaction (gated by
+  `timestamp_history_retention_interval_sec`, 900s by default). Wait it out.
+- **A parent branch's GC cutoff is stuck** at a dropped child's fork point — that
+  pin is the child's `amp_storage.branch_state` row, and the reaper deletes it first,
+  so this resolves as soon as the child is reaped. See
+  [`../compute/architecture/pageserver-gc.md`](../compute/architecture/pageserver-gc.md).
+
 ## Fast triage checklist
 
 ```bash

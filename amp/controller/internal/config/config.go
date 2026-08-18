@@ -50,6 +50,37 @@ type TaskConfig struct {
 	ShutdownGrace time.Duration
 }
 
+// BranchGCConfig tunes the branch-drop reaper (internal/branchgc): the loop that
+// reclaims a dropped branch's rows from `amp_storage` once its retention window
+// has passed. Every knob here bounds the reaper's blast radius rather than its
+// throughput — the rows it deletes are garbage with no deadline, and the only
+// cost of going slowly is disk.
+// Each field's meaning is the flag's help text in Load; what is worth saying here
+// is what the help text cannot.
+//
+// Distinct from GCConfig, which is the failed-create orphan sweeper's
+// (internal/gc) — two unrelated loops that both happen to be called GC.
+type BranchGCConfig struct {
+	Enabled  bool
+	Interval time.Duration
+	// Retention is snapshotted into `amp_registry.branches.reap_after` the first
+	// tick that sees a tombstone, measured from its `dropped_at`. Raising or
+	// lowering it therefore moves only deadlines not yet stamped.
+	Retention time.Duration
+	// Both counts below are CEILINGS, never targets: a DELETE names at most
+	// RowsPerDelete rows, and a tick deletes at most RowsPerTick across every
+	// branch and table it touches. Each is routinely under-run — a delete is
+	// clamped by whatever is left of the tick's budget, and a tick stops the
+	// moment that budget is spent.
+	//
+	// RowsPerDelete keeps a reap out of one large distributed transaction;
+	// RowsPerTick is what spreads a big branch over many ticks instead of flooding
+	// the tablets live branches are ingesting into. Together they are the whole of
+	// the pacing: rows, not branches, are what the cluster feels.
+	RowsPerDelete int
+	RowsPerTick   int
+}
+
 // DeployConfig configures how the controller provisions compute endpoints
 // (amp-controller.md §11, issue #108). Runtime-specific deploy logic lives
 // behind the deploy.Deployer interface (principle 2/3); Driver selects the
@@ -163,6 +194,7 @@ type Config struct {
 	DB             DBConfig
 	Task           TaskConfig
 	GC             GCConfig
+	BranchGC       BranchGCConfig
 	Deploy         DeployConfig
 	YCP            YCPConfig
 }
@@ -175,6 +207,18 @@ type GCConfig struct {
 	Grace      time.Duration
 	BatchLimit int
 }
+
+// defaultGCRetention is how long a dropped branch's data is kept before the reaper
+// reclaims it. It matches the pageserver's default PITR window
+// (`DEFAULT_PITR_INTERVAL`, compute/libs/pageserver_api/src/config.rs): that
+// window is how far back a LIVE branch's history stays readable, so keeping a
+// dropped branch's for the same span makes the drop no more destructive than the
+// retention the branch was already running with.
+//
+// It is a flag rather than a per-branch lookup, because `pitr_interval` is
+// pageserver config and the control plane does not record it per branch — so this
+// mirrors its default, and a deployment that raises one should raise both.
+const defaultGCRetention = 24 * time.Hour
 
 var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
@@ -203,6 +247,12 @@ func Load(args []string) (*Config, error) {
 	fs.DurationVar(&c.GC.Grace, "gc-grace", envDuration("AMP_GC_GRACE", 30*time.Minute), "how long a failed-create orphan is left alone before teardown, so a fresh failure can be inspected and a manual retry is not raced")
 	fs.IntVar(&c.GC.BatchLimit, "gc-batch-limit", envInt("AMP_GC_BATCH_LIMIT", 20), "max orphans one sweep enqueues")
 	fs.DurationVar(&c.Task.ShutdownGrace, "task-shutdown-grace", envDuration("AMP_TASK_SHUTDOWN_GRACE", 10*time.Second), "max time to wait for in-flight tasks to finish on shutdown")
+
+	fs.BoolVar(&c.BranchGC.Enabled, "branch-gc", envBool("AMP_BRANCH_GC", true), "run the branch-drop reaper: reclaim a dropped branch's amp_storage rows once its retention window has passed")
+	fs.DurationVar(&c.BranchGC.Interval, "branch-gc-interval", envDuration("AMP_BRANCH_GC_INTERVAL", 30*time.Second), "branch-drop reaper tick cadence; an idle tick is one seek on branches_gc_due, so this is also what sets the delete rate (rows-per-tick / interval)")
+	fs.DurationVar(&c.BranchGC.Retention, "branch-gc-retention", envDuration("AMP_BRANCH_GC_RETENTION", defaultGCRetention), "how long a dropped branch's data is kept before it is reclaimed; measured from the drop and stamped into reap_after by the reaper, so a change moves only deadlines not yet stamped")
+	fs.IntVar(&c.BranchGC.RowsPerDelete, "branch-gc-rows-per-delete", envInt("AMP_BRANCH_GC_ROWS_PER_DELETE", 5000), "at most this many rows are named by one DELETE, so no reap is one large distributed transaction")
+	fs.IntVar(&c.BranchGC.RowsPerTick, "branch-gc-rows-per-tick", envInt("AMP_BRANCH_GC_ROWS_PER_TICK", 20000), "pacing budget: at most this many rows are deleted by one reaper tick, across every branch and table it touches")
 
 	d := &c.Deploy
 	fs.BoolVar(&d.Enabled, "deploy", envBool("AMP_DEPLOY", false), "enable the endpoint deployer (§11, #108)")
@@ -279,6 +329,9 @@ func Load(args []string) (*Config, error) {
 	if c.Task.ShutdownGrace <= 0 {
 		return nil, fmt.Errorf("task shutdown grace must be positive")
 	}
+	if err := validateBranchGC(&c.BranchGC); err != nil {
+		return nil, err
+	}
 	if err := validateDeploy(d); err != nil {
 		return nil, err
 	}
@@ -286,6 +339,32 @@ func Load(args []string) (*Config, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// validateBranchGC validates the branch-drop reaper's knobs, all of which only
+// matter while it runs — the reaper is the sole consumer of every one, retention
+// included, since it stamps the deadlines itself.
+//
+// Retention is deliberately allowed to be zero (reap on the next tick); negative
+// is not, since it would make every drop instantly due including one whose
+// deadline an operator meant to extend.
+func validateBranchGC(g *BranchGCConfig) error {
+	if !g.Enabled {
+		return nil
+	}
+	if g.Retention < 0 {
+		return fmt.Errorf("branch gc retention must not be negative")
+	}
+	if g.Interval <= 0 {
+		return fmt.Errorf("branch gc interval must be positive")
+	}
+	if g.RowsPerDelete < 1 {
+		return fmt.Errorf("branch gc rows per delete must be at least 1")
+	}
+	if g.RowsPerTick < 1 {
+		return fmt.Errorf("branch gc rows per tick must be at least 1")
+	}
+	return nil
 }
 
 // validateYCP validates the YCP registration/reporting config. It is a no-op

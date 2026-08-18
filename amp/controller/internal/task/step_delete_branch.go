@@ -56,11 +56,12 @@ func (s *deleteBranchStep) Execute(ctx context.Context) StepResult {
 	// instead of a second surface. Dropping a record while its instance still runs
 	// stays refused — see the loop.
 	//
-	// Pre-check for child forks BEFORE retiring any endpoints: the parent FK is
-	// RESTRICT, so a branch with children cannot be deleted. Failing first means
-	// no endpoints are retired and nothing is half-deleted (the branch row would
-	// otherwise survive with its compute already gone, and replays would re-hit
-	// the same FK error forever).
+	// Pre-check for child forks BEFORE retiring any endpoints: a branch with live
+	// children cannot be dropped (its pre-fork history is what they read, and the
+	// reaper would eventually reclaim it). Failing first means no endpoints are
+	// retired and nothing is half-deleted (the branch row would otherwise survive
+	// with its compute already gone, and replays would re-hit the same refusal
+	// forever).
 	children, err := s.state.ChildBranchIDs(ctx, s.ClusterID, s.BranchID)
 	if err != nil {
 		return Fail(fmt.Errorf("check child branches: %w", err))

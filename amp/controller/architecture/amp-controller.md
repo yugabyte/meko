@@ -809,7 +809,9 @@ the upstream multi-tenant machinery is dropped.
   projection (`replace(branch_id::text, '-', '')`), not a table.
 - **Dropped branches are tombstoned, not deleted.** `branch.dropped_at` is stamped
   and the row stays: a branch id is never reused, and its pages and WAL in
-  `amp_storage` outlive the drop (left for a later GC pass, #36). Every "is this
+  `amp_storage` outlive the drop — until the branch-drop reaper reclaims them a
+  retention window later and marks the row `gc_completed_at`, keeping it
+  ([sc-integration.md](sc-integration.md#branch-drop-gc)). Every "is this
   live?" reader filters `dropped_at IS NULL`, and the name/default uniqueness
   indexes are partial on it so a drop frees the name. Clusters are tombstoned for
   the same reason — the branch → cluster FK is RESTRICT, so a cluster whose
@@ -860,8 +862,11 @@ one from corrupting storage state.
 - **Billing/metering, quotas** — will build on the tenancy model later.
 - **API authentication** — the user/grant model (§10.1) is designed; how callers
   authenticate as users is not.
-- **Branch data GC** — deleting a branch removes control-plane records;
-  reclaiming the underlying branch's physical data in YBDB is a future design.
+- **Un-dropping a branch** — a branch's data now outlives its drop only for
+  `--branch-gc-retention`, after which the reaper reclaims it
+  ([sc-integration.md](sc-integration.md#branch-drop-gc)). The window is a safety
+  margin, not yet a recovery window: nothing restores a tombstoned branch. Nor is
+  a tombstoned *cluster* row ever reclaimed (its branches are).
 - **Data-plane credential isolation** — pageservers and safekeepers across all
   storage-layer branches currently share one set of universe credentials on the shared
   storage tables; branch-scoped data-plane credentials (or row-level security) are a

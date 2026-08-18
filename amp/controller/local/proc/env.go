@@ -23,9 +23,21 @@ var envAllowlist = []string{
 	"DYLD_LIBRARY_PATH",
 }
 
-// ybEnvPrefix marks environment variables (e.g. YB_STORAGE_PASSWORD) that are
-// forwarded wholesale from the launcher to the child.
-const ybEnvPrefix = "YB_"
+// Environment-variable prefixes forwarded wholesale from the launcher to a child.
+//
+//   - YB_ (e.g. YB_STORAGE_PASSWORD) — the daemons' own namespace.
+//   - AMP_ — the controller's namespace: every flag in internal/config falls back
+//     to `AMP_<FLAG>`, and the controller is one of the launcher's children, so
+//     forwarding the namespace is the same relationship YB_ already has. It is a
+//     production channel, not a test seam — which is what makes it the right way
+//     for a dev or the integration harness to set a knob the launcher has no field
+//     for (e.g. AMP_BRANCH_GC_INTERVAL, to make the branch-drop reaper tick on a
+//     test's timescale) instead of teaching the launcher one flag at a time.
+//     Explicit args the launcher passes still win: a flag beats its env default.
+const (
+	ybEnvPrefix  = "YB_"
+	ampEnvPrefix = "AMP_"
+)
 
 // buildChildEnv constructs the environment for a spawned child from scratch. We
 // deliberately do NOT inherit the launcher's full environment; instead we
@@ -34,7 +46,7 @@ const ybEnvPrefix = "YB_"
 //
 //   - RUST_BACKTRACE: passed through if set, otherwise defaulted to "1".
 //   - the allowlist above, each forwarded only if present in the parent.
-//   - every variable whose name begins with "YB_".
+//   - every variable whose name begins with "YB_" or "AMP_".
 //   - the caller-supplied extraEnv, applied last so it overrides the above.
 func buildChildEnv(extraEnv map[string]string) []string {
 	env := map[string]string{}
@@ -53,7 +65,7 @@ func buildChildEnv(extraEnv map[string]string) []string {
 	}
 
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, ybEnvPrefix) {
+		if !strings.HasPrefix(kv, ybEnvPrefix) && !strings.HasPrefix(kv, ampEnvPrefix) {
 			continue
 		}
 		if k, v, ok := strings.Cut(kv, "="); ok {

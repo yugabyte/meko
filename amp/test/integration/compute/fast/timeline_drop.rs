@@ -3,8 +3,10 @@
 //! verifies the durable cleanup: the endpoint's compute is gone (local dir
 //! removed), its record is deleted from the controller, and the
 //! branch is marked dropped (`dropped_at` set) so it no longer counts as a
-//! live branch and isn't brought back on restart. The underlying branch
-//! data is intentionally left for a later GC pass (see #36).
+//! live branch and isn't brought back on restart. The underlying branch data is
+//! reclaimed asynchronously, by the controller's branch-drop reaper a retention
+//! window later — that is `gc_branch_drop_reclaims`, not this test, which asserts
+//! only what the drop itself does.
 
 use anyhow::bail;
 

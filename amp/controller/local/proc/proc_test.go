@@ -29,6 +29,9 @@ func TestBuildChildEnvScrubAndPassthrough(t *testing.T) {
 	t.Setenv("RUST_LOG", "debug")
 	// Any YB_-prefixed var must pass through.
 	t.Setenv("YB_STORAGE_PASSWORD", "s3cret")
+	// So must any AMP_-prefixed one: that is the controller's config namespace, and
+	// the controller is one of the children spawned through here.
+	t.Setenv("AMP_BRANCH_GC_INTERVAL", "5s")
 	// RUST_BACKTRACE explicitly unset so we can check the default.
 	os.Unsetenv("RUST_BACKTRACE")
 
@@ -39,6 +42,9 @@ func TestBuildChildEnvScrubAndPassthrough(t *testing.T) {
 	}
 	if got := env["YB_STORAGE_PASSWORD"]; got != "s3cret" {
 		t.Errorf("YB_ var not passed through: got %q", got)
+	}
+	if got := env["AMP_BRANCH_GC_INTERVAL"]; got != "5s" {
+		t.Errorf("AMP_ var not passed through: got %q", got)
 	}
 	if got := env["RUST_BACKTRACE"]; got != "1" {
 		t.Errorf("RUST_BACKTRACE default = %q, want \"1\"", got)

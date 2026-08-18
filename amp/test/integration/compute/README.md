@@ -269,6 +269,17 @@ stays invisible to reads — and the `gc_*` scenarios exercise it directly
 (reclaim, branch-point pinning, teardown, crash recovery). GC scenarios
 run on their own child branches so their reclaim signal is isolated.
 
+**Branch-drop GC** is the *controller's* reaper, not the pageserver's: it
+reclaims a dropped branch's `amp_storage` rows after
+`--branch-gc-retention` (a day in production, matching the default PITR
+window). The suite runs the controller with `AMP_BRANCH_GC_RETENTION=0s`
+and `AMP_BRANCH_GC_INTERVAL=3s` (both overridable in the environment;
+`cluster.rs` forwards them, and the launcher passes every `AMP_`-prefixed
+var through to the controller it spawns), so reclamation happens inside a
+test rather than a day later. That is on for *every* scenario — any test
+that drops a branch as teardown also exercises the reap —
+and `gc_branch_drop_reclaims` asserts it directly.
+
 **Concurrency:** every run is isolated by construction — it synthesizes
 its own config on a free port block (auto-picked in 20000..60000, pin
 with `INTEGRATION_PORT_BASE=<n>`), uses an ephemeral DB
