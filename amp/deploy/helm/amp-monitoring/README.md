@@ -1,11 +1,12 @@
 # amp-monitoring Helm chart
 
-The observability stack for amp: a **VictoriaMetrics** store and **Grafana** with
-the amp dashboards. It's the store + visualize end of the metrics pipeline; the
-scrape + collect end is the `OpenTelemetryCollector` CRs in the
-[`yb-amp-controller`](../yb-amp-controller) chart. Design + rationale in
-[`DESIGN.md`](DESIGN.md) and
-[`controller/architecture/ac-metrics.md`](../../../controller/architecture/ac-metrics.md).
+The observability stack for amp: **VictoriaMetrics** and **VictoriaLogs** stores
+plus **Grafana** with the amp dashboards. It's the store + visualize end of both
+the metrics and the log pipeline; the collect end is the
+`OpenTelemetryCollector` CRs in the [`yb-amp-controller`](../yb-amp-controller)
+chart. Design + rationale in [`DESIGN.md`](DESIGN.md),
+[`controller/architecture/ac-metrics.md`](../../../controller/architecture/ac-metrics.md)
+and [`controller/architecture/ac-logs.md`](../../../controller/architecture/ac-logs.md).
 
 ## Prerequisites
 
@@ -21,19 +22,26 @@ For dashboards to show data, the collect step must be running:
      --set admissionWebhooks.autoGenerateCert.enabled=true \
      --set manager.collectorImage.repository=otel/opentelemetry-collector-contrib
    ```
-2. **`yb-amp-controller` deployed with `otel.enabled=true`** (the default), pointed
-   at this store
-   (`otel.remoteWriteEndpoint=http://victoria-metrics-server:8428/api/v1/write`).
+2. **`yb-amp-controller` deployed with `otel.enabled=true`** (the default),
+   pointed at both stores:
+   ```sh
+   --set otel.remoteWriteEndpoint=http://victoria-metrics-server:8428/api/v1/write \
+   --set otel.logsEndpoint=http://victoria-logs-server:9428/insert/opentelemetry/v1/logs
+   ```
 
-This chart is valid and installable without them — the dashboards are just empty
-until metrics arrive.
+This chart is valid and installable without them — the dashboards and the log
+view are just empty until data arrives.
+
+Grafana downloads the `victoriametrics-logs-datasource` plugin from grafana.com
+at pod start, so its pod needs egress. Without it, Grafana comes up but the
+VictoriaLogs datasource fails to load.
 
 ## Install
 
 Install into the amp namespace so the short Service DNS resolves:
 
 ```sh
-helm dependency update deploy/helm/amp-monitoring        # once, fetches VM + Grafana
+helm dependency update deploy/helm/amp-monitoring   # once, fetches VM + VictoriaLogs + Grafana
 helm upgrade --install amp-monitoring deploy/helm/amp-monitoring -n amp-dev
 ```
 
@@ -54,19 +62,46 @@ Or port-forward: `kubectl -n amp-dev port-forward svc/amp-monitoring-grafana 300
 - **VictoriaMetrics** (`victoria-metrics-single`) — Service `victoria-metrics-server:8428`;
   remote-write target `…/api/v1/write`, PromQL/datasource on `:8428`. Backed by a
   `gp2-csi` PVC, 1-month retention (see `values.yaml`).
-- **Grafana** — VictoriaMetrics as the default datasource + four dashboards
-  (Postgres, Controller, Storage layer, Pod resources) loaded from ConfigMaps via
-  the dashboard sidecar.
+- **VictoriaLogs** (`victoria-logs-single`) — Service `victoria-logs-server:9428`;
+  OTLP ingest at `…/insert/opentelemetry/v1/logs`, LogsQL/datasource on `:9428`.
+  Backed by a `gp2-csi` PVC, 1-month retention.
+- **Grafana** — VictoriaMetrics (default) and VictoriaLogs datasources + five
+  dashboards (Postgres, Controller, Storage layer, Pod resources, Endpoint logs)
+  loaded from ConfigMaps via the dashboard sidecar.
+
+## Viewing endpoint logs
+
+Grafana → **Dashboards → amp — Endpoint logs**. Pick an endpoint and a container
+from the dropdowns; the panels show the live tail plus an error-rate graph. The
+dashboard is the intended entry point — Explore is there when you need raw LogsQL:
+
+```logsql
+{k8s.namespace.name="amp-dev", k8s.container.name="endpoint"} error
+{endpoint="yb-ep-abc123"} | stats by (k8s.container.name) count()
+```
+
+Field names keep the OTLP form with dots (`k8s.container.name`), unlike the
+metrics side where Prometheus normalization underscores them
+(`k8s_namespace_name`). Containers are `endpoint`, `controller`, `mcp`, `ui` and
+`postgres-exporter` — the endpoint pod runs pageserver, safekeeper and
+compute_ctl inside the single `endpoint` container, so separating those means
+filtering on the message, not the container.
+
+The collector sets the same `endpoint` label the metrics carry, so a chart and
+its logs filter identically.
 
 ## Key values
 
 | Value | Default | Meaning |
 |---|---|---|
-| `victoriametrics.server.retentionPeriod` | `1` | retention, months |
-| `victoriametrics.server.persistentVolume.storageClassName` | `gp2-csi` | store PVC class |
-| `victoriametrics.server.persistentVolume.size` | `10Gi` | store PVC size |
+| `victoriametrics.server.retentionPeriod` | `1` | metrics retention, months |
+| `victoriametrics.server.persistentVolume.storageClassName` | `gp2-csi` | metrics PVC class |
+| `victoriametrics.server.persistentVolume.size` | `10Gi` | metrics PVC size |
+| `victorialogs.server.retentionPeriod` | `1` | log retention, months |
+| `victorialogs.server.persistentVolume.size` | `20Gi` | log PVC size — raise it first when logs fill up |
+| `grafana.plugins` | `[victoriametrics-logs-datasource]` | LogsQL datasource plugin (needs egress at pod start) |
 | `grafana.service.annotations` | tailnet expose (`grafana-amp`, `tag:k8s-meko`) | Grafana exposure; override for internal-LB etc. |
-| `grafana.persistence.enabled` | `false` | Grafana is stateless (provisioned datasource + dashboards) |
+| `grafana.persistence.enabled` | `false` | Grafana is stateless (provisioned datasources + dashboards) |
 
 Dashboards live in [`dashboards/`](dashboards) as JSON; add one and it's picked up
 automatically. See [`values.yaml`](values.yaml) for the full set.

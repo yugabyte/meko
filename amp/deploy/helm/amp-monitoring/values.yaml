@@ -1,12 +1,14 @@
-# amp-monitoring — VictoriaMetrics + Grafana for the amp metrics pipeline.
+# amp-monitoring — VictoriaMetrics + VictoriaLogs + Grafana for the amp metrics
+# and log pipelines.
 #
 # The collect step lives elsewhere: the OpenTelemetryCollector CRs in the
-# yb-amp-controller chart (otel.enabled) scrape amp and remote-write into the
-# VictoriaMetrics deployed here; Grafana reads it back. See DESIGN.md.
+# yb-amp-controller chart (otel.enabled) scrape amp into the VictoriaMetrics
+# deployed here and tail its container logs into the VictoriaLogs deployed here;
+# Grafana reads both back. See DESIGN.md.
 #
 # Namespace: install this into the same namespace as amp (e.g. amp-dev) so the
-# short Service DNS (victoria-metrics-server) and the Grafana dashboard-sidecar
-# search resolve without cross-namespace config.
+# short Service DNS (victoria-metrics-server, victoria-logs-server) and the
+# Grafana dashboard-sidecar search resolve without cross-namespace config.
 
 # VictoriaMetrics single-node store (Prometheus-compatible, remote-write in,
 # PromQL out). fullnameOverride pins the Service name to victoria-metrics-server
@@ -34,14 +36,46 @@ victoriametrics:
       limits:
         memory: 1Gi
 
-# Grafana with the VictoriaMetrics datasource + the amp dashboards (loaded from
-# the ConfigMaps this chart renders, via the dashboard sidecar).
+# VictoriaLogs single-node store (OTLP in, LogsQL out). fullnameOverride pins the
+# Service name to victoria-logs-server so it matches the log collector's default
+# otel.logsEndpoint. Sized larger than the metrics PVC: amp's Rust services and
+# Postgres are chatty, and a log byte is far less compressible than a sample.
+victorialogs:
+  enabled: true
+  fullnameOverride: victoria-logs
+  server:
+    fullnameOverride: victoria-logs-server
+    # -- Retention. Bare number = months (VictoriaLogs' own unit convention),
+    # matching the metrics store's 1 month.
+    retentionPeriod: "1"
+    persistentVolume:
+      enabled: true
+      # EKS/meko has no default StorageClass; gp2-csi is the EBS CSI class.
+      storageClassName: gp2-csi
+      size: 20Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      # Same reasoning as the metrics store: cap memory, leave CPU unthrottled.
+      limits:
+        memory: 1Gi
+
+# Grafana with the VictoriaMetrics + VictoriaLogs datasources and the amp
+# dashboards (loaded from the ConfigMaps this chart renders, via the dashboard
+# sidecar).
 grafana:
   enabled: true
-  # Dashboards come from ConfigMaps + the datasource is provisioned, so the pod
+  # Dashboards come from ConfigMaps + the datasources are provisioned, so the pod
   # is effectively stateless — no PVC.
   persistence:
     enabled: false
+  # The VictoriaLogs datasource ships as a plugin, which Grafana downloads from
+  # grafana.com at pod start — unlike the dashboards, this one step needs egress.
+  # For an air-gapped cluster, bake it into the image or preload GF_PATHS_PLUGINS
+  # and drop this.
+  plugins:
+    - victoriametrics-logs-datasource
   # Exposed on the tailnet via the Tailscale operator (same pattern as the amp
   # control plane). The operator does L4 forwarding on port 80 → reach Grafana at
   # http://<hostname>.<tailnet>.ts.net (HTTP, not HTTPS). Override/remove these
@@ -65,6 +99,14 @@ grafana:
           # Same-namespace short DNS; matches victoriametrics.fullnameOverride.
           url: http://victoria-metrics-server:8428
           isDefault: true
+        - name: VictoriaLogs
+          # Served by the plugin in grafana.plugins below — LogsQL has no
+          # built-in Grafana datasource type.
+          type: victoriametrics-logs-datasource
+          uid: victorialogs
+          access: proxy
+          # Same-namespace short DNS; matches victorialogs.server.fullnameOverride.
+          url: http://victoria-logs-server:9428
   sidecar:
     dashboards:
       enabled: true

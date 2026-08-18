@@ -1,0 +1,151 @@
+{
+  "uid": "amp-endpoint-logs",
+  "title": "amp — Endpoint logs",
+  "tags": ["amp", "logs"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "endpoint",
+        "label": "endpoint",
+        "type": "query",
+        "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+        "query": "endpoint",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "container",
+        "label": "container",
+        "type": "query",
+        "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+        "query": "k8s.container.name",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "search",
+        "label": "search",
+        "type": "textbox",
+        "query": "",
+        "current": { "text": "", "value": "" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "Container logs for the amp endpoint pods, shipped by the `-logs` OTel daemonset (see `controller/architecture/ac-logs.md`). Pick an **endpoint** and **container** above; **search** is a free-text filter applied to the message.\n\nThe `endpoint` label is the same one the metrics dashboards use, so a spike on *amp — Storage layer* and the logs behind it filter identically. Empty panels usually mean the log collector is not running (`otel.collectors.logs.enabled`) or the OTel Operator CRDs are absent."
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "log volume by container",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 7, "w": 16, "x": 0, "y": 3 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } },
+          "unit": "logs/s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "stats",
+          "expr": "{endpoint=~\"$endpoint\", k8s.container.name=~\"$container\"} | stats by (k8s.container.name) count() as value"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "errors (selected window)",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 3 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 50 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "area", "textMode": "auto" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "stats",
+          "expr": "{endpoint=~\"$endpoint\", k8s.container.name=~\"$container\"} error OR ERROR OR FATAL OR panic | stats count() as value"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "live tail — $endpoint / $container",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 10 },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "{endpoint=~\"$endpoint\", k8s.container.name=~\"$container\"} $search"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "errors only",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 26 },
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "signature",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "{endpoint=~\"$endpoint\", k8s.container.name=~\"$container\"} error OR ERROR OR FATAL OR panic OR CRITICAL"
+        }
+      ]
+    }
+  ]
+}

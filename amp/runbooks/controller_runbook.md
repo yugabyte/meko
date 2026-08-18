@@ -106,6 +106,16 @@ until kubectl -n "$NS" get "$POD" -o jsonpath='{.status.containerStatuses[0].res
 kubectl -n "$NS" logs "$POD" --previous --tail=80
 ```
 
+**(c) Read it back from the log store** — where `otel.collectors.logs` is deployed, the node's
+collector ships container stdout to VictoriaLogs as it is written, so lines survive the pod being
+torn down (gotcha 2) even though `kubectl logs` cannot reach them. Grafana → *amp — Endpoint logs*,
+or by pod name:
+```logsql
+{k8s.pod.name="yb-ep-..."} | sort by (_time)
+```
+This does not rescue gotcha 1: a container that dies before the runtime writes a stream leaves
+nothing on disk for the collector to tail either.
+
 > Rule of thumb: if the container dies in well under a second, skip `kubectl` and go straight to
 > `docker run` locally — it's faster and the logs aren't truncated.
 

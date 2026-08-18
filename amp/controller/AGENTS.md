@@ -32,6 +32,11 @@ with the design docs in [`architecture/`](architecture/):
   `/metrics` endpoint and the `amp_controller_*` series it exposes
   ([`internal/metrics`](internal/metrics/metrics.go)), plus the Collector and
   compute `postgres_exporter` follow-on steps.
+- [`architecture/ac-logs.md`](architecture/ac-logs.md) — the log pipeline
+  (container stdout → filelog daemonset → OTLP → VictoriaLogs → the
+  `amp — Endpoint logs` dashboard): why it tails `/var/log/pods` instead of
+  exporting in-process, the collector's receiver/processor anatomy, and how its
+  labels line up with the metrics ones.
 
 This guide is scoped to `controller/`. The repo-wide guide is the top-level
 [`AGENTS.md`](../AGENTS.md); where they overlap, the rules here win for code

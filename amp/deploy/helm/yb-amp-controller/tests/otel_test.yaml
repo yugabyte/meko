@@ -24,7 +24,7 @@ tests:
         - opentelemetry.io/v1beta1
     asserts:
       - hasDocuments:
-          count: 7
+          count: 8
 
   - it: renders nothing when the opentelemetry.io CRDs are absent, though enabled by default
     asserts:
@@ -38,7 +38,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: renders both collector CRs plus RBAC (SA + Role/binding + ClusterRole/binding) when enabled
+  - it: renders all three collector CRs plus RBAC (SA + Role/binding + ClusterRole/binding) when enabled
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
@@ -46,7 +46,7 @@ tests:
       otel.enabled: true
     asserts:
       - hasDocuments:
-          count: 7
+          count: 8
 
   - it: the controller collector is a deployment-mode OpenTelemetryCollector
     capabilities:
@@ -105,9 +105,60 @@ tests:
       otel.enabled: true
       otel.collectors.controller.enabled: false
     asserts:
-      # SA + Role + RoleBinding + ClusterRole + ClusterRoleBinding + compute CR.
+      # SA + Role + RoleBinding + ClusterRole + ClusterRoleBinding + compute CR
+      # + logs CR.
       - hasDocuments:
-          count: 6
+          count: 7
+
+  - it: omits the logs collector when it is disabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.collectors.logs.enabled: false
+    asserts:
+      # The default renders 8, so 7 is exactly the logs CR being absent.
+      - hasDocuments:
+          count: 7
+
+  # `helm upgrade --reuse-values` replays the previous release's values and
+  # ignores new chart defaults, so an install predating this collector has an
+  # otel.collectors map with no `logs` key. A direct lookup nil-pointers there
+  # and fails the whole upgrade; this asserts the collector still renders.
+  - it: still renders the logs collector when otel.collectors has no logs key
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.collectors:
+        controller:
+          enabled: true
+        compute:
+          enabled: true
+    asserts:
+      # 8 is the full default set; the sibling case above renders 7 when logs is
+      # explicitly disabled, so this count is exactly "the logs CR is present".
+      - hasDocuments:
+          count: 8
+
+  # Same --reuse-values path: an unset logsEndpoint reaches hasPrefix as nil and
+  # fails the render on a type error, so the exporter has to fall back.
+  - it: falls back to the default logs endpoint when the value is unset
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.logsEndpoint: null
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.config.exporters.otlphttp/logs.logs_endpoint
+          value: http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs
+      - equal:
+          path: spec.config.exporters.otlphttp/logs.tls.insecure
+          value: true
 
   - it: includes the cadvisor job only when podMetrics is on
     capabilities:
@@ -146,13 +197,14 @@ tests:
     set:
       otel.podMetrics: false
     asserts:
-      # SA + Role + RoleBinding + both collectors, and NO ClusterRole/binding:
-      # the default renders 7, so 5 here is exactly the two cluster-scoped
-      # documents being absent.
+      # SA + Role + RoleBinding + all three collectors, and NO
+      # ClusterRole/binding: the default renders 8, so 6 here is exactly the two
+      # cluster-scoped documents being absent. The log collector adds no
+      # cluster-scoped RBAC — it is namespace-filtered by design.
       - hasDocuments:
-          count: 5
+          count: 6
 
-  - it: pod discovery is a namespaced Role scoped to pods only
+  - it: pod discovery is a namespaced Role, scoped to pods and replicasets
     capabilities:
       apiVersions:
         - opentelemetry.io/v1beta1
@@ -166,6 +218,10 @@ tests:
       - equal:
           path: rules[0].resources
           value: [pods]
+      # k8sattributes resolves a log's owning workload through its ReplicaSet.
+      - equal:
+          path: rules[1].resources
+          value: [replicasets]
 
   - it: the node ClusterRole exists only for cadvisor and grants only node access
     capabilities:
@@ -181,3 +237,155 @@ tests:
       - equal:
           path: rules[1].nonResourceURLs
           value: ["/metrics/cadvisor"]
+
+  # Container logs are node-local files, so anything but daemonset mode silently
+  # collects only from the nodes the replicas happen to land on.
+  - it: the logs collector is a daemonset-mode OpenTelemetryCollector
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - isKind:
+          of: OpenTelemetryCollector
+      - isAPIVersion:
+          of: opentelemetry.io/v1beta1
+      - equal:
+          path: spec.mode
+          value: daemonset
+      - equal:
+          path: spec.config.service.pipelines.logs.receivers
+          value: [filelog]
+
+  - it: scopes the log tail to the release namespace and excludes its own collectors
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    release:
+      namespace: amp-dev
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.config.receivers.filelog.include
+          value: [/var/log/pods/amp-dev_*/*/*.log]
+      - equal:
+          path: spec.config.receivers.filelog.exclude
+          value: [/var/log/pods/amp-dev_RELEASE-NAME-yb-amp-controller-*-collector-*/*/*.log]
+
+  - it: points the log exporter at the configured OTLP logs endpoint
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.logsEndpoint: https://logs.example/insert/opentelemetry/v1/logs
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.config.exporters.otlphttp/logs.logs_endpoint
+          value: https://logs.example/insert/opentelemetry/v1/logs
+      # https:// endpoints must not fall back to the plaintext default.
+      - equal:
+          path: spec.config.exporters.otlphttp/logs.tls.insecure
+          value: false
+
+  # memory_limiter has to run before anything else, or a log storm OOMs the
+  # node's collector before the limiter ever sees it.
+  - it: runs memory_limiter first in the logs pipeline
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.config.service.pipelines.logs.processors
+          value: [memory_limiter, k8sattributes, batch]
+
+  # Both filters matter: the namespace filter is what keeps the chart's RBAC a
+  # namespaced Role, and without KUBE_NODE_NAME the node filter cannot resolve.
+  - it: filters k8sattributes to this namespace and the collector's own node
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    release:
+      namespace: amp-dev
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.config.processors.k8sattributes.filter.namespace
+          value: amp-dev
+      - equal:
+          path: spec.config.processors.k8sattributes.filter.node_from_env_var
+          value: KUBE_NODE_NAME
+      - contains:
+          path: spec.env
+          content:
+            name: KUBE_NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+
+  # Non-root cannot write the root-owned hostPath checkpoint dir, and the filelog
+  # receiver fails to start at all when its storage client can't open — taking
+  # the whole pipeline down, not just checkpointing.
+  - it: runs the log collector as root so it can read logs and write checkpoints
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.securityContext.runAsUser
+          value: 0
+      - equal:
+          path: spec.securityContext.runAsGroup
+          value: 0
+
+  - it: mounts the host log dir read-only and a checkpoint dir for read offsets
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - contains:
+          path: spec.volumeMounts
+          content:
+            name: varlogpods
+            mountPath: /var/log/pods
+            readOnly: true
+      - equal:
+          path: spec.config.receivers.filelog.storage
+          value: file_storage/checkpoints
+      - contains:
+          path: spec.config.service.extensions
+          content: file_storage/checkpoints
+
+  - it: passes tolerations through so tainted endpoint nodes still get a collector
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.logsTolerations:
+        - key: amp-compute
+          operator: Exists
+          effect: NoSchedule
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - equal:
+          path: spec.tolerations[0].key
+          value: amp-compute

@@ -16,6 +16,21 @@ data:
   YB_PASSWORD_ENV: "YB_PASSWORD"
   {{- end }}
 
+  # --- Tracing ---
+  {{- /*
+    compute_ctl calls tracing_utils::init_tracing with ExportConfig::default(),
+    which targets http://localhost:4318. Nothing listens there in an endpoint
+    pod, so the batch span processor retries forever and logs a
+    BatchSpanProcessor.ExportError every few seconds — ~40k ERROR lines a day
+    per endpoint, all of them noise, and the single largest source of ERROR in
+    the log store. Off unless a real OTLP endpoint is configured.
+  */}}
+  {{- if .Values.tracing.otlpEndpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.tracing.otlpEndpoint | quote }}
+  {{- else }}
+  OTEL_SDK_DISABLED: "true"
+  {{- end }}
+
   # --- Endpoint / compute settings ---
   ENDPOINT_PG_VERSION: {{ .Values.endpoint.pgVersion | quote }}
   COMPUTE_PORT: {{ .Values.endpoint.computePort | quote }}

@@ -39,6 +39,15 @@ yugabyte:
   existingSecretKey: "password"
 
 # Endpoint / compute settings.
+# Distributed tracing for the compute's OTLP span exporter.
+tracing:
+  # -- OTLP/HTTP endpoint for compute_ctl's span exporter. Empty (the default)
+  # sets OTEL_SDK_DISABLED=true instead: compute_ctl otherwise defaults to
+  # http://localhost:4318, where nothing listens in an endpoint pod, and the
+  # retry loop emits a BatchSpanProcessor.ExportError every few seconds. Set
+  # this only when a collector with an OTLP traces pipeline actually exists.
+  otlpEndpoint: ""
+
 endpoint:
   # -- Postgres major version for the compute. The image ships v18 only; this
   # locates the install at `pg_install/v{N}`, so anything else points at a

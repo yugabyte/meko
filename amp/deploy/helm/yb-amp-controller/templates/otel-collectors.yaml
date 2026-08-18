@@ -1,14 +1,20 @@
 {{- if and .Values.otel.enabled (.Capabilities.APIVersions.Has "opentelemetry.io/v1beta1") }}
 {{- /*
 OpenTelemetry Collector CRs (reconciled by the OpenTelemetry Operator) that
-implement the amp metrics pipeline's collect-and-export step
-(controller/architecture/ac-metrics.md). Two deployment-mode collectors ship
-with the control plane:
+implement the collect-and-export step of the amp metrics pipeline
+(controller/architecture/ac-metrics.md) and log pipeline
+(controller/architecture/ac-logs.md). Three collectors ship with the control
+plane:
   - controller: scrapes the amp controller (:8080).
   - compute:    scrapes every endpoint pod's Prometheus sources — the
     postgres_exporter sidecar (:9187), pageserver (:9898), safekeeper (:7676),
     compute_ctl (:3080) — plus per-pod cAdvisor resource metrics.
-Both remote-write to a Prometheus-compatible store (VictoriaMetrics by default).
+  - logs:       tails every amp container's stdout off the node — pageserver,
+    safekeeper, compute_ctl and Postgres itself — and exports OTLP to a log
+    store (VictoriaLogs by default).
+The two metrics collectors run deployment-mode and remote-write to a
+Prometheus-compatible store (VictoriaMetrics by default); the log collector must
+be a daemonset, since container logs are only readable node-locally.
 
 Gated on the opentelemetry.io CRDs being present as well as otel.enabled, so
 that enabled-by-default cannot fail an install on a cluster without the
@@ -30,7 +36,8 @@ metadata:
 Pod discovery for every app scrape job. All of them are namespace-restricted
 (`role: pod, namespaces: {names: [<release ns>]}`), so this is a Role, not a
 ClusterRole: an install that does not scrape node metrics needs no cluster-scoped
-rights at all.
+rights at all. The log collector's k8sattributes processor is namespace-filtered
+for the same reason, and reads replicasets to name a pod's owning workload.
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -42,6 +49,9 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: ["apps"]
+    resources: [replicasets]
     verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -232,5 +242,141 @@ spec:
           receivers: [prometheus]
           processors: [batch]
           exporters: [prometheus_remote_write]
+{{- end }}
+{{- /*
+`dig` rather than a direct lookup: `helm upgrade --reuse-values` replays the
+previous release's values and ignores new chart defaults, so upgrading an install
+that predates this collector leaves otel.collectors.logs unset — a direct
+reference nil-pointers and fails the upgrade outright.
+*/}}
+{{- if dig "collectors" "logs" "enabled" true .Values.otel }}
+{{- /* Defaulted for the same --reuse-values reason: an unset logsEndpoint reaches
+       hasPrefix as nil and fails the render on a type error. */}}
+{{- $logsEndpoint := .Values.otel.logsEndpoint | default "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs" }}
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: {{ $fullName }}-logs
+  labels:
+    {{- include "yb-amp-controller.labels" . | nindent 4 }}
+spec:
+  # Container logs are node-local files, so this one collects per node rather
+  # than scraping over the network like the metrics pair.
+  mode: daemonset
+  serviceAccount: {{ $saName }}
+  # Both hostPaths below are root-owned: the operator otherwise runs the
+  # collector under a non-root uid that cannot write the checkpoint dir
+  # ("permission denied" on receiver_filelog_, which fails the whole pipeline)
+  # and cannot read every container log. Running the log tailer as root is what
+  # promtail, fluent-bit and the upstream collector's logsCollection preset do.
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+  {{- with .Values.otel.image }}
+  image: {{ . }}
+  {{- end }}
+  {{- with .Values.otel.logsTolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  env:
+    - name: KUBE_NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+  volumes:
+    - name: varlogpods
+      hostPath:
+        path: /var/log/pods
+    # Read offsets survive a collector restart, so a rescheduled pod neither
+    # replays nor skips what it already shipped.
+    - name: checkpoints
+      hostPath:
+        path: /var/lib/otelcol/{{ $fullName }}-logs
+        type: DirectoryOrCreate
+  volumeMounts:
+    - name: varlogpods
+      mountPath: /var/log/pods
+      readOnly: true
+    - name: checkpoints
+      mountPath: /var/lib/otelcol
+  config:
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      file_storage/checkpoints:
+        directory: /var/lib/otelcol
+    receivers:
+      filelog:
+        # Scoped to this namespace: the daemonset can see every pod on the node,
+        # and shipping the node's other tenants is both a volume and a privacy
+        # problem.
+        include: [/var/log/pods/{{ $ns }}_*/*/*.log]
+        # Without this the collector's own stdout feeds back into its pipeline.
+        exclude: [/var/log/pods/{{ $ns }}_{{ $fullName }}-*-collector-*/*/*.log]
+        include_file_path: true
+        # Not `end`: an endpoint pod that dies during startup is exactly the case
+        # these logs exist to explain, and the checkpoint prevents replay.
+        start_at: beginning
+        storage: file_storage/checkpoints
+        retry_on_failure:
+          enabled: true
+        operators:
+          # Strips the CRI/containerd (or docker) envelope, reassembles lines
+          # the runtime split at 16 KiB, and lifts k8s.{namespace,pod,container}
+          # off the file path.
+          - type: container
+            id: container-parser
+            add_metadata_from_filepath: true
+    processors:
+      # First in the pipeline: a log storm from one pod must not OOM the node's
+      # collector.
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 20
+      # Pod uid, workload identity and the amp labels the file path can't carry.
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        filter:
+          # Namespace-scoped to match the Role above — without this the processor
+          # lists pods cluster-wide and the chart would need a ClusterRole.
+          namespace: {{ $ns }}
+          # A daemonset pod only ever reads its own node; unfiltered, each replica
+          # would watch every pod in the cluster.
+          node_from_env_var: KUBE_NODE_NAME
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.container.name
+            - k8s.deployment.name
+            - k8s.statefulset.name
+            - k8s.node.name
+          labels:
+            # `endpoint` matches the label the metrics collectors relabel onto
+            # every per-endpoint series, so a log line and its metrics join.
+            - {tag_name: endpoint, key: app.kubernetes.io/instance, from: pod}
+            - {tag_name: component, key: app.kubernetes.io/component, from: pod}
+        pod_association:
+          - sources: [{from: resource_attribute, name: k8s.pod.uid}]
+          - sources: [{from: resource_attribute, name: k8s.namespace.name}, {from: resource_attribute, name: k8s.pod.name}]
+      batch: {}
+    exporters:
+      otlphttp/logs:
+        logs_endpoint: {{ $logsEndpoint | quote }}
+        tls:
+          # Plaintext for in-cluster http:// stores; TLS for an https:// endpoint.
+          insecure: {{ if hasPrefix "https://" $logsEndpoint }}false{{ else }}true{{ end }}
+    service:
+      extensions: [health_check, file_storage/checkpoints]
+      pipelines:
+        logs:
+          receivers: [filelog]
+          processors: [memory_limiter, k8sattributes, batch]
+          exporters: [otlphttp/logs]
 {{- end }}
 {{- end }}

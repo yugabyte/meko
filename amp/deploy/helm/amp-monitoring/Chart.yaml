@@ -1,11 +1,12 @@
 apiVersion: v2
 name: amp-monitoring
 description: >-
-  Observability stack for amp — a VictoriaMetrics store and Grafana with the amp
-  dashboards. Pairs with the OpenTelemetryCollector CRs in the yb-amp-controller
-  chart (otel.enabled), which scrape amp and remote-write here.
+  Observability stack for amp — VictoriaMetrics and VictoriaLogs stores plus
+  Grafana with the amp dashboards. Pairs with the OpenTelemetryCollector CRs in
+  the yb-amp-controller chart (otel.enabled), which scrape amp's metrics and tail
+  its container logs, and ship both here.
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.1.0"
 dependencies:
   - name: victoria-metrics-single
@@ -13,6 +14,11 @@ dependencies:
     repository: https://victoriametrics.github.io/helm-charts
     alias: victoriametrics
     condition: victoriametrics.enabled
+  - name: victoria-logs-single
+    version: 0.13.9
+    repository: https://victoriametrics.github.io/helm-charts
+    alias: victorialogs
+    condition: victorialogs.enabled
   - name: grafana
     version: 10.5.15
     repository: https://grafana.github.io/helm-charts

@@ -253,3 +253,25 @@ tests:
     asserts:
       - notExists:
           path: data.ENDPOINT_STORAGE_HTTP_PORT
+
+  # compute_ctl's span exporter defaults to http://localhost:4318, where nothing
+  # listens in an endpoint pod. Left alone it retries forever and emits a
+  # BatchSpanProcessor.ExportError every few seconds — the single largest source
+  # of ERROR lines in the log store.
+  - it: disables the OTel SDK when no OTLP endpoint is configured
+    asserts:
+      - equal:
+          path: data.OTEL_SDK_DISABLED
+          value: "true"
+      - notExists:
+          path: data.OTEL_EXPORTER_OTLP_ENDPOINT
+
+  - it: exports traces instead of disabling when an OTLP endpoint is set
+    set:
+      tracing.otlpEndpoint: http://otel-collector:4318
+    asserts:
+      - equal:
+          path: data.OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://otel-collector:4318
+      - notExists:
+          path: data.OTEL_SDK_DISABLED

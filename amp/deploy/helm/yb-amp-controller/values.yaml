@@ -292,12 +292,20 @@ otel:
   # should not run these collectors.
   enabled: true
   # -- Collector image. Empty => the operator's configured default (must be a
-  # distro with the prometheus receiver + prometheusremotewrite exporter, i.e.
-  # opentelemetry-collector-contrib).
+  # distro with the prometheus + filelog receivers, the k8sattributes processor
+  # and the prometheusremotewrite exporter, i.e. opentelemetry-collector-contrib).
   image: ""
   # -- Prometheus remote-write endpoint of the metrics store (VictoriaMetrics,
   # Prometheus, Thanos receive, …).
   remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
+  # -- OTLP/HTTP logs endpoint of the log store. Defaults to the VictoriaLogs
+  # OTLP ingest path served by the amp-monitoring chart; any OTLP/HTTP logs
+  # receiver works (a central collector, a vendor endpoint, …).
+  logsEndpoint: "http://victoria-logs-server.monitoring.svc.cluster.local:9428/insert/opentelemetry/v1/logs"
+  # -- Tolerations for the logs daemonset. Set these when endpoint pods run on
+  # tainted nodes — the daemonset has to be schedulable there or those nodes'
+  # logs are silently missing.
+  logsTolerations: []
   # -- Also scrape per-pod cAdvisor resource metrics (CPU/mem/net) for the
   # endpoint pods, via each node's kubelet. Feeds the whole "amp — Pod resources"
   # dashboard (all 7 panels); the controller, postgres and storage dashboards do
@@ -326,4 +334,9 @@ otel:
       enabled: true
     # Scrapes every endpoint pod: postgres_exporter/pageserver/safekeeper/compute_ctl.
     compute:
+      enabled: true
+    # Tails every amp container's stdout on the node (pageserver, safekeeper,
+    # compute_ctl, Postgres, the controller) and exports OTLP to logsEndpoint.
+    # Namespace-scoped: needs no cluster-wide RBAC, unlike podMetrics above.
+    logs:
       enabled: true

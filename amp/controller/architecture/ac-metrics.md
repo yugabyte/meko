@@ -12,6 +12,9 @@ controller — closed by step 1 below. This repo now implements the two source-s
 steps (step 1, the controller `/metrics`; step 3, the compute `postgres_exporter`
 sidecar); the collector (step 2) is the remaining deployment step.
 
+Logs are the sibling pipeline, sharing the collector deployment, the RBAC and the
+`endpoint` label convention but nothing else — see [`ac-logs.md`](ac-logs.md).
+
 ## Pipeline
 
 ```
