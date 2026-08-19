@@ -170,14 +170,24 @@ a table is drained while rows remain.
 | flag | default | |
 |---|---|---|
 | `--branch-gc` | true | run the reaper at all |
-| `--branch-gc-interval` | 30s | tick cadence |
+| `--branch-gc-interval` | 30s | **base** tick cadence; the loop adapts around it (below) |
 | `--branch-gc-retention` | 24h | window between the drop and the reap; matches the default PITR window |
 | `--branch-gc-rows-per-delete` | 5000 | rows one DELETE names: the SELECT's `LIMIT`, and so the size of its `ybctid` list |
-| `--branch-gc-rows-per-tick` | 20000 | pacing budget across every delete in the tick (~2.4M rows/hour at the default interval) |
+| `--branch-gc-rows-per-tick` | 20000 | pacing budget across every delete in the tick (up to ~2.4M rows/hour at the base interval, 6x that while a reap is capped) |
 
-Pacing is **open-loop** — a fixed rows/tick, not a reaction to cluster load — so
-the defaults are deliberately conservative: this is garbage with no deadline, and
-the only cost of going slowly is disk.
+Pacing is **open-loop** in rows — a fixed rows/tick, not a reaction to cluster
+load — so the defaults are deliberately conservative: this is garbage with no
+deadline, and the only cost of going slowly is disk.
+
+The cadence, though, does react to the reaper's own backlog (`nextInterval`),
+the same three states the pageserver's candidate drain uses: base while
+reclaiming, `interval/6` (5s) while a tick stops on its row budget, doubling to
+`8 x interval` (4min) while nothing is due. So an idle controller stops paying a
+seek on `branches_gc_due` every 30s, and a large reap drains at rows-per-tick
+per *floor* — the sustained ceiling is 6x what the base interval sets. Each wait
+runs from the end of the previous tick, not on a fixed grid, so a reap's own
+duration adds to the gap and those rates are ceilings. A tick that errored keeps
+the base cadence.
 
 A dropped **cluster**'s branches are reclaimed too (its tombstone stamps them
 exactly as a branch delete does); nothing reclaims the cluster row itself.

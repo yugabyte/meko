@@ -1073,8 +1073,9 @@ on that one read, materialiser walredo failures abort the process.
 `page_server/tasks.rs` starts exactly two per-branch loops, plus
 on-demand logical-size calculation:
 
-- **GC loop** (`gc_period`): refreshes GC cutoffs (space horizon from
-  `gc_horizon`, time cutoff from `pitr_interval` via
+- **GC loop** (base cadence `gc_period`; adaptive, see
+  [pageserver-gc.md](pageserver-gc.md#tick-cadence)): refreshes GC cutoffs
+  (space horizon from `gc_horizon`, time cutoff from `pitr_interval` via
   `find_gc_cutoffs`), culls expired LSN leases, and updates
   PITR-related metrics. With `enable_gc` on for the branch, each tick
   also persists `applied_gc_cutoff_lsn = max(old, fresh cutoff)` to

@@ -356,8 +356,9 @@ Read it in this order:
 - **`reap_after` is NULL** (`due` is NULL too) — the branch is tombstoned and not
   yet stamped. Normally transient: the reaper stamps every unstamped tombstone at
   the start of each tick, from that row's own `dropped_at`, so this clears within
-  one `--branch-gc-interval`. Nothing to do by hand — writing a tombstone without
-  a deadline is fine, and that is the point.
+  one tick — up to 4 min if the reaper has backed off on an idle queue (the
+  cadence is adaptive; see below). Nothing to do by hand — writing a tombstone
+  without a deadline is fine, and that is the point.
 
   Persisting past a tick means the reaper is not running at all (see below); the
   deadline is not the problem.
@@ -394,12 +395,17 @@ Read it in this order:
     should have refused — retire the referencing resource first, and treat the skew
     itself as a bug.
   - `branch-drop reap paused on the tick's row budget` ⇒ working as intended on a
-    large branch: it drains over many ticks
-    (`--branch-gc-rows-per-tick`, 20 000/tick — with the default 30s
-    `--branch-gc-interval` that is ≈ 2.4M rows/hour, or ≈ 670 rows/s).
-    The rate is the budget divided by the interval, so raising the budget or
-    shortening the interval both speed it up — but remember these deletes land on
-    the same six `pages` / `wals` tablets live branches are ingesting into.
+    large branch: it drains over many ticks (`--branch-gc-rows-per-tick`,
+    20 000/tick). A capped tick retries at a sixth of `--branch-gc-interval`
+    rather than waiting a full one, so at the defaults a backlog drains at up to
+    20 000 per 5s ≈ 4 000 rows/s; once it catches up the loop returns to the 30s
+    base, and doubles to 4 min while nothing is due. The wait is measured from
+    the end of the previous tick, so the real rate is the budget over
+    `floor + however long the reap itself took` — treat 4 000/s as the ceiling,
+    and read the actual spacing off the `branch data reclaimed` /
+    `reap paused` log timestamps. Raising the budget or shortening the interval
+    both speed it up — but remember these deletes land on the same six `pages` /
+    `wals` tablets live branches are ingesting into.
 - **`gc_completed_at` set but disk hasn't dropped** — the rows are gone; what
   remains is DocDB tombstones, reclaimed at compaction (gated by
   `timestamp_history_retention_interval_sec`, 900s by default). Wait it out.

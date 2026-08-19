@@ -24,6 +24,7 @@ use utils::pausable_failpoint;
 use crate::context::{DownloadBehavior, RequestContext};
 use crate::metrics::{self, BackgroundLoopSemaphoreMetricsRecorder, TENANT_TASK_EVENTS};
 use crate::page_server::PageServer;
+use crate::page_server::gc_result::GcTickOutcome;
 use crate::page_server::throttle::Stats;
 use crate::task_mgr::{self, BACKGROUND_RUNTIME, TOKIO_WORKER_THREADS, TaskKind};
 
@@ -162,6 +163,10 @@ pub fn start_background_loops(tenant: &Arc<PageServer>) {
 async fn gc_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
     const MAX_BACKOFF_SECS: f64 = 300.0;
     let mut error_run = 0; // consecutive errors
+    // Previous idle tick's sleep, the base for the next doubling (see
+    // GcTickOutcome::next_sleep). Loop-local, so each branch's pageserver backs
+    // off on its own schedule.
+    let mut idle_sleep: Option<Duration> = None;
 
     // GC might require downloading, to find the cutoff LSN that corresponds to the
     // cutoff specified as time.
@@ -192,6 +197,7 @@ async fn gc_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
                 .inc();
             // check again in 10 seconds, in case it's been enabled again.
             sleep_duration = Duration::from_secs(10);
+            idle_sleep = None;
         } else {
             let iteration = Iteration {
                 started_at: Instant::now(),
@@ -203,9 +209,11 @@ async fn gc_loop(tenant: Arc<PageServer>, cancel: CancellationToken) {
                 .run(tenant.gc_iteration(gc_horizon, tenant.get_pitr_interval(), &cancel, &ctx))
                 .await;
             match output {
-                Ok(_) => {
+                Ok(result) => {
                     error_run = 0;
-                    sleep_duration = period;
+                    sleep_duration = result.outcome.next_sleep(period, idle_sleep);
+                    idle_sleep =
+                        (result.outcome == GcTickOutcome::NothingDue).then_some(sleep_duration);
                 }
                 // `Timeline::shutdown` is only reached from `PageServer::shutdown`,
                 // which cancels the branch's token before the tenant's, so either

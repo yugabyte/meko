@@ -17,11 +17,13 @@ use tokio::time::sleep;
 use crate::cluster::{Cluster, step};
 use crate::db;
 
-/// How long the failpoint holds the materialise job (ms). Must
-/// comfortably exceed the flush period (~5 s) + the cutoff's travel
-/// time past the drop (~2 s at the suite's 1 s gc_period), so the
-/// deferral is observed while the job is still held.
-const HOLD_MS: u32 = 20_000;
+/// How long the failpoint holds the materialise job (ms). Must comfortably
+/// exceed the flush period (~5 s) + the cutoff's travel time past the drop,
+/// so the deferral is observed while the job is still held. That travel is
+/// not one 1 s tick: the drain idles while the workload pauses and its
+/// cadence backs off to `8 x gc_period` (8 s here), so the tick that acts the
+/// drop can be that late.
+const HOLD_MS: u32 = 35_000;
 
 pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let branch_pg_port = c.compute_port() + 250;

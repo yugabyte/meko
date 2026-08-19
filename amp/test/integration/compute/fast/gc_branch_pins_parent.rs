@@ -47,9 +47,29 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         db::batch(&main, &format!("UPDATE gc_pin SET payload = 'new{i}-' || md5(payload)")).await?;
     }
     db::batch(&main, "CHECKPOINT").await?;
-    // Give the drain several ticks to run against the churned parent; the
-    // pin must keep it from trimming the branch-point versions.
-    sleep(Duration::from_secs(10)).await;
+    // The pin must keep the parent's drain from trimming the branch-point
+    // versions, so the assertion needs drain ticks to have run after the churn —
+    // but not many: one tick would trim if the pin were broken. Wait on the
+    // parent's own tick counter rather than the clock, because the cadence is
+    // adaptive and the pin itself keeps every tick empty (nothing is due below a
+    // pinned cutoff, however much the parent churns), so the drain sits at its
+    // `8 x gc_period` ceiling here and a fixed 10 s sleep can buy one tick.
+    let ps = c.ps_http_port();
+    let ticks_before = c.metric_sum(ps, "pageserver_yb_gc_drain_ticks_total").await?;
+    let mut ticks = ticks_before;
+    for _ in 0..60 {
+        sleep(Duration::from_secs(1)).await;
+        ticks = c.metric_sum(ps, "pageserver_yb_gc_drain_ticks_total").await?;
+        if ticks - ticks_before >= 3.0 {
+            break;
+        }
+    }
+    if ticks - ticks_before < 3.0 {
+        bail!(
+            "parent drain ran only {} ticks; the pin assertion would be vacuous",
+            ticks - ticks_before
+        );
+    }
 
     step("Cold child read: restart the branch endpoint, re-read from the store");
     c.yb(&["endpoint", "stop", "ep_gc_pin"])?;

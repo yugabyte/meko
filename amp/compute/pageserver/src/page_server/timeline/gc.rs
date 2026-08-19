@@ -6,6 +6,8 @@
 use super::*;
 use pageserver_api::key::Key;
 
+use crate::page_server::gc_result::GcTickOutcome;
+
 /// One tick's due candidates split by coarse operation, which sets the act
 /// order and the dequeue method. A candidate
 /// [`Timeline::classify_candidate`] rejects enters no bucket at all.
@@ -200,8 +202,9 @@ impl Timeline {
         crate::metrics::GC_CANDIDATES_READ.inc_by(selected.raw_count as u64);
 
         let Some(max_due_lsn) = selected.max_due_lsn else {
+            result.outcome = GcTickOutcome::NothingDue;
             crate::metrics::GC_DRAIN_TICKS
-                .with_label_values(&["empty"])
+                .with_label_values(&[result.outcome.label()])
                 .inc();
             // An empty reset tick found nothing stranded below the floor,
             // so the reset succeeded — stamp it (see pick_drain_floor).
@@ -261,10 +264,15 @@ impl Timeline {
             progress.last_floor_reset = Some(std::time::Instant::now());
         }
         result.candidates_dequeued = dequeued;
+        result.outcome = if all_due_visited {
+            GcTickOutcome::CaughtUp
+        } else {
+            GcTickOutcome::BacklogRemains
+        };
         crate::metrics::GC_CANDIDATES_DEQUEUED.inc_by(dequeued);
         crate::metrics::GC_ROWS_DELETED.inc_by(result.rows_deleted);
         crate::metrics::GC_DRAIN_TICKS
-            .with_label_values(&[if all_due_visited { "drained" } else { "capped" }])
+            .with_label_values(&[result.outcome.label()])
             .inc();
 
         info!(

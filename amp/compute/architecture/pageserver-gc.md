@@ -161,8 +161,7 @@ base re-covers it.
 
 ## Drain
 
-Each `gc_period` tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`)
-runs:
+Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
 
 1. **Cutoff.** Compute `min(retention window, live leases,
    consistent_lsn)`, floored at the branch's own ancestor LSN. Persist
@@ -409,6 +408,36 @@ invisible candidate, not a lost page — which is what
 `thin_lane_gc_enqueue_matches_ysql_drain` pins down by enqueuing on the
 lane and draining over YSQL.
 
+### Tick cadence
+
+`gc_period` is the base, not the period: the loop (`gc_loop`,
+`page_server/tasks.rs`) picks the next sleep from the queue state the tick
+left (`GcResult::outcome`, whose `label()` is also the
+`gc_drain_ticks_total` label), so an idle branch stops paying a full
+per-bucket fan-out every 30s and a backlogged one stops being pinned at
+`gc_drain_limit` per 30s.
+
+| Queue the tick left (`gc_drain_ticks_total` label) | Next sleep |
+| --- | --- |
+| Caught up — everything due was acted (`drained`) | `gc_period` (30s) |
+| Backlog remains — `gc_drain_limit` hit (`capped`) | `gc_period / 6` (5s), never under 1s |
+| Nothing due (`empty`) | double the previous sleep, up to `8 x gc_period` (4min) |
+
+The first working tick resets to the base. A tick that reached
+`gc_iteration` and skipped the drain there (`test_enable_gc_drain` off, lease
+grace) backs off like an idle one; the loop-level disable (`gc_period == 0` or
+`gc_horizon == 0`) instead keeps its own fixed 10 s re-check, so the
+`outcome=disabled` label covers two cadences — 10 s if GC is switched off, up
+to 4 min if only the drain is. Errors keep
+their own exponential retry. The backoff state lives in the loop and the first
+tick still jitters (`sleep_random`), so a fleet restarted together doesn't
+resynchronise its selects on the shared `pending_gc` tablets.
+
+A candidate that comes due inside a backed-off window waits up to the ceiling
+before it is reclaimed — GC is throughput-bound, not latency-bound. The other
+end of that trade: the drain's sustained ceiling is `gc_drain_limit` per
+*floor*, so a backlog drains 6x faster than the base cadence suggests.
+
 ## Config
 
 All GC knobs are **per-branch** (tenant config, patchable via
@@ -420,7 +449,7 @@ per-branch is also per-instance today.
 | `enable_gc` | `false` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
 | `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
 | `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Read fresh each tick. |
-| `gc_period` | — | Drain tick interval. |
+| `gc_period` | 30 s | **Base** drain tick interval; the loop adapts around it (5 s floor / 4 min ceiling — see [Tick cadence](#tick-cadence)). `0` disables GC. |
 | `gc_horizon` / `pitr_interval` | — | Retention window feeding the cutoff. |
 
 ## Metrics
@@ -437,7 +466,7 @@ one doc.)
 | `pageserver_yb_gc_candidates_read_total` | IntCounter | — | Rows the drain's `pending_gc` select returned per tick (pre-routing). `== gc_drain_limit` ⇒ capped; `≫ removed` ⇒ read but not cleared. |
 | `pageserver_yb_gc_candidates_dequeued_total` | IntCounter | — | Rows deleted from `pending_gc` by the dequeue: trim range-sweeps a visited key's whole `(floor, cutoff]` set (collapses duplicates), drop/shrink clear exactly the acted candidates. ≈ `read` at steady state. `rate(emitted) − rate(dequeued)` = queue growth. |
 | `pageserver_yb_gc_rows_deleted_total` | IntCounter | — | Rows deleted by the drain across `amp_storage.pages`, `slru_pages`, and `meta` (trim / drop / shrink). `rate()` = reclamation throughput. |
-| `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence. |
+| `pageserver_yb_gc_drain_ticks_total` | IntCounter | `outcome` (`drained`/`capped`/`empty`/`lease_grace`/`disabled`/`error`) | One increment per drain-loop iteration, by how it ended. `rate(capped)/rate(all)` = keep-up alarm; `lease_grace`/`disabled` moving = GC silently gated off; `rate(all)` = tick cadence — which is adaptive, so a low rate is idle backoff, not necessarily a stall. |
 
 The drain also owns five `kind` values of
 `pageserver_yb_correctness_errors_total` (the rest are in
@@ -462,18 +491,24 @@ Three checks localize most GC escalations (metrics above):
 1. **Is GC running?** `enable_gc` on for the branch and
    `rate(gc_drain_ticks_total) > 0`. `outcome=disabled` climbing ⇒ gated
    off; `lease_grace` ⇒ skipped during fresh-attach grace; `error` ⇒ the
-   drain is erroring.
+   drain is erroring. A *low* tick rate is not by itself a stall: a branch
+   with nothing due backs off to one tick per 4 min, so read the rate together
+   with `outcome=empty` climbing.
 2. **Is the queue keeping up?** `rate(candidates_emitted) −
    rate(candidates_dequeued) > 0` ⇒ the drain is falling behind; confirm
    with `gc_drain_lag_bytes > 0` and rising `outcome=capped`.
 3. **Is the cutoff advancing?** `pageserver_last_record_lsn −
    gc_applied_cutoff_lsn` is the retained-history window. Frozen while the
-   queue grows ⇒ the cutoff is pinned.
+   queue grows ⇒ the cutoff is pinned. Expect `outcome=empty` ticks at the
+   4 min ceiling while it is: nothing below a pinned cutoff is due, so the
+   drain idles however much the branch churns, and reclaim resumes one tick
+   after the pin lifts.
 
 **Storage keeps growing / pages not reclaimed.**
-- Drain capped (`gc_drain_lag_bytes > 0`, `capped` ticks) → raise
-  `gc_drain_limit` or shorten `gc_period`; the drain has its own pool, so
-  a bigger budget won't starve ingest or reads.
+- Drain capped (`gc_drain_lag_bytes > 0`, `capped` ticks) → the loop is
+  already ticking at the 5 s floor; raise `gc_drain_limit` (or shorten
+  `gc_period`, which lowers the floor with it, down to a 1 s clamp). The drain
+  has its own pool, so a bigger budget won't starve ingest or reads.
 - `candidates_emitted` flat → `enable_gc` unset, or
   `gc_candidate_every_n_bases` too high (both read at timeline
   activation — a live change needs a PS restart).

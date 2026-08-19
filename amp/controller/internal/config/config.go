@@ -75,8 +75,10 @@ type BranchGCConfig struct {
 	//
 	// RowsPerDelete keeps a reap out of one large distributed transaction;
 	// RowsPerTick is what spreads a big branch over many ticks instead of flooding
-	// the tablets live branches are ingesting into. Together they are the whole of
-	// the pacing: rows, not branches, are what the cluster feels.
+	// the tablets live branches are ingesting into. Together with the tick cadence
+	// they are the whole of the pacing: rows, not branches, are what the cluster
+	// feels. The cadence is adaptive (see branchgc.nextInterval), so the sustained
+	// ceiling is RowsPerTick per Interval/6, not per Interval.
 	RowsPerDelete int
 	RowsPerTick   int
 }
@@ -221,7 +223,7 @@ func Load(args []string) (*Config, error) {
 	fs.DurationVar(&c.Task.ShutdownGrace, "task-shutdown-grace", envDuration("AMP_TASK_SHUTDOWN_GRACE", 10*time.Second), "max time to wait for in-flight tasks to finish on shutdown")
 
 	fs.BoolVar(&c.BranchGC.Enabled, "branch-gc", envBool("AMP_BRANCH_GC", true), "run the branch-drop reaper: reclaim a dropped branch's amp_storage rows once its retention window has passed")
-	fs.DurationVar(&c.BranchGC.Interval, "branch-gc-interval", envDuration("AMP_BRANCH_GC_INTERVAL", 30*time.Second), "branch-drop reaper tick cadence; an idle tick is one seek on branches_gc_due, so this is also what sets the delete rate (rows-per-tick / interval)")
+	fs.DurationVar(&c.BranchGC.Interval, "branch-gc-interval", envDuration("AMP_BRANCH_GC_INTERVAL", 30*time.Second), "branch-drop reaper base tick cadence; the loop adapts around it — interval/6 while a reap is capped by its row budget, doubling to 8x while nothing is due (see internal/branchgc)")
 	fs.DurationVar(&c.BranchGC.Retention, "branch-gc-retention", envDuration("AMP_BRANCH_GC_RETENTION", defaultGCRetention), "how long a dropped branch's data is kept before it is reclaimed; measured from the drop and stamped into reap_after by the reaper, so a change moves only deadlines not yet stamped")
 	fs.IntVar(&c.BranchGC.RowsPerDelete, "branch-gc-rows-per-delete", envInt("AMP_BRANCH_GC_ROWS_PER_DELETE", 5000), "at most this many rows are named by one DELETE, so no reap is one large distributed transaction")
 	fs.IntVar(&c.BranchGC.RowsPerTick, "branch-gc-rows-per-tick", envInt("AMP_BRANCH_GC_ROWS_PER_TICK", 20000), "pacing budget: at most this many rows are deleted by one reaper tick, across every branch and table it touches")

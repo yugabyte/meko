@@ -954,8 +954,10 @@ pub struct BranchConfigToml {
     /// older LSN. Page versions older than this become eligible for
     /// garbage collection.
     pub gc_horizon: u64,
-    /// Interval at which the background GC loop runs. `Duration::ZERO`
-    /// disables automatic GC.
+    /// Base interval of the background GC loop, which adapts around it:
+    /// period/6 while a tick is capped by `gc_drain_limit`, doubling to 8x
+    /// while nothing is due (`GcTickOutcome::next_sleep`).
+    /// `Duration::ZERO` disables automatic GC.
     #[serde(with = "humantime_serde")]
     pub gc_period: Duration,
     /// Time-based PITR retention. Page versions older than this are
@@ -1025,7 +1027,8 @@ pub struct BranchConfigToml {
 pub mod tenant_conf_defaults {
     pub const DEFAULT_GC_HORIZON: u64 = 64 * 1024 * 1024;
     // Short period so the drain proactively reclaims garbage as it
-    // becomes due; work per tick scales with garbage, not data size.
+    // becomes due; work per tick scales with garbage, not data size. The
+    // adaptive cadence takes 5 s / 4 min as its floor and ceiling from it.
     pub const DEFAULT_GC_PERIOD: &str = "30 s";
     pub const DEFAULT_GC_DRAIN_LIMIT: usize = 10_000;
     pub const DEFAULT_GC_QUEUE_FLOOR_RESET_INTERVAL: &str = "2 h";

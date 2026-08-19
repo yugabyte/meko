@@ -315,14 +315,59 @@ func New(pool *db.Pool, cfg config.BranchGCConfig, logger *slog.Logger) *Reaper 
 	}
 }
 
+// The adaptive cadence's bounds, as ratios of --branch-gc-interval (the base): a
+// tick that stopped on its row budget has a backlog left, so it retries at the
+// floor, and a run of ticks with nothing due doubles up to the ceiling. 5s and
+// 4min at the 30s default. The pageserver's candidate drain adapts the same way
+// (`GcTickOutcome::next_sleep`, compute/pageserver/src/page_server/gc_result.rs).
+//
+// Raising the delete rate on a backlog is the point of the floor: the row budget
+// is spent per floor rather than per base interval, so the sustained rate a reap
+// can reach is 6x what the base sets.
+const (
+	intervalFloorDivisor    = 6
+	intervalCeilingMultiple = 8
+	// Absolute floor: a sixth of a short base is a due-scan every few hundred ms.
+	intervalFloorMin = time.Second
+)
+
+// idle reports a tick that reclaimed nothing, which is what the cadence backs
+// off on. A capped tick always deleted rows (drainStep stops short only at the
+// budget), so BudgetSpent needs no term here.
+func (s tickStats) idle() bool {
+	return s.RowsDeleted == 0 && s.BranchesReclaimed == 0
+}
+
+// nextInterval is how long to wait after a tick that returned stats. lastIdle is
+// the wait the previous idle tick picked, zero once any tick did work — so an
+// idle run doubles from the base and one working tick resets to it.
+func nextInterval(base time.Duration, stats tickStats, lastIdle time.Duration) time.Duration {
+	switch {
+	case stats.BudgetSpent:
+		// min so a sub-second base can't outwait a caught-up tick.
+		return min(max(base/intervalFloorDivisor, intervalFloorMin), base)
+	case stats.idle():
+		if lastIdle == 0 {
+			lastIdle = base
+		}
+		return min(2*lastIdle, intervalCeilingMultiple*base)
+	default:
+		return base
+	}
+}
+
 // Run ticks until ctx is cancelled. It returns immediately when the reaper is
 // disabled, so the caller can start it unconditionally — the same contract as
 // gc.Sweeper.Run, which keeps the controller's two periodic reclaimers wired
 // alike.
 //
+// The wait between ticks is not fixed: see nextInterval.
+//
 // A tick that fails is logged and retried on the next one: every step is
 // idempotent, so there is nothing to unwind and no reason to stop the loop (the
-// usual failure is a database blip, which the next tick finds resolved).
+// usual failure is a database blip, which the next tick finds resolved). A
+// failure says nothing about the backlog, so it neither shortens the wait nor
+// counts towards the idle backoff.
 func (r *Reaper) Run(ctx context.Context) {
 	if !r.cfg.Enabled {
 		r.log.Info("branch-drop reaper disabled (--branch-gc=false); dropped branches keep their data")
@@ -331,21 +376,37 @@ func (r *Reaper) Run(ctx context.Context) {
 	r.log.Info("branch-drop reaper started",
 		"interval", r.cfg.Interval, "retention", r.cfg.Retention,
 		"rows_per_delete", r.cfg.RowsPerDelete, "rows_per_tick", r.cfg.RowsPerTick)
-	ticker := time.NewTicker(r.cfg.Interval)
-	defer ticker.Stop()
+	interval := r.cfg.Interval
+	var lastIdle time.Duration
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			r.log.Info("branch-drop reaper stopped")
 			return
-		case <-ticker.C:
-			if _, err := r.tick(ctx); err != nil {
+		case <-timer.C:
+			next := r.cfg.Interval
+			stats, err := r.tick(ctx)
+			if err != nil {
 				// A cancelled context is the shutdown path, not a failure.
 				if ctx.Err() != nil {
 					continue
 				}
 				r.log.Error("branch-drop reap tick failed", "error", err)
+			} else {
+				next = nextInterval(r.cfg.Interval, stats, lastIdle)
+				lastIdle = 0
+				if stats.idle() {
+					lastIdle = next
+				}
 			}
+			if next != interval {
+				r.log.Debug("branch-drop reaper cadence changed", "interval", next,
+					"rows_deleted", stats.RowsDeleted, "budget_spent", stats.BudgetSpent)
+				interval = next
+			}
+			timer.Reset(next)
 		}
 	}
 }
