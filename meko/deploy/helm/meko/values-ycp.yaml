@@ -68,6 +68,14 @@ apiServer:
   # disable it if you don't want a public api-server hostname.
   lb:
     enabled: true
+  # Standalone zonal NEG on the ClusterIP Service so an L7 URL map (the devcloud front
+  # door, infra/conf/cloudapp-ingress) can attach it as a backend — an L4 internal LB
+  # can't be one. Key "80" is the Service port; NEG endpoints resolve to the pod
+  # targetPort (25433). Harmless where no URL map consumes it. The name must match the
+  # front-door NEG data source (data.google_compute_network_endpoint_group.meko_ycp).
+  service:
+    annotations:
+      cloud.google.com/neg: '{"exposed_ports": {"80": {"name": "meko-api-server-neg"}}}'
   # No public hostname for the control plane — reach it via the internal LB.
   ingress:
     enabled: false
