@@ -44,14 +44,14 @@ func TestRegister_SeedsBootstrapDesiredState(t *testing.T) {
 	})
 
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 	// ReplaceDesired upserts-and-prunes: read existing keys (none on a fresh
 	// register), upsert the seeded meko-stack, prune nothing.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT kind, name FROM meko_system\.environment_desired_resources WHERE env_uuid = \$1`).
-		WithArgs("11111111-1111-1111-1111-111111111111").WillReturnRows(sqlmock.NewRows([]string{"kind", "name"}))
+		WithArgs(envUUID).WillReturnRows(sqlmock.NewRows([]string{"kind", "name"}))
 	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
-		WithArgs("11111111-1111-1111-1111-111111111111", "meko-stack", "meko", sqlmock.AnyArg()).
+		WithArgs(envUUID, "meko-stack", "meko", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -75,7 +75,7 @@ func TestRegister_SeedsTheWholeStackInOneResource(t *testing.T) {
 		Enabled: true, Release: testRelease,
 		ImagePullSecret: "meko-ecr", SecretRef: "meko-data-plane",
 	}}
-	res := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"}, KindMeko)
+	res := svc.initialDesired(RegisterEnvironmentRequest{Name: acctA}, KindMeko)
 	if len(res) != 1 || res[0].Kind != "meko-stack" {
 		t.Fatalf("seeded %+v, want a single meko-stack resource", res)
 	}
@@ -105,7 +105,7 @@ func TestRegister_SeedsTheWholeStackInOneResource(t *testing.T) {
 // runs. Seeding a placeholder would provision one nobody asked for.
 func TestRegister_SeedsNoDatapack(t *testing.T) {
 	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: true, Release: testRelease}}
-	for _, r := range svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"}, KindMeko) {
+	for _, r := range svc.initialDesired(RegisterEnvironmentRequest{Name: acctA}, KindMeko) {
 		if r.Kind == "datapack" {
 			t.Errorf("registration seeded a datapack (%s), which nobody asked for", r.Name)
 		}
@@ -118,7 +118,7 @@ func TestRegister_ExplicitDesiredWins(t *testing.T) {
 	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: true, Release: testRelease}}
 
 	empty := []models.DesiredResource{}
-	got := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme", Desired: &empty}, KindMeko)
+	got := svc.initialDesired(RegisterEnvironmentRequest{Name: acctA, Desired: &empty}, KindMeko)
 	if len(got) != 0 {
 		t.Errorf("explicit empty desired state was overridden with %+v", got)
 	}
@@ -126,7 +126,7 @@ func TestRegister_ExplicitDesiredWins(t *testing.T) {
 	custom := []models.DesiredResource{
 		{Kind: "database", Name: "byo", Spec: json.RawMessage(`{"mode":"external","host":"db"}`)},
 	}
-	got = svc.initialDesired(RegisterEnvironmentRequest{Name: "acme", Desired: &custom}, KindMeko)
+	got = svc.initialDesired(RegisterEnvironmentRequest{Name: acctA, Desired: &custom}, KindMeko)
 	if len(got) != 1 || got[0].Name != "byo" {
 		t.Errorf("explicit desired state not used: %+v", got)
 	}
@@ -136,7 +136,7 @@ func TestRegister_ExplicitDesiredWins(t *testing.T) {
 // operators want to declare every environment by hand.
 func TestRegister_BootstrapDisabled(t *testing.T) {
 	svc := &EnvironmentService{bootstrap: BootstrapDefaults{Enabled: false, Release: testRelease}}
-	if got := svc.initialDesired(RegisterEnvironmentRequest{Name: "acme"}, KindMeko); got != nil {
+	if got := svc.initialDesired(RegisterEnvironmentRequest{Name: acctA}, KindMeko); got != nil {
 		t.Errorf("seeded %+v with bootstrap defaults disabled", got)
 	}
 }
@@ -154,7 +154,7 @@ func TestRegister_SurvivesDesiredStateWriteFailure(t *testing.T) {
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{Enabled: true})
 
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 	mock.ExpectBegin().WillReturnError(errTest)
 
 	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1"}, "")

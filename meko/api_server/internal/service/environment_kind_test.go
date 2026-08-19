@@ -25,7 +25,7 @@ var envRowCols = []string{
 // defaults for everything the test does not care about.
 func envRow(id, kind string) *sqlmock.Rows {
 	return sqlmock.NewRows(envRowCols).AddRow(
-		"11111111-1111-1111-1111-111111111111", id, "acme", "cloud", "us-east-1", "PENDING", "", 0, "",
+		envUUID, id, acctA, "cloud", "us-east-1", "PENDING", "", 0, "",
 		0, 400, "", nil, "", "", "[]", false, "", nil, "", time.Now(), kind, "[]",
 	)
 }
@@ -45,7 +45,7 @@ func TestRegister_AmpKindQualifiesIDAndSeedsNothing(t *testing.T) {
 
 	// Only the environment upsert — no desired-state write for amp.
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 
 	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Kind: "amp"}, "")
 	if err != nil {
@@ -76,7 +76,7 @@ func TestRegister_DefaultsToMekoKind(t *testing.T) {
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{}) // disabled: no desired write
 
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 
 	e, _, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod"}, "")
 	if err != nil {
@@ -111,9 +111,9 @@ func TestEnrollWithToken_RejectsKindMismatch(t *testing.T) {
 	const plain = "ycp_enr_deadbeef"
 	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments WHERE enroll_token_hash = \$1`).
 		WithArgs(hashToken(plain)).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
-		WithArgs("11111111-1111-1111-1111-111111111111").
+		WithArgs(envUUID).
 		WillReturnRows(envRow("acme-prod", KindMeko))
 
 	_, _, ok, err := svc.EnrollWithToken(plain, "cloud", KindAmp, ClusterFacts{})
@@ -151,7 +151,7 @@ func TestApplyStatus_StoresReportedResources(t *testing.T) {
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{})
 
 	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
-		WithArgs("11111111-1111-1111-1111-111111111111").
+		WithArgs(envUUID).
 		WillReturnRows(envRow("amp-acme-prod", KindAmp))
 
 	// $1..$21 are anything; $22 (resources) must carry the reported pool.
@@ -163,7 +163,7 @@ func TestApplyStatus_StoresReportedResources(t *testing.T) {
 		WithArgs(append(anyArgs, argContains("storage_pool"))...).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	ok, err := svc.ApplyStatus("11111111-1111-1111-1111-111111111111", StatusReport{
+	ok, err := svc.ApplyStatus(envUUID, StatusReport{
 		EnvironmentState: "READY",
 		Resources: []ResourceStatus{
 			{Kind: "storage_pool", ID: "pool-1", Name: "default"},

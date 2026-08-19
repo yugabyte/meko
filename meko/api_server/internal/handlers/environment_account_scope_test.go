@@ -16,6 +16,14 @@ import (
 	"meko/api_server/internal/service"
 )
 
+// Test accounts and environment key. Named because account ids are uuids: inline
+// literals push these expectations past the 120-column limit.
+const (
+	acctA   = "a0000000-0000-0000-0000-000000000001"
+	acctB   = "a0000000-0000-0000-0000-000000000002"
+	envUUID = "11111111-1111-1111-1111-111111111111"
+)
+
 var scopeRowCols = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
@@ -25,7 +33,7 @@ var scopeRowCols = []string{
 
 func scopeRow(id, accountID string) *sqlmock.Rows {
 	return sqlmock.NewRows(scopeRowCols).AddRow(
-		"11111111-1111-1111-1111-111111111111", id, accountID, "cloud", "us-east-1", "READY", "", 0, "",
+		envUUID, id, accountID, "cloud", "us-east-1", "READY", "", 0, "",
 		0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "meko", "[]",
 	)
 }
@@ -71,10 +79,10 @@ func TestList_FiltersByAccountHeader(t *testing.T) {
 	defer done()
 
 	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 ORDER BY live DESC`).
-		WithArgs("acct-1").
-		WillReturnRows(scopeRow("acme-prod", "acct-1"))
+		WithArgs(acctA).
+		WillReturnRows(scopeRow("acme-prod", acctA))
 
-	rec := fleetRequest(t, h.List, http.MethodGet, "/api/v1/environments", "acct-1", "", "")
+	rec := fleetRequest(t, h.List, http.MethodGet, "/api/v1/environments", acctA, "", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
@@ -91,7 +99,7 @@ func TestList_UnscopedWithoutAccountHeader(t *testing.T) {
 
 	// ORDER BY must follow the table directly — no WHERE clause.
 	mock.ExpectQuery(`FROM meko_system\.environments ORDER BY live DESC`).
-		WillReturnRows(scopeRow("acme-prod", "acct-1"))
+		WillReturnRows(scopeRow("acme-prod", acctA))
 
 	rec := fleetRequest(t, h.List, http.MethodGet, "/api/v1/environments", "", "", "")
 	if rec.Code != http.StatusOK {
@@ -111,10 +119,10 @@ func TestGet_OtherAccountsEnvironmentIs404(t *testing.T) {
 	// Scoped in SQL: acct-2's query simply matches nothing, so acct-1's row is
 	// never read, let alone compared.
 	mock.ExpectQuery(`WHERE account_id = \$1 AND id = \$2`).
-		WithArgs("acct-2", "acme-prod").
+		WithArgs(acctB, "acme-prod").
 		WillReturnRows(sqlmock.NewRows(scopeRowCols))
 
-	rec := fleetRequest(t, h.Get, http.MethodGet, "/api/v1/environments/acme-prod", "acct-2", "", "acme-prod")
+	rec := fleetRequest(t, h.Get, http.MethodGet, "/api/v1/environments/acme-prod", acctB, "", "acme-prod")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
 	}
@@ -127,10 +135,10 @@ func TestRegister_StampsAccountFromHeader(t *testing.T) {
 	defer done()
 
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 
 	rec := fleetRequest(t, h.Register, http.MethodPost, "/api/v1/environments",
-		"acct-1", `{"name":"acme-prod","account_id":"spoofed"}`, "")
+		acctA, `{"name":"acme-prod","account_id":"`+acctB+`"}`, "")
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
 	}
@@ -144,7 +152,7 @@ func TestRegister_StampsAccountFromHeader(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Data.Environment.AccountID != "acct-1" {
+	if body.Data.Environment.AccountID != acctA {
 		t.Errorf("account = %q, want acct-1 from the header", body.Data.Environment.AccountID)
 	}
 }

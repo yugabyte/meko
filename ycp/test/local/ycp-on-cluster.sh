@@ -356,7 +356,7 @@ fi
 
 log "registering environment $ENV_NAME"
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
-  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"local\",\"placement\":\"cloud\",\"region\":\"$ENVPRESET\"}")" ||
+  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"$ENVPRESET\"}")" ||
   die "registration failed"
 TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
 ENV_ID="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["environment"]["id"])')"

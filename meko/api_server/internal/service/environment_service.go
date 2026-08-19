@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/repository"
 )
@@ -259,6 +261,14 @@ func (s *EnvironmentService) Register(
 	accountID := req.AccountID
 	if scope != "" {
 		accountID = string(scope)
+	}
+	// account_id is a UUID column, so a malformed value would otherwise surface as a
+	// database error on insert. Rejected here instead, and empty stays legal: an
+	// unaccounted environment is stored under a sentinel.
+	if accountID != "" {
+		if _, err := uuid.Parse(accountID); err != nil {
+			return nil, "", fmt.Errorf("%w: account_id %q is not a uuid", ErrValidation, accountID)
+		}
 	}
 	name := strings.TrimSpace(req.Name)
 	if len(name) < 3 || len(name) > 60 {

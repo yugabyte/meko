@@ -164,7 +164,7 @@ fi
 
 log "registering $ENV_NAME with nothing but a name"
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
-  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"local\",\"placement\":\"cloud\",\"region\":\"local\"}")" ||
+  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"22222222-2222-2222-2222-222222222222\",\"placement\":\"cloud\",\"region\":\"local\"}")" ||
   die "POST /api/v1/environments failed"
 TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
 [ -n "$TOKEN" ] || die "no enrollment_token in the register response: ${reg:0:200}"

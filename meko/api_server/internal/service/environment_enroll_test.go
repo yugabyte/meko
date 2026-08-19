@@ -33,17 +33,17 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments WHERE enroll_token_hash = \$1`).
 		WithArgs(tokenHash).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 
 	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
-		WithArgs("11111111-1111-1111-1111-111111111111").
+		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 			"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 			"cert_fingerprint", "components", "live", "enroll_token_hash", "enroll_token_expires_at",
 			"status_token_hash", "created_at", "kind", "resources",
 		}).AddRow(
-			"11111111-1111-1111-1111-111111111111", "acme-prod", "acme", "cloud", "us-east-2", "PENDING", "", 0, "",
+			envUUID, "acme-prod", acctA, "cloud", "us-east-2", "PENDING", "", 0, "",
 			// created_at is a non-pointer time.Time, so it cannot be NULL here.
 			0, 400, "", nil, "", "", "[]", false, tokenHash, expires, "", time.Now(), "meko", "[]",
 		))
@@ -54,8 +54,8 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 	// column the positional assertions below are checking.
 	mock.ExpectExec(`UPDATE meko_system\.environments SET`).
 		WithArgs(
-			"11111111-1111-1111-1111-111111111111", // $1  uuid — the key the update is applied by
-			sqlmock.AnyArg(), sqlmock.AnyArg(),     // $2 placement, $3 region
+			envUUID,                            // $1  uuid — the key the update is applied by
+			sqlmock.AnyArg(), sqlmock.AnyArg(), // $2 placement, $3 region
 			"ATTESTING", // $4  state
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),

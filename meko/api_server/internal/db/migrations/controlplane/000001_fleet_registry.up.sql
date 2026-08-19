@@ -14,12 +14,24 @@
  *
  * The dropped YB clauses are not load-bearing: on YB the first primary-key column
  * hashes by default, and SPLIT INTO only presets tablet count.
+ *
+ * id is the operator-facing handle -- slug(name), sent by the agent as ?envId= and baked
+ * into the install hint's --set agent.envName=. It is unique per account, not
+ * fleet-wide: two accounts may each hold an environment called "prod".
  */
 CREATE SCHEMA IF NOT EXISTS meko_system;
 
 CREATE TABLE IF NOT EXISTS meko_system.environments (
-    id                 TEXT NOT NULL,
-    account_id         TEXT,
+    uuid               UUID NOT NULL DEFAULT gen_random_uuid(),
+    id                 TEXT NOT NULL,          -- slug(name); unique per account
+    -- The YBM account that owns this environment. Defaults to an all-zeros sentinel so
+    -- YCP can be stood up and exercised standalone -- the e2e, the local scripts, the
+    -- console -- where there is no YBM and so no account to attribute an environment to.
+    --
+    -- A sentinel rather than NULL because NULLs compare as distinct in a unique
+    -- constraint: nullable, and environments_account_id_uniq below would let any number
+    -- of unattributed rows share a name.
+    account_id         UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
     placement          TEXT NOT NULL DEFAULT 'cloud',    -- cloud | onprem
     region             TEXT,
     state              TEXT NOT NULL DEFAULT 'PENDING',
@@ -40,16 +52,23 @@ CREATE TABLE IF NOT EXISTS meko_system.environments (
     enroll_token_expires_at  TIMESTAMPTZ,                -- bootstrap token TTL
     status_token_hash        TEXT NOT NULL DEFAULT '',   -- SHA-256 hex
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (id)
+    PRIMARY KEY (uuid)
 );
+
+-- What Register upserts on: a name another account holds is a separate row, and
+-- re-registering your own name updates it.
+CREATE UNIQUE INDEX IF NOT EXISTS environments_account_id_uniq
+    ON meko_system.environments (account_id, id);
 
 CREATE INDEX IF NOT EXISTS environments_enroll_token_hash_idx
     ON meko_system.environments (enroll_token_hash);
 
+-- Keyed by the parent's uuid rather than its id: id is only unique per account, so
+-- keying on it would let two accounts' "prod" environments share one resource set.
 CREATE TABLE IF NOT EXISTS meko_system.environment_desired_resources (
-    env_id  TEXT NOT NULL,
-    kind    TEXT NOT NULL,
-    name    TEXT NOT NULL,
-    spec    JSONB NOT NULL DEFAULT '{}'::jsonb,
-    PRIMARY KEY (env_id, kind, name)
+    env_uuid UUID NOT NULL REFERENCES meko_system.environments (uuid) ON DELETE CASCADE,
+    kind     TEXT NOT NULL,
+    name     TEXT NOT NULL,
+    spec     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    PRIMARY KEY (env_uuid, kind, name)
 );

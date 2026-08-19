@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 )
 
@@ -63,6 +64,36 @@ func RequireInternalSecret(secret string) echo.MiddlewareFunc {
 // RequireInternalSecret. Intended for the trusted meko_admin console.
 func RequireAdminSecret(secret string) echo.MiddlewareFunc {
 	return requireSecret(AdminSecretHeader, secret)
+}
+
+// ValidateAccountID returns middleware rejecting a malformed AccountIDHeader. It is
+// wired unconditionally, unlike RequireAccountID: account_id is a UUID column, so a
+// garbled value would otherwise reach the query and come back as a 500.
+//
+// A malformed account is refused rather than ignored. Treating it as absent would
+// silently widen the call to the whole fleet on a control plane that does not require
+// the header — the one failure mode worth being loud about.
+//
+// An absent header is fine here; whether that is allowed is RequireAccountID's business.
+func ValidateAccountID() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			raw := strings.TrimSpace(c.Request().Header.Get(AccountIDHeader))
+			if raw == "" {
+				return next(c)
+			}
+			if _, err := uuid.Parse(raw); err != nil {
+				return c.JSON(http.StatusBadRequest, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "VALIDATION_ERROR",
+						"message": AccountIDHeader + " must be a uuid",
+					},
+				})
+			}
+			return next(c)
+		}
+	}
 }
 
 // RequireAccountID returns middleware rejecting any request that does not name an

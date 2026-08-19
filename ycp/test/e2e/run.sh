@@ -343,7 +343,7 @@ echo "    unauthenticated -> 401, authenticated -> 200"
 #     the top of this file.
 log "checking a plain registration seeds the whole Meko stack"
 api POST /api/v1/environments -H 'content-type: application/json' \
-  -d '{"name":"seed-check","account_id":"e2e","placement":"cloud","region":"local"}' >/dev/null ||
+  -d '{"name":"seed-check","account_id":"11111111-1111-1111-1111-111111111111","placement":"cloud","region":"local"}' >/dev/null ||
   die "registering seed-check failed"
 seed="$(api GET /api/v1/environments/seed-check/desired)"
 python3 - "$seed" <<'PY' || die "a plain registration did not seed a full meko-stack"
@@ -370,7 +370,7 @@ api DELETE /api/v1/environments/seed-check >/dev/null 2>&1 || true
 #     That still exercises what matters here: enrol, reconcile, report, GC.
 log "registering environment $ENV_NAME"
 reg="$(api POST /api/v1/environments -H 'content-type: application/json' \
-  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"e2e\",\"placement\":\"cloud\",\"region\":\"local\",
+  -d "{\"name\":\"$ENV_NAME\",\"account_id\":\"11111111-1111-1111-1111-111111111111\",\"placement\":\"cloud\",\"region\":\"local\",
        \"desired\":[{\"kind\":\"database\",\"name\":\"meko\",\"spec\":{}}]}")"
 TOKEN="$(printf '%s' "$reg" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["enrollment_token"])')"
 [ -n "$TOKEN" ] || die "no enrollment_token in the register response: ${reg:0:200}"

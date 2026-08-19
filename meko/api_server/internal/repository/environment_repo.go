@@ -25,6 +25,28 @@ func NewEnvironmentRepo(db *sql.DB) *EnvironmentRepo {
 	return &EnvironmentRepo{db: db}
 }
 
+// unaccountedAccount is what account_id holds for an environment that belongs to no
+// account. A sentinel rather than NULL, because NULLs compare as distinct inside
+// environments_account_id_uniq and would let unaccounted rows share a name.
+//
+// It is confined to this file: everything above the repository uses "" for
+// unaccounted, and these two helpers translate at the boundary.
+const unaccountedAccount = "00000000-0000-0000-0000-000000000000"
+
+func accountForStore(accountID string) string {
+	if accountID == "" {
+		return unaccountedAccount
+	}
+	return accountID
+}
+
+func accountFromStore(accountID string) string {
+	if accountID == unaccountedAccount {
+		return ""
+	}
+	return accountID
+}
+
 // ErrAmbiguousID is returned when an unscoped lookup by id matches more than one
 // account's environment. Impossible for rows predating the per-account unique
 // index, since ids were globally unique then.
@@ -50,6 +72,7 @@ func scanEnvironment(row interface{ Scan(...any) error }) (*models.Environment, 
 		t := enrollExpires.Time
 		e.EnrollTokenExpiresAt = &t
 	}
+	e.AccountID = accountFromStore(e.AccountID)
 	e.Region = region.String
 	e.K8sVersion = k8sVersion.String
 	e.Provider = provider.String
@@ -93,7 +116,7 @@ func (r *EnvironmentRepo) Get(accountID, id string) (*models.Environment, error)
 	if accountID != "" {
 		return scanOne(r.db.QueryRow(
 			`SELECT `+envColumns+` FROM meko_system.environments WHERE account_id = $1 AND id = $2`,
-			accountID, id))
+			accountForStore(accountID), id))
 	}
 	// LIMIT 2 distinguishes "one" from "more than one" without reading the rest.
 	rows, err := r.db.Query(`SELECT `+envColumns+` FROM meko_system.environments WHERE id = $1 LIMIT 2`, id)
@@ -138,7 +161,7 @@ func (r *EnvironmentRepo) List(accountID string) ([]*models.Environment, error) 
 	var args []any
 	if accountID != "" {
 		query += ` WHERE account_id = $1`
-		args = append(args, accountID)
+		args = append(args, accountForStore(accountID))
 	}
 	query += ` ORDER BY live DESC, id ASC`
 	rows, err := r.db.Query(query, args...)
@@ -191,7 +214,7 @@ func (r *EnvironmentRepo) Insert(e *models.Environment) error {
 			enroll_token_hash=$17, enroll_token_expires_at=$18, status_token_hash=$19,
 			kind=$21, resources=$22
 		RETURNING uuid`,
-		e.ID, e.AccountID, e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
+		e.ID, accountForStore(e.AccountID), e.Placement, nullStr(e.Region), e.State, nullStr(e.K8sVersion), e.NodeCount,
 		nullStr(e.Provider), e.Datapacks, e.MaxDatapacks, nullStr(e.AgentVersion), e.LastHeartbeatAt,
 		nullStr(e.MCPBaseURL), nullStr(e.CertFingerprint), []byte(components), e.Live,
 		e.EnrollTokenHash, e.EnrollTokenExpiresAt, e.StatusTokenHash, e.CreatedAt, kind,

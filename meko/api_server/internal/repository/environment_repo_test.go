@@ -20,19 +20,19 @@ func TestEnvironmentRepo_EnrollLookup(t *testing.T) {
 	// found
 	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments\s+WHERE enroll_token_hash = \$1`).
 		WithArgs("abc123").
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
-	envUUID, found, err := repo.EnrollLookup("abc123")
-	if err != nil || !found || envUUID != "11111111-1111-1111-1111-111111111111" {
-		t.Fatalf("EnrollLookup = (%q,%v,%v), want (11111111-1111-1111-1111-111111111111,true,nil)", envUUID, found, err)
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
+	gotUUID, found, err := repo.EnrollLookup("abc123")
+	if err != nil || !found || gotUUID != envUUID {
+		t.Fatalf("EnrollLookup = (%q,%v,%v), want (%s,true,nil)", gotUUID, found, err, envUUID)
 	}
 
 	// not found → (\"\", false, nil)
 	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments WHERE enroll_token_hash = \$1`).
 		WithArgs("nope").
 		WillReturnError(sql.ErrNoRows)
-	envUUID, found, err = repo.EnrollLookup("nope")
-	if err != nil || found || envUUID != "" {
-		t.Fatalf("EnrollLookup(miss) = (%q,%v,%v), want (\"\",false,nil)", envUUID, found, err)
+	gotUUID, found, err = repo.EnrollLookup("nope")
+	if err != nil || found || gotUUID != "" {
+		t.Fatalf("EnrollLookup(miss) = (%q,%v,%v), want (\"\",false,nil)", gotUUID, found, err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -77,12 +77,12 @@ func TestEnvironmentRepo_ListDesired(t *testing.T) {
 
 	spec := `{"image":"registry/meko-mcp-server:2.1.0","image_pull_secret":"meko-ecr"}`
 	mock.ExpectQuery(`SELECT kind, name, COALESCE\(spec::text, '\{\}'\), generation FROM meko_system\.environment_desired_resources`).
-		WithArgs("11111111-1111-1111-1111-111111111111").
+		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "name", "spec", "generation"}).
 			AddRow("database", "meko", "{}", int64(0)).
 			AddRow("mcp-server", "mcp", spec, int64(3)))
 
-	got, err := repo.ListDesired("11111111-1111-1111-1111-111111111111")
+	got, err := repo.ListDesired(envUUID)
 	if err != nil {
 		t.Fatalf("ListDesired err = %v", err)
 	}
@@ -118,20 +118,20 @@ func TestEnvironmentRepo_ReplaceDesired(t *testing.T) {
 	// no longer desired. Here "stale" is withdrawn and "alpha" is kept.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT kind, name FROM meko_system\.environment_desired_resources WHERE env_uuid = \$1`).
-		WithArgs("11111111-1111-1111-1111-111111111111").
+		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows([]string{"kind", "name"}).
 			AddRow("datapack", "alpha").
 			AddRow("datapack", "stale"))
 	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
-		WithArgs("11111111-1111-1111-1111-111111111111", "datapack", "alpha", sqlmock.AnyArg()).
+		WithArgs(envUUID, "datapack", "alpha", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM meko_system\.environment_desired_resources\s+`+
 		`WHERE env_uuid=\$1 AND kind=\$2 AND name=\$3`).
-		WithArgs("11111111-1111-1111-1111-111111111111", "datapack", "stale").
+		WithArgs(envUUID, "datapack", "stale").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	err = repo.ReplaceDesired("11111111-1111-1111-1111-111111111111",
+	err = repo.ReplaceDesired(envUUID,
 		[]models.DesiredResource{{Kind: "datapack", Name: "alpha"}})
 	if err != nil {
 		t.Fatalf("ReplaceDesired err = %v", err)

@@ -32,13 +32,13 @@ func TestEnvironmentRepo_Get_ScansKindAndResources(t *testing.T) {
 
 	inventory := `[{"kind":"storage_pool","id":"pool-1","name":"default"}]`
 	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
-		WithArgs("11111111-1111-1111-1111-111111111111").
+		WithArgs(envUUID).
 		WillReturnRows(sqlmock.NewRows(envRowColsK).AddRow(
-			"11111111-1111-1111-1111-111111111111", "amp-acme", "acme", "cloud", "us-east-1", "READY", "", 0, "",
+			envUUID, "amp-acme", acctA, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "amp", inventory,
 		))
 
-	e, err := repo.GetByUUID("11111111-1111-1111-1111-111111111111")
+	e, err := repo.GetByUUID(envUUID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 	args := append(anyArgs, "amp", argContainsK("storage_pool")) // $21 kind, $22 resources
 	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WithArgs(args...).
-		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow(envUUID))
 
 	err = repo.Insert(&models.Environment{
 		ID: "amp-acme", Kind: "amp", Placement: "cloud", State: "READY",

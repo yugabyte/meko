@@ -389,7 +389,11 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		}
 		// One middleware for the whole group rather than a check per handler, so a
 		// route added later cannot forget it.
-		fleetAuth := []echo.MiddlewareFunc{auth.RequireAdminSecret(cfg.AdminAPIKey)}
+		fleetAuth := []echo.MiddlewareFunc{
+			auth.RequireAdminSecret(cfg.AdminAPIKey),
+			// Always on: a malformed account is a 400 whether or not one is required.
+			auth.ValidateAccountID(),
+		}
 		if cfg.RequireAccountHeader {
 			fleetAuth = append(fleetAuth, auth.RequireAccountID())
 		}

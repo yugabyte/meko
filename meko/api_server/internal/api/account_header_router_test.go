@@ -13,6 +13,14 @@ import (
 	"meko/api_server/internal/api"
 )
 
+// Test accounts and environment key. Named because account ids are uuids: inline
+// literals push these expectations past the 120-column limit.
+const (
+	acctA   = "a0000000-0000-0000-0000-000000000001"
+	acctB   = "a0000000-0000-0000-0000-000000000002"
+	envUUID = "11111111-1111-1111-1111-111111111111"
+)
+
 const testAdminSecret = "admin-secret"
 
 var headerRowCols = []string{
@@ -99,13 +107,13 @@ func TestFleetRoutes_RequireAccountHeader_ServesScopedCall(t *testing.T) {
 	srv, mock := fleetServer(t, true)
 
 	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 ORDER BY live DESC`).
-		WithArgs("acct-1").
+		WithArgs(acctA).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
-			"11111111-1111-1111-1111-111111111111", "acme-prod", "acct-1", "cloud", "us-east-1", "READY", "", 0, "",
+			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "meko", "[]",
 		))
 
-	resp := fleetGet(t, srv, "/api/v1/environments", "acct-1")
+	resp := fleetGet(t, srv, "/api/v1/environments", acctA)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -122,7 +130,7 @@ func TestFleetRoutes_AccountHeaderOptionalByDefault(t *testing.T) {
 
 	mock.ExpectQuery(`FROM meko_system\.environments ORDER BY live DESC`).
 		WillReturnRows(sqlmock.NewRows(headerRowCols).AddRow(
-			"11111111-1111-1111-1111-111111111111", "acme-prod", "acct-1", "cloud", "us-east-1", "READY", "", 0, "",
+			envUUID, "acme-prod", acctA, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "meko", "[]",
 		))
 
@@ -160,5 +168,23 @@ func TestAgentRoutes_UnaffectedByAccountHeaderRequirement(t *testing.T) {
 	}
 	if strings.Contains(body.Error.Message, "X-Meko-Account-ID") {
 		t.Errorf("agent enroll was gated on the account header: %q", body.Error.Message)
+	}
+}
+
+// account_id is a UUID column, so a garbled header must be refused at the edge rather
+// than reaching the query as a 500. Refused, not ignored: treating it as absent would
+// serve the whole fleet on a control plane that does not require the header.
+func TestFleetRoutes_MalformedAccountHeaderIs400(t *testing.T) {
+	for _, requireHeader := range []bool{false, true} {
+		srv, _ := fleetServer(t, requireHeader)
+		resp := fleetGet(t, srv, "/api/v1/environments", "acme-corp")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("require=%v: malformed account = %d, want 400", requireHeader, resp.StatusCode)
+			continue
+		}
+		if code := errorCode(t, resp); code != "VALIDATION_ERROR" {
+			t.Errorf("require=%v: error code = %q, want VALIDATION_ERROR", requireHeader, code)
+		}
 	}
 }

@@ -10,6 +10,14 @@ import (
 	"meko/api_server/internal/models"
 )
 
+// Test accounts and environment key. Named because account ids are uuids: inline
+// literals push these expectations past the 120-column limit.
+const (
+	acctA   = "a0000000-0000-0000-0000-000000000001"
+	acctB   = "a0000000-0000-0000-0000-000000000002"
+	envUUID = "11111111-1111-1111-1111-111111111111"
+)
+
 // listRowCols is the column set scanEnvironment reads, in order.
 var listRowCols = []string{
 	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
@@ -20,11 +28,11 @@ var listRowCols = []string{
 
 // listAccount is the account every row here belongs to; the tests that need a
 // second account add its row inline.
-const listAccount = "acct-1"
+const listAccount = acctA
 
 func listRow(id string) *sqlmock.Rows {
 	return sqlmock.NewRows(listRowCols).AddRow(
-		"11111111-1111-1111-1111-111111111111", id, listAccount, "cloud", "us-east-1", "READY", "", 0, "",
+		envUUID, id, listAccount, "cloud", "us-east-1", "READY", "", 0, "",
 		0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "meko", "[]",
 	)
 }
@@ -40,14 +48,14 @@ func TestEnvironmentRepo_ListFiltersByAccount(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 ORDER BY live DESC`).
-		WithArgs("acct-1").
+		WithArgs(acctA).
 		WillReturnRows(listRow("acme-prod"))
 
-	envs, err := repo.List("acct-1")
+	envs, err := repo.List(acctA)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(envs) != 1 || envs[0].AccountID != "acct-1" {
+	if len(envs) != 1 || envs[0].AccountID != acctA {
 		t.Fatalf("List(acct-1) = %+v, want the one acct-1 environment", envs)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -69,7 +77,7 @@ func TestEnvironmentRepo_ListUnscopedHasNoFilter(t *testing.T) {
 	// WHERE clause is emitted.
 	mock.ExpectQuery(`FROM meko_system\.environments ORDER BY live DESC`).
 		WillReturnRows(listRow("acme-prod").AddRow(
-			"22222222-2222-2222-2222-222222222222", "other-prod", "acct-2", "cloud", "us-east-1", "READY", "", 0, "",
+			"22222222-2222-2222-2222-222222222222", "other-prod", acctB, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "meko", "[]",
 		))
 
@@ -97,10 +105,10 @@ func TestEnvironmentRepo_GetScopedHitsTheUniqueIndex(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	mock.ExpectQuery(`FROM meko_system\.environments WHERE account_id = \$1 AND id = \$2`).
-		WithArgs("acct-1", "acme-prod").
+		WithArgs(acctA, "acme-prod").
 		WillReturnRows(listRow("acme-prod"))
 
-	e, err := repo.Get("acct-1", "acme-prod")
+	e, err := repo.Get(acctA, "acme-prod")
 	if err != nil || e == nil {
 		t.Fatalf("Get = (%v, %v), want the environment", e, err)
 	}
@@ -123,7 +131,7 @@ func TestEnvironmentRepo_GetUnscopedRefusesAmbiguousID(t *testing.T) {
 	mock.ExpectQuery(`FROM meko_system\.environments WHERE id = \$1 LIMIT 2`).
 		WithArgs("prod").
 		WillReturnRows(listRow("prod").AddRow(
-			"33333333-3333-3333-3333-333333333333", "prod", "acct-2", "cloud", "us-east-1", "READY", "", 0, "",
+			"33333333-3333-3333-3333-333333333333", "prod", acctB, "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "meko", "[]",
 		))
 
@@ -166,7 +174,7 @@ func TestEnvironmentRepo_InsertConflictsOnAccountAndIDAndReturnsUUID(t *testing.
 	mock.ExpectQuery(`ON CONFLICT \(account_id, id\) DO UPDATE`).
 		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("44444444-4444-4444-4444-444444444444"))
 
-	e := &models.Environment{ID: "acme-prod", AccountID: "acct-2", State: "PENDING"}
+	e := &models.Environment{ID: "acme-prod", AccountID: acctB, State: "PENDING"}
 	if err := repo.Insert(e); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -196,12 +204,41 @@ func TestEnvironmentRepo_UpdateKeysOnUUID(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = repo.Update(&models.Environment{
-		UUID: "44444444-4444-4444-4444-444444444444", ID: "acme-prod", AccountID: "acct-1", State: "SUSPENDED",
+		UUID: "44444444-4444-4444-4444-444444444444", ID: "acme-prod", AccountID: acctA, State: "SUSPENDED",
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// An unaccounted environment is stored under the sentinel, not NULL: NULLs compare
+// as distinct inside environments_account_id_uniq, so a nullable column would let
+// unlimited unaccounted rows share a name. The sentinel is confined to storage —
+// callers above the repository see "".
+func TestEnvironmentRepo_UnaccountedUsesTheSentinel(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	repo := NewEnvironmentRepo(db)
+
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WithArgs("acme-prod", "00000000-0000-0000-0000-000000000000", sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("44444444-4444-4444-4444-444444444444"))
+
+	e := &models.Environment{ID: "acme-prod", AccountID: "", State: "PENDING"}
+	if err := repo.Insert(e); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unaccounted insert did not use the sentinel: %v", err)
 	}
 }
