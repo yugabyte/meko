@@ -1031,7 +1031,7 @@ const META_ROWS_PER_INSERT: usize = 2000;
 
 /// Placement buckets in `amp_storage.pending_gc`'s hash key; must match
 /// the drain's per-bucket fan-out.
-pub const GC_BUCKETS: i32 = 10;
+pub const GC_BUCKETS: i32 = 3;
 
 /// Concurrent GC action DELETEs per drain tick (scaled); the dedicated
 /// `pageserver:gc` pool is sized to this.
@@ -1045,14 +1045,14 @@ pub(crate) fn key_to_bytes(key: &Key) -> Vec<u8> {
     b
 }
 
-/// Placement bucket for a candidate. FROZEN: must stay a fixed,
-/// deterministic function of the encoded `key` bytes (golden-value test)
-/// — changing it strands existing candidates in their old buckets and
-/// breaks crash-replay dedup. Deliberately not `std::hash` (unstable
-/// across Rust versions) and not a YB generated column (the yb-client
-/// write path bypasses the YSQL layer).
-pub fn gc_bucket_id(key: &Key) -> i32 {
-    // FNV-1a over the key's 18 encoded bytes.
+/// FNV-1a over the key's 18 encoded bytes. FROZEN: must stay a fixed,
+/// deterministic function of them (golden-value test) — changing it strands
+/// existing candidates in their old buckets and breaks crash-replay dedup.
+/// Deliberately not `std::hash` (unstable across Rust versions) and not a YB
+/// generated column (the yb-client write path bypasses the YSQL layer). Kept
+/// separate from the modulus so the test can pin it independently of
+/// [`GC_BUCKETS`], which is not frozen while no deployment holds candidates.
+fn gc_key_hash(key: &Key) -> u64 {
     let mut kb = [0u8; KEY_SIZE];
     key.write_to_byte_slice(&mut kb);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -1060,7 +1060,12 @@ pub fn gc_bucket_id(key: &Key) -> i32 {
         h ^= b as u64;
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    (h % GC_BUCKETS as u64) as i32
+    h
+}
+
+/// Placement bucket for a candidate.
+pub fn gc_bucket_id(key: &Key) -> i32 {
+    (gc_key_hash(key) % GC_BUCKETS as u64) as i32
 }
 
 /// The `amp_storage.pages` placement bucket, shared with the operator tools
@@ -7183,12 +7188,16 @@ mod tests {
                 blk,
             )
         };
-        // Golden values (change ⇒ you broke the frozen hash — intended?).
-        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 1)), 8);
-        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 2)), 7);
-        assert_eq!(gc_bucket_id(&blk(1663, 5, 16401, 0)), 2);
-        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 999)), 7);
-        assert_eq!(gc_bucket_id(&blk(0, 0, 0, 0)), 9);
+        // The digest is the frozen half; the buckets below also move with
+        // GC_BUCKETS, and at modulus 3 they cannot tell the two apart.
+        assert_eq!(gc_key_hash(&blk(1663, 5, 16400, 1)), 0xcd46_8f83_9ce4_ca9e);
+
+        // Golden values (change ⇒ the hash or GC_BUCKETS moved — intended?).
+        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 1)), 0);
+        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 2)), 2);
+        assert_eq!(gc_bucket_id(&blk(1663, 5, 16401, 0)), 0);
+        assert_eq!(gc_bucket_id(&blk(1663, 5, 16400, 999)), 0);
+        assert_eq!(gc_bucket_id(&blk(0, 0, 0, 0)), 1);
 
         // Deterministic + in range over a spread of blocks.
         let mut counts = [0usize; GC_BUCKETS as usize];
@@ -7201,7 +7210,7 @@ mod tests {
         }
         // No bucket is starved or dominant (even spread ⇒ no tablet hotspot).
         assert!(
-            counts.iter().all(|&c| (700..1300).contains(&c)),
+            counts.iter().all(|&c| (3000..3700).contains(&c)),
             "uneven bucket distribution: {counts:?}"
         );
     }

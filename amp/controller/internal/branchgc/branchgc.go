@@ -42,7 +42,7 @@ import (
 // The reaper fans those tables out over the column, so a count that reads LOW
 // silently strands the rows above it: drained, reported finished, never
 // revisited. rust_constants_test.go fails CI when either copy stops matching.
-const gcBuckets = 10
+const gcBuckets = 3
 
 const slruKinds = 3
 

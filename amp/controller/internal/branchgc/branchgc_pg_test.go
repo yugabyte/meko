@@ -143,7 +143,7 @@ var storageTables = []string{
 // bucket-count regression in the reaper's fan-out fail loudly instead of silently
 // leaving rows behind (see the bucket constants' comment): `pages` steps `blknum` by
 // 256 so the writer's formula walks all 6 buckets, `wals` cycles 6, `pending_gc`
-// cycles 10 — so seed at least 10 rows to cover them all. `pages.bucket_id` is
+// cycles 3 — so seed at least 6 rows to cover them all. `pages.bucket_id` is
 // computed by the same expression the table's CHECK constraint carries.
 //
 // `slru_pages` is spread over all three SlruKinds and several segnos on purpose:
@@ -161,7 +161,7 @@ func seedStorage(t *testing.T, pool *db.Pool, branchID uuid.UUID, n int) {
 		`INSERT INTO amp_storage.wals (bucket_id, branch_id, segno, chunk_offset, chunk_size, data, last_modified_us)
 		 SELECT g % 6, $1, 1, g * 1024, 1024, '\\x00'::bytea, 0 FROM generate_series(0, $2::int - 1) g`,
 		`INSERT INTO amp_storage.pending_gc (branch_id, bucket_id, due_lsn, key, gc_kind)
-		 SELECT $1, g % 10, 1000 + g, decode(lpad(to_hex(g), 36, '0'), 'hex'), 0
+		 SELECT $1, g % 3, 1000 + g, decode(lpad(to_hex(g), 36, '0'), 'hex'), 0
 		   FROM generate_series(0, $2::int - 1) g`,
 		`INSERT INTO amp_storage.blobs
 		   (branch_id, namespace, key, chunk_idx, data, size_bytes, etag, last_modified_us)

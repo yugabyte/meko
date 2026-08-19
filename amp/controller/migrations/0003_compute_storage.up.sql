@@ -255,16 +255,20 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
 -- keying convention covers rel blocks, SLRU blocks, and meta keys alike.
 -- Replayed duplicates dedup: the
 -- candidate's identity is its PK and writers run upsert-mode, so a replay
--- overwrites in place. `bucket_id` is placement only, WRITER-computed
--- (page_store::gc_bucket_id, frozen hash of `key`, modulus = GC_BUCKETS) —
--- deliberately not a generated column (the yb-client write path bypasses
--- the YSQL layer). NB: queries must bind bucket_id as a VALUE; without
--- bucket_id equality a query seq-scans. Explicit SPLIT into 3 tablets: the
--- queue stays small (continuously drained); tablets (3) < buckets (10)
--- bounds a statement's distributed-txn fan-out.
+-- overwrites in place. `bucket_id` is placement only (formula at the column):
+-- it keeps a branch's inserts off one tablet, and every reader must bind it
+-- as a VALUE — without bucket_id equality a query seq-scans.
+--
+-- Pre-split into 6 tablets, matching `pages` and `wals`, so the queue spreads
+-- over six Raft groups from the first row; size-based auto-splitting never
+-- fires on a queue this small. Buckets (3) are per branch and cost round
+-- trips, not storage: the drain and the branch reaper each issue one scan per
+-- bucket per tick. Three keeps that fan-out cheap while still splitting a
+-- branch's writes; it is the tablets, shared by all branches, that spread the
+-- load.
 CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     branch_id  uuid     NOT NULL,
-    bucket_id  INT      NOT NULL,
+    bucket_id  INT      NOT NULL,   -- FROZEN: FNV-1a(key) % 3 (page_store::gc_bucket_id)
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,   -- encoded Key: block (trim) or object (drop/shrink)
     gc_kind    SMALLINT NOT NULL,   -- 0=trim_pages 1=trim_slru 2=trim_meta 3=shrink_pages 4=drop_pages 5=drop_slru 6=drop_meta
@@ -272,7 +276,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     -- (NULL for trim/drop; shrink is rel-only).
     relsize    BIGINT,
     PRIMARY KEY ((branch_id, bucket_id) HASH, due_lsn, key, gc_kind)
-) SPLIT INTO 3 TABLETS;
+) SPLIT INTO 6 TABLETS;
 
 -- =====================================================================
 -- WAL mirror — written and read by safekeeper.

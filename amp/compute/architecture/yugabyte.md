@@ -727,14 +727,14 @@ CONFLICT` needed under `yb_enable_upsert_mode`.
 ```sql
 CREATE TABLE amp_storage.pending_gc (
     branch_id  uuid     NOT NULL,
-    bucket_id  INT      NOT NULL,  -- writer-computed: page_store::gc_bucket_id(key) % GC_BUCKETS
+    bucket_id  INT      NOT NULL,  -- writer-computed: page_store::gc_bucket_id(key), FNV-1a % GC_BUCKETS (3)
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,  -- encoded 18-byte Key: block (trim) or object (drop/shrink)
     gc_kind    SMALLINT NOT NULL,  -- page_store::GcKind (0..=6; trim/shrink/drop × table)
     relsize    BIGINT,             -- shrink's truncation target; NULL for trim/drop
     PRIMARY KEY ((branch_id, bucket_id) HASH,
                  due_lsn, key, gc_kind)
-) SPLIT INTO 3 TABLETS;
+) SPLIT INTO 6 TABLETS;
 ```
 
 `bucket_id` is placement only, never identity: it spreads a branch's
@@ -751,12 +751,16 @@ the same PK and dedup; the modulus must equal `GC_BUCKETS`. The drain
 issues one `due_lsn` range scan per bucket (via a UNION-ALL that YB
 plans as an early-terminating Merge Append — verified unaffected by
 the plain vs generated column, since the read is plain `bucket_id = N`
-hash-key equality, not `yb_hash_code()` in a predicate). The tablet
-count (3) is deliberately below the bucket count (10): a multi-row
-insert's distributed-txn fan-out is bounded by tablets touched, while
-10 buckets still hash-spread evenly across them; the SPLIT is explicit
-because size-based auto-splitting never triggers on a small,
-write-hot, continuously-drained queue.
+hash-key equality, not `yb_hash_code()` in a predicate). Buckets
+therefore cost round trips per tick — the branch reaper
+(`controller/internal/branchgc`) fans out the same way — which is why
+the count is 3, enough to keep a branch's inserts off one tablet
+without paying for scans of empty buckets. The 6 tablets, matching
+`pages` and `wals`, are what spread the load across branches; the SPLIT
+is explicit because size-based auto-splitting never triggers on a
+small, write-hot, continuously-drained queue. `GC_BUCKETS` is frozen
+once a deployment holds data: shrinking it strands queued candidates in
+buckets nothing scans.
 
 ## `amp_registry` schema
 
