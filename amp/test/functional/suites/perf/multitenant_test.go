@@ -133,8 +133,8 @@ func TestMultitenantKnobsAreDeclaredInDefaultConfig(t *testing.T) {
 
 	// The declared values must be the ones that reach the test.
 	p := multitenantParamsFromConfig(c)
-	if p.Tenants != 15 || len(p.Workloads) != 5 {
-		t.Errorf("resolved tenants/workloads = %d/%d, want 15/5", p.Tenants, len(p.Workloads))
+	if p.Tenants != 5 || len(p.Workloads) != 5 {
+		t.Errorf("resolved tenants/workloads = %d/%d, want 5/5", p.Tenants, len(p.Workloads))
 	}
 	if p.EndpointCPU != "2" || p.EndpointMemory != "4Gi" {
 		t.Errorf("resolved endpoint size = %s/%s, want 2/4Gi", p.EndpointCPU, p.EndpointMemory)
@@ -560,10 +560,12 @@ func TestDefaultMixIsBroadAndTenantsMatchIt(t *testing.T) {
 	if got < len(defaultWorkloadMix) || got%len(defaultWorkloadMix) != 0 {
 		t.Errorf("default tenants = %d, want a whole multiple of the %d-workload mix", got, len(defaultWorkloadMix))
 	}
-	// One near-idle tenant per workload left the shared storage at ~1% CPU and
-	// every interference ratio at 1.0x — the deployment was never contended.
-	if got == len(defaultWorkloadMix) {
-		t.Error("one tenant per workload cannot contend for a shared deployment; the mixed phase needs a population")
+	// One of each by default: a bigger population is a scale run's parameter, and
+	// growing it here silently moves every tenant's interference ratio and voids
+	// the limit those ratios are gated against.
+	if got != len(defaultWorkloadMix) {
+		t.Errorf("default tenants = %d, want one per workload (%d); raise perf.multitenant.tenants for a scale run",
+			got, len(defaultWorkloadMix))
 	}
 }
 

@@ -96,13 +96,12 @@ type multitenantParams struct {
 
 func multitenantParamsFromConfig(c *core.Config) multitenantParams {
 	return multitenantParams{
-		// Three tenants per workload in the default mix. One each proved the shape
-		// but not the point: with five near-idle tenants the shared storage sat at
-		// ~1% CPU and every interference ratio came back 1.0x — the deployment was
-		// never contended, so the measurement said nothing about multitenancy.
-		// Solo now costs one baseline per WORKLOAD, so the population can grow
-		// without the serial phase growing with it.
-		Tenants:         c.GetInt("perf.multitenant.tenants", 3*len(defaultWorkloadMix)),
+		// One tenant per workload, every tenant a different KIND. Raise
+		// perf.multitenant.tenants for a scale run; population size is the scale
+		// schedules' variable, not this test's default, because a default that
+		// moves silently invalidates the interference limit below and every
+		// version comparison made against it.
+		Tenants:         c.GetInt("perf.multitenant.tenants", len(defaultWorkloadMix)),
 		Workloads:       c.GetStringSlice("perf.multitenant.workloads", defaultWorkloadMix),
 		MaxInterference: c.GetFloat("perf.multitenant.max_interference", 4),
 		SeedRows:        c.GetInt("perf.multitenant.seed_rows", 2000),

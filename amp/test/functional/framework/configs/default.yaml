@@ -1626,12 +1626,11 @@ perf:
   # per run (-o perf.multitenant.<key>=...), because the useful shape depends on
   # what the cluster can actually schedule that day — see endpoint_cpu.
   multitenant:
-    # tenants is the population. Default: three per workload in the mix (15).
-    # One each proved the shape but not the point — five near-idle tenants left
-    # the shared storage at ~1% CPU and every interference ratio came back 1.0x.
-    # Solo costs one baseline per WORKLOAD, not per tenant, so this can grow
-    # without the serial phase growing with it.
-    tenants: 15
+    # tenants is the population: one per workload in the mix, each tenant a
+    # different KIND. Population size belongs to the scale schedules, which raise
+    # it per run — changing it here moves every interference ratio and voids
+    # max_interference along with every version comparison gated on it.
+    tenants: 5
     # workloads is the mix each tenant is assigned round-robin: tpcc and ycsb
     # (benchbase), bank_transfer and sql_transactions (yb-stress-sample-apps),
     # pgbench. A single-entry list turns this into a same-workload contention
