@@ -31,19 +31,19 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 	tokenHash := hashToken(plain)
 	expires := time.Now().Add(20 * time.Minute).UTC()
 
-	mock.ExpectQuery(`SELECT id FROM meko_system\.environments WHERE enroll_token_hash = \$1`).
+	mock.ExpectQuery(`SELECT uuid FROM meko_system\.environments WHERE enroll_token_hash = \$1`).
 		WithArgs(tokenHash).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("acme-prod"))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
 
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE id = \$1`).
-		WithArgs("acme-prod").
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
+		WithArgs("11111111-1111-1111-1111-111111111111").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
+			"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 			"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 			"cert_fingerprint", "components", "live", "enroll_token_hash", "enroll_token_expires_at",
 			"status_token_hash", "created_at", "kind", "resources",
 		}).AddRow(
-			"acme-prod", "acme", "cloud", "us-east-2", "PENDING", "", 0, "",
+			"11111111-1111-1111-1111-111111111111", "acme-prod", "acme", "cloud", "us-east-2", "PENDING", "", 0, "",
 			// created_at is a non-pointer time.Time, so it cannot be NULL here.
 			0, 400, "", nil, "", "", "[]", false, tokenHash, expires, "", time.Now(), "meko", "[]",
 		))
@@ -52,16 +52,19 @@ func TestEnrollWithToken_PreservesTheEnrollmentToken(t *testing.T) {
 	// rather than assuming it: it matches the ON CONFLICT assignments, so reordering
 	// envColumnsInsert breaks this expectation instead of silently shifting which
 	// column the positional assertions below are checking.
-	mock.ExpectExec(`enroll_token_hash=\$17, enroll_token_expires_at=\$18`).
+	mock.ExpectExec(`UPDATE meko_system\.environments SET`).
 		WithArgs(
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "ATTESTING",
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"11111111-1111-1111-1111-111111111111", // $1  uuid — the key the update is applied by
+			sqlmock.AnyArg(), sqlmock.AnyArg(),     // $2 placement, $3 region
+			"ATTESTING", // $4  state
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(), true,
-			tokenHash,                          // $17 — still there
-			expires,                            // $18 — still there
-			sqlmock.AnyArg(), sqlmock.AnyArg(), // $19 status_token_hash, $20 created_at
-			sqlmock.AnyArg(), sqlmock.AnyArg(), // $21 kind, $22 resources
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg(),
+			true,                               // $15 live
+			tokenHash,                          // $16 — still there
+			expires,                            // $17 — still there
+			sqlmock.AnyArg(),                   // $18 status_token_hash
+			sqlmock.AnyArg(), sqlmock.AnyArg(), // $19 kind, $20 resources
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 

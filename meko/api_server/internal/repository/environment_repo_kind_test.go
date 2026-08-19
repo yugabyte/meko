@@ -15,7 +15,7 @@ import (
 // envRowColsK is the column set Get/List scan, in order, including the kind and
 // resources columns added for amp environments.
 var envRowColsK = []string{
-	"id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
+	"uuid", "id", "account_id", "placement", "region", "state", "k8s_version", "node_count", "provider",
 	"datapacks", "max_datapacks", "agent_version", "last_heartbeat_at", "mcp_base_url",
 	"cert_fingerprint", "components", "live", "enroll_token_hash", "enroll_token_expires_at",
 	"status_token_hash", "created_at", "kind", "resources",
@@ -31,14 +31,14 @@ func TestEnvironmentRepo_Get_ScansKindAndResources(t *testing.T) {
 	repo := NewEnvironmentRepo(db)
 
 	inventory := `[{"kind":"storage_pool","id":"pool-1","name":"default"}]`
-	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE id = \$1`).
-		WithArgs("amp-acme").
+	mock.ExpectQuery(`SELECT .* FROM meko_system\.environments WHERE uuid = \$1`).
+		WithArgs("11111111-1111-1111-1111-111111111111").
 		WillReturnRows(sqlmock.NewRows(envRowColsK).AddRow(
-			"amp-acme", "acme", "cloud", "us-east-1", "READY", "", 0, "",
+			"11111111-1111-1111-1111-111111111111", "amp-acme", "acme", "cloud", "us-east-1", "READY", "", 0, "",
 			0, 400, "", nil, "", "", "[]", true, "", nil, "", time.Now(), "amp", inventory,
 		))
 
-	e, err := repo.Get("amp-acme")
+	e, err := repo.GetByUUID("11111111-1111-1111-1111-111111111111")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -66,8 +66,8 @@ func (a argContainsK) Match(v driver.Value) bool {
 	}
 }
 
-// Upsert writes the kind ($21) and the resources inventory ($22).
-func TestEnvironmentRepo_Upsert_PersistsKindAndResources(t *testing.T) {
+// Insert writes the kind ($21) and the resources inventory ($22).
+func TestEnvironmentRepo_Insert_PersistsKindAndResources(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -80,16 +80,16 @@ func TestEnvironmentRepo_Upsert_PersistsKindAndResources(t *testing.T) {
 		anyArgs[i] = sqlmock.AnyArg()
 	}
 	args := append(anyArgs, "amp", argContainsK("storage_pool")) // $21 kind, $22 resources
-	mock.ExpectExec(`INSERT INTO meko_system\.environments`).
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
 		WithArgs(args...).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
 
-	err = repo.Upsert(&models.Environment{
+	err = repo.Insert(&models.Environment{
 		ID: "amp-acme", Kind: "amp", Placement: "cloud", State: "READY",
 		Resources: json.RawMessage(`[{"kind":"storage_pool","id":"pool-1"}]`),
 	})
 	if err != nil {
-		t.Fatalf("Upsert: %v", err)
+		t.Fatalf("Insert: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("kind/resources not persisted as expected: %v", err)

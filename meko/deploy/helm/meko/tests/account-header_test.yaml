@@ -1,0 +1,64 @@
+# apiServer.requireAccountHeader turns X-Meko-Account-ID from optional into
+# mandatory on the fleet routes, for a control plane reached only through YBM.
+# Three things have to hold:
+#
+#   1. Off by default, including under the ycp preset — turning it on takes the
+#      unscoped fleet-admin path away from the console, the e2e and operator curl,
+#      so no existing deploy may acquire it by upgrading.
+#   2. Set, it reaches the process as a bare flag. --require-account-header=false
+#      would be noise, and an older image without the flag exits on an unknown one.
+#   3. It never renders in data-plane mode, where there is no fleet API to gate and
+#      the flag would only fail startup.
+#
+#   helm unittest charts/meko
+suite: api-server require account header
+templates:
+  # configmap.yaml is loaded because the Deployment includes it for its config
+  # checksum; only deployment.yaml is asserted against.
+  - templates/api-server/deployment.yaml
+  - templates/api-server/configmap.yaml
+tests:
+  - it: does not require the account header by default
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-ycp.yaml
+    set:
+      apiServer.image.tag: t
+      global.imageRegistry: reg.example.com
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--require-account-header"
+
+  - it: requires the account header when set
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+      - ../values-ycp.yaml
+    set:
+      apiServer.image.tag: t
+      global.imageRegistry: reg.example.com
+      apiServer.requireAccountHeader: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--require-account-header"
+
+  - it: never renders the flag in data-plane mode
+    # The fleet routes only exist under --control-plane-mode, so the flag has
+    # nothing to gate here and would just fail startup on an older image.
+    template: templates/api-server/deployment.yaml
+    values:
+      - ../values-gcp.yaml
+      - ../values-dev.yaml
+    set:
+      apiServer.image.tag: t
+      global.imageRegistry: reg.example.com
+      apiServer.requireAccountHeader: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--require-account-header"

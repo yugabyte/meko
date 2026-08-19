@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 )
@@ -20,6 +21,15 @@ const InternalSecretHeader = "X-Meko-Internal-Secret" //nolint:gosec // header n
 // that protects the /admin/* metrics endpoints consumed by meko_admin.
 // Like InternalSecretHeader this is a header NAME, not a credential.
 const AdminSecretHeader = "X-Meko-Admin-Secret" //nolint:gosec // header name, not a credential
+
+// AccountIDHeader is the request header naming the account a fleet call acts
+// for. YBM stamps it from the account it has already authenticated, so it is
+// trusted to the same degree as the admin secret that gates the route.
+//
+// Optional unless the control plane runs --require-account-header: without it a
+// caller that sends no account stays unscoped and sees the whole fleet, which is
+// what the console, the ycp e2e and an operator's curl rely on.
+const AccountIDHeader = "X-Meko-Account-ID"
 
 // RequireInternalSecret returns Echo middleware that gates a route
 // group on a static shared secret.
@@ -53,6 +63,35 @@ func RequireInternalSecret(secret string) echo.MiddlewareFunc {
 // RequireInternalSecret. Intended for the trusted meko_admin console.
 func RequireAdminSecret(secret string) echo.MiddlewareFunc {
 	return requireSecret(AdminSecretHeader, secret)
+}
+
+// RequireAccountID returns middleware rejecting any request that does not name an
+// account in AccountIDHeader, for a control plane where every fleet caller is
+// expected to be an account-aware proxy such as YBM.
+//
+// It is wired only when --require-account-header is set, because it takes the
+// unscoped fleet-admin path away: the built-in console, the ycp e2e and an
+// operator's curl all authenticate with the admin secret alone and have no
+// account to send, so they get 400 from a control plane running with it on.
+//
+// It does not validate the value. What the account is allowed to see follows from
+// the id itself, and the admin secret this sits behind is already the thing that
+// says the caller may speak for one.
+func RequireAccountID() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if strings.TrimSpace(c.Request().Header.Get(AccountIDHeader)) == "" {
+				return c.JSON(http.StatusBadRequest, map[string]any{
+					"data": nil,
+					"error": map[string]any{
+						"code":    "VALIDATION_ERROR",
+						"message": AccountIDHeader + " required",
+					},
+				})
+			}
+			return next(c)
+		}
+	}
 }
 
 // requireSecret builds shared-secret middleware for a given header:

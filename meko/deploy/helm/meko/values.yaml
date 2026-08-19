@@ -139,6 +139,22 @@ apiServer:
   # api-server keeps /api/v1/health at the domain root precisely because kubelet
   # reaches the pod directly and never passes through the proxy.
   basePath: ""
+  # ycp mode only. Reject fleet calls (/api/v1/environments*, /api/v1/entitlements)
+  # that do not carry X-Meko-Account-ID, instead of serving them against the whole
+  # fleet. YBM stamps the header on every call it proxies, from the account it has
+  # authenticated, so a control plane reached only through YBM should turn this on.
+  #
+  # OFF by default because it takes the unscoped fleet-admin path away: the built-in
+  # console, the ycp e2e and an operator's curl all authenticate with the admin
+  # secret alone and have no account to send, so they get 400 from a control plane
+  # running with it on.
+  #
+  # The agent API is unaffected either way — it authenticates with the enrollment
+  # and status tokens, not the admin secret.
+  #
+  # Needs an image built with --require-account-header; Go's flag package exits on
+  # an unknown flag, so an older image will not start rather than ignoring it.
+  requireAccountHeader: false
   # ycp mode only — what a newly registered environment is told to run, so an
   # enrolling agent brings Meko up instead of idling until someone commands it.
   # The control plane seeds a `database` (which has a working default) at

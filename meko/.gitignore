@@ -10,7 +10,12 @@ build/
 
 # Integration-test fixtures: cached YugabyteDB installs + per-test data dirs.
 # Managed by api_server/testlib/ybdb (downloads tarball on first run).
+#
+# Unanchored, so it matches any directory named tests anywhere under meko/ -- which
+# is how the Helm chart's helm-unittest suites came to be untracked when the chart
+# was imported from meko-devops. Checked-in suites need an explicit negation.
 tests/
+!deploy/helm/meko/tests/
 
 # Linter caches
 .mypy_cache/

@@ -23,6 +23,24 @@ var ErrValidation = errors.New("validation error")
 // which would otherwise reconcile the wrong desired state.
 var ErrKindMismatch = errors.New("environment kind mismatch")
 
+// ErrAmbiguousID re-exports the repository's, so handlers map it to a status code
+// without importing the storage layer. Raised when an unscoped caller names an id
+// two accounts both hold (mapped to 409) -- send an account to disambiguate.
+var ErrAmbiguousID = repository.ErrAmbiguousID
+
+// AccountScope limits an operation to one account's environments. The zero value
+// is unscoped and reaches every environment; --require-account-header stops such a
+// call at the router, so it arrives here only where fleet-wide calls are allowed.
+//
+// It is a distinct type so that an account id cannot be passed where an
+// environment id is wanted, and so the unscoped case is one documented rule
+// rather than an empty string tested at each call site.
+//
+// Scoping is applied in SQL, against the (account_id, id) unique index, rather
+// than by reading a row and comparing -- so an environment the scope does not own
+// is not read at all.
+type AccountScope string
+
 // Environment kinds. An amp environment is driven by the amp controller (which
 // reports a resource inventory and no meko-stack); a meko environment is driven
 // by the datapack/stack agent. The kind is fixed at registration and baked into
@@ -215,15 +233,33 @@ func slug(name string) string {
 
 // ---- operations ----
 
-// List returns every environment.
-func (s *EnvironmentService) List() ([]*models.Environment, error) { return s.repo.List() }
+// List returns the scope's environments, or every one when unscoped.
+func (s *EnvironmentService) List(scope AccountScope) ([]*models.Environment, error) {
+	return s.repo.List(string(scope))
+}
 
-// Get returns one environment, or (nil, nil) if absent.
-func (s *EnvironmentService) Get(id string) (*models.Environment, error) { return s.repo.Get(id) }
+// Get returns one environment, or (nil, nil) if absent. An environment the scope
+// does not own reads as absent, so a caller cannot tell another account's
+// environment from one that was never registered.
+func (s *EnvironmentService) Get(id string, scope AccountScope) (*models.Environment, error) {
+	return s.repo.Get(string(scope), id)
+}
 
 // Register mints a single-use enrollment token and stores a PENDING environment,
 // returning the plaintext token once.
-func (s *EnvironmentService) Register(req RegisterEnvironmentRequest) (*models.Environment, string, error) {
+//
+// A scoped registration is stamped with the scope's account and ignores the body's
+// account_id: the scope comes from the account YBM authenticated, the body from
+// whoever composed the request, and only one of those can be trusted to say whose
+// environment this is. An unscoped registration still takes the body's account_id,
+// which is how the console has always set it.
+func (s *EnvironmentService) Register(
+	req RegisterEnvironmentRequest, scope AccountScope,
+) (*models.Environment, string, error) {
+	accountID := req.AccountID
+	if scope != "" {
+		accountID = string(scope)
+	}
 	name := strings.TrimSpace(req.Name)
 	if len(name) < 3 || len(name) > 60 {
 		return nil, "", fmt.Errorf("%w: name must be 3-60 chars", ErrValidation)
@@ -252,12 +288,15 @@ func (s *EnvironmentService) Register(req RegisterEnvironmentRequest) (*models.E
 		id = KindAmp + "-" + id
 	}
 	e := &models.Environment{
-		ID: id, Kind: kind, AccountID: req.AccountID, Placement: placement, Region: req.Region,
+		ID: id, Kind: kind, AccountID: accountID, Placement: placement, Region: req.Region,
 		State: state, MaxDatapacks: 400, CreatedAt: time.Now().UTC(),
 		Components: json.RawMessage("[]"), Resources: json.RawMessage("[]"),
 		EnrollTokenHash: hash, EnrollTokenExpiresAt: &exp,
 	}
-	if err := s.repo.Upsert(e); err != nil {
+	// Insert stamps e.UUID, which the desired-state write below is keyed on. A name
+	// another account already holds is not a conflict: (account_id, id) is what is
+	// unique, so this registers that account's own environment.
+	if err := s.repo.Insert(e); err != nil {
 		return nil, "", err
 	}
 	// Desired state comes with the registration, so the agent has something to do the
@@ -266,7 +305,7 @@ func (s *EnvironmentService) Register(req RegisterEnvironmentRequest) (*models.E
 	// discarding it here would leave an environment nobody can attach an agent to.
 	// A desired-state write can always be retried; a token cannot.
 	if res := s.initialDesired(req, kind); res != nil {
-		if err := s.repo.ReplaceDesired(e.ID, res); err != nil {
+		if err := s.repo.ReplaceDesired(e.UUID, res); err != nil {
 			return e, plain, nil //nolint:nilerr // see above: the token must survive
 		}
 	}
@@ -324,11 +363,11 @@ func (s *EnvironmentService) EnrollWithToken(tokenPlain, placement, declaredKind
 	if err != nil {
 		return nil, "", false, err
 	}
-	id, found, err := s.repo.EnrollLookup(hashToken(tokenPlain))
+	envUUID, found, err := s.repo.EnrollLookup(hashToken(tokenPlain))
 	if err != nil || !found {
 		return nil, "", false, err
 	}
-	e, err := s.repo.Get(id)
+	e, err := s.repo.GetByUUID(envUUID)
 	if err != nil || e == nil {
 		return nil, "", false, err
 	}
@@ -372,24 +411,28 @@ func (s *EnvironmentService) EnrollWithToken(tokenPlain, placement, declaredKind
 	// (an endpoint that mints a fresh enrollment token for a known environment, or
 	// status-token rotation authenticated by the current token). Until then the
 	// TTL is the only bound, which is what it was designed to be.
-	if err := s.repo.Upsert(e); err != nil {
+	if err := s.repo.Update(e); err != nil {
 		return nil, "", false, err
 	}
 	return e, statusPlain, true, nil
 }
 
-// ValidateStatusToken reports whether tokenPlain is envID's current status token.
-func (s *EnvironmentService) ValidateStatusToken(envID, tokenPlain string) (bool, error) {
-	e, err := s.repo.Get(envID)
-	if err != nil || e == nil || e.StatusTokenHash == "" {
-		return false, err
+// ResolveAgent returns the environment an agent's (id, status token) pair names,
+// or nil when the pair matches nothing -- an unknown id and an invalid token are
+// deliberately the same answer, so neither can be probed for.
+//
+// The token does the identifying, not the id: an id is unique only within an
+// account, and an agent knows nothing about accounts.
+func (s *EnvironmentService) ResolveAgent(envID, tokenPlain string) (*models.Environment, error) {
+	if envID == "" || tokenPlain == "" {
+		return nil, nil
 	}
-	return e.StatusTokenHash == hashToken(tokenPlain), nil
+	return s.repo.GetByAgentToken(envID, hashToken(tokenPlain))
 }
 
 // ApplyStatus merges an agent status report. ok=false ⇒ unknown environment.
-func (s *EnvironmentService) ApplyStatus(envID string, r StatusReport) (bool, error) {
-	e, err := s.repo.Get(envID)
+func (s *EnvironmentService) ApplyStatus(envUUID string, r StatusReport) (bool, error) {
+	e, err := s.repo.GetByUUID(envUUID)
 	if err != nil || e == nil {
 		return false, err
 	}
@@ -410,7 +453,7 @@ func (s *EnvironmentService) ApplyStatus(envID string, r StatusReport) (bool, er
 			e.Resources = res
 		}
 	}
-	if err := s.repo.Upsert(e); err != nil {
+	if err := s.repo.Update(e); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -418,13 +461,13 @@ func (s *EnvironmentService) ApplyStatus(envID string, r StatusReport) (bool, er
 
 // SetState moves an environment to an agent-reported bootstrap phase. Distinct
 // from Action, which applies operator intent from a fixed set.
-func (s *EnvironmentService) SetState(envID, state string) (bool, error) {
-	e, err := s.repo.Get(envID)
+func (s *EnvironmentService) SetState(envUUID, state string) (bool, error) {
+	e, err := s.repo.GetByUUID(envUUID)
 	if err != nil || e == nil {
 		return false, err
 	}
 	e.State = state
-	return true, s.repo.Upsert(e)
+	return true, s.repo.Update(e)
 }
 
 // Entitlement is the plan the control plane reports. Static until a billing source
@@ -445,8 +488,8 @@ func (s *EnvironmentService) Entitlement() models.Entitlement {
 // Returns nil when the environment has no stack: --no-bootstrap-defaults, or a
 // registration that declared individual resources instead. The agent then runs whatever
 // desired state declares, which is the behaviour that predates this.
-func (s *EnvironmentService) EnrolledStack(envID string) (json.RawMessage, error) {
-	res, err := s.repo.ListDesired(envID)
+func (s *EnvironmentService) EnrolledStack(envUUID string) (json.RawMessage, error) {
+	res, err := s.repo.ListDesired(envUUID)
 	if err != nil {
 		return nil, err
 	}
@@ -458,23 +501,26 @@ func (s *EnvironmentService) EnrolledStack(envID string) (json.RawMessage, error
 	return nil, nil
 }
 
-// SetDesired replaces the desired resource set. ok=false ⇒ unknown environment.
-func (s *EnvironmentService) SetDesired(envID string, res []models.DesiredResource) (bool, error) {
-	e, err := s.repo.Get(envID)
+// SetDesired replaces the desired resource set. ok=false ⇒ unknown environment,
+// or one the scope does not own.
+func (s *EnvironmentService) SetDesired(envID string, scope AccountScope, res []models.DesiredResource) (bool, error) {
+	e, err := s.Get(envID, scope)
 	if err != nil || e == nil {
 		return false, err
 	}
-	return true, s.repo.ReplaceDesired(envID, res)
+	return true, s.repo.ReplaceDesired(e.UUID, res)
 }
 
-// Desired returns the environment's desired resources.
-func (s *EnvironmentService) Desired(envID string) ([]models.DesiredResource, error) {
-	return s.repo.ListDesired(envID)
+// Desired returns the environment's desired resources, by key -- callers have
+// already resolved the environment, whether by scope or by agent token.
+func (s *EnvironmentService) Desired(envUUID string) ([]models.DesiredResource, error) {
+	return s.repo.ListDesired(envUUID)
 }
 
-// Action applies a lifecycle action (suspend|resume|drain|deregister).
-func (s *EnvironmentService) Action(envID, action string) (bool, error) {
-	e, err := s.repo.Get(envID)
+// Action applies a lifecycle action (suspend|resume|drain|deregister). ok=false ⇒
+// unknown environment, or one the scope does not own.
+func (s *EnvironmentService) Action(envID string, scope AccountScope, action string) (bool, error) {
+	e, err := s.Get(envID, scope)
 	if err != nil || e == nil {
 		return false, err
 	}
@@ -490,7 +536,7 @@ func (s *EnvironmentService) Action(envID, action string) (bool, error) {
 	default:
 		return false, fmt.Errorf("%w: unknown action %q", ErrValidation, action)
 	}
-	return true, s.repo.Upsert(e)
+	return true, s.repo.Update(e)
 }
 
 func mergeFacts(e *models.Environment, f ClusterFacts) {

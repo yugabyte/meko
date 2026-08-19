@@ -52,6 +52,12 @@ byte-identically to the pre-mode chart.
        enrollment and status tokens -- so the symptom is an agent happily enrolled
        into a control plane whose console is dead. */}}
 - "--admin-api-key=$(ADMIN_API_KEY)"
+{{- if $c.requireAccountHeader }}
+{{- /* Rendered only when true: the flag's own default is false, so passing it
+       explicitly would be noise, and an older image that does not know the flag
+       exits on an unknown one rather than ignoring it. */}}
+- "--require-account-header"
+{{- end }}
 {{- /* What a newly registered environment is told to run, so an enrolling agent
        bootstraps Meko instead of idling until somebody sends it a command. The
        database has a working default and is always seeded; the MCP server is a

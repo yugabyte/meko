@@ -172,6 +172,13 @@ func run() error {
 			"Hands the fleet-admin credential to anyone who can load the console, so only for "+
 			"a control plane whose console is already the trust boundary (internal LB, tailnet).")
 
+	requireAccountHeader := flag.Bool("require-account-header",
+		envBoolOrDefault("MEKO_REQUIRE_ACCOUNT_HEADER", false),
+		"reject fleet calls that do not carry X-Meko-Account-ID, instead of serving them "+
+			"against the whole fleet. For a control plane reached only through an account-aware "+
+			"proxy such as YBM; it 400s the built-in console, the ycp e2e and operator curl, "+
+			"which authenticate with the admin secret alone.")
+
 	ybaAPIToken := flag.String("yba-api-token",
 		os.Getenv("YBA_API_TOKEN"),
 		"YugabyteDB Anywhere API token (X-AUTH-YW-API-TOKEN) for the admin Data Plane tab. Empty reports the data plane as not configured.")
@@ -476,6 +483,7 @@ func run() error {
 		MCPInternalSecret:         *mcpInternalSecret,
 		AdminAPIKey:               *adminAPIKey,
 		ConsoleEmbedAdminSecret:   *consoleEmbedAdminSecret,
+		RequireAccountHeader:      *requireAccountHeader,
 		YBAAPIToken:               *ybaAPIToken,
 		MCPPATFlushInterval:       *mcpPATFlushInterval,
 		PATRateLimitPerMin:        *patRateLimitPerMin,

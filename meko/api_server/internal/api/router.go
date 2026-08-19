@@ -387,7 +387,13 @@ func NewRouter(cfg ServerConfig) (*echo.Echo, *serviceRegistry, error) {
 		if cfg.ConsoleEmbedAdminSecret {
 			consoleSecret = cfg.AdminAPIKey
 		}
-		fleet := v1.Group("", auth.RequireAdminSecret(cfg.AdminAPIKey))
+		// One middleware for the whole group rather than a check per handler, so a
+		// route added later cannot forget it.
+		fleetAuth := []echo.MiddlewareFunc{auth.RequireAdminSecret(cfg.AdminAPIKey)}
+		if cfg.RequireAccountHeader {
+			fleetAuth = append(fleetAuth, auth.RequireAccountID())
+		}
+		fleet := v1.Group("", fleetAuth...)
 		fleet.GET("/environments", envH.List)
 		fleet.POST("/environments", envH.Register)
 		fleet.GET("/environments/:id", envH.Get)

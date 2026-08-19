@@ -255,6 +255,52 @@ Datapacks are **not** modelled here. An environment is the unit YCP manages; wha
 runs inside Meko — datapacks, users, tenants — is Meko's own concern, created
 through its api-server once the stack is up.
 
+## Which environments a fleet call sees
+
+The admin secret is a fleet-wide credential, so a caller presenting only it — the
+console, the e2e, your curl — reads and writes every environment. That is the
+default; `--require-account-header` (below) makes it a 400 instead.
+
+`X-Meko-Account-ID` narrows a call to one account. YBM sends it on every request it
+proxies, stamped from the account it has already authenticated:
+
+```bash
+curl -H "X-Meko-Admin-Secret: $ADMIN_KEY" -H "X-Meko-Account-ID: $ACCOUNT" \
+  "$YCP/api/v1/environments"                      # only $ACCOUNT's environments
+```
+
+With the header set, registration stamps the new environment with that account and
+ignores any `account_id` in the body, and every other `/environments` route — read,
+patch, deregister, desired state — is restricted to environments carrying it. One
+that belongs to another account answers 404, the same as one that does not exist.
+
+Environment ids come from the name, and the name is unique per account rather than
+across the fleet — `(account_id, id)` is what the database enforces. So two accounts
+may each register `prod` and each gets its own environment; neither can address or
+overwrite the other's. Re-registering your own name updates it, as it always did.
+
+The id an operator and an agent use is unchanged by that. Rows are keyed internally
+by a uuid, which is what the desired-resources table and the enrollment handshake
+join on, but nothing in the API takes it: `{id}` in the path, `?envId=` from the
+agent, and `--set agent.envName=` are all still the name-derived slug.
+
+The one call that can now be ambiguous is an **unscoped** read of an id two accounts
+both hold: it answers 409 rather than picking one. Send an account to resolve it.
+That cannot happen for environments registered before the per-account index, whose
+ids were unique fleet-wide — and it cannot happen at all with the header required.
+
+Environments registered before accounts were stamped carry no account, and are
+visible only to an unscoped caller.
+
+To make the header mandatory, so no call can reach the whole fleet:
+
+| Control-plane flag / env | Chart value | Effect |
+|---|---|---|
+| `--require-account-header` / `MEKO_REQUIRE_ACCOUNT_HEADER` | `apiServer.requireAccountHeader` | Answer 400 to any fleet call with no `X-Meko-Account-ID`, instead of serving it fleet-wide. **Off by default**, because it takes the unscoped path away: the console, the e2e and operator curl all authenticate with the admin secret alone. For a control plane reached only through YBM. |
+
+The agent API is unaffected either way — it authenticates with the enrollment and
+status tokens, not the admin secret.
+
 ## Operating an attached agent
 
 ```bash

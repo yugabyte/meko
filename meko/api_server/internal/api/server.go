@@ -76,6 +76,13 @@ type ServerConfig struct {
 	// handlers.ConsoleHandler.
 	ConsoleEmbedAdminSecret bool
 
+	// RequireAccountHeader rejects any fleet call that does not carry
+	// X-Meko-Account-ID, instead of serving it against the whole fleet. For a
+	// control plane reached only through an account-aware proxy such as YBM, which
+	// stamps the header on every call; it takes away the unscoped path the built-in
+	// console, the ycp e2e and an operator's curl rely on, so it is off by default.
+	RequireAccountHeader bool
+
 	// YBAAPIToken authenticates read-only calls to YugabyteDB Anywhere
 	// (X-AUTH-YW-API-TOKEN) for the admin Data Plane tab. When empty, the
 	// /admin/dataplane endpoint reports the data plane as not configured.

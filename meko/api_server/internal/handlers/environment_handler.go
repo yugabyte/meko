@@ -8,6 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"meko/api_server/internal/auth"
 	"meko/api_server/internal/models"
 	"meko/api_server/internal/service"
 )
@@ -27,22 +28,39 @@ func agentBearer(c echo.Context) string {
 	return strings.TrimSpace(strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer "))
 }
 
+// accountScope reads the account this fleet call acts for. Empty is unscoped, and
+// only reaches here when --require-account-header is off; the group middleware
+// rejects it otherwise. See auth.AccountIDHeader.
+func accountScope(c echo.Context) service.AccountScope {
+	return service.AccountScope(strings.TrimSpace(c.Request().Header.Get(auth.AccountIDHeader)))
+}
+
+// envLookupError answers a failed environment lookup. An unscoped caller naming an
+// id two accounts hold is the caller's to resolve, by sending one — not a 500.
+func envLookupError(c echo.Context, err error) error {
+	if errors.Is(err, service.ErrAmbiguousID) {
+		return apiError(c, http.StatusConflict, "AMBIGUOUS_ID", err.Error())
+	}
+	return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+}
+
 // ---- console / admin ----
 
-// List returns all environments.
+// List returns the caller's environments, or the whole fleet when unscoped.
 func (h *EnvironmentHandler) List(c echo.Context) error {
-	envs, err := h.svc.List()
+	envs, err := h.svc.List(accountScope(c))
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
 	return ok(c, http.StatusOK, map[string]any{"items": envs})
 }
 
-// Get returns one environment.
+// Get returns one environment. Another account's environment is a 404, the same
+// as one that does not exist.
 func (h *EnvironmentHandler) Get(c echo.Context) error {
-	e, err := h.svc.Get(c.Param("id"))
+	e, err := h.svc.Get(c.Param("id"), accountScope(c))
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return envLookupError(c, err)
 	}
 	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
@@ -56,7 +74,7 @@ func (h *EnvironmentHandler) Register(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	e, token, err := h.svc.Register(req)
+	e, token, err := h.svc.Register(req, accountScope(c))
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
@@ -78,9 +96,9 @@ func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	found, err := h.svc.SetDesired(c.Param("id"), body.Resources)
+	found, err := h.svc.SetDesired(c.Param("id"), accountScope(c), body.Resources)
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return envLookupError(c, err)
 	}
 	if !found {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
@@ -95,15 +113,14 @@ func (h *EnvironmentHandler) SetDesired(c echo.Context) error {
 // console: you could send a command and never read back what an environment had
 // been told to run.
 func (h *EnvironmentHandler) GetDesired(c echo.Context) error {
-	envID := c.Param("id")
-	e, err := h.svc.Get(envID)
+	e, err := h.svc.Get(c.Param("id"), accountScope(c))
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return envLookupError(c, err)
 	}
 	if e == nil {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
 	}
-	res, err := h.svc.Desired(envID)
+	res, err := h.svc.Desired(e.UUID)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
@@ -121,12 +138,12 @@ func (h *EnvironmentHandler) Action(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	found, err := h.svc.Action(c.Param("id"), body.Action)
+	found, err := h.svc.Action(c.Param("id"), accountScope(c), body.Action)
 	if err != nil {
 		if errors.Is(err, service.ErrValidation) {
 			return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
 		}
-		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return envLookupError(c, err)
 	}
 	if !found {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
@@ -137,9 +154,9 @@ func (h *EnvironmentHandler) Action(c echo.Context) error {
 // Deregister marks the environment DEREGISTERED. A state change, not a row delete:
 // the fleet keeps the record (and its history) after an environment goes away.
 func (h *EnvironmentHandler) Deregister(c echo.Context) error {
-	found, err := h.svc.Action(c.Param("id"), "deregister")
+	found, err := h.svc.Action(c.Param("id"), accountScope(c), "deregister")
 	if err != nil {
-		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		return envLookupError(c, err)
 	}
 	if !found {
 		return apiError(c, http.StatusNotFound, "NOT_FOUND", "no such environment")
@@ -158,12 +175,9 @@ func (h *EnvironmentHandler) Entitlements(c echo.Context) error {
 // bootstrap phases. Authenticated by the env-scoped status token like the other
 // agent endpoints.
 func (h *EnvironmentHandler) AgentBootstrapProgress(c echo.Context) error {
-	envID := c.QueryParam("envId")
-	if envID == "" {
-		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "envId required")
-	}
-	if !h.authAgent(c, envID) {
-		return apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "invalid status token")
+	e := h.authAgent(c, c.QueryParam("envId"))
+	if e == nil {
+		return nil
 	}
 	var bp struct {
 		Phase string `json:"phase"`
@@ -173,7 +187,7 @@ func (h *EnvironmentHandler) AgentBootstrapProgress(c echo.Context) error {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
 	if bp.Phase != "" {
-		if _, err := h.svc.SetState(envID, bp.Phase); err != nil {
+		if _, err := h.svc.SetState(e.UUID, bp.Phase); err != nil {
 			return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		}
 	}
@@ -207,7 +221,7 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 	// command. A failure to read it is logged and omitted rather than failing the
 	// enrollment: the status token is returned exactly once, and losing it to a
 	// transient read error would leave an environment no agent can attach to.
-	if stack, err := h.svc.EnrolledStack(e.ID); err != nil {
+	if stack, err := h.svc.EnrolledStack(e.UUID); err != nil {
 		slog.Warn("could not read the stack to hand the enrolling agent",
 			"environment", e.ID, "error", err)
 	} else if len(stack) > 0 {
@@ -218,11 +232,11 @@ func (h *EnvironmentHandler) AgentEnroll(c echo.Context) error {
 
 // AgentDesiredState returns the generic desired-state resources (bearer-authed).
 func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
-	envID := c.QueryParam("envId")
-	if !h.authAgent(c, envID) {
+	e := h.authAgent(c, c.QueryParam("envId"))
+	if e == nil {
 		return nil
 	}
-	res, err := h.svc.Desired(envID)
+	res, err := h.svc.Desired(e.UUID)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
@@ -246,18 +260,15 @@ func (h *EnvironmentHandler) AgentDesiredState(c echo.Context) error {
 
 // AgentStatus ingests a status report (bearer-authed).
 func (h *EnvironmentHandler) AgentStatus(c echo.Context) error {
-	envID := c.QueryParam("envId")
-	if envID == "" {
-		return apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "envId query param required")
-	}
-	if !h.authAgent(c, envID) {
+	e := h.authAgent(c, c.QueryParam("envId"))
+	if e == nil {
 		return nil
 	}
 	var rep service.StatusReport
 	if err := c.Bind(&rep); err != nil {
 		return apiError(c, http.StatusBadRequest, "INVALID_JSON", "malformed request body")
 	}
-	found, err := h.svc.ApplyStatus(envID, rep)
+	found, err := h.svc.ApplyStatus(e.UUID, rep)
 	if err != nil {
 		return apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 	}
@@ -267,25 +278,28 @@ func (h *EnvironmentHandler) AgentStatus(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// authAgent validates the env-scoped status bearer; writes the error + returns false on failure.
-func (h *EnvironmentHandler) authAgent(c echo.Context, envID string) bool {
+// authAgent resolves the environment from the env-scoped status bearer, returning
+// nil (having written the error) when it cannot. The environment comes back rather
+// than a bool because an id alone no longer identifies a row -- callers need the
+// resolved key to read or write anything.
+func (h *EnvironmentHandler) authAgent(c echo.Context, envID string) *models.Environment {
 	if envID == "" {
 		_ = apiError(c, http.StatusBadRequest, "VALIDATION_ERROR", "envId query param required")
-		return false
+		return nil
 	}
 	tok := agentBearer(c)
 	if tok == "" {
 		_ = apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "missing bearer status token")
-		return false
+		return nil
 	}
-	valid, err := h.svc.ValidateStatusToken(envID, tok)
+	e, err := h.svc.ResolveAgent(envID, tok)
 	if err != nil {
 		_ = apiError(c, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
-		return false
+		return nil
 	}
-	if !valid {
+	if e == nil {
 		_ = apiError(c, http.StatusUnauthorized, "UNAUTHORIZED", "invalid status token")
-		return false
+		return nil
 	}
-	return true
+	return e
 }

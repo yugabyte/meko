@@ -1,6 +1,19 @@
 /*
  * YCP fleet registry (control-plane mode).
  *
+ * NOT the live definition of these tables. That is the controlplane/ set, which keys
+ * environments by uuid and makes (account_id, id) unique; this copy is frozen in the
+ * pre-uuid shape and the code can no longer read it -- scanEnvironment selects uuid and
+ * scans account_id as NOT NULL, so a control plane pointed at a database that ran only
+ * this set fails on its first query rather than degrading. Control-plane mode migrates
+ * with --only-controlplane-migrate, so that pairing is a misconfiguration and not a path
+ * anything takes; both sets otherwise share one systemDB under separate version tables.
+ *
+ * Inert rather than wrong in data-plane mode: envSvc is constructed only under
+ * --control-plane-mode, so nothing here reads or writes these tables. Kept rather than
+ * dropped because removing them means a new system migration running destructive DDL
+ * against every data-plane database.
+ *
  * One row per registered customer data-plane environment. Populated by the
  * agent enrollment handshake and status reports; read by the console/fleet API.
  * Holds metadata only -- never customer data.

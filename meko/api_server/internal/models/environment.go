@@ -10,8 +10,14 @@ import (
 type Environment struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
-	ID              string     `json:"id"`
-	AccountID       string     `json:"account_id,omitempty"`
+	// UUID is the row's identity and the key everything internal joins on. ID is
+	// what an operator and an agent use, so it stays in the API unchanged; this is
+	// what survives when two accounts pick the same one.
+	UUID string `json:"uuid"`
+	// ID is slug(name): the id in the API path, in the agent's ?envId=, and in the
+	// install hint's --set agent.envName=. Unique per account, not globally.
+	ID        string `json:"id"`
+	AccountID string `json:"account_id,omitempty"`
 	// Kind distinguishes an amp environment (the amp controller) from a meko one
 	// (the datapack/stack agent). It is fixed at registration. A meko id is a bare
 	// slug(name) (unchanged, backward compatible); an amp id is prefixed "amp-",

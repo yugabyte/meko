@@ -43,18 +43,19 @@ func TestRegister_SeedsBootstrapDesiredState(t *testing.T) {
 		SecretRef:       "meko-data-plane",
 	})
 
-	mock.ExpectExec(`INSERT INTO meko_system\.environments`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
 	// ReplaceDesired upserts-and-prunes: read existing keys (none on a fresh
 	// register), upsert the seeded meko-stack, prune nothing.
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT kind, name FROM meko_system\.environment_desired_resources WHERE env_id = \$1`).
-		WithArgs("acme-prod").WillReturnRows(sqlmock.NewRows([]string{"kind", "name"}))
+	mock.ExpectQuery(`SELECT kind, name FROM meko_system\.environment_desired_resources WHERE env_uuid = \$1`).
+		WithArgs("11111111-1111-1111-1111-111111111111").WillReturnRows(sqlmock.NewRows([]string{"kind", "name"}))
 	mock.ExpectExec(`INSERT INTO meko_system\.environment_desired_resources`).
-		WithArgs("acme-prod", "meko-stack", "meko", sqlmock.AnyArg()).
+		WithArgs("11111111-1111-1111-1111-111111111111", "meko-stack", "meko", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1"})
+	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1"}, "")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -152,10 +153,11 @@ func TestRegister_SurvivesDesiredStateWriteFailure(t *testing.T) {
 	defer db.Close()
 	svc := NewEnvironmentService(repository.NewEnvironmentRepo(db), BootstrapDefaults{Enabled: true})
 
-	mock.ExpectExec(`INSERT INTO meko_system\.environments`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`INSERT INTO meko_system\.environments`).
+		WillReturnRows(sqlmock.NewRows([]string{"uuid"}).AddRow("11111111-1111-1111-1111-111111111111"))
 	mock.ExpectBegin().WillReturnError(errTest)
 
-	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1"})
+	e, token, err := svc.Register(RegisterEnvironmentRequest{Name: "acme-prod", Region: "us-east-1"}, "")
 	if err != nil {
 		t.Fatalf("Register err = %v, want nil: a desired-state failure must not lose the token", err)
 	}
