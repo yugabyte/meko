@@ -10,22 +10,20 @@
 # pageserver/safekeeper -> YugabyteDB), creates the `regression`
 # database, runs the parallel schedule, and tears the cluster down.
 #
-# Defaults to RELEASE: the full suite is ~200 tests with getpage/WAL
-# round-trips, so a debug build is painfully slow. Pass --debug to override.
+# Standalone it builds what it needs, defaulting to RELEASE: the full suite is 230
+# tests with getpage/WAL round-trips, so a debug build is slower. Pass --debug to
+# override, or --no-build to run on a build a caller already produced — which is
+# what CI does, straight after run.sh in the same job.
 #
 # This script also builds the regression C support modules (regress,
 # refint, autoinc) via PGXS and installs them into the compute's $libdir,
 # then points pg_regress at them with --dlpath, so the dynlib-gated tests
 # actually run rather than erroring on the restricted-loader path.
 #
-# Expected result (PG18, see #119): 0 failures. The only diffs the suite
-# produces are the one by-design limitation — `CREATE TABLESPACE`
-# unsupported — in 4 tests (`test_setup`, `tablespace`, `stats`,
-# `database`). Those are blessed via yb-amp expected-output variants in
-# regress_yb_expected/ (overlaid onto pg_regress's expected/<test>_N.out
-# alternative-file mechanism, NOT by editing the upstream goldens), so a
-# clean tree is a genuine green. No page-reconstruction or WAL bugs
-# surface, and no genuine yb-amp behavioral diffs remain.
+# Expected result on PG18: 230/230, matching the upstream goldens exactly.
+# The compute runs with `yb_amp.regress_test_mode=on` (see below), which is
+# what keeps it there — without it the by-design `CREATE TABLESPACE` rejection
+# fails test_setup, tablespace and stats.
 set -euo pipefail
 
 usage() {
@@ -33,7 +31,14 @@ usage() {
 Usage: test/integration/compute/pg_regress.sh [options]
 
 Options:
+  --no-build          build nothing: use the Postgres install, yb_amp extension
+                      and cluster binaries already in the tree, taking the profile
+                      from whichever of target/{release,debug} holds them. Fails
+                      if any is missing. What CI uses, running straight after
+                      run.sh in the same job.
   --debug             build/run the cluster binaries in debug (default: release)
+  --release           the default; accepted so `run.sh --release pg_regress`
+                      forwards cleanly
   -j, --jobs <n>      pg_regress --max-connections (default: 8). Higher = faster
                       but more PS->YB connection-pool pressure.
   --schedule <file>   schedule to run (default: the vendored parallel_schedule).
@@ -47,8 +52,7 @@ Honoured env vars: YB_HOST, YB_PORT (the backing YugabyteDB; default
 YB_AMP_REPO_DIR, YB_DBNAME.
 
 Output (results + regression.diffs) is written under the run dir and
-printed at the end. Exit status is pg_regress's (non-zero while the known
-diffs remain un-allowlisted).
+printed at the end. Exit status is pg_regress's.
 EOF
 }
 
@@ -62,9 +66,12 @@ PROFILE=release
 JOBS=8
 SCHEDULE=parallel_schedule
 KEEP=0
+NO_BUILD=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --no-build) NO_BUILD=1 ;;
         --debug) PROFILE=debug ;;
+        --release) PROFILE=release ;;
         -j|--jobs) JOBS="$2"; shift ;;
         --schedule) SCHEDULE="$2"; shift ;;
         --keep) KEEP=1 ;;
@@ -76,10 +83,6 @@ done
 
 REG="$REPO/compute/vendor/postgres-v18/src/test/regress"
 PGINST="$REPO/pg_install/v18"
-# yb-amp expected-output variants for the by-design CREATE TABLESPACE
-# diffs; overlaid into the vendored expected/ at run time (see below).
-YBEXP="$REPO/test/integration/compute/regress_yb_expected"
-OVERLAID=()   # variant files copied into expected/, removed by finish()
 
 # 1) Vendored Postgres source carries the suite (sql/expected/schedule).
 if [[ ! -f "$REG/parallel_schedule" ]]; then
@@ -89,27 +92,78 @@ fi
 [[ "$SCHEDULE" = /* ]] || SCHEDULE="$REG/$SCHEDULE"
 [[ -f "$SCHEDULE" ]] || { echo "schedule not found: $SCHEDULE" >&2; exit 1; }
 
-# 2) Build the binaries yb_amp_local spawns at runtime (it does not build
-#    them itself — a stale one surfaces as baffling runtime mismatches). The
-#    four server binaries are cargo targets; yb_amp_local and the controller are
-#    Go (controller/local/cmd, controller/cmd), built separately below.
-CLUSTER_BINS=(--bin pageserver --bin safekeeper
-              --bin compute-ctl
+# 2) Everything the suite needs to run: a Postgres install matching the
+#    checked-out submodule (postgres_ffi binds against its headers, so the cargo
+#    build needs it too), a yb_amp.so built from this tree's C sources, and the
+#    binaries yb_amp_local spawns at runtime — it does not build them, and a
+#    stale one surfaces as a baffling runtime mismatch.
+#
+#    --no-build: a caller already produced all of it in this tree, so touch
+#    nothing. CI relies on that — it runs this straight after run.sh in the same
+#    job, and building here would not just duplicate work but UNDO it: build.sh
+#    requires a release Postgres, run.sh's extension make leaves a cassert one
+#    (Makefile BUILD_TYPE defaults to debug), so each would wipe and rebuild
+#    pg_install behind the other, dragging the postgres_ffi-dependent crates with
+#    it. The profile comes from whatever is in target/, so it follows run.sh
+#    rather than needing to agree with it.
+CLUSTER_BINS=(pageserver safekeeper compute-ctl
               # yb_amp_local runs the three daemons under this.
-              --bin endpoint-supervisor)
-echo ">>> building cluster binaries ($PROFILE)..."
-if [[ $PROFILE == release ]]; then
-    cargo build --release "${CLUSTER_BINS[@]}"
-    YB_AMP="$REPO/target/release/yb_amp_local"
-    _PROFILE_DIR=release
+              endpoint-supervisor
+              # Go, not cargo targets: the launcher and the controller it spawns.
+              yb_amp_local controller)
+if [[ $NO_BUILD == 1 ]]; then
+    for _p in release debug; do
+        _missing=0
+        for _b in "${CLUSTER_BINS[@]}"; do
+            [[ -x "$REPO/target/$_p/$_b" ]] || { _missing=1; break; }
+        done
+        [[ $_missing == 0 ]] && { _PROFILE_DIR=$_p; break; }
+    done
+    [[ -n ${_PROFILE_DIR:-} ]] || {
+        echo "--no-build: no complete cluster build in target/{release,debug}." >&2
+        echo "Run test/integration/compute/run.sh first, or drop --no-build." >&2
+        exit 1
+    }
+    [[ -x "$PGINST/bin/postgres" && -f "$PGINST/lib/postgresql/yb_amp.so" ]] || {
+        echo "--no-build: pg_install/v18 has no postgres or no yb_amp.so." >&2
+        exit 1
+    }
+    PROFILE=$_PROFILE_DIR
+    YB_AMP="$REPO/target/$_PROFILE_DIR/yb_amp_local"
+    echo ">>> reusing the existing $_PROFILE_DIR build (--no-build)"
 else
-    cargo build "${CLUSTER_BINS[@]}"
-    YB_AMP="$REPO/target/debug/yb_amp_local"
-    _PROFILE_DIR=debug
+    # The extension gets a CLEAN rebuild when its sources changed — PGXS has no
+    # header dependency tracking — keyed on a stamp rather than the installed .so,
+    # whose mtime ninstall.sh preserves when the rebuild is byte-identical.
+    # `env -u PROFILE`: PGXS reads $PROFILE as C flags, and ours holds debug|release.
+    env -u PROFILE "$REPO/build.sh" --pg-only
+    EXT_SO="$PGINST/lib/postgresql/yb_amp.so"
+    EXT_STAMP="$REPO/build/.yb_amp_ext.stamp"
+    if [[ ! -f $EXT_SO ]] || [[ ! -f $EXT_STAMP ]] \
+        || [[ -n "$(find "$REPO/compute/pgxn" -type f \( -name '*.c' -o -name '*.h' -o -name 'Makefile' \) -newer "$EXT_STAMP" -print -quit)" ]]; then
+        echo ">>> yb_amp extension is stale (C sources changed or not yet built) — clean-rebuilding"
+        rm -rf "$REPO/build/pgxn-v18"
+        env -u PROFILE make -C "$REPO" yb-amp-pg-ext-v18
+        mkdir -p "$REPO/build"
+        touch "$EXT_STAMP"
+    fi
+
+    # Same features run.sh builds the cluster binaries with, so a tree it already
+    # built is not recompiled under a second feature set.
+    echo ">>> building cluster binaries ($PROFILE)..."
+    _CARGO_BINS=(--bin pageserver --bin safekeeper --bin compute-ctl --bin endpoint-supervisor)
+    FEATURES=(--features "pageserver/testing,safekeeper/testing")
+    if [[ $PROFILE == release ]]; then
+        cargo build --release "${FEATURES[@]}" "${_CARGO_BINS[@]}"
+        _PROFILE_DIR=release
+    else
+        cargo build "${FEATURES[@]}" "${_CARGO_BINS[@]}"
+        _PROFILE_DIR=debug
+    fi
+    YB_AMP="$REPO/target/$_PROFILE_DIR/yb_amp_local"
+    ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local )
+    ( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
 fi
-# yb_amp_local and the controller it spawns are Go binaries, not cargo targets.
-( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/yb_amp_local" ./local/cmd/yb_amp_local )
-( cd "$REPO/controller" && go build -o "$REPO/target/$_PROFILE_DIR/controller" ./cmd/controller )
 
 # 2b) Build + install the regression suite's C support modules. The core
 #     tests load helper functions/types from regress.so, and the trigger
@@ -139,7 +193,9 @@ PG_CONFIG = $PG_CONFIG
 PGXS := \$(shell \$(PG_CONFIG) --pgxs)
 include \$(PGXS)
 MK
-if ! make -C "$tmod" >"$tmod/build.log" 2>&1; then
+# `env -u PROFILE` for the same reason as the extension build above: PGXS reads
+# $PROFILE as C flags, and ours holds debug|release.
+if ! env -u PROFILE make -C "$tmod" >"$tmod/build.log" 2>&1; then
     echo "test-module build failed:" >&2; tail -20 "$tmod/build.log" >&2; rm -rf "$tmod"; exit 1
 fi
 cp "$tmod"/regress.so "$tmod"/refint.so "$tmod"/autoinc.so "$PKGLIB/"
@@ -156,18 +212,39 @@ export YB_AMP_REPO_DIR="${YB_AMP_REPO_DIR:-$REPO/.integration-tests/pg_regress_$
 export POSTGRES_DISTRIB_DIR="$REPO/pg_install"
 export LD_LIBRARY_PATH="$PGINST/lib:${LD_LIBRARY_PATH:-}"
 
-# Pick a free port block (base..base+700): SC=base, PS pg/http/grpc=+300/+400/+500,
-# SK=+100/+200, compute=+700.
+# Low end of the OS ephemeral (dynamic) port range; mirrors the Rust harness's
+# ephemeral_floor (test/integration/compute/cluster.rs).
+ephemeral_floor() {
+    local lo=""
+    if [[ -r /proc/sys/net/ipv4/ip_local_port_range ]]; then
+        lo=$(cut -f1 /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)
+    fi
+    if [[ $lo =~ ^[0-9]+$ ]] && (( lo > 10000 )); then echo "$lo"; else echo 32768; fi
+}
+
+# Pick a free port block (base..base+700): SC=base, SK=+100/+200,
+# PS pg/http/grpc=+300/+400/+500, compute=+700.
+#
+# The whole block must sit BELOW the ephemeral floor, like the harness's
+# pick_port_base. `ss` sees only listeners, so a port up there can be taken
+# between this probe and the bind by an outbound connection — including our own
+# daemons' connections to YB, which is how a CI run lost its compute port on
+# :55700 with the cluster already up.
 pick_base() {
-    local b
-    for b in "${INTEGRATION_PORT_BASE:-53000}" 54000 55000 56000 57000 58000; do
-        local busy=0 p
-        for p in "$b" $((b+300)) $((b+400)) $((b+700)); do
+    local floor b p busy
+    floor=$(ephemeral_floor)
+    for b in "${INTEGRATION_PORT_BASE:-18000}" 19000 20000 21000 22000 23000; do
+        (( b + 700 < floor )) || continue
+        busy=0
+        # Every port the block actually binds. Probing only some of them let a
+        # busy safekeeper or pageserver-grpc port through, and the daemon then
+        # died on "Address already in use" instead of this moving to the next block.
+        for p in "$b" $((b+100)) $((b+200)) $((b+300)) $((b+400)) $((b+500)) $((b+700)); do
             ss -ltn 2>/dev/null | grep -q ":${p}\b" && { busy=1; break; }
         done
         [[ $busy == 0 ]] && { echo "$b"; return 0; }
     done
-    echo "no free port block found" >&2; return 1
+    echo "no free port block below the ephemeral floor ($floor)" >&2; return 1
 }
 BASE=$(pick_base)
 COMPUTE=$((BASE + 700))
@@ -180,10 +257,11 @@ clean() { bash "$REPO/test/integration/compute/clean.sh" >/dev/null 2>&1 || true
 finish() {
     local rc=$?
     trap - EXIT INT TERM HUP
-    # Remove the overlaid expected variants so the vendored submodule is
-    # left pristine (do this even with --keep — it's a source-tree edit,
-    # not cluster state).
-    [[ ${#OVERLAID[@]} -gt 0 ]] && rm -f "${OVERLAID[@]}"
+    # A failed run's daemon logs are the postmortem the results dir does not
+    # carry, so keep them the way the Rust harness does: clean.sh strips
+    # everything but *.log instead of removing the run dir, which is what the
+    # workflow's artifact upload globs.
+    if [[ $rc -ne 0 ]]; then export INTEGRATION_KEEP_LOGS=1; fi
     if [[ $KEEP == 1 ]]; then
         echo ">>> --keep: cluster left up (compute 127.0.0.1:${COMPUTE:-?}, db=$YB_DBNAME); results in ${OUTDIR:-n/a}"
         echo "    tear down: YB_DBNAME=$YB_DBNAME YB_AMP_REPO_DIR=$YB_AMP_REPO_DIR COMPUTE_PORT=${COMPUTE:-} bash test/integration/compute/clean.sh"
@@ -195,33 +273,31 @@ finish() {
 trap finish EXIT INT TERM HUP
 clean   # clear any leftover state for this (db, dir) up front
 
-# Overlay the yb-amp expected variants. pg_regress tries expected/<test>_N.out
-# (N=0..9) and passes if any matches, so these bless the by-design CREATE
-# TABLESPACE diffs as known-good without editing the upstream goldens. Copied
-# in here and removed by finish(), so the vendored submodule stays clean.
-# Regenerate after an intended change: cp "$OUTDIR"/results/<test>.out to
-# $YBEXP/<test>_<N>.out (N = an index not already used upstream).
-if [[ -d $YBEXP ]]; then
-    echo ">>> overlaying yb-amp expected variants: $(cd "$YBEXP" && echo *.out)"
-    for v in "$YBEXP"/*.out; do
-        dst="$REG/expected/$(basename "$v")"
-        [[ -e $dst ]] && { echo "refusing to clobber existing $dst" >&2; exit 1; }
-        cp "$v" "$dst"; OVERLAID+=("$dst")
-    done
-fi
-
 echo ">>> bringing up yb-amp cluster (db=$YB_DBNAME base=$BASE compute=$COMPUTE)"
 yb() { "$YB_AMP" "$@"; }
 yb init --yb-dbname "$YB_DBNAME" --yb-host "$YB_HOST" --yb-port "$YB_PORT" --port-base "$BASE"
 yb start
 BID=$(yb cluster create pgregress --pg-version 18 | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
-[[ -n "$BID" ]] || { echo "cluster create failed" >&2; clean; exit 1; }
-yb endpoint create main --branch-id "$BID" --pg-version 18 --pg-port "$COMPUTE"
+# Teardown is finish()'s job, not this branch's: exiting non-zero through the trap
+# is what keeps the failed bring-up's logs.
+[[ -n "$BID" ]] || { echo "cluster create failed" >&2; exit 1; }
+# yb_amp.regress_test_mode is the escape hatch yb_amp_ddl_handler.c defines for
+# exactly this suite: it lets CREATE TABLESPACE through and skips the
+# event-trigger superuser gating, both of which the upstream goldens assume.
+# Without it test_setup, tablespace and stats fail on the tablespace rejection.
+yb endpoint create main --branch-id "$BID" \
+    --pg-setting yb_amp.regress_test_mode=on \
+    --pg-version 18 --pg-port "$COMPUTE"
 yb endpoint start main --start-timeout 600s
 
 echo ">>> running pg_regress (schedule=$(basename "$SCHEDULE") jobs=$JOBS) against 127.0.0.1:$COMPUTE"
 # Results live OUTSIDE the run dir so they survive teardown (clean.sh rm's
-# YB_AMP_REPO_DIR). Old result dirs are reaped by the same 7-day GC as runs.
+# YB_AMP_REPO_DIR). Nothing else reaps them — the harness's GC and reap.sh both
+# key on the `run_` prefix, and these deliberately do not use it (reap.sh treats a
+# lockless run_ dir as dead and kills its processes, which would hit a live run
+# here) — so age out this script's own leftovers, both dirs and results.
+find "$REPO/.integration-tests" -maxdepth 1 -type d -name 'pg_regress_*' -mtime +7 \
+    -exec rm -rf {} + 2>/dev/null || true
 OUTDIR="${YB_AMP_REPO_DIR}_out"
 rm -rf "$OUTDIR"; mkdir -p "$OUTDIR"
 status=0

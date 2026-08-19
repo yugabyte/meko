@@ -30,6 +30,9 @@ Selection (default: unit then fast):
   fast            only the fast suite
   slow            only the slow suite
   all             unit, fast, then slow
+  pg_regress      the full upstream PostgreSQL suite — hands off to
+                  pg_regress.sh (see -h there), in this script's profile and
+                  with the remaining arguments forwarded
   <name>          one test by name (substring also matches), e.g.
                   branch_ancestor, restart_wal_replay_yb, smoke
 
@@ -65,6 +68,7 @@ Examples:
   test/integration/compute/run.sh smoke                 # one golden workload
   test/integration/compute/run.sh -n 20 restart_wal_replay_yb   # repeat 20x, count
   test/integration/compute/run.sh --release all         # full suite, release build
+  test/integration/compute/run.sh pg_regress            # upstream PostgreSQL suite
 EOF
 }
 
@@ -130,6 +134,21 @@ The integration harness needs one running — it does not start it for you. Eith
   * point at an existing YB:      YB_HOST=<host> YB_PORT=<port> $0 ...
 EOF
     exit 1
+fi
+
+# The upstream pg_regress suite has its own driver (own cluster, own schedule, no
+# Rust harness), so hand off — after the preflight above, so a missing YB fails the
+# same way for it. The selection is positional like any other, and this script's
+# conventions win over the driver's own defaults: debug unless --release, with the
+# rest of the arguments forwarded (an option only this script knows, e.g. -n, comes
+# back as the driver's "unknown arg" error rather than being ignored).
+if [[ " ${ARGS[*]-} " == *" pg_regress "* ]]; then
+    _forward=()
+    for _arg in ${ARGS[0]+"${ARGS[@]}"}; do
+        [[ $_arg == pg_regress ]] || _forward+=("$_arg")
+    done
+    exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pg_regress.sh" \
+        "--$PROFILE" ${_forward[0]+"${_forward[@]}"}
 fi
 
 # The pageserver and safekeeper link against the prebuilt `libyb_thin_client.so`

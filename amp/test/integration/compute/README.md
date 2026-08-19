@@ -150,6 +150,7 @@ compute, use `pg_regress.sh` — a separate driver that bypasses the Rust
 harness entirely:
 
 ```sh
+test/integration/compute/run.sh pg_regress         # same thing, via the one entry point
 test/integration/compute/pg_regress.sh            # full suite, release build (default)
 test/integration/compute/pg_regress.sh --debug    # debug build (slower)
 test/integration/compute/pg_regress.sh -j 16      # more pg_regress connections
@@ -157,17 +158,23 @@ test/integration/compute/pg_regress.sh --keep     # leave the cluster up for pos
 test/integration/compute/pg_regress.sh -h         # full help
 ```
 
-It drives the ~200-test suite straight from the vendored Postgres source
+It drives the 230-test suite straight from the vendored Postgres source
 (`compute/vendor/postgres-v18/src/test/regress`) via the stock `pg_regress`
 binary: it builds + installs the suite's C support modules (regress,
 refint, autoinc), brings up a throwaway `yb_amp_local` cluster, creates
 the `regression` database, runs the parallel schedule, and tears down on
-exit (unless `--keep`). The by-design `CREATE TABLESPACE`-unsupported
-diffs are blessed via the expected-output variants in
-[`regress_yb_expected/`](regress_yb_expected) (overlaid onto pg_regress's
-`expected/<test>_N.out` alternative-file mechanism, not by editing the
-upstream goldens), so a clean tree is a genuine green (0 failures on PG18).
-See the header of `pg_regress.sh` and issue #119 for details.
+exit (unless `--keep`). Expect 230/230 against the upstream goldens — there
+are no yb-amp-specific expected files, because the compute runs with
+`yb_amp.regress_test_mode=on`, the escape hatch `yb_amp_ddl_handler.c`
+defines for this suite (it lets `CREATE TABLESPACE` through, which
+`test_setup`, `tablespace` and `stats` need).
+
+In CI it runs as a second step of the integration job (`amp-pr-build.yml`), right
+after `run.sh`, as `pg_regress.sh --no-build`: it builds nothing and runs on what
+that step produced, taking the profile from whatever is in `target/`. Building
+there would undo `run.sh`'s work rather than merely duplicate it — `build.sh`
+requires a release Postgres and `run.sh`'s extension make leaves a cassert one, so
+each wipes the other's `pg_install`.
 
 > Defaults to a **release** build — a debug build of the full suite is
 > painfully slow. Honours `YB_HOST`/`YB_PORT`, `INTEGRATION_PORT_BASE`,
@@ -230,7 +237,6 @@ test/integration/
     run.sh                 wrapper: build + run the harness (signal-trap cleanup)
     pg_regress.sh          driver for the FULL upstream pg_regress suite (see above)
     extensions.sh          driver: externalized extension end-to-end on local deploy (see above)
-    regress_yb_expected/   yb-amp expected-output variants for pg_regress.sh
     clean.sh               teardown (kill procs, drop DB, wipe run dir)
     build.rs               auto-registers scenarios from fast/ and slow/
     Cargo.toml             the `integration_tests` crate

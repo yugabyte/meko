@@ -11,8 +11,10 @@ name: Amp CI
 #                submodule commit, so warm runs skip it.
 #   integration        — `test/integration/compute/run.sh` against a YugabyteDB container:
 #                live-DB unit tests + the fast scenario suite (run.sh's default)
-#                on PRs and main pushes. The slow suite runs daily on main and
-#                on-demand via `/ci amp_integration_slow` (see on-demand-checks.yml).
+#                on PRs and main pushes, then the upstream PostgreSQL suite
+#                (pg_regress.sh) on the same build. The slow suite runs daily on
+#                main and on-demand via `/ci amp_integration_slow` (see
+#                on-demand-checks.yml).
 #   controller — Go controller: `go build`, `go vet`, `go test`.
 #   migrations — the controller's live-database Go tests, against a throwaway
 #                YugabyteDB: steps each migration up/down/up in turn (catching a
@@ -403,6 +405,27 @@ jobs:
       - name: Integration tests (live-DB unit + fast scenarios)
         run: test/integration/compute/run.sh
 
+      # The upstream PostgreSQL suite (230 tests) against a yb-amp compute — stock
+      # Postgres behaviour over the yb_amp smgr, which the scenarios above do not
+      # cover. ~7 min: cluster bring-up plus the suite.
+      #
+      # --no-build: run on the build the step above produced and touch nothing
+      # else. Building here would UNDO that step's work — build.sh insists on a
+      # release Postgres while run.sh's extension make leaves a cassert one
+      # (Makefile BUILD_TYPE defaults to debug), so each wipes and rebuilds
+      # pg_install behind the other, taking the postgres_ffi-dependent crates with
+      # it (measured: +5 min Postgres, +1m43s crates). It fails loudly if that
+      # step ever stops producing a build.
+      #
+      # Its own cluster, on a block away from the one run.sh auto-picked and below
+      # the OS ephemeral floor — above it, an outbound socket can take a port
+      # between pg_regress.sh's probe and the bind (INTEGRATION_PORT_BASE is its
+      # first candidate, not a hard pin).
+      - name: pg_regress suite (upstream PostgreSQL)
+        env:
+          INTEGRATION_PORT_BASE: "18000"
+        run: test/integration/compute/pg_regress.sh --no-build
+
       - name: Upload run logs
         if: failure()
         uses: actions/upload-artifact@v7
@@ -412,7 +435,12 @@ jobs:
           # safekeeper), kept by the
           # harness's INTEGRATION_KEEP_LOGS teardown. Glob to *.log so any stray
           # non-log leftovers can't break artifact zip creation.
-          path: amp/.integration-tests/**/*.log
+          # pg_regress's regression.diffs is the postmortem for that suite —
+          # which tests diverged and how — and is not a *.log.
+          path: |
+            amp/.integration-tests/**/*.log
+            amp/.integration-tests/pg_regress_*_out/regression.diffs
+            amp/.integration-tests/pg_regress_*_out/regression.out
           # `.integration-tests` is a dot-dir; upload-artifact skips hidden paths
           # by default, so without this the artifact is empty.
           include-hidden-files: true

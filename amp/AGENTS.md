@@ -156,7 +156,7 @@ Code anchors:
   `5433`/`yb_storage`; without one, run them via
   `test/integration/compute/run.sh unit`, which points them at an isolated
   ephemeral cluster instead.
-- End-to-end: `test/integration/compute/run.sh [unit|fast|slow|all|<name>]`
+- End-to-end: `test/integration/compute/run.sh [unit|fast|slow|all|pg_regress|<name>]`
   (default: unit then fast) — a Rust harness
   (`integration_tests` crate) that brings up a real `yb_amp_local` + YB, runs
   scenario tests + golden `.sql` workloads, and scans the pageserver log
@@ -174,6 +174,13 @@ Code anchors:
   compute via the `extension_control_path`/`dynamic_library_path` GUCs, and runs
   `CREATE EXTENSION` + a real query (the local-deploy twin of `deploy/smoke-test.sh`'s
   `SMOKE_EXTENSIONS` GKE check). Needs docker.
+- Upstream PostgreSQL regression suite against a yb-amp compute:
+  `test/integration/compute/run.sh pg_regress` (or `pg_regress.sh` directly) —
+  the vendored 230-test `parallel_schedule` through the stock `pg_regress`,
+  which is stock Postgres behaviour over the `yb_amp` smgr rather than
+  amp-specific scenarios. CI runs it as a second step of the integration job, on
+  the build `run.sh` just produced — same profile and features, so its own build
+  steps are no-ops.
 
 ## Live dev cluster cheat-sheet
 
