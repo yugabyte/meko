@@ -94,6 +94,9 @@ const (
 	DBPurposeControlPlane DBPurpose = "controlplane"
 )
 
+// mekoSystemSchema holds every table the control-plane set creates.
+const mekoSystemSchema = "meko_system"
+
 // MigrationScope selects which migration sets RunMigrations applies.
 type MigrationScope struct {
 	System bool
@@ -163,6 +166,14 @@ func getMigrator(conn *sql.DB, purpose DBPurpose, fs embed.FS, rootFs string) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to load embedded %s data: %w", purpose, err)
 	}
+	// postgres.WithInstance creates the version table as it builds the driver,
+	// before m.Up() runs anything, so a schema the config pins it to has to exist
+	// already -- controlplane/000001 creating it is too late.
+	if purpose == DBPurposeControlPlane {
+		if _, err = conn.Exec("CREATE SCHEMA IF NOT EXISTS " + mekoSystemSchema); err != nil {
+			return nil, fmt.Errorf("failed to create %s schema: %w", mekoSystemSchema, err)
+		}
+	}
 	driver, err := postgres.WithInstance(conn, getPostgresConfig(purpose))
 	if err != nil {
 		return nil, fmt.Errorf("failed to %s migration driver: %w", purpose, err)
@@ -176,16 +187,22 @@ func getMigrator(conn *sql.DB, purpose DBPurpose, fs embed.FS, rootFs string) (*
 
 func getPostgresConfig(purpose DBPurpose) *postgres.Config {
 	switch purpose {
+	// Left wherever the search path puts it: this set shares its database with the
+	// data-plane tables, so moving its version table into meko_system would turn a
+	// drop of that schema into a whole-platform reset.
 	case DBPurposeSystem:
 		return &postgres.Config{
 			MigrationsTable: fmt.Sprintf("%s_%s", postgres.DefaultMigrationsTable, "system"),
 		}
 	// Its own tracking table, so a database that already ran the system set can
 	// also run this one (every statement is IF NOT EXISTS) without either set
-	// seeing the other's version.
+	// seeing the other's version. In meko_system, the schema this set creates and
+	// owns, so DROP SCHEMA meko_system CASCADE is a complete reset instead of one
+	// that strands a version row claiming the migrations are still applied.
 	case DBPurposeControlPlane:
 		return &postgres.Config{
 			MigrationsTable: fmt.Sprintf("%s_%s", postgres.DefaultMigrationsTable, "controlplane"),
+			SchemaName:      mekoSystemSchema,
 		}
 	default:
 		return &postgres.Config{}
