@@ -23,8 +23,21 @@ use utils::write_fence::{WriteToken, WriteTokenRequest, WriteTokenResponse};
 pub const BRANCH_ACTIVE_TIMEOUT: Duration = Duration::from_secs(180);
 pub const BRANCH_ACTIVE_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Timeout for the branch control calls, which block on the far side's startup
+/// rather than answering promptly. `GlobalTimelines::create` waits out the
+/// safekeeper's load behind a 60 s deadline of its own, and that load scales with
+/// the branch's WAL, so the shared client's 5 s killed the call on any branch big
+/// enough to need the wait — fatally, since a dropped request is not the
+/// retryable `StillLoading` the server would have returned (#831). Well past the
+/// server's own deadline, so the server gets to answer.
+pub const SLOW_CONTROL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
 /// A shared blocking client. Built once: `reqwest::blocking` starts a runtime per
 /// client, and the readiness probes call this hundreds of times.
+///
+/// Its 5 s is a *probe* budget. Calls that can legitimately block longer override
+/// it per request with [`SLOW_CONTROL_TIMEOUT`] rather than taking a second
+/// client, which would mean a second runtime.
 pub fn client() -> &'static reqwest::blocking::Client {
     static C: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
     C.get_or_init(|| {
@@ -65,7 +78,13 @@ pub fn wait_branch_active(
         if crate::supervise::shutdown_requested() {
             bail!("shutdown requested while waiting for the branch to become Active");
         }
-        match branch_state(&url) {
+        // Bounded by what is left of `timeout`: the 5 s probe budget is wrong here
+        // too, but a request outliving the loop's own deadline would make that
+        // deadline unenforceable.
+        let budget = deadline
+            .saturating_duration_since(Instant::now())
+            .min(SLOW_CONTROL_TIMEOUT);
+        match branch_state(&url, budget) {
             Ok(Some((state, lsn))) if state == "Active" => {
                 tracing::info!(branch_id, %lsn, "pageserver branch is Active");
                 return Ok(lsn);
@@ -95,8 +114,12 @@ pub fn wait_branch_active(
 /// `(state, last_record_lsn)`, or `None` when the pageserver has no such branch
 /// yet. `last_record_lsn` defaults to `0/0`, which is what a branch with no
 /// records reports.
-fn branch_state(url: &str) -> Result<Option<(String, String)>> {
-    let resp = client().get(url).send().context("GET branch")?;
+fn branch_state(url: &str, timeout: Duration) -> Result<Option<(String, String)>> {
+    let resp = client()
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .context("GET branch")?;
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -137,6 +160,7 @@ pub fn create_safekeeper_branch(
     });
     let resp = client()
         .post(&url)
+        .timeout(SLOW_CONTROL_TIMEOUT)
         .json(&body)
         .send()
         .context("POST safekeeper branch")?;
@@ -189,6 +213,13 @@ mod tests {
     /// A one-shot HTTP server that replies with `status` and `body` to every
     /// request, and reports back what it received.
     fn serve(replies: Vec<(u16, String)>) -> (u16, mpsc::Receiver<String>) {
+        serve_after(Duration::ZERO, replies)
+    }
+
+    /// `serve`, but the reply is withheld for `delay` — a server that is up and
+    /// working, just slow, which is what a safekeeper waiting out its startup
+    /// load looks like from the client side.
+    fn serve_after(delay: Duration, replies: Vec<(u16, String)>) -> (u16, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = mpsc::channel();
@@ -200,6 +231,7 @@ mod tests {
                 let mut buf = [0u8; 4096];
                 let n = sock.read(&mut buf).unwrap_or(0);
                 let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+                std::thread::sleep(delay);
                 let reason = if code == 200 { "OK" } else { "X" };
                 let resp = format!(
                     "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -228,6 +260,26 @@ mod tests {
         assert!(http_ok("127.0.0.1", port, "/status"));
         let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(req.starts_with("GET /status "), "{req}");
+    }
+
+    /// Regression for #831: the branch create shares the client whose 5 s exists
+    /// for readiness probes, and the safekeeper deliberately blocks this call
+    /// while it loads (up to 60 s server-side). A reply slower than the probe
+    /// budget must still be waited for — before the fix this failed at exactly
+    /// 5.000 s with `error sending request`, which the supervisor treats as fatal,
+    /// so the endpoint crashlooped and the branch could not be given an endpoint
+    /// at all.
+    #[test]
+    fn a_slow_branch_create_outlives_the_probe_budget() {
+        let (port, _rx) = serve_after(Duration::from_secs(6), vec![(200, "{}".into())]);
+        let started = Instant::now();
+        create_safekeeper_branch("127.0.0.1", port, "abc123", 18, "0/16B3F48")
+            .expect("a slow-but-successful create must not be cut off at 5s");
+        assert!(
+            started.elapsed() >= Duration::from_secs(5),
+            "the server replied too fast to prove anything: {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

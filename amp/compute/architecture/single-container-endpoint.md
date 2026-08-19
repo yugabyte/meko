@@ -146,7 +146,9 @@ The supervisor materializes the branch itself:
   `Active`, the supervisor creates the timeline on the safekeeper's
   HTTP API (`POST /v1/branch`) at the pageserver's `last_record_lsn`,
   with a single-member membership configuration (generation 1). A 409
-  on restart is fine.
+  on restart is fine. The safekeeper blocks this call while it loads, for
+  longer the more WAL the branch has, so the supervisor gives it
+  `SLOW_CONTROL_TIMEOUT` rather than the shared client's probe budget (#831).
 - **Compute.** `compute_ctl` gets a generated spec (`ComputeConfig`)
   whose `yb_amp.pageserver_connstring` / `yb_amp.safekeepers` (with the
   `g#1:` membership prefix, from `safekeepers_generation: 1`) /
