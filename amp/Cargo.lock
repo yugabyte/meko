@@ -1194,6 +1194,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "utils",
+ "uuid",
  "workspace_hack",
  "ysql_client",
 ]

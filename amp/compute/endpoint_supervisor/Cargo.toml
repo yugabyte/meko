@@ -38,6 +38,9 @@ tracing.workspace = true
 # The write fence: the token store client, the wire types, and the deadline
 # arithmetic — one definition shared with the daemons that enforce it.
 utils.workspace = true
+# `uuid` because `amp_registry.endpoints.id` is a `uuid` and the override read
+# binds it as one — see registry.rs's QUERY.
+uuid.workspace = true
 ysql_client.workspace = true
 tracing-subscriber.workspace = true
 workspace_hack.workspace = true

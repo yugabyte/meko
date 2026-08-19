@@ -363,6 +363,27 @@ async fn unit_tests(c: &Cluster) -> anyhow::Result<()> {
         .env("YB_TEST_DB", c.db_name());
     run_cargo_test(ps_sk, "pageserver/safekeeper unit tests").await?;
 
+    // The endpoint supervisor's registry override read, against this run's
+    // migrated `amp_registry`. A bin-only crate, so `--bins` rather than
+    // `--lib`; it seeds its own user/pool/cluster/branch/endpoint chain and
+    // tears it down. This is the test #834 did not have: the SQL text and the
+    // parser were both already covered and the read still failed on every
+    // endpoint boot, because only a live server reports the bind parameter's
+    // type back.
+    let mut supervisor = cargo_test_cmd();
+    supervisor.args([
+        "-p",
+        "endpoint_supervisor",
+        "--bins",
+        "--",
+        "registry::tests::live::",
+    ]);
+    supervisor
+        .env("YB_TEST_HOST", c.yb_host())
+        .env("YB_TEST_PORT", c.yb_port().to_string())
+        .env("YB_TEST_DB", c.db_name());
+    run_cargo_test(supervisor, "endpoint supervisor registry live tests").await?;
+
     // yb_thin_client live integration suite — the hot-path client (tserver
     // RPC on :9100; creates its own tables via YSQL in this run's ephemeral
     // db). `--ignored` runs the otherwise-skipped live tests; the process
