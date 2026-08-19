@@ -425,21 +425,28 @@ func (b *PgBackend) DeleteBranch(ctx context.Context, clusterID, branchID uuid.U
 	// tombstoned — both a converged no-op for a replayed cascade), or a live child
 	// fork or a still-present endpoint blocked it. Only the latter is an error, so
 	// classify before returning.
-	var blocked bool
+	//
+	// Liveness is the WHOLE classification: the UPDATE moved nothing, so a row that
+	// is still live had `dropped_at IS NULL`, which leaves one of the two NOT EXISTS
+	// guards as the only thing that can have failed — it WAS blocked.
+	//
+	// Re-checking the guards here would be a bug rather than extra rigour. This runs
+	// in a transaction of its own, so it would answer "is a blocker visible now?"
+	// where the question is "did the tombstone happen?" — and a blocker whose whole
+	// job is to make the caller retry can vanish in the gap: the racing fork's child
+	// is dropped by its own task, the endpoint created after the step's enumeration
+	// is deleted. "Retry me" would become "done", leaving a live branch whose
+	// endpoints the step already destroyed and which GC will never reclaim for want
+	// of a tombstone.
+	var live bool
 	if err := b.pool.QueryRow(ctx,
-		`SELECT (EXISTS (
-		    SELECT 1 FROM amp_registry.branches c
-		     WHERE c.cluster_id = $1::uuid AND c.parent_branch_id = $2::uuid
-		       AND c.dropped_at IS NULL)
-		   OR EXISTS (
-		    SELECT 1 FROM amp_registry.endpoints e WHERE e.branch_id = $2::uuid))
-		  AND EXISTS (
+		`SELECT EXISTS (
 		    SELECT 1 FROM amp_registry.branches
 		     WHERE cluster_id = $1::uuid AND branch_id = $2::uuid AND dropped_at IS NULL)`,
-		clusterID.String(), branchID.String()).Scan(&blocked); err != nil {
+		clusterID.String(), branchID.String()).Scan(&live); err != nil {
 		return fmt.Errorf("classify branch tombstone no-op: %w", err)
 	}
-	if blocked {
+	if live {
 		return ErrConflict
 	}
 	return nil
