@@ -123,6 +123,11 @@ data:
   SAFEKEEPER_PG_PORT: {{ .Values.ports.safekeeperPg | quote }}
   SAFEKEEPER_HTTP_PORT: {{ .Values.ports.safekeeperHttp | quote }}
   COMPUTE_CTL_HTTP_PORT: {{ .Values.ports.computeCtlHttp | quote }}
+  {{- if .Values.controller.url }}
+  # The settings API. Absent => the supervisor serves nothing, which is what an
+  # endpoint with no controller wants.
+  SUPERVISOR_HTTP_PORT: {{ .Values.ports.supervisorHttp | quote }}
+  {{- end }}
 
   # --- Supervisor behaviour ---
   SUPERVISOR_RESTART_BACKOFF_SECONDS: {{ .Values.supervisor.restartBackoffSeconds | quote }}

@@ -569,6 +569,75 @@ func (b *PgBackend) UpdateEndpointResources(ctx context.Context, endpointID uuid
 	return nil
 }
 
+// UpdateBranchSettings writes the branch-wide settings the caller named.
+//
+// One statement with a COALESCE per column rather than a built-up SET list: an
+// omitted surface passes NULL and keeps what is stored, so the shape of the
+// query does not depend on which fields the caller happened to send. Idempotent;
+// an absent row is a no-op.
+func (b *PgBackend) UpdateBranchSettings(ctx context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any) error {
+	pgJSON, err := settingsJSON(pg)
+	if err != nil {
+		return fmt.Errorf("encode branch pg_settings: %w", err)
+	}
+	wtJSON, err := settingsJSON(writeToken)
+	if err != nil {
+		return fmt.Errorf("encode branch write_token_settings: %w", err)
+	}
+	_, err = b.pool.Exec(ctx,
+		`UPDATE amp_registry.branches
+		    SET pg_settings          = COALESCE($2::jsonb, pg_settings),
+		        write_token_settings = COALESCE($3::jsonb, write_token_settings)
+		  WHERE branch_id = $1::uuid`,
+		branchID.String(), pgJSON, wtJSON)
+	if err != nil {
+		return fmt.Errorf("update branch settings: %w", err)
+	}
+	return nil
+}
+
+// UpdateEndpointSettings writes the endpoint settings the caller named, on the
+// same terms as UpdateBranchSettings.
+func (b *PgBackend) UpdateEndpointSettings(ctx context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any) error {
+	pgJSON, err := settingsJSON(pg)
+	if err != nil {
+		return fmt.Errorf("encode endpoint pg_settings: %w", err)
+	}
+	psJSON, err := settingsJSON(pageserver)
+	if err != nil {
+		return fmt.Errorf("encode endpoint pageserver_settings: %w", err)
+	}
+	skJSON, err := settingsJSON(safekeeper)
+	if err != nil {
+		return fmt.Errorf("encode endpoint safekeeper_settings: %w", err)
+	}
+	_, err = b.pool.Exec(ctx,
+		`UPDATE amp_registry.endpoints
+		    SET pg_settings         = COALESCE($2::jsonb, pg_settings),
+		        pageserver_settings = COALESCE($3::jsonb, pageserver_settings),
+		        safekeeper_settings = COALESCE($4::jsonb, safekeeper_settings)
+		  WHERE id = $1::uuid`,
+		endpointID.String(), pgJSON, psJSON, skJSON)
+	if err != nil {
+		return fmt.Errorf("update endpoint settings: %w", err)
+	}
+	return nil
+}
+
+// settingsJSON encodes a settings map for the COALESCE above: nil means "leave
+// it", and an empty map means "clear it" — which is why nil and `{}` cannot be
+// collapsed into one case here.
+func settingsJSON[T any](m *map[string]T) (any, error) {
+	if m == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(*m)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
 // count runs a scalar COUNT(*) query and returns its result.
 func (b *PgBackend) count(ctx context.Context, sql string, args ...any) (int, error) {
 	var n int

@@ -100,6 +100,10 @@ type Branch struct {
 	// branch. A fork inherits its parent's, and an endpoint's own settings merge
 	// over these (see Endpoint.PgSettings). Nil when none are set.
 	PgSettings map[string]string
+	// WriteTokenSettings is how the supervisor holds this branch's write lease
+	// (`ttl_ms`, `renew_seconds`). On the branch because the lease is one row per
+	// branch and every endpoint on it contends for that row. Nil when unset.
+	WriteTokenSettings map[string]any
 }
 
 // EffectivePgSettings is the settings an endpoint's compute actually runs with:
@@ -284,4 +288,11 @@ type Backend interface {
 	// DeleteEndpoint removes an endpoint record. Idempotent: deleting an absent
 	// row is a no-op.
 	DeleteEndpoint(ctx context.Context, endpointID uuid.UUID) error
+
+	// UpdateBranchSettings replaces the branch-wide settings that are non-nil
+	// and leaves the rest alone, so a caller that knows about one surface cannot
+	// blank another it has never heard of. An empty map clears a surface.
+	UpdateBranchSettings(ctx context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any) error
+	// UpdateEndpointSettings does the same for one endpoint's three surfaces.
+	UpdateEndpointSettings(ctx context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any) error
 }

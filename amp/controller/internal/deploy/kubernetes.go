@@ -765,6 +765,13 @@ func (k *KubernetesDeployer) EndpointSafekeeperURL(id string) string {
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", id, k.cfg.Namespace, safekeeperHTTPPort)
 }
 
+// EndpointSupervisorURL: the settings API is published on the same Service as
+// the daemon APIs, under the same gate — the chart opens it only when a
+// controller URL is set, which a controller-driven install always sets.
+func (k *KubernetesDeployer) EndpointSupervisorURL(id string) string {
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", id, k.cfg.Namespace, supervisorHTTPPort)
+}
+
 // chartValues mirrors the subset of deploy/helm/yb-amp-endpoint values.yaml
 // the controller drives. JSON tags match the chart keys; helm reads the
 // marshaled document as a values file.

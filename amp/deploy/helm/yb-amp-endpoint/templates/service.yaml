@@ -26,4 +26,10 @@ spec:
       port: {{ .Values.ports.safekeeperHttp }}
       targetPort: sk-http
       protocol: TCP
+    {{- if .Values.controller.url }}
+    - name: sup-http
+      port: {{ .Values.ports.supervisorHttp }}
+      targetPort: sup-http
+      protocol: TCP
+    {{- end }}
     {{- end }}

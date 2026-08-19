@@ -143,6 +143,12 @@ func (d *DockerDeployer) EndpointSafekeeperURL(id string) string {
 	return fmt.Sprintf("http://%s:%d", id, safekeeperHTTPPort)
 }
 
+// EndpointSupervisorURL: same shared network, same container name, the
+// supervisor's port.
+func (d *DockerDeployer) EndpointSupervisorURL(id string) string {
+	return fmt.Sprintf("http://%s:%d", id, supervisorHTTPPort)
+}
+
 // waitReady blocks until the endpoint's supervisor reports the compute is up and
 // its password is set (the marker it logs once Postgres accepts remote auth).
 func (d *DockerDeployer) waitReady(ctx context.Context, name string) error {

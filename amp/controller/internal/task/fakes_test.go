@@ -425,6 +425,10 @@ func (f *fakeDeployer) EndpointSafekeeperURL(id string) string {
 	return "http://" + id + ":7676"
 }
 
+func (f *fakeDeployer) EndpointSupervisorURL(id string) string {
+	return "http://" + id + ":9899"
+}
+
 // --- fakeStep: a configurable task.Step for worker tests --------------------
 
 // fakeStep records how many times it ran and can be told to fail. It surfaces a

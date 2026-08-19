@@ -17,6 +17,12 @@ import (
 // it uniformly from an endpoint's reachable host.
 const safekeeperHTTPPort = 7676
 
+// supervisorHTTPPort is the port an endpoint's supervisor serves its settings
+// API on (ports.supervisorHttp in deploy/helm/yb-amp-endpoint). Served only
+// where a controller exists to call it, which is exactly the case the
+// controller is in when it calls.
+const supervisorHTTPPort = 9899
+
 // branchIDValue renders a branch id for a deployer's wire format. uuid.Nil must
 // render as "" — the chart documents an empty branchId as "bootstrap a fresh
 // branch" and the supervisor's env_opt discards empty values, so emitting
@@ -157,4 +163,13 @@ type Deployer interface {
 	// ancestor's own safekeeper (#133). It is a pure function of id and the
 	// deployer's static config; it does not check that the endpoint is live.
 	EndpointSafekeeperURL(id string) string
+	// EndpointSupervisorURL returns the base URL of the endpoint's supervisor
+	// settings API, addressed exactly as EndpointSafekeeperURL addresses the
+	// safekeeper. The controller POSTs to it after writing a settings row, so a
+	// running endpoint re-reads it rather than waiting for its next restart.
+	//
+	// Empty when the deployer has no way to reach one, which the caller must
+	// treat as "cannot be told" rather than an error: the row is written either
+	// way, and an endpoint that was not told picks the change up when it starts.
+	EndpointSupervisorURL(id string) string
 }

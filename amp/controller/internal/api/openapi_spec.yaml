@@ -424,6 +424,53 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/settings:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+    patch:
+      tags: [branches]
+      operationId: updateBranchSettings
+      summary: Update a branch's settings
+      description: |
+        Replaces the branch-wide settings named in the body and leaves the rest
+        alone — an omitted field is "do not touch", not "clear", so a caller that
+        knows about one surface cannot blank another it has never heard of. To
+        clear a surface, send it as `{}`.
+
+        These are the **baseline** for every compute on the branch; an endpoint's
+        own `pg_settings` merge over them and win on a shared key.
+
+        Applied to running endpoints on a best-effort basis: the controller
+        writes the row, then asks each of the branch's endpoints to re-read it.
+        The daemons load their config at start, so an endpoint **restarts the
+        services whose config actually changed** and reports them in
+        `restarted`. A write that renders identical config restarts nothing.
+        An endpoint that cannot be reached is reported in `unreachable`; the row
+        is still written, so it picks the change up when it next starts.
+
+        `404` if the pool, cluster, or branch does not exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBranchSettingsRequest'
+      responses:
+        '200':
+          description: The settings now stored, and what they could not be applied to.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsUpdateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints:
     parameters:
       - $ref: '#/components/parameters/PoolId'
@@ -517,6 +564,54 @@ paths:
       responses:
         '202':
           $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/settings:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+      - $ref: '#/components/parameters/EndpointId'
+    patch:
+      tags: [endpoints]
+      operationId: updateEndpointSettings
+      summary: Update an endpoint's settings
+      description: |
+        Replaces the endpoint's settings named in the body and leaves the rest
+        alone — an omitted field is "do not touch", not "clear". To clear a
+        surface, send it as `{}`.
+
+        `pg_settings` merge over the branch's and win on a shared key;
+        `pageserver_settings` and `safekeeper_settings` are this endpoint's
+        alone.
+
+        Applied on a best-effort basis: the controller writes the row, then asks
+        the endpoint to re-read it. The daemons load their config at start, so
+        the endpoint **restarts the services whose config actually changed** and
+        reports them in `restarted`; a write that renders identical config
+        restarts nothing. An endpoint that cannot be reached is reported in
+        `unreachable`; the row is still written, so it picks the change up when
+        it next starts.
+
+        `404` if the pool, cluster, branch, or endpoint does not exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEndpointSettingsRequest'
+      responses:
+        '200':
+          description: The settings now stored, and what they could not be applied to.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsUpdateResult'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -1064,6 +1159,108 @@ components:
         created_at:
           type: string
           format: date-time
+
+    UpdateBranchSettingsRequest:
+      type: object
+      description: |
+        Branch-wide settings to replace. Every field is optional and an omitted
+        one is left as it is; send `{}` for a surface to clear it.
+      properties:
+        pg_settings:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Extra PostgreSQL settings as `{name: value}`. Replaces what is
+            stored; `{}` clears them.
+        write_token_settings:
+          $ref: '#/components/schemas/WriteTokenSettings'
+
+    UpdateEndpointSettingsRequest:
+      type: object
+      description: |
+        This endpoint's settings to replace. Every field is optional and an
+        omitted one is left as it is; send `{}` for a surface to clear it.
+      properties:
+        pg_settings:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Extra PostgreSQL settings as `{name: value}`. Replaces what is
+            stored; `{}` clears them.
+        pageserver_settings:
+          $ref: '#/components/schemas/DaemonSettings'
+        safekeeper_settings:
+          $ref: '#/components/schemas/DaemonSettings'
+
+    WriteTokenSettings:
+      type: object
+      additionalProperties: true
+      description: |
+        How the supervisor holds this branch's write lease
+        (`compute/architecture/compute-fencing.md`). `ttl_ms` is the lease
+        length; `renew_seconds` is how often it is renewed, and must be under
+        the TTL — the gap is how long a failing renewal may be retried before
+        anything stops writing.
+
+        On the branch and not the endpoint because the lease is one row per
+        branch: every endpoint on it contends for that row, so two endpoints
+        disagreeing about the TTL would not be an override, just whichever
+        renewed last.
+
+        Empty means the supervisor's own defaults. Read when an endpoint
+        starts.
+      example:
+        ttl_ms: 15000
+        renew_seconds: 5
+
+    SettingsUpdateResult:
+      type: object
+      required: [applied]
+      description: |
+        What was stored, and what could not be applied to a running endpoint.
+        The row is written either way — an endpoint that could not be told
+        picks the change up when it next starts.
+      properties:
+        applied:
+          type: boolean
+          description: Whether the settings were persisted. False never appears with a 200.
+        endpoints:
+          type: array
+          description: |
+            One entry per running endpoint the change was pushed to. Absent for
+            a branch with no endpoints.
+          items:
+            $ref: '#/components/schemas/EndpointSettingsOutcome'
+
+    EndpointSettingsOutcome:
+      type: object
+      required: [endpoint_id]
+      description: What one endpoint did with the change.
+      properties:
+        endpoint_id:
+          type: string
+          format: uuid
+        restarted:
+          type: array
+          description: |
+            Services the endpoint restarted onto the new config. Empty means
+            nothing changed for that endpoint — a settings write that renders
+            identical config costs nothing, so only what actually moved is
+            bounced.
+
+            Restarting the compute (`compute_ctl`) bounces Postgres, so a
+            change to `pg_settings` interrupts connections on that endpoint.
+            Heavier than most changes need — see meko#847, which will restart
+            only what requires it and reload the rest.
+          items:
+            type: string
+        unreachable:
+          type: string
+          description: |
+            Why this endpoint could not be told, when it could not be. The
+            settings are still stored.
 
     DaemonSettings:
       type: object

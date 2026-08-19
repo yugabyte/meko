@@ -480,6 +480,7 @@ type fakeDeployer struct {
 	mu        sync.Mutex
 	addr      string
 	skURL     string // safekeeper base URL EndpointSafekeeperURL returns (fork-point resolution)
+	supURL    string // supervisor settings API base URL; empty = unreachable
 	created   []deploy.EndpointSpec
 	deleted   []string
 	resized   []deploy.ResizeSpec
@@ -535,6 +536,13 @@ func (f *fakeDeployer) resizedSpecs() []deploy.ResizeSpec {
 
 func (f *fakeDeployer) EndpointSafekeeperURL(string) string {
 	return f.skURL
+}
+
+// supURL is the settings API the settings handlers POST to. Empty by default,
+// which the handlers report as "cannot be told" rather than treating as a
+// failure — the settings are stored either way.
+func (f *fakeDeployer) EndpointSupervisorURL(string) string {
+	return f.supURL
 }
 
 // TestCreateEndpointDeployFailure: under the async contract the handler no longer

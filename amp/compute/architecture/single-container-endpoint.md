@@ -57,6 +57,62 @@ until asked to start it again. An endpoint is up or down as a unit:
 `endpoint create` writes config and starts nothing, `endpoint start`
 runs it.
 
+## The settings API
+
+Every setting an operator can change — the branch's `pg_settings` and
+`write_token_settings`, the endpoint's `pg_settings`, `pageserver_settings` and
+`safekeeper_settings` — is read once at startup and rendered into the files the
+children start from. Editing a row therefore does nothing to a running endpoint
+until it restarts.
+
+`POST /v1/settings/reload` is how the controller closes that gap. The supervisor
+re-reads the registry, re-renders the configs, and replies with what it could
+**not** apply in place:
+
+```
+$ curl -sX POST http://$ENDPOINT:9899/v1/settings/reload
+{"restarted":["pageserver"]}
+```
+
+The lease timings are applied immediately — they are this process's own. The
+daemons read their config at start, so the supervisor restarts the ones whose
+config actually changed and reports them.
+
+**Only the ones that changed.** Each rendered file is compared with what is on
+disk before it is written, so a reload that produces identical bytes restarts
+nothing — which is what makes this safe to call after any edit rather than only
+after one known to matter. Most of a config comes from the environment and the
+resources, not from the registry row someone just edited, so most reloads are
+no-ops.
+
+Restarting the compute bounces Postgres, so a `pg_settings` change does
+interrupt connections on that endpoint. That cost is real; it is simply paid
+when the edit is made rather than left for someone to remember.
+
+It is also heavier than most changes need — Postgres classifies most GUCs as
+reloadable, and the daemons have no reload path at all — so the plan is to
+restart only what genuinely requires it and reload the rest
+([#847](https://github.com/yugabyte/meko/issues/847)).
+
+Two things follow from re-rendering at runtime rather than only at boot. Configs
+are written beside and renamed over, because a re-render races the monitor loop
+restarting a daemon and a half-written config fails with a parse error that
+explains nothing. And reloads are serialised, because two interleaving would each
+write the other's files and both report a "changed" that reflects the race rather
+than the registry.
+
+Served only where something calls it: the chart emits `SUPERVISOR_HTTP_PORT`
+only when `controller.url` is set, and with no port the supervisor serves
+nothing. It is unauthenticated, like the pageserver and safekeeper HTTP APIs the
+same Service already publishes — inherited posture rather than a new decision,
+and the endpoint takes no request body, so the most an unauthenticated caller
+can do is make the supervisor re-read state it already trusts.
+
+An endpoint on `PRERENDERED_CONFIG` refuses the call: its config belongs to the
+caller that wrote it (`yb_amp_local`), built from an environment this process
+cannot see, so re-rendering would replace a working config with one assembled
+from defaults.
+
 ## The write fence
 
 The supervisor also holds the endpoint's **lease on its branch** — a

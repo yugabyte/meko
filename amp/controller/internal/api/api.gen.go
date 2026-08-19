@@ -519,6 +519,26 @@ type EndpointResources struct {
 	Memory *string `json:"memory,omitempty"`
 }
 
+// EndpointSettingsOutcome What one endpoint did with the change.
+type EndpointSettingsOutcome struct {
+	EndpointId openapi_types.UUID `json:"endpoint_id"`
+
+	// Restarted Services the endpoint restarted onto the new config. Empty means
+	// nothing changed for that endpoint — a settings write that renders
+	// identical config costs nothing, so only what actually moved is
+	// bounced.
+	//
+	// Restarting the compute (`compute_ctl`) bounces Postgres, so a
+	// change to `pg_settings` interrupts connections on that endpoint.
+	// Heavier than most changes need — see meko#847, which will restart
+	// only what requires it and reload the rest.
+	Restarted *[]string `json:"restarted,omitempty"`
+
+	// Unreachable Why this endpoint could not be told, when it could not be. The
+	// settings are still stored.
+	Unreachable *string `json:"unreachable,omitempty"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	Error ErrorBody `json:"error"`
@@ -546,6 +566,18 @@ type ResizeEndpointRequest struct {
 	// **Guaranteed** QoS class. Omit the object (or either field) to take the
 	// defaults of 2 CPU cores and 4Gi of memory.
 	Resources EndpointResources `json:"resources"`
+}
+
+// SettingsUpdateResult What was stored, and what could not be applied to a running endpoint.
+// The row is written either way — an endpoint that could not be told
+// picks the change up when it next starts.
+type SettingsUpdateResult struct {
+	// Applied Whether the settings were persisted. False never appears with a 200.
+	Applied bool `json:"applied"`
+
+	// Endpoints One entry per running endpoint the change was pushed to. Absent for
+	// a branch with no endpoints.
+	Endpoints *[]EndpointSettingsOutcome `json:"endpoints,omitempty"`
 }
 
 // StoragePool defines model for StoragePool.
@@ -604,6 +636,91 @@ type TaskList struct {
 // TotalCount The number of items matching the request across all pages (ignores limit/offset).
 type TotalCount = int
 
+// UpdateBranchSettingsRequest Branch-wide settings to replace. Every field is optional and an omitted
+// one is left as it is; send `{}` for a surface to clear it.
+type UpdateBranchSettingsRequest struct {
+	// PgSettings Extra PostgreSQL settings as `{name: value}`. Replaces what is
+	// stored; `{}` clears them.
+	PgSettings *map[string]string `json:"pg_settings,omitempty"`
+
+	// WriteTokenSettings How the supervisor holds this branch's write lease
+	// (`compute/architecture/compute-fencing.md`). `ttl_ms` is the lease
+	// length; `renew_seconds` is how often it is renewed, and must be under
+	// the TTL — the gap is how long a failing renewal may be retried before
+	// anything stops writing.
+	//
+	// On the branch and not the endpoint because the lease is one row per
+	// branch: every endpoint on it contends for that row, so two endpoints
+	// disagreeing about the TTL would not be an override, just whichever
+	// renewed last.
+	//
+	// Empty means the supervisor's own defaults. Read when an endpoint
+	// starts.
+	WriteTokenSettings *WriteTokenSettings `json:"write_token_settings,omitempty"`
+}
+
+// UpdateEndpointSettingsRequest This endpoint's settings to replace. Every field is optional and an
+// omitted one is left as it is; send `{}` for a surface to clear it.
+type UpdateEndpointSettingsRequest struct {
+	// PageserverSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	PageserverSettings *DaemonSettings `json:"pageserver_settings,omitempty"`
+
+	// PgSettings Extra PostgreSQL settings as `{name: value}`. Replaces what is
+	// stored; `{}` clears them.
+	PgSettings *map[string]string `json:"pg_settings,omitempty"`
+
+	// SafekeeperSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
+}
+
 // User defines model for User.
 type User struct {
 	CreatedAt time.Time          `json:"created_at"`
@@ -634,6 +751,21 @@ type Version struct {
 	// Version Hybrid CalVer version from the repo-root VERSION file (MAJOR.YYMMDD.PATCH, e.g. "0.260714.0"); "dev" for an un-stamped build.
 	Version string `json:"version"`
 }
+
+// WriteTokenSettings How the supervisor holds this branch's write lease
+// (`compute/architecture/compute-fencing.md`). `ttl_ms` is the lease
+// length; `renew_seconds` is how often it is renewed, and must be under
+// the TTL — the gap is how long a failing renewal may be retried before
+// anything stops writing.
+//
+// On the branch and not the endpoint because the lease is one row per
+// branch: every endpoint on it contends for that row, so two endpoints
+// disagreeing about the TTL would not be an override, just whichever
+// renewed last.
+//
+// Empty means the supervisor's own defaults. Read when an endpoint
+// starts.
+type WriteTokenSettings map[string]interface{}
 
 // BranchId defines model for BranchId.
 type BranchId = openapi_types.UUID
@@ -763,6 +895,12 @@ type CreateEndpointJSONRequestBody = CreateEndpointRequest
 
 // ResizeEndpointJSONRequestBody defines body for ResizeEndpoint for application/json ContentType.
 type ResizeEndpointJSONRequestBody = ResizeEndpointRequest
+
+// UpdateEndpointSettingsJSONRequestBody defines body for UpdateEndpointSettings for application/json ContentType.
+type UpdateEndpointSettingsJSONRequestBody = UpdateEndpointSettingsRequest
+
+// UpdateBranchSettingsJSONRequestBody defines body for UpdateBranchSettings for application/json ContentType.
+type UpdateBranchSettingsJSONRequestBody = UpdateBranchSettingsRequest
 
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = CreateUserRequest
@@ -897,6 +1035,16 @@ type ClientInterface interface {
 	ResizeEndpointWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	ResizeEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateEndpointSettingsWithBody request with any body
+	UpdateEndpointSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateEndpointSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateBranchSettingsWithBody request with any body
+	UpdateBranchSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateBranchSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListTasks request
 	ListTasks(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1161,6 +1309,54 @@ func (c *Client) ResizeEndpointWithBody(ctx context.Context, poolId PoolId, clus
 
 func (c *Client) ResizeEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewResizeEndpointRequest(c.Server, poolId, clusterId, branchId, endpointId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateEndpointSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateEndpointSettingsRequestWithBody(c.Server, poolId, clusterId, branchId, endpointId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateEndpointSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateEndpointSettingsRequest(c.Server, poolId, clusterId, branchId, endpointId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateBranchSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateBranchSettingsRequestWithBody(c.Server, poolId, clusterId, branchId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateBranchSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateBranchSettingsRequest(c.Server, poolId, clusterId, branchId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2165,6 +2361,135 @@ func NewResizeEndpointRequestWithBody(server string, poolId PoolId, clusterId Cl
 	return req, nil
 }
 
+// NewUpdateEndpointSettingsRequest calls the generic UpdateEndpointSettings builder with application/json body
+func NewUpdateEndpointSettingsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateEndpointSettingsRequestWithBody(server, poolId, clusterId, branchId, endpointId, "application/json", bodyReader)
+}
+
+// NewUpdateEndpointSettingsRequestWithBody generates requests for UpdateEndpointSettings with any type of body
+func NewUpdateEndpointSettingsRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "endpointId", endpointId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s/settings", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewUpdateBranchSettingsRequest calls the generic UpdateBranchSettings builder with application/json body
+func NewUpdateBranchSettingsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateBranchSettingsRequestWithBody(server, poolId, clusterId, branchId, "application/json", bodyReader)
+}
+
+// NewUpdateBranchSettingsRequestWithBody generates requests for UpdateBranchSettings with any type of body
+func NewUpdateBranchSettingsRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/settings", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewListTasksRequest generates requests for ListTasks
 func NewListTasksRequest(server string, params *ListTasksParams) (*http.Request, error) {
 	var err error
@@ -2568,6 +2893,16 @@ type ClientWithResponsesInterface interface {
 	ResizeEndpointWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
 
 	ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
+
+	// UpdateEndpointSettingsWithBodyWithResponse request with any body
+	UpdateEndpointSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error)
+
+	UpdateEndpointSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error)
+
+	// UpdateBranchSettingsWithBodyWithResponse request with any body
+	UpdateBranchSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error)
+
+	UpdateBranchSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error)
 
 	// ListTasksWithResponse request
 	ListTasksWithResponse(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*ListTasksResponse, error)
@@ -3122,6 +3457,72 @@ func (r ResizeEndpointResponse) ContentType() string {
 	return ""
 }
 
+type UpdateEndpointSettingsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SettingsUpdateResult
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateEndpointSettingsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateEndpointSettingsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateEndpointSettingsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UpdateBranchSettingsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SettingsUpdateResult
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateBranchSettingsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateBranchSettingsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateBranchSettingsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListTasksResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3496,6 +3897,40 @@ func (c *ClientWithResponses) ResizeEndpointWithResponse(ctx context.Context, po
 		return nil, err
 	}
 	return ParseResizeEndpointResponse(rsp)
+}
+
+// UpdateEndpointSettingsWithBodyWithResponse request with arbitrary body returning *UpdateEndpointSettingsResponse
+func (c *ClientWithResponses) UpdateEndpointSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error) {
+	rsp, err := c.UpdateEndpointSettingsWithBody(ctx, poolId, clusterId, branchId, endpointId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateEndpointSettingsResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateEndpointSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error) {
+	rsp, err := c.UpdateEndpointSettings(ctx, poolId, clusterId, branchId, endpointId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateEndpointSettingsResponse(rsp)
+}
+
+// UpdateBranchSettingsWithBodyWithResponse request with arbitrary body returning *UpdateBranchSettingsResponse
+func (c *ClientWithResponses) UpdateBranchSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error) {
+	rsp, err := c.UpdateBranchSettingsWithBody(ctx, poolId, clusterId, branchId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateBranchSettingsResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateBranchSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error) {
+	rsp, err := c.UpdateBranchSettings(ctx, poolId, clusterId, branchId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateBranchSettingsResponse(rsp)
 }
 
 // ListTasksWithResponse request returning *ListTasksResponse
@@ -4340,6 +4775,100 @@ func ParseResizeEndpointResponse(rsp *http.Response) (*ResizeEndpointResponse, e
 	return response, nil
 }
 
+// ParseUpdateEndpointSettingsResponse parses an HTTP response from a UpdateEndpointSettingsWithResponse call
+func ParseUpdateEndpointSettingsResponse(rsp *http.Response) (*UpdateEndpointSettingsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateEndpointSettingsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SettingsUpdateResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateBranchSettingsResponse parses an HTTP response from a UpdateBranchSettingsWithResponse call
+func ParseUpdateBranchSettingsResponse(rsp *http.Response) (*UpdateBranchSettingsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateBranchSettingsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SettingsUpdateResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListTasksResponse parses an HTTP response from a ListTasksWithResponse call
 func ParseListTasksResponse(rsp *http.Response) (*ListTasksResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -4630,6 +5159,12 @@ type ServerInterface interface {
 	// Resize an endpoint's compute (in place)
 	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize)
 	ResizeEndpoint(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
+	// Update an endpoint's settings
+	// (PATCH /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/settings)
+	UpdateEndpointSettings(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
+	// Update a branch's settings
+	// (PATCH /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/settings)
+	UpdateBranchSettings(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error
 	// List tasks
 	// (GET /tasks)
 	ListTasks(ctx echo.Context, params ListTasksParams) error
@@ -5136,6 +5671,78 @@ func (w *ServerInterfaceWrapper) ResizeEndpoint(ctx echo.Context) error {
 	return err
 }
 
+// UpdateEndpointSettings converts echo context to params.
+func (w *ServerInterfaceWrapper) UpdateEndpointSettings(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
+	}
+
+	// ------------- Path parameter "endpointId" -------------
+	var endpointId EndpointId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "endpointId", ctx.Param("endpointId"), &endpointId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter endpointId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.UpdateEndpointSettings(ctx, poolId, clusterId, branchId, endpointId)
+	return err
+}
+
+// UpdateBranchSettings converts echo context to params.
+func (w *ServerInterfaceWrapper) UpdateBranchSettings(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.UpdateBranchSettings(ctx, poolId, clusterId, branchId)
+	return err
+}
+
 // ListTasks converts echo context to params.
 func (w *ServerInterfaceWrapper) ListTasks(ctx echo.Context) error {
 	var err error
@@ -5320,6 +5927,8 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 	router.DELETE(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.DeleteEndpoint, options.OperationMiddlewares["deleteEndpoint"]...)
 	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint, options.OperationMiddlewares["getEndpoint"]...)
 	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/resize", wrapper.ResizeEndpoint, options.OperationMiddlewares["resizeEndpoint"]...)
+	router.PATCH(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/settings", wrapper.UpdateEndpointSettings, options.OperationMiddlewares["updateEndpointSettings"]...)
+	router.PATCH(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/settings", wrapper.UpdateBranchSettings, options.OperationMiddlewares["updateBranchSettings"]...)
 	router.GET(options.BaseURL+"/tasks", wrapper.ListTasks, options.OperationMiddlewares["listTasks"]...)
 	router.GET(options.BaseURL+"/tasks/:taskId", wrapper.GetTask, options.OperationMiddlewares["getTask"]...)
 	router.GET(options.BaseURL+"/users", wrapper.ListUsers, options.OperationMiddlewares["listUsers"]...)
@@ -6463,6 +7072,141 @@ func (response ResizeEndpoint500JSONResponse) VisitResizeEndpointResponse(w http
 	return err
 }
 
+type UpdateEndpointSettingsRequestObject struct {
+	PoolId     PoolId     `json:"poolId"`
+	ClusterId  ClusterId  `json:"clusterId"`
+	BranchId   BranchId   `json:"branchId"`
+	EndpointId EndpointId `json:"endpointId"`
+	Body       *UpdateEndpointSettingsJSONRequestBody
+}
+
+type UpdateEndpointSettingsResponseObject interface {
+	VisitUpdateEndpointSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateEndpointSettings200JSONResponse SettingsUpdateResult
+
+func (response UpdateEndpointSettings200JSONResponse) VisitUpdateEndpointSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointSettings400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateEndpointSettings400JSONResponse) VisitUpdateEndpointSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointSettings404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateEndpointSettings404JSONResponse) VisitUpdateEndpointSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointSettings500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateEndpointSettings500JSONResponse) VisitUpdateEndpointSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateBranchSettingsRequestObject struct {
+	PoolId    PoolId    `json:"poolId"`
+	ClusterId ClusterId `json:"clusterId"`
+	BranchId  BranchId  `json:"branchId"`
+	Body      *UpdateBranchSettingsJSONRequestBody
+}
+
+type UpdateBranchSettingsResponseObject interface {
+	VisitUpdateBranchSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateBranchSettings200JSONResponse SettingsUpdateResult
+
+func (response UpdateBranchSettings200JSONResponse) VisitUpdateBranchSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateBranchSettings400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateBranchSettings400JSONResponse) VisitUpdateBranchSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateBranchSettings404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateBranchSettings404JSONResponse) VisitUpdateBranchSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateBranchSettings500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response UpdateBranchSettings500JSONResponse) VisitUpdateBranchSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListTasksRequestObject struct {
 	Params ListTasksParams
 }
@@ -6812,6 +7556,12 @@ type StrictServerInterface interface {
 	// Resize an endpoint's compute (in place)
 	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/resize)
 	ResizeEndpoint(ctx context.Context, request ResizeEndpointRequestObject) (ResizeEndpointResponseObject, error)
+	// Update an endpoint's settings
+	// (PATCH /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/settings)
+	UpdateEndpointSettings(ctx context.Context, request UpdateEndpointSettingsRequestObject) (UpdateEndpointSettingsResponseObject, error)
+	// Update a branch's settings
+	// (PATCH /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/settings)
+	UpdateBranchSettings(ctx context.Context, request UpdateBranchSettingsRequestObject) (UpdateBranchSettingsResponseObject, error)
 	// List tasks
 	// (GET /tasks)
 	ListTasks(ctx context.Context, request ListTasksRequestObject) (ListTasksResponseObject, error)
@@ -7293,6 +8043,73 @@ func (sh *strictHandler) ResizeEndpoint(ctx echo.Context, poolId PoolId, cluster
 		return err
 	} else if validResponse, ok := response.(ResizeEndpointResponseObject); ok {
 		return validResponse.VisitResizeEndpointResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// UpdateEndpointSettings operation middleware
+func (sh *strictHandler) UpdateEndpointSettings(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error {
+	var request UpdateEndpointSettingsRequestObject
+
+	request.PoolId = poolId
+	request.ClusterId = clusterId
+	request.BranchId = branchId
+	request.EndpointId = endpointId
+
+	var body UpdateEndpointSettingsJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateEndpointSettings(ctx.Request().Context(), request.(UpdateEndpointSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateEndpointSettings")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(UpdateEndpointSettingsResponseObject); ok {
+		return validResponse.VisitUpdateEndpointSettingsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// UpdateBranchSettings operation middleware
+func (sh *strictHandler) UpdateBranchSettings(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error {
+	var request UpdateBranchSettingsRequestObject
+
+	request.PoolId = poolId
+	request.ClusterId = clusterId
+	request.BranchId = branchId
+
+	var body UpdateBranchSettingsJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateBranchSettings(ctx.Request().Context(), request.(UpdateBranchSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateBranchSettings")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(UpdateBranchSettingsResponseObject); ok {
+		return validResponse.VisitUpdateBranchSettingsResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

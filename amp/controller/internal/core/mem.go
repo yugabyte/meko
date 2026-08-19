@@ -641,6 +641,57 @@ func (m *MemBackend) UpdateEndpointResources(_ context.Context, endpointID uuid.
 	return nil
 }
 
+// UpdateBranchSettings stores the branch-wide settings the caller named,
+// mirroring PgBackend: nil leaves a surface alone, an empty map clears it.
+// Absent branch is a no-op.
+func (m *MemBackend) UpdateBranchSettings(_ context.Context, branchID uuid.UUID, pg *map[string]string, writeToken *map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	br, ok := m.branches[branchID]
+	if !ok {
+		return nil
+	}
+	if pg != nil {
+		br.PgSettings = orNil(*pg)
+	}
+	if writeToken != nil {
+		br.WriteTokenSettings = orNil(*writeToken)
+	}
+	m.branches[branchID] = br
+	return nil
+}
+
+// UpdateEndpointSettings does the same for one endpoint's three surfaces.
+func (m *MemBackend) UpdateEndpointSettings(_ context.Context, endpointID uuid.UUID, pg *map[string]string, pageserver, safekeeper *map[string]any) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ep, ok := m.endpoints[endpointID]
+	if !ok {
+		return nil
+	}
+	if pg != nil {
+		ep.PgSettings = orNil(*pg)
+	}
+	if pageserver != nil {
+		ep.PageserverSettings = orNil(*pageserver)
+	}
+	if safekeeper != nil {
+		ep.SafekeeperSettings = orNil(*safekeeper)
+	}
+	m.endpoints[endpointID] = ep
+	return nil
+}
+
+// orNil normalises a cleared surface to nil, which is how "none set" is spelled
+// everywhere else in these structs — so a cleared surface and a never-set one
+// read the same, as they do out of the database.
+func orNil[T any](m map[string]T) map[string]T {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
 // EndpointIDsForBranch returns the ids of every endpoint on the branch (the
 // delete_branch step's Execute-time enumeration). An absent branch yields an
 // empty slice.

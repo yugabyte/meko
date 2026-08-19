@@ -64,6 +64,7 @@ pub mod config;
 pub mod control;
 pub mod coordinate;
 pub mod fence;
+pub mod http;
 pub mod pg_settings;
 pub mod pidfile;
 pub mod protected_keys;
@@ -127,7 +128,7 @@ pub(crate) fn env_u64(name: &str) -> Result<Option<u64>> {
 }
 
 /// The environment contract, as the chart's ConfigMap and Secret deliver it.
-struct Env {
+pub struct Env {
     layout: boot::Layout,
     yb_host_ports: String,
     yb_user: String,
@@ -313,6 +314,31 @@ impl Env {
         serde_json::from_value(v).context("building the YB connection for the write fence")
     }
 
+    /// Where to serve the settings API, or `None` when no port is configured.
+    ///
+    /// Opt-in rather than defaulted: this is the one listener in the pod that
+    /// exists for the control plane rather than for the endpoint's own traffic,
+    /// so a deployment that has no controller calling it should not have it
+    /// open. A port that will not parse is a warning and no listener, on the
+    /// same reasoning as the rest of this surface — a typo in a ConfigMap must
+    /// not be the reason a database will not start.
+    fn settings_api_addr(&self) -> Option<std::net::SocketAddr> {
+        let raw = env_opt("SUPERVISOR_HTTP_PORT")?;
+        match raw.trim().parse::<u16>() {
+            Ok(port) if port > 0 => Some(std::net::SocketAddr::from((
+                std::net::Ipv4Addr::UNSPECIFIED,
+                port,
+            ))),
+            _ => {
+                tracing::warn!(
+                    port = %raw,
+                    "SUPERVISOR_HTTP_PORT is not a port; the settings API will not be served"
+                );
+                None
+            }
+        }
+    }
+
     /// Host and port for the readiness wait, taken from the first entry of the
     /// comma-separated `host:port` list.
     fn yb_probe_target(&self) -> Result<(String, u16)> {
@@ -367,7 +393,7 @@ fn run() -> Result<std::process::ExitCode> {
     // process with its children already running.
     supervise::install_signal_handlers()?;
 
-    let env = Env::read()?;
+    let env = std::sync::Arc::new(Env::read()?);
     let l = &env.layout;
     let fence_cfg = fence::Config::from_env(&l.branch_id)?;
     if !fence_cfg.required {
@@ -413,7 +439,11 @@ fn run() -> Result<std::process::ExitCode> {
         // one derived from container defaults.
         require_prerendered(l)?;
     } else {
-        render_config(&env, &fence_cfg)?;
+        // Tolerant on the boot path: `fetch_overrides` warns and returns
+        // defaults, because an endpoint that cannot reach the registry must
+        // still start. `reload_config` refuses instead — see there.
+        let overrides = fetch_overrides(&env);
+        render_config(&env, fence_cfg.required, &overrides)?;
     }
 
     // Nothing starts before the endpoint holds its branch's write lease, and
@@ -424,6 +454,19 @@ fn run() -> Result<std::process::ExitCode> {
     // must not depend on any of the fencing machinery — including the token
     // store, whose brokenness may be exactly why it was set. With fencing off,
     // nothing here is connected to, acquired, renewed, or released.
+    // Once for the process, not once per lease: the settings it serves belong to
+    // the endpoint, which outlives any lease it happens to be holding. Not fatal
+    // — an endpoint serves fine without it, and refusing to run because a port is
+    // taken would trade a working database for a convenience. Only when a port is
+    // configured: the chart sets one, `yb_amp_local` does not.
+    if let Some(addr) = env.settings_api_addr() {
+        let state = std::sync::Arc::new(http::State::new(env.clone(), fence_cfg.required));
+        match http::spawn(addr, state) {
+            Ok(bound) => tracing::info!(%bound, "settings API bound"),
+            Err(e) => tracing::warn!("settings API unavailable: {e:#}"),
+        }
+    }
+
     let mut fence = if fence_cfg.required {
         Some(fence::Fence::connect(
             fence_cfg.clone(),
@@ -597,6 +640,11 @@ fn serve_one_lease(
         // supervisor means the monitor loop takes the lock a pass at a time —
         // see `control`.
         let sup: control::Shared = std::sync::Arc::new(std::sync::Mutex::new(sup));
+        // The settings API restarts through this one. Published per lease
+        // because it is rebuilt per lease, and retired when serving ends so a
+        // reload between leases says there is nothing running rather than
+        // restarting into a supervisor that has stopped.
+        http::set_supervisor(Some(sup.clone()));
         // Not fatal, at either step: the endpoint serves fine without a control
         // surface, and taking it down over one would trade a working database
         // for a missing convenience. `thread::spawn` panics when the process is
@@ -617,6 +665,11 @@ fn serve_one_lease(
         const POLL: std::time::Duration = std::time::Duration::from_millis(500);
         control::run_shared(&sup, POLL)
     })();
+
+    // Serving is over, so there is no supervisor to restart through until the
+    // next lease publishes one. A reload in the gap says so rather than acting
+    // on a supervisor that has stopped.
+    http::set_supervisor(None);
 
     // The serving is over, however it ended; nothing else stops the renewal
     // thread when the daemons died for a spent restart budget — the process is
@@ -650,7 +703,67 @@ fn serve_one_lease(
 ///
 /// All of it happens before anything starts, because a render failure is a bad
 /// config — failing here beats crash-looping a daemon against it.
-fn render_config(env: &Env, fence_cfg: &fence::Config) -> Result<()> {
+/// What a render changed on disk.
+///
+/// The daemons read their config once, at start, so "changed" is the same
+/// question as "does this service have to be restarted to be running what the
+/// registry says". Reporting it is the whole value of re-rendering at runtime:
+/// re-rendering is cheap, restarting a pageserver is not.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Rendered {
+    pub pageserver: bool,
+    pub safekeeper: bool,
+    pub compute: bool,
+}
+
+impl Rendered {
+    /// The services whose config on disk no longer matches what they are
+    /// running, in the order a caller would restart them.
+    pub fn stale(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        for (changed, name) in [
+            (self.safekeeper, "safekeeper"),
+            (self.pageserver, "pageserver"),
+            (self.compute, "compute_ctl"),
+        ] {
+            if changed {
+                out.push(name);
+            }
+        }
+        out
+    }
+}
+
+/// Re-read the registry and re-render, for a caller that is not booting.
+///
+/// The difference from the boot path is what a failed read means. At boot,
+/// carrying on with derived defaults is right: the endpoint has nothing else to
+/// start from, and an override that cannot be read is worth less than a database
+/// that will not come up. Here it is the opposite — the real settings are
+/// already on disk and already running, so rendering defaults over them would
+/// discard an operator's configuration because of a transient YB error, and
+/// report all three services as needing a restart onto it.
+pub fn reload_config(env: &Env, fence_required: bool) -> Result<Rendered> {
+    let overrides = match env.endpoint_id.as_deref() {
+        // Nothing to look up, so nothing to lose: same as boot.
+        None => registry::Overrides::default(),
+        Some(id) => {
+            let yb = env
+                .yb_conn_config()
+                .context("building the registry connection")?;
+            registry::fetch(&yb, id)
+                .context("re-reading the registry")?
+                .unwrap_or_default()
+        }
+    };
+    render_config(env, fence_required, &overrides)
+}
+
+pub fn render_config(
+    env: &Env,
+    fence_required: bool,
+    overrides: &registry::Overrides,
+) -> Result<Rendered> {
     let l = &env.layout;
 
     let cgroup_root: Utf8PathBuf = env_or("CGROUP_ROOT", "/sys/fs/cgroup").into();
@@ -682,8 +795,6 @@ fn render_config(env: &Env, fence_cfg: &fence::Config) -> Result<()> {
         tracing::warn!("data volume budget unknown; the LFC stays disabled");
     }
 
-    let overrides = fetch_overrides(env);
-
     // The branch's lease timings, before the fence takes a token with them.
     // `render_config` runs ahead of the acquire, so this is the one read that
     // already has them — the alternative is a second registry round trip on the
@@ -711,19 +822,19 @@ fn render_config(env: &Env, fence_cfg: &fence::Config) -> Result<()> {
         tracing::warn!("endpoint CPU unknown; leaving the daemons' scale_factor at their default");
     }
 
-    let mut ps_base = boot::pageserver_base(l, env.yb_conn(), fence_cfg.required);
+    let mut ps_base = boot::pageserver_base(l, env.yb_conn(), fence_required);
     ps_base.extend(scale.clone());
     let ps_toml = config::render(config::Daemon::Pageserver, ps_base, &overrides.pageserver)
         .context("rendering pageserver.toml")?;
-    write(&l.ps_datadir().join("pageserver.toml"), &ps_toml)?;
+    let pageserver = write(&l.ps_datadir().join("pageserver.toml"), &ps_toml)?;
 
     // The safekeeper's yb_storage_conn is a string-encoded inline table rather
     // than a table, which is the shape its config type expects.
-    let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string(), fence_cfg.required);
+    let mut sk_base = boot::safekeeper_base(l, env.yb_conn().to_string(), fence_required);
     sk_base.extend(scale);
     let sk_toml = config::render(config::Daemon::Safekeeper, sk_base, &overrides.safekeeper)
         .context("rendering safekeeper.toml")?;
-    write(&l.sk_datadir().join("safekeeper.toml"), &sk_toml)?;
+    let safekeeper = write(&l.sk_datadir().join("safekeeper.toml"), &sk_toml)?;
 
     let compute_spec = spec::render_compute_spec(
         &spec::ComputeSpecParams {
@@ -745,8 +856,12 @@ fn render_config(env: &Env, fence_cfg: &fence::Config) -> Result<()> {
         &env.chart_settings,
         &overrides.pg,
     );
-    write(&l.compute_spec(), &serde_json::to_string(&compute_spec)?)?;
-    Ok(())
+    let compute = write(&l.compute_spec(), &serde_json::to_string(&compute_spec)?)?;
+    Ok(Rendered {
+        pageserver,
+        safekeeper,
+        compute,
+    })
 }
 
 /// Checks that the caller really did write the files it said it would.
@@ -829,10 +944,28 @@ fn fetch_overrides(env: &Env) -> registry::Overrides {
     }
 }
 
-fn write(path: &Utf8Path, contents: &str) -> Result<()> {
-    std::fs::write(path, contents).with_context(|| format!("write {path}"))?;
-    tracing::info!(%path, bytes = contents.len(), "wrote");
-    Ok(())
+/// Write the file, and say whether that changed it.
+///
+/// Compared rather than assumed: at runtime the answer decides whether a daemon
+/// has to be restarted, and re-rendering the same bytes is the common case —
+/// most of a config comes from the environment and the resources, not from the
+/// registry row someone just edited.
+fn write(path: &Utf8Path, contents: &str) -> Result<bool> {
+    let changed = match std::fs::read_to_string(path) {
+        Ok(existing) => existing != contents,
+        // No file yet, or unreadable: writing it is a change either way.
+        Err(_) => true,
+    };
+    // Written beside and renamed over, rather than truncated in place. At boot
+    // nothing else is reading these; at runtime a re-render races the monitor
+    // loop restarting a daemon, and a daemon that reads a half-written config
+    // fails on a parse error that names nothing about why. `rename` within a
+    // directory is atomic, so a concurrent reader sees one version or the other.
+    let tmp = Utf8PathBuf::from(format!("{path}.tmp"));
+    std::fs::write(&tmp, contents).with_context(|| format!("write {tmp}"))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("rename {tmp} -> {path}"))?;
+    tracing::info!(%path, bytes = contents.len(), changed, "wrote");
+    Ok(changed)
 }
 
 /// Puts `dir` ahead of any inherited `LD_LIBRARY_PATH`, which the children
@@ -934,7 +1067,7 @@ mod tests {
         unsafe { std::env::remove_var("LD_LIBRARY_PATH") };
     }
 
-    fn test_env() -> Env {
+    pub(crate) fn test_env() -> Env {
         Env {
             layout: boot::Layout {
                 run_dir: "/data".into(),
@@ -993,6 +1126,36 @@ mod tests {
             "zzzzzzzz-0000-4000-8000-000000000001", // non-hex
         ] {
             assert_eq!(well_formed_endpoint_id(bad), None, "accepted {bad:?}");
+        }
+    }
+
+    /// The settings API is the one listener in this pod that exists for the
+    /// control plane rather than the endpoint's own traffic, so it is served
+    /// only where something calls it — the chart emits the port only when a
+    /// controller URL is set.
+    #[test]
+    fn the_settings_api_is_served_only_when_a_port_is_configured() {
+        let saved = std::env::var("SUPERVISOR_HTTP_PORT").ok();
+        let env = test_env();
+        // SAFETY: single-threaded test; this var is read by nothing else.
+        unsafe { std::env::remove_var("SUPERVISOR_HTTP_PORT") };
+        assert_eq!(env.settings_api_addr(), None, "unset must serve nothing");
+
+        unsafe { std::env::set_var("SUPERVISOR_HTTP_PORT", "9899") };
+        assert_eq!(env.settings_api_addr().unwrap().port(), 9899);
+
+        // A typo in a ConfigMap must not be the reason a database will not
+        // start, so these are warnings and no listener rather than failures.
+        for bad in ["", "0", "no", "70000", "-1"] {
+            unsafe { std::env::set_var("SUPERVISOR_HTTP_PORT", bad) };
+            assert_eq!(env.settings_api_addr(), None, "accepted {bad:?}");
+        }
+
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("SUPERVISOR_HTTP_PORT", v),
+                None => std::env::remove_var("SUPERVISOR_HTTP_PORT"),
+            }
         }
     }
 

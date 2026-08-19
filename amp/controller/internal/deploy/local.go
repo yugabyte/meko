@@ -49,3 +49,8 @@ func (LocalDeployer) ResizeEndpoint(_ context.Context, _ ResizeSpec) (ResizeResu
 // derive. Callers that need it must be gated on a reachable node (see
 // api.Provisioning.Node, which this driver leaves nil).
 func (LocalDeployer) EndpointSafekeeperURL(_ string) string { return "" }
+
+// EndpointSupervisorURL is likewise empty: the launcher owns these endpoints,
+// and one on prerendered config refuses a reload anyway — its settings are the
+// launcher's to re-render, from an environment the supervisor cannot see.
+func (LocalDeployer) EndpointSupervisorURL(_ string) string { return "" }

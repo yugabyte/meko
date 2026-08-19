@@ -121,6 +121,11 @@ ports:
   safekeeperPg: 5454
   safekeeperHttp: 7676
   computeCtlHttp: 3080
+  # -- The supervisor's settings API, which the controller calls after it edits
+  # an endpoint's or branch's settings so a running endpoint re-reads them.
+  # Served only when `controller.url` is set: with no controller there is nobody
+  # to call it, and an unused listener is surface for nothing.
+  supervisorHttp: 9899
 
 # LFC prewarm: compute_ctl saves the local file cache's contents to YugabyteDB
 # and loads them back on start, so a restarted endpoint is not cold.

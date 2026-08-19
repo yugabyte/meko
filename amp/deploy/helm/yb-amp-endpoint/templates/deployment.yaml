@@ -91,6 +91,11 @@ spec:
             - name: sk-http
               containerPort: {{ .Values.ports.safekeeperHttp }}
               protocol: TCP
+            {{- if .Values.controller.url }}
+            - name: sup-http
+              containerPort: {{ .Values.ports.supervisorHttp }}
+              protocol: TCP
+            {{- end }}
             {{- end }}
           {{- if .Values.readinessProbe.enabled }}
           readinessProbe:

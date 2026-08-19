@@ -81,3 +81,4 @@ func (d *memReplayDeployer) ResizeEndpoint(_ context.Context, _ deploy.ResizeSpe
 }
 
 func (d *memReplayDeployer) EndpointSafekeeperURL(id string) string { return "http://" + id + ":7676" }
+func (d *memReplayDeployer) EndpointSupervisorURL(id string) string { return "http://" + id + ":9899" }

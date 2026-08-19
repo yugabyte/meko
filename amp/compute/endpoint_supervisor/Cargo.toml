@@ -31,8 +31,15 @@ pageserver_api.workspace = true
 # The daemons' HTTP control plane: their readiness endpoints, and the
 # safekeeper's branch create.
 reqwest = { workspace = true, features = ["blocking", "json"] }
+# The settings API: the same server machinery the daemons serve their own
+# control planes with, so one HTTP surface in this pod is not a second shape.
+http-utils.workspace = true
+hyper0.workspace = true
+routerify.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tokio-util.workspace = true
 safekeeper_api.workspace = true
-tokio = { workspace = true, features = ["rt", "time"] }
+tokio = { workspace = true, features = ["rt", "time", "net", "sync"] }
 toml_edit.workspace = true
 tracing.workspace = true
 # The write fence: the token store client, the wire types, and the deadline
