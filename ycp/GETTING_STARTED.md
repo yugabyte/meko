@@ -6,12 +6,12 @@ modes that are easy to hit.
 
 > **What YCP is.** The control plane is `api_server` run with
 > `--control-plane-mode`; the data plane runs `meko-agent` from this directory.
-> Both are deployed by the `meko` Helm chart in
-> [meko-devops](https://github.com/yugabyte/meko-devops).
+> Both are deployed by the `meko` Helm chart at
+> [`meko/deploy/helm/meko`](../meko/deploy/helm/meko).
 >
 > This document gets you to the point where that chart can work: code that builds,
 > images in a registry, and a cluster allowed to pull them. The install itself is
-> [`charts/meko/YCP-RUNBOOK.md`](https://github.com/yugabyte/meko-devops/blob/main/charts/meko/YCP-RUNBOOK.md),
+> [`meko/deploy/helm/meko/YCP-RUNBOOK.md`](../meko/deploy/helm/meko/YCP-RUNBOOK.md),
 > which is written from a real bring-up and picks up exactly where this leaves off.
 
 - For what the pieces *are*, read [`ARCHITECTURE.md`](./ARCHITECTURE.md) first.
@@ -417,7 +417,7 @@ carry real per-user auth, treat that secret as exposed to the whole domain.
 ## Deploy
 
 With A–C satisfied, follow
-[`charts/meko/YCP-RUNBOOK.md`](https://github.com/yugabyte/meko-devops/blob/main/charts/meko/YCP-RUNBOOK.md):
+[`meko/deploy/helm/meko/YCP-RUNBOOK.md`](../meko/deploy/helm/meko/YCP-RUNBOOK.md):
 namespace and Secrets, `helm upgrade --install … -f values-ycp.yaml`, verify, then
 register an environment and attach an agent with `-f values-agent.yaml`.
 

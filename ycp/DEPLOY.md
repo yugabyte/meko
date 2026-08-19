@@ -6,10 +6,9 @@ built, configured, tested and operated. For the component overview see
 
 **Deploying the control plane is not covered here.** It is `api_server` with
 `--control-plane-mode`, installed from the `meko` Helm chart; the step-by-step is
-`charts/meko/YCP-RUNBOOK.md` in
-[meko-devops](https://github.com/yugabyte/meko-devops). §4 of that runbook is also
-how an agent gets attached to it in a real cluster. What follows is for building
-and debugging the agent itself.
+[`meko/deploy/helm/meko/YCP-RUNBOOK.md`](../meko/deploy/helm/meko/YCP-RUNBOOK.md).
+§4 of that runbook is also how an agent gets attached to it in a real cluster. What
+follows is for building and debugging the agent itself.
 
 ## Prerequisites
 

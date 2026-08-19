@@ -1,15 +1,15 @@
 # YCP — current state
 
 Checkpoint as of 2026-07-31. Snapshot of what is deployed and what is open; for how
-to deploy see [`charts/meko/YCP-RUNBOOK.md`](https://github.com/yugabyte/meko-devops/blob/main/charts/meko/YCP-RUNBOOK.md)
-in meko-devops and [`DEPLOY.md`](./DEPLOY.md), and for the design see
+to deploy see [`meko/deploy/helm/meko/YCP-RUNBOOK.md`](../meko/deploy/helm/meko/YCP-RUNBOOK.md)
+and [`DEPLOY.md`](./DEPLOY.md), and for the design see
 [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## There is one implementation
 
-`api_server --control-plane-mode` is YCP. It is deployed by the `meko` chart in
-meko-devops (`-f values-ycp.yaml`) and serves the fleet API, the agent API and the
-operator console.
+`api_server --control-plane-mode` is YCP. It is deployed by the `meko` chart at
+`meko/deploy/helm/meko` (`-f values-ycp.yaml`) and serves the fleet API, the agent
+API and the operator console.
 
 There were two until this change. `ycp/cmd/ycp` was a reference implementation of
 the same contract — no Cognito/S3/Langfuse, in-memory registry — used by the demo

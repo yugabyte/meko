@@ -26,12 +26,12 @@ ycp/test/e2e/run.sh           # build + deploy on kind; needs docker + kind
 ## Deploy
 
 Both images ship to the platform ECR registry and deploy through the `meko` Helm
-chart in [meko-devops](https://github.com/yugabyte/meko-devops):
+chart at [`meko/deploy/helm/meko`](../meko/deploy/helm/meko):
 
 | What | How |
 |------|-----|
-| The control plane | `charts/meko -f values-ycp.yaml` — see `charts/meko/YCP-RUNBOOK.md` |
-| An agent in a data plane | `charts/meko -f values-agent.yaml` — same runbook, §4 |
+| The control plane | `-f values-ycp.yaml` — see [`YCP-RUNBOOK.md`](../meko/deploy/helm/meko/YCP-RUNBOOK.md) |
+| An agent in a data plane | `-f values-agent.yaml` — same runbook, §4 |
 
 [`DEPLOY.md`](./DEPLOY.md) covers what is specific to this directory: which
 Dockerfile builds which image, how the agent is configured, and how it is
