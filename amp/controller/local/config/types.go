@@ -22,33 +22,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// BranchID is a branch identifier as a string (Rust `utils::id::BranchId`, a
-// 128-bit id that (de)serializes as the uuid's own spelling in human-readable
-// formats such as TOML).
-type BranchID = string
-
-// SameBranch reports whether two branch ids denote the same branch.
-//
-// Compared as uuids rather than as strings, because a branch id reaches the
-// launcher from a CLI flag or a config file and `uuid.Parse` accepts several
-// spellings of the same 128 bits. Every lookup that matches a caller's id
-// against a stored one goes through here, so a non-canonical spelling cannot
-// silently find nothing — which for `branch drop` would mean stopping no
-// endpoints and dropping the branch anyway.
-//
-// Falls back to string equality, so it is never stricter than a raw compare:
-// two ids that are byte-identical match even if neither parses.
-func SameBranch(a, b BranchID) bool {
-	if a == b {
-		return true
-	}
-	ua, errA := uuid.Parse(string(a))
-	ub, errB := uuid.Parse(string(b))
-	return errA == nil && errB == nil && ua == ub
-}
+// BranchID is a branch identifier: the uuid every `branch_id` column holds
+// (Rust `utils::id::BranchId`). An alias, not a defined type, so it keeps
+// uuid.UUID's text marshalling and round-trips through TOML and JSON unchanged.
+type BranchID = uuid.UUID
 
 // Lsn is a Postgres log sequence number in the "X/Y" upper/lower hex form
-// (Rust `utils::lsn::Lsn`).
+// (Rust `utils::lsn::Lsn`). Stays a string: there is no Go type for it to become.
 type Lsn = string
 
 // AuthType mirrors Rust `postgres_backend::AuthType`. Its serde repr is the

@@ -7,7 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/google/uuid"
 )
+
+// testBranchID is a branch id in the only spelling one ever has: the uuid's own.
+var testBranchID = uuid.MustParse("92331eed-afb2-40ef-bb2d-724d649bee78")
 
 func TestTimelineFlushLSN(t *testing.T) {
 	var gotPath string
@@ -18,14 +23,14 @@ func TestTimelineFlushLSN(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lsn, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br-1")
+	lsn, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, testBranchID)
 	if err != nil {
 		t.Fatalf("TimelineFlushLSN: %v", err)
 	}
 	if lsn != "0/16ABCD0" {
 		t.Errorf("lsn = %q, want 0/16ABCD0", lsn)
 	}
-	if want := "/v1/branch/br-1"; gotPath != want {
+	if want := "/v1/branch/" + testBranchID.String(); gotPath != want {
 		t.Errorf("path = %q, want %q", gotPath, want)
 	}
 }
@@ -37,7 +42,7 @@ func TestTimelineFlushLSNTrailingSlashBaseURL(t *testing.T) {
 	defer srv.Close()
 
 	// A base URL with a trailing slash must not double the separator.
-	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL+"/", "br"); err != nil {
+	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL+"/", testBranchID); err != nil {
 		t.Fatalf("TimelineFlushLSN: %v", err)
 	}
 }
@@ -50,7 +55,7 @@ func TestTimelineFlushLSNMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br"); err == nil {
+	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, testBranchID); err == nil {
 		t.Fatal("expected an error when the status has no flush_lsn")
 	}
 }
@@ -63,7 +68,7 @@ func TestTimelineFlushLSNNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br"); err == nil {
+	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, testBranchID); err == nil {
 		t.Fatal("expected an error on a 404 from the safekeeper")
 	}
 }
@@ -72,7 +77,7 @@ func TestTimelineFlushLSNNotFound(t *testing.T) {
 // while a node that answered badly is not, however unwelcome the answer.
 func TestTimelineFlushLSNUnreachableIsDistinguished(t *testing.T) {
 	// Port 1 needs root to bind, so nothing is listening: the dial is refused.
-	_, err := NewClient().TimelineFlushLSN(context.Background(), "http://127.0.0.1:1", "br")
+	_, err := NewClient().TimelineFlushLSN(context.Background(), "http://127.0.0.1:1", testBranchID)
 	if !errors.Is(err, ErrUnreachable) {
 		t.Errorf("dial refused: err = %v, want ErrUnreachable", err)
 	}
@@ -81,7 +86,7 @@ func TestTimelineFlushLSNUnreachableIsDistinguished(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
-	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, "br"); errors.Is(err, ErrUnreachable) {
+	if _, err := NewClient().TimelineFlushLSN(context.Background(), srv.URL, testBranchID); errors.Is(err, ErrUnreachable) {
 		t.Errorf("404 from the safekeeper: err = %v, want a non-ErrUnreachable error", err)
 	}
 }

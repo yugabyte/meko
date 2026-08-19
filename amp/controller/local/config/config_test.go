@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 func strPtr(s string) *string { return &s }
@@ -18,7 +19,7 @@ func u16Ptr(v uint16) *uint16 { return &v }
 // fullConfig builds an OnDiskConfig exercising every skip rule and the
 // nested sub-structs, for round-trip testing.
 func fullConfig() OnDiskConfig {
-	branch := BranchID("3d1f7595-b468-2303-04e0-b73cecbcb081")
+	branch := BranchID(uuid.MustParse("3d1f7595-b468-2303-04e0-b73cecbcb081"))
 	yb := &YbConnConfig{
 		HostPorts:   "10.0.0.1:5433,10.0.0.2:5440",
 		User:        "yugabyte",
@@ -435,7 +436,7 @@ func TestAuthKeypairAndJWT(t *testing.T) {
 	}
 
 	env := &LocalEnv{BaseDataDir: tmp, PrivateKeyPath: "auth_private_key.pem", PublicKeyPath: "auth_public_key.pem"}
-	claims := NewStorageClaims(ScopeTenant, "3d1f7595-b468-2303-04e0-b73cecbcb081")
+	claims := NewStorageClaims(ScopeTenant, uuid.MustParse("3d1f7595-b468-2303-04e0-b73cecbcb081"))
 	token, err := env.GenerateAuthToken(claims)
 	if err != nil {
 		t.Fatal(err)
@@ -509,33 +510,54 @@ func TestYbConnConfigLoopbackOnly(t *testing.T) {
 	}
 }
 
-// SameBranch is what every launcher lookup uses to match a caller's branch id
-// against a stored one, so it has to accept any spelling a uuid parses from: a
-// raw compare would silently find nothing, and `branch drop` reads "nothing
-// found" as "already dropped".
-func TestSameBranch(t *testing.T) {
-	const (
-		dashed = BranchID("9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60")
-		flat   = BranchID("9753168c7f0d4c8f9a3b1e2d3c4b5a60")
-		upper  = BranchID("9753168C-7F0D-4C8F-9A3B-1E2D3C4B5A60")
-		other  = BranchID("00000000-0000-0000-0000-000000000001")
-	)
-	for _, c := range []struct {
-		a, b BranchID
-		want bool
-	}{
-		{dashed, dashed, true},
-		{dashed, flat, true},
-		{dashed, upper, true},
-		{dashed, other, false},
-		// Never stricter than a raw compare: equal strings match even when
-		// neither is a uuid.
-		{"not-an-id", "not-an-id", true},
-		{"not-an-id", dashed, false},
-		{"", "", true},
+// A branch id reaches the launcher through a config file, so the typed field has
+// to read back every spelling one can be written in. Absent stays nil — a
+// pageserver that serves no branch yet — which PageserverConfForBranch skips.
+func TestPageserverBranchIDSpellings(t *testing.T) {
+	want := uuid.MustParse("9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60")
+	tmp := t.TempDir()
+	endpoints := filepath.Join(tmp, "endpoints")
+	for name, spelling := range map[string]string{
+		"dashed": "9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60",
+		"flat":   "9753168c7f0d4c8f9a3b1e2d3c4b5a60",
+		"upper":  "9753168C-7F0D-4C8F-9A3B-1E2D3C4B5A60",
 	} {
-		if got := SameBranch(c.a, c.b); got != c.want {
-			t.Errorf("SameBranch(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		writePageserverDir(t, endpoints, name, 64000)
+		path := filepath.Join(endpoints, name, "pageserver", "pageserver.toml")
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
 		}
+		if _, err := f.WriteString("branch_id = '" + spelling + "'\n"); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	// No branch_id at all.
+	writePageserverDir(t, endpoints, "unassigned", 64100)
+
+	found, err := DiscoverPageservers(endpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := &LocalEnv{Pageservers: found}
+	assigned := 0
+	for _, ps := range found {
+		if ps.BranchID == nil {
+			continue
+		}
+		assigned++
+		if *ps.BranchID != want {
+			t.Errorf("%s: branch_id = %v, want %v", ps.DataDir, *ps.BranchID, want)
+		}
+	}
+	if assigned != 3 {
+		t.Errorf("pageservers with a branch id = %d, want 3", assigned)
+	}
+	if env.PageserverConfForBranch(want) == nil {
+		t.Error("PageserverConfForBranch found no pageserver for the branch")
+	}
+	if env.PageserverConfForBranch(uuid.New()) != nil {
+		t.Error("PageserverConfForBranch matched an unrelated branch")
 	}
 }

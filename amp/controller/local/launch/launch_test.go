@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/yugabyte/amp/controller/local/config"
 )
 
@@ -75,15 +77,15 @@ func TestSecondPageserverGetsNextPortDelta(t *testing.T) {
 
 func TestFirstSafekeeperReusesTemplatePorts(t *testing.T) {
 	env := envWithTemplates()
-	conf, err := allocateSafekeeperConf(env, "main", "aa")
+	conf, err := allocateSafekeeperConf(env, "main", testBranchID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if conf.PgPort != 5454 || conf.HTTPPort != 7676 {
 		t.Errorf("got pg=%d http=%d, want 5454/7676", conf.PgPort, conf.HTTPPort)
 	}
-	if conf.BranchID == nil || *conf.BranchID != "aa" {
-		t.Errorf("branch_id = %v, want aa", conf.BranchID)
+	if conf.BranchID == nil || *conf.BranchID != testBranchID {
+		t.Errorf("branch_id = %v, want %v", conf.BranchID, testBranchID)
 	}
 	if conf.EndpointID != "main" {
 		t.Errorf("endpoint_id = %q, want main", conf.EndpointID)
@@ -95,12 +97,12 @@ func TestFirstSafekeeperReusesTemplatePorts(t *testing.T) {
 
 func TestSecondSafekeeperGetsNextPortDelta(t *testing.T) {
 	env := envWithTemplates()
-	first, err := allocateSafekeeperConf(env, "main", "aa")
+	first, err := allocateSafekeeperConf(env, "main", testBranchID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	env.Safekeepers = append(env.Safekeepers, first)
-	conf, err := allocateSafekeeperConf(env, "ep_b1", "bb")
+	conf, err := allocateSafekeeperConf(env, "ep_b1", uuid.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,13 +140,13 @@ func TestPageserverInitConfPreservesTemplateYbStorageConn(t *testing.T) {
 // integration harness scrapes: a line containing "successfully created" whose
 // 2nd whitespace token is the branch id.
 func TestSuccessfullyCreatedLineInvariant(t *testing.T) {
-	branchID := "d0d0d0d0-d0d0-d0d0-d0d0-d0d0d0d0d0d0"
+	branchID := uuid.MustParse("d0d0d0d0-d0d0-d0d0-d0d0-d0d0d0d0d0d0")
 	line := successfullyCreatedLine(branchID)
 	if !strings.Contains(line, "successfully created") {
 		t.Fatalf("line %q must contain 'successfully created'", line)
 	}
 	fields := strings.Fields(line)
-	if len(fields) < 2 || fields[1] != branchID {
+	if len(fields) < 2 || fields[1] != branchID.String() {
 		t.Fatalf("2nd whitespace token of %q = %q, want %q", line, secondToken(fields), branchID)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // GenerateAuthKeys writes an ed25519 keypair for JWT auth: a PKCS#8
@@ -135,11 +136,11 @@ const (
 
 // NewStorageClaims builds the JWT claims payload the storage daemons
 // expect (Rust `utils::auth::Claims`). The wire key for the branch stays
-// `tenant_id` for JWT compatibility. Pass an empty branchID to omit it.
+// `tenant_id` for JWT compatibility. Pass uuid.Nil to omit it.
 func NewStorageClaims(scope Scope, branchID BranchID) jwt.MapClaims {
 	claims := jwt.MapClaims{"scope": scope}
-	if branchID != "" {
-		claims["tenant_id"] = branchID
+	if branchID != uuid.Nil {
+		claims["tenant_id"] = branchID.String()
 	}
 	return claims
 }

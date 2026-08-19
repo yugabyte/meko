@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // testKubernetesConfig returns a fully-populated KubernetesConfig for the
@@ -26,12 +28,12 @@ func testKubernetesConfig() KubernetesConfig {
 	}
 }
 
-// testEndpointSpec returns an EndpointSpec as the API handler builds it: the
-// storage branch id is already a string, and the YB connection is populated.
+// testEndpointSpec returns an EndpointSpec as the API handler builds it, with
+// the YB connection populated.
 func testEndpointSpec() EndpointSpec {
 	return EndpointSpec{
 		Name:      "yb-ep-92331eed-afb2-a0ef-3b2d-724d649bee78",
-		BranchID:  "92331eed-afb2-a0ef-3b2d-724d649bee78",
+		BranchID:  uuid.MustParse("92331eed-afb2-a0ef-3b2d-724d649bee78"),
 		PgVersion: 15,
 		YB: YBConn{
 			HostPorts: "yb-tserver:5433",
@@ -82,8 +84,23 @@ func TestKubernetesValues(t *testing.T) {
 	if v.Endpoint.ComputePort != cfg.ComputePort {
 		t.Errorf("Endpoint.ComputePort = %d, want %d", v.Endpoint.ComputePort, cfg.ComputePort)
 	}
-	if v.Endpoint.BranchId != spec.BranchID {
+	if v.Endpoint.BranchId != spec.BranchID.String() {
 		t.Errorf("Endpoint.BranchId = %q, want %q", v.Endpoint.BranchId, spec.BranchID)
+	}
+}
+
+// An unset branch id must reach the chart as "", not as the nil uuid: the chart
+// reads an empty branchId as "bootstrap a fresh branch" and the supervisor's
+// env_opt discards empty values, and "00000000-…" passes both checks.
+func TestKubernetesValuesUnsetBranchIDIsEmpty(t *testing.T) {
+	k := NewKubernetesDeployer(testKubernetesConfig(), nil)
+	spec := testEndpointSpec()
+	spec.BranchID = uuid.Nil
+	if got := k.values(spec, spec.Name).Endpoint.BranchId; got != "" {
+		t.Errorf("Endpoint.BranchId = %q, want the empty sentinel", got)
+	}
+	if got := branchIDValue(testEndpointSpec().BranchID); got != testEndpointSpec().BranchID.String() {
+		t.Errorf("a set branch id rendered as %q", got)
 	}
 }
 

@@ -558,7 +558,7 @@ func (c *Controllers) resolveForkLSN(ctx context.Context, poolID uuid.UUID, pare
 		return "", errResp
 	}
 	skURL := c.prov.Deployer.EndpointSafekeeperURL(endpointDeployName(rw.ID))
-	lsn, err := c.prov.Node.TimelineFlushLSN(ctx, skURL, parent.BranchID.String())
+	lsn, err := c.prov.Node.TimelineFlushLSN(ctx, skURL, parent.BranchID)
 	if err != nil {
 		c.logger.LogAttrs(ctx, slog.LevelWarn, "could not resolve default fork point from parent safekeeper",
 			slog.String(applog.KeyBranchID, parent.BranchID.String()), slog.String("error", err.Error()))

@@ -42,7 +42,7 @@ func endpointDir(env *config.LocalEnv, endpointID string) string {
 // id and name are the row's, and the branch and pg version come from the branch.
 type endpointConf struct {
 	EndpointID                   string               `json:"endpoint_id"`
-	BranchID                     string               `json:"branch_id"`
+	BranchID                     config.BranchID      `json:"branch_id"`
 	Mode                         string               `json:"mode"`
 	PgPort                       uint16               `json:"pg_port"`
 	ExternalHTTPPort             uint16               `json:"external_http_port"`
@@ -218,22 +218,17 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 
 	// A branch is addressed by id, never by name: names are unique only within a
 	// cluster, and the launcher spans several (a lineage is a cluster).
-	branchID := config.BranchID(args.BranchID)
-	if branchID == "" {
+	if args.BranchID == "" {
 		return fmt.Errorf("`endpoint create` requires --branch-id")
 	}
-	// Canonicalize before anything derives from or compares it: the default
-	// endpoint id below is built from this string, and the lookups further down
-	// compare it against stored ids, which carry the spelling the API printed.
-	parsed, err := parseBranchID(branchID)
+	branchID, err := parseBranchID(args.BranchID)
 	if err != nil {
 		return err
 	}
-	branchID = config.BranchID(parsed.String())
 
 	endpointID := args.EndpointID
 	if endpointID == "" {
-		endpointID = "ep-" + string(branchID)
+		endpointID = "ep-" + branchID.String()
 	}
 
 	// The endpoint hangs off this branch, and the branch says which cluster and
@@ -289,7 +284,7 @@ func EndpointCreate(ctx context.Context, env *config.LocalEnv, args EndpointCrea
 // duplicate primary is refused by the schema before any local state exists; and
 // it is what mints the endpoint id the config has to carry.
 func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch *api.Branch, endpoints launcherEndpoints, endpointID string, args EndpointCreateArgs) error {
-	branchID := config.BranchID(branch.BranchId.String())
+	branchID := branch.BranchId
 	pgPort, err := resolvePort(args.PgPort, func() (uint16, error) {
 		return findFreePort(nextCandidatePort(endpoints))
 	})
@@ -426,7 +421,7 @@ func resolvePort(explicit *uint16, alloc func() (uint16, error)) (uint16, error)
 func checkConflictingEndpoints(endpoints launcherEndpoints, branchID config.BranchID) error {
 	for _, ep := range endpoints.all {
 		id := ep.conf.EndpointID
-		if config.SameBranch(ep.conf.BranchID, branchID) && ep.conf.Mode == cfg.ComputeModePrimary {
+		if ep.conf.BranchID == branchID && ep.conf.Mode == cfg.ComputeModePrimary {
 			return fmt.Errorf(
 				"attempting to create a duplicate primary endpoint on branch %s: endpoint %q exists already", branchID, id)
 		}

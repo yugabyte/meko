@@ -895,7 +895,7 @@ func (k *KubernetesDeployer) values(spec EndpointSpec, release string) chartValu
 		Endpoint: endpointValues{
 			PgVersion:   strconv.Itoa(pgVersion),
 			ComputePort: k.cfg.ComputePort,
-			BranchId:    spec.BranchID,
+			BranchId:    branchIDValue(spec.BranchID),
 			EndpointId:  spec.EndpointID,
 			Resources:   resourceValues{CPU: cpu, Memory: memory},
 			Extensions:  extensionValuesFor(spec.Extensions),

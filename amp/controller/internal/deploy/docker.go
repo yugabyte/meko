@@ -70,7 +70,7 @@ func (d *DockerDeployer) CreateEndpoint(ctx context.Context, spec EndpointSpec) 
 		"YB_USER":             spec.YB.User,
 		"YB_PASSWORD":         spec.YB.Password,
 		"YB_DBNAME":           spec.YB.DBName,
-		"BRANCH_ID":           spec.BranchID,
+		"BRANCH_ID":           branchIDValue(spec.BranchID),
 		"ENDPOINT_PG_VERSION": strconv.Itoa(spec.PgVersion),
 	}
 	// TODO(extensions): spec.Extensions are mounted as Kubernetes ImageVolumes

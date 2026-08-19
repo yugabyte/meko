@@ -155,7 +155,7 @@ func SetPageserverIdentity(path string, branchID config.BranchID) error {
 	if err := toml.Unmarshal(data, &doc); err != nil {
 		return fmt.Errorf("parse %q: %w", path, err)
 	}
-	doc["branch_id"] = branchID
+	doc["branch_id"] = branchID.String()
 	out, err := encodeTOML(doc)
 	if err != nil {
 		return fmt.Errorf("serialize %q: %w", path, err)

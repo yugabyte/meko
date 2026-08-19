@@ -166,22 +166,13 @@ func (b *branchAPI) allBranches(ctx context.Context) ([]api.Branch, error) {
 
 // resolveBranch returns the live branch with the given id, from any
 // of the launcher's clusters.
-//
-// Compared as uuids, not as strings: an id typed or pasted in any spelling a
-// uuid accepts has to resolve, matching what `Id::from_str` does on the Rust
-// side. A raw string compare would silently fail to find a branch given in a
-// non-canonical spelling, which `branch drop` would then report as success.
 func (b *branchAPI) resolveBranch(ctx context.Context, id config.BranchID) (*api.Branch, error) {
-	want, err := parseBranchID(id)
-	if err != nil {
-		return nil, err
-	}
 	branches, err := b.allBranches(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for i := range branches {
-		if branches[i].BranchId == want {
+		if branches[i].BranchId == id {
 			return &branches[i], nil
 		}
 	}
@@ -204,12 +195,11 @@ func (b *branchAPI) resolveBranchInCluster(ctx context.Context, clusterID uuid.U
 	return nil, nil
 }
 
-// parseBranchID turns the launcher's string BranchId into the uuid the product
-// API keys on. Lenient in the spellings it accepts, since the string reaches it
-// from a CLI flag or a config file: `uuid.Parse` takes the hyphenated form
-// everything prints, and the bare-hex one too.
-func parseBranchID(raw config.BranchID) (uuid.UUID, error) {
-	id, err := uuid.Parse(string(raw))
+// parseBranchID parses a branch id at the launcher's edge — a CLI flag — into the
+// uuid everything inside carries. Lenient: `uuid.Parse` also takes the flat-hex
+// spelling ids minted before the id was a uuid were printed in.
+func parseBranchID(raw string) (config.BranchID, error) {
+	id, err := uuid.Parse(raw)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("malformed branch id %q: %w", raw, err)
 	}

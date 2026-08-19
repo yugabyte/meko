@@ -5,13 +5,29 @@
 // runtime-specific logic lives here, never in core or the API handlers.
 package deploy
 
-import "context"
+import (
+	"context"
+
+	"github.com/google/uuid"
+)
 
 // safekeeperHTTPPort is the port every endpoint's co-located safekeeper serves
 // its HTTP API on. The same in both runtimes — the Docker container's internal
 // port and the Helm chart's ports.safekeeperHttp — so the controller can address
 // it uniformly from an endpoint's reachable host.
 const safekeeperHTTPPort = 7676
+
+// branchIDValue renders a branch id for a deployer's wire format. uuid.Nil must
+// render as "" — the chart documents an empty branchId as "bootstrap a fresh
+// branch" and the supervisor's env_opt discards empty values, so emitting
+// "00000000-0000-0000-0000-000000000000" would pass every one of those checks and
+// deploy a pod claiming to serve a branch that cannot exist.
+func branchIDValue(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
+}
 
 // YBConn is how an endpoint reaches the YugabyteDB storage universe.
 type YBConn struct {
@@ -34,9 +50,10 @@ type EndpointSpec struct {
 	// passed explicitly so the pod never has to parse its release name. Empty =>
 	// the pod runs on derived defaults with no override lookup.
 	EndpointID string
-	// BranchID is the storage-layer branch id this compute serves, as the uuid
-	// every `branch_id` prints (the flat single-id storage contract — no tenant).
-	BranchID  string
+	// BranchID is the storage-layer branch id this compute serves (the flat
+	// single-id storage contract — no tenant). uuid.Nil means "unset", which both
+	// deployers render as the empty string — see branchIDValue.
+	BranchID  uuid.UUID
 	PgVersion int
 	YB        YBConn
 	// ControllerURL, when non-empty, points the endpoint at that controller for

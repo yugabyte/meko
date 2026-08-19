@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/yugabyte/amp/controller/local/config"
@@ -21,8 +22,9 @@ import (
 // (rather than reading them out of the goldens) is what makes a wrong field
 // NAME/type surface: the writer must reproduce the golden from these
 // literals.
+var goldBranchID = uuid.MustParse("9a57cdca-fd66-3c91-ab83-654f21378725")
+
 const (
-	goldBranchID     = "9a57cdca-fd66-3c91-ab83-654f21378725"
 	goldPgDistribDir = "/net/dev-server-hsunder/share/code/amp/pg_install"
 	goldControlPlane = "http://127.0.0.1:30000/upcall/v1/"
 	goldSafekeeperPg = "127.0.0.1:30100"
@@ -164,7 +166,7 @@ func TestMetadataJSONGolden(t *testing.T) {
 
 func TestSafekeeperTomlGolden(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "safekeeper.toml")
-	branch := config.BranchID(goldBranchID)
+	branch := goldBranchID
 	yb := goldYbInlineConn
 	p := SafekeeperParams{
 		BranchID:      &branch,
@@ -275,7 +277,7 @@ func TestBuildComputeConfigRejectsNonPrimary(t *testing.T) {
 
 func TestSafekeeperTomlRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "safekeeper.toml")
-	branch := config.BranchID(goldBranchID)
+	branch := goldBranchID
 	tenantOnly := uint16(30150)
 	https := uint16(30250)
 	wal := uint32(128)

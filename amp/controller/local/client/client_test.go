@@ -162,17 +162,17 @@ func TestAPIIsNotFound(t *testing.T) {
 func TestPageserverTimelineInfo(t *testing.T) {
 	var cap capture
 	srv := recordingServer(t, &cap, http.StatusOK,
-		`{"branch_id":"b1","last_record_lsn":"0/16B3E10","consistent_lsn":"0/16B3D00"}`)
+		`{"branch_id":"`+testBranchID.String()+`","last_record_lsn":"0/16B3E10","consistent_lsn":"0/16B3D00"}`)
 	p := NewPageserver(srv.URL, nil)
 
-	info, err := p.TimelineInfo(context.Background(), "b1")
+	info, err := p.TimelineInfo(context.Background(), testBranchID)
 	if err != nil {
 		t.Fatalf("TimelineInfo: %v", err)
 	}
-	if cap.method != http.MethodGet || cap.path != "/v1/branch/b1" {
+	if cap.method != http.MethodGet || cap.path != "/v1/branch/"+testBranchID.String() {
 		t.Fatalf("hit %s %s", cap.method, cap.path)
 	}
-	if info.BranchID != "b1" || info.LastRecordLSN != "0/16B3E10" || info.ConsistentLSN != "0/16B3D00" {
+	if info.BranchID != testBranchID || info.LastRecordLSN != "0/16B3E10" || info.ConsistentLSN != "0/16B3D00" {
 		t.Fatalf("unexpected info: %+v", info)
 	}
 }
@@ -189,17 +189,17 @@ func TestPageserverStatusAndFlush(t *testing.T) {
 		t.Fatalf("status hit %s", cap.path)
 	}
 
-	if err := p.BranchFlush(context.Background(), "b1", "0/16B3E10"); err != nil {
+	if err := p.BranchFlush(context.Background(), testBranchID, "0/16B3E10"); err != nil {
 		t.Fatalf("BranchFlush: %v", err)
 	}
-	if cap.method != http.MethodPut || cap.path != "/v1/branch/b1/flush" {
+	if cap.method != http.MethodPut || cap.path != "/v1/branch/"+testBranchID.String()+"/flush" {
 		t.Fatalf("flush hit %s %s", cap.method, cap.path)
 	}
 	if cap.query != "lsn=0%2F16B3E10" {
 		t.Fatalf("unexpected flush query: %q", cap.query)
 	}
 
-	if err := p.BranchFlush(context.Background(), "b1", ""); err != nil {
+	if err := p.BranchFlush(context.Background(), testBranchID, ""); err != nil {
 		t.Fatalf("BranchFlush no-wait: %v", err)
 	}
 	if cap.query != "" {
@@ -213,7 +213,7 @@ func TestSafekeeperCreateTimelineAndStatus(t *testing.T) {
 	s := NewSafekeeper(srv.URL, nil)
 
 	err := s.CreateTimeline(context.Background(), SafekeeperTimelineCreateRequest{
-		BranchID:  "b1",
+		BranchID:  testBranchID,
 		PgVersion: 180000,
 		StartLSN:  "0/16B3E10",
 	})
@@ -234,17 +234,22 @@ func TestSafekeeperCreateTimelineAndStatus(t *testing.T) {
 	if raw["start_lsn"] != "0/16B3E10" {
 		t.Fatalf("start_lsn wrong: %v", raw["start_lsn"])
 	}
+	// The typed branch id still goes on the wire as the uuid's own spelling.
+	if raw["branch_id"] != testBranchID.String() {
+		t.Fatalf("branch_id wrong: %v", raw["branch_id"])
+	}
 	if _, ok := raw["system_id"]; !ok {
 		t.Fatal("system_id field missing")
 	}
 
-	tst := recordingServer(t, &cap, http.StatusOK, `{"branch_id":"b1","flush_lsn":"0/16B3E10","commit_lsn":"0/16B3E10"}`)
+	tst := recordingServer(t, &cap, http.StatusOK,
+		`{"branch_id":"`+testBranchID.String()+`","flush_lsn":"0/16B3E10","commit_lsn":"0/16B3E10"}`)
 	s2 := NewSafekeeper(tst.URL, nil)
-	got, err := s2.TimelineStatus(context.Background(), "b1")
+	got, err := s2.TimelineStatus(context.Background(), testBranchID)
 	if err != nil {
 		t.Fatalf("TimelineStatus: %v", err)
 	}
-	if cap.path != "/v1/branch/b1" {
+	if cap.path != "/v1/branch/"+testBranchID.String() {
 		t.Fatalf("status hit %s", cap.path)
 	}
 	if got.FlushLSN != "0/16B3E10" {

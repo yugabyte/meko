@@ -4,9 +4,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-
-	"github.com/yugabyte/amp/controller/local/config"
 )
+
+// testBranchID is the branch id the package's tests place endpoints on.
+var testBranchID = uuid.MustParse("9a054903-242f-46bc-a0c9-cc6b91a37e4c")
 
 // The launcher is where a branch id leaves and re-enters the process as a
 // string, so the two halves have to agree: what the API and the endpoint's
@@ -18,7 +19,7 @@ func TestBranchIDRoundTrip(t *testing.T) {
 	if got := want.String(); got != "9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60" {
 		t.Errorf("branch id renders as %q, want the hyphenated spelling", got)
 	}
-	for _, spelling := range []config.BranchID{
+	for _, spelling := range []string{
 		"9753168c-7f0d-4c8f-9a3b-1e2d3c4b5a60", // what the wire carries
 		"9753168c7f0d4c8f9a3b1e2d3c4b5a60",
 	} {

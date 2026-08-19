@@ -145,7 +145,7 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	spec := deploy.EndpointSpec{
 		Name:          EndpointDeployName(s.EndpointID),
 		EndpointID:    s.EndpointID.String(),
-		BranchID:      s.BranchID.String(),
+		BranchID:      s.BranchID,
 		PgVersion:     s.PgVersion,
 		YB:            s.yb,
 		ControllerURL: s.scURL,

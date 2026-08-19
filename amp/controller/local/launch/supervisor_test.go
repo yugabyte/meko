@@ -11,7 +11,7 @@ import (
 // already been provisioned: the ports below are what the supervisor has to be
 // told about, because they are also in the config files it will not re-render.
 func envWithProvisionedEndpoint() (*config.LocalEnv, launcherEndpoint) {
-	branch := config.BranchID("9a054903-242f-46bc-a0c9-cc6b91a37e4c")
+	branch := testBranchID
 	env := envWithTemplates()
 	env.Pageservers = []config.PageServerConf{{
 		ListenPgAddr:   "127.0.0.1:64010",
@@ -30,7 +30,7 @@ func envWithProvisionedEndpoint() (*config.LocalEnv, launcherEndpoint) {
 
 	le := launcherEndpoint{conf: endpointConf{
 		EndpointID:       "main",
-		BranchID:         string(branch),
+		BranchID:         branch,
 		PgPort:           55433,
 		ExternalHTTPPort: 3080,
 		InternalHTTPPort: 47119,

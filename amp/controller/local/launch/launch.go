@@ -103,7 +103,7 @@ func setAddrPort(addr string, port uint16) (string, error) {
 func safekeepersForTimeline(env *config.LocalEnv, branchID config.BranchID) []config.SafekeeperConf {
 	var dedicated []config.SafekeeperConf
 	for _, sk := range env.Safekeepers {
-		if sk.BranchID != nil && config.SameBranch(*sk.BranchID, branchID) {
+		if sk.BranchID != nil && *sk.BranchID == branchID {
 			dedicated = append(dedicated, sk)
 		}
 	}

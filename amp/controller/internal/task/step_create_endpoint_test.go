@@ -40,8 +40,8 @@ func TestCreateEndpointStepRecordsAndDeploys(t *testing.T) {
 	if spec.Name != EndpointDeployName(epID) {
 		t.Errorf("deploy name = %q, want %q", spec.Name, EndpointDeployName(epID))
 	}
-	// The deploy spec carries the branch id verbatim, in the one spelling.
-	if spec.BranchID != branchID.String() {
+	// The deploy spec carries the branch id verbatim.
+	if spec.BranchID != branchID {
 		t.Errorf("deploy spec branch id = %s, want %s", spec.BranchID, branchID)
 	}
 	wantAddr := EndpointDeployName(epID) + ".endpoints.svc:55433"

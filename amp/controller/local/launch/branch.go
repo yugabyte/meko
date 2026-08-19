@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/google/uuid"
-
 	"github.com/yugabyte/amp/controller/local/config"
 )
 
@@ -15,16 +13,11 @@ import (
 // asynchronously by the controller's branch-drop reaper, one
 // --branch-gc-retention window later; the endpoints are stopped first, so nothing
 // is left running over rows that reaper deletes.
-func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.BranchID) error {
-	// Canonicalize before anything compares it: an endpoint's stored branch_id is
-	// what the API printed, so a caller's non-canonical spelling would match no
-	// endpoint here and still resolve below — dropping the branch with its
-	// computes left running.
-	id, err := parseBranchID(branchID)
+func BranchDrop(ctx context.Context, env *config.LocalEnv, rawBranchID string) error {
+	branchID, err := parseBranchID(rawBranchID)
 	if err != nil {
 		return err
 	}
-	branchID = config.BranchID(id.String())
 
 	endpoints, err := loadEndpoints(ctx, env)
 	if err != nil {
@@ -34,7 +27,7 @@ func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.Branc
 	// one whose name is also used on another branch and so is absent from the
 	// by-name index.
 	for _, ep := range endpoints.all {
-		if config.SameBranch(ep.conf.BranchID, branchID) {
+		if ep.conf.BranchID == branchID {
 			epID := ep.conf.EndpointID
 			if err := stopEndpoint(ctx, env, ep, StopModeImmediate, true); err != nil {
 				fmt.Fprintf(os.Stderr, "stop+destroy endpoint %s: %v\n", epID, err)
@@ -55,7 +48,7 @@ func BranchDrop(ctx context.Context, env *config.LocalEnv, branchID config.Branc
 	}
 	// Scoped to the branch's own cluster: a lineage is a cluster, so different
 	// branches live in different ones.
-	task, err := b.api.DeleteBranch(ctx, b.poolID, branch.ClusterId, id)
+	task, err := b.api.DeleteBranch(ctx, b.poolID, branch.ClusterId, branchID)
 	if err != nil {
 		return err
 	}
@@ -87,7 +80,10 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 		return err
 	}
 
-	ancestorID := config.BranchID(args.AncestorBranchID)
+	ancestorID, err := parseBranchID(args.AncestorBranchID)
+	if err != nil {
+		return err
+	}
 	ancestor, err := b.resolveBranch(ctx, ancestorID)
 	if err != nil {
 		return err
@@ -95,9 +91,6 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 	if ancestor == nil {
 		return fmt.Errorf("no live branch %s in any of the launcher's clusters", ancestorID)
 	}
-	// Use the resolved branch's own spelling from here: the lookups below key on
-	// the string, and `resolveBranch` accepts any spelling a uuid parses from.
-	ancestorID = config.BranchID(ancestor.BranchId.String())
 
 	// The ancestor has to be materialized: the fork point comes from its safekeeper.
 	if env.PageserverConfForBranch(ancestorID) == nil {
@@ -115,8 +108,7 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 	// the parent's writer endpoint's safekeeper via the deployer, and the launcher
 	// has none — but it has just read the durable LSN from that same safekeeper.
 	// pg_version is not passed; a fork inherits its ancestor's, resolved server-side.
-	ancestorUUID := uuid.UUID(ancestor.BranchId)
-	task, err := b.api.CreateBranch(ctx, b.poolID, ancestor.ClusterId, args.BranchName, &ancestorUUID, startLSN)
+	task, err := b.api.CreateBranch(ctx, b.poolID, ancestor.ClusterId, args.BranchName, &ancestorID, startLSN)
 	if err != nil {
 		return err
 	}
@@ -131,13 +123,13 @@ func BranchCreate(ctx context.Context, env *config.LocalEnv, args BranchCreateAr
 	if created == nil {
 		return fmt.Errorf("branch task succeeded but branch %q is not listed", args.BranchName)
 	}
-	branchID := created.BranchId.String()
+	branchID := created.BranchId
 
 	fmt.Printf(
 		"Created branch '%s' (branch %s) at %s from %s; its pageserver + safekeeper come up at `endpoint create`\n",
 		args.BranchName, branchID, startLSN, ancestorID)
 	// NB: harness invariant — the 2nd whitespace token is the branch id.
-	fmt.Println(successfullyCreatedLine(config.BranchID(branchID)))
+	fmt.Println(successfullyCreatedLine(branchID))
 	return nil
 }
 

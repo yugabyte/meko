@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+
+	"github.com/google/uuid"
 )
 
 // Safekeeper is the launcher's client for a safekeeper's management HTTP API.
@@ -25,12 +27,12 @@ func NewSafekeeper(base string, hc *http.Client) *Safekeeper {
 // serializes as u32); the LSNs are "X/Y" strings. system_id, wal_seg_size, and
 // commit_lsn are optional and serialize as null when nil.
 type SafekeeperTimelineCreateRequest struct {
-	BranchID   string  `json:"branch_id"`
-	PgVersion  uint32  `json:"pg_version"`
-	SystemID   *uint64 `json:"system_id"`
-	WalSegSize *uint32 `json:"wal_seg_size"`
-	StartLSN   string  `json:"start_lsn"`
-	CommitLSN  *string `json:"commit_lsn"`
+	BranchID   uuid.UUID `json:"branch_id"`
+	PgVersion  uint32    `json:"pg_version"`
+	SystemID   *uint64   `json:"system_id"`
+	WalSegSize *uint32   `json:"wal_seg_size"`
+	StartLSN   string    `json:"start_lsn"`
+	CommitLSN  *string   `json:"commit_lsn"`
 }
 
 // SafekeeperStatus is the GET /v1/status body (safekeeper_api::models::
@@ -56,8 +58,8 @@ func (s *Safekeeper) CreateTimeline(ctx context.Context, req SafekeeperTimelineC
 }
 
 // TimelineStatus fetches a branch's status via GET /v1/branch/{branchID}.
-func (s *Safekeeper) TimelineStatus(ctx context.Context, branchID string) (SafekeeperTimelineStatus, error) {
+func (s *Safekeeper) TimelineStatus(ctx context.Context, branchID uuid.UUID) (SafekeeperTimelineStatus, error) {
 	var st SafekeeperTimelineStatus
-	err := s.t.do(ctx, http.MethodGet, "/v1/branch/"+url.PathEscape(branchID), nil, &st)
+	err := s.t.do(ctx, http.MethodGet, "/v1/branch/"+url.PathEscape(branchID.String()), nil, &st)
 	return st, err
 }

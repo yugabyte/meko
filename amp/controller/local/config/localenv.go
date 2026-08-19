@@ -295,7 +295,7 @@ func DiscoverPageservers(endpointsPath string) ([]PageServerConf, error) {
 // `pageserver_conf_for_timeline`.
 func (e *LocalEnv) PageserverConfForBranch(branchID BranchID) *PageServerConf {
 	for i := range e.Pageservers {
-		if e.Pageservers[i].BranchID != nil && SameBranch(*e.Pageservers[i].BranchID, branchID) {
+		if e.Pageservers[i].BranchID != nil && *e.Pageservers[i].BranchID == branchID {
 			return &e.Pageservers[i]
 		}
 	}

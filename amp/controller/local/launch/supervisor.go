@@ -167,7 +167,7 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 		"RUN_DIR":             endpointDir(env, conf.EndpointID),
 		"BIN_DIR":             env.YbAmpDistribDir,
 		"PG_DISTRIB_DIR":      env.PgDistribDirRaw(),
-		"BRANCH_ID":           string(conf.BranchID),
+		"BRANCH_ID":           conf.BranchID.String(),
 		"ENDPOINT_PG_VERSION": strconv.Itoa(conf.PgVersion),
 
 		"COMPUTE_ID":                     conf.EndpointID,
