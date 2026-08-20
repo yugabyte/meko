@@ -79,6 +79,18 @@ The MCP Deployment uses HTTP `GET /healthz` liveness/readiness probes on port
 `http` transport — which this pod always runs — returning `{"status": "ok"}`, so
 a 200 confirms the MCP app is actually serving, not just that the port is bound.
 
+## Upgrading
+
+Chart `0.260714.2` renames the otel `podMetrics` ClusterRole/ClusterRoleBinding
+from `<release>-otel` to `<namespace>-<release>-otel`, so two installs in one
+cluster no longer share them (#888). Helm creates the new pair and orphans the
+old one; delete it after upgrading an install that predates this version, since
+nothing else will:
+
+```sh
+kubectl delete clusterrole,clusterrolebinding <release>-otel --ignore-not-found
+```
+
 ## Key values
 
 | Value | Default | Meaning |

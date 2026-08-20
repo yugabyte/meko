@@ -115,10 +115,12 @@ The chart also creates the collector `ServiceAccount` and RBAC sized to what is
 actually scraped: a namespaced **`Role`** on `pods` for discovery — every app
 scrape job restricts SD to the release namespace — plus a **`ClusterRole`** on
 `nodes`/`nodes/proxy`/`nodes/metrics` **only when `otel.podMetrics` is on**,
-because cAdvisor lives in the kubelet and has no namespaced equivalent. With
-`podMetrics` off the collectors need no cluster-scoped rights at all. Store is
-set via `otel.remoteWriteEndpoint` (VictoriaMetrics by default). **Requires the
-OTel Operator** (opentelemetry.io CRDs) in the cluster.
+because cAdvisor lives in the kubelet and has no namespaced equivalent. That pair
+is named `<namespace>-<release>-otel` — unprefixed, two installs on one cluster
+share it and either `uninstall` revokes the other's node access (#888). With
+`podMetrics` off the collectors need no cluster-scoped rights at all. Store is set
+via `otel.remoteWriteEndpoint` (VictoriaMetrics by default). **Requires the OTel
+Operator** (opentelemetry.io CRDs) in the cluster.
 
 Implementation notes learned deploying this on EKS:
 - Use the **contrib** collector image (the `prometheus` receiver +

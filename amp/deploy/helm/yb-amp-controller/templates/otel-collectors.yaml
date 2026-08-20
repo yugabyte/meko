@@ -25,6 +25,11 @@ so rendering locally needs `--api-versions opentelemetry.io/v1beta1`.
 {{- $fullName := include "yb-amp-controller.fullname" . }}
 {{- $saName := printf "%s-otel" $fullName }}
 {{- $ns := .Release.Namespace }}
+{{- /* Namespace-prefixed like rbac.yaml's cluster-scoped pair: $fullName comes
+       from the release name alone, so without the prefix two installs into
+       different namespaces of one cluster share these objects and uninstalling
+       either strips the other's node access (#888). */}}
+{{- $clusterName := printf "%s-%s-otel" $ns $fullName }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -82,7 +87,7 @@ only when that job exists: with podMetrics off, nothing here is created.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ $fullName }}-otel
+  name: {{ $clusterName }}
   labels:
     {{- include "yb-amp-controller.labels" . | nindent 4 }}
 rules:
@@ -95,13 +100,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ $fullName }}-otel
+  name: {{ $clusterName }}
   labels:
     {{- include "yb-amp-controller.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ $fullName }}-otel
+  name: {{ $clusterName }}
 subjects:
   - kind: ServiceAccount
     name: {{ $saName }}

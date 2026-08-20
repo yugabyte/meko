@@ -223,6 +223,40 @@ tests:
           path: rules[1].resources
           value: [replicasets]
 
+  # Cluster-scoped, so the names must be namespace-prefixed the way rbac.yaml's
+  # pair is: unprefixed, two installs into one cluster share them and either
+  # uninstall strips the other's node access.
+  - it: namespace-prefixes the cluster-scoped names so releases don't collide
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    release:
+      namespace: staging
+    asserts:
+      - equal:
+          path: metadata.name
+          value: staging-RELEASE-NAME-yb-amp-controller-otel
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: staging-RELEASE-NAME-yb-amp-controller-otel
+        documentIndex: 4
+      # The binding must follow the ClusterRole's new name, not the old one.
+      - equal:
+          path: roleRef.name
+          value: staging-RELEASE-NAME-yb-amp-controller-otel
+        documentIndex: 4
+      # The namespaced Role/RoleBinding are already unique per namespace and keep
+      # the unprefixed name.
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-otel
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-yb-amp-controller-otel
+        documentIndex: 2
+
   - it: the node ClusterRole exists only for cadvisor and grants only node access
     capabilities:
       apiVersions:
