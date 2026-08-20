@@ -125,6 +125,19 @@ def git_out(*args):
 PG_COMMIT_STAMP = PG_INSTALL / ".pg_commit"
 
 
+# contrib modules the cached install must carry because a compute preloads them
+# (postgres.mk installs them alongside PostgreSQL). A missing preload library is a
+# hard postmaster start failure, and the commit stamp above cannot see the contrib
+# list itself change.
+PRELOADED_CONTRIB = ["pg_stat_statements.so"]
+
+
+def missing_preloaded_contrib():
+    """Preload-required contrib modules absent from the cached pg_install."""
+    libdir = PG_INSTALL / "lib" / "postgresql"
+    return [lib for lib in PRELOADED_CONTRIB if not (libdir / lib).is_file()]
+
+
 def built_pg_commit():
     """The submodule commit pg_install/v18 was last built from, or None."""
     return PG_COMMIT_STAMP.read_text().strip() if PG_COMMIT_STAMP.is_file() else None
@@ -141,13 +154,13 @@ def sync_submodule_if_needed():
     """Check out / re-sync compute/vendor/postgres-v18. Return True if PG needs a rebuild.
 
     PG must be rebuilt when the working tree doesn't match the gitlink (a bump,
-    or a fresh/absent checkout), when pg_install/v18 was never built, or when
-    the cached install was built from a DIFFERENT submodule commit than the one
-    now checked out. The last case is the one a bare gitlink/working-tree check
-    misses: after a commit bumps the submodule and the tree is re-synced, the
-    gitlink and working tree agree while the install still holds the old PG (and
-    old headers), so a header change like FMGR_ABI_EXTRA would otherwise ship a
-    stale ABI to every extension.
+    or a fresh/absent checkout), when pg_install/v18 was never built, when the
+    cached install was built from a DIFFERENT submodule commit than the one now
+    checked out, or when it lacks a contrib module a compute preloads. The commit
+    case is the one a bare gitlink/working-tree check misses: after a commit bumps
+    the submodule and the tree is re-synced, the gitlink and working tree agree
+    while the install still holds the old PG (and old headers), so a header change
+    like FMGR_ABI_EXTRA would otherwise ship a stale ABI to every extension.
     """
     want = git_out("rev-parse", f"HEAD:{submodule_in_tree()}")
     have = git_out("-C", SUBMODULE, "rev-parse", "HEAD")
@@ -168,6 +181,11 @@ def sync_submodule_if_needed():
     if built != have:
         say(f"pg_install/v18 was built from {(built or 'unknown')[:12]} but the "
             f"submodule is at {have[:12]} — rebuilding PostgreSQL")
+        return True
+    missing = missing_preloaded_contrib()
+    if missing:
+        say(f"pg_install/v18 is missing preloaded contrib ({', '.join(missing)}) "
+            "— reinstalling PostgreSQL")
         return True
     say(f"{SUBMODULE} up to date ({have[:12]}) — reusing cached pg_install/v18")
     return False

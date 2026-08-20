@@ -85,7 +85,7 @@ require a specific compute status return **412 Precondition Failed** with
 |---|---|---|
 | GET | `/dbs_and_roles` | `CatalogObjects { roles, databases }` (`catalog::get_dbs_and_roles`). |
 | GET | `/database_schema?database=<name>` | Streams a `pg_dump --schema-only` dump (served with a JSON content-type header even though the body is SQL text). 404 if the database does not exist. **The query param is `database`.** |
-| GET | `/insights` | Requires `running` (else 412). Top-100 `pg_stat_statements` rows (excluding `cloud_admin`) as JSON. |
+| GET | `/insights` | Requires `running` (else 412). Top-100 `pg_stat_statements` rows (excluding `cloud_admin`, so a compute that only ever saw admin traffic reports nothing) as JSON. Empty `{"pg_stat_statements": []}` when the query fails. |
 | GET | `/metrics.json` | JSON snapshot of the compute's startup metrics (`ComputeMetrics`: `wait_for_spec_ms`, `sync_sk_check_ms`, `sync_safekeepers_ms` — always 0, there is no sync-safekeepers pass — `pageserver_connect_micros`, `basebackup_ms`/`_bytes`, `start_postgres_ms`, `config_ms`, `total_startup_ms`, extension-download stats). Distinct from Prometheus `/metrics`. |
 
 ### LFC prewarm / offload (JWT)

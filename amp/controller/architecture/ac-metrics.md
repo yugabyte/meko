@@ -163,19 +163,25 @@ in the k8s endpoint pod (the exporter already ships in the compute VM image at
   tuples, deadlocks, temp files), bgwriter/checkpointer, connections, locks, DB
   size, and replication with no extra config.
 
-### Query-level metrics — `pg_stat_statements` (opt-in)
+### Query-level metrics — `pg_stat_statements`
 
 The richest perf signal (per-normalized statement `calls`, total/mean/max exec
 time, rows, block hits vs reads, WAL bytes) comes from the exporter's built-in
-`stat_statements` collector, enabled with
-`metrics.postgresExporter.extraArgs: ["--collector.stat_statements"]`. It is
-**off by default** because it requires the extension, which the compute does not
-load by default (it preloads `yb_amp,pgaudit`). To turn it on:
+`stat_statements` collector, **on by default**. Three pieces hang off one value,
+`endpoint.sharedPreloadLibraries` (`yb_amp,pg_stat_statements`):
 
-1. Add `pg_stat_statements` to `endpoint.sharedPreloadLibraries` (a preload lib →
-   needs a compute restart).
-2. `CREATE EXTENSION pg_stat_statements` in the target database.
-3. Set the `--collector.stat_statements` exporter arg above.
+1. The library is preloaded from the first boot. It is loadable only at postmaster
+   start, so leaving it out costs a compute restart to add later.
+2. `compute_ctl` creates the extension in the main database, from
+   `post_apply_config` — which runs whether or not the spec sets
+   `skip_pg_catalog_updates`, and every amp spec does. It is a background task, so
+   the extension lands a moment after the endpoint reports ready.
+3. The chart passes `--collector.stat_statements` only when that value carries the
+   library — without it the view is absent and the collector errors every scrape.
+
+So dropping `pg_stat_statements` from that one value turns the whole path off
+coherently, extension and collector included. It also gates `compute_ctl`'s
+`GET /insights` (top-100 statements by mean time).
 
 `queryid` is high-cardinality, so scope/cap it in the Collector's relabel rules
 if the series count is a concern.
@@ -188,7 +194,7 @@ All three steps are implemented:
 2. **OTel Collector** — ✅ (`OpenTelemetryCollector` CRs in the control-plane
    chart; requires the OTel Operator + a store, VictoriaMetrics by default).
 3. **Compute `postgres_exporter` sidecar** — ✅
-   (`deploy/helm/yb-amp-endpoint`); `pg_stat_statements` is opt-in.
+   (`deploy/helm/yb-amp-endpoint`), `pg_stat_statements` included.
 
 Steps 1 and 3 are store-agnostic (they only expose `/metrics`); step 2 picks
 the store.

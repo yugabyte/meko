@@ -78,6 +78,12 @@ pub mod supervise;
 use resources::{Cgroup, Resources};
 use supervise::{Outcome, Policy, Supervisor};
 
+/// What a compute preloads when the chart passes nothing: the storage extension it
+/// cannot run without, plus `pg_stat_statements`, which feeds the postgres_exporter
+/// statement collector and compute_ctl's `/insights` and can only be loaded at
+/// postmaster start.
+const DEFAULT_SHARED_PRELOAD_LIBRARIES: &str = "yb_amp,pg_stat_statements";
+
 pub(crate) fn env_opt(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
@@ -263,7 +269,10 @@ impl Env {
             compute_password: env_or("COMPUTE_PASSWORD", "cloud_admin"),
             autoprewarm: env_bool("AUTOPREWARM"),
             offload_lfc_interval_seconds: env_u64("OFFLOAD_LFC_INTERVAL_SECONDS")?,
-            shared_preload_libraries: env_or("SHARED_PRELOAD_LIBRARIES", "yb_amp"),
+            shared_preload_libraries: env_or(
+                "SHARED_PRELOAD_LIBRARIES",
+                DEFAULT_SHARED_PRELOAD_LIBRARIES,
+            ),
             chart_settings: chart_settings()?,
             prerendered,
         })

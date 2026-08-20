@@ -12,7 +12,7 @@
       "state": null,
       "roles": [],
       "databases": [],
-      "postgresql_conf": "max_wal_senders=10\nwal_log_hints=off\nmax_replication_slots=10\nhot_standby=on\nshared_buffers=100MB\neffective_io_concurrency=2\nfsync=off\nfull_page_writes=off\nmax_connections=100\nwal_level=logical\nwal_sender_timeout=5s\nlisten_addresses='127.0.0.1'\nport=55432\nwal_keep_size=0\nrestart_after_crash=off\nshared_preload_libraries='yb_amp'\nyb_amp.safekeeper_conninfo_options='sslmode=disable'\nyb_amp.max_file_cache_size=1GB\nyb_amp.file_cache_size_limit=1GB\nmax_replication_write_lag=15MB\nmax_replication_flush_lag=10GB\nsynchronous_standby_names=walproposer\nyb_amp.safekeepers='localhost:30100'\n",
+      "postgresql_conf": "max_wal_senders=10\nwal_log_hints=off\nmax_replication_slots=10\nhot_standby=on\nshared_buffers=100MB\neffective_io_concurrency=2\nfsync=off\nfull_page_writes=off\nmax_connections=100\nwal_level=logical\nwal_sender_timeout=5s\nlisten_addresses='127.0.0.1'\nport=55432\nwal_keep_size=0\nrestart_after_crash=off\nshared_preload_libraries='yb_amp,pg_stat_statements'\nyb_amp.safekeeper_conninfo_options='sslmode=disable'\nyb_amp.max_file_cache_size=1GB\nyb_amp.file_cache_size_limit=1GB\nmax_replication_write_lag=15MB\nmax_replication_flush_lag=10GB\nsynchronous_standby_names=walproposer\nyb_amp.safekeepers='localhost:30100'\n",
       "settings": null
     },
     "delta_operations": null,

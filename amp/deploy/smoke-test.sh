@@ -215,6 +215,18 @@ echo "$out" | grep -q '^3,24$' && ok "loopback CRUD + checkpoint + readback (3 r
 EPS=$(kubectl -n "$NS" get endpoints "yb-ep-$EP" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)
 [ -n "$EPS" ] && ok "recorded address $ADDR routes to a ready Service backend ($EPS)" \
   || bad "endpoint Service has no ready backend for $ADDR"
+# (c) pg_stat_statements is live without anyone asking for it: the chart preloads the
+#     library and compute_ctl creates the extension after start. It is what the
+#     exporter's statement collector and compute_ctl's /insights read. The create runs
+#     in a background task, so give it a few seconds rather than racing it.
+out=""
+for ((r=0; r<10; r++)); do
+  out=$(psql_pod "$POD" 127.0.0.1 55433 <<<'SELECT count(*) > 0 FROM public.pg_stat_statements;' 2>&1)
+  echo "$out" | grep -q '^t$' && break
+  sleep 3
+done
+echo "$out" | grep -q '^t$' && ok "pg_stat_statements preloaded + created, tracking statements" \
+  || bad "pg_stat_statements not usable on a fresh endpoint (got: $(echo "$out"|tail -1))"
 
 hdr "createBranch (fork default) -> task succeeded"
 # The default fork-point resolution reads the parent writer's safekeeper flush_lsn;

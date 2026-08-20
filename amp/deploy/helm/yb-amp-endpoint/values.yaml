@@ -64,7 +64,10 @@ endpoint:
   endpointId: ""
   # -- Postgres shared_preload_libraries for the compute. Extensions with
   # `preload: true` below are appended to this automatically.
-  sharedPreloadLibraries: "yb_amp"
+  # `pg_stat_statements` (contrib, in the image) is preloaded by default because a
+  # preload library cannot be added later without a postmaster restart. The
+  # compute_ctl creates the matching extension after start when it sees the name here.
+  sharedPreloadLibraries: "yb_amp,pg_stat_statements"
   # -- Externalized extensions to mount as read-only Kubernetes ImageVolumes
   # (built from deploy/extensions). Each mounts at /extensions/<name>, and its
   # share/ + lib/ subdirs are appended to extension_control_path /
@@ -187,10 +190,10 @@ metrics:
     user: cloud_admin
     # -- Database the exporter connects to.
     dbname: postgres
-    # -- Extra postgres_exporter flags. Enable query-level metrics with
-    # "--collector.stat_statements" once pg_stat_statements is preloaded
-    # (endpoint.sharedPreloadLibraries) and the extension is created; the
-    # database collector is disabled by default (it errors on the storage layer).
+    # -- Extra postgres_exporter flags. The template already passes
+    # --collector.stat_statements (pg_stat_statements is preloaded by default,
+    # see endpoint.sharedPreloadLibraries) and --no-collector.database (the
+    # database collector errors on the storage layer).
     extraArgs: []
     # -- Sidecar resources. Set request == limit (cpu + memory) so the sidecar
     # is Guaranteed-QoS like the endpoint container; otherwise the whole pod

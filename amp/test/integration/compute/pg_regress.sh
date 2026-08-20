@@ -285,8 +285,13 @@ BID=$(yb cluster create pgregress --pg-version 18 | grep -oE '[0-9a-f]{8}-[0-9a-
 # exactly this suite: it lets CREATE TABLESPACE through and skips the
 # event-trigger superuser gating, both of which the upstream goldens assume.
 # Without it test_setup, tablespace and stats fail on the tablespace rejection.
+# compute_query_id=regress is what upstream's own `make check` uses: preloading
+# pg_stat_statements turns the default `auto` on, and EXPLAIN VERBOSE would then
+# print a "Query Identifier" line the goldens don't have. `regress` keeps the ids
+# (pg_stat_statements needs them) and suppresses that line.
 yb endpoint create main --branch-id "$BID" \
     --pg-setting yb_amp.regress_test_mode=on \
+    --pg-setting compute_query_id=regress \
     --pg-version 18 --pg-port "$COMPUTE"
 yb endpoint start main --start-timeout 600s
 

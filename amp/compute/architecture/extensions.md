@@ -54,9 +54,10 @@ name (`pgvector` ships `vector.control`, so `CREATE EXTENSION vector`).
 
 `shared_preload_libraries` is separate: an extension that must be preloaded
 (e.g. `pg_cron`) has its library name appended to the base
-`shared_preload_libraries`. It must contain **only** libraries that are actually
-mounted, or the postmaster fails to start — so the controller/chart only add a
-preload entry for an extension it is also mounting.
+`shared_preload_libraries` (`yb_amp,pg_stat_statements`, both image-baked). It
+must contain **only** libraries that are actually mounted, or the postmaster fails
+to start — so the controller/chart only add a preload entry for an extension it is
+also mounting.
 
 `pg_cron`'s scheduler binds to one database via `cron.database_name` (default
 `postgres`, which every endpoint serves, so opting in needs no extra config); a

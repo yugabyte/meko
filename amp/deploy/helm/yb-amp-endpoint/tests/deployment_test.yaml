@@ -244,6 +244,10 @@ tests:
       - contains:
           path: spec.template.spec.containers[1].args
           content: --no-collector.database
+      # pg_stat_statements is preloaded by default, so the collector is on.
+      - contains:
+          path: spec.template.spec.containers[1].args
+          content: --collector.stat_statements
       # Connects over loopback to the compute port as cloud_admin (trust auth).
       - contains:
           path: spec.template.spec.containers[1].env
@@ -276,15 +280,26 @@ tests:
             name: DATA_SOURCE_NAME
             value: "host=localhost port=5599 user=cloud_admin dbname=postgres sslmode=disable application_name=postgres-exporter options='-c pgaudit.log=none'"
 
-  - it: appends extra exporter args (e.g. the stat_statements collector)
+  - it: drops the stat_statements collector when the library is not preloaded
+    template: templates/deployment.yaml
+    set:
+      endpoint.sharedPreloadLibraries: "yb_amp"
+    asserts:
+      # Without the library the view does not exist, so the collector would
+      # error on every scrape.
+      - notContains:
+          path: spec.template.spec.containers[1].args
+          content: --collector.stat_statements
+
+  - it: appends extra exporter args
     template: templates/deployment.yaml
     set:
       metrics.postgresExporter.extraArgs:
-        - --collector.stat_statements
+        - --collector.long_running_transactions
     asserts:
       - contains:
           path: spec.template.spec.containers[1].args
-          content: --collector.stat_statements
+          content: --collector.long_running_transactions
 
   - it: omits the sidecar and scrape annotations when disabled
     template: templates/deployment.yaml

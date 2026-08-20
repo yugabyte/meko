@@ -275,7 +275,9 @@ knows about these objects):
    `branch_id` — the spec flag alone can't distinguish "first start on this branch"
    from "same VM restarting with the same spec", and dropping twice would destroy
    subscriptions the user created in between.
-4. **Finishing phases**: `HandleOtherExtensions` (e.g. `pg_stat_statements`),
+4. **Finishing phases**: `HandleOtherExtensions` (the preloaded extensions, see
+   `post_apply_config` below — amp's own specs set `skip_pg_catalog_updates`, so
+   this pass is skipped and that is where they are actually created),
    `HandleYbAmpExtension` (`CREATE/UPDATE EXTENSION yb_amp` where the spec installs
    it), `CreateAvailabilityCheck` (the `public.health_check` table used by
    `POST /check_writability`), `DropRoles`, then per audit level the pgaudit
@@ -283,7 +285,15 @@ knows about these objects):
 
 Afterwards `post_apply_config()` spawns a background task that runs
 `ALTER EXTENSION yb_amp UPDATE` — only if the extension is actually installed in the
-maintenance database, to avoid a spurious error on every startup.
+maintenance database, to avoid a spurious error on every startup — and creates the
+**preloaded extensions**: `CREATE EXTENSION IF NOT EXISTS <name> WITH SCHEMA public`
+for every entry of `spec_apply.rs`'s `PRELOADED_EXTENSIONS` that the effective
+`shared_preload_libraries` names (`pg_stat_statements` today). It runs here, not in
+the `HandleOtherExtensions` phase above, because this task runs whether or not the
+spec sets `skip_pg_catalog_updates` — and amp's specs do. The schema is pinned
+because these extensions are relocatable: without it one lands in the first schema
+of the connection's `search_path`, while `/insights` reads
+`public.pg_stat_statements` by name.
 
 ### Catalog migrations
 

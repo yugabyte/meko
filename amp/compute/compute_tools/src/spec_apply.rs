@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use compute_api::responses::ComputeStatus;
-use compute_api::spec::{ComputeAudit, ComputeSpec, Database, PgIdent, Role};
+use compute_api::spec::{ComputeAudit, ComputeSpec, Database, GenericOptions, PgIdent, Role};
 use futures::future::join_all;
 use tokio::sync::RwLock;
 use tokio_postgres::Client;
@@ -28,6 +28,62 @@ use crate::spec_apply::ApplySpecPhase::{
 use crate::spec_apply::PerDatabasePhase::{
     ChangeSchemaPerms, DeleteDBRoleReferences, DropLogicalSubscriptions,
 };
+
+/// Extensions whose SQL objects a preloaded library needs, keyed by the library
+/// name in `shared_preload_libraries`. `pg_stat_statements` is the only one today:
+/// the library is loaded at postmaster start, the view it exposes comes from the
+/// extension, and both `/insights` and the postgres_exporter statement collector
+/// read `public.pg_stat_statements`.
+const PRELOADED_EXTENSIONS: &[&str] = &["pg_stat_statements"];
+
+/// `CREATE EXTENSION` for every [`PRELOADED_EXTENSIONS`] entry the spec's effective
+/// `shared_preload_libraries` names. Idempotent, so a restart re-runs it harmlessly.
+///
+/// The schema is pinned: these extensions are relocatable, so without `WITH SCHEMA`
+/// one lands in the first schema of the connection's `search_path` — which an
+/// endpoint's `pg_settings` can change — while `/insights` reads
+/// `public.pg_stat_statements` by name.
+pub fn preloaded_extension_queries(spec: &ComputeSpec) -> Vec<String> {
+    shared_preload_libraries(
+        &spec.cluster.settings,
+        spec.cluster.postgresql_conf.as_deref(),
+    )
+    .map(|libs| extension_queries(&libs))
+    .unwrap_or_default()
+}
+
+/// The statements for one `shared_preload_libraries` value.
+fn extension_queries(libs: &str) -> Vec<String> {
+    let preloaded: Vec<&str> = libs.split(',').map(str::trim).collect();
+    PRELOADED_EXTENSIONS
+        .iter()
+        .filter(|name| preloaded.contains(*name))
+        .map(|name| format!("CREATE EXTENSION IF NOT EXISTS {name} WITH SCHEMA public"))
+        .collect()
+}
+
+/// The `shared_preload_libraries` value the postmaster actually started with.
+///
+/// Two things make this more than a `settings.find()`: the spec layers overrides
+/// by *appending* to `cluster.settings` and Postgres keeps the last occurrence of
+/// a name, so the effective value is the last one, not the first; and
+/// `yb_amp_local` passes its settings as an in-spec `postgresql.conf` that
+/// `cluster.settings` never carries at all.
+fn shared_preload_libraries(settings: &GenericOptions, conf: Option<&str>) -> Option<String> {
+    if let Some(opt) = settings.as_ref().and_then(|opts| {
+        opts.iter()
+            .rev()
+            .find(|o| o.name == "shared_preload_libraries")
+    }) {
+        return opt.value.clone();
+    }
+    conf?
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with("shared_preload_libraries"))
+        .and_then(|line| line.split_once('='))
+        .map(|(_, value)| value.trim().trim_matches('\'').to_string())
+}
 
 impl ComputeNode {
     /// Apply the spec to the running PostgreSQL instance.
@@ -1036,17 +1092,16 @@ async fn get_operations<'a>(
         // Interestingly, we only install p_s_s in the main database, even when
         // it's preloaded.
         ApplySpecPhase::HandleOtherExtensions => {
-            if let Some(libs) = spec.cluster.settings.find("shared_preload_libraries") {
-                if libs.contains("pg_stat_statements") {
-                    return Ok(Box::new(once(Operation {
-                        query: String::from(
-                            "CREATE EXTENSION IF NOT EXISTS pg_stat_statements WITH SCHEMA public",
-                        ),
-                        comment: Some(String::from("create system extensions")),
-                    })));
-                }
-            }
-            Ok(Box::new(empty()))
+            let operations = preloaded_extension_queries(spec)
+                .into_iter()
+                .map(|query| Operation {
+                    query,
+                    comment: Some(String::from("create system extensions")),
+                })
+                .collect::<Vec<_>>()
+                .into_iter();
+
+            Ok(Box::new(operations))
         }
         ApplySpecPhase::CreatePgauditExtension => Ok(Box::new(once(Operation {
             query: String::from("CREATE EXTENSION IF NOT EXISTS pgaudit WITH SCHEMA public"),
@@ -1118,5 +1173,68 @@ async fn get_operations<'a>(
             query: String::from(include_str!("sql/finalize_drop_subscriptions.sql")),
             comment: None,
         }))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use compute_api::spec::GenericOption;
+
+    use super::{extension_queries, shared_preload_libraries};
+
+    fn opt(name: &str, value: &str) -> GenericOption {
+        GenericOption {
+            name: name.to_string(),
+            value: Some(value.to_string()),
+            vartype: "string".to_string(),
+        }
+    }
+
+    #[test]
+    fn takes_the_last_setting_postgres_would_keep() {
+        let settings = Some(vec![
+            opt("shared_preload_libraries", "yb_amp,pg_stat_statements"),
+            opt("max_connections", "200"),
+            opt("shared_preload_libraries", "yb_amp"),
+        ]);
+        assert_eq!(
+            shared_preload_libraries(&settings, None).as_deref(),
+            Some("yb_amp")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_in_spec_postgresql_conf() {
+        let conf = "port=55432\nshared_preload_libraries='yb_amp,pg_stat_statements'\nfsync=off\n";
+        assert_eq!(
+            shared_preload_libraries(&None, Some(conf)).as_deref(),
+            Some("yb_amp,pg_stat_statements")
+        );
+        assert_eq!(shared_preload_libraries(&None, Some("fsync=off\n")), None);
+        assert_eq!(shared_preload_libraries(&None, None), None);
+    }
+
+    /// Only libraries actually preloaded get an extension: creating one whose
+    /// library is absent leaves an extension whose functions cannot run. The schema
+    /// is pinned so `/insights` finds the view where it looks for it.
+    #[test]
+    fn an_extension_is_created_only_when_its_library_is_preloaded() {
+        assert_eq!(
+            extension_queries("yb_amp, pg_stat_statements"),
+            vec!["CREATE EXTENSION IF NOT EXISTS pg_stat_statements WITH SCHEMA public"]
+        );
+        assert!(extension_queries("yb_amp").is_empty());
+        // A substring match would fire on this; the list is comma-separated names.
+        assert!(extension_queries("yb_amp,pg_stat_statements_foo").is_empty());
+    }
+
+    #[test]
+    fn settings_win_over_the_conf() {
+        let settings = Some(vec![opt("shared_preload_libraries", "yb_amp")]);
+        let conf = "shared_preload_libraries='yb_amp,pg_stat_statements'\n";
+        assert_eq!(
+            shared_preload_libraries(&settings, Some(conf)).as_deref(),
+            Some("yb_amp")
+        );
     }
 }

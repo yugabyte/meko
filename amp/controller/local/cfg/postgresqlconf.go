@@ -102,7 +102,10 @@ func BuildPostgresqlConf(p PostgresqlConfParams) string {
 	c.append("port", fmt.Sprintf("%d", p.Port))
 	c.append("wal_keep_size", "0")
 	c.append("restart_after_crash", "off")
-	c.append("shared_preload_libraries", "yb_amp")
+	// pg_stat_statements matches the endpoint chart's default. Only loadable at
+	// postmaster start, so it goes in from the first boot; compute_ctl creates the
+	// matching extension after start (compute_tools' post_apply_config).
+	c.append("shared_preload_libraries", "yb_amp,pg_stat_statements")
 
 	if !p.UseLocalTLS {
 		c.append("yb_amp.safekeeper_conninfo_options", "sslmode=disable")

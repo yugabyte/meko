@@ -104,7 +104,9 @@ $(BUILD_DIR)/%/config.status:
 # the same thing
 $(foreach pg_version,$(POSTGRES_VERSIONS),postgres-configure-$(pg_version)): postgres-configure-%: FORCE $(BUILD_DIR)/%/config.status
 
-# Compile and install PostgreSQL (and the contrib modules the compute ships)
+# Compile and install PostgreSQL (and the contrib modules the compute ships).
+# pg_stat_statements is preloaded by default (endpoint chart + yb_amp_local), so an
+# install without it cannot start the postmaster.
 postgres-install-%: postgres-configure-% \
 		  postgres-headers-install-% # to prevent `make install` conflicts with neon's `postgres-headers-install`
 	+@echo "Compiling PostgreSQL $*"
@@ -117,6 +119,7 @@ postgres-install-%: postgres-configure-% \
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/btree_gin install
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/amcheck install
 	$(MAKE) -C $(BUILD_DIR)/$*/contrib/test_decoding install
+	$(MAKE) -C $(BUILD_DIR)/$*/contrib/pg_stat_statements install
 
 .PHONY: FORCE
 FORCE:

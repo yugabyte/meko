@@ -445,7 +445,7 @@ a ConfigMap + Secret):
 | `ENDPOINT_PG_VERSION` | `18` | compute Postgres major version; locates `pg_install/v{N}` (the image ships v18 only) |
 | `COMPUTE_PORT` | `55433` | compute Postgres port |
 | `COMPUTE_PASSWORD` | `cloud_admin` | password for the `cloud_admin` role |
-| `SHARED_PRELOAD_LIBRARIES` | `neon` | compute `shared_preload_libraries` |
+| `SHARED_PRELOAD_LIBRARIES` | `yb_amp,pg_stat_statements` | compute `shared_preload_libraries` |
 | `TENANT_ID` / `TIMELINE_ID` | _(unset)_ | serve an existing tenant; unset ⇒ bootstrap a fresh one |
 
 Internal ports (`PAGESERVER_PG_PORT`, `PAGESERVER_HTTP_PORT`,

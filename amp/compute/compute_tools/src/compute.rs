@@ -55,6 +55,7 @@ use crate::rsyslog::{
     launch_pgaudit_gc,
 };
 use crate::spec::*;
+use crate::spec_apply::preloaded_extension_queries;
 use crate::swap::resize_swap;
 use crate::sync_sk::{check_if_synced, ping_safekeeper};
 use crate::tls::watch_cert_for_changes;
@@ -1607,10 +1608,16 @@ impl ComputeNode {
 
     /// Do post configuration of the already started Postgres. This function spawns a background task to
     /// configure the database after applying the compute spec. Currently, it upgrades the yb_amp extension
-    /// version. In the future, it may upgrade all 3rd-party extensions.
+    /// version and creates the extensions the spec's preloaded libraries need. In the future, it may
+    /// upgrade all 3rd-party extensions.
+    ///
+    /// The preloaded extensions are created here rather than in the
+    /// `HandleOtherExtensions` spec-apply phase because this runs whether or not the
+    /// spec sets `skip_pg_catalog_updates`, and every amp spec does.
     #[instrument(skip_all)]
-    pub fn post_apply_config(&self) -> Result<()> {
+    pub fn post_apply_config(&self, spec: &ComputeSpec) -> Result<()> {
         let conf = self.get_tokio_conn_conf(Some("compute_ctl:post_apply_config"));
+        let extensions = preloaded_extension_queries(spec);
         tokio::spawn(async move {
             let res = async {
                 let (mut client, connection) = conf.connect(NoTls).await?;
@@ -1623,6 +1630,13 @@ impl ComputeNode {
                 handle_yb_amp_extension_upgrade(&mut client)
                     .await
                     .context("handle_yb_amp_extension_upgrade")?;
+                for query in &extensions {
+                    info!("post_apply_config: {query}");
+                    client
+                        .simple_query(query)
+                        .await
+                        .with_context(|| format!("run {query}"))?;
+                }
                 Ok::<_, anyhow::Error>(())
             }
             .await;
@@ -1921,7 +1935,7 @@ impl ComputeNode {
             }
             self.pg_reload_conf()?;
         }
-        self.post_apply_config()?;
+        self.post_apply_config(&pspec.spec)?;
 
         Ok(())
     }
@@ -2110,7 +2124,8 @@ LIMIT 100",
 
             format!("{{\"pg_stat_statements\": [{}]}}", result_rows.join(","))
         } else {
-            "{{\"pg_stat_statements\": []}}".to_string()
+            // Not a format string: the braces must not be doubled here.
+            "{\"pg_stat_statements\": []}".to_string()
         }
     }
 
