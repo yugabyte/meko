@@ -211,40 +211,13 @@ export const SALES_CONTACT_URL = "https://share-na2.hsforms.com/16H0_N54LT0WVNmc
 export const AWS_MARKETPLACE_LISTING_URL: string =
   readRuntimeEnv("MEKO_AWS_MARKETPLACE_URL") ?? "";
 
-/** localStorage key testers set to opt IN to seeing the Standard tier
- *  tile while `MEKO_ENABLE_STANDARD_TIER=true` on the pod. Kept as a
- *  named export so future callers use one canonical string.
- *  TODO(GA): remove this key + the AND-gate below once Standard is
- *  live for all users. */
-export const STANDARD_TIER_LOCAL_OPT_IN_KEY = "meko_show_standard_tier";
-
 /** Pre-GA gate for the Standard tier. When false the Settings page
  *  hides the Standard column entirely (2-card Free + Pro layout).
- *
- *  Gated on BOTH:
- *    - runtime env: `MEKO_ENABLE_STANDARD_TIER=true` on the pod, AND
- *    - per-browser localStorage opt-in: window.localStorage.setItem(
- *      STANDARD_TIER_LOCAL_OPT_IN_KEY, "true").
- *
- *  This lets ops flip the env flag on prod for validation without the
- *  tile being visible to real users -- only browsers that explicitly
- *  set the localStorage key see the Standard tile + Upgrade button.
- *  Once Standard goes GA, drop the localStorage requirement (delete
- *  the key + the AND-gate below) so the env flag alone controls
- *  visibility.
- *
- *  TODO(GA): remove the localOptIn check + STANDARD_TIER_LOCAL_OPT_IN_KEY. */
+ *  Runtime var; set `MEKO_ENABLE_STANDARD_TIER=true` on the pod (or
+ *  in local dev's .env) to enable. */
 export const STANDARD_TIER_ENABLED: boolean = (() => {
   const raw = readRuntimeEnv("MEKO_ENABLE_STANDARD_TIER") ?? "";
-  const envEnabled = ["1", "true", "yes"].includes(raw.trim().toLowerCase());
-  if (!envEnabled) return false;
-  // SSR / non-browser guard: no localStorage exists, so we can't
-  // check the opt-in. Fall back to env-only in that context (matches
-  // the historical behavior before the AND-gate was added).
-  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
-    return true;
-  }
-  return window.localStorage.getItem(STANDARD_TIER_LOCAL_OPT_IN_KEY) === "true";
+  return ["1", "true", "yes"].includes(raw.trim().toLowerCase());
 })();
 
 /** Long-form banner copy shown at the top of gated pages. Keyed by
