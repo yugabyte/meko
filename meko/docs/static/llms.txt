@@ -71,6 +71,7 @@ OAuth (URL only, no API key) works for clients with a custom-connector flow; tha
 - [WorkbenchLM](/guides/workbench-lm/): Use when trying Meko in the portal chat with no local MCP install
 - [Working with Memory](/guides/working-with-memory/): Use when adding, searching, listing, or promoting memories over MCP
 - [Working with Knowledge Bases](/guides/working-with-knowledge-bases/): Use when building or querying document collections for RAG
+- [Working with Artifacts](/guides/working-with-artifacts/): Use when storing or retrieving agent-generated files (`artifact_put` / `artifact_get`) across sessions or agents
 - [Observability](/guides/observability/): Use when locating decision traces and conversation history in the portal
 
 ## Integrations

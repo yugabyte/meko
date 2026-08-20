@@ -19,8 +19,13 @@ name: Meko CI
 #                     workflow (ycp-images.yml) that runs only on merge to main.
 #                     Fires on `ycp/**` and on the meko/api_server files that make up
 #                     the control plane (see the meko_ycp_cp filter).
+#   meko_docs       — Public MCP docs surface check: tool count vs reference rows,
+#                     and required companion guides for documented tool prefixes
+#                     (memory_*, knowledgebase_*, artifact_*). Fires on docs and
+#                     on this workflow file — including docs-only PRs.
 #
-# Docs-only PRs (only *.md changed) skip the heavy jobs via the `meko_code` filter.
+# Docs-only PRs (only *.md changed) skip the heavy jobs via the `meko_code` filter;
+# meko_docs is the exception and still runs when docs change.
 on:
   pull_request:
     branches: [main]
@@ -46,6 +51,7 @@ jobs:
       meko_ui: ${{ steps.filter.outputs.meko_ui }}
       meko_ycp: ${{ steps.filter.outputs.meko_ycp }}
       meko_ycp_cp: ${{ steps.filter.outputs.meko_ycp_cp }}
+      meko_docs: ${{ steps.filter.outputs.meko_docs }}
       meko_code: ${{ steps.code.outputs.meko_code }}
     steps:
       - uses: actions/checkout@v7
@@ -64,6 +70,11 @@ jobs:
               - '.github/workflows/meko-pr-build.yml'
             meko_ycp:
               - 'ycp/**'
+              - '.github/workflows/meko-pr-build.yml'
+            meko_docs:
+              - 'meko/docs/content/docs/**'
+              - 'meko/docs/static/llms.txt'
+              - 'meko/docs/scripts/check-mcp-docs.py'
               - '.github/workflows/meko-pr-build.yml'
             # The e2e runs api_server --control-plane-mode, so control-plane
             # changes have to trigger it too -- otherwise the one test that covers
@@ -274,6 +285,18 @@ jobs:
         run: ./test/e2e/run.sh
         working-directory: ycp
 
+  meko_docs:
+    name: Meko docs — MCP tool surface
+    needs: changes
+    # Docs-only PRs skip the code jobs; this one must still run when docs change.
+    if: needs.changes.outputs.meko_docs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check MCP docs tool surface
+        run: python3 meko/docs/scripts/check-mcp-docs.py
+
   # The single required check for this workflow. The `main-branch` ruleset requires
   # "Meko CI gate" and nothing else from here, so adding a job above never means
   # touching repository settings — add it to `needs` and it is gated. The gate's own
@@ -289,6 +312,7 @@ jobs:
       - meko_ui
       - meko_ycp
       - meko_ycp_e2e
+      - meko_docs
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

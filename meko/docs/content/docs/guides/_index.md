@@ -26,6 +26,11 @@ Use the following guides to learn key concepts and workflows for Meko.
     desc="Build and query knowledge bases from your documents."
   >}}
   {{< card
+    href="guides/working-with-artifacts/"
+    title="Work with artifacts"
+    desc="Store and retrieve agent-generated files across sessions and agents."
+  >}}
+  {{< card
     href="guides/observability/"
     title="Observability"
     desc="View decision traces and execution traces."

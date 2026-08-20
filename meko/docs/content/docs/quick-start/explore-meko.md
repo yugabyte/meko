@@ -16,7 +16,11 @@ We'll start by adding knowledge, then move on to creating memories.
 
 > [!NOTE] Free tier
 >
-> Free accounts can store up to **100 MB** of knowledge across all datapacks (5 MB per file); Standard accounts get **5 GB** (50 MB per file). MCP conversation and retrieval limits also apply when you use an external client. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+> Free accounts can store up to **100 MB** of knowledge-base files and
+> [artifacts](../guides/working-with-artifacts/) combined across all datapacks
+> (5 MB per file); Standard accounts get **5 GB** (50 MB per file). MCP conversation
+> and retrieval limits also apply when you use an external client. See
+> [Meko pricing](https://mekodata.ai/pricing/) for plan details.
 
 ## Upload knowledge
 

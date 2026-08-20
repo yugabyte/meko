@@ -25,7 +25,11 @@ Currently, Meko accepts PDF, TXT, MD, JSON, CSV, and HTML files up to 10 per bat
 
 > [!NOTE] Free tier
 >
-> Free accounts are limited to **100 MB** of total knowledge-base storage across all datapacks, with individual files capped at **5 MB**. Standard accounts get **5 GB** of total storage and **50 MB** per file. See [Meko pricing](https://mekodata.ai/pricing/) for plan details.
+> Free accounts are limited to **100 MB** of total storage across all datapacks for
+> knowledge-base files and [artifacts](../../../guides/working-with-artifacts/) combined,
+> with individual files capped at **5 MB**. Standard accounts get **5 GB** of total
+> storage and **50 MB** per file. See [Meko pricing](https://mekodata.ai/pricing/) for
+> plan details.
 
 Documents can be uploaded to your datapacks via the Meko portal.
 
