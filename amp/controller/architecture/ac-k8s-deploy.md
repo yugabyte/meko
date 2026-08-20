@@ -203,7 +203,20 @@ allocation will fill. The corollary is a **provisioning requirement**: whatever
 backs `/data` has to be able to supply 20 GiB per vCPU for the largest endpoint
 the deployment intends to run, or that endpoint never schedules.
 `--deploy-disk-gib-per-vcpu` / `AMP_DEPLOY_DISK_GIB_PER_VCPU` overrides the ratio
-for a pool deliberately built to a different disk-per-core shape. Because the
+for a pool deliberately built to a different disk-per-core shape.
+
+`--deploy-disk-size-override` / `AMP_DEPLOY_DISK_SIZE_OVERRIDE` (chart:
+`controller.endpoint.diskSizeOverride`) abandons the ratio: **every** endpoint's
+`/data` is that flat size whatever its CPU, bypassing both the ratio and the
+`--deploy-disk-size` floor. It is for **test clusters**, where the provisioning
+requirement above is the obstacle rather than something to satisfy. A GKE node on
+the default 100GB boot disk reports ~43.8 GiB *allocatable* ephemeral storage on
+every machine shape, so a 2-vCPU endpoint's 40 GiB request packs **one endpoint
+per node**, and under a cluster-wide auto-provisioning quota the endpoint that
+cannot get a fresh node stays `Pending` indefinitely (#602). `10Gi` fits four.
+Empty by default, and it should stay empty in prod: a flat size promises nothing
+will fill the disk, which holds for a test's scratch data and not for a real
+workload's. Because the
 ReadWriteOnce volume attaches to one pod at a time, the Deployment switches to the
 **`Recreate`** strategy (stop the old pod before starting the new one). The pod's
 **`podSecurityContext.fsGroup`** (default `1000`, the endpoint image's `yugabyte`
@@ -360,7 +373,9 @@ Kubernetes driver:
 | `--deploy-service-type` | endpoint Service type: `ClusterIP` (default), `NodePort`, or `LoadBalancer` |
 | `--deploy-service-annotations` | `k=v,k=v` annotations on the endpoint Service (e.g. internal-LB) |
 | `--deploy-storage-class` | storage class for the endpoint `/data` PVC (EBS/PD); empty = ephemeral `emptyDir` |
-| `--deploy-disk-size` | **floor** for the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`); the size itself is 5 GiB × the endpoint's vCPU |
+| `--deploy-disk-size` | **floor** for the `/data` PVC when `--deploy-storage-class` is set (default `10Gi`); the size itself is 20 GiB × the endpoint's vCPU |
+| `--deploy-disk-gib-per-vcpu` | GiB of `/data` per endpoint vCPU (`0` = the built-in 20; for a pool built to a different disk-per-core shape) |
+| `--deploy-disk-size-override` | flat `/data` size for **every** endpoint whatever its CPU, bypassing the ratio and the floor; empty (default) = CPU-proportional. Test clusters only |
 
 Docker driver: `--deploy-endpoint-image`, `--deploy-network`,
 `--deploy-external-host`.

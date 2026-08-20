@@ -40,6 +40,11 @@
 #   ENDPOINT_STORAGE_CLASS  storage class for each endpoint's /data PVC (EBS/PD);
 #                           empty (default) => an ephemeral emptyDir
 #   ENDPOINT_DISK_SIZE      PVC size when ENDPOINT_STORAGE_CLASS is set (default: 10Gi)
+#   ENDPOINT_DISK_SIZE_OVERRIDE
+#                           flat /data size for EVERY endpoint regardless of CPU,
+#                           bypassing the 20 GiB-per-vCPU policy (empty = keep it).
+#                           For a test cluster whose nodes are too small to back
+#                           the ratio; leave empty in prod
 #   ENDPOINT_NODE_SELECTOR  "k=v,k=v" node labels endpoint pods must schedule onto;
 #                           leave ENDPOINT_STORAGE_CLASS empty and point this at a
 #                           local-NVMe-SSD ephemeral pool to put /data on NVMe
@@ -117,6 +122,9 @@ esac
 # volume). The class must exist in the cluster (`kubectl get storageclass`).
 ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS:-}"
 ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
+# Flat /data size for every endpoint whatever its CPU, bypassing the per-vCPU
+# ratio and the floor above. Empty (the default) keeps CPU-proportional sizing.
+ENDPOINT_DISK_SIZE_OVERRIDE="${ENDPOINT_DISK_SIZE_OVERRIDE:-}"
 # Node labels endpoint pods must schedule onto, as a "k=v,k=v" CSV. Leave
 # ENDPOINT_STORAGE_CLASS empty and set this to a local-NVMe-SSD ephemeral pool
 # (e.g. "cloud.google.com/gke-ephemeral-storage-local-ssd=true") to put each
@@ -160,7 +168,7 @@ UI_IMAGE_REPOSITORY="${ECR}/${UI_IMAGE_REPO}"
 
 echo ">> namespace=${NS}  controller=${CONTROLLER_IMAGE_REPOSITORY}:${CONTROLLER_TAG}  endpoint=${ENDPOINT_IMAGE_REPOSITORY}:${ENDPOINT_TAG}"
 echo ">> mcp=${MCP_ENABLED} (${MCP_IMAGE_REPOSITORY}:${MCP_TAG})  ui=${UI_ENABLED} (${UI_IMAGE_REPOSITORY}:${UI_TAG})  expose=${CONTROLLER_EXPOSE}"
-echo ">> endpoint storage class=${ENDPOINT_STORAGE_CLASS:-<emptyDir>}  disk size=${ENDPOINT_DISK_SIZE}"
+echo ">> endpoint storage class=${ENDPOINT_STORAGE_CLASS:-<emptyDir>}  disk size=${ENDPOINT_DISK_SIZE}  disk override=${ENDPOINT_DISK_SIZE_OVERRIDE:-<per-vCPU>}"
 
 # Sanity: warn (don't fail) if the namespace is missing (up.sh / an admin creates it).
 kubectl get ns "${NS}" >/dev/null 2>&1 || echo "WARN: namespace ${NS} not found"
@@ -180,6 +188,7 @@ HELM_SET=(
   "controller.endpoint.service.type=${ENDPOINT_SERVICE_TYPE}"
   "controller.endpoint.storageClass=${ENDPOINT_STORAGE_CLASS}"
   "controller.endpoint.diskSize=${ENDPOINT_DISK_SIZE}"
+  "controller.endpoint.diskSizeOverride=${ENDPOINT_DISK_SIZE_OVERRIDE}"
   "controller.service.type=${CONTROLLER_EXPOSE}"
   "controller.service.nodePortValue=${CONTROLLER_NODEPORT}"
   "mcp.enabled=${MCP_ENABLED}"

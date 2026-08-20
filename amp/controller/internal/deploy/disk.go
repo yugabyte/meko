@@ -32,7 +32,9 @@ const (
 	// was provisioned too small, and the right failure for that is the scheduler
 	// leaving the pod Pending — not silently handing the endpoint a volume that
 	// its CPU allocation will overrun. --deploy-disk-gib-per-vcpu overrides the
-	// ratio for a pool built to a deliberately different disk-per-core shape.
+	// ratio for a pool built to a deliberately different disk-per-core shape,
+	// and --deploy-disk-size-override abandons the ratio altogether for a test
+	// cluster that just needs endpoints to fit (see diskBytesFor).
 	defaultDiskGiBPerVCPU = 20
 )
 
@@ -46,7 +48,23 @@ type runDirValues struct {
 // cores: the installer's per-vCPU ratio (or the built-in default), floored by
 // --deploy-disk-size so an existing deployment never gets a smaller volume
 // than it asked for.
+//
+// --deploy-disk-size-override replaces that calculation outright: every endpoint
+// gets exactly that size, whatever its CPU. It is for test clusters, whose nodes
+// cannot back the ratio — a GKE node on the default 100GB boot disk has ~43.8
+// GiB allocatable, so a 2-vCPU endpoint's 40 GiB request packs one endpoint per
+// node, and under a cluster-wide autoprovisioning quota the next one stays
+// Pending indefinitely (#602). Not for prod: a flat size is a promise that
+// nothing will fill the disk, which holds for a test's scratch data and not for
+// a real workload.
 func (k *KubernetesDeployer) diskBytesFor(vcpu float64) float64 {
+	// Config validation rejects an unparseable override at startup; falling back
+	// to the ratio keeps a directly-constructed deployer from sizing to 0.
+	if k.cfg.DiskSizeOverride != "" {
+		if flat, err := parseByteQuantity(k.cfg.DiskSizeOverride); err == nil && flat > 0 {
+			return float64(flat)
+		}
+	}
 	ratio := k.cfg.DiskGiBPerVCPU
 	if ratio <= 0 {
 		ratio = defaultDiskGiBPerVCPU

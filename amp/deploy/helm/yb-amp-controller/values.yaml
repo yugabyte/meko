@@ -88,6 +88,12 @@ controller:
     storageClass: ""
     # -- Size of each endpoint's /data PVC when storageClass is set (AMP_DEPLOY_DISK_SIZE).
     diskSize: "10Gi"
+    # -- Flat /data size for every endpoint regardless of CPU, bypassing the
+    # 20 GiB-per-vCPU policy and the diskSize floor (AMP_DEPLOY_DISK_SIZE_OVERRIDE).
+    # Empty (default) keeps CPU-proportional sizing; leave it empty in prod. For a
+    # test cluster whose nodes cannot back the ratio: a 100GB GKE boot disk leaves
+    # ~43.8Gi allocatable, so a 2-vCPU endpoint's 40Gi packs one per node, "10Gi" four.
+    diskSizeOverride: ""
     # -- Node labels endpoint pods must schedule onto, as a list of "key=value"
     # strings (joined into the AMP_DEPLOY_NODE_SELECTOR CSV). Leave storageClass
     # empty and point this at a local-NVMe-SSD ephemeral node pool (GKE:

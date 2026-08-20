@@ -300,6 +300,58 @@ func TestDeployStorageClass(t *testing.T) {
 	}
 }
 
+// #602: the flat per-endpoint size override. Off by default (prod keeps the
+// per-vCPU policy); a bad quantity fails startup rather than at endpoint-create.
+func TestDeployDiskSizeOverride(t *testing.T) {
+	chart := t.TempDir()
+	base := func() []string {
+		return []string{
+			"--database-url", "postgres://localhost/db",
+			"--deploy",
+			"--deploy-driver", "kubernetes",
+			"--deploy-namespace", "endpoints",
+			"--deploy-chart", chart,
+			"--endpoint-image-repo", "registry.example.com/endpoint",
+			"--deploy-yb-host-ports", "yb-tserver:5433",
+		}
+	}
+
+	c, err := Load(base())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Deploy.DiskSizeOverride != "" {
+		t.Errorf("DiskSizeOverride = %q, want empty by default", c.Deploy.DiskSizeOverride)
+	}
+
+	for _, ok := range []string{"10Gi", "512Mi", "2G", "1073741824"} {
+		c, err := Load(append(base(), "--deploy-disk-size-override", ok))
+		if err != nil {
+			t.Errorf("Load(--deploy-disk-size-override %s): %v", ok, err)
+			continue
+		}
+		if c.Deploy.DiskSizeOverride != ok {
+			t.Errorf("DiskSizeOverride = %q, want %q", c.Deploy.DiskSizeOverride, ok)
+		}
+	}
+
+	for _, bad := range []string{"10 Gi", "ten", "10GB", "-5Gi"} {
+		if _, err := Load(append(base(), "--deploy-disk-size-override", bad)); err == nil {
+			t.Errorf("--deploy-disk-size-override %q: want error, got nil", bad)
+		}
+	}
+
+	// Env-provided, since that is how the chart delivers it.
+	t.Setenv("AMP_DEPLOY_DISK_SIZE_OVERRIDE", "10Gi")
+	c, err = Load(base())
+	if err != nil {
+		t.Fatalf("Load(env): %v", err)
+	}
+	if c.Deploy.DiskSizeOverride != "10Gi" {
+		t.Errorf("DiskSizeOverride from env = %q, want 10Gi", c.Deploy.DiskSizeOverride)
+	}
+}
+
 func TestDeployEnabledMissingRequired(t *testing.T) {
 	chart := t.TempDir()
 	// base: a fully-valid set of args; each subtest removes/breaks one field.

@@ -80,6 +80,27 @@ tests:
             name: AMP_DEPLOY_NAMESPACE
             value: amp
 
+  # #602: a test cluster whose nodes cannot back 20 GiB per endpoint vCPU pins a
+  # flat /data size instead. Empty is the default and must stay empty, or prod
+  # would silently lose CPU-proportional sizing.
+  - it: leaves the endpoint disk size override empty by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_DISK_SIZE_OVERRIDE
+            value: ""
+
+  - it: passes the endpoint disk size override through when set
+    set:
+      controller.endpoint.diskSizeOverride: 10Gi
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AMP_DEPLOY_DISK_SIZE_OVERRIDE
+            value: "10Gi"
+
   - it: derives the endpoint pull secret from the first imagePullSecret
     set:
       imagePullSecrets:

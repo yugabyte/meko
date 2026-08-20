@@ -66,7 +66,7 @@ Three failure modes, three different next moves:
 |---|---|---|
 | `CrashLoopBackOff` / `restartCount` climbing | a process inside the container exits non-zero on start | container logs (step 3) |
 | `Running` but `READY 0/1`, `restartCount=0` | container stays up but the readiness probe never passes | the service that backs the readiness probe; SC registration |
-| `ContainerCreating` / `Pending` | image pull, scheduling, PVC binding — including `Insufficient ephemeral-storage`, which means the pool cannot back this endpoint's 20 GiB/vCPU data volume (a 32-vCPU endpoint asks for 640 GiB; size the node pool's local SSDs to match) | events; `describe pod` |
+| `ContainerCreating` / `Pending` | image pull, scheduling, PVC binding — including `Insufficient ephemeral-storage`, which means the pool cannot back this endpoint's 20 GiB/vCPU data volume (a 32-vCPU endpoint asks for 640 GiB; size the node pool's local SSDs to match). On a test cluster, pin a flat size instead: `controller.endpoint.diskSizeOverride=10Gi` | events; `describe pod` |
 
 Confirm with the container's terminated state:
 ```bash

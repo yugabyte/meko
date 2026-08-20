@@ -99,6 +99,10 @@ NS=amp CONTROLLER_TAG=<tag> ENDPOINT_TAG=<tag> deploy/controller/redeploy.sh
 - `ENDPOINT_STORAGE_CLASS` — storage class for each endpoint's `/data` volume; a
   PVC of that class (EBS/PD), sized by `ENDPOINT_DISK_SIZE` (default `10Gi`).
   Empty (default) ⇒ an ephemeral `emptyDir`.
+- `ENDPOINT_DISK_SIZE_OVERRIDE` — a flat `/data` size for every endpoint whatever
+  its CPU, bypassing the 20 GiB-per-vCPU policy. Empty (default) ⇒
+  CPU-proportional. Set it on a test cluster whose nodes are too small to back the
+  ratio; leave it empty in prod.
 
 (`deploy/up.sh` overrides these to `nodeport` + `ClusterIP` by default.)
 

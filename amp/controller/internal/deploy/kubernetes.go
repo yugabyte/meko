@@ -112,6 +112,11 @@ type KubernetesConfig struct {
 	// nodes it will schedule onto (#584), so a ratio the pool cannot back
 	// surfaces as an unschedulable endpoint rather than an error here.
 	DiskGiBPerVCPU int
+	// DiskSizeOverride, when non-empty, is the flat data-volume size every
+	// endpoint gets regardless of its CPU — the per-vCPU ratio and the DiskSize
+	// floor are both bypassed. For test clusters whose nodes cannot back the
+	// ratio (#602); empty (the default) keeps the CPU-proportional policy.
+	DiskSizeOverride string
 
 	// Optional: deliver the backing YugabyteDB password from a pre-existing
 	// Secret in the namespace instead of inline (keeps the plaintext off the

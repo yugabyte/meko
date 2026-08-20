@@ -161,6 +161,73 @@ func TestApplyDiskSizingEmptyDir(t *testing.T) {
 	}
 }
 
+// #602: --deploy-disk-size-override replaces the whole CPU-proportional
+// calculation with one flat size, on both backings, so a test cluster can fit
+// endpoints on nodes that cannot back the ratio.
+func TestApplyDiskSizingFlatOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name, cpu, floor, override, want string
+		ratio                            int
+	}{
+		{name: "override beats the default ratio", cpu: "2", floor: "10Gi", override: "10Gi", want: "10Gi"},
+		{name: "override ignores cpu entirely", cpu: "32", floor: "10Gi", override: "10Gi", want: "10Gi"},
+		{name: "override beats the floor", cpu: "1", floor: "30Gi", override: "8Gi", want: "8Gi"},
+		{name: "override beats an installer ratio", cpu: "2", floor: "", override: "5Gi", want: "5Gi", ratio: 100},
+		{name: "override may exceed the ratio too", cpu: "1", floor: "", override: "100Gi", want: "100Gi"},
+		{name: "non-Gi units are honoured", cpu: "4", floor: "", override: "512Mi", want: "1Gi"},
+		// Config validation rejects these at startup; sizing falls back to the
+		// ratio rather than handing the endpoint a zero-byte volume.
+		{name: "unparseable override falls back to the ratio", cpu: "2", floor: "", override: "ten gigs", want: "40Gi"},
+		{name: "zero override falls back to the ratio", cpu: "2", floor: "", override: "0", want: "40Gi"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := KubernetesConfig{DiskSize: tc.floor, DiskGiBPerVCPU: tc.ratio, DiskSizeOverride: tc.override}
+
+			empty := chartValues{Endpoint: endpointValues{Resources: resourceValues{CPU: tc.cpu}}}
+			k := &KubernetesDeployer{cfg: cfg}
+			if err := k.applyDiskSizing(&empty); err != nil {
+				t.Fatalf("emptyDir: %v", err)
+			}
+			if empty.RunDir == nil || empty.RunDir.SizeLimit != tc.want {
+				t.Errorf("emptyDir sizeLimit = %+v, want %s", empty.RunDir, tc.want)
+			}
+			// The scheduler accounts this, so it is the figure that decides whether
+			// the endpoint fits the node at all.
+			if empty.Endpoint.Resources.EphemeralStorage != tc.want {
+				t.Errorf("ephemeral-storage request = %q, want %s",
+					empty.Endpoint.Resources.EphemeralStorage, tc.want)
+			}
+
+			pvcCfg := cfg
+			pvcCfg.StorageClass = "std"
+			pvc := chartValues{
+				Endpoint:    endpointValues{Resources: resourceValues{CPU: tc.cpu}},
+				Persistence: &persistenceValues{StorageClass: "std"},
+			}
+			kp := &KubernetesDeployer{cfg: pvcCfg}
+			if err := kp.applyDiskSizing(&pvc); err != nil {
+				t.Fatalf("pvc: %v", err)
+			}
+			if pvc.Persistence.Size != tc.want {
+				t.Errorf("PVC size = %s, want %s", pvc.Persistence.Size, tc.want)
+			}
+		})
+	}
+}
+
+// Empty is the prod default and must leave the ratio untouched — the override is
+// opt-in, not a new default.
+func TestApplyDiskSizingEmptyOverrideKeepsRatio(t *testing.T) {
+	k := &KubernetesDeployer{cfg: KubernetesConfig{DiskSize: "10Gi", DiskSizeOverride: ""}}
+	v := chartValues{Endpoint: endpointValues{Resources: resourceValues{CPU: "32"}}}
+	if err := k.applyDiskSizing(&v); err != nil {
+		t.Fatalf("applyDiskSizing: %v", err)
+	}
+	if v.RunDir.SizeLimit != "640Gi" {
+		t.Errorf("sizeLimit = %s, want 640Gi", v.RunDir.SizeLimit)
+	}
+}
+
 // A PVC is not ephemeral storage, so claiming it against the node's disk budget
 // would reserve the same bytes twice.
 func TestApplyDiskSizingPVCRequestsNoEphemeralStorage(t *testing.T) {

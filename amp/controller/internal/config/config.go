@@ -121,6 +121,12 @@ type DeployConfig struct {
 	// (#584), so a ratio the pool cannot back shows up as an endpoint that will
 	// not schedule.
 	DiskGiBPerVCPU int
+	// DiskSizeOverride is a flat data-volume size applied to every endpoint
+	// whatever its CPU, bypassing both the per-vCPU ratio and the DiskSize
+	// floor. Empty (the default) keeps the CPU-proportional policy. This is for
+	// test clusters, where nodes are too small to back the ratio and the disk is
+	// scratch nothing will fill (#602) — not for prod.
+	DiskSizeOverride string
 
 	// --- Docker runtime ---
 	EndpointImage string // single-container endpoint image to run
@@ -200,6 +206,11 @@ var schemaRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // '-', starting and ending alphanumeric); length is checked separately.
 var dns1123Re = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
+// byteQuantityRe matches a Kubernetes storage quantity ("10Gi", "512Mi", "2G",
+// "1073741824") — the subset deploy.parseByteQuantity accepts. A typo here would
+// otherwise be discovered as a mis-sized volume at endpoint-create time.
+var byteQuantityRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|k|K|M|G|T|P)?$`)
+
 // Load resolves configuration from args (flags) layered over the environment.
 func Load(args []string) (*Config, error) {
 	fs := flag.NewFlagSet("controller", flag.ContinueOnError)
@@ -249,6 +260,7 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.StorageClass, "deploy-storage-class", env("AMP_DEPLOY_STORAGE_CLASS", ""), "k8s: storage class for the endpoint data volume — provisions a PersistentVolumeClaim (EBS/PD). Empty = ephemeral emptyDir (no persistent volume)")
 	fs.StringVar(&d.DiskSize, "deploy-disk-size", env("AMP_DEPLOY_DISK_SIZE", "10Gi"), "k8s: requested size of the endpoint data volume when --deploy-storage-class is set")
 	fs.IntVar(&d.DiskGiBPerVCPU, "deploy-disk-gib-per-vcpu", envInt("AMP_DEPLOY_DISK_GIB_PER_VCPU", 0), "k8s: GiB of endpoint data volume per vCPU (0 = the built-in 20 GiB/vCPU policy; override only for a pool built to a different disk-per-core shape)")
+	fs.StringVar(&d.DiskSizeOverride, "deploy-disk-size-override", env("AMP_DEPLOY_DISK_SIZE_OVERRIDE", ""), "k8s: flat endpoint data volume size (e.g. 10Gi) for every endpoint regardless of CPU, bypassing the per-vCPU ratio and --deploy-disk-size floor; empty = CPU-proportional sizing. For test clusters whose nodes cannot back the ratio")
 	fs.StringVar(&d.BackingYBHostPorts, "deploy-yb-host-ports", env("AMP_DEPLOY_YB_HOST_PORTS", ""), "backing YugabyteDB host:port[,...] as the deployed pods reach it")
 	fs.StringVar(&d.BackingYBUser, "deploy-yb-user", env("AMP_DEPLOY_YB_USER", "yugabyte"), "backing YugabyteDB user for deployed endpoints")
 	fs.StringVar(&d.BackingYBDBName, "deploy-yb-dbname", env("AMP_DEPLOY_YB_DBNAME", "yb_storage"), "backing YugabyteDB database for deployed endpoints")
@@ -425,6 +437,11 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	// class the data volume is an ephemeral emptyDir and the size is unused.
 	if d.StorageClass != "" && d.DiskSize == "" {
 		return fmt.Errorf("deploy disk size is required when --deploy-storage-class is set")
+	}
+	// The flat override sizes every endpoint's volume, so an unparseable value
+	// has to fail startup rather than silently fall back to the ratio.
+	if d.DiskSizeOverride != "" && !byteQuantityRe.MatchString(d.DiskSizeOverride) {
+		return fmt.Errorf("invalid deploy disk size override %q (want a k8s quantity, e.g. 10Gi)", d.DiskSizeOverride)
 	}
 	return nil
 }

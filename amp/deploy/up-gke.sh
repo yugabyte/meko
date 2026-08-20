@@ -85,6 +85,11 @@ ENDPOINT_SERVICE_TYPE="${ENDPOINT_SERVICE_TYPE:-ClusterIP}"
 # (Persistent Disk); empty (default) => an ephemeral emptyDir.
 ENDPOINT_STORAGE_CLASS="${ENDPOINT_STORAGE_CLASS:-}"
 ENDPOINT_DISK_SIZE="${ENDPOINT_DISK_SIZE:-10Gi}"
+# Flat /data size for every endpoint whatever its CPU, bypassing the 20 GiB-per-vCPU
+# policy and the floor above. Empty (default) = CPU-proportional. A GKE node on the
+# default 100GB boot disk has ~43.8Gi allocatable, so a 2-vCPU endpoint's 40Gi packs
+# one endpoint per node; "10Gi" fits four.
+ENDPOINT_DISK_SIZE_OVERRIDE="${ENDPOINT_DISK_SIZE_OVERRIDE:-}"
 # GKE internal-LB annotations (used for internal-lb controller/UI Services).
 LB_ANNOTATIONS="${LB_ANNOTATIONS:-networking.gke.io/load-balancer-type=Internal,networking.gke.io/internal-load-balancer-allow-global-access=true}"
 MCP_ENABLED="${MCP_ENABLED:-true}"
@@ -309,6 +314,7 @@ HELM_SET=(
   "controller.endpoint.service.type=${ENDPOINT_SERVICE_TYPE}"
   "controller.endpoint.storageClass=${ENDPOINT_STORAGE_CLASS}"
   "controller.endpoint.diskSize=${ENDPOINT_DISK_SIZE}"
+  "controller.endpoint.diskSizeOverride=${ENDPOINT_DISK_SIZE_OVERRIDE}"
   "controller.service.type=${CONTROLLER_EXPOSE}"
   "mcp.enabled=${MCP_ENABLED}"
   "mcp.image.repository=${REGISTRY}/${MCP_IMAGE_REPO}"

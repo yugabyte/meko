@@ -86,6 +86,10 @@ spec:
               value: {{ .Values.controller.endpoint.storageClass | quote }}
             - name: AMP_DEPLOY_DISK_SIZE
               value: {{ .Values.controller.endpoint.diskSize | quote }}
+            # Flat /data size for every endpoint, whatever its CPU — bypasses the
+            # per-vCPU ratio. Empty (the default) = CPU-proportional sizing.
+            - name: AMP_DEPLOY_DISK_SIZE_OVERRIDE
+              value: {{ .Values.controller.endpoint.diskSizeOverride | default "" | quote }}
             # Node labels endpoint pods must match (e.g. a local-NVMe-SSD ephemeral
             # pool). The controller parses this as a "k=v,k=v" CSV.
             - name: AMP_DEPLOY_NODE_SELECTOR

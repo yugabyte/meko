@@ -96,7 +96,8 @@ a 200 confirms the MCP app is actually serving, not just that the port is bound.
 | `controller.endpoint.ybHostPorts` | `yb-tserver:5433` | `AMP_DEPLOY_YB_HOST_PORTS` |
 | `controller.endpoint.ybUser` / `.ybDbname` | `yugabyte` / `yb_storage` | `AMP_DEPLOY_YB_USER` / `AMP_DEPLOY_YB_DBNAME` |
 | `controller.endpoint.storageClass` | _(empty)_ | `AMP_DEPLOY_STORAGE_CLASS` (empty ⇒ emptyDir) |
-| `controller.endpoint.diskSize` | `10Gi` | `AMP_DEPLOY_DISK_SIZE` |
+| `controller.endpoint.diskSize` | `10Gi` | `AMP_DEPLOY_DISK_SIZE` (a **floor**; the size itself is 20 GiB × the endpoint's vCPU) |
+| `controller.endpoint.diskSizeOverride` | _(empty)_ | `AMP_DEPLOY_DISK_SIZE_OVERRIDE` — flat `/data` size for every endpoint whatever its CPU, bypassing the ratio and the floor. Empty ⇒ CPU-proportional. Test clusters only |
 | `controller.endpoint.service.type` | `ClusterIP` | `AMP_DEPLOY_SERVICE_TYPE` (ClusterIP \| NodePort \| LoadBalancer) |
 | `controller.endpoint.service.nodePortValue` | _(empty)_ | reserved — the deployer currently auto-assigns the endpoint NodePort |
 | `controller.endpoint.service.annotations` | `[]` | list of `"k=v"` strings → `AMP_DEPLOY_SERVICE_ANNOTATIONS` (CSV) |
