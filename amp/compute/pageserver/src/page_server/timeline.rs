@@ -326,6 +326,92 @@ pub(crate) struct GcDrainProgress {
 
     /// When the floor was last reset to 0.
     pub(crate) last_floor_reset: Option<std::time::Instant>,
+
+    /// Resume cursors for candidates whose act is budgeted and resumable
+    /// (`GcKind::DropDb` today), keyed by candidate. An entry lives from the
+    /// first budget-capped sweep until the candidate is dequeued; a restart
+    /// loses them, which costs a re-scan of the tombstones the deleted rows
+    /// left behind, not a re-delete.
+    db_drop_cursors: std::collections::HashMap<
+        crate::page_store::GcCandidateId,
+        crate::page_store::GcDbDropProgress,
+    >,
+}
+
+impl GcDrainProgress {
+    /// The cursor this candidate resumes from. Leaves the entry in place: the
+    /// caller writes back whatever the sweep advanced it to, error or not.
+    ///
+    /// A cursor that reports done is discarded rather than returned: the
+    /// candidate is only visited again because it was left queued (its
+    /// database has a materialise job in flight), and sweeping from the start
+    /// is what reclaims an image that job landed after the first pass ran
+    /// past it.
+    pub(crate) fn resume_cursor(
+        &self,
+        id: &crate::page_store::GcCandidateId,
+    ) -> crate::page_store::GcDbDropProgress {
+        self.db_drop_cursors
+            .get(id)
+            .filter(|p| !p.is_reclaimed())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn store_cursor(
+        &mut self,
+        id: crate::page_store::GcCandidateId,
+        progress: crate::page_store::GcDbDropProgress,
+    ) {
+        self.db_drop_cursors.insert(id, progress);
+    }
+
+    /// Candidates with ranges still to walk, for the next tick to resume
+    /// without the queue select having to re-find them.
+    ///
+    /// A cursor with every range done is excluded even when it owes a
+    /// re-check. Both are
+    /// queued on an external condition — a materialise job going idle — with
+    /// no progress guarantee, so they wait for the floor reset like every
+    /// other busy drop. Injecting them would re-act a wedged object every
+    /// tick, and would hold the whole branch's drain at the backlog cadence
+    /// by keeping `ActOutcome::unfinished_db_drops` non-empty forever.
+    pub(crate) fn unfinished_db_drops(&self) -> Vec<crate::page_store::GcCandidateId> {
+        self.db_drop_cursors
+            .iter()
+            .filter(|(_, p)| !p.all_ranges_done())
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Make sure this candidate has a cursor, leaving any it already has
+    /// alone. A tick that could not sweep it at all — an earlier candidate
+    /// spent the budget — still has to leave it visible to
+    /// [`Self::unfinished_db_drops`], but overwriting a live cursor would
+    /// restart a sweep that is already deep in its range, and the restart
+    /// re-walks every tombstone its earlier ticks wrote.
+    pub(crate) fn ensure_cursor(&mut self, id: crate::page_store::GcCandidateId) {
+        self.db_drop_cursors.entry(id).or_default();
+    }
+
+    /// Require one more full pass of this candidate's sweep before it may be
+    /// dequeued, because a fork of its database was busy while the cursors
+    /// were moving. Inserts a fresh cursor if the candidate has none, so the
+    /// requirement cannot be lost.
+    pub(crate) fn require_recheck(&mut self, id: crate::page_store::GcCandidateId) {
+        self.db_drop_cursors
+            .entry(id)
+            .or_default()
+            .require_recheck();
+    }
+
+    /// Drop the cursors of candidates that just left the queue. An id without
+    /// one — every kind but `DropDb` — is simply absent.
+    pub(crate) fn remove_cursors(&mut self, ids: &[crate::page_store::GcCandidateId]) {
+        for id in ids {
+            self.db_drop_cursors.remove(id);
+        }
+    }
 }
 
 /// The GC drain's connection pool and in-memory progress.

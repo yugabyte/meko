@@ -616,8 +616,15 @@ impl PageWriter {
                 crate::page_store::GcKind::ShrinkPages => "shrink",
                 crate::page_store::GcKind::DropPages
                 | crate::page_store::GcKind::DropSlru
-                | crate::page_store::GcKind::DropMeta => "drop",
-                other => {
+                | crate::page_store::GcKind::DropMeta
+                | crate::page_store::GcKind::DropDb => "drop",
+                // Exhaustive, no wildcard: a new kind must be classified here
+                // at compile time rather than mislabelled in release and
+                // panicking in debug.
+                other @ (crate::page_store::GcKind::TrimPages
+                | crate::page_store::GcKind::TrimSlru
+                | crate::page_store::GcKind::TrimMeta
+                | crate::page_store::GcKind::Unknown(_)) => {
                     debug_assert!(
                         false,
                         "trim candidates go through the emitter, got {other:?}"

@@ -63,7 +63,7 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use dashmap::DashMap;
 use futures::stream::{StreamExt, TryStreamExt};
-use pageserver_api::key::{KEY_SIZE, Key, rel_size_to_key};
+use pageserver_api::key::{DB_META_KEY_RANGES, KEY_SIZE, Key, rel_size_to_key};
 use pageserver_api::models::PayloadCompression;
 use pageserver_api::reltag::{RelTag, SlruKind};
 
@@ -1068,6 +1068,7 @@ pub fn gc_bucket_id(key: &Key) -> i32 {
     (gc_key_hash(key) % GC_BUCKETS as u64) as i32
 }
 
+pub use pageserver_api::config::GC_DB_DROP_MAX_ROWS_PER_DELETE;
 /// The `amp_storage.pages` placement bucket, shared with the operator tools
 /// (`dump-pages` pins its queries with the same function). Defined once in
 /// `pageserver_api` — a second copy of a frozen key function is how rows go
@@ -1093,13 +1094,14 @@ fn rel_size_key_bytes(spcnode: i64, dbnode: i64, relnode: i64, forknum: i16) -> 
 /// `TrimPages`→`gc_act_trim_blocks`, `TrimSlru`→`gc_act_trim_slru`,
 /// `TrimMeta`→`gc_act_trim_meta`, `ShrinkPages`→`gc_act_shrink_fork`
 /// (rel-only), `DropPages`→`gc_act_drop_fork`, `DropSlru`→
-/// `gc_act_drop_slru`, `DropMeta`→`gc_act_drop_meta`. The emitter, which
+/// `gc_act_drop_slru`, `DropMeta`→`gc_act_drop_meta`,
+/// `DropDb`→`gc_act_drop_db`. The emitter, which
 /// knows the target table, stamps the kind — the key stays pure identity.
 ///
 /// Stored as a `SMALLINT` via [`Self::to_i16`]/[`Self::from_i16`] (wire
-/// values 0..=6, frozen). A value this version doesn't recognise decodes
+/// values 0..=7, frozen). A value this version doesn't recognise decodes
 /// to [`GcKind::Unknown`], which the drain alarms on and leaves queued.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GcKind {
     TrimPages,
     TrimSlru,
@@ -1108,6 +1110,9 @@ pub enum GcKind {
     DropPages,
     DropSlru,
     DropMeta,
+    /// A whole dropped database, keyed by its relmap key — one candidate
+    /// covering every fork's `pages` rows and every one of its `meta` keys.
+    DropDb,
     Unknown(i16),
 }
 
@@ -1121,6 +1126,7 @@ impl GcKind {
             GcKind::DropPages => 4,
             GcKind::DropSlru => 5,
             GcKind::DropMeta => 6,
+            GcKind::DropDb => 7,
             GcKind::Unknown(v) => v,
         }
     }
@@ -1134,6 +1140,7 @@ impl GcKind {
             4 => GcKind::DropPages,
             5 => GcKind::DropSlru,
             6 => GcKind::DropMeta,
+            7 => GcKind::DropDb,
             other => GcKind::Unknown(other),
         }
     }
@@ -1149,9 +1156,15 @@ pub type GcForkIdent = (i64, i64, i64, i16);
 /// `gc_act_*` functions.
 pub type GcSlruSeg = (i16, i64);
 
-/// The full identity (PK) of one drop/shrink candidate — its object
-/// `key`, `gc_kind`, and `due_lsn`.
-pub(crate) type GcDropShrinkCandidateId = (Key, GcKind, Lsn);
+/// Database identity: (spcnode, dbnode) — what a [`GcKind::DropDb`]
+/// candidate names, and the `pages` key prefix its sweep binds.
+pub type GcDbIdent = (i64, i64);
+
+/// One candidate's full identity: `key`, `gc_kind` and `due_lsn`, which
+/// within a branch is `pending_gc`'s whole primary key. Any kind can be
+/// named this way; only drop/shrink candidates are *dequeued* by it (a trim
+/// dequeues by a range sweep over `(key, gc_kind)` instead).
+pub(crate) type GcCandidateId = (Key, GcKind, Lsn);
 
 /// One GC candidate: "reclaim the garbage named by `key` once the cutoff
 /// reaches `due_lsn`", per `gc_kind`. `key` is an encoded [`Key`] — a rel
@@ -1165,6 +1178,95 @@ pub struct PendingGcRow {
     pub gc_kind: GcKind,
     pub due_lsn: Lsn,
     pub relsize: Option<i64>,
+}
+
+/// Where a db-wide drop ([`GcKind::DropDb`]) resumes: a position per `pages`
+/// bucket, then one per `meta` key range.
+///
+/// In memory only (`GcDrainProgress`), and the candidate stays queued until
+/// [`Self::is_reclaimed`]. Losing it to a restart costs a re-scan of the
+/// tombstones the deleted rows left behind, not a re-delete.
+#[derive(Debug, Clone, Default)]
+pub struct GcDbDropProgress {
+    pages: [GcDbDropBucket; PAGE_BUCKETS as usize],
+    /// Index into [`pageserver_api::key::db_meta_key_ranges`];
+    /// `== DB_META_KEY_RANGES` once every range is done.
+    meta_range: usize,
+    /// Position within `meta_range`: the last batch's final key.
+    meta_cursor: Option<Vec<u8>>,
+    /// A tick swept this database while one of its forks could still receive
+    /// a materialised image. The cursors may have moved past a row that
+    /// landed behind them at a folded LSN `<= due_lsn`, so the sweep owes one
+    /// more full pass before its candidate may be dequeued.
+    needs_recheck: bool,
+}
+
+/// One `pages` bucket's place in the sweep. `NotStarted` and `At(bucket
+/// minimum)` mean the same thing to the SELECT; the variant exists so the
+/// struct can derive `Default`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum GcDbDropBucket {
+    #[default]
+    NotStarted,
+    At(GcDbDropPageCursor),
+    /// Its SELECT came back empty: nothing of the database is left there.
+    Done,
+}
+
+/// A `pages` resume position: the trailing key columns below the bound
+/// `(bucket_id, branch_id, spcnode, dbnode)` prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GcDbDropPageCursor {
+    relnode: i64,
+    forknum: i16,
+    blknum: i64,
+}
+
+impl GcDbDropProgress {
+    /// The database's rows are provably gone: every range came back empty and
+    /// no re-check is owed. The condition for dequeueing its candidate.
+    pub fn is_reclaimed(&self) -> bool {
+        self.all_ranges_done() && !self.needs_recheck
+    }
+
+    /// Require one more full pass: a fork of this database was busy while the
+    /// cursors were moving, so a straggling image may sit behind them.
+    pub fn require_recheck(&mut self) {
+        self.needs_recheck = true;
+    }
+
+    /// Put the sweep back at the start of its first range. Moves position
+    /// only: the rows already deleted stay deleted, so the next pass is
+    /// `PAGE_BUCKETS + 2` seeks over ranges that are already empty, plus
+    /// whatever straggler it finds.
+    fn start_over(&mut self) {
+        *self = Self::default();
+    }
+
+    /// If every range came back empty but a re-check is owed, put the sweep
+    /// back at the start of its first range and clear the debt. Reports
+    /// whether it did, which is what tells the caller a candidate is
+    /// unfinished for that reason rather than for the row budget.
+    pub fn begin_owed_pass(&mut self) -> bool {
+        let owed = self.all_ranges_done() && self.needs_recheck;
+        if owed {
+            self.start_over();
+        }
+        owed
+    }
+
+    /// Every `pages` bucket and every `meta` range has come back empty, so
+    /// there is nothing to walk right now. Weaker than
+    /// [`Self::is_reclaimed`], which also requires that no re-check is owed.
+    pub fn all_ranges_done(&self) -> bool {
+        self.pages_done() && self.meta_range >= DB_META_KEY_RANGES
+    }
+
+    /// One spelling of "every bucket is `Done`", so the sweep's loop condition
+    /// and [`Self::is_reclaimed`] cannot disagree.
+    fn pages_done(&self) -> bool {
+        self.pages.iter().all(|b| *b == GcDbDropBucket::Done)
+    }
 }
 
 /// What one `gc_select_due_candidates` sweep found.
@@ -1189,6 +1291,16 @@ pub(crate) fn rel_fork_of(key: &Key) -> GcForkIdent {
         key.field4 as i64,
         key.field5 as i16,
     )
+}
+
+/// A rel key's database, as the `i64`s the `pages` columns bind. Only
+/// meaningful for rel-keyspace keys (`field1 == 0`), whose field2/field3 are
+/// spcnode/dbnode — an SLRU key's are its kind and a constant.
+///
+/// The cast is the point, and why this isn't a `Key` method: a caller building
+/// another `Key` wants the raw `Oid`s instead (see `drop_target_is_busy`).
+pub(crate) fn db_of_rel_key(key: &Key) -> GcDbIdent {
+    (key.field2 as i64, key.field3 as i64)
 }
 
 /// Decode an SLRU key's segment identity `(kind, segno)` from its fields
@@ -3384,12 +3496,12 @@ impl PageStore {
     pub async fn gc_dequeue_drop_shrink_candidates(
         &self,
         branch_id: BranchId,
-        candidates: &[GcDropShrinkCandidateId],
+        candidates: &[GcCandidateId],
     ) -> Result<u64> {
         if candidates.is_empty() {
             return Ok(0);
         }
-        let mut by_bucket: std::collections::HashMap<i32, Vec<&GcDropShrinkCandidateId>> =
+        let mut by_bucket: std::collections::HashMap<i32, Vec<&GcCandidateId>> =
             std::collections::HashMap::new();
         for c in candidates {
             by_bucket.entry(gc_bucket_id(&c.0)).or_default().push(c);
@@ -3592,6 +3704,248 @@ impl PageStore {
                 format!("gc_act_drop_fork meta branch={branch_id} rel={relnode} fork={forknum}")
             })?;
         Ok(deleted)
+    }
+
+    /// Drop action ([`GcKind::DropDb`]): reclaim a dropped database — every
+    /// `pages` row of every fork it held, and every `meta` key in its two
+    /// prefixes, bounded by `lsn <= due_lsn` so a database recreated on the
+    /// same OIDs keeps its newer rows.
+    ///
+    /// Deletes at most `budget` rows and advances `progress`; the caller must
+    /// leave the candidate queued until `progress.is_reclaimed()`. Idempotent.
+    ///
+    /// `pages` goes round-robin over the buckets, one batch each per pass:
+    /// `bucket_id` leads that table's key and pre-splits it into
+    /// [`PAGE_BUCKETS`] tablets, so a bucket at a time would aim a whole tick
+    /// at one Raft group — one that live ingest is writing to — while the
+    /// other five idle. Passes repeat until the budget is spent, so a database
+    /// whose rows all land in one bucket still spends it all.
+    ///
+    /// Why a range works at all, and the alternatives discarded on the way:
+    /// `compute/architecture/pageserver-gc.md`.
+    pub async fn gc_act_drop_db(
+        &self,
+        branch_id: BranchId,
+        (spcnode, dbnode): GcDbIdent,
+        due_lsn: Lsn,
+        budget: usize,
+        progress: &mut GcDbDropProgress,
+    ) -> Result<u64> {
+        self.write_gate("GC drop of a database");
+        // A sixth of the budget, so one pass over the buckets is a tick's work.
+        let rows_per_delete = budget
+            .div_ceil(PAGE_BUCKETS as usize)
+            .min(GC_DB_DROP_MAX_ROWS_PER_DELETE);
+        let mut deleted = 0usize;
+
+        // Buckets in a cycle, one batch each: a pass spreads the tick over all
+        // six tablets, and passes repeat so a database whose rows all land in
+        // one bucket still spends the whole budget. Terminates because every
+        // visit either marks a bucket Done or advances its cursor — true even
+        // when a retried DELETE reports 0 rows and `deleted` doesn't move.
+        for bucket in (0..PAGE_BUCKETS as usize).cycle() {
+            if deleted >= budget || progress.pages_done() {
+                break;
+            }
+            let resume = match progress.pages[bucket] {
+                GcDbDropBucket::Done => continue,
+                GcDbDropBucket::NotStarted => None,
+                GcDbDropBucket::At(cursor) => Some(cursor),
+            };
+            // One state write per visit, and the assignment is deliberately the
+            // outermost operation: an error inside the match skips it, so a
+            // failed batch is re-read from the same cursor rather than seeking
+            // past rows it never deleted.
+            progress.pages[bucket] = match self
+                .gc_drop_db_select_pages_batch(
+                    branch_id,
+                    (spcnode, dbnode),
+                    due_lsn,
+                    bucket,
+                    resume,
+                    rows_per_delete.min(budget - deleted),
+                )
+                .await?
+            {
+                None => GcDbDropBucket::Done,
+                Some((ybctids, cursor)) => {
+                    deleted += self.gc_drop_db_delete_batch("pages", &ybctids).await?;
+                    GcDbDropBucket::At(cursor)
+                }
+            };
+        }
+
+        // `meta` only once every bucket is Done: the loop above exits with
+        // budget left over in no other case.
+        while deleted < budget && progress.meta_range < DB_META_KEY_RANGES {
+            match self
+                .gc_drop_db_select_meta_batch(
+                    branch_id,
+                    (spcnode, dbnode),
+                    due_lsn,
+                    progress.meta_range,
+                    progress.meta_cursor.as_deref(),
+                    rows_per_delete.min(budget - deleted),
+                )
+                .await?
+            {
+                // This range is empty; move to the next one.
+                None => {
+                    progress.meta_range += 1;
+                    progress.meta_cursor = None;
+                }
+                Some((ybctids, cursor)) => {
+                    deleted += self.gc_drop_db_delete_batch("meta", &ybctids).await?;
+                    progress.meta_cursor = Some(cursor);
+                }
+            }
+        }
+
+        Ok(deleted as u64)
+    }
+
+    /// One `pages` bucket's batch: its `ybctid`s and the position to resume
+    /// from — the LAST row's cursor columns, since a batch is the lowest
+    /// remaining rows in key order. `None` means the bucket holds nothing of
+    /// this database at `lsn <= due_lsn`.
+    ///
+    /// The bound `(bucket_id, branch_id, spcnode, dbnode)` prefix is what
+    /// confines the scan to this database; the row constructor, anchored at
+    /// the key's first column, is what seeks past the rows already deleted.
+    /// Anything else (a constructor starting mid-key, `ybctid >`) degrades to
+    /// a filter over the branch. A fresh bucket binds the trailing columns at
+    /// zero — every `pages` row is at or above that, so the clause is a no-op
+    /// until there is a cursor, and the statement text stays single.
+    ///
+    /// The cursor is `>=`, not `>`: it stops above the table's `lsn DESC` tail
+    /// (row comparisons are lexicographic-ascending), so a `LIMIT` can cut a
+    /// block's versions in half and the boundary group has to be re-included.
+    /// It cannot spin — progress comes from the delete.
+    async fn gc_drop_db_select_pages_batch(
+        &self,
+        branch_id: BranchId,
+        (spcnode, dbnode): GcDbIdent,
+        due_lsn: Lsn,
+        bucket: usize,
+        resume: Option<GcDbDropPageCursor>,
+        limit: usize,
+    ) -> Result<Option<(Vec<Vec<u8>>, GcDbDropPageCursor)>> {
+        let sql = format!(
+            "SELECT ybctid, relnode, forknum, blknum FROM \"{schema}\".pages \
+             WHERE bucket_id=$1 AND branch_id=$2 AND spcnode=$3 AND dbnode=$4 \
+               AND lsn <= $5 \
+               AND (bucket_id, branch_id, spcnode, dbnode, relnode, forknum, blknum) \
+                   >= ($1, $2, $3, $4, $6, $7, $8) \
+             ORDER BY relnode, forknum, blknum, lsn DESC, is_image DESC \
+             LIMIT $9",
+            schema = self.schema
+        );
+        let at = resume.unwrap_or(GcDbDropPageCursor {
+            relnode: 0,
+            forknum: 0,
+            blknum: 0,
+        });
+        let rows = self
+            .ysql_client
+            .query(
+                &sql,
+                &[
+                    &(bucket as i16),
+                    &branch_id,
+                    &spcnode,
+                    &dbnode,
+                    &(due_lsn.0 as i64),
+                    &at.relnode,
+                    &at.forknum,
+                    &at.blknum,
+                    &(limit as i64),
+                ],
+            )
+            .await
+            .with_context(|| {
+                format!("gc_act_drop_db pages branch={branch_id} db={dbnode} bucket={bucket}")
+            })?;
+        let Some(last) = rows.last() else {
+            return Ok(None);
+        };
+        let cursor = GcDbDropPageCursor {
+            relnode: last.get(1),
+            forknum: last.get(2),
+            blknum: last.get(3),
+        };
+        Ok(Some((rows.iter().map(|r| r.get(0)).collect(), cursor)))
+    }
+
+    /// One `meta` range's batch, the [`Self::gc_drop_db_select_pages_batch`] analog.
+    /// `branch_id` is the whole hash key, so binding it already bounds the
+    /// statement to one tablet — the `key` range is what scopes it to the
+    /// database.
+    ///
+    /// Batched rather than deleted as one range statement even though a
+    /// database holds only ~2 `meta` keys per fork: the rows are *versions*,
+    /// and `put_rel_extend` writes a size row per growth record, collapsed
+    /// only by `TrimMeta` — which `enable_gc` gates off by default, so the
+    /// first sweep after it is turned on faces the whole untrimmed history.
+    /// An unbounded statement would also spend an unbounded, unmeasured part
+    /// of the tick's row budget.
+    async fn gc_drop_db_select_meta_batch(
+        &self,
+        branch_id: BranchId,
+        (spcnode, dbnode): GcDbIdent,
+        due_lsn: Lsn,
+        meta_range: usize,
+        resume: Option<&[u8]>,
+        limit: usize,
+    ) -> Result<Option<(Vec<Vec<u8>>, Vec<u8>)>> {
+        let range =
+            &pageserver_api::key::db_meta_key_ranges(spcnode as u32, dbnode as u32)[meta_range];
+        let start = resume.map_or_else(|| key_to_bytes(&range.start), <[u8]>::to_vec);
+        let sql = format!(
+            "SELECT ybctid, key FROM \"{schema}\".meta \
+             WHERE branch_id=$1 AND key >= $2 AND key < $3 AND lsn <= $4 \
+             ORDER BY key, lsn DESC \
+             LIMIT $5",
+            schema = self.schema
+        );
+        let rows = self
+            .ysql_client
+            .query(
+                &sql,
+                &[
+                    &branch_id,
+                    &start,
+                    &key_to_bytes(&range.end),
+                    &(due_lsn.0 as i64),
+                    &(limit as i64),
+                ],
+            )
+            .await
+            .with_context(|| {
+                format!("gc_act_drop_db meta branch={branch_id} db={dbnode} range={meta_range}")
+            })?;
+        let Some(last) = rows.last() else {
+            return Ok(None);
+        };
+        let cursor = last.get::<_, Vec<u8>>(1);
+        Ok(Some((rows.iter().map(|r| r.get(0)).collect(), cursor)))
+    }
+
+    /// Delete one db-drop batch by `ybctid`. Idempotent — a row another tick
+    /// already removed just doesn't match.
+    ///
+    /// Returns `ybctids.len()`, not the DELETE's count: a retried statement
+    /// re-runs as a no-op and reports 0 for rows that are gone, which would
+    /// under-charge the budget and let one tick sweep the whole database.
+    async fn gc_drop_db_delete_batch(&self, table: &str, ybctids: &[Vec<u8>]) -> Result<usize> {
+        let sql = format!(
+            "DELETE FROM \"{schema}\".{table} WHERE ybctid = ANY($1::bytea[])",
+            schema = self.schema
+        );
+        self.ysql_client
+            .execute(&sql, &[&ybctids])
+            .await
+            .with_context(|| format!("gc_act_drop_db delete from {table} n={}", ybctids.len()))?;
+        Ok(ybctids.len())
     }
 
     /// Shrink action ([`GcKind::ShrinkPages`]): delete `pages` with
@@ -7061,6 +7415,80 @@ mod tests {
                 .collect())
         }
 
+        /// Test-only: how much of one database is still stored — its
+        /// `pages` rows, and its `meta` rows across both of the key prefixes
+        /// a db drop sweeps.
+        async fn test_db_row_counts(
+            &self,
+            branch_id: BranchId,
+            spcnode: i64,
+            dbnode: i64,
+        ) -> Result<(i64, i64)> {
+            let pages_sql = format!(
+                "SELECT count(*) FROM \"{}\".pages \
+                 WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3",
+                self.schema
+            );
+            let pages: i64 = self
+                .ysql_client
+                .query(&pages_sql, &[&branch_id, &spcnode, &dbnode])
+                .await
+                .context("test_db_row_counts pages")?[0]
+                .get(0);
+            let meta_sql = format!(
+                "SELECT count(*) FROM \"{}\".meta \
+                 WHERE branch_id=$1 AND ((key >= $2 AND key < $3) OR (key >= $4 AND key < $5))",
+                self.schema
+            );
+            // The keyspace definition is shared with the sweep; its batching
+            // and stepping — what this test exercises — is not.
+            let [rel, sparse] =
+                pageserver_api::key::db_meta_key_ranges(spcnode as u32, dbnode as u32);
+            let meta: i64 = self
+                .ysql_client
+                .query(
+                    &meta_sql,
+                    &[
+                        &branch_id,
+                        &key_to_bytes(&rel.start),
+                        &key_to_bytes(&rel.end),
+                        &key_to_bytes(&sparse.start),
+                        &key_to_bytes(&sparse.end),
+                    ],
+                )
+                .await
+                .context("test_db_row_counts meta")?[0]
+                .get(0);
+            Ok((pages, meta))
+        }
+
+        /// Test-only: one database's remaining `pages` rows per `bucket_id`,
+        /// which is what shows whether a sweep spread over the table's tablets
+        /// or drained one at a time.
+        async fn test_db_pages_per_bucket(
+            &self,
+            branch_id: BranchId,
+            spcnode: i64,
+            dbnode: i64,
+        ) -> Result<Vec<i64>> {
+            let sql = format!(
+                "SELECT bucket_id, count(*) FROM \"{}\".pages \
+                 WHERE branch_id=$1 AND spcnode=$2 AND dbnode=$3 \
+                 GROUP BY bucket_id",
+                self.schema
+            );
+            let rows = self
+                .ysql_client
+                .query(&sql, &[&branch_id, &spcnode, &dbnode])
+                .await
+                .context("test_db_pages_per_bucket")?;
+            let mut out = vec![0i64; PAGE_BUCKETS as usize];
+            for r in rows {
+                out[r.get::<_, i16>(0) as usize] = r.get(1);
+            }
+            Ok(out)
+        }
+
         /// SLRU analog of [`Self::test_raw_block_versions`]: one block's
         /// stored versions for `(kind, segno, blknum)`, ordered by lsn.
         async fn test_raw_slru_versions(
@@ -7164,14 +7592,15 @@ mod tests {
     /// out-of-range → `Unknown`, preserving the raw wire value). No DB.
     #[test]
     fn gc_kind_i16_roundtrip() {
-        for v in [0i16, 1, 2, 3, 4, 5, 6, 7, -1, 42, i16::MAX, i16::MIN] {
+        for v in [0i16, 1, 2, 3, 4, 5, 6, 7, 8, -1, 42, i16::MAX, i16::MIN] {
             assert_eq!(GcKind::from_i16(v).to_i16(), v, "roundtrip for {v}");
         }
         assert_eq!(GcKind::from_i16(0), GcKind::TrimPages);
         assert_eq!(GcKind::from_i16(6), GcKind::DropMeta);
-        assert_eq!(GcKind::from_i16(7), GcKind::Unknown(7));
+        assert_eq!(GcKind::from_i16(7), GcKind::DropDb);
+        assert_eq!(GcKind::from_i16(8), GcKind::Unknown(8));
         assert_eq!(GcKind::TrimPages.to_i16(), 0);
-        assert_eq!(GcKind::DropMeta.to_i16(), 6);
+        assert_eq!(GcKind::DropDb.to_i16(), 7);
     }
 
     /// golden values, not just property checks. No DB needed (pure fn).
@@ -7984,6 +8413,224 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(again, 0);
+    }
+
+    /// Scenario: one `DropDb` candidate reclaims a whole database — every
+    /// fork's `pages` rows and every `meta` key under both of its prefixes,
+    /// sparse-reldir tombstones included — at `lsn <= due_lsn`, while a
+    /// database recreated on the same oids (rows above the drop) and a
+    /// different database survive.
+    ///
+    /// The sweep is budgeted: a budget below the database's size stops
+    /// mid-range and reports itself undrained, and resuming from the cursor
+    /// finishes it. That is what keeps a 100 GB `DROP DATABASE` from being one
+    /// unbounded delete.
+    #[tokio::test]
+    async fn gc_act_drop_db_sweeps_the_database_in_budgeted_batches() {
+        use pageserver_api::key::{rel_tag_sparse_key, relmap_file_key};
+        let (store, _schema) = make_store("gc_drop_db").await;
+        let branch = rand_branch();
+        // The dropped database and a bystander sharing its tablespace.
+        let (db, other_db) = (GC_DB, GC_DB + 1);
+        let due = Lsn(100);
+
+        let meta_row = |key: Key, lsn: u64| MetaRow {
+            key: Bytes::from(key_to_bytes(&key)),
+            lsn: Lsn(lsn),
+            payload: Bytes::from_static(b"m"),
+        };
+        let mut pages = Vec::new();
+        let mut meta = Vec::new();
+        for rel in 16400u32..16404 {
+            for fork in 0u8..2 {
+                // Blocks span `PAGE_BUCKET_STRIDE` boundaries so the database
+                // lands in every bucket — `page_bucket_id` folds
+                // `blknum / stride` in, and adjacent relnodes alone would put
+                // the whole fixture in two buckets.
+                for stride in 0..PAGE_BUCKETS as u32 {
+                    for j in 0u32..7 {
+                        let blk = stride * PAGE_BUCKET_STRIDE as u32 + j;
+                        for lsn in [10u64, 20] {
+                            pages.push(page_row(
+                                page_key(GC_SPC as u32, db as u32, rel, fork, blk),
+                                lsn,
+                                true,
+                                true,
+                                b"x",
+                            ));
+                        }
+                    }
+                }
+                meta.push(rel_size_row(rel, fork, 10, 42));
+                // A live marker for the even rels, a DROP TABLE tombstone for
+                // the odd ones — a range sweep clears both without listing.
+                meta.push(meta_row(
+                    rel_tag_sparse_key(GC_SPC as u32, db as u32, rel, fork),
+                    10,
+                ));
+            }
+        }
+        meta.push(meta_row(relmap_file_key(GC_SPC as u32, db as u32), 10));
+        // Recreated on the same oids above the drop: must survive.
+        pages.push(page_row(
+            page_key(GC_SPC as u32, db as u32, 16400, 0, 0),
+            200,
+            true,
+            true,
+            b"new",
+        ));
+        meta.push(meta_row(relmap_file_key(GC_SPC as u32, db as u32), 200));
+        // A different database: must survive untouched.
+        pages.push(page_row(
+            page_key(GC_SPC as u32, other_db as u32, 16400, 0, 0),
+            10,
+            true,
+            true,
+            b"other",
+        ));
+        meta.push(meta_row(
+            relmap_file_key(GC_SPC as u32, other_db as u32),
+            10,
+        ));
+        meta.push(meta_row(
+            rel_tag_sparse_key(GC_SPC as u32, other_db as u32, 16400, 0),
+            10,
+        ));
+        store.put_pages(branch, &pages).await.unwrap();
+        store.put_meta(branch, &meta).await.unwrap();
+
+        let (pages_before, meta_before) =
+            store.test_db_row_counts(branch, GC_SPC, db).await.unwrap();
+        assert_eq!((pages_before, meta_before), (673, 18));
+        let by_bucket_before = store
+            .test_db_pages_per_bucket(branch, GC_SPC, db)
+            .await
+            .unwrap();
+        assert!(
+            by_bucket_before.iter().all(|n| *n > 20),
+            "fixture must occupy every bucket to test the fan-out: \
+             {by_bucket_before:?}"
+        );
+
+        // One budgeted pass: bounded, and not done.
+        let mut progress = GcDbDropProgress::default();
+        let first = store
+            .gc_act_drop_db(branch, (GC_SPC, db), due, 100, &mut progress)
+            .await
+            .unwrap();
+        assert!(first <= 100, "the budget bounds the pass: {first}");
+        assert!(
+            !progress.is_reclaimed(),
+            "a 100-row budget can't finish 689 rows"
+        );
+
+        // The pass took a batch from EVERY bucket rather than draining one:
+        // `pages` is pre-split on `bucket_id`, so a bucket-at-a-time sweep
+        // would aim a whole tick's deletes at one tablet.
+        let by_bucket_after = store
+            .test_db_pages_per_bucket(branch, GC_SPC, db)
+            .await
+            .unwrap();
+        for (bucket, (before, after)) in by_bucket_before.iter().zip(&by_bucket_after).enumerate() {
+            assert!(
+                after < before,
+                "bucket {bucket} untouched by the pass: {before} -> {after} \
+                 (all buckets: {by_bucket_after:?})"
+            );
+        }
+
+        // Resume from the same cursor until it reports done, and tally what the
+        // sweep charged. The tally is exact because a batch charges the rows
+        // its SELECT named, not the DELETE's reported count — which a retried
+        // statement under-reports (see `gc_drop_db_delete_batch`).
+        let mut total = first;
+        for _ in 0..40 {
+            if progress.is_reclaimed() {
+                break;
+            }
+            total += store
+                .gc_act_drop_db(branch, (GC_SPC, db), due, 100, &mut progress)
+                .await
+                .unwrap();
+        }
+        assert!(progress.is_reclaimed(), "the sweep must converge");
+        assert_eq!(
+            total, 689,
+            "every row at or below the drop LSN, charged once: 672 pages + 17 meta"
+        );
+
+        // What is left of the dropped database is exactly the recreation.
+        assert_eq!(
+            store.test_db_row_counts(branch, GC_SPC, db).await.unwrap(),
+            (1, 1),
+            "only the rows written above the drop survive"
+        );
+        assert_eq!(
+            store
+                .test_raw_block_versions(branch, GC_SPC, db, 16400, 0, 0)
+                .await
+                .unwrap(),
+            vec![(200, true, true)]
+        );
+        assert_eq!(
+            store
+                .test_db_row_counts(branch, GC_SPC, other_db)
+                .await
+                .unwrap(),
+            (1, 2),
+            "a different database is untouched"
+        );
+
+        // A fork busy mid-sweep: the cursors moved past it, then a materialise
+        // job inserted an image behind them at a folded LSN below the drop.
+        // `require_recheck` is what stops the candidate being dequeued with
+        // that row stranded — nothing would ever name it again.
+        store
+            .put_pages(
+                branch,
+                &[page_row(
+                    page_key(GC_SPC as u32, db as u32, 16400, 0, 0),
+                    50,
+                    true,
+                    true,
+                    b"straggler",
+                )],
+            )
+            .await
+            .unwrap();
+        progress.require_recheck();
+        assert!(
+            !progress.is_reclaimed(),
+            "an owed re-check must hold the candidate queued"
+        );
+        // What `act_db_drops` does once a re-check is owed.
+        assert!(progress.begin_owed_pass(), "the owed pass must begin");
+        for _ in 0..40 {
+            if progress.is_reclaimed() {
+                break;
+            }
+            store
+                .gc_act_drop_db(branch, (GC_SPC, db), due, 100, &mut progress)
+                .await
+                .unwrap();
+        }
+        assert!(progress.is_reclaimed(), "the re-check pass must converge");
+        assert_eq!(
+            store.test_db_row_counts(branch, GC_SPC, db).await.unwrap(),
+            (1, 1),
+            "the straggler is gone; only the rows above the drop survive"
+        );
+
+        // Idempotent: a fresh sweep of the same candidate finds nothing left.
+        let mut again = GcDbDropProgress::default();
+        assert_eq!(
+            store
+                .gc_act_drop_db(branch, (GC_SPC, db), due, 10_000, &mut again)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(again.is_reclaimed());
     }
 
     /// Scenario: an SLRU segment drop deletes the segment's `slru_pages`

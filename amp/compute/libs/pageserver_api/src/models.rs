@@ -437,6 +437,8 @@ pub struct BranchConfigPatch {
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_drain_limit: FieldPatch<usize>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
+    pub gc_drop_db_rows_per_tick: FieldPatch<usize>,
+    #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub gc_queue_floor_reset_interval: FieldPatch<String>,
     #[serde(skip_serializing_if = "FieldPatch::is_noop")]
     pub enable_gc: FieldPatch<bool>,
@@ -503,6 +505,9 @@ pub struct BranchConfig {
     pub gc_drain_limit: Option<usize>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub gc_drop_db_rows_per_tick: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "humantime_serde")]
     pub gc_queue_floor_reset_interval: Option<Duration>,
 
@@ -534,6 +539,7 @@ impl BranchConfig {
             mut basebackup_cache_enabled,
             mut test_enable_gc_drain,
             mut gc_drain_limit,
+            mut gc_drop_db_rows_per_tick,
             mut gc_queue_floor_reset_interval,
             mut enable_gc,
             mut gc_candidate_every_n_bases,
@@ -579,6 +585,9 @@ impl BranchConfig {
         patch.test_enable_gc_drain.apply(&mut test_enable_gc_drain);
         patch.gc_drain_limit.apply(&mut gc_drain_limit);
         patch
+            .gc_drop_db_rows_per_tick
+            .apply(&mut gc_drop_db_rows_per_tick);
+        patch
             .gc_queue_floor_reset_interval
             .map(|v| humantime::parse_duration(&v))?
             .apply(&mut gc_queue_floor_reset_interval);
@@ -603,6 +612,7 @@ impl BranchConfig {
             basebackup_cache_enabled,
             test_enable_gc_drain,
             gc_drain_limit,
+            gc_drop_db_rows_per_tick,
             gc_queue_floor_reset_interval,
             enable_gc,
             gc_candidate_every_n_bases,
@@ -648,6 +658,9 @@ impl BranchConfig {
                 .test_enable_gc_drain
                 .unwrap_or(global_conf.test_enable_gc_drain),
             gc_drain_limit: self.gc_drain_limit.unwrap_or(global_conf.gc_drain_limit),
+            gc_drop_db_rows_per_tick: self
+                .gc_drop_db_rows_per_tick
+                .unwrap_or(global_conf.gc_drop_db_rows_per_tick),
             gc_queue_floor_reset_interval: self
                 .gc_queue_floor_reset_interval
                 .unwrap_or(global_conf.gc_queue_floor_reset_interval),

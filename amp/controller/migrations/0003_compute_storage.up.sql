@@ -251,7 +251,8 @@ CREATE TABLE IF NOT EXISTS amp_storage.branch_state (
 -- the encoded `Key` (`key`, the same 18-byte layout `meta` uses) plus a
 -- `gc_kind` that names both the operation and its target table
 -- (0=trim_pages, 1=trim_slru, 2=trim_meta, 3=shrink_pages, 4=drop_pages,
--- 5=drop_slru, 6=drop_meta); the drain dispatches on gc_kind alone. One
+-- 5=drop_slru, 6=drop_meta, 7=drop_db); the drain dispatches on gc_kind
+-- alone. One
 -- keying convention covers rel blocks, SLRU blocks, and meta keys alike.
 -- Replayed duplicates dedup: the
 -- candidate's identity is its PK and writers run upsert-mode, so a replay
@@ -271,7 +272,7 @@ CREATE TABLE IF NOT EXISTS amp_storage.pending_gc (
     bucket_id  INT      NOT NULL,   -- FROZEN: FNV-1a(key) % 3 (page_store::gc_bucket_id)
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,   -- encoded Key: block (trim) or object (drop/shrink)
-    gc_kind    SMALLINT NOT NULL,   -- 0=trim_pages 1=trim_slru 2=trim_meta 3=shrink_pages 4=drop_pages 5=drop_slru 6=drop_meta
+    gc_kind    SMALLINT NOT NULL,   -- 0=trim_pages 1=trim_slru 2=trim_meta 3=shrink_pages 4=drop_pages 5=drop_slru 6=drop_meta 7=drop_db
     -- Rel size (blocks) as of a shrink. Set on shrink candidates only
     -- (NULL for trim/drop; shrink is rel-only).
     relsize    BIGINT,

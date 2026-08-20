@@ -74,15 +74,17 @@ an encoded `Key` (the same 18-byte layout `meta` uses — a rel block, an
 SLRU block, or a whole object) plus a `gc_kind` that names both the
 **operation** and its **target table**, so the drain dispatches on
 `gc_kind` alone: each kind maps 1:1 to an act function and the key is never
-re-inspected for routing. The seven kinds are `{trim, drop}` ×
-`{pages, slru, meta}` plus `shrink` (rel `pages` only) — the emitter, which
+re-inspected for routing. The eight kinds are `{trim, drop}` ×
+`{pages, slru, meta}` plus `shrink` (rel `pages` only) and `drop_db` (a whole
+dropped database, both tables) — the emitter, which
 knows the table it wrote, stamps the kind; the key stays pure identity.
 
 | operation | key | recorded when | becomes collectable |
 | --- | --- | --- | --- |
 | **trim** (`TrimPages`/`TrimSlru`/`TrimMeta`) | the block (rel / SLRU) or meta key | a block's every-n-th new base (`is_image`/`will_init`), or a meta put; `due_lsn` = the newest counted base's LSN | that key's versions below its newest base `<= cutoff` |
 | **shrink** (`ShrinkPages`, rel-only) | the rel-size key | a relation is truncated at `due_lsn` | blocks at/above the post-truncation size |
-| **drop** (`DropPages`/`DropSlru`/`DropMeta`) | the retired object's key | a relfilenode drop, an SLRU segment truncation, each dead key of a `DROP DATABASE`, or a two-phase resolve, at `due_lsn` | all of the object's rows `<= due_lsn` |
+| **drop** (`DropPages`/`DropSlru`/`DropMeta`) | the retired object's key | a relfilenode drop, an SLRU segment truncation, or a two-phase resolve, at `due_lsn` | all of the object's rows `<= due_lsn` |
+| **drop_db** (`DropDb`) | the database's relmap key — its `(spcnode, dbnode)` identity | a `DROP DATABASE` at `due_lsn` | every `pages` row and every `meta` key of that database, `<= due_lsn` |
 
 `due_lsn` is the LSN at which the garbage became collectable; a candidate
 is actionable only once the cutoff reaches its `due_lsn`. A `gc_kind` the
@@ -113,8 +115,8 @@ Candidates split by **durability requirement**, not by producer:
   a buffer lost to a crash implies `consistent_lsn` didn't advance and
   the producing record replays and re-emits — `put_rel_truncation`
   (shrink), and the drops from `put_rel_drops`, `drop_slru_segment`,
-  `drop_twophase_file`, and each dead key under `drop_dbdir`
-  (`DROP DATABASE`).
+  `drop_twophase_file`, and the one db-wide candidate `drop_dbdir`
+  queues (`DROP DATABASE`).
 
 Best-effort is safe for trim because no single trim candidate is
 load-bearing (the block's next base heals it), and both producers
@@ -254,7 +256,10 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    object. So each kind requires its keyspace's shape: rel block
    (`TrimPages`) or rel-size sentinel (`ShrinkPages` / `DropPages`), SLRU
    block (`TrimSlru`) or segment-size sentinel (`DropSlru`), any `meta`-table
-   key (`TrimMeta`). A shrink additionally needs a `relsize` in `BlockNumber`
+   key (`TrimMeta`), the relmap key (`DropDb` — the act takes only
+   `(spcnode, dbnode)` from the key and sweeps that whole database, so a
+   rel-size key would name a *live* database and delete every row of it). A
+   shrink additionally needs a `relsize` in `BlockNumber`
    range — `gc_act_shrink_fork` deletes `blknum >= relsize`, so a negative one
    would match every block and delete the whole fork.
 
@@ -265,10 +270,13 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    object is *dead*, and nearly every `meta` key is live state for something —
    a size sentinel (owned by `Drop{Pages,Slru}`, which delete it with the
    object), a dbdir, the twophase *directory* (whose key is
-   `twophase_file_key(0)`). So `DropMeta` accepts exactly the three shapes
-   its emitters produce — relmap, sparse-reldir entry, twophase file — and
-   adding an emitter means adding its shape. (The rel-dir shape went with
-   the v1 keyspace; nothing emits it.) `TrimMeta` needs no
+   `twophase_file_key(0)`). So `DropMeta` accepts a fixed allowlist, currently
+   the one shape it emits — a twophase file — and adding an emitter means adding
+   its shape. Every accepted shape is blast radius for a mis-emitted candidate,
+   so the list holds nothing speculative: the relmap and sparse-reldir shapes
+   went with the per-fork `DROP DATABASE` emitter (one `DropDb` candidate now
+   sweeps those keys by range), and the rel-dir shape with the v1 keyspace.
+   `TrimMeta` needs no
    allowlist: every `meta` row is self-contained (an image, or a `will_init`
    record that fully replaces the key), so keeping the newest `<= cutoff`
    cannot lose readable state for any key.
@@ -303,6 +311,39 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
      `pages` + the rel-size meta key), an SLRU segment (`gc_act_drop_slru`:
      `slru_pages` + the segment-size meta key), or dead meta keys
      (`gc_act_drop_meta`).
+   - **drop_db** (`gc_act_drop_db`) — a whole dropped database, as a range
+     sweep rather than a per-fork fan-out. The key layout is what makes that a
+     seek: `(branch_id, spcnode, dbnode)` is a `pages` key prefix under a bound
+     `bucket_id`, and a rel key encodes spcnode/dbnode ahead of relnode, so the
+     database is one contiguous range per bucket and per `meta` prefix — six
+     seeks plus two, against six *per fork* before. Sweeping `meta` by range
+     rather than by list is also what clears the sparse-reldir tombstones
+     earlier `DROP TABLE`s left.
+
+     A database is unbounded in size, so this is the first act to be
+     **budgeted and resumable**: `gc_drop_db_rows_per_tick` caps the rows a
+     tick deletes, and each batch is a key-only SELECT yielding `ybctid`s then
+     one `DELETE ... WHERE ybctid = ANY(...)`, resuming from an in-memory
+     cursor (`GcDrainProgress::db_drop_cursors`) so a batch never re-walks the
+     tombstones the last one wrote — the controller's branch-drop reaper in
+     miniature. Losing the cursors to a restart costs a re-scan of those
+     tombstones, not a re-delete. A candidate whose range still holds rows is
+     not dequeued, and resumes on the next tick from memory rather than at the
+     floor reset (below). (`DropPages` and
+     `ShrinkPages` are *not* budgeted — one unbounded DELETE per bucket over a
+     fork of unknown length — so a `DROP TABLE` on a huge relation still has
+     the burst problem this fixes for databases.)
+
+     `pages` is swept **round-robin over the buckets**, one batch each per
+     pass, because `bucket_id` leads that table's key and pre-splits it into
+     six tablets: a bucket at a time would aim a whole tick's deletes at one
+     Raft group — one live ingest is writing to, for every branch — while the
+     other five idle. The batch is *derived*, a sixth of the budget and capped
+     at `GC_DB_DROP_MAX_ROWS_PER_DELETE`, so one pass is a tick's work and
+     pacing stays the only knob. Passes repeat until the budget is spent or
+     every bucket reports empty, so a database whose rows all land in one
+     bucket still spends its whole budget. The `meta` ranges stay sequential —
+     a branch's `meta` is one tablet, so there is nothing to spread.
    - **shrink** (`gc_act_shrink_fork`, rel-only): delete `pages` with
      `blknum >= relsize AND lsn <= due_lsn`, using the `relsize`
      (truncation target) carried on the candidate — no meta read. The
@@ -351,7 +392,8 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
      an un-acted sibling (e.g. a capped-out later re-drop) keeps its
      distinct `due_lsn` and stays queued for its own tick.
    - **busy-object drops** (a rel fork or SLRU segment with a materialise
-     job in flight): *not* passed to the dequeue. The drop's rows are
+     job in flight; for a `DropDb`, *any* fork of the database): *not*
+     passed to the dequeue. The drop's rows are
      already deleted; leaving the row queued lets a later tick re-act
      it and sweep any image a straggling materialise job inserts (at a
      folded LSN below the drop) after the delete. A dropped object gets no
@@ -359,6 +401,9 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
      is the one image-leak race the eager delete could open, closed by
      the re-act; shrink and trim don't need it (a late image on a live
      object is reclaimed by that object's next visit).
+   - **budget-capped sweeps** (a `drop_db` whose range still holds rows): also
+     left queued, but re-found from memory rather than by the select — see
+     [Resuming a capped sweep](#resuming-a-capped-sweep).
 7. **Advance the floor** (`next_drain_floor`), only now — after act and
    dequeue both succeeded, so a failed tick leaves it and the failed batch
    re-selects. An **uncapped** tick (everything due handled) advances the
@@ -366,8 +411,8 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    selected due_lsn − 1`, since the limit can split that group's ties and the
    −1 keeps them selectable. Unchanged on an empty select. The rows that stay
    queued below the floor — a busy-object drop, a refused candidate,
-   a malformed key — don't hold it back; they're swept by a later tick or the
-   rescan.
+   a malformed key, a capped sweep — don't hold it back; they're swept by a
+   later tick or the rescan.
 
    **Except** when a capped tick dequeued *nothing*: then it advances to `max
    selected due_lsn` instead, stepping over that tie group. Holding at
@@ -376,8 +421,8 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    one a busy-object drop) would otherwise re-select identically forever — and
    because it fills the limit at the *oldest* `due_lsn`, nothing above it is
    ever reached, stalling the branch's whole queue rather than just those rows.
-   Groups do get that large: a DROP DATABASE emits one candidate per rel at the
-   drop's LSN (those clear normally — the stall needs rows that don't).
+   Groups do get that large: the emitter flushes up to 500 keys at one
+   `due_lsn` (those clear normally — the stall needs rows that don't).
 
    Stepping over is not a full recovery. Any row at that `due_lsn` the limit
    didn't return is stuck behind the group too, and a floor reset won't reach
@@ -386,6 +431,59 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    back. Those rows wait until the blocking ones are cleared (drained by a
    newer binary, or `DELETE`d). What stepping over buys is that the *rest* of
    the queue keeps draining instead of the whole branch wedging.
+
+### Resuming a capped sweep
+
+A `drop_db` whose range outlasts the tick's row budget stays queued, and the
+NEXT tick resumes it — but not by re-selecting it. The tick reads the
+unfinished candidates straight out of `GcDrainProgress::db_drop_cursors` and adds
+them to the rows the select returned (`Timeline::with_resuming`), so the floor
+advances to the cutoff as usual.
+
+Making the *select* re-find it instead — holding the floor just below its
+`due_lsn` — is the obvious design and it degrades: the candidate's `due_lsn` is
+frozen at the drop while the cutoff keeps advancing, so the window widens for
+the whole sweep and every trim candidate the branch dequeues inside it leaves a
+tombstone exactly where the next tick's scan starts. A 100 GB database is
+~427 ticks; at 500 candidates/s of ordinary emission that is ~1M rows dequeued
+inside the pinned window, re-walked every 5 s. The floor exists to skip
+precisely those tombstones.
+
+Nothing is lost when the cursors are: they are in-memory only, and a restart
+resets the floor to 0, so the first tick after one re-selects the row from the
+queue head and starts the sweep over. A candidate the select *also* returns (a
+floor-reset tick scans from the head) is deduped by
+`(key, gc_kind, due_lsn)` — acting twice would re-issue the sweep, and
+dequeueing twice would delete a row already gone.
+
+**Only a candidate with ranges left resumes this way.** A busy-object drop is
+also left queued, but it waits for the floor reset: it depends on an external
+event with no progress guarantee, so retrying it every tick would re-act a
+wedged object forever, and — because an injected candidate keeps the tick
+reporting `capped` — would hold the whole branch's drain at the backlog cadence
+for as long as the job stays wedged. A capped sweep is the opposite: guaranteed
+to advance every tick.
+
+### The re-check pass
+
+A sweep resumes from a cursor that only moves forward, so the usual protection
+for a busy drop — leave it queued, re-act it later, and catch whatever the
+straggling materialise job inserted — does not work: re-acting resumes *past*
+the straggler. `gc_act_drop_fork` has no such hole, because each visit deletes
+the whole fork again.
+
+So a tick that finds any fork of the database awaiting a materialise job sets
+`needs_recheck` on its cursor, and `is_reclaimed` — the dequeue's gate — stays false
+while it is set. On reaching the end of its ranges the sweep rewinds once and
+clears the flag, owing exactly one more full pass. Rewinding when the flag is
+*set* would instead discard a long sweep every time a fork happened to be busy;
+the pass itself is `PAGE_BUCKETS + 2` seeks over ranges that are already empty,
+since the deletes do not repeat.
+
+Without it the leak is silent and permanent: busy at one tick, idle at the tick
+that finishes, dequeued with an image stranded behind the cursors — and a
+dropped database's keys are never named by a future record, so nothing would
+ever emit a candidate for them again.
 
 The whole drain (select, actions, dequeue) runs on a dedicated
 **`pageserver:gc` connection pool** sized to the action width, so a
@@ -420,7 +518,7 @@ per-bucket fan-out every 30s and a backlogged one stops being pinned at
 | Queue the tick left (`gc_drain_ticks_total` label) | Next sleep |
 | --- | --- |
 | Caught up — everything due was acted (`drained`) | `gc_period` (30s) |
-| Backlog remains — `gc_drain_limit` hit (`capped`) | `gc_period / 6` (5s), never under 1s |
+| Backlog remains — `gc_drain_limit` hit, or a db drop stopped on `gc_drop_db_rows_per_tick` (`capped`) | `gc_period / 6` (5s), never under 1s |
 | Nothing due (`empty`) | double the previous sleep, up to `8 x gc_period` (4min) |
 
 The first working tick resets to the base. A tick that reached
@@ -435,8 +533,9 @@ resynchronise its selects on the shared `pending_gc` tablets.
 
 A candidate that comes due inside a backed-off window waits up to the ceiling
 before it is reclaimed — GC is throughput-bound, not latency-bound. The other
-end of that trade: the drain's sustained ceiling is `gc_drain_limit` per
-*floor*, so a backlog drains 6x faster than the base cadence suggests.
+end of that trade: the drain's sustained ceiling is `gc_drain_limit` (or
+`gc_drop_db_rows_per_tick`) per *floor*, so a backlog drains 6x faster than the
+base cadence suggests.
 
 ## Config
 
@@ -449,6 +548,7 @@ per-branch is also per-instance today.
 | `enable_gc` | `false` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
 | `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
 | `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Read fresh each tick. |
+| `gc_drop_db_rows_per_tick` | `30 000` | Rows a tick deletes for db-wide drops, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database is one, so this is what bounds its burst; a larger database drains over many ticks. The default is `PAGE_BUCKETS x GC_DB_DROP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
 | `gc_period` | 30 s | **Base** drain tick interval; the loop adapts around it (5 s floor / 4 min ceiling — see [Tick cadence](#tick-cadence)). `0` disables GC. |
 | `gc_horizon` / `pitr_interval` | — | Retention window feeding the cutoff. |
 
@@ -514,6 +614,10 @@ Three checks localize most GC escalations (metrics above):
   activation — a live change needs a PS restart).
 - Candidates drained but `rows_deleted ≈ 0` → the cutoff isn't
   advancing past them; it's pinned (below).
+- A dropped database still holding space → its sweep is paced by
+  `gc_drop_db_rows_per_tick`; the drain logs one line per tick while it is
+  still going (`gc: db-wide drop paused on the tick's row budget`). Raise the
+  knob to reclaim faster.
 
 **History window too large / cutoff pinned.** The cutoff is
 `min(retention, live lease, child fork point, consistent_lsn)`, floored at

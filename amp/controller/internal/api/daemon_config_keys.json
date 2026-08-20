@@ -60,6 +60,7 @@
     "tenant_config.enable_gc": "boolean",
     "tenant_config.gc_candidate_every_n_bases": "integer",
     "tenant_config.gc_drain_limit": "integer",
+    "tenant_config.gc_drop_db_rows_per_tick": "integer",
     "tenant_config.gc_horizon": "integer",
     "tenant_config.gc_period": "string",
     "tenant_config.gc_queue_floor_reset_interval": "string",

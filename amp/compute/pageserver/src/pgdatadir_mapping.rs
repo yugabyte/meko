@@ -1440,9 +1440,8 @@ impl DatadirModification<'_> {
     /// included, as `(RelTag, marker)`.
     ///
     /// `list_rels` deliberately hides `Removed`, which is right for callers
-    /// asking "what exists" but wrong for the two callers that must reason
-    /// about the keys themselves: GC at DROP DATABASE (the tombstones are
-    /// keys too and leak otherwise) and the reset at CREATE DATABASE.
+    /// asking "what exists" but wrong for the reset at CREATE DATABASE, which
+    /// has to tombstone the survivors of a previous database on the same oid.
     async fn all_reldir_markers(
         &self,
         spcnode: Oid,
@@ -1486,7 +1485,7 @@ impl DatadirModification<'_> {
     /// batch containing `XLOG_SMGR_CREATE` followed by `XLOG_DBASE_DROP`
     /// on the same database loses the new relation: `drop_dbdir` reads at
     /// `Version::Modified` and would not see it, so its size never leaves
-    /// `pending_nblocks` and `record_gc_drop_db_keys` never queues its keys.
+    /// `pending_nblocks`.
     pub(crate) fn pending_reldir_markers(
         &self,
         spcnode: Oid,
@@ -1958,8 +1957,7 @@ impl DatadirModification<'_> {
 
     /// Whether GC is on (`enable_gc`) for the timeline being modified —
     /// the layering bridge to the writer's frozen master switch. Gates
-    /// drop/shrink event recording and, for `DROP DATABASE`, the per-rel
-    /// enumeration feeding it.
+    /// drop/shrink event recording.
     fn gc_enabled(&self) -> bool {
         self.tline
             .page_writer
@@ -1997,42 +1995,6 @@ impl DatadirModification<'_> {
         self.pending_gc_drop_shrink_events.push(row);
     }
 
-    /// Queue GC drop candidates for a dropped database: per rel its
-    /// rel-size sentinel and sparse-reldir tombstone, then the db-level
-    /// relmap key. The caller removes the DbDir entry, which
-    /// shadows the sparse keys from readers — so deleting the tombstones is
-    /// safe (unlike a single rel drop).
-    fn record_gc_drop_db_keys(
-        &mut self,
-        markers: impl IntoIterator<Item = (RelTag, RelDirExists)>,
-        spcnode: Oid,
-        dbnode: Oid,
-    ) {
-        for (rel, marker) in markers {
-            // Only a live rel still owns pages and a size sentinel; a
-            // tombstone's were queued when it was dropped.
-            if marker == RelDirExists::Exists {
-                self.record_gc_drop_shrink_event(
-                    rel_size_to_key(rel),
-                    crate::page_store::GcKind::DropPages,
-                    None,
-                );
-            }
-            // The sparse-reldir key itself, live marker or tombstone alike.
-            self.record_gc_drop_shrink_event(
-                rel_tag_sparse_key(rel.spcnode, rel.dbnode, rel.relnode, rel.forknum),
-                crate::page_store::GcKind::DropMeta,
-                None,
-            );
-        }
-        // The db-level relmap meta key.
-        self.record_gc_drop_shrink_event(
-            relmap_file_key(spcnode, dbnode),
-            crate::page_store::GcKind::DropMeta,
-            None,
-        );
-    }
-
     pub async fn drop_dbdir(
         &mut self,
         spcnode: Oid,
@@ -2044,17 +2006,17 @@ impl DatadirModification<'_> {
             .get_db_size(spcnode, dbnode, Version::Modified(self), ctx)
             .await?;
 
-        // Record GC drop candidates for the db's keys while the reldir can
-        // still be enumerated (the DbDir entry is removed just below).
-        if self.gc_enabled() {
-            // Enumerate the raw markers rather than `list_rels`: the latter
-            // hides `Removed`, so every tombstone left by an earlier DROP
-            // TABLE would leak in `amp_storage.meta` forever. Dropping them
-            // is only safe here, where removing the DbDir entry shadows the
-            // whole range from readers.
-            let markers = self.all_reldir_markers(spcnode, dbnode, ctx).await?;
-            self.record_gc_drop_db_keys(markers, spcnode, dbnode);
-        }
+        // One GC candidate for the whole database, keyed by its relmap key:
+        // the drain sweeps the `(spcnode, dbnode)` range of `pages` and of the
+        // db's two `meta` prefixes. A range covers what a list cannot — the
+        // sparse-reldir tombstones earlier DROP TABLEs left, which would
+        // otherwise leak forever — and keeps the enumeration and its thousands
+        // of INSERTs off the ingest path applying this record.
+        self.record_gc_drop_shrink_event(
+            relmap_file_key(spcnode, dbnode),
+            crate::page_store::GcKind::DropDb,
+            None,
+        );
 
         // Remove entry from dbdir
         let buf = self.get(DBDIR_KEY, ctx).await?;

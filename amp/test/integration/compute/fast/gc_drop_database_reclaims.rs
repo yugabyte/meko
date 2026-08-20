@@ -1,9 +1,10 @@
-//! DROP DATABASE reclamation: dropping a database queues a drop
-//! event per relation fork (emitted under `drop_dbdir`'s reldir
-//! enumeration) and the drain deletes every stored page of the
-//! database once the cutoff passes the drop. Asserts the whole
-//! `dbnode`'s `pages` and `pending_gc` rows reach zero, on a dedicated
-//! branch so the signal is this test's alone.
+//! DROP DATABASE reclamation: dropping a database queues ONE drop
+//! candidate for the whole database, and the drain sweeps the database's
+//! key range out of `pages` and `meta` once the cutoff passes the drop.
+//! Asserts the whole `dbnode`'s `pages`, `meta` and `pending_gc` rows
+//! reach zero — the `meta` half is what covers the sparse-reldir
+//! tombstones a per-relation list would have to enumerate — on a
+//! dedicated branch so the signal is this test's alone.
 
 use std::time::Duration;
 
@@ -42,13 +43,20 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     let db_pages = format!(
         "SELECT count(*) FROM amp_storage.pages WHERE branch_id = '{b}' AND dbnode = {dbnode}"
     );
-    // pending_gc keys candidates by their encoded Key; every one of a
-    // dropped db's keys (per-rel drops + reldir/relmap/sparse-reldir)
-    // carries the dbnode in field3 (bytes 6-9, 1-indexed).
-    let db_queue = format!(
-        "SELECT count(*) FROM amp_storage.pending_gc \
-         WHERE branch_id = '{b}' AND substring(key FROM 6 FOR 4) = '\\x{dbnode:08x}'::bytea"
-    );
+    // pending_gc and meta both key rows by their encoded Key, and every key
+    // of this database — a rel block or size sentinel (prefix 0x00) or a
+    // sparse-reldir entry (0x65) — carries the dbnode in field3 (bytes 6-9,
+    // 1-indexed). The prefix test keeps an unrelated keyspace that happens to
+    // hold those bytes (an aux-file key hashes its name into them) out.
+    let db_keys = |table: &str| {
+        format!(
+            "SELECT count(*) FROM amp_storage.{table} \
+             WHERE branch_id = '{b}' AND get_byte(key, 0) IN (0, 101) \
+               AND substring(key FROM 6 FOR 4) = '\\x{dbnode:08x}'::bytea"
+        )
+    };
+    let db_queue = db_keys("pending_gc");
+    let db_meta = db_keys("meta");
     let mut stored = 0;
     for _ in 0..30 {
         stored = db::query_i64(&yb, &db_pages).await?;
@@ -75,10 +83,14 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
     if !dropped {
         bail!("DROP DATABASE kept failing (lingering connection?)");
     }
-    db::batch(&conn, "CREATE TABLE gc_dd_churn (id INT PRIMARY KEY, n INT)").await?;
+    db::batch(
+        &conn,
+        "CREATE TABLE gc_dd_churn (id INT PRIMARY KEY, n INT)",
+    )
+    .await?;
 
-    step("Database's pages and queue rows drain to zero");
-    let (mut pages, mut queue) = (i64::MAX, i64::MAX);
+    step("Database's pages, meta and queue rows drain to zero");
+    let (mut pages, mut meta, mut queue) = (i64::MAX, i64::MAX, i64::MAX);
     for i in 0..40 {
         db::batch(
             &conn,
@@ -87,16 +99,18 @@ pub async fn run(c: &Cluster) -> anyhow::Result<()> {
         .await?;
         sleep(Duration::from_secs(1)).await;
         pages = db::query_i64(&yb, &db_pages).await?;
+        meta = db::query_i64(&yb, &db_meta).await?;
         queue = db::query_i64(&yb, &db_queue).await?;
-        if pages == 0 && queue == 0 {
+        if pages == 0 && meta == 0 && queue == 0 {
             break;
         }
     }
     let _ = c.yb(&["branch", "drop", "--branch-id", &b]);
     c.yb_quiet(&["pageserver", "stop", "ep_gc_dd", "-m", "immediate"]);
-    if pages != 0 || queue != 0 {
+    if pages != 0 || meta != 0 || queue != 0 {
         bail!(
-            "dropped database not reclaimed: stored={stored} pages_left={pages} queue_left={queue}"
+            "dropped database not reclaimed: stored={stored} pages_left={pages} \
+             meta_left={meta} queue_left={queue}"
         );
     }
     Ok(())

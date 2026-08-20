@@ -1010,6 +1010,11 @@ pub struct BranchConfigToml {
     /// carries to the next tick. Bounds per-tick memory and delete
     /// burst size. Default 10_000 (~1 MiB of candidates in memory).
     pub gc_drain_limit: usize,
+    /// Max rows one GC tick deletes for db-wide drops (a dropped database
+    /// is one candidate, so `gc_drain_limit` doesn't bound it), shared by
+    /// every such candidate in the tick. A larger database drains over
+    /// many ticks.
+    pub gc_drop_db_rows_per_tick: usize,
     /// How often a drain tick resets the select floor to 0, scanning the
     /// pending_gc queue from the head instead of past the cursor.
     /// Default 2 h.
@@ -1024,6 +1029,12 @@ pub struct BranchConfigToml {
     pub gc_candidate_every_n_bases: u32,
 }
 
+/// Ceiling on the rows one db-drop GC DELETE names, so a `DROP DATABASE`
+/// sweep never becomes a single huge distributed transaction. The batch is
+/// otherwise derived from `gc_drop_db_rows_per_tick` (see
+/// `PageStore::gc_act_drop_db`); this only caps it.
+pub const GC_DB_DROP_MAX_ROWS_PER_DELETE: usize = 5_000;
+
 pub mod tenant_conf_defaults {
     pub const DEFAULT_GC_HORIZON: u64 = 64 * 1024 * 1024;
     // Short period so the drain proactively reclaims garbage as it
@@ -1031,6 +1042,10 @@ pub mod tenant_conf_defaults {
     // adaptive cadence takes 5 s / 4 min as its floor and ceiling from it.
     pub const DEFAULT_GC_PERIOD: &str = "30 s";
     pub const DEFAULT_GC_DRAIN_LIMIT: usize = 10_000;
+    /// One batch per `pages` bucket, so at the default a tick is exactly one
+    /// pass and the batch ceiling binds only if an operator raises the pace.
+    pub const DEFAULT_GC_DROP_DB_ROWS_PER_TICK: usize =
+        crate::pages_bucket::PAGE_BUCKETS as usize * super::GC_DB_DROP_MAX_ROWS_PER_DELETE;
     pub const DEFAULT_GC_QUEUE_FLOOR_RESET_INTERVAL: &str = "2 h";
     pub const DEFAULT_GC_CANDIDATE_EVERY_N_BASES: u32 = 10;
     pub const DEFAULT_PITR_INTERVAL: &str = "1 day";
@@ -1069,6 +1084,7 @@ impl Default for BranchConfigToml {
             basebackup_cache_enabled: false,
             test_enable_gc_drain: false,
             gc_drain_limit: DEFAULT_GC_DRAIN_LIMIT,
+            gc_drop_db_rows_per_tick: DEFAULT_GC_DROP_DB_ROWS_PER_TICK,
             gc_queue_floor_reset_interval: humantime::parse_duration(
                 DEFAULT_GC_QUEUE_FLOOR_RESET_INTERVAL,
             )

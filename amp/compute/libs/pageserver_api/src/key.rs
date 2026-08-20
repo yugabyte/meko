@@ -476,8 +476,14 @@ pub const DBDIR_KEY: Key = Key {
     field6: 0,
 };
 
+/// Every rel-keyspace key of one database: its relmap and rel-dir keys and
+/// each relation's size sentinel. Relation *block* keys fall in the range
+/// too, but they live in `pages`, so over `meta` this is exactly the
+/// database's metadata — which is what a `DROP DATABASE` GC sweep deletes.
+/// The v2 sparse rel-directory sits in its own prefix
+/// ([`rel_tag_sparse_key_range`]), not here.
 #[inline(always)]
-pub fn dbdir_key_range(spcnode: Oid, dbnode: Oid) -> Range<Key> {
+pub fn db_rel_keyspace_range(spcnode: Oid, dbnode: Oid) -> Range<Key> {
     Key {
         field1: 0x00,
         field2: spcnode,
@@ -493,6 +499,27 @@ pub fn dbdir_key_range(spcnode: Oid, dbnode: Oid) -> Range<Key> {
         field5: 0xff,
         field6: 0xffffffff,
     }
+    .next()
+}
+
+/// How many ranges [`db_meta_key_ranges`] returns. It is that array's length,
+/// so adding a range there without updating this fails to compile.
+pub const DB_META_KEY_RANGES: usize = 2;
+
+/// The key ranges one database's `meta` rows occupy: its rel-keyspace keys,
+/// then its v2 sparse rel-directory. Two rather than one because the sparse
+/// directory needs a key per relation fork, and inside the rel keyspace
+/// `field6` is the block number — every slot there is already a block or the
+/// fork's size sentinel — so it carries its own [`REL_DIR_KEY_PREFIX`].
+///
+/// A `DROP DATABASE` sweeps exactly these. The database's entry in
+/// [`DBDIR_KEY`] is not here and is not deletable: that key is shared by every
+/// database, so the drop rewrites it instead.
+pub fn db_meta_key_ranges(spcnode: Oid, dbnode: Oid) -> [Range<Key>; DB_META_KEY_RANGES] {
+    [
+        db_rel_keyspace_range(spcnode, dbnode),
+        rel_tag_sparse_key_range(spcnode, dbnode),
+    ]
 }
 
 #[inline(always)]
