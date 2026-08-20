@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -123,6 +124,110 @@ func TestPgRecordBranchForkValidation(t *testing.T) {
 		AncestorBranchID: &missing, StartLSN: "1/0",
 	}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("fork from missing ancestor: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestPgRecordBranchConcurrentSiblings pins the two properties the worker's
+// retry-on-40001 stands on (#578). Several forks off ONE ancestor, launched at
+// once: each writes the ancestor's `branches` and `branch_state` rows to interlock
+// against a drop and a cutoff advance, so the siblings collide with each other on
+// those rows and all but one lose.
+//
+//   - a loser leaves NO rows behind. RecordBranch is one transaction, and the
+//     worker re-runs the step on the strength of that; a partial effect here would
+//     make the retry duplicate it. This is the property only a real database can
+//     show, and it is why the test exists;
+//   - a loser's error still satisfies db.IsAbortedTransaction. Checked here when
+//     there IS a loser, but NOT guarded here — see the note at the assertions.
+//
+// The ancestor is a root branch with no cutoff published, so no fork point is
+// invalid and a loss can only be the interlock.
+func TestPgRecordBranchConcurrentSiblings(t *testing.T) {
+	ctx := t.Context()
+	pool := migratedPool(t)
+	s := NewStore(pool)
+	clusterID := seedCluster(t, pool)
+
+	parent := uuid.New()
+	if err := s.RecordBranch(ctx, clusterID, parent, BranchCreateRecord{
+		BranchName: "siblings-parent", PgVersion: 18, StartLSN: "0/0",
+	}); err != nil {
+		t.Fatalf("record parent: %v", err)
+	}
+
+	// More lanes than stress/branch_churn runs (3), so the contention is exceeded
+	// rather than merely met.
+	const siblings = 6
+	ids := make([]uuid.UUID, siblings)
+	errs := make([]error, siblings)
+	var wg sync.WaitGroup
+	// A start barrier, not just goroutines: without one they can serialise, every
+	// fork wins, and the test passes having exercised no interlock at all.
+	gate := make(chan struct{})
+	for i := range siblings {
+		ids[i] = uuid.New()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-gate
+			errs[i] = s.RecordBranch(ctx, clusterID, ids[i], BranchCreateRecord{
+				BranchName: fmt.Sprintf("sibling-%d", i), PgVersion: 18,
+				AncestorBranchID: &parent, StartLSN: "0/64",
+			})
+		}()
+	}
+	close(gate)
+	wg.Wait()
+
+	rows := func(id uuid.UUID) (branch, state int) {
+		if err := pool.QueryRow(ctx,
+			`SELECT (SELECT count(*) FROM amp_registry.branches
+			          WHERE cluster_id = $1::uuid AND branch_id = $2::uuid),
+			        (SELECT count(*) FROM amp_storage.branch_state WHERE branch_id = $2::uuid)`,
+			clusterID.String(), id.String()).Scan(&branch, &state); err != nil {
+			t.Fatalf("count rows: %v", err)
+		}
+		return branch, state
+	}
+
+	won, lost := 0, 0
+	for i, err := range errs {
+		branch, state := rows(ids[i])
+		switch {
+		case err == nil:
+			won++
+			if branch != 1 || state != 1 {
+				t.Errorf("sibling %d succeeded but has branch=%d branch_state=%d, want 1 and 1",
+					i, branch, state)
+			}
+		default:
+			lost++
+			// Asserted through the SAME predicate the worker acts on, not a local
+			// copy of the rule, so widening that class cannot leave this behind. And
+			// on the driver error, not a sentinel: RecordBranch returns none.
+			if !db.IsAbortedTransaction(err) {
+				t.Errorf("sibling %d failed with an error the worker would NOT retry, so the fork is lost: %v", i, err)
+			}
+			if branch != 0 || state != 0 {
+				t.Errorf("sibling %d lost the interlock but left branch=%d branch_state=%d behind; the whole registration must roll back",
+					i, branch, state)
+			}
+		}
+	}
+	if won == 0 {
+		t.Fatalf("every sibling lost; one of %d must win the interlock", siblings)
+	}
+	// Whether anyone loses is a property of the machine, not of the code: on a box
+	// where these transactions are quick enough, six forks released together still
+	// effectively serialise and all win (CI does exactly that, in ~0.3s, where the
+	// dev-server contends and 4 of 6 lose). So this cannot be an assertion — the
+	// abort chain the worker retries on is pinned deterministically instead, in
+	// abort_test.go, where nothing environmental can skip it. What is left here is
+	// the real-database check: whoever loses, loses cleanly.
+	t.Logf("%d of %d siblings won the interlock, %d lost and rolled back", won, siblings, lost)
+	if lost == 0 {
+		t.Logf("no contention this run — the loser assertions above did not execute; " +
+			"explainAbort's chain is covered by abort_test.go regardless")
 	}
 }
 

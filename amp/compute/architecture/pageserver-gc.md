@@ -204,7 +204,14 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    holds at its fork point; publish-first ⇒ the fork's condition sees the
    advanced cutoff and the registration rolls back (rejected). A plain
    read on either side would not conflict and both could commit on stale
-   views of each other.
+   views of each other. Whichever side loses aborts with a serialization
+   failure, and the controller's task worker re-runs the step on it
+   (bounded, jittered) rather than failing the operation: nothing landed,
+   so the re-run either wins or reads the winner's effect and rejects for
+   a real reason. GC is not the only other writer of these rows — another
+   fork off the ancestor, a drop of it, and an endpoint being created on it
+   all contend here too — so the retry is what lets any of those proceed
+   concurrently rather than failing each other.
 
    The same shape closes the fork ↔ **drop** race, one row over. A drop
    tombstones the parent's `amp_registry.branches` row while checking

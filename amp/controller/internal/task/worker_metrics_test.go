@@ -13,6 +13,7 @@ type fakeRecorder struct {
 	mu       sync.Mutex
 	started  int
 	finished []finishedEvent
+	retried  []string
 }
 
 type finishedEvent struct {
@@ -24,6 +25,12 @@ func (r *fakeRecorder) TaskStarted() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.started++
+}
+
+func (r *fakeRecorder) StepRetried(kind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.retried = append(r.retried, kind)
 }
 
 func (r *fakeRecorder) TaskFinished(kind, status string, _ time.Duration) {

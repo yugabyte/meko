@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"runtime/debug"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yugabyte/amp/controller/internal/config"
+	"github.com/yugabyte/amp/controller/internal/db"
 	applog "github.com/yugabyte/amp/controller/internal/log"
 )
 
@@ -19,6 +21,41 @@ import (
 // a persistent claim error (e.g. the DB is down) is retried at a steady, sane
 // rate rather than every poll interval.
 const maxClaimBackoff = 30 * time.Second
+
+// A step whose failure carries SQLSTATE 40001 is re-run rather than failing its
+// task: the abort means the transaction rolled back in full, so nothing landed and
+// the condition clears as soon as the writer that won commits. Why the controller
+// provokes these deliberately, and which writers collide, is in
+// controller/architecture/ac-tasks.md.
+//
+// Two bounds, because they bound different things. The unit re-run is the whole
+// STEP, not the transaction that aborted, so a step whose external effects precede
+// its retryable write repeats them once per attempt — delete_branch retires
+// endpoint instances before tombstoning the branch row. They are idempotent (the
+// Step contract), so that is waste, not damage; but an attempt count limits how
+// many re-runs happen, not what they cost, which is what the wall-clock budget is
+// for.
+//
+// Sound only because an operation that can surface such an abort is atomic — see
+// the invariant on the ports in deps.go.
+const (
+	stepRetryAttempts = 6
+	// Doubled per further attempt and jittered.
+	stepRetryBackoff = 15 * time.Millisecond
+	// Also sorts the cheap case from the expensive one: an abort from a short
+	// transaction surfaces in milliseconds, so a step that took longer than this to
+	// lose the interlock lost it after doing real work.
+	stepRetryBudget = 2 * time.Second
+)
+
+// jitter spreads a backoff over [d/2, d], so several steps that lost the same
+// interlock do not come back in lockstep and collide with each other again.
+func jitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+}
 
 // Worker claims runnable tasks under a lease and drives each to completion via a
 // resume-safe step loop (§8.1). Claiming and execution are decoupled: a single
@@ -37,6 +74,10 @@ type MetricsRecorder interface {
 	// status is one of "succeeded", "failed", or "interrupted"; dur is the
 	// execution wall-clock time.
 	TaskFinished(kind, status string, dur time.Duration)
+	// StepRetried counts one re-run of a step after it lost a write interlock.
+	// stepKind is the task_step.kind (e.g. record_branch_recipe), NOT the task
+	// kind — they are different name spaces.
+	StepRetried(stepKind string)
 }
 
 type Worker struct {
@@ -46,6 +87,8 @@ type Worker struct {
 	logger   *slog.Logger
 	owner    string
 	metrics  MetricsRecorder
+	// retryBudget is stepRetryBudget, held per-worker so a test can shorten it.
+	retryBudget time.Duration
 }
 
 // Option configures an optional Worker collaborator.
@@ -64,6 +107,8 @@ func NewWorker(store Store, registry *Registry, cfg config.TaskConfig, logger *s
 		cfg:      cfg,
 		logger:   logger,
 		owner:    ownerID(),
+
+		retryBudget: stepRetryBudget,
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -310,7 +355,7 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		// applog.FromContext with the task/step keys already attached
 		// (controller/AGENTS.md: log through internal/log, not slog directly).
 		stepCtx := applog.IntoContext(ctx, stepLog)
-		res := w.runStep(stepCtx, stepLog, step)
+		res := w.runStepWithRetry(stepCtx, stepLog, step)
 		if res.Failed() {
 			// A cancelled worker context means we are shutting down (or the parent
 			// was cancelled), not that the step genuinely failed. Leave the step and
@@ -330,6 +375,46 @@ func (w *Worker) execute(ctx context.Context, logger *slog.Logger, t *Task) erro
 		stepLog.Debug("step succeeded")
 	}
 	return w.store.CompleteTask(ctx, t.ID, w.owner)
+}
+
+// runStepWithRetry runs one step, re-running it while its failure is a
+// serialization abort, within the bounds above. It returns the last result, so an
+// exhausted retry fails the task through the ordinary path.
+//
+// A cancelled context stops the loop at once and returns the failure as-is:
+// execute treats a cancelled ctx as an interruption and leaves the task
+// reclaimable, which is what a shutdown mid-backoff should do.
+func (w *Worker) runStepWithRetry(ctx context.Context, logger *slog.Logger, step Step) StepResult {
+	var res StepResult
+	start := time.Now()
+	for attempt := 0; ; attempt++ {
+		res = w.runStep(ctx, logger, step)
+		if !res.Failed() || !db.IsAbortedTransaction(res.Err) {
+			return res
+		}
+		if attempt+1 >= stepRetryAttempts || ctx.Err() != nil {
+			return res
+		}
+		if elapsed := time.Since(start); elapsed > w.retryBudget {
+			logger.Warn("step lost a write interlock but has spent its retry budget; failing it",
+				"elapsed", elapsed.String(), "budget", w.retryBudget.String(),
+				"attempt", attempt+1, "error", res.Err)
+			return res
+		}
+		if w.metrics != nil {
+			w.metrics.StepRetried(step.Kind())
+		}
+		logger.Warn("step lost a write interlock; re-running",
+			"attempt", attempt+1, "attempts", stepRetryAttempts, "error", res.Err)
+
+		timer := time.NewTimer(jitter(stepRetryBackoff << attempt))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return res
+		case <-timer.C:
+		}
+	}
 }
 
 // runStep executes one step, converting a panic into a step failure so a single

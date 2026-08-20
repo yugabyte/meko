@@ -20,6 +20,16 @@ import (
 // state operations live on *core.PgBackend (core/provision.go) and the recipe
 // operations bridge to the in-process registry store.
 //
+// INVARIANT, in two halves, because the worker re-runs a whole STEP on a
+// serialization abort (worker.go) and that is bigger than the call which aborted:
+//
+//   - the aborting operation must be ATOMIC — a failed call leaves nothing behind.
+//     Today's two hold to it by committing their record and their interlock in one
+//     transaction (registry.RecordBranch, core.EnsureEndpointRecord).
+//   - everything the step did BEFORE that call is re-executed too, so it must
+//     converge — the Step contract in task.go, not a new demand. An individually
+//     atomic operation still double-applies if an earlier effect does not.
+//
 // Naming: the controller's user-facing ladder is storage pool -> cluster ->
 // branch -> endpoint. The storage layer is flat: a branch's branch_id IS the
 // storage-layer BranchId (no enclosing tenant), so the controller carries it

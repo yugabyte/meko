@@ -157,7 +157,7 @@ double-apply or error.
 |---|---|---|---|
 | `create_cluster` | pool, cluster, branch ids, name, pg_version | Create the cluster + its default branch. | `EnsureCluster`: `INSERT … ON CONFLICT (pk) DO NOTHING` on both rows — same ids re-run is a no-op. A *name* collision (different ids) is a real error. |
 | `create_branch` | parent, cluster, branch ids, name, fork LSN, pg_version | Fork a branch into a new branch (records ancestry). | `EnsureBranch`: same `ON CONFLICT (pk) DO NOTHING`; a missing parent or name collision is a real error. |
-| `record_branch_recipe` | cluster, branch ids, branch name, pg_version, ancestor (opt), start LSN | Record the controller's pending-init recipe (materialized later by the first endpoint). | The controller upserts the recipe; with no controller the step no-ops with a warning (the recipe then lives only in the `branch` row). |
+| `record_branch_recipe` | cluster, branch ids, branch name, pg_version, ancestor (opt), start LSN | Record the controller's pending-init recipe (materialized later by the first endpoint). | The controller upserts the recipe; with no controller the step no-ops with a warning (the recipe then lives only in the `branch` row). A fork's ancestor interlock is inside this step's single transaction (`registry.RecordBranch`). The abort it provokes is re-run by the worker (see the interlock-retry invariant below), so a fork racing any other writer of the ancestor's row — a drop, another fork, an endpoint create on it, or GC advancing its cutoff — is not a task failure. |
 | `create_endpoint` | endpoint, cluster, branch ids, role, pg_version, cpu, memory, ancestor (opt) | Ensure the endpoint record, deploy the compute (with its CPU/memory reservation), record the address, clear the branch recipe. **The shared step** create-cluster, branch, and scale-up all reuse (§8). | Record insert is id-keyed `ON CONFLICT (id) DO NOTHING` (so the single-writer index is not re-violated on replay); deploy is keyed by the endpoint's stable name (deployer idempotency); address is an absolute `UPDATE`; recipe clear tolerates an already-absent recipe. `cpu`/`memory` are resolved (defaulted to 2 cores / 4Gi) by the API handler and carried in the args, so a reclaim/replay redeploys the same size. |
 | `resize_endpoint` | endpoint id, cpu, memory | Change the endpoint's compute reservation: persist the new size to the endpoint `config`, then resize the **running pod in place** (`internal/task/step_resize_endpoint.go`). Records the in-place outcome on the step result. | Persist-first, then resize: `UpdateEndpointResources` is an absolute jsonb merge and the deployer resize is idempotent, so a replay converges. The DB write lands before the live resize, so even if the in-place step is deferred/infeasible a controller-driven redeploy still lands the new size. The deployer does **not** patch the Deployment template (that would trigger a rollout and recreate the pod — the opposite of in-place); an involuntary recreate before the next redeploy comes back at the old size (durable in DB, converges). **First-writer-wins lock**: the partial unique index `tasks_one_active_resize_per_endpoint` (migration 0004) admits at most one non-terminal `resize_endpoint` per endpoint (`target_ref`); a concurrent one is `ErrResizeInProgress` → `409`. The lock self-releases when the task reaches terminal (a crashed task is reclaimed by its lease, so it can't wedge). |
 | `delete_endpoint` | endpoint id | Retire the running instance, then delete the record. | Both effects tolerate an already-absent target. Order matters: retire the instance *before* deleting the record, so a crash between them leaves a record whose instance can still be retired on replay (never an orphaned instance with no record). |
@@ -188,7 +188,8 @@ A few invariants worth calling out:
   WHERE branch_id = … AND dropped_at IS NULL`** in one transaction: both sides now
   write the branch row, so they serialize. Zero rows ⇒ the branch was dropped
   concurrently ⇒ the whole record rolls back and the step fails `ErrNotFound`; a
-  serialization abort is reported as a retryable conflict. The interlock is gated
+  serialization abort carries no sentinel — it is not a verdict on the request —
+  and the worker re-runs the step on it (invariant below). The interlock is gated
   on the insert having actually inserted, so a replay stays an idempotent no-op.
   `delete_cluster` tombstones every branch row in the cluster, so it conflicts the
   same way. Same shape as the fork↔cutoff interlock in `registry.RecordBranch`.
@@ -198,6 +199,30 @@ A few invariants worth calling out:
   set. The deploy
   spec carries the branch id verbatim as the spec's `BranchID` (and the ancestor's
   for a fork); a cluster no longer maps to a storage tenant (#168).
+- **A step that loses a write interlock is re-run, not failed.** The interlocks
+  above *provoke* a serialization abort (SQLSTATE 40001) by design: two writers are
+  made to collide on one row so one of them loses, instead of both committing on
+  stale views of each other. Losing is the mechanism working, and the condition
+  clears the moment the winner commits — so the worker re-runs the step (6 attempts,
+  jittered exponential from 15ms, and a 2s wall-clock budget) rather than failing
+  the task, which would strand an operation a background GC tick was enough to
+  provoke (#578). Re-run **in place**, holding the lease: a re-queue would cost a
+  `PollInterval` per attempt for a conflict that resolves in milliseconds.
+  The unit re-run is the whole **step**, not the transaction that aborted, so a step
+  whose external effects precede its retryable write repeats them once per attempt
+  (`delete_branch` retires endpoint instances before tombstoning the branch row).
+  They are idempotent by the Step contract, so that is waste rather than damage, and
+  the wall-clock budget is what bounds it — an attempt count bounds re-runs, not
+  their cost.
+  The class is **derived** from the driver error — `db.IsAbortedTransaction`, one
+  definition shared by the worker that acts on it and the interlock owners that
+  raise it — rather than declared by a sentinel the failing step attaches: an abort
+  is not a verdict on the request, so it is a member of neither store's error
+  vocabulary, and a sentinel a producer must remember to attach is how #578
+  happened. It names the *precondition* (the transaction rolled back in full) rather
+  than "retryable", because that is what makes re-running safe; this is sound only
+  while an operation that can surface one is atomic, an invariant stated on the
+  ports in `internal/task/deps.go`.
 - **Clearing the recipe is best-effort.** A lingering recipe is harmless (nothing
   reads it once the branch is materialized), so a clear failure logs a warning and
   the step still succeeds.

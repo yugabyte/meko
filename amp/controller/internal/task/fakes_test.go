@@ -438,10 +438,13 @@ func (f *fakeDeployer) EndpointSupervisorURL(id string) string {
 // step on each execution; regWith hands back this same instance from its builder,
 // so call counts accumulate across rebuilds.
 type fakeStep struct {
-	kind     string
-	mu       sync.Mutex
-	calls    int
-	failWith error
+	kind  string
+	mu    sync.Mutex
+	calls int
+	// failWith fails every call. failTimes instead fails only the first N, so a
+	// test can drive the worker's in-place retry to eventual success.
+	failWith  error
+	failTimes int
 }
 
 func (s *fakeStep) Kind() string { return s.kind }
@@ -449,11 +452,12 @@ func (s *fakeStep) Kind() string { return s.kind }
 func (s *fakeStep) Execute(ctx context.Context) StepResult {
 	s.mu.Lock()
 	s.calls++
+	calls := s.calls
 	s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return Fail(err)
 	}
-	if s.failWith != nil {
+	if s.failWith != nil && (s.failTimes == 0 || calls <= s.failTimes) {
 		return Fail(s.failWith)
 	}
 	return Ok(json.RawMessage(`{"ok":true}`))

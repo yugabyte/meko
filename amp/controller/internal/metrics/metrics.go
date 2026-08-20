@@ -40,6 +40,7 @@ type Metrics struct {
 	tasksTotal    *prometheus.CounterVec
 	taskDuration  *prometheus.HistogramVec
 	tasksInflight prometheus.Gauge
+	stepRetries   *prometheus.CounterVec
 	gcOrphans     *prometheus.CounterVec
 	gcSweeps      prometheus.Counter
 	gcSweepDur    prometheus.Histogram
@@ -77,6 +78,10 @@ func New() *Metrics {
 			Namespace: namespace, Subsystem: "tasks", Name: "inflight",
 			Help: "Tasks the worker is currently executing.",
 		}),
+		stepRetries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace, Subsystem: "tasks", Name: "step_retries_total",
+			Help: "Step re-runs after losing a write interlock (SQLSTATE 40001). Labelled by task_step.kind, deliberately NOT `kind` like tasks_total — a step kind and a task kind are different name spaces and joining them yields nonsense. Contention, not breakage.",
+		}, []string{"step_kind"}),
 	}
 
 	m.gcOrphans = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -101,6 +106,7 @@ func New() *Metrics {
 		m.tasksTotal,
 		m.taskDuration,
 		m.tasksInflight,
+		m.stepRetries,
 		m.gcOrphans,
 		m.gcSweeps,
 		m.gcSweepDur,
@@ -141,6 +147,15 @@ func (m *Metrics) TaskStarted() {
 		return
 	}
 	m.tasksInflight.Inc()
+}
+
+// StepRetried counts one re-run of a step after it lost a write interlock.
+// stepKind is the task_step.kind, not the task kind.
+func (m *Metrics) StepRetried(stepKind string) {
+	if m == nil {
+		return
+	}
+	m.stepRetries.WithLabelValues(stepKind).Inc()
 }
 
 // TaskFinished marks a task leaving execution (inflight--) and counts the

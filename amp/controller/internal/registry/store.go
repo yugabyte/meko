@@ -13,14 +13,17 @@ import (
 	"github.com/yugabyte/amp/controller/internal/db"
 )
 
-// Sentinel errors the handlers map onto HTTP status codes.
+// Sentinel errors classifying a failure for the caller. No handler maps these
+// to a status code: in production they reach the record_branch_recipe step,
+// which fails the task and keeps the message. Tests assert on them directly.
 var (
 	// ErrNotFound is returned when an addressed row does not exist.
 	ErrNotFound = errors.New("registry: not found")
 	// ErrConflict is returned when a request collides with existing state.
 	ErrConflict = errors.New("registry: conflict")
-	// ErrInvalid is returned when a request is semantically invalid
-	// against current state. Retrying the same request cannot succeed.
+	// ErrInvalid is returned when the target exists but the operation is
+	// impossible against current state, such as a fork point below the
+	// ancestor's GC cutoff.
 	ErrInvalid = errors.New("registry: invalid request")
 )
 
@@ -52,12 +55,6 @@ func NewStore(pool *db.Pool) *Store {
 }
 
 // --- error classification ---------------------------------------------------
-
-// isSerializationAbort reports SQLSTATE 40001 (serialization_failure).
-func isSerializationAbort(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "40001"
-}
 
 // mapWriteErr translates the constraint violations a resource-model write can
 // raise into this package's sentinels: a name already taken among live rows, or a
@@ -137,22 +134,38 @@ func FullPgVersionID(major int) (int, error) {
 //     before either starts.
 //
 // A fork (AncestorBranchID set) is additionally validated twice: the ancestor must
-// still be live, and the fork point must be at or above the ancestor's GC cutoff.
-// Each validation races a writer of that ancestor — a drop of it, or an advance of
-// its cutoff. Both are resolved the same way: the condition is the WHERE clause of
-// an UPDATE of the ancestor's row, so the two transactions conflict on that row
-// instead of both committing. Described per race in the body.
+// still be live, and the fork point must be at or above its GC cutoff. Each
+// condition is the WHERE clause of an UPDATE of the ancestor's row, so this
+// transaction conflicts with every other writer of it — a drop, another fork, an
+// endpoint create on it, GC advancing its cutoff — instead of write-skewing past
+// them. Described per race in the body.
+//
+// The loser is aborted with a serialization failure, and the task worker re-runs
+// the step on it (worker.go). What makes that safe is this method being ONE
+// transaction: a rejected attempt left neither row behind. Keep it that way.
+//
+// The abort is returned under no sentinel, only a legible message — it is not a
+// verdict on the request. See explainAbort.
 func (s *Store) RecordBranch(ctx context.Context, clusterID, branchID uuid.UUID, req BranchCreateRecord) error {
-	err := s.recordBranch(ctx, clusterID, branchID, req)
-	// The validations above write the ancestor's row, so a concurrent drop or
-	// cutoff advance can abort this whole transaction with a serialization failure
-	// (40001). ErrConflict tells the caller to retry.
-	if isSerializationAbort(err) {
-		return fmt.Errorf(
-			"%w: branch registration conflicted with a concurrent GC cutoff advance on, or drop of, the ancestor — retry: %w",
-			ErrConflict, err)
+	return explainAbort(s.recordBranch(ctx, clusterID, branchID, req))
+}
+
+// explainAbort names the interlock a lost registration collided with, WITHOUT
+// changing its class: the driver error stays in the chain through %w, and that is
+// what the task worker matches on to decide the step is worth re-running
+// (db.IsAbortedTransaction). Wrapping with %v instead would still read correctly
+// in a log while silently turning every fork conflict back into a permanent task
+// failure — which is exactly #578. So the chain is a contract, not an incidental
+// formatting choice, and abort_test.go pins it without needing a database or a
+// real race to do it. Anything else is returned untouched.
+func explainAbort(err error) error {
+	if !db.IsAbortedTransaction(err) {
+		return err
 	}
-	return err
+	return fmt.Errorf(
+		"branch registration conflicted with a concurrent write to the ancestor "+
+			"(a drop, another fork, an endpoint create, or a GC cutoff advance): %w",
+		err)
 }
 
 func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID, req BranchCreateRecord) error {

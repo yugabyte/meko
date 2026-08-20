@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/yugabyte/amp/controller/internal/db"
 )
 
 // This file adds the *idempotent, id-keyed* provisioning operations the
@@ -308,15 +310,18 @@ func (b *PgBackend) EnsureEndpointRecord(ctx context.Context, endpointID, cluste
 	return nil
 }
 
-// mapBranchDropRaceErr translates the serialization abort the branch interlock
-// provokes by design into a legible, retryable ErrConflict rather than an opaque
-// SQLSTATE 40001 in the task log. A retry after losing to the drop resolves to a
-// clean ErrNotFound.
+// mapBranchDropRaceErr makes the serialization abort the branch interlock provokes
+// by design legible, rather than an opaque SQLSTATE 40001 in the task log.
+//
+// Deliberately under no sentinel: the abort is not a verdict on the request — the
+// request was never adjudicated, the transaction just lost the row — so it is
+// neither ErrConflict nor ErrNotFound. The task worker re-runs the step on it
+// (db.IsAbortedTransaction), which resolves to success or to a clean ErrNotFound
+// once the winning drop is visible; the %w chain below is what it classifies on.
 func mapBranchDropRaceErr(what string, err error) error {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "40001" { // serialization_failure
-		return fmt.Errorf("%w: %s conflicted with a concurrent drop of the branch — retry: %w",
-			ErrConflict, what, err)
+	if db.IsAbortedTransaction(err) {
+		return fmt.Errorf("%s conflicted with a concurrent drop of, or fork off, the branch: %w",
+			what, err)
 	}
 	return fmt.Errorf("%s: %w", what, err)
 }
