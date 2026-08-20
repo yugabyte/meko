@@ -1,0 +1,623 @@
+# Local Meko stack.
+#
+# YugabyteDB runs NATIVELY (via yugabyted, started by start.sh).
+# Every other component runs in this compose. Containers reach
+# yugabyted via host.docker.internal:5433.
+#
+# All builds use BIND-MOUNTED LOCAL SOURCE so edits in
+# /Users/gargsans/meko/meko-{mem0,mcp-server,langfuse}/ and
+# /Users/gargsans/meko/meko/{api_server,inference_gateway,meko_ui}/
+# flow through. Python sources are also bind-mounted at runtime; a
+# `docker compose restart <svc>` picks up changes without a rebuild.
+
+x-host-gateway: &host-gateway
+  # Linux: start.sh exports HOST_GATEWAY_IP = the IP yugabyted's YSQL bound to.
+  # macOS: HOST_GATEWAY_IP is unset, so this falls back to the host-gateway alias.
+  extra_hosts:
+    - "host.docker.internal:${HOST_GATEWAY_IP:-host-gateway}"
+
+# ──────────────────────────────────────────────────────────────────
+# RAG agent (component #7): ONE image, run as TWO workers that split
+# the work queue by document MIME type. start_rag_agent.py's poller
+# leases PREPROCESS tasks filtered by WORKER_DOCUMENT_TYPE:
+#   TEXT -> json/csv/html/markdown/plain/xml    PDF -> application/pdf
+# Both must run, or files of the un-served type sit QUEUED forever
+# (the poller simply never leases them). Shared config lives in these
+# anchors; the two services below differ only by WORKER_DOCUMENT_TYPE.
+# ──────────────────────────────────────────────────────────────────
+x-rag-agent-env: &rag-agent-env
+  YUGABYTEDB_CONNECTION_STRING: "postgresql://${YB_USER}:${YB_PASSWORD}@host.docker.internal:${YB_PORT}/yugabyte"
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  AWS_REGION: ${AWS_REGION}
+  AWS_S3_BUCKET_NAME: ${S3_KB_BUCKET}
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  # boto3 1.34+ honors this to point S3 calls at MinIO. The MEKO_RAG path uses
+  # boto3 client('s3') without endpoint_url, so this env var is the override.
+  AWS_ENDPOINT_URL_S3: "http://minio:9000"
+  AWS_ENDPOINT_URL: "http://minio:9000"
+  # MinIO serves on one hostname and doesn't own *.minio:9000 DNS, so boto3 must
+  # use path-style URLs (http://minio:9000/<bucket>/<key>) not virtual-hosted.
+  AWS_S3_ADDRESSING_STYLE: "path"
+  POLL_IDLE_SLEEP_SECONDS: "2"
+  ENABLE_LANGFUSE_TRACING: "false"
+  # WORKER_DOCUMENT_TYPE is set per-service (TEXT / PDF) below.
+
+x-rag-agent: &rag-agent
+  image: meko-rag-agent:meko-local
+  restart: unless-stopped
+  depends_on:
+    minio:
+      condition: service_healthy
+    # Serialized behind the api-server migration: YB aborts a transaction whose
+    # catalog snapshot is invalidated by concurrent DDL (MISMATCHED_SCHEMA), so
+    # nothing that might run DDL may boot while the (minutes-long) migration runs.
+    meko-api-server-migrate:
+      condition: service_completed_successfully
+  # start_rag_agent.py hardcodes logging.FileHandler('app.log') — a CWD-relative
+  # path. The source mount is read-only (clean host tree, no app.log leaking back
+  # into the repo), so we run from /tmp — writable by the non-root ragagent user,
+  # on the container's own fs. __main__.py is run by absolute path and PYTHONPATH
+  # keeps imports resolving regardless of CWD.
+  working_dir: /tmp
+  entrypoint: ["python", "/app/rag_agent/__main__.py"]
+  volumes:
+    - ${MEKO_YB_HOME}/python/ai/rag_agent:/app/rag_agent:ro
+  networks: [meko_net]
+
+services:
+  # ──────────────────────────────────────────────────────────────────
+  # Infra: Redis (Langfuse queues) + MinIO (Langfuse blobs + KB uploads)
+  # ──────────────────────────────────────────────────────────────────
+  redis:
+    image: docker.io/redis:7
+    container_name: meko-redis
+    restart: unless-stopped
+    command: >
+      --requirepass ${REDIS_AUTH}
+      --port 6379
+      --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT}:6379"
+    volumes:
+      - meko_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_AUTH}", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+    networks: [meko_net]
+
+  minio:
+    image: cgr.dev/chainguard/minio
+    container_name: meko-minio
+    restart: unless-stopped
+    entrypoint: sh
+    # Create both langfuse + KB upload buckets at start.
+    command: >
+      -c 'mkdir -p /data/langfuse /data/${S3_KB_BUCKET} &&
+          minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT}:9001"
+    volumes:
+      - meko_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+    networks: [meko_net]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Schema init jobs (one-shot). Use a YB image purely as a ysqlsh client
+  # because we need pg-extensions to be created on the host yugabyted.
+  # ──────────────────────────────────────────────────────────────────
+  yb-langfuse-metadata-init:
+    image: postgres:17-alpine
+    container_name: meko-yb-langfuse-metadata-init
+    <<: *host-gateway
+    depends_on:
+      redis:
+        condition: service_started
+    environment:
+      PGHOST: host.docker.internal
+      PGPORT: "5433"
+      PGUSER: ${YB_USER}
+      PGPASSWORD: ${YB_PASSWORD}
+    entrypoint: ["sh", "-eu", "-c"]
+    command:
+      - |
+        until pg_isready -h $$PGHOST -p $$PGPORT -U $$PGUSER -d yugabyte; do
+          echo "waiting for yugabyted on $$PGHOST:$$PGPORT..."
+          sleep 3
+        done
+        if [ "$$(psql -d yugabyte -tAc "SELECT 1 FROM pg_database WHERE datname='langfuse'")" != "1" ]; then
+          echo "creating langfuse database + loading metadata schema..."
+          psql -d yugabyte -c "CREATE DATABASE langfuse"
+          psql -v ON_ERROR_STOP=1 -d langfuse -f /schema/yb_postgres_data.sql
+        else
+          echo "langfuse database already exists; skipping metadata import."
+        fi
+    volumes:
+      - ${MEKO_LANGFUSE_DIR:-../../../../meko-langfuse}/yb_postgres_data.sql:/schema/yb_postgres_data.sql:ro
+    restart: "no"
+    networks: [meko_net]
+
+  yb-langfuse-tracing-init:
+    image: postgres:17-alpine
+    container_name: meko-yb-langfuse-tracing-init
+    <<: *host-gateway
+    depends_on:
+      yb-langfuse-metadata-init:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: host.docker.internal
+      PGPORT: "5433"
+      PGUSER: ${YB_USER}
+      PGPASSWORD: ${YB_PASSWORD}
+    entrypoint: ["sh", "-eu", "-c"]
+    command:
+      - |
+        psql -d langfuse -c "CREATE SCHEMA IF NOT EXISTS clickhouse"
+        PGOPTIONS="-c search_path=clickhouse,public" \
+          psql -d langfuse -f /schema/tracing_postgres_schema.sql
+    volumes:
+      - ${MEKO_LANGFUSE_DIR:-../../../../meko-langfuse}/tracing_postgres_schema.sql:/schema/tracing_postgres_schema.sql:ro
+    restart: "no"
+    networks: [meko_net]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Langfuse (web + worker), backed by the host yugabyted.
+  # NOTE: LANGFUSE_DISABLE_CLICKHOUSE_WRITES=true → no ClickHouse service.
+  # ──────────────────────────────────────────────────────────────────
+  langfuse-web:
+    image: langfuse-web:meko-local
+    build:
+      context: ${MEKO_LANGFUSE_DIR:-../../../../meko-langfuse}
+      dockerfile: web/Dockerfile
+    container_name: meko-langfuse-web
+    <<: *host-gateway
+    restart: unless-stopped
+    depends_on:
+      yb-langfuse-metadata-init:
+        condition: service_completed_successfully
+      yb-langfuse-tracing-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      # Serialized behind the api-server migration — Langfuse's boot may run
+      # prisma DDL, which invalidates YB catalog snapshots of the in-flight
+      # migration (MISMATCHED_SCHEMA).
+      meko-api-server-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: "postgresql://${YB_USER}:${YB_PASSWORD}@host.docker.internal:${YB_PORT}/langfuse"
+      TRACING_DATABASE_URL: "postgresql://${YB_USER}:${YB_PASSWORD}@host.docker.internal:${YB_PORT}/langfuse?schema=clickhouse"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_AUTH}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: "true"
+      LANGFUSE_S3_BATCH_EXPORT_BUCKET: langfuse
+      LANGFUSE_S3_BATCH_EXPORT_PREFIX: exports/
+      LANGFUSE_S3_BATCH_EXPORT_REGION: us-east-1
+      LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_BATCH_EXPORT_EXTERNAL_ENDPOINT: "http://localhost:${MINIO_API_PORT}"
+      LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: "true"
+      # Langfuse's NextAuth must use the public URL the browser sees.
+      NEXTAUTH_URL: "http://localhost:${UI_HOST_PORT}"
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      LANGFUSE_AUTO_POSTGRES_MIGRATION_DISABLED: "true"
+      LANGFUSE_AUTO_CLICKHOUSE_MIGRATION_DISABLED: "true"
+      NEXT_PUBLIC_LANGFUSE_RUN_NEXT_INIT: "true"
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
+      LANGFUSE_EE_LICENSE_KEY: ${LANGFUSE_EE_LICENSE_KEY}
+      # api_server uses this to call Langfuse admin API for per-datapack
+      # org/project provisioning. Must match api_server's LANGFUSE_ADMIN_API_KEY.
+      ADMIN_API_KEY: ${LANGFUSE_ADMIN_API_KEY}
+      LANGFUSE_DISABLE_CLICKHOUSE_WRITES: "true"
+      LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS: "false"
+      LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED: "false"
+      LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED: "false"
+      LANGFUSE_BATCH_TRACE_DELETION_CLEANER_ENABLED: "false"
+    networks: [meko_net]
+
+  langfuse-worker:
+    image: langfuse-worker:meko-local
+    build:
+      context: ${MEKO_LANGFUSE_DIR:-../../../../meko-langfuse}
+      dockerfile: worker/Dockerfile
+    container_name: meko-langfuse-worker
+    <<: *host-gateway
+    restart: unless-stopped
+    depends_on:
+      yb-langfuse-metadata-init:
+        condition: service_completed_successfully
+      yb-langfuse-tracing-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      # Serialized behind the api-server migration — Langfuse's boot may run
+      # prisma DDL, which invalidates YB catalog snapshots of the in-flight
+      # migration (MISMATCHED_SCHEMA).
+      meko-api-server-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: "postgresql://${YB_USER}:${YB_PASSWORD}@host.docker.internal:${YB_PORT}/langfuse"
+      TRACING_DATABASE_URL: "postgresql://${YB_USER}:${YB_PASSWORD}@host.docker.internal:${YB_PORT}/langfuse?schema=clickhouse"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${REDIS_AUTH}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: "true"
+      LANGFUSE_S3_BATCH_EXPORT_BUCKET: langfuse
+      LANGFUSE_S3_BATCH_EXPORT_PREFIX: exports/
+      LANGFUSE_S3_BATCH_EXPORT_REGION: us-east-1
+      LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: "true"
+      NEXTAUTH_URL: "http://localhost:${UI_HOST_PORT}/observe"
+      SALT: ${LANGFUSE_SALT}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_DISABLE_CLICKHOUSE_WRITES: "true"
+      LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS: "false"
+      LANGFUSE_BATCH_PROJECT_CLEANER_ENABLED: "false"
+      LANGFUSE_BATCH_DATA_RETENTION_CLEANER_ENABLED: "false"
+      LANGFUSE_BATCH_TRACE_DELETION_CLEANER_ENABLED: "false"
+      QUEUE_CONSUMER_INGESTION_QUEUE_IS_ENABLED: "true"
+      QUEUE_CONSUMER_OTEL_INGESTION_QUEUE_IS_ENABLED: "true"
+    networks: [meko_net]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Meko Go API server.
+  # Runs migrations on boot. DevAuth is unused here because we require
+  # Cognito for the UI to work; api_server uses real JWT validation.
+  # ──────────────────────────────────────────────────────────────────
+  # api_server only runs migrations when invoked with -migrate-only. A
+  # one-shot init container does that before the real api_server starts so
+  # the meko_system schema exists by the time anything queries it.
+  meko-api-server-migrate:
+    image: meko-api-server:meko-local
+    build:
+      context: ${MEKO_API_SERVER_DIR:-../../api_server}
+      dockerfile: Dockerfile
+    container_name: meko-api-server-migrate
+    <<: *host-gateway
+    depends_on:
+      # BOTH langfuse init jobs must finish before migrations run. YugabyteDB
+      # invalidates a transaction's catalog snapshot on concurrent DDL
+      # ("MISMATCHED_SCHEMA") — tracing-init's schema/table DDL racing the
+      # (minutes-long) data migration killed it reproducibly.
+      yb-langfuse-metadata-init:
+        condition: service_completed_successfully
+      yb-langfuse-tracing-init:
+        condition: service_completed_successfully
+    entrypoint: ["/usr/local/bin/meko-api-server"]
+    command:
+      - "-migrate-only"
+      - "-db-host=host.docker.internal"
+      - "-db-port=5433"
+      - "-db-user-name=${YB_USER}"
+      - "-db-password=${YB_PASSWORD}"
+      - "-db-name=yugabyte"
+    restart: "no"
+    networks: [meko_net]
+
+  meko-api-server:
+    image: meko-api-server:meko-local
+    build:
+      context: ${MEKO_API_SERVER_DIR:-../../api_server}
+      dockerfile: Dockerfile
+    container_name: meko-api-server
+    <<: *host-gateway
+    restart: unless-stopped
+    depends_on:
+      meko-api-server-migrate:
+        condition: service_completed_successfully
+      yb-langfuse-metadata-init:
+        condition: service_completed_successfully
+    environment:
+      LOG_LEVEL: info
+      LANGFUSE_HOST: http://langfuse-web:3000
+      LANGFUSE_ADMIN_API_KEY: ${LANGFUSE_ADMIN_API_KEY}
+      LANGFUSE_DB_HOST: host.docker.internal
+      LANGFUSE_DB_PORT: "5433"
+      LANGFUSE_DB_NAME: langfuse
+      LANGFUSE_DB_USER: ${YB_USER}
+      LANGFUSE_DB_PASSWORD: ${YB_PASSWORD}
+      LANGFUSE_DB_SSLMODE: disable
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPEN_AI_LLM_MODEL: ${LLM_MODEL}
+      OPEN_AI_EMBEDDING_MODEL: ${EMBEDDER_MODEL}
+      MEKO_DEPLOY_ENV: dev
+      MCP_INTERNAL_SECRET: ${MEKO_MCP_INTERNAL_SECRET}
+      # Shared secret for the /admin/* metrics endpoints (X-Meko-Admin-Secret,
+      # #337). Empty → endpoints return 503. Only needed if you run the
+      # meko_admin console against this stack (not part of local-deploy).
+      ADMIN_API_KEY: ${MEKO_ADMIN_API_KEY:-}
+      S3_AUTH_MODE: minio
+      # Server-side S3 ops use the in-network hostname.
+      S3_ENDPOINT: http://minio:9000
+      # Presigned upload/download URLs are handed to the browser, which is
+      # on the host and can't resolve "minio". Sign them against the
+      # published MinIO host port instead so the browser can reach them.
+      S3_PUBLIC_ENDPOINT: "http://localhost:${MINIO_API_PORT}"
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_KB_BUCKET}
+      S3_REGION: us-east-1
+    entrypoint: ["/usr/local/bin/meko-api-server"]
+    command:
+      - "-port=25433"
+      - "-db-host=host.docker.internal"
+      - "-db-port=5433"
+      - "-db-user-name=${YB_USER}"
+      - "-db-password=${YB_PASSWORD}"
+      - "-db-name=yugabyte"
+      - "-cognito-region=${COGNITO_REGION}"
+      - "-cognito-pool-id=${COGNITO_POOL_ID}"
+      - "-cognito-client-id=${COGNITO_CLIENT_ID}"
+      - "-cognito-client-secret=${COGNITO_CLIENT_SECRET}"
+      - "-cognito-domain=${COGNITO_DOMAIN}"
+    ports:
+      - "127.0.0.1:${API_SERVER_HOST_PORT}:25433"
+    networks: [meko_net]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Meko MCP server (HTTP transport). Bind-mounts:
+  #   - meko-mem0/mem0 → site-packages/mem0 (live mem0 library edits)
+  #   - meko-mcp-server/src → /app/src     (live MCP server src edits)
+  # Restart the container after edits: `docker compose restart meko-mcp-server`
+  # ──────────────────────────────────────────────────────────────────
+  meko-mcp-server:
+    image: meko-mcp-server:meko-local
+    build:
+      context: ${MEKO_MCP_SERVER_DIR:-../../../../meko-mcp-server}
+      dockerfile: Dockerfile
+    container_name: meko-mcp-server
+    <<: *host-gateway
+    restart: unless-stopped
+    depends_on:
+      meko-api-server:
+        condition: service_started
+      langfuse-web:
+        condition: service_started
+    environment:
+      # Run as Streamable-HTTP at /mcp on :8000.
+      YB_MCP_TRANSPORT: http
+      YB_MCP_STATELESS_HTTP: "true"
+      MCP_BASE_URL: "http://localhost:${MCP_SERVER_HOST_PORT}"
+      MCP_ENV: local
+      MCP_CORS_ORIGINS: "http://localhost:${UI_HOST_PORT},http://localhost:${INFERENCE_GATEWAY_HOST_PORT}"
+      # Auth: cognito accepts raw Cognito access tokens (what the UI's
+      # signin flow issues). MEKO_TKN_AUTH_ENABLED=true also accepts
+      # mko_tkn_* PATs alongside, so both work.
+      MCP_AUTH_PROVIDER: cognito
+      COGNITO_USER_POOL_ID: ${COGNITO_POOL_ID}
+      COGNITO_AWS_REGION: ${COGNITO_REGION}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID}
+      COGNITO_CLIENT_SECRET: ${COGNITO_CLIENT_SECRET}
+      MEKO_TKN_AUTH_ENABLED: "true"
+      MEKO_BASE_URL: "http://meko-api-server:25433/api/v1"
+      MEKO_MCP_INTERNAL_SECRET: ${MEKO_MCP_INTERNAL_SECRET}
+      # YB connection (libpq keyword form, per Dockerfile default).
+      # load_balance is a Yugabyte smart-driver flag (yugabyte-psycopg2 fork).
+      # Standard psycopg / libpq rejects it as "invalid connection option".
+      YUGABYTEDB_URL: "dbname=yugabyte host=host.docker.internal port=${YB_PORT} user=${YB_USER} password=${YB_PASSWORD}"
+      YUGABYTEDB_SYSTEM_URL: "dbname=yugabyte host=host.docker.internal port=${YB_PORT} user=${YB_USER} password=${YB_PASSWORD}"
+      # mem0 LLM + embedder + graph creds
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      EMBEDDER_PROVIDER: ${EMBEDDER_PROVIDER}
+      LLM_MODEL: ${LLM_MODEL}
+      EMBEDDER_MODEL: ${EMBEDDER_MODEL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      # Graph store (mage on YB) needs these as separate env vars.
+      HOST: host.docker.internal
+      PORT: ${YB_PORT}
+      DBNAME: yugabyte
+      USER: ${YB_USER}
+      PASSWORD: ${YB_PASSWORD}
+      # mem0 table creation is opt-in since meko-mem0 #6 (default false, schema
+      # provisioned out-of-band in prod). The local stack has no provisioning
+      # step, so mem0 must create its own vector/graph tables on a fresh DB —
+      # without this, memory tools fail and WorkbenchLM chat 502s.
+      MEM0_CREATE_TABLES: "true"
+      # Langfuse for conversation storage.
+      LANGFUSE_HOST: http://langfuse-web:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      YB_LOG_LEVEL: INFO
+    volumes:
+      # Override the installed mem0 package with our local source (read-only).
+      # Python imports `mem0` from this path; .py edits visible on container
+      # restart. Dependency changes require a rebuild.
+      - ${MEKO_MEM0_DIR:-../../../../meko-mem0}/mem0:/app/.venv/lib/python3.10/site-packages/mem0:ro
+      # MCP server's own src — same restart-to-apply model.
+      - ${MEKO_MCP_SERVER_DIR:-../../../../meko-mcp-server}/src:/app/src:ro
+    ports:
+      - "127.0.0.1:${MCP_SERVER_HOST_PORT}:8000"
+    networks: [meko_net]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Inference gateway (Playground chat backend).
+  # Source bind-mounted so edits land on restart.
+  # ──────────────────────────────────────────────────────────────────
+  meko-inference-gateway:
+    image: meko-inference-gateway:meko-local
+    build:
+      context: ${MEKO_INFERENCE_GATEWAY_DIR:-../../inference_gateway}
+      dockerfile: Dockerfile
+    container_name: meko-inference-gateway
+    <<: *host-gateway
+    restart: unless-stopped
+    depends_on:
+      meko-mcp-server:
+        condition: service_started
+    environment:
+      INFERENCE_LLM_PROVIDER: ${INFERENCE_LLM_PROVIDER}
+      INFERENCE_LLM_MODEL: ${INFERENCE_LLM_MODEL}
+      INFERENCE_MCP_ENDPOINT: "http://meko-mcp-server:8000/mcp"
+      INFERENCE_PORT: "8088"
+      INFERENCE_CORS_ORIGINS: "http://localhost:${UI_HOST_PORT}"
+      INFERENCE_LOG_LEVEL: INFO
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - ${MEKO_INFERENCE_GATEWAY_DIR:-../../inference_gateway}/inference_gateway:/opt/venv/lib/python3.11/site-packages/inference_gateway:ro
+    ports:
+      - "127.0.0.1:${INFERENCE_GATEWAY_HOST_PORT}:8088"
+    networks: [meko_net]
+
+  # ──────────────────────────────────────────────────────────────────
+  # RAG agent (component #7): polls pg_dist_rag work queue, downloads
+  # KB files from MinIO, chunks/embeds, writes back to YB. Source
+  # bind-mounted. Two workers (TEXT + PDF) share one image built from the
+  # rag_agent Dockerfile — see the x-rag-agent anchors above. This TEXT
+  # service owns the build; the PDF service reuses the resulting
+  # meko-rag-agent:meko-local image.
+  # ──────────────────────────────────────────────────────────────────
+  meko-rag-agent:
+    <<: [*rag-agent, *host-gateway]
+    build:
+      # rag_agent ships its Python source (incl. the Dockerfile) under
+      # MEKO_YB_HOME/python/ai/rag_agent in a yugabyte-db source build.
+      context: ${MEKO_YB_HOME}/python/ai/rag_agent
+      dockerfile: Dockerfile
+    container_name: meko-rag-agent
+    environment:
+      <<: *rag-agent-env
+      WORKER_DOCUMENT_TYPE: TEXT
+
+  # PDF worker: same image, processes only application/pdf. The PDF path is
+  # GPU-oriented upstream but runs on CPU locally (poppler/tesseract ship in
+  # the image) — slower, but it keeps PDF KB uploads from stalling at QUEUED.
+  # No build here: it reuses the image the TEXT service builds above.
+  meko-rag-agent-pdf:
+    <<: [*rag-agent, *host-gateway]
+    container_name: meko-rag-agent-pdf
+    # NOTE: this depends_on REPLACES the anchor's (YAML merge is shallow), so
+    # the migrate gate must be repeated here.
+    depends_on:
+      minio:
+        condition: service_healthy
+      meko-rag-agent:
+        condition: service_started
+      meko-api-server-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *rag-agent-env
+      WORKER_DOCUMENT_TYPE: PDF
+
+  # ──────────────────────────────────────────────────────────────────
+  # Meko UI (React + Express). VITE_* baked in at build time.
+  # ──────────────────────────────────────────────────────────────────
+  meko-ui:
+    image: meko-ui:meko-local
+    build:
+      context: ${MEKO_UI_DIR:-../../meko_ui}
+      dockerfile: Dockerfile
+      args:
+        VITE_COGNITO_DOMAIN: ${VITE_COGNITO_DOMAIN}
+        VITE_COGNITO_CLIENT_ID: ${VITE_COGNITO_CLIENT_ID}
+        VITE_COGNITO_REDIRECT_URI: ${VITE_COGNITO_REDIRECT_URI}
+        VITE_OBSERVE_EMBED_PATH: ${VITE_OBSERVE_EMBED_PATH}
+        VITE_INFERENCE_GATEWAY_URL: "http://localhost:${INFERENCE_GATEWAY_HOST_PORT}"
+    container_name: meko-ui
+    restart: unless-stopped
+    depends_on:
+      meko-api-server:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      MEKO_API_UPSTREAM: "http://meko-api-server:25433"
+      # RudderStack is RUNTIME config since #312: the Express server exposes an
+      # allow-listed env set as window.__MEKO_RUNTIME__ via /runtime-config.js —
+      # nothing is baked into the bundle anymore. start.sh forces the write key
+      # empty unless RUDDERSTACK_ENABLED is on; empty key → telemetry no-ops.
+      VITE_RUDDERSTACK_WRITE_KEY: ${VITE_RUDDERSTACK_WRITE_KEY:-}
+      VITE_RUDDERSTACK_DATA_PLANE_URL: ${VITE_RUDDERSTACK_DATA_PLANE_URL:-}
+    expose:
+      - "5000"
+    networks: [meko_net]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Single-entry nginx reverse proxy. UI ↔ /observe ↔ /api/v1 on one port.
+  # ──────────────────────────────────────────────────────────────────
+  meko-proxy:
+    image: nginx:1.27-alpine
+    container_name: meko-proxy
+    restart: unless-stopped
+    depends_on:
+      - meko-ui
+      - langfuse-web
+      - meko-api-server
+    ports:
+      - "${UI_HOST_PORT}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [meko_net]
+
+volumes:
+  meko_redis_data:
+  meko_minio_data:
+
+networks:
+  meko_net:
+    driver: bridge

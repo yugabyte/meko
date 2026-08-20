@@ -54,6 +54,7 @@ type ServerConfig struct {
 	S3AuthMode               string
 	S3Bucket                 string
 	S3Endpoint               string
+	S3PublicEndpoint         string
 	S3Region                 string
 	S3SecretKey              string
 	MCPServerURL             string

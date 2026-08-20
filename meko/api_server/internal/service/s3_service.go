@@ -32,12 +32,21 @@ const (
 )
 
 type S3Config struct {
-	AuthMode  S3AuthMode
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	Region    string
+	AuthMode S3AuthMode
+	Endpoint string
+	// PublicEndpoint, when set, is used ONLY for presigned URLs (upload /
+	// download) so the host/port baked into the SigV4 signature is one the
+	// end-user's browser can reach. Server-side calls (HeadObject,
+	// DeleteObject, ListObjects) keep using Endpoint. This solves the
+	// split-horizon case where api_server reaches MinIO at an internal
+	// docker hostname (http://minio:9000) but the browser must use the
+	// published host port (http://localhost:19090). Empty = presign with
+	// the same Endpoint as everything else (the original behaviour).
+	PublicEndpoint string
+	AccessKey      string
+	SecretKey      string
+	Bucket         string
+	Region         string
 }
 
 type S3Service struct {
@@ -52,24 +61,47 @@ func NewS3Service(cfg S3Config) (*S3Service, error) {
 	}
 
 	var client *s3.Client
+	// presignSource is the client whose endpoint the presigned URLs are
+	// signed against. Defaults to the main client; overridden below when a
+	// public endpoint is configured so browser-facing URLs carry a
+	// host/port the browser can actually reach.
+	var presignSource *s3.Client
+
+	normalizeEndpoint := func(ep string) string {
+		if !strings.HasPrefix(ep, "http://") && !strings.HasPrefix(ep, "https://") {
+			ep = "http://" + ep
+		}
+		return strings.TrimSuffix(ep, "/")
+	}
 
 	switch cfg.AuthMode {
 	case S3AuthMinio:
 		if cfg.AccessKey == "" || cfg.SecretKey == "" || cfg.Endpoint == "" {
 			return nil, fmt.Errorf("minio mode requires endpoint, access-key and secret-key")
 		}
-		endpoint := cfg.Endpoint
-		if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-			endpoint = "http://" + endpoint
-		}
+		endpoint := normalizeEndpoint(cfg.Endpoint)
+		creds := credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")
 		client = s3.New(s3.Options{
 			Region:       cfg.Region,
-			Credentials:  credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
+			Credentials:  creds,
 			UsePathStyle: true,
-			BaseEndpoint: aws.String(strings.TrimSuffix(endpoint, "/")),
+			BaseEndpoint: aws.String(endpoint),
 		})
+		presignSource = client
+		if cfg.PublicEndpoint != "" {
+			publicEndpoint := normalizeEndpoint(cfg.PublicEndpoint)
+			presignSource = s3.New(s3.Options{
+				Region:       cfg.Region,
+				Credentials:  creds,
+				UsePathStyle: true,
+				BaseEndpoint: aws.String(publicEndpoint),
+			})
+			slog.Info("s3 presign client uses public endpoint",
+				"public_endpoint", publicEndpoint)
+		}
 		slog.Info("s3 service initialized", "mode", "minio",
-			"endpoint", cfg.Endpoint, "bucket", cfg.Bucket, "region", cfg.Region)
+			"endpoint", cfg.Endpoint, "public_endpoint", cfg.PublicEndpoint,
+			"bucket", cfg.Bucket, "region", cfg.Region)
 
 	case S3AuthIAMUser:
 		if cfg.AccessKey == "" || cfg.SecretKey == "" {
@@ -79,6 +111,7 @@ func NewS3Service(cfg S3Config) (*S3Service, error) {
 			Region:      cfg.Region,
 			Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
 		})
+		presignSource = client
 		slog.Info("s3 service initialized", "mode", "iam-user",
 			"bucket", cfg.Bucket, "region", cfg.Region)
 
@@ -90,6 +123,7 @@ func NewS3Service(cfg S3Config) (*S3Service, error) {
 			return nil, fmt.Errorf("load AWS default config: %w", err)
 		}
 		client = s3.NewFromConfig(awsCfg)
+		presignSource = client
 		slog.Info("s3 service initialized", "mode", "iam-role",
 			"bucket", cfg.Bucket, "region", cfg.Region)
 
@@ -99,7 +133,7 @@ func NewS3Service(cfg S3Config) (*S3Service, error) {
 
 	return &S3Service{
 		client:        client,
-		presignClient: s3.NewPresignClient(client),
+		presignClient: s3.NewPresignClient(presignSource),
 		bucket:        cfg.Bucket,
 	}, nil
 }

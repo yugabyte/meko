@@ -208,6 +208,7 @@ func run() error {
 	// S3 configuration
 	s3AuthMode := flag.String("s3-auth-mode", envOrDefault("S3_AUTH_MODE", "minio"), "S3 auth mode: minio, iam-user, iam-role")
 	s3Endpoint := flag.String("s3-endpoint", envOrDefault("S3_ENDPOINT", "http://localhost:19094"), "S3-compatible endpoint URL (minio mode)")
+	s3PublicEndpoint := flag.String("s3-public-endpoint", envOrDefault("S3_PUBLIC_ENDPOINT", ""), "Public S3 endpoint used only for presigned upload/download URLs (browser-reachable host). Empty = use --s3-endpoint.")
 	s3AccessKey := flag.String("s3-access-key", envOrDefault("S3_ACCESS_KEY", "meko"), "S3 access key (minio/iam-user modes)")
 	s3SecretKey := flag.String("s3-secret-key", envOrDefault("S3_SECRET_KEY", "mekosecret"), "S3 secret key (minio/iam-user modes)")
 	s3Bucket := flag.String("s3-bucket", envOrDefault("S3_BUCKET", "meko-kb-uploads"), "S3 bucket for KB file uploads")
@@ -474,6 +475,7 @@ func run() error {
 		MemoryListSkipVectorSort:  *memoryListSkipVectorSort,
 		S3AuthMode:                *s3AuthMode,
 		S3Endpoint:                *s3Endpoint,
+		S3PublicEndpoint:          *s3PublicEndpoint,
 		S3AccessKey:               *s3AccessKey,
 		S3SecretKey:               *s3SecretKey,
 		S3Bucket:                  *s3Bucket,

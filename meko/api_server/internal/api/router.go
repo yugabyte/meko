@@ -118,12 +118,13 @@ func buildServiceRegistry(cfg ServerConfig) *serviceRegistry {
 	if cfg.S3Bucket != "" {
 		var err error
 		s3Svc, err = service.NewS3Service(service.S3Config{
-			AuthMode:  service.S3AuthMode(cfg.S3AuthMode),
-			Endpoint:  cfg.S3Endpoint,
-			AccessKey: cfg.S3AccessKey,
-			SecretKey: cfg.S3SecretKey,
-			Bucket:    cfg.S3Bucket,
-			Region:    cfg.S3Region,
+			AuthMode:       service.S3AuthMode(cfg.S3AuthMode),
+			Endpoint:       cfg.S3Endpoint,
+			PublicEndpoint: cfg.S3PublicEndpoint,
+			AccessKey:      cfg.S3AccessKey,
+			SecretKey:      cfg.S3SecretKey,
+			Bucket:         cfg.S3Bucket,
+			Region:         cfg.S3Region,
 		})
 		if err != nil {
 			slog.Error("failed to initialize S3 service", "error", err)
