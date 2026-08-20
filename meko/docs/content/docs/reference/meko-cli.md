@@ -149,7 +149,7 @@ You should see an output similar to the following:
 
 > [!NOTE]
 >
-> To connect Cursor, Claude, or other MCP clients, use a long-lived **API key** from the Meko portal (**Settings>API Keys**), not the datapack API key shown in this CLI output. See [Integrations](../../integrations/#mcp-server-url-and-api-key).
+> To connect Cursor, Claude, or other MCP clients, use a long-lived **API key** from the Meko portal (**Settings>API Keys**), not the datapack API key shown in this CLI output. See [Integrations](../../integrations/#api-key).
 
 For machine-readable output, use the `--json` flag:
 

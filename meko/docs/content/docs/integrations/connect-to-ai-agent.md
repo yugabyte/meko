@@ -14,14 +14,18 @@ Integrate with AI agents for interactive use cases, such as saving personal, tea
 
 ## Before you connect
 
-1. **Generate an API key**. In the portal, open **Settings>API Keys>Generate API key**, enter a name, then copy or download the key before closing the dialog (it starts with `mko_tkn_` and is shown only once).
-1. **Use the MCP server URL** `https://mcp.mekodata.ai/mcp` (the same URL appears in the **Datapacks>Connect** dialog).
+Every client uses the MCP server URL `https://mcp.mekodata.ai/mcp`. The **Datapacks > Connect** dialog also shows this URL.
 
-For any of the following integrations, replace `<paste-your-api-key>` with the key you saved. The portal's one-line installer uses that same placeholder.
+Choose one authentication method for each client:
 
-You can also connect Meko by URL with no API key and no installer using OAuth. The client opens a browser for OAuth; your Meko portal login is the identity. The MCP server returns its tool list to the client automatically.
+- **API key:** In the portal, open **Settings > API Keys > Generate API key**. Name the key, then copy or download it before you close the dialog. The key starts with `mko_tkn_`, and Meko shows it only once. In the instructions below, replace `<paste-your-api-key>` with this key.
+- **OAuth:** Add the MCP server URL without an API key or authentication headers. The client opens your browser so you can sign in to the Meko portal.
 
-For the full workflow, see [MCP server URL and API key](../#mcp-server-url-and-api-key).
+Use an API key for command-line clients, CI, and scripts. Command-line OAuth uses a local callback that Meko currently rejects, and unattended clients can't open a browser when an OAuth session expires.
+
+Don't configure both methods for the same client. The client may choose OAuth and ignore your API key.
+
+For the full workflow, see [MCP server URL](../#mcp-server-url) and [Choose an authentication method](../#choose-an-authentication-method).
 
 ### OAuth and Manual setup
 
@@ -68,14 +72,15 @@ In Cursor Desktop:
         "meko": {
           "url": "https://mcp.mekodata.ai/mcp",
           "headers": {
-            "API_KEY": "<paste-your-api-key>"
+            "Authorization": "Bearer <paste-your-api-key>",
+            "User-Agent": "meko-mcp-installer/1.0"
           }
         }
       }
     }
     ```
 
-    Replace `<paste-your-api-key>` with the API key you saved from **Settings>API Keys**.
+    Replace `<paste-your-api-key>` with the API key you saved from **Settings>API Keys**. Keep the `Bearer ` prefix, and keep the `User-Agent` header — see [Choose an authentication method](../#choose-an-authentication-method).
 
     The result should look like the following:
 
@@ -125,15 +130,38 @@ In Claude Desktop (whether used for Chat, Cowork, or Code):
             "-y",
             "mcp-remote",
             "https://mcp.mekodata.ai/mcp",
-            "--allow-http"
+            "--transport",
+            "http-only",
+            "--header",
+            "Authorization:${AUTH_HEADER}",
+            "--header",
+            "User-Agent:meko-mcp-installer/1.0"
           ],
           "env": {
-            "API_KEY": "<paste-your-api-key>"
+            "AUTH_HEADER": "Bearer <paste-your-api-key>"
           }
         }
       }
     }
     ```
+
+    **Why split the key between `args` and `env`:** The `Bearer <key>` header
+    value contains a space. Environment variable values can safely contain
+    spaces, but some clients mishandle spaces in `args` entries. The
+    configuration keeps the argument space-free as
+    `Authorization:${AUTH_HEADER}` and stores `Bearer <key>` in `env`. This is
+    the pattern `mcp-remote` expects.
+
+    **How the substitution works:** Claude Desktop doesn't expand
+    `${AUTH_HEADER}`. It passes the `args` array as written and sets
+    `AUTH_HEADER` in the `mcp-remote` process environment. When `mcp-remote`
+    parses the `Authorization` header, it replaces `${AUTH_HEADER}` with the
+    `Bearer <key>` value.
+
+    **Why the name matters:** `mcp-remote` substitutes only environment
+    variables that are explicitly referenced in `args`. The `AUTH_HEADER` name
+    in `env` must match `${AUTH_HEADER}` in `args`. A different or unreferenced
+    variable name doesn't authenticate the connection.
 
 1. Quit and restart Claude Desktop.
 
@@ -201,10 +229,12 @@ In the Meko portal, select **Connect** and follow the steps.
 1. Run the setup command in your shell to add the Meko MCP server to Claude Code:
 
     ```sh
-    claude mcp add --scope user --transport http meko https://mcp.mekodata.ai/mcp --header "API_KEY: <paste-your-api-key>"
+    claude mcp add --scope user --transport http meko https://mcp.mekodata.ai/mcp \
+      --header "Authorization: Bearer <paste-your-api-key>" \
+      --header "User-Agent: meko-mcp-installer/1.0"
     ```
 
-    Replace `<paste-your-api-key>` with the API key you saved from **Settings>API Keys**.
+    Replace `<paste-your-api-key>` with the API key you saved from **Settings>API Keys**. Keep the `Bearer ` prefix — see [Choose an authentication method](../#choose-an-authentication-method).
 
 1. Verify the connection by entering the following at the command-line console:
 
@@ -317,13 +347,16 @@ In Codex Desktop:
     echo "### Registering the Meko MCP server ###"
     npx mcp-add@latest \
       --name meko \
-      --type stdio \
-      --command 'npx -y mcp-remote https://mcp.mekodata.ai/mcp --allow-http' \
-      --env 'MEKO_API_KEY=<paste-your-api-key>' \
-      --headers 'MEKO_API_KEY=<paste-your-api-key>' \
+      --type http \
+      --url 'https://mcp.mekodata.ai/mcp' \
+      --headers 'Authorization=Bearer <paste-your-api-key>,User-Agent=meko-mcp-installer/1.0' \
       --scope global \
       --clients 'vscode'
     ```
+
+    VS Code can connect to a remote MCP server on its own, so this registers the
+    URL and its headers directly. Unlike Claude Desktop, it needs no local
+    `mcp-remote` helper.
 
     Replace `<paste-your-api-key>` with the API key you saved from **Settings>API Keys**.
 

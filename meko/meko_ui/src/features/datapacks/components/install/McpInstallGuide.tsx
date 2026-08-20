@@ -170,7 +170,10 @@ const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
   {
     title: "Integrate MCP server",
     description:
-      "Run mcp-add with your Meko MCP URL and API keys from the Datapacks page. Replace placeholders before executing.",
+      "Run mcp-add with your Meko MCP URL and API key from the Datapacks page. " +
+      "Meko is a remote MCP server, so this registers the URL over HTTP and sends " +
+      "the key as an Authorization header — no local bridge process. Replace " +
+      "placeholders before executing.",
     code: [
       'echo "### Installing the latest Node.js ###"',
       "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash",
@@ -179,12 +182,31 @@ const MANUAL_MCP_INSTALL_STEPS: InstallStep[] = [
       'echo "### Registering the Meko MCP server ###"',
       "npx mcp-add@latest \\",
       "  --name meko \\",
-      "  --type stdio \\",
-      "  --command 'npx -y mcp-remote <mcp-server-url> --allow-http' \\",
-      "  --env 'MEKO_API_KEY=<mcp-server-api-key>' \\",
-      "  --headers 'MEKO_API_KEY=<mcp-server-api-key>' \\",
+      "  --type http \\",
+      "  --url <mcp-server-url> \\",
+      "  --headers 'Authorization=Bearer <mcp-server-api-key>,User-Agent=meko-mcp-installer/1.0' \\",
       "  --scope global \\",
-      "  --clients 'claude desktop,claude code,cursor,codex,vscode'",
+      "  --clients 'claude code,cursor,codex,vscode'",
+    ].join("\n"),
+    langLabel: "bash",
+  },
+  {
+    title: "Claude Desktop only: add the stdio bridge",
+    description:
+      "Claude Desktop can't take a remote URL directly, so it needs the mcp-remote " +
+      "bridge. This writes only the Claude Desktop config, so it doesn't collide " +
+      "with the previous step. The header value goes in an env var because " +
+      "'Bearer <key>' contains a space: mcp-add splits --command on whitespace, and " +
+      "some clients mangle spaces inside args, so the arg itself must stay " +
+      "space-free. Skip this step if you don't use Claude Desktop.",
+    code: [
+      "npx mcp-add@latest \\",
+      "  --name meko \\",
+      "  --type stdio \\",
+      "  --command 'npx -y mcp-remote <mcp-server-url> --transport http-only --header Authorization:${AUTH_HEADER} --header User-Agent:meko-mcp-installer/1.0' \\",
+      "  --env 'AUTH_HEADER=Bearer <mcp-server-api-key>' \\",
+      "  --scope global \\",
+      "  --clients 'claude desktop'",
     ].join("\n"),
     langLabel: "bash",
   },

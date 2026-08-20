@@ -28,6 +28,19 @@ On any datapack, click **Connect**. If you have no active API key, the dialog pr
 
 All keys start with `mko_tkn_` followed by a random string. Only the prefix is shown after creation — the full key cannot be recovered. If you lose it, revoke the old key and generate a new one.
 
+## How to send a key
+
+Send the key in an `Authorization` header, with the `Bearer ` prefix:
+
+```text
+Authorization: Bearer mko_tkn_your_key_here
+User-Agent: meko-mcp-installer/1.0
+```
+
+That's the only form Meko accepts. A header or environment variable named `API_KEY`, `MEKO_API_KEY`, or `X-Api-Key` doesn't authenticate you, and neither does an `Authorization` value without `Bearer `. Also send a `User-Agent` header; Meko rejects requests that don't include one.
+
+The installer handles this for you. For hand-written config, see [Choose an authentication method](../../integrations/#choose-an-authentication-method).
+
 ## Limits
 
 - Up to **10 active keys** per account.

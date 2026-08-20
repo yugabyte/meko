@@ -86,6 +86,10 @@ If your client supports adding a custom remote MCP connector, you can connect Me
 2. Complete the OAuth handshake when the browser opens.
 3. The MCP server returns its tool list to the client automatically.
 
+> [!NOTE] OAuth doesn't work for every client
+>
+> Clients that complete OAuth through a local `http://127.0.0.1` callback currently fail with an HTML `403 Forbidden`. That covers command-line clients and some IDEs — it's about the callback the client registers, not whether it has a window. Use an API key for those. Hosted connectors with an `https` callback, such as Claude Desktop's, are unaffected.
+
 With OAuth alone, your agent interacts with Meko _on demand_: you need to mention "Meko" in your prompt for the agent to call the tools. For example, _"save this to Meko"_, _"search my Meko knowledge base"_. The agent won't proactively save conversations or capture memories unless you ask.
 
 To get automatic behavior, use the **Automated install** instead, or write your own skills to teach your agent when to call Meko tools.
@@ -106,12 +110,17 @@ Add the Meko MCP server directly to your client's config file with your API key.
         "meko": {
           "url": "https://mcp.mekodata.ai/mcp",
           "headers": {
-            "API_KEY": "<paste-your-api-key>"
+            "Authorization": "Bearer <paste-your-api-key>",
+            "User-Agent": "meko-mcp-installer/1.0"
           }
         }
       }
     }
     ```
+
+    Keep the `Bearer ` prefix — `Authorization` is the only header Meko reads for
+    authentication. Keep `User-Agent` too; Meko rejects requests without one. See
+    [Choose an authentication method](../integrations/#choose-an-authentication-method).
 
 3. Restart your client.
 

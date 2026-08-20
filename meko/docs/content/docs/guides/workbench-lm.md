@@ -47,7 +47,7 @@ If it is not your first time signing in, do the following:
 | Authentication | Your portal session | Long-lived `mko_tkn_…` key from **Settings>API Keys** |
 | Best for | Trying Meko, demos, light Q&A | IDE-integrated development |
 
-External clients authenticate with an [API key](../../integrations/#mcp-server-url-and-api-key). WorkbenchLM uses your signed-in session and server-side credentials for the selected datapack — you don't need to provide an API key to use WorkbenchLM.
+External clients authenticate with an [API key](../../integrations/#api-key). WorkbenchLM uses your signed-in session and server-side credentials for the selected datapack — you don't need to provide an API key to use WorkbenchLM.
 
 ## Next steps
 
