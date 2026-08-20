@@ -285,3 +285,21 @@ func TestConfigApplyToOverlaysKnobs(t *testing.T) {
 		t.Errorf("ApplyTo did not overlay config knobs, got %+v", s)
 	}
 }
+
+// The run redirects into this path, so a caller can read the log WHILE the
+// benchmark is going. Run only surfaces the output once it returns, which for a
+// benchmark that outlives the scenario is never.
+func TestResolvedLogPathIncludesTheRunDir(t *testing.T) {
+	spec := benchbase.RunSpec{RunDir: "/opt/ampqa/benchbase-yugabyte"}
+	if got, want := spec.ResolvedLogPath(), "/opt/ampqa/benchbase-yugabyte/benchbase.out"; got != want {
+		t.Errorf("ResolvedLogPath = %q, want %q", got, want)
+	}
+	if got := (benchbase.RunSpec{}).ResolvedLogPath(); got != "benchbase.out" {
+		t.Errorf("ResolvedLogPath with no run dir = %q", got)
+	}
+	// It must be the file the command actually writes to.
+	cmd := benchbase.BuildRunCommand(spec)
+	if !strings.Contains(cmd, "> 'benchbase.out'") {
+		t.Errorf("run command does not redirect into the log this path names: %s", cmd)
+	}
+}

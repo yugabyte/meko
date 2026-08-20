@@ -290,7 +290,13 @@ func provisionYBAProvisionedWithPlan(ctx context.Context, cfg *core.Config, runT
 	if k, ok := env.(interface{ InClusterAddrs() []string }); ok {
 		inCluster = k.InClusterAddrs()
 	}
-	return ybaProvisionedBacking(acc.PGEndpoint(), acc.NodeAddrs(), inCluster), teardown, ybaReapPlan(env), nil
+	// The env is carried along, not dropped: it is the only handle to the YBA
+	// that manages this universe, and a maintenance test needs to drive it.
+	backing := UniverseBacking{
+		BackingStore: ybaProvisionedBacking(acc.PGEndpoint(), acc.NodeAddrs(), inCluster),
+		env:          env,
+	}
+	return backing, teardown, ybaReapPlan(env), nil
 }
 
 // ybaReapPlan names the YBA control plane and, for a kubernetes universe, the
@@ -335,6 +341,50 @@ func ybaReapPlan(env core.Environment) *reap.Plan {
 // attempt times out against a perfectly healthy RF=3 universe.
 func ybaProvisionedBacking(conn pg.ConnInfo, addrs, inClusterAddrs []string) ybbacking.BackingStore {
 	return ybbacking.FromProvisionedUniverse(conn, addrs, inClusterAddrs)
+}
+
+// UniverseBacking is a backing store that also carries the universe env it came
+// from, so a test can MAINTAIN the universe (upgrade it, change its gflags) and
+// not merely connect to it. Only the yba_provisioned mode produces one; every
+// other backing is just a place to write.
+//
+// It forwards the OPTIONAL surfaces a BackingStore may implement
+// (ControllerHostPortsCSV, KubeColocation) explicitly. Embedding the interface
+// alone promotes only the methods BackingStore declares, so the type assertions
+// ybbacking.ExternalBacking makes for those two would fail against the wrapper
+// and silently lose the co-located path — the amp storage-DB create would go
+// back to dialling pod IPs the coordinator has no route to.
+type UniverseBacking struct {
+	ybbacking.BackingStore
+	env core.Environment
+}
+
+// ControllerHostPortsCSV forwards the in-cluster address split when the wrapped
+// store provides one.
+func (b UniverseBacking) ControllerHostPortsCSV() string {
+	if c, ok := b.BackingStore.(interface{ ControllerHostPortsCSV() string }); ok {
+		return c.ControllerHostPortsCSV()
+	}
+	return b.BackingStore.HostPortsCSV()
+}
+
+// KubeColocation forwards where the wrapped store's tservers live.
+func (b UniverseBacking) KubeColocation() (namespace, pod string) {
+	if k, ok := b.BackingStore.(interface{ KubeColocation() (string, string) }); ok {
+		return k.KubeColocation()
+	}
+	return "", ""
+}
+
+// UniverseEnv is the env that provisioned the universe under this backing.
+func (b UniverseBacking) UniverseEnv() core.Environment { return b.env }
+
+// UniverseEnvOf returns the universe env behind a backing store, if it has one.
+func UniverseEnvOf(store ybbacking.BackingStore) core.Environment {
+	if u, ok := store.(interface{ UniverseEnv() core.Environment }); ok {
+		return u.UniverseEnv()
+	}
+	return nil
 }
 
 // ybaHTTPClient builds the YBA HTTP client, skipping TLS verification when the

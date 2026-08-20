@@ -301,6 +301,32 @@ func (c *Client) DeleteUniverse(ctx context.Context, universeID string) (TaskRef
 // SetRuntimeConfig sets a runtime-config key at a scope (PUT text/plain, the raw
 // value — RuntimeConfController.setKey rejects application/json). scopeUUID is a
 // provider / universe / customer / global scope UUID.
+// GlobalRuntimeScope is the all-zeros scope UUID YBA treats as the global
+// runtime-config scope (a real UUID scopes the key to that provider/universe).
+const GlobalRuntimeScope = "00000000-0000-0000-0000-000000000000"
+
+// SetGlobalRuntimeConfig sets a runtime-config key at the global scope.
+func (c *Client) SetGlobalRuntimeConfig(ctx context.Context, key, value string) error {
+	return c.SetRuntimeConfig(ctx, GlobalRuntimeScope, key, value)
+}
+
+// AllowCrossVersionReleases relaxes the two version gates that otherwise refuse
+// a universe running a YugabyteDB other than this YBA's own build:
+// skip_version_checks (stable/preview crossing and downgrade refusals) and
+// allow_db_version_more_than_yba_version (a DB newer than the YBA).
+//
+// An upgrade test exists precisely to run those combinations, so it turns them
+// off deliberately rather than shaping the test around them. Best-effort: an
+// older YBA that does not know a key answers an error, which is not a reason to
+// fail the run.
+func (c *Client) AllowCrossVersionReleases(ctx context.Context) {
+	for _, key := range []string{"yb.skip_version_checks", "yb.allow_db_version_more_than_yba_version"} {
+		if err := c.SetGlobalRuntimeConfig(ctx, key, "true"); err != nil {
+			c.log("yba: could not set %s (continuing): %v", key, err)
+		}
+	}
+}
+
 func (c *Client) SetRuntimeConfig(ctx context.Context, scopeUUID, key, value string) error {
 	url := c.custURL("/runtime_config/" + scopeUUID + "/key/" + key)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, strings.NewReader(value))

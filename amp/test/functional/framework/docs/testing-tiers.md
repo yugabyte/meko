@@ -5,9 +5,11 @@ Four tier tags — and **`nightly` is a superset of the other three**:
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
   didn't break anything important. Must stay green to merge.
-- **`stress`** — the two `suites/stress` scenarios: `load_sustain` (workloadgen
-  soak) and `combined_load` (four parallel workloads under chaos on a co-located
-  YB backing). Scheduled as its own tier so the report portal gets a Stress
+- **`stress`** — the `suites/stress` scenarios: `load_sustain` (workloadgen
+  soak), `combined_load` (four parallel workloads under chaos on a co-located
+  YB backing), `backing_maintenance` (workloads through a rolling restart, a
+  gflag change, a data move and a YugabyteDB upgrade) and the nemesis /
+  durability scenarios. Scheduled as its own tier so the report portal gets a Stress
   column; the `Category: core.Stress` tests in `suites/features` are **not** in it
   (they belong to `regression`/`nightly` and would double-report).
 - **`perf`** — the baseline-gated benchmarks in `suites/perf` (`tpcc`, `pgbench`,
@@ -86,8 +88,9 @@ once). The extended-only tests (beyond regression) are:
 - **amp features on real k8s** — `amp_branch_isolation`, `amp_endpoint_lifecycle`,
   `amp_compute_restart`.
 - **Stress** (also `--tag stress`) — `combined_load` (parallel workloads +
-  chaos/nemesis against an exclusive universe) and `load_sustain` (workloadgen
-  soak).
+  chaos/nemesis against an exclusive universe), `backing_maintenance` (the same
+  co-located backing under PLANNED maintenance instead of chaos) and
+  `load_sustain` (workloadgen soak).
 - **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench` and `sysbench`,
   baseline-gated, with version/image comparison + bisect + history/trend. All
   three also sample the backing's own numbers while the benchmark runs
@@ -108,13 +111,22 @@ ampqa run --tag stress -c gke.yaml -o stress.combined.enabled=bool:true
 ampqa run --tag perf   -c gke.yaml -o perf.enabled=bool:true
 ```
 
-`--tag stress` selects both stress tests. `load_sustain` needs no config beyond a
+`--tag stress` selects the whole tier. `load_sustain` needs no config beyond a
 `pgEnv`-capable env (it skips otherwise) and honours `-o stress.duration`.
 `combined_load` self-provisions, so it skips unless `stress.combined.enabled` is
 set *and* a kube-context (`apps.ybk8s.kubecontext` / `apps.ybk8s.kubeconfig` /
 `env.ampstack.context`), a chart version (`apps.ybk8s.chart_version` /
 `versions.yugabytedb`) and the private sample-app jar secret
 (`stress.combined.jar_secret`, default `gh_package`) are all resolvable.
+`backing_maintenance` self-provisions the same way and gates on the same three
+things under `stress.backing_maintenance.*`, plus an upgrade target
+(`upgrade_to`) whenever `software_upgrade` is in its `operations` list:
+
+```
+ampqa run --testr '^stress/backing_maintenance$' -c gke.yaml \
+  -o stress.backing_maintenance.enabled=bool:true \
+  -o stress.backing_maintenance.upgrade_to=<newer-yb-version>
+```
 
 > **Planned, not yet present:** dedicated negative / red-path cases (error paths,
 > failure injection with asserted failure) belong in `nightly`. Add them tagged

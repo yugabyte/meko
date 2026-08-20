@@ -1313,6 +1313,89 @@ stress:
     ready_timeout: "5m"
     verify_timeout: "5m"
     health_timeout: "5m"
+  # backing_maintenance: amp tenants write THROUGH their endpoints while the
+  # YugabyteDB under amp is put through planned maintenance on YBA — gflag
+  # change, data move, software upgrade. backing_nemesis covers the ungraceful
+  # case; this covers what an operator does. The workload goes through amp on
+  # purpose: writing straight to YugabyteDB says nothing about amp compute or
+  # the pageserver. After every operation amp must have ACKNOWLEDGED commits
+  # while it was in flight, and every acknowledged row must read back at the
+  # end. Maintains the run's OWN backing, so it needs
+  # env.yb_deploy=yba_provisioned and is opt-in.
+  backing_maintenance:
+    # enabled gates the whole scenario.
+    enabled: false
+    # rf must be >=3 (gated) and match apps.yba.k8s.replication_factor: below
+    # that, a node going out stops the writes for a legitimate reason.
+    rf: 3
+    # The ordered sequence. rolling_restart is absent on purpose: a full roll
+    # that proves less than the gflag change, which is the same restart with
+    # something to verify. data_move needs apps.yba.k8s.num_nodes > rf, which
+    # the default universe lacks. Both stay selectable.
+    operations: ["gflag_change", "software_upgrade"]
+    # Each tenant gets its own amp cluster, endpoint, journaled writer and a
+    # distinct workload: 0 SqlTransactions, 1 SqlBankTransfer, 2 TPC-C, then
+    # repeating. Below 3 tenants some workloads do not run.
+    tenants: 3
+    payload_bytes: 256
+    # baseline_duration makes a later zero-commit verdict about the maintenance
+    # rather than a workload that never worked; resume_duration is the probe for
+    # a backing that came back but can no longer commit.
+    baseline_duration: "20s"
+    resume_duration: "30s"
+    # upgrade_to: leave empty and the target is the YBA's OWN version, which is
+    # the ceiling anyway. The universe must then be CREATED a train behind
+    # (apps.yba.universe.yb_version), and one already at or past the target
+    # fails the run. A release the YBA has never seen is imported first.
+    upgrade_to: ""
+    upgrade_image_tag: ""
+    # upgrade_arch is the release architecture imported when the YBA's catalog
+    # does not already carry the target version.
+    upgrade_arch: "x86_64"
+    # gflag_key/gflag_value is the tserver gflag the gflag_change operation
+    # sets. The default only lengthens WAL retention, so it changes no behaviour
+    # the workload depends on while still forcing a real rolling restart. YBA
+    # REJECTS a gflag upgrade that changes nothing, so the value must differ
+    # from what the universe already carries.
+    gflag_key: "log_min_seconds_to_retain"
+    gflag_value: "1800"
+    # min_commits_per_op is how many commits must be acknowledged DURING each
+    # operation for amp to count as having stayed writable through it.
+    # Deliberately low: the assertion is "the write path survived", not a
+    # throughput target.
+    min_commits_per_op: 1
+    # max_nodes_out_at_once is what makes an operation rolling rather than an
+    # outage: pods are sampled WHILE it runs. The task succeeding proves
+    # nothing — an all-at-once restart that finishes looks the same.
+    max_nodes_out_at_once: 1
+    rolling_sample_interval: "5s"
+    # node_restart_sleep is the pause YBA leaves after a node comes back before
+    # taking the next one down.
+    node_restart_sleep: "180s"
+    # The workloads run in a client pod beside amp. client_image MUST carry
+    # java, sh, coreutils, procps, curl and tar. jar_secret authenticates the
+    # PRIVATE sample-app jar fetch.
+    client_image: "eclipse-temurin:21-jdk"
+    client_pull_secret: ""
+    remote_dir: "/opt/ampqa"
+    jar_secret: "gh_package"
+    workload_threads_read: 1
+    workload_threads_write: 2
+    # workload_run_time only has to outlast the maintenance; the run collects
+    # and kills the workloads when the sequence ends.
+    workload_run_time: "4h"
+    benchbase_warehouses: 1
+    benchbase_terminals: 2
+    # benchbase_start_grace: TPC-C has no "generating load" signal while it
+    # creates and loads, so this is how long a bad connection gets to surface.
+    benchbase_start_grace: "30s"
+    # SqlBankTransfer's conserved total is the invariant a lost or duplicated
+    # write breaks; it runs with --bank_exit_on_fail so it stops on a mismatch.
+    bank_accounts: 200
+    # move_timeout bounds the blacklist drain and the rebalance after it;
+    # settle_timeout bounds endpoints coming back once the maintenance ends.
+    move_timeout: "30m"
+    settle_timeout: "10m"
 
 # --- Perf suite (suites/perf) ---
 # perf/tpcc, perf/pgbench, perf/sysbench: provision a co-located RF3

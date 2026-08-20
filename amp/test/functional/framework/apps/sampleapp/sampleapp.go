@@ -365,6 +365,11 @@ func (a *App) loadStarted(ctx context.Context) (bool, error) {
 	return res.ExitCode == 0, nil
 }
 
+// LogTail returns the recent output of the running jar. A caller scans it for
+// the workload's own violation markers — SqlBankTransfer reports a broken
+// conserved total there rather than by exiting non-zero.
+func (a *App) LogTail(ctx context.Context) string { return a.logTail(ctx) }
+
 func (a *App) logTail(ctx context.Context) string {
 	res, err := a.ex.Run(ctx, fmt.Sprintf("tail -n 20 %s 2>/dev/null", shellQuote(a.spec.logPath())))
 	if err != nil {

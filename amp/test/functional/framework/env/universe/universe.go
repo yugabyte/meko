@@ -178,6 +178,8 @@ type ybaProvisioner interface {
 	EnsureGCPProvider(ctx context.Context, spec yba.GCPProviderSpec) (string, error)
 	SetYbcEnabledForProvider(ctx context.Context, providerUUID string, enabled bool) error
 	EnsureRelease(ctx context.Context, version, arch, tarballURL string) error
+	EnsureReleaseK8s(ctx context.Context, version string) error
+	AppVersion(ctx context.Context) (string, error)
 	AddInstanceType(ctx context.Context, providerUUID string, spec yba.InstanceTypeSpec) error
 	ProviderAccessKeyCode(ctx context.Context, providerUUID string) (string, error)
 	RegionUUIDsForCodes(ctx context.Context, providerUUID string, codes ...string) ([]string, error)
@@ -660,8 +662,10 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	// VM clouds (AWS + GCP): import the DB release for the universe version+arch —
 	// a freshly-deployed YBA has no artifact for it, so universe-create would 500
 	// ("no artifact found for architecture <arch>"). k8s universes pull their DB
-	// image from the provider's kubernetesImageRegistry instead, so there is no
-	// tarball release to import. Idempotent — a present artifact is a no-op.
+	// image from the provider's kubernetesImageRegistry instead — no tarball —
+	// but YBA still demands the release's HELM CHART package, which it bundles
+	// only for its OWN version; a universe on any other version (the upgrade
+	// tests' from-version) needs the chart imported. Idempotent either way.
 	if !isK8s {
 		arch := provSpec.Arch
 		if gcp {
@@ -669,6 +673,11 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 		}
 		if err := cl.EnsureRelease(ctx, uniSpec.YBSoftwareVersion, arch, uniSpec.ReleaseURL); err != nil {
 			return failure(fmt.Errorf("provision_yba: ensure release: %w", err))
+		}
+	} else if ybaV, verr := cl.AppVersion(ctx); verr == nil && ybaV != uniSpec.YBSoftwareVersion {
+		if err := cl.EnsureReleaseK8s(ctx, uniSpec.YBSoftwareVersion); err != nil {
+			return failure(fmt.Errorf("provision_yba: ensure the %s helm chart (the YBA is %s and bundles only its own): %w",
+				uniSpec.YBSoftwareVersion, ybaV, err))
 		}
 	}
 	var providerUUID string
@@ -1251,6 +1260,48 @@ func (e *Env) PGEndpoint() pg.ConnInfo {
 	e.pgMu.Lock()
 	defer e.pgMu.Unlock()
 	return e.pg
+}
+
+// YBAMaintainer is the universe-maintenance subset of *yba.Client a test drives
+// to put the backing through the operations an operator performs: restart it,
+// change its gflags, upgrade its software. Declared here so a test depends on
+// the capability rather than on which mode provisioned the universe.
+type YBAMaintainer interface {
+	RestartUniverseAndWait(ctx context.Context, universeID string, opt yba.UpgradeOption, sleep time.Duration) error
+	UpgradeGflagsAndWait(ctx context.Context, universeID string, master, tserver map[string]string, opt yba.UpgradeOption, sleep time.Duration) error
+	UpgradeSoftwareAndWait(ctx context.Context, universeID, version string, opt yba.UpgradeOption, sleep time.Duration) error
+	GetUniverse(ctx context.Context, ref string) (yba.Universe, error)
+	// AppVersion is the YBA's own version — the ceiling on what a universe can
+	// be upgraded to, and therefore an upgrade test's natural target.
+	AppVersion(ctx context.Context) (string, error)
+	// EnsureReleaseAvailable makes a version upgradable-to, importing the
+	// artifact the universe needs (helm chart for k8s, el8 tarball for VMs)
+	// when the YBA's catalog does not already carry it.
+	EnsureReleaseAvailable(ctx context.Context, version, arch string, k8s bool) error
+}
+
+// YBAUniverse exposes the YBA control plane behind this env and the universe it
+// manages. Both YBA modes qualify: attach_yba points at an existing universe,
+// provision_yba stood one up, and either can be maintained through the same
+// API. A nil maintainer means this env is not YBA-backed.
+func (e *Env) YBAUniverse() (YBAMaintainer, string) {
+	if e.universeID == "" {
+		return nil, ""
+	}
+	if e.yba != nil {
+		return e.yba, e.universeID
+	}
+	if m, ok := e.provClient.(YBAMaintainer); ok {
+		return m, e.universeID
+	}
+	return nil, ""
+}
+
+// KubeUniverse locates a kubernetes universe's namespace for callers that need
+// to run something beside it (a workload client pod). Empty context/namespace
+// means the universe is not in kubernetes.
+func (e *Env) KubeUniverse() (kubeContext, kubeconfig, namespace string) {
+	return e.kubeContext, e.kubeconfig, e.kubeNamespace
 }
 
 // NodeAddrs lists every tserver host:port the target exposes.

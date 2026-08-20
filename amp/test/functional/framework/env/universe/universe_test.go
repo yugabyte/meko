@@ -342,6 +342,7 @@ type fakeProvisioner struct {
 	forceDeleteErr error
 	getErr         error
 	reapErr        error
+	appVersion     string
 	deletes        int
 	instTypes      int
 	releases       int
@@ -392,6 +393,16 @@ func (f *fakeProvisioner) EnsureRelease(context.Context, string, string, string)
 	f.ev.add("ensure_release")
 	f.releases++
 	return f.releaseErr
+}
+
+func (f *fakeProvisioner) EnsureReleaseK8s(context.Context, string) error {
+	f.ev.add("ensure_release_k8s")
+	f.releases++
+	return f.releaseErr
+}
+
+func (f *fakeProvisioner) AppVersion(context.Context) (string, error) {
+	return f.appVersion, nil
 }
 
 func (f *fakeProvisioner) AddInstanceType(context.Context, string, yba.InstanceTypeSpec) error {

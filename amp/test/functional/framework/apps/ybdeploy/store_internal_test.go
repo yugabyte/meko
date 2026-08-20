@@ -100,3 +100,37 @@ func TestYBAProvisionedBackingCarriesKubeLocation(t *testing.T) {
 		t.Errorf("a VM universe must not claim a kube location, got %q/%q", vm.KubeNamespace, vm.KubePod)
 	}
 }
+
+// TestUniverseBackingKeepsTheColocatedSurfaces: wrapping a co-located store to
+// carry its universe env must not hide the OPTIONAL interfaces
+// ybbacking.ExternalBacking type-asserts for. Embedding the BackingStore
+// interface alone promotes only its declared methods, so the wrapper silently
+// lost the in-cluster split and the amp storage-DB create went back to dialling
+// pod IPs the coordinator has no route to — a real regression this pins.
+func TestUniverseBackingKeepsTheColocatedSurfaces(t *testing.T) {
+	conn := pg.ConnInfo{Host: "100.64.0.1", Port: 5433, User: "yugabyte"}
+	podIPs := []string{"100.64.0.1:5433", "100.64.0.2:5433"}
+	inCluster := []string{"yb-tserver-0.yb-tservers.yb-uni.svc.cluster.local:5433"}
+	inner := ybaProvisionedBacking(conn, podIPs, inCluster)
+	wrapped := UniverseBacking{BackingStore: inner}
+
+	bare := ybbacking.ExternalBacking(inner)
+	got := ybbacking.ExternalBacking(wrapped)
+
+	if got.KubeNamespace != bare.KubeNamespace || got.KubePod != bare.KubePod {
+		t.Errorf("wrapped kube colocation = %q/%q, want the wrapped store's %q/%q",
+			got.KubeNamespace, got.KubePod, bare.KubeNamespace, bare.KubePod)
+	}
+	if got.KubeNamespace == "" {
+		t.Error("no kube colocation survived the wrapper: the yb_storage create would dial pod IPs")
+	}
+	if got.HostPorts != bare.HostPorts {
+		t.Errorf("wrapped host ports = %q, want %q", got.HostPorts, bare.HostPorts)
+	}
+	if !strings.Contains(got.HostPorts, "svc.cluster.local") {
+		t.Errorf("controller host ports = %q, want the in-cluster addresses", got.HostPorts)
+	}
+	if wrapped.UniverseEnv() != nil {
+		t.Error("UniverseEnv should be nil when none was attached")
+	}
+}

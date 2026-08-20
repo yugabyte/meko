@@ -33,6 +33,7 @@ import (
 	"github.com/yugabyte/amp/test/functional/framework/core"
 	"github.com/yugabyte/amp/test/functional/framework/diag"
 	"github.com/yugabyte/amp/test/functional/framework/env/reap"
+	"github.com/yugabyte/amp/test/functional/framework/env/universe"
 	"github.com/yugabyte/amp/test/functional/framework/exec"
 	"github.com/yugabyte/amp/test/functional/framework/exec/k8s"
 )
@@ -185,6 +186,11 @@ type Provider struct {
 	// that shares no memory with it (an aborted CI build).
 	backingPlan      *reap.Plan
 	ybDeployTeardown func(context.Context) error
+	// backingUniverse is the env that provisioned the backing universe, when the
+	// backing IS a universe (yba_provisioned). It is the only handle to the YBA
+	// managing it, so a test that maintains the backing needs it; nil for every
+	// other backing.
+	backingUniverse core.Environment
 
 	ctrl controllerConn // one long-lived controller forward shared by all tests
 
@@ -491,6 +497,7 @@ func (p *Provider) prepareYBDeploy() error {
 	p.backingPlan = plan
 	if store != nil {
 		p.ampCfg.Backing = ybbacking.ExternalBacking(store)
+		p.backingUniverse = ybdeploy.UniverseEnvOf(store)
 	}
 	return nil
 }
@@ -1247,6 +1254,69 @@ func (e *Env) BackingKube() *k8s.Kubectl {
 	}
 	return e.kube.InNamespace(e.backingNamespace())
 }
+
+// YBAUniverse exposes the YBA control plane behind this env's BACKING and the
+// universe it manages, when the backing is a YBA-provisioned universe. It lets a
+// test maintain the YugabyteDB under amp — upgrade it, change its gflags — the
+// way an operator does. A nil maintainer means the backing is not a universe.
+func (e *Env) YBAUniverse() (universe.YBAMaintainer, string) {
+	u, ok := e.backingUniverseEnv().(interface {
+		YBAUniverse() (universe.YBAMaintainer, string)
+	})
+	if !ok {
+		return nil, ""
+	}
+	return u.YBAUniverse()
+}
+
+// KubeUniverse locates the backing universe's namespace, for a caller that needs
+// to run something beside it. Empty when the backing is not a kubernetes
+// universe.
+func (e *Env) KubeUniverse() (kubeContext, kubeconfig, namespace string) {
+	u, ok := e.backingUniverseEnv().(interface {
+		KubeUniverse() (string, string, string)
+	})
+	if !ok {
+		return "", "", ""
+	}
+	return u.KubeUniverse()
+}
+
+// InClusterAddrs are the backing universe's tserver addresses as reached from
+// inside the cluster. Empty when the backing is not a universe.
+func (e *Env) InClusterAddrs() []string {
+	u, ok := e.backingUniverseEnv().(interface{ InClusterAddrs() []string })
+	if !ok {
+		return nil
+	}
+	return u.InClusterAddrs()
+}
+
+func (e *Env) backingUniverseEnv() core.Environment {
+	if e.prov == nil {
+		return nil
+	}
+	return e.prov.backingUniverse
+}
+
+// EndpointInClusterAddr is where a workload running IN this cluster reaches a
+// tenant's endpoint: the compute Service's own DNS name. ConnectEndpoint gives
+// the coordinator a port-forward instead, which a pod cannot use — a client pod
+// beside amp must dial the Service directly.
+func (e *Env) EndpointInClusterAddr(ep controller.Endpoint) (host string, port int) {
+	ns := ""
+	if e.kube != nil {
+		ns = e.kube.Namespace()
+	}
+	port = e.prov.cfg.EndpointPort
+	if _, p := splitAddr(ep.Address, port); p != 0 {
+		port = p
+	}
+	return fmt.Sprintf("yb-ep-%s.%s.svc.cluster.local", ep.ID, ns), port
+}
+
+// EndpointCredentials are the role and database an endpoint's compute serves.
+func (e *Env) EndpointCredentials() (user, database string) { return computeUser, computeDB }
 
 // ConnectEndpoint opens a pooled SQL connection to an amp endpoint on the standing
 // control plane, port-forwarding the endpoint Service through kubectl when it is

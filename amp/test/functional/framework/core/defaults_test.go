@@ -1217,6 +1217,70 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		t.Errorf("stress.storage_proc_nemesis.daemons = %v, want [pageserver safekeeper]", d)
 	}
 
+	// --- stress/backing_maintenance ---
+	if cfg.GetBool("stress.backing_maintenance.enabled", true) {
+		t.Errorf("stress.backing_maintenance.enabled = true, want false (opt-in)")
+	}
+	maintInts := map[string]int{
+		"stress.backing_maintenance.rf":                     3,
+		"stress.backing_maintenance.tenants":                3,
+		"stress.backing_maintenance.payload_bytes":          256,
+		"stress.backing_maintenance.min_commits_per_op":     1,
+		"stress.backing_maintenance.max_nodes_out_at_once":  1,
+		"stress.backing_maintenance.workload_threads_read":  1,
+		"stress.backing_maintenance.workload_threads_write": 2,
+		"stress.backing_maintenance.benchbase_warehouses":   1,
+		"stress.backing_maintenance.benchbase_terminals":    2,
+		"stress.backing_maintenance.bank_accounts":          200,
+	}
+	for key, want := range maintInts {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+	maintStrs := map[string]string{
+		"stress.backing_maintenance.gflag_key":    "log_min_seconds_to_retain",
+		"stress.backing_maintenance.gflag_value":  "1800",
+		"stress.backing_maintenance.upgrade_arch": "x86_64",
+		"stress.backing_maintenance.client_image": "eclipse-temurin:21-jdk",
+		"stress.backing_maintenance.remote_dir":   "/opt/ampqa",
+		"stress.backing_maintenance.jar_secret":   "gh_package",
+	}
+	for key, want := range maintStrs {
+		if got := cfg.GetString(key, "__MISSING__"); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	// Documented-empty but must be PRESENT: an absent key would silently fall
+	// back to a code default the operator never sees.
+	for _, key := range []string{
+		"stress.backing_maintenance.upgrade_to",
+		"stress.backing_maintenance.upgrade_image_tag",
+		"stress.backing_maintenance.client_pull_secret",
+	} {
+		if got := cfg.GetString(key, "__MISSING__"); got != "" {
+			t.Errorf("%s = %q, want present and empty", key, got)
+		}
+	}
+	maintDurs := map[string]time.Duration{
+		"stress.backing_maintenance.baseline_duration":       20 * time.Second,
+		"stress.backing_maintenance.resume_duration":         30 * time.Second,
+		"stress.backing_maintenance.node_restart_sleep":      180 * time.Second,
+		"stress.backing_maintenance.move_timeout":            30 * time.Minute,
+		"stress.backing_maintenance.settle_timeout":          10 * time.Minute,
+		"stress.backing_maintenance.rolling_sample_interval": 5 * time.Second,
+		"stress.backing_maintenance.workload_run_time":       4 * time.Hour,
+		"stress.backing_maintenance.benchbase_start_grace":   30 * time.Second,
+	}
+	for key, want := range maintDurs {
+		if got := cfg.GetDuration(key, -1); got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
+	}
+	if ops := cfg.GetStringSlice("stress.backing_maintenance.operations", nil); strings.Join(ops, ",") != "gflag_change,software_upgrade" {
+		t.Errorf("stress.backing_maintenance.operations = %v", ops)
+	}
+
 	// --- perf suite (perf/tpcc) ---
 	if cfg.GetBool("perf.enabled", true) {
 		t.Errorf("perf.enabled = true, want false (opt-in)")

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
@@ -66,7 +67,10 @@ type tenant struct {
 	Table     string
 
 	// Written is how many DISTINCT ids this tenant's writer was acknowledged
-	// for — the lower bound the verification holds storage to.
+	// for — the lower bound the verification holds storage to. It and the three
+	// counters below are written by the tenant's writer goroutine and may be
+	// READ while it runs (live progress sampling), so all four are touched
+	// atomically.
 	Written int64
 	// Attempted is how many ids it issued, acknowledged or not — the difference
 	// against Written is how much of the run the client spent in trouble.
@@ -196,7 +200,7 @@ func writeFor(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes i
 	for ctx.Err() == nil {
 		id := base + ten.nextID
 		ten.nextID++
-		ten.Attempted++
+		atomic.AddInt64(&ten.Attempted, 1)
 		// v is a pure function of id, so every stored row can be checked for
 		// corruption without knowing which ids were acknowledged.
 		// $3 is cast explicitly: a bare parameter arrives as "unknown", and
@@ -206,7 +210,7 @@ func writeFor(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes i
 			id, id*7, payloadBytes)
 		if err == nil {
 			consecutive = 0
-			ten.Written++
+			atomic.AddInt64(&ten.Written, 1)
 			continue
 		}
 		// A cancelled context ends the phase. Any other error leaves this id in
@@ -215,7 +219,7 @@ func writeFor(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes i
 		if ctx.Err() != nil {
 			return
 		}
-		ten.WriteErrors++
+		atomic.AddInt64(&ten.WriteErrors, 1)
 		consecutive++
 		if consecutive < reconnectAfterErrors {
 			continue
@@ -231,7 +235,7 @@ func writeFor(ctx context.Context, env ampTenantEnv, ten *tenant, payloadBytes i
 		}
 		ten.Conn.Close()
 		ten.Conn = conn
-		ten.Reconnects++
+		atomic.AddInt64(&ten.Reconnects, 1)
 		consecutive = 0
 	}
 }
@@ -348,10 +352,13 @@ func fairnessOf(tenants []tenant) float64 {
 	return float64(lo) / float64(hi)
 }
 
+// totalWritten sums the acknowledged writes. It reads atomically because a
+// maintenance run samples it WHILE the writers are still going, to attribute
+// commits to the operation they landed during.
 func totalWritten(tenants []tenant) int64 {
 	var n int64
-	for _, ten := range tenants {
-		n += ten.Written
+	for i := range tenants {
+		n += atomic.LoadInt64(&tenants[i].Written)
 	}
 	return n
 }

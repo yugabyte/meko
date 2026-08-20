@@ -175,6 +175,17 @@ func (s RunSpec) logPath() string {
 	return "benchbase.out"
 }
 
+// ResolvedLogPath is where the run writes its output ON THE TARGET, run dir
+// included. The command redirects into it, so a caller can read the log WHILE
+// the benchmark is still going — Run only surfaces the output once it returns,
+// which for a long benchmark is far too late to notice anything.
+func (s RunSpec) ResolvedLogPath() string {
+	if s.RunDir == "" {
+		return s.logPath()
+	}
+	return path.Join(s.RunDir, s.logPath())
+}
+
 func phase(p *bool) bool { return p == nil || *p }
 
 // Ptr is a helper for setting the optional Create/Load/Execute phase flags.

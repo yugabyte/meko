@@ -55,6 +55,10 @@ type BootstrapResult struct {
 // AppVersion reads GET /api/v1/app_version — the unauthenticated readiness /
 // version probe. It succeeds only once the platform process is actually serving,
 // so Bootstrap uses it as the "is the pod up yet" gate.
+//
+// It is also the ceiling on what a universe can be upgraded to: YBA will not
+// roll a universe to a YugabyteDB newer than itself, so an upgrade test takes
+// its target from here rather than from a number kept in step by hand.
 func (c *Client) AppVersion(ctx context.Context) (string, error) {
 	var out struct {
 		Version string `json:"version"`

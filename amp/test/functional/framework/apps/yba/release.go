@@ -271,13 +271,17 @@ func releaseURLFromConfig(c ConfigGetter) string {
 	return ReleaseTarballURL(c.GetString("versions.yugabytedb", ""), c.GetString("apps.yba.aws.arch", DefaultArch))
 }
 
-// ReleaseTarballURL builds the public software.yugabyte.com el8 tarball URL for
-// a release: the base version (no build) is the directory, the full
-// build-suffixed version the file, arch mapped to YBA's enum. Matches the
-// framework's artifacts.yugabytedb pattern (yugabyte-<v>-b<n>-el8-<arch>.tar.gz).
+// Uses releases.yugabyte.com, which carries every build, keyed by the full
+// build-suffixed version (software.yugabyte.com 404s -bNNN builds). OS token is
+// "centos" for x86_64 / "almalinux8" for aarch64; "el8" 403s on this bucket.
 func ReleaseTarballURL(version, arch string) string {
 	v, _ := core.ParseVersion(version)
-	return fmt.Sprintf("https://software.yugabyte.com/releases/%s/yugabyte-%s-el8-%s.tar.gz", v.Base(), v.String(), ybaArch(arch))
+	osToken := "centos"
+	if ybaArch(arch) == "aarch64" {
+		osToken = "almalinux8"
+	}
+	return fmt.Sprintf("https://releases.yugabyte.com/%s/yugabyte-%s-%s-%s.tar.gz",
+		v.String(), v.String(), osToken, ybaArch(arch))
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -287,4 +291,124 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// A kubernetes universe's DB image comes from the provider's registry, but YBA
+// still demands a helm chart artifact on the release to render with, and only
+// bundles one for its own version.
+
+func hasK8sArtifact(r Release) bool {
+	for _, a := range r.Artifacts {
+		if strings.EqualFold(a.Platform, "KUBERNETES") {
+			return true
+		}
+	}
+	return false
+}
+
+// The chart file is named by the short version (first three components), inside the full build's release directory.
+func HelmChartURL(version string) string {
+	v, _ := core.ParseVersion(version)
+	parts := strings.Split(v.Base(), ".")
+	if len(parts) > 3 {
+		parts = parts[:3]
+	}
+	return fmt.Sprintf("https://releases.yugabyte.com/%s/helm/yugabyte-%s.tgz", version, strings.Join(parts, "."))
+}
+
+// Idempotent, like EnsureRelease.
+func (c *Client) EnsureReleaseK8s(ctx context.Context, version string) error {
+	if version == "" {
+		return fmt.Errorf("ensure k8s release: empty version")
+	}
+	releases, err := c.GetReleases(ctx)
+	if err != nil {
+		return err
+	}
+	c.log("yba: release catalog: %s", summarizeReleases(releases))
+	existing, versionExists := findRelease(releases, version)
+	if versionExists && hasK8sArtifact(existing) {
+		return nil
+	}
+	// The DB tarball is required even for a pure kubernetes universe: YBA reads
+	// gflag metadata from it (ReleaseContainer.getTarGZipDBPackageInputStream
+	// skips KUBERNETES artifacts), so an absent version is created from the
+	// public el8 tarball first and the chart added as a second artifact.
+	if !versionExists {
+		if err := c.EnsureRelease(ctx, version, "x86_64", ReleaseTarballURL(version, "x86_64")); err != nil {
+			return fmt.Errorf("create release %s from its DB tarball (a chart alone cannot create one): %w", version, err)
+		}
+		releases, err = c.GetReleases(ctx)
+		if err != nil {
+			return err
+		}
+		existing, versionExists = findRelease(releases, version)
+		if !versionExists {
+			return fmt.Errorf("release %s did not appear in the catalog after its tarball import", version)
+		}
+	}
+
+	// The imported build differs from this YBA's own version.
+	c.AllowCrossVersionReleases(ctx)
+
+	chartURL := HelmChartURL(version)
+	c.log("yba: importing the helm chart artifact for %s from %s", version, chartURL)
+	meta, err := c.extractReleaseMetadata(ctx, chartURL)
+	if err != nil {
+		return fmt.Errorf("extract chart metadata for %s: %w", chartURL, err)
+	}
+	// A helm chart has no machine architecture.
+	newArtifact := map[string]any{
+		"package_url":  chartURL,
+		"sha256":       meta.Sha256,
+		"platform":     firstNonEmpty(meta.Platform, "KUBERNETES"),
+		"architecture": nil,
+	}
+
+	artifacts := make([]any, 0, len(existing.Artifacts)+1)
+	for _, a := range existing.Artifacts {
+		m := map[string]any{"platform": a.Platform, "architecture": a.Architecture}
+		if a.Architecture == "" {
+			m["architecture"] = nil
+		}
+		if a.PackageURL != "" {
+			m["package_url"] = a.PackageURL
+		}
+		if a.PackageFileID != "" {
+			m["package_file_id"] = a.PackageFileID
+		}
+		artifacts = append(artifacts, m)
+	}
+	artifacts = append(artifacts, newArtifact)
+	var out map[string]any
+	if _, err := c.doJSON(ctx, http.MethodPut, c.custURL("/ybdb_release/"+existing.ReleaseUUID), map[string]any{"artifacts": artifacts}, &out); err != nil {
+		return fmt.Errorf("add the helm chart artifact to release %s: %w", version, err)
+	}
+	return c.waitReleasePresent(ctx, version, hasK8sArtifact)
+}
+
+// waitReleasePresent polls the catalog until version satisfies have.
+func (c *Client) waitReleasePresent(ctx context.Context, version string, have func(Release) bool) error {
+	deadline := time.Now().Add(DefaultReleaseExtractTimeout)
+	backoff := 2 * time.Second
+	for {
+		releases, err := c.GetReleases(ctx)
+		if err != nil {
+			return err
+		}
+		if r, ok := findRelease(releases, version); ok && have(r) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("release %s did not become available after import", version)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < 10*time.Second {
+			backoff += 2 * time.Second
+		}
+	}
 }

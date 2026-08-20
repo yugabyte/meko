@@ -151,17 +151,19 @@ func TestEnsureReleaseSkipsWhenPresent(t *testing.T) {
 	}
 }
 
+// The build-suffixed version is BOTH the directory and the filename, on the
+// releases bucket that carries every build. The previous form
+// (software.yugabyte.com/releases/<base>/…-el8-<arch>) resolves only for
+// aarch64 — its x86_64 twin 404s, and neither serves a -bNNN build that is not
+// a published GA release, which is exactly what an upgrade test pins.
 func TestReleaseTarballURL(t *testing.T) {
-	// The single build-suffixed version drives both the release DIRECTORY (bare
-	// 2025.2.1.0) and the tarball FILENAME (full 2025.2.1.0-b141), byte-identical
-	// to the live-green path.
 	got := ReleaseTarballURL("2025.2.1.0-b141", "arm")
-	want := "https://software.yugabyte.com/releases/2025.2.1.0/yugabyte-2025.2.1.0-b141-el8-aarch64.tar.gz"
+	want := "https://releases.yugabyte.com/2025.2.1.0-b141/yugabyte-2025.2.1.0-b141-almalinux8-aarch64.tar.gz"
 	if got != want {
 		t.Errorf("url = %q, want %q", got, want)
 	}
-	if x := ReleaseTarballURL("2025.2.1.0-b141", "x86"); x != "https://software.yugabyte.com/releases/2025.2.1.0/yugabyte-2025.2.1.0-b141-el8-x86_64.tar.gz" {
-		t.Errorf("x86 url = %q", x)
+	if x := ReleaseTarballURL("2025.2.1.0-b141", "x86"); x != "https://releases.yugabyte.com/2025.2.1.0-b141/yugabyte-2025.2.1.0-b141-centos-x86_64.tar.gz" {
+		t.Errorf("x86 url = %q, want the centos-named x86_64 tarball", x)
 	}
 }
 
@@ -169,7 +171,7 @@ func TestReleaseURLFromConfig(t *testing.T) {
 	derived := releaseURLFromConfig(fakeConfig{m: map[string]any{
 		"versions.yugabytedb": "2025.2.1.0-b141", "apps.yba.aws.arch": "arm",
 	}})
-	if derived != "https://software.yugabyte.com/releases/2025.2.1.0/yugabyte-2025.2.1.0-b141-el8-aarch64.tar.gz" {
+	if derived != "https://releases.yugabyte.com/2025.2.1.0-b141/yugabyte-2025.2.1.0-b141-almalinux8-aarch64.tar.gz" {
 		t.Errorf("derived = %q", derived)
 	}
 	override := releaseURLFromConfig(fakeConfig{m: map[string]any{"apps.yba.release_url": "s3://custom/x.tar.gz"}})
