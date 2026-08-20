@@ -441,8 +441,8 @@ pub(crate) static YB_PAYLOAD_ROWS: Lazy<IntCounterVec> = Lazy::new(|| {
 /// row, not a stream of new ones. The `error!` line carries the row.
 ///
 /// - `gc_candidate_key_shape_mismatch` — the row's `key` shape doesn't match
-///   the keyspace its `gc_kind` acts on (e.g. a `DropPages` carrying a rel
-///   *block* key instead of the fork's rel-size key). The act paths decode
+///   the keyspace its `gc_kind` acts on (e.g. a `DropRel` carrying a rel
+///   *block* key instead of the relation's rel-size key). The act paths decode
 ///   the object identity from the key blind, so acting could delete a live
 ///   object. The log line has the `gc_kind` and `key`.
 /// - `gc_shrink_missing_relsize` — a shrink candidate with no stored

@@ -24,7 +24,7 @@ use pageserver_api::key::{
 use pageserver_api::keyspace::KeySpaceRandomAccum;
 use pageserver_api::reltag::{BlockNumber, RelTag, SlruKind};
 use postgres_ffi::{BLCKSZ, TransactionId};
-use postgres_ffi_types::forknum::{FSM_FORKNUM, VISIBILITYMAP_FORKNUM};
+use postgres_ffi_types::forknum::{FSM_FORKNUM, MAIN_FORKNUM, VISIBILITYMAP_FORKNUM};
 use postgres_ffi_types::{Oid, RepOriginId, TimestampTz};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
@@ -2271,12 +2271,31 @@ impl DatadirModification<'_> {
         ctx: &RequestContext,
     ) -> Result<(), WalIngestError> {
         let dropped_rels = self.put_rel_drop_v2(drop_relations, ctx).await?;
-        // Queue GC drop events for the forks that actually existed (the
-        // incoming map is speculative — every fork of every xnode).
-        for rel in dropped_rels {
+        // One GC candidate per relation, not per fork. The drop's own
+        // granularity is the relfilenode — `ingest_xlog_xact_record` expands
+        // each xnode to every forknum, and `put_rel_drop_v2` narrows that to
+        // the forks whose marker existed — so a candidate keyed by
+        // `(spcnode, dbnode, relnode)` names exactly what was dropped, and the
+        // drain sweeps the forks as one contiguous range per bucket.
+        //
+        // Collapsed through a set rather than by skipping adjacent repeats:
+        // `RelTag`'s ordering puts `forknum` last only because of a hand-written
+        // `Ord`, and its own comment invites deriving one instead — which would
+        // order by the struct's first field, `forknum`, and scatter the forks.
+        // The key carries the main fork's `forknum`; the act does not read it.
+        let relations: std::collections::BTreeSet<(Oid, Oid, Oid)> = dropped_rels
+            .iter()
+            .map(|rel| (rel.spcnode, rel.dbnode, rel.relnode))
+            .collect();
+        for (spcnode, dbnode, relnode) in relations {
             self.record_gc_drop_shrink_event(
-                rel_size_to_key(rel),
-                crate::page_store::GcKind::DropPages,
+                rel_size_to_key(RelTag {
+                    forknum: MAIN_FORKNUM,
+                    spcnode,
+                    dbnode,
+                    relnode,
+                }),
+                crate::page_store::GcKind::DropRel,
                 None,
             );
         }

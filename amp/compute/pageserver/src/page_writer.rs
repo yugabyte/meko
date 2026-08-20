@@ -614,10 +614,10 @@ impl PageWriter {
         for row in rows {
             let path = match row.gc_kind {
                 crate::page_store::GcKind::ShrinkPages => "shrink",
-                crate::page_store::GcKind::DropPages
-                | crate::page_store::GcKind::DropSlru
+                crate::page_store::GcKind::DropSlru
                 | crate::page_store::GcKind::DropMeta
-                | crate::page_store::GcKind::DropDb => "drop",
+                | crate::page_store::GcKind::DropDb
+                | crate::page_store::GcKind::DropRel => "drop",
                 // Exhaustive, no wildcard: a new kind must be classified here
                 // at compile time rather than mislabelled in release and
                 // panicking in debug.

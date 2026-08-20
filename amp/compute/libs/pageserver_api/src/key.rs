@@ -502,6 +502,35 @@ pub fn db_rel_keyspace_range(spcnode: Oid, dbnode: Oid) -> Range<Key> {
     .next()
 }
 
+/// Every rel-keyspace key of one relation, across all of its forks. Over
+/// `meta` that is exactly the forks' size sentinels — relation *block* keys
+/// share the range but live in `pages` — which is what a dropped relation's
+/// sweep reclaims.
+///
+/// Its v2 sparse rel-directory entries are deliberately NOT here: a `Removed`
+/// marker shadows an ancestor's `Exists` under copy-on-write, so deleting one
+/// could resurrect the relation in a child. Only a `DROP DATABASE`, which
+/// removes the DbDir entry and shadows the whole range from readers, may
+/// delete those.
+pub fn rel_all_forks_key_range(spcnode: Oid, dbnode: Oid, relnode: Oid) -> Range<Key> {
+    Key {
+        field1: 0x00,
+        field2: spcnode,
+        field3: dbnode,
+        field4: relnode,
+        field5: 0,
+        field6: 0,
+    }..Key {
+        field1: 0x00,
+        field2: spcnode,
+        field3: dbnode,
+        field4: relnode,
+        field5: 0xff,
+        field6: 0xffffffff,
+    }
+    .next()
+}
+
 /// How many ranges [`db_meta_key_ranges`] returns. It is that array's length,
 /// so adding a range there without updating this fails to compile.
 pub const DB_META_KEY_RANGES: usize = 2;

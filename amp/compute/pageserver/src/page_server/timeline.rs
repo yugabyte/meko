@@ -327,14 +327,14 @@ pub(crate) struct GcDrainProgress {
     /// When the floor was last reset to 0.
     pub(crate) last_floor_reset: Option<std::time::Instant>,
 
-    /// Resume cursors for candidates whose act is budgeted and resumable
-    /// (`GcKind::DropDb` today), keyed by candidate. An entry lives from the
-    /// first budget-capped sweep until the candidate is dequeued; a restart
-    /// loses them, which costs a re-scan of the tombstones the deleted rows
-    /// left behind, not a re-delete.
-    db_drop_cursors: std::collections::HashMap<
+    /// Resume cursors for candidates whose act is a budgeted prefix sweep
+    /// (`GcKind::DropDb` and `GcKind::DropRel`), keyed by candidate. An entry
+    /// lives from the first budget-capped sweep until the candidate is
+    /// dequeued; a restart loses them, which costs a re-scan of the tombstones
+    /// the deleted rows left behind, not a re-delete.
+    sweep_cursors: std::collections::HashMap<
         crate::page_store::GcCandidateId,
-        crate::page_store::GcDbDropProgress,
+        crate::page_store::GcSweepProgress,
     >,
 }
 
@@ -342,28 +342,32 @@ impl GcDrainProgress {
     /// The cursor this candidate resumes from. Leaves the entry in place: the
     /// caller writes back whatever the sweep advanced it to, error or not.
     ///
-    /// A cursor that reports done is discarded rather than returned: the
-    /// candidate is only visited again because it was left queued (its
-    /// database has a materialise job in flight), and sweeping from the start
-    /// is what reclaims an image that job landed after the first pass ran
-    /// past it.
+    /// A cursor that reports done is discarded rather than returned, and the
+    /// only way one survives is a tick that failed between `act` and
+    /// `dequeue` — which is exactly what invalidates its claim. Normally both
+    /// run against one snapshot taken before `act`, so either a job was
+    /// visible (and the sweep owes a re-check) or none was in flight while the
+    /// ranges were walked. Across the gap a failed tick leaves, neither
+    /// snapshot covers a job that lands an image inside an already-swept
+    /// range, and a preserved cursor would issue no query and dequeue over it.
+    /// Re-sweeping from the start is what finds it.
     pub(crate) fn resume_cursor(
         &self,
-        id: &crate::page_store::GcCandidateId,
-    ) -> crate::page_store::GcDbDropProgress {
-        self.db_drop_cursors
-            .get(id)
+        cand: crate::page_store::GcSweepCandidate,
+    ) -> crate::page_store::GcSweepProgress {
+        self.sweep_cursors
+            .get(&cand.id())
             .filter(|p| !p.is_reclaimed())
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_else(|| crate::page_store::GcSweepProgress::new(cand.scope()))
     }
 
     pub(crate) fn store_cursor(
         &mut self,
         id: crate::page_store::GcCandidateId,
-        progress: crate::page_store::GcDbDropProgress,
+        progress: crate::page_store::GcSweepProgress,
     ) {
-        self.db_drop_cursors.insert(id, progress);
+        self.sweep_cursors.insert(id, progress);
     }
 
     /// Candidates with ranges still to walk, for the next tick to resume
@@ -375,9 +379,9 @@ impl GcDrainProgress {
     /// no progress guarantee, so they wait for the floor reset like every
     /// other busy drop. Injecting them would re-act a wedged object every
     /// tick, and would hold the whole branch's drain at the backlog cadence
-    /// by keeping `ActOutcome::unfinished_db_drops` non-empty forever.
-    pub(crate) fn unfinished_db_drops(&self) -> Vec<crate::page_store::GcCandidateId> {
-        self.db_drop_cursors
+    /// by keeping `ActOutcome::unfinished_sweeps` non-empty forever.
+    pub(crate) fn unfinished_sweeps(&self) -> Vec<crate::page_store::GcCandidateId> {
+        self.sweep_cursors
             .iter()
             .filter(|(_, p)| !p.all_ranges_done())
             .map(|(id, _)| *id)
@@ -387,29 +391,33 @@ impl GcDrainProgress {
     /// Make sure this candidate has a cursor, leaving any it already has
     /// alone. A tick that could not sweep it at all — an earlier candidate
     /// spent the budget — still has to leave it visible to
-    /// [`Self::unfinished_db_drops`], but overwriting a live cursor would
+    /// [`Self::unfinished_sweeps`], but overwriting a live cursor would
     /// restart a sweep that is already deep in its range, and the restart
     /// re-walks every tombstone its earlier ticks wrote.
-    pub(crate) fn ensure_cursor(&mut self, id: crate::page_store::GcCandidateId) {
-        self.db_drop_cursors.entry(id).or_default();
+    pub(crate) fn ensure_cursor(&mut self, cand: crate::page_store::GcSweepCandidate) {
+        self.sweep_cursors
+            .entry(cand.id())
+            .or_insert_with(|| crate::page_store::GcSweepProgress::new(cand.scope()));
     }
 
     /// Require one more full pass of this candidate's sweep before it may be
-    /// dequeued, because a fork of its database was busy while the cursors
+    /// dequeued, because a fork inside its scope was busy while the cursors
     /// were moving. Inserts a fresh cursor if the candidate has none, so the
-    /// requirement cannot be lost.
-    pub(crate) fn require_recheck(&mut self, id: crate::page_store::GcCandidateId) {
-        self.db_drop_cursors
-            .entry(id)
-            .or_default()
+    /// requirement cannot be lost — which is the difference from
+    /// [`crate::page_store::GcSweepProgress::require_recheck`], the flag this
+    /// sets once it has a sweep to set it on.
+    pub(crate) fn require_recheck(&mut self, cand: crate::page_store::GcSweepCandidate) {
+        self.sweep_cursors
+            .entry(cand.id())
+            .or_insert_with(|| crate::page_store::GcSweepProgress::new(cand.scope()))
             .require_recheck();
     }
 
     /// Drop the cursors of candidates that just left the queue. An id without
-    /// one — every kind but `DropDb` — is simply absent.
+    /// one — every kind but a sweep — is simply absent.
     pub(crate) fn remove_cursors(&mut self, ids: &[crate::page_store::GcCandidateId]) {
         for id in ids {
-            self.db_drop_cursors.remove(id);
+            self.sweep_cursors.remove(id);
         }
     }
 }

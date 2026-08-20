@@ -299,9 +299,9 @@ pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 ///
 /// Several statements the daemons issue legitimately run for minutes, and a
 /// server-side cancellation of one of them is not a transient error — `57014`
-/// is fatal here, so nothing retries it. The GC drop/shrink deletes
-/// (`page_store::gc_act_drop_fork`, `gc_act_shrink_fork`) delete every version
-/// of every block of a fork in one unbatched statement, and the candidate is
+/// is fatal here, so nothing retries it. The GC shrink delete
+/// (`page_store::gc_act_shrink_fork`) deletes every version of every block
+/// above a fork's new length in one unbatched statement, and the candidate is
 /// only dequeued once the action succeeds — a cancelled delete is re-selected
 /// forever, so GC stops and storage is never reclaimed. `list_rels` runs an
 /// unbounded `DISTINCT` per database on the basebackup path, so a cap there

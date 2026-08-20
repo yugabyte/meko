@@ -20,11 +20,69 @@ struct PartitionedCandidates {
 /// What one tick's [`Timeline::act`] did, and what it couldn't finish.
 struct ActOutcome {
     rows_deleted: u64,
-    /// Db drops whose sweep ran out of row budget with work left. Not
-    /// dequeued — a later tick resumes them from their cursor. `DropDb` is the
-    /// only resumable kind, hence the name; the element type is a plain
-    /// candidate id, so a second one needs no new type here.
-    unfinished_db_drops: std::collections::HashSet<crate::page_store::GcCandidateId>,
+    /// Prefix sweeps that ran out of row budget with work left. Not
+    /// dequeued — a later tick resumes them from their cursor.
+    unfinished_sweeps: std::collections::HashSet<crate::page_store::GcCandidateId>,
+}
+
+/// The materialise jobs in flight when a tick started — snapshotted before
+/// acting, so a job running during a drop's delete is always caught — indexed
+/// for the one question a drop asks: could a job still insert an image inside
+/// what I am about to reclaim?
+///
+/// The two sweep indexes are [`crate::page_store::GcSweepScope::rel_keyspace_range`]'s
+/// membership test spelled out. A rel key is inside a `Relation`'s range
+/// exactly when it carries that `(spcnode, dbnode, relnode)`, and inside a
+/// `Database`'s exactly when it carries that `(spcnode, dbnode)` — the range
+/// binds no column below the one its scope binds. So these answer the same
+/// question as scanning the set against the range, without the scan.
+#[derive(Default)]
+struct PendingMaterialise {
+    /// The objects' own sentinel keys, which is what a per-object drop names.
+    objects: std::collections::HashSet<Key>,
+    rels: std::collections::HashSet<(u32, u32, u32)>,
+    dbs: std::collections::HashSet<(u32, u32)>,
+}
+
+impl PendingMaterialise {
+    fn new(objects: std::collections::HashSet<Key>) -> Self {
+        // Only rel keys: an SLRU sentinel shares neither range.
+        let rels: std::collections::HashSet<(u32, u32, u32)> = objects
+            .iter()
+            .filter(|k| k.field1 == 0)
+            .map(|k| (k.field2, k.field3, k.field4))
+            .collect();
+        // Derived from `rels`, not from `objects`: one entry per busy
+        // relation, so the database index costs the busy relations, not the
+        // whole set.
+        let dbs = rels.iter().map(|(spc, db, _)| (*spc, *db)).collect();
+        Self { objects, rels, dbs }
+    }
+
+    /// Whether a drop's target could still receive a materialised image at a
+    /// folded LSN. Its *dequeue* is what this holds back — the drop is acted
+    /// either way; dequeueing it while a job can still land inside the
+    /// reclaimed range is the leak this exists to prevent.
+    ///
+    /// Matched per scope variant, not with a catch-all: a new scope answering
+    /// as a database would be silently wrong here.
+    fn defers_dequeue(
+        &self,
+        row: &crate::page_store::PendingGcRow,
+        scope: Option<crate::page_store::GcSweepScope>,
+    ) -> bool {
+        use crate::page_store::GcSweepScope;
+        match scope {
+            Some(GcSweepScope::Relation((spcnode, dbnode), relnode)) => {
+                self.rels
+                    .contains(&(spcnode as u32, dbnode as u32, relnode as u32))
+            }
+            Some(GcSweepScope::Database((spcnode, dbnode))) => {
+                self.dbs.contains(&(spcnode as u32, dbnode as u32))
+            }
+            None => self.objects.contains(&row.key),
+        }
+    }
 }
 
 /// A validated candidate: its bucket, plus whatever the validation parsed on
@@ -216,7 +274,7 @@ impl Timeline {
         // the floor to advance past them: holding it at their `due_lsn` for
         // the whole sweep would make every tick re-walk the tombstones of
         // everything the sweep's own earlier ticks dequeued above it.
-        let resuming = self.gc_drain.progress.lock().unwrap().unfinished_db_drops();
+        let resuming = self.gc_drain.progress.lock().unwrap().unfinished_sweeps();
         if selected.max_due_lsn.is_none() && resuming.is_empty() {
             result.outcome = GcTickOutcome::NothingDue;
             crate::metrics::GC_DRAIN_TICKS
@@ -237,13 +295,15 @@ impl Timeline {
         // drop's delete is always caught: a busy-object drop is acted but
         // not dequeued (see `dequeue`), so a straggling image INSERT after
         // the delete can't leak. Paid only when drops are present.
-        let objects_pending_materialise = if partition.drops.is_empty() {
-            Default::default()
+        let pending_materialise = if partition.drops.is_empty() {
+            PendingMaterialise::default()
         } else {
-            self.page_writer
-                .as_ref()
-                .map(|pw| pw.objects_with_pending_materialise())
-                .unwrap_or_default()
+            PendingMaterialise::new(
+                self.page_writer
+                    .as_ref()
+                    .map(|pw| pw.objects_with_pending_materialise())
+                    .unwrap_or_default(),
+            )
         };
 
         // Cancel is checked once, up front: a mid-tick cancel just
@@ -255,7 +315,7 @@ impl Timeline {
         // Act (delete), then dequeue what was acted — strictly after every
         // action succeeded. An error before the dequeue returns via `?`
         // leaving the floor unchanged, so the next tick re-selects the same
-        // batch. `objects_pending_materialise` was snapshotted before acting.
+        // batch. `pending_materialise` was snapshotted before acting.
         let acted = self.act(store, &partition, applied_cutoff).await?;
         result.rows_deleted = acted.rows_deleted;
 
@@ -263,8 +323,8 @@ impl Timeline {
             .dequeue(
                 store,
                 &partition,
-                &objects_pending_materialise,
-                &acted.unfinished_db_drops,
+                &pending_materialise,
+                &acted.unfinished_sweeps,
                 floor,
                 applied_cutoff,
             )
@@ -291,7 +351,7 @@ impl Timeline {
         // tick stopped on its own row budget with work left — even though it
         // visited everything due, so the loop keeps the short cadence instead
         // of pacing the sweep at one budget per base period.
-        result.outcome = if all_due_visited && acted.unfinished_db_drops.is_empty() {
+        result.outcome = if all_due_visited && acted.unfinished_sweeps.is_empty() {
             GcTickOutcome::CaughtUp
         } else {
             GcTickOutcome::BacklogRemains
@@ -325,36 +385,36 @@ impl Timeline {
         due: &PartitionedCandidates,
         applied_cutoff: Lsn,
     ) -> Result<ActOutcome, GcError> {
-        let (mut rows_deleted, unfinished_db_drops) = self.act_drops(store, &due.drops).await?;
+        let (mut rows_deleted, unfinished_sweeps) = self.act_drops(store, &due.drops).await?;
         rows_deleted += self.act_shrinks(store, &due.shrinks).await?;
         rows_deleted += self.act_trims(store, &due.trims, applied_cutoff).await?;
         Ok(ActOutcome {
             rows_deleted,
-            unfinished_db_drops,
+            unfinished_sweeps,
         })
     }
 
     /// Remove from `pending_gc` exactly what [`Self::act`] just reclaimed,
     /// returning the count. Trim keys range-sweep `(floor, cutoff]`;
-    /// drop/shrink clear by their PK. A drop whose object is in
-    /// `objects_pending_materialise` (snapshotted before acting) is left
-    /// queued for a later tick — a straggling image INSERT after its delete
-    /// would otherwise leak — and logged, not removed; so is a candidate in
-    /// `unfinished_db_drops`, whose sweep ran out of row budget. Runs only
+    /// drop/shrink clear by their PK. A drop whose target could still receive
+    /// a materialised image ([`PendingMaterialise::defers_dequeue`]) is left queued for
+    /// a later tick — a straggling image INSERT after its delete would
+    /// otherwise leak — and logged, not removed; so is a candidate in
+    /// `unfinished_sweeps`, whose sweep ran out of row budget. Runs only
     /// after `act`
     /// succeeded (crash-safety: act-before-dequeue).
     async fn dequeue(
         &self,
         store: &Arc<crate::page_store::PageStore>,
         due: &PartitionedCandidates,
-        objects_pending_materialise: &std::collections::HashSet<Key>,
-        unfinished_db_drops: &std::collections::HashSet<crate::page_store::GcCandidateId>,
+        pending_materialise: &PendingMaterialise,
+        unfinished_sweeps: &std::collections::HashSet<crate::page_store::GcCandidateId>,
         floor: Lsn,
         applied_cutoff: Lsn,
     ) -> Result<u64, GcError> {
         // Trims dequeue by a range sweep over their (key, gc_kind) pairs;
-        // shrinks and finished, idle drops by PK. A busy drop (its object in
-        // objects_pending_materialise) and a budget-capped sweep stay queued.
+        // shrinks and finished, idle drops by PK. A busy drop and a
+        // budget-capped sweep stay queued.
         let mut drop_shrink_to_dequeue: Vec<crate::page_store::GcCandidateId> = due
             .shrinks
             .iter()
@@ -363,20 +423,24 @@ impl Timeline {
         let mut drops_awaiting_materialise: Vec<Key> = Vec::new();
         for r in &due.drops {
             let id = (r.key, r.gc_kind, r.due_lsn);
-            let awaits_materialise =
-                Self::drop_target_awaits_materialise(r, objects_pending_materialise);
-            if awaits_materialise {
+            let sweep = crate::page_store::GcSweepCandidate::of(r);
+            let dequeue_deferred = pending_materialise.defers_dequeue(r, sweep.map(|s| s.scope()));
+            if dequeue_deferred {
                 drops_awaiting_materialise.push(r.key);
-                // A resumable sweep's cursors may have moved past a fork this
-                // tick while a job could still insert an image behind them, so
+                // A sweep's cursors may have moved past an object this tick
+                // while a job could still insert an image behind them, so
                 // re-acting from the cursor would not catch it. Owe a full
                 // pass. The per-object kinds need nothing: their re-act covers
                 // the whole object.
-                if r.gc_kind == crate::page_store::GcKind::DropDb {
-                    self.gc_drain.progress.lock().unwrap().require_recheck(id);
+                if let Some(sweep) = sweep {
+                    self.gc_drain
+                        .progress
+                        .lock()
+                        .unwrap()
+                        .require_recheck(sweep);
                 }
             }
-            if awaits_materialise || unfinished_db_drops.contains(&id) {
+            if dequeue_deferred || unfinished_sweeps.contains(&id) {
                 continue;
             }
             drop_shrink_to_dequeue.push(id);
@@ -412,24 +476,6 @@ impl Timeline {
         Ok(removed_trim + removed_drop_shrink)
     }
 
-    /// Whether a drop's target could still receive a materialised image at a
-    /// folded LSN, which holds its dequeue back. `DropDb` covers a whole
-    /// database, so any one fork of it awaiting a job counts; every other kind
-    /// names its object outright.
-    fn drop_target_awaits_materialise(
-        row: &crate::page_store::PendingGcRow,
-        objects_pending_materialise: &std::collections::HashSet<Key>,
-    ) -> bool {
-        if row.gc_kind != crate::page_store::GcKind::DropDb {
-            return objects_pending_materialise.contains(&row.key);
-        }
-        // The same range the sweep deletes against, so the two cannot drift:
-        // a dequeue while a job can still land inside it is the leak this
-        // check exists to prevent.
-        let db = pageserver_api::key::db_rel_keyspace_range(row.key.field2, row.key.field3);
-        objects_pending_materialise.iter().any(|k| db.contains(k))
-    }
-
     /// Run `f` over each of `items` with bounded concurrency
     /// (`GC_ACTION_PARALLELISM` × tenant `scale_factor`) and sum the
     /// per-call deleted counts. Each item gets a fresh `store` clone handed
@@ -460,12 +506,12 @@ impl Timeline {
     }
 
     /// Drop actions, reclaiming each object's rows `<= due_lsn`
-    /// (id-reuse-safe — a recreated object writes above it). Rel-fork and
-    /// SLRU drops act per candidate, in parallel (distinct tablets, no
-    /// ordering constraint). Dead meta keys batch per `due_lsn` into one
+    /// (id-reuse-safe — a recreated object writes above it). SLRU drops act
+    /// per candidate, in parallel (distinct tablets, no ordering constraint).
+    /// Dead meta keys batch per `due_lsn` into one
     /// `key = ANY` delete — the same batched meta path `act_trims` uses.
-    /// A db-wide drop is a budgeted range sweep of its own
-    /// ([`Self::act_db_drops`]).
+    /// A dropped database or relation is a budgeted prefix sweep of its own
+    /// ([`Self::act_drop_sweeps`]).
     async fn act_drops(
         &self,
         store: &Arc<crate::page_store::PageStore>,
@@ -481,47 +527,40 @@ impl Timeline {
         use std::collections::HashMap;
         let branch_id = self.branch_id;
 
-        // Split by table: rel-fork / SLRU drops act per candidate; DropMeta
+        // Split by table: SLRU drops act per candidate; DropMeta
         // keys group by `due_lsn` for one batched delete each; a whole
-        // database is its own budgeted sweep.
-        let mut fork_slru: Vec<crate::page_store::PendingGcRow> = Vec::new();
+        // database or relation is its own budgeted prefix sweep.
+        let mut slru_drops: Vec<crate::page_store::PendingGcRow> = Vec::new();
         let mut meta_by_due: HashMap<Lsn, Vec<Key>> = HashMap::new();
-        let mut db_drops: Vec<crate::page_store::PendingGcRow> = Vec::new();
+        let mut sweeps: Vec<crate::page_store::GcSweepCandidate> = Vec::new();
         for row in drop_rows {
+            // Asked, not re-listed: `GcSweepCandidate::of` is what decides
+            // which kinds sweep, so routing on it pairs each row with its
+            // scope here and leaves the act nothing to re-derive or assert.
+            if let Some(sweep) = crate::page_store::GcSweepCandidate::of(row) {
+                sweeps.push(sweep);
+                continue;
+            }
             match row.gc_kind {
-                GcKind::DropPages | GcKind::DropSlru => fork_slru.push(*row),
+                GcKind::DropSlru => slru_drops.push(*row),
                 GcKind::DropMeta => meta_by_due.entry(row.due_lsn).or_default().push(row.key),
-                GcKind::DropDb => db_drops.push(*row),
                 // partition_by_kind routes only drop kinds into this bucket.
                 other => debug_assert!(false, "act_drops: non-drop kind {other:?}"),
             }
         }
 
         let mut deleted = self
-            .run_parallel_actions(store, fork_slru.into_iter(), |store, row| async move {
-                let (key, due) = (row.key, row.due_lsn);
-                match row.gc_kind {
-                    // rel fork: drop its pages + rel-size sentinel key.
-                    GcKind::DropPages => {
-                        store
-                            .gc_act_drop_fork(branch_id, crate::page_store::rel_fork_of(&key), due)
-                            .await
-                    }
-                    // SLRU segment: drop its slru_pages + its seg-size
-                    // sentinel meta key (= this key).
-                    GcKind::DropSlru => {
-                        store
-                            .gc_act_drop_slru(
-                                branch_id,
-                                crate::page_store::slru_seg_of(&key),
-                                crate::page_store::key_to_bytes(&key),
-                                due,
-                            )
-                            .await
-                    }
-                    // The split above routed only Drop{Pages,Slru} here.
-                    _ => Ok(0),
-                }
+            .run_parallel_actions(store, slru_drops.into_iter(), |store, row| async move {
+                // An SLRU segment: its slru_pages rows plus its seg-size
+                // sentinel meta key, which is this candidate's own key.
+                store
+                    .gc_act_drop_slru(
+                        branch_id,
+                        crate::page_store::slru_seg_of(&row.key),
+                        crate::page_store::key_to_bytes(&row.key),
+                        row.due_lsn,
+                    )
+                    .await
             })
             .await?;
 
@@ -533,22 +572,22 @@ impl Timeline {
                 .map_err(GcError::Persistence)?;
         }
 
-        let (db_deleted, unfinished_db_drops) = self.act_db_drops(store, &db_drops).await?;
-        Ok((deleted + db_deleted, unfinished_db_drops))
+        let (swept, unfinished_sweeps) = self.act_drop_sweeps(store, &sweeps).await?;
+        Ok((deleted + swept, unfinished_sweeps))
     }
 
-    /// Db-wide drops (`GcKind::DropDb`), sequentially and under one shared
-    /// per-tick row budget (`gc_drop_db_rows_per_tick`): a database is
-    /// unbounded in size, and every sweep hits the same `pages` tablets, so
+    /// Prefix sweeps (`GcKind::DropDb`/`DropRel`), sequentially and under one
+    /// shared per-tick row budget (`gc_sweep_rows_per_tick`): a dropped object
+    /// is unbounded in size, and every sweep hits the same `pages` tablets, so
     /// running them in parallel would multiply the burst the budget exists to
     /// bound. Each candidate resumes from its own cursor
-    /// (`GcDrainProgress::db_drop_cursors`), and one whose range still has rows
+    /// (`GcDrainProgress::sweep_cursors`), and one whose range still has rows
     /// is reported back so the caller neither dequeues it nor lets the floor
     /// pass it.
-    async fn act_db_drops(
+    async fn act_drop_sweeps(
         &self,
         store: &Arc<crate::page_store::PageStore>,
-        db_drops: &[crate::page_store::PendingGcRow],
+        sweeps: &[crate::page_store::GcSweepCandidate],
     ) -> Result<
         (
             u64,
@@ -557,33 +596,27 @@ impl Timeline {
         GcError,
     > {
         let mut unfinished = std::collections::HashSet::new();
-        if db_drops.is_empty() {
+        if sweeps.is_empty() {
             return Ok((0, unfinished));
         }
-        let mut budget = self.get_gc_drop_db_rows_per_tick();
+        let mut budget = self.get_gc_sweep_rows_per_tick();
         let mut deleted = 0u64;
-        for row in db_drops {
-            let id = (row.key, row.gc_kind, row.due_lsn);
+        for cand in sweeps.iter().copied() {
+            let id = cand.id();
             if budget == 0 {
                 // Not swept at all: an earlier candidate spent the budget.
-                // Still needs a cursor, or `unfinished_db_drops` cannot see it
+                // Still needs a cursor, or `unfinished_sweeps` cannot see it
                 // next tick and it waits for a floor reset instead — the floor
                 // no longer holds for unfinished candidates. `ensure` and not
-                // `store`: this candidate may be mid-sweep, and the order db
-                // drops are visited in shifts between ticks.
-                self.gc_drain.progress.lock().unwrap().ensure_cursor(id);
+                // `store`: this candidate may be mid-sweep, and the order
+                // sweeps are visited in shifts between ticks.
+                self.gc_drain.progress.lock().unwrap().ensure_cursor(cand);
                 unfinished.insert(id);
                 continue;
             }
-            let mut progress = self.gc_drain.progress.lock().unwrap().resume_cursor(&id);
+            let mut progress = self.gc_drain.progress.lock().unwrap().resume_cursor(cand);
             let acted = store
-                .gc_act_drop_db(
-                    self.branch_id,
-                    crate::page_store::db_of_rel_key(&row.key),
-                    row.due_lsn,
-                    budget,
-                    &mut progress,
-                )
+                .gc_act_sweep(self.branch_id, cand.due_lsn(), budget, &mut progress)
                 .await;
             let reclaimed = progress.is_reclaimed();
             let owed_pass = progress.begin_owed_pass();
@@ -604,13 +637,13 @@ impl Timeline {
             // Only the owed pass is logged. A sweep merely spending its budget
             // is progress, reported every tick by `gc drain complete` and by
             // `gc_rows_deleted_total`; this one is rare and means a materialise
-            // job may be wedged, deferring the database to the floor reset.
+            // job may be wedged, deferring the object to the floor reset.
             if owed_pass {
                 tracing::info!(
-                    db = %row.key,
-                    due_lsn = %row.due_lsn,
+                    scope = ?cand.scope(),
+                    due_lsn = %cand.due_lsn(),
                     rows_deleted = rows,
-                    "gc: db-wide drop owes a re-check pass (a fork was busy mid-sweep)"
+                    "gc: sweep owes a re-check pass (a fork was busy mid-sweep)"
                 );
             }
         }
@@ -779,10 +812,6 @@ impl Timeline {
                 shaped(row.key.is_meta_table_key())?;
                 CandidatePartition::Trim
             }
-            GcKind::DropPages => {
-                shaped(row.key.is_rel_size_key())?;
-                CandidatePartition::Drop
-            }
             GcKind::DropSlru => {
                 shaped(row.key.is_slru_segment_size_key())?;
                 CandidatePartition::Drop
@@ -795,6 +824,17 @@ impl Timeline {
             // the rel keyspace, and one of the keys the sweep deletes.
             GcKind::DropDb => {
                 shaped(row.key.is_relmap_file_key())?;
+                CandidatePartition::Drop
+            }
+            // A relation's size sentinel. The act reads (spcnode, dbnode,
+            // relnode) and sweeps every fork, so `forknum` is not consulted —
+            // the emitter puts the main fork's there. `relnode != 0` is
+            // load-bearing: relnode 0 is the database's own slot, so a sweep
+            // scoped there spans the live relmap and rel-directory keys.
+            // `ShrinkPages` needs no such check — it only touches `pages`,
+            // where relnode 0 holds nothing.
+            GcKind::DropRel => {
+                shaped(row.key.is_rel_size_key() && row.key.field4 != 0)?;
                 CandidatePartition::Drop
             }
             GcKind::ShrinkPages => {
@@ -818,11 +858,15 @@ impl Timeline {
         mut selected: Vec<crate::page_store::PendingGcRow>,
         resuming: &[crate::page_store::GcCandidateId],
     ) -> Vec<crate::page_store::PendingGcRow> {
-        for (key, gc_kind, due_lsn) in resuming {
-            if selected
-                .iter()
-                .any(|r| (r.key, r.gc_kind, r.due_lsn) == (*key, *gc_kind, *due_lsn))
-            {
+        // Hashed, not scanned: `selected` runs to `gc_drain_limit` (10 000)
+        // and one deferred sweep per dropped relation can resume, so the pair
+        // is large x large in exactly the drop-heavy workload this serves.
+        let already: std::collections::HashSet<crate::page_store::GcCandidateId> = selected
+            .iter()
+            .map(|r| (r.key, r.gc_kind, r.due_lsn))
+            .collect();
+        for id @ (key, gc_kind, due_lsn) in resuming {
+            if already.contains(id) {
                 continue;
             }
             selected.push(crate::page_store::PendingGcRow {
@@ -920,15 +964,15 @@ impl Timeline {
             .unwrap_or(self.conf.default_tenant_conf.gc_drain_limit)
     }
 
-    /// Per-tick cap on rows a db-wide drop's sweep deletes, shared by every
-    /// such candidate in the tick (tenant override → default). Sole caller:
-    /// `act_db_drops`.
-    fn get_gc_drop_db_rows_per_tick(&self) -> usize {
+    /// Per-tick cap on rows the prefix sweeps delete, shared by every such
+    /// candidate in the tick (tenant override → default). Sole caller:
+    /// `act_drop_sweeps`.
+    fn get_gc_sweep_rows_per_tick(&self) -> usize {
         let tenant_conf = self.tenant_conf.load();
         tenant_conf
             .tenant_conf
-            .gc_drop_db_rows_per_tick
-            .unwrap_or(self.conf.default_tenant_conf.gc_drop_db_rows_per_tick)
+            .gc_sweep_rows_per_tick
+            .unwrap_or(self.conf.default_tenant_conf.gc_sweep_rows_per_tick)
     }
 
     /// How often a tick resets the select floor to 0 (tenant override →
@@ -988,7 +1032,7 @@ mod tests {
     fn well_formed_key(gc_kind: GcKind) -> Key {
         match gc_kind {
             GcKind::TrimPages => rel_block_to_key(rel(16400), 7),
-            GcKind::ShrinkPages | GcKind::DropPages => rel_size_to_key(rel(16400)),
+            GcKind::ShrinkPages | GcKind::DropRel => rel_size_to_key(rel(16400)),
             GcKind::TrimSlru => slru_block_to_key(SlruKind::Clog, 3, 7),
             GcKind::DropSlru => slru_segment_size_to_key(SlruKind::Clog, 3),
             // One of DropMeta's four allowed shapes; also a valid TrimMeta
@@ -1040,7 +1084,7 @@ mod tests {
         };
         let p = Timeline::partition_by_kind(vec![
             row_of(GcKind::TrimPages),
-            row_of(GcKind::DropPages),
+            row_of(GcKind::DropRel),
             row_of(GcKind::ShrinkPages),
             unknown,
         ]);
@@ -1065,7 +1109,7 @@ mod tests {
                 GcKind::TrimSlru,
                 GcKind::TrimMeta,
                 GcKind::ShrinkPages,
-                GcKind::DropPages,
+                GcKind::DropRel,
                 GcKind::DropSlru,
                 GcKind::DropMeta,
                 GcKind::DropDb,
@@ -1087,9 +1131,9 @@ mod tests {
     /// Every kind's key shape is enforced, because each act path decodes
     /// the object identity from the key *blind* — a `TrimPages` row holding
     /// a rel-*size* key would trim `field6 = u32::MAX` as a block number,
-    /// and a `DropPages` row holding a rel-*block* key would drop a live
-    /// fork wholesale. Every kind is rejected when handed a key from the
-    /// wrong keyspace. (`partition_buckets_all_seven_kinds` pins the
+    /// and a `DropRel` row holding a rel-*block* key would take its blknum
+    /// for a fork and drop a live relation wholesale. Every kind is rejected when handed a key from the
+    /// wrong keyspace. (`partition_buckets_all_eight_kinds` pins the
     /// converse: each kind's *right* shape classifies.)
     #[test]
     fn classify_rejects_a_key_shape_that_mismatches_its_kind() {
@@ -1097,7 +1141,6 @@ mod tests {
         let cases = [
             (GcKind::TrimPages, rel_size_to_key(rel(16400))),
             (GcKind::ShrinkPages, rel_block_to_key(rel(16400), 7)),
-            (GcKind::DropPages, rel_block_to_key(rel(16400), 7)),
             (
                 GcKind::TrimSlru,
                 slru_segment_size_to_key(SlruKind::Clog, 3),
@@ -1111,6 +1154,13 @@ mod tests {
             // delete every row of it.
             (GcKind::DropDb, rel_size_to_key(rel(16400))),
             (GcKind::DropDb, DBDIR_KEY),
+            // A rel drop names a relation: a block key would take its blknum
+            // for a fork, and the relmap key has relnode 0.
+            (GcKind::DropRel, rel_block_to_key(rel(16400), 7)),
+            (GcKind::DropRel, relmap_file_key(1663, 5)),
+            // Rel-size-shaped but at relnode 0, whose sweep range would cover
+            // the database's live relmap and rel-directory keys.
+            (GcKind::DropRel, rel_size_to_key(rel(0))),
         ];
         for (gc_kind, wrong_key) in cases {
             let row = PendingGcRow {
@@ -1277,17 +1327,19 @@ mod tests {
             key: relmap_file_key(1663, 5),
             ..row_of(GcKind::DropDb)
         };
-        let busy = |keys: &[Key]| keys.iter().copied().collect();
+        let busy = |keys: &[Key]| PendingMaterialise::new(keys.iter().copied().collect());
+        // Scoped the way the drain scopes it, so this covers the composition
+        // and not just the predicate.
+        let awaits = |row: &crate::page_store::PendingGcRow, pending: &PendingMaterialise| {
+            pending.defers_dequeue(
+                row,
+                crate::page_store::GcSweepCandidate::of(row).map(|c| c.scope()),
+            )
+        };
 
-        assert!(!Timeline::drop_target_awaits_materialise(
-            &db_drop,
-            &busy(&[])
-        ));
+        assert!(!awaits(&db_drop, &busy(&[])));
         assert!(
-            Timeline::drop_target_awaits_materialise(
-                &db_drop,
-                &busy(&[rel_size_to_key(rel(16400))])
-            ),
+            awaits(&db_drop, &busy(&[rel_size_to_key(rel(16400))])),
             "a busy fork of this database defers the whole db drop"
         );
         let other_db = RelTag {
@@ -1295,22 +1347,34 @@ mod tests {
             ..rel(16400)
         };
         assert!(
-            !Timeline::drop_target_awaits_materialise(
-                &db_drop,
-                &busy(&[rel_size_to_key(other_db)])
-            ),
+            !awaits(&db_drop, &busy(&[rel_size_to_key(other_db)])),
             "another database's busy fork is not this drop's business"
         );
-        // A fork drop still matches on its own key alone.
-        let fork_drop = row_of(GcKind::DropPages);
-        assert!(Timeline::drop_target_awaits_materialise(
-            &fork_drop,
-            &busy(&[fork_drop.key])
-        ));
-        assert!(!Timeline::drop_target_awaits_materialise(
-            &fork_drop,
-            &busy(&[rel_size_to_key(other_db)])
-        ));
+
+        // A relation drop covers its own forks and stops there.
+        let rel_drop = PendingGcRow {
+            key: rel_size_to_key(rel(16400)),
+            ..row_of(GcKind::DropRel)
+        };
+        assert!(
+            awaits(
+                &rel_drop,
+                &busy(&[rel_size_to_key(RelTag {
+                    forknum: 2,
+                    ..rel(16400)
+                })])
+            ),
+            "a busy fork defers the whole relation's drop"
+        );
+        assert!(
+            !awaits(&rel_drop, &busy(&[rel_size_to_key(rel(16401))])),
+            "a sibling relation's busy fork is not this drop's business"
+        );
+
+        // A per-object drop still matches on its own key alone.
+        let fork_drop = row_of(GcKind::DropSlru);
+        assert!(awaits(&fork_drop, &busy(&[fork_drop.key])));
+        assert!(!awaits(&fork_drop, &busy(&[rel_size_to_key(other_db)])));
     }
 
     /// A refused row enters no bucket at all — so `act` can't touch it and

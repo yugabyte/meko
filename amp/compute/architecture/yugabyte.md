@@ -170,8 +170,8 @@ yb_storage_conn = { host_ports = "...", connect_timeout_ms = 5000, statement_tim
 **every** statement on the connection, and several the daemons issue
 legitimately run for minutes:
 
-- the GC drop/shrink deletes (`gc_act_drop_fork`, `gc_act_shrink_fork`)
-  remove every version of every block of a fork in one unbatched
+- the GC shrink delete (`gc_act_shrink_fork`) removes every version of
+  every block above a fork's new length in one unbatched
   statement — and because a candidate is dequeued only once its action
   succeeds, a cancelled delete is re-selected forever. GC stops and the
   storage is never reclaimed.
@@ -730,7 +730,7 @@ CREATE TABLE amp_storage.pending_gc (
     bucket_id  INT      NOT NULL,  -- writer-computed: page_store::gc_bucket_id(key), FNV-1a % GC_BUCKETS (3)
     due_lsn    BIGINT   NOT NULL,
     key        BYTEA    NOT NULL,  -- encoded 18-byte Key: block (trim) or object (drop/shrink)
-    gc_kind    SMALLINT NOT NULL,  -- page_store::GcKind (0..=7; trim/shrink/drop × table, plus drop_db)
+    gc_kind    SMALLINT NOT NULL,  -- page_store::GcKind (0..=7; trim/shrink/drop × table, plus drop_db/drop_rel)
     relsize    BIGINT,             -- shrink's truncation target; NULL for trim/drop
     PRIMARY KEY ((branch_id, bucket_id) HASH,
                  due_lsn, key, gc_kind)

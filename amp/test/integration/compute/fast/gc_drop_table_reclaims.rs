@@ -1,5 +1,5 @@
 //! DROP TABLE reclamation: dropping a relation queues a drop event
-//! (`pending_gc.gc_kind = 4`, DropPages) and the drain then deletes every stored
+//! (`pending_gc.gc_kind = 4`, DropRel) and the drain then deletes every stored
 //! page of the dropped relfilenode once the cutoff passes the drop.
 //! Asserts the strongest end-state — the rel's `pages` rows AND its
 //! `pending_gc` rows both reach zero — on a dedicated branch so the

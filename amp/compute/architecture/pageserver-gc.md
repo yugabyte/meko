@@ -75,16 +75,18 @@ SLRU block, or a whole object) plus a `gc_kind` that names both the
 **operation** and its **target table**, so the drain dispatches on
 `gc_kind` alone: each kind maps 1:1 to an act function and the key is never
 re-inspected for routing. The eight kinds are `{trim, drop}` ×
-`{pages, slru, meta}` plus `shrink` (rel `pages` only) and `drop_db` (a whole
-dropped database, both tables) — the emitter, which
+`{pages, slru, meta}` plus `shrink` (rel `pages` only) and the two prefix
+sweeps, `drop_db` and `drop_rel` (a whole dropped database or relation, both
+tables) — the emitter, which
 knows the table it wrote, stamps the kind; the key stays pure identity.
 
 | operation | key | recorded when | becomes collectable |
 | --- | --- | --- | --- |
 | **trim** (`TrimPages`/`TrimSlru`/`TrimMeta`) | the block (rel / SLRU) or meta key | a block's every-n-th new base (`is_image`/`will_init`), or a meta put; `due_lsn` = the newest counted base's LSN | that key's versions below its newest base `<= cutoff` |
 | **shrink** (`ShrinkPages`, rel-only) | the rel-size key | a relation is truncated at `due_lsn` | blocks at/above the post-truncation size |
-| **drop** (`DropPages`/`DropSlru`/`DropMeta`) | the retired object's key | a relfilenode drop, an SLRU segment truncation, or a two-phase resolve, at `due_lsn` | all of the object's rows `<= due_lsn` |
+| **drop** (`DropSlru`/`DropMeta`) | the retired object's key | an SLRU segment truncation or a two-phase resolve, at `due_lsn` | all of the object's rows `<= due_lsn` |
 | **drop_db** (`DropDb`) | the database's relmap key — its `(spcnode, dbnode)` identity | a `DROP DATABASE` at `due_lsn` | every `pages` row and every `meta` key of that database, `<= due_lsn` |
+| **drop_rel** (`DropRel`) | the relation's main-fork size key — its `(spcnode, dbnode, relnode)` identity | a `DROP TABLE` at `due_lsn`, one candidate per relfilenode | every fork's `pages` rows and size row, `<= due_lsn`; the sparse rel-directory tombstones stay |
 
 `due_lsn` is the LSN at which the garbage became collectable; a candidate
 is actionable only once the cutoff reaches its `due_lsn`. A `gc_kind` the
@@ -254,7 +256,7 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    `key` *blind* (`rel_fork_of` / `slru_seg_of` just read Key fields) — a
    key whose shape doesn't match its kind would delete a wrong, live
    object. So each kind requires its keyspace's shape: rel block
-   (`TrimPages`) or rel-size sentinel (`ShrinkPages` / `DropPages`), SLRU
+   (`TrimPages`) or rel-size sentinel (`ShrinkPages` / `DropRel`), SLRU
    block (`TrimSlru`) or segment-size sentinel (`DropSlru`), any `meta`-table
    key (`TrimMeta`), the relmap key (`DropDb` — the act takes only
    `(spcnode, dbnode)` from the key and sweeps that whole database, so a
@@ -268,7 +270,7 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    keeps the newest version `<= cutoff`, while `gc_act_drop_meta` deletes
    `lsn <= due_lsn` outright. A drop is therefore only correct on a key whose
    object is *dead*, and nearly every `meta` key is live state for something —
-   a size sentinel (owned by `Drop{Pages,Slru}`, which delete it with the
+   a size sentinel (owned by `DropRel`/`DropSlru`, which delete it with the
    object), a dbdir, the twophase *directory* (whose key is
    `twophase_file_key(0)`). So `DropMeta` accepts a fixed allowlist, currently
    the one shape it emits — a twophase file — and adding an emitter means adding
@@ -306,13 +308,19 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    object moots its own shrink/trim candidates), each dispatched by its
    `gc_kind` to the matching act function:
    - **drop** — delete the object's rows `<= due_lsn` (bounded by the drop
-     LSN, so a later reuse — relfilenode, wrapped-around segno, recreated
-     database — keeps its newer rows): a rel fork (`gc_act_drop_fork`:
-     `pages` + the rel-size meta key), an SLRU segment (`gc_act_drop_slru`:
+     LSN, so a later reuse — wrapped-around segno, recreated relfilenode or
+     database — keeps its newer rows): an SLRU segment (`gc_act_drop_slru`:
      `slru_pages` + the segment-size meta key), or dead meta keys
-     (`gc_act_drop_meta`).
-   - **drop_db** (`gc_act_drop_db`) — a whole dropped database, as a range
-     sweep rather than a per-fork fan-out. The key layout is what makes that a
+     (`gc_act_drop_meta`). A dropped relation is a prefix sweep, below.
+   - **drop_db / drop_rel** (`gc_act_sweep`) — a whole dropped database or
+     relation, as a range sweep rather than a per-fork fan-out. The two differ
+     only in how many key columns are bound (`GcSweepScope`): a relation binds
+     `relnode` as well, so its forks are one contiguous `pages` range per
+     bucket just as a database's relations are, and it sweeps one `meta` range
+     (the forks' size rows) rather than two. A relation's sparse rel-directory
+     entries are NOT swept — a `Removed` marker shadows an ancestor's `Exists`
+     under copy-on-write, so only a `DROP DATABASE`, which removes the DbDir
+     entry and shadows the whole range from readers, may delete those. The key layout is what makes that a
      seek: `(branch_id, spcnode, dbnode)` is a `pages` key prefix under a bound
      `bucket_id`, and a rel key encodes spcnode/dbnode ahead of relnode, so the
      database is one contiguous range per bucket and per `meta` prefix — six
@@ -321,25 +329,24 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
      earlier `DROP TABLE`s left.
 
      A database is unbounded in size, so this is the first act to be
-     **budgeted and resumable**: `gc_drop_db_rows_per_tick` caps the rows a
+     **budgeted and resumable**: `gc_sweep_rows_per_tick` caps the rows a
      tick deletes, and each batch is a key-only SELECT yielding `ybctid`s then
      one `DELETE ... WHERE ybctid = ANY(...)`, resuming from an in-memory
-     cursor (`GcDrainProgress::db_drop_cursors`) so a batch never re-walks the
+     cursor (`GcDrainProgress::sweep_cursors`) so a batch never re-walks the
      tombstones the last one wrote — the controller's branch-drop reaper in
      miniature. Losing the cursors to a restart costs a re-scan of those
      tombstones, not a re-delete. A candidate whose range still holds rows is
      not dequeued, and resumes on the next tick from memory rather than at the
-     floor reset (below). (`DropPages` and
-     `ShrinkPages` are *not* budgeted — one unbounded DELETE per bucket over a
-     fork of unknown length — so a `DROP TABLE` on a huge relation still has
-     the burst problem this fixes for databases.)
+     floor reset (below). (`ShrinkPages` is *not* budgeted — one unbounded DELETE per bucket over the
+     truncated suffix — and cannot be coalesced with its siblings either, since
+     each fork carries its own truncation length.)
 
      `pages` is swept **round-robin over the buckets**, one batch each per
      pass, because `bucket_id` leads that table's key and pre-splits it into
      six tablets: a bucket at a time would aim a whole tick's deletes at one
      Raft group — one live ingest is writing to, for every branch — while the
      other five idle. The batch is *derived*, a sixth of the budget and capped
-     at `GC_DB_DROP_MAX_ROWS_PER_DELETE`, so one pass is a tick's work and
+     at `GC_SWEEP_MAX_ROWS_PER_DELETE`, so one pass is a tick's work and
      pacing stays the only knob. Passes repeat until the budget is spent or
      every bucket reports empty, so a database whose rows all land in one
      bucket still spends its whole budget. The `meta` ranges stay sequential —
@@ -366,9 +373,9 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
    `gc_act_trim_blocks` groups its candidate blknums by `page_bucket_id` and
    issues one bucket-pinned DELETE per group (a block's anchor is computed
    within its own bucket, which is where all of that block's rows live, so the
-   per-block semantics are unchanged), while `gc_act_drop_fork` and
-   `gc_act_shrink_fork` cover a whole fork — length unknown at that point —
-   and so loop over all `PAGE_BUCKETS`. Each returns the summed row count.
+   per-block semantics are unchanged), while `gc_act_shrink_fork` covers a
+   fork's whole truncated suffix — length unknown at that point — and so loops
+   over all `PAGE_BUCKETS`. Each returns the summed row count.
    `slru_pages` and `meta` need no fan-out: `branch_id` is their whole hash
    key, so binding the branch (which every act does) already bounds the
    statement to one tablet.
@@ -436,7 +443,7 @@ Each tick, `Timeline::gc_iteration` (`page_server/timeline/gc.rs`) runs:
 
 A `drop_db` whose range outlasts the tick's row budget stays queued, and the
 NEXT tick resumes it — but not by re-selecting it. The tick reads the
-unfinished candidates straight out of `GcDrainProgress::db_drop_cursors` and adds
+unfinished candidates straight out of `GcDrainProgress::sweep_cursors` and adds
 them to the rows the select returned (`Timeline::with_resuming`), so the floor
 advances to the cutoff as usual.
 
@@ -469,21 +476,27 @@ to advance every tick.
 A sweep resumes from a cursor that only moves forward, so the usual protection
 for a busy drop — leave it queued, re-act it later, and catch whatever the
 straggling materialise job inserted — does not work: re-acting resumes *past*
-the straggler. `gc_act_drop_fork` has no such hole, because each visit deletes
-the whole fork again.
+the straggler. The unbudgeted acts have no such hole, because each visit deletes
+the whole object again.
 
-So a tick that finds any fork of the database awaiting a materialise job sets
-`needs_recheck` on its cursor, and `is_reclaimed` — the dequeue's gate — stays false
-while it is set. On reaching the end of its ranges the sweep rewinds once and
-clears the flag, owing exactly one more full pass. Rewinding when the flag is
-*set* would instead discard a long sweep every time a fork happened to be busy;
-the pass itself is `PAGE_BUCKETS + 2` seeks over ranges that are already empty,
-since the deletes do not repeat.
+So a tick that finds any fork inside the sweep's scope awaiting a materialise
+job sets `needs_recheck` on its cursor, and `is_reclaimed` — the dequeue's gate —
+stays false while it is set. On reaching the end of its ranges the sweep rewinds
+once and clears the flag, owing exactly one more full pass. Rewinding when the
+flag is *set* would instead discard a long sweep every time a fork happened to be
+busy; the pass itself is one seek per `pages` bucket and per `meta` range over
+ranges that are already empty, since the deletes do not repeat.
+
+That "any fork inside the scope" test is a lookup, not a scan:
+`PendingMaterialise` indexes the tick's in-flight jobs by `(spcnode, dbnode)` and
+`(spcnode, dbnode, relnode)`, which is what a scope's key range admits — a
+relation drop is the common case, so scanning the whole in-flight set per
+candidate would be quadratic in a `DROP SCHEMA`.
 
 Without it the leak is silent and permanent: busy at one tick, idle at the tick
-that finishes, dequeued with an image stranded behind the cursors — and a
-dropped database's keys are never named by a future record, so nothing would
-ever emit a candidate for them again.
+that finishes, dequeued with an image stranded behind the cursors — and a dropped
+object's keys are never named by a future record, so nothing would ever emit a
+candidate for them again.
 
 The whole drain (select, actions, dequeue) runs on a dedicated
 **`pageserver:gc` connection pool** sized to the action width, so a
@@ -518,7 +531,7 @@ per-bucket fan-out every 30s and a backlogged one stops being pinned at
 | Queue the tick left (`gc_drain_ticks_total` label) | Next sleep |
 | --- | --- |
 | Caught up — everything due was acted (`drained`) | `gc_period` (30s) |
-| Backlog remains — `gc_drain_limit` hit, or a db drop stopped on `gc_drop_db_rows_per_tick` (`capped`) | `gc_period / 6` (5s), never under 1s |
+| Backlog remains — `gc_drain_limit` hit, or a sweep stopped on `gc_sweep_rows_per_tick` (`capped`) | `gc_period / 6` (5s), never under 1s |
 | Nothing due (`empty`) | double the previous sleep, up to `8 x gc_period` (4min) |
 
 The first working tick resets to the base. A tick that reached
@@ -534,7 +547,7 @@ resynchronise its selects on the shared `pending_gc` tablets.
 A candidate that comes due inside a backed-off window waits up to the ceiling
 before it is reclaimed — GC is throughput-bound, not latency-bound. The other
 end of that trade: the drain's sustained ceiling is `gc_drain_limit` (or
-`gc_drop_db_rows_per_tick`) per *floor*, so a backlog drains 6x faster than the
+`gc_sweep_rows_per_tick`) per *floor*, so a backlog drains 6x faster than the
 base cadence suggests.
 
 ## Config
@@ -548,7 +561,7 @@ per-branch is also per-instance today.
 | `enable_gc` | `false` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
 | `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
 | `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Read fresh each tick. |
-| `gc_drop_db_rows_per_tick` | `30 000` | Rows a tick deletes for db-wide drops, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database is one, so this is what bounds its burst; a larger database drains over many ticks. The default is `PAGE_BUCKETS x GC_DB_DROP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
+| `gc_sweep_rows_per_tick` | `30 000` | Rows a tick deletes across its prefix sweeps, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database or relation is one, so this is what bounds their burst; a larger object drains over many ticks. The default is `PAGE_BUCKETS x GC_SWEEP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
 | `gc_period` | 30 s | **Base** drain tick interval; the loop adapts around it (5 s floor / 4 min ceiling — see [Tick cadence](#tick-cadence)). `0` disables GC. |
 | `gc_horizon` / `pitr_interval` | — | Retention window feeding the cutoff. |
 
@@ -578,7 +591,7 @@ a stream of new ones — the `error!` line carries the row.
 
 | `kind` | Meaning |
 | --- | --- |
-| `gc_candidate_key_shape_mismatch` | The row's `key` shape doesn't match the keyspace its `gc_kind` acts on (e.g. `DropPages` carrying a rel *block* key, not the fork's rel-size key). The act paths decode the object identity from the key blind, so acting could delete a live object. |
+| `gc_candidate_key_shape_mismatch` | The row's `key` shape doesn't match the keyspace its `gc_kind` acts on (e.g. `DropRel` carrying a rel *block* key, not the relation's rel-size key). The act paths decode the object identity from the key blind, so acting could delete a live object. |
 | `gc_shrink_missing_relsize` | A `ShrinkPages` candidate with no stored `relsize` — nothing to truncate at. |
 | `gc_shrink_relsize_out_of_range` | A `ShrinkPages` `relsize` that isn't a block number (negative, or `>= u32::MAX`). A negative one would match every block (`blknum >= relsize`) and delete the whole fork. |
 | `gc_unknown_candidate_kind` | A `gc_kind` this binary doesn't know, most likely written by a newer one — it reclaims the row on roll-forward. |
@@ -614,10 +627,10 @@ Three checks localize most GC escalations (metrics above):
   activation — a live change needs a PS restart).
 - Candidates drained but `rows_deleted ≈ 0` → the cutoff isn't
   advancing past them; it's pinned (below).
-- A dropped database still holding space → its sweep is paced by
-  `gc_drop_db_rows_per_tick`; the drain logs one line per tick while it is
-  still going (`gc: db-wide drop paused on the tick's row budget`). Raise the
-  knob to reclaim faster.
+- A dropped database or relation still holding space → its sweep is paced by
+  `gc_sweep_rows_per_tick`; raise the knob to reclaim faster. A repeated
+  `gc: sweep owes a re-check pass` for the same object instead means a
+  materialise job is wedged, and the sweep is waiting for a floor reset.
 
 **History window too large / cutoff pinned.** The cutoff is
 `min(retention, live lease, child fork point, consistent_lsn)`, floored at
