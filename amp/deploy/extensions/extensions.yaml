@@ -41,6 +41,10 @@ extensions:
     # Empty => build with the generic extension.Dockerfile. Set to a path
     # (relative to repo root) for a complex extension needing its own recipe.
     dockerfile: ""
+    # Run the extension's own upstream pg_regress suite (test/sql + test/expected)
+    # against the mounted ImageVolume — see extensions.sh --regress.
+    regress:
+      driver: pgxs
 
   - name: pg_cron
     # 1.6.6 is the first release with Postgres 18 support (PG18 dropped the
@@ -60,6 +64,11 @@ extensions:
     preload: true
     prep: ""
     dockerfile: ""
+    # pg_regress suite (sql/pg_cron-test.sql). Its Makefile REGRESS_OPTS start a
+    # private --temp-instance; extensions.sh --regress ignores those and drives
+    # pg_regress straight at the live compute instead.
+    regress:
+      driver: pgxs
 
   - name: hexabridge
     # HexaCluster's Oracle-compatibility layer (DBMS_*/UTL_* packages). Closed
@@ -67,20 +76,27 @@ extensions:
     # tarball endpoint with an auth header — build.sh mounts $AMP_EXT_GH_TOKEN as
     # the gh_token BuildKit secret (see extension.Dockerfile). Pin to a commit
     # (no upstream release yet); the /tarball/<sha> archive is byte-stable for a
-    # given commit, so the sha256 below is reproducible.
+    # given commit, so the sha256 below is reproducible. This commit is the first
+    # that ships the upstream regression suite (scripts/regression.sh + test/pg/).
     version: "0.1"
-    url: https://api.github.com/repos/HexaCluster/hexabridge-ybamp/tarball/1868d155428df6a2e61a5e58d08f31e7df3260b7
-    sha256: 636132b5bac6f08871e40d6efe8a926f246db9526197ad26dc70c7f41ff2da93
+    url: https://api.github.com/repos/HexaCluster/hexabridge-ybamp/tarball/4f1bb16db442d8b3fe66246bc9c1f0ad79ed949a
+    sha256: 0bcb960953db2d139535d1a4deb7e66264015bfd82937a4c6d11dd5433f7b499
     patch: ""
     # SQL name == package name: CREATE EXTENSION hexabridge.
     control: hexabridge
     # The .control ships no `trusted`, so CREATE EXTENSION is superuser-only —
     # keep trusted: false rather than forcing it open.
     trusted: false
-    # Plain function library, no background worker — no shared_preload_libraries
-    # entry, so an endpoint can opt in with just a mount (no restart).
-    preload: false
+    # hexabridge's _PG_init registers a dbms_scheduler background worker and sets
+    # up dbms_alert/dbms_pipe shared memory, so its library must be in
+    # shared_preload_libraries — adding it to a live endpoint needs a restart.
+    preload: true
     prep: ""
     # Pure PGXS (make && make install) — the generic extension.Dockerfile builds
     # it; its link deps (libcurl/libxml2/openssl/zlib) live in the ABI base.
     dockerfile: ""
+    # Run the extension's own regression suite (its custom bash runner, not
+    # pg_regress) against the mounted ImageVolume — see extensions.sh --regress.
+    regress:
+      driver: script
+      script: scripts/regression.sh

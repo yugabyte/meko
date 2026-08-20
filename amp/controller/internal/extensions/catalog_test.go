@@ -51,11 +51,13 @@ func TestCatalogResolveBuildsImageRef(t *testing.T) {
 }
 
 func TestCatalogResolveHexabridge(t *testing.T) {
-	// hexabridge is a plain (non-preload) opt-in extension; Resolve yields its
-	// image ref with Preload:false, and it stays off the default set.
+	// hexabridge is an opt-in extension (off the default set) that preloads: its
+	// _PG_init registers a dbms_scheduler background worker and dbms_alert/
+	// dbms_pipe shared memory, so Resolve carries Preload:true through to the
+	// chart's shared_preload_libraries.
 	c := NewCatalog("quay.io/yugabyte")
 	got := c.Resolve([]string{"hexabridge"})
-	want := []Resolved{{Name: "hexabridge", Image: "quay.io/yugabyte/amp-ext-hexabridge:0.1", Preload: false}}
+	want := []Resolved{{Name: "hexabridge", Image: "quay.io/yugabyte/amp-ext-hexabridge:0.1", Preload: true}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Resolve(hexabridge) = %+v, want %+v", got, want)
 	}

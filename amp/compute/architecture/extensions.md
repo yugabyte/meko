@@ -120,8 +120,9 @@ extension is tagged and released on its own cadence.
   the common path stays small.
 - **[`extensions.yaml`](../../deploy/extensions/extensions.yaml)** — the build
   **manifest**: one row per extension (version, URL, checksums, patch, preload,
-  prep, optional dedicated dockerfile). The single source of truth for versions
-  and checksums; keep it in lockstep with the controller catalog (below).
+  prep, optional dedicated dockerfile, optional `regress:` block for the upstream
+  suite). The single source of truth for versions and checksums; keep it in
+  lockstep with the controller catalog (below).
 - **[`build.sh`](../../deploy/extensions/build.sh)** — builds the base once, then
   each extension, and optionally `--push`es them. `--push` publishes the base too
   (for reuse); `--no-base-push` keeps the base local — nothing pulls it back, so
@@ -288,10 +289,18 @@ audit / recreate.
 2. Add the matching entry to the controller catalog
    ([`catalog.go`](../../controller/internal/extensions/catalog.go)) with the
    same version, and `Default: true` only if it should be mounted on every
-   endpoint (today all entries are `Default: false`).
+   endpoint (today all entries are `Default: false`). Set `Preload: true` if the
+   extension registers a background worker or needs shared memory (its `_PG_init`
+   requires `shared_preload_libraries`), keeping it in step with the manifest's
+   `preload:`.
 3. For a non-default extension, opt an endpoint in by passing
    `extensions: ["<name>"]` to `createEndpoint`; the step persists it onto the
    branch and the fork path inherits it.
+4. (Optional but expected) add a `regress:` block to the manifest row so
+   `extensions.sh --regress` runs the extension's upstream suite: `driver: pgxs`
+   for a Makefile with a `REGRESS` target, or `driver: script` + `script: <path>`
+   for a custom runner. Bless any by-design amp diffs under
+   `test/integration/compute/ext_regress_expected/<name>/`.
 
 ## Testing
 
@@ -314,9 +323,23 @@ audit / recreate.
   registration. For `hexabridge` it goes past `CREATE EXTENSION` (superuser-only)
   and calls deterministic Oracle-compat functions (`nanvl`, `utl_raw.length`) so
   the loaded `.so` is exercised; that run needs `AMP_EXT_GH_TOKEN` for the private
-  fetch and is skipped on forks. The opt-in `amp_extensions_local` CI suite runs
-  all three, and it fires automatically when a diff touches `deploy/extensions/`.
-  It is the local-deploy twin of `deploy/smoke-test.sh`'s `SMOKE_EXTENSIONS` check.
+  fetch and is skipped on forks. It is the local-deploy twin of
+  `deploy/smoke-test.sh`'s `SMOKE_EXTENSIONS` check.
+- **Upstream regression suites (local)** —
+  [`extensions.sh --regress`](../../test/integration/compute/extensions.sh) runs
+  each extension's **own** upstream regression suite against the mounted
+  ImageVolume — the extension analogue of `pg_regress.sh` for core Postgres (#608)
+  — driven by the manifest row's `regress:` block: `driver: pgxs` runs
+  `pg_regress` from the extension's Makefile `REGRESS` (pgvector, pg_cron) against
+  the live compute; `driver: script` runs the extension's own runner (hexabridge's
+  `scripts/regression.sh`). The suite lives in the source tree (not the
+  `FROM scratch` image), so the driver re-fetches the source as
+  `extension.Dockerfile` does. By-design amp diffs are blessed as alternative
+  expected outputs under
+  [`test/integration/compute/ext_regress_expected/<name>/`](../../test/integration/compute/ext_regress_expected/README.md),
+  never by editing upstream goldens. The `amp_extensions_local` CI suite runs all
+  three with `--regress`, and it fires automatically when a diff touches
+  `deploy/extensions/`.
 - **Smoke test** — `deploy/smoke-test.sh` with `SMOKE_EXTENSIONS=1` exercises the
   real K8s ImageVolume path for pgvector, pg_cron, and hexabridge end-to-end.
 

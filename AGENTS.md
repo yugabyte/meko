@@ -168,7 +168,7 @@ nothing.
 |---|---|
 | `amp_integration_slow` | slow integration scenario suite. Also automatic when the diff touches `amp/test/integration/compute/slow/` |
 | `amp_generate_image` | controller container image build |
-| `amp_extensions_local` | local-deploy extension end-to-end test (`amp/test/integration/compute/extensions.sh`): builds the real extension image and asserts `CREATE EXTENSION` against a throwaway `yb_amp_local` cluster. Also automatic when the diff touches `amp/deploy/extensions/`, and nightly on `main`. The lighter twin of `amp_deploy_gke` for extension-pipeline changes |
+| `amp_extensions_local` | local-deploy extension regression test (`amp/test/integration/compute/extensions.sh --regress`): builds the real extension image and runs each externalized extension's own upstream regression suite against a throwaway `yb_amp_local` cluster. Also automatic when the diff touches `amp/deploy/extensions/`, and nightly on `main`. The lighter twin of `amp_deploy_gke` for extension-pipeline changes |
 | `amp_deploy_gke` | build + push four images to Quay, deploy to the itest-dev GKE cluster, smoke test. Also nightly on `main` |
 
 They are all `amp_`-prefixed because they belong to AMP; there is nothing equivalent for

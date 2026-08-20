@@ -401,8 +401,10 @@ SQL
   HDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$HPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$HPROJ" ] && [ -n "$HDEF" ] && ok "hexabridge cluster materialized ($HPROJ / $HDEF)" || bad "hexabridge cluster not materialized"
 
-  # Opt into hexabridge. It is a plain (non-preload) extension, so like pgvector
-  # the pod comes up with just the ImageVolume mounted — no restart needed.
+  # Opt into hexabridge. Like pg_cron it is a preload extension (its _PG_init
+  # registers a dbms_scheduler background worker), so the controller appends it
+  # to shared_preload_libraries; a fresh endpoint that opts in comes up with the
+  # ImageVolume mounted and the library preloaded.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" '{"role":"read_write","extensions":["hexabridge"]}')
   [ "$code" = 202 ] && ok "createEndpoint(extensions:[hexabridge]) 202" || bad "createEndpoint(hexabridge) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(hexabridge) succeeded" || bad "create_endpoint(hexabridge) task=$st"

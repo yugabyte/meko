@@ -55,6 +55,9 @@ Usage: test/integration/compute/extensions.sh [options]
 Options:
   --ext <name>        extension to test (default: pgvector). Must be a row in
                       deploy/extensions/extensions.yaml.
+  --regress           run the extension's OWN upstream regression suite against
+                      the mounted ImageVolume (see the row's `regress:` block)
+                      instead of the built-in smoke assertions.
   --debug             build/run the cluster binaries in debug (default: release)
   --release           build/run the cluster binaries in release (the default)
   --registry <reg>    override the image registry from extensions.yaml
@@ -80,9 +83,11 @@ PROFILE=release
 REGISTRY_OVERRIDE=""
 CACHE=0
 KEEP=0
+REGRESS=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --ext) EXT_NAME="$2"; shift ;;
+        --regress) REGRESS=1 ;;
         --debug) PROFILE=debug ;;
         --release) PROFILE=release ;;
         --registry) REGISTRY_OVERRIDE="$2"; shift ;;
@@ -156,8 +161,10 @@ docker rm "$CID" >/dev/null
 #    generates bindings against pg_install/v18's server headers (it reads
 #    pg_config / include/postgresql/server), so a missing pg_install/v18 fails the
 #    cluster-binary build with "'c.h' file not found" rather than building it. The
-#    CI PG-install cache is keyed on amp/Makefile, so a Makefile change is a cache
-#    miss and pg_install/v18 is absent here on the first run after such a change.
+#    CI PG-install cache is keyed on the PG submodule rev, amp/Makefile, amp/postgres.mk
+#    and amp/compute/pgxn/** — the last so a change to the yb_amp .so (e.g. the
+#    pagestream wire command) busts the cache and rebuilds it against the fresh
+#    pageserver, rather than reusing a stale .so that speaks the old protocol.
 if [[ ! -x "$PGINST/bin/postgres" || ! -f "$PGINST/lib/postgresql/yb_amp.so" ]]; then
     echo ">>> pg_install/v18 missing — building Postgres + yb_amp extension (./build.sh)"
     bash "$REPO/build.sh"
@@ -195,18 +202,39 @@ export YB_AMP_REPO_DIR="${YB_AMP_REPO_DIR:-$REPO/.integration-tests/extensions_$
 export POSTGRES_DISTRIB_DIR="$REPO/pg_install"
 export LD_LIBRARY_PATH="$PGINST/lib:${LD_LIBRARY_PATH:-}"
 
-# Pick a free port block (base..base+700): SC=base, PS pg/http/grpc=+300/+400/+500,
-# SK=+100/+200, compute=+700.
+# Low end of the OS ephemeral (dynamic) port range; mirrors the Rust harness's
+# ephemeral_floor (test/integration/compute/cluster.rs).
+ephemeral_floor() {
+    local lo=""
+    if [[ -r /proc/sys/net/ipv4/ip_local_port_range ]]; then
+        lo=$(cut -f1 /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null)
+    fi
+    if [[ $lo =~ ^[0-9]+$ ]] && (( lo > 10000 )); then echo "$lo"; else echo 32768; fi
+}
+
+# Pick a free port block (base..base+700): SC=base, SK=+100/+200,
+# PS pg/http/grpc=+300/+400/+500, compute=+700.
+#
+# The whole block must sit BELOW the ephemeral floor, like pg_regress.sh and the
+# Rust harness's pick_port_base. `ss` sees only listeners, so a port up there can
+# be taken between this probe and the bind by an outbound connection — including
+# our own daemons' connections to YB, which is how a CI run lost the controller's
+# base port on :55000 with an "address already in use" bind.
 pick_base() {
-    local b
-    for b in "${INTEGRATION_PORT_BASE:-53000}" 54000 55000 56000 57000 58000; do
-        local busy=0 p
-        for p in "$b" $((b+300)) $((b+400)) $((b+700)); do
+    local floor b p busy
+    floor=$(ephemeral_floor)
+    for b in "${INTEGRATION_PORT_BASE:-18000}" 19000 20000 21000 22000 23000; do
+        (( b + 700 < floor )) || continue
+        busy=0
+        # Every port the block actually binds. Probing only some of them let a
+        # busy safekeeper or pageserver-grpc port through, and the daemon then
+        # died on "Address already in use" instead of this moving to the next block.
+        for p in "$b" $((b+100)) $((b+200)) $((b+300)) $((b+400)) $((b+500)) $((b+700)); do
             ss -ltn 2>/dev/null | grep -q ":${p}\b" && { busy=1; break; }
         done
         [[ $busy == 0 ]] && { echo "$b"; return 0; }
     done
-    echo "no free port block found" >&2; return 1
+    echo "no free port block below the ephemeral floor ($floor)" >&2; return 1
 }
 BASE=$(pick_base)
 COMPUTE=$((BASE + 700))
@@ -250,6 +278,7 @@ finish() {
         echo "    tear down: YB_DBNAME=$YB_DBNAME YB_AMP_REPO_DIR=$YB_AMP_REPO_DIR COMPUTE_PORT=${COMPUTE:-} bash test/integration/compute/clean.sh"
     else
         [[ -n "${EXT_DIR:-}" ]] && rm -rf "$EXT_DIR"
+        [[ -n "${SRC_DIR:-}" ]] && rm -rf "$SRC_DIR"
         echo ">>> tearing down"; clean
     fi
     exit "$rc"
@@ -290,6 +319,153 @@ yb endpoint start ext -t 600s
 #    compute's major version). Connect as cloud_admin over loopback (pg_hba
 #    trusts it, no password). -tA prints raw values for exact-match grepping.
 PSQL=("$PGINST/bin/psql" -h 127.0.0.1 -p "$COMPUTE" -U cloud_admin -d postgres -tA -v ON_ERROR_STOP=1)
+
+# --regress: run the extension's own upstream regression suite against the live
+# compute (the local-deploy analogue of pg_regress.sh for core Postgres, #608),
+# instead of the hand-written smoke below. The suite ships in the extension's
+# SOURCE tree — which the FROM-scratch ImageVolume deliberately does not carry —
+# so re-fetch the source the same way extension.Dockerfile does (URL + sha256 +
+# optional gh_token/prep/patch from the manifest). The already-built ImageVolume
+# is what the compute loads; the fetched tree only supplies sql/expected.
+if [[ "$REGRESS" == 1 ]]; then
+    # Pull the row's regress config + the fetch inputs, as shell assignments.
+    eval "$(python3 - "$MANIFEST" "$EXT_NAME" <<'PY'
+import sys, yaml, shlex
+m = yaml.safe_load(open(sys.argv[1]))
+name = sys.argv[2]
+for e in m.get("extensions", []):
+    if e.get("name") == name:
+        r = e.get("regress") or {}
+        def emit(k, v): print("%s=%s" % (k, shlex.quote(str(v if v is not None else ""))))
+        emit("REG_DRIVER", r.get("driver"))
+        emit("REG_SCRIPT", r.get("script"))
+        emit("EXT_URL", e.get("url"))
+        emit("EXT_SHA256", e.get("sha256"))
+        emit("EXT_PATCH", e.get("patch"))
+        emit("EXT_PREP", e.get("prep"))
+        break
+else:
+    sys.exit("extension %r not found in %s" % (name, sys.argv[1]))
+PY
+)"
+    [[ -n "$REG_DRIVER" ]] || { echo "$EXT_NAME has no regress: block in $MANIFEST; nothing to run with --regress" >&2; exit 2; }
+
+    # Re-fetch + unpack the source into a run-scoped dir (cleaned by finish()).
+    SRC_DIR="$(mktemp -d)"
+    fetch_source() {
+        local tgz; tgz="$(mktemp)"
+        local auth=()
+        # hexabridge lives in a private repo; the token turns into a bearer
+        # header exactly as extension.Dockerfile's gh_token secret does. Public
+        # sources (pgvector, pg_cron) fetch with no header.
+        [[ -n "${AMP_EXT_GH_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $AMP_EXT_GH_TOKEN")
+        echo ">>> fetching source: $EXT_URL"
+        curl -fsSL "${auth[@]}" "$EXT_URL" -o "$tgz"
+        echo "$EXT_SHA256  $tgz" | sha256sum -c -
+        tar -xzf "$tgz" --strip-components=1 -C "$SRC_DIR"
+        rm -f "$tgz"
+        ( cd "$SRC_DIR"
+          [[ -n "$EXT_PREP" ]] && sh -eu -c "$EXT_PREP"
+          [[ -n "$EXT_PATCH" ]] && patch --batch --fuzz=0 -p1 < "$REPO/compute/image/patches/$EXT_PATCH"
+          true )
+    }
+
+    # Overlay amp-specific expected-output variants (by-design diffs blessed in
+    # test/integration/compute/ext_regress_expected/<name>/) onto the fetched
+    # tree. Empty until a real diff is blessed, so a clean tree is a genuine green.
+    overlay_expected() {
+        local destdir="$1"
+        local src="$REPO/test/integration/compute/ext_regress_expected/$EXT_NAME"
+        [[ -d "$src" ]] || return 0
+        local n; n=$(find "$src" -type f ! -name README.md | wc -l)
+        [[ "$n" -gt 0 ]] || return 0
+        echo ">>> overlaying $n amp expected variant(s): $src -> $destdir"
+        mkdir -p "$destdir"
+        # Copy everything except the directory's README.md.
+        ( cd "$src" && find . -type f ! -name README.md -print0 \
+            | while IFS= read -r -d '' f; do
+                mkdir -p "$destdir/$(dirname "$f")"; cp -a "$f" "$destdir/$f"
+              done )
+    }
+
+    fetch_source
+
+    if [[ "$REG_DRIVER" == pgxs ]]; then
+        # Evaluate REGRESS + REGRESS_OPTS from the extension's own Makefile (they
+        # use make functions like $(wildcard ...), so read them through make
+        # rather than parse). Then strip --temp-instance/--temp-config: those
+        # would spin up a PRIVATE temp server (pg_cron's Makefile does), but we
+        # want the suite driven at the live amp compute.
+        PG_CONFIG="$PGINST/bin/pg_config"
+        # A throwaway wrapper makefile that includes the extension's own Makefile
+        # (which ends in `include $(PGXS)`) and adds a target to print any var.
+        WRAP="$SRC_DIR/.amp_regress.mk"
+        cat > "$WRAP" <<'MK'
+include Makefile
+amp-print-%:
+	@echo '$($*)'
+MK
+        REGRESS_TESTS="$(make -s -C "$SRC_DIR" -f "$WRAP" amp-print-REGRESS PG_CONFIG="$PG_CONFIG")"
+        REGRESS_OPTS="$(make -s -C "$SRC_DIR" -f "$WRAP" amp-print-REGRESS_OPTS PG_CONFIG="$PG_CONFIG")"
+        rm -f "$WRAP"
+        [[ -n "$REGRESS_TESTS" ]] || { echo ">>> FAIL $EXT_NAME: no REGRESS tests found in Makefile" >&2; exit 1; }
+        KEPT_OPTS=()
+        INPUTDIR="$SRC_DIR"
+        for tok in $REGRESS_OPTS; do
+            case "$tok" in
+                --temp-instance*|--temp-config*) ;;  # drop: no private server
+                --inputdir=*) INPUTDIR="$SRC_DIR/${tok#--inputdir=}"; KEPT_OPTS+=("$tok") ;;
+                *) KEPT_OPTS+=("$tok") ;;
+            esac
+        done
+        overlay_expected "$INPUTDIR/expected"
+        PG_REGRESS="$PGINST/lib/postgresql/pgxs/src/test/regress/pg_regress"
+        echo ">>> running pg_regress ($EXT_NAME): tests=[$REGRESS_TESTS] opts=[${KEPT_OPTS[*]:-}]"
+        # pg_regress creates its own throwaway database on the compute (amp
+        # supports CREATE DATABASE — see pg_regress.sh / #119). The endpoint's
+        # extension_control_path/dynamic_library_path GUCs are server-wide, so
+        # the extension resolves in that database too.
+        ( cd "$SRC_DIR" && "$PG_REGRESS" \
+            --bindir="$PGINST/bin" \
+            --host=127.0.0.1 --port="$COMPUTE" --user=cloud_admin \
+            --dbname="amp_regress_${EXT_NAME}" \
+            "${KEPT_OPTS[@]}" $REGRESS_TESTS )
+        echo ">>> PASS $EXT_NAME: upstream pg_regress suite green"
+    elif [[ "$REG_DRIVER" == script ]]; then
+        # A custom runner (hexabridge's scripts/regression.sh): it drives psql
+        # itself over PG* env and diffs against its own saved outputs, so just
+        # point it at the live compute. CREATE EXTENSION first (the runner
+        # assumes it exists; hexabridge's is superuser-only, and cloud_admin is
+        # the compute superuser).
+        [[ -n "$REG_SCRIPT" ]] || { echo ">>> FAIL $EXT_NAME: regress.driver=script but no script path" >&2; exit 1; }
+        "${PSQL[@]}" -c "CREATE EXTENSION IF NOT EXISTS $CONTROL" >/dev/null
+        # Run the suite as role "postgres", the role its reference CI uses.
+        # dbms_aqadm.create_queue_table maps a bare queue-table name to the
+        # current_user's schema (dbms_aq._parse_name), so the tests that read a
+        # queue table back as the hardcoded postgres.<table> only resolve when
+        # current_user is postgres. amp's superuser is cloud_admin, so add a
+        # peer superuser role for the run (auth is disabled on the local compute).
+        "${PSQL[@]}" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='postgres') THEN CREATE ROLE postgres SUPERUSER LOGIN; END IF; END \$\$" >/dev/null
+        overlay_expected "$SRC_DIR/test/pg"
+        echo ">>> running $REG_SCRIPT ($EXT_NAME) against compute 127.0.0.1:$COMPUTE"
+        ( cd "$SRC_DIR"
+          export PATH="$PGINST/bin:$PATH"
+          export PGHOST=127.0.0.1 PGPORT="$COMPUTE" PGUSER=postgres PGDATABASE=postgres
+          # Match the extension's own CI environment for deterministic output.
+          export PGOPTIONS="-c timezone=Etc/UTC -c lc_messages=C" LC_ALL=C
+          # hexabridge's dbms_crypto tests need OpenSSL legacy providers; its CI
+          # ships the config under .github/. Use it when present.
+          [[ -f .github/openssl-legacy.cnf ]] && export OPENSSL_CONF="$PWD/.github/openssl-legacy.cnf"
+          bash "$REG_SCRIPT" )
+        echo ">>> PASS $EXT_NAME: upstream regression suite green"
+    else
+        echo ">>> FAIL $EXT_NAME: unknown regress.driver=$REG_DRIVER" >&2
+        exit 1
+    fi
+
+    echo ">>> OK ($EXT_NAME regression)"
+    exit 0
+fi
 
 if [[ "$EXT_NAME" == pgvector ]]; then
     # CREATE EXTENSION + store real vector data + a nearest-neighbour query that
@@ -370,8 +546,10 @@ SQL
         exit 1
     fi
 elif [[ "$EXT_NAME" == hexabridge ]]; then
-    # hexabridge is HexaCluster's Oracle-compat layer: a plain (non-preload)
-    # function library whose source lives in a PRIVATE repo (build.sh fetched it
+    # hexabridge is HexaCluster's Oracle-compat layer: a preload extension (its
+    # _PG_init registers a dbms_scheduler background worker, so it was added to
+    # shared_preload_libraries above) whose source lives in a PRIVATE repo
+    # (build.sh fetched it
     # with $AMP_EXT_GH_TOKEN). CREATE EXTENSION is superuser-only (the .control
     # ships no `trusted`); cloud_admin is the compute superuser. Beyond
     # registration, call two deterministic, IMMUTABLE Oracle-compat functions so

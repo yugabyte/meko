@@ -75,6 +75,16 @@ for e in exts:
         import os
         p = os.path.join(os.path.dirname(sys.argv[1]), "..", "..", "compute", "image", "patches", patch)
         assert os.path.isfile(p), f"{name}: patch {patch!r} not found at {p}"
+    # regress, if present, drives the upstream regression suite (extensions.sh
+    # --regress). driver is required and one of pgxs|script; script driver needs
+    # a script path (relative to the source tree).
+    reg = e.get("regress")
+    if reg is not None:
+        assert isinstance(reg, dict), f"{name}: regress must be a mapping"
+        driver = reg.get("driver")
+        assert driver in ("pgxs", "script"), f"{name}: regress.driver must be pgxs|script, got {driver!r}"
+        if driver == "script":
+            assert reg.get("script"), f"{name}: regress.driver=script needs a script path"
 print(f"   ok: {len(exts)} extension(s): {', '.join(sorted(seen))}")
 PY
 

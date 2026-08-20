@@ -190,8 +190,9 @@ extension is "mounted" the way the chart's config does it — the two PG18 path
 GUCs — set here via `--pg-setting`:
 
 ```sh
-test/integration/compute/extensions.sh                 # pgvector, release
+test/integration/compute/extensions.sh                 # pgvector smoke, release
 test/integration/compute/extensions.sh --ext pgvector  # explicit
+test/integration/compute/extensions.sh --regress       # run pgvector's upstream suite
 test/integration/compute/extensions.sh --debug         # debug cluster build
 test/integration/compute/extensions.sh --registry my   # override image registry
 test/integration/compute/extensions.sh --cache         # layer-cache the base build
@@ -215,13 +216,38 @@ What it does:
 The docker-built `.so` loads into the local compute because both compile from
 the same `compute/vendor/postgres-v18` submodule (matching `PG_MODULE_MAGIC`).
 
+### `--regress`: the extension's own upstream suite (#608)
+
+`--regress` swaps the hand-written smoke in step 4 for the extension's **own**
+upstream regression suite — the extension analogue of what `pg_regress.sh` does
+for core PostgreSQL. The suite ships in the extension's source tree, which the
+`FROM scratch` ImageVolume deliberately omits, so the driver re-fetches the
+source the same way [`extension.Dockerfile`](../../../deploy/extensions/extension.Dockerfile)
+does (URL + sha256 + optional `AMP_EXT_GH_TOKEN` / `prep` / `patch` from the
+manifest) and runs its suite against the compute that mounts the built tree.
+
+Which suite is per the manifest row's `regress:` block:
+
+- `driver: pgxs` (pgvector, pg_cron) — reads `REGRESS` / `REGRESS_OPTS` from the
+  extension's Makefile and runs `pg_regress` straight at the live compute,
+  stripping any `--temp-instance` / `--temp-config` (pg_cron's Makefile would
+  otherwise start a private server).
+- `driver: script` (hexabridge) — runs the extension's own runner
+  (`scripts/regression.sh`) pointed at the compute via `PG*` env.
+
+By-design amp diffs are blessed as alternative expected outputs under
+[`ext_regress_expected/<name>/`](ext_regress_expected/README.md) (overlaid at run
+time, upstream goldens untouched), so a clean tree is a genuine green. An
+extension with no `regress:` block errors under `--regress`.
+
 > **Requires docker** + `python3`/PyYAML, a YugabyteDB (`YB_HOST`/`YB_PORT`,
 > default `127.0.0.1:5433`), and a built Postgres (`pg_install/v18` — the script
 > runs `./build.sh` if it is missing). Heavy: the first run builds the
 > ABI-anchor PG18 base image in docker (several minutes). Primarily a
 > manual/local driver; it is not part of the per-PR CI, but the opt-in
-> [`/ci amp_extensions_local`](../../../docs/ci-directives.md) suite runs it (with
-> `--cache`, so the base restores from the shared registry layer cache).
+> [`/ci amp_extensions_local`](../../../docs/ci-directives.md) suite runs it with
+> `--regress` (and `--cache`, so the base restores from the shared registry layer
+> cache).
 >
 > **Preload caveat:** a preload extension (e.g. `pg_cron`) is also appended to
 > `shared_preload_libraries` (the local base is just `yb_amp`); the library base
@@ -236,7 +262,8 @@ test/integration/
   compute/                 this suite (the `integration_tests` crate)
     run.sh                 wrapper: build + run the harness (signal-trap cleanup)
     pg_regress.sh          driver for the FULL upstream pg_regress suite (see above)
-    extensions.sh          driver: externalized extension end-to-end on local deploy (see above)
+    extensions.sh          driver: externalized extension smoke + --regress suite on local deploy (see above)
+    ext_regress_expected/  amp expected-output variants for extensions.sh --regress
     clean.sh               teardown (kill procs, drop DB, wipe run dir)
     build.rs               auto-registers scenarios from fast/ and slow/
     Cargo.toml             the `integration_tests` crate

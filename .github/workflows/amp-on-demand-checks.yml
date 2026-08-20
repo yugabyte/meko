@@ -15,9 +15,10 @@ name: Amp on-demand checks
 #                       pr-build.yml, so this + that == full coverage.
 #   amp_generate_image    — build the controller container image (deploy/controller)
 #   amp_extensions_local  — the local-deploy extension end-to-end test
-#                       (test/integration/compute/extensions.sh): builds the real
-#                       extension docker image and asserts CREATE EXTENSION against a
-#                       yb_amp_local cluster. Also automatic when the diff touches
+#                       (test/integration/compute/extensions.sh --regress): builds
+#                       the real extension docker image and runs each extension's
+#                       own upstream regression suite (#608) against a yb_amp_local
+#                       cluster. Also automatic when the diff touches
 #                       deploy/extensions/ (the pipeline it exercises), and nightly on
 #                       main; the GKE twin is amp_deploy_gke_extensions over in
 #                       amp-control-plane-gke.yml.
@@ -173,7 +174,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: amp/pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk', 'amp/compute/pgxn/**') }}
 
       - name: Wait for YugabyteDB
         run: |
@@ -343,7 +344,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: amp/pg_install
-          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk') }}
+          key: pg-v18-${{ runner.os }}-${{ steps.pgrev.outputs.rev }}-${{ hashFiles('amp/Makefile', 'amp/postgres.mk', 'amp/compute/pgxn/**') }}
 
       - name: Wait for YugabyteDB
         run: |
@@ -369,30 +370,32 @@ jobs:
       # extension per run (--ext, default pgvector), so run each manifest
       # extension explicitly: the ABI-anchor base is built once (the second run
       # reuses it), then each brings up its own throwaway yb_amp_local cluster.
-      # pg_cron exercises the preload + scheduled-job path (see its block in
-      # extensions.sh), which pgvector does not.
-      # The two runs share one job and run sequentially, so pin each to a distinct
-      # port block (each spans base..base+700): extensions.sh's pick_base probes
-      # only base/+300/+400/+700, not the safekeeper sub-ports (+100/+200), so a
-      # shared base collides on a still-draining SK socket from the first run.
-      - name: Local extension test (pgvector)
+      # --regress runs each extension's OWN upstream regression suite against the
+      # mounted ImageVolume (issue #608) — pgvector/pg_cron via pg_regress,
+      # hexabridge via its scripts/regression.sh — instead of the built-in smoke.
+      # The runs share one job and run sequentially, so pin each to a distinct port
+      # block (each spans base..base+700). The bases sit BELOW the ephemeral floor
+      # (~32768) that pick_base enforces: a block up in the ephemeral range can lose
+      # a lane to an outbound connection between the probe and the bind, which is
+      # how the controller's base port failed to bind mid-run.
+      - name: Local extension regression suite (pgvector)
         env:
-          INTEGRATION_PORT_BASE: "53000"
-        run: test/integration/compute/extensions.sh --ext pgvector ${{ steps.quay.outputs.cache }}
+          INTEGRATION_PORT_BASE: "18000"
+        run: test/integration/compute/extensions.sh --ext pgvector --regress ${{ steps.quay.outputs.cache }}
 
-      - name: Local extension test (pg_cron)
+      - name: Local extension regression suite (pg_cron)
         env:
-          INTEGRATION_PORT_BASE: "55000"
-        run: test/integration/compute/extensions.sh --ext pg_cron ${{ steps.quay.outputs.cache }}
+          INTEGRATION_PORT_BASE: "19000"
+        run: test/integration/compute/extensions.sh --ext pg_cron --regress ${{ steps.quay.outputs.cache }}
 
       # hexabridge's source is private, so this needs AMP_EXT_GH_TOKEN — skipped on
       # forks (no secrets), where the env var is empty. Distinct port block again
-      # (57000..57700) so it can't collide with the two runs above.
-      - name: Local extension test (hexabridge)
+      # (20000..20700) so it can't collide with the two runs above.
+      - name: Local extension regression suite (hexabridge)
         if: env.AMP_EXT_GH_TOKEN != ''
         env:
-          INTEGRATION_PORT_BASE: "57000"
-        run: test/integration/compute/extensions.sh --ext hexabridge ${{ steps.quay.outputs.cache }}
+          INTEGRATION_PORT_BASE: "20000"
+        run: test/integration/compute/extensions.sh --ext hexabridge --regress ${{ steps.quay.outputs.cache }}
 
       - name: Upload run logs
         if: failure()
