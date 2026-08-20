@@ -2,7 +2,7 @@
 // lineage) plus the compute section for that branch, and — on forks — a delete.
 
 import { useState } from "react";
-import { GitBranch, Trash2 } from "lucide-react";
+import { GitBranch, SlidersHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import type { Branch, Endpoint } from "@/lib/api/types";
 import { dataBranchingMessages as msg } from "@/lib/messages";
 import { formatDateTime } from "@/lib/format";
 import { EndpointsSection } from "./EndpointsSection";
+import { SettingsDialog } from "./SettingsDialog";
 
 export function BranchCard({
   branch,
@@ -46,6 +47,7 @@ export function BranchCard({
   // a fork's data is real but it's a fork, not the whole cluster.
   const del = useDeleteBranch();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   function remove() {
     del.mutate(
@@ -111,6 +113,15 @@ export function BranchCard({
           <span className="text-xs text-muted-foreground">
             {formatDateTime(branch.created_at)}
           </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowSettings(true)}
+            className="h-7 gap-1 px-2 text-xs"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            Settings
+          </Button>
           {!isRoot && (
             <Button
               variant="ghost"
@@ -158,6 +169,18 @@ export function BranchCard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <SettingsDialog
+        open={showSettings}
+        onOpenChange={setShowSettings}
+        poolId={poolId}
+        clusterId={clusterId}
+        branchId={branch.branch_id}
+        stored={{
+          pg_settings: branch.pg_settings,
+          write_token_settings: branch.write_token_settings,
+        }}
+        title={branch.name}
+      />
     </div>
   );
 }

@@ -321,6 +321,52 @@ class ControllerClient:
             json={"resources": resources},
         )
 
+    def update_branch_settings(
+        self,
+        pool_id: str,
+        cluster_id: str,
+        branch_id: str,
+        pg_settings: Optional[dict] = None,
+        write_token_settings: Optional[dict] = None,
+    ) -> dict:
+        # Only the named surfaces are sent. An omitted key means "leave it
+        # alone" and `{}` means "clear it", so the two cannot be collapsed —
+        # dropping a None would be indistinguishable from clearing.
+        body: dict[str, Any] = {}
+        if pg_settings is not None:
+            body["pg_settings"] = pg_settings
+        if write_token_settings is not None:
+            body["write_token_settings"] = write_token_settings
+        return self._request(
+            "PATCH",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}/settings",
+            json=body,
+        )
+
+    def update_endpoint_settings(
+        self,
+        pool_id: str,
+        cluster_id: str,
+        branch_id: str,
+        endpoint_id: str,
+        pg_settings: Optional[dict] = None,
+        pageserver_settings: Optional[dict] = None,
+        safekeeper_settings: Optional[dict] = None,
+    ) -> dict:
+        body: dict[str, Any] = {}
+        if pg_settings is not None:
+            body["pg_settings"] = pg_settings
+        if pageserver_settings is not None:
+            body["pageserver_settings"] = pageserver_settings
+        if safekeeper_settings is not None:
+            body["safekeeper_settings"] = safekeeper_settings
+        return self._request(
+            "PATCH",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}/branches/{branch_id}"
+            f"/endpoints/{endpoint_id}/settings",
+            json=body,
+        )
+
     # ---- Tasks ----
 
     def list_tasks(

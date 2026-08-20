@@ -11,7 +11,7 @@ metadata:
 # amp MCP Tools — Agent Behavioral Guide
 
 The amp controller manages a placement group of Postgres-compatible databases
-on branchable storage. This server exposes its control-plane REST API as **19
+on branchable storage. This server exposes its control-plane REST API as **21
 MCP tools**. This skill teaches you how to call them correctly on the first try
 — above all, the **asynchronous task model**, which is the single most common
 way agents get amp wrong.
@@ -76,8 +76,9 @@ same branch is rejected with `conflict`. Provision additional compute as
 
 ## Settings: dotted keys reach the nested ones
 
-`create_endpoint` takes three settings maps, all **create-time only** — there is
-no update surface, so changing one means creating another endpoint.
+`create_endpoint` takes three settings maps. They can also be changed
+afterwards — see "Changing settings after create" below, which is the part with
+a cost, since applying a change restarts the services whose config moved.
 
 `pg_settings={"work_mem": "64MB"}` are PostgreSQL GUCs (values are strings) and
 merge over the branch's, winning on a shared key.
@@ -103,8 +104,30 @@ the `listen_*` addresses, `yb_storage_conn`, `pg_distrib_dir`,
 suggests it. Validation is against a key set generated from the daemons' own
 config types, so it tracks the binaries rather than a hand-kept list.
 
-These apply at pod start, which is why they are create-time: the supervisor
-reads them from the endpoint's row when the pod comes up.
+The supervisor reads them from the endpoint's row when the pod comes up, which
+is why applying a later change costs a restart of the services whose config
+moved.
+
+## Changing settings after create
+
+`update_branch_settings(pg_settings?, write_token_settings?)` and
+`update_endpoint_settings(pg_settings?, pageserver_settings?,
+safekeeper_settings?)` are **synchronous**, unlike everything else that
+changes a resource.
+
+**Omitted means "leave it alone"; `{}` means "clear it".** Sending only
+`write_token_settings` does not touch `pg_settings`. This is the mistake worth
+avoiding: passing an empty map for a surface you did not mean to change wipes
+it.
+
+They store the settings first, then tell the running endpoints. Each restarts
+the services whose config actually changed and reports them in `restarted`; a
+change that renders identical config restarts nothing, and `unreachable` says
+why an endpoint could not be told (it picks the change up when it next starts).
+
+**Restarting the compute bounces Postgres.** A `pg_settings` change interrupts
+connections on the endpoint — and on a *branch*, on every endpoint on it. Say so
+before making one on anything live.
 
 ## Resize outcomes
 
@@ -153,13 +176,13 @@ Failures raise an error with a stable `code` and a human message. Common ones:
 - `conflict` — a second `read_write` on a branch, or deleting a branch that still has child branches.
 - `internal` — controller-side failure; surface it, don't silently retry.
 
-## Tool catalog (19)
+## Tool catalog (21)
 
 **Users (1):** `get_user`
 **Storage pools (3):** `create_storage_pool`, `list_storage_pools`, `get_storage_pool`
 **Clusters / databases (4):** `create_cluster`*, `list_clusters`, `get_cluster`, `delete_cluster`*
-**Branches (4):** `create_branch`*, `list_branches`, `get_branch`, `delete_branch`*
-**Endpoints / compute (5):** `create_endpoint`*, `list_endpoints`, `get_endpoint`, `delete_endpoint`*, `resize_endpoint`*
+**Branches (5):** `create_branch`*, `list_branches`, `get_branch`, `delete_branch`*, `update_branch_settings`
+**Endpoints / compute (6):** `create_endpoint`*, `list_endpoints`, `get_endpoint`, `delete_endpoint`*, `resize_endpoint`*, `update_endpoint_settings`
 **Tasks (2):** `list_tasks`, `get_task`
 
 `*` = asynchronous → returns a Task, poll `get_task`.

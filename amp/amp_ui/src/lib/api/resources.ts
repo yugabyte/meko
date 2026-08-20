@@ -17,10 +17,13 @@ import type {
   ClusterList,
   ResizeEndpointInput,
   ResizeOutcome,
+  SettingsUpdateResult,
   StoragePool,
   StoragePoolList,
   Task,
   TaskList,
+  UpdateBranchSettingsInput,
+  UpdateEndpointSettingsInput,
   User,
   UserList,
   Version,
@@ -323,6 +326,37 @@ export async function resizeEndpoint(
     outcome: result.in_place_resize ?? "completed",
     message: result.in_place_message ?? "",
   };
+}
+
+// Sync: the controller stores the settings, then pushes them to the running
+// endpoints. The reply says what was stored (`applied`) and, per endpoint,
+// which services it restarted onto the new config or why it could not be told.
+//
+// Only what the caller names is sent: an omitted surface is left alone and `{}`
+// clears it, so the two must not be collapsed on the way out.
+export async function updateBranchSettings(
+  poolId: string,
+  clusterId: string,
+  branchId: string,
+  input: UpdateBranchSettingsInput,
+): Promise<SettingsUpdateResult> {
+  return apiRequest<SettingsUpdateResult>(
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/settings`,
+    { method: "PATCH", body: input },
+  );
+}
+
+export async function updateEndpointSettings(
+  poolId: string,
+  clusterId: string,
+  branchId: string,
+  endpointId: string,
+  input: UpdateEndpointSettingsInput,
+): Promise<SettingsUpdateResult> {
+  return apiRequest<SettingsUpdateResult>(
+    `/storage-pools/${poolId}/clusters/${clusterId}/branches/${branchId}/endpoints/${endpointId}/settings`,
+    { method: "PATCH", body: input },
+  );
 }
 
 // Async: DELETE records a delete_endpoint task (tears down the Helm release and

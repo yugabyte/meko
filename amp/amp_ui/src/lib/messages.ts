@@ -26,6 +26,33 @@ export const dataBranchingMessages = {
   resizeUnsupported: (size: string) => `Resized to ${size} (in-place n/a on this runtime)`,
   resizeError: "Failed to resize compute",
 
+  // Settings
+  settingsTitle: "Settings",
+  settingsBranchDescription:
+    "Postgres settings applied to every compute on this branch. An endpoint's own settings win on a key both define.",
+  settingsEndpointDescription:
+    "Settings for this compute alone. Postgres settings here win over the branch's.",
+  settingsRestartWarning:
+    "Changing Postgres settings restarts this compute and drops its active connections. Only the services whose config actually changes are restarted.",
+  settingsRestartWarningBranch:
+    "Changing Postgres settings restarts the compute on every endpoint of this branch and drops their active connections. Only the services whose config actually changes are restarted.",
+  settingsSaved: "Settings saved",
+  settingsSavedRestarted: (services: string) => `Settings saved — restarted ${services}`,
+  settingsSavedNoRestart: "Settings saved — nothing needed restarting",
+  settingsSavedRestartedAndUnreachable: (services: string, unreachable: number) =>
+    `Settings saved — restarted ${services}; ${unreachable} compute${unreachable === 1 ? "" : "s"} couldn't be reached and will apply them on next start`,
+  settingsSavedUnreachable:
+    "Settings saved, but the compute couldn't be reached — they apply when it next starts",
+  settingsError: "Failed to save settings",
+  settingsNothingSet: "Nothing set.",
+  settingsAddRow: "Add setting",
+  settingsBlankValue: (label: string, key: string) =>
+    `Give ${key} a value under ${label}, or remove the row — a setting with no value stops the compute from starting.`,
+  settingsDuplicateKey: (label: string, key: string) =>
+    `${key} appears twice under ${label}. Edit the existing row instead of adding a second one.`,
+  settingsInvalidValue: (label: string, key: string) =>
+    `${key} under ${label} needs a number.`,
+
   // Unprovision (delete compute)
   unprovisionTitle: (role: string) => `Unprovision ${role} compute?`,
   unprovisionConfirmReadWrite:

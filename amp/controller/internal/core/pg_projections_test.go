@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -70,6 +71,15 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		t.Fatalf("ensure endpoint: %v", err)
 	}
 
+	// pg_settings and write_token_settings are adjacent jsonb columns in the
+	// branch projection, so — as with the endpoint's two daemon columns above —
+	// disjoint fixtures are what stops a transposed scan from passing.
+	branchPg := map[string]string{"statement_timeout": "30s"}
+	branchLease := map[string]any{"ttl_ms": 20000}
+	if err := b.UpdateBranchSettings(ctx, branchID, &branchPg, &branchLease); err != nil {
+		t.Fatalf("seed branch settings: %v", err)
+	}
+
 	t.Run("branches", func(t *testing.T) {
 		// GetBranch (branchSelect, pool-joined).
 		got, err := b.GetBranch(ctx, sp.ID, clusterID, branchID)
@@ -78,6 +88,18 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		}
 		if got.BranchID != branchID || got.Name != DefaultBranchName {
 			t.Errorf("GetBranch = %+v", got)
+		}
+		if got.PgSettings["statement_timeout"] != "30s" {
+			t.Errorf("branch pg_settings did not land: %+v", got.PgSettings)
+		}
+		// A transposed scan would put the lease object here, or the settings in
+		// the lease — either way this comparison fails rather than the row
+		// merely looking populated.
+		if fmt.Sprint(got.WriteTokenSettings["ttl_ms"]) != "20000" {
+			t.Errorf("branch write_token_settings did not land: %+v", got.WriteTokenSettings)
+		}
+		if _, crossed := got.WriteTokenSettings["statement_timeout"]; crossed {
+			t.Errorf("pg_settings leaked into write_token_settings: %+v", got.WriteTokenSettings)
 		}
 
 		// ListBranches (its own FROM, same column list).

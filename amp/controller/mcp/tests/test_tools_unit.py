@@ -119,3 +119,57 @@ def test_resize_endpoint_omits_unset_field(wired):
         pool_id="p1", cluster_id="pr1", branch_id="b1", endpoint_id="e1", cpu="4",
     )
     assert wired.last_json() == {"resources": {"cpu": "4"}}
+
+
+# The settings tools rest on a distinction the wire format makes and Python
+# hides: an argument left unset must not appear in the body at all ("leave that
+# surface alone"), while `{}` must appear ("clear it"). Collapsing them would
+# make an omitted argument silently destructive — a caller changing a lease
+# would blank the branch's pg_settings.
+@pytest.mark.parametrize(
+    "wired",
+    [{"PATCH /api/v1/storage-pools/p1/clusters/pr1/branches/b1/settings": (200, {"applied": True})}],
+    indirect=True,
+)
+def test_update_branch_settings_omits_unset_surfaces(wired):
+    tools.update_branch_settings(
+        pool_id="p1", cluster_id="pr1", branch_id="b1",
+        write_token_settings={"ttl_ms": 15000, "renew_seconds": 5},
+    )
+    assert wired.last.method == "PATCH"
+    assert wired.last.url.path.endswith("/branches/b1/settings")
+    # pg_settings is absent, not null and not {}.
+    assert wired.last_json() == {
+        "write_token_settings": {"ttl_ms": 15000, "renew_seconds": 5}
+    }
+
+
+@pytest.mark.parametrize(
+    "wired",
+    [{"PATCH /api/v1/storage-pools/p1/clusters/pr1/branches/b1/settings": (200, {"applied": True})}],
+    indirect=True,
+)
+def test_update_branch_settings_sends_empty_to_clear(wired):
+    tools.update_branch_settings(
+        pool_id="p1", cluster_id="pr1", branch_id="b1", pg_settings={},
+    )
+    assert wired.last_json() == {"pg_settings": {}}
+
+
+@pytest.mark.parametrize(
+    "wired",
+    [{"PATCH /api/v1/storage-pools/p1/clusters/pr1/branches/b1/endpoints/e1/settings":
+      (200, {"applied": True, "endpoints": [{"endpoint_id": "e1", "restarted": ["pageserver"]}]})}],
+    indirect=True,
+)
+def test_update_endpoint_settings_reports_what_restarted(wired):
+    result = tools.update_endpoint_settings(
+        pool_id="p1", cluster_id="pr1", branch_id="b1", endpoint_id="e1",
+        pageserver_settings={"tenant_config.enable_gc": True},
+    )
+    assert wired.last_json() == {
+        "pageserver_settings": {"tenant_config.enable_gc": True}
+    }
+    # The caller is told which services were bounced, which is the part with a
+    # cost: restarting the compute interrupts Postgres connections.
+    assert result["endpoints"][0]["restarted"] == ["pageserver"]

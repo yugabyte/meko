@@ -154,6 +154,21 @@ type Branch struct {
 	// `pg_settings` merge over these and win on a key both define.
 	PgSettings *map[string]string `json:"pg_settings,omitempty"`
 	PgVersion  int                `json:"pg_version"`
+
+	// WriteTokenSettings How the supervisor holds this branch's write lease
+	// (`compute/architecture/compute-fencing.md`). `ttl_ms` is the lease
+	// length; `renew_seconds` is how often it is renewed, and must be under
+	// the TTL — the gap is how long a failing renewal may be retried before
+	// anything stops writing.
+	//
+	// On the branch and not the endpoint because the lease is one row per
+	// branch: every endpoint on it contends for that row, so two endpoints
+	// disagreeing about the TTL would not be an override, just whichever
+	// renewed last.
+	//
+	// Empty means the supervisor's own defaults. Read when an endpoint
+	// starts.
+	WriteTokenSettings *WriteTokenSettings `json:"write_token_settings,omitempty"`
 }
 
 // BranchList defines model for BranchList.

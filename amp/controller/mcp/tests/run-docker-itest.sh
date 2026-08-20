@@ -110,7 +110,7 @@ from fastmcp import Client
 async def main():
     async with Client(os.environ["MCP_URL"]) as c:
         names = sorted(t.name for t in await c.list_tools())
-        assert len(names) == 18, f"expected 18 tools, got {len(names)}: {names}"
+        assert len(names) == 21, f"expected 21 tools, got {len(names)}: {names}"
         assert "create_user" not in names and "list_users" not in names
         print(f"   MCP container serves {len(names)} tools; create_user/list_users absent")
 asyncio.run(main())

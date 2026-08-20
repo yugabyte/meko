@@ -23,12 +23,15 @@ import {
   listStoragePools,
   listTasks,
   listUsers,
+  updateBranchSettings,
 } from "./resources";
 import type {
   Branch,
   CreateBranchInput,
   Cluster,
+  SettingsUpdateResult,
   StoragePool,
+  UpdateBranchSettingsInput,
   User,
 } from "./types";
 
@@ -232,6 +235,31 @@ export function useCreateBranch() {
       body: CreateBranchInput;
     }): Promise<Branch> =>
       createBranch(input.poolId, input.clusterId, input.body),
+    onSuccess: (_data, input) => {
+      qc.invalidateQueries({
+        queryKey: qk.branches(input.poolId, input.clusterId),
+      });
+    },
+  });
+}
+
+/** Update a branch's settings.
+ *
+ * Branch-wide, so the controller tells every endpoint on the branch and the
+ * result carries one outcome each. A `pg_settings` change restarts each
+ * endpoint's compute, which interrupts its Postgres connections — the caller is
+ * responsible for saying so before it happens.
+ */
+export function useUpdateBranchSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      poolId: string;
+      clusterId: string;
+      branchId: string;
+      settings: UpdateBranchSettingsInput;
+    }): Promise<SettingsUpdateResult> =>
+      updateBranchSettings(input.poolId, input.clusterId, input.branchId, input.settings),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
         queryKey: qk.branches(input.poolId, input.clusterId),

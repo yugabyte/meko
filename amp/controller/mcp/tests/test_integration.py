@@ -95,7 +95,7 @@ async def test_real_controller_resource_ladder():
     config.controller_url = base
     mcp = server.build_server(config)
     async with Client(mcp) as client:
-        assert len(await client.list_tools()) == 18
+        assert len(await client.list_tools()) == 21
 
         pool = (
             await client.call_tool(

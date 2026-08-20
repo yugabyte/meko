@@ -1,4 +1,4 @@
-"""Wire-contract lock for all 18 MCP tools.
+"""Wire-contract lock for all 21 MCP tools.
 
 What this solves: it pins the exact HTTP method, path, request body, and query
 params each tool sends to the controller, so silent API drift (a renamed route,
@@ -46,7 +46,7 @@ def wire():
 
 
 # (tool name, kwargs, expected method, expected path, canned response spec).
-# One row per tool — the full 18-tool surface.
+# One row per tool — the full 21-tool surface.
 CASES = [
     ("get_user", {"user_id": "u1"}, "GET", "/api/v1/users/u1", {"id": "u1"}),
     ("create_storage_pool", {"name": "n", "owner_user_id": "u9"}, "POST",
@@ -84,6 +84,16 @@ CASES = [
     ("resize_endpoint",
      {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
       "endpoint_id": "e1", "cpu": "4"}, "POST", f"{E}/resize", (202, TASK)),
+    # Settings are synchronous: a 200 with what was stored and what it could be
+    # applied to, not a Task to poll.
+    ("update_branch_settings",
+     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
+      "pg_settings": {"work_mem": "64MB"}}, "PATCH", f"{B}/settings",
+     {"applied": True}),
+    ("update_endpoint_settings",
+     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
+      "endpoint_id": "e1", "pg_settings": {"work_mem": "64MB"}},
+     "PATCH", f"{E}/settings", {"applied": True}),
     ("list_tasks", {}, "GET", "/api/v1/tasks",
      {"tasks": [], "total": 0, "count": 0}),
     ("get_task", {"task_id": "t1"}, "GET", "/api/v1/tasks/t1",
@@ -92,7 +102,7 @@ CASES = [
 
 
 def test_cases_cover_all_tools():
-    assert len({name for name, *_ in CASES}) == 19
+    assert len({name for name, *_ in CASES}) == 21
 
 
 @pytest.mark.parametrize("name,kwargs,method,path,spec", CASES, ids=[c[0] for c in CASES])

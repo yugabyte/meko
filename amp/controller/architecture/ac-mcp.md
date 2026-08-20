@@ -41,7 +41,7 @@ intentionally flat:
 
 ```
 controller/mcp/src/
-  server.py              config (flags + env) → FastMCP setup → register 18 tools → run
+  server.py              config (flags + env) → FastMCP setup → register 21 tools → run
   controller_client.py   singleton ControllerClient (httpx) → /api/v1 → ControllerApiError
   tools.py               18 tool functions: typed args → client method → JSON back
   server_instructions.py the instructions string handed to the model
@@ -69,7 +69,7 @@ controller/mcp/src/
   `owner_user_id` requirement, so the model gets the same mental model a human
   reads in `ac-apis.md`.
 
-## The tool catalog — 18 tools
+## The tool catalog — 21 tools
 
 The catalog is a curated subset of the REST operations, one tool per operation,
 named in snake_case. Each carries MCP annotation hints so a client can reason
@@ -91,10 +91,12 @@ external service).
 | `list_branches` | `GET …/clusters/{clusterId}/branches` | read-only |
 | `get_branch` | `GET …/branches/{branchId}` | read-only |
 | `delete_branch` | `DELETE …/branches/{branchId}` | destructive (async) |
+| `update_branch_settings` | `PATCH …/branches/{branchId}/settings` | write (sync) |
 | `create_endpoint` | `POST …/branches/{branchId}/endpoints` | write (async) |
 | `list_endpoints` | `GET …/branches/{branchId}/endpoints` | read-only |
 | `get_endpoint` | `GET …/endpoints/{endpointId}` | read-only |
 | `resize_endpoint` | `POST …/endpoints/{endpointId}/resize` | write (async) |
+| `update_endpoint_settings` | `PATCH …/endpoints/{endpointId}/settings` | write (sync) |
 | `delete_endpoint` | `DELETE …/endpoints/{endpointId}` | destructive (async) |
 | `list_tasks` | `GET /tasks` (`status`, `kind`, `cluster_id` filters) | read-only |
 | `get_task` | `GET /tasks/{taskId}` | read-only |

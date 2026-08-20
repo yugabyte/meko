@@ -43,6 +43,8 @@ from tools import (
     list_storage_pools,
     list_tasks,
     resize_endpoint,
+    update_branch_settings,
+    update_endpoint_settings,
 )
 
 logger = logging.getLogger("amp-mcp.server")
@@ -171,6 +173,8 @@ def build_server(
         (get_endpoint, ann["ro"]),
         (delete_endpoint, ann["dest"]),
         (resize_endpoint, ann["write"]),
+        (update_branch_settings, ann["write"]),
+        (update_endpoint_settings, ann["write"]),
         (list_tasks, ann["ro"]),
         (get_task, ann["ro"]),
     ]

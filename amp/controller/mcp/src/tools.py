@@ -157,8 +157,10 @@ def create_endpoint(
     `get_endpoint` to read its `address` (and `tailnet_address`, if the endpoint
     is exposed on the tailnet).
 
-    Three optional settings maps configure what runs inside the pod, all
-    create-time only — to change one, create another endpoint.
+    Three optional settings maps configure what runs inside the pod. To change
+    one later use `update_endpoint_settings` — the endpoint restarts the
+    services whose config actually moved, so a `pg_settings` change interrupts
+    its Postgres connections.
 
     `pg_settings` is `{name: value}` PostgreSQL GUCs, values all strings, e.g.
     `{"work_mem": "64MB"}`. They merge over the branch's and win.
@@ -245,6 +247,77 @@ def resize_endpoint(
     """
     return controller_client.resize_endpoint(
         pool_id, cluster_id, branch_id, endpoint_id, cpu, memory
+    )
+
+
+def update_branch_settings(
+    pool_id: str,
+    cluster_id: str,
+    branch_id: str,
+    pg_settings: Optional[dict] = None,
+    write_token_settings: Optional[dict] = None,
+) -> dict[str, Any]:
+    """Change settings that apply to every compute on a branch. SYNCHRONOUS.
+
+    `pg_settings` is a flat `{name: value}` map of PostgreSQL settings — the
+    baseline for the branch, which an endpoint's own `pg_settings` merge over
+    and win on a shared key. `write_token_settings` is the branch's write lease
+    (`{"ttl_ms": 15000, "renew_seconds": 5}`); `renew_seconds` must be under
+    `ttl_ms`, since the gap is how long a failing renewal may be retried before
+    anything stops writing.
+
+    **An omitted argument is left alone; pass `{}` to clear a surface.** So
+    sending only `pg_settings` never touches the lease.
+
+    The settings are stored first — that is what `applied` reports — and the
+    controller then tells each of the branch's endpoints. Each restarts the
+    services whose config actually changed and reports them in `restarted`; a
+    change that renders identical config restarts nothing. Restarting the
+    compute bounces Postgres, so a `pg_settings` change interrupts connections
+    on **every endpoint on the branch**. An endpoint that could not be reached
+    comes back in `unreachable` and picks the change up when it next starts.
+    """
+    return controller_client.update_branch_settings(
+        pool_id, cluster_id, branch_id, pg_settings, write_token_settings
+    )
+
+
+def update_endpoint_settings(
+    pool_id: str,
+    cluster_id: str,
+    branch_id: str,
+    endpoint_id: str,
+    pg_settings: Optional[dict] = None,
+    pageserver_settings: Optional[dict] = None,
+    safekeeper_settings: Optional[dict] = None,
+) -> dict[str, Any]:
+    """Change one endpoint's settings. SYNCHRONOUS.
+
+    `pg_settings` merge over the branch's and win on a shared key.
+    `pageserver_settings` and `safekeeper_settings` are this endpoint's alone,
+    flat `{key: scalar}` maps whose keys may be **dotted paths**
+    (`tenant_config.enable_gc`, which is how the pageserver's GC knobs are
+    reached at all). They are validated against the daemons' own config types,
+    so an unknown key, a wrong type or a protected key is rejected — a key the
+    daemon does not know would abort its startup.
+
+    **An omitted argument is left alone; pass `{}` to clear a surface.**
+
+    Stored first (`applied`), then the endpoint is told: it restarts the
+    services whose config actually changed and reports them in `restarted`. A
+    change that renders identical config restarts nothing. Restarting the
+    compute bounces Postgres, so a `pg_settings` change interrupts this
+    endpoint's connections; `unreachable` says why an endpoint could not be
+    told, and it picks the change up when it next starts.
+    """
+    return controller_client.update_endpoint_settings(
+        pool_id,
+        cluster_id,
+        branch_id,
+        endpoint_id,
+        pg_settings,
+        pageserver_settings,
+        safekeeper_settings,
     )
 
 

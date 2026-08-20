@@ -34,6 +34,16 @@ server-level default user. Wherever the API needs an owner (today only \
 `create_storage_pool`), pass `owner_user_id` explicitly. `get_user` is \
 available to read a known user by id.
 
+## Settings changes restart things
+
+`update_branch_settings` and `update_endpoint_settings` are synchronous. An \
+omitted surface is left alone; `{}` clears it. They store the change, then the \
+endpoints restart the services whose config actually moved and report them in \
+`restarted` — restarting the compute bounces Postgres, so a `pg_settings` \
+change interrupts that endpoint's connections, and a branch-wide one \
+interrupts every endpoint on the branch. Warn the user before doing that to \
+anything live.
+
 ## Asynchronous operations — poll get_task
 
 All `create_*` and `delete_*` tools (clusters, branches, endpoints) plus \

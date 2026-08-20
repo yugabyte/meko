@@ -9,7 +9,7 @@ files below only handle **delivery** (getting a harness to auto-discover it).
 
 ```
 controller/mcp/skills/
-  amp-mcp-tools/SKILL.md          # the skill (all 19 tools, async model, gotchas)
+  amp-mcp-tools/SKILL.md          # the skill (all 21 tools, async model, gotchas)
   .claude-plugin-desktop/plugin.json   # Claude Desktop bundle manifest
   scripts/package-skill.sh        # build a .skill bundle for Desktop
   README.md                       # this file

@@ -11,7 +11,7 @@ See `controller/architecture/ac-mcp.md` for the design.
 
 ## Tools
 
-19 tools mapped to the controller's operations:
+21 tools mapped to the controller's operations:
 
 - **Users (read-only):** `get_user`. User create/list are intentionally not
   exposed; where the API needs an owner, the tool takes `owner_user_id` as a
@@ -20,13 +20,20 @@ See `controller/architecture/ac-mcp.md` for the design.
   `list_storage_pools`, `get_storage_pool`.
 - **Clusters:** `create_cluster` (optional `pg_version`, default 18 — only 18
   is accepted today), `list_clusters`, `get_cluster`, `delete_cluster`.
-- **Branches:** `create_branch`, `list_branches`, `get_branch`, `delete_branch`.
+- **Branches:** `create_branch`, `list_branches`, `get_branch`,
+  `delete_branch`, `update_branch_settings` (branch-wide Postgres settings and
+  the write lease).
 - **Endpoints:** `create_endpoint`, `list_endpoints`, `get_endpoint`,
-  `delete_endpoint`, `resize_endpoint` (vertical CPU/memory resize, in place).
+  `delete_endpoint`, `resize_endpoint` (vertical CPU/memory resize, in place),
+  `update_endpoint_settings` (this endpoint's Postgres / pageserver /
+  safekeeper settings).
 - **Tasks:** `list_tasks`, `get_task`.
 
-`create_storage_pool` is **synchronous** — it returns the created storage pool
-directly. The `create_cluster` / `create_branch` / `create_endpoint` /
+`create_storage_pool` and the two `update_*_settings` tools are
+**synchronous** — they return their result directly. A settings change is
+stored, then pushed to the running endpoints, which restart the services whose
+config actually changed and report them; restarting the compute bounces
+Postgres, so a `pg_settings` change interrupts that endpoint's connections. The `create_cluster` / `create_branch` / `create_endpoint` /
 `resize_endpoint` tools and every `delete_*` tool are **asynchronous**: they
 return a `Task` object immediately. Poll `get_task(task_id=<id>)` until the task's `status` reaches
 `succeeded` or `failed`, then read the resource to see its final state.

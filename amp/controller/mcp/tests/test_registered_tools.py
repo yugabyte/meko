@@ -22,6 +22,8 @@ EXPECTED_TOOLS = {
     "get_endpoint",
     "delete_endpoint",
     "resize_endpoint",
+    "update_branch_settings",
+    "update_endpoint_settings",
     "list_tasks",
     "get_task",
 }
@@ -44,7 +46,7 @@ def test_all_tools_present_in_tools_module():
     tools_src = _read(TOOLS_SRC)
     for name in EXPECTED_TOOLS:
         assert f"def {name}(" in tools_src, f"missing tool def: {name}"
-    assert len(EXPECTED_TOOLS) == 19
+    assert len(EXPECTED_TOOLS) == 21
 
 
 def test_all_tools_registered_in_server():

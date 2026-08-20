@@ -29,6 +29,11 @@ export type Branch = {
   is_default: boolean;
   parent_branch_id: string | null;
   fork_lsn: string | null;
+  /** Baseline Postgres settings for every compute on the branch; an
+   *  endpoint's own merge over these and win on a shared key. */
+  pg_settings?: PgSettings;
+  /** How the supervisor holds this branch's write lease. */
+  write_token_settings?: WriteTokenSettings;
   created_at: string;
 };
 
@@ -55,6 +60,11 @@ export type Endpoint = {
   /** Current compute reservation (cpu/memory). Fields may be empty for
    *  endpoints created before resource tracking. */
   resources?: EndpointResources;
+  /** This endpoint's own stored settings. `pg_settings` merge over the
+   *  branch's and win on a shared key; the daemon ones are its alone. */
+  pg_settings?: PgSettings;
+  pageserver_settings?: DaemonSettings;
+  safekeeper_settings?: DaemonSettings;
   created_at: string;
 };
 
@@ -131,6 +141,51 @@ export type CreateEndpointInput = {
  *  as request == limit; an omitted field keeps its current value. */
 export type ResizeEndpointInput = {
   resources: EndpointResources;
+};
+
+/** Flat `{name: value}` Postgres settings. */
+export type PgSettings = Record<string, string>;
+
+/** A storage daemon's overrides. Keys may be dotted paths
+ *  (`tenant_config.enable_gc`); values are scalars. */
+export type DaemonSettings = Record<string, string | number | boolean>;
+
+/** How the supervisor holds a branch's write lease. `renew_seconds` must be
+ *  under `ttl_ms` — the gap is how long a failing renewal may be retried
+ *  before anything stops writing. */
+export type WriteTokenSettings = {
+  ttl_ms?: number;
+  renew_seconds?: number;
+};
+
+/** Settings to replace on a branch. An omitted field is left alone; `{}`
+ *  clears that surface. The two are not interchangeable. */
+export type UpdateBranchSettingsInput = {
+  pg_settings?: PgSettings;
+  write_token_settings?: WriteTokenSettings;
+};
+
+/** Settings to replace on one endpoint. Same omitted-vs-empty rule. */
+export type UpdateEndpointSettingsInput = {
+  pg_settings?: PgSettings;
+  pageserver_settings?: DaemonSettings;
+  safekeeper_settings?: DaemonSettings;
+};
+
+/** What one endpoint did with a settings change. `restarted` names the
+ *  services it bounced onto the new config — empty when nothing changed for
+ *  it. `unreachable` says why it could not be told; the settings are stored
+ *  either way and it picks them up when it next starts. */
+export type EndpointSettingsOutcome = {
+  endpoint_id: string;
+  restarted?: string[];
+  unreachable?: string;
+};
+
+/** The reply to a settings update: stored, plus what it reached. */
+export type SettingsUpdateResult = {
+  applied: boolean;
+  endpoints?: EndpointSettingsOutcome[];
 };
 
 /** The in-place resize outcome reported by the resize task result. */

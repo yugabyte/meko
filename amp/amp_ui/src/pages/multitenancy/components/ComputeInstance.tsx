@@ -1,8 +1,9 @@
 // One provisioned compute instance under a branch: address, role, resource tag,
-// in-place resize panel, unprovision confirm, and a copyable psql connect string.
+// in-place resize panel, settings, unprovision confirm, and a copyable psql
+// connect string.
 
 import { useState } from "react";
-import { Check, Copy, Cpu, Server, Trash2 } from "lucide-react";
+import { Check, Copy, Cpu, Server, SlidersHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useDeleteEndpoint, useResizeEndpoint } from "@/hooks/useEndpoints";
+import { SettingsDialog } from "./SettingsDialog";
 import type { Endpoint } from "@/lib/api/types";
 import { DEFAULT_ENDPOINT_CPU, DEFAULT_ENDPOINT_MEMORY } from "@/lib/api/types";
 import { dataBranchingMessages as msg } from "@/lib/messages";
@@ -46,6 +48,7 @@ export function ComputeInstance({
   // running pod in place; the reported outcome says whether it applied live.
   const resize = useResizeEndpoint();
   const [showResize, setShowResize] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [cpu, setCpu] = useState(ep.resources?.cpu || DEFAULT_ENDPOINT_CPU);
   const [memory, setMemory] = useState(
     ep.resources?.memory || DEFAULT_ENDPOINT_MEMORY,
@@ -161,6 +164,15 @@ export function ComputeInstance({
           <Cpu className="h-3.5 w-3.5" />
           Resize
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShowSettings(true)}
+          className="h-7 gap-1 px-2 text-xs"
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          Settings
+        </Button>
         {/* Unprovision is offered on forked branches only — the source (default)
             branch's compute can't be torn down from the UI for now. */}
         {!isDefaultBranch && (
@@ -258,6 +270,20 @@ export function ComputeInstance({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <SettingsDialog
+        open={showSettings}
+        onOpenChange={setShowSettings}
+        poolId={poolId}
+        clusterId={ep.cluster_id}
+        branchId={ep.branch_id}
+        endpointId={ep.id}
+        stored={{
+          pg_settings: ep.pg_settings,
+          pageserver_settings: ep.pageserver_settings,
+          safekeeper_settings: ep.safekeeper_settings,
+        }}
+        title={roleLabel}
+      />
     </li>
   );
 }

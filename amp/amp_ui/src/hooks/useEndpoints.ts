@@ -9,9 +9,16 @@ import {
   deleteEndpoint,
   listEndpoints,
   resizeEndpoint,
+  updateEndpointSettings,
   type ResizeResult,
 } from "@/lib/api/resources";
-import type { Branch, Endpoint, EndpointRole } from "@/lib/api/types";
+import type {
+  Branch,
+  Endpoint,
+  EndpointRole,
+  SettingsUpdateResult,
+  UpdateEndpointSettingsInput,
+} from "@/lib/api/types";
 
 /** Fan out across branches to fetch each one's endpoints, keyed by branch id. */
 export function useBranchEndpoints(
@@ -96,6 +103,41 @@ export function useResizeEndpoint() {
       resizeEndpoint(input.poolId, input.clusterId, input.branchId, input.endpointId, {
         resources: { cpu: input.cpu, memory: input.memory },
       }),
+    onSuccess: (_data, input) => {
+      qc.invalidateQueries({
+        queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),
+      });
+    },
+  });
+}
+
+/** Update one endpoint's settings.
+ *
+ * The mutation resolves with what the controller could reach: `restarted` names
+ * the services the endpoint bounced onto the new config, `unreachable` says why
+ * it could not be told. The settings are stored either way, so the caller shows
+ * the outcome rather than treating an unreachable endpoint as a failure.
+ *
+ * Only the surfaces the caller passes are sent — an omitted one is left alone,
+ * `{}` clears it — so this deliberately does not default them to empty objects.
+ */
+export function useUpdateEndpointSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      poolId: string;
+      clusterId: string;
+      branchId: string;
+      endpointId: string;
+      settings: UpdateEndpointSettingsInput;
+    }): Promise<SettingsUpdateResult> =>
+      updateEndpointSettings(
+        input.poolId,
+        input.clusterId,
+        input.branchId,
+        input.endpointId,
+        input.settings,
+      ),
     onSuccess: (_data, input) => {
       qc.invalidateQueries({
         queryKey: qk.endpoints(input.poolId, input.clusterId, input.branchId),

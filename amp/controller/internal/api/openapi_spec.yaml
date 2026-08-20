@@ -1046,6 +1046,8 @@ components:
             Extra PostgreSQL settings applied to every compute on this branch, as
             `{name: value}`. A fork inherits its ancestor's. An endpoint's own
             `pg_settings` merge over these and win on a key both define.
+        write_token_settings:
+          $ref: '#/components/schemas/WriteTokenSettings'
         extensions:
           type: array
           items:
