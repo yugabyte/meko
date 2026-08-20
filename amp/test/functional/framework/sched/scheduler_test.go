@@ -281,3 +281,114 @@ func TestSchedulerRetriesSchedulingEnvFailureOnce(t *testing.T) {
 		t.Errorf("counts = %v (total %d), want exactly one passed", summary.Counts, summary.Total)
 	}
 }
+
+// sharedInfraProvider arms the FaultsSharedInfra gate.
+type sharedInfraProvider struct{ fake.Provider }
+
+func (p *sharedInfraProvider) SharesInfraAcrossTests() bool { return true }
+
+func faultTest(name string, run func(*core.T) error) core.Test {
+	tc := exclusiveTest(name, run)
+	tc.Env.FaultsSharedInfra = true
+	return tc
+}
+
+// A fault test must never run beside another: it breaks what they all use.
+func TestSchedulerRunsSharedInfraFaultTestsAlone(t *testing.T) {
+	var mu sync.Mutex
+	live, peakBesideFault := 0, 0
+	faulting := 0
+
+	body := func(fault bool) func(*core.T) error {
+		return func(*core.T) error {
+			mu.Lock()
+			live++
+			if fault {
+				faulting++
+			}
+			// Any peer seen while a fault test is live is a violation.
+			if faulting > 0 && live > faulting {
+				peakBesideFault = live
+			}
+			if faulting > 1 {
+				peakBesideFault = live
+			}
+			mu.Unlock()
+
+			time.Sleep(20 * time.Millisecond)
+
+			mu.Lock()
+			live--
+			if fault {
+				faulting--
+			}
+			mu.Unlock()
+			return nil
+		}
+	}
+
+	var tests []core.Test
+	for i := 0; i < 8; i++ {
+		tests = append(tests, sharedTest(fmt.Sprintf("f%d", i), body(false)))
+	}
+	for i := 0; i < 3; i++ {
+		tests = append(tests, faultTest(fmt.Sprintf("chaos%d", i), body(true)))
+	}
+	for i := 0; i < 4; i++ {
+		tests = append(tests, exclusiveTest(fmt.Sprintf("x%d", i), body(false)))
+	}
+
+	summary, results := sched.Run(context.Background(), tests, sched.Options{
+		RunOptions:        core.RunOptions{Parallel: 8, Seed: core.NewRunSeed(1, true), Provider: &sharedInfraProvider{}},
+		Capacity:          8,
+		PerEnvParallelism: 4,
+	})
+
+	if summary.Counts[core.StatusPassed] != len(tests) {
+		t.Fatalf("passed = %d, want %d (%+v)", summary.Counts[core.StatusPassed], len(tests), summary.Counts)
+	}
+	for i, r := range results {
+		if r == nil || r.Status != core.StatusPassed {
+			t.Fatalf("result %d not passed: %+v", i, r)
+		}
+	}
+	if peakBesideFault != 0 {
+		t.Errorf("%d tests ran alongside a shared-infra fault test, want it to run alone", peakBesideFault)
+	}
+}
+
+// No shared infrastructure: no run pays for isolation it does not need.
+func TestSchedulerFaultFlagIsInertOnUnsharedProvider(t *testing.T) {
+	var mu sync.Mutex
+	live, peak := 0, 0
+	body := func(*core.T) error {
+		mu.Lock()
+		live++
+		if live > peak {
+			peak = live
+		}
+		mu.Unlock()
+		time.Sleep(30 * time.Millisecond)
+		mu.Lock()
+		live--
+		mu.Unlock()
+		return nil
+	}
+
+	var tests []core.Test
+	for i := 0; i < 4; i++ {
+		tests = append(tests, faultTest(fmt.Sprintf("chaos%d", i), body))
+	}
+
+	summary, _ := sched.Run(context.Background(), tests, sched.Options{
+		RunOptions:        core.RunOptions{Parallel: 4, Seed: core.NewRunSeed(1, true), Provider: &fake.Provider{}},
+		Capacity:          4,
+		PerEnvParallelism: 4,
+	})
+	if summary.Counts[core.StatusPassed] != len(tests) {
+		t.Fatalf("passed = %d, want %d", summary.Counts[core.StatusPassed], len(tests))
+	}
+	if peak < 2 {
+		t.Errorf("peak concurrency = %d, want >1: the gate must not serialise a provider that shares nothing", peak)
+	}
+}

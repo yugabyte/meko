@@ -292,7 +292,7 @@ func assertEndpointsServe(t *core.T, env ampTenantEnv, tenants []tenant, settle 
 // running and ready — a crash-looping controller or endpoint is exactly the
 // "amp stopped working" this tier is here to catch. Pods that completed
 // (Succeeded) are ignored: a finished job is not a failure.
-func assertAmpHealthy(t *core.T, kube *k8s.Kubectl) (string, error) {
+func assertAmpHealthy(t *core.T, kube *k8s.Kubectl, tenants []tenant) (string, error) {
 	// No kube context means this check did not run. Reporting success for it
 	// is how a "the deployment still stands" step passes without looking at
 	// the deployment at all.
@@ -306,6 +306,11 @@ func assertAmpHealthy(t *core.T, kube *k8s.Kubectl) (string, error) {
 	var unhealthy []string
 	for _, p := range states {
 		if p.Phase == "Succeeded" {
+			continue
+		}
+		// Another fleet's endpoints churn as their owner runs; their health is
+		// their owner's assertion, not ours.
+		if foreignEndpointPod(p.Name, tenants) {
 			continue
 		}
 		if p.Phase != "Running" || !p.Ready {

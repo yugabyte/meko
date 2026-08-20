@@ -27,7 +27,7 @@ func init() {
 		Name:        "stress/commit_durability",
 		Suite:       "stress",
 		Category:    core.Stress,
-		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
+		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane, FaultsSharedInfra: true},
 		Tags:        []string{"stress", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Journal every write's outcome while pod_delete faults hit amp's endpoint computes and the backing YugabyteDB, aiming a PostgreSQL cancel request at a seeded share of in-flight inserts plus a forced floor per writer, then recycle one tenant's endpoint and hold storage to the exact set: every acknowledged id present with its value, every present id one that was issued, and writes flowing again. A cancelled insert the server acks anyway is journaled as acked, which makes the meko#473 window reachable, not certain.",
@@ -172,7 +172,7 @@ func commitDurabilityChaos(t *core.T, s *core.StepHandle, env ampTenantEnv, ampE
 	params commitDurabilityParams, logf func(string, ...any)) error {
 	ampKube, backingKube := ampEnv.AmpKube(), backingEnv.BackingKube()
 
-	epPods, err := endpointPods(t, ampKube)
+	epPods, err := endpointPods(t, ampKube, fleet)
 	if err != nil {
 		return err
 	}
@@ -181,8 +181,8 @@ func commitDurabilityChaos(t *core.T, s *core.StepHandle, env ampTenantEnv, ampE
 		return err
 	}
 	if len(epPods) == 0 {
-		return fmt.Errorf("the control-plane namespace has no %s* pod to aim at, though %d tenants have endpoints",
-			endpointPodPrefix, len(fleet.Tenants))
+		return fmt.Errorf("the control-plane namespace has no pod for any of this fleet's %d endpoints to aim at",
+			len(fleet.Tenants))
 	}
 	if len(backPods) == 0 {
 		return fmt.Errorf("no backing pod matched any known selector in namespace %q", backingKube.Namespace())

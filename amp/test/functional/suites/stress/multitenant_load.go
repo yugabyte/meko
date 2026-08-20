@@ -136,7 +136,7 @@ func runMultitenantLoad(t *core.T) error {
 			s.Set("checked", "no kube context")
 			return nil
 		}
-		summary, err := assertAmpHealthy(t, kubeEnv.AmpKube())
+		summary, err := assertAmpHealthy(t, kubeEnv.AmpKube(), fleet.Tenants)
 		if err != nil {
 			return err
 		}

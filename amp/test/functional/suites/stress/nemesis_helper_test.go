@@ -1,8 +1,10 @@
 package stress
 
 import (
+	"slices"
 	"testing"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
@@ -54,5 +56,47 @@ func TestBackingNemesisParamsDeclaredInDefaults(t *testing.T) {
 	}
 	if p.ResumeDuration <= 0 {
 		t.Error("resume_duration must be positive — the post-chaos write probe is the point of the test (meko#727)")
+	}
+}
+
+// A prefix-only match would turn amp_nemesis into every concurrent test's
+// nemesis, since all their endpoints share the namespace.
+func TestFleetEndpointPodsScopesToOwnFleet(t *testing.T) {
+	pods := []string{
+		"yb-ep-aaaa1111-2222-3333-4444-555566667777-96b45f5cb-dk2j5", // ours
+		"yb-ep-bbbb1111-2222-3333-4444-555566667777-85847c58d7-gkdl", // another test's
+		"yb-ep-aaaa1111-2222-3333-4444-555566667777-96b45f5cb-x9z8q", // ours, second pod
+		"amp-controller-5b9dcc4c44-f5hqm",
+		"ampqa-http-relay",
+	}
+	tenants := []tenant{
+		{Endpoint: controller.Endpoint{ID: "aaaa1111-2222-3333-4444-555566667777"}},
+		{Endpoint: controller.Endpoint{}}, // endpoint never created: must match nothing
+	}
+	got := fleetEndpointPods(pods, tenants)
+	want := []string{
+		"yb-ep-aaaa1111-2222-3333-4444-555566667777-96b45f5cb-dk2j5",
+		"yb-ep-aaaa1111-2222-3333-4444-555566667777-96b45f5cb-x9z8q",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("fleetEndpointPods = %v, want %v", got, want)
+	}
+	if got := fleetEndpointPods(pods, nil); len(got) != 0 {
+		t.Errorf("no tenants must select no pods, got %v", got)
+	}
+}
+
+// A foreign endpoint mid-churn must not fail us; shared pods still must.
+func TestForeignEndpointPod(t *testing.T) {
+	tenants := []tenant{{Endpoint: controller.Endpoint{ID: "aaaa1111-2222-3333-4444-555566667777"}}}
+	for pod, foreign := range map[string]bool{
+		"yb-ep-aaaa1111-2222-3333-4444-555566667777-96b45f5cb-dk2j5": false, // ours: asserted
+		"yb-ep-bbbb1111-2222-3333-4444-555566667777-85847c58d7-gkdl": true,  // another fleet's
+		"amp-controller-5b9dcc4c44-f5hqm":                            false, // shared: asserted
+		"yb-amp-controller-logs-collector-4d6vt":                     false, // shared: asserted
+	} {
+		if got := foreignEndpointPod(pod, tenants); got != foreign {
+			t.Errorf("foreignEndpointPod(%s) = %v, want %v", pod, got, foreign)
+		}
 	}
 }

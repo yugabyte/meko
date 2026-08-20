@@ -44,6 +44,7 @@ import (
 	"log"
 	"net"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1118,9 +1119,45 @@ func (a *App) UpgradeImages(ctx context.Context, controllerImage, endpointImage 
 	return nil
 }
 
+// chartCapabilityCRDs are the CRDs the chart gates documents on through
+// .Capabilities.APIVersions. `helm template` has no cluster to ask, so those
+// gates are false unless the group/version is passed with --api-versions.
+var chartCapabilityCRDs = []struct {
+	crd   string
+	group string
+}{
+	{crd: "opentelemetrycollectors.opentelemetry.io", group: "opentelemetry.io"},
+}
+
+// renderAPIVersions returns the group/versions to declare to `helm template` so
+// the render matches what the cluster can reconcile. An absent CRD contributes
+// nothing; a failed lookup is treated as absent rather than failing the deploy.
+func (a *App) renderAPIVersions(ctx context.Context) []string {
+	if a.kube == nil {
+		return nil
+	}
+	cluster := a.kube.InNamespace("") // CRDs are cluster-scoped
+	var out []string
+	for _, c := range chartCapabilityCRDs {
+		served, err := cluster.Get(ctx, "crd", c.crd,
+			`{range .spec.versions[?(@.served)]}{.name}{"\n"}{end}`)
+		if err != nil {
+			if a.logf != nil {
+				a.logf("ampstack: %s not found, rendering the chart without %s (%v)", c.crd, c.group, err)
+			}
+			continue
+		}
+		for _, v := range strings.Fields(served) {
+			out = append(out, c.group+"/"+v)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // helmTemplate renders the controller chart to a manifest string.
 func (a *App) helmTemplate(ctx context.Context) (string, error) {
-	argv := a.helmTemplateArgs()
+	argv := a.helmTemplateArgs(a.renderAPIVersions(ctx))
 	if a.logf != nil {
 		a.logf("exec: %s", k8s.CmdString(argv))
 	}
@@ -1140,7 +1177,7 @@ func (a *App) helmTemplate(ctx context.Context) (string, error) {
 // helmTemplateArgs builds the `helm template` argv mirroring the --set flags
 // deploy/controller/redeploy.sh uses (namespace-scoped: controller Service
 // stays ClusterIP-only via controller.service.type=none).
-func (a *App) helmTemplateArgs() []string {
+func (a *App) helmTemplateArgs(apiVersions []string) []string {
 	prefix := a.cfg.registryPrefix()
 	ctrlRepo, ctrlTag := splitImageRef(withRegistry(a.cfg.ControllerImage, prefix))
 	epRepo, epTag := splitImageRef(withRegistry(a.cfg.EndpointImage, prefix))
@@ -1186,6 +1223,9 @@ func (a *App) helmTemplateArgs() []string {
 	// survives as one value instead of being torn into bogus assignments.
 	argv = append(argv, "--set-string", "controller.endpoint.ybHostPorts="+helmEscape(a.backingHostPorts()))
 	argv = append(argv, "--set-string", "controller.databaseUrl="+helmEscape(a.dbURL()))
+	for _, v := range apiVersions {
+		argv = append(argv, "--api-versions", v)
+	}
 	return argv
 }
 

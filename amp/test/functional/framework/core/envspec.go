@@ -78,6 +78,11 @@ type EnvSpec struct {
 	Sharing Sharing
 	Shape   Shape
 	Weight  int // lease units; 0 → shape default
+	// FaultsSharedInfra marks a test that faults the control plane or the
+	// YugabyteDB under it. Sharing: Exclusive does not cover this — under
+	// sharedk8s it buys a cluster, not a control plane. The scheduler runs such a
+	// test alone where the provider is a SharedInfraProvider.
+	FaultsSharedInfra bool
 	// PreferredYBDeploy is a test's HINT for which YugabyteDB deployment it would
 	// like (e.g. "yb_k8s"). It is opaque to the engine — carried, never
 	// interpreted here — and read only by the deploy selector (apps/ybdeploy).

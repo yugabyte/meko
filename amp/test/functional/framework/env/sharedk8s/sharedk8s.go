@@ -156,6 +156,10 @@ func (c Config) deployContext() string {
 	return firstNonEmptyStr(c.Context, c.AmpStack.Context)
 }
 
+// SharesInfraAcrossTests: every environment here is a cluster on one control
+// plane, whose metadata lives in one YugabyteDB.
+func (p *Provider) SharesInfraAcrossTests() bool { return true }
+
 // Provider provisions cluster-per-test environments on a shared control plane.
 type Provider struct {
 	cfg  Config

@@ -1404,3 +1404,61 @@ func TestBackingNamespacePrefersTheBackingsOwn(t *testing.T) {
 		t.Errorf("BackingNamespace = %q, want the stack namespace for a blank value", got)
 	}
 }
+
+// Without the declaration a gated document renders as nothing, so the collectors
+// go silently absent on a cluster that runs the operator.
+func TestRenderDeclaresTheAPIVersionsTheClusterServes(t *testing.T) {
+	rec := newRecorder()
+	rec.on("get crd opentelemetrycollectors.opentelemetry.io", exec.Result{Stdout: "v1beta1\nv1alpha1\n"})
+	a := testApp(Config{HelmShim: false}, rec)
+
+	if _, err := a.Deploy(context.Background()); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	calls := rec.snapshot()
+
+	// The CRD lookup is cluster-scoped: -n would make it fail on a real cluster.
+	var probe string
+	for _, c := range calls {
+		if strings.Contains(c.argv, "get crd opentelemetrycollectors.opentelemetry.io") {
+			probe = c.argv
+		}
+	}
+	if probe == "" {
+		t.Fatalf("the render must ask the cluster for the otel CRD, calls: %v", calls)
+	}
+	if strings.Contains(probe, " -n ") {
+		t.Errorf("the CRD probe must not be namespaced, got %q", probe)
+	}
+
+	var render string
+	for _, c := range calls {
+		if strings.Contains(c.argv, "helm template") {
+			render = c.argv
+		}
+	}
+	for _, want := range []string{
+		"--api-versions opentelemetry.io/v1alpha1",
+		"--api-versions opentelemetry.io/v1beta1",
+	} {
+		if !strings.Contains(render, want) {
+			t.Errorf("render must declare %s, got %q", want, render)
+		}
+	}
+}
+
+// No operator: the chart skips the collectors and the deploy still succeeds.
+func TestRenderDeclaresNothingWhenTheCRDIsAbsent(t *testing.T) {
+	rec := newRecorder()
+	rec.on("get crd opentelemetrycollectors.opentelemetry.io", exec.Result{ExitCode: 1, Stderr: "Error from server (NotFound)"})
+	a := testApp(Config{HelmShim: false}, rec)
+
+	if _, err := a.Deploy(context.Background()); err != nil {
+		t.Fatalf("an absent optional CRD must not fail the deploy: %v", err)
+	}
+	for _, c := range rec.snapshot() {
+		if strings.Contains(c.argv, "helm template") && strings.Contains(c.argv, "--api-versions") {
+			t.Errorf("no --api-versions should be declared when no CRD is served, got %q", c.argv)
+		}
+	}
+}

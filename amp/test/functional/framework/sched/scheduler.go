@@ -89,6 +89,16 @@ func Run(ctx context.Context, tests []core.Test, opts Options) (core.RunSummary,
 		capacity: capacity,
 		perEnv:   perEnv,
 	}
+	// Arming costs every test an uncontended RLock; only pay it when there is
+	// shared infrastructure and a test that faults it.
+	if core.ProviderSharesInfra(opts.Provider) {
+		for i := range tests {
+			if tests[i].Env.FaultsSharedInfra {
+				s.infraGateArmed = true
+				break
+			}
+		}
+	}
 
 	var shared, exclusive []int
 	for i := range tests {
@@ -141,6 +151,27 @@ type scheduler struct {
 	slots    chan struct{}
 	capacity int
 	perEnv   int
+
+	// infraGate: a test that faults shared infrastructure takes the write side,
+	// every other test the read side.
+	infraGate      sync.RWMutex
+	infraGateArmed bool
+}
+
+// enterInfraGate takes this test's side of the gate and returns the release.
+//
+// Must be taken BEFORE the lease and the slot: a waiter holding either while
+// blocked here deadlocks the writer, which needs both.
+func (s *scheduler) enterInfraGate(test core.Test) func() {
+	if !s.infraGateArmed {
+		return func() {}
+	}
+	if test.Env.FaultsSharedInfra {
+		s.infraGate.Lock()
+		return s.infraGate.Unlock
+	}
+	s.infraGate.RLock()
+	return s.infraGate.RUnlock
 }
 
 // leaseWeight resolves a spec's lease weight, clamped to total capacity so a
@@ -185,6 +216,7 @@ func (s *scheduler) releaseSlot() { <-s.slots }
 // core.RunOne), and runs the test alone.
 func (s *scheduler) runExclusive(ctx context.Context, i int) *core.Result {
 	test := s.tests[i]
+	defer s.enterInfraGate(test)()
 	lease, err := s.mgr.Acquire(ctx, s.leaseWeight(test.Env))
 	if err == nil {
 		defer lease.Release()
@@ -278,6 +310,7 @@ func (s *scheduler) sharedEnvWorker(ctx context.Context, envN int, queue <-chan 
 		go func(idx int) {
 			defer batch.Done()
 			defer func() { <-inFlight }()
+			defer s.enterInfraGate(s.tests[idx])()
 			// The shared env is not re-provisioned, but a body's env failure retries.
 			onEnv := func(c context.Context, t core.Test, o core.RunOptions) *core.Result {
 				return core.RunOneOnEnv(c, t, env, o)

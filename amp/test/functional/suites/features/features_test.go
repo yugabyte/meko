@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pageserver"
@@ -409,3 +410,55 @@ func TestGateUpgradeBackingSkipsWhenTheBackingCannotBeNamed(t *testing.T) {
 // sharedk8s.Env losing YBStorage would silently turn this test back into a
 // permanent skip, so the capability is pinned at compile time.
 var _ upgradeBackingEnv = (*sharedk8s.Env)(nil)
+
+func TestAssertResizeTasksNeverOverlapped(t *testing.T) {
+	base := time.Date(2026, 8, 20, 6, 30, 48, 0, time.UTC)
+	task := func(id string, startMS, endMS int) controller.Task {
+		return controller.Task{
+			ID:        id,
+			CreatedAt: base.Add(time.Duration(startMS) * time.Millisecond),
+			UpdatedAt: base.Add(time.Duration(endMS) * time.Millisecond),
+		}
+	}
+
+	// The 0.260819.0 shape: terminal at +325ms, next accepted at +699ms.
+	if err := assertResizeTasksNeverOverlapped([]controller.Task{
+		task("first", 0, 325), task("second", 699, 2416),
+	}); err != nil {
+		t.Errorf("two resizes that never overlapped must pass, got %v", err)
+	}
+
+	// Handover, not an overlap.
+	if err := assertResizeTasksNeverOverlapped([]controller.Task{
+		task("first", 0, 325), task("second", 325, 700),
+	}); err != nil {
+		t.Errorf("touching windows must pass, got %v", err)
+	}
+
+	// A real lock violation, in either argument order.
+	for _, order := range [][]controller.Task{
+		{task("first", 0, 900), task("second", 300, 1200)},
+		{task("second", 300, 1200), task("first", 0, 900)},
+	} {
+		err := assertResizeTasksNeverOverlapped(order)
+		if err == nil {
+			t.Fatalf("overlapping non-terminal windows must fail, got nil")
+		}
+		if !strings.Contains(err.Error(), "both non-terminal at once") ||
+			!strings.Contains(err.Error(), "tasks_one_active_resize_per_endpoint") {
+			t.Errorf("the overlap failure must name the invariant it broke, got %q", err)
+		}
+	}
+
+	// Missing stamps must not read as "no overlap".
+	if err := assertResizeTasksNeverOverlapped([]controller.Task{
+		{ID: "a"}, {ID: "b"},
+	}); err == nil || !strings.Contains(err.Error(), "created_at/updated_at") {
+		t.Errorf("absent timestamps must fail loudly, got %v", err)
+	}
+
+	// One task cannot overlap anything.
+	if err := assertResizeTasksNeverOverlapped([]controller.Task{task("only", 0, 325)}); err != nil {
+		t.Errorf("a single task must pass, got %v", err)
+	}
+}

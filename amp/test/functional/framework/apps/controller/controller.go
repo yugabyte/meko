@@ -235,6 +235,10 @@ type Task struct {
 	Status    string  `json:"status"`
 	ClusterID *string `json:"cluster_id"`
 	Error     *string `json:"error"`
+	// On a terminal task UpdatedAt is the transition into terminal, so
+	// [CreatedAt, UpdatedAt] is the window the row spent non-terminal.
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	// Result is the final step's opaque outcome JSON, absent until a step records
 	// one. For a resize_endpoint task it carries in_place_resize + in_place_message.
 	Result json.RawMessage `json:"result"`

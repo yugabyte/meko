@@ -108,13 +108,13 @@ func runAmpNemesis(t *core.T) error {
 	}
 
 	if err := t.Step("chaos_under_load", func(s *core.StepHandle) error {
-		pods, err := endpointPods(t, kube)
+		pods, err := endpointPods(t, kube, fleet)
 		if err != nil {
 			return err
 		}
 		if len(pods) == 0 {
-			return fmt.Errorf("the control-plane namespace has no %s* pod to aim at, though %d tenants have endpoints",
-				endpointPodPrefix, len(fleet.Tenants))
+			return fmt.Errorf("the control-plane namespace has no pod for any of this fleet's %d endpoints to aim at",
+				len(fleet.Tenants))
 		}
 		return chaosOnPods(t, s, env, fleet, kube, pods, "amp-nemesis",
 			params.Duration, params.PayloadBytes, logf)
@@ -146,7 +146,7 @@ func runAmpNemesis(t *core.T) error {
 		// After the faults stop, everything amp runs must be back up. This is the
 		// recovery assertion: a controller or compute still crash-looping is amp
 		// having failed to come back, whatever the data says.
-		summary, err := assertAmpHealthy(t, kube)
+		summary, err := assertAmpHealthy(t, kube, fleet.Tenants)
 		if err != nil {
 			return err
 		}
@@ -168,21 +168,40 @@ func runAmpNemesis(t *core.T) error {
 	})
 }
 
-// endpointPods lists the control plane's endpoint compute pods — the ones amp
-// itself deployed for tenants, which is what makes this chaos amp's rather than
-// the backing database's. The controller's own pod is deliberately left alone:
-// killing it would test the deployment, not the data path, and the control
-// plane is shared with whatever else the environment is hosting.
-func endpointPods(t *core.T, kube *k8s.Kubectl) ([]string, error) {
+// endpointPods lists THIS fleet's endpoint computes. The controller's own pod is
+// left alone (killing it tests the deployment, not the data path), and so is
+// every other fleet's: under a shared control plane a prefix-only match shoots
+// concurrently running tests.
+func endpointPods(t *core.T, kube *k8s.Kubectl, fleet *tenantFleet) ([]string, error) {
 	pods, err := kube.ListPods(t.Context)
 	if err != nil {
 		return nil, err
 	}
+	return fleetEndpointPods(pods, fleet.Tenants), nil
+}
+
+// fleetEndpointPods keeps the pods backing these tenants' endpoints, named
+// yb-ep-<endpoint-id>-<replicaset-hash>-<suffix>.
+func fleetEndpointPods(pods []string, tenants []tenant) []string {
 	var out []string
 	for _, p := range pods {
-		if strings.HasPrefix(p, endpointPodPrefix) {
+		if isFleetEndpointPod(p, tenants) {
 			out = append(out, p)
 		}
 	}
-	return out, nil
+	return out
+}
+
+func isFleetEndpointPod(pod string, tenants []tenant) bool {
+	for i := range tenants {
+		if id := tenants[i].Endpoint.ID; id != "" && strings.HasPrefix(pod, endpointPodPrefix+id+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+// foreignEndpointPod reports whether pod is another fleet's endpoint compute.
+func foreignEndpointPod(pod string, tenants []tenant) bool {
+	return strings.HasPrefix(pod, endpointPodPrefix) && !isFleetEndpointPod(pod, tenants)
 }

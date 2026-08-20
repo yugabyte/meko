@@ -4,8 +4,8 @@
 // the product guarantees: the new size is applied and durable, an omitted
 // dimension is preserved, a `completed` in-place resize keeps the SAME pod with
 // no container restart and no dropped connection, and concurrent resizes of one
-// endpoint are first-writer-wins (one 202, the rest 409, lock released on
-// terminal).
+// endpoint serialise on the resize lock (never two non-terminal at once, the
+// contenders rejected 409, lock released on terminal).
 //
 // A deferred (`pending`), unsatisfiable (`infeasible`) or runtime-unsupported
 // (`unsupported`) in-place resize is a SUCCESSFUL terminal outcome in the
@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yugabyte/amp/test/functional/framework/apps/controller"
 	"github.com/yugabyte/amp/test/functional/framework/apps/pg"
@@ -37,7 +38,8 @@ const (
 	resizeCPUB    = "4"
 	resizeMemoryB = "6Gi"
 	// resizeContenders is how many concurrent resizes the lock test fires at one
-	// endpoint. The lock admits one; the rest must be rejected with 409.
+	// endpoint. High enough that some contender arrives while a resize is still
+	// non-terminal; an all-accepted burst fails as untested.
 	resizeContenders = 6
 	// resizeHeldTable is the table the in-place test writes before the resize and
 	// re-reads afterwards over the connection its transaction pinned.
@@ -76,7 +78,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
-		Description: "Fire concurrent resizes at one endpoint and assert first-writer-wins: exactly one 202, the rest 409, the endpoint lands at the winner's size, and the lock releases afterwards.",
+		Description: "Fire concurrent resizes at one endpoint and assert the resize lock serialises them: contenders are rejected 409, no two accepted resize tasks are ever non-terminal at the same time, the endpoint lands at the last accepted size, and the lock releases once every task is terminal.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:         runAmpEndpointResizeLock,
 	})
@@ -273,12 +275,13 @@ func (a *ampFeatureRun) endpointPGClient(ctx context.Context, ep controller.Endp
 	return connectPG(ctx, ci)
 }
 
-// endpointResizeLock asserts first-writer-wins. It fires resizeContenders
-// concurrent resizes, each at a distinct cpu, and asserts exactly one is accepted
-// while every other is rejected with 409, the endpoint lands at the winner's cpu,
-// and a fresh resize is accepted once the winner reached terminal (the partial
-// unique index tasks_one_active_resize_per_endpoint drops the terminal task out of
-// its predicate, releasing the lock).
+// endpointResizeLock asserts what tasks_one_active_resize_per_endpoint
+// guarantees: never two resize_endpoint tasks non-terminal for one endpoint.
+//
+// Deliberately NOT "exactly one accepted". A resize can go terminal in a few
+// hundred ms, well inside the time six round-trips take to land, and a terminal
+// row drops out of the index predicate — so admitting the next request is
+// correct, and is the release the tail of this test asserts.
 func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 	cl, err := a.f.controllerClient(ctx)
 	if err != nil {
@@ -318,41 +321,78 @@ func (a *ampFeatureRun) endpointResizeLock(ctx context.Context) error {
 	close(start)
 	wg.Wait()
 
-	var winners []attempt
+	var accepted []attempt
+	rejected := 0
 	for _, at := range attempts {
 		switch {
 		case at.err == nil:
-			winners = append(winners, at)
+			accepted = append(accepted, at)
 		case at.status == http.StatusConflict:
+			rejected++
 		default:
 			return fmt.Errorf("a concurrent resize (cpu=%s) failed with an unexpected error, want either acceptance or 409 conflict: %w", at.cpu, at.err)
 		}
 	}
-	if len(winners) != 1 {
-		accepted := make([]string, 0, len(winners))
-		for _, w := range winners {
-			accepted = append(accepted, w.cpu)
-		}
-		return fmt.Errorf("%d of %d concurrent resizes of endpoint %s were accepted (cpu %v), want exactly 1 with the rest rejected 409 — at most one non-terminal resize_endpoint task per endpoint may exist",
-			len(winners), len(attempts), ep.ID, accepted)
+	if len(accepted) == 0 {
+		return fmt.Errorf("all %d concurrent resizes of endpoint %s were rejected 409, want at least one accepted — the lock admitted nobody", len(attempts), ep.ID)
 	}
-	winner := winners[0]
-	a.f.logf("first-writer-wins: cpu=%s accepted, %d rejected with 409", winner.cpu, len(attempts)-1)
+	// A burst that contended for nothing proves nothing: fail rather than pass
+	// vacuously.
+	if rejected == 0 {
+		return fmt.Errorf("all %d concurrent resizes of endpoint %s were accepted with no 409 at all: the burst never overlapped a non-terminal resize, so the first-writer-wins lock went untested — re-check the contender count against how fast a resize settles here",
+			len(attempts), ep.ID)
+	}
 
-	outcome, err := a.resizeOutcome(cl.WaitTask(ctx, winner.task.ID))
-	if err != nil {
-		return err
+	settled := make([]controller.Task, 0, len(accepted))
+	for _, at := range accepted {
+		task, err := cl.WaitTask(ctx, at.task.ID)
+		if err != nil {
+			return fmt.Errorf("an accepted concurrent resize (cpu=%s, task %s) never settled: %w", at.cpu, at.task.ID, err)
+		}
+		if outcome, _ := task.InPlaceResize(); outcome != "" {
+			a.f.logf("accepted resize cpu=%s settled with in-place outcome %q", at.cpu, outcome)
+		}
+		settled = append(settled, task)
 	}
-	a.f.logf("winning resize settled with in-place outcome %q", outcome)
-	if err := a.assertResourcesCPU(ctx, cl, ep.ID, winner.cpu); err != nil {
+	if err := assertResizeTasksNeverOverlapped(settled); err != nil {
+		return fmt.Errorf("endpoint %s: %w", ep.ID, err)
+	}
+	a.f.logf("resize lock held: %d accepted in strict succession, %d rejected with 409", len(accepted), rejected)
+
+	// Acceptances were serialised, so the last one to hold the lock lands.
+	last := accepted[len(accepted)-1]
+	if err := a.assertResourcesCPU(ctx, cl, ep.ID, last.cpu); err != nil {
 		return err
 	}
 
 	// The lock self-releases on terminal: a fresh resize must be accepted now.
 	if _, err := a.resize(ctx, cl, ep.ID, controller.EndpointResources{CPU: resizeCPUB}); err != nil {
-		return fmt.Errorf("a resize issued after the winning resize reached terminal was not accepted, want the first-writer-wins lock released: %w", err)
+		return fmt.Errorf("a resize issued after every burst resize reached terminal was not accepted, want the first-writer-wins lock released: %w", err)
 	}
 	return a.assertResourcesCPU(ctx, cl, ep.ID, resizeCPUB)
+}
+
+// assertResizeTasksNeverOverlapped reports whether any two tasks were
+// non-terminal at once. Windows are the controller's own stamps, so no local
+// clock is involved. Touching windows are a handover, not an overlap.
+func assertResizeTasksNeverOverlapped(tasks []controller.Task) error {
+	for i := range tasks {
+		for j := i + 1; j < len(tasks); j++ {
+			a, b := tasks[i], tasks[j]
+			if a.CreatedAt.After(b.CreatedAt) {
+				a, b = b, a
+			}
+			if a.CreatedAt.IsZero() || a.UpdatedAt.IsZero() || b.CreatedAt.IsZero() {
+				return fmt.Errorf("resize task %s or %s came back without created_at/updated_at, so the one-active-resize invariant cannot be checked", a.ID, b.ID)
+			}
+			if b.CreatedAt.Before(a.UpdatedAt) {
+				return fmt.Errorf("resize tasks %s [%s, %s] and %s [%s, %s] were both non-terminal at once, want at most one non-terminal resize_endpoint task per endpoint (tasks_one_active_resize_per_endpoint)",
+					a.ID, a.CreatedAt.Format(time.RFC3339Nano), a.UpdatedAt.Format(time.RFC3339Nano),
+					b.ID, b.CreatedAt.Format(time.RFC3339Nano), b.UpdatedAt.Format(time.RFC3339Nano))
+			}
+		}
+	}
+	return nil
 }
 
 // endpointResizeReadOnly asserts a read_only-role endpoint takes a resize the

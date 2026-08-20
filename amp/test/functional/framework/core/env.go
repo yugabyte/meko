@@ -48,3 +48,17 @@ type EnvProvider interface {
 	Teardown(ctx context.Context, env Environment) error
 	Attach(ctx context.Context, ref string) (Environment, error)
 }
+
+// SharedInfraProvider is implemented by a provider whose environments are slices
+// of one standing stack, so a fault aimed at that stack hits every test on it.
+// Providers that stand each environment up in full leave it unimplemented, and
+// EnvSpec.FaultsSharedInfra is then a no-op.
+type SharedInfraProvider interface {
+	SharesInfraAcrossTests() bool
+}
+
+// ProviderSharesInfra reports whether prov shares infrastructure across tests.
+func ProviderSharesInfra(prov EnvProvider) bool {
+	sp, ok := prov.(SharedInfraProvider)
+	return ok && sp.SharesInfraAcrossTests()
+}
