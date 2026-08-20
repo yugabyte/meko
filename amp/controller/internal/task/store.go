@@ -135,7 +135,10 @@ const taskColumns = `id::text, kind, status::text, cluster_id::text, target_ref,
 	params, step_ids::text[], error, owner, lease_expiry, created_at, updated_at`
 
 func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
-	taskID := uuid.New()
+	taskID := spec.ID
+	if taskID == uuid.Nil {
+		taskID = uuid.New()
+	}
 	params := spec.Params
 	if len(params) == 0 {
 		params = json.RawMessage("{}")
@@ -159,11 +162,12 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 
 	// The task first (the steps' task_id FK points at it), carrying the ordered
 	// step ids; then the steps themselves.
-	if _, err := tx.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`INSERT INTO tasks (id, kind, status, cluster_id, target_ref, params, step_ids)
 		 VALUES ($1::uuid, $2, 'pending', $3::uuid, $4, $5::jsonb, $6::uuid[])
 		 ON CONFLICT (id) DO NOTHING`,
-		taskID.String(), spec.Kind, clusterArg, spec.TargetRef, []byte(params), stepIDs); err != nil {
+		taskID.String(), spec.Kind, clusterArg, spec.TargetRef, []byte(params), stepIDs)
+	if err != nil {
 		// The first-writer-wins resize lock: a second in-flight resize of the same
 		// endpoint violates the partial unique index, which we surface as a typed
 		// conflict for the API to turn into a 409.
@@ -171,6 +175,14 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 			return nil, ErrResizeInProgress
 		}
 		return nil, fmt.Errorf("insert task: %w", err)
+	}
+	// A replay of Create with a preassigned id returns the original durable plan;
+	// it must not add unreferenced steps under freshly generated ids.
+	if tag.RowsAffected() == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return s.Get(ctx, taskID)
 	}
 
 	for i, sp := range spec.Steps {

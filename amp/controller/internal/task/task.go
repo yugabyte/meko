@@ -68,9 +68,13 @@ type StepSpec struct {
 }
 
 // TaskSpec is a task as planned: the task-level metadata plus its ordered steps.
-// Store.Create persists it — assigning the task id and a step id per step — and
-// returns the resulting Task.
+// Store.Create persists it — assigning a step id per step — and returns the
+// resulting Task. ID is normally zero (Store.Create assigns a fresh task id);
+// planners whose step args must refer to the task before it is persisted (the
+// migration launchers) fix it write-ahead, and Store.Create then honors it and
+// converges on replay.
 type TaskSpec struct {
+	ID        uuid.UUID
 	Kind      string
 	ClusterID *uuid.UUID
 	TargetRef *string

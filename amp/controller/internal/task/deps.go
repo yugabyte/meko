@@ -7,6 +7,7 @@ import (
 
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
+	"github.com/yugabyte/amp/controller/internal/voyager/migration"
 )
 
 // This file defines the *ports* the step catalog (the step_*.go files) depends
@@ -150,6 +151,15 @@ type RecipeStore interface {
 	RecordBranchRecipe(ctx context.Context, clusterID, branchID uuid.UUID, r BranchRecipe) error
 }
 
+// VoyagerMigrationEndpointLookup resolves the deployed client address
+// (host:port) of the endpoint a create-migration-target plan allocated, so the
+// attach step can record it as the migration's target. It is intentionally
+// narrower than the controller's core backend, keeping the migration steps off
+// the domain layer.
+type VoyagerMigrationEndpointLookup interface {
+	EndpointAddress(ctx context.Context, poolID, projectID, branchID, endpointID uuid.UUID) (string, error)
+}
+
 // Deps bundles the collaborators the production steps need. The Registry holds
 // one Deps and binds it into each step it builds (registry.go); a step then keeps
 // only the specific ports it uses. Recipes and Deployer may be nil when the
@@ -162,6 +172,14 @@ type Deps struct {
 	Deployer      deploy.Deployer
 	EndpointYB    deploy.YBConn
 	ControllerURL string // controller URL a launched endpoint uses to reach the controller
+
+	// VoyagerMigrations, VoyagerMigrationEndpoints, and VoyagerRunner are the
+	// Voyager-migration ports the launcher/target steps use. Each is nil when the
+	// migration feature is disabled; no migration task is planned without them, so
+	// a step built without one fails cleanly rather than running half-wired.
+	VoyagerMigrations         migration.Store
+	VoyagerMigrationEndpoints VoyagerMigrationEndpointLookup
+	VoyagerRunner             deploy.VoyagerJobRunner
 	// Extensions is the externalized-extension catalog the create_endpoint step
 	// resolves a branch's extension set against (names -> pinned images). Nil
 	// disables externalized extensions (the endpoint ships only image-baked ones),

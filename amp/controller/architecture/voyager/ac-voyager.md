@@ -273,7 +273,7 @@ errors:
   409: target already attached, or a provision task already in flight
 ```
 
-Task plan (`KindCreateMigrationTarget`):
+Task plan (`KindVoyagerCreateMigrationTarget`):
 
 1. `create_cluster` (existing step; with writer endpoint) — creates cluster,
    default branch, and the `read_write` endpoint via the `yb-light-endpoint`
@@ -494,7 +494,7 @@ response: 200
 
 ### 4.6 `POST /migrations/{migrationId}/assess` — run assessment
 
-Async `202 + Task`. Task plan (`KindStartMigrationRun`, operation=assess):
+Async `202 + Task`. Task plan (`KindVoyagerStartMigrationRun`, operation=assess):
 
 1. `ensure_migration_run` — insert the run row (run id, attempt fixed at plan
    time; idempotent by id).
@@ -864,7 +864,7 @@ image is built from the patched branch.
    pool; mutations: plan tasks).
 3. New voyager DB pool + `internal/voyager/migrations/` golang-migrate dir (run at
    startup against database `voyager`).
-4. `internal/task/`: `KindCreateMigrationTarget`, `KindStartMigrationRun`; new
+4. `internal/task/`: `KindVoyagerCreateMigrationTarget`, `KindVoyagerStartMigrationRun`; new
    steps `attach_target_to_migration`, `ensure_migration_run`,
    `launch_voyager_job`; register in `registry.go`.
 5. `internal/deploy/` (or sibling package): `VoyagerJobRunner` with kubernetes +

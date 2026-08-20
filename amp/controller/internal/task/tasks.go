@@ -345,11 +345,19 @@ const defaultBranchName = "main"
 // Store. clusterID is taken by value and the address of a copy is stored, so
 // callers can pass a field directly.
 func (s *Service) create(ctx context.Context, kind string, params any, clusterID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
+	return s.createWithID(ctx, uuid.Nil, kind, params, clusterID, targetRef, steps)
+}
+
+// createWithID is the stable-id form of create, used by planners whose step args
+// must refer to the task before Store.Create is called (the migration
+// launchers). A zero taskID defers id assignment to the store; a fixed one is
+// honored and replays converge on the original plan.
+func (s *Service) createWithID(ctx context.Context, taskID uuid.UUID, kind string, params any, clusterID uuid.UUID, targetRef string, steps []StepSpec) (*Task, error) {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s params: %w", kind, err)
 	}
-	spec := TaskSpec{Kind: kind, Params: raw, Steps: steps}
+	spec := TaskSpec{ID: taskID, Kind: kind, Params: raw, Steps: steps}
 	if clusterID != uuid.Nil {
 		pid := clusterID
 		spec.ClusterID = &pid

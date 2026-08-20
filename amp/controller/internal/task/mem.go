@@ -63,7 +63,16 @@ func (s *MemStore) Create(_ context.Context, spec TaskSpec) (*Task, error) {
 			}
 		}
 	}
-	id := uuid.New()
+	id := spec.ID
+	if id == uuid.Nil {
+		id = uuid.New()
+	}
+	// Mirror PgStore's ON CONFLICT behavior for a replayed preassigned id: keep
+	// and return the original durable plan rather than generating replacement
+	// steps under a second set of ids.
+	if existing := s.tasks[id]; existing != nil {
+		return cloneTask(existing), nil
+	}
 	now := s.now()
 	var stepIDs []uuid.UUID
 	for _, sp := range spec.Steps {
