@@ -3,11 +3,15 @@ package deploy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -370,43 +374,105 @@ func TestEndpointSafekeeperURL(t *testing.T) {
 	}
 }
 
-// One read of a Service's Endpoints answers "can the control plane reach this
-// endpoint": a ready address, serving the safekeeper's port (#724).
-func TestEndpointsServePort(t *testing.T) {
-	ready := []byte(`{"subsets":[{"addresses":[{"ip":"10.21.133.26"}],"ports":[{"port":55433},{"port":7676}]}]}`)
-	if !endpointsServePort(ready, 7676) {
-		t.Error("a ready address serving 7676 was not recognized")
-	}
+// The create task's gate is a real round trip to the safekeeper's status route,
+// so a 2xx from it — and nothing short of one — lets the task succeed (#724).
+func TestAwaitSafekeeper(t *testing.T) {
+	// Fast enough that the failure cases don't dominate the package's runtime;
+	// several attempts still fit in the budget.
+	const (
+		budget   = 100 * time.Millisecond
+		interval = 10 * time.Millisecond
+	)
 
-	// The #724 state: the pod is Ready but not yet a backend, so it is listed as
-	// notReady and kube-proxy still answers with a REJECT.
-	notReady := []byte(`{"subsets":[{"notReadyAddresses":[{"ip":"10.21.133.26"}],"ports":[{"port":7676}]}]}`)
-	if endpointsServePort(notReady, 7676) {
-		t.Error("a notReady-only Endpoints was treated as routable")
-	}
+	t.Run("a serving safekeeper passes on the first attempt", func(t *testing.T) {
+		var gotPath string
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			gotPath = r.URL.Path
+		}))
+		defer srv.Close()
 
-	// A Service that publishes only the compute port: reachable for Postgres, not
-	// for the controller.
-	computeOnly := []byte(`{"subsets":[{"addresses":[{"ip":"10.21.133.26"}],"ports":[{"port":55433}]}]}`)
-	if endpointsServePort(computeOnly, 7676) {
-		t.Error("a Service without the safekeeper port was treated as reachable")
-	}
+		if err := awaitSafekeeper(context.Background(), srv.URL, budget, interval); err != nil {
+			t.Fatalf("awaitSafekeeper = %v, want nil", err)
+		}
+		if gotPath != safekeeperStatusPath {
+			t.Errorf("probed %q, want %q", gotPath, safekeeperStatusPath)
+		}
+		if n := calls.Load(); n != 1 {
+			t.Errorf("probed %d times, want 1", n)
+		}
+	})
 
-	// Addresses and ports have to come from the SAME subset — a ready address in
-	// one subset does not back a port only another subset serves.
-	split := []byte(`{"subsets":[{"addresses":[{"ip":"10.21.133.26"}],"ports":[{"port":55433}]},` +
-		`{"notReadyAddresses":[{"ip":"10.21.133.27"}],"ports":[{"port":7676}]}]}`)
-	if endpointsServePort(split, 7676) {
-		t.Error("a ready address in one subset was credited to a port served by another")
-	}
+	// The window the gate exists for: the pod is Ready and the Service routes, but
+	// the safekeeper is not serving yet. It has to be waited out, not failed on.
+	t.Run("a safekeeper that starts serving mid-budget passes", func(t *testing.T) {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if calls.Add(1) < 3 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+		}))
+		defer srv.Close()
 
-	if endpointsServePort([]byte("not json"), 7676) {
-		t.Error("unparseable body was treated as routable")
-	}
+		if err := awaitSafekeeper(context.Background(), srv.URL, budget, interval); err != nil {
+			t.Fatalf("awaitSafekeeper = %v, want nil", err)
+		}
+		if n := calls.Load(); n != 3 {
+			t.Errorf("probed %d times, want 3 (two refusals then a pass)", n)
+		}
+	})
+
+	// The regression: an address that accepts nothing is what a Service with no
+	// backend looks like from here, and it used to satisfy the gate because the
+	// Endpoints object said the pod was ready and the Service declared the port.
+	t.Run("an address nothing answers on fails", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		dead := srv.URL
+		srv.Close()
+
+		err := awaitSafekeeper(context.Background(), dead, budget, interval)
+		if err == nil {
+			t.Fatal("awaitSafekeeper on a dead address = nil, want an error")
+		}
+		// The message has to name what was dialed: the runbook's triage starts there.
+		if !strings.Contains(err.Error(), dead+safekeeperStatusPath) {
+			t.Errorf("error %q does not name the probed URL", err)
+		}
+	})
+
+	t.Run("a safekeeper that never serves fails", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+
+		err := awaitSafekeeper(context.Background(), srv.URL, budget, interval)
+		if err == nil {
+			t.Fatal("awaitSafekeeper against a 503 = nil, want an error")
+		}
+		if !strings.Contains(err.Error(), "503") {
+			t.Errorf("error %q does not carry the last status", err)
+		}
+	})
+
+	t.Run("a cancelled context stops the wait", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		if err := awaitSafekeeper(ctx, srv.URL, time.Minute, interval); !errors.Is(err, context.Canceled) {
+			t.Errorf("awaitSafekeeper with a cancelled context = %v, want context.Canceled", err)
+		}
+	})
 }
 
-// verifyReady gates the create task, so it must be a no-op where there is no API
-// server to verify against — otherwise every non-in-cluster deploy fails.
+// verifyReady gates the create task on an address only an in-cluster caller can
+// resolve, so out of cluster it must be a no-op — otherwise every non-in-cluster
+// deploy fails on a name that was never going to resolve.
 func TestVerifyReadySkipsOutsideCluster(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "")

@@ -50,11 +50,15 @@ func (a *ampFeatureRun) forkAfterEndpointCreate(ctx context.Context) error {
 // Deliberately no sleep between the create and the fork: the gap IS the test.
 func forkAfterEndpointCreateSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string,
 	connect endpointConnector, logf func(string, ...any)) error {
-	created := time.Now()
 	parentEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
 	if err != nil {
 		return fmt.Errorf("create parent endpoint: %w", err)
 	}
+	// Timed from here, not from before the create: the window under test is the gap
+	// between create_endpoint RETURNING and the fork. A timer started earlier
+	// reports the deploy's own ~90s instead, which reads in the log as a long wait
+	// the test never took — and makes a passing run look like it missed the window.
+	created := time.Now()
 
 	// A branch nobody has written to has no determinable fork point even with an
 	// endpoint deployed, and would fail this test for an unrelated reason. One row

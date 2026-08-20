@@ -81,13 +81,22 @@ answers a REJECT — and the controller reaches an endpoint's pageserver/safekee
 over exactly that Service, which is how it came to report an endpoint ready and
 then refuse its own follow-up call (#724).
 
-So the deploy is `helm --wait` **and** `verifyReady`: the Service's `Endpoints`
-lists a ready address serving `sk-http`. Only then does the task succeed. One read
-answers it — the ports listed there are the Service's own and the addresses are
-the ready ones — and it retries every second for 30s, so neither a Service a beat
-behind nor a blip in the API server fails an otherwise good deploy. A failure
-leaves the release installed and the endpoint row addressless, the same shape as
-any other failed deploy; the create is idempotent, so re-issuing it converges.
+So the deploy is `helm --wait` **and** `verifyReady`: a `GET /v1/status` against
+the endpoint's safekeeper, over the same Service DNS the controller's follow-up
+calls use, must answer 2xx. Only then does the task succeed.
+
+It is a round trip rather than a read of the Service's `Endpoints`, because
+routable and ready are different facts and only the first is visible there — an
+address is listed ready because the *pod's* readiness probe passed (that probe is
+on `pg-compute`) and the port is listed because the Service declares it, so
+neither observes the safekeeper. The GET subsumes the routing check anyway: a
+Service with no backend REJECTs. `/v1/status` is on the safekeeper's
+unauthenticated allow-list, so the probe carries no token.
+
+It retries every second for 30s, so neither a Service a beat behind nor a
+safekeeper still binding its port fails an otherwise good deploy. A failure leaves
+the release installed and the endpoint row addressless, the same shape as any
+other failed deploy; the create is idempotent, so re-issuing it converges.
 
 Retire is the mirror (`DELETE …/endpoints/{id}`): `helm uninstall
 --ignore-not-found --wait` then drop the row → `204`. This is the design's

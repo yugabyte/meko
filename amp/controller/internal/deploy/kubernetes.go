@@ -206,85 +206,94 @@ func (k *KubernetesDeployer) CreateEndpoint(ctx context.Context, spec EndpointSp
 	return Endpoint{ID: release, Address: addr, TailnetAddress: tailnet}, nil
 }
 
-// verifyReadyBudget / verifyReadyInterval bound the confirmation that the
-// endpoint's Service is usable. Nothing here fails on one bad read: a Service
-// gains its backend a beat after the pod goes Ready (EndpointSlice, then
-// kube-proxy), and the API server can blip, so the check keeps looking for the
-// whole budget and only reports what it last saw once that runs out.
+// verifyReadyBudget / verifyReadyInterval / verifyReadyAttempt bound the
+// confirmation that the endpoint is reachable. Nothing here fails on one bad
+// attempt: a Service gains its backend a beat after the pod goes Ready
+// (EndpointSlice, then kube-proxy), so the check keeps trying for the whole
+// budget and reports what it last saw once that runs out. Each attempt gets its
+// own timeout so a single hung dial cannot eat the budget.
 const (
 	verifyReadyBudget   = 30 * time.Second
 	verifyReadyInterval = time.Second
+	verifyReadyAttempt  = 5 * time.Second
 )
 
-// verifyReady confirms the deployed endpoint is one the control plane can reach:
-// its Service has a ready backend for the safekeeper's HTTP port. One read of the
-// Service's Endpoints answers both halves — the ports listed there are the
-// Service's own, and the addresses are the ready ones — which is exactly the
-// state kube-proxy programs a backend from, as opposed to the REJECT it installs
-// for a Service with none.
+// safekeeperStatusPath is the safekeeper's liveness route. It sits on the
+// safekeeper's unauthenticated allow-list (ALLOWLIST_ROUTES in
+// compute/safekeeper/src/http/routes.rs), so the probe carries no token.
+const safekeeperStatusPath = "/v1/status"
+
+// verifyReady confirms the deployed endpoint ANSWERS on the safekeeper's HTTP
+// API, over the same Service DNS the controller's own follow-up calls use. Only
+// then does the create task succeed: an endpoint the controller cannot call is
+// not created, whatever the pod is doing.
 //
-// It returns as soon as that holds (the common case is the first read) and an
-// error only after the budget. An error fails the create task: an endpoint the
-// controller cannot call is not created, whatever the pod is doing.
+// It is a round trip rather than a read of the Service's `Endpoints`, because
+// routable and ready are different facts and only the first is visible there. An
+// address is listed ready because the POD's readiness probe passed — and that
+// probe is on pg-compute — while the port is listed because the Service declares
+// it; neither observes the safekeeper. Reading Endpoints proves kube-proxy will
+// route to sk-http and leaves "something answers there" resting on the pod's
+// internal start order, which is the very thing the fork then depends on. A GET
+// subsumes the routing check anyway: a Service with no backend REJECTs.
 func (k *KubernetesDeployer) verifyReady(ctx context.Context, release string) error {
+	// Out of cluster the endpoint's Service DNS does not resolve from here — and
+	// the controller could not make the follow-up call either, so there is nothing
+	// to gate (tests, dev).
 	if !inCluster() {
-		return nil // no API server to verify against (tests, dev)
+		return nil
 	}
-	path := fmt.Sprintf("/api/v1/namespaces/%s/endpoints/%s", k.cfg.Namespace, release)
-	deadline := time.Now().Add(verifyReadyBudget)
-	for {
-		if body, ok := k.k8sAPIGet(ctx, path); ok && endpointsServePort(body, safekeeperHTTPPort) {
-			return nil
-		}
-		if !time.Now().Before(deadline) {
-			return fmt.Errorf("its Service had no ready backend for port %d after %s",
-				safekeeperHTTPPort, verifyReadyBudget)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(verifyReadyInterval):
-		}
-	}
+	return awaitSafekeeper(ctx, k.EndpointSafekeeperURL(release), verifyReadyBudget, verifyReadyInterval)
 }
 
 // inCluster reports whether the controller is running inside Kubernetes, and so
-// has an API server to verify against. k8sAPIGet folds this in with its error
-// cases; verifyReady has to tell them apart, since one is "cannot know" and the
-// other is "not ready".
+// shares a network with the endpoint Services it deploys.
 func inCluster() bool {
 	return os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != ""
 }
 
-// endpointsServePort reports whether the Endpoints body lists a ready address
-// serving port. Both halves have to come from the same subset: a subset is a set
-// of addresses paired with the ports they serve, so a ready address in one and
-// the port in another would not be a backend for that port.
-func endpointsServePort(body []byte, port int) bool {
-	var eps struct {
-		Subsets []struct {
-			Addresses []struct {
-				IP string `json:"ip"`
-			} `json:"addresses"`
-			Ports []struct {
-				Port int `json:"port"`
-			} `json:"ports"`
-		} `json:"subsets"`
-	}
-	if json.Unmarshal(body, &eps) != nil {
-		return false
-	}
-	for _, sub := range eps.Subsets {
-		if len(sub.Addresses) == 0 {
-			continue
+// awaitSafekeeper polls baseURL's status route until it answers 2xx, returning
+// the last failure if the budget runs out first. Both failure modes are worth
+// retrying and neither is distinguished: a refused connection is a Service with
+// no backend yet, a 5xx a safekeeper that holds the port but is not serving.
+func awaitSafekeeper(ctx context.Context, baseURL string, budget, interval time.Duration) error {
+	client := &http.Client{Timeout: verifyReadyAttempt}
+	defer client.CloseIdleConnections()
+	u := strings.TrimRight(baseURL, "/") + safekeeperStatusPath
+	deadline := time.Now().Add(budget)
+	for {
+		err := probeSafekeeper(ctx, client, u)
+		if err == nil {
+			return nil
 		}
-		for _, p := range sub.Ports {
-			if p.Port == port {
-				return true
-			}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("its safekeeper did not answer GET %s within %s: %w", u, budget, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
 		}
 	}
-	return false
+}
+
+// probeSafekeeper is one GET, drained and closed so the connection can be reused
+// across attempts.
+func probeSafekeeper(ctx context.Context, client *http.Client, u string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // tailnetAddress derives the endpoint's Tailscale (tailnet) host:port when the
