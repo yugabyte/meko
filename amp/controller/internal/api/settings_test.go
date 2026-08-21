@@ -2,6 +2,8 @@ package api_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -76,6 +78,73 @@ func TestUpdateSettingsStoresEvenWhenTheEndpointCannotBeTold(t *testing.T) {
 	}
 	if stored.PageserverSettings["scale_factor"] != float64(8) && stored.PageserverSettings["scale_factor"] != 8 {
 		t.Fatalf("pageserver settings not stored: %v", stored.PageserverSettings)
+	}
+}
+
+// The endpoint's own account of what it did has to reach the caller intact.
+// Every field here is a fact the caller cannot get any other way: which services
+// were bounced, which took the change while running, which setting cost them the
+// restart, and which settings are stored and doing nothing at all. A decode that
+// dropped one would report a clean success for a change that did not happen.
+func TestUpdateSettingsReportsWhatTheEndpointDid(t *testing.T) {
+	ctx := context.Background()
+	backend := core.NewMemBackend()
+
+	var gotPath string
+	sup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"restarted": ["compute_ctl"],
+			"reloaded": [],
+			"restart_forced_by": ["shared_buffers"],
+			"not_applied": ["block_size", "yb_amp.nonsense"]
+		}`))
+	}))
+	defer sup.Close()
+
+	client, _, _ := newTestServerWith(t, backend,
+		api.Provisioning{Deployer: &fakeDeployer{supURL: sup.URL}})
+
+	pool := seedUserPool(t, backend)
+	cl, err := backend.CreateCluster(ctx, pool, "main", 18)
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	br := cl.DefaultBranch
+	ep, err := backend.CreateEndpoint(ctx, cl.ID, br.BranchID, core.RoleReadWrite, nil)
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+
+	work := map[string]string{"shared_buffers": "512MB"}
+	resp, err := client.UpdateEndpointSettingsWithResponse(ctx, pool, cl.ID, br.BranchID, ep.ID,
+		api.UpdateEndpointSettingsJSONRequestBody{PgSettings: &work})
+	if err != nil {
+		t.Fatalf("UpdateEndpointSettings: %v", err)
+	}
+	if resp.StatusCode() != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode(), string(resp.Body))
+	}
+	if gotPath != "/v1/settings/reload" {
+		t.Errorf("POSTed to %q, want /v1/settings/reload", gotPath)
+	}
+	if resp.JSON200.Endpoints == nil || len(*resp.JSON200.Endpoints) != 1 {
+		t.Fatalf("want one endpoint outcome, got %v", resp.JSON200.Endpoints)
+	}
+	got := (*resp.JSON200.Endpoints)[0]
+	if got.Unreachable != nil {
+		t.Fatalf("endpoint answered, must not be unreachable: %s", *got.Unreachable)
+	}
+	if got.Restarted == nil || len(*got.Restarted) != 1 || (*got.Restarted)[0] != "compute_ctl" {
+		t.Errorf("restarted = %v, want [compute_ctl]", got.Restarted)
+	}
+	if got.RestartForcedBy == nil || (*got.RestartForcedBy)[0] != "shared_buffers" {
+		t.Errorf("restart_forced_by = %v, want [shared_buffers]", got.RestartForcedBy)
+	}
+	// The only signal that a stored setting is not in force.
+	if got.NotApplied == nil || len(*got.NotApplied) != 2 {
+		t.Fatalf("not_applied = %v, want both names", got.NotApplied)
 	}
 }
 

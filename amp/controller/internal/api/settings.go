@@ -25,12 +25,15 @@ import (
 // unsure whether the settings were stored, which is the one thing that is never
 // in doubt.
 //
-// The endpoint restarts the services whose config actually changed, and reports
-// which. Only those: a write that renders identical config costs nothing, which
-// is what makes this safe to call after any edit rather than only after one
-// known to matter. Restarting the compute does bounce Postgres, so a
-// `pg_settings` change interrupts connections on that endpoint — the cost is
-// real, it is just no longer left for someone to remember to pay.
+// The endpoint applies each change the cheapest way that actually applies it,
+// and reports which. A Postgres setting that can change while the server is
+// running is reloaded — connections stay up — and one fixed at server start
+// restarts the compute, with `restart_forced_by` naming it so the interruption
+// is explained. The pageserver and safekeeper have no reload path, so a change
+// to theirs is still a restart.
+//
+// Nothing is restarted that did not need to be: the rendered config is compared
+// with what is on disk, so a write that changes nothing costs nothing.
 
 // notifyTimeout bounds one endpoint's reload. Short because the settings are
 // already durable by the time it runs: waiting longer on an endpoint that is
@@ -39,7 +42,10 @@ const notifyTimeout = 10 * time.Second
 
 // reloadReply is the supervisor's answer to POST /v1/settings/reload.
 type reloadReply struct {
-	Restarted []string `json:"restarted"`
+	Restarted       []string `json:"restarted"`
+	Reloaded        []string `json:"reloaded"`
+	RestartForcedBy []string `json:"restart_forced_by"`
+	NotApplied      []string `json:"not_applied"`
 }
 
 func (c *Controllers) UpdateBranchSettings(ctx context.Context, request UpdateBranchSettingsRequestObject) (UpdateBranchSettingsResponseObject, error) {
@@ -131,51 +137,64 @@ func (c *Controllers) notifyEndpoints(ctx context.Context, ids []uuid.UUID) *[]E
 	out := make([]EndpointSettingsOutcome, 0, len(ids))
 	for _, id := range ids {
 		outcome := EndpointSettingsOutcome{EndpointId: id}
-		switch restart, err := c.notifyEndpoint(ctx, id); {
+		switch reply, err := c.notifyEndpoint(ctx, id); {
 		case err != nil:
 			reason := err.Error()
 			outcome.Unreachable = &reason
 			c.logger.LogAttrs(ctx, slog.LevelInfo, "endpoint not told about a settings change",
 				slog.String(applog.KeyEndpointID, id.String()), slog.String("error", reason))
 		default:
-			outcome.Restarted = &restart
+			outcome.Restarted = &reply.Restarted
+			outcome.Reloaded = &reply.Reloaded
+			if len(reply.RestartForcedBy) > 0 {
+				outcome.RestartForcedBy = &reply.RestartForcedBy
+			}
+			// Only when there is something to say: the caller stored these and
+			// they are not in force, which is a warning rather than part of a
+			// normal reply.
+			if len(reply.NotApplied) > 0 {
+				outcome.NotApplied = &reply.NotApplied
+			}
 		}
 		out = append(out, outcome)
 	}
 	return &out
 }
 
-func (c *Controllers) notifyEndpoint(ctx context.Context, id uuid.UUID) ([]string, error) {
+func (c *Controllers) notifyEndpoint(ctx context.Context, id uuid.UUID) (reloadReply, error) {
 	if c.prov.Deployer == nil {
-		return nil, errors.New("this controller does not deploy endpoints")
+		return reloadReply{}, errors.New("this controller does not deploy endpoints")
 	}
 	base := c.prov.Deployer.EndpointSupervisorURL(endpointDeployName(id))
 	if base == "" {
-		return nil, errors.New("this deployer cannot reach an endpoint's settings API")
+		return reloadReply{}, errors.New("this deployer cannot reach an endpoint's settings API")
 	}
 	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/settings/reload", nil)
 	if err != nil {
-		return nil, err
+		return reloadReply{}, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return reloadReply{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("settings reload returned %s", resp.Status)
+		return reloadReply{}, fmt.Errorf("settings reload returned %s", resp.Status)
 	}
 	var reply reloadReply
 	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
-		return nil, fmt.Errorf("decoding the reload reply: %w", err)
+		return reloadReply{}, fmt.Errorf("decoding the reload reply: %w", err)
 	}
 	if reply.Restarted == nil {
 		reply.Restarted = []string{}
 	}
-	return reply.Restarted, nil
+	if reply.Reloaded == nil {
+		reply.Reloaded = []string{}
+	}
+	return reply, nil
 }
 
 // pgSettingsOf and daemonSettingsOf convert a request field to what the backend

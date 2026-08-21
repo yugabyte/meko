@@ -473,6 +473,20 @@ impl ComputeNode {
     pub fn run(self) -> Result<Option<i32>> {
         let this = Arc::new(self);
 
+        // SIGHUP re-reads the spec file and reconfigures, which is how the
+        // endpoint supervisor applies a settings change without restarting this
+        // process and taking Postgres down with it.
+        //
+        // A signal rather than an HTTP route: the external `/configure` is
+        // behind a JWT the supervisor has no way to present, and the internal
+        // server binds a wildcard address with no auth layer, so putting
+        // `/configure` there would let anything that can reach the pod IP
+        // replace the spec — including `yb_amp.pageserver_connstring`, i.e.
+        // where this compute reads its data from. A signal carries no payload
+        // and needs the pod's PID namespace, so the only thing it can apply is
+        // the file the supervisor already wrote.
+        Self::spawn_reload_on_sighup(this.clone());
+
         let cli_spec = this.state.lock().unwrap().pspec.clone();
 
         // If this is a pooled VM, prewarm before starting HTTP server and becoming
@@ -1813,6 +1827,60 @@ impl ComputeNode {
     /// Similar to `apply_config()`, but does a bit different sequence of operations,
     /// as it's used to reconfigure a previously started and configured Postgres node.
     #[instrument(skip_all)]
+    /// Re-read the spec on SIGHUP and hand it to the same path `/configure`
+    /// drives.
+    ///
+    /// Best effort by construction: a signal has nowhere to return an error to,
+    /// so a spec that cannot be read or parsed is logged and the running
+    /// configuration is left alone. The caller learns nothing from the signal
+    /// itself — the supervisor checks the outcome separately — so failing
+    /// silently into a *changed* state is the one thing this must not do.
+    fn spawn_reload_on_sighup(this: Arc<Self>) {
+        let mut signals = match signal_hook::iterator::Signals::new([signal_hook::consts::SIGHUP]) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("cannot listen for SIGHUP, settings changes will need a restart: {e}");
+                return;
+            }
+        };
+        std::thread::spawn(move || {
+            for _ in signals.forever() {
+                if let Err(e) = this.reload_spec_from_disk() {
+                    error!("SIGHUP: leaving the running configuration in place: {e:#}");
+                }
+            }
+        });
+    }
+
+    /// Load the spec file this process was started with and queue a
+    /// reconfigure.
+    ///
+    /// The status check mirrors `/configure`: reconfiguring anything but an
+    /// Empty or Running compute would race the state machine that is already
+    /// mid-transition.
+    fn reload_spec_from_disk(&self) -> Result<()> {
+        let path = self
+            .params
+            .config_path_test_only
+            .as_ref()
+            .context("no spec file to re-read; this compute was configured over HTTP")?;
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("open {}", path.to_string_lossy()))?;
+        let config: compute_api::responses::ComputeConfig =
+            serde_json::from_reader(&file).context("the spec file is not a compute config")?;
+        let spec = config.spec.context("the spec file carries no spec")?;
+        let pspec = ParsedSpec::try_from(spec).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let mut state = self.state.lock().unwrap();
+        if !matches!(state.status, ComputeStatus::Empty | ComputeStatus::Running) {
+            anyhow::bail!("compute is {}, not ready to reconfigure", state.status);
+        }
+        ComputeNode::set_spec(&self.params, &mut state, pspec);
+        state.set_status(ComputeStatus::ConfigurationPending, &self.state_changed);
+        info!("SIGHUP: spec re-read, reconfigure queued");
+        Ok(())
+    }
+
     pub fn reconfigure(&self) -> Result<()> {
         let spec = self.state.lock().unwrap().pspec.clone().unwrap().spec;
 

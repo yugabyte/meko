@@ -34,6 +34,7 @@ func envWithProvisionedEndpoint() (*config.LocalEnv, launcherEndpoint) {
 		PgPort:           55433,
 		ExternalHTTPPort: 3080,
 		InternalHTTPPort: 47119,
+		SettingsHTTPPort: 47120,
 		PgVersion:        18,
 	}}
 	return env, le
@@ -64,6 +65,7 @@ func TestSupervisorEnvCarriesTheAllocatedPorts(t *testing.T) {
 		"SAFEKEEPER_PG_PORT":             "5464",
 		"SAFEKEEPER_HTTP_PORT":           "7686",
 		"ENDPOINT_PG_VERSION":            "18",
+		"SUPERVISOR_HTTP_PORT":           "47120",
 	}
 	for k, v := range want {
 		if got[k] != v {
@@ -83,6 +85,21 @@ func TestSupervisorEnvDoesNotLetTheInternalPortBeDerived(t *testing.T) {
 	}
 	if got["COMPUTE_CTL_INTERNAL_HTTP_PORT"] == "" {
 		t.Fatal("COMPUTE_CTL_INTERNAL_HTTP_PORT must be passed, not derived")
+	}
+}
+
+// Without a port the supervisor serves no settings API, and a settings change
+// applies only on the next endpoint restart. An endpoint created before this
+// port existed has a zero here, which must not become a request to bind port 0.
+func TestSupervisorEnvOmitsTheSettingsPortWhenUnallocated(t *testing.T) {
+	env, le := envWithProvisionedEndpoint()
+	le.conf.SettingsHTTPPort = 0
+	got, err := supervisorEnv(env, le)
+	if err != nil {
+		t.Fatalf("supervisorEnv: %v", err)
+	}
+	if v, ok := got["SUPERVISOR_HTTP_PORT"]; ok {
+		t.Errorf("SUPERVISOR_HTTP_PORT = %q, want it absent", v)
 	}
 }
 

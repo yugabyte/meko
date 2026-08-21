@@ -85,14 +85,26 @@ after one known to matter. Most of a config comes from the environment and the
 resources, not from the registry row someone just edited, so most reloads are
 no-ops.
 
-Restarting the compute bounces Postgres, so a `pg_settings` change does
-interrupt connections on that endpoint. That cost is real; it is simply paid
-when the edit is made rather than left for someone to remember.
+**Postgres settings usually reload rather than restart.** Postgres itself says
+which is which: `pg_settings.context` is `postmaster` for the settings fixed at
+server start and `sighup`/`superuser`/`user` for the rest. The supervisor asks
+the running server about the settings that actually changed, so the rule is not
+a hand-kept list that drifts from the binary.
 
-It is also heavier than most changes need — Postgres classifies most GUCs as
-reloadable, and the daemons have no reload path at all — so the plan is to
-restart only what genuinely requires it and reload the rest
-([#847](https://github.com/yugabyte/meko/issues/847)).
+When none of them are `postmaster`, the new spec goes to `compute_ctl`'s in-pod
+`/configure`, which rewrites `postgresql.conf` and calls `pg_reload_conf()` —
+connections stay up. When one is, the compute restarts and the reply names the
+setting that forced it, so the cost is explained rather than arbitrary.
+
+Some settings nothing applies, and those are left alone. `internal` ones like
+`block_size` are compiled into the binary, and a name Postgres does not report
+at all — a typo, or one from an extension that is not loaded — cannot be put in
+force by any means. Restarting on their account would be an interruption that
+changes nothing, so the reply names them as not applied instead, which is also
+the only way the operator finds out the edit had no effect.
+
+The pageserver and safekeeper restart on any change to their toml. They read it
+once at start and have no reload path.
 
 Two things follow from re-rendering at runtime rather than only at boot. Configs
 are written beside and renamed over, because a re-render races the monitor loop

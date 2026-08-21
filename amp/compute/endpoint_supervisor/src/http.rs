@@ -7,21 +7,22 @@
 //! apply an edit is to restart the endpoint and hope the boot read picks it up.
 //!
 //! So the controller calls `POST /v1/settings/reload` after it writes the row.
-//! This process re-reads the registry, re-renders the configs, applies what it
-//! can in place — the lease timings are its own — and restarts the services
-//! whose config actually moved.
+//! This process re-reads the registry, re-renders the configs, and applies each
+//! change the cheapest way that actually applies it.
 //!
-//! **Only the ones that moved.** Each rendered file is compared with what is on
-//! disk before it is written, so a reload that renders identical bytes restarts
-//! nothing. That is what makes this safe to call after any edit rather than only
-//! after one known to matter: most of a config comes from the environment and
-//! the resources, not from the registry row someone just edited.
+//! For the compute that is usually a reload: Postgres says which settings can
+//! change while it is running, and when the changed ones all can, `compute_ctl`
+//! takes a SIGHUP, re-reads the spec and calls `pg_reload_conf()` — connections
+//! stay up. A setting fixed at server start restarts the compute, and the reply
+//! names it, so the interruption is explained rather than arbitrary.
 //!
-//! Restarting is heavier than most changes need — Postgres classifies most GUCs
-//! as reloadable and the daemons have no reload path at all — so the plan is to
-//! restart only what genuinely requires it and reload the rest (#847). Until
-//! then the cost is paid visibly at the moment of the edit rather than left
-//! unapplied.
+//! The pageserver and safekeeper restart on any change to their toml: they
+//! read it once at start and have no reload path.
+//!
+//! **Only what moved.** Each rendered file is compared with what is on disk
+//! before it is written, so a reload that renders identical bytes does nothing.
+//! Most of a config comes from the environment and the resources, not from the
+//! registry row someone just edited.
 //!
 //! Separate from [`crate::control`] rather than folded into it: that socket is
 //! a Unix socket in the run directory, deliberately unreachable from outside the
@@ -42,10 +43,23 @@ use crate::Env;
 /// What a reload did.
 #[derive(Debug, serde::Serialize)]
 struct ReloadResponse {
-    /// Services whose rendered config changed, and which were therefore
-    /// restarted onto it. Empty means nothing changed — a reload that renders
-    /// identical config is a no-op, not a restart.
+    /// Services restarted onto the new config, because it could not be applied
+    /// any other way. Empty means nothing changed, or everything that did was
+    /// applied without an interruption.
     restarted: Vec<String>,
+    /// Services that took the change in place. For the compute this means
+    /// Postgres reloaded its config and kept its connections.
+    reloaded: Vec<String>,
+    /// The settings that forced a restart, when one was needed — Postgres fixes
+    /// these at server start, so naming them explains a cost the caller
+    /// otherwise has to guess at.
+    restart_forced_by: Vec<String>,
+    /// Settings that were stored but are not in force, because nothing applies
+    /// them: `internal` ones are compiled into the binary, and a name Postgres
+    /// does not report is a typo or belongs to an extension that is not loaded.
+    /// Naming them is the only way the caller learns the edit had no effect —
+    /// the alternative is a success reply for a setting that never took.
+    not_applied: Vec<String>,
 }
 
 /// The supervisor currently serving a lease, for the handler to restart through.
@@ -92,7 +106,121 @@ fn restart_stale(stale: &[&'static str]) -> Result<Vec<String>> {
     Ok(restarted)
 }
 
-/// Everything a request needs. `Arc` because routerify hands it to each request
+/// Apply a re-render: reload what can be reloaded, restart what cannot.
+///
+/// The pageserver and safekeeper read their toml once, at start, and have no
+/// reload path — so a change to theirs is still a restart. The compute is the
+/// one that had a cheaper option all along, and the expensive one: restarting
+/// it takes Postgres and every connection with it.
+fn apply(env: &Env, rendered: crate::Rendered) -> Result<ReloadResponse> {
+    let mut restarted = Vec::new();
+    let mut reloaded = Vec::new();
+    let mut restart_forced_by = Vec::new();
+    let mut not_applied = Vec::new();
+
+    restarted.extend(restart_stale(&daemons_to_restart(&rendered))?);
+
+    if rendered.compute {
+        let l = &env.layout;
+        let decision = match crate::reconfigure::classify_settings(
+            &l.pg_bin().join("psql"),
+            l.compute_port,
+            &rendered.changed_settings,
+        ) {
+            Ok(sorted) => {
+                // Settings nothing can apply are named back to the caller rather
+                // than restarted for: a restart would not put them in force
+                // either, so it would be an interruption that changes nothing.
+                not_applied = sorted.inapplicable.clone();
+                crate::reconfigure::decide(&rendered.changed_settings, &sorted)
+            }
+            // Postgres could not be asked — it may be down, or mid-restart.
+            // Restarting is the answer that is always correct, so take it and
+            // say why rather than reloading on an assumption.
+            //
+            // "Could not be classified" is a different fact from "these are
+            // postmaster settings", and only the second has a field. Filling
+            // `restart_forced_by` here would tell the operator that the setting
+            // they edited can only change at server start, which is exactly what
+            // is not known.
+            Err(e) => {
+                tracing::warn!("could not classify the changed settings, restarting: {e:#}");
+                crate::reconfigure::Apply::Restart {
+                    because: Vec::new(),
+                }
+            }
+        };
+        match decision {
+            // Nothing here: the spec changed, but not in its settings — a
+            // password, an endpoint id, the storage block, the prewarm knobs.
+            // A reload does NOT apply those on an amp spec: every spec this
+            // process renders sets `skip_pg_catalog_updates`, so `reconfigure`
+            // skips the catalogue work, and the prewarm fields are only read on
+            // the start path. Reporting a reload here would report a change that
+            // is on disk and not in force.
+            crate::reconfigure::Apply::Nothing => {
+                restarted.extend(restart_stale(&["compute_ctl"])?);
+            }
+            crate::reconfigure::Apply::Reload => {
+                match reload_compute() {
+                    Ok(()) => reloaded.push("compute_ctl".to_string()),
+                    // Falling back to the restart keeps the change applied,
+                    // which is what the caller asked for; it just costs what
+                    // this function exists to avoid.
+                    Err(e) => {
+                        tracing::warn!("in-place reconfigure failed, restarting: {e:#}");
+                        restarted.extend(restart_stale(&["compute_ctl"])?);
+                    }
+                }
+            }
+            crate::reconfigure::Apply::Restart { because } => {
+                restart_forced_by = because;
+                restarted.extend(restart_stale(&["compute_ctl"])?);
+            }
+        }
+    }
+
+    Ok(ReloadResponse {
+        restarted,
+        reloaded,
+        restart_forced_by,
+        not_applied,
+    })
+}
+
+/// The daemons whose config moved, in the order they are restarted.
+///
+/// The safekeeper first: it is what the pageserver and the compute read from,
+/// so restarting it after them would make them reconnect twice.
+fn daemons_to_restart(rendered: &crate::Rendered) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if rendered.safekeeper {
+        out.push("safekeeper");
+    }
+    if rendered.pageserver {
+        out.push("pageserver");
+    }
+    out
+}
+
+/// Tell `compute_ctl` to re-read the spec this process just wrote.
+///
+/// SIGHUP, not an HTTP call. The external `/configure` is behind a JWT this
+/// process cannot present — it renders the compute's own key set empty — and the
+/// internal server binds a wildcard address with no auth layer, so exposing
+/// `/configure` there would let anything able to reach the pod IP replace the
+/// spec, including where this compute reads its data from. A signal carries no
+/// payload and needs the pod's PID namespace, so the only thing it can apply is
+/// the file already on disk.
+fn reload_compute() -> Result<()> {
+    let sup = supervisor().context("no services are running to reload")?;
+    let mut sup = sup
+        .lock()
+        .map_err(|_| anyhow::anyhow!("the supervisor lock is poisoned"))?;
+    sup.signal_one("compute_ctl", libc::SIGHUP)
+}
+
+/// Everything a request needs./// Everything a request needs. `Arc` because routerify hands it to each request
 /// by reference and the server outlives any one of them.
 pub struct State {
     pub env: Arc<Env>,
@@ -142,17 +270,21 @@ async fn reload_handler(request: Request<Body>) -> Result<Response<Body>, ApiErr
         // `reload_config` for why re-rendering anyway is the dangerous option.
         .map_err(|e| ApiError::ResourceUnavailable(format!("{e:#}").into()))?;
 
-    let stale = rendered.stale();
-    let restarted = tokio::task::spawn_blocking(move || restart_stale(&stale))
+    let env = state.env.clone();
+    let outcome = tokio::task::spawn_blocking(move || apply(&env, rendered))
         .await
-        .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("the restart task: {e}")))?
-        // The settings are stored and rendered by now, so a restart that failed
-        // leaves a service running the previous config — worth an error rather
-        // than a 200 that implies it took.
+        .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("the apply task: {e}")))?
+        // The settings are stored and rendered by now, so a failure here leaves
+        // a service running the previous config — worth an error rather than a
+        // 200 that implies it took.
         .map_err(ApiError::InternalServerError)?;
 
-    tracing::info!(?restarted, "settings reloaded from the registry");
-    json_response(StatusCode::OK, ReloadResponse { restarted })
+    tracing::info!(
+        restarted = ?outcome.restarted,
+        reloaded = ?outcome.reloaded,
+        "settings reloaded from the registry"
+    );
+    json_response(StatusCode::OK, outcome)
 }
 
 pub fn make_router(state: Arc<State>) -> RouterBuilder<Body, ApiError> {
@@ -215,7 +347,7 @@ pub fn spawn(addr: std::net::SocketAddr, state: Arc<State>) -> Result<std::net::
 
 #[cfg(test)]
 mod tests {
-    use crate::Rendered;
+    use super::daemons_to_restart;
 
     /// The API has to *come up*, which is not something compiling proves.
     ///
@@ -286,25 +418,25 @@ mod tests {
         );
     }
 
-    /// Which services a change touches, in the order they are restarted.
+    /// The daemons are restarted in dependency order — the safekeeper is what
+    /// the pageserver and the compute read from, so it goes first.
     #[test]
-    fn stale_names_the_services_whose_config_moved() {
-        let none = Rendered::default();
-        assert!(none.stale().is_empty());
-
-        let all = Rendered {
+    fn daemons_restart_in_dependency_order() {
+        let order = daemons_to_restart(&crate::Rendered {
             pageserver: true,
             safekeeper: true,
             compute: true,
-        };
-        // Restart order, not declaration order: the safekeeper is what the
-        // pageserver and the compute read from.
-        assert_eq!(all.stale(), vec!["safekeeper", "pageserver", "compute_ctl"]);
+            changed_settings: Vec::new(),
+        });
+        assert_eq!(order, vec!["safekeeper", "pageserver"]);
 
-        let one = Rendered {
+        // Only what moved: an unchanged daemon is not bounced for a change to
+        // its neighbour.
+        let order = daemons_to_restart(&crate::Rendered {
             pageserver: true,
             ..Default::default()
-        };
-        assert_eq!(one.stale(), vec!["pageserver"]);
+        });
+        assert_eq!(order, vec!["pageserver"]);
+        assert!(daemons_to_restart(&crate::Rendered::default()).is_empty());
     }
 }

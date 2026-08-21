@@ -179,6 +179,17 @@ export type UpdateEndpointSettingsInput = {
 export type EndpointSettingsOutcome = {
   endpoint_id: string;
   restarted?: string[];
+  /** Services that took the change in place. For the compute this means
+   *  Postgres reloaded its config and kept its connections. */
+  reloaded?: string[];
+  /** The Postgres settings that forced a restart — they are fixed at server
+   *  start, so naming them explains a cost that would otherwise look
+   *  arbitrary. */
+  restart_forced_by?: string[];
+  /** Settings that are stored but not in force: nothing applies them, so the
+   *  endpoint was not interrupted for them either. Compiled-in (`internal`)
+   *  settings and names Postgres does not report at all. */
+  not_applied?: string[];
   unreachable?: string;
 };
 

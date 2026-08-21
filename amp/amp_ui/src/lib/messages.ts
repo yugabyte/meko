@@ -33,16 +33,24 @@ export const dataBranchingMessages = {
   settingsEndpointDescription:
     "Settings for this compute alone. Postgres settings here win over the branch's.",
   settingsRestartWarning:
-    "Changing Postgres settings restarts this compute and drops its active connections. Only the services whose config actually changes are restarted.",
+    "Most Postgres settings apply without an interruption. A few can only change when the server starts — those restart this compute and drop its connections, and you'll be told which.",
   settingsRestartWarningBranch:
-    "Changing Postgres settings restarts the compute on every endpoint of this branch and drops their active connections. Only the services whose config actually changes are restarted.",
+    "Most Postgres settings apply without an interruption. A few can only change when the server starts — those restart the compute on every endpoint of this branch and drop their connections, and you'll be told which.",
   settingsSaved: "Settings saved",
   settingsSavedRestarted: (services: string) => `Settings saved — restarted ${services}`,
   settingsSavedNoRestart: "Settings saved — nothing needed restarting",
+  settingsSavedReloaded: "Settings saved and applied — no connections were dropped",
+  settingsSavedRestartedBecause: (services: string, why: string) =>
+    `Settings saved — restarted ${services}, because ${why} can only change at server start`,
   settingsSavedRestartedAndUnreachable: (services: string, unreachable: number) =>
     `Settings saved — restarted ${services}; ${unreachable} compute${unreachable === 1 ? "" : "s"} couldn't be reached and will apply them on next start`,
   settingsSavedUnreachable:
     "Settings saved, but the compute couldn't be reached — they apply when it next starts",
+  /** Appended to whatever else happened: the operator believes they changed
+   *  something, and nothing will apply it, so this has to be said out loud
+   *  rather than inferred from a compute that did not restart. */
+  settingsSavedNotApplied: (base: string, names: string) =>
+    `${base}. ${names} won't take effect — Postgres can't change ${names.includes(",") ? "those" : "that"} from a config file; check the spelling, or whether the extension that defines it is loaded`,
   settingsError: "Failed to save settings",
   settingsNothingSet: "Nothing set.",
   settingsAddRow: "Add setting",

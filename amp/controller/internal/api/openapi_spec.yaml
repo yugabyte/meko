@@ -472,11 +472,16 @@ paths:
 
         Applied to running endpoints on a best-effort basis: the controller
         writes the row, then asks each of the branch's endpoints to re-read it.
-        The daemons load their config at start, so an endpoint **restarts the
-        services whose config actually changed** and reports them in
-        `restarted`. A write that renders identical config restarts nothing.
-        An endpoint that cannot be reached is reported in `unreachable`; the row
-        is still written, so it picks the change up when it next starts.
+        Each endpoint applies what it can in place and restarts only what it
+        must: a Postgres setting that can change while the server is running is
+        reloaded (`reloaded`), one fixed at server start restarts the compute
+        (`restarted`, with `restart_forced_by` naming the setting), and a change
+        to a storage daemon's config is a restart because those have no reload
+        path. A setting nothing can apply — compiled in, or a name Postgres does
+        not know — is reported in `not_applied` rather than restarted for, since
+        a restart would not put it in force either. A write that renders identical config does nothing. An endpoint
+        that cannot be reached is reported in `unreachable`; the row is still
+        written, so it picks the change up when it next starts.
 
         `404` if the pool, cluster, or branch does not exist.
       requestBody:
@@ -629,12 +634,15 @@ paths:
         alone.
 
         Applied on a best-effort basis: the controller writes the row, then asks
-        the endpoint to re-read it. The daemons load their config at start, so
-        the endpoint **restarts the services whose config actually changed** and
-        reports them in `restarted`; a write that renders identical config
-        restarts nothing. An endpoint that cannot be reached is reported in
-        `unreachable`; the row is still written, so it picks the change up when
-        it next starts.
+        the endpoint to re-read it. The endpoint reloads what can change while
+        the server is running (`reloaded`) and restarts only what cannot
+        (`restarted`, with `restart_forced_by` naming the Postgres setting that
+        forced it); a storage daemon's config has no reload path, so a change
+        there is a restart. A setting nothing can apply — compiled in, or a name
+        Postgres does not know — is reported in `not_applied` rather than
+        restarted for. A write that renders identical config does nothing.
+        An endpoint that cannot be reached is reported in `unreachable`; the row
+        is still written, so it picks the change up when it next starts.
 
         `404` if the pool, cluster, branch, or endpoint does not exist.
       requestBody:
@@ -1536,6 +1544,23 @@ components:
         endpoint_id:
           type: string
           format: uuid
+        reloaded:
+          type: array
+          description: |
+            Services that took the change in place, without an interruption.
+            For the compute this means Postgres reloaded its configuration and
+            kept its connections.
+          items:
+            type: string
+        restart_forced_by:
+          type: array
+          description: |
+            The Postgres settings that forced a restart. Postgres fixes these at
+            server start (`pg_settings.context = 'postmaster'`), so they cannot
+            be applied any other way — naming them explains a cost that would
+            otherwise look arbitrary.
+          items:
+            type: string
         restarted:
           type: array
           description: |
@@ -1544,10 +1569,23 @@ components:
             identical config costs nothing, so only what actually moved is
             bounced.
 
-            Restarting the compute (`compute_ctl`) bounces Postgres, so a
-            change to `pg_settings` interrupts connections on that endpoint.
-            Heavier than most changes need — see meko#847, which will restart
-            only what requires it and reload the rest.
+            Restarting the compute bounces Postgres, so this is the field to
+            watch: a setting Postgres fixes at server start interrupts that
+            endpoint's connections, and `restart_forced_by` names it. A setting
+            that can change while the server is running is reloaded instead and
+            appears in `reloaded`.
+          items:
+            type: string
+        not_applied:
+          type: array
+          description: |
+            Settings that are stored but not in force, because nothing applies
+            them. A `pg_settings.context = 'internal'` setting is compiled into
+            the binary, and a name Postgres does not report at all is a typo or
+            belongs to an extension that is not loaded. Neither a reload nor a
+            restart would put these in force, so the endpoint is not interrupted
+            for them — which makes this field the only signal that the edit had
+            no effect.
           items:
             type: string
         unreachable:

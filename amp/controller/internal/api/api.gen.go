@@ -700,15 +700,36 @@ type EndpointResources struct {
 type EndpointSettingsOutcome struct {
 	EndpointId openapi_types.UUID `json:"endpoint_id"`
 
+	// NotApplied Settings that are stored but not in force, because nothing applies
+	// them. A `pg_settings.context = 'internal'` setting is compiled into
+	// the binary, and a name Postgres does not report at all is a typo or
+	// belongs to an extension that is not loaded. Neither a reload nor a
+	// restart would put these in force, so the endpoint is not interrupted
+	// for them — which makes this field the only signal that the edit had
+	// no effect.
+	NotApplied *[]string `json:"not_applied,omitempty"`
+
+	// Reloaded Services that took the change in place, without an interruption.
+	// For the compute this means Postgres reloaded its configuration and
+	// kept its connections.
+	Reloaded *[]string `json:"reloaded,omitempty"`
+
+	// RestartForcedBy The Postgres settings that forced a restart. Postgres fixes these at
+	// server start (`pg_settings.context = 'postmaster'`), so they cannot
+	// be applied any other way — naming them explains a cost that would
+	// otherwise look arbitrary.
+	RestartForcedBy *[]string `json:"restart_forced_by,omitempty"`
+
 	// Restarted Services the endpoint restarted onto the new config. Empty means
 	// nothing changed for that endpoint — a settings write that renders
 	// identical config costs nothing, so only what actually moved is
 	// bounced.
 	//
-	// Restarting the compute (`compute_ctl`) bounces Postgres, so a
-	// change to `pg_settings` interrupts connections on that endpoint.
-	// Heavier than most changes need — see meko#847, which will restart
-	// only what requires it and reload the rest.
+	// Restarting the compute bounces Postgres, so this is the field to
+	// watch: a setting Postgres fixes at server start interrupts that
+	// endpoint's connections, and `restart_forced_by` names it. A setting
+	// that can change while the server is running is reloaded instead and
+	// appears in `reloaded`.
 	Restarted *[]string `json:"restarted,omitempty"`
 
 	// Unreachable Why this endpoint could not be told, when it could not be. The

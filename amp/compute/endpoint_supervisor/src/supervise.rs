@@ -291,6 +291,28 @@ impl Service {
     /// SIGTERM drains, SIGQUIT stops now without one, and both leave a datadir
     /// that reopens cleanly. SIGKILL leaves the mess a crash leaves, so it is the
     /// last resort and never the request.
+    /// Signal a running service without waiting for it to exit.
+    ///
+    /// Separate from [`Self::stop`] because that one is a shutdown: it waits out
+    /// a grace period and escalates to SIGKILL. This is for a signal the service
+    /// is meant to survive — SIGHUP telling `compute_ctl` to re-read its spec —
+    /// where waiting for an exit would be waiting for the wrong thing.
+    ///
+    /// `false` when the service is not running, which the caller reports rather
+    /// than treating as delivered.
+    pub fn signal(&mut self, signal: libc::c_int) -> bool {
+        let Some(child) = self.child.as_mut() else {
+            return false;
+        };
+        let pid = child.id() as libc::pid_t;
+        // SAFETY: `pid` is our own child and the signal is a valid constant.
+        unsafe {
+            libc::kill(pid, signal);
+        }
+        tracing::info!(service = %self.name, pid, signal, "signalled");
+        true
+    }
+
     pub fn stop(&mut self, signal: libc::c_int, grace: Duration) {
         let Some(child) = self.child.as_mut() else {
             return;
@@ -655,6 +677,17 @@ impl Supervisor {
     ///
     /// A shutdown that arrived as SIGQUIT is passed on as one: the caller asked
     /// to stop now rather than drain, and the daemons implement that.
+    /// Send a signal to one service by name, without stopping it.
+    pub fn signal_one(&mut self, name: &str, signal: libc::c_int) -> Result<()> {
+        let svc = self
+            .services
+            .iter_mut()
+            .find(|s| s.name == name)
+            .with_context(|| format!("no service named {name}"))?;
+        anyhow::ensure!(svc.signal(signal), "{name} is not running");
+        Ok(())
+    }
+
     pub fn stop_all(&mut self) {
         let grace = self.policy.stop_grace;
         let signal = if shutdown_is_immediate() {

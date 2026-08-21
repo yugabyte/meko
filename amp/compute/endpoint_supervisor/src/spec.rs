@@ -258,7 +258,17 @@ mod tests {
             data_volume_bytes: Some(12 << 30),
         })
         .0;
-        let spec = render_compute_spec(&params(), &derived, &BTreeMap::new(), &BTreeMap::new());
+        // A name the derived layer also sets: this is the payload of a settings
+        // reload, and it has to survive the typed parse *and* still be the
+        // occurrence that wins.
+        assert!(
+            derived.iter().any(|s| s.name == "max_parallel_workers"),
+            "max_parallel_workers must be derived for this to test precedence"
+        );
+        let registry = [("max_parallel_workers".to_string(), "3".to_string())]
+            .into_iter()
+            .collect();
+        let spec = render_compute_spec(&params(), &derived, &BTreeMap::new(), &registry);
         let parsed: compute_api::responses::ComputeConfig =
             serde_json::from_value(spec).expect("must deserialize as ComputeConfig");
         let inner = parsed.spec.expect("spec must be present");
@@ -270,5 +280,13 @@ mod tests {
             .find(|s| s.name == "max_worker_processes")
             .expect("max_worker_processes");
         assert_eq!(wp.vartype, "integer");
+        // Postgres takes the last occurrence, so the operator's value has to be
+        // the last one here too.
+        let last = settings
+            .iter()
+            .rev()
+            .find(|s| s.name == "max_parallel_workers")
+            .expect("max_parallel_workers");
+        assert_eq!(last.value.as_deref(), Some("3"));
     }
 }

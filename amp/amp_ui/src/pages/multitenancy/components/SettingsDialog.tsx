@@ -71,13 +71,34 @@ const ENDPOINT_SURFACES: Surface[] = [
  */
 function outcomeMessage(result: SettingsUpdateResult): string {
   const outcomes = result.endpoints ?? [];
+  const base = appliedMessage(result);
+  // A setting nothing can apply is the one outcome the operator cannot see for
+  // themselves: no restart, no error, and the value sitting in the row as though
+  // it took. Appended rather than substituted, because it does not make the
+  // restart it accompanied any less worth reporting.
+  const notApplied = [...new Set(outcomes.flatMap((o) => o.not_applied ?? []))];
+  return notApplied.length > 0 ? msg.settingsSavedNotApplied(base, notApplied.join(", ")) : base;
+}
+
+function appliedMessage(result: SettingsUpdateResult): string {
+  const outcomes = result.endpoints ?? [];
   const restarted = [...new Set(outcomes.flatMap((o) => o.restarted ?? []))];
+  const reloaded = [...new Set(outcomes.flatMap((o) => o.reloaded ?? []))];
+  const forcedBy = [...new Set(outcomes.flatMap((o) => o.restart_forced_by ?? []))];
   const unreachable = outcomes.filter((o) => o.unreachable).length;
   if (restarted.length > 0 && unreachable > 0) {
     return msg.settingsSavedRestartedAndUnreachable(restarted.join(", "), unreachable);
   }
   if (unreachable > 0) return msg.settingsSavedUnreachable;
+  // Naming the setting that forced it turns "we restarted your database" from
+  // an arbitrary cost into one the operator can predict next time.
+  if (restarted.length > 0 && forcedBy.length > 0) {
+    return msg.settingsSavedRestartedBecause(restarted.join(", "), forcedBy.join(", "));
+  }
   if (restarted.length > 0) return msg.settingsSavedRestarted(restarted.join(", "));
+  // A reload is a success, not a no-op: saying "nothing needed restarting"
+  // would understate that the change is in force.
+  if (reloaded.length > 0) return msg.settingsSavedReloaded;
   return msg.settingsSavedNoRestart;
 }
 

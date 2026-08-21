@@ -67,7 +67,21 @@ impl From<&Server> for Router<Arc<ComputeNode>> {
                         post(extension_server::download_extension),
                     )
                     .route("/extensions", post(extensions::install_extension))
-                    .route("/grants", post(grants::add_grant));
+                    .route("/grants", post(grants::add_grant))
+                    // Reconfigure, for the endpoint supervisor in this pod.
+                    //
+                    // The external copy of this route is behind a JWT, and the
+                    // supervisor has no token to present — it renders the
+                    // compute's own `jwks` as an empty key set, so that route
+                    // rejects every request it could make. This server is the
+                    // in-pod control channel (it already takes `/extensions`
+                    // and `/grants`, which change the database), and it is not
+                    // published on the endpoint's Service.
+                    //
+                    // Reaching it is what lets a settings change reload
+                    // Postgres instead of restarting the compute: `reconfigure`
+                    // rewrites postgresql.conf and calls `pg_reload_conf`.
+                    .route("/configure", post(configure::configure));
 
                 // Add in any testing support
                 if cfg!(feature = "testing") {

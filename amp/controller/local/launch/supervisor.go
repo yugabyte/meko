@@ -194,6 +194,11 @@ func supervisorEnv(env *config.LocalEnv, le launcherEndpoint) (map[string]string
 		}
 		out["PAGESERVER_GRPC_PORT"] = strconv.Itoa(int(grpcPort))
 	}
+	// An endpoint created before this port existed has none, and serves no
+	// settings API rather than binding port 0.
+	if conf.SettingsHTTPPort != 0 {
+		out["SUPERVISOR_HTTP_PORT"] = strconv.Itoa(int(conf.SettingsHTTPPort))
+	}
 	if conf.PrivilegedRoleName != nil {
 		out["PRIVILEGED_ROLE_NAME"] = *conf.PrivilegedRoleName
 	}

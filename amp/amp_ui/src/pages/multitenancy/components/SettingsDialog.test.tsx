@@ -8,7 +8,10 @@ import { SettingsDialog } from "./SettingsDialog";
 // lease would rewrite the branch's Postgres settings with whatever the dialog
 // read when it opened — a destructive edit nobody asked for, and an invisible
 // one.
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 const updateBranch = vi.fn();
 const updateEndpoint = vi.fn();
@@ -19,6 +22,24 @@ vi.mock("@/lib/api/queries", () => ({
 vi.mock("@/hooks/useEndpoints", () => ({
   useUpdateEndpointSettings: () => ({ mutate: updateEndpoint, isPending: false }),
 }));
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+// Referenced through an arrow, not directly: `vi.mock` is hoisted above the
+// consts above, so a factory that touches one eagerly runs before it exists.
+vi.mock("sonner", () => ({
+  toast: {
+    success: (m: string) => toastSuccess(m),
+    error: (m: string) => toastError(m),
+  },
+}));
+
+/** Save an edit, then hand the mutation the reply the controller would send. */
+function saveAndReply(result: unknown): string {
+  save();
+  const onSuccess = updateBranch.mock.calls.at(-1)?.[1]?.onSuccess as (r: unknown) => void;
+  onSuccess(result);
+  return String(toastSuccess.mock.calls.at(-1)?.[0]);
+}
 
 function view(props: {
   open?: boolean;
@@ -192,5 +213,39 @@ describe("SettingsDialog", () => {
     fireEvent.change(valueBox("pg_settings"), { target: { value: "999MB" } });
     rerender(view({ stored: { pg_settings: { work_mem: "64MB" } } }));
     expect(valueBox("pg_settings").value).toBe("999MB");
+  });
+
+  // The one outcome an operator cannot see for themselves: no restart, no
+  // error, and the value sitting in the row as though it took.
+  it("says when a stored setting will never take effect", () => {
+    renderDialog({ stored: { pg_settings: { work_mem: "64MB" } } });
+    fireEvent.change(valueBox("pg_settings"), { target: { value: "128MB" } });
+    const said = saveAndReply({
+      applied: true,
+      endpoints: [{ endpoint_id: "e1", reloaded: ["compute_ctl"], not_applied: ["blocksize"] }],
+    });
+    expect(said).toContain("blocksize");
+    expect(said).toContain("won't take effect");
+  });
+
+  // Appended, not substituted: a restart drops connections and stays the
+  // headline even when something else in the batch could not be applied.
+  it("still reports the restart alongside a setting nothing applies", () => {
+    renderDialog({ stored: { pg_settings: { work_mem: "64MB" } } });
+    fireEvent.change(valueBox("pg_settings"), { target: { value: "128MB" } });
+    const said = saveAndReply({
+      applied: true,
+      endpoints: [
+        {
+          endpoint_id: "e1",
+          restarted: ["compute_ctl"],
+          restart_forced_by: ["shared_buffers"],
+          not_applied: ["blocksize"],
+        },
+      ],
+    });
+    expect(said).toContain("compute_ctl");
+    expect(said).toContain("shared_buffers");
+    expect(said).toContain("blocksize");
   });
 });

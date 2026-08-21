@@ -68,6 +68,7 @@ pub mod http;
 pub mod pg_settings;
 pub mod pidfile;
 pub mod protected_keys;
+pub mod reconfigure;
 pub mod registry;
 pub mod remote_auth;
 pub mod resources;
@@ -467,7 +468,10 @@ fn run() -> Result<std::process::ExitCode> {
     // the endpoint, which outlives any lease it happens to be holding. Not fatal
     // — an endpoint serves fine without it, and refusing to run because a port is
     // taken would trade a working database for a convenience. Only when a port is
-    // configured: the chart sets one, `yb_amp_local` does not.
+    // configured, which the chart and `yb_amp_local` both do. It is served on a
+    // prerendered endpoint too, where every call is the refusal in
+    // `reload_handler` — the caller learns that from an answer rather than from a
+    // connection refused.
     if let Some(addr) = env.settings_api_addr() {
         let state = std::sync::Arc::new(http::State::new(env.clone(), fence_cfg.required));
         match http::spawn(addr, state) {
@@ -725,24 +729,10 @@ pub struct Rendered {
     pub pageserver: bool,
     pub safekeeper: bool,
     pub compute: bool,
-}
-
-impl Rendered {
-    /// The services whose config on disk no longer matches what they are
-    /// running, in the order a caller would restart them.
-    pub fn stale(&self) -> Vec<&'static str> {
-        let mut out = Vec::new();
-        for (changed, name) in [
-            (self.safekeeper, "safekeeper"),
-            (self.pageserver, "pageserver"),
-            (self.compute, "compute_ctl"),
-        ] {
-            if changed {
-                out.push(name);
-            }
-        }
-        out
-    }
+    /// The Postgres settings whose effective value moved, when the compute spec
+    /// changed. What to do about them is [`reconfigure::decide`]'s to say — it
+    /// needs the running server to classify them.
+    pub changed_settings: Vec<String>,
 }
 
 /// Re-read the registry and re-render, for a caller that is not booting.
@@ -867,11 +857,28 @@ pub fn render_config(
         &env.chart_settings,
         &overrides.pg,
     );
-    let compute = write(&l.compute_spec(), &serde_json::to_string(&compute_spec)?)?;
+    let rendered_spec = serde_json::to_string(&compute_spec)?;
+    let (compute, previous) = write_returning_previous(&l.compute_spec(), &rendered_spec)?;
+    // Only meaningful against a spec that was already there: at boot there is
+    // nothing to diff, and nothing running to reload either.
+    // No previous spec to diff, or one that will not parse: every setting counts
+    // as changed. An empty list would mean "nothing moved", and nothing moved is
+    // reported as applied — which is the one answer that must not come out of
+    // "what moved could not be determined".
+    let changed_settings = match previous
+        .as_deref()
+        .map(serde_json::from_str::<serde_json::Value>)
+    {
+        Some(Ok(old)) => reconfigure::changed_settings(&old, &compute_spec),
+        _ => reconfigure::settings_of(&compute_spec)
+            .into_keys()
+            .collect(),
+    };
     Ok(Rendered {
         pageserver,
         safekeeper,
         compute,
+        changed_settings,
     })
 }
 
@@ -962,10 +969,17 @@ fn fetch_overrides(env: &Env) -> registry::Overrides {
 /// most of a config comes from the environment and the resources, not from the
 /// registry row someone just edited.
 fn write(path: &Utf8Path, contents: &str) -> Result<bool> {
-    let changed = match std::fs::read_to_string(path) {
-        Ok(existing) => existing != contents,
+    Ok(write_returning_previous(path, contents)?.0)
+}
+
+/// Write, and hand back what was there — the compute path diffs the two to
+/// decide whether the change needs a restart or only a reload.
+fn write_returning_previous(path: &Utf8Path, contents: &str) -> Result<(bool, Option<String>)> {
+    let previous = std::fs::read_to_string(path).ok();
+    let changed = match &previous {
+        Some(existing) => existing != contents,
         // No file yet, or unreadable: writing it is a change either way.
-        Err(_) => true,
+        None => true,
     };
     // Written beside and renamed over, rather than truncated in place. At boot
     // nothing else is reading these; at runtime a re-render races the monitor
@@ -976,7 +990,7 @@ fn write(path: &Utf8Path, contents: &str) -> Result<bool> {
     std::fs::write(&tmp, contents).with_context(|| format!("write {tmp}"))?;
     std::fs::rename(&tmp, path).with_context(|| format!("rename {tmp} -> {path}"))?;
     tracing::info!(%path, bytes = contents.len(), changed, "wrote");
-    Ok(changed)
+    Ok((changed, previous))
 }
 
 /// Puts `dir` ahead of any inherited `LD_LIBRARY_PATH`, which the children

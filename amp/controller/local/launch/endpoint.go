@@ -41,12 +41,18 @@ func endpointDir(env *config.LocalEnv, endpointID string) string {
 // What is NOT here is anything the control plane already models: the endpoint's
 // id and name are the row's, and the branch and pg version come from the branch.
 type endpointConf struct {
-	EndpointID                   string               `json:"endpoint_id"`
-	BranchID                     config.BranchID      `json:"branch_id"`
-	Mode                         string               `json:"mode"`
-	PgPort                       uint16               `json:"pg_port"`
-	ExternalHTTPPort             uint16               `json:"external_http_port"`
-	InternalHTTPPort             uint16               `json:"internal_http_port"`
+	EndpointID       string          `json:"endpoint_id"`
+	BranchID         config.BranchID `json:"branch_id"`
+	Mode             string          `json:"mode"`
+	PgPort           uint16          `json:"pg_port"`
+	ExternalHTTPPort uint16          `json:"external_http_port"`
+	InternalHTTPPort uint16          `json:"internal_http_port"`
+	// Where the supervisor serves POST /v1/settings/reload. Deployed endpoints
+	// get this from the chart. Locally the answer is always a refusal — the
+	// launcher renders the config, so re-rendering is not the supervisor's to do
+	// — and the port is allocated anyway so that contract is reachable, by a
+	// test and by anyone debugging why a local settings change did not apply.
+	SettingsHTTPPort             uint16               `json:"settings_http_port"`
 	PgVersion                    int                  `json:"pg_version"`
 	Grpc                         bool                 `json:"grpc"`
 	SkipPgCatalogUpdates         bool                 `json:"skip_pg_catalog_updates"`
@@ -163,7 +169,7 @@ func nextCandidatePort(endpoints launcherEndpoints) uint16 {
 	// Over `all`, not the by-name index: an endpoint whose name collides with
 	// another's is missing from the index but still holds its ports.
 	for _, ep := range endpoints.all {
-		for _, p := range []uint16{ep.conf.PgPort, ep.conf.ExternalHTTPPort, ep.conf.InternalHTTPPort} {
+		for _, p := range []uint16{ep.conf.PgPort, ep.conf.ExternalHTTPPort, ep.conf.InternalHTTPPort, ep.conf.SettingsHTTPPort} {
 			if p > max {
 				max = p
 			}
@@ -197,6 +203,7 @@ type EndpointCreateArgs struct {
 	PgPort           *uint16
 	ExternalHTTPPort *uint16
 	InternalHTTPPort *uint16
+	SettingsHTTPPort *uint16
 	LSN              string      // Static mode not supported in the minimal port
 	ConfigOnly       bool        // accepted for compat; ignored (Rust ignores it too)
 	PgSettings       [][2]string // repeatable --pg-setting NAME=VALUE
@@ -304,6 +311,13 @@ func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch
 		return err
 	}
 
+	settingsPort, err := resolvePort(args.SettingsHTTPPort, func() (uint16, error) {
+		return findFreePort(intPort + 1)
+	})
+	if err != nil {
+		return err
+	}
+
 	pub, err := env.ReadPublicKey()
 	if err != nil {
 		return err
@@ -320,6 +334,7 @@ func newEndpoint(ctx context.Context, env *config.LocalEnv, b *branchAPI, branch
 		PgPort:                       pgPort,
 		ExternalHTTPPort:             extPort,
 		InternalHTTPPort:             intPort,
+		SettingsHTTPPort:             settingsPort,
 		PgVersion:                    pgVersion,
 		Grpc:                         false,
 		SkipPgCatalogUpdates:         true, // minimal path never runs catalog updates

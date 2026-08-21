@@ -78,7 +78,9 @@ same branch is rejected with `conflict`. Provision additional compute as
 
 `create_endpoint` takes three settings maps. They can also be changed
 afterwards — see "Changing settings after create" below, which is the part with
-a cost, since applying a change restarts the services whose config moved.
+a cost: most Postgres settings reload without an interruption, but one fixed
+at server start restarts the compute, and a storage daemon's settings always
+restart that daemon.
 
 `pg_settings={"work_mem": "64MB"}` are PostgreSQL GUCs (values are strings) and
 merge over the branch's, winning on a shared key.
@@ -120,14 +122,24 @@ changes a resource.
 avoiding: passing an empty map for a surface you did not mean to change wipes
 it.
 
-They store the settings first, then tell the running endpoints. Each restarts
-the services whose config actually changed and reports them in `restarted`; a
-change that renders identical config restarts nothing, and `unreachable` says
-why an endpoint could not be told (it picks the change up when it next starts).
+They store the settings first, then tell the running endpoints. Each applies
+what it can in place: `reloaded` lists what took the change while running,
+`restarted` what had to be bounced, `restart_forced_by` names the Postgres
+setting that forced a restart, `not_applied` names settings that are stored and
+will never take effect, and `unreachable` says why an endpoint could not be told
+(it picks the change up when it next starts).
 
-**Restarting the compute bounces Postgres.** A `pg_settings` change interrupts
-connections on the endpoint — and on a *branch*, on every endpoint on it. Say so
-before making one on anything live.
+**Most Postgres settings reload — a few restart the compute.** Postgres fixes
+settings like `shared_buffers` at server start, and those bounce the compute and
+drop its connections; on a *branch*, on every endpoint of it. Warn before doing
+that to anything live, and report `restart_forced_by` so the user knows which
+setting cost them. `pageserver_settings` / `safekeeper_settings` always restart
+that daemon — they have no reload path.
+
+Nothing is restarted for a setting in `not_applied`: a name Postgres does not
+know, or one compiled into the binary, cannot be put in force by a restart
+either. Say so — the value is stored and doing nothing, and a silent success is
+how a typo survives.
 
 ## Resize outcomes
 

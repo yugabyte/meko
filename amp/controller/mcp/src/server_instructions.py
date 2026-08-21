@@ -34,15 +34,27 @@ server-level default user. Wherever the API needs an owner (today only \
 `create_storage_pool`), pass `owner_user_id` explicitly. `get_user` is \
 available to read a known user by id.
 
-## Settings changes restart things
+## Settings changes are usually applied without an interruption
 
 `update_branch_settings` and `update_endpoint_settings` are synchronous. An \
-omitted surface is left alone; `{}` clears it. They store the change, then the \
-endpoints restart the services whose config actually moved and report them in \
-`restarted` — restarting the compute bounces Postgres, so a `pg_settings` \
-change interrupts that endpoint's connections, and a branch-wide one \
-interrupts every endpoint on the branch. Warn the user before doing that to \
-anything live.
+omitted surface is left alone; `{}` clears it. They store the change, then each \
+endpoint applies it the cheapest way that actually applies it and says which: \
+`reloaded` for settings that took effect while the server kept running, \
+`restarted` for services that had to be bounced, and `restart_forced_by` naming \
+the Postgres setting that forced one.
+
+Most Postgres settings reload. A few — `shared_buffers` and friends — can only \
+change when the server starts, and those restart the compute and drop its \
+connections; on a branch, on every endpoint of it. Warn the user before doing \
+that to anything live, and report `restart_forced_by` when it happens so they \
+know which setting cost them. A storage daemon's settings \
+(`pageserver_settings`, `safekeeper_settings`) always restart that daemon — \
+those have no reload path.
+
+A setting nothing can apply — a name Postgres does not know, or one compiled \
+into the binary — comes back in `not_applied`. Nothing is restarted for it, \
+because a restart would not put it in force either. Tell the user: the value is \
+stored and doing nothing, and a silent success is how a typo survives.
 
 ## Asynchronous operations — poll get_task
 

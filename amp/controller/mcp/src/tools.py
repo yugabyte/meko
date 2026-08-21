@@ -270,12 +270,16 @@ def update_branch_settings(
     sending only `pg_settings` never touches the lease.
 
     The settings are stored first — that is what `applied` reports — and the
-    controller then tells each of the branch's endpoints. Each restarts the
-    services whose config actually changed and reports them in `restarted`; a
-    change that renders identical config restarts nothing. Restarting the
-    compute bounces Postgres, so a `pg_settings` change interrupts connections
-    on **every endpoint on the branch**. An endpoint that could not be reached
-    comes back in `unreachable` and picks the change up when it next starts.
+    controller then tells each of the branch's endpoints. Each applies what it
+    can in place: `reloaded` lists services that took the change while running,
+    `restarted` those that had to be bounced, and `restart_forced_by` names the
+    Postgres setting that forced a restart. Most Postgres settings reload; the
+    ones fixed at server start restart the compute and drop its connections —
+    on a branch, on every endpoint of it. `not_applied` names settings that are
+    stored and will never take effect — a typo, or one compiled into the binary —
+    which nothing restarts for, so it is the only signal the edit did nothing.
+    An endpoint that could not be reached comes back in `unreachable` and picks
+    the change up when it next starts.
     """
     return controller_client.update_branch_settings(
         pool_id, cluster_id, branch_id, pg_settings, write_token_settings
@@ -303,12 +307,15 @@ def update_endpoint_settings(
 
     **An omitted argument is left alone; pass `{}` to clear a surface.**
 
-    Stored first (`applied`), then the endpoint is told: it restarts the
-    services whose config actually changed and reports them in `restarted`. A
-    change that renders identical config restarts nothing. Restarting the
-    compute bounces Postgres, so a `pg_settings` change interrupts this
-    endpoint's connections; `unreachable` says why an endpoint could not be
-    told, and it picks the change up when it next starts.
+    Stored first (`applied`), then the endpoint is told: `reloaded` lists what
+    took the change while running, `restarted` what had to be bounced, and
+    `restart_forced_by` names the Postgres setting that forced it. Most Postgres
+    settings reload; ones fixed at server start restart the compute and drop its
+    connections. `pageserver_settings` / `safekeeper_settings` always restart
+    that daemon — they have no reload path. `not_applied` names settings that are
+    stored and will never take effect, which nothing restarts for. `unreachable`
+    says why an endpoint could not be told; it picks the change up when it next
+    starts.
     """
     return controller_client.update_endpoint_settings(
         pool_id,
