@@ -1,7 +1,7 @@
 # ac — YCP integration (reconcile-agent)
 
 **Status:** Draft
-**Last updated:** 2026-08-18
+**Last updated:** 2026-08-21
 
 How an amp controller is driven by **YCP** (the Yugabyte Control Plane — meko's
 `api_server` run with `--control-plane-mode`), so a fleet operator declares an amp
@@ -35,6 +35,13 @@ pool → cluster → branch → endpoint hierarchy), and the enroll/report clien
 live in the `ycp` module (`ycp/reconcile`, `ycp/reconcile/ampbackend`,
 `ycp/internal/ycpclient`). The agent is authoritative: it garbage-collects any
 controller resource not present in desired state.
+
+A pool's `owner_user_id` is the one thing the mapping materializes outside the
+declared kinds. Users are not a YCP kind — there is no user delete, so the engine
+must not List/GC them — but a pool needs an existing owner. So before creating a
+pool the backend ensures that user (`POST /api/v1/users` with the explicit id,
+idempotent on it); the owner UUID carried in the pool spec becomes a controller
+user on first use.
 
 ## Convergence status
 

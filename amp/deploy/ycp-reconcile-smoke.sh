@@ -16,7 +16,8 @@
 #
 # In order it:
 #   1. port-forwards the control plane (meko-api-server) and the amp controller;
-#   2. creates an amp user (users are not agent-managed — a pool needs an owner);
+#   2. picks the pool owner id — the agent materializes that user before creating
+#      the pool (users aren't a YCP kind, but the owner is carried in the pool spec);
 #   3. POSTs desired state to YCP: a pool -> cluster -> (default) branch -> a
 #      read_write endpoint, named by the agent's hierarchical path convention;
 #   4. waits for the agent to create them and report the endpoint READY in the
@@ -71,7 +72,6 @@ YCP_PF_PID=$!
 kubectl -n "$NS" port-forward svc/amp-controller "${AMP_PF_PORT}:8080" >/tmp/rec-amp-pf.log 2>&1 &
 AMP_PF_PID=$!
 CP="http://127.0.0.1:${YCP_PF_PORT}/api/v1"
-AMP="http://127.0.0.1:${AMP_PF_PORT}/api/v1"
 for ((i=0; i<30; i++)); do curl -sf "$CP/health" >/dev/null 2>&1 && break; sleep 1; done
 for ((i=0; i<30; i++)); do curl -sf "http://127.0.0.1:${AMP_PF_PORT}/healthz" >/dev/null 2>&1 && break; sleep 1; done
 curl -sf "$CP/health" >/dev/null 2>&1 && ok "control plane reachable" || bad "control plane /health unreachable"
@@ -89,10 +89,13 @@ set_desired() {
     -d "$(jq -nc --argjson r "$1" '{resources:$r}')" >/dev/null
 }
 
-# --- owner user (not agent-managed: a pool needs an owner_user_id) ---
-hdr "create amp user (pool owner)"
-UID_=$(curl -sf -X POST "$AMP/users" -H 'Content-Type: application/json' -d '{}' | jq -r '.id')
-[ -n "$UID_" ] && [ "$UID_" != null ] && ok "createUser ($UID_)" || bad "createUser"
+# --- owner user id (materialized by the agent, not created here) ---
+# The pool's owner_user_id is carried in desired state; the reconcile-agent
+# ensures that user exists before creating the pool. So the operator only picks
+# an id — this asserts the agent-driven path, not an out-of-band POST /users.
+hdr "pick pool owner id (agent materializes the user)"
+UID_=$(cat /proc/sys/kernel/random/uuid)
+[ -n "$UID_" ] && ok "owner id ($UID_)" || bad "generate owner id"
 
 # --- desired state: the full tree ---
 hdr "POST desired state (pool -> cluster -> branch -> endpoint)"

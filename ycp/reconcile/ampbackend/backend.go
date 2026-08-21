@@ -224,6 +224,18 @@ func (b *Backend) Create(ctx context.Context, r api.DesiredResource) error {
 			return err
 		}
 		req.Name = name
+		// A pool needs an existing owner, but users are not part of YCP desired
+		// state (no user kind — the engine would List/GC them, and the controller
+		// has no user delete). The operator only carries owner_user_id in the pool
+		// spec, so materialize that user here — idempotent on the explicit id — or
+		// the pool create 404s on a missing owner on a fresh controller.
+		if owner := req.OwnerUserId; owner != (openapi_types.UUID{}) {
+			if err := b.mutate(ctx, func(c context.Context) (*http.Response, error) {
+				return b.api.CreateUser(c, ampclient.CreateUserRequest{Id: &owner})
+			}); err != nil {
+				return fmt.Errorf("ensure pool owner %s: %w", owner, err)
+			}
+		}
 		return b.mutate(ctx, func(c context.Context) (*http.Response, error) {
 			return b.api.CreateStoragePool(c, req)
 		})
