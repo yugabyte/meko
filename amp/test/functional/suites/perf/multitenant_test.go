@@ -635,3 +635,38 @@ func TestSampleAppSampleCarriesTheDriverLog(t *testing.T) {
 		t.Errorf("Raw = %q — a window count is a measurement, not the driver's log", s.Raw)
 	}
 }
+
+func TestLoadFieldsMultitenantSignature(t *testing.T) {
+	base := multitenantParams{
+		Tenants:             9,
+		Workloads:           []string{"tpcc", "bank"},
+		SeedRows:            2000,
+		Iterations:          3,
+		MeasurementDuration: 3 * time.Minute,
+		EndpointCPU:         "2",
+		EndpointMemory:      "4Gi",
+	}
+	sig := func(mut func(*multitenantParams)) string {
+		p := base
+		p.Workloads = append([]string(nil), base.Workloads...)
+		mut(&p)
+		return LoadSignature(loadFieldsMultitenant(p))
+	}
+	same := sig(func(*multitenantParams) {})
+	if sig(func(*multitenantParams) {}) != same {
+		t.Fatal("the same multitenant load hashed differently")
+	}
+	for name, mut := range map[string]func(*multitenantParams){
+		"tenants":      func(p *multitenantParams) { p.Tenants = 12 },
+		"workloads":    func(p *multitenantParams) { p.Workloads = []string{"tpcc", "ycsb"} },
+		"seed_rows":    func(p *multitenantParams) { p.SeedRows = 5000 },
+		"iterations":   func(p *multitenantParams) { p.Iterations = 5 },
+		"duration":     func(p *multitenantParams) { p.MeasurementDuration = 5 * time.Minute },
+		"endpoint":     func(p *multitenantParams) { p.EndpointCPU = "4" },
+		"endpoint_mem": func(p *multitenantParams) { p.EndpointMemory = "8Gi" },
+	} {
+		if got := sig(mut); got == same {
+			t.Errorf("changing %s left the signature at %s", name, got)
+		}
+	}
+}

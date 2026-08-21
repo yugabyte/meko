@@ -94,6 +94,18 @@ type multitenantParams struct {
 	Iterations int
 }
 
+// The mix and endpoint shape ride in Script because LoadFields has no field for
+// either, and a tenant sized differently is a different load.
+func loadFieldsMultitenant(p multitenantParams) LoadFields {
+	return LoadFields{
+		Script:        fmt.Sprintf("multitenant:%s@%s/%s", strings.Join(p.Workloads, "+"), p.EndpointCPU, p.EndpointMemory),
+		Clients:       p.Tenants,
+		Rows:          p.SeedRows,
+		Iterations:    p.Iterations,
+		MeasurementMS: p.MeasurementDuration.Milliseconds(),
+	}
+}
+
 func multitenantParamsFromConfig(c *core.Config) multitenantParams {
 	return multitenantParams{
 		// One tenant per workload, every tenant a different KIND. Raise
@@ -174,6 +186,9 @@ func runMultitenant(t *core.T) error {
 	}
 	cfg := perfFromConfig(t.Options)
 	bc := benchConfigFromConfig(t.Options)
+	// Must precede the first Datapoint, which stamps the identity set at call time.
+	t.SetPerfIdentity(identityFromConfig(t.Options, "", frameworkCommit(),
+		loadFieldsMultitenant(params)).core())
 	logf := t.Masker().Logf(log.Printf)
 	cl, err := env.AmpController(t.Context)
 	if err != nil {

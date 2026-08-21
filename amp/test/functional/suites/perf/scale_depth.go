@@ -99,6 +99,16 @@ func scaleDepthParamsFromConfig(c *core.Config) scaleDepthParams {
 	}
 }
 
+// The ladder rides in Script because LoadFields holds one warehouse count and
+// this walks many.
+func loadFieldsScaleDepth(p scaleDepthParams) LoadFields {
+	return LoadFields{
+		Script: fmt.Sprintf("scale_depth:%v/%v*%g@%s/%s",
+			p.Warehouses, p.Terminals, p.Growth, p.EndpointCPU, p.EndpointMem),
+		MeasurementMS: p.StageDuration.Milliseconds(),
+	}
+}
+
 func runScaleDepth(t *core.T) error {
 	env, ok := t.Env.(ampMultitenantEnv)
 	if !ok {
@@ -116,6 +126,9 @@ func runScaleDepth(t *core.T) error {
 			len(params.Warehouses), len(params.Terminals))
 	}
 	cfg := perfFromConfig(t.Options)
+	// Must precede the first Datapoint, which stamps the identity set at call time.
+	t.SetPerfIdentity(identityFromConfig(t.Options, "", frameworkCommit(),
+		loadFieldsScaleDepth(params)).core())
 	logf := t.Masker().Logf(log.Printf)
 	kube := kubeEnv.AmpKube()
 	cl, err := env.AmpController(t.Context)
