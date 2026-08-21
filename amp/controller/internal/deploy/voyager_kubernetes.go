@@ -19,6 +19,16 @@ import (
 
 const voyagerServiceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 
+// The Voyager image runs as the unprivileged `yugabyte` user (uid/gid 1000; see
+// deploy/voyager/Dockerfile). A freshly provisioned PVC mounts root-owned, so the
+// pod must declare a matching fsGroup — Kubernetes then chowns the volume to that
+// group — otherwise the first write to the export dir fails with EACCES.
+const (
+	voyagerRunAsUser  = int64(1000)
+	voyagerRunAsGroup = int64(1000)
+	voyagerFSGroup    = int64(1000)
+)
+
 // KubernetesVoyagerConfig configures Voyager jobs submitted to an in-cluster
 // Kubernetes API.
 type KubernetesVoyagerConfig struct {
@@ -199,8 +209,18 @@ func (r *KubernetesVoyagerJobRunner) ensureJob(
 
 func (r *KubernetesVoyagerJobRunner) jobManifest(job voyagerJobSpec) kubernetesJob {
 	backoffLimit := int32(0)
+	runAsUser := voyagerRunAsUser
+	runAsGroup := voyagerRunAsGroup
+	fsGroup := voyagerFSGroup
+	runAsNonRoot := true
 	podSpec := kubernetesPodSpec{
 		RestartPolicy: "Never",
+		SecurityContext: &kubernetesPodSecurityContext{
+			RunAsUser:    &runAsUser,
+			RunAsGroup:   &runAsGroup,
+			RunAsNonRoot: &runAsNonRoot,
+			FSGroup:      &fsGroup,
+		},
 		Containers: []kubernetesContainer{{
 			Name:         "voyager",
 			Image:        r.cfg.Image,
@@ -426,9 +446,17 @@ type kubernetesPodTemplate struct {
 
 type kubernetesPodSpec struct {
 	RestartPolicy    string                           `json:"restartPolicy"`
+	SecurityContext  *kubernetesPodSecurityContext    `json:"securityContext,omitempty"`
 	ImagePullSecrets []kubernetesLocalObjectReference `json:"imagePullSecrets,omitempty"`
 	Containers       []kubernetesContainer            `json:"containers"`
 	Volumes          []kubernetesVolume               `json:"volumes"`
+}
+
+type kubernetesPodSecurityContext struct {
+	RunAsUser    *int64 `json:"runAsUser,omitempty"`
+	RunAsGroup   *int64 `json:"runAsGroup,omitempty"`
+	RunAsNonRoot *bool  `json:"runAsNonRoot,omitempty"`
+	FSGroup      *int64 `json:"fsGroup,omitempty"`
 }
 
 type kubernetesLocalObjectReference struct {

@@ -199,6 +199,22 @@ func TestKubernetesJobManifestRuntimePolicy(t *testing.T) {
 	if got := manifest.Spec.Template.Spec.Containers[0].VolumeMounts[0].MountPath; got != voyagerExportDir {
 		t.Fatalf("mount path = %q, want %q", got, voyagerExportDir)
 	}
+	// The non-root image (uid/gid 1000) can only write the freshly provisioned,
+	// root-owned PVC if the pod declares a matching fsGroup for Kubernetes to
+	// chown the volume to.
+	sc := manifest.Spec.Template.Spec.SecurityContext
+	if sc == nil {
+		t.Fatal("pod securityContext is nil, want fsGroup set for PVC ownership")
+	}
+	if sc.FSGroup == nil || *sc.FSGroup != voyagerFSGroup {
+		t.Fatalf("fsGroup = %v, want %d", sc.FSGroup, voyagerFSGroup)
+	}
+	if sc.RunAsUser == nil || *sc.RunAsUser != voyagerRunAsUser {
+		t.Fatalf("runAsUser = %v, want %d", sc.RunAsUser, voyagerRunAsUser)
+	}
+	if sc.RunAsGroup == nil || *sc.RunAsGroup != voyagerRunAsGroup {
+		t.Fatalf("runAsGroup = %v, want %d", sc.RunAsGroup, voyagerRunAsGroup)
+	}
 }
 
 func TestParseKubernetesJobState(t *testing.T) {
