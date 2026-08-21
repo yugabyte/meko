@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -466,5 +467,114 @@ func TestEndpointResourcesAbsentOnOlderController(t *testing.T) {
 	}
 	if ep.Resources != nil {
 		t.Errorf("endpoint resources = %+v, want nil when the response carries no resources", ep.Resources)
+	}
+}
+
+// The omitted-vs-empty distinction is the whole contract of these two PATCHes:
+// the controller reads a missing surface as "leave it alone" and `{}` as "clear
+// it". So a request must carry only what the caller named — sending a surface it
+// never set would replace that surface's stored settings with an empty one,
+// which for the daemons means an endpoint quietly losing its tuning.
+func TestUpdateSettingsSendsOnlyTheNamedSurface(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var body map[string]json.RawMessage
+	f.on("PATCH /api/v1/storage-pools/p/clusters/c/branches/b/endpoints/e/settings",
+		func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"applied":true}`))
+		})
+
+	pg := map[string]string{"work_mem": "64MB"}
+	got, err := f.client().UpdateEndpointSettings(context.Background(), "p", "c", "b", "e",
+		UpdateSettingsRequest{PgSettings: &pg})
+	if err != nil {
+		t.Fatalf("UpdateEndpointSettings: %v", err)
+	}
+	if !got.Applied {
+		t.Error("applied must decode as true")
+	}
+	if _, ok := body["pg_settings"]; !ok {
+		t.Error("pg_settings must be sent")
+	}
+	// The endpoint route has no write lease — that surface is the branch's alone
+	// — so these three are what an unnamed surface could wrongly clear here.
+	for _, k := range []string{"pageserver_settings", "safekeeper_settings"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("%s was sent but never set — the controller would read that as an edit", k)
+		}
+	}
+	if _, ok := body["write_token_settings"]; ok {
+		t.Error("write_token_settings was sent on an endpoint PATCH, which has no such surface")
+	}
+}
+
+// An empty object is a real instruction ("clear this surface"), and it has to
+// survive serialisation as one rather than being dropped as if omitted.
+func TestUpdateSettingsSendsAnEmptyObjectAsAClear(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var raw string
+	f.on("PATCH /api/v1/storage-pools/p/clusters/c/branches/b/settings",
+		func(w http.ResponseWriter, r *http.Request) {
+			b := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(b)
+			raw = string(b)
+			_, _ = w.Write([]byte(`{"applied":true}`))
+		})
+
+	empty := map[string]string{}
+	if _, err := f.client().UpdateBranchSettings(context.Background(), "p", "c", "b",
+		UpdateSettingsRequest{PgSettings: &empty}); err != nil {
+		t.Fatalf("UpdateBranchSettings: %v", err)
+	}
+	if want := `"pg_settings":{}`; !strings.Contains(raw, want) {
+		t.Errorf("body %s does not carry %s", raw, want)
+	}
+}
+
+// Every field of the per-endpoint outcome is a fact the caller cannot get any
+// other way — which services were bounced, which took the change while running,
+// which setting cost the restart, and which settings are stored and doing
+// nothing. A decode that dropped one would read as a clean success.
+func TestUpdateSettingsDecodesEveryOutcomeField(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	f.on("PATCH /api/v1/storage-pools/p/clusters/c/branches/b/settings",
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"applied":true,"endpoints":[
+				{"endpoint_id":"e1","reloaded":["compute_ctl"]},
+				{"endpoint_id":"e2","restarted":["compute_ctl"],"restart_forced_by":["shared_buffers"]},
+				{"endpoint_id":"e3","not_applied":["block_size"]},
+				{"endpoint_id":"e4","unreachable":"connection refused"}
+			]}`))
+		})
+
+	pg := map[string]string{"shared_buffers": "512MB"}
+	got, err := f.client().UpdateBranchSettings(context.Background(), "p", "c", "b",
+		UpdateSettingsRequest{PgSettings: &pg})
+	if err != nil {
+		t.Fatalf("UpdateBranchSettings: %v", err)
+	}
+	if len(got.Endpoints) != 4 {
+		t.Fatalf("want 4 outcomes, got %d", len(got.Endpoints))
+	}
+	if e := got.Endpoints[0]; len(e.Reloaded) != 1 || e.Reloaded[0] != "compute_ctl" {
+		t.Errorf("reloaded = %v", e.Reloaded)
+	}
+	if e := got.Endpoints[1]; len(e.Restarted) != 1 || len(e.RestartForcedBy) != 1 ||
+		e.RestartForcedBy[0] != "shared_buffers" {
+		t.Errorf("restarted = %v, forced by = %v", e.Restarted, e.RestartForcedBy)
+	}
+	if e := got.Endpoints[2]; len(e.NotApplied) != 1 || e.NotApplied[0] != "block_size" {
+		t.Errorf("not_applied = %v", e.NotApplied)
+	}
+	if e := got.Endpoints[3]; e.Unreachable == "" {
+		t.Error("unreachable must decode")
 	}
 }

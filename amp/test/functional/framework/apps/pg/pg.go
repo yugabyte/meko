@@ -112,6 +112,70 @@ func Connect(ctx context.Context, ci ConnInfo) (*Client, error) {
 	return &Client{pool: pool}, nil
 }
 
+// Session is one Postgres backend, held for as long as the caller keeps it.
+//
+// A [Client] is a pool: it hands each query whichever connection is free and
+// quietly replaces one it finds dead, which is what a test wants almost always
+// and exactly wrong when the question is whether a connection SURVIVED
+// something. Through a pool, a compute that restarted mid-test still answers —
+// the pool reconnected. A Session is the same methods over one pinned
+// connection, so a server that went away surfaces as an error instead.
+type Session interface {
+	Exec(ctx context.Context, sql string, args ...any) (int64, error)
+	QueryInt(ctx context.Context, sql string, args ...any) (int64, error)
+	QueryString(ctx context.Context, sql string, args ...any) (string, error)
+	Close()
+}
+
+// Pin takes one connection out of the pool and keeps it.
+//
+// Close returns it. Every query on the result runs on that one backend, so its
+// session state (a temp table, a `SET`) persists and its death is visible.
+func (c *Client) Pin(ctx context.Context) (Session, error) {
+	conn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("pin a connection: %w", err)
+	}
+	return &pinned{conn: conn}, nil
+}
+
+type pinned struct {
+	conn *pgxpool.Conn
+}
+
+func (p *pinned) Exec(ctx context.Context, sql string, args ...any) (int64, error) {
+	tag, err := p.conn.Exec(ctx, sql, args...)
+	if err != nil {
+		return 0, fmt.Errorf("exec %q: %w", truncate(sql), err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (p *pinned) QueryInt(ctx context.Context, sql string, args ...any) (int64, error) {
+	var v int64
+	if err := p.conn.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
+		return 0, fmt.Errorf("query int %q: %w", truncate(sql), err)
+	}
+	return v, nil
+}
+
+func (p *pinned) QueryString(ctx context.Context, sql string, args ...any) (string, error) {
+	var v string
+	if err := p.conn.QueryRow(ctx, sql, args...).Scan(&v); err != nil {
+		return "", fmt.Errorf("query string %q: %w", truncate(sql), err)
+	}
+	return v, nil
+}
+
+// Close releases the connection back to the pool. Safe on a connection whose
+// server went away: pgxpool discards it rather than reusing it.
+func (p *pinned) Close() {
+	if p.conn != nil {
+		p.conn.Release()
+		p.conn = nil
+	}
+}
+
 // Close releases the pool.
 func (c *Client) Close() {
 	if c.pool != nil {

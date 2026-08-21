@@ -221,6 +221,48 @@ type CreateEndpointRequest struct {
 	Extensions []string `json:"extensions,omitempty"`
 }
 
+// UpdateSettingsRequest is the body of the two settings PATCHes. The controller
+// reads an omitted surface as "leave it alone" and `{}` as "clear it".
+//
+// Pointers for the ability to say `{}`: with `omitempty` an empty map is omitted
+// exactly like a nil pointer, so a plain map field could never clear a surface —
+// it could only fail to mention one.
+type UpdateSettingsRequest struct {
+	PgSettings         *map[string]string `json:"pg_settings,omitempty"`
+	PageserverSettings *map[string]any    `json:"pageserver_settings,omitempty"`
+	SafekeeperSettings *map[string]any    `json:"safekeeper_settings,omitempty"`
+	// Branch-only: the write lease (`ttl_ms`, `renew_seconds`).
+	WriteTokenSettings *map[string]any `json:"write_token_settings,omitempty"`
+}
+
+// EndpointSettingsOutcome is one endpoint's account of what it did with a
+// settings change. The distinctions are the point: a setting can be applied in
+// place, or cost a restart, or be stored and never take effect at all.
+type EndpointSettingsOutcome struct {
+	EndpointID string `json:"endpoint_id"`
+	// Services bounced onto the new config, and the Postgres settings that left
+	// no other option (Postgres fixes them at server start).
+	Restarted       []string `json:"restarted"`
+	RestartForcedBy []string `json:"restart_forced_by"`
+	// Services that took the change while running. For the compute this means
+	// Postgres reloaded and kept its connections.
+	Reloaded []string `json:"reloaded"`
+	// Stored but not in force: compiled-in settings, and names Postgres does not
+	// report. Nothing is restarted for these, so this is the only signal that an
+	// edit did nothing.
+	NotApplied []string `json:"not_applied"`
+	// Why this endpoint could not be told. The settings are stored regardless.
+	Unreachable string `json:"unreachable"`
+}
+
+// SettingsUpdateResult is the reply to either settings PATCH: stored, plus what
+// the change reached. `Applied` covers the row only — the per-endpoint outcomes
+// are best effort on top of a write that already happened.
+type SettingsUpdateResult struct {
+	Applied   bool                      `json:"applied"`
+	Endpoints []EndpointSettingsOutcome `json:"endpoints"`
+}
+
 // EndpointList is a page of endpoints.
 type EndpointList struct {
 	Endpoints []Endpoint `json:"endpoints"`
@@ -463,6 +505,24 @@ func (c *Client) DeleteEndpoint(ctx context.Context, poolID, clusterID, branchID
 // *APIError.
 func (c *Client) ResizeEndpoint(ctx context.Context, poolID, clusterID, branchID, endpointID string, req ResizeEndpointRequest) (Task, string, error) {
 	return c.async(ctx, http.MethodPost, c.endpointsPath(poolID, clusterID, branchID)+"/"+endpointID+"/resize", req)
+}
+
+// UpdateBranchSettings replaces the branch-wide settings named in the body
+// (sync, 200) and asks every endpoint on the branch to re-read them.
+func (c *Client) UpdateBranchSettings(ctx context.Context, poolID, clusterID, branchID string, req UpdateSettingsRequest) (SettingsUpdateResult, error) {
+	var out SettingsUpdateResult
+	path := c.apiURL + "/storage-pools/" + poolID + "/clusters/" + clusterID + "/branches/" + branchID + "/settings"
+	_, _, err := c.doJSON(ctx, http.MethodPatch, path, req, &out)
+	return out, err
+}
+
+// UpdateEndpointSettings replaces one endpoint's settings (sync, 200) and asks
+// that endpoint to re-read them.
+func (c *Client) UpdateEndpointSettings(ctx context.Context, poolID, clusterID, branchID, endpointID string, req UpdateSettingsRequest) (SettingsUpdateResult, error) {
+	var out SettingsUpdateResult
+	path := c.endpointsPath(poolID, clusterID, branchID) + "/" + endpointID + "/settings"
+	_, _, err := c.doJSON(ctx, http.MethodPatch, path, req, &out)
+	return out, err
 }
 
 // PauseEndpoint plans an async compute pause (202): the compute is stopped while

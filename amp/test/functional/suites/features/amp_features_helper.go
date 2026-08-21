@@ -55,6 +55,12 @@ type ampCtl interface {
 	ListAllEndpoints(context.Context, string, string, string) ([]controller.Endpoint, error)
 	DeleteEndpointAndWait(context.Context, string, string, string, string) (controller.Task, error)
 
+	// The settings PATCHes. Synchronous, unlike everything above: the row is
+	// written and the endpoints are told before the call returns, and the reply
+	// is each endpoint's account of what it did with the change.
+	UpdateBranchSettings(context.Context, string, string, string, controller.UpdateSettingsRequest) (controller.SettingsUpdateResult, error)
+	UpdateEndpointSettings(context.Context, string, string, string, string, controller.UpdateSettingsRequest) (controller.SettingsUpdateResult, error)
+
 	// The async trio. Every method above waits out its task, which is what a
 	// feature test wants — but a CONCURRENCY test has to hold two tasks in flight
 	// at once, so it plans them itself (the 202 + Task) and joins on WaitTask
