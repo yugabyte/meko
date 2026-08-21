@@ -33,6 +33,8 @@ import (
 	"github.com/yugabyte/amp/controller/internal/registry"
 	"github.com/yugabyte/amp/controller/internal/task"
 	"github.com/yugabyte/amp/controller/internal/version"
+	"github.com/yugabyte/amp/controller/internal/voyager/migration"
+	voyagermigrations "github.com/yugabyte/amp/controller/internal/voyager/migrations"
 	"github.com/yugabyte/amp/controller/internal/ycp"
 )
 
@@ -188,6 +190,33 @@ func buildProvisioning(cfg *config.Config, logger *slog.Logger) (api.Provisionin
 			DBName:    cfg.Deploy.BackingYBDBName,
 		}
 	}
+
+	// The Voyager migration job runner launches offline-migration jobs through the
+	// same driver the endpoint deployer uses. It is wired independently of
+	// cfg.Deploy.Enabled — the migration feature may be on while endpoint
+	// deployment is off — but config validation has already restricted the driver
+	// to docker or kubernetes when the feature is enabled.
+	if cfg.Voyager.DatabaseURL != "" {
+		switch cfg.Deploy.Driver {
+		case config.DriverKubernetes:
+			prov.VoyagerRunner = deploy.NewKubernetesVoyagerJobRunner(deploy.KubernetesVoyagerConfig{
+				Image:              cfg.Voyager.Image,
+				Namespace:          cfg.Voyager.Namespace,
+				PVCSize:            cfg.Voyager.PVCSize,
+				StorageClass:       cfg.Voyager.StorageClass,
+				PullSecret:         cfg.Deploy.PullSecret,
+				DBConnectionString: cfg.Voyager.DatabaseURL,
+			})
+		default: // config.DriverDocker
+			prov.VoyagerRunner = deploy.NewDockerVoyagerJobRunner(deploy.DockerVoyagerConfig{
+				Image:              cfg.Voyager.Image,
+				Network:            cfg.Deploy.Network,
+				DBConnectionString: cfg.Voyager.DatabaseURL,
+			})
+		}
+		logger.Info("Voyager migration job runner enabled",
+			"driver", cfg.Deploy.Driver, "image", cfg.Voyager.Image)
+	}
 	return prov, nil
 }
 
@@ -210,6 +239,15 @@ func runMigrate(args []string) error {
 		return err
 	}
 	logger.Info("migrations applied", "schema", cfg.DB.Schema)
+
+	// Apply the Voyager control schema too when the feature is configured, so a
+	// migrate init-container prepares both databases in one pass.
+	if cfg.Voyager.DatabaseURL != "" {
+		if err := db.MigrateFS(ctx, cfg.Voyager.DatabaseURL, voyagermigrations.ControlSchema, voyagermigrations.FS); err != nil {
+			return fmt.Errorf("migrate Voyager state: %w", err)
+		}
+		logger.Info("Voyager migrations applied", "schema", voyagermigrations.ControlSchema)
+	}
 	return nil
 }
 
@@ -235,6 +273,23 @@ func runServe(args []string) error {
 	}
 	logger.Info("migrations applied", "schema", cfg.DB.Schema)
 
+	// The Voyager migration feature keeps its control tables in a schema (and,
+	// typically, a database) of their own. When configured, apply that schema and
+	// open a second pool pinned to it; when not, voyagerPool stays nil and the
+	// migration APIs answer 501, leaving the controller's behavior unchanged.
+	var voyagerPool *db.Pool
+	if cfg.Voyager.DatabaseURL != "" {
+		if err := db.MigrateFS(ctx, cfg.Voyager.DatabaseURL, voyagermigrations.ControlSchema, voyagermigrations.FS); err != nil {
+			return fmt.Errorf("migrate Voyager state: %w", err)
+		}
+		logger.Info("Voyager migrations applied", "schema", voyagermigrations.ControlSchema)
+		voyagerPool, err = db.Connect(ctx, cfg.Voyager.DatabaseURL, voyagermigrations.ControlSchema)
+		if err != nil {
+			return fmt.Errorf("connect to Voyager database: %w", err)
+		}
+		defer voyagerPool.Close()
+	}
+
 	store := task.NewPgStore(pool)
 	backend := core.NewPgBackend(pool)
 	regStore := registry.NewStore(pool)
@@ -254,6 +309,15 @@ func runServe(args []string) error {
 	// deleteCluster. *core.PgBackend supplies the idempotent, id-keyed state
 	// operations the steps need.
 	prov.Recipes = recipeStore{s: regStore}
+
+	// Wire the migration store + derive-on-read service onto the provisioning the
+	// API handlers read (nil-safe: they stay nil when the feature is off, which is
+	// what makes the migration handlers answer 501).
+	if cfg.Voyager.DatabaseURL != "" {
+		prov.VoyagerMigrations = migration.NewYbStore(voyagerPool)
+		prov.VoyagerMigrationService = migration.NewService(prov.VoyagerMigrations, prov.VoyagerRunner)
+	}
+
 	deps := task.Deps{
 		State:         backend,
 		Deployer:      prov.Deployer,
@@ -261,6 +325,11 @@ func runServe(args []string) error {
 		ControllerURL: prov.ControllerURL,
 		Recipes:       prov.Recipes,
 		Extensions:    prov.Extensions,
+		// Voyager-migration ports (nil when the feature is off). The endpoint
+		// lookup adapter keeps the task package off the core domain layer.
+		VoyagerMigrations:         prov.VoyagerMigrations,
+		VoyagerMigrationEndpoints: migrationEndpointLookup{backend: backend},
+		VoyagerRunner:             prov.VoyagerRunner,
 	}
 	// Prometheus instrumentation: one registry, shared by the worker (task
 	// metrics) and the HTTP server (request + runtime metrics, and the /metrics

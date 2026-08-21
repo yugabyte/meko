@@ -20,6 +20,7 @@ import (
 	"github.com/yugabyte/amp/controller/internal/node"
 	"github.com/yugabyte/amp/controller/internal/task"
 	"github.com/yugabyte/amp/controller/internal/version"
+	"github.com/yugabyte/amp/controller/internal/voyager/migration"
 )
 
 // Provisioning holds the collaborators the create-cluster / create-endpoint
@@ -46,6 +47,14 @@ type Provisioning struct {
 	// resolves a branch's extension set against. Wired only for the Kubernetes
 	// driver (ImageVolumes); nil for Docker / when the feature is off.
 	Extensions *extensions.Catalog
+
+	// VoyagerMigrations, VoyagerMigrationService, and VoyagerRunner back the
+	// Voyager migration APIs. They are all nil when the migration feature is not
+	// configured (no Voyager database URL), in which case the migration handlers
+	// refuse with 501.
+	VoyagerMigrations       migration.Store
+	VoyagerMigrationService *migration.Service
+	VoyagerRunner           deploy.VoyagerJobRunner
 }
 
 // Controllers implements the generated StrictServerInterface: the controller's

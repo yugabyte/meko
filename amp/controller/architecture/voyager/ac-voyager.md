@@ -26,7 +26,7 @@ controller API:
 | `start_assess_migration` | `POST /migrations/{id}/assess` | async, 202 + Task |
 | `get_migration_status` (polled) | `GET /migrations/{id}` | sync read |
 | *(agent reads sizing)* | `GET /migrations/{id}/assessment` | sync read |
-| `provision_pg_compute` | `POST /migrations/{id}/target` | async, 202 + Task |
+| `provision_pg_compute` | `POST /migrations/{id}/provision-target` | async, 202 + Task |
 | `start_migrate_schema` + `start_migrate_data` (merged) | `POST /migrations/{id}/migrate` | async, 202 + Task |
 | *(sidebar "Recent")* | `GET /migrations` | sync read |
 
@@ -74,7 +74,7 @@ unchanged**, **reused as logic**, **reused as-is**, or **new**.
 
 
 #### AMP
-1. **Target provisioning is a voyager API** (`POST /migrations/{id}/target`) that
+1. **Target provisioning is a voyager API** (`POST /migrations/{id}/provision-target`) that
    internally reuses the existing cluster/endpoint task steps and attaches the
    result to the migration — the agent never hand-carries endpoint ids.
 1. **AMP's task framework is reused as-is** (`internal/task/`) for the three
@@ -257,7 +257,7 @@ response: 201                  # Migration (see §4.4; state="created")
 
 Validation: `db_type == postgresql`, required fields non-empty. `400` otherwise.
 
-### 4.3 `POST /migrations/{migrationId}/target` — provision PG compute + attach
+### 4.3 `POST /migrations/{migrationId}/provision-target` — provision PG compute + attach
 
 Async `202 + Task`. Reuses the existing cluster/endpoint provisioning steps and
 appends one new step that writes the result onto the migration.
@@ -509,8 +509,8 @@ unique index is the backstop).
 
 Same shape and task plan as assess with operation=migrate, plus a handler
 precondition: `target_config` must be attached (`409 target_not_attached`
-otherwise). Optional request body: `{ parallel_jobs: 8 }` (default from
-controller config) — passed to `import data --parallel-jobs` (adaptive
+otherwise). Optional request body: `{ parallel_jobs: 8 }` (defaults to `8`,
+hardcoded for now) — passed to `import data --parallel-jobs` (adaptive
 parallelism is not supported for `yugabytedb-amp` targets).
 
 ### 4.8 `GET /migrations/{migrationId}/assessment` — parsed assessment report
@@ -755,7 +755,7 @@ sequenceDiagram
   REST-->>Agent: 200 {complexity, sizing_recommendation, issues}
 ```
 
-### 7.3 `POST /migrations/{id}/target`
+### 7.3 `POST /migrations/{id}/provision-target`
 
 ```mermaid
 sequenceDiagram
@@ -764,7 +764,7 @@ sequenceDiagram
   participant Worker
   participant VoyagerDB
   participant K8s
-  Agent->>REST: POST /migrations/{id}/target {pool_id, vcpu}
+  Agent->>REST: POST /migrations/{id}/provision-target {pool_id, vcpu}
   REST->>VoyagerDB: 409 if target attached or task in flight
   REST->>VoyagerDB: plan Task [create_cluster(+writer endpoint), attach_target]
   REST->>VoyagerDB: migration.target_task_id = task.id

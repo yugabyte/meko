@@ -156,6 +156,20 @@ type DeployConfig struct {
 	Timeout time.Duration // how long to wait for a deploy/retire to converge (helm --wait / container ready)
 }
 
+// VoyagerConfig configures the optional Voyager database-migration feature
+// (yb-amp/migration). It is entirely disabled unless DatabaseURL is set: an
+// empty DatabaseURL keeps the controller's behavior identical to before the
+// feature existed (the migration APIs answer 501). When set, the controller
+// connects to the central Voyager control database, applies its schema, and
+// launches offline-migration jobs through the configured deploy driver.
+type VoyagerConfig struct {
+	DatabaseURL  string // controller's connection to the central Voyager control database (enables the migration APIs); launched Voyager jobs reach the same database at this URL
+	Image        string // Voyager job container image (required when enabled)
+	Namespace    string // k8s: namespace Voyager Jobs run in; defaults to the deploy namespace
+	PVCSize      string // k8s: size of each Voyager job's work PersistentVolumeClaim
+	StorageClass string // k8s: storage class for the Voyager job PVC; defaults to the deploy storage class
+}
+
 // Deploy drivers.
 const (
 	DriverKubernetes = "kubernetes"
@@ -177,6 +191,7 @@ type Config struct {
 	GC             GCConfig
 	BranchGC       BranchGCConfig
 	Deploy         DeployConfig
+	Voyager        VoyagerConfig
 }
 
 // GCConfig tunes the failed-create orphan sweeper (internal/gc). Mirrors gc.Config;
@@ -274,11 +289,30 @@ func Load(args []string) (*Config, error) {
 	fs.StringVar(&d.ExternalHost, "deploy-external-host", env("AMP_DEPLOY_EXTERNAL_HOST", "127.0.0.1"), "docker: host a client uses to reach a published compute port")
 	fs.StringVar(&d.ControllerURL, "deploy-controller-url", env("AMP_DEPLOY_CONTROLLER_URL", ""), "URL deployed endpoints use to reach the controller; empty = endpoint runs controller-free (Kubernetes: typically the controller's in-cluster Service URL, e.g. http://amp-controller.<ns>.svc.cluster.local:8080)")
 
+	// Voyager database-migration feature (yb-amp/migration). Disabled unless
+	// --voyager-database-url is set.
+	v := &c.Voyager
+	fs.StringVar(&v.DatabaseURL, "voyager-database-url", env("AMP_VOYAGER_DATABASE_URL", ""), "connection string to the central Voyager control database; empty = the Voyager migration APIs are disabled (501)")
+	fs.StringVar(&v.Image, "voyager-image", env("AMP_VOYAGER_IMAGE", ""), "Voyager job container image (required when the Voyager feature is enabled)")
+	fs.StringVar(&v.Namespace, "voyager-namespace", env("AMP_VOYAGER_NAMESPACE", ""), "k8s: namespace Voyager migration Jobs run in; empty = the deploy namespace")
+	fs.StringVar(&v.PVCSize, "voyager-pvc-size", env("AMP_VOYAGER_PVC_SIZE", "20Gi"), "k8s: size of each Voyager job's work PersistentVolumeClaim")
+	fs.StringVar(&v.StorageClass, "voyager-storage-class", env("AMP_VOYAGER_STORAGE_CLASS", ""), "k8s: storage class for the Voyager job PVC; empty = the deploy storage class")
+
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 	d.ServiceAnnotations = parseKeyValueList(serviceAnnotationsRaw)
 	d.NodeSelector = parseKeyValueList(nodeSelectorRaw)
+
+	// The Voyager Kubernetes placement inherits the deploy defaults when not
+	// overridden, so a single-database deployment need only set
+	// --voyager-database-url and --voyager-image.
+	if v.Namespace == "" {
+		v.Namespace = d.Namespace
+	}
+	if v.StorageClass == "" {
+		v.StorageClass = d.StorageClass
+	}
 
 	// The universe connection is required configuration: the controller refuses
 	// to start without it (amp-controller.md §9).
@@ -307,6 +341,9 @@ func Load(args []string) (*Config, error) {
 		return nil, fmt.Errorf("task shutdown grace must be positive")
 	}
 	if err := validateBranchGC(&c.BranchGC); err != nil {
+		return nil, err
+	}
+	if err := validateVoyager(v, d.Driver); err != nil {
 		return nil, err
 	}
 	if err := validateDeploy(d); err != nil {
@@ -442,6 +479,35 @@ func validateDeployKubernetes(d *DeployConfig) error {
 	// has to fail startup rather than silently fall back to the ratio.
 	if d.DiskSizeOverride != "" && !byteQuantityRe.MatchString(d.DiskSizeOverride) {
 		return fmt.Errorf("invalid deploy disk size override %q (want a k8s quantity, e.g. 10Gi)", d.DiskSizeOverride)
+	}
+	return nil
+}
+
+// validateVoyager validates the optional Voyager migration configuration for the
+// selected deploy driver. An empty DatabaseURL means the feature is disabled, so
+// the function is a no-op and the controller's default behavior is unchanged.
+func validateVoyager(v *VoyagerConfig, deployDriver string) error {
+	if v.DatabaseURL == "" {
+		return nil
+	}
+	if v.Image == "" {
+		return fmt.Errorf("Voyager image is required when --voyager-database-url is set (set --voyager-image or AMP_VOYAGER_IMAGE)")
+	}
+	// Voyager jobs are launched through the endpoint deploy driver, so the only
+	// runtimes that can run them are the two launching drivers.
+	switch deployDriver {
+	case DriverKubernetes:
+		if len(v.Namespace) > 63 || !dns1123Re.MatchString(v.Namespace) {
+			return fmt.Errorf("invalid Voyager namespace %q: must be a DNS-1123 label (set --voyager-namespace or --deploy-namespace)", v.Namespace)
+		}
+		if v.PVCSize == "" {
+			return fmt.Errorf("Voyager PVC size is required for the kubernetes driver")
+		}
+	case DriverDocker:
+		// The Docker runner uses named volumes on the shared network; no
+		// namespace or PVC applies.
+	default:
+		return fmt.Errorf("invalid deploy driver %q for Voyager migrations (want %q or %q)", deployDriver, DriverKubernetes, DriverDocker)
 	}
 	return nil
 }

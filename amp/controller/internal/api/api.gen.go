@@ -74,6 +74,159 @@ func (e EndpointRole) Valid() bool {
 	}
 }
 
+// Defines values for MigrationRunOperation.
+const (
+	Assess  MigrationRunOperation = "assess"
+	Migrate MigrationRunOperation = "migrate"
+)
+
+// Valid indicates whether the value is a known member of the MigrationRunOperation enum.
+func (e MigrationRunOperation) Valid() bool {
+	switch e {
+	case Assess:
+		return true
+	case Migrate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationRunStatus.
+const (
+	MigrationRunStatusFailed    MigrationRunStatus = "failed"
+	MigrationRunStatusPending   MigrationRunStatus = "pending"
+	MigrationRunStatusRunning   MigrationRunStatus = "running"
+	MigrationRunStatusSucceeded MigrationRunStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the MigrationRunStatus enum.
+func (e MigrationRunStatus) Valid() bool {
+	switch e {
+	case MigrationRunStatusFailed:
+		return true
+	case MigrationRunStatusPending:
+		return true
+	case MigrationRunStatusRunning:
+		return true
+	case MigrationRunStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceDbType.
+const (
+	MigrationSourceDbTypePostgresql MigrationSourceDbType = "postgresql"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceDbType enum.
+func (e MigrationSourceDbType) Valid() bool {
+	switch e {
+	case MigrationSourceDbTypePostgresql:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceRequestDbType.
+const (
+	MigrationSourceRequestDbTypePostgresql MigrationSourceRequestDbType = "postgresql"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceRequestDbType enum.
+func (e MigrationSourceRequestDbType) Valid() bool {
+	switch e {
+	case MigrationSourceRequestDbTypePostgresql:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationState.
+const (
+	MigrationStateAssessed           MigrationState = "assessed"
+	MigrationStateAssessing          MigrationState = "assessing"
+	MigrationStateCompleted          MigrationState = "completed"
+	MigrationStateCreated            MigrationState = "created"
+	MigrationStateFailed             MigrationState = "failed"
+	MigrationStateMigrating          MigrationState = "migrating"
+	MigrationStateProvisioningTarget MigrationState = "provisioning_target"
+	MigrationStateTargetReady        MigrationState = "target_ready"
+)
+
+// Valid indicates whether the value is a known member of the MigrationState enum.
+func (e MigrationState) Valid() bool {
+	switch e {
+	case MigrationStateAssessed:
+		return true
+	case MigrationStateAssessing:
+		return true
+	case MigrationStateCompleted:
+		return true
+	case MigrationStateCreated:
+		return true
+	case MigrationStateFailed:
+		return true
+	case MigrationStateMigrating:
+		return true
+	case MigrationStateProvisioningTarget:
+		return true
+	case MigrationStateTargetReady:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationTableProgressStatus.
+const (
+	MigrationTableProgressStatusCompleted  MigrationTableProgressStatus = "completed"
+	MigrationTableProgressStatusDone       MigrationTableProgressStatus = "done"
+	MigrationTableProgressStatusInProgress MigrationTableProgressStatus = "in_progress"
+	MigrationTableProgressStatusNotStarted MigrationTableProgressStatus = "not_started"
+)
+
+// Valid indicates whether the value is a known member of the MigrationTableProgressStatus enum.
+func (e MigrationTableProgressStatus) Valid() bool {
+	switch e {
+	case MigrationTableProgressStatusCompleted:
+		return true
+	case MigrationTableProgressStatusDone:
+		return true
+	case MigrationTableProgressStatusInProgress:
+		return true
+	case MigrationTableProgressStatusNotStarted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationVoyagerPhaseStatus.
+const (
+	MigrationVoyagerPhaseStatusCompleted  MigrationVoyagerPhaseStatus = "completed"
+	MigrationVoyagerPhaseStatusInProgress MigrationVoyagerPhaseStatus = "in_progress"
+	MigrationVoyagerPhaseStatusNotStarted MigrationVoyagerPhaseStatus = "not_started"
+)
+
+// Valid indicates whether the value is a known member of the MigrationVoyagerPhaseStatus enum.
+func (e MigrationVoyagerPhaseStatus) Valid() bool {
+	switch e {
+	case MigrationVoyagerPhaseStatusCompleted:
+		return true
+	case MigrationVoyagerPhaseStatusInProgress:
+		return true
+	case MigrationVoyagerPhaseStatusNotStarted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskStatus.
 const (
 	TaskStatusFailed    TaskStatus = "failed"
@@ -363,6 +516,15 @@ type CreateEndpointRequestDiskType string
 // CreateEndpointRequestRole The endpoint's role. A branch admits at most one read_write endpoint.
 type CreateEndpointRequestRole string
 
+// CreateMigrationRequest defines model for CreateMigrationRequest.
+type CreateMigrationRequest struct {
+	// Name Human name for the migration.
+	Name string `json:"name"`
+
+	// Source The source database connection, as supplied by the caller. The password is stored for the Voyager jobs but is never returned in any response.
+	Source MigrationSourceRequest `json:"source"`
+}
+
 // CreateStoragePoolRequest defines model for CreateStoragePoolRequest.
 type CreateStoragePoolRequest struct {
 	// Id Optional explicit id — e.g. a Meko datapack UUID, so the pool and the datapack share one id (no separate mapping). Omit to auto-generate. Idempotent: re-creating an existing id returns it.
@@ -568,8 +730,276 @@ type ErrorBody struct {
 	Message string `json:"message"`
 }
 
+// Migration A migration and its derived status.
+type Migration struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Detail Human-readable, chat-ready status detail (e.g. "importing data (4,103/6,704 rows)").
+	Detail string             `json:"detail"`
+	Id     openapi_types.UUID `json:"id"`
+	Name   string             `json:"name"`
+
+	// Runs The latest attempt per operation (assess and/or migrate).
+	Runs []MigrationRun `json:"runs"`
+
+	// Source The source database connection as returned in responses — the password is intentionally omitted.
+	Source MigrationSource `json:"source"`
+
+	// State The migration's lifecycle state, derived on read from the migration row,
+	// its runs, and the live Voyager job.
+	State MigrationState `json:"state"`
+
+	// Target The attached target compute; null until a target is provisioned.
+	Target    *MigrationTarget  `json:"target,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at"`
+	Voyager   *MigrationVoyager `json:"voyager,omitempty"`
+}
+
+// MigrationAssessment The parsed, agent-oriented projection of Voyager's completed assessment payload.
+type MigrationAssessment struct {
+	Issues []MigrationAssessmentIssue `json:"issues"`
+
+	// MigrationComplexity Voyager's complexity rating (e.g. LOW, MEDIUM, HIGH).
+	MigrationComplexity            string   `json:"migration_complexity"`
+	MigrationComplexityExplanation string   `json:"migration_complexity_explanation"`
+	Notes                          []string `json:"notes"`
+
+	// SizingRecommendation Voyager's compute-sizing recommendation, projected to the fields the agent needs.
+	SizingRecommendation MigrationSizingRecommendation `json:"sizing_recommendation"`
+
+	// SourceDatabase Size and row-count facts from the source database.
+	SourceDatabase MigrationAssessmentSourceDatabaseStats `json:"source_database"`
+
+	// SourceEnvironment Source host environment facts. Voyager payload v1.8 does not currently populate these, so they are normally zero.
+	SourceEnvironment MigrationAssessmentSourceEnvironment `json:"source_environment"`
+	VoyagerVersion    string                               `json:"voyager_version"`
+}
+
+// MigrationAssessmentIssue A flattened, agent-readable assessment issue.
+type MigrationAssessmentIssue struct {
+	Category    *string `json:"category,omitempty"`
+	Description *string `json:"description,omitempty"`
+	DocsLink    *string `json:"docs_link,omitempty"`
+	Impact      *string `json:"impact,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	ObjectName  *string `json:"object_name,omitempty"`
+	ObjectType  *string `json:"object_type,omitempty"`
+	Type        *string `json:"type,omitempty"`
+}
+
+// MigrationAssessmentSourceDatabaseStats Size and row-count facts from the source database.
+type MigrationAssessmentSourceDatabaseStats struct {
+	TableRowCount       *int64 `json:"table_row_count,omitempty"`
+	TotalIndexSizeBytes *int64 `json:"total_index_size_bytes,omitempty"`
+	TotalTableSizeBytes *int64 `json:"total_table_size_bytes,omitempty"`
+}
+
+// MigrationAssessmentSourceEnvironment Source host environment facts. Voyager payload v1.8 does not currently populate these, so they are normally zero.
+type MigrationAssessmentSourceEnvironment struct {
+	TotalDiskSize *int64   `json:"total_disk_size,omitempty"`
+	TotalMemory   *int64   `json:"total_memory,omitempty"`
+	TotalVcpu     *float32 `json:"total_vcpu,omitempty"`
+}
+
+// MigrationConnectivity The result of a source-connectivity probe. `reachable=false` is still a 200; the failure detail is in `error` (credentials redacted).
+type MigrationConnectivity struct {
+	// Error A redacted failure reason when `reachable=false`.
+	Error *string `json:"error,omitempty"`
+
+	// LatencyMs Connect + probe round-trip latency in milliseconds, when reachable.
+	LatencyMs *int64 `json:"latency_ms,omitempty"`
+	Reachable bool   `json:"reachable"`
+
+	// ServerVersion The source server version string, when reachable.
+	ServerVersion *string `json:"server_version,omitempty"`
+
+	// Ssl Whether the connection negotiated SSL, when reachable.
+	Ssl *bool `json:"ssl,omitempty"`
+}
+
+// MigrationConnectivityRequest defines model for MigrationConnectivityRequest.
+type MigrationConnectivityRequest struct {
+	// Source The source database connection, as supplied by the caller. The password is stored for the Voyager jobs but is never returned in any response.
+	Source MigrationSourceRequest `json:"source"`
+}
+
+// MigrationDataProgress Data-copy progress for the migrate operation. Each direction is null until that phase produces rows.
+type MigrationDataProgress struct {
+	Export *MigrationPhaseDataProgress `json:"export,omitempty"`
+	Import *MigrationPhaseDataProgress `json:"import,omitempty"`
+}
+
+// MigrationList defines model for MigrationList.
+type MigrationList struct {
+	// Count The number of items returned in this response (this page).
+	Count      PageCount          `json:"count"`
+	Migrations []MigrationSummary `json:"migrations"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
+// MigrationPhaseDataProgress Aggregate and per-table row progress for one data direction (export or import).
+type MigrationPhaseDataProgress struct {
+	RowsCompleted int64                    `json:"rows_completed"`
+	RowsTotal     int64                    `json:"rows_total"`
+	Tables        []MigrationTableProgress `json:"tables"`
+}
+
+// MigrationRun One assess or migrate attempt. Credentials never appear here.
+type MigrationRun struct {
+	Attempt          int                           `json:"attempt"`
+	DeployerMetadata *MigrationRunDeployerMetadata `json:"deployer_metadata,omitempty"`
+
+	// DeployerType The deployer that ran the job (e.g. `kubernetes`, `docker`); null until the job is launched.
+	DeployerType *string `json:"deployer_type,omitempty"`
+
+	// ErrorSummary A short, credential-free failure summary; null unless the run failed.
+	ErrorSummary *string               `json:"error_summary,omitempty"`
+	FinishedAt   *time.Time            `json:"finished_at,omitempty"`
+	Operation    MigrationRunOperation `json:"operation"`
+	StartedAt    *time.Time            `json:"started_at,omitempty"`
+	Status       MigrationRunStatus    `json:"status"`
+
+	// TaskId The launcher task that owns this run.
+	TaskId *openapi_types.UUID `json:"task_id,omitempty"`
+}
+
+// MigrationRunOperation defines model for MigrationRun.Operation.
+type MigrationRunOperation string
+
+// MigrationRunStatus defines model for MigrationRun.Status.
+type MigrationRunStatus string
+
+// MigrationRunDeployerMetadata Safe, credential-free runtime reference to the deployer job backing a run
+// (e.g. the Kubernetes namespace/job or the Docker container). Shape varies
+// by deployer; common Kubernetes fields are documented below.
+type MigrationRunDeployerMetadata struct {
+	ContainerId          *string                `json:"container_id,omitempty"`
+	JobName              *string                `json:"job_name,omitempty"`
+	JobUid               *string                `json:"job_uid,omitempty"`
+	Namespace            *string                `json:"namespace,omitempty"`
+	Volume               *string                `json:"volume,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// MigrationSizingRecommendation Voyager's compute-sizing recommendation, projected to the fields the agent needs.
+type MigrationSizingRecommendation struct {
+	ColocatedTables *[]string `json:"colocated_tables,omitempty"`
+	MemoryPerNodeGb *int      `json:"memory_per_node_gb,omitempty"`
+	NumNodes        *float32  `json:"num_nodes,omitempty"`
+	ShardedTables   *[]string `json:"sharded_tables,omitempty"`
+	Summary         *string   `json:"summary,omitempty"`
+	VcpuPerNode     *int      `json:"vcpu_per_node,omitempty"`
+}
+
+// MigrationSource The source database connection as returned in responses — the password is intentionally omitted.
+type MigrationSource struct {
+	Database string                `json:"database"`
+	DbType   MigrationSourceDbType `json:"db_type"`
+	Host     string                `json:"host"`
+	Port     int                   `json:"port"`
+	Schemas  *[]string             `json:"schemas,omitempty"`
+	Username string                `json:"username"`
+}
+
+// MigrationSourceDbType defines model for MigrationSource.DbType.
+type MigrationSourceDbType string
+
+// MigrationSourceRequest The source database connection, as supplied by the caller. The password is stored for the Voyager jobs but is never returned in any response.
+type MigrationSourceRequest struct {
+	Database string `json:"database"`
+
+	// DbType Source database engine. Only `postgresql` is supported.
+	DbType MigrationSourceRequestDbType `json:"db_type"`
+	Host   string                       `json:"host"`
+
+	// Password Source password. Stored for the Voyager jobs; never returned.
+	Password string `json:"password"`
+	Port     int    `json:"port"`
+
+	// Schemas Schemas to migrate. Required — list at least one schema explicitly (e.g. `[public]`), matching the Voyager CLI's explicit-scope behavior.
+	Schemas  []string `json:"schemas"`
+	Username string   `json:"username"`
+}
+
+// MigrationSourceRequestDbType Source database engine. Only `postgresql` is supported.
+type MigrationSourceRequestDbType string
+
+// MigrationState The migration's lifecycle state, derived on read from the migration row,
+// its runs, and the live Voyager job.
+type MigrationState string
+
+// MigrationSummary The lightweight migration projection used in list responses (persisted state only).
+type MigrationSummary struct {
+	CreatedAt time.Time          `json:"created_at"`
+	Detail    string             `json:"detail"`
+	Id        openapi_types.UUID `json:"id"`
+	Name      string             `json:"name"`
+
+	// State The migration's lifecycle state, derived on read from the migration row,
+	// its runs, and the live Voyager job.
+	State     MigrationState `json:"state"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// MigrationTableProgress Per-table row progress for a data phase (row counts only — Voyager does not emit byte counts).
+type MigrationTableProgress struct {
+	RowsCompleted int64                        `json:"rows_completed"`
+	RowsTotal     int64                        `json:"rows_total"`
+	Schema        string                       `json:"schema"`
+	Status        MigrationTableProgressStatus `json:"status"`
+	Table         string                       `json:"table"`
+}
+
+// MigrationTableProgressStatus defines model for MigrationTableProgress.Status.
+type MigrationTableProgressStatus string
+
+// MigrationTarget The attached AMP compute the migrate job imports into. Populated once a target is provisioned and attached; the password is never returned.
+type MigrationTarget struct {
+	ClusterId  openapi_types.UUID `json:"cluster_id"`
+	Database   string             `json:"database"`
+	EndpointId openapi_types.UUID `json:"endpoint_id"`
+	Host       string             `json:"host"`
+	PoolId     openapi_types.UUID `json:"pool_id"`
+	Port       int                `json:"port"`
+	Username   string             `json:"username"`
+}
+
+// MigrationVoyager Voyager's own view of the migration, read from its visualizer tables. Null before the first run writes any rows.
+type MigrationVoyager struct {
+	DataProgress *MigrationDataProgress  `json:"data_progress,omitempty"`
+	Phases       []MigrationVoyagerPhase `json:"phases"`
+}
+
+// MigrationVoyagerPhase One Voyager workflow phase (Voyager's fixed phase number and its name), with its latest status.
+type MigrationVoyagerPhase struct {
+	// Name Human phase name (e.g. export-schema, import-data).
+	Name string `json:"name"`
+
+	// Phase Voyager's fixed phase identifier (non-contiguous — e.g. import-schema is 5, export-data is 4).
+	Phase     int                         `json:"phase"`
+	Status    MigrationVoyagerPhaseStatus `json:"status"`
+	UpdatedAt *time.Time                  `json:"updated_at,omitempty"`
+}
+
+// MigrationVoyagerPhaseStatus defines model for MigrationVoyagerPhase.Status.
+type MigrationVoyagerPhaseStatus string
+
 // PageCount The number of items returned in this response (this page).
 type PageCount = int
+
+// ProvisionMigrationTargetRequest defines model for ProvisionMigrationTargetRequest.
+type ProvisionMigrationTargetRequest struct {
+	// PoolId The storage pool to create the target project in.
+	PoolId openapi_types.UUID `json:"pool_id"`
+
+	// ProjectName Name for the target project. Defaults to the migration name when omitted.
+	ProjectName *string `json:"project_name,omitempty"`
+
+	// Vcpu Target compute size in vCPU (chosen by the agent from the assessment). Zero/omitted leaves the deployer default.
+	Vcpu *int `json:"vcpu,omitempty"`
+}
 
 // ResizeEndpointRequest Request to change an existing endpoint's compute reservation. cpu/memory
 // are applied as request == limit, so the pod keeps its Guaranteed QoS class
@@ -593,6 +1023,12 @@ type SettingsUpdateResult struct {
 	// Endpoints One entry per running endpoint the change was pushed to. Absent for
 	// a branch with no endpoints.
 	Endpoints *[]EndpointSettingsOutcome `json:"endpoints,omitempty"`
+}
+
+// StartMigrationRequest defines model for StartMigrationRequest.
+type StartMigrationRequest struct {
+	// ParallelJobs Value for `import data --parallel-jobs`. Defaults to `8` when omitted.
+	ParallelJobs *int `json:"parallel_jobs,omitempty"`
 }
 
 // StoragePool defines model for StoragePool.
@@ -797,6 +1233,9 @@ type IncludeFailed = bool
 // Limit defines model for Limit.
 type Limit = int
 
+// MigrationId defines model for MigrationId.
+type MigrationId = openapi_types.UUID
+
 // Offset defines model for Offset.
 type Offset = int
 
@@ -826,6 +1265,15 @@ type NotFound = Error
 
 // ServiceUnavailable defines model for ServiceUnavailable.
 type ServiceUnavailable = Error
+
+// ListMigrationsParams defines parameters for ListMigrations.
+type ListMigrationsParams struct {
+	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
 
 // ListStoragePoolsParams defines parameters for ListStoragePools.
 type ListStoragePoolsParams struct {
@@ -896,6 +1344,18 @@ type ListUsersParams struct {
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// CreateMigrationJSONRequestBody defines body for CreateMigration for application/json ContentType.
+type CreateMigrationJSONRequestBody = CreateMigrationRequest
+
+// CheckMigrationConnectivityJSONRequestBody defines body for CheckMigrationConnectivity for application/json ContentType.
+type CheckMigrationConnectivityJSONRequestBody = MigrationConnectivityRequest
+
+// StartMigrationJSONRequestBody defines body for StartMigration for application/json ContentType.
+type StartMigrationJSONRequestBody = StartMigrationRequest
+
+// ProvisionMigrationTargetJSONRequestBody defines body for ProvisionMigrationTarget for application/json ContentType.
+type ProvisionMigrationTargetJSONRequestBody = ProvisionMigrationTargetRequest
+
 // CreateStoragePoolJSONRequestBody defines body for CreateStoragePool for application/json ContentType.
 type CreateStoragePoolJSONRequestBody = CreateStoragePoolRequest
 
@@ -919,6 +1379,134 @@ type UpdateBranchSettingsJSONRequestBody = UpdateBranchSettingsRequest
 
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = CreateUserRequest
+
+// Getter for additional properties for MigrationRunDeployerMetadata. Returns the specified
+// element and whether it was found
+func (a MigrationRunDeployerMetadata) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for MigrationRunDeployerMetadata
+func (a *MigrationRunDeployerMetadata) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for MigrationRunDeployerMetadata to handle AdditionalProperties
+func (a *MigrationRunDeployerMetadata) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["container_id"]; found {
+		err = json.Unmarshal(raw, &a.ContainerId)
+		if err != nil {
+			return fmt.Errorf("error reading 'container_id': %w", err)
+		}
+		delete(object, "container_id")
+	}
+
+	if raw, found := object["job_name"]; found {
+		err = json.Unmarshal(raw, &a.JobName)
+		if err != nil {
+			return fmt.Errorf("error reading 'job_name': %w", err)
+		}
+		delete(object, "job_name")
+	}
+
+	if raw, found := object["job_uid"]; found {
+		err = json.Unmarshal(raw, &a.JobUid)
+		if err != nil {
+			return fmt.Errorf("error reading 'job_uid': %w", err)
+		}
+		delete(object, "job_uid")
+	}
+
+	if raw, found := object["namespace"]; found {
+		err = json.Unmarshal(raw, &a.Namespace)
+		if err != nil {
+			return fmt.Errorf("error reading 'namespace': %w", err)
+		}
+		delete(object, "namespace")
+	}
+
+	if raw, found := object["volume"]; found {
+		err = json.Unmarshal(raw, &a.Volume)
+		if err != nil {
+			return fmt.Errorf("error reading 'volume': %w", err)
+		}
+		delete(object, "volume")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for MigrationRunDeployerMetadata to handle AdditionalProperties
+func (a MigrationRunDeployerMetadata) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.ContainerId != nil {
+		object["container_id"], err = json.Marshal(a.ContainerId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'container_id': %w", err)
+		}
+	}
+
+	if a.JobName != nil {
+		object["job_name"], err = json.Marshal(a.JobName)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'job_name': %w", err)
+		}
+	}
+
+	if a.JobUid != nil {
+		object["job_uid"], err = json.Marshal(a.JobUid)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'job_uid': %w", err)
+		}
+	}
+
+	if a.Namespace != nil {
+		object["namespace"], err = json.Marshal(a.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'namespace': %w", err)
+		}
+	}
+
+	if a.Volume != nil {
+		object["volume"], err = json.Marshal(a.Volume)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'volume': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -993,6 +1581,38 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ListMigrations request
+	ListMigrations(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateMigrationWithBody request with any body
+	CreateMigrationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateMigration(ctx context.Context, body CreateMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CheckMigrationConnectivityWithBody request with any body
+	CheckMigrationConnectivityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CheckMigrationConnectivity(ctx context.Context, body CheckMigrationConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetMigration request
+	GetMigration(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartMigrationAssessment request
+	StartMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetMigrationAssessment request
+	GetMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartMigrationWithBody request with any body
+	StartMigrationWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	StartMigration(ctx context.Context, migrationId MigrationId, body StartMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ProvisionMigrationTargetWithBody request with any body
+	ProvisionMigrationTargetWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ProvisionMigrationTarget(ctx context.Context, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListStoragePools request
 	ListStoragePools(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1080,6 +1700,150 @@ type ClientInterface interface {
 
 	// GetVersion request
 	GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ListMigrations(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListMigrationsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateMigrationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMigrationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateMigration(ctx context.Context, body CreateMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMigrationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CheckMigrationConnectivityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCheckMigrationConnectivityRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CheckMigrationConnectivity(ctx context.Context, body CheckMigrationConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCheckMigrationConnectivityRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetMigration(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMigrationRequest(c.Server, migrationId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartMigrationAssessmentRequest(c.Server, migrationId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMigrationAssessmentRequest(c.Server, migrationId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartMigrationWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartMigrationRequestWithBody(c.Server, migrationId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartMigration(ctx context.Context, migrationId MigrationId, body StartMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartMigrationRequest(c.Server, migrationId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ProvisionMigrationTargetWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewProvisionMigrationTargetRequestWithBody(c.Server, migrationId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ProvisionMigrationTarget(ctx context.Context, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewProvisionMigrationTargetRequest(c.Server, migrationId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) ListStoragePools(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1464,6 +2228,348 @@ func (c *Client) GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) 
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListMigrationsRequest generates requests for ListMigrations
+func NewListMigrationsRequest(server string, params *ListMigrationsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "offset", *params.Offset, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateMigrationRequest calls the generic CreateMigration builder with application/json body
+func NewCreateMigrationRequest(server string, body CreateMigrationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateMigrationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateMigrationRequestWithBody generates requests for CreateMigration with any type of body
+func NewCreateMigrationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCheckMigrationConnectivityRequest calls the generic CheckMigrationConnectivity builder with application/json body
+func NewCheckMigrationConnectivityRequest(server string, body CheckMigrationConnectivityJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCheckMigrationConnectivityRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCheckMigrationConnectivityRequestWithBody generates requests for CheckMigrationConnectivity with any type of body
+func NewCheckMigrationConnectivityRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/connectivity-checks")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetMigrationRequest generates requests for GetMigration
+func NewGetMigrationRequest(server string, migrationId MigrationId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStartMigrationAssessmentRequest generates requests for StartMigrationAssessment
+func NewStartMigrationAssessmentRequest(server string, migrationId MigrationId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/assess", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetMigrationAssessmentRequest generates requests for GetMigrationAssessment
+func NewGetMigrationAssessmentRequest(server string, migrationId MigrationId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/assessment", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStartMigrationRequest calls the generic StartMigration builder with application/json body
+func NewStartMigrationRequest(server string, migrationId MigrationId, body StartMigrationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewStartMigrationRequestWithBody(server, migrationId, "application/json", bodyReader)
+}
+
+// NewStartMigrationRequestWithBody generates requests for StartMigration with any type of body
+func NewStartMigrationRequestWithBody(server string, migrationId MigrationId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/migrate", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewProvisionMigrationTargetRequest calls the generic ProvisionMigrationTarget builder with application/json body
+func NewProvisionMigrationTargetRequest(server string, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewProvisionMigrationTargetRequestWithBody(server, migrationId, "application/json", bodyReader)
+}
+
+// NewProvisionMigrationTargetRequestWithBody generates requests for ProvisionMigrationTarget with any type of body
+func NewProvisionMigrationTargetRequestWithBody(server string, migrationId MigrationId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/provision-target", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
 // NewListStoragePoolsRequest generates requests for ListStoragePools
@@ -2851,6 +3957,38 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ListMigrationsWithResponse request
+	ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error)
+
+	// CreateMigrationWithBodyWithResponse request with any body
+	CreateMigrationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMigrationResponse, error)
+
+	CreateMigrationWithResponse(ctx context.Context, body CreateMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMigrationResponse, error)
+
+	// CheckMigrationConnectivityWithBodyWithResponse request with any body
+	CheckMigrationConnectivityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CheckMigrationConnectivityResponse, error)
+
+	CheckMigrationConnectivityWithResponse(ctx context.Context, body CheckMigrationConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*CheckMigrationConnectivityResponse, error)
+
+	// GetMigrationWithResponse request
+	GetMigrationWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationResponse, error)
+
+	// StartMigrationAssessmentWithResponse request
+	StartMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*StartMigrationAssessmentResponse, error)
+
+	// GetMigrationAssessmentWithResponse request
+	GetMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationAssessmentResponse, error)
+
+	// StartMigrationWithBodyWithResponse request with any body
+	StartMigrationWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error)
+
+	StartMigrationWithResponse(ctx context.Context, migrationId MigrationId, body StartMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error)
+
+	// ProvisionMigrationTargetWithBodyWithResponse request with any body
+	ProvisionMigrationTargetWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProvisionMigrationTargetResponse, error)
+
+	ProvisionMigrationTargetWithResponse(ctx context.Context, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*ProvisionMigrationTargetResponse, error)
+
 	// ListStoragePoolsWithResponse request
 	ListStoragePoolsWithResponse(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*ListStoragePoolsResponse, error)
 
@@ -2938,6 +4076,270 @@ type ClientWithResponsesInterface interface {
 
 	// GetVersionWithResponse request
 	GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error)
+}
+
+type ListMigrationsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *MigrationList
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListMigrationsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListMigrationsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListMigrationsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateMigrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Migration
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateMigrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateMigrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateMigrationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CheckMigrationConnectivityResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *MigrationConnectivity
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r CheckMigrationConnectivityResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CheckMigrationConnectivityResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CheckMigrationConnectivityResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetMigrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Migration
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMigrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMigrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMigrationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type StartMigrationAssessmentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r StartMigrationAssessmentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartMigrationAssessmentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r StartMigrationAssessmentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetMigrationAssessmentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *MigrationAssessment
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMigrationAssessmentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMigrationAssessmentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMigrationAssessmentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type StartMigrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r StartMigrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartMigrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r StartMigrationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ProvisionMigrationTargetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ProvisionMigrationTargetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ProvisionMigrationTargetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ProvisionMigrationTargetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type ListStoragePoolsResponse struct {
@@ -3752,6 +5154,110 @@ func (r GetVersionResponse) ContentType() string {
 	return ""
 }
 
+// ListMigrationsWithResponse request returning *ListMigrationsResponse
+func (c *ClientWithResponses) ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error) {
+	rsp, err := c.ListMigrations(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListMigrationsResponse(rsp)
+}
+
+// CreateMigrationWithBodyWithResponse request with arbitrary body returning *CreateMigrationResponse
+func (c *ClientWithResponses) CreateMigrationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMigrationResponse, error) {
+	rsp, err := c.CreateMigrationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateMigrationResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateMigrationWithResponse(ctx context.Context, body CreateMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMigrationResponse, error) {
+	rsp, err := c.CreateMigration(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateMigrationResponse(rsp)
+}
+
+// CheckMigrationConnectivityWithBodyWithResponse request with arbitrary body returning *CheckMigrationConnectivityResponse
+func (c *ClientWithResponses) CheckMigrationConnectivityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CheckMigrationConnectivityResponse, error) {
+	rsp, err := c.CheckMigrationConnectivityWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCheckMigrationConnectivityResponse(rsp)
+}
+
+func (c *ClientWithResponses) CheckMigrationConnectivityWithResponse(ctx context.Context, body CheckMigrationConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*CheckMigrationConnectivityResponse, error) {
+	rsp, err := c.CheckMigrationConnectivity(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCheckMigrationConnectivityResponse(rsp)
+}
+
+// GetMigrationWithResponse request returning *GetMigrationResponse
+func (c *ClientWithResponses) GetMigrationWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationResponse, error) {
+	rsp, err := c.GetMigration(ctx, migrationId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMigrationResponse(rsp)
+}
+
+// StartMigrationAssessmentWithResponse request returning *StartMigrationAssessmentResponse
+func (c *ClientWithResponses) StartMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*StartMigrationAssessmentResponse, error) {
+	rsp, err := c.StartMigrationAssessment(ctx, migrationId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartMigrationAssessmentResponse(rsp)
+}
+
+// GetMigrationAssessmentWithResponse request returning *GetMigrationAssessmentResponse
+func (c *ClientWithResponses) GetMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationAssessmentResponse, error) {
+	rsp, err := c.GetMigrationAssessment(ctx, migrationId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMigrationAssessmentResponse(rsp)
+}
+
+// StartMigrationWithBodyWithResponse request with arbitrary body returning *StartMigrationResponse
+func (c *ClientWithResponses) StartMigrationWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error) {
+	rsp, err := c.StartMigrationWithBody(ctx, migrationId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartMigrationResponse(rsp)
+}
+
+func (c *ClientWithResponses) StartMigrationWithResponse(ctx context.Context, migrationId MigrationId, body StartMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error) {
+	rsp, err := c.StartMigration(ctx, migrationId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartMigrationResponse(rsp)
+}
+
+// ProvisionMigrationTargetWithBodyWithResponse request with arbitrary body returning *ProvisionMigrationTargetResponse
+func (c *ClientWithResponses) ProvisionMigrationTargetWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProvisionMigrationTargetResponse, error) {
+	rsp, err := c.ProvisionMigrationTargetWithBody(ctx, migrationId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseProvisionMigrationTargetResponse(rsp)
+}
+
+func (c *ClientWithResponses) ProvisionMigrationTargetWithResponse(ctx context.Context, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*ProvisionMigrationTargetResponse, error) {
+	rsp, err := c.ProvisionMigrationTarget(ctx, migrationId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseProvisionMigrationTargetResponse(rsp)
+}
+
 // ListStoragePoolsWithResponse request returning *ListStoragePoolsResponse
 func (c *ClientWithResponses) ListStoragePoolsWithResponse(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*ListStoragePoolsResponse, error) {
 	rsp, err := c.ListStoragePools(ctx, params, reqEditors...)
@@ -4030,6 +5536,382 @@ func (c *ClientWithResponses) GetVersionWithResponse(ctx context.Context, reqEdi
 		return nil, err
 	}
 	return ParseGetVersionResponse(rsp)
+}
+
+// ParseListMigrationsResponse parses an HTTP response from a ListMigrationsWithResponse call
+func ParseListMigrationsResponse(rsp *http.Response) (*ListMigrationsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListMigrationsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MigrationList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateMigrationResponse parses an HTTP response from a CreateMigrationWithResponse call
+func ParseCreateMigrationResponse(rsp *http.Response) (*CreateMigrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateMigrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Migration
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCheckMigrationConnectivityResponse parses an HTTP response from a CheckMigrationConnectivityWithResponse call
+func ParseCheckMigrationConnectivityResponse(rsp *http.Response) (*CheckMigrationConnectivityResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CheckMigrationConnectivityResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MigrationConnectivity
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetMigrationResponse parses an HTTP response from a GetMigrationWithResponse call
+func ParseGetMigrationResponse(rsp *http.Response) (*GetMigrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMigrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Migration
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStartMigrationAssessmentResponse parses an HTTP response from a StartMigrationAssessmentWithResponse call
+func ParseStartMigrationAssessmentResponse(rsp *http.Response) (*StartMigrationAssessmentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartMigrationAssessmentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetMigrationAssessmentResponse parses an HTTP response from a GetMigrationAssessmentWithResponse call
+func ParseGetMigrationAssessmentResponse(rsp *http.Response) (*GetMigrationAssessmentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMigrationAssessmentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MigrationAssessment
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStartMigrationResponse parses an HTTP response from a StartMigrationWithResponse call
+func ParseStartMigrationResponse(rsp *http.Response) (*StartMigrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartMigrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseProvisionMigrationTargetResponse parses an HTTP response from a ProvisionMigrationTargetWithResponse call
+func ParseProvisionMigrationTargetResponse(rsp *http.Response) (*ProvisionMigrationTargetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ProvisionMigrationTargetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseListStoragePoolsResponse parses an HTTP response from a ListStoragePoolsWithResponse call
@@ -5302,6 +7184,30 @@ func ParseGetVersionResponse(rsp *http.Response) (*GetVersionResponse, error) {
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// List migrations
+	// (GET /migrations)
+	ListMigrations(ctx echo.Context, params ListMigrationsParams) error
+	// Create a migration
+	// (POST /migrations)
+	CreateMigration(ctx echo.Context) error
+	// Test source database reachability
+	// (POST /migrations/connectivity-checks)
+	CheckMigrationConnectivity(ctx echo.Context) error
+	// Get a migration's status
+	// (GET /migrations/{migrationId})
+	GetMigration(ctx echo.Context, migrationId MigrationId) error
+	// Start an assessment run
+	// (POST /migrations/{migrationId}/assess)
+	StartMigrationAssessment(ctx echo.Context, migrationId MigrationId) error
+	// Get the parsed assessment report
+	// (GET /migrations/{migrationId}/assessment)
+	GetMigrationAssessment(ctx echo.Context, migrationId MigrationId) error
+	// Start the offline migration
+	// (POST /migrations/{migrationId}/migrate)
+	StartMigration(ctx echo.Context, migrationId MigrationId) error
+	// Provision and attach the migration target
+	// (POST /migrations/{migrationId}/provision-target)
+	ProvisionMigrationTarget(ctx echo.Context, migrationId MigrationId) error
 	// List storage pools
 	// (GET /storage-pools)
 	ListStoragePools(ctx echo.Context, params ListStoragePoolsParams) error
@@ -5379,6 +7285,129 @@ type ServerInterface interface {
 // ServerInterfaceWrapper converts echo contexts to parameters.
 type ServerInterfaceWrapper struct {
 	Handler ServerInterface
+}
+
+// ListMigrations converts echo context to params.
+func (w *ServerInterfaceWrapper) ListMigrations(ctx echo.Context) error {
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMigrationsParams
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", ctx.QueryParams(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter limit: %s", err))
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", ctx.QueryParams(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter offset: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ListMigrations(ctx, params)
+	return err
+}
+
+// CreateMigration converts echo context to params.
+func (w *ServerInterfaceWrapper) CreateMigration(ctx echo.Context) error {
+	var err error
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.CreateMigration(ctx)
+	return err
+}
+
+// CheckMigrationConnectivity converts echo context to params.
+func (w *ServerInterfaceWrapper) CheckMigrationConnectivity(ctx echo.Context) error {
+	var err error
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.CheckMigrationConnectivity(ctx)
+	return err
+}
+
+// GetMigration converts echo context to params.
+func (w *ServerInterfaceWrapper) GetMigration(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "migrationId" -------------
+	var migrationId MigrationId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migrationId", ctx.Param("migrationId"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter migrationId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetMigration(ctx, migrationId)
+	return err
+}
+
+// StartMigrationAssessment converts echo context to params.
+func (w *ServerInterfaceWrapper) StartMigrationAssessment(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "migrationId" -------------
+	var migrationId MigrationId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migrationId", ctx.Param("migrationId"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter migrationId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.StartMigrationAssessment(ctx, migrationId)
+	return err
+}
+
+// GetMigrationAssessment converts echo context to params.
+func (w *ServerInterfaceWrapper) GetMigrationAssessment(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "migrationId" -------------
+	var migrationId MigrationId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migrationId", ctx.Param("migrationId"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter migrationId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.GetMigrationAssessment(ctx, migrationId)
+	return err
+}
+
+// StartMigration converts echo context to params.
+func (w *ServerInterfaceWrapper) StartMigration(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "migrationId" -------------
+	var migrationId MigrationId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migrationId", ctx.Param("migrationId"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter migrationId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.StartMigration(ctx, migrationId)
+	return err
+}
+
+// ProvisionMigrationTarget converts echo context to params.
+func (w *ServerInterfaceWrapper) ProvisionMigrationTarget(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "migrationId" -------------
+	var migrationId MigrationId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migrationId", ctx.Param("migrationId"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter migrationId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.ProvisionMigrationTarget(ctx, migrationId)
+	return err
 }
 
 // ListStoragePools converts echo context to params.
@@ -6102,6 +8131,14 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 		Handler: si,
 	}
 
+	router.GET(options.BaseURL+"/migrations", wrapper.ListMigrations, options.OperationMiddlewares["listMigrations"]...)
+	router.POST(options.BaseURL+"/migrations", wrapper.CreateMigration, options.OperationMiddlewares["createMigration"]...)
+	router.POST(options.BaseURL+"/migrations/connectivity-checks", wrapper.CheckMigrationConnectivity, options.OperationMiddlewares["checkMigrationConnectivity"]...)
+	router.GET(options.BaseURL+"/migrations/:migrationId", wrapper.GetMigration, options.OperationMiddlewares["getMigration"]...)
+	router.POST(options.BaseURL+"/migrations/:migrationId/assess", wrapper.StartMigrationAssessment, options.OperationMiddlewares["startMigrationAssessment"]...)
+	router.GET(options.BaseURL+"/migrations/:migrationId/assessment", wrapper.GetMigrationAssessment, options.OperationMiddlewares["getMigrationAssessment"]...)
+	router.POST(options.BaseURL+"/migrations/:migrationId/migrate", wrapper.StartMigration, options.OperationMiddlewares["startMigration"]...)
+	router.POST(options.BaseURL+"/migrations/:migrationId/provision-target", wrapper.ProvisionMigrationTarget, options.OperationMiddlewares["provisionMigrationTarget"]...)
 	router.GET(options.BaseURL+"/storage-pools", wrapper.ListStoragePools, options.OperationMiddlewares["listStoragePools"]...)
 	router.POST(options.BaseURL+"/storage-pools", wrapper.CreateStoragePool, options.OperationMiddlewares["createStoragePool"]...)
 	router.GET(options.BaseURL+"/storage-pools/:poolId", wrapper.GetStoragePool, options.OperationMiddlewares["getStoragePool"]...)
@@ -6153,6 +8190,523 @@ type ServiceUnavailableJSONResponse struct {
 	Body Error
 
 	Headers ServiceUnavailableResponseHeaders
+}
+
+type ListMigrationsRequestObject struct {
+	Params ListMigrationsParams
+}
+
+type ListMigrationsResponseObject interface {
+	VisitListMigrationsResponse(w http.ResponseWriter) error
+}
+
+type ListMigrations200JSONResponse MigrationList
+
+func (response ListMigrations200JSONResponse) VisitListMigrationsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMigrations400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListMigrations400JSONResponse) VisitListMigrationsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMigrations500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ListMigrations500JSONResponse) VisitListMigrationsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateMigrationRequestObject struct {
+	Body *CreateMigrationJSONRequestBody
+}
+
+type CreateMigrationResponseObject interface {
+	VisitCreateMigrationResponse(w http.ResponseWriter) error
+}
+
+type CreateMigration201JSONResponse Migration
+
+func (response CreateMigration201JSONResponse) VisitCreateMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateMigration400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateMigration400JSONResponse) VisitCreateMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateMigration500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateMigration500JSONResponse) VisitCreateMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckMigrationConnectivityRequestObject struct {
+	Body *CheckMigrationConnectivityJSONRequestBody
+}
+
+type CheckMigrationConnectivityResponseObject interface {
+	VisitCheckMigrationConnectivityResponse(w http.ResponseWriter) error
+}
+
+type CheckMigrationConnectivity200JSONResponse MigrationConnectivity
+
+func (response CheckMigrationConnectivity200JSONResponse) VisitCheckMigrationConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckMigrationConnectivity400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CheckMigrationConnectivity400JSONResponse) VisitCheckMigrationConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckMigrationConnectivity500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CheckMigrationConnectivity500JSONResponse) VisitCheckMigrationConnectivityResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMigrationRequestObject struct {
+	MigrationId MigrationId `json:"migrationId"`
+}
+
+type GetMigrationResponseObject interface {
+	VisitGetMigrationResponse(w http.ResponseWriter) error
+}
+
+type GetMigration200JSONResponse Migration
+
+func (response GetMigration200JSONResponse) VisitGetMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMigration400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetMigration400JSONResponse) VisitGetMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMigration404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetMigration404JSONResponse) VisitGetMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMigration500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetMigration500JSONResponse) VisitGetMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigrationAssessmentRequestObject struct {
+	MigrationId MigrationId `json:"migrationId"`
+}
+
+type StartMigrationAssessmentResponseObject interface {
+	VisitStartMigrationAssessmentResponse(w http.ResponseWriter) error
+}
+
+type StartMigrationAssessment202JSONResponse struct{ AcceptedJSONResponse }
+
+func (response StartMigrationAssessment202JSONResponse) VisitStartMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigrationAssessment400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response StartMigrationAssessment400JSONResponse) VisitStartMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigrationAssessment404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response StartMigrationAssessment404JSONResponse) VisitStartMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigrationAssessment409JSONResponse struct{ ConflictJSONResponse }
+
+func (response StartMigrationAssessment409JSONResponse) VisitStartMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigrationAssessment500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response StartMigrationAssessment500JSONResponse) VisitStartMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMigrationAssessmentRequestObject struct {
+	MigrationId MigrationId `json:"migrationId"`
+}
+
+type GetMigrationAssessmentResponseObject interface {
+	VisitGetMigrationAssessmentResponse(w http.ResponseWriter) error
+}
+
+type GetMigrationAssessment200JSONResponse MigrationAssessment
+
+func (response GetMigrationAssessment200JSONResponse) VisitGetMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMigrationAssessment400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetMigrationAssessment400JSONResponse) VisitGetMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMigrationAssessment404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetMigrationAssessment404JSONResponse) VisitGetMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetMigrationAssessment500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetMigrationAssessment500JSONResponse) VisitGetMigrationAssessmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigrationRequestObject struct {
+	MigrationId MigrationId `json:"migrationId"`
+	Body        *StartMigrationJSONRequestBody
+}
+
+type StartMigrationResponseObject interface {
+	VisitStartMigrationResponse(w http.ResponseWriter) error
+}
+
+type StartMigration202JSONResponse struct{ AcceptedJSONResponse }
+
+func (response StartMigration202JSONResponse) VisitStartMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigration400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response StartMigration400JSONResponse) VisitStartMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigration404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response StartMigration404JSONResponse) VisitStartMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigration409JSONResponse struct{ ConflictJSONResponse }
+
+func (response StartMigration409JSONResponse) VisitStartMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartMigration500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response StartMigration500JSONResponse) VisitStartMigrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionMigrationTargetRequestObject struct {
+	MigrationId MigrationId `json:"migrationId"`
+	Body        *ProvisionMigrationTargetJSONRequestBody
+}
+
+type ProvisionMigrationTargetResponseObject interface {
+	VisitProvisionMigrationTargetResponse(w http.ResponseWriter) error
+}
+
+type ProvisionMigrationTarget202JSONResponse struct{ AcceptedJSONResponse }
+
+func (response ProvisionMigrationTarget202JSONResponse) VisitProvisionMigrationTargetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionMigrationTarget400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ProvisionMigrationTarget400JSONResponse) VisitProvisionMigrationTargetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionMigrationTarget404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ProvisionMigrationTarget404JSONResponse) VisitProvisionMigrationTargetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionMigrationTarget409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ProvisionMigrationTarget409JSONResponse) VisitProvisionMigrationTargetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ProvisionMigrationTarget500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ProvisionMigrationTarget500JSONResponse) VisitProvisionMigrationTargetResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
 }
 
 type ListStoragePoolsRequestObject struct {
@@ -8037,6 +10591,30 @@ func (response GetVersion200JSONResponse) VisitGetVersionResponse(w http.Respons
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// List migrations
+	// (GET /migrations)
+	ListMigrations(ctx context.Context, request ListMigrationsRequestObject) (ListMigrationsResponseObject, error)
+	// Create a migration
+	// (POST /migrations)
+	CreateMigration(ctx context.Context, request CreateMigrationRequestObject) (CreateMigrationResponseObject, error)
+	// Test source database reachability
+	// (POST /migrations/connectivity-checks)
+	CheckMigrationConnectivity(ctx context.Context, request CheckMigrationConnectivityRequestObject) (CheckMigrationConnectivityResponseObject, error)
+	// Get a migration's status
+	// (GET /migrations/{migrationId})
+	GetMigration(ctx context.Context, request GetMigrationRequestObject) (GetMigrationResponseObject, error)
+	// Start an assessment run
+	// (POST /migrations/{migrationId}/assess)
+	StartMigrationAssessment(ctx context.Context, request StartMigrationAssessmentRequestObject) (StartMigrationAssessmentResponseObject, error)
+	// Get the parsed assessment report
+	// (GET /migrations/{migrationId}/assessment)
+	GetMigrationAssessment(ctx context.Context, request GetMigrationAssessmentRequestObject) (GetMigrationAssessmentResponseObject, error)
+	// Start the offline migration
+	// (POST /migrations/{migrationId}/migrate)
+	StartMigration(ctx context.Context, request StartMigrationRequestObject) (StartMigrationResponseObject, error)
+	// Provision and attach the migration target
+	// (POST /migrations/{migrationId}/provision-target)
+	ProvisionMigrationTarget(ctx context.Context, request ProvisionMigrationTargetRequestObject) (ProvisionMigrationTargetResponseObject, error)
 	// List storage pools
 	// (GET /storage-pools)
 	ListStoragePools(ctx context.Context, request ListStoragePoolsRequestObject) (ListStoragePoolsResponseObject, error)
@@ -8121,6 +10699,229 @@ func NewStrictHandler(ssi StrictServerInterface, middlewares []StrictMiddlewareF
 type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
+}
+
+// ListMigrations operation middleware
+func (sh *strictHandler) ListMigrations(ctx echo.Context, params ListMigrationsParams) error {
+	var request ListMigrationsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ListMigrations(ctx.Request().Context(), request.(ListMigrationsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListMigrations")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ListMigrationsResponseObject); ok {
+		return validResponse.VisitListMigrationsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// CreateMigration operation middleware
+func (sh *strictHandler) CreateMigration(ctx echo.Context) error {
+	var request CreateMigrationRequestObject
+
+	var body CreateMigrationJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateMigration(ctx.Request().Context(), request.(CreateMigrationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateMigration")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(CreateMigrationResponseObject); ok {
+		return validResponse.VisitCreateMigrationResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// CheckMigrationConnectivity operation middleware
+func (sh *strictHandler) CheckMigrationConnectivity(ctx echo.Context) error {
+	var request CheckMigrationConnectivityRequestObject
+
+	var body CheckMigrationConnectivityJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.CheckMigrationConnectivity(ctx.Request().Context(), request.(CheckMigrationConnectivityRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CheckMigrationConnectivity")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(CheckMigrationConnectivityResponseObject); ok {
+		return validResponse.VisitCheckMigrationConnectivityResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetMigration operation middleware
+func (sh *strictHandler) GetMigration(ctx echo.Context, migrationId MigrationId) error {
+	var request GetMigrationRequestObject
+
+	request.MigrationId = migrationId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetMigration(ctx.Request().Context(), request.(GetMigrationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetMigration")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetMigrationResponseObject); ok {
+		return validResponse.VisitGetMigrationResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// StartMigrationAssessment operation middleware
+func (sh *strictHandler) StartMigrationAssessment(ctx echo.Context, migrationId MigrationId) error {
+	var request StartMigrationAssessmentRequestObject
+
+	request.MigrationId = migrationId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.StartMigrationAssessment(ctx.Request().Context(), request.(StartMigrationAssessmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartMigrationAssessment")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(StartMigrationAssessmentResponseObject); ok {
+		return validResponse.VisitStartMigrationAssessmentResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// GetMigrationAssessment operation middleware
+func (sh *strictHandler) GetMigrationAssessment(ctx echo.Context, migrationId MigrationId) error {
+	var request GetMigrationAssessmentRequestObject
+
+	request.MigrationId = migrationId
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.GetMigrationAssessment(ctx.Request().Context(), request.(GetMigrationAssessmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetMigrationAssessment")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(GetMigrationAssessmentResponseObject); ok {
+		return validResponse.VisitGetMigrationAssessmentResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// StartMigration operation middleware
+func (sh *strictHandler) StartMigration(ctx echo.Context, migrationId MigrationId) error {
+	var request StartMigrationRequestObject
+
+	request.MigrationId = migrationId
+
+	var body StartMigrationJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			return err
+		}
+	} else {
+		request.Body = &body
+	}
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.StartMigration(ctx.Request().Context(), request.(StartMigrationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartMigration")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(StartMigrationResponseObject); ok {
+		return validResponse.VisitStartMigrationResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// ProvisionMigrationTarget operation middleware
+func (sh *strictHandler) ProvisionMigrationTarget(ctx echo.Context, migrationId MigrationId) error {
+	var request ProvisionMigrationTargetRequestObject
+
+	request.MigrationId = migrationId
+
+	var body ProvisionMigrationTargetJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.ProvisionMigrationTarget(ctx.Request().Context(), request.(ProvisionMigrationTargetRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ProvisionMigrationTarget")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(ProvisionMigrationTargetResponseObject); ok {
+		return validResponse.VisitProvisionMigrationTargetResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
 }
 
 // ListStoragePools operation middleware

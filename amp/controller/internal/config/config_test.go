@@ -498,3 +498,107 @@ func TestDeployFlagOverridesEnv(t *testing.T) {
 		t.Errorf("Namespace = %q, want flag to win (flag-endpoints)", c.Deploy.Namespace)
 	}
 }
+
+// --- Voyager migration feature ---------------------------------------------
+
+// TestVoyagerDisabledByDefault: an unset --voyager-database-url leaves the
+// feature off and Load succeeds exactly as before (no new required config).
+func TestVoyagerDisabledByDefault(t *testing.T) {
+	c, err := Load([]string{"--database-url", "postgres://localhost/db"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Voyager.DatabaseURL != "" {
+		t.Errorf("Voyager.DatabaseURL = %q, want empty (disabled)", c.Voyager.DatabaseURL)
+	}
+}
+
+// TestVoyagerEnabledDockerDefaults: the minimum enabling config on the docker
+// driver — a database URL and an image — is accepted, and the API-level
+// parallel-jobs default is applied.
+func TestVoyagerEnabledDockerDefaults(t *testing.T) {
+	c, err := Load([]string{
+		"--database-url", "postgres://localhost/db",
+		"--voyager-database-url", "postgres://voyager/db",
+		"--voyager-image", "yb/voyager:amp",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Voyager.PVCSize != "20Gi" {
+		t.Errorf("PVCSize = %q, want 20Gi", c.Voyager.PVCSize)
+	}
+}
+
+// TestVoyagerEnabledRequiresImage: enabling the feature without an image is a
+// Load error.
+func TestVoyagerEnabledRequiresImage(t *testing.T) {
+	_, err := Load([]string{
+		"--database-url", "postgres://localhost/db",
+		"--voyager-database-url", "postgres://voyager/db",
+	})
+	if err == nil {
+		t.Fatal("expected an error when the Voyager feature is enabled without an image")
+	}
+}
+
+// TestVoyagerKubernetesInheritsNamespace: on the kubernetes driver the Voyager
+// namespace defaults to the deploy namespace, and an explicit override wins.
+func TestVoyagerKubernetesInheritsNamespace(t *testing.T) {
+	c, err := Load([]string{
+		"--database-url", "postgres://localhost/db",
+		"--deploy-driver", "kubernetes",
+		"--deploy-namespace", "amp",
+		"--voyager-database-url", "postgres://voyager/db",
+		"--voyager-image", "yb/voyager:amp",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Voyager.Namespace != "amp" {
+		t.Errorf("Voyager.Namespace = %q, want it to inherit the deploy namespace (amp)", c.Voyager.Namespace)
+	}
+
+	override, err := Load([]string{
+		"--database-url", "postgres://localhost/db",
+		"--deploy-driver", "kubernetes",
+		"--deploy-namespace", "amp",
+		"--voyager-database-url", "postgres://voyager/db",
+		"--voyager-image", "yb/voyager:amp",
+		"--voyager-namespace", "amp-voyager",
+	})
+	if err != nil {
+		t.Fatalf("Load(override): %v", err)
+	}
+	if override.Voyager.Namespace != "amp-voyager" {
+		t.Errorf("Voyager.Namespace = %q, want the explicit override (amp-voyager)", override.Voyager.Namespace)
+	}
+}
+
+// TestVoyagerKubernetesRequiresNamespace: on the kubernetes driver with no
+// deploy namespace to inherit, enabling Voyager is rejected.
+func TestVoyagerKubernetesRequiresNamespace(t *testing.T) {
+	_, err := Load([]string{
+		"--database-url", "postgres://localhost/db",
+		"--deploy-driver", "kubernetes",
+		"--voyager-database-url", "postgres://voyager/db",
+		"--voyager-image", "yb/voyager:amp",
+	})
+	if err == nil {
+		t.Fatal("expected an error when the kubernetes Voyager namespace is empty")
+	}
+}
+
+// TestVoyagerRejectsLocalDriver: Voyager jobs are launched through a deploy
+// driver, so the records-only local driver cannot run them.
+func TestVoyagerRejectsLocalDriver(t *testing.T) {
+	_, err := Load([]string{
+		"--database-url", "postgres://localhost/db",
+		"--deploy-driver", "local",
+		"--voyager-database-url", "postgres://voyager/db",
+		"--voyager-image", "yb/voyager:amp",
+	})
+	if err == nil {
+		t.Fatal("expected an error enabling Voyager on the local deploy driver")
+	}
+}
