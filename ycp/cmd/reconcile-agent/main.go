@@ -290,6 +290,7 @@ func inventory(res reconcile.Result) []api.ResourceStatus {
 			Name:   leaf(act.Key.Name),
 			Parent: parent,
 			State:  act.State,
+			Attrs:  act.Attrs,
 		}
 		if err, ok := res.Failed[act.Key]; ok {
 			rs.Error = err.Error()

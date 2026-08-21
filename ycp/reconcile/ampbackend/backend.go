@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -120,6 +121,69 @@ func leaf(name string) string {
 	return segs[len(segs)-1]
 }
 
+// attrPut sets m[k]=v when v is non-empty, allocating m on first use, so a
+// resource with no attributes reports a nil Attrs (and omitempty holds).
+func attrPut(m map[string]string, k, v string) map[string]string {
+	if v == "" {
+		return m
+	}
+	if m == nil {
+		m = map[string]string{}
+	}
+	m[k] = v
+	return m
+}
+
+// attrPutInt is attrPut for an int, skipping the zero value so an unset
+// pg_version is not reported as "0".
+func attrPutInt(m map[string]string, k string, v int) map[string]string {
+	if v == 0 {
+		return m
+	}
+	return attrPut(m, k, strconv.Itoa(v))
+}
+
+// branchAttrs reports a branch's amp id and durable details: pg version, the
+// LSN it was forked at, its externalized extensions, and its lineage. The id
+// pairs with a fork's parent_branch_id so a UI can rebuild the fork tree.
+func branchAttrs(br ampclient.Branch) map[string]string {
+	var m map[string]string
+	m = attrPut(m, "id", br.BranchId.String())
+	m = attrPutInt(m, "pg_version", br.PgVersion)
+	if br.ForkLsn != nil {
+		m = attrPut(m, "fork_lsn", *br.ForkLsn)
+	}
+	if br.Extensions != nil && len(*br.Extensions) > 0 {
+		m = attrPut(m, "extensions", strings.Join(*br.Extensions, ","))
+	}
+	if br.ParentBranchId != nil {
+		m = attrPut(m, "parent_branch_id", br.ParentBranchId.String())
+	}
+	if br.IsDefault {
+		m = attrPut(m, "is_default", "true")
+	}
+	return m
+}
+
+// endpointAttrs reports a compute endpoint's amp id, role, connection
+// addresses, and reserved compute.
+func endpointAttrs(ep ampclient.Endpoint) map[string]string {
+	var m map[string]string
+	m = attrPut(m, "id", ep.Id.String())
+	m = attrPut(m, "role", string(ep.Role))
+	m = attrPut(m, "address", ep.Address)
+	m = attrPut(m, "tailnet_address", ep.TailnetAddress)
+	if ep.Resources != nil {
+		if ep.Resources.Cpu != nil {
+			m = attrPut(m, "cpu", *ep.Resources.Cpu)
+		}
+		if ep.Resources.Memory != nil {
+			m = attrPut(m, "memory", *ep.Resources.Memory)
+		}
+	}
+	return m
+}
+
 // List traverses pools -> clusters -> branches -> endpoints and returns every
 // YCP-owned resource, rebuilding the id index as it goes.
 func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
@@ -139,6 +203,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 			Key:   reconcile.ResourceKey{Kind: KindPool, Name: poolPath},
 			Ready: true,
 			State: "ready",
+			Attrs: attrPut(nil, "id", p.Id.String()),
 		})
 
 		var clusters ampclient.ClusterList
@@ -155,6 +220,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 				Parent: reconcile.ResourceKey{Kind: KindPool, Name: poolPath},
 				Ready:  true,
 				State:  "ready",
+				Attrs:  attrPutInt(attrPut(nil, "id", cl.Id.String()), "pg_version", cl.DefaultBranch.PgVersion),
 			})
 
 			var branches ampclient.BranchList
@@ -171,6 +237,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 					Parent: reconcile.ResourceKey{Kind: KindCluster, Name: clusterPath},
 					Ready:  true,
 					State:  "ready",
+					Attrs:  branchAttrs(br),
 				})
 
 				var endpoints ampclient.EndpointList
@@ -196,6 +263,7 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 						Parent: reconcile.ResourceKey{Kind: KindBranch, Name: branchPath},
 						Ready:  ready,
 						State:  state,
+						Attrs:  endpointAttrs(ep),
 					})
 				}
 			}

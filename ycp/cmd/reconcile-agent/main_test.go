@@ -63,6 +63,25 @@ func TestInventoryCleanHasNoErrors(t *testing.T) {
 	}
 }
 
+// inventory carries each resource's backend-observed Attrs through to the
+// reported status so YCP sees pg version, role, compute, etc.
+func TestInventoryCopiesAttrs(t *testing.T) {
+	ep := reconcile.ResourceKey{Kind: "endpoint", Name: "p/c/main/rw"}
+	res := reconcile.Result{
+		Actual: []reconcile.Actual{
+			{Key: ep, Ready: true, State: "ready", Attrs: map[string]string{"role": "read_write", "address": "h:5433"}},
+		},
+		Failed: map[reconcile.ResourceKey]error{}, Stuck: map[reconcile.ResourceKey]time.Duration{}, Permanent: map[reconcile.ResourceKey]error{},
+	}
+	got := inventory(res)
+	if len(got) != 1 {
+		t.Fatalf("rows = %d, want 1", len(got))
+	}
+	if got[0].Attrs["role"] != "read_write" || got[0].Attrs["address"] != "h:5433" {
+		t.Fatalf("attrs = %v, want role+address copied through", got[0].Attrs)
+	}
+}
+
 // A binding conflict is fatal and must not be retried — retrying cannot change
 // the answer.
 func TestBindConflictIsFatalNotRetried(t *testing.T) {

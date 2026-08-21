@@ -180,7 +180,13 @@ type ResourceStatus struct {
 	// (a kind with no update/delete path). Empty when the resource is fine.
 	// Without it a stuck resource reads as a bare state in the console and the
 	// reason lives only in the agent's and controller's logs.
-	Error string            `json:"error,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Attrs are kind-specific details the backend observed, reported verbatim
+	// for the console/API to render: every resource's backend id (an amp UUID,
+	// distinct from the path in ID), a cluster's/branch's pg_version, a branch's
+	// fork_lsn, extensions, parent_branch_id (pairs with a branch's id to rebuild
+	// the fork tree), is_default, and an endpoint's role, address,
+	// tailnet_address, cpu, memory. Empty when the backend has none.
 	Attrs map[string]string `json:"attrs,omitempty"`
 }
 
