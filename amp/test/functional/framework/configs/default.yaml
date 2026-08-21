@@ -1275,6 +1275,95 @@ stress:
     # resume_duration is the post-kill write window proving COMMIT works again.
     resume_duration: "30s"
     payload_bytes: 256
+  # bulk_load_kill: deletes a tenant's endpoint compute pod while ONE large
+  # write is streaming into it, and holds that write to all-or-nothing. Sizes
+  # here are the nightly ones: 4M baseline + eight 1.5M blocks + the commit-kill
+  # block, so 17.5M rows. The total is baseline + one block per LOADING round +
+  # the commit-kill block, so adding an op to ops{} grows the dataset without any
+  # size knob changing — check dataset_rows_planned on load_baseline. Raise
+  # row counts, not payload_bytes, to go bigger — rows are what make a write last
+  # long enough to be killed mid-flight, bytes only make the verification slower.
+  #
+  # Going bigger means sizing the BACKING too. amp stores pages, WAL and the
+  # image chains an update round leaves behind, so the volume holds several times
+  # the user data: 18M rows fits the default env.ampstack.yb_storage of 20Gi, and
+  # 36M rows does not — the tserver starts rejecting writes for want of space,
+  # the compute wedges, and it reads exactly like a product bug (runs 79e5de84,
+  # 1d6134df, 12bbd532). Raise env.ampstack.yb_storage with the row counts.
+  bulk_load_kill:
+    baseline_rows: 4000000
+    # batch_rows is one killed write. Too small and it commits before the
+    # kubelet acts, which the run then reports as proving nothing.
+    batch_rows: 1500000
+    # rounds: the op cycles every round and the kill mode advances once every op
+    # has had a turn, so ops (5) * kill_modes (2) = ten rounds cover every write
+    # shape against both ways the compute can die.
+    rounds: 10
+    # ops are cycled over the rounds. copy streams from the client; insert_select
+    # is one server-side statement (an in-database ETL); batch_insert is what an
+    # application does — one transaction holding thousands of small parameterised
+    # INSERTs, the client sending rows throughout; txn spans a few large
+    # statements plus COMMIT; update rewrites the block the round before it
+    # loaded (so it cannot be first) instead of adding rows.
+    ops: ["copy", "insert_select", "batch_insert", "txn", "update"]
+    # rows_per_statement is one batch_insert statement, sized like an
+    # application's batch so the transaction is thousands of statements long.
+    rows_per_statement: 1000
+    # kill_modes: graceful is a rolling update (postgres shuts down and aborts
+    # tidily); force kills the container outright, no chance to abort anything.
+    kill_modes: ["graceful", "force"]
+    # payload_bytes is what makes the dataset big in BYTES; row counts are what
+    # make a write take long enough to be killed mid-flight. Verification reads
+    # every byte back, so this is the knob that decides how long a run takes.
+    payload_bytes: 128
+    # update_rows is how many rows an update round rewrites, off the front of the
+    # block before it. Every updated row is a version the later scans have to
+    # read, so a whole block would double the cost of every check after it.
+    update_rows: 500000
+    # baseline_probe_rows is the rotating slice of the baseline each round
+    # re-reads. Reading all of it every round costs more than everything else
+    # together; verify_dataset covers the whole of it at the end.
+    baseline_probe_rows: 500000
+    # secondary_index adds an index on v. Without it the only index is the primary
+    # key, and a bulk load's index maintenance — the part a kill is most likely to
+    # leave half-done — is never exercised.
+    secondary_index: true
+    # commit_kill runs one more block after the rounds, to completion, and kills
+    # the compute the instant the server acknowledges it: the rounds tear writes
+    # that never committed, this one tests that an acknowledged write survives.
+    commit_kill: true
+    # visibility_probe polls the range from a second connection while the write
+    # runs. Each poll is its own snapshot, so it may only see none of the write or
+    # all of it; anything else is a reader seeing an uncommitted bulk write.
+    visibility_probe: true
+    visibility_period: "500ms"
+    # visibility_window_rows is how many rows at the front of the range a poll
+    # counts. Counting the whole range takes seconds, which left the probe with
+    # one or two polls per write; a window this size answers at once.
+    visibility_window_rows: 10000
+    # verify_parallel is how many verification chunks are read at once. Scans are
+    # what a big dataset costs, and one connection reads them one at a time.
+    verify_parallel: 4
+    # load_chunk_rows bounds one baseline COPY.
+    load_chunk_rows: 50000
+    # kill_fraction is how far into the batch the pod is deleted — exact for a
+    # copy, and for the ops the client cannot observe a delay derived from the
+    # rate the baseline loaded at, bounded by kill_delay_min/max.
+    kill_fraction: 0.4
+    kill_delay_min: "2s"
+    kill_delay_max: "2m"
+    # endpoint_cpu/endpoint_memory size the single tenant's compute. The
+    # multitenant reservation (500m/1Gi) exists to fit many tenants on a shared
+    # cluster, and 2/4Gi is still not enough here: reading an 18M-row table back
+    # OOM-killed the container twice (run 6fe61127), while 4/8Gi did it fine.
+    endpoint_cpu: "4"
+    endpoint_memory: "8Gi"
+    # verify_chunk_rows bounds one verification query. A count over millions of
+    # rows sends nothing for minutes and the port-forward to the endpoint does
+    # not survive that; the chunked total is the same number.
+    verify_chunk_rows: 500000
+    load_timeout: "20m"
+    settle_timeout: "10m"
   combined:
     # enabled gates the whole scenario (self-provisioning + private jar + k8s).
     enabled: false

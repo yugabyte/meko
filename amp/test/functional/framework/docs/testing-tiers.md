@@ -5,11 +5,14 @@ Four tier tags — and **`nightly` is a superset of the other three**:
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
   didn't break anything important. Must stay green to merge.
-- **`stress`** — the `suites/stress` scenarios: `load_sustain` (workloadgen
-  soak), `combined_load` (four parallel workloads under chaos on a co-located
-  YB backing), `backing_maintenance` (workloads through a rolling restart, a
-  gflag change, a data move and a YugabyteDB upgrade) and the nemesis /
-  durability scenarios. Scheduled as its own tier so the report portal gets a Stress
+- **`stress`** — all ten `suites/stress` scenarios: `load_sustain` (workloadgen
+  soak), `combined_load` (four parallel workloads under chaos on a co-located YB
+  backing), `backing_maintenance` (workloads through a rolling restart, a gflag
+  change, a data move and a YugabyteDB upgrade), `multitenant_load` and
+  `branch_churn` (many tenants, many branches), the nemesis / durability
+  scenarios (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`,
+  `commit_durability`) and `bulk_load_kill` (one large write killed mid-flight).
+  Scheduled as its own tier so the report portal gets a Stress
   column; the `Category: core.Stress` tests in `suites/features` are **not** in it
   (they belong to `regression`/`nightly` and would double-report).
 - **`perf`** — the baseline-gated benchmarks in `suites/perf` (`tpcc`, `pgbench`,
@@ -70,7 +73,7 @@ merge (note exit `4` = all-skipped, which the gate must treat as a failure).
 
 ---
 
-## `nightly` — extended sweep on Jenkins (19 tests = the 11 regression + 8 extended)
+## `nightly` — extended sweep on Jenkins (the regression tests plus the extended ones)
 
 The wide, heavy tier: it re-runs the regression tests against real backings, and
 adds real deployments across clouds/backings, chaos, and long runs. Selected by
@@ -89,8 +92,13 @@ once). The extended-only tests (beyond regression) are:
   `amp_compute_restart`.
 - **Stress** (also `--tag stress`) — `combined_load` (parallel workloads +
   chaos/nemesis against an exclusive universe), `backing_maintenance` (the same
-  co-located backing under PLANNED maintenance instead of chaos) and
-  `load_sustain` (workloadgen soak).
+  co-located backing under PLANNED maintenance instead of chaos), `load_sustain`
+  (workloadgen soak), `multitenant_load` and `branch_churn`, the nemesis /
+  durability scenarios (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`,
+  `commit_durability`) and `bulk_load_kill`, which deletes an endpoint's compute
+  pod — gracefully and by killing the container outright — in the middle of one
+  large COPY / INSERT ... SELECT / batched-insert transaction / million-row
+  UPDATE and holds it to all-or-nothing.
 - **Perf** (also `--tag perf`) — `tpcc` (BenchBase), `pgbench` and `sysbench`,
   baseline-gated, with version/image comparison + bisect + history/trend. All
   three also sample the backing's own numbers while the benchmark runs

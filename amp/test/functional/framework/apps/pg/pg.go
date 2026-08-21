@@ -133,6 +133,17 @@ func (c *Client) Exec(ctx context.Context, sql string, args ...any) (int64, erro
 	return tag.RowsAffected(), nil
 }
 
+// CopyFrom streams rows into a table with the PostgreSQL COPY protocol and
+// returns how many the server accepted. One COPY is one statement, so a
+// killed compute must leave either all of these rows or none.
+func (c *Client) CopyFrom(ctx context.Context, table string, columns []string, src pgx.CopyFromSource) (int64, error) {
+	n, err := c.pool.CopyFrom(ctx, pgx.Identifier{table}, columns, src)
+	if err != nil {
+		return n, fmt.Errorf("copy into %s: %w", table, err)
+	}
+	return n, nil
+}
+
 // Query runs a query and calls scan for each row. scan receives the pgx.Rows.
 func (c *Client) Query(ctx context.Context, scan func(pgx.Rows) error, sql string, args ...any) error {
 	rows, err := c.pool.Query(ctx, sql, args...)

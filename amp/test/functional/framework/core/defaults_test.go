@@ -1164,6 +1164,17 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.storage_proc_nemesis.tenants":          2,
 		"stress.storage_proc_nemesis.kills_per_daemon": 1,
 		"stress.storage_proc_nemesis.payload_bytes":    256,
+		"stress.bulk_load_kill.baseline_rows":          4_000_000,
+		"stress.bulk_load_kill.batch_rows":             1_500_000,
+		"stress.bulk_load_kill.update_rows":            500_000,
+		"stress.bulk_load_kill.baseline_probe_rows":    500_000,
+		"stress.bulk_load_kill.verify_parallel":        4,
+		"stress.bulk_load_kill.visibility_window_rows": 10_000,
+		"stress.bulk_load_kill.rounds":                 10,
+		"stress.bulk_load_kill.rows_per_statement":     1_000,
+		"stress.bulk_load_kill.payload_bytes":          128,
+		"stress.bulk_load_kill.load_chunk_rows":        50_000,
+		"stress.bulk_load_kill.verify_chunk_rows":      500_000,
 	}
 	for key, want := range stressInts {
 		if got := cfg.GetInt(key, -1); got != want {
@@ -1171,9 +1182,11 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		}
 	}
 	stressStrs := map[string]string{
-		"stress.combined.client_image": "eclipse-temurin:21-jdk",
-		"stress.combined.remote_dir":   "/opt/ampqa",
-		"stress.combined.jar_secret":   "gh_package",
+		"stress.bulk_load_kill.endpoint_cpu":    "4",
+		"stress.bulk_load_kill.endpoint_memory": "8Gi",
+		"stress.combined.client_image":          "eclipse-temurin:21-jdk",
+		"stress.combined.remote_dir":            "/opt/ampqa",
+		"stress.combined.jar_secret":            "gh_package",
 	}
 	for key, want := range stressStrs {
 		if got := cfg.GetString(key, "__MISSING__"); got != want {
@@ -1201,6 +1214,11 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		"stress.storage_proc_nemesis.kill_gap":          15 * time.Second,
 		"stress.storage_proc_nemesis.settle_timeout":    10 * time.Minute,
 		"stress.storage_proc_nemesis.resume_duration":   30 * time.Second,
+
+		"stress.bulk_load_kill.kill_delay_min": 2 * time.Second,
+		"stress.bulk_load_kill.kill_delay_max": 2 * time.Minute,
+		"stress.bulk_load_kill.load_timeout":   20 * time.Minute,
+		"stress.bulk_load_kill.settle_timeout": 10 * time.Minute,
 	}
 	for key, want := range stressDurs {
 		if got := cfg.GetDuration(key, -1); got != want {
@@ -1209,6 +1227,27 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if got := cfg.GetFloat("stress.commit_durability.cancel_probability", -1); got != 0.1 {
 		t.Errorf("stress.commit_durability.cancel_probability = %v, want 0.1", got)
+	}
+	for _, key := range []string{
+		"stress.bulk_load_kill.secondary_index",
+		"stress.bulk_load_kill.commit_kill",
+		"stress.bulk_load_kill.visibility_probe",
+	} {
+		if !cfg.GetBool(key, false) {
+			t.Errorf("%s = false, want true", key)
+		}
+	}
+	if got := cfg.GetDuration("stress.bulk_load_kill.visibility_period", -1); got != 500*time.Millisecond {
+		t.Errorf("stress.bulk_load_kill.visibility_period = %s, want 500ms", got)
+	}
+	if got := cfg.GetFloat("stress.bulk_load_kill.kill_fraction", -1); got != 0.4 {
+		t.Errorf("stress.bulk_load_kill.kill_fraction = %v, want 0.4", got)
+	}
+	if modes := cfg.GetStringSlice("stress.bulk_load_kill.kill_modes", nil); strings.Join(modes, ",") != "graceful,force" {
+		t.Errorf("stress.bulk_load_kill.kill_modes = %v, want [graceful force]", modes)
+	}
+	if ops := cfg.GetStringSlice("stress.bulk_load_kill.ops", nil); strings.Join(ops, ",") != "copy,insert_select,batch_insert,txn,update" {
+		t.Errorf("stress.bulk_load_kill.ops = %v, want [copy insert_select batch_insert txn update]", ops)
 	}
 	if actions := cfg.GetStringSlice("stress.combined.chaos_actions", nil); strings.Join(actions, ",") != "pod_delete,process_kill,process_restart" {
 		t.Errorf("stress.combined.chaos_actions = %v, want [pod_delete process_kill process_restart]", actions)

@@ -91,11 +91,17 @@ type tenant struct {
 // tenantFleet owns the tenants' lifecycle: create them, hand them out, and
 // delete them whatever happened.
 type tenantFleet struct {
-	cl      *controller.Client
-	poolID  string
-	env     ampTenantEnv
-	logf    func(string, ...any)
-	Tenants []tenant
+	cl     *controller.Client
+	poolID string
+	env    ampTenantEnv
+	logf   func(string, ...any)
+	// EndpointCPU and EndpointMemory override the small per-tenant reservation
+	// below. Empty means the default: a fleet of many tenants has to fit on a
+	// shared cluster, but a test running ONE tenant through large writes needs a
+	// compute sized for them.
+	EndpointCPU    string
+	EndpointMemory string
+	Tenants        []tenant
 }
 
 func newTenantFleet(t *core.T, env ampTenantEnv, logf func(string, ...any)) (*tenantFleet, error) {
@@ -131,7 +137,7 @@ func (f *tenantFleet) Create(t *core.T, n int) error {
 		if _, err := f.cl.CreateEndpointAndWait(t.Context, f.poolID, cluster.ID, cluster.DefaultBranch.BranchID,
 			controller.CreateEndpointRequest{
 				Role:      tenantRole,
-				Resources: &controller.EndpointResources{CPU: tenantEndpointCPU, Memory: tenantEndpointMemory},
+				Resources: f.endpointResources(),
 			}); err != nil {
 			return fmt.Errorf("tenant %d: create endpoint: %w", i, err)
 		}
@@ -155,6 +161,18 @@ func (f *tenantFleet) Create(t *core.T, n int) error {
 		}
 	}
 	return nil
+}
+
+// endpointResources is the reservation every tenant endpoint is created with.
+func (f *tenantFleet) endpointResources() *controller.EndpointResources {
+	res := &controller.EndpointResources{CPU: tenantEndpointCPU, Memory: tenantEndpointMemory}
+	if f.EndpointCPU != "" {
+		res.CPU = f.EndpointCPU
+	}
+	if f.EndpointMemory != "" {
+		res.Memory = f.EndpointMemory
+	}
+	return res
 }
 
 // Close deletes every tenant on its own deadline — the test's context is often

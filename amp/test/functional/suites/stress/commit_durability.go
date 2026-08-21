@@ -292,7 +292,7 @@ func recycleOneEndpoint(t *core.T, s *core.StepHandle, env ampTenantEnv, fleet *
 	_, err := fleet.cl.CreateEndpointAndWait(t.Context, fleet.poolID, ten.ClusterID, ten.BranchID,
 		controller.CreateEndpointRequest{
 			Role:      tenantRole,
-			Resources: &controller.EndpointResources{CPU: tenantEndpointCPU, Memory: tenantEndpointMemory},
+			Resources: fleet.endpointResources(),
 		})
 	if err != nil {
 		return classifyEndpointRecreate(t.Context, fleet.cl, ten.ClusterID,

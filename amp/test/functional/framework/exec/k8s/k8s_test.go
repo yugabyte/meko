@@ -129,6 +129,9 @@ func TestApplyDeleteGet(t *testing.T) {
 	if err := k.Delete(context.Background(), "service", "amp-controller"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
+	if err := k.DeleteNow(context.Background(), "yb-ep-1-abc"); err != nil {
+		t.Fatalf("delete now: %v", err)
+	}
 	got, err := k.Get(context.Background(), "statefulset", "yugabyted", "{.status.readyReplicas}")
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -139,6 +142,7 @@ func TestApplyDeleteGet(t *testing.T) {
 	argvs := sr.argvs()
 	assertHas(t, argvs, "apply -f -")
 	assertHas(t, argvs, "delete service amp-controller --ignore-not-found")
+	assertHas(t, argvs, "delete pod yb-ep-1-abc --ignore-not-found --force --grace-period=0")
 	assertHas(t, argvs, "get statefulset yugabyted -o jsonpath={.status.readyReplicas}")
 }
 

@@ -53,3 +53,52 @@ func TestHealthCheckWithoutKubeIsNotSuccess(t *testing.T) {
 		t.Error("a missing kube context no longer fails: the pod-health assertion silently passes without checking any pod")
 	}
 }
+
+// bulk_load_kill's equivalent precondition: its rounds assert atomicity, but a
+// batch that had already committed when the pod was deleted was never torn by
+// anything, so a run where that happened every round proves nothing.
+func TestBulkLoadKillRequiresAKillInFlight(t *testing.T) {
+	b, err := os.ReadFile("bulk_load_kill.go")
+	if err != nil {
+		t.Fatalf("read bulk_load_kill.go: %v", err)
+	}
+	body := string(b)
+	if !strings.Contains(body, "landed == 0") {
+		t.Error("bulk_load_kill no longer requires one round's write to have been in flight when the pod was deleted")
+	}
+	// landed is only set once the load is known not to have finished; without
+	// that check the guard counts kills that hit an already-committed batch.
+	if !strings.Contains(body, "if !finished {") {
+		t.Error("bulk_load_kill no longer separates a mid-flight kill from a load that had already finished")
+	}
+	// A compute that OOMs or panics on its own only reaches the client as a
+	// dropped connection, which reads like a network problem. Every step is
+	// checked for it, not just the rounds: the step that first caught one was
+	// verify_dataset, reading the table back with no fault injected.
+	if !strings.Contains(body, "endpointSelfRestart(t, kube, ten)") {
+		t.Error("bulk_load_kill no longer checks whether the compute container died on its own after each step")
+	}
+	// A backing out of disk rejects every write the compute attempts and wedges
+	// it, which looks like a product failure and is not one. Three runs were
+	// triaged as an amp bug before the log said "insufficient disk space".
+	if !strings.Contains(body, "core.AsEnvFailure") || !strings.Contains(body, "backingDiskFullSignature") {
+		t.Error("bulk_load_kill no longer classifies a backing that ran out of disk as an environment failure")
+	}
+	// "could not find a server to connect to" is BOTH the cluster moving the
+	// backing pod and amp caching a tserver hostname that no longer resolves
+	// (amp#811). Only the pod's identity separates them, so the classification
+	// must consult it — calling every instance environmental would mask that bug.
+	if !strings.Contains(body, "backingReplaced(t, backingUID, logf)") {
+		t.Error("bulk_load_kill no longer distinguishes a replaced backing pod from amp losing track of one that never moved")
+	}
+	// A client with no reply yet is not the same as an open transaction: a commit
+	// whose acknowledgement is still on the wire looks identical from the client,
+	// and killing after a commit tests durability, not atomicity. The claim needs
+	// the server's view, sampled at the instant of the kill.
+	if !strings.Contains(body, "sampleOpenTxn(t.Context, ten, obs, s)") {
+		t.Error("bulk_load_kill no longer asks the server whether a transaction was open when it deleted the pod")
+	}
+	if !strings.Contains(body, "observed == 0") {
+		t.Error("bulk_load_kill no longer requires any round to have observed an open transaction at the kill")
+	}
+}

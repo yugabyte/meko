@@ -245,6 +245,15 @@ func (k *Kubectl) Delete(ctx context.Context, kind, name string) error {
 	return err
 }
 
+// DeleteNow deletes a pod without a grace period: the container is killed
+// outright instead of being asked to shut down. A graceful delete lets postgres
+// terminate its connections and abort in-flight work tidily, which is the easy
+// half of the fault; this is the other half.
+func (k *Kubectl) DeleteNow(ctx context.Context, pod string) error {
+	_, err := k.exec(ctx, nil, "delete", "pod", pod, "--ignore-not-found", "--force", "--grace-period=0")
+	return err
+}
+
 // Get reads a field of a resource via jsonpath and returns the trimmed value.
 func (k *Kubectl) Get(ctx context.Context, kind, name, jsonpath string) (string, error) {
 	res, err := k.exec(ctx, nil, "get", kind, name, "-o", "jsonpath="+jsonpath)
