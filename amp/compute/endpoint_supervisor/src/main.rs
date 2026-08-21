@@ -614,6 +614,8 @@ fn serve_one_lease(
                 &l.branch_id,
                 l.pg_version_major,
                 &start_lsn,
+                coordinate::BRANCH_CREATE_TIMEOUT,
+                coordinate::BRANCH_CREATE_INTERVAL,
             )?;
             Ok(start_lsn)
         })();

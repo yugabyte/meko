@@ -19,6 +19,18 @@ use crate::timeline::{Timeline, TimelineError};
 use crate::yb_wal_storage::YbWalConn;
 use crate::{SafeKeeperConf, control_file};
 
+/// How long a create waits for the startup load before answering
+/// [`TimelineError::StillLoading`] — a 503, which the caller re-sends inside its
+/// own budget (`endpoint_supervisor`'s `coordinate.rs`).
+///
+/// It bounds one request, not the load. Every leg of the load is bounded in its
+/// own right (`load_write_lsn` is a fixed count of single-row probes, the anchor
+/// walk is capped at `MAX_ANCHOR_SCAN_BYTES`, the torn-tail cleanup at
+/// `YB_TORN_TAIL_CLEANUP_MAX`), so this is not standing in for an unbounded step —
+/// it decides how long one caller holds a connection before being told to ask
+/// again, and holding it longer buys nothing a re-ask does not.
+const LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 // Timeline entry in the slot: either a ready timeline, or mark that it is
 // being created.
 #[derive(Clone)]
@@ -183,7 +195,7 @@ impl GlobalTimelines {
         // the load's read is in flight can have its freshly published timeline
         // overwritten by the load's own copy of the same row. Creation is a
         // once-per-branch event, so waiting a moment is the correct price.
-        let load_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let load_deadline = tokio::time::Instant::now() + LOAD_WAIT;
         while !self.is_initialized() {
             if tokio::time::Instant::now() >= load_deadline {
                 bail!(TimelineError::StillLoading(branch_id));

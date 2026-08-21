@@ -24,6 +24,7 @@ use utils::auth::SwappableJwtAuth;
 use utils::id::BranchId;
 use utils::write_fence::WriteTokenRequest;
 
+use crate::timeline::TimelineError;
 use crate::{GlobalTimelines, SafeKeeperConf, debug_dump, patch_control_file};
 
 /// Healthcheck handler.
@@ -88,9 +89,31 @@ async fn timeline_create_handler(mut request: Request<Body>) -> Result<Response<
     global_timelines
         .create(branch_id, server_info, request_data.start_lsn)
         .await
-        .map_err(ApiError::InternalServerError)?;
+        .map_err(create_error)?;
 
     json_response(StatusCode::OK, ())
+}
+
+/// The status a failed create answers with.
+///
+/// The two transient outcomes answer **503**, which the caller re-sends while
+/// they clear (`endpoint_supervisor`'s `coordinate.rs`); reporting either as a 500
+/// makes a condition that passes on its own look fatal (#874):
+///
+/// * `StillLoading` — the startup load has not published the timeline yet.
+/// * `CreationInProgress` — another creator holds the slot. `From<TimelineError>`
+///   sends this to 500 for the read paths, where "someone is creating it" really
+///   is not an answer; on the create path it means exactly "ask again shortly".
+///
+/// Anything else is a genuine internal error.
+fn create_error(e: anyhow::Error) -> ApiError {
+    match e.downcast::<TimelineError>() {
+        Ok(TimelineError::CreationInProgress(branch_id)) => ApiError::ResourceUnavailable(
+            format!("timeline {branch_id} creation is in progress").into(),
+        ),
+        Ok(te) => ApiError::from(te),
+        Err(e) => ApiError::InternalServerError(e),
+    }
 }
 
 /// Report info about timeline.
@@ -290,4 +313,46 @@ pub fn make_router(
             request_span(r, patch_control_file_handler)
         })
         .get("/v1/debug_dump", |r| request_span(r, dump_debug_handler))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shape `GlobalTimelines::create` actually returns, so the test breaks if
+    /// the error stops being a typed `TimelineError`.
+    fn still_loading(branch_id: BranchId) -> anyhow::Result<()> {
+        anyhow::bail!(TimelineError::StillLoading(branch_id))
+    }
+
+    #[test]
+    fn a_still_loading_create_is_a_503_not_a_500() {
+        let branch_id = BranchId::from([0x11; 16]);
+        let err = still_loading(branch_id).unwrap_err();
+        assert!(
+            matches!(create_error(err), ApiError::ResourceUnavailable(_)),
+            "still-loading must stay retryable"
+        );
+    }
+
+    /// A concurrent creator holds the slot: also "ask again shortly", and the
+    /// caller's loop only re-asks on 503.
+    #[test]
+    fn a_creation_in_progress_is_also_retryable() {
+        let branch_id = BranchId::from([0x22; 16]);
+        let err = anyhow::Error::new(TimelineError::CreationInProgress(branch_id));
+        assert!(matches!(
+            create_error(err),
+            ApiError::ResourceUnavailable(_)
+        ));
+    }
+
+    #[test]
+    fn any_other_create_failure_is_still_internal() {
+        let err = anyhow::anyhow!("the row would not write");
+        assert!(matches!(
+            create_error(err),
+            ApiError::InternalServerError(_)
+        ));
+    }
 }

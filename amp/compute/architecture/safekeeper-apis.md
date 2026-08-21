@@ -57,7 +57,7 @@ pushed a token writes nothing at all: silence is not permission.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/v1/branch` | Create a branch. Body = `TimelineCreateRequest` (`branch_id`, `pg_version`, optional `system_id`, `wal_seg_size`, `start_lsn`). Defaults: `system_id=0`, `wal_seg_size=WAL_SEGMENT_SIZE`. Writes the branch's `amp_storage.branch_state` row; returns the existing timeline if already present. Branch scope. |
+| POST | `/v1/branch` | Create a branch. Body = `TimelineCreateRequest` (`branch_id`, `pg_version`, optional `system_id`, `wal_seg_size`, `start_lsn`). Defaults: `system_id=0`, `wal_seg_size=WAL_SEGMENT_SIZE`. Writes the branch's `amp_storage.branch_state` row; returns the existing timeline if already present. **503** while the startup load is still running (`StillLoading`) — retryable, and the supervisor re-sends until it clears; 500 for a real failure. Branch scope. |
 | GET | `/v1/branch/:branch_id` | Branch status: `TimelineStatus` with `pg_info`, `flush_lsn`, `commit_lsn` (reported equal to `flush_lsn` — every flushed LSN is committed), `timeline_start_lsn`, peers, walsenders, walreceivers. In-memory values. Branch scope. |
 
 ### Timeline maintenance / debug

@@ -338,8 +338,18 @@ line of YB statements:
 | Last line | Waiting on |
 |---|---|
 | `truncated torn WAL tail to the last valid record boundary` | the torn-tail cleanup delete (`truncate_wals_above`) |
-| `rehydrated write_lsn from amp_storage.wals` | `min(segno)` (`load_min_segno`) |
+| `rehydrated write_lsn from amp_storage.wals` | on a build carrying #874, **nothing on this path** — the load is done; look at what follows it (below) |
 | neither | the end-of-WAL scan (`load_write_lsn` / `find_anchor` / `find_end_of_wal`) |
+
+A load that appeared stuck right after `rehydrated write_lsn from amp_storage.wals`
+was the second known instance (#874): the next statement was `min(segno)`
+(`load_min_segno`), seeding the GC DELETE bound. It seeks forward from the bottom
+of the branch's key range — the span WAL GC has emptied — so DocDB walks every
+deleted key to reach the first live one, and YB's counters hide it: 51 s reporting
+`Storage Rows Scanned: 63` on a branch that had churned ~260 GB of WAL. The load
+then outran the branch-create deadline, the supervisor took that as fatal, and the
+endpoint crashlooped. Builds carrying the fix do not run that query at startup at
+all, so a load stuck at this line on a current build is a **new** cause.
 
 The known instance (#812) was the first row: before the fix, `truncate_wals_above`
 filtered on a computed expression over the key columns, so it scanned the
@@ -353,10 +363,13 @@ Triage:
 
 1. Confirm the shape — `safekeeper_timelines 0` with a live `/metrics`, and no
    `failed to load timeline` anywhere in the log. An error means **P**, not this.
-2. Find the statement on the YB side — all three of these run on the system
+2. Find the statement on the YB side — the load's statements run on the system
    lane:
    `SELECT query, state, xact_start FROM pg_stat_activity WHERE application_name = 'safekeeper:yb_wal_system'`.
-   A long-running statement there names the culprit directly.
+   A long-running statement there names the culprit directly. WAL GC uses the same
+   lane, so match it against the load's statements above before concluding this is
+   a load at all — a `min(segno)` or a `DELETE … segno >= …` well after startup is
+   §R.
 3. `EXPLAIN` that statement against the branch. `Storage Table Rows Scanned`
    near the branch's whole row count in `wals`, with the filter under
    `Storage Filter:` rather than `Index Cond:`, is the same class of bug.
@@ -364,3 +377,23 @@ Triage:
 Restarting the safekeeper (the supervisor, or the pod) clears the state but does
 not fix the cause; it recurred on every restart that hit the torn-tail path and
 cleared on restarts that didn't.
+
+## R. SK: a long-running WAL GC statement
+
+WAL GC's two statements can take tens of seconds. Both address the span GC has
+emptied, where DocDB walks deleted keys that YB's `Storage Rows Scanned` does not
+count:
+
+| Statement | What it is |
+|---|---|
+| `SELECT min(segno) …` | the first removal after a load resolving `delete_lower_bound`. Once per load. 51 s on a branch that had churned ~260 GB of WAL. |
+| `DELETE FROM … segno >= $2 AND segno < $3` | the removal itself. Wide only if the resolve above failed (the warning `could not resolve the WAL DELETE lower bound` says so); tight afterwards. |
+
+The removal is a spawned task holding no timeline lock, so a slow statement here
+is not by itself an incident.
+
+It becomes one if it never finishes — GC then stops advancing and `wals` grows
+without bound. Check `safekeeper_timelines`, the branch's row count trend in
+`amp_storage.wals`, and whether the removal task logs `WAL removal` completions.
+Before #874 this query ran on the startup load instead, where the same cost took
+the branch's endpoint down (§Q).

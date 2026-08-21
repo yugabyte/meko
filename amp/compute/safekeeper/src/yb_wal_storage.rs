@@ -174,7 +174,7 @@ fn bucket_in_list() -> String {
 ///   can't stall the read-back path that walproposer commits depend
 ///   on.
 /// - [`Self::system_client`] — everything else: startup rehydration
-///   SELECTs, WAL GC DELETEs, and the control-file ops (restore /
+///   SELECTs, WAL GC statements, and the control-file ops (restore /
 ///   create / persist). No upsert GUC.
 pub struct YbWalConn {
     /// Fast Path Upsert lane (`yb_enable_upsert_mode = true`). Used by
@@ -185,8 +185,7 @@ pub struct YbWalConn {
     /// chunk fetches that feed the WAL sender. No upsert GUC.
     pub read_client: Arc<YsqlClient>,
     /// System / background lane (no upsert GUC). Used for startup
-    /// rehydration ([`YbWalStorage::load_write_lsn`] /
-    /// [`load_min_segno`]), the GC DELETE
+    /// rehydration ([`YbWalStorage::load_write_lsn`]), the GC DELETE
     /// ([`YbWalStorage::remove_up_to`]), and the idempotent
     /// control-file ops (`restore_opt` SELECT, `write_initial_state` and `persist`
     /// UPDATEs — the control file's row is provisioned by the controller, so
@@ -258,8 +257,8 @@ impl YbWalConn {
         //   writes are UPDATEs against a row the controller provisioned
         //   at branch create, so a blind retry can't hit duplicate-key.
         // - Read lane (no GUC): exclusively the segment reader.
-        // - System lane (no GUC): startup SELECTs (`load_write_lsn` /
-        //   `load_min_segno`), the GC DELETE (`remove_up_to`), and
+        // - System lane (no GUC): the startup SELECT (`load_write_lsn`),
+        //   the GC DELETE (`remove_up_to`), and
         //   the control-file ops (`restore_opt` SELECT, `write_initial_state`
         //   and `persist` UPDATEs).
         let fpu_client = Arc::new(
@@ -503,12 +502,22 @@ pub struct YbWalStorage {
     cache: Option<Arc<std::sync::Mutex<WalCache>>>,
     /// Lower bound for the next `remove_up_to` DELETE. Rows with
     /// `segno < delete_lower_bound` are known to no longer exist (already
-    /// deleted, or never inserted on this timeline). Seeded at
-    /// construction from `min(segno)` in the table so the first DELETE
-    /// after a safekeeper restart doesn't run unbounded-low; advanced
-    /// after each successful `remove_up_to(N)` to `N`. Pinned in an
-    /// `Arc<AtomicU64>` because `remove_up_to` returns a `'static`
-    /// future.
+    /// deleted, or never inserted on this timeline), so naming it keeps the
+    /// DELETE's range tight. Advanced after each successful `remove_up_to(N)`
+    /// to `N`. Pinned in an `Arc<AtomicU64>` because `remove_up_to` returns a
+    /// `'static` future.
+    ///
+    /// Starts at [`DELETE_BOUND_UNRESOLVED`] and is resolved by the first
+    /// removal, from [`YbWalStorage::load_min_segno`] — **not** at
+    /// construction. That query is a forward seek from the bottom of the
+    /// branch's key range, the span GC has emptied, so it pays for every deleted
+    /// key it crosses: 51 s on a branch that had churned ~260 GB of WAL. On the
+    /// startup path that was a load that never finished, which took the branch's
+    /// endpoint with it (#874). In the spawned removal task it holds no timeline
+    /// lock and nothing waits on it.
+    ///
+    /// Resolved exactly once per load, successfully or not — see the sentinel
+    /// for why a plain 0 could not mark "unresolved".
     delete_lower_bound: Arc<AtomicU64>,
     /// Highest LSN whose chunks are confirmed in `wals`. Advanced by
     /// the consumer after each successful batch INSERT. Read by
@@ -712,10 +721,8 @@ impl YbWalStorage {
             yb_wal.codec,
         ));
 
-        // Seed the DELETE lower bound from YB so post-restart removals
-        // don't scan/tombstone the empty range below the first surviving
-        // segno. Cheap: one tablet lookup keyed on branch.
-        let min_segno = Self::load_min_segno(&system_client, &table_name, branch_id).await?;
+        // The DELETE lower bound is left unestablished; the first removal
+        // resolves it. See the field's doc for why not here.
 
         let me = YbWalStorage {
             inner,
@@ -730,7 +737,7 @@ impl YbWalStorage {
             durable_wait_log_every: YB_DURABLE_WAIT_LOG_EVERY,
             durable_wait_max: YB_DURABLE_WAIT_MAX,
             cache,
-            delete_lower_bound: Arc::new(AtomicU64::new(min_segno)),
+            delete_lower_bound: Arc::new(AtomicU64::new(DELETE_BOUND_UNRESOLVED)),
             durable_lsn,
             _consumer_handle: consumer_handle,
         };
@@ -803,16 +810,22 @@ impl YbWalStorage {
         Ok(max_end.map(Lsn).unwrap_or(commit_lsn))
     }
 
-    /// Lowest segno still present in `wals` for this timeline. Used to
-    /// seed [`Self::delete_lower_bound`] at construction so the first
-    /// `remove_up_to(N)` DELETE after a safekeeper restart is bounded
-    /// from below rather than scanning from 0.
+    /// The lowest `segno` the branch still has a row for, or 0 when it has
+    /// none — the floor [`Self::delete_lower_bound`] wants.
+    ///
+    /// **Slow by nature, and deliberately not on any hot path.** Naming every
+    /// bucket completes the key prefix for each, so the aggregate is pushed
+    /// down per bucket rather than scanning the branch through YSQL — but the
+    /// seek still starts at the bottom of the range, which is the span GC has
+    /// emptied, and DocDB walks every deleted key on the way to the first live
+    /// one. YB's own counters do not show it: on a branch that had churned
+    /// ~260 GB of WAL this took 51 s and reported `Storage Rows Scanned: 63`.
+    /// An all-deleted branch is the worst case, not the cheapest: the answer is
+    /// 0 and nothing terminated the seek early.
+    ///
+    /// Called once per load, from the spawned WAL-removal task; see
+    /// [`Self::delete_lower_bound`] for what happened when it ran at startup.
     async fn load_min_segno(client: &YsqlClient, table: &str, branch_id: BranchId) -> Result<u64> {
-        // Naming every bucket completes the key prefix for each, so the
-        // aggregate resolves to per-bucket index probes rather than scanning
-        // the whole branch. min(segno) is index-tight: within a
-        // (bucket_id, branch_id) prefix `segno` is the next key column, so
-        // each bucket's minimum is its first index row.
         let sql = bake_branch_id(
             &format!(
                 "SELECT min(segno) AS m FROM {} \
@@ -827,7 +840,7 @@ impl YbWalStorage {
         let row = client
             .query_opt(&sql, &[])
             .await
-            .context("YbWalStorage: rehydrate min(segno) from YB")?;
+            .context("YbWalStorage: resolve min(segno) from YB")?;
         let m: Option<i64> = row.and_then(|r| r.get("m"));
         Ok(m.map(|v| v as u64).unwrap_or(0))
     }
@@ -1154,17 +1167,41 @@ impl Storage for YbWalStorage {
                 c.lock().unwrap().remove_segnos_below(segno_up_to);
             }
             inner_fut.await?;
-            // Bound the DELETE on both sides. The lower bound is the
-            // segno boundary advanced by the previous successful call
-            // (or `min(segno)` at startup) — rows below it are known to
-            // be gone, so naming them in the WHERE clause turns what was
-            // an unbounded-low range scan into a tight one. Idempotent if
-            // `segno_up_to <= lower`: the predicate is unsatisfiable and
-            // the DELETE is a no-op.
+            // Bound the DELETE on both sides. The lower bound is the segno
+            // boundary advanced by the previous successful call — rows below it
+            // are known to be gone, so naming them in the WHERE clause turns
+            // what was an unbounded-low range scan into a tight one. Idempotent
+            // if `segno_up_to <= lower`: the predicate is unsatisfiable and the
+            // DELETE is a no-op.
             // Naming every bucket completes the key prefix for each, so the
             // DELETE resolves to a per-bucket index range on `segno`
             // instead of scanning the branch across all tablets.
-            let lower = delete_lower_bound.load(Ordering::Relaxed);
+            //
+            // Nothing has established the bound yet on the first removal after a
+            // load, so ask the table. That query crosses the deleted span and can
+            // take tens of seconds (see `load_min_segno`) — affordable here and
+            // nowhere else: this runs in the manager's spawned removal task,
+            // holding no timeline lock, while the compute is already serving. A
+            // failure is not fatal; 0 is a valid floor, so the DELETE just starts
+            // wider and the bound is fixed by the `fetch_max` below.
+            let mut lower = delete_lower_bound.load(Ordering::Relaxed);
+            if lower == DELETE_BOUND_UNRESOLVED {
+                lower = match Self::load_min_segno(&system_client, &table, branch_id).await {
+                    Ok(min_segno) => min_segno,
+                    Err(e) => {
+                        tracing::warn!(
+                            %branch_id,
+                            "could not resolve the WAL DELETE lower bound; deleting from 0: {e:#}"
+                        );
+                        0
+                    }
+                };
+                // Resolved either way, including the failure: 0 is a valid floor,
+                // and re-running a seek that just cost tens of seconds on every
+                // removal would be worse than one wide DELETE. The advance below
+                // tightens it from here on.
+                delete_lower_bound.store(lower, Ordering::Relaxed);
+            }
             let sql = bake_branch_id(
                 &format!(
                     "DELETE FROM {} WHERE branch_id = $1 AND {} \
@@ -1191,6 +1228,13 @@ impl Storage for YbWalStorage {
         self.inner.get_metrics()
     }
 }
+
+/// [`YbWalStorage::delete_lower_bound`] before the first removal has resolved it.
+/// `u64::MAX` rather than 0 because 0 is a legitimate floor, and a `min(segno)`
+/// answering 0 — which it also does for an all-deleted branch, after crossing the
+/// whole span — must not leave the bound looking unresolved and re-run that seek on
+/// every removal.
+const DELETE_BOUND_UNRESOLVED: u64 = u64::MAX;
 
 /// Quote a (possibly schema-qualified) relation name for safe SQL
 /// interpolation. A `schema.table` input is split on the first `.` and
@@ -3517,7 +3561,7 @@ mod tests {
         let yb_wal = Arc::new(YbWalConn {
             fpu_client: client.clone(),
             read_client: client.clone(),
-            system_client: client,
+            system_client: client.clone(),
             table: table.to_string(),
             cache: Some(Arc::new(std::sync::Mutex::new(WalCache::new(
                 64 * 1024 * 1024,
@@ -3778,13 +3822,77 @@ mod tests {
             "system_client SELECT must reflect fpu_client INSERTs immediately"
         );
 
-        // And load_min_segno — same cross-connection contract.
-        let min_segno = YbWalStorage::load_min_segno(&system, &table, branch_id)
-            .await
-            .expect("load_min_segno via system_client");
-        assert_eq!(min_segno, 0, "min(segno) across lanes");
-
         drop_wals_table(&fpu, &table).await;
+    }
+
+    /// The DELETE bound is unset at construction and learned by the first
+    /// removal, which is the whole point: resolving it means a `min(segno)` seek
+    /// across the span GC has emptied, and on the startup path that cost took
+    /// branches down (#874). Live, because what is under test is what YB
+    /// answers for a branch whose rows start well above zero.
+    #[tokio::test]
+    async fn the_first_removal_resolves_the_delete_bound_from_the_table() {
+        let table = scratch_table("wals_test_delete_bound");
+        let (storage, _tmp) = make_storage(&table, Lsn(SEG_SIZE)).await;
+        let branch_id = storage.branch_id;
+        let client = storage.ysql_system_client.clone();
+        let q = quote_relation(&table);
+
+        // Rows at segnos 100..=103 and nothing below, so a bound of 0 and a
+        // bound of 100 produce the same deletions but not the same range.
+        for segno in 100i64..=103 {
+            client
+                .execute(
+                    &format!(
+                        "INSERT INTO {q} (branch_id, bucket_id, segno, chunk_offset, \
+                           chunk_size, data, last_modified_us) \
+                         VALUES ($1, 0, $2, 0, 8, $3, 0)"
+                    ),
+                    &[&branch_id, &segno, &b"12345678".to_vec()],
+                )
+                .await
+                .expect("insert chunk");
+        }
+
+        assert_eq!(
+            storage.delete_lower_bound.load(Ordering::Relaxed),
+            DELETE_BOUND_UNRESOLVED,
+            "construction must not have queried the table for the bound"
+        );
+        assert_eq!(
+            YbWalStorage::load_min_segno(&client, &table, branch_id)
+                .await
+                .expect("resolve min(segno)"),
+            100,
+            "the resolver reports the branch's real floor"
+        );
+
+        crate::wal_storage::Storage::remove_up_to(&storage, 102)
+            .await
+            .expect("remove_up_to");
+
+        assert_eq!(
+            storage.delete_lower_bound.load(Ordering::Relaxed),
+            102,
+            "a successful removal leaves the bound at its upper edge"
+        );
+        let left: Vec<i64> = client
+            .query(
+                &format!("SELECT segno FROM {q} WHERE branch_id = $1 ORDER BY segno"),
+                &[&branch_id],
+            )
+            .await
+            .expect("read back")
+            .iter()
+            .map(|r| r.get::<_, i64>("segno"))
+            .collect();
+        assert_eq!(
+            left,
+            vec![102, 103],
+            "only segnos below the cut are removed"
+        );
+
+        drop_wals_table(&client, &table).await;
     }
 
     /// `truncate_wals_above` drops chunks past the cut, trims the chunk

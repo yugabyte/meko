@@ -336,8 +336,11 @@ The manager (`update_wal_removal`) computes
 `removal_horizon_segno = horizon.segment_number() - 1` (saturating) and,
 when it exceeds `last_removed_segno`, spawns
 `YbWalStorage::remove_up_to(segno)` — dropping cached chunks first, then
-DELETEing all `amp_storage.wals` rows with `segno < segno_up_to` (bounded on
-both sides by the last-removed segno for a tight index range).
+DELETEing all `amp_storage.wals` rows with `segno < segno_up_to`, bounded below
+by `delete_lower_bound` for a tight index range. The first removal after a load
+resolves that bound from `min(segno)` on the branch — slow by nature, see
+[`safekeeper.md`](safekeeper.md) → `remove_up_to` — and every removal after it
+uses the previous one's upper edge.
 
 **Why each term is in the min:**
 - `consistent_lsn`: the pageserver's durable-ingest frontier. Safe to

@@ -370,9 +370,17 @@ Key properties:
   computed `segno * seg + chunk_offset` scanned the branch's whole WAL, here
   while holding the timeline lock (#812).
 - **`remove_up_to(segno)`** is WAL GC: a DELETE of all rows with
-  `segno < segno_up_to`, bounded below by `delete_lower_bound` (seeded from
-  `min(segno)` at construction, advanced after each successful delete) so
-  the range predicate stays tight instead of scanning tombstones from zero.
+  `segno < segno_up_to`, bounded below by `delete_lower_bound` so the range
+  predicate stays tight instead of scanning deleted keys from zero. That bound
+  starts unestablished and **this call resolves it**, from `min(segno)` on the
+  branch, then advances it to `segno_up_to` on success. Resolving is expensive —
+  a forward seek from the bottom of the range, which is exactly the span GC has
+  emptied, so DocDB walks every deleted key to reach the first live one: 51 s on
+  a branch that had churned ~260 GB of WAL, reporting 63 rows scanned. It is
+  affordable here because this runs in the manager's spawned removal task, which
+  holds no timeline lock and nothing waits on. It used to run at construction, on
+  the startup load, where the same cost stalled the branch handshake past its
+  deadline and cost the endpoint (#874).
   It does not wait on the watermark — by construction it only targets
   segments far below the writer's position. The matching `WalCache` ranges
   are dropped first. The GC horizon is
@@ -599,6 +607,13 @@ external API keeps collection shapes (`get`, `get_all() -> Vec`,
   on the upsert lane), then loads the timeline back from it. Claiming the slot
   before the write keeps concurrent creators out; the marker is cleared on
   every failure path.
+  - A create arriving before `init()` finishes waits for it (HTTP serves
+    first, so the write fence can be pushed to during the load), and answers
+    `StillLoading` — **503**, not 500 — once `LOAD_WAIT` is up. That status is
+    the contract with the supervisor, which re-sends the create while the load
+    runs (`coordinate.rs`): the load's cost scales with the branch's WAL, so no
+    constant here can bound it, and reporting it as fatal instead loses the
+    branch to a restart loop (#874).
 - **Teardown**: a branch's rows (`amp_storage.branch_state`,
   `amp_storage.wals`) are reclaimed by the controller's branch-drop reaper
   (`controller/internal/branchgc`), a retention window after the drop, as are the
@@ -670,8 +685,9 @@ loses nothing but logs.
      until the cause is fixed. That trade is deliberate, and the diagnosis and
      recovery per cause are in
      [`runbooks/startup-failures.md`](../../runbooks/startup-failures.md) §P.
-3. **GC lower bound**: `load_min_segno` seeds `delete_lower_bound` so the
-   first post-restart GC DELETE is range-bounded.
+3. **GC lower bound**: nothing here establishes `delete_lower_bound` — the
+   first `remove_up_to` resolves it, off this path (see `remove_up_to` above for
+   why that matters).
 4. The durability watermark and `durable_lsn` start at the rehydrated
    `write_lsn`, so an immediate flush with nothing in flight returns at
    once. Committed-but-unacked rows from a crashed run are absorbed as

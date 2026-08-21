@@ -25,11 +25,10 @@ pub const BRANCH_ACTIVE_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Timeout for the branch control calls, which block on the far side's startup
 /// rather than answering promptly. `GlobalTimelines::create` waits out the
-/// safekeeper's load behind a 60 s deadline of its own, and that load scales with
-/// the branch's WAL, so the shared client's 5 s killed the call on any branch big
-/// enough to need the wait — fatally, since a dropped request is not the
-/// retryable `StillLoading` the server would have returned (#831). Well past the
-/// server's own deadline, so the server gets to answer.
+/// safekeeper's load behind a deadline of its own, so the shared client's 5 s
+/// killed the call whenever that load needed the wait — fatally, since a dropped
+/// request is not the retryable `StillLoading` the server would have returned
+/// (#831). Well past the server's own deadline, so the server gets to answer.
 pub const SLOW_CONTROL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// A shared blocking client. Built once: `reqwest::blocking` starts a runtime per
@@ -138,16 +137,39 @@ fn branch_state(url: &str, timeout: Duration) -> Result<Option<(String, String)>
     Ok(Some((state.to_string(), lsn)))
 }
 
+/// How long to keep re-asking the safekeeper while it answers "still loading",
+/// and the gap between asks. The budget is the same [`SLOW_CONTROL_TIMEOUT`] a
+/// single call gets — it is spent on the same thing, and split across attempts
+/// rather than sunk into one.
+///
+/// Bounded rather than forever — this runs on PID 1's startup path, and an
+/// endpoint that never reports is harder to diagnose than one that says what it
+/// gave up on.
+pub const BRANCH_CREATE_TIMEOUT: Duration = SLOW_CONTROL_TIMEOUT;
+pub const BRANCH_CREATE_INTERVAL: Duration = Duration::from_secs(2);
+/// How often the wait says so. Every ask would be hundreds of identical lines
+/// across the full budget; silence would leave a slow start looking like a hang.
+const LOAD_LOG_EVERY: Duration = Duration::from_secs(30);
+
 /// Tells the safekeeper about the branch, at the LSN the pageserver reported.
 ///
 /// An already-existing branch is success, not failure: this runs again on every
 /// pod restart, and the safekeeper keeps the branch across one.
+///
+/// A safekeeper that has not finished loading the timeline answers 503 (see
+/// `GlobalTimelines::create`). That is "ask again shortly", not a failure: the
+/// load is in flight and each ask re-enters it, so this waits it out. Treating it
+/// as fatal instead takes down both daemons, and since the restart begins the load
+/// again from nothing, every attempt hits the same wall — the branch can never be
+/// given an endpoint again (#874).
 pub fn create_safekeeper_branch(
     host: &str,
     safekeeper_http_port: u16,
     branch_id: &str,
     pg_version_major: u32,
     start_lsn: &str,
+    timeout: Duration,
+    interval: Duration,
 ) -> Result<()> {
     let url = format!("http://{host}:{safekeeper_http_port}/v1/branch");
     let body = serde_json::json!({
@@ -158,26 +180,64 @@ pub fn create_safekeeper_branch(
         "pg_version": pg_version_major * 10_000,
         "start_lsn": start_lsn,
     });
-    let resp = client()
-        .post(&url)
-        .timeout(SLOW_CONTROL_TIMEOUT)
-        .json(&body)
-        .send()
-        .context("POST safekeeper branch")?;
-    let status = resp.status();
-    if status.is_success() {
-        tracing::info!(branch_id, start_lsn, "created the branch on the safekeeper");
-        return Ok(());
+    let deadline = Instant::now() + timeout;
+    let mut last_log: Option<Instant> = None;
+    loop {
+        if crate::supervise::shutdown_requested() {
+            bail!("shutdown requested while creating the branch on the safekeeper");
+        }
+        // Nothing else reads this until the handshake returns — `poll_once` does
+        // not run yet — while the renewals keep going in the background. Without
+        // this check a pod that lost the branch's lease mid-wait would keep asking
+        // for the full budget before anyone noticed.
+        if crate::fence::lost() {
+            bail!("the write lease was lost while creating the branch on the safekeeper");
+        }
+        // Per attempt, not the whole budget: a request that hangs must not push the
+        // handshake past `timeout` (the same clamp `wait_branch_active` uses).
+        let attempt_budget = deadline
+            .saturating_duration_since(Instant::now())
+            .min(SLOW_CONTROL_TIMEOUT)
+            // A budget that ran out during the sleep would fail the request as a
+            // transport error and lose the "still loading" diagnosis. Leave room
+            // for one last ask, whose reply the deadline check below turns into
+            // that message.
+            .max(Duration::from_secs(1));
+        let resp = client()
+            .post(&url)
+            .timeout(attempt_budget)
+            .json(&body)
+            .send()
+            .context("POST safekeeper branch")?;
+        let status = resp.status();
+        if status.is_success() {
+            tracing::info!(branch_id, start_lsn, "created the branch on the safekeeper");
+            return Ok(());
+        }
+        if status == reqwest::StatusCode::CONFLICT {
+            tracing::info!(branch_id, "branch already exists on the safekeeper");
+            return Ok(());
+        }
+        let detail = resp.text().unwrap_or_default();
+        let detail: String = detail.chars().take(200).collect();
+        if status != reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            bail!("safekeeper branch create returned {status}: {detail}");
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "the safekeeper was still loading branch {branch_id} after {timeout:?}: {detail}"
+            );
+        }
+        let now = Instant::now();
+        if last_log.is_none_or(|at| now.duration_since(at) >= LOAD_LOG_EVERY) {
+            tracing::info!(
+                branch_id,
+                "the safekeeper is still loading the timeline; asking again"
+            );
+            last_log = Some(now);
+        }
+        std::thread::sleep(interval);
     }
-    if status == reqwest::StatusCode::CONFLICT {
-        tracing::info!(branch_id, "branch already exists on the safekeeper");
-        return Ok(());
-    }
-    let detail = resp.text().unwrap_or_default();
-    bail!(
-        "safekeeper branch create returned {status}: {}",
-        detail.chars().take(200).collect::<String>()
-    );
 }
 
 /// Hands a daemon the endpoint's write token.
@@ -273,8 +333,16 @@ mod tests {
     fn a_slow_branch_create_outlives_the_probe_budget() {
         let (port, _rx) = serve_after(Duration::from_secs(6), vec![(200, "{}".into())]);
         let started = Instant::now();
-        create_safekeeper_branch("127.0.0.1", port, "abc123", 18, "0/16B3F48")
-            .expect("a slow-but-successful create must not be cut off at 5s");
+        create_safekeeper_branch(
+            "127.0.0.1",
+            port,
+            "abc123",
+            18,
+            "0/16B3F48",
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+        )
+        .expect("a slow-but-successful create must not be cut off at 5s");
         assert!(
             started.elapsed() >= Duration::from_secs(5),
             "the server replied too fast to prove anything: {:?}",
@@ -335,7 +403,16 @@ mod tests {
     #[test]
     fn the_branch_create_sends_the_lsn_and_scaled_version() {
         let (port, rx) = serve(vec![(200, "{}".into())]);
-        create_safekeeper_branch("127.0.0.1", port, "abc123", 18, "0/16B3F48").unwrap();
+        create_safekeeper_branch(
+            "127.0.0.1",
+            port,
+            "abc123",
+            18,
+            "0/16B3F48",
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+        )
+        .unwrap();
         let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(req.starts_with("POST /v1/branch"), "{req}");
         assert!(req.contains(r#""branch_id":"abc123""#), "{req}");
@@ -348,7 +425,62 @@ mod tests {
     #[test]
     fn an_existing_branch_is_success() {
         let (port, _rx) = serve(vec![(409, "already exists".into())]);
-        create_safekeeper_branch("127.0.0.1", port, "abc123", 18, "0/0").unwrap();
+        create_safekeeper_branch(
+            "127.0.0.1",
+            port,
+            "abc123",
+            18,
+            "0/0",
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+        )
+        .unwrap();
+    }
+
+    /// Regression for #874: a safekeeper still loading the timeline answers 503,
+    /// which means "ask again shortly" — the load is in flight and each ask
+    /// re-enters it. Treating it as fatal takes down both daemons, and the restart
+    /// starts the load over, so the branch can never be given an endpoint again.
+    #[test]
+    fn a_still_loading_safekeeper_is_waited_out() {
+        let loading = r#"{"msg":"timeline abc123 has not been loaded yet"}"#.to_string();
+        let (port, _rx) = serve(vec![
+            (503, loading.clone()),
+            (503, loading),
+            (200, "{}".into()),
+        ]);
+        create_safekeeper_branch(
+            "127.0.0.1",
+            port,
+            "abc123",
+            18,
+            "0/16B3F48",
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+        )
+        .expect("a load still in progress must be waited out, not fatal");
+    }
+
+    /// Bounded, though: a load that never finishes has to report what it gave up
+    /// on rather than hang startup silently.
+    #[test]
+    fn waiting_out_the_load_is_bounded() {
+        let loading = r#"{"msg":"timeline abc123 has not been loaded yet"}"#.to_string();
+        // More replies than the budget allows attempts: a stub that runs out
+        // would hand the loop a connection error instead of another 503, which is
+        // a different path than the one under test.
+        let (port, _rx) = serve(vec![(503, loading); 12]);
+        let err = create_safekeeper_branch(
+            "127.0.0.1",
+            port,
+            "abc123",
+            18,
+            "0/0",
+            Duration::from_millis(30),
+            Duration::from_millis(10),
+        )
+        .expect_err("an endless load must not block startup forever");
+        assert!(format!("{err:#}").contains("still loading"), "{err:#}");
     }
 
     /// Any other failure must surface: a safekeeper without the branch cannot
@@ -356,8 +488,16 @@ mod tests {
     #[test]
     fn a_real_failure_is_an_error() {
         let (port, _rx) = serve(vec![(500, "boom".into())]);
-        let err = create_safekeeper_branch("127.0.0.1", port, "abc123", 18, "0/0")
-            .expect_err("500 must not be swallowed");
+        let err = create_safekeeper_branch(
+            "127.0.0.1",
+            port,
+            "abc123",
+            18,
+            "0/0",
+            Duration::from_secs(30),
+            Duration::from_millis(10),
+        )
+        .expect_err("500 must not be swallowed");
         assert!(format!("{err:#}").contains("500"), "{err:#}");
     }
 }
