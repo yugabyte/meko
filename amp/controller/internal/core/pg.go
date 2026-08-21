@@ -47,7 +47,15 @@ func (b *PgBackend) EnsureUser(ctx context.Context, id uuid.UUID, isAdmin bool) 
 		id.String(), isAdmin); err != nil {
 		return User{}, fmt.Errorf("insert user: %w", err)
 	}
-	return b.GetUser(ctx, id)
+	// The row is durable from here, so a failed read-back is not the API's to
+	// report as retryable (db.AfterWrite). Conservative for a caller that passed
+	// its own id — that replay would converge — but this cannot tell it apart
+	// from CreateUser's generated one, which would mint a second user.
+	u, err := b.GetUser(ctx, id)
+	if err != nil {
+		return User{}, db.AfterWrite(err)
+	}
+	return u, nil
 }
 
 func (b *PgBackend) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
@@ -82,7 +90,11 @@ func (b *PgBackend) CreateStoragePoolWithID(ctx context.Context, id, owner uuid.
 		}
 		return StoragePool{}, fmt.Errorf("insert storage pool: %w", err)
 	}
-	return b.getStoragePoolByID(ctx, id)
+	pool, err := b.getStoragePoolByID(ctx, id)
+	if err != nil {
+		return StoragePool{}, db.AfterWrite(err)
+	}
+	return pool, nil
 }
 
 func (b *PgBackend) ListUsers(ctx context.Context, limit, offset int) ([]User, int, error) {

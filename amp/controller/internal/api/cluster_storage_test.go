@@ -667,8 +667,11 @@ func TestCreateBranchDefaultForkSafekeeperUnreachable(t *testing.T) {
 	if !ok {
 		t.Fatalf("response = %T, want CreateBranch503JSONResponse (parent not serving yet)", resp)
 	}
-	if got.Error.Code != "service_unavailable" {
-		t.Errorf("error code = %q, want service_unavailable", got.Error.Code)
+	if got.Body.Error.Code != "service_unavailable" {
+		t.Errorf("error code = %q, want service_unavailable", got.Body.Error.Code)
+	}
+	if got.Headers.RetryAfter <= 0 {
+		t.Errorf("Retry-After = %d, want a positive number of seconds", got.Headers.RetryAfter)
 	}
 	// A branch whose fork point never resolved must not have been planned — which
 	// is what makes the caller's retry safe.

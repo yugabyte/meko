@@ -199,10 +199,17 @@ func (s *PgStore) Create(ctx context.Context, spec TaskSpec) (*Task, error) {
 		}
 	}
 
+	// Past the commit the plan is durable, so a failure reading it back must not
+	// look replayable to the API: the caller would plan the same work twice under
+	// a fresh task id. The commit itself is the same case — it may have landed.
 	if err := tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, db.AfterWrite(err)
 	}
-	return s.Get(ctx, taskID)
+	t, err := s.Get(ctx, taskID)
+	if err != nil {
+		return nil, db.AfterWrite(err)
+	}
+	return t, nil
 }
 
 func (s *PgStore) ClaimNext(ctx context.Context, owner string, lease time.Duration) (*Task, error) {

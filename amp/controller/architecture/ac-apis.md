@@ -72,7 +72,8 @@ storage pools, clusters, branches, and endpoints:
 
 Everything is under `/api/v1`. The resource ladder is **storage pool → cluster →
 branch → endpoint** (the user is not in the path). The error envelope is `{ "error": {
-"code", "message" } }` for every non-2xx response.
+"code", "message" } }` for every non-2xx response. Every operation that touches
+the state store also declares `503` (see Layering below).
 
 **Mutations are asynchronous tasks.** The six world-changing operations —
 `createCluster`, `createBranch`, `createEndpoint`, `deleteCluster`,
@@ -292,6 +293,26 @@ worker's steps (against the task framework's `StateStore` port, `ac-tasks.md`
 §5). A controller that returns an unexpected (non-`echo.HTTPError`) error yields
 a `500` rendered in the same `Error` envelope — documented per operation in the
 spec so the generated client gets a typed handle for it.
+
+**An unreachable state store is a `503`, not that `500` (#886)**, so a tserver
+restart does not read to a caller as a controller bug. `errorHandler` classifies
+the escaping error with `db.Unavailable`: a failed connection attempt, a
+connection that died under a statement, or a SQLSTATE in class `08` (plus the
+class-57 shutdown codes and `53300`) is the store going away; a syntax,
+constraint, permission, or authentication error is a verdict on the statement and
+stays the controller's fault. This is close to but not the same test `/readyz`
+runs — a bare `Ping` where any failure means unhealthy — so the two can disagree
+at the edges, and `/readyz` does not predict what a request returned.
+
+Replayability is a second question, answered by `db.SafeToRetry`. A **read**
+always may be replayed. A **mutation** only when the failure provably preceded
+the statement reaching the store *and* nothing earlier in the request had already
+written: past a commit or an insert, the store marks what follows with
+`db.ErrOutcomeUnknown` (`db.AfterWrite`), which forces the `500`. Without that,
+a connection failure on the read-back after a durable insert would answer `503`
+on work that already exists, and the retry would plan it a second time under a
+fresh id. Every `503`, this one and `createBranch`'s unresolvable fork point,
+carries `Retry-After`.
 
 ## Testing
 

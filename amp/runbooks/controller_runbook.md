@@ -335,6 +335,27 @@ kubectl -n "$NS" get pod -l app.kubernetes.io/instance=yb-ep-$EP \
   missing the `pods/resize` subresource grant (older chart); re-deploy the
   `yb-amp-controller` chart.
 
+## Every API call answers `503 service_unavailable`
+
+The controller cannot reach the YugabyteDB holding `yb_storage` — the tserver
+serving it is restarting, being replaced, or gone. The controller is fine; it is
+saying so on purpose (#886), and `Retry-After` says when to come back. Retry, and
+if it does not clear:
+
+```bash
+# a second opinion on the store (a bare Ping, so it can disagree at the edges):
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/../readyz     # 503 = store unreachable
+# what it cannot reach, and why:
+kubectl -n "$NS" logs deploy/amp-controller | grep 'state store unavailable' | tail -5
+kubectl -n "$NS" get pods | grep yb-tserver     # the host in the log line is one of these
+```
+
+A **mutation** that answers `500` while the store is down is the other half of
+the same outage: the connection dropped with the statement already sent, so the
+write may have committed and a blind retry could double-apply it. The log line
+`state store unavailable mid-request; outcome unknown` marks those. Read the
+resource back before retrying.
+
 ## A dropped branch's data isn't going away
 
 The drop itself only **tombstones** the branch (`dropped_at`). The controller's

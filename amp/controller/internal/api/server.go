@@ -10,6 +10,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -63,6 +64,9 @@ func NewServer(cfg *config.Config, backend core.Backend, tasks *task.Service, pr
 	})
 	e.GET("/readyz", func(c echo.Context) error {
 		if err := backend.Healthy(c.Request().Context()); err != nil {
+			// Same hint the API's 503s carry, so a prober outside the spec gets the
+			// same answer about when to come back.
+			c.Response().Header().Set(echo.HeaderRetryAfter, strconv.Itoa(retryAfterSeconds))
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "database unavailable")
 		}
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
@@ -134,7 +138,13 @@ func slogLogger(logger *slog.Logger) echo.MiddlewareFunc {
 		LogError:     true,
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 			level := slog.LevelInfo
-			if v.Status >= 500 || v.Error != nil {
+			switch {
+			case v.Status == http.StatusServiceUnavailable:
+				// A retryable condition is not the controller failing. Logging it below
+				// ERROR is half of what makes ERROR usable during a backing restart
+				// (#886); the status label on the metric is the other half.
+				level = slog.LevelWarn
+			case v.Status >= 500 || v.Error != nil:
 				level = slog.LevelError
 			}
 			attrs := []slog.Attr{

@@ -174,6 +174,7 @@ Failures raise an error with a stable `code` and a human message. Common ones:
 - `unsupported_disk_type` — `disk_type: local` (only `network` is supported today).
 - `not_found` — a wrong id in the chain.
 - `conflict` — a second `read_write` on a branch, or deleting a branch that still has child branches.
+- `service_unavailable` — transient: the controller could not reach its state store, or a dependency the call needs is not up yet. Wait the `Retry-After` seconds (2) and retry the same call.
 - `internal` — controller-side failure; surface it, don't silently retry.
 
 ## Tool catalog (21)

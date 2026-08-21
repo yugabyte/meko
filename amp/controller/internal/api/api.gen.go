@@ -2946,6 +2946,7 @@ type ListStoragePoolsResponse struct {
 	JSON200      *StoragePoolList
 	JSON400      *BadRequest
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2980,6 +2981,7 @@ type CreateStoragePoolResponse struct {
 	JSON404      *NotFound
 	JSON409      *Conflict
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3013,6 +3015,7 @@ type GetStoragePoolResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3046,6 +3049,7 @@ type ListClustersResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3079,6 +3083,7 @@ type CreateClusterResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3112,6 +3117,7 @@ type DeleteClusterResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3145,6 +3151,7 @@ type GetClusterResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3178,6 +3185,7 @@ type ListBranchesResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3246,6 +3254,7 @@ type DeleteBranchResponse struct {
 	JSON404      *NotFound
 	JSON409      *Conflict
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3279,6 +3288,7 @@ type GetBranchResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3312,6 +3322,7 @@ type ListEndpointsResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3346,6 +3357,7 @@ type CreateEndpointResponse struct {
 	JSON404      *NotFound
 	JSON409      *Conflict
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3379,6 +3391,7 @@ type DeleteEndpointResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3412,6 +3425,7 @@ type GetEndpointResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3446,6 +3460,7 @@ type ResizeEndpointResponse struct {
 	JSON404      *NotFound
 	JSON409      *Conflict
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3479,6 +3494,7 @@ type UpdateEndpointSettingsResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3512,6 +3528,7 @@ type UpdateBranchSettingsResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3544,6 +3561,7 @@ type ListTasksResponse struct {
 	JSON200      *TaskList
 	JSON400      *BadRequest
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3577,6 +3595,7 @@ type GetTaskResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3609,6 +3628,7 @@ type ListUsersResponse struct {
 	JSON200      *UserList
 	JSON400      *BadRequest
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3641,6 +3661,7 @@ type CreateUserResponse struct {
 	JSON201      *User
 	JSON400      *BadRequest
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3674,6 +3695,7 @@ type GetUserResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -4045,6 +4067,13 @@ func ParseListStoragePoolsResponse(rsp *http.Response) (*ListStoragePoolsRespons
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4099,6 +4128,13 @@ func ParseCreateStoragePoolResponse(rsp *http.Response) (*CreateStoragePoolRespo
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4145,6 +4181,13 @@ func ParseGetStoragePoolResponse(rsp *http.Response) (*GetStoragePoolResponse, e
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4193,6 +4236,13 @@ func ParseListClustersResponse(rsp *http.Response) (*ListClustersResponse, error
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4239,6 +4289,13 @@ func ParseCreateClusterResponse(rsp *http.Response) (*CreateClusterResponse, err
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4287,6 +4344,13 @@ func ParseDeleteClusterResponse(rsp *http.Response) (*DeleteClusterResponse, err
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4334,6 +4398,13 @@ func ParseGetClusterResponse(rsp *http.Response) (*GetClusterResponse, error) {
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4380,6 +4451,13 @@ func ParseListBranchesResponse(rsp *http.Response) (*ListBranchesResponse, error
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4489,6 +4567,13 @@ func ParseDeleteBranchResponse(rsp *http.Response) (*DeleteBranchResponse, error
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4536,6 +4621,13 @@ func ParseGetBranchResponse(rsp *http.Response) (*GetBranchResponse, error) {
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4582,6 +4674,13 @@ func ParseListEndpointsResponse(rsp *http.Response) (*ListEndpointsResponse, err
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4637,6 +4736,13 @@ func ParseCreateEndpointResponse(rsp *http.Response) (*CreateEndpointResponse, e
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4684,6 +4790,13 @@ func ParseDeleteEndpointResponse(rsp *http.Response) (*DeleteEndpointResponse, e
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4730,6 +4843,13 @@ func ParseGetEndpointResponse(rsp *http.Response) (*GetEndpointResponse, error) 
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4785,6 +4905,13 @@ func ParseResizeEndpointResponse(rsp *http.Response) (*ResizeEndpointResponse, e
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4831,6 +4958,13 @@ func ParseUpdateEndpointSettingsResponse(rsp *http.Response) (*UpdateEndpointSet
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4879,6 +5013,13 @@ func ParseUpdateBranchSettingsResponse(rsp *http.Response) (*UpdateBranchSetting
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4918,6 +5059,13 @@ func ParseListTasksResponse(rsp *http.Response) (*ListTasksResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4966,6 +5114,13 @@ func ParseGetTaskResponse(rsp *http.Response) (*GetTaskResponse, error) {
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -5006,6 +5161,13 @@ func ParseListUsersResponse(rsp *http.Response) (*ListUsersResponse, error) {
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -5045,6 +5207,13 @@ func ParseCreateUserResponse(rsp *http.Response) (*CreateUserResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -5092,6 +5261,13 @@ func ParseGetUserResponse(rsp *http.Response) (*GetUserResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -5970,7 +6146,14 @@ type InternalErrorJSONResponse Error
 
 type NotFoundJSONResponse Error
 
-type ServiceUnavailableJSONResponse Error
+type ServiceUnavailableResponseHeaders struct {
+	RetryAfter int
+}
+type ServiceUnavailableJSONResponse struct {
+	Body Error
+
+	Headers ServiceUnavailableResponseHeaders
+}
 
 type ListStoragePoolsRequestObject struct {
 	Params ListStoragePoolsParams
@@ -6018,6 +6201,21 @@ func (response ListStoragePools500JSONResponse) VisitListStoragePoolsResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListStoragePools503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response ListStoragePools503JSONResponse) VisitListStoragePoolsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6100,6 +6298,21 @@ func (response CreateStoragePool500JSONResponse) VisitCreateStoragePoolResponse(
 	return err
 }
 
+type CreateStoragePool503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response CreateStoragePool503JSONResponse) VisitCreateStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetStoragePoolRequestObject struct {
 	PoolId PoolId `json:"poolId"`
 }
@@ -6160,6 +6373,21 @@ func (response GetStoragePool500JSONResponse) VisitGetStoragePoolResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetStoragePool503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response GetStoragePool503JSONResponse) VisitGetStoragePoolResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6225,6 +6453,21 @@ func (response ListClusters500JSONResponse) VisitListClustersResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListClusters503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response ListClusters503JSONResponse) VisitListClustersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6295,6 +6538,21 @@ func (response CreateCluster500JSONResponse) VisitCreateClusterResponse(w http.R
 	return err
 }
 
+type CreateCluster503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response CreateCluster503JSONResponse) VisitCreateClusterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DeleteClusterRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
 	ClusterId ClusterId `json:"clusterId"`
@@ -6357,6 +6615,21 @@ func (response DeleteCluster500JSONResponse) VisitDeleteClusterResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCluster503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response DeleteCluster503JSONResponse) VisitDeleteClusterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6426,6 +6699,21 @@ func (response GetCluster500JSONResponse) VisitGetClusterResponse(w http.Respons
 	return err
 }
 
+type GetCluster503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response GetCluster503JSONResponse) VisitGetClusterResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListBranchesRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
 	ClusterId ClusterId `json:"clusterId"`
@@ -6488,6 +6776,21 @@ func (response ListBranches500JSONResponse) VisitListBranchesResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListBranches503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response ListBranches503JSONResponse) VisitListBranchesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6564,10 +6867,11 @@ type CreateBranch503JSONResponse struct{ ServiceUnavailableJSONResponse }
 func (response CreateBranch503JSONResponse) VisitCreateBranchResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
 	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
@@ -6654,6 +6958,21 @@ func (response DeleteBranch500JSONResponse) VisitDeleteBranchResponse(w http.Res
 	return err
 }
 
+type DeleteBranch503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response DeleteBranch503JSONResponse) VisitDeleteBranchResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetBranchRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
 	ClusterId ClusterId `json:"clusterId"`
@@ -6716,6 +7035,21 @@ func (response GetBranch500JSONResponse) VisitGetBranchResponse(w http.ResponseW
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetBranch503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response GetBranch503JSONResponse) VisitGetBranchResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6783,6 +7117,21 @@ func (response ListEndpoints500JSONResponse) VisitListEndpointsResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEndpoints503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response ListEndpoints503JSONResponse) VisitListEndpointsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6869,6 +7218,21 @@ func (response CreateEndpoint500JSONResponse) VisitCreateEndpointResponse(w http
 	return err
 }
 
+type CreateEndpoint503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response CreateEndpoint503JSONResponse) VisitCreateEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DeleteEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
 	ClusterId  ClusterId  `json:"clusterId"`
@@ -6937,6 +7301,21 @@ func (response DeleteEndpoint500JSONResponse) VisitDeleteEndpointResponse(w http
 	return err
 }
 
+type DeleteEndpoint503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response DeleteEndpoint503JSONResponse) VisitDeleteEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetEndpointRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
 	ClusterId  ClusterId  `json:"clusterId"`
@@ -7000,6 +7379,21 @@ func (response GetEndpoint500JSONResponse) VisitGetEndpointResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEndpoint503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response GetEndpoint503JSONResponse) VisitGetEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -7087,6 +7481,21 @@ func (response ResizeEndpoint500JSONResponse) VisitResizeEndpointResponse(w http
 	return err
 }
 
+type ResizeEndpoint503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response ResizeEndpoint503JSONResponse) VisitResizeEndpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type UpdateEndpointSettingsRequestObject struct {
 	PoolId     PoolId     `json:"poolId"`
 	ClusterId  ClusterId  `json:"clusterId"`
@@ -7151,6 +7560,21 @@ func (response UpdateEndpointSettings500JSONResponse) VisitUpdateEndpointSetting
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEndpointSettings503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response UpdateEndpointSettings503JSONResponse) VisitUpdateEndpointSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -7222,6 +7646,21 @@ func (response UpdateBranchSettings500JSONResponse) VisitUpdateBranchSettingsRes
 	return err
 }
 
+type UpdateBranchSettings503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response UpdateBranchSettings503JSONResponse) VisitUpdateBranchSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListTasksRequestObject struct {
 	Params ListTasksParams
 }
@@ -7268,6 +7707,21 @@ func (response ListTasks500JSONResponse) VisitListTasksResponse(w http.ResponseW
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTasks503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response ListTasks503JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -7336,6 +7790,21 @@ func (response GetTask500JSONResponse) VisitGetTaskResponse(w http.ResponseWrite
 	return err
 }
 
+type GetTask503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response GetTask503JSONResponse) VisitGetTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListUsersRequestObject struct {
 	Params ListUsersParams
 }
@@ -7386,6 +7855,21 @@ func (response ListUsers500JSONResponse) VisitListUsersResponse(w http.ResponseW
 	return err
 }
 
+type ListUsers503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response ListUsers503JSONResponse) VisitListUsersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateUserRequestObject struct {
 	Body *CreateUserJSONRequestBody
 }
@@ -7432,6 +7916,21 @@ func (response CreateUser500JSONResponse) VisitCreateUserResponse(w http.Respons
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateUser503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response CreateUser503JSONResponse) VisitCreateUserResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -7496,6 +7995,21 @@ func (response GetUser500JSONResponse) VisitGetUserResponse(w http.ResponseWrite
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetUser503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response GetUser503JSONResponse) VisitGetUserResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
