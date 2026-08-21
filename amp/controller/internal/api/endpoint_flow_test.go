@@ -326,6 +326,32 @@ func TestEndpointExtensions(t *testing.T) {
 	if len(cronPersisted) != 1 || cronPersisted[0] != "pg_cron" {
 		t.Errorf("branch extensions = %v, want [pg_cron] persisted", cronPersisted)
 	}
+
+	// Two non-preload extensions can be opted into on one endpoint (pgvector +
+	// age): both are mounted (resolved to their pinned images, Preload:false) and
+	// both persisted onto the branch. This is the co-mounted case the local/smoke
+	// tests exercise. Fresh branch so its set is independent of the above.
+	ageClusterID, ageBranchID := uuid.New(), uuid.New()
+	backend.SeedBranch(pool.Id, core.Branch{ClusterID: ageClusterID, BranchID: ageBranchID, Name: "main", PgVersion: 18, IsDefault: true})
+	both := []string{"pgvector", "age"}
+	aok, err := client.CreateEndpointWithResponse(ctx, pool.Id, ageClusterID, ageBranchID, api.CreateEndpointRequest{Role: &rw, Extensions: &both})
+	if err != nil {
+		t.Fatalf("CreateEndpoint(pgvector+age): %v", err)
+	}
+	if aok.StatusCode() != http.StatusAccepted {
+		t.Fatalf("pgvector+age status = %d, want 202; body = %s", aok.StatusCode(), aok.Body)
+	}
+	drainTasks(t, store, backend, prov)
+	got := dep.created[len(dep.created)-1].Extensions
+	if len(got) != 2 ||
+		got[0].Name != "pgvector" || got[0].Image != "quay.io/yugabyte/amp-ext-pgvector:0.8.2" || got[0].Preload ||
+		got[1].Name != "age" || got[1].Image != "quay.io/yugabyte/amp-ext-age:1.8.0" || got[1].Preload {
+		t.Fatalf("deploy spec extensions = %+v, want the pinned pgvector + age (both Preload:false)", got)
+	}
+	agePersisted, _ := backend.BranchExtensions(ctx, ageClusterID, ageBranchID)
+	if len(agePersisted) != 2 || agePersisted[0] != "pgvector" || agePersisted[1] != "age" {
+		t.Errorf("branch extensions = %v, want [pgvector age] persisted", agePersisted)
+	}
 }
 
 // TestEndpointExtensionsUnsupported: requesting extensions when the controller

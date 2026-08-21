@@ -275,7 +275,7 @@ for ((i=0; i<20; i++)); do [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c 
 [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && ok "endpoint instance retired" || bad "endpoint instance lingering"
 
 if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
-  hdr "externalized extensions: pgvector opt-in mounts, CREATE EXTENSION (fork inherit disabled pending #440)"
+  hdr "externalized extensions: pgvector + age co-mount on one endpoint, CREATE EXTENSION (fork inherit disabled pending #440)"
 
   # A self-contained cluster so this section is independent of the cascade above.
   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"extproj"}')
@@ -284,17 +284,21 @@ if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
   EDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$EPROJ" ] && [ -n "$EDEF" ] && ok "ext cluster materialized ($EPROJ / $EDEF)" || bad "ext cluster not materialized"
 
-  # Endpoint that opts into pgvector.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" '{"role":"read_write","extensions":["pgvector"]}')
-  [ "$code" = 202 ] && ok "createEndpoint(extensions:[pgvector]) 202" || bad "createEndpoint(ext) code=$code"
+  # One endpoint that opts into BOTH pgvector and age — the two non-preload
+  # catalog extensions. This exercises multi-extension ImageVolume mounting (each
+  # extension is its own mount at /extensions/<name>) in a single compute.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" '{"role":"read_write","extensions":["pgvector","age"]}')
+  [ "$code" = 202 ] && ok "createEndpoint(extensions:[pgvector,age]) 202" || bad "createEndpoint(ext) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(ext) succeeded" || bad "create_endpoint(ext) task=$st"
   EEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" | jq -r '.endpoints[0].id')
   EPOD=$(wait_ready_pod "$EEP")
   [ -n "$EPOD" ] && ok "ext endpoint pod Ready ($EPOD)" || bad "ext endpoint pod not Ready"
 
-  # The ImageVolume is mounted at /extensions/pgvector with the control file.
+  # Both ImageVolumes are mounted, each at /extensions/<name> with its control file.
   kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control \
     && ok "pgvector ImageVolume mounted (/extensions/pgvector)" || bad "pgvector ImageVolume not mounted"
+  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/age/share/postgresql/extension/age.control \
+    && ok "age ImageVolume mounted (/extensions/age)" || bad "age ImageVolume not mounted"
 
   # CREATE EXTENSION + store real vector data + a nearest-neighbour query that
   # exercises the type end-to-end (insert -> CHECKPOINT through the storage stack
@@ -314,6 +318,24 @@ SQL
   { echo "$out" | grep -q '^2|1.732$' && echo "$out" | grep -q '^5.196$'; } \
     && ok "pgvector data I/O: NN([3,3,3])=id2 dist=1.732 + literal <-> =5.196" \
     || bad "pgvector data query (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
+
+  # AGE (openCypher) on the SAME endpoint. Non-preload: load it per session with
+  # LOAD 'age'. Create a graph, a cypher() CREATE that writes a vertex (through
+  # the storage stack after CHECKPOINT), then a cypher() MATCH that reads the
+  # property back — asserting the value ('ada') round-trips.
+  out=$(psql_pod "$EPOD" 127.0.0.1 55433 <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS age;
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+SELECT create_graph('amp_age_probe');
+SELECT * FROM cypher('amp_age_probe', $$ CREATE (:Person {name: 'ada'}) $$) AS (v agtype);
+CHECKPOINT;
+SELECT * FROM cypher('amp_age_probe', $$ MATCH (p:Person) RETURN p.name $$) AS (name agtype);
+SQL
+)
+  echo "$out" | grep -q '^"ada"$' \
+    && ok "age data I/O: LOAD 'age' + create_graph + cypher CREATE/MATCH round-trip (ada)" \
+    || bad "age cypher query (got: $(echo "$out" | tail -2 | tr '\n' ' '))"
 
   hdr "externalized extensions: pg_cron opt-in preloads, CREATE EXTENSION, a scheduled job runs"
 

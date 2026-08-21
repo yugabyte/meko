@@ -371,7 +371,7 @@ jobs:
       # extension explicitly: the ABI-anchor base is built once (the second run
       # reuses it), then each brings up its own throwaway yb_amp_local cluster.
       # --regress runs each extension's OWN upstream regression suite against the
-      # mounted ImageVolume (issue #608) — pgvector/pg_cron via pg_regress,
+      # mounted ImageVolume — pgvector,pg_cron,... via pg_regress,
       # hexabridge via its scripts/regression.sh — instead of the built-in smoke.
       # The runs share one job and run sequentially, so pin each to a distinct port
       # block (each spans base..base+700). The bases sit BELOW the ephemeral floor
@@ -396,6 +396,14 @@ jobs:
         env:
           INTEGRATION_PORT_BASE: "20000"
         run: test/integration/compute/extensions.sh --ext hexabridge --regress ${{ steps.quay.outputs.cache }}
+
+      # age (Apache AGE) via its own pg_regress suite. Distinct port block again
+      # (21000..21700), below the ephemeral floor, so it can't collide with the
+      # runs above.
+      - name: Local extension regression suite (age)
+        env:
+          INTEGRATION_PORT_BASE: "21000"
+        run: test/integration/compute/extensions.sh --ext age --regress ${{ steps.quay.outputs.cache }}
 
       - name: Upload run logs
         if: failure()

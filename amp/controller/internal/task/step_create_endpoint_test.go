@@ -206,6 +206,35 @@ func TestCreateEndpointStepOptInPreloadExtension(t *testing.T) {
 	}
 }
 
+func TestCreateEndpointStepOptInMultipleExtensions(t *testing.T) {
+	// Two non-preload extensions opted in together (pgvector + age) are both
+	// resolved to their pinned images, mounted in request order, and both
+	// persisted onto the branch — the co-mounted case the local/smoke tests
+	// exercise end-to-end.
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	deps := endpointDeps(state, newFakeRecipeStore(), dep)
+	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
+	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
+	step := NewCreateEndpointStep(CreateEndpointArgs{
+		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
+		Extensions: []string{"pgvector", "age"},
+	}, deps)
+
+	if res := step.Execute(t.Context()); res.Failed() {
+		t.Fatalf("Execute: %v", res.Err)
+	}
+	exts := dep.created[0].Extensions
+	if len(exts) != 2 ||
+		exts[0].Name != "pgvector" || exts[0].Image != "quay.io/yugabyte/amp-ext-pgvector:0.8.2" || exts[0].Preload ||
+		exts[1].Name != "age" || exts[1].Image != "quay.io/yugabyte/amp-ext-age:1.8.0" || exts[1].Preload {
+		t.Fatalf("spec.Extensions = %+v, want [pgvector, age] both Preload:false", exts)
+	}
+	persisted, _ := state.BranchExtensions(t.Context(), clusterID, branchID)
+	if len(persisted) != 2 || persisted[0] != "pgvector" || persisted[1] != "age" {
+		t.Fatalf("branch extensions = %v, want [pgvector age] persisted", persisted)
+	}
+}
+
 func TestCreateEndpointStepInheritsBranchExtensions(t *testing.T) {
 	// A branch that opted into an extra extension (e.g. inherited across a fork)
 	// mounts it in addition to the catalog defaults, de-duplicated and ordered

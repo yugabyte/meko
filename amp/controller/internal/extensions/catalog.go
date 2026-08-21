@@ -70,6 +70,13 @@ var builtin = []Extension{
 	// catalog name (CREATE EXTENSION hexabridge); its source is fetched from a
 	// private repo at build time (see deploy/extensions).
 	{Name: "hexabridge", Version: "0.1", Default: false, Preload: true},
+	// age: Apache AGE, the openCypher graph extension. Opt-in per branch like the
+	// others and NOT a default. Preload: false — AGE loads per session via
+	// `LOAD 'age'` and does not require shared_preload_libraries (like pgvector),
+	// so opting in on a live endpoint is a mount, not a restart. The SQL name
+	// equals the catalog name (CREATE EXTENSION age; schema ag_catalog). v1.8.0
+	// is AGE's PG18 release line.
+	{Name: "age", Version: "1.8.0", Default: false, Preload: false},
 }
 
 // NewCatalog returns the built-in catalog with images under registry (e.g.

@@ -27,6 +27,7 @@
 # Usage:
 #   test/integration/compute/extensions.sh                  # pgvector, release
 #   test/integration/compute/extensions.sh --ext pgvector   # explicit
+#   test/integration/compute/extensions.sh --ext pgvector,age # co-mount + smoke both
 #   test/integration/compute/extensions.sh --ext hexabridge # needs AMP_EXT_GH_TOKEN
 #   test/integration/compute/extensions.sh --debug          # debug cluster build
 #   test/integration/compute/extensions.sh --registry my    # override image registry
@@ -53,8 +54,12 @@ usage() {
 Usage: test/integration/compute/extensions.sh [options]
 
 Options:
-  --ext <name>        extension to test (default: pgvector). Must be a row in
-                      deploy/extensions/extensions.yaml.
+  --ext <name>[,<name>...]
+                      extension(s) to test (default: pgvector). Each must be a
+                      row in deploy/extensions/extensions.yaml. A comma-separated
+                      list co-mounts several on one endpoint (e.g. pgvector,age)
+                      and runs each one's smoke in turn. --regress needs a single
+                      extension.
   --regress           run the extension's OWN upstream regression suite against
                       the mounted ImageVolume (see the row's `regress:` block)
                       instead of the built-in smoke assertions.
@@ -102,14 +107,27 @@ done
 command -v docker >/dev/null 2>&1 || { echo "docker not found on PATH" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found on PATH" >&2; exit 1; }
 
+# --ext accepts a comma-separated list to co-mount several extensions on ONE
+# endpoint (e.g. --ext pgvector,age) — the local-deploy twin of opting an
+# endpoint into extensions:[...]. The built-in smoke runs each extension's own
+# assertions in turn against the shared compute. --regress stays single-extension
+# (it drives one upstream pg_regress/script suite).
+IFS=',' read -ra EXT_NAMES <<< "$EXT_NAME"
+[[ ${#EXT_NAMES[@]} -ge 1 && -n "${EXT_NAMES[0]}" ]] || { echo "no --ext given" >&2; exit 2; }
+PRIMARY_EXT="${EXT_NAMES[0]}"
+if [[ $REGRESS == 1 && ${#EXT_NAMES[@]} -gt 1 ]]; then
+    echo "--regress runs a single extension's upstream suite; got --ext $EXT_NAME" >&2
+    exit 2
+fi
+
 MANIFEST="$REPO/deploy/extensions/extensions.yaml"
 PGINST="$REPO/pg_install/v18"
 
-# 1) Resolve the extension's manifest row: the image tag is the single source
+# 1) Resolve each extension's manifest row: the image tag is the single source
 #    of truth in extensions.yaml, so read it the same way build.sh does rather
-#    than reconstruct it here. Emits: registry, version, control, preload.
+#    than reconstruct it here. Emits (per name): registry, version, control, preload.
 read_row() {
-    python3 - "$MANIFEST" "$EXT_NAME" <<'PY'
+    python3 - "$MANIFEST" "$1" <<'PY'
 import sys, yaml
 m = yaml.safe_load(open(sys.argv[1]))
 name = sys.argv[2]
@@ -124,36 +142,56 @@ else:
     sys.exit("extension %r not found in %s" % (name, sys.argv[1]))
 PY
 }
-IFS=$'\t' read -r REGISTRY VERSION CONTROL PRELOAD < <(read_row)
-[[ -n "$REGISTRY_OVERRIDE" ]] && REGISTRY="$REGISTRY_OVERRIDE"
-[[ -n "$VERSION" ]] || { echo "no version for '$EXT_NAME' in $MANIFEST" >&2; exit 1; }
-IMAGE="${REGISTRY}/amp-ext-${EXT_NAME}:${VERSION}"
+declare -a EXT_VERSIONS EXT_CONTROLS EXT_PRELOADS EXT_IMAGES
+for _n in "${EXT_NAMES[@]}"; do
+    IFS=$'\t' read -r _reg _ver _ctrl _pre < <(read_row "$_n")
+    [[ -n "$REGISTRY_OVERRIDE" ]] && _reg="$REGISTRY_OVERRIDE"
+    [[ -n "$_ver" ]] || { echo "no version for '$_n' in $MANIFEST" >&2; exit 1; }
+    EXT_VERSIONS+=("$_ver"); EXT_CONTROLS+=("$_ctrl"); EXT_PRELOADS+=("$_pre")
+    EXT_IMAGES+=("${_reg}/amp-ext-${_n}:${_ver}")
+    echo ">>> extension=$_n version=$_ver control=$_ctrl preload=$_pre image=${_reg}/amp-ext-${_n}:${_ver}"
+done
+# Legacy single-extension aliases: the --regress path below drives just the
+# primary extension and its script driver does CREATE EXTENSION $CONTROL.
+EXT_NAME="$PRIMARY_EXT"
+CONTROL="${EXT_CONTROLS[0]}"
 
-echo ">>> extension=$EXT_NAME version=$VERSION control=$CONTROL preload=$PRELOAD image=$IMAGE"
+# 2+3) Build each extension image via the real docker pipeline (no --push; the
+#      first build also compiles the ABI-anchor PG18 base — slow) and extract its
+#      FROM-scratch tree (share/ + lib/) to a per-extension host temp dir. The
+#      image root is exactly /share/postgresql/extension + /lib/postgresql
+#      (extension.Dockerfile). The image is FROM scratch with no CMD/ENTRYPOINT,
+#      and `docker create` refuses one ("no command specified") without a
+#      command; pass a placeholder — it is only recorded in the container config,
+#      never run (we just docker cp the layers out and delete it). Accumulate the
+#      two PG path GUCs ($system/$libdir kept literal — PG expands them — the
+#      extracted dirs COLON-joined on) and, for any preload extension, its
+#      shared_preload_libraries name.
+declare -a EXT_DIRS
+CTRL_PATH_PARTS=('$system')
+LIB_PATH_PARTS=('$libdir')
+PRELOAD_LIBS=()
+for _i in "${!EXT_NAMES[@]}"; do
+    _n="${EXT_NAMES[$_i]}"; _img="${EXT_IMAGES[$_i]}"
+    echo ">>> building extension image ($_n) via deploy/extensions/build.sh"
+    BUILD_ARGS=()
+    [[ -n "$REGISTRY_OVERRIDE" ]] && BUILD_ARGS+=(--registry "$REGISTRY_OVERRIDE")
+    [[ $CACHE == 1 ]] && BUILD_ARGS+=(--cache)
+    bash "$REPO/deploy/extensions/build.sh" "${BUILD_ARGS[@]}" "$_n"
 
-# 2) Build the extension image with the real docker pipeline (no --push). This
-#    also builds the ABI-anchor PG18 base image the first time (slow).
-echo ">>> building extension image via deploy/extensions/build.sh"
-BUILD_ARGS=()
-[[ -n "$REGISTRY_OVERRIDE" ]] && BUILD_ARGS+=(--registry "$REGISTRY_OVERRIDE")
-[[ $CACHE == 1 ]] && BUILD_ARGS+=(--cache)
-bash "$REPO/deploy/extensions/build.sh" "${BUILD_ARGS[@]}" "$EXT_NAME"
-
-# 3) Extract the FROM-scratch tree (share/ + lib/) to a host temp dir. The
-#    image root is exactly /share/postgresql/extension + /lib/postgresql
-#    (extension.Dockerfile), so after this EXT_DIR holds share/ and lib/.
-#    The image is FROM scratch with no CMD/ENTRYPOINT, and `docker create`
-#    refuses one ("no command specified") without a command; pass a placeholder.
-#    It is only recorded in the container config, never run — we just docker cp
-#    the layers out and delete it — so the binary need not exist in the image.
-EXT_DIR="$(mktemp -d)"
-echo ">>> extracting $IMAGE -> $EXT_DIR"
-CID="$(docker create "$IMAGE" /extract-only)"
-docker cp "$CID:/share" "$EXT_DIR/"
-docker cp "$CID:/lib" "$EXT_DIR/"
-docker rm "$CID" >/dev/null
-[[ -d "$EXT_DIR/share/postgresql/extension" ]] || { echo "extracted tree missing share/postgresql/extension" >&2; exit 1; }
-[[ -d "$EXT_DIR/lib/postgresql" ]] || { echo "extracted tree missing lib/postgresql" >&2; exit 1; }
+    _dir="$(mktemp -d)"
+    EXT_DIRS+=("$_dir")
+    echo ">>> extracting $_img -> $_dir"
+    _cid="$(docker create "$_img" /extract-only)"
+    docker cp "$_cid:/share" "$_dir/"
+    docker cp "$_cid:/lib" "$_dir/"
+    docker rm "$_cid" >/dev/null
+    [[ -d "$_dir/share/postgresql/extension" ]] || { echo "extracted tree missing share/postgresql/extension" >&2; exit 1; }
+    [[ -d "$_dir/lib/postgresql" ]] || { echo "extracted tree missing lib/postgresql" >&2; exit 1; }
+    CTRL_PATH_PARTS+=("$_dir/share/postgresql")
+    LIB_PATH_PARTS+=("$_dir/lib/postgresql")
+    [[ "${EXT_PRELOADS[$_i]}" == true ]] && PRELOAD_LIBS+=("${EXT_CONTROLS[$_i]}")
+done
 
 # 4) The compute needs a built Postgres (+ the yb_amp extension) to run. build.sh
 #    is the single entry point that produces pg_install/v18 and the yb_amp .so.
@@ -271,13 +309,13 @@ finish() {
     trap - EXIT INT TERM HUP
     [[ $rc -ne 0 ]] && dump_logs
     if [[ $KEEP == 1 ]]; then
-        # Keep EXT_DIR too: the endpoint's extension_control_path/dynamic_library_path
-        # point into it, so wiping it here would leave the kept cluster unable to
-        # restart or CREATE EXTENSION.
+        # Keep the extracted tree(s) too: the endpoint's extension_control_path/
+        # dynamic_library_path point into them, so wiping them here would leave the
+        # kept cluster unable to restart or CREATE EXTENSION.
         echo ">>> --keep: cluster left up (compute 127.0.0.1:${COMPUTE:-?}, db=$YB_DBNAME)"
         echo "    tear down: YB_DBNAME=$YB_DBNAME YB_AMP_REPO_DIR=$YB_AMP_REPO_DIR COMPUTE_PORT=${COMPUTE:-} bash test/integration/compute/clean.sh"
     else
-        [[ -n "${EXT_DIR:-}" ]] && rm -rf "$EXT_DIR"
+        for _d in "${EXT_DIRS[@]:-}"; do [[ -n "$_d" ]] && rm -rf "$_d"; done
         [[ -n "${SRC_DIR:-}" ]] && rm -rf "$SRC_DIR"
         echo ">>> tearing down"; clean
     fi
@@ -296,21 +334,31 @@ BR=$(yb cluster create ext --pg-version 18 | awk '/successfully created/{print $
 [[ -n "$BR" ]] || { echo "cluster create produced no branch id" >&2; exit 1; }
 echo ">>> branch: $BR"
 
-# 7) Create the endpoint with the two path GUCs pointing at the extracted tree.
-#    $system / $libdir stay literal (PG expands them); the extracted dir is
+# 7) Create the endpoint with the two path GUCs pointing at the extracted tree(s).
+#    $system / $libdir stay literal (PG expands them); the extracted dirs are
 #    interpolated by the shell. These are Postgres path lists, so entries are
 #    COLON-separated (like the chart's `join ":"` in configmap.yaml) — a comma
 #    makes PG read "$system,<dir>" as one element and FATAL on the macro name.
 #    extension_control_path is the sharedir BASE — PG18 appends /extension itself.
+#    With several co-mounted extensions every extracted dir is on the path.
+CTRL_PATH="$(IFS=:; echo "${CTRL_PATH_PARTS[*]}")"
+LIB_PATH="$(IFS=:; echo "${LIB_PATH_PARTS[*]}")"
 PG_SETTINGS=(
-    --pg-setting "extension_control_path=\$system:$EXT_DIR/share/postgresql"
-    --pg-setting "dynamic_library_path=\$libdir:$EXT_DIR/lib/postgresql"
+    --pg-setting "extension_control_path=$CTRL_PATH"
+    --pg-setting "dynamic_library_path=$LIB_PATH"
+    # amp compute defaults compute_query_id=on, so EXPLAIN (VERBOSE) prints a
+    # non-deterministic "Query Identifier:" line. Upstream regress suites assume
+    # the stock default (off), so restore it — otherwise AGE's expr/cypher_with
+    # EXPLAIN tests diverge on a value that can't be blessed. Harmless elsewhere.
+    --pg-setting "compute_query_id=off"
 )
 # A preload extension must also be added to shared_preload_libraries; the local
 # base sets it to just "yb_amp" (postgresqlconf.go). That GUC is comma-separated
-# (a list of library names), unlike the path GUCs above. pgvector needs no preload.
-if [[ "$PRELOAD" == true ]]; then
-    PG_SETTINGS+=(--pg-setting "shared_preload_libraries=yb_amp,$CONTROL")
+# (a list of library names), unlike the path GUCs above. pgvector/age need no
+# preload; pg_cron/hexabridge do — union whatever the co-mounted set requires.
+if [[ ${#PRELOAD_LIBS[@]} -gt 0 ]]; then
+    SPL="$(IFS=,; echo "${PRELOAD_LIBS[*]}")"
+    PG_SETTINGS+=(--pg-setting "shared_preload_libraries=yb_amp,$SPL")
 fi
 yb endpoint create ext --branch-id "$BR" --pg-version 18 --pg-port "$COMPUTE" "${PG_SETTINGS[@]}"
 yb endpoint start ext -t 600s
@@ -409,12 +457,30 @@ MK
         REGRESS_OPTS="$(make -s -C "$SRC_DIR" -f "$WRAP" amp-print-REGRESS_OPTS PG_CONFIG="$PG_CONFIG")"
         rm -f "$WRAP"
         [[ -n "$REGRESS_TESTS" ]] || { echo ">>> FAIL $EXT_NAME: no REGRESS tests found in Makefile" >&2; exit 1; }
+        # Reproduce the extension's "installcheck-existing" (run against a live
+        # server) from its REGRESS_OPTS by dropping only what pins a PRIVATE temp
+        # instance: --temp-instance, its --temp-config, and the --port that goes
+        # with it, so the harness's own --host/--port (the live amp compute,
+        # below) win. AGE bakes the whole trio into REGRESS_OPTS
+        # (--temp-instance/--port=61958/--temp-config age_regression.conf); its
+        # surviving --port otherwise overrode ours and pg_regress dialed a dead
+        # port. Everything else is KEPT — in particular --dbname: pg_cron's and
+        # age's expected output, and pg_cron's CREATE EXTENSION guard, hardcode
+        # the Makefile's contrib_regression, so dropping it breaks them. Handle
+        # both "--flag=value" and space-separated "--flag value" forms (the
+        # latter needs the next token dropped too, or its value orphans into a
+        # bogus positional test name).
         KEPT_OPTS=()
         INPUTDIR="$SRC_DIR"
+        OUTPUTDIR="$SRC_DIR"   # pg_regress writes regression.diffs here (CWD default)
+        drop_value=0
         for tok in $REGRESS_OPTS; do
+            if (( drop_value )); then drop_value=0; continue; fi
             case "$tok" in
-                --temp-instance*|--temp-config*) ;;  # drop: no private server
-                --inputdir=*) INPUTDIR="$SRC_DIR/${tok#--inputdir=}"; KEPT_OPTS+=("$tok") ;;
+                --temp-instance=*|--temp-config=*|--port=*) ;;
+                --temp-instance|--temp-config|--port) drop_value=1 ;;
+                --inputdir=*) v="${tok#--inputdir=}"; [[ $v == /* ]] && INPUTDIR="$v" || INPUTDIR="$SRC_DIR/$v"; KEPT_OPTS+=("$tok") ;;
+                --outputdir=*) v="${tok#--outputdir=}"; [[ $v == /* ]] && OUTPUTDIR="$v" || OUTPUTDIR="$SRC_DIR/$v"; KEPT_OPTS+=("$tok") ;;
                 *) KEPT_OPTS+=("$tok") ;;
             esac
         done
@@ -425,11 +491,26 @@ MK
         # supports CREATE DATABASE — see pg_regress.sh / #119). The endpoint's
         # extension_control_path/dynamic_library_path GUCs are server-wide, so
         # the extension resolves in that database too.
-        ( cd "$SRC_DIR" && "$PG_REGRESS" \
+        #
+        # On a diff, pg_regress writes regression.diffs (under --outputdir if the
+        # Makefile set one, else the CWD) but that file is neither in the cluster
+        # log dir nor uploaded, so print it here — it's the only way to see what
+        # diverged (and thus what to bless under ext_regress_expected/) from CI.
+        if ! ( cd "$SRC_DIR" && "$PG_REGRESS" \
             --bindir="$PGINST/bin" \
             --host=127.0.0.1 --port="$COMPUTE" --user=cloud_admin \
             --dbname="amp_regress_${EXT_NAME}" \
-            "${KEPT_OPTS[@]}" $REGRESS_TESTS )
+            "${KEPT_OPTS[@]}" $REGRESS_TESTS ); then
+            for diffs in "$OUTPUTDIR/regression.diffs" "$SRC_DIR/regression.diffs" \
+                         "$INPUTDIR/regression.diffs"; do
+                [[ -f "$diffs" ]] || continue
+                echo ">>> regression.diffs ($EXT_NAME) — $diffs:"
+                cat "$diffs"
+                break
+            done
+            echo ">>> FAIL $EXT_NAME: pg_regress reported diffs" >&2
+            exit 1
+        fi
         echo ">>> PASS $EXT_NAME: upstream pg_regress suite green"
     elif [[ "$REG_DRIVER" == script ]]; then
         # A custom runner (hexabridge's scripts/regression.sh): it drives psql
@@ -467,6 +548,11 @@ MK
     exit 0
 fi
 
+# Built-in smoke assertions for ONE extension against the live compute. Runs
+# once per co-mounted extension (all share this endpoint). $PSQL/$COMPUTE are the
+# cluster globals; the extension name + its control basename come in as args.
+smoke_ext() {
+  local EXT_NAME="$1" CONTROL="$2"
 if [[ "$EXT_NAME" == pgvector ]]; then
     # CREATE EXTENSION + store real vector data + a nearest-neighbour query that
     # exercises the type end-to-end (insert -> CHECKPOINT through the storage
@@ -572,6 +658,29 @@ SQL
         echo "$out" >&2
         exit 1
     fi
+elif [[ "$EXT_NAME" == age ]]; then
+    # Apache AGE (openCypher graph). Non-preload: load it per session with
+    # LOAD 'age' (no shared_preload_libraries). Beyond registration, exercise the
+    # graph path end-to-end in one session: create a graph, a cypher() CREATE that
+    # writes a vertex (through the storage stack after CHECKPOINT), then a cypher()
+    # MATCH that reads the property back — asserting the value round-trips.
+    out=$("${PSQL[@]}" <<'SQL' 2>&1
+CREATE EXTENSION IF NOT EXISTS age;
+LOAD 'age';
+SET search_path = ag_catalog, "$user", public;
+SELECT create_graph('amp_age_probe');
+SELECT * FROM cypher('amp_age_probe', $$ CREATE (:Person {name: 'ada'}) $$) AS (v agtype);
+CHECKPOINT;
+SELECT * FROM cypher('amp_age_probe', $$ MATCH (p:Person) RETURN p.name $$) AS (name agtype);
+SQL
+)
+    if echo "$out" | grep -q '^"ada"$'; then
+        echo ">>> PASS age: LOAD 'age' + create_graph + cypher CREATE/MATCH round-trip (ada)"
+    else
+        echo ">>> FAIL age cypher query; output:" >&2
+        echo "$out" >&2
+        exit 1
+    fi
 else
     # Generic smoke: create the extension and confirm it registered.
     out=$("${PSQL[@]}" <<SQL 2>&1
@@ -587,6 +696,12 @@ SQL
         exit 1
     fi
 fi
+}
 
-echo ">>> OK ($EXT_NAME)"
+# Run the smoke assertions for each co-mounted extension in turn.
+for _i in "${!EXT_NAMES[@]}"; do
+    smoke_ext "${EXT_NAMES[$_i]}" "${EXT_CONTROLS[$_i]}"
+done
+
+echo ">>> OK (${EXT_NAMES[*]})"
 # teardown (or --keep) handled by the finish() EXIT trap

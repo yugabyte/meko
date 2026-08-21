@@ -4,8 +4,9 @@ This page describes how yb-amp ships PostgreSQL extensions **outside** the
 endpoint image — each extension is built into its own tiny OCI image and mounted
 into the endpoint pod as a Kubernetes **ImageVolume**, with PostgreSQL pointed at
 it via `extension_control_path` / `dynamic_library_path` (both PG18 features).
-`pgvector`, `pg_cron`, and `hexabridge` are delivered this way; the pipeline is
-generic so adding another is a manifest row plus a catalog entry.
+`pgvector`, `pg_cron`, `hexabridge`, and `age` (Apache AGE) are delivered this
+way; the pipeline is generic so adding another is a manifest row plus a catalog
+entry.
 
 ## Why not bake them into the endpoint image
 
@@ -323,25 +324,31 @@ audit / recreate.
   registration. For `hexabridge` it goes past `CREATE EXTENSION` (superuser-only)
   and calls deterministic Oracle-compat functions (`nanvl`, `utl_raw.length`) so
   the loaded `.so` is exercised; that run needs `AMP_EXT_GH_TOKEN` for the private
-  fetch and is skipped on forks. It is the local-deploy twin of
-  `deploy/smoke-test.sh`'s `SMOKE_EXTENSIONS` check.
+  fetch and is skipped on forks. For `age` it does `LOAD 'age'`, creates a graph,
+  and runs a `cypher()` CREATE/MATCH round-trip. `--ext` also takes a
+  comma-separated list to **co-mount** several extensions on one endpoint (e.g.
+  `--ext pgvector,age` — both non-preload — mounts both trees and runs each one's
+  smoke in turn). It is the local-deploy twin of `deploy/smoke-test.sh`'s
+  `SMOKE_EXTENSIONS` check.
 - **Upstream regression suites (local)** —
   [`extensions.sh --regress`](../../test/integration/compute/extensions.sh) runs
   each extension's **own** upstream regression suite against the mounted
   ImageVolume — the extension analogue of `pg_regress.sh` for core Postgres (#608)
-  — driven by the manifest row's `regress:` block: `driver: pgxs` runs
-  `pg_regress` from the extension's Makefile `REGRESS` (pgvector, pg_cron) against
-  the live compute; `driver: script` runs the extension's own runner (hexabridge's
-  `scripts/regression.sh`). The suite lives in the source tree (not the
-  `FROM scratch` image), so the driver re-fetches the source as
+  —   driven by the manifest row's `regress:` block: `driver: pgxs` runs
+  `pg_regress` from the extension's Makefile `REGRESS` (pgvector, pg_cron, age)
+  against the live compute; `driver: script` runs the extension's own runner
+  (hexabridge's `scripts/regression.sh`). The suite lives in the source tree (not
+  the `FROM scratch` image), so the driver re-fetches the source as
   `extension.Dockerfile` does. By-design amp diffs are blessed as alternative
   expected outputs under
   [`test/integration/compute/ext_regress_expected/<name>/`](../../test/integration/compute/ext_regress_expected/README.md),
-  never by editing upstream goldens. The `amp_extensions_local` CI suite runs all
-  three with `--regress`, and it fires automatically when a diff touches
-  `deploy/extensions/`.
+  never by editing upstream goldens. The `amp_extensions_local` CI suite runs each
+  extension with `--regress` (one per step, distinct port block), and it fires
+  automatically when a diff touches `deploy/extensions/`.
 - **Smoke test** — `deploy/smoke-test.sh` with `SMOKE_EXTENSIONS=1` exercises the
-  real K8s ImageVolume path for pgvector, pg_cron, and hexabridge end-to-end.
+  real K8s ImageVolume path end-to-end: pgvector and `age` co-mounted on one
+  endpoint (asserting both `/extensions/<name>` mounts, the pgvector data query,
+  and an AGE `cypher()` round-trip), then pg_cron and hexabridge on their own.
 
 ## Code anchors
 

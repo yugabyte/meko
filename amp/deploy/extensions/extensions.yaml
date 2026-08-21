@@ -100,3 +100,30 @@ extensions:
     regress:
       driver: script
       script: scripts/regression.sh
+
+  - name: age
+    # Apache AGE (openCypher graph). AGE ships a per-Postgres-major release line;
+    # v1.8.0 is the PG18 one (tag PG18/v1.8.0-rc0), so it builds against the
+    # forked PG18 ABI base. Pure PGXS => the generic extension.Dockerfile builds
+    # it (the patch below only trims a regress test, not the build).
+    version: "1.8.0"
+    url: https://github.com/apache/age/archive/refs/tags/PG18/v1.8.0-rc0.tar.gz
+    sha256: c9036f9fb6fe545aa20e333743c661810966288cda9922ac89f4d82d9ee6e99b
+    # Drops scan's EUC_KR (non-UTF8 server encoding) sub-test: amp compute forces
+    # the C.UTF-8 locale, so its CREATE DATABASE ... ENCODING EUC_KR is rejected
+    # and would abort scan.sql before it cleans up. Regress-only; no build effect.
+    patch: age-regress-euc-kr.patch
+    # SQL name == package name: CREATE EXTENSION age (schema ag_catalog).
+    control: age
+    # The .control ships no `trusted`, so CREATE EXTENSION is superuser-only.
+    trusted: false
+    # AGE loads per session via `LOAD 'age'`; shared_preload_libraries is
+    # optional (1.8.0's #2438 makes it usable that way, but not required), so it
+    # is a non-preload extension like pgvector — no restart to enable.
+    preload: false
+    prep: ""
+    dockerfile: ""
+    # AGE ships a pg_regress suite under regress/ — run it against the mounted
+    # ImageVolume (see extensions.sh --regress).
+    regress:
+      driver: pgxs
