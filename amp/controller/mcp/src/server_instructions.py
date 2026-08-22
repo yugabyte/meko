@@ -51,10 +51,12 @@ know which setting cost them. A storage daemon's settings \
 (`pageserver_settings`, `safekeeper_settings`) always restart that daemon — \
 those have no reload path.
 
-A setting nothing can apply — a name Postgres does not know, or one compiled \
-into the binary — comes back in `not_applied`. Nothing is restarted for it, \
-because a restart would not put it in force either. Tell the user: the value is \
-stored and doing nothing, and a silent success is how a typo survives.
+A setting Postgres will not take — a name it does not know, a value it cannot \
+parse — comes back in `not_applied` as `{name, reason}`, and is deliberately not \
+written to the config file at all, because a file containing one does not load. \
+Nothing is restarted for it. Report the reason, not just the name: \
+`unrecognized parameter` is a typo to fix, `invalid value` is the wrong value \
+for a real setting. A silent success is how either survives.
 
 ## Asynchronous operations — poll get_task
 

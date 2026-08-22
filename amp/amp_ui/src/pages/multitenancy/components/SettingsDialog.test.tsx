@@ -222,10 +222,41 @@ describe("SettingsDialog", () => {
     fireEvent.change(valueBox("pg_settings"), { target: { value: "128MB" } });
     const said = saveAndReply({
       applied: true,
-      endpoints: [{ endpoint_id: "e1", reloaded: ["compute_ctl"], not_applied: ["blocksize"] }],
+      endpoints: [
+        {
+          endpoint_id: "e1",
+          reloaded: ["compute_ctl"],
+          not_applied: [{ name: "blocksize", reason: "unrecognized parameter" }],
+        },
+      ],
     });
     expect(said).toContain("blocksize");
-    expect(said).toContain("won't take effect");
+    // The reason, not just the name: a typo and an unusable value are different
+    // things to go and fix.
+    expect(said).toContain("unrecognized parameter");
+  });
+
+  // One line per reason, not per setting: three typos should read as one thing
+  // to go and fix, not three repetitions of the same explanation.
+  it("groups settings by why they did not take effect", () => {
+    renderDialog({ stored: { pg_settings: { work_mem: "64MB" } } });
+    fireEvent.change(valueBox("pg_settings"), { target: { value: "128MB" } });
+    const said = saveAndReply({
+      applied: true,
+      endpoints: [
+        {
+          endpoint_id: "e1",
+          reloaded: ["compute_ctl"],
+          not_applied: [
+            { name: "wrok_mem", reason: "unrecognized parameter" },
+            { name: "maintenance_work_mem", reason: "invalid value" },
+            { name: "shraed_buffers", reason: "unrecognized parameter" },
+          ],
+        },
+      ],
+    });
+    expect(said).toContain("wrok_mem, shraed_buffers (unrecognized parameter)");
+    expect(said).toContain("maintenance_work_mem (invalid value)");
   });
 
   // Appended, not substituted: a restart drops connections and stays the
@@ -240,7 +271,7 @@ describe("SettingsDialog", () => {
           endpoint_id: "e1",
           restarted: ["compute_ctl"],
           restart_forced_by: ["shared_buffers"],
-          not_applied: ["blocksize"],
+          not_applied: [{ name: "blocksize", reason: "unrecognized parameter" }],
         },
       ],
     });

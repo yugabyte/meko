@@ -96,12 +96,23 @@ When none of them are `postmaster`, the new spec goes to `compute_ctl`'s in-pod
 connections stay up. When one is, the compute restarts and the reply names the
 setting that forced it, so the cost is explained rather than arbitrary.
 
-Some settings nothing applies, and those are left alone. `internal` ones like
-`block_size` are compiled into the binary, and a name Postgres does not report
-at all — a typo, or one from an extension that is not loaded — cannot be put in
-force by any means. Restarting on their account would be an interruption that
-changes nothing, so the reply names them as not applied instead, which is also
-the only way the operator finds out the edit had no effect.
+Some settings never reach the config file at all. Postgres refuses a name it
+does not recognise or a value it cannot parse, and it refuses them by refusing
+the whole file: a reload of it applies nothing, and the next start fails
+outright, so a typo stored today is an endpoint that will not come back from its
+next restart. It has no option to ignore one. So the settings are put to the
+binary before they are written — `postgres -C` parses a throwaway config without
+needing a server, which is the only way to ask at create, when Postgres has never
+run — and one it will not take is left out and named in the reply instead.
+
+`internal` settings like `block_size` are left out on the same reasoning,
+though they are inert rather than fatal: compiled into the binary, so no reload
+or restart puts them in force. A name with a dot is always written, because
+Postgres accepts it as a placeholder whether or not anything defines it — which
+is what a setting belonging to an unloaded extension needs.
+
+Either way the endpoint is not interrupted for them, and the reply naming them
+is the only way the operator finds out the edit did nothing.
 
 The pageserver and safekeeper restart on any change to their toml. They read it
 once at start and have no reload path.
@@ -113,12 +124,24 @@ explains nothing. And reloads are serialised, because two interleaving would eac
 write the other's files and both report a "changed" that reflects the race rather
 than the registry.
 
+`POST /v1/settings/check` is the other half, and it runs *before* a write. The
+controller asks the branch's writer whether Postgres would take the names and
+values, and refuses the request outright if not, rather than storing a setting
+that can only ever be reported as not in force. Only the pod can answer: the
+version judging them is the one in its image, and an extension's setting does not
+exist until that extension is loaded. It applies nothing, so it is safe on an
+endpoint running prerendered config and concurrently with a reload.
+
 Served only where something calls it: the chart emits `SUPERVISOR_HTTP_PORT`
 only when `controller.url` is set, and with no port the supervisor serves
 nothing. It is unauthenticated, like the pageserver and safekeeper HTTP APIs the
-same Service already publishes — inherited posture rather than a new decision,
-and the endpoint takes no request body, so the most an unauthenticated caller
-can do is make the supervisor re-read state it already trusts.
+same Service already publishes — inherited posture rather than a new decision.
+`reload` takes no body, so the most a caller can do there is make the supervisor
+re-read state it already trusts. `check` does take one, and does work
+proportional to it — a `postgres` per setting when a set is refused — so it is
+bounded: 64 KiB of body and 512 settings, both far above any real map, because
+an unauthenticated route that spawns processes should not be the cheapest way to
+load the pod.
 
 An endpoint on `PRERENDERED_CONFIG` refuses the call: its config belongs to the
 caller that wrote it (`yb_amp_local`), built from an environment this process

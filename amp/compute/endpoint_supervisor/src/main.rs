@@ -64,6 +64,7 @@ pub mod config;
 pub mod control;
 pub mod coordinate;
 pub mod fence;
+pub mod guc;
 pub mod http;
 pub mod pg_settings;
 pub mod pidfile;
@@ -733,6 +734,10 @@ pub struct Rendered {
     /// changed. What to do about them is [`reconfigure::decide`]'s to say — it
     /// needs the running server to classify them.
     pub changed_settings: Vec<String>,
+    /// Settings that were stored and deliberately not written, because Postgres
+    /// would refuse the config file that contained them, each with why. See
+    /// [`crate::guc`].
+    pub refused_settings: Vec<guc::NotApplied>,
 }
 
 /// Re-read the registry and re-render, for a caller that is not booting.
@@ -781,6 +786,18 @@ pub fn render_config(
         data_volume_bytes = res.data_volume_bytes,
         "resolved endpoint resources"
     );
+
+    // Asked before the render, not after: a name or value Postgres refuses would
+    // take the whole config file down with it, and at create there is no server
+    // to have asked instead.
+    let screened = guc::screen(&l.pg_bin(), &l.run_dir, &overrides.pg);
+    for r in &screened.refused {
+        tracing::warn!(
+            name = %r.name,
+            reason = %r.reason,
+            "stored but not rendered"
+        );
+    }
 
     let (settings, skipped) = pg_settings::derive(&res);
     for s in &settings {
@@ -855,7 +872,7 @@ pub fn render_config(
         },
         &settings,
         &env.chart_settings,
-        &overrides.pg,
+        &screened.keep,
     );
     let rendered_spec = serde_json::to_string(&compute_spec)?;
     let (compute, previous) = write_returning_previous(&l.compute_spec(), &rendered_spec)?;
@@ -879,6 +896,7 @@ pub fn render_config(
         safekeeper,
         compute,
         changed_settings,
+        refused_settings: screened.refused,
     })
 }
 

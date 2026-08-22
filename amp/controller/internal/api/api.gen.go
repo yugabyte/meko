@@ -700,14 +700,28 @@ type EndpointResources struct {
 type EndpointSettingsOutcome struct {
 	EndpointId openapi_types.UUID `json:"endpoint_id"`
 
-	// NotApplied Settings that are stored but not in force, because nothing applies
-	// them. A `pg_settings.context = 'internal'` setting is compiled into
-	// the binary, and a name Postgres does not report at all is a typo or
-	// belongs to an extension that is not loaded. Neither a reload nor a
-	// restart would put these in force, so the endpoint is not interrupted
-	// for them — which makes this field the only signal that the edit had
-	// no effect.
-	NotApplied *[]string `json:"not_applied,omitempty"`
+	// NotApplied Settings that are stored but not in force, and never will be until
+	// they are changed. Two reasons, both reported here:
+	//
+	// Postgres refuses the setting — a name it does not recognise, or a
+	// value it cannot parse. These are deliberately left out of the config
+	// file the compute reads, because a file containing one does not load:
+	// a reload of it applies nothing, and the next start fails outright. A
+	// setting like this cannot break the endpoint, but it also does nothing.
+	//
+	// Or nothing applies it: a `pg_settings.context = 'internal'` setting
+	// is compiled into the binary, so neither a reload nor a restart can
+	// change it.
+	//
+	// Either way the endpoint is not interrupted, which makes this field
+	// the only signal that the edit had no effect.
+	//
+	// A name with a dot in it is always written — Postgres takes it as a
+	// placeholder — so it is never refused. It does appear here with
+	// `nothing applies this setting` while the extension that defines it is
+	// not loaded, because until then Postgres does not report the setting
+	// and nothing can put the value in force.
+	NotApplied *[]SettingNotApplied `json:"not_applied,omitempty"`
 
 	// Reloaded Services that took the change in place, without an interruption.
 	// For the compute this means Postgres reloaded its configuration and
@@ -1032,6 +1046,27 @@ type ResizeEndpointRequest struct {
 	// **Guaranteed** QoS class. Omit the object (or either field) to take the
 	// defaults of 2 CPU cores and 4Gi of memory.
 	Resources EndpointResources `json:"resources"`
+}
+
+// SettingNotApplied One stored setting that is not in force, and why.
+type SettingNotApplied struct {
+	// Name The setting's name, as it was stored.
+	Name string `json:"name"`
+
+	// Reason Why it is not in force. A fixed phrase, safe to show a person and
+	// safe to compare on:
+	//
+	// - `unrecognized parameter` — Postgres does not know this name,
+	//   usually a typo. Never an extension's setting: a name with a dot in
+	//   it is always accepted.
+	// - `invalid value` — the name is real, the value is not usable for it.
+	// - `cannot be set in a configuration file` — compiled into the binary
+	//   (`pg_settings.context = 'internal'`), like `block_size`.
+	// - `refused by Postgres` — refused for a reason none of the above
+	//   covers. The endpoint's log carries Postgres's own message.
+	// - `nothing applies this setting` — Postgres accepts it in the file,
+	//   but neither a reload nor a restart puts it in force.
+	Reason string `json:"reason"`
 }
 
 // SettingsUpdateResult What was stored, and what could not be applied to a running endpoint.

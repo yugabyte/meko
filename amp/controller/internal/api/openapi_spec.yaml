@@ -483,6 +483,21 @@ paths:
         that cannot be reached is reported in `unreachable`; the row is still
         written, so it picks the change up when it next starts.
 
+
+        **A setting Postgres will not take is refused, not stored.** Before the
+        row is written the branch's `read_write` endpoint is asked whether its
+        Postgres would accept the names and values, and a `400` names each one it
+        would not, with why. Only that endpoint can answer: the version judging
+        them is the one in its image, and an extension's setting does not exist
+        until that extension is loaded.
+
+        The check is skipped when there is no writer to ask — a branch whose
+        endpoints are all read replicas, or which has none yet, is still
+        configurable, because its settings are the baseline whatever starts on it
+        next will use. It is also skipped when the writer cannot be reached, so a
+        write is never blocked on a compute being up; anything unusable then comes
+        back in `not_applied` as before.
+
         `404` if the pool, cluster, or branch does not exist.
       requestBody:
         required: true
@@ -643,6 +658,14 @@ paths:
         restarted for. A write that renders identical config does nothing.
         An endpoint that cannot be reached is reported in `unreachable`; the row
         is still written, so it picks the change up when it next starts.
+
+
+        **A setting Postgres will not take is refused, not stored.** Before the
+        row is written this endpoint is asked whether its Postgres would accept
+        the names and values — it is the pod that will apply them, and for a read
+        replica it may be the only one up — and a `400` names each one it would
+        not, with why. If it cannot be reached the write goes ahead unchecked
+        rather than being blocked on a compute being up.
 
         `404` if the pool, cluster, branch, or endpoint does not exist.
       requestBody:
@@ -1536,6 +1559,31 @@ components:
           items:
             $ref: '#/components/schemas/EndpointSettingsOutcome'
 
+    SettingNotApplied:
+      type: object
+      required: [name, reason]
+      description: One stored setting that is not in force, and why.
+      properties:
+        name:
+          type: string
+          description: The setting's name, as it was stored.
+        reason:
+          type: string
+          description: |
+            Why it is not in force. A fixed phrase, safe to show a person and
+            safe to compare on:
+
+            - `unrecognized parameter` — Postgres does not know this name,
+              usually a typo. Never an extension's setting: a name with a dot in
+              it is always accepted.
+            - `invalid value` — the name is real, the value is not usable for it.
+            - `cannot be set in a configuration file` — compiled into the binary
+              (`pg_settings.context = 'internal'`), like `block_size`.
+            - `refused by Postgres` — refused for a reason none of the above
+              covers. The endpoint's log carries Postgres's own message.
+            - `nothing applies this setting` — Postgres accepts it in the file,
+              but neither a reload nor a restart puts it in force.
+
     EndpointSettingsOutcome:
       type: object
       required: [endpoint_id]
@@ -1579,15 +1627,29 @@ components:
         not_applied:
           type: array
           description: |
-            Settings that are stored but not in force, because nothing applies
-            them. A `pg_settings.context = 'internal'` setting is compiled into
-            the binary, and a name Postgres does not report at all is a typo or
-            belongs to an extension that is not loaded. Neither a reload nor a
-            restart would put these in force, so the endpoint is not interrupted
-            for them — which makes this field the only signal that the edit had
-            no effect.
+            Settings that are stored but not in force, and never will be until
+            they are changed. Two reasons, both reported here:
+
+            Postgres refuses the setting — a name it does not recognise, or a
+            value it cannot parse. These are deliberately left out of the config
+            file the compute reads, because a file containing one does not load:
+            a reload of it applies nothing, and the next start fails outright. A
+            setting like this cannot break the endpoint, but it also does nothing.
+
+            Or nothing applies it: a `pg_settings.context = 'internal'` setting
+            is compiled into the binary, so neither a reload nor a restart can
+            change it.
+
+            Either way the endpoint is not interrupted, which makes this field
+            the only signal that the edit had no effect.
+
+            A name with a dot in it is always written — Postgres takes it as a
+            placeholder — so it is never refused. It does appear here with
+            `nothing applies this setting` while the extension that defines it is
+            not loaded, because until then Postgres does not report the setting
+            and nothing can put the value in force.
           items:
-            type: string
+            $ref: '#/components/schemas/SettingNotApplied'
         unreachable:
           type: string
           description: |

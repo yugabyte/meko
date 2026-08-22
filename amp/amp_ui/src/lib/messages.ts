@@ -49,8 +49,11 @@ export const dataBranchingMessages = {
   /** Appended to whatever else happened: the operator believes they changed
    *  something, and nothing will apply it, so this has to be said out loud
    *  rather than inferred from a compute that did not restart. */
-  settingsSavedNotApplied: (base: string, names: string) =>
-    `${base}. ${names} won't take effect — Postgres can't change ${names.includes(",") ? "those" : "that"} from a config file; check the spelling, or whether the extension that defines it is loaded`,
+  /** `detail` already reads as "work_mem (invalid value); foo, bar (unrecognized
+   *  parameter)" — the reason comes from the API rather than being guessed at
+   *  here, so the operator is told which fix applies. */
+  settingsSavedNotApplied: (base: string, detail: string) =>
+    `${base}. Stored but not in force: ${detail}`,
   settingsError: "Failed to save settings",
   settingsNothingSet: "Nothing set.",
   settingsAddRow: "Add setting",

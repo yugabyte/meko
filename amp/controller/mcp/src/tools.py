@@ -275,9 +275,10 @@ def update_branch_settings(
     `restarted` those that had to be bounced, and `restart_forced_by` names the
     Postgres setting that forced a restart. Most Postgres settings reload; the
     ones fixed at server start restart the compute and drop its connections —
-    on a branch, on every endpoint of it. `not_applied` names settings that are
-    stored and will never take effect — a typo, or one compiled into the binary —
-    which nothing restarts for, so it is the only signal the edit did nothing.
+    on a branch, on every endpoint of it. `not_applied` lists settings that are
+    stored and not in force, each as `{name, reason}` — `unrecognized parameter`
+    for a typo, `invalid value` for one Postgres cannot parse, and so on. Nothing
+    is restarted for these, so it is the only signal the edit did nothing.
     An endpoint that could not be reached comes back in `unreachable` and picks
     the change up when it next starts.
     """
@@ -312,10 +313,10 @@ def update_endpoint_settings(
     `restart_forced_by` names the Postgres setting that forced it. Most Postgres
     settings reload; ones fixed at server start restart the compute and drop its
     connections. `pageserver_settings` / `safekeeper_settings` always restart
-    that daemon — they have no reload path. `not_applied` names settings that are
-    stored and will never take effect, which nothing restarts for. `unreachable`
-    says why an endpoint could not be told; it picks the change up when it next
-    starts.
+    that daemon — they have no reload path. `not_applied` lists settings that are
+    stored and not in force as `{name, reason}`, which nothing restarts for.
+    `unreachable` says why an endpoint could not be told; it picks the change up
+    when it next starts.
     """
     return controller_client.update_endpoint_settings(
         pool_id,

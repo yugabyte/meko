@@ -125,9 +125,9 @@ it.
 They store the settings first, then tell the running endpoints. Each applies
 what it can in place: `reloaded` lists what took the change while running,
 `restarted` what had to be bounced, `restart_forced_by` names the Postgres
-setting that forced a restart, `not_applied` names settings that are stored and
-will never take effect, and `unreachable` says why an endpoint could not be told
-(it picks the change up when it next starts).
+setting that forced a restart, `not_applied` lists settings that are stored and
+not in force as `{name, reason}`, and `unreachable` says why an endpoint could
+not be told (it picks the change up when it next starts).
 
 **Most Postgres settings reload — a few restart the compute.** Postgres fixes
 settings like `shared_buffers` at server start, and those bounce the compute and
@@ -136,10 +136,11 @@ that to anything live, and report `restart_forced_by` so the user knows which
 setting cost them. `pageserver_settings` / `safekeeper_settings` always restart
 that daemon — they have no reload path.
 
-Nothing is restarted for a setting in `not_applied`: a name Postgres does not
-know, or one compiled into the binary, cannot be put in force by a restart
-either. Say so — the value is stored and doing nothing, and a silent success is
-how a typo survives.
+Nothing is restarted for a setting in `not_applied`, and one Postgres refuses
+is not even written to the config file — a file containing it does not load, so
+the compute would not start. Report the `reason`: `unrecognized parameter` is a
+typo, `invalid value` is a real setting given an unusable value. The value is
+stored and doing nothing, and a silent success is how either survives.
 
 ## Resize outcomes
 

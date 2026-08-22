@@ -186,10 +186,10 @@ export type EndpointSettingsOutcome = {
    *  start, so naming them explains a cost that would otherwise look
    *  arbitrary. */
   restart_forced_by?: string[];
-  /** Settings that are stored but not in force: nothing applies them, so the
-   *  endpoint was not interrupted for them either. Compiled-in (`internal`)
-   *  settings and names Postgres does not report at all. */
-  not_applied?: string[];
+  /** Settings that are stored but not in force, each with why — a typo and an
+   *  unusable value send the operator to different fixes. The endpoint was not
+   *  interrupted for any of them. */
+  not_applied?: { name: string; reason: string }[];
   unreachable?: string;
 };
 

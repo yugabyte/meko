@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,17 +37,110 @@ import (
 // Nothing is restarted that did not need to be: the rendered config is compared
 // with what is on disk, so a write that changes nothing costs nothing.
 
-// notifyTimeout bounds one endpoint's reload. Short because the settings are
-// already durable by the time it runs: waiting longer on an endpoint that is
-// wedged buys nothing the next restart will not deliver.
+// notifyTimeout bounds one request to an endpoint's settings API — the reload
+// after a write, and the check before one.
+//
+// Short for both, for opposite reasons. The reload's settings are already durable
+// by the time it runs, so waiting longer on a wedged endpoint buys nothing the
+// next restart will not deliver. The check's are not durable yet: every second of
+// it is latency on a request that has not succeeded, and an endpoint too slow to
+// answer is treated as one that cannot, which lets the write through unchecked.
 const notifyTimeout = 10 * time.Second
+
+// checkReply is the supervisor's answer to POST /v1/settings/check.
+type checkReply struct {
+	NotApplied []SettingNotApplied `json:"not_applied"`
+}
+
+// checkPgSettings asks an endpoint whether Postgres would take these settings.
+//
+// The pod is the only place that can answer: the names and values are Postgres's
+// to judge, the version that judges them is the one in the image, and an
+// extension's setting does not exist until that extension is loaded. So the
+// controller asks the endpoint rather than carrying a list it cannot keep true.
+//
+// An endpoint that cannot answer is not an error: the write goes ahead unchecked,
+// which is what happened before this check existed. Refusing an operator's edit
+// because their compute is down would be worse than the bug being prevented.
+//
+// TODO: skip the check for a paused endpoint once pause is modelled. Nothing here
+// can tell one from an endpoint that is merely slow — `EndpointSupervisorURL` is
+// a pure function of the id and does not check that the endpoint is live — so a
+// paused one is currently found out by asking it and waiting for the timeout.
+// That is a correct answer arrived at wastefully: the caller pays the timeout on
+// a request that could have skipped straight to the write.
+//
+// Returns the settings the endpoint refuses. `ok` is false when it could not be
+// asked, which is not an error.
+func (c *Controllers) checkPgSettings(ctx context.Context, id uuid.UUID, settings map[string]string) (refused []SettingNotApplied, ok bool) {
+	if len(settings) == 0 || c.prov.Deployer == nil {
+		return nil, false
+	}
+	base := c.prov.Deployer.EndpointSupervisorURL(endpointDeployName(id))
+	if base == "" {
+		return nil, false
+	}
+	body, err := json.Marshal(map[string]any{"pg_settings": settings})
+	if err != nil {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/settings/check", bytes.NewReader(body))
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	// A supervisor too old to know this route 404s. Treated like any other
+	// unusable answer: no check, and the write proceeds.
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var reply checkReply
+	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
+		return nil, false
+	}
+	return reply.NotApplied, true
+}
+
+// refusedMessage turns what the endpoint refused into one 400 message, so a
+// careless edit is one round trip rather than one per bad setting.
+func refusedMessage(refused []SettingNotApplied) string {
+	parts := make([]string, 0, len(refused))
+	for _, r := range refused {
+		parts = append(parts, fmt.Sprintf("%s (%s)", r.Name, r.Reason))
+	}
+	// "Nothing was stored" rather than "these were not": each settings surface is
+	// replaced whole, and the refusal returns before the write, so the valid
+	// settings sent alongside these did not land either. An operator told only
+	// that the bad ones were rejected would assume the rest took.
+	return "Postgres will not accept: " + strings.Join(parts, ", ") +
+		". Nothing in this request was stored — not even the settings it accepts — " +
+		"so fix these and send the whole request again."
+}
+
+// writerOf returns the branch's read_write endpoint, which is the one asked to
+// vet a branch-wide change.
+func writerOf(eps []core.Endpoint) (uuid.UUID, bool) {
+	for _, ep := range eps {
+		if ep.Role == core.RoleReadWrite {
+			return ep.ID, true
+		}
+	}
+	return uuid.Nil, false
+}
 
 // reloadReply is the supervisor's answer to POST /v1/settings/reload.
 type reloadReply struct {
-	Restarted       []string `json:"restarted"`
-	Reloaded        []string `json:"reloaded"`
-	RestartForcedBy []string `json:"restart_forced_by"`
-	NotApplied      []string `json:"not_applied"`
+	Restarted       []string            `json:"restarted"`
+	Reloaded        []string            `json:"reloaded"`
+	RestartForcedBy []string            `json:"restart_forced_by"`
+	NotApplied      []SettingNotApplied `json:"not_applied"`
 }
 
 func (c *Controllers) UpdateBranchSettings(ctx context.Context, request UpdateBranchSettingsRequestObject) (UpdateBranchSettingsResponseObject, error) {
@@ -63,17 +158,28 @@ func (c *Controllers) UpdateBranchSettings(ctx context.Context, request UpdateBr
 		return UpdateBranchSettings400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", err.Error()))}, nil
 	}
 
+	// Branch-wide, so every endpoint on it is affected — and the writer among them
+	// is who vets the change first.
+	eps, _, err := c.backend.ListEndpoints(ctx, request.PoolId, request.ClusterId, request.BranchId, 1000, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list endpoints: %w", err)
+	}
+	// A branch with no writer is not checked at all. There is nowhere to ask —
+	// only a pod can judge a Postgres setting — and a branch whose endpoints are
+	// all read replicas, or which has none yet, must still be configurable: its
+	// settings are the baseline the next endpoint will start on.
+	if writer, found := writerOf(eps); found && request.Body.PgSettings != nil {
+		if refused, ok := c.checkPgSettings(ctx, writer, *request.Body.PgSettings); ok && len(refused) > 0 {
+			return UpdateBranchSettings400JSONResponse{BadRequestJSONResponse(
+				apiError("invalid_argument", refusedMessage(refused)))}, nil
+		}
+	}
+
 	if err := c.backend.UpdateBranchSettings(ctx, request.BranchId,
 		pgSettingsOf(request.Body.PgSettings),
 		daemonSettingsOf(request.Body.WriteTokenSettings),
 	); err != nil {
 		return nil, fmt.Errorf("update branch settings: %w", err)
-	}
-
-	// Branch-wide, so every endpoint on it is affected.
-	eps, _, err := c.backend.ListEndpoints(ctx, request.PoolId, request.ClusterId, request.BranchId, 1000, 0)
-	if err != nil {
-		return nil, fmt.Errorf("list endpoints: %w", err)
 	}
 	ids := make([]uuid.UUID, 0, len(eps))
 	for _, ep := range eps {
@@ -111,6 +217,16 @@ func (c *Controllers) UpdateEndpointSettings(ctx context.Context, request Update
 		}
 		if err := validateDaemonSettings(s.daemon, *s.settings); err != nil {
 			return UpdateEndpointSettings400JSONResponse{BadRequestJSONResponse(apiError("invalid_argument", err.Error()))}, nil
+		}
+	}
+
+	// Asked of this endpoint rather than the branch's writer: it is the pod that
+	// will apply these, so it is the one whose Postgres has the say — and for a
+	// read replica it may be the only one up.
+	if request.Body.PgSettings != nil {
+		if refused, ok := c.checkPgSettings(ctx, request.EndpointId, *request.Body.PgSettings); ok && len(refused) > 0 {
+			return UpdateEndpointSettings400JSONResponse{BadRequestJSONResponse(
+				apiError("invalid_argument", refusedMessage(refused)))}, nil
 		}
 	}
 

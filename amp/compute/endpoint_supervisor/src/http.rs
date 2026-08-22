@@ -24,6 +24,14 @@
 //! Most of a config comes from the environment and the resources, not from the
 //! registry row someone just edited.
 //!
+//! **Before the row is written** there is `POST /v1/settings/check`. The
+//! controller stores settings first and applies them second, which is right for
+//! a value Postgres will take and wrong for one it will not: that one is stored,
+//! never rendered, and only ever reported. The check lets the controller refuse
+//! it up front instead — it asks the same question of the same binary, writes
+//! nothing, and changes nothing, so it is safe to call on any endpoint at any
+//! time.
+//!
 //! Separate from [`crate::control`] rather than folded into it: that socket is
 //! a Unix socket in the run directory, deliberately unreachable from outside the
 //! pod, and the caller here is the controller.
@@ -54,12 +62,14 @@ struct ReloadResponse {
     /// these at server start, so naming them explains a cost the caller
     /// otherwise has to guess at.
     restart_forced_by: Vec<String>,
-    /// Settings that were stored but are not in force, because nothing applies
-    /// them: `internal` ones are compiled into the binary, and a name Postgres
-    /// does not report is a typo or belongs to an extension that is not loaded.
+    /// Settings that were stored but are not in force. Either Postgres refuses
+    /// them outright — a name it does not recognise, a value it cannot parse —
+    /// in which case they were deliberately not written, because a config file
+    /// containing one does not load and the compute would not start; or nothing
+    /// applies them, like an `internal` setting compiled into the binary.
     /// Naming them is the only way the caller learns the edit had no effect —
     /// the alternative is a success reply for a setting that never took.
-    not_applied: Vec<String>,
+    not_applied: Vec<crate::guc::NotApplied>,
 }
 
 /// The supervisor currently serving a lease, for the handler to restart through.
@@ -120,6 +130,11 @@ fn apply(env: &Env, rendered: crate::Rendered) -> Result<ReloadResponse> {
 
     restarted.extend(restart_stale(&daemons_to_restart(&rendered))?);
 
+    // From the render, not the classification: these were never written, so the
+    // running server has nothing to say about them, and the caller needs to hear
+    // it even when nothing else moved.
+    not_applied.extend(rendered.refused_settings.iter().cloned());
+
     if rendered.compute {
         let l = &env.layout;
         let decision = match crate::reconfigure::classify_settings(
@@ -131,7 +146,23 @@ fn apply(env: &Env, rendered: crate::Rendered) -> Result<ReloadResponse> {
                 // Settings nothing can apply are named back to the caller rather
                 // than restarted for: a restart would not put them in force
                 // either, so it would be an interruption that changes nothing.
-                not_applied = sorted.inapplicable.clone();
+                // Skipping any the render already refused. An endpoint
+                // upgrading with a typo already in its spec drops it from the
+                // render — which puts the name in `changed_settings`, where
+                // the classifier finds no `pg_settings` row for it and would
+                // call it inapplicable too. One name under two reasons reads
+                // as two problems, and the render's reason is the specific
+                // one.
+                let fresh: Vec<_> = sorted
+                    .inapplicable
+                    .iter()
+                    .filter(|name| !not_applied.iter().any(|n| &n.name == *name))
+                    .map(|name| crate::guc::NotApplied {
+                        name: name.clone(),
+                        reason: crate::guc::NOTHING_APPLIES.to_string(),
+                    })
+                    .collect();
+                not_applied.extend(fresh);
                 crate::reconfigure::decide(&rendered.changed_settings, &sorted)
             }
             // Postgres could not be asked — it may be down, or mid-restart.
@@ -287,11 +318,92 @@ async fn reload_handler(request: Request<Body>) -> Result<Response<Body>, ApiErr
     json_response(StatusCode::OK, outcome)
 }
 
+/// What a caller wants checked. Only Postgres settings: the daemons' keys are
+/// validated against a generated key set in the controller, which needs no pod.
+#[derive(Debug, serde::Deserialize)]
+struct CheckRequest {
+    #[serde(default)]
+    pg_settings: std::collections::BTreeMap<String, String>,
+}
+
+/// How much body the check will read, and how many settings it will probe.
+///
+/// This is the only route on this port that takes a body and does work
+/// proportional to it — a refused set costs one `postgres` per setting — and the
+/// port is unauthenticated. Both bounds are far above any real settings map:
+/// Postgres has a few hundred GUCs, and 64 KiB holds thousands of them.
+const MAX_CHECK_BODY: usize = 64 * 1024;
+const MAX_CHECK_SETTINGS: usize = 512;
+
+/// The answer: what would not be applied, and why. Empty means all of them are
+/// usable.
+#[derive(Debug, serde::Serialize)]
+struct CheckResponse {
+    not_applied: Vec<crate::guc::NotApplied>,
+}
+
+/// Would Postgres take these settings?
+///
+/// Applies nothing: it puts them to the binary in a directory of its own and
+/// reports. Safe to call on an endpoint running prerendered config, and
+/// concurrently with a reload or with another check — each probe gets its own
+/// directory ([`crate::guc`]), which is what makes that true rather than merely
+/// claimed.
+///
+/// It does write, to that directory, and it spawns a `postgres` per setting when
+/// a set is refused. Hence the bounds on the input above: this port is
+/// unauthenticated.
+async fn check_handler(mut request: Request<Body>) -> Result<Response<Body>, ApiError> {
+    let state = request
+        .data::<Arc<State>>()
+        .expect("state is attached to the router")
+        .clone();
+
+    // Read to the cap rather than to the end: `to_bytes` on an unauthenticated
+    // route would buffer whatever a caller cared to send.
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        use hyper0::body::HttpBody;
+        let body = request.body_mut();
+        while let Some(chunk) = body.data().await {
+            let chunk = chunk
+                .map_err(|e| ApiError::BadRequest(anyhow::anyhow!("reading the body: {e}")))?;
+            if buf.len() + chunk.len() > MAX_CHECK_BODY {
+                return Err(ApiError::BadRequest(anyhow::anyhow!(
+                    "a settings check body may not exceed {MAX_CHECK_BODY} bytes"
+                )));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+    }
+    let req: CheckRequest = serde_json::from_slice(&buf)
+        .map_err(|e| ApiError::BadRequest(anyhow::anyhow!("not a settings check request: {e}")))?;
+    if req.pg_settings.len() > MAX_CHECK_SETTINGS {
+        return Err(ApiError::BadRequest(anyhow::anyhow!(
+            "a settings check may name at most {MAX_CHECK_SETTINGS} settings, got {}",
+            req.pg_settings.len()
+        )));
+    }
+
+    // Spawns processes, so not on the reactor thread.
+    let not_applied = tokio::task::spawn_blocking(move || {
+        let l = &state.env.layout;
+        crate::guc::screen(&l.pg_bin(), &l.run_dir, &req.pg_settings).refused
+    })
+    .await
+    .map_err(|e| ApiError::InternalServerError(anyhow::anyhow!("the check task: {e}")))?;
+
+    json_response(StatusCode::OK, CheckResponse { not_applied })
+}
+
 pub fn make_router(state: Arc<State>) -> RouterBuilder<Body, ApiError> {
     endpoint::make_router()
         .data(state)
         .post("/v1/settings/reload", |r| {
             endpoint::request_span(r, reload_handler)
+        })
+        .post("/v1/settings/check", |r| {
+            endpoint::request_span(r, check_handler)
         })
 }
 
@@ -392,6 +504,68 @@ mod tests {
         panic!("the settings API never answered on {addr}: {last:?}");
     }
 
+    /// The check's HTTP contract, which the controller's pre-check depends on: a
+    /// map in, a `{name, reason}` list out, naming only what Postgres refuses.
+    ///
+    /// Needs the compute's Postgres, so it skips where `pg_install` is not built
+    /// — the same rule as the probe's own tests.
+    #[test]
+    fn the_check_names_what_postgres_refuses() {
+        use std::io::{Read, Write};
+
+        let pg_distrib =
+            camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pg_install");
+        if !pg_distrib.join("v18/bin/postgres").exists() {
+            eprintln!("SKIP: no postgres at {pg_distrib}");
+            return;
+        }
+        let run_dir = camino::Utf8PathBuf::try_from(std::env::temp_dir())
+            .expect("temp dir is utf8")
+            .join("endpoint-supervisor-check-http");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+
+        let mut env = crate::tests::test_env();
+        env.layout.pg_distrib_dir = pg_distrib;
+        env.layout.run_dir = run_dir;
+        let state = std::sync::Arc::new(super::State::new(std::sync::Arc::new(env), true));
+        let addr = super::spawn(([127, 0, 0, 1], 0).into(), state).expect("spawn the API");
+
+        let body = r#"{"pg_settings":{"work_memm":"5MB","work_mem":"64MB"}}"#;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut last = String::new();
+        while std::time::Instant::now() < deadline {
+            if let Ok(mut sock) = std::net::TcpStream::connect(addr) {
+                sock.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                    .unwrap();
+                write!(
+                    sock,
+                    "POST /v1/settings/check HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+                let mut buf = String::new();
+                let _ = sock.read_to_string(&mut buf);
+                if buf.contains("200 OK") {
+                    assert!(
+                        buf.contains("work_memm") && buf.contains("unrecognized parameter"),
+                        "the typo is not named with its reason: {buf}"
+                    );
+                    // The valid setting must not be reported: a check that
+                    // refused everything would block every write.
+                    assert!(
+                        !buf.contains("\"work_mem\","),
+                        "a usable setting was reported as refused: {buf}"
+                    );
+                    return;
+                }
+                last = buf;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("the check never answered on {addr}: {last:?}");
+    }
+
     /// Nothing changed, nothing restarts — including when there is no supervisor
     /// to restart through. This is what makes a reload safe to call after any
     /// edit rather than only after one known to matter: most of a config comes
@@ -427,6 +601,7 @@ mod tests {
             safekeeper: true,
             compute: true,
             changed_settings: Vec::new(),
+            refused_settings: Vec::new(),
         });
         assert_eq!(order, vec!["safekeeper", "pageserver"]);
 

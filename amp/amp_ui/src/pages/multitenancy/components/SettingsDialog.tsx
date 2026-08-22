@@ -76,8 +76,19 @@ function outcomeMessage(result: SettingsUpdateResult): string {
   // themselves: no restart, no error, and the value sitting in the row as though
   // it took. Appended rather than substituted, because it does not make the
   // restart it accompanied any less worth reporting.
-  const notApplied = [...new Set(outcomes.flatMap((o) => o.not_applied ?? []))];
-  return notApplied.length > 0 ? msg.settingsSavedNotApplied(base, notApplied.join(", ")) : base;
+  // Grouped by reason, so one line reads "x, y: unrecognized parameter" rather
+  // than repeating the explanation per setting.
+  const byReason = new Map<string, string[]>();
+  for (const { name, reason } of outcomes.flatMap((o) => o.not_applied ?? [])) {
+    const names = byReason.get(reason) ?? [];
+    if (!names.includes(name)) names.push(name);
+    byReason.set(reason, names);
+  }
+  if (byReason.size === 0) return base;
+  const detail = [...byReason]
+    .map(([reason, names]) => `${names.join(", ")} (${reason})`)
+    .join("; ");
+  return msg.settingsSavedNotApplied(base, detail);
 }
 
 function appliedMessage(result: SettingsUpdateResult): string {
