@@ -355,9 +355,11 @@ functional:
       - pg_trgm
       - btree_gin
       - amcheck
+      - pg_stat_statements
     catalog:
       - "pgvector:vector"
       - "pg_cron:pg_cron"
+      - "hexabridge:hexabridge"
   # features/amp_byoc_scope: the namespace-scoped (BYOC) permission shape.
   #   require_impersonation: fail instead of falling back to the weaker
   #     binding-level check when `kubectl auth can-i --as` is not permitted.

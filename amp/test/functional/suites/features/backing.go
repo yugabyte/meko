@@ -2,6 +2,7 @@ package features
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -737,6 +738,82 @@ func connectPG(ctx context.Context, ci pg.ConnInfo) (*pg.Client, error) {
 		return nil, err
 	}
 	return pg.Connect(ctx, ci)
+}
+
+// ampStorageBackend is the attach-mode capability for reaching the amp storage
+// database: a standing control plane owns the route to its own backing, so the
+// flow asks for it rather than deriving one. sharedk8s.Env satisfies it.
+type ampStorageBackend interface {
+	YBStorage(ctx context.Context) (pg.ConnInfo, error)
+}
+
+// ampStorageSQL opens a connection to the backing's amp storage database — the
+// one holding the `amp_storage` schema the data path writes. Both flow modes are
+// covered: a self-provisioned backing is dialled directly (this process stood it
+// up, so its address is known and there is no forward to go stale), and an
+// attached control plane is asked for its own route.
+//
+// The attached route goes through connectStorageConn, NOT a bare connectPG: that
+// route is a kubectl port-forward, kubectl outlives its own tunnel, and
+// YBStorage's liveness check only sees a dead PROCESS. Without the refresh a
+// stale-but-alive forward burns the caller's whole budget on a corpse and then
+// reads as a missing capability — or, mid-poll, as a product failure.
+func (f *flow) ampStorageSQL(ctx context.Context) (*pg.Client, error) {
+	if f.ampEnv != nil {
+		be, ok := f.ampEnv.(ampStorageBackend)
+		if !ok {
+			return nil, fmt.Errorf("%w: this standing control plane exposes no route to its backing amp storage database", errNoStorageRoute)
+		}
+		refresh := func(context.Context) (pg.ConnInfo, error) { return pg.ConnInfo{}, errNoStorageRefresh }
+		if r, ok := f.ampEnv.(storageRefresher); ok {
+			refresh = r.RefreshYBStorage
+		}
+		return connectStorageConn(ctx, be.YBStorage, refresh)
+	}
+	if f.store == nil {
+		return nil, fmt.Errorf("%w: no backing has been provisioned yet", errNoStorageRoute)
+	}
+	ci := f.store.ConnInfo()
+	ci.Database = f.t.Options.GetString("env.ampstack.db_name", ampstack.DefaultDBName)
+	return connectPG(ctx, ci)
+}
+
+var (
+	// errNoStorageRoute marks the capability as ABSENT (no route exists at all),
+	// which a test skips on. A route that exists but does not answer is an
+	// environment failure instead — the difference decides whether a run reports
+	// "not asserted" or "the cluster broke".
+	errNoStorageRoute = errors.New("no route to the backing amp storage database")
+	// errNoStorageRefresh is what a route with no rebuild path reports; a refused
+	// connection on such a route is simply retried until the budget ends.
+	errNoStorageRefresh = errors.New("this route cannot be rebuilt")
+)
+
+// connectStorageConn is the dead-forward-aware connect shared by every
+// storage-side assertion: resolve the route, wait for YSQL in short slices, and
+// on a REFUSED loopback port (a dead tunnel behind a live kubectl, never a dead
+// database) ask for a fresh route before the next slice. Any other error just
+// retries until the budget ends.
+func connectStorageConn(ctx context.Context, resolve, refresh func(context.Context) (pg.ConnInfo, error)) (*pg.Client, error) {
+	deadline := time.Now().Add(storageReadyTimeout)
+	for {
+		ci, err := resolve(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("reach the backing amp storage database: %w", err)
+		}
+		wait := min(time.Until(deadline), storageProbeBudget)
+		if err = pg.WaitReady(ctx, ci, wait); err == nil {
+			return pg.Connect(ctx, ci)
+		}
+		if core.IsConnRefused(err) {
+			if fresh, rerr := refresh(ctx); rerr == nil {
+				ci = fresh
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("backing amp storage database %s never answered: %w", ci.Addr(), err)
+		}
+	}
 }
 
 func findCluster(ctx context.Context, cl *controller.Client, poolID, name string) (controller.Cluster, error) {

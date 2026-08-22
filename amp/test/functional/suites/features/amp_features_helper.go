@@ -52,6 +52,7 @@ type ampCtl interface {
 	ListBranches(context.Context, string, string, int, int) (controller.BranchList, error)
 	ListTasks(context.Context, controller.ListTasksOptions) (controller.TaskList, error)
 	CreateEndpointAndWait(context.Context, string, string, string, controller.CreateEndpointRequest) (controller.Task, error)
+	GetEndpoint(context.Context, string, string, string, string) (controller.Endpoint, error)
 	ListAllEndpoints(context.Context, string, string, string) ([]controller.Endpoint, error)
 	DeleteEndpointAndWait(context.Context, string, string, string, string) (controller.Task, error)
 

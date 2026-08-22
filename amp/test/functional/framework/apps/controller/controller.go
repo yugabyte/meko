@@ -181,6 +181,11 @@ type Endpoint struct {
 	// persisted config. Nil on a controller predating in-place resize, which is
 	// how a caller detects the capability without probing the runtime.
 	Resources *EndpointResources `json:"resources"`
+	// The settings the endpoint was created with, read back verbatim. Nil/empty
+	// on a controller predating the endpoint settings API.
+	PgSettings         map[string]string `json:"pg_settings"`
+	PageserverSettings map[string]any    `json:"pageserver_settings"`
+	SafekeeperSettings map[string]any    `json:"safekeeper_settings"`
 }
 
 // EndpointResources is a compute reservation: cpu + memory as Kubernetes
@@ -219,6 +224,14 @@ type CreateEndpointRequest struct {
 	// durable set, so forks inherit it, and mounted into the pod as a read-only
 	// ImageVolume. Rejected with 400 on a controller without an extension catalog.
 	Extensions []string `json:"extensions,omitempty"`
+	// PgSettings are extra PostgreSQL settings for this endpoint, merged over
+	// the branch's pg_settings.
+	PgSettings map[string]string `json:"pg_settings,omitempty"`
+	// PageserverSettings / SafekeeperSettings override that daemon's toml at pod
+	// start. Keys may be dotted paths (`tenant_config.enable_gc`); values must be
+	// scalars. Unknown or protected keys are rejected with 400.
+	PageserverSettings map[string]any `json:"pageserver_settings,omitempty"`
+	SafekeeperSettings map[string]any `json:"safekeeper_settings,omitempty"`
 }
 
 // UpdateSettingsRequest is the body of the two settings PATCHes. The controller

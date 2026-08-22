@@ -24,16 +24,23 @@ import (
 // That is a separate capability with no product commitment and no other test.
 var DefaultExtensionsBaked = []string{
 	"pg_prewarm", "pg_buffercache", "pg_visibility", "pageinspect",
-	"pg_trgm", "btree_gin", "amcheck",
+	"pg_trgm", "btree_gin", "amcheck", "pg_stat_statements",
 }
 
-// DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName. The
-// two differ: the pgvector image ships the "vector" extension.
-var DefaultExtensionsCatalog = []string{"pgvector:vector", "pg_cron:pg_cron"}
+// DefaultExtensionsCatalog is the externalized set, as catalogName:sqlName
+// (they differ for pgvector, whose image ships the "vector" extension). Kept in
+// step with deploy/extensions/extensions.yaml — but a name belongs here only
+// once a BUILT image's catalog serves it, because require_catalog (on by
+// default) turns "the controller does not know it" into a hard failure, which is
+// the whole point. Apache AGE is built but not yet in a release image, so it
+// joins this list with the image that ships it; the canary below activates on
+// its own when it does.
+var DefaultExtensionsCatalog = []string{"pgvector:vector", "pg_cron:pg_cron", "hexabridge:hexabridge"}
 
-// pgCronCatalogName must be in shared_preload_libraries (the endpoint chart
-// appends it), so it is created last.
-const pgCronCatalogName = "pg_cron"
+// preloadCatalogExts are the catalog extensions that must be in
+// shared_preload_libraries (the endpoint chart appends them), so they are
+// created last.
+var preloadCatalogExts = map[string]bool{"pg_cron": true, "hexabridge": true}
 
 // Kubernetes serves ImageVolume as beta from 1.33 (the endpoint chart's volumes
 // stanza states the same bound). Below it a kubelet brings the pod up with no
@@ -180,7 +187,7 @@ func parseCatalogExts(entries []string) ([]catalogExt, error) {
 		if !ok || name == "" || sql == "" {
 			return nil, fmt.Errorf("functional.extensions.catalog entry %q is not catalogName:sqlName", e)
 		}
-		out = append(out, catalogExt{catalog: name, sql: sql, preload: name == pgCronCatalogName})
+		out = append(out, catalogExt{catalog: name, sql: sql, preload: preloadCatalogExts[name]})
 	}
 	return out, nil
 }
@@ -373,8 +380,11 @@ func quoteExtIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
-// extensionCanaries runs the cheapest real query for the two customer-committed
-// extensions: a btree_gin GIN index over an int column, and pg_trgm similarity.
+// extensionCanaries runs one REAL call per baked extension, because "created and
+// version-matched" proves the SQL scripts, not the library or the storage read
+// path behind it. Catalog extensions get their depth in their own tests
+// (amp_extension_pgvector / _pg_cron / _hexabridge / _age); the matrix stays the
+// availability contract.
 func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
 	if _, err := c.Exec(ctx, "CREATE TABLE "+table+" (id int primary key, status int)"); err != nil {
 		return fmt.Errorf("create the canary table: %w", err)
@@ -402,5 +412,37 @@ func extensionCanaries(ctx context.Context, c sqlConn, table string) error {
 	if sim != 1 {
 		return fmt.Errorf("similarity('abc','abd') is not strictly between 0 and 1: pg_trgm's trigram similarity is not computing")
 	}
+
+	// pg_stat_statements only serves its view when the library is in
+	// shared_preload_libraries — installable-but-not-preloaded errors here.
+	tracked, err := c.QueryInt(ctx, "SELECT count(*) FROM pg_stat_statements")
+	if err != nil {
+		return fmt.Errorf("pg_stat_statements is installed but its view is not readable — the library is not in shared_preload_libraries, and every endpoint commits to preloading it: %w", err)
+	}
+	if tracked == 0 {
+		return fmt.Errorf("pg_stat_statements tracked 0 statements on a connection that has been executing SQL — the preloaded library is not recording")
+	}
+
+	// The observability/maintenance contribs each do one real call over the
+	// canary table. pageinspect's get_raw_page and amcheck's bt_index_check are
+	// the interesting ones on amp: both read pages through the storage stack.
+	if _, err := c.QueryInt(ctx, "SELECT pg_prewarm($1)::bigint", table); err != nil {
+		return fmt.Errorf("pg_prewarm over the canary table: %w", err)
+	}
+	if _, err := c.QueryInt(ctx, "SELECT count(*) FROM pg_buffercache"); err != nil {
+		return fmt.Errorf("pg_buffercache view: %w", err)
+	}
+	if _, err := c.QueryInt(ctx, "SELECT count(*) FROM pg_visibility_map($1)", table); err != nil {
+		return fmt.Errorf("pg_visibility_map over the canary table: %w", err)
+	}
+	if tuples, err := c.QueryInt(ctx, "SELECT count(*) FROM heap_page_items(get_raw_page($1, 0))", table); err != nil {
+		return fmt.Errorf("pageinspect heap_page_items(get_raw_page(...)) — a raw page read through amp storage: %w", err)
+	} else if tuples == 0 {
+		return fmt.Errorf("pageinspect read page 0 of the canary table as empty, but 20 rows were just inserted — the raw-page read path is returning a wrong page")
+	}
+	if _, err := c.Exec(ctx, "SELECT bt_index_check(($1 || '_pkey')::regclass)", table); err != nil {
+		return fmt.Errorf("amcheck bt_index_check over the canary table's primary key: %w", err)
+	}
+
 	return nil
 }
