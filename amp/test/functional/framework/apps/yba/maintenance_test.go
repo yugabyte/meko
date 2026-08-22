@@ -576,3 +576,46 @@ func TestAllowCrossVersionReleasesToleratesAnUnknownKey(t *testing.T) {
 	defer f.close()
 	f.client().AllowCrossVersionReleases(context.Background())
 }
+
+// A DB newer than the YBA is refused at CREATE ("Release version X is newer then
+// yba version Y"), so the gates must be down before the POST, not after it.
+func TestEnsureReleaseRelaxesTheVersionGatesBeforeCreating(t *testing.T) {
+	f := newFake()
+	defer f.close()
+	var gates int
+	var created bool
+	f.on("GET /api/v1/customers/cust1/ybdb_release", func(w http.ResponseWriter, _ *http.Request) {
+		if created {
+			writeJSON(w, http.StatusOK, []Release{{ReleaseUUID: "r1", Version: "2026.1.2.0-b77",
+				Artifacts: []ReleaseArtifact{{Platform: "LINUX", Architecture: "x86_64"}}}})
+			return
+		}
+		writeJSON(w, http.StatusOK, []Release{})
+	})
+	for _, k := range []string{"yb.skip_version_checks", "yb.allow_db_version_more_than_yba_version"} {
+		f.on("PUT /api/v1/customers/cust1/runtime_config/"+GlobalRuntimeScope+"/key/"+k, func(w http.ResponseWriter, _ *http.Request) {
+			gates++
+			writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		})
+	}
+	f.on("POST /api/v1/customers/cust1/ybdb_release/extract_metadata", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, extractHandle{ResourceUUID: "m1"})
+	})
+	f.on("GET /api/v1/customers/cust1/ybdb_release/extract_metadata/m1", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, extractedArtifact{Version: "2026.1.2.0-b77", Sha256: "abc", Status: urlArtifactSuccess})
+	})
+	f.on("POST /api/v1/customers/cust1/ybdb_release", func(w http.ResponseWriter, _ *http.Request) {
+		if gates != 2 {
+			t.Errorf("gates relaxed = %d at create time, want both", gates)
+		}
+		created = true
+		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	})
+	if err := f.client().EnsureRelease(context.Background(), "2026.1.2.0-b77", "x86_64",
+		ReleaseTarballURL("2026.1.2.0-b77", "x86_64")); err != nil {
+		t.Fatalf("EnsureRelease: %v", err)
+	}
+	if !created {
+		t.Fatal("the release was never created")
+	}
+}

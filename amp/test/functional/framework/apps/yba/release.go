@@ -142,6 +142,9 @@ func (c *Client) EnsureRelease(ctx context.Context, version, arch, tarballURL st
 	if versionExists && hasArch(existing, ybArch) {
 		return nil // idempotent: the version+arch artifact is already present.
 	}
+	// Before the import, not after: YBA refuses to create a release newer than
+	// its own build, so the gates have to be down for the create itself.
+	c.AllowCrossVersionReleases(ctx)
 	c.log("yba: importing %s release for %s from %s", ybArch, version, tarballURL)
 	meta, err := c.extractReleaseMetadata(ctx, tarballURL)
 	if err != nil {
@@ -330,6 +333,9 @@ func (c *Client) EnsureReleaseK8s(ctx context.Context, version string) error {
 	if versionExists && hasK8sArtifact(existing) {
 		return nil
 	}
+	// The imported build may differ from this YBA's own version, and every write
+	// below (create, artifact PUT) is version-gated.
+	c.AllowCrossVersionReleases(ctx)
 	// The DB tarball is required even for a pure kubernetes universe: YBA reads
 	// gflag metadata from it (ReleaseContainer.getTarGZipDBPackageInputStream
 	// skips KUBERNETES artifacts), so an absent version is created from the
@@ -347,9 +353,6 @@ func (c *Client) EnsureReleaseK8s(ctx context.Context, version string) error {
 			return fmt.Errorf("release %s did not appear in the catalog after its tarball import", version)
 		}
 	}
-
-	// The imported build differs from this YBA's own version.
-	c.AllowCrossVersionReleases(ctx)
 
 	chartURL := HelmChartURL(version)
 	c.log("yba: importing the helm chart artifact for %s from %s", version, chartURL)
