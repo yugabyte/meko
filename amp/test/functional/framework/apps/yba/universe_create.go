@@ -92,14 +92,12 @@ func instanceTagsFromConfig(c ConfigGetter) map[string]string {
 }
 
 // BuildUniverseSpec reads apps.yba.universe.* into a UniverseSpec. The software
-// version falls back from apps.yba.universe.yb_version to versions.yugabytedb.
+// version resolves through DBVersion: apps.yba.universe.yb_version, then the
+// versions.yb run override, then versions.yugabytedb.
 // The provider UUID, provider code, and region UUIDs are NOT read here — the
 // caller resolves them against the live provider and fills them in.
 func BuildUniverseSpec(c ConfigGetter) UniverseSpec {
-	version := c.GetString("apps.yba.universe.yb_version", "")
-	if version == "" {
-		version = c.GetString("versions.yugabytedb", "")
-	}
+	version := DBVersion(c, "apps.yba.universe.yb_version")
 	return UniverseSpec{
 		NamePrefix:        c.GetString("apps.yba.universe.name_prefix", DefaultUniverseNamePrefix),
 		Region:            c.GetString("apps.yba.universe.region", DefaultUniverseRegion),

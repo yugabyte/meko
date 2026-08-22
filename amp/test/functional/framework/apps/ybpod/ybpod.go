@@ -153,9 +153,12 @@ type Getter interface {
 }
 
 // FromConfig reads apps.ybpod.* into a Config. Version falls back to
-// versions.yugabytedb when apps.ybpod.version is empty.
+// the versions.yb run override, then versions.yugabytedb, when apps.ybpod.version is empty.
 func FromConfig(get Getter) Config {
 	version := get.GetString("apps.ybpod.version", "")
+	if version == "" {
+		version = get.GetString("versions.yb", "")
+	}
 	if version == "" {
 		version = get.GetString("versions.yugabytedb", "")
 	}

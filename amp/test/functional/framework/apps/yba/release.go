@@ -262,13 +262,13 @@ func (c *Client) extractReleaseMetadata(ctx context.Context, url string) (extrac
 }
 
 // releaseURLFromConfig returns the DB-release tarball URL to import from:
-// apps.yba.release_url when set, else derived from versions.yugabytedb and the
+// apps.yba.release_url when set, else derived from the resolved DB version and the
 // provider arch (apps.yba.aws.arch).
 func releaseURLFromConfig(c ConfigGetter) string {
 	if u := c.GetString("apps.yba.release_url", ""); u != "" {
 		return u
 	}
-	return ReleaseTarballURL(c.GetString("versions.yugabytedb", ""), c.GetString("apps.yba.aws.arch", DefaultArch))
+	return ReleaseTarballURL(DBVersion(c, ""), c.GetString("apps.yba.aws.arch", DefaultArch))
 }
 
 // Uses releases.yugabyte.com, which carries every build, keyed by the full

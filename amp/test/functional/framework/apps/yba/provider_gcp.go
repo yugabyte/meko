@@ -344,10 +344,7 @@ func gcpProviderPayload(spec GCPProviderSpec) map[string]any {
 // release URL is derived with the GCP arch (x86 by default) so the imported DB
 // tarball matches the GCE image.
 func BuildGCPUniverseSpec(c ConfigGetter) UniverseSpec {
-	version := c.GetString("apps.yba.universe.yb_version", "")
-	if version == "" {
-		version = c.GetString("versions.yugabytedb", "")
-	}
+	version := DBVersion(c, "apps.yba.universe.yb_version")
 	releaseURL := c.GetString("apps.yba.release_url", "")
 	if releaseURL == "" {
 		releaseURL = ReleaseTarballURL(version, c.GetString("apps.yba.gcp.arch", DefaultGCPArch))

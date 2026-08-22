@@ -198,10 +198,7 @@ func readK8sZones(c ConfigGetter) []K8sZoneSpec {
 // shared name_prefix and version resolution from apps.yba.universe.*). The
 // ProviderCode is kubernetes so BuildConfigureRequest emits the k8s userIntent.
 func BuildK8sUniverseSpec(c ConfigGetter) UniverseSpec {
-	version := c.GetString("apps.yba.universe.yb_version", "")
-	if version == "" {
-		version = c.GetString("versions.yugabytedb", "")
-	}
+	version := DBVersion(c, "apps.yba.universe.yb_version")
 	return UniverseSpec{
 		NamePrefix:        c.GetString("apps.yba.universe.name_prefix", DefaultUniverseNamePrefix),
 		ProviderCode:      "kubernetes",
