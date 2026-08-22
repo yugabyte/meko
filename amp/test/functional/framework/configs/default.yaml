@@ -1487,6 +1487,69 @@ stress:
     # settle_timeout bounds endpoints coming back once the maintenance ends.
     move_timeout: "30m"
     settle_timeout: "10m"
+  # backing_backup_restore: amp tenants write THROUGH their endpoints while the
+  # YugabyteDB under amp runs YBA's data-protection operations — full backup,
+  # restore, PITR rewind, a recurring backup schedule. Restores only ever roll
+  # probe databases created for the purpose; amp's own keyspace is backed up
+  # (the distributed snapshot under live write traffic is the point) but never
+  # restored over. The backup store is a MinIO the test deploys beside the
+  # universe, so no cloud credentials are needed. Backups require YBC on the
+  # universe: create it with apps.yba.universe.enable_ybc=true. Needs
+  # env.yb_deploy=yba_provisioned (kubernetes) and is opt-in.
+  backing_backup_restore:
+    # enabled gates the whole scenario.
+    enabled: false
+    # The ordered sequence; restore must come after backup. scheduled_backup
+    # dominates the runtime when schedule_fire_timeout is non-zero.
+    operations: ["backup", "restore", "pitr", "scheduled_backup"]
+    # Tenant 0 runs SqlTransactions, tenant 1 SqlBankTransfer, tenant 2 TPC-C,
+    # then repeating; the default 2 keeps exactly the two sample-app workloads.
+    # At 3 or more the benchbase_* knobs below start driving a TPC-C tenant.
+    tenants: 2
+    # backup_amp_keyspace also takes a full backup of amp's yb_storage keyspace
+    # while the tenants write into it.
+    backup_amp_keyspace: true
+    # storage_config_name is the YBA storage config registered for the MinIO
+    # (reused when it already exists, so kept envs don't stack duplicates).
+    storage_config_name: "ampqa-minio"
+    minio_server_image: "minio/minio:latest"
+    minio_client_image: "minio/mc:latest"
+    # storage_ready_timeout bounds the MinIO pod start and bucket bootstrap.
+    storage_ready_timeout: "5m"
+    # probe_rows sizes each probe database (backup/restore round-trip checksum,
+    # and each half of the PITR before/after mark).
+    probe_rows: 2000
+    # PITR window: retention must cover the whole operation; interval matters
+    # little since the config-creation snapshot already covers the mark.
+    pitr_retention: "4h"
+    pitr_interval: "1h"
+    # pitr_mark_margin separates the mark from the writes on either side, so
+    # commit-time granularity cannot blur which rows the restore should keep.
+    pitr_mark_margin: "5s"
+    # schedule_frequency is the recurring backup period (YBA's floor is 1h).
+    # The FIRST scheduled backup fires immediately, within YBA's 2-minute
+    # scheduler tick, so observing one costs minutes rather than a full period.
+    # schedule_fire_timeout of 0 skips the wait and only asserts the schedule
+    # registered.
+    schedule_frequency: "1h"
+    schedule_fire_timeout: "10m"
+    payload_bytes: 256
+    baseline_duration: "20s"
+    resume_duration: "30s"
+    min_commits_per_op: 1
+    client_image: "eclipse-temurin:21-jdk"
+    client_pull_secret: ""
+    remote_dir: "/opt/ampqa"
+    jar_secret: "gh_package"
+    workload_threads_read: 1
+    workload_threads_write: 2
+    workload_run_time: "4h"
+    bank_accounts: 200
+    # benchbase_*: only reached at tenants >= 3, where a TPC-C tenant appears.
+    benchbase_warehouses: 1
+    benchbase_terminals: 2
+    benchbase_start_grace: "30s"
+    settle_timeout: "10m"
 
 # --- Perf suite (suites/perf) ---
 # perf/tpcc, perf/pgbench, perf/sysbench: provision a co-located RF3

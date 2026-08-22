@@ -5,10 +5,12 @@ Four tier tags — and **`nightly` is a superset of the other three**:
 - **`regression`** — the fast gate on every PR / push to `master`. Checks that the
   basic functions still work, that the main use case is intact, and that the PR
   didn't break anything important. Must stay green to merge.
-- **`stress`** — all ten `suites/stress` scenarios: `load_sustain` (workloadgen
+- **`stress`** — all eleven `suites/stress` scenarios: `load_sustain` (workloadgen
   soak), `combined_load` (four parallel workloads under chaos on a co-located YB
   backing), `backing_maintenance` (workloads through a rolling restart, a gflag
-  change, a data move and a YugabyteDB upgrade), `multitenant_load` and
+  change, a data move and a YugabyteDB upgrade), `backing_backup_restore`
+  (workloads through a YBA backup, restore, PITR rewind and scheduled backup),
+  `multitenant_load` and
   `branch_churn` (many tenants, many branches), the nemesis / durability
   scenarios (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`,
   `commit_durability`) and `bulk_load_kill` (one large write killed mid-flight).
@@ -92,7 +94,9 @@ once). The extended-only tests (beyond regression) are:
   `amp_compute_restart`.
 - **Stress** (also `--tag stress`) — `combined_load` (parallel workloads +
   chaos/nemesis against an exclusive universe), `backing_maintenance` (the same
-  co-located backing under PLANNED maintenance instead of chaos), `load_sustain`
+  co-located backing under PLANNED maintenance instead of chaos),
+  `backing_backup_restore` (the same backing under YBA's data-protection
+  operations — backup, restore, PITR, scheduled backups), `load_sustain`
   (workloadgen soak), `multitenant_load` and `branch_churn`, the nemesis /
   durability scenarios (`amp_nemesis`, `backing_nemesis`, `storage_proc_nemesis`,
   `commit_durability`) and `bulk_load_kill`, which deletes an endpoint's compute
@@ -134,6 +138,16 @@ things under `stress.backing_maintenance.*`, plus an upgrade target
 ampqa run --testr '^stress/backing_maintenance$' -c gke.yaml \
   -o stress.backing_maintenance.enabled=bool:true \
   -o stress.backing_maintenance.upgrade_to=<newer-yb-version>
+```
+
+`backing_backup_restore` gates the same way under
+`stress.backing_backup_restore.*`, and additionally needs YBC on the universe —
+YBA's backup tasks run through it, and it is off by default:
+
+```
+ampqa run --testr '^stress/backing_backup_restore$' -c gke.yaml \
+  -o stress.backing_backup_restore.enabled=bool:true \
+  -o apps.yba.universe.enable_ybc=bool:true
 ```
 
 > **Planned, not yet present:** dedicated negative / red-path cases (error paths,

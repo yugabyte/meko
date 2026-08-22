@@ -1320,6 +1320,69 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 		t.Errorf("stress.backing_maintenance.operations = %v", ops)
 	}
 
+	// --- stress/backing_backup_restore ---
+	if cfg.GetBool("stress.backing_backup_restore.enabled", true) {
+		t.Errorf("stress.backing_backup_restore.enabled = true, want false (opt-in)")
+	}
+	if !cfg.GetBool("stress.backing_backup_restore.backup_amp_keyspace", false) {
+		t.Errorf("stress.backing_backup_restore.backup_amp_keyspace = false, want true")
+	}
+	brInts := map[string]int{
+		"stress.backing_backup_restore.tenants":                2,
+		"stress.backing_backup_restore.probe_rows":             2000,
+		"stress.backing_backup_restore.min_commits_per_op":     1,
+		"stress.backing_backup_restore.payload_bytes":          256,
+		"stress.backing_backup_restore.workload_threads_read":  1,
+		"stress.backing_backup_restore.workload_threads_write": 2,
+		"stress.backing_backup_restore.bank_accounts":          200,
+		"stress.backing_backup_restore.benchbase_warehouses":   1,
+		"stress.backing_backup_restore.benchbase_terminals":    2,
+	}
+	for key, want := range brInts {
+		if got := cfg.GetInt(key, -1); got != want {
+			t.Errorf("%s = %d, want %d", key, got, want)
+		}
+	}
+	brStrs := map[string]string{
+		"stress.backing_backup_restore.storage_config_name": "ampqa-minio",
+		"stress.backing_backup_restore.minio_server_image":  "minio/minio:latest",
+		"stress.backing_backup_restore.minio_client_image":  "minio/mc:latest",
+		"stress.backing_backup_restore.client_image":        "eclipse-temurin:21-jdk",
+		"stress.backing_backup_restore.jar_secret":          "gh_package",
+		"stress.backing_backup_restore.remote_dir":          "/opt/ampqa",
+	}
+	for key, want := range brStrs {
+		if got := cfg.GetString(key, "__MISSING__"); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	// Documented-empty but must be PRESENT: an absent key silently falls back
+	// to a code default the operator never sees.
+	if got := cfg.GetString("stress.backing_backup_restore.client_pull_secret", "__MISSING__"); got != "" {
+		t.Errorf("stress.backing_backup_restore.client_pull_secret = %q, want present and empty", got)
+	}
+	brDurs := map[string]time.Duration{
+		"stress.backing_backup_restore.pitr_retention":        4 * time.Hour,
+		"stress.backing_backup_restore.pitr_interval":         time.Hour,
+		"stress.backing_backup_restore.pitr_mark_margin":      5 * time.Second,
+		"stress.backing_backup_restore.schedule_frequency":    time.Hour,
+		"stress.backing_backup_restore.schedule_fire_timeout": 10 * time.Minute,
+		"stress.backing_backup_restore.storage_ready_timeout": 5 * time.Minute,
+		"stress.backing_backup_restore.baseline_duration":     20 * time.Second,
+		"stress.backing_backup_restore.resume_duration":       30 * time.Second,
+		"stress.backing_backup_restore.workload_run_time":     4 * time.Hour,
+		"stress.backing_backup_restore.benchbase_start_grace": 30 * time.Second,
+		"stress.backing_backup_restore.settle_timeout":        10 * time.Minute,
+	}
+	for key, want := range brDurs {
+		if got := cfg.GetDuration(key, -1); got != want {
+			t.Errorf("%s = %s, want %s", key, got, want)
+		}
+	}
+	if ops := cfg.GetStringSlice("stress.backing_backup_restore.operations", nil); strings.Join(ops, ",") != "backup,restore,pitr,scheduled_backup" {
+		t.Errorf("stress.backing_backup_restore.operations = %v", ops)
+	}
+
 	// --- perf suite (perf/tpcc) ---
 	if cfg.GetBool("perf.enabled", true) {
 		t.Errorf("perf.enabled = true, want false (opt-in)")

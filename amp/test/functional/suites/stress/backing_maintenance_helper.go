@@ -87,21 +87,37 @@ type maintenanceConfig struct {
 
 func maintenanceFromConfig(c *core.Config) maintenanceConfig {
 	const p = "stress.backing_maintenance."
-	cfg := maintenanceConfig{
+	cfg := workloadConfigAt(c, p)
+	cfg.RF = c.GetInt(p+"rf", DefaultMaintenanceRF)
+	cfg.Operations = c.GetStringSlice(p+"operations", DefaultMaintenanceOperations)
+	cfg.UpgradeTo = c.GetString(p+"upgrade_to", "")
+	cfg.UpgradeImageTag = c.GetString(p+"upgrade_image_tag", "")
+	cfg.UpgradeArch = c.GetString(p+"upgrade_arch", DefaultMaintenanceUpgradeArch)
+	cfg.GflagKey = c.GetString(p+"gflag_key", DefaultMaintenanceGflagKey)
+	cfg.GflagValue = c.GetString(p+"gflag_value", DefaultMaintenanceGflagValue)
+	cfg.MaxNodesOutAtOnce = c.GetInt(p+"max_nodes_out_at_once", DefaultMaintenanceMaxNodesOut)
+	cfg.RollingSampleInterval = c.GetDuration(p+"rolling_sample_interval", DefaultRollingSampleInterval)
+	cfg.NodeRestartSleep = c.GetDuration(p+"node_restart_sleep", DefaultMaintenanceNodeRestartSleep)
+	cfg.MoveTimeout = c.GetDuration(p+"move_timeout", DefaultMaintenanceMoveTimeout)
+	if cfg.UpgradeImageTag == "" {
+		cfg.UpgradeImageTag = cfg.UpgradeTo
+	}
+	return cfg
+}
+
+// workloadConfigAt reads only the knobs shared by every suite that drives amp
+// tenant load while operating on the backing: the tenants, their workloads and
+// the settle/commit budgets. The node-restarting knobs (rf, gflags, upgrade
+// target, rolling limits) stay with maintenanceFromConfig — a prefix that
+// silently answered for them would document knobs its own suite never reads.
+func workloadConfigAt(c *core.Config, p string) maintenanceConfig {
+	return maintenanceConfig{
 		Enabled:              c.GetBool(p+"enabled", false),
-		RF:                   c.GetInt(p+"rf", DefaultMaintenanceRF),
-		Operations:           c.GetStringSlice(p+"operations", DefaultMaintenanceOperations),
 		Tenants:              c.GetInt(p+"tenants", DefaultMaintenanceTenants),
 		PayloadBytes:         c.GetInt(p+"payload_bytes", DefaultMaintenancePayloadBytes),
 		BaselineDuration:     c.GetDuration(p+"baseline_duration", DefaultMaintenanceBaselineDuration),
 		ResumeDuration:       c.GetDuration(p+"resume_duration", DefaultMaintenanceResumeDuration),
-		UpgradeTo:            c.GetString(p+"upgrade_to", ""),
-		UpgradeImageTag:      c.GetString(p+"upgrade_image_tag", ""),
-		UpgradeArch:          c.GetString(p+"upgrade_arch", DefaultMaintenanceUpgradeArch),
-		GflagKey:             c.GetString(p+"gflag_key", DefaultMaintenanceGflagKey),
-		GflagValue:           c.GetString(p+"gflag_value", DefaultMaintenanceGflagValue),
 		MinCommitsPerOp:      c.GetInt(p+"min_commits_per_op", DefaultMaintenanceMinCommits),
-		MaxNodesOutAtOnce:    c.GetInt(p+"max_nodes_out_at_once", DefaultMaintenanceMaxNodesOut),
 		ClientImage:          c.GetString(p+"client_image", DefaultMaintenanceClientImage),
 		ClientPullSecret:     c.GetString(p+"client_pull_secret", ""),
 		RemoteDir:            c.GetString(p+"remote_dir", DefaultMaintenanceRemoteDir),
@@ -119,15 +135,8 @@ func maintenanceFromConfig(c *core.Config) maintenanceConfig {
 			Password: c.GetString("functional.amp.endpoint_password", "cloud_admin"),
 			Database: c.GetString("functional.amp.endpoint_db", "postgres"),
 		},
-		RollingSampleInterval: c.GetDuration(p+"rolling_sample_interval", DefaultRollingSampleInterval),
-		NodeRestartSleep:      c.GetDuration(p+"node_restart_sleep", DefaultMaintenanceNodeRestartSleep),
-		MoveTimeout:           c.GetDuration(p+"move_timeout", DefaultMaintenanceMoveTimeout),
-		SettleTimeout:         c.GetDuration(p+"settle_timeout", DefaultMaintenanceSettleTimeout),
+		SettleTimeout: c.GetDuration(p+"settle_timeout", DefaultMaintenanceSettleTimeout),
 	}
-	if cfg.UpgradeImageTag == "" {
-		cfg.UpgradeImageTag = cfg.UpgradeTo
-	}
-	return cfg
 }
 
 func (cfg maintenanceConfig) wants(op string) bool {

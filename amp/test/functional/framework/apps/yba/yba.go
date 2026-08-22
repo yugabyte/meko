@@ -160,6 +160,16 @@ type UniverseDetails struct {
 	Clusters         []Cluster     `json:"clusters"`
 	UpdateSucceeded  bool          `json:"updateSucceeded"`
 	UpdateInProgress bool          `json:"updateInProgress"`
+	// EnableYbc/YbcInstalled: backups on current YBA run through YBC, so a
+	// universe without it cannot be backed up.
+	EnableYbc    bool `json:"enableYbc"`
+	YbcInstalled bool `json:"ybcInstalled"`
+}
+
+// HasYbc reports whether the universe carries YBC, the agent YBA's
+// backup/restore tasks require.
+func (u Universe) HasYbc() bool {
+	return u.UniverseDetails.EnableYbc || u.UniverseDetails.YbcInstalled
 }
 
 // IsReady reports whether the universe finished its create/edit successfully: no
