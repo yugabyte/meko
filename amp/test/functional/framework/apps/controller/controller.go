@@ -263,9 +263,16 @@ type EndpointSettingsOutcome struct {
 	// Stored but not in force: compiled-in settings, and names Postgres does not
 	// report. Nothing is restarted for these, so this is the only signal that an
 	// edit did nothing.
-	NotApplied []string `json:"not_applied"`
+	NotApplied []SettingNotApplied `json:"not_applied"`
 	// Why this endpoint could not be told. The settings are stored regardless.
 	Unreachable string `json:"unreachable"`
+}
+
+// SettingNotApplied is one stored setting that is not in force, and the
+// controller's fixed phrase for why.
+type SettingNotApplied struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 // SettingsUpdateResult is the reply to either settings PATCH: stored, plus what

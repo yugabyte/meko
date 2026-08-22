@@ -207,8 +207,12 @@ func restarted(because ...string) controller.SettingsUpdateResult {
 }
 
 func notApplied(names ...string) controller.SettingsUpdateResult {
+	entries := make([]controller.SettingNotApplied, 0, len(names))
+	for _, n := range names {
+		entries = append(entries, controller.SettingNotApplied{Name: n, Reason: "nothing applies this setting"})
+	}
 	return controller.SettingsUpdateResult{Applied: true, Endpoints: []controller.EndpointSettingsOutcome{
-		{EndpointID: "ep-1", NotApplied: names},
+		{EndpointID: "ep-1", NotApplied: entries},
 	}}
 }
 

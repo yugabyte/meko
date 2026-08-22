@@ -550,7 +550,7 @@ func TestUpdateSettingsDecodesEveryOutcomeField(t *testing.T) {
 			_, _ = w.Write([]byte(`{"applied":true,"endpoints":[
 				{"endpoint_id":"e1","reloaded":["compute_ctl"]},
 				{"endpoint_id":"e2","restarted":["compute_ctl"],"restart_forced_by":["shared_buffers"]},
-				{"endpoint_id":"e3","not_applied":["block_size"]},
+				{"endpoint_id":"e3","not_applied":[{"name":"block_size","reason":"cannot be set in a configuration file"}]},
 				{"endpoint_id":"e4","unreachable":"connection refused"}
 			]}`))
 		})
@@ -571,7 +571,8 @@ func TestUpdateSettingsDecodesEveryOutcomeField(t *testing.T) {
 		e.RestartForcedBy[0] != "shared_buffers" {
 		t.Errorf("restarted = %v, forced by = %v", e.Restarted, e.RestartForcedBy)
 	}
-	if e := got.Endpoints[2]; len(e.NotApplied) != 1 || e.NotApplied[0] != "block_size" {
+	if e := got.Endpoints[2]; len(e.NotApplied) != 1 || e.NotApplied[0].Name != "block_size" ||
+		e.NotApplied[0].Reason == "" {
 		t.Errorf("not_applied = %v", e.NotApplied)
 	}
 	if e := got.Endpoints[3]; e.Unreachable == "" {

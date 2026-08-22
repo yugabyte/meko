@@ -299,7 +299,7 @@ func endpointSettingsSteps(ctx context.Context, cl ampCtl, proj ampCluster, conn
 	if out, err = only(reply); err != nil {
 		return fmt.Errorf("setting %s: %w", settingsProbeName, err)
 	}
-	if !contains(out.NotApplied, settingsProbeName) {
+	if !containsNotApplied(out.NotApplied, settingsProbeName) {
 		return fmt.Errorf("not_applied = %v, want it to name %s — otherwise a setting that will never take effect reports success", out.NotApplied, settingsProbeName)
 	}
 	if len(out.Restarted) != 0 {
@@ -366,6 +366,15 @@ func endpointSettingsSteps(ctx context.Context, cl ampCtl, proj ampCluster, conn
 func contains(hay []string, needle string) bool {
 	for _, s := range hay {
 		if strings.EqualFold(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsNotApplied(hay []controller.SettingNotApplied, needle string) bool {
+	for _, s := range hay {
+		if strings.EqualFold(s.Name, needle) {
 			return true
 		}
 	}
