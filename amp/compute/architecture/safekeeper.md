@@ -660,6 +660,17 @@ loses nothing but logs.
      (#181) — then `find_end_of_wal` scans forward to the last complete record
      boundary. Exhausting `MAX_ANCHOR_SCAN_BYTES` seeds at the floor rather than
      failing.
+   - The two phases get expensive under opposite conditions, so the scan logs
+     each separately (`find_anchor_queries` / `_ms`, `find_end_of_wal_queries` / `_ms`).
+     The walk is one query per 8 KiB page and stops at the first fresh-record
+     page, so it is short on small records and long on large ones. The replay
+     reads chunks, and a chunk is one coalesced consumer batch — ~1.4 KiB on OLTP
+     WAL, ~100 KiB on large records — so it runs the other way. The replay reads a
+     batch per query (`WalSource::contiguous_chunks_from`, segno-scoped) rather than
+     a chunk per query. `bucket_id` leads the `wals` key, so that scan returns rows
+     bucket-major and a plain `ORDER BY chunk_offset` would sort every payload; plan
+     hints have YB merge the six per-bucket streams inside the index scan instead,
+     with no sort node (#929).
    - **Torn tail** (`end < raw`): truncate back to the boundary; the compute
      re-streams from there. The torn rows are physically deleted
      (`truncate_wals_above`) so they are not re-counted next restart;

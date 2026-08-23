@@ -156,6 +156,13 @@ fn bucket_in_list() -> String {
     format!("bucket_id IN ({})", ids.join(","))
 }
 
+/// Rows one [`YbWalSource::contiguous_chunks_from`] fetch may return. The segno
+/// scoping bounds the bytes; this bounds row count, which it does not — rows are one
+/// coalesced consumer batch each, so tiny commits can put ~110k in a 16 MiB segment.
+/// Set above a full segment's normal count (~11k at OLTP's ~1.5 KiB rows) so the
+/// ordinary case is one query per segment.
+const CHUNK_FETCH_ROW_CAP: usize = 16384;
+
 /// Handles to the YB connections that mirror live WAL into
 /// `amp_storage.wals`. Constructed at safekeeper boot via
 /// [`YbWalConn::from_conf`] and shared across timelines via
@@ -580,7 +587,13 @@ impl YbWalStorage {
                 table: &table_name,
                 branch_id,
                 seg: wal_seg_size as u64,
+                find_anchor_queries: AtomicU64::new(0),
+                find_end_of_wal_queries: AtomicU64::new(0),
             };
+            // Timed apart: the backward walk and the forward replay get expensive
+            // under opposite conditions, so a combined figure names neither.
+            let mut find_anchor_ms = 0u128;
+            let mut find_end_of_wal_ms = 0u128;
             // YB keeps no persisted record-boundary flush_lsn to start from
             // (the upstream safekeeper read it from the control file), so
             // anchor on a recent fresh-record page at or below the raw end,
@@ -603,11 +616,26 @@ impl YbWalStorage {
                 // `find_anchor`'s target is inclusive and `max_offset` is one past
                 // the last persisted byte (#678).
                 let last_byte = Lsn(max_offset.0 - 1);
-                match find_anchor(&src, last_byte, retention_floor).await {
+                let t = std::time::Instant::now();
+                let anchor = find_anchor(&src, last_byte, retention_floor).await;
+                find_anchor_ms = t.elapsed().as_millis();
+                let t = std::time::Instant::now();
+                let scanned = match anchor {
                     Ok(anchor) => find_end_of_wal(&src, anchor, pg_version).await,
                     Err(e) => Err(e),
-                }
+                };
+                find_end_of_wal_ms = t.elapsed().as_millis();
+                scanned
             };
+            // Every probe is a YB round trip, so the counts are the scan's cost.
+            tracing::info!(
+                branch_id = %branch_id,
+                find_anchor_queries = %src.find_anchor_queries.load(Ordering::Relaxed),
+                %find_anchor_ms,
+                find_end_of_wal_queries = %src.find_end_of_wal_queries.load(Ordering::Relaxed),
+                %find_end_of_wal_ms,
+                "YbWalStorage::new — end-of-WAL scan finished",
+            );
             match scanned {
                 Ok(end) if end < max_offset => {
                     tracing::warn!(
@@ -1260,6 +1288,26 @@ struct YbWalSource<'a> {
     table: &'a str,
     branch_id: BranchId,
     seg: u64,
+    /// YB round trips, one per statement, named for the phase that spends them.
+    /// `find_anchor` reaches `chunk_at` through `read_exact`, one page header per
+    /// call, and is `chunk_at`'s only caller here — `contiguous_chunks_from`'s default is
+    /// overridden below and `decode_forward` has no caller on this path. Logged by
+    /// `YbWalStorage::new` beside each phase's elapsed time; the quotient is what
+    /// separates a long scan from a slow cluster.
+    find_anchor_queries: AtomicU64,
+    find_end_of_wal_queries: AtomicU64,
+}
+
+impl YbWalSource<'_> {
+    /// One scan row, decoded, its offset resolved against `segno`. Borrows the
+    /// row buffer: a batch can be thousands of rows.
+    fn decode_row(&self, row: &yb_tokio_postgres::Row, segno: i64) -> Result<(Lsn, Vec<u8>)> {
+        let chunk_offset = row.get::<_, i64>(0) as u64;
+        let stored: &[u8] = row.get(1);
+        let data = decode_chunk_data(stored, "end-of-WAL scan")
+            .with_context(|| format!("chunk segno={segno} offset={chunk_offset}"))?;
+        Ok((Lsn(segno as u64 * self.seg + chunk_offset), data))
+    }
 }
 
 impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
@@ -1268,6 +1316,7 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
     }
 
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
+        self.find_anchor_queries.fetch_add(1, Ordering::Relaxed);
         let segno = (lsn.0 / self.seg) as i64;
         let off = (lsn.0 % self.seg) as i64;
         // The bucket of a chunk can't be derived, so probe all buckets (an
@@ -1291,20 +1340,104 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         else {
             return Ok(None);
         };
-        let chunk_offset = row.get::<_, i64>(0) as u64;
-        let stored: Vec<u8> = row.get::<_, Vec<u8>>(1);
-        // Decode before any length arithmetic below — the coverage check
-        // and the returned buffer are both in logical WAL bytes.
-        let data = decode_chunk_data(
-            &stored,
-            &format!("end-of-WAL scan: chunk segno={segno} offset={chunk_offset}"),
-        )?;
-        let chunk_start = segno as u64 * self.seg + chunk_offset;
-        if lsn.0 >= chunk_start + data.len() as u64 {
+        // Decode before any length arithmetic — the coverage check and the
+        // returned buffer are both in logical WAL bytes.
+        let (chunk_start, data) = self.decode_row(&row, segno)?;
+        if lsn.0 >= chunk_start.0 + data.len() as u64 {
             // The nearest chunk stops short of `lsn`: the WAL ends here.
             return Ok(None);
         }
-        Ok(Some((Lsn(chunk_start), data)))
+        Ok(Some((chunk_start, data)))
+    }
+
+    /// One range query per byte window instead of one point query per chunk.
+    ///
+    /// Scoped to `lsn`'s segno, which bounds the bytes: chunks never overlap, so a
+    /// segment's rows carry at most `wal_seg_size` however many rows that is.
+    ///
+    /// The hints are load-bearing. `bucket_id` leads the key and a chunk's bucket is
+    /// not derivable, so the `IN`-list scan returns rows bucket-major and a plain
+    /// `ORDER BY chunk_offset` costs a sort carrying every payload — a 9 MiB
+    /// external-merge spill on one 16 MiB segment, measured. Under the hints YB
+    /// merges the six per-bucket streams inside the index scan and emits them
+    /// ordered, with no sort node at all.
+    ///
+    /// All three are needed on YB 2026.1, where `yb_enable_cbo` ships `legacy_mode`
+    /// and `yb_max_merge_scan_streams` ships 0 (both `boot_val`s). `yb_enable_cbo`
+    /// opens a hard gate in the planner — merge-scan paths are not generated without
+    /// it (`yb_merge_scan.c`) — and the stream count must be at least the bucket
+    /// count. `enable_sort` is the one that makes the choice independent of
+    /// statistics: with the gate open but costing left to decide, an unanalysed
+    /// table still picks the sort, and nothing ANALYZEs `amp_storage.wals`.
+    /// Penalising sort leaves merge scan the only surviving path, verified on a
+    /// table with no statistics at all. So if a later YB defaults `yb_enable_cbo`
+    /// on, that hint stops being load-bearing but `enable_sort` does not. Hints
+    /// rather than `SET` because this lane also runs `load_min_segno` and
+    /// `truncate_wals_above`, the plans behind #874 and #812.
+    ///
+    /// They apply statement-wide, so the covering-chunk subquery is re-planned too —
+    /// into an `Index Scan Backward` merge scan, its own 1-row sort gone and its
+    /// storage reads 3 down to 1. Dropping `enable_sort` as though it only concerned
+    /// the outer `ORDER BY` would give that back as well.
+    ///
+    /// A hint is a comment, so a cluster without `pg_hint_plan` preloaded silently
+    /// gets the sort back. `find_end_of_wal_queries` on the scan's log line is where
+    /// that shows; `startup-failures.md` §Q reads it.
+    ///
+    /// The subquery is `chunk_at`'s covering-chunk lookup, needed because a record
+    /// boundary is not a chunk boundary so the first call lands mid-chunk. One
+    /// `InitPlan`, seeking backward — the cheap direction (#874).
+    async fn contiguous_chunks_from(&self, lsn: Lsn) -> anyhow::Result<Vec<(Lsn, Vec<u8>)>> {
+        self.find_end_of_wal_queries.fetch_add(1, Ordering::Relaxed);
+        let segno = (lsn.0 / self.seg) as i64;
+        let off = (lsn.0 % self.seg) as i64;
+        let table = quote_relation(self.table);
+        let buckets = bucket_in_list();
+        let sql = format!(
+            "/*+ Set(yb_enable_cbo on) Set(yb_max_merge_scan_streams {WALS_BUCKETS}) \
+                 Set(enable_sort off) */ \
+             SELECT chunk_offset, data FROM {table} \
+             WHERE branch_id = $1 AND {buckets} AND segno = $2 \
+               AND chunk_offset >= (SELECT chunk_offset FROM {table} \
+                                    WHERE branch_id = $1 AND {buckets} AND segno = $2 \
+                                      AND chunk_offset <= $3 \
+                                    ORDER BY chunk_offset DESC LIMIT 1) \
+             ORDER BY chunk_offset ASC LIMIT $4"
+        );
+        let params: [&(dyn ToSql + Sync); 4] =
+            [&self.branch_id, &segno, &off, &(CHUNK_FETCH_ROW_CAP as i64)];
+        // A failed query stays an `Err`; only an empty result ends the WAL (#756).
+        let rows = self
+            .client
+            .query(&sql, &params)
+            .await
+            .context("end-of-WAL scan: reading wals")?;
+        // Cut the run at the first byte it does not hold, so the batch is
+        // contiguous in fact and not just in the contract. `lsn` seeds it because
+        // the leading chunk starts at or below `lsn` and may stop short of it.
+        let mut out: Vec<(Lsn, Vec<u8>)> = Vec::with_capacity(rows.len());
+        let mut want = lsn;
+        for (i, row) in rows.iter().enumerate() {
+            let (start, data) = match self.decode_row(row, segno) {
+                Ok(chunk) => chunk,
+                // A row the scan may never reach must not fail the load: the
+                // one-row-per-query scan stopped at the last complete record and
+                // never fetched what lay above it. Ending the run here keeps that
+                // — and if the scan does reach this row, the next fetch leads with
+                // it and the error surfaces then (#756).
+                Err(_) if i > 0 => break,
+                Err(e) => return Err(e),
+            };
+            if start > want || want.0 - start.0 >= data.len() as u64 {
+                break;
+            }
+            want = Lsn(start.0 + data.len() as u64);
+            out.push((start, data));
+        }
+        // Empty carries `chunk_at`'s `None`: nothing covers `lsn`. The batch may
+        // hold rows above a gap, which `chunk_at` could not see and this does not
+        // act on — reporting that as an end of WAL is #799, unchanged here.
+        Ok(out)
     }
 }
 
@@ -3100,6 +3233,35 @@ mod tests {
             .expect("create scratch wals table");
     }
 
+    /// One `wals` row, encoded the way the write path stores it.
+    async fn insert_chunk(
+        client: &YsqlClient,
+        table: &str,
+        branch_id: BranchId,
+        segno: i64,
+        chunk_offset: i64,
+        data: &[u8],
+    ) {
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
+                                     chunk_size, data, last_modified_us) \
+                     VALUES ($1, 0, $2, $3, $4, $5, 0)",
+                    quote_relation(table)
+                ),
+                &[
+                    &branch_id,
+                    &segno,
+                    &chunk_offset,
+                    &(data.len() as i32),
+                    &enc(data),
+                ],
+            )
+            .await
+            .expect("insert WAL chunk");
+    }
+
     async fn drop_wals_table(client: &YsqlClient, table: &str) {
         let q = quote_relation(table);
         let _ = client
@@ -3200,6 +3362,105 @@ mod tests {
 
     const SEG_SIZE: u64 = 16 * 1024 * 1024;
 
+    /// `contiguous_chunks_from` replaces one point query per chunk with one range query per
+    /// segment, so it has to return the covering chunk for a mid-chunk `lsn`, then
+    /// its successors ascending, and stop at the segment edge.
+    #[tokio::test]
+    async fn chunks_from_returns_a_contiguous_run_within_the_segment() {
+        use postgres_ffi::wal_record_boundary::WalSource;
+
+        let table = scratch_table("wals_test_chunks_from");
+        let client = Arc::new(
+            YsqlClient::connect_no_tls(pgcfg(), true)
+                .await
+                .expect("connect to local YB; set YB_TEST_HOST/PORT/USER/DB to override"),
+        );
+        make_wals_table(&client, &table).await;
+        let branch_id = BranchId::generate();
+
+        // Ten 1 KiB chunks in segno 1, then one in segno 2 the fetch must not reach.
+        const N: usize = 10;
+        const SZ: usize = 1024;
+        for i in 0..N {
+            let body = vec![i as u8; SZ];
+            insert_chunk(&client, &table, branch_id, 1, (i * SZ) as i64, &body).await;
+        }
+        insert_chunk(&client, &table, branch_id, 2, 0, &[0xAA; SZ]).await;
+
+        let src = YbWalSource {
+            client: client.as_ref(),
+            table: &table,
+            branch_id,
+            seg: SEG_SIZE,
+            find_anchor_queries: AtomicU64::new(0),
+            find_end_of_wal_queries: AtomicU64::new(0),
+        };
+
+        // Mid-chunk start: the covering chunk is the one that holds it, not the
+        // next one up — a bare `chunk_offset >= lsn` would skip it.
+        let mid = Lsn(SEG_SIZE + (3 * SZ + 500) as u64);
+        let got = src
+            .contiguous_chunks_from(mid)
+            .await
+            .expect("contiguous_chunks_from");
+        assert_eq!(
+            got.len(),
+            N - 3,
+            "must return chunk 3 through the segment end"
+        );
+        assert_eq!(got[0].0, Lsn(SEG_SIZE + (3 * SZ) as u64));
+        for (i, (start, data)) in got.iter().enumerate() {
+            assert_eq!(
+                *start,
+                Lsn(SEG_SIZE + ((i + 3) * SZ) as u64),
+                "chunk {i} start"
+            );
+            assert_eq!(data.len(), SZ);
+        }
+
+        // Past the last chunk of the segment: empty, which carries `chunk_at`'s
+        // `None` meaning. It must NOT reach into segno 2.
+        let past = Lsn(SEG_SIZE + (N * SZ) as u64);
+        assert!(
+            src.contiguous_chunks_from(past)
+                .await
+                .expect("past")
+                .is_empty()
+        );
+
+        // A gap mid-segment ends the run there rather than splicing across it:
+        // the bytes after a hole are not contiguous with the ones before.
+        let gapped = scratch_table("wals_test_chunks_from_gap");
+        make_wals_table(&client, &gapped).await;
+        let gap_branch = BranchId::generate();
+        for i in [0usize, 1, 2, 4, 5] {
+            let body = vec![i as u8; SZ];
+            insert_chunk(&client, &gapped, gap_branch, 1, (i * SZ) as i64, &body).await;
+        }
+        let gap_src = YbWalSource {
+            client: client.as_ref(),
+            table: &gapped,
+            branch_id: gap_branch,
+            seg: SEG_SIZE,
+            find_anchor_queries: AtomicU64::new(0),
+            find_end_of_wal_queries: AtomicU64::new(0),
+        };
+        let run = gap_src
+            .contiguous_chunks_from(Lsn(SEG_SIZE))
+            .await
+            .expect("contiguous_chunks_from across a gap");
+        assert_eq!(
+            run.len(),
+            3,
+            "the run must stop at the hole at offset {}, not resume at {}",
+            3 * SZ,
+            4 * SZ
+        );
+        drop_wals_table(&client, &gapped).await;
+
+        drop_wals_table(&client, &table).await;
+    }
+
     /// Regression for #678: `max_offset` is an exclusive end, so a page-aligned
     /// one must not be handed to the inclusive-target `find_anchor`.
     #[tokio::test]
@@ -3237,18 +3498,7 @@ mod tests {
         );
 
         let branch_id = BranchId::generate();
-        client
-            .execute(
-                &format!(
-                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
-                                     chunk_size, data, last_modified_us) \
-                     VALUES ($1, 0, 1, 0, $2, $3, 0)",
-                    quote_relation(&table)
-                ),
-                &[&branch_id, &(len as i32), &enc(&buf[..len])],
-            )
-            .await
-            .expect("insert WAL chunk");
+        insert_chunk(&client, &table, branch_id, 1, 0, &buf[..len]).await;
 
         let mut state = TimelinePersistentState::empty();
         state.branch_id = branch_id;
@@ -3339,18 +3589,7 @@ mod tests {
         }
 
         let branch_id = BranchId::generate();
-        client
-            .execute(
-                &format!(
-                    "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
-                                     chunk_size, data, last_modified_us) \
-                     VALUES ($1, 0, 2, 0, $2, $3, 0)",
-                    quote_relation(&table)
-                ),
-                &[&branch_id, &(kept.len() as i32), &enc(&kept)],
-            )
-            .await
-            .expect("insert retained WAL chunk");
+        insert_chunk(&client, &table, branch_id, 2, 0, &kept).await;
 
         let mut state = TimelinePersistentState::empty();
         state.branch_id = branch_id;
@@ -3478,6 +3717,8 @@ mod tests {
                 table: &table,
                 branch_id,
                 seg: SEG_SIZE,
+                find_anchor_queries: AtomicU64::new(0),
+                find_end_of_wal_queries: AtomicU64::new(0),
             },
             Lsn(durable_end.0 - 1),
             start,
@@ -4420,17 +4661,7 @@ mod tests {
 
         // One chunk spanning [0, 2048).
         let chunk: Vec<u8> = (0u8..=255).cycle().take(2048).collect();
-        fpu.execute(
-            &format!(
-                "INSERT INTO {} (branch_id, bucket_id, segno, chunk_offset, \
-                                 chunk_size, data, last_modified_us) \
-                 VALUES ($1, 0, 0, 0, 2048, $2, 0)",
-                quote_relation(&table)
-            ),
-            &[&branch_id, &enc(chunk.as_slice())],
-        )
-        .await
-        .expect("INSERT chunk");
+        insert_chunk(&fpu, &table, branch_id, 0, 0, &chunk).await;
 
         let yb_wal = Arc::new(YbWalConn {
             fpu_client: fpu.clone(),

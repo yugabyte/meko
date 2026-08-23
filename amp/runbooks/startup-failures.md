@@ -307,13 +307,14 @@ which never creates. So a scan error that recurs on every attempt leaves the bra
 unavailable: the compute reconnects in a loop and the pageserver cannot stream WAL
 that is sitting durable in `wals`.
 
-Read the error chain in `failed to load timeline <branch>` to tell the three apart:
+Read the error chain in `failed to load timeline <branch>` to tell them apart:
 
 | Chain mentions | Cause | Recovery |
 |---|---|---|
 | `end-of-WAL scan: reading wals` + a YB error | transient query failure | none needed — the next handshake retries and succeeds |
 | `decoding stored WAL chunk` / `unknown payload codec tag 0x<NN>` | the row was written by a build whose codec this one doesn't know (version skew), or the payload is damaged | run a safekeeper build that understands the tag — usually roll forward to the version that wrote it. The offending row is named in the chain (`segno=N offset=M`); inspect it with `dump-wals --branch <id>`, which reports each chunk's stored codec |
 | `no fresh-record WAL page found within 64 MiB below` | `find_anchor` hit `MAX_ANCHOR_SCAN_BYTES` with no floor to fall back on, which needs `retention_floor` to be `Lsn(0)` — i.e. a branch with WAL rows but no `timeline_start_lsn` and no `consistent_lsn` | check `min(segno)`/`max(segno)` in `wals` against `branch_state`; rows present while both columns are unset means the row set and the branch state disagree, which is the thing to investigate |
+| `chunk at <LSN> (+N bytes) does not cover <LSN>` | a `WalSource` handed `find_end_of_wal` a batch that is not contiguous from where the scan had reached. `YbWalSource::contiguous_chunks_from` cuts its run at the first byte it does not hold, so this is a bug in a `WalSource` implementation, not a state the WAL can be in | not an operator-recoverable condition and not a reason to delete rows — the WAL above is intact and the scan simply refused to guess. Escalate with the branch id and the two LSNs from the message |
 | `reading WAL page header at <LSN>: WAL hole at <LSN>: no covering chunk` | the anchor walk descended past the lowest surviving `segno`, into WAL retention already trimmed. Fixed in #788 by flooring the walk at `branch_state.consistent_lsn`, which GC never trims below; before that fix the floor was `timeline_start_lsn`, which sits below the retained window | on a build carrying #788 this means `consistent_lsn` itself is below the surviving WAL — compare it with `min(segno) * wal_seg_size` from `wals`. Escalate; deleting rows only removes more WAL |
 
 If a branch must be brought up before the underlying cause is fixed, the only safe
@@ -340,6 +341,17 @@ line of YB statements:
 | `truncated torn WAL tail to the last valid record boundary` | the torn-tail cleanup delete (`truncate_wals_above`) |
 | `rehydrated write_lsn from amp_storage.wals` | on a build carrying #874, **nothing on this path** — the load is done; look at what follows it (below) |
 | neither | the end-of-WAL scan (`load_write_lsn` / `find_anchor` / `find_end_of_wal`) |
+
+For that last row, `end-of-WAL scan finished` reports each phase's queries and
+elapsed time. Divide one by the other: the two phases fail for opposite reasons,
+and so does a slow cluster.
+
+| reading | cause |
+|---|---|
+| `find_anchor_ms` high, `find_anchor_queries` low | slow round trips — a YB problem, not a WAL one |
+| `find_anchor_ms` high, `find_anchor_queries` high | no fresh-record page near the tip, so the walk ran to `retention_floor`. Expected on WAL made of large records; check how far the pageserver's `consistent_lsn` is behind |
+| `find_end_of_wal_ms` high, `find_end_of_wal_queries` ≈ 1 per 16 MiB replayed | batching is working; the cluster is slow |
+| `find_end_of_wal_ms` high, `find_end_of_wal_queries` far above that | the fetch is back to a query per chunk, so the `Set()` hints in `contiguous_chunks_from` are not applying and YB is sorting and spilling instead of merging the per-bucket streams. Check that `pg_hint_plan` is in the cluster's `shared_preload_libraries` — a hint is a comment, so a cluster without it degrades silently |
 
 A load that appeared stuck right after `rehydrated write_lsn from amp_storage.wals`
 was the second known instance (#874): the next statement was `min(segno)`

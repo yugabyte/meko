@@ -50,6 +50,24 @@ pub trait WalSource {
     /// where the WAL ends from it (#756).
     async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>>;
 
+    /// A contiguous run starting with the chunk covering `lsn`, ascending: every
+    /// chunk begins where the one before it ended, and the run stops at the first
+    /// byte the source does not hold. Empty means nothing covers `lsn` —
+    /// `chunk_at`'s `None`, read the same way (#756). How many to return is the
+    /// implementation's choice; contiguity is not, which is what the name is for.
+    ///
+    /// Batched because a `wals` read is a round trip, so the one-chunk-per-call
+    /// scan cost one query per chunk — thousands on OLTP WAL (#929).
+    ///
+    /// The default returns the covering chunk alone, which satisfies the contract
+    /// (a run of one) without batching. It is a default so that adding this did
+    /// not break every implementor, and nothing in production takes it:
+    /// [`find_end_of_wal`] is the only caller and `YbWalSource` overrides it.
+    /// `decode_forward`, the other forward scan, still reads a chunk at a time.
+    async fn contiguous_chunks_from(&self, lsn: Lsn) -> anyhow::Result<Vec<(Lsn, Vec<u8>)>> {
+        Ok(self.chunk_at(lsn).await?.into_iter().collect())
+    }
+
     /// Read exactly `len` bytes starting at `lsn`, assembling across
     /// chunk (and segment) boundaries. Errors on a hole: the caller asked
     /// for a span it already expects to be there.
@@ -235,30 +253,38 @@ pub async fn find_end_of_wal<S: WalSource>(
     let mut curr_lsn = start_lsn;
     let mut decoder = WalStreamDecoder::new(start_lsn, pg_version);
 
-    // loop over WAL chunks
+    // loop over batches of WAL chunks
     loop {
-        let (chunk_start, data) = match reader
-            .chunk_at(curr_lsn)
+        let chunks = reader
+            .contiguous_chunks_from(curr_lsn)
             .await
-            .with_context(|| format!("end-of-WAL scan: reading the chunk at {curr_lsn}"))?
-        {
-            // no more WAL
-            None => return Ok(result),
-            Some(chunk) => chunk,
-        };
-        let seg_offs = (curr_lsn.0 - chunk_start.0) as usize;
-        curr_lsn = Lsn(chunk_start.0 + data.len() as u64);
-        decoder.feed_bytes(&data[seg_offs..]);
+            .with_context(|| format!("end-of-WAL scan: reading the chunks at {curr_lsn}"))?;
+        if chunks.is_empty() {
+            return Ok(result); // no more WAL
+        }
+        for (chunk_start, data) in chunks {
+            // The source broke its contract; returning `result` here, as the holes
+            // below do, would read as end-of-WAL and truncate durable rows (#756).
+            if chunk_start > curr_lsn || curr_lsn.0 - chunk_start.0 >= data.len() as u64 {
+                bail!(
+                    "end-of-WAL scan: chunk at {chunk_start} (+{} bytes) does not cover {curr_lsn}",
+                    data.len()
+                );
+            }
+            let seg_offs = (curr_lsn.0 - chunk_start.0) as usize;
+            curr_lsn = Lsn(chunk_start.0 + data.len() as u64);
+            decoder.feed_bytes(&data[seg_offs..]);
 
-        // advance result past all completely read records
-        loop {
-            match decoder.poll_decode() {
-                Ok(Some(record)) => result = record.0,
-                Err(_e) => {
-                    // torn / partial tail: stop at the last complete record
-                    return Ok(result);
+            // advance result past all completely read records
+            loop {
+                match decoder.poll_decode() {
+                    Ok(Some(record)) => result = record.0,
+                    Err(_e) => {
+                        // torn / partial tail: stop at the last complete record
+                        return Ok(result);
+                    }
+                    Ok(None) => break, // need more data
                 }
-                Ok(None) => break, // need more data
             }
         }
     }
@@ -292,7 +318,144 @@ mod tests {
         }
     }
 
+    /// The same WAL cut into fixed-size chunks. `per_fetch: 1` is the trait
+    /// default's one-chunk-per-call behaviour.
+    struct ChunkedWal {
+        start: Lsn,
+        buf: Vec<u8>,
+        chunk: usize,
+        per_fetch: usize,
+    }
+
+    impl ChunkedWal {
+        fn at(&self, lsn: Lsn) -> Option<(Lsn, Vec<u8>)> {
+            let end = self.start.0 + self.buf.len() as u64;
+            if lsn.0 < self.start.0 || lsn.0 >= end {
+                return None;
+            }
+            let idx = ((lsn.0 - self.start.0) as usize) / self.chunk;
+            let from = idx * self.chunk;
+            let to = min(from + self.chunk, self.buf.len());
+            Some((Lsn(self.start.0 + from as u64), self.buf[from..to].to_vec()))
+        }
+    }
+
+    impl WalSource for ChunkedWal {
+        fn seg(&self) -> u64 {
+            WAL_SEGMENT_SIZE as u64
+        }
+        async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
+            Ok(self.at(lsn))
+        }
+        async fn contiguous_chunks_from(&self, lsn: Lsn) -> anyhow::Result<Vec<(Lsn, Vec<u8>)>> {
+            let mut out = Vec::new();
+            let mut pos = lsn;
+            while out.len() < self.per_fetch {
+                match self.at(pos) {
+                    Some((s, d)) => {
+                        pos = Lsn(s.0 + d.len() as u64);
+                        out.push((s, d));
+                    }
+                    None => break,
+                }
+            }
+            Ok(out)
+        }
+    }
+
     const START: Lsn = Lsn(WAL_SEGMENT_SIZE as u64);
+
+    /// A batched `contiguous_chunks_from` must reach the same end of WAL as the
+    /// one-chunk-per-call default, whatever the chunk size (#929).
+    #[tokio::test]
+    async fn bulk_and_single_chunk_reads_agree() {
+        let (buf, starts) = gen_wal(400, 16);
+        let end = Lsn(START.0 + buf.len() as u64);
+        // `per_fetch: 3` with tiny chunks makes the scan cross many batches, so a
+        // short batch must not read as the end of WAL.
+        for (chunk, per_fetch) in [(64usize, 3usize), (512, 64), (4096, 64), (1 << 20, 64)] {
+            let single = ChunkedWal {
+                start: START,
+                buf: buf.clone(),
+                chunk,
+                per_fetch: 1,
+            };
+            let bulk = ChunkedWal {
+                start: START,
+                buf: buf.clone(),
+                chunk,
+                per_fetch,
+            };
+            let a = find_end_of_wal(&single, starts[10], PgMajorVersion::PG18)
+                .await
+                .expect("single");
+            let b = find_end_of_wal(&bulk, starts[10], PgMajorVersion::PG18)
+                .await
+                .expect("bulk");
+            assert_eq!(a, b, "chunk size {chunk}: bulk and single disagree");
+            assert_eq!(a, end, "chunk size {chunk}: wrong end of WAL");
+        }
+    }
+
+    /// The batch is not trusted to be contiguous: the caller stops at the first
+    /// chunk that does not cover where it is, which is the hole `chunk_at`'s
+    /// `None` used to report. Seeding past the WAL must not walk off the end.
+    #[tokio::test]
+    async fn bulk_read_stops_at_a_hole() {
+        let (buf, starts) = gen_wal(200, 16);
+        let cut = starts[100];
+        // Serve only the first half; everything at or above `cut` is absent.
+        let src = ChunkedWal {
+            start: START,
+            buf: buf[..(cut.0 - START.0) as usize].to_vec(),
+            chunk: 512,
+            per_fetch: 64,
+        };
+        let got = find_end_of_wal(&src, starts[5], PgMajorVersion::PG18)
+            .await
+            .expect("scan");
+        assert_eq!(
+            got, cut,
+            "the scan must stop at the last complete record before the hole"
+        );
+    }
+
+    /// A batch that does not cover where the scan is breaks the contract. Reading
+    /// it as end-of-WAL would truncate durable WAL (#756), so it must fail.
+    #[tokio::test]
+    async fn bulk_read_rejects_a_batch_that_does_not_cover() {
+        let (buf, starts) = gen_wal(200, 16);
+        struct Skipping(ChunkedWal);
+        impl WalSource for Skipping {
+            fn seg(&self) -> u64 {
+                self.0.seg()
+            }
+            async fn chunk_at(&self, lsn: Lsn) -> anyhow::Result<Option<(Lsn, Vec<u8>)>> {
+                self.0.chunk_at(lsn).await
+            }
+            async fn contiguous_chunks_from(
+                &self,
+                lsn: Lsn,
+            ) -> anyhow::Result<Vec<(Lsn, Vec<u8>)>> {
+                // Skip the covering chunk and hand back the one after it.
+                let skipped = Lsn(lsn.0 + self.0.chunk as u64);
+                self.0.contiguous_chunks_from(skipped).await
+            }
+        }
+        let src = Skipping(ChunkedWal {
+            start: START,
+            buf,
+            chunk: 512,
+            per_fetch: 4,
+        });
+        let err = find_end_of_wal(&src, starts[0], PgMajorVersion::PG18)
+            .await
+            .expect_err("a non-covering batch must fail the scan, not end it");
+        assert!(
+            format!("{err:#}").contains("does not cover"),
+            "unexpected error: {err:#}"
+        );
+    }
 
     /// Generate `count` uniform logical-message records from `START`,
     /// returning the bytes and the true record-start boundaries.
