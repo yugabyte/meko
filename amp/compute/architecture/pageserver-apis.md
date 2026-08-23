@@ -135,10 +135,10 @@ Details per handler:
   granted `LsnLease` (with `valid_until`).
 - **do_gc**: JSON body `TimelineGcRequest` (optional `gc_horizon`
   override; PITR comes from the branch config). Runs
-  `TenantManager::immediate_gc` and returns the `GcResult`. Note
-  `Timeline::gc` deletes no rows — this refreshes cutoffs and lease
-  state only (see [`pageserver.md`](pageserver.md) "Background
-  tasks").
+  `TenantManager::immediate_gc` and returns the `GcResult`: it refreshes
+  cutoffs and lease state, then drains the due `pending_gc` candidates
+  (see [`pageserver-gc.md`](pageserver-gc.md)). Goes through `gc_iteration`,
+  so `enable_gc` off or the lsn-lease grace makes it a no-op.
 - **flush**: optional query `lsn=<lsn>` — first `wait_lsn`s until WAL
   ingest reaches that LSN, then calls `Timeline::force_flush()`
   (`PageWriter::flush` + `force_upsert_consistent_lsn_if_advanced`), so

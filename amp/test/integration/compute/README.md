@@ -290,9 +290,8 @@ what was skipped).
 
 **Garbage collection:** every pageserver the suite provisions is *born*
 with GC enabled and tuned for prompt reclaim on small test workloads
-(`enable_gc`, `test_enable_gc_drain`, `gc_period="1s"`,
-`gc_queue_floor_reset_interval="5s"`, `pitr_interval="0s"`, a small
-`gc_horizon`, `gc_candidate_every_n_bases=1`),
+(`enable_gc`, `gc_period="1s"`, `gc_queue_floor_reset_interval="5s"`,
+`pitr_interval="0s"`, a small `gc_horizon`, `gc_candidate_every_n_bases=1`),
 injected into each generated `pageserver.toml` via the
 `YB_PAGESERVER_TEST_EXTRA_TOML` boot seam (set in `cluster.rs`; born-with
 because `enable_gc` is read once at attach, so changing it needs a

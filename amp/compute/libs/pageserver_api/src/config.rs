@@ -1002,10 +1002,6 @@ pub struct BranchConfigToml {
     pub relsize_snapshot_cache_capacity: usize,
     /// Enable the basebackup cache for this tenant.
     pub basebackup_cache_enabled: bool,
-    /// TEST-ONLY: run the GC drain (off = candidate collection only),
-    /// so the insert-side cost can be A/B-measured without drain cost.
-    /// Default false.
-    pub test_enable_gc_drain: bool,
     /// Max candidates one GC tick drains (oldest-first); leftover
     /// carries to the next tick. Bounds per-tick memory and delete
     /// burst size. Default 10_000 (~1 MiB of candidates in memory).
@@ -1020,7 +1016,7 @@ pub struct BranchConfigToml {
     #[serde(with = "humantime_serde")]
     pub gc_queue_floor_reset_interval: Duration,
     /// Master switch for garbage collection. Read once at `Timeline::new`
-    /// (a runtime patch applies on next PS restart). Default false.
+    /// (a runtime patch applies on next PS restart). Default true.
     pub enable_gc: bool,
     /// Insert one trim candidate per this many base writes to a block;
     /// ingest and the materialiser share one per-block counter. Read once
@@ -1081,14 +1077,13 @@ impl Default for BranchConfigToml {
             sampling_ratio: None,
             relsize_snapshot_cache_capacity: DEFAULT_RELSIZE_SNAPSHOT_CACHE_CAPACITY,
             basebackup_cache_enabled: false,
-            test_enable_gc_drain: false,
             gc_drain_limit: DEFAULT_GC_DRAIN_LIMIT,
             gc_sweep_rows_per_tick: DEFAULT_GC_SWEEP_ROWS_PER_TICK,
             gc_queue_floor_reset_interval: humantime::parse_duration(
                 DEFAULT_GC_QUEUE_FLOOR_RESET_INTERVAL,
             )
             .expect("cannot parse default gc queue floor reset interval"),
-            enable_gc: false,
+            enable_gc: true,
             gc_candidate_every_n_bases: DEFAULT_GC_CANDIDATE_EVERY_N_BASES,
         }
     }

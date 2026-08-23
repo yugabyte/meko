@@ -1875,12 +1875,12 @@ impl DatadirModification<'_> {
             // reuses OIDs, so the sparse-reldir range may still hold markers
             // from a previous database with the same oid. Their removal is
             // queued asynchronously at DROP DATABASE and gated on the GC
-            // cutoff (and `enable_gc` is off by default), so they can easily
-            // still be here. v1 got this reset for free: it wrote an *empty*
-            // RelDirectory, which replaced the old set wholesale. Per-relation
-            // keys have no such single point, so tombstone the survivors
-            // explicitly — otherwise `get_rel_exists` resurrects relations
-            // that do not exist and basebackup emits them.
+            // cutoff, so they can easily still be here. v1 got this reset
+            // for free: it wrote an *empty* RelDirectory, which replaced the
+            // old set wholesale. Per-relation keys have no such single point,
+            // so tombstone the survivors explicitly — otherwise
+            // `get_rel_exists` resurrects relations that do not exist and
+            // basebackup emits them.
             for (tag, marker) in self.all_reldir_markers(spcnode, dbnode, ctx).await? {
                 if marker == RelDirExists::Exists {
                     self.put(
@@ -1959,10 +1959,7 @@ impl DatadirModification<'_> {
     /// the layering bridge to the writer's frozen master switch. Gates
     /// drop/shrink event recording.
     fn gc_enabled(&self) -> bool {
-        self.tline
-            .page_writer
-            .as_ref()
-            .is_some_and(|w| w.gc_enabled())
+        self.tline.gc_enabled()
     }
 
     /// Record a drop (`GcKind::Drop*`) / shrink (`GcKind::ShrinkPages`) GC

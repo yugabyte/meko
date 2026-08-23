@@ -3964,8 +3964,8 @@ impl PageStore {
     /// Batched rather than deleted as one range statement even though a scope
     /// holds few `meta` keys: the rows are *versions*, and `put_rel_extend`
     /// writes a size row per growth record, collapsed only by `TrimMeta` —
-    /// which `enable_gc` gates off by default, so the first sweep after it is
-    /// turned on faces the whole untrimmed history. An unbounded statement
+    /// which `enable_gc` gates off, so the first sweep on a branch that ran
+    /// with GC off faces the whole untrimmed history. An unbounded statement
     /// would also spend an unmeasured part of the tick's row budget.
     async fn gc_sweep_select_meta_batch(
         &self,

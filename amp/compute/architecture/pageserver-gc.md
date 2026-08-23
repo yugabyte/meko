@@ -19,7 +19,7 @@ Removing dead tuples / defragmenting within a page is ordinary Postgres
 `VACUUM` in the compute (emits WAL, ingested like any write) — orthogonal
 to this.
 
-GC is **default off**; a branch turns it on with `enable_gc` — see
+GC is **default on**; a branch turns it off with `enable_gc` — see
 [Config](#config).
 
 ## Branch-drop GC
@@ -542,14 +542,14 @@ per-bucket fan-out every 30s and a backlogged one stops being pinned at
 | Nothing due (`empty`) | double the previous sleep, up to `8 x gc_period` (4min) |
 
 The first working tick resets to the base. A tick that reached
-`gc_iteration` and skipped the drain there (`test_enable_gc_drain` off, lease
-grace) backs off like an idle one; the loop-level disable (`gc_period == 0` or
+`gc_iteration` and skipped the drain there (`enable_gc` off, lease grace) backs
+off like an idle one; the loop-level disable (`gc_period == 0` or
 `gc_horizon == 0`) instead keeps its own fixed 10 s re-check, so the
-`outcome=disabled` label covers two cadences — 10 s if GC is switched off, up
-to 4 min if only the drain is. Errors keep
-their own exponential retry. The backoff state lives in the loop and the first
-tick still jitters (`sleep_random`), so a fleet restarted together doesn't
-resynchronise its selects on the shared `pending_gc` tablets.
+`outcome=disabled` label covers two cadences — 10 s if the loop is switched off,
+up to 4 min if `enable_gc` is. Errors keep their own exponential retry. The
+backoff state lives in the loop and the first tick still jitters
+(`sleep_random`), so a fleet restarted together doesn't resynchronise its
+selects on the shared `pending_gc` tablets.
 
 A candidate that comes due inside a backed-off window waits up to the ceiling
 before it is reclaimed — GC is throughput-bound, not latency-bound. The other
@@ -565,7 +565,7 @@ per-branch is also per-instance today.
 
 | Knob | Default | Effect |
 | --- | --- | --- |
-| `enable_gc` | `false` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
+| `enable_gc` | `true` | Master switch — off ⇒ no candidates emitted ⇒ nothing to reclaim. Read once at timeline activation, so a runtime patch applies on the next PS restart. |
 | `gc_candidate_every_n_bases` | `10` | Trim-candidate sampling: one per n bases per key. Read once at activation. |
 | `gc_drain_limit` | `10 000` | Max candidates a tick selects/acts on; bounds per-tick memory and delete burst. Read fresh each tick. |
 | `gc_sweep_rows_per_tick` | `30 000` | Rows a tick deletes across its prefix sweeps, shared by all of them. `gc_drain_limit` counts candidates, and a dropped database or relation is one, so this is what bounds their burst; a larger object drains over many ticks. The default is `PAGE_BUCKETS x GC_SWEEP_MAX_ROWS_PER_DELETE`, so one tick is one pass of one bounded DELETE per bucket (~6 000 rows/s at the backlog cadence). Read fresh each tick. |
@@ -609,11 +609,12 @@ a stream of new ones — the `error!` line carries the row.
 Three checks localize most GC escalations (metrics above):
 
 1. **Is GC running?** `enable_gc` on for the branch and
-   `rate(gc_drain_ticks_total) > 0`. `outcome=disabled` climbing ⇒ gated
-   off; `lease_grace` ⇒ skipped during fresh-attach grace; `error` ⇒ the
-   drain is erroring. A *low* tick rate is not by itself a stall: a branch
-   with nothing due backs off to one tick per 4 min, so read the rate together
-   with `outcome=empty` climbing.
+   `rate(gc_drain_ticks_total) > 0`. `outcome=disabled` climbing ⇒
+   gated off (`enable_gc`, or `gc_period`/`gc_horizon` at 0);
+   `lease_grace` ⇒ skipped during fresh-attach grace; `error` ⇒ the drain is
+   erroring. A *low* tick rate is not by itself a stall: a branch with nothing
+   due backs off to one tick per 4 min, so read the rate together with
+   `outcome=empty` climbing.
 2. **Is the queue keeping up?** `rate(candidates_emitted) −
    rate(candidates_dequeued) > 0` ⇒ the drain is falling behind; confirm
    with `gc_drain_lag_bytes > 0` and rising `outcome=capped`.

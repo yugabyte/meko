@@ -390,7 +390,6 @@ impl Cluster {
                 "[tenant_config]\n\
                  enable_gc = true\n\
                  gc_candidate_every_n_bases = 1\n\
-                 test_enable_gc_drain = true\n\
                  gc_drain_limit = 10000\n\
                  gc_period = \"1s\"\n\
                  gc_queue_floor_reset_interval = \"5s\"\n\

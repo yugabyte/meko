@@ -71,7 +71,6 @@
     "tenant_config.max_lsn_wal_lag": "integer",
     "tenant_config.pitr_interval": "string",
     "tenant_config.relsize_snapshot_cache_capacity": "integer",
-    "tenant_config.test_enable_gc_drain": "boolean",
     "tenant_config.timeline_get_throttle.initial": "integer",
     "tenant_config.timeline_get_throttle.max": "integer",
     "tenant_config.timeline_get_throttle.refill_amount": "integer",

@@ -547,10 +547,10 @@ never landed**:
 
 A freshly bootstrapped branch therefore carried `consistent_lsn` and the
 generation and nothing else: `applied_gc_cutoff_lsn` and
-`initdb_lsn` stayed NULL (#552). `enable_gc` defaults to
-false, so no GC tick stamped the cutoff afterwards either — only the integration
-harness, which sets `enable_gc = true`, converged the row, which is why CI never
-saw it. Observed on a live cluster immediately after bootstrap:
+`initdb_lsn` stayed NULL (#552). `enable_gc` defaulted to false back then, so
+no GC tick stamped the cutoff afterwards either — only the integration harness,
+which sets `enable_gc = true`, converged the row, which is why CI never saw
+it. Observed on a live cluster immediately after bootstrap:
 `consistent_lsn = 22469800` with all four of those columns NULL.
 
 Reads were mis-classified too. A crash between step 3 and step 4 left

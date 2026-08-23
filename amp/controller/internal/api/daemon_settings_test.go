@@ -16,7 +16,6 @@ func TestDaemonConfigKeysLoad(t *testing.T) {
 	// not in a perf run that silently could not set one.
 	for _, want := range []string{
 		"tenant_config.enable_gc",
-		"tenant_config.test_enable_gc_drain",
 		"tenant_config.gc_horizon",
 		"tenant_config.gc_period",
 		"tenant_config.pitr_interval",
@@ -44,9 +43,8 @@ func TestValidateDaemonSettingsAccepts(t *testing.T) {
 		"float":          {"scale_factor": 8.5},
 		"top-level bool": {"dev_mode": true},
 		"several at once": {
-			"tenant_config.enable_gc":            true,
-			"tenant_config.test_enable_gc_drain": true,
-			"tenant_config.pitr_interval":        "0s",
+			"tenant_config.enable_gc":     true,
+			"tenant_config.pitr_interval": "0s",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

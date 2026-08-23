@@ -762,6 +762,12 @@ pub(crate) enum ShutdownMode {
 
 /// Public interface functions
 impl Timeline {
+    /// The `enable_gc` master switch as the writer latched it at
+    /// activation (emitter present).
+    pub(crate) fn gc_enabled(&self) -> bool {
+        self.page_writer.as_ref().is_some_and(|w| w.gc_enabled())
+    }
+
     /// Get the LSN where this branch was created
     pub(crate) fn get_ancestor_lsn(&self) -> Lsn {
         self.ancestor_lsn

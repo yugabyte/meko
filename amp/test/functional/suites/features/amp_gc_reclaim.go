@@ -24,15 +24,15 @@ const (
 	gcReclaimTimeout = 5 * time.Minute
 )
 
-// gcReclaimPageserverSettings turns GC on for this endpoint through the
-// settings API. Deployed endpoints run with candidate emission (enable_gc) and
-// the drain (test_enable_gc_drain) both off, and a 1-day PITR window — none of
-// which lets a test observe reclamation. This is the integration suite's GC
-// fragment (test/integration/compute/cluster.rs) expressed as create-time
-// overrides.
+// gcReclaimPageserverSettings turns GC on for this endpoint and tightens its
+// retention, through the settings API. `enable_gc` is redundant on a current
+// image and deliberately kept: against a released image whose compiled default
+// is still off, relying on the default would fail this test at its reclaim
+// deadline with a message pointing at the drain, sending whoever triages the
+// nightly after a bug that is not there. The rest is the integration suite's GC
+// fragment (test/integration/compute/cluster.rs) as create-time overrides.
 var gcReclaimPageserverSettings = map[string]any{
 	"tenant_config.enable_gc":                     true,
-	"tenant_config.test_enable_gc_drain":          true,
 	"tenant_config.gc_candidate_every_n_bases":    1,
 	"tenant_config.gc_period":                     "1s",
 	"tenant_config.gc_queue_floor_reset_interval": "5s",
@@ -52,7 +52,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamCompute,
-		Description: "DROP TABLE reclamation end to end: on an endpoint with GC enabled via pageserver_settings, the dropped relation's amp_storage.pages and pending_gc rows drain to zero while a live table's data and stored pages survive.",
+		Description: "DROP TABLE reclamation end to end: on an endpoint whose GC retention is tightened via pageserver_settings, the dropped relation's amp_storage.pages and pending_gc rows drain to zero while a live table's data and stored pages survive.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     25 * time.Minute,
 		Run:         runAmpGCReclaim,
@@ -107,7 +107,7 @@ func gcReclaimSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect end
 		return fmt.Errorf("read endpoint %s back: %w", ep.ID, err)
 	}
 	if len(got.PageserverSettings) == 0 {
-		skip("this controller does not persist pageserver_settings, so GC cannot be enabled on the endpoint")
+		skip("this controller does not persist pageserver_settings, so GC cannot be turned on or tightened on the endpoint")
 		return nil
 	}
 
@@ -223,7 +223,7 @@ func gcReclaimSteps(ctx context.Context, cl ampCtl, proj ampCluster, connect end
 			break
 		}
 		if time.Now().After(reclaimDeadline) {
-			return fmt.Errorf("dropped table %s not reclaimed within %s: amp_storage still holds pages=%d pending_gc=%d for branch %s relnode %d (seeded %d page rows) — GC is enabled on this endpoint via pageserver_settings, so the drain should have reached the drop", victim, gcReclaimTimeout, pages, queue, branchID, victimRel, stored)
+			return fmt.Errorf("dropped table %s not reclaimed within %s: amp_storage still holds pages=%d pending_gc=%d for branch %s relnode %d (seeded %d page rows) — GC is enabled and tightened on this endpoint via pageserver_settings, so the drain should have reached the drop", victim, gcReclaimTimeout, pages, queue, branchID, victimRel, stored)
 		}
 		select {
 		case <-ctx.Done():

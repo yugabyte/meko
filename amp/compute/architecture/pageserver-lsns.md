@@ -280,10 +280,9 @@ persists `applied_gc_cutoff_lsn = max(old, fresh cutoff)` to
 to the in-memory `Rcu` and deleting anything — the read floor is durable
 before any delete.
 
-Bootstrap sets it to 0 ("nothing GC'd yet"), and `enable_gc` defaults to
-**false**, so no GC tick moves it afterwards — outside the integration
-harness, which sets `enable_gc = true`, it stays 0 for the life of the
-branch. It is still read as `Option`, defaulting to 0, as defence in depth:
+Bootstrap sets it to 0 ("nothing GC'd yet"), and every GC tick moves it
+afterwards (`enable_gc` defaults to **true**). It is still read as `Option`,
+defaulting to 0, as defence in depth:
 the guarded failure mode is a crash-loop on attach, and the guard costs one
 `unwrap_or(0)`.
 
@@ -298,10 +297,9 @@ publish (after the persist above), and the HTTP `timeline_patch`
 endpoint (`routes.rs`) — the patch does not persist to YB, so it does
 not survive a restart.
 
-**Behavior:** enforcement exists at read time. With `enable_gc` off (the
-default) the value stays at its creation-time setting — no writer
-advances it; with GC on, each tick advances and persists it before the
-drain.
+**Behavior:** enforcement exists at read time. With GC on (the default)
+each tick advances and persists it before the drain; with `enable_gc` off
+the value stays at its creation-time setting — no writer advances it.
 
 ---
 
@@ -396,12 +394,11 @@ Child branch points are not held in memory: the parent's cutoff is clamped
 against its child rows in `branch_state` by `publish_gc_cutoff`.
 
 `gc_iteration_internal` (`page_server.rs`) refreshes the cutoffs and calls
-`Timeline::gc()`. With `enable_gc` on for the branch, the tick drains due
-`pending_gc` candidates and deletes the superseded / truncated / dropped
-`pages` rows they name ([`pageserver-gc.md`](pageserver-gc.md)). With it
-off (the default), no rows are deleted and retention is effectively
-unbounded in the page tables; the cutoffs still serve read-scope
-enforcement and planning.
+`Timeline::gc()`. With `enable_gc` on for the branch (the default), the tick
+drains due `pending_gc` candidates and deletes the superseded / truncated /
+dropped `pages` rows they name ([`pageserver-gc.md`](pageserver-gc.md)). With
+it off, no rows are deleted and retention is effectively unbounded in the page
+tables; the cutoffs still serve read-scope enforcement and planning.
 
 ---
 

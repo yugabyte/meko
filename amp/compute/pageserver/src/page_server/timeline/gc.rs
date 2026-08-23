@@ -132,8 +132,8 @@ impl Timeline {
     ///   anchor — then dequeue (crash-safety contract on
     ///   [`Self::drain_due_candidates`]).
     ///
-    /// Caller (`gc_iteration`) has already gated on
-    /// `test_enable_gc_drain` and the lsn-lease deadline grace.
+    /// Caller (`gc_iteration`) has already gated on `enable_gc` and the
+    /// lsn-lease deadline grace.
     pub(crate) async fn gc(&self) -> Result<GcResult, GcError> {
         let mut result = GcResult::default();
         // No writer yet ⇒ timeline not fully wired; nothing to GC.

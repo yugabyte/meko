@@ -36,14 +36,29 @@ const (
 	// budget instead of burning the controller's full helm --wait.
 	cutoffDoomedEndpointBudget = 6 * time.Minute
 	// gcDrainTicksMetric counts the pageserver's GC drain ticks by outcome. The
-	// "disabled" outcome is how a pageserver reports that its GC drain is switched
-	// off, so nothing it is asked to reclaim can ever be reclaimed.
+	// "disabled" outcome means the tick reclaimed nothing because GC is switched
+	// off — `enable_gc`, or the loop-level `gc_period`/`gc_horizon` at 0. None of
+	// those is the stock configuration, so it marks a deployment that turned GC
+	// off rather than a default.
 	gcDrainTicksMetric = "pageserver_yb_gc_drain_ticks_total"
 	// endpointPodContainer is the endpoint pod's amp container (the pod also
 	// carries a postgres-exporter sidecar, and only this one answers on the
 	// pageserver's management port).
 	endpointPodContainer = "endpoint"
 )
+
+// forkCutoffPageserverSettings makes the ancestor's applied GC cutoff reachable
+// inside a test window. GC itself is on by default; what blocks the cutoff is
+// retention. `pitr_interval` defaults to 1 day and is authoritative over the
+// space horizon whenever it is non-zero, so the forced GC's small gc_horizon
+// cannot move the cutoff until it is 0. `lsn_lease_length` doubles as GC's
+// startup grace (`lsn_lease_deadline = startup + lsn_lease_length`), so at the
+// 10-minute default no tick in this test would run at all. Same trap
+// `features/amp_gc_reclaim` documents.
+var forkCutoffPageserverSettings = map[string]any{
+	"tenant_config.pitr_interval":    "0s",
+	"tenant_config.lsn_lease_length": "2s",
+}
 
 // errNoPageserverAccess marks a deployment that cannot reach a pageserver's
 // management port at all: no kube context, no pod, or nothing listening. That is
@@ -141,9 +156,12 @@ func podPageserverExec(kube *k8s.Kubectl, pod string) pageserver.ExecFunc {
 }
 
 func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector, findPS pageserverFinder, logf func(string, ...any), skip func(string)) error {
-	baseEP, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
+	baseEP, err := createEndpointReq(ctx, cl, proj.poolID, proj.projID, proj.branchID, controller.CreateEndpointRequest{
+		Role:               roleReadWrite,
+		PageserverSettings: forkCutoffPageserverSettings,
+	})
 	if err != nil {
-		return fmt.Errorf("create ancestor endpoint: %w", err)
+		return fmt.Errorf("create ancestor endpoint with retention pageserver_settings: %w", err)
 	}
 	base, err := connect(ctx, baseEP)
 	if err != nil {
@@ -223,11 +241,11 @@ func forkBelowGCCutoffSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 			return mErr
 		}
 		if ticks, known := gcDrainDisabled(samples); known && ticks > 0 {
-			skip(fmt.Sprintf("this deployment's pageserver has its GC drain switched off (%s{outcome=\"disabled\"} = %.0f), so branch %s's applied GC cutoff stays at %s whatever is forced and no fork point can be below it. Exercising the below-cutoff rejection needs the endpoint's pageserver born with the GC drain on and a short pitr_interval, which no runtime route exposes today: blocked on meko#751",
+			skip(fmt.Sprintf("this deployment's pageserver is not running GC (%s{outcome=\"disabled\"} = %.0f — enable_gc off, or gc_period/gc_horizon at 0), so branch %s's applied GC cutoff stays at %s whatever is forced and no fork point can be below it. None of those is the default, so this deployment turned GC off",
 				gcDrainTicksMetric, ticks, branchID, info.AppliedGCCutoffLSN))
 			return nil
 		}
-		return fmt.Errorf("branch %s's applied GC cutoff is %s, at or below the captured fork LSN %s, after %d churn round(s) of %d rows and a forced GC at gc_horizon %d bytes (last record %s, min readable %s, GC reported %d candidate(s) dequeued and %d row(s) deleted). The pageserver does not report its GC drain as switched off, so the cutoff was expected to advance past the fork LSN and the below-cutoff rejection could not be exercised; the branch's pitr_interval is authoritative over the space-based horizon and defaults to 1 day",
+		return fmt.Errorf("branch %s's applied GC cutoff is %s, at or below the captured fork LSN %s, after %d churn round(s) of %d rows and a forced GC at gc_horizon %d bytes (last record %s, min readable %s, GC reported %d candidate(s) dequeued and %d row(s) deleted). The pageserver does not report GC as switched off and the endpoint was created with pitr_interval=0s, so the cutoff was expected to advance past the fork LSN and the below-cutoff rejection could not be exercised",
 			branchID, info.AppliedGCCutoffLSN, earlyLSN, cutoffHistoryRounds, cutoffChurnRows, cutoffForceGCHorizonBytes,
 			info.LastRecordLSN, info.MinReadableLSN, forced.CandidatesDequeued, forced.RowsDeleted)
 	}
@@ -300,8 +318,9 @@ func cutoffPassed(cutoff, forkLSN string) (bool, error) {
 	return c > f, nil
 }
 
-// gcDrainDisabled reports the pageserver's count of GC ticks that did nothing
-// because the drain is switched off, and whether it exports that counter at all.
+// gcDrainDisabled reports the pageserver's count of GC ticks that reclaimed
+// nothing because GC is switched off (`enable_gc`, or `gc_period`/`gc_horizon`
+// at 0), and whether it exports that counter at all.
 func gcDrainDisabled(s pageserver.Samples) (ticks float64, known bool) {
 	return s.Value(gcDrainTicksMetric, map[string]string{"outcome": "disabled"})
 }

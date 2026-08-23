@@ -996,13 +996,13 @@ impl PageServer {
             return Ok(GcResult::default());
         }
 
-        // Gate BEFORE refresh_gc_info_internal: with the drain off, the
-        // tick must cost nothing — no cutoff computation (the
-        // timestamp→LSN lookup reads SLRU pages), no publish. Keeps the
-        // enable_gc-only perf configuration (candidate collection
-        // without drain) free of tick noise.
-        if !self.get_test_enable_gc_drain() {
-            debug!("Skipping GC: test_enable_gc_drain is off");
+        // Gate BEFORE refresh_gc_info_internal: with GC off the tick must
+        // cost nothing — no cutoff computation (the timestamp→LSN lookup
+        // reads SLRU pages), no publish, no pending_gc select. Reads the
+        // writer's latched `enable_gc` rather than the live tenant conf, so
+        // the drain and the emitter never disagree about the master switch.
+        if self.timeline().is_some_and(|tl| !tl.gc_enabled()) {
+            debug!("Skipping GC: enable_gc is off");
             crate::metrics::GC_DRAIN_TICKS
                 .with_label_values(&["disabled"])
                 .inc();
@@ -1121,13 +1121,6 @@ impl PageServer {
         tenant_conf
             .gc_horizon
             .unwrap_or(self.conf.default_tenant_conf.gc_horizon)
-    }
-
-    pub fn get_test_enable_gc_drain(&self) -> bool {
-        let tenant_conf = self.tenant_conf.load().tenant_conf.clone();
-        tenant_conf
-            .test_enable_gc_drain
-            .unwrap_or(self.conf.default_tenant_conf.test_enable_gc_drain)
     }
 
     pub fn get_gc_period(&self) -> Duration {

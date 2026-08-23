@@ -776,13 +776,13 @@ two-phase pipeline:
    SLRU images go to `slru_pages` and need no cache install — there is
    no long-lived in-RAM SLRU read cache, and the image row anchors
    subsequent `read_slru_chain` reads on its own. `in_flight` is
-   released per batch on success or failure. With `enable_gc` on, the
-   commit also records a `pending_gc` trim candidate per installed
-   image (buffered, best-effort — see
+   released per batch on success or failure. With `enable_gc` on (the
+   default), the commit also records a `pending_gc` trim candidate per
+   installed image (buffered, best-effort — see
    [`pageserver-gc.md`](pageserver-gc.md)), so the superseded rows
    below the new anchor are later reclaimed by the GC drain; with it
-   off (the default) the row count grows monotonically and
-   materialisation pays only for read-latency wins.
+   off the row count grows monotonically and materialisation pays only
+   for read-latency wins.
 
 Materialiser RAM has two pools, bounded differently:
 
@@ -1077,13 +1077,13 @@ on-demand logical-size calculation:
   [pageserver-gc.md](pageserver-gc.md#tick-cadence)): refreshes GC cutoffs
   (space horizon from `gc_horizon`, time cutoff from `pitr_interval` via
   `find_gc_cutoffs`), culls expired LSN leases, and updates
-  PITR-related metrics. With `enable_gc` on for the branch, each tick
-  also persists `applied_gc_cutoff_lsn = max(old, fresh cutoff)` to
-  `branch_state` (monotone, durable **before**
+  PITR-related metrics. With `enable_gc` on for the branch (the default),
+  each tick also persists `applied_gc_cutoff_lsn = max(old, fresh cutoff)`
+  to `branch_state` (monotone, durable **before**
   anything is deleted) and drains the due `pending_gc` candidates,
   deleting the superseded `pages` rows they name. With `enable_gc` off
-  (the default) the tick deletes nothing and superseded deltas and old
-  images accumulate in YB. Full design:
+  the tick deletes nothing and superseded deltas and old images
+  accumulate in YB. Full design:
   [`pageserver-gc.md`](pageserver-gc.md).
 - **Housekeeping loop** (fixed 20 s cadence,
   `TENANT_HOUSEKEEPING_PERIOD`): ingest housekeeping plus getpage
@@ -1153,11 +1153,6 @@ The compute opens libpq connections to the pageserver per backend
   locations** — none. The only caches are the in-RAM `UnifiedPages` and
   meta LRU; local disk holds only the initdb tarball and basebackup
   cache.
-- **Row GC by default** — `enable_gc` is off unless a branch opts in,
-  and then `Timeline::gc` deletes nothing; row counts in YB grow
-  monotonically. With it on, superseded page versions are reclaimed via
-  the `pending_gc` candidate queue + periodic drain
-  ([`pageserver-gc.md`](pageserver-gc.md)).
 - **S3 / object storage** — the pageserver's `remote_storage` backend
   is `YbStore` (required at startup); there is no S3 dependency and no
   object-versioning time-travel path. Point-in-time recovery composes

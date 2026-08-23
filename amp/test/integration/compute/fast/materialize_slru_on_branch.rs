@@ -13,11 +13,11 @@
 //! treats a walredo failure as corruption) `fatal_abort`ed the pageserver. This
 //! test failed there with `could not connect to pageserver`.
 //!
-//! Deliberately GC-independent, unlike `gc_slru_trim_reclaims`: `enable_gc`
-//! defaults to OFF, materialisation runs either way, and the abort did too — so
-//! asserting the reclamation of trimmed rows leaves the default configuration
-//! uncovered. This asserts the positive artifact instead: an `is_image` row
-//! appears on the BRANCH for the block whose only base is on the parent.
+//! Deliberately GC-independent, unlike `gc_slru_trim_reclaims`: materialisation
+//! runs whether or not GC is on, and the abort did too — so asserting the
+//! reclamation of trimmed rows would leave the GC-off configuration uncovered.
+//! This asserts the positive artifact instead: an `is_image` row appears on the
+//! BRANCH for the block whose only base is on the parent.
 
 use std::time::Duration;
 
