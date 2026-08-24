@@ -667,10 +667,13 @@ loses nothing but logs.
      reads chunks, and a chunk is one coalesced consumer batch — ~1.4 KiB on OLTP
      WAL, ~100 KiB on large records — so it runs the other way. The replay reads a
      batch per query (`WalSource::contiguous_chunks_from`, segno-scoped) rather than
-     a chunk per query. `bucket_id` leads the `wals` key, so that scan returns rows
-     bucket-major and a plain `ORDER BY chunk_offset` would sort every payload; plan
-     hints have YB merge the six per-bucket streams inside the index scan instead,
-     with no sort node (#929).
+     a chunk per query (#929). `bucket_id` leads the `wals` key, so that scan
+     returns rows bucket-major and ordering them costs a sort over one segment's
+     rows. It carried plan hints to get YB's merge scan instead; they are gone,
+     because on a prepared statement the merge scan never applied and the
+     `enable_sort off` among them left an index scan that only *claimed*
+     `chunk_offset` order — which mis-seeded the batch and truncated durable WAL
+     (#938, yugabyte-db#32733).
    - **Torn tail** (`end < raw`): truncate back to the boundary; the compute
      re-streams from there. The torn rows are physically deleted
      (`truncate_wals_above`) so they are not re-counted next restart;

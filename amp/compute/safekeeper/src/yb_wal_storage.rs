@@ -1403,38 +1403,39 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
     /// Scoped to `lsn`'s segno, which bounds the bytes: chunks never overlap, so a
     /// segment's rows carry at most `wal_seg_size` however many rows that is.
     ///
-    /// The hints are load-bearing. `bucket_id` leads the key and a chunk's bucket is
-    /// not derivable, so the `IN`-list scan returns rows bucket-major and a plain
-    /// `ORDER BY chunk_offset` costs a sort carrying every payload — a 9 MiB
-    /// external-merge spill on one 16 MiB segment, measured. Under the hints YB
-    /// merges the six per-bucket streams inside the index scan and emits them
-    /// ordered, with no sort node at all.
+    /// The subquery finds the chunk covering `lsn` — a record boundary is not a chunk
+    /// boundary, so `lsn` lands mid-chunk — and the batch starts from that chunk. Its
+    /// plan:
     ///
-    /// All three are needed on YB 2026.1, where `yb_enable_cbo` ships `legacy_mode`
-    /// and `yb_max_merge_scan_streams` ships 0 (both `boot_val`s). `yb_enable_cbo`
-    /// opens a hard gate in the planner — merge-scan paths are not generated without
-    /// it (`yb_merge_scan.c`) — and the stream count must be at least the bucket
-    /// count. `enable_sort` is the one that makes the choice independent of
-    /// statistics: with the gate open but costing left to decide, an unanalysed
-    /// table still picks the sort, and nothing ANALYZEs `amp_storage.wals`.
-    /// Penalising sort leaves merge scan the only surviving path, verified on a
-    /// table with no statistics at all. So if a later YB defaults `yb_enable_cbo`
-    /// on, that hint stops being load-bearing but `enable_sort` does not. Hints
-    /// rather than `SET` because this lane also runs `load_min_segno` and
-    /// `truncate_wals_above`, the plans behind #874 and #812.
+    /// ```text
+    /// Limit
+    ///   -> Sort                    <- carries `data`, i.e. the WAL bytes
+    ///        Sort Key: chunk_offset DESC
+    ///        -> Index Scan using wals_pkey
+    ///             Index Cond: bucket_id = ANY ('{0,1,2,3,4,5}') AND ... AND chunk_offset <= $3
+    /// ```
     ///
-    /// They apply statement-wide, so the covering-chunk subquery is re-planned too —
-    /// into an `Index Scan Backward` merge scan, its own 1-row sort gone and its
-    /// storage reads 3 down to 1. Dropping `enable_sort` as though it only concerned
-    /// the outer `ORDER BY` would give that back as well.
+    /// The Sort is there because `bucket_id` leads the key and a chunk's bucket cannot be
+    /// derived from its offset, so all six are named and the scan returns rows grouped by
+    /// bucket. One segment's rows, once per timeline load.
     ///
-    /// A hint is a comment, so a cluster without `pg_hint_plan` preloaded silently
-    /// gets the sort back. `find_end_of_wal_queries` on the scan's log line is where
-    /// that shows; `startup-failures.md` §Q reads it.
+    /// `Set(yb_enable_cbo on) Set(yb_max_merge_scan_streams 6) Set(enable_sort off)` gets
+    /// YB to merge the six ranges inside the scan and drop the Sort instead:
     ///
-    /// The subquery is `chunk_at`'s covering-chunk lookup, needed because a record
-    /// boundary is not a chunk boundary so the first call lands mid-chunk. One
-    /// `InitPlan`, seeking backward — the cheap direction (#874).
+    /// ```text
+    /// Limit
+    ///   -> Index Scan Backward using wals_pkey
+    ///        Index Cond: ...
+    ///        Merge Sort Key: chunk_offset DESC
+    ///        Merge Stream Key: bucket_id
+    ///        Merge Streams: 6
+    /// ```
+    ///
+    /// Don't. Hints are statement-wide, so they re-plan the subquery too, and there it
+    /// runs into yugabyte-db#32733: `DESC LIMIT 1` comes back with one bucket's max
+    /// instead of the global max. The chunk it names then stops short of `lsn`, this
+    /// returns empty, and an empty batch reads as an end of WAL — so the safekeeper
+    /// deletes the durable rows above it (#938).
     async fn contiguous_chunks_from(&self, lsn: Lsn) -> anyhow::Result<Vec<(Lsn, Vec<u8>)>> {
         self.find_end_of_wal_queries.fetch_add(1, Ordering::Relaxed);
         let segno = (lsn.0 / self.seg) as i64;
@@ -1442,9 +1443,7 @@ impl postgres_ffi::wal_record_boundary::WalSource for YbWalSource<'_> {
         let table = quote_relation(self.table);
         let buckets = bucket_in_list();
         let sql = format!(
-            "/*+ Set(yb_enable_cbo on) Set(yb_max_merge_scan_streams {WALS_BUCKETS}) \
-                 Set(enable_sort off) */ \
-             SELECT chunk_offset, data FROM {table} \
+            "SELECT chunk_offset, data FROM {table} \
              WHERE branch_id = $1 AND {buckets} AND segno = $2 \
                AND chunk_offset >= (SELECT chunk_offset FROM {table} \
                                     WHERE branch_id = $1 AND {buckets} AND segno = $2 \

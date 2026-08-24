@@ -351,7 +351,8 @@ and so does a slow cluster.
 | `find_anchor_ms` high, `find_anchor_queries` low | slow round trips — a YB problem, not a WAL one |
 | `find_anchor_ms` high, `find_anchor_queries` high | no fresh-record page near the tip, so the walk ran to `retention_floor`. Expected on WAL made of large records; check how far the pageserver's `consistent_lsn` is behind |
 | `find_end_of_wal_ms` high, `find_end_of_wal_queries` ≈ 1 per 16 MiB replayed | batching is working; the cluster is slow |
-| `find_end_of_wal_ms` high, `find_end_of_wal_queries` far above that | the fetch is back to a query per chunk, so the `Set()` hints in `contiguous_chunks_from` are not applying and YB is sorting and spilling instead of merging the per-bucket streams. Check that `pg_hint_plan` is in the cluster's `shared_preload_libraries` — a hint is a comment, so a cluster without it degrades silently |
+| `find_end_of_wal_ms` high, `find_end_of_wal_queries` far above that | the fetch is back to a query per chunk. `contiguous_chunks_from` cuts its run at the first row that does not continue the last one, so a batch that comes back mis-ordered degrades to roughly one chunk per query — slow, but not wrong |
+| `find_end_of_wal_queries` ≈ 1 **and** `valid_end` equal to the anchor in `truncated torn WAL tail` | the opposite and far worse reading: the first batch came back empty and ended the scan, so the tail below `torn_end` was deleted rather than replayed. This was #938 — a mis-seeded covering-chunk lookup. A one-query scan is only healthy when `valid_end` moved |
 
 A load that appeared stuck right after `rehydrated write_lsn from amp_storage.wals`
 was the second known instance (#874): the next statement was `min(segno)`
