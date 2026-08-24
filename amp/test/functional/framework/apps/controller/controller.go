@@ -54,6 +54,19 @@ const (
 	getTaskRetryDelay = 200 * time.Millisecond
 )
 
+// Budget for waiting out the controller's state-store 503: a rescheduled
+// tserver costs a pod recreate plus a PD detach/attach, rounded up.
+const (
+	DefaultUnavailableBudget = 90 * time.Second
+	DefaultUnavailableDelay  = 2 * time.Second
+	unavailableMaxWait       = 10 * time.Second
+)
+
+// Matched on the message, not the code: the controller derives the code from
+// the status text, so every 503 it sends carries "service_unavailable" —
+// including /readyz, whose callers need it to answer immediately.
+const storeUnavailableMessage = "state store unavailable"
+
 // Client is a controller REST client. Base URL and http.Client are injectable.
 type Client struct {
 	baseURL string // scheme://host[:port], no trailing slash; health lives here
@@ -63,6 +76,9 @@ type Client struct {
 	// PollInitial/PollMax bound the async-task poll backoff (settable for tests).
 	PollInitial time.Duration
 	PollMax     time.Duration
+
+	UnavailableBudget time.Duration
+	UnavailableDelay  time.Duration
 }
 
 // Option customizes a Client.
@@ -77,11 +93,13 @@ func WithHTTPClient(hc *http.Client) Option { return func(c *Client) { c.hc = hc
 func New(baseURL string, opts ...Option) *Client {
 	b := strings.TrimRight(baseURL, "/")
 	c := &Client{
-		baseURL:     b,
-		apiURL:      b + "/api/v1",
-		hc:          http.DefaultClient,
-		PollInitial: DefaultPollInitial,
-		PollMax:     DefaultPollMax,
+		baseURL:           b,
+		apiURL:            b + "/api/v1",
+		hc:                http.DefaultClient,
+		PollInitial:       DefaultPollInitial,
+		PollMax:           DefaultPollMax,
+		UnavailableBudget: DefaultUnavailableBudget,
+		UnavailableDelay:  DefaultUnavailableDelay,
 	}
 	for _, o := range opts {
 		o(c)
@@ -577,8 +595,8 @@ func (c *Client) ListAllEndpoints(ctx context.Context, poolID, clusterID, branch
 
 // GetTask reads one task's status, retrying up to getTaskRetries times (small
 // fixed backoff) on a transient connection error before surfacing it — see
-// getTaskRetries. A real API error (4xx/5xx, decoded from the body) is never
-// retried, only a dropped/refused/reset connection.
+// getTaskRetries. Beyond the state-store 503 doJSON waits out, a decoded API
+// error is not retried here — only a dropped/refused/reset connection.
 func (c *Client) GetTask(ctx context.Context, taskID string) (Task, error) {
 	var out Task
 	var err error
@@ -792,20 +810,72 @@ func (c *Client) async(ctx context.Context, method, url string, body any) (Task,
 	return task, loc, nil
 }
 
+// doJSON retries while the controller reports its state store unavailable. Safe
+// on every method: it sends that answer only for a request it established never
+// reached the store, and a 500 when it cannot (db.SafeToRetry).
 func (c *Client) doJSON(ctx context.Context, method, url string, body, out any) (int, http.Header, error) {
-	var rdr io.Reader
+	var raw []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return 0, nil, fmt.Errorf("marshal %s %s: %w", method, url, err)
 		}
-		rdr = bytes.NewReader(b)
+		raw = b
+	}
+	deadline := time.Now().Add(c.UnavailableBudget)
+	for {
+		status, hdr, err := c.doJSONOnce(ctx, method, url, raw, body != nil, out)
+		if !storeUnavailable(err) {
+			return status, hdr, err
+		}
+		wait := c.retryAfter(hdr)
+		if time.Now().Add(wait).After(deadline) {
+			return status, hdr, err
+		}
+		select {
+		case <-ctx.Done():
+			// Keep the 503: without it a caller logs this as the controller hanging.
+			return status, hdr, errors.Join(err, ctx.Err())
+		case <-time.After(wait):
+		}
+	}
+}
+
+func storeUnavailable(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) &&
+		apiErr.StatusCode == http.StatusServiceUnavailable &&
+		strings.Contains(apiErr.Message, storeUnavailableMessage)
+}
+
+func (c *Client) retryAfter(hdr http.Header) time.Duration {
+	fallback := c.UnavailableDelay
+	if fallback <= 0 {
+		fallback = DefaultUnavailableDelay
+	}
+	if hdr == nil {
+		return fallback
+	}
+	secs, err := strconv.Atoi(strings.TrimSpace(hdr.Get("Retry-After")))
+	if err != nil || secs <= 0 {
+		return fallback
+	}
+	if d := time.Duration(secs) * time.Second; d < unavailableMaxWait {
+		return d
+	}
+	return unavailableMaxWait
+}
+
+func (c *Client) doJSONOnce(ctx context.Context, method, url string, raw []byte, hasBody bool, out any) (int, http.Header, error) {
+	var rdr io.Reader
+	if hasBody {
+		rdr = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
 	if err != nil {
 		return 0, nil, fmt.Errorf("build %s %s: %w", method, url, err)
 	}
-	if body != nil {
+	if hasBody {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")

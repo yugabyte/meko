@@ -3,7 +3,9 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -577,5 +579,282 @@ func TestUpdateSettingsDecodesEveryOutcomeField(t *testing.T) {
 	}
 	if e := got.Endpoints[3]; e.Unreachable == "" {
 		t.Error("unreachable must decode")
+	}
+}
+
+// unavailable writes the controller's state-store 503 verbatim. No Retry-After:
+// the header is whole seconds, too coarse for a unit test.
+func unavailable(w http.ResponseWriter) {
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{
+		"code": "service_unavailable", "message": "state store unavailable; retry the request",
+	}})
+}
+
+func fastRetry(c *Client) *Client {
+	c.UnavailableBudget = 2 * time.Second
+	c.UnavailableDelay = time.Millisecond
+	return c
+}
+
+// Waited out on a write too, not just the idempotent methods.
+func TestCreateEndpointWaitsOutStoreUnavailable(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var calls atomic.Int32
+	f.on("POST /api/v1/storage-pools/p/clusters/c/branches/b/endpoints",
+		func(w http.ResponseWriter, _ *http.Request) {
+			if calls.Add(1) <= 2 {
+				unavailable(w)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, Task{ID: "t1", Status: TaskSucceeded})
+		})
+
+	cl := fastRetry(f.client())
+	task, _, err := cl.CreateEndpoint(context.Background(), "p", "c", "b", CreateEndpointRequest{Role: "read_write"})
+	if err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	if task.ID != "t1" {
+		t.Errorf("task id = %q, want t1", task.ID)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("attempts = %d, want 3 (two 503s then the accept)", got)
+	}
+}
+
+// A store that never comes back must surface the 503, not hang to the test's
+// own timeout.
+func TestStoreUnavailableRetryIsBounded(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	f.on("GET /api/v1/storage-pools/p/clusters/c",
+		func(w http.ResponseWriter, _ *http.Request) { unavailable(w) })
+
+	cl := f.client()
+	cl.UnavailableBudget = 50 * time.Millisecond
+	cl.UnavailableDelay = 10 * time.Millisecond
+
+	start := time.Now()
+	_, err := cl.GetCluster(context.Background(), "p", "c")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("want the 503 to surface once the budget is spent")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("err = %v, want a 503 APIError", err)
+	}
+	if elapsed > time.Second {
+		t.Errorf("gave up after %s, want the budget to bound it", elapsed)
+	}
+}
+
+// Every controller 503 carries code "service_unavailable", so matching the code
+// alone would swallow answers that promise nothing about the request landing.
+func TestOnlyTheStateStore503IsWaitedOut(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		code    string
+		message string
+	}{
+		// internal/api/server.go
+		{"readyz database unavailable", http.StatusServiceUnavailable, "service_unavailable", "database unavailable"},
+		// internal/api/handlers.go
+		{"safekeeper not serving", http.StatusServiceUnavailable, "service_unavailable",
+			"the parent branch's endpoint is not serving its safekeeper API yet; retry the fork"},
+		{"bare 503 from a proxy", http.StatusServiceUnavailable, "", ""},
+		{"500 outcome unknown", http.StatusInternalServerError, "internal", "internal error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake()
+			defer f.close()
+
+			var calls atomic.Int32
+			f.on("POST /api/v1/storage-pools/p/clusters/c/branches/b/endpoints",
+				func(w http.ResponseWriter, _ *http.Request) {
+					calls.Add(1)
+					writeJSON(w, tc.status, map[string]any{"error": map[string]string{
+						"code": tc.code, "message": tc.message,
+					}})
+				})
+
+			cl := fastRetry(f.client())
+			if _, _, err := cl.CreateEndpoint(context.Background(), "p", "c", "b", CreateEndpointRequest{}); err == nil {
+				t.Fatal("want the error to surface")
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("attempts = %d, want 1 (no retry)", got)
+			}
+		})
+	}
+}
+
+// waitControllerReady polls Readyz on a 1s cadence and re-resolves a dead
+// controller address halfway through its budget; one retry sitting on the full
+// budget consumes the window that recovery depends on.
+func TestReadyzIsNotWaitedOut(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var calls atomic.Int32
+	f.on("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "2")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{
+			"code": "service_unavailable", "message": "database unavailable",
+		}})
+	})
+
+	cl := f.client()
+	cl.UnavailableBudget = time.Minute
+	cl.UnavailableDelay = 2 * time.Second
+
+	start := time.Now()
+	if err := cl.Readyz(context.Background()); err == nil {
+		t.Fatal("want the readiness verdict to surface")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("Readyz blocked %s, want it to answer at once", elapsed)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("attempts = %d, want 1", got)
+	}
+}
+
+func TestRetryAfterHonoursTheHeader(t *testing.T) {
+	cl := New("http://example.invalid")
+	cl.UnavailableDelay = 2 * time.Second
+
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{"absent", "", 2 * time.Second},
+		{"garbage", "soon", 2 * time.Second},
+		{"zero", "0", 2 * time.Second},
+		{"negative", "-5", 2 * time.Second},
+		{"honoured above the delay", "5", 5 * time.Second},
+		{"capped", "600", unavailableMaxWait},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hdr := http.Header{}
+			if tc.value != "" {
+				hdr.Set("Retry-After", tc.value)
+			}
+			if got := cl.retryAfter(hdr); got != tc.want {
+				t.Errorf("retryAfter(%q) = %s, want %s", tc.value, got, tc.want)
+			}
+		})
+	}
+	if got := cl.retryAfter(nil); got != 2*time.Second {
+		t.Errorf("retryAfter(nil) = %s, want the client delay", got)
+	}
+}
+
+// captureControllerHang logs this error before SIGQUITing the pod, so losing the
+// 503 turns "backing is down" into "controller hung".
+func TestCancelledRetryKeepsTheAPIError(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	served := make(chan struct{})
+	var once sync.Once
+	f.on("GET /api/v1/storage-pools/p/clusters/c", func(w http.ResponseWriter, _ *http.Request) {
+		unavailable(w)
+		once.Do(func() { close(served) })
+	})
+
+	// Delay under budget so the loop reaches its sleep, then cancel from there:
+	// a deadline racing the request instead would cancel before any 503 exists.
+	cl := f.client()
+	cl.UnavailableBudget = 2 * time.Hour
+	cl.UnavailableDelay = time.Hour
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-served
+		// Margin for the client to finish reading the 503 before cancelling, so
+		// the cancel lands in the retry sleep and not in the request.
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := cl.GetCluster(ctx, "p", "c")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want it to carry the context cause", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v, want the 503 preserved as the diagnostic", err)
+	}
+	if !strings.Contains(apiErr.Message, "state store unavailable") {
+		t.Errorf("APIError message = %q, want the state-store reason", apiErr.Message)
+	}
+}
+
+func TestRetryResendsTheRequestBody(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var bodies []string
+	var mu sync.Mutex
+	f.on("POST /api/v1/storage-pools/p/clusters/c/branches/b/endpoints",
+		func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			n := len(bodies)
+			mu.Unlock()
+			if n == 1 {
+				unavailable(w)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, Task{ID: "t1", Status: TaskSucceeded})
+		})
+
+	cl := fastRetry(f.client())
+	if _, _, err := cl.CreateEndpoint(context.Background(), "p", "c", "b",
+		CreateEndpointRequest{Role: "read_write"}); err != nil {
+		t.Fatalf("CreateEndpoint: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("attempts = %d, want 2", len(bodies))
+	}
+	if bodies[0] != bodies[1] {
+		t.Errorf("retry sent a different body:\n first = %s\nsecond = %s", bodies[0], bodies[1])
+	}
+	if !strings.Contains(bodies[1], "read_write") {
+		t.Errorf("retried body lost its content: %s", bodies[1])
+	}
+}
+
+func TestStoreUnavailableRetryHonorsContext(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	f.on("GET /api/v1/storage-pools/p/clusters/c",
+		func(w http.ResponseWriter, _ *http.Request) { unavailable(w) })
+
+	cl := f.client()
+	cl.UnavailableBudget = time.Minute
+	cl.UnavailableDelay = 20 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := cl.GetCluster(ctx, "p", "c"); err == nil {
+		t.Fatal("want an error")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("blocked %s past the context deadline", elapsed)
 	}
 }
