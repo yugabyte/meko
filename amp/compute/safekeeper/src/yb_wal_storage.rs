@@ -7,8 +7,9 @@
 //! commit is acked only once its bytes are INSERT'd (see the ack model under
 //! "Batching" below).
 //!
-//! [`YbWalStorage`] wraps a [`WalBookkeeping`] — an in-memory tracker of the
-//! WAL LSN watermarks and record boundaries, with no filesystem interaction.
+//! [`YbWalStorage`] tracks two in-memory watermarks over that stream — the byte
+//! end it has accepted and the last complete record within it (a
+//! [`WalStreamTracker`]) — and no filesystem state of any kind.
 //!
 //! The table (`amp_storage.wals`, defined in the controller
 //! migration) holds one row per coalesced run of a consumer batch:
@@ -68,7 +69,7 @@
 //! `&mut self` across the YB round-trip).
 //!
 //! Durability is acked off the ingest path. `flush_lsn()` is capped at
-//! `min(inner.flush_lsn, durable_lsn)`, so nothing is ever advertised past
+//! `min(record boundary, durable_lsn)`, so nothing is ever advertised past
 //! what has landed in YB. Steady-state commits are acked as that watermark
 //! advances: `handle_flush` kicks the consumer without waiting
 //! (`yb_flush(YbFlush::Notify)`), and the WAL acceptor's durable-watch arm
@@ -109,7 +110,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use futures::future::{BoxFuture, FutureExt};
-use postgres_ffi::XLogSegNo;
+use postgres_ffi::wal_record_boundary::WalStreamTracker;
+use postgres_ffi::{PgMajorVersion, XLogSegNo};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, watch};
 use utils::id::BranchId;
@@ -117,10 +119,10 @@ use utils::lsn::Lsn;
 use utils::payload_codec;
 use yb_tokio_postgres::types::ToSql;
 
-use crate::metrics::WalStorageMetrics;
+use crate::metrics::{WAL_STORAGE_OPERATION_SECONDS, WalStorageMetrics};
 use crate::state::TimelinePersistentState;
 use crate::wal_cache::WalCache;
-use crate::wal_storage::{Storage, WalBookkeeping};
+use crate::wal_storage::Storage;
 
 // Re-export the auto-reconnecting Postgres client wrapper shared with
 // the pageserver's `YbStore`. See `ysql_client::YsqlClient` for the
@@ -192,7 +194,7 @@ pub struct YbWalConn {
     /// chunk fetches that feed the WAL sender. No upsert GUC.
     pub read_client: Arc<YsqlClient>,
     /// System / background lane (no upsert GUC). Used for startup
-    /// rehydration ([`YbWalStorage::load_write_lsn`]), the GC DELETE
+    /// rehydration ([`YbWalStorage::load_max_offset`]), the GC DELETE
     /// ([`YbWalStorage::remove_up_to`]), and the idempotent
     /// control-file ops (`restore_opt` SELECT, `write_initial_state` and `persist`
     /// UPDATEs — the control file's row is provisioned by the controller, so
@@ -264,7 +266,7 @@ impl YbWalConn {
         //   writes are UPDATEs against a row the controller provisioned
         //   at branch create, so a blind retry can't hit duplicate-key.
         // - Read lane (no GUC): exclusively the segment reader.
-        // - System lane (no GUC): the startup SELECT (`load_write_lsn`),
+        // - System lane (no GUC): the startup SELECT (`load_max_offset`),
         //   the GC DELETE (`remove_up_to`), and
         //   the control-file ops (`restore_opt` SELECT, `write_initial_state`
         //   and `persist` UPDATEs).
@@ -439,7 +441,7 @@ const YB_DURABLE_WAIT_MAX: Duration = Duration::from_secs(60);
 /// Bound for the best-effort torn-tail cleanup in [`YbWalStorage::new`], which
 /// runs inside `load_timeline` where an unbounded wait hangs the load silently
 /// (#812). Giving up is safe at any point, including between the delete and the
-/// trim: readers are bounded by `write_lsn`, so leftover rows are inert and the
+/// trim: readers are bounded by `accepted_byte_end`, so leftover rows are inert and the
 /// next restart retries. Bounds the safekeeper, not YB — `statement_timeout` is
 /// off on these connections, so the statement runs on regardless.
 const YB_TORN_TAIL_CLEANUP_MAX: Duration = Duration::from_secs(60);
@@ -462,20 +464,23 @@ pub enum DurableState {
 /// How far a YB flush should go — the arg to [`crate::wal_storage::Storage::yb_flush`].
 #[derive(Clone, Copy, Debug)]
 pub enum YbFlush {
-    /// Wake the consumer, wait for the batch to be durable in `amp_storage.wals`,
-    /// then advance the local watermark. The synchronous durable-commit
-    /// boundary used by `handle_elected` / sync-safekeepers.
+    /// Wake the consumer and wait for the batch to be durable in
+    /// `amp_storage.wals`. The synchronous durable-commit boundary used by
+    /// `handle_elected` / sync-safekeepers.
     NotifyAndWait,
-    /// Wake the consumer, then advance the local watermark without waiting.
-    /// Steady-state commit; durability is acked later off the ingest path.
+    /// Wake the consumer without waiting. Steady-state commit; durability is
+    /// acked later off the ingest path.
     Notify,
-    /// Advance the local watermark only, so `flush_lsn()` reaches the current
-    /// `durable_lsn`. The durability-ack path, reacting to a flush already done.
-    LocalAdvanceOnly,
 }
 
 pub struct YbWalStorage {
-    inner: WalBookkeeping,
+    /// End of the last complete record accepted; reported by
+    /// [`Storage::flush_lsn`], capped there at `durable_lsn`.
+    accepted_stream: WalStreamTracker,
+    /// Segment-header material for [`Storage::initialize_first_segment`].
+    pg_version: PgMajorVersion,
+    system_id: u64,
+    metrics: WalStorageMetrics,
     /// Background-write lane (no upsert GUC). Used by
     /// [`Self::remove_up_to`] for the GC DELETE. The hot-path INSERTs
     /// run on the FPU lane owned by the consumer task; SELECTs run on
@@ -529,10 +534,10 @@ pub struct YbWalStorage {
     /// Highest LSN whose chunks are confirmed in `wals`. Advanced by
     /// the consumer after each successful batch INSERT. Read by
     /// `flush_lsn()` to cap the externally-reported flush watermark at
-    /// true YB durability — the in-memory `inner.flush_record_lsn` can
+    /// true YB durability — the in-memory record boundary can
     /// otherwise be moved ahead of YB by `truncate_wal(end_pos)` when
     /// `end_pos > submitted_max_lsn`, opening a permanent gap. Initialised
-    /// from `load_write_lsn` at construction (YB's current max chunk end).
+    /// from `load_max_offset` at construction (YB's current max chunk end).
     durable_lsn: Arc<AtomicU64>,
     /// Kept so the consumer task isn't dropped immediately on
     /// `YbWalStorage` drop; closing `tx` is what signals shutdown.
@@ -558,11 +563,11 @@ impl YbWalStorage {
         let cache = yb_wal.cache.clone();
         let wal_seg_size = state.server.wal_seg_size as usize;
 
-        // Rehydrate `write_lsn` from YB rather than scanning local FS. Take
+        // Rehydrate the end of WAL from YB rather than scanning local FS. Take
         // the highest `chunk_offset + chunk_size` across all segnos for this
         // branch as the end-of-WAL position. Startup work →
         // system lane so it doesn't share the streaming-read connection.
-        let max_offset = Self::load_write_lsn(
+        let max_offset = Self::load_max_offset(
             &system_client,
             &table_name,
             branch_id,
@@ -571,17 +576,17 @@ impl YbWalStorage {
         )
         .await?;
 
-        // `load_write_lsn` returns the max BYTE offset persisted, which
+        // `load_max_offset` returns the max BYTE offset persisted, which
         // lands mid-record when an ungraceful compute shutdown left a torn
         // trailing page (#61). Treating that as the durable end-of-WAL
         // makes the interpreted reader decode into the torn page and panic.
         // Replay the decoder to the last complete record boundary <=
         // max_offset — where Postgres crash recovery also stops — and use
-        // THAT as write_lsn, discarding the torn tail (the compute
+        // THAT as the end of WAL, discarding the torn tail (the compute
         // re-streams from here and overwrites it).
-        let write_lsn = {
-            let pg_version = postgres_ffi::PgMajorVersion::try_from(state.server.pg_version)
-                .unwrap_or(postgres_ffi::PgMajorVersion::PG18);
+        let pg_version =
+            PgMajorVersion::try_from(state.server.pg_version).unwrap_or(PgMajorVersion::PG18);
+        let end_of_wal = {
             let src = YbWalSource {
                 client: &system_client,
                 table: &table_name,
@@ -609,7 +614,7 @@ impl YbWalStorage {
                 //
                 // Passed through unclamped: a trailing XLOG_SWITCH legitimately
                 // puts it *above* `max_offset`, and clamping would land
-                // `write_lsn` in the segment padding (#181). `find_anchor`
+                // `end_of_wal` in the segment padding (#181). `find_anchor`
                 // returns a floor at or above its target, and `find_end_of_wal`
                 // hands it back, so the `end > max_offset` arm below honors it.
                 //
@@ -653,7 +658,7 @@ impl YbWalStorage {
                     // compute doesn't stream that padding, so the persisted
                     // byte range stops at (or inside) it while the true flush
                     // position is the next segment. Honor it rather than clamping
-                    // back to max_offset — clamping leaves write_lsn inside the
+                    // back to max_offset — clamping leaves end_of_wal inside the
                     // padding, where the compute resumes streaming, the reader hits
                     // `invalid xl_tot_len 0`, and the safekeeper wedges (#181).
                     //
@@ -688,17 +693,17 @@ impl YbWalStorage {
         // Physically discard the torn tail so the table ends exactly at the
         // valid boundary — otherwise the dropped rows linger past
         // `durable_lsn` (violating `truncate_wal`'s "no rows past end_pos"
-        // invariant) and would be re-counted by `load_write_lsn` on the
+        // invariant) and would be re-counted by `load_max_offset` on the
         // next restart. Best-effort: the reader is already bounded by
-        // `write_lsn`, so a failed cleanup is harmless and retried next
+        // `end_of_wal`, so a failed cleanup is harmless and retried next
         // restart.
-        if write_lsn < max_offset {
+        if end_of_wal < max_offset {
             let cleanup = truncate_wals_above(
                 &system_client,
                 &table_name,
                 branch_id,
                 wal_seg_size,
-                write_lsn,
+                end_of_wal,
             );
             // Bounded: see `YB_TORN_TAIL_CLEANUP_MAX`. A timeout is reported
             // like any other cleanup failure — the load carries on.
@@ -709,7 +714,7 @@ impl YbWalStorage {
             if let Some(why) = outcome {
                 tracing::warn!(
                     branch_id = %branch_id,
-                    %write_lsn,
+                    %end_of_wal,
                     %max_offset,
                     "YbWalStorage::new — failed to delete torn WAL tail (harmless; retried next restart): {why}",
                 );
@@ -717,25 +722,21 @@ impl YbWalStorage {
         }
         tracing::info!(
             branch_id = %branch_id,
-            %write_lsn,
+            %end_of_wal,
             cfile_timeline_start_lsn = %state.timeline_start_lsn,
             %retention_floor,
-            "YbWalStorage::new — rehydrated write_lsn from amp_storage.wals \
+            "YbWalStorage::new — rehydrated the end of WAL from amp_storage.wals \
              (last valid record boundary; falls back to timeline_start_lsn on empty)",
         );
 
-        // WalBookkeeping holds the LSN tracker + WAL decoder for this
-        // stream — durability is our job.
-        let inner = WalBookkeeping::new(&branch_id, state, write_lsn)?;
-
         // Producer/consumer plumbing. The watermark starts at
-        // `write_lsn` so an immediately-following `flush_wal()` with
-        // `submitted_max_lsn == write_lsn` returns at once (nothing to
+        // `end_of_wal` so an immediately-following `flush_wal()` with
+        // `submitted_max_lsn == end_of_wal` returns at once (nothing to
         // wait for).
         let (tx, rx) = mpsc::channel::<PendingChunk>(CHUNK_CHANNEL_CAPACITY);
-        let (watermark_tx, watermark_rx) = watch::channel(DurableState::Healthy(write_lsn));
+        let (watermark_tx, watermark_rx) = watch::channel(DurableState::Healthy(end_of_wal));
         let flush_notify = Arc::new(tokio::sync::Notify::new());
-        let durable_lsn = Arc::new(AtomicU64::new(write_lsn.0));
+        let durable_lsn = Arc::new(AtomicU64::new(end_of_wal.0));
         let consumer_handle = tokio::spawn(consumer_main(
             rx,
             fpu_client,
@@ -753,7 +754,10 @@ impl YbWalStorage {
         // resolves it. See the field's doc for why not here.
 
         let me = YbWalStorage {
-            inner,
+            accepted_stream: WalStreamTracker::new(end_of_wal, pg_version),
+            pg_version,
+            system_id: state.server.system_id,
+            metrics: WalStorageMetrics::default(),
             ysql_system_client: system_client,
             branch_id,
             table_name,
@@ -761,7 +765,7 @@ impl YbWalStorage {
             tx,
             watermark_rx,
             flush_notify,
-            submitted_max_lsn: write_lsn,
+            submitted_max_lsn: end_of_wal,
             durable_wait_log_every: YB_DURABLE_WAIT_LOG_EVERY,
             durable_wait_max: YB_DURABLE_WAIT_MAX,
             cache,
@@ -770,7 +774,7 @@ impl YbWalStorage {
             _consumer_handle: consumer_handle,
         };
 
-        // No post-crash row scrub: `load_write_lsn` already takes the
+        // No post-crash row scrub: `load_max_offset` already takes the
         // max chunk-end across the table, so any committed-but-unacked
         // rows from a crashed run are absorbed as durable rather than
         // discarded. yb-amp has no truncation-past-durable case that
@@ -805,7 +809,7 @@ impl YbWalStorage {
     /// property changes (a batch spanning tablets again, or concurrent
     /// in-flight batches), hole detection must return — git history has
     /// the hole-aware `contiguous_end` tail scan this replaced.
-    async fn load_write_lsn(
+    async fn load_max_offset(
         client: &YsqlClient,
         table: &str,
         branch_id: BranchId,
@@ -827,7 +831,7 @@ impl YbWalStorage {
             let row = client
                 .query_opt(&sql, &[])
                 .await
-                .context("YbWalStorage: rehydrate write_lsn from YB (bucket max-end probe)")?;
+                .context("YbWalStorage: probe the max chunk end in YB (per-bucket)")?;
             if let Some(row) = row {
                 let segno: i64 = row.get("segno");
                 let end_off: i64 = row.get("end_off");
@@ -871,14 +875,6 @@ impl YbWalStorage {
             .context("YbWalStorage: resolve min(segno) from YB")?;
         let m: Option<i64> = row.and_then(|r| r.get("m"));
         Ok(m.map(|v| v as u64).unwrap_or(0))
-    }
-
-    fn inner_pg_version_id(&self) -> postgres_versioninfo::PgVersionId {
-        self.inner.pg_version_id()
-    }
-
-    fn inner_system_id(&self) -> u64 {
-        self.inner.system_id()
     }
 
     /// Producer side: split the incoming WAL range at segment boundaries,
@@ -1033,36 +1029,49 @@ impl YbWalStorage {
 }
 
 impl Storage for YbWalStorage {
-    fn write_lsn(&self) -> Lsn {
-        self.inner.write_lsn()
+    fn accepted_byte_end(&self) -> Lsn {
+        self.accepted_stream.byte_end()
     }
 
     fn flush_lsn(&self) -> Lsn {
-        // Cap at YB-confirmed durability. `inner.flush_lsn()` can be ahead
-        // when `truncate_wal(end_pos)` ran with `end_pos > durable_lsn`
-        // (ProposerElected with `start_streaming_at` past the persisted tail);
-        // returning the uncapped value to the walproposer
-        // is what creates the WAL gap forensic / 2026-05-29.
-        let inner_lsn = self.inner.flush_lsn();
+        // The LSN this safekeeper answers for. It goes out in the greeting and in
+        // every AppendResponse, the walproposer turns it into commit_lsn, and the
+        // compute releases synchronous commits on it — so an LSN reported here has
+        // been promised to a client.
+        //
+        // Both bounds are needed, for different reasons:
+        //
+        // Past `durable_lsn`, the bytes may not be in `amp_storage.wals` yet. A crash
+        // after the ack but before the INSERT loses a commit the client was told was
+        // durable. That is the 2026-05-29 gap forensic.
+        //
+        // Past `record_end`, the LSN can fall inside a record. A reader that stops
+        // there has half a record and fails to decode; and this safekeeper discards
+        // that partial tail on its next restart, so it would be advertising a
+        // position it will not have after a crash.
+        //
+        // Neither bound alone is enough, because each one goes stale where the other
+        // is exact. `durable_lsn` only ever rises: after `truncate_wal` deletes rows
+        // it still claims them, and `record_end` is what keeps the reported value
+        // inside the table. `record_end` advances as soon as bytes are decoded, well
+        // before they are INSERTed, so while a batch is in flight `durable_lsn` is
+        // the only honest statement about what YB can serve.
         let durable = Lsn(self.durable_lsn.load(Ordering::Acquire));
-        std::cmp::min(inner_lsn, durable)
+        std::cmp::min(self.accepted_stream.record_end(), durable)
     }
 
     async fn initialize_first_segment(&mut self, init_lsn: Lsn) -> Result<()> {
+        let _timer = WAL_STORAGE_OPERATION_SECONDS
+            .with_label_values(&["initialize_first_segment"])
+            .start_timer();
         // Generate the standard PG segment header + zero padding, then push
         // it through the consumer just like a regular write. Wait for the
         // consumer to flush before returning so the 16 MiB header is
         // durable by the time the caller sees success. One-shot
         // (per-timeline init), not on the per-commit hot path.
         let segno = init_lsn.segment_number(self.wal_seg_size);
-        let major_pg_version = postgres_ffi::PgMajorVersion::try_from(self.inner_pg_version_id())
-            .map_err(|e| anyhow::anyhow!("invalid pg version: {e:?}"))?;
-        let wal_seg = postgres_ffi::generate_wal_segment(
-            segno,
-            self.inner_system_id(),
-            major_pg_version,
-            init_lsn,
-        )?;
+        let wal_seg =
+            postgres_ffi::generate_wal_segment(segno, self.system_id, self.pg_version, init_lsn)?;
         let end_lsn = Lsn(init_lsn.0 + wal_seg.len() as u64);
         // Init blob is a 16 MiB zero-padded segment. Intentionally not
         // cached — see WalCache module docs. It still goes through the
@@ -1083,17 +1092,40 @@ impl Storage for YbWalStorage {
         self.submitted_max_lsn = end_lsn;
         self.flush_notify.notify_one();
         self.wait_for_durable(end_lsn).await?;
-        self.inner.initialize_first_segment(init_lsn).await
+        tracing::info!("initialize_first_segment: segno {segno} at lsn {init_lsn}");
+        Ok(())
     }
 
+    /// Sequential append only: moving the write pointer takes a `ProposerElected`
+    /// truncation first. The rewrite case is expected in normal operation — a
+    /// reconnecting walproposer whose first connection is still delivering packets.
     async fn write_wal(&mut self, startpos: Lsn, buf: &[u8]) -> Result<()> {
-        // Push chunks onto the consumer's channel. Durability is not
-        // observed yet — the caller must call `flush_wal` to wait for it.
-        self.upsert_writes(startpos, buf).await?;
-        self.inner.write_wal(startpos, buf).await
+        let accepted_byte_end = self.accepted_stream.byte_end();
+        if accepted_byte_end > startpos {
+            anyhow::bail!(
+                "write_wal rewrites WAL already accepted, accepted_byte_end={accepted_byte_end}, \
+                 startpos={startpos}"
+            );
+        }
+        if accepted_byte_end < startpos && accepted_byte_end != Lsn(0) {
+            anyhow::bail!(
+                "write_wal creates gap in accepted WAL, accepted_byte_end={accepted_byte_end}, \
+                 startpos={startpos}"
+            );
+        }
+        // Validate and decode before queueing, so a rejection leaves nothing on the
+        // channel. A failed `upsert_writes` recovers only via the dropped connection;
+        // the stream end is already advanced, so the next append would pass.
+        self.accepted_stream.feed(startpos, buf)?;
+        self.metrics.observe_write_bytes(buf.len());
+        // Durability is not observed yet — the caller must `flush_wal` to wait.
+        self.upsert_writes(startpos, buf).await
     }
 
     async fn truncate_wal(&mut self, end_pos: Lsn) -> Result<()> {
+        let _timer = WAL_STORAGE_OPERATION_SECONDS
+            .with_label_values(&["truncate_wal"])
+            .start_timer();
         // Drain everything the consumer has in flight first. Otherwise a
         // buffered chunk for an LSN past `end_pos` could be flushed after
         // the DELETE and silently resurrect data the walproposer intended
@@ -1102,8 +1134,8 @@ impl Storage for YbWalStorage {
         self.wait_for_durable(self.submitted_max_lsn).await?;
 
         // Refuse to advance the truncation point past confirmed YB
-        // durability. `inner.truncate_wal(end_pos)` sets `flush_record_lsn
-        // = end_pos` unconditionally, so accepting an `end_pos` past
+        // durability. The reset below moves `record_end` to `end_pos`
+        // unconditionally, so accepting an `end_pos` past
         // `durable_lsn` would advertise WAL the row store can't return —
         // exactly the forensic gap (2026-05-29). The walproposer should
         // reissue ProposerElected with a corrected `start_streaming_at`
@@ -1118,12 +1150,23 @@ impl Storage for YbWalStorage {
                 self.submitted_max_lsn,
             );
         }
+        // Also before the DELETE: bailing after it leaves the rows gone with the
+        // watermarks still above `end_pos`, advertising a range the table lost.
+        if self.accepted_stream.record_end() != Lsn(0)
+            && end_pos > self.accepted_stream.record_end()
+        {
+            anyhow::bail!(
+                "truncate_wal called on non-written WAL, record_end={}, end_pos={end_pos}",
+                self.accepted_stream.record_end(),
+            );
+        }
+
         // Physically drop any WAL past `end_pos` before resetting the
         // in-memory watermarks. In the steady single-SK case `end_pos ==
         // durable` and there's nothing past it (no-op), but after a torn
         // tail (find_end_of_wal capped flush_lsn below the raw max on
         // restart) or a multi-SK divergence, rows can sit past `end_pos`;
-        // leaving them would let `load_write_lsn` re-count them on the
+        // leaving them would let `load_max_offset` re-count them on the
         // next restart and could resurface a partial chunk to a reader.
         truncate_wals_above(
             &self.ysql_system_client,
@@ -1148,12 +1191,20 @@ impl Storage for YbWalStorage {
             let end_offset = end_pos.segment_offset(self.wal_seg_size) as u64;
             cache.lock().unwrap().truncate_after(segno_end, end_offset);
         }
-        self.inner.truncate_wal(end_pos).await
+
+        if end_pos == self.accepted_stream.byte_end()
+            && end_pos == self.accepted_stream.record_end()
+        {
+            return Ok(());
+        }
+        self.accepted_stream.reset(end_pos);
+        tracing::info!("truncated WAL to {end_pos}");
+        Ok(())
     }
 
-    /// Flush the consumer's queue, then advance the local inner watermark; the
-    /// mode selects how far to go (see [`YbFlush`]). `flush_lsn()` stays capped
-    /// at `durable_lsn` regardless, so `append_response` only ever advertises
+    /// Push the consumer's queue toward durability; the mode selects how far to
+    /// wait (see [`YbFlush`]). `flush_lsn()` reads `durable_lsn` directly, so it
+    /// needs no local advance here and `append_response` only ever advertises
     /// durable WAL.
     async fn yb_flush(&mut self, mode: YbFlush) -> Result<()> {
         match mode {
@@ -1162,9 +1213,8 @@ impl Storage for YbWalStorage {
                 self.wait_for_durable(self.submitted_max_lsn).await?;
             }
             YbFlush::Notify => self.flush_notify.notify_one(),
-            YbFlush::LocalAdvanceOnly => {}
         }
-        self.inner.flush_wal().await
+        Ok(())
     }
 
     /// Durability sync point (`handle_elected` / sync-safekeepers): notify, wait, advance.
@@ -1179,7 +1229,6 @@ impl Storage for YbWalStorage {
     }
 
     fn remove_up_to(&self, segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
-        let inner_fut = self.inner.remove_up_to(segno_up_to);
         let system_client = self.ysql_system_client.clone();
         let table = self.table_name.clone();
         let branch_id = self.branch_id;
@@ -1194,7 +1243,6 @@ impl Storage for YbWalStorage {
             if let Some(c) = &cache {
                 c.lock().unwrap().remove_segnos_below(segno_up_to);
             }
-            inner_fut.await?;
             // Bound the DELETE on both sides. The lower bound is the segno
             // boundary advanced by the previous successful call — rows below it
             // are known to be gone, so naming them in the WHERE clause turns
@@ -1253,7 +1301,7 @@ impl Storage for YbWalStorage {
     }
 
     fn get_metrics(&self) -> WalStorageMetrics {
-        self.inner.get_metrics()
+        self.metrics.clone()
     }
 }
 
@@ -2072,7 +2120,7 @@ fn encode_run(chunks: &[PendingChunk], codec: payload_codec::Codec) -> bytes::By
 /// ([`encode_run`]). The whole batch carries ONE bucket, so all ops
 /// land on one tablet and the tserver session applies them as one write
 /// batch (atomic) — a crash mid-flush cannot leave a hole (the invariant
-/// `load_write_lsn`'s simple max-end rehydration relies on).
+/// `load_max_offset`'s simple max-end rehydration relies on).
 ///
 /// `encoded` carries the [`payload_codec`]-wrapped run buffers produced by
 /// [`flush_batch`], 1:1 with `runs`.
@@ -2989,10 +3037,12 @@ async fn fetch_chunks_from_yb(
 pub type WalStore = YbWalStorage;
 
 impl YbWalStorage {
-    /// Forwarded passthrough for `WalBookkeeping::internal_state`. Used by
-    /// debug-dump / metrics endpoints.
-    pub fn internal_state(&self) -> (Lsn, Lsn, Lsn, bool) {
-        self.inner.internal_state()
+    /// `(byte_end, record_end)` for the debug-dump endpoint.
+    pub fn internal_state(&self) -> (Lsn, Lsn) {
+        (
+            self.accepted_stream.byte_end(),
+            self.accepted_stream.record_end(),
+        )
     }
 }
 
@@ -3270,8 +3320,8 @@ mod tests {
     }
 
     /// Build a fresh `YbWalStorage` with its own per-test scratch table
-    /// and tempdir. `start_lsn` becomes the rehydrated `write_lsn` (the
-    /// table is empty, so `load_write_lsn` falls back to `commit_lsn`).
+    /// and tempdir. `start_lsn` becomes the rehydrated `accepted_byte_end` (the
+    /// table is empty, so `load_max_offset` falls back to `commit_lsn`).
     ///
     /// All three lanes (`fpu`, `read`, `bg`) share a single underlying
     /// `YsqlClient` Arc here — production opens three independent
@@ -3513,14 +3563,14 @@ mod tests {
         .await
         .expect("YbWalStorage::new");
 
-        let got = storage.write_lsn();
+        let got = storage.accepted_byte_end();
         assert!(
             got < cut,
-            "rehydrated write_lsn {got} must fall below the page-aligned torn end {cut}"
+            "rehydrated accepted_byte_end {got} must fall below the page-aligned torn end {cut}"
         );
         assert!(
             starts.contains(&got),
-            "rehydrated write_lsn {got} must be a real record boundary"
+            "rehydrated accepted_byte_end {got} must be a real record boundary"
         );
 
         drop_wals_table(&client, &table).await;
@@ -3603,9 +3653,9 @@ mod tests {
             .expect("a branch whose WAL was trimmed by GC must still load");
 
         assert_eq!(
-            storage.write_lsn(),
+            storage.accepted_byte_end(),
             end,
-            "rehydrated write_lsn must reach the true end of the retained WAL; anything \
+            "rehydrated accepted_byte_end must reach the true end of the retained WAL; anything \
              short of it gets DELETEd by the torn-tail cleanup"
         );
         drop(storage);
@@ -3616,7 +3666,7 @@ mod tests {
         let caught_up = YbWalStorage::new(branch_id, &state, end, wal_conn(&client, &table))
             .await
             .expect("a floor at the end of the WAL is the caught-up case, not a disagreement");
-        assert_eq!(caught_up.write_lsn(), end);
+        assert_eq!(caught_up.accepted_byte_end(), end);
 
         drop_wals_table(&client, &table).await;
     }
@@ -3732,7 +3782,7 @@ mod tests {
             wal_conn(&client, &table),
         )
         .await;
-        let write_lsn = res.as_ref().ok().map(|s| s.write_lsn());
+        let accepted_byte_end = res.as_ref().ok().map(|s| s.accepted_byte_end());
         let failure = res.as_ref().err().map(|e| format!("{e:#}"));
 
         let persisted_end: Option<i64> = client
@@ -3759,10 +3809,10 @@ mod tests {
             persisted_end.map(|e| Lsn(e as u64)),
             Some(durable_end),
             "durable WAL was DELETEd: `wals` now ends at {:?}, below the acked end \
-             {durable_end}; the scan stopped at {write_lsn:?}",
+             {durable_end}; the scan stopped at {accepted_byte_end:?}",
             persisted_end.map(|e| Lsn(e as u64)),
         );
-        if let Some(got) = write_lsn {
+        if let Some(got) = accepted_byte_end {
             assert_eq!(
                 got, durable_end,
                 "the advertised end-of-WAL regressed below the acked end {durable_end}"
@@ -3865,32 +3915,32 @@ mod tests {
 
     /// Regression: when the consumer's confirmed `durable_lsn` is at X
     /// and a caller asks to truncate to Y > X, `truncate_wal` must bail
-    /// rather than silently advance `inner.flush_record_lsn` past YB
+    /// rather than silently advance the record boundary past YB
     /// (which is what created the 2026-05-29 forensic gap — see the
     /// `truncate_wal` comment).
     ///
     /// Construction gives us a valid bug-exhibiting state without
     /// needing to push real WAL bytes: an empty `wals` falls back to
-    /// `state.commit_lsn` for `write_lsn`, the watermark starts at
-    /// `Healthy(write_lsn)`, and `durable_lsn` is initialised from the
-    /// same value. So `submitted_max_lsn == durable_lsn == write_lsn ==
+    /// `state.commit_lsn` for `accepted_byte_end`, the watermark starts at
+    /// `Healthy(accepted_byte_end)`, and `durable_lsn` is initialised from the
+    /// same value. So `submitted_max_lsn == durable_lsn == accepted_byte_end ==
     /// start_lsn` at t=0. We then ask to truncate to `start_lsn + 4 KiB`
     /// — exactly the "ProposerElected with start_streaming_at past the
     /// persisted tail" pattern. With Fix 2 we bail; without it,
-    /// `inner.truncate_wal(end_pos)` advances `flush_record_lsn` past
-    /// `durable_lsn` and opens the gap.
+    /// the reset in `truncate_wal` advances `record_end` past `durable_lsn`
+    /// and opens the gap.
     #[tokio::test]
     async fn truncate_wal_refuses_end_pos_past_durable() {
         let table = scratch_table("wals_test_truncate");
-        // Start past the first-segment quick-exit edge case in
-        // `inner.truncate_wal` (it special-cases `write_record_lsn == 0`).
+        // Start past the first-segment quick-exit edge case in `truncate_wal`
+        // (it special-cases a zero boundary).
         let start = Lsn(SEG_SIZE);
         let (mut storage, _tmp) = make_storage(&table, start).await;
 
         assert_eq!(
             Lsn(storage.durable_lsn.load(Ordering::Acquire)),
             start,
-            "durable_lsn seeded from load_write_lsn at construction"
+            "durable_lsn seeded from load_max_offset at construction"
         );
         assert_eq!(storage.flush_lsn(), start);
 
@@ -3922,8 +3972,8 @@ mod tests {
         drop_wals_table(&storage.ysql_system_client, &table).await;
     }
 
-    /// `flush_lsn()` returns `min(inner, durable)` — defence-in-depth
-    /// in case some future path moves `inner.flush_record_lsn` ahead of
+    /// `flush_lsn()` returns `min(boundary, durable)` — defence-in-depth
+    /// in case some future path moves the record boundary ahead of
     /// YB independent of `truncate_wal`. Poke `durable_lsn` directly to
     /// simulate "consumer is lagging" without needing to keep real
     /// chunks in flight.
@@ -3942,7 +3992,7 @@ mod tests {
         assert_eq!(
             storage.flush_lsn(),
             phony_durable,
-            "flush_lsn must cap at durable_lsn when inner is ahead"
+            "flush_lsn must cap at durable_lsn when record_end is ahead"
         );
 
         // Restore so the consumer's shutdown path doesn't observe a
@@ -4001,14 +4051,14 @@ mod tests {
         );
     }
 
-    /// `load_write_lsn` runs on `system_client` at SK startup, but the
+    /// `load_max_offset` runs on `system_client` at SK startup, but the
     /// rows it scans were written by the previous SK instance's
     /// `fpu_client`. Regression guard: a SELECT on a freshly-opened
     /// system_client must see the committed FPU writes — anything else
-    /// would let the safekeeper rehydrate a `write_lsn` below YB's
+    /// would let the safekeeper rehydrate an `accepted_byte_end` below YB's
     /// actual durable tail and silently regress flush_lsn on restart.
     #[tokio::test]
-    async fn load_write_lsn_via_system_client_sees_fpu_writes() {
+    async fn load_max_offset_via_system_client_sees_fpu_writes() {
         let table = scratch_table("wals_test_lane_view");
         let (fpu, _read, system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
@@ -4051,11 +4101,11 @@ mod tests {
         }
 
         // Read via system_client — the lane that does the real
-        // load_write_lsn at SK startup.
+        // load_max_offset at SK startup.
         let lsn =
-            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_max_offset(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
-                .expect("load_write_lsn via system_client");
+                .expect("load_max_offset via system_client");
         let expected = 1024u64 + 256u64;
         assert_eq!(
             lsn,
@@ -4172,9 +4222,9 @@ mod tests {
 
         // End of WAL is now exactly the cut.
         let lsn =
-            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_max_offset(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
-                .expect("load_write_lsn");
+                .expect("load_max_offset");
         assert_eq!(
             lsn,
             Lsn(10000),
@@ -4228,9 +4278,9 @@ mod tests {
             .await
             .expect("truncate_wals_above (idempotent)");
         let lsn2 =
-            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_max_offset(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
-                .expect("load_write_lsn after re-run");
+                .expect("load_max_offset after re-run");
         assert_eq!(lsn2, Lsn(10000), "re-run must not change the end of WAL");
 
         // Idempotent under BLIND REPLAY of the trim statement itself, which
@@ -4418,9 +4468,9 @@ mod tests {
             .get(0);
         assert_eq!(straddler_size, 4096, "the straddler is trimmed to the cut");
         let lsn =
-            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_max_offset(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
-                .expect("load_write_lsn");
+                .expect("load_max_offset");
         assert_eq!(lsn, cut, "end of WAL must equal the cut");
 
         // Re-cut at a segment boundary. Nothing can straddle a segment-aligned
@@ -4564,7 +4614,7 @@ mod tests {
     /// `YbSegmentReader` is the read path the WAL sender plugs into.
     /// Stage a couple of non-overlapping chunks directly in YB, then
     /// drive a reader across them and verify the bytes come back in
-    /// order. Bypasses `WalBookkeeping::write_wal` (which validates a
+    /// order. Bypasses `write_wal` (which validates a
     /// real PG WAL page header that we don't want to synthesise here),
     /// so this stays focused on the YB read path: chunk-row selection,
     /// `pos` advance across chunk boundaries, and the read-lane SELECT.
@@ -5263,7 +5313,7 @@ mod tests {
 
     /// Per-batch bucket stamping + rotation: every row written by one
     /// consumer batch must carry ONE `bucket_id` (the whole batch targets
-    /// one tablet — the atomicity `load_write_lsn`'s simple max-end
+    /// one tablet — the atomicity `load_max_offset`'s simple max-end
     /// rehydration relies on), and the bucket must rotate across batches
     /// (the load spread across tablets).
     ///
@@ -5373,14 +5423,14 @@ mod tests {
     /// probe must skip), while other buckets hold their own bucket-local
     /// maxima that end lower — including one in the same top segno.
     ///
-    /// Calls `load_write_lsn` directly (the same restore seam
+    /// Calls `load_max_offset` directly (the same restore seam
     /// `YbWalStorage::new` uses) rather than constructing the full
     /// storage: construction additionally runs the record-boundary
     /// end-of-WAL scan over the row bytes, which on this synthetic
     /// payload could nondeterministically trim the tail and obscure what
     /// is under test — the cross-bucket max itself.
     #[tokio::test]
-    async fn load_write_lsn_takes_max_across_adversarial_buckets() {
+    async fn load_max_offset_takes_max_across_adversarial_buckets() {
         let table = scratch_table("wals_test_bucket_max");
         let (fpu, _read, system) = open_three_lanes().await;
         make_wals_table(&fpu, &table).await;
@@ -5415,22 +5465,22 @@ mod tests {
         }
 
         let got =
-            YbWalStorage::load_write_lsn(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
+            YbWalStorage::load_max_offset(&system, &table, branch_id, SEG_SIZE as usize, Lsn(0))
                 .await
-                .expect("load_write_lsn");
+                .expect("load_max_offset");
         assert_eq!(
             got,
             Lsn(5 * SEG_SIZE + 8192 + 128),
-            "load_write_lsn must return the global max end across ALL buckets, \
+            "load_max_offset must return the global max end across ALL buckets, \
              not a single bucket's top row"
         );
 
         // Fresh-timeline fallback: an unknown branch yields commit_lsn.
         let other = BranchId::generate();
         let fallback =
-            YbWalStorage::load_write_lsn(&system, &table, other, SEG_SIZE as usize, Lsn(4242))
+            YbWalStorage::load_max_offset(&system, &table, other, SEG_SIZE as usize, Lsn(4242))
                 .await
-                .expect("load_write_lsn (empty branch)");
+                .expect("load_max_offset (empty branch)");
         assert_eq!(
             fallback,
             Lsn(4242),
@@ -5846,7 +5896,7 @@ mod tests {
 
         // Cross-transport visibility: plain-YSQL rehydration sees the
         // thin-lane-written rows and lands exactly at the stream end.
-        let lsn = YbWalStorage::load_write_lsn(
+        let lsn = YbWalStorage::load_max_offset(
             &client,
             &table,
             storage.branch_id,
@@ -5854,7 +5904,7 @@ mod tests {
             Lsn(0),
         )
         .await
-        .expect("load_write_lsn");
+        .expect("load_max_offset");
         assert_eq!(
             lsn, pos,
             "rehydrated end must equal the submitted stream end"

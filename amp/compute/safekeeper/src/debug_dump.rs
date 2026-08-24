@@ -113,11 +113,8 @@ pub struct Memory {
     pub last_removed_segno: XLogSegNo,
     pub mgr_status: timeline_manager::Status,
 
-    // WalBookkeeping state.
-    pub write_lsn: Lsn,
-    pub write_record_lsn: Lsn,
-    pub flush_lsn: Lsn,
-    pub file_open: bool,
+    pub accepted_byte_end: Lsn,
+    pub accepted_record_end: Lsn,
 }
 
 /// Build debug dump response, using the provided [`Args`] filters.

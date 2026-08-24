@@ -29,7 +29,7 @@ one branch, so this is one series per metric per process.
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `safekeeper_write_wal_bytes` | Histogram | — | Bytes accepted per `write_wal` call (observed by `WalBookkeeping`). |
+| `safekeeper_write_wal_bytes` | Histogram | — | Bytes accepted per `write_wal` call. |
 | `safekeeper_proposer_acceptor_messages_total` | IntCounterVec | `outcome` (`success` \| `error`) | ProposerAcceptorMessages processed by the acceptor. |
 | `safekeeper_wal_storage_operation_seconds` | HistogramVec | `operation` | WAL-storage operation timings. Observed operations: `initialize_first_segment`, `truncate_wal`. |
 | `safekeeper_misc_operation_seconds` | HistogramVec | `operation` | Miscellaneous timings. Observed operations: `handle_elected`, `state_snapshot`, `wal_residence_guard`, `try_wal_residence_guard`. |

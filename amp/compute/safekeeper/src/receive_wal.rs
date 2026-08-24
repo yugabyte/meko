@@ -667,8 +667,8 @@ impl WalAcceptor {
                 // YB-WAL: the consumer made more WAL durable in YugabyteDB.
                 // Emit an AppendResponse so the walproposer learns the advanced
                 // flush_lsn and releases waiting synchronous commits.
-                // `yb_emit_append_response` advances the local watermark and
-                // re-broadcasts commit_lsn via the write guard's Drop.
+                // `yb_emit_append_response` re-broadcasts commit_lsn via the
+                // write guard's Drop.
                 changed = async {
                     match durable_rx.as_mut() {
                         Some(rx) => rx.changed().await.is_ok(),

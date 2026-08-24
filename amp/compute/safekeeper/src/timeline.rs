@@ -154,7 +154,7 @@ impl StateSK {
     }
 
     /// Returns WAL storage internal LSNs for debug dump.
-    pub fn wal_storage_internal_state(&self) -> (Lsn, Lsn, Lsn, bool) {
+    pub fn wal_storage_internal_state(&self) -> (Lsn, Lsn) {
         match self {
             StateSK::Loaded(sk) => sk.wal_store.internal_state(),
             StateSK::Empty => unreachable!(),
@@ -496,11 +496,7 @@ impl Timeline {
         }
         let resp = {
             let mut shared_state = self.write_shared_state().await;
-            let mut resp = shared_state
-                .sk
-                .safekeeper()
-                .yb_emit_append_response()
-                .await?;
+            let mut resp = shared_state.sk.safekeeper().yb_emit_append_response();
             resp.hs_feedback = self.walsenders.get_hotstandby().hs_feedback;
             resp
         };
@@ -584,8 +580,7 @@ impl Timeline {
     pub async fn memory_dump(&self) -> debug_dump::Memory {
         let state = self.read_shared_state().await;
 
-        let (write_lsn, write_record_lsn, flush_lsn, file_open) =
-            state.sk.wal_storage_internal_state();
+        let (accepted_byte_end, accepted_record_end) = state.sk.wal_storage_internal_state();
 
         debug_dump::Memory {
             is_cancelled: self.is_cancelled(),
@@ -595,10 +590,8 @@ impl Timeline {
             num_computes: self.walreceivers.get_num() as u32,
             last_removed_segno: self.last_removed_segno.load(Ordering::Relaxed),
             mgr_status: self.mgr_status.get(),
-            write_lsn,
-            write_record_lsn,
-            flush_lsn,
-            file_open,
+            accepted_byte_end,
+            accepted_record_end,
         }
     }
 

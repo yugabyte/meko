@@ -60,8 +60,9 @@ Code anchors:
   user, `password_env`, `sslmode`, etc.).
 - `compute/safekeeper/src/control_file.rs` — `ControlFileStorage` enum.
 - `compute/safekeeper/src/yb_wal_storage.rs` — `YbWalStorage`, the YB WAL mirror.
-- `compute/safekeeper/src/wal_storage.rs::WalBookkeeping` — in-memory WAL
-  LSN/record-boundary bookkeeping.
+- `compute/libs/postgres_ffi/src/wal_record_boundary.rs` — WAL record
+  boundaries: `WalStreamTracker` on the write path, `find_end_of_wal` on
+  restart.
 - `controller/src/persistence.rs` — `establish_connection_rustls`,
   AcceptAll TLS verifier.
 - `controller/local/launch` — the yb_amp_local launcher lifecycle:

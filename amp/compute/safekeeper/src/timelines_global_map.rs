@@ -24,7 +24,7 @@ use crate::{SafeKeeperConf, control_file};
 /// own budget (`endpoint_supervisor`'s `coordinate.rs`).
 ///
 /// It bounds one request, not the load. Every leg of the load is bounded in its
-/// own right (`load_write_lsn` is a fixed count of single-row probes, the anchor
+/// own right (`load_max_offset` is a fixed count of single-row probes, the anchor
 /// walk is capped at `MAX_ANCHOR_SCAN_BYTES`, the torn-tail cleanup at
 /// `YB_TORN_TAIL_CLEANUP_MAX`), so this is not standing in for an unbounded step —
 /// it decides how long one caller holds a connection before being told to ask

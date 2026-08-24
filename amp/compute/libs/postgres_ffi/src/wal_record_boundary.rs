@@ -15,6 +15,12 @@
 //! `wals` access (and tests an in-memory buffer); [`find_anchor`] +
 //! [`decode_forward`] are the generic scan. [`last_valid_boundary`] wraps
 //! them for the common "truncate a torn tail" case.
+//!
+//! [`WalStreamTracker`] answers the same question for a stream being
+//! written, from the bytes in hand rather than from the rows. It lives here so
+//! both sides run the one decoder: a writer and a restart scan that disagree on
+//! where a record ends leave the branch truncating to a point the writer never
+//! called a boundary.
 
 use std::cmp::min;
 
@@ -290,6 +296,82 @@ pub async fn find_end_of_wal<S: WalSource>(
     }
 }
 
+/// End of WAL for a stream being **written**, tracked as the bytes arrive.
+///
+/// The scans above rediscover the boundary by replaying the rows; this reports
+/// it while the writer still holds the bytes, so the write path never pays a
+/// read to learn where its own last record ended.
+pub struct WalStreamTracker {
+    decoder: WalStreamDecoder,
+    /// Moves backwards on `reset`, so this is the most recent boundary, not the
+    /// highest ever seen.
+    record_end: Lsn,
+    /// Tracked by arithmetic rather than read back from `decoder`, whose
+    /// `available()` drops below the bytes handed in when `poll_decode` consumes a
+    /// page header and then rejects it.
+    byte_end: Lsn,
+}
+
+impl WalStreamTracker {
+    /// `start_lsn` must be a record boundary — the rehydrated end of WAL, or
+    /// `timeline_start_lsn` on a fresh branch. It is the boundary until bytes
+    /// arrive, which is what an empty stream should report.
+    pub fn new(start_lsn: Lsn, pg_version: PgMajorVersion) -> Self {
+        Self {
+            decoder: WalStreamDecoder::new(start_lsn, pg_version),
+            record_end: start_lsn,
+            byte_end: start_lsn,
+        }
+    }
+
+    /// The last boundary known: the end of the most recent complete record fed,
+    /// or the `start_lsn` the stream was seeded at if nothing has been.
+    pub fn record_end(&self) -> Lsn {
+        self.record_end
+    }
+
+    /// End of the bytes fed so far — a byte position, mid-record as often as not,
+    /// which is what [`Self::record_end`] lags. Where the next feed must start, and
+    /// exact even when the feed that delivered them failed to decode.
+    pub fn byte_end(&self) -> Lsn {
+        self.byte_end
+    }
+
+    /// Extend the stream with the bytes at `startpos` and return the boundary they
+    /// establish. `startpos` is a byte position, mid-record as often as not — only
+    /// [`Self::new`] and [`Self::reset`] take a boundary.
+    ///
+    /// Errors if `startpos` does not continue where the last feed ended, because
+    /// both ways of getting there are caller bugs: bytes were skipped, leaving a
+    /// hole, or the stream moved back without a [`Self::reset`] to say so. Papering
+    /// over either would report a boundary for a stream that does not exist.
+    pub fn feed(&mut self, startpos: Lsn, buf: &[u8]) -> anyhow::Result<Lsn> {
+        if self.byte_end != startpos {
+            bail!(
+                "WAL stream feed at {startpos} is not contiguous with {}; \
+                 move the stream with reset()",
+                self.byte_end,
+            );
+        }
+        self.decoder.feed_bytes(buf);
+        // Before the decode, so a torn record still leaves the byte end exact.
+        self.byte_end = Lsn(startpos.0 + buf.len() as u64);
+        while let Some((lsn, _rec)) = self.decoder.poll_decode()? {
+            self.record_end = lsn;
+        }
+        Ok(self.record_end)
+    }
+
+    /// Move the stream to `lsn` — the only way to move it — discarding decoder
+    /// state: a truncation deleted the bytes above it, so nothing half-decoded from
+    /// them survives. `lsn` must be a record boundary, as in [`Self::new`].
+    pub fn reset(&mut self, lsn: Lsn) {
+        self.decoder = WalStreamDecoder::new(lsn, self.decoder.pg_version);
+        self.record_end = lsn;
+        self.byte_end = lsn;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,6 +551,125 @@ mod tests {
             buf.extend_from_slice(&bytes);
         }
         (buf, starts)
+    }
+
+    /// The writer-side tracker and the scan must name the same boundary for the
+    /// same bytes, however the writer's pieces happen to fall.
+    #[tokio::test]
+    async fn tracker_agrees_with_the_scan() {
+        let (buf, starts) = gen_wal(400, 16);
+        let max = *starts.last().unwrap();
+        let buf = buf[..(max.0 - START.0) as usize].to_vec();
+        let scanned = find_end_of_wal(
+            &MemWal {
+                start: START,
+                buf: buf.clone(),
+            },
+            START,
+            PgMajorVersion::PG18,
+        )
+        .await
+        .unwrap();
+
+        for piece in [1usize, 7, 100, XLOG_BLCKSZ - 1, XLOG_BLCKSZ, 1 << 16] {
+            let mut t = WalStreamTracker::new(START, PgMajorVersion::PG18);
+            let mut pos = START;
+            for chunk in buf.chunks(piece) {
+                t.feed(pos, chunk).unwrap();
+                pos = Lsn(pos.0 + chunk.len() as u64);
+            }
+            assert_eq!(
+                t.record_end(),
+                scanned,
+                "tracker fed in {piece}-byte pieces disagreed with the scan"
+            );
+        }
+    }
+
+    /// A trailing partial record leaves the boundary at the last complete one,
+    /// and `reset` puts the stream back where a truncation left it.
+    #[tokio::test]
+    async fn tracker_holds_at_the_last_complete_record() {
+        let (buf, starts) = gen_wal(400, 16);
+        let max = *starts.last().unwrap();
+        let torn = (max.0 - START.0) as usize + 8;
+
+        let mut t = WalStreamTracker::new(START, PgMajorVersion::PG18);
+        t.feed(START, &buf[..torn]).unwrap();
+        assert_eq!(t.record_end(), max, "a partial tail is not a boundary");
+        assert_eq!(
+            t.byte_end(),
+            Lsn(START.0 + torn as u64),
+            "end() is the byte end, mid-record and eight bytes past the boundary"
+        );
+
+        let back = starts[42];
+        t.reset(back);
+        assert_eq!(t.record_end(), back);
+        // And it decodes forward from there, rather than from the pre-reset state.
+        t.feed(back, &buf[(back.0 - START.0) as usize..torn])
+            .unwrap();
+        assert_eq!(t.record_end(), max);
+    }
+
+    /// A feed whose bytes fail to decode still moves the byte end by exactly what it
+    /// handed in. The decoder cannot be asked for this: `poll_decode` consumes a page
+    /// header before rejecting it, so `available()` would come back short.
+    #[test]
+    fn tracker_byte_end_is_exact_after_a_decode_error() {
+        let (mut buf, _starts) = gen_wal(4000, 16);
+        // Tear the page header that begins the last full page, as the scan tests do.
+        let last_page = (buf.len() - 1) / XLOG_BLCKSZ * XLOG_BLCKSZ;
+        assert!(last_page > 0, "test needs multi-page WAL");
+        buf[last_page] = 0;
+        buf[last_page + 1] = 0;
+
+        let mut t = WalStreamTracker::new(START, PgMajorVersion::PG18);
+        t.feed(START, &buf)
+            .expect_err("the torn page header must surface");
+        assert_eq!(
+            t.byte_end(),
+            Lsn(START.0 + buf.len() as u64),
+            "the byte end is what was handed in, not what decoded"
+        );
+        // And the next feed is accepted as contiguous with it.
+        let more = vec![0u8; 16];
+        let at = Lsn(START.0 + buf.len() as u64);
+        t.feed(at, &more).expect_err("still torn, but not a gap");
+        assert_eq!(t.byte_end(), Lsn(at.0 + more.len() as u64));
+    }
+
+    /// A feed that doesn't continue the stream is a caller bug either way it goes,
+    /// and must not be absorbed: the boundary would then describe a stream with a
+    /// hole in it, or one whose tail was replaced.
+    #[test]
+    fn tracker_rejects_a_non_contiguous_feed() {
+        let (buf, starts) = gen_wal(400, 16);
+        let max = *starts.last().unwrap();
+        let end = (max.0 - START.0) as usize;
+        let mut t = WalStreamTracker::new(START, PgMajorVersion::PG18);
+        t.feed(START, &buf[..end]).unwrap();
+        assert_eq!(t.record_end(), max);
+
+        for (label, at) in [("backwards", starts[42]), ("forward", Lsn(max.0 + 4096))] {
+            let err = t.feed(at, &buf[..8]).expect_err("must not be absorbed");
+            assert!(
+                format!("{err:#}").contains("not contiguous"),
+                "{label}: unexpected error: {err:#}"
+            );
+            assert_eq!(
+                t.record_end(),
+                max,
+                "{label}: a refused feed changes nothing"
+            );
+        }
+
+        // And the stream carries on once reset says where it is now.
+        let back = starts[42];
+        t.reset(back);
+        t.feed(back, &buf[(back.0 - START.0) as usize..end])
+            .unwrap();
+        assert_eq!(t.record_end(), max);
     }
 
     /// Clean WAL: scanning from the start reaches the end of the last

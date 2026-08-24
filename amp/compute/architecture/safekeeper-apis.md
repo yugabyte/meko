@@ -71,7 +71,7 @@ pushed a token writes nothing at all: silence is not permission.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | PUT | `/v1/failpoints` | Configure failpoints (testing builds). Global scope. |
-| GET | `/v1/debug_dump` | Stream a full JSON dump of safekeeper state as `application/octet-stream`. Query toggles: `dump_all`, `dump_control_file`, `dump_memory`, plus an optional `branch_id` filter; unknown params are a 400. Each toggle defaults to the value of `dump_all` (default false). `dump_memory` includes the `WalBookkeeping` watermarks and manager status. Global scope. |
+| GET | `/v1/debug_dump` | Stream a full JSON dump of safekeeper state as `application/octet-stream`. Query toggles: `dump_all`, `dump_control_file`, `dump_memory`, plus an optional `branch_id` filter; unknown params are a 400. Each toggle defaults to the value of `dump_all` (default false). `dump_memory` includes the WAL storage positions (`accepted_byte_end`, `accepted_record_end`) and manager status. Global scope. |
 
 ## Replication protocol (non-HTTP)
 

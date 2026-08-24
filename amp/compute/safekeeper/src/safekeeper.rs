@@ -523,19 +523,19 @@ where
         // when walproposer reconnects to safekeeper and writes some more data
         // while first connection still gets some packets later. It might be
         // better to not log this as error! above.
-        let write_lsn = self.wal_store.write_lsn();
+        let accepted_byte_end = self.wal_store.accepted_byte_end();
         let flush_lsn = self.wal_store.flush_lsn();
-        if write_lsn > msg.h.begin_lsn {
+        if accepted_byte_end > msg.h.begin_lsn {
             bail!(
-                "append request rewrites WAL written before, write_lsn={}, msg lsn={}",
-                write_lsn,
+                "append request rewrites WAL already accepted, accepted_byte_end={}, msg lsn={}",
+                accepted_byte_end,
                 msg.h.begin_lsn
             );
         }
-        if write_lsn < msg.h.begin_lsn && write_lsn != Lsn(0) {
+        if accepted_byte_end < msg.h.begin_lsn && accepted_byte_end != Lsn(0) {
             bail!(
-                "append request creates gap in written WAL, write_lsn={}, msg lsn={}",
-                write_lsn,
+                "append request creates gap in accepted WAL, accepted_byte_end={}, msg lsn={}",
+                accepted_byte_end,
                 msg.h.begin_lsn,
             );
         }
@@ -585,13 +585,10 @@ where
         )))
     }
 
-    /// YB durability-ack path: advance the local inner watermark to the new
-    /// durable point, then snapshot the `AppendResponse`.
-    pub(crate) async fn yb_emit_append_response(&mut self) -> Result<AppendResponse> {
-        self.wal_store
-            .yb_flush(crate::yb_wal_storage::YbFlush::LocalAdvanceOnly)
-            .await?;
-        Ok(self.append_response())
+    /// YB durability-ack path: snapshot the `AppendResponse` at the new durable
+    /// point. Nothing to flush — `flush_lsn()` reads `durable_lsn` itself.
+    pub(crate) fn yb_emit_append_response(&mut self) -> AppendResponse {
+        self.append_response()
     }
 }
 
@@ -641,7 +638,7 @@ mod tests {
     }
 
     impl wal_storage::Storage for DummyWalStore {
-        fn write_lsn(&self) -> Lsn {
+        fn accepted_byte_end(&self) -> Lsn {
             self.lsn
         }
 

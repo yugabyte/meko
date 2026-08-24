@@ -1,11 +1,10 @@
-//! WAL bookkeeping + reader.
+//! WAL storage trait + reader.
 //!
 //! Historically this module wrote WAL to a local pg_wal-style directory.
-//! yb-amp keeps WAL only in YB (`amp_storage.wals`); `WalBookkeeping` is
-//! now a pure bookkeeping helper used by `YbWalStorage` to track LSN
-//! watermarks and feed the `WalStreamDecoder`. `WalReader` continues to
-//! serve WAL bytes to the WAL sender — locally from the in-memory
-//! `WalCache`, otherwise from YB.
+//! yb-amp keeps WAL only in YB (`amp_storage.wals`), so the only implementor of
+//! [`Storage`] is `YbWalStorage`; the trait stays because `SafeKeeper` is generic
+//! over it and its unit tests substitute a dummy. `WalReader` serves WAL bytes to
+//! the WAL sender — locally from the in-memory `WalCache`, otherwise from YB.
 
 use std::cmp::min;
 use std::future::Future;
@@ -15,22 +14,20 @@ use anyhow::{Result, bail};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use postgres_ffi::XLogSegNo;
-use postgres_ffi::waldecoder::WalStreamDecoder;
-use postgres_versioninfo::{PgMajorVersion, PgVersionId};
+use postgres_versioninfo::PgMajorVersion;
 use pq_proto::SystemId;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::*;
 use utils::id::BranchId;
 use utils::lsn::Lsn;
 
-use crate::metrics::{WAL_STORAGE_OPERATION_SECONDS, WalStorageMetrics};
+use crate::metrics::WalStorageMetrics;
 use crate::state::TimelinePersistentState;
 use crate::yb_wal_storage::YbWalConn;
 
 pub trait Storage {
-    // Last written LSN.
-    fn write_lsn(&self) -> Lsn;
+    /// End of the byte stream accepted so far; may sit mid-record.
+    fn accepted_byte_end(&self) -> Lsn;
     /// LSN of last durably stored WAL record.
     fn flush_lsn(&self) -> Lsn;
 
@@ -52,10 +49,10 @@ pub trait Storage {
     /// Durably store WAL up to the last written WAL record.
     fn flush_wal(&mut self) -> impl Future<Output = Result<()>> + Send;
 
-    /// Flush the consumer's queue, advancing the local inner watermark; the
-    /// mode selects how far to go (see [`crate::yb_wal_storage::YbFlush`]).
-    /// The default delegates to the synchronous [`Self::flush_wal`], for
-    /// bookkeeping that carries no async durability of its own.
+    /// Flush the consumer's queue; the mode selects how far to wait (see
+    /// [`crate::yb_wal_storage::YbFlush`]). The default delegates to the
+    /// synchronous [`Self::flush_wal`], for storage that carries no async
+    /// durability of its own.
     fn yb_flush(
         &mut self,
         mode: crate::yb_wal_storage::YbFlush,
@@ -79,204 +76,6 @@ pub trait Storage {
 
     /// Get metrics for this timeline.
     fn get_metrics(&self) -> WalStorageMetrics;
-}
-
-/// In-memory bookkeeping for the WAL stream: write/flush watermarks plus
-/// the `WalStreamDecoder` used to find WAL-record boundaries. No
-/// filesystem interaction — `YbWalStorage` owns durability via YB.
-///
-/// Relationship of LSNs:
-/// `write_lsn` >= `write_record_lsn` >= `flush_record_lsn`
-pub struct WalBookkeeping {
-    metrics: WalStorageMetrics,
-
-    /// Size of WAL segment in bytes.
-    wal_seg_size: usize,
-    pg_version: PgVersionId,
-    system_id: u64,
-
-    /// Possibly in the middle of a WAL record.
-    write_lsn: Lsn,
-
-    /// LSN of the last fully-written WAL record.
-    write_record_lsn: Lsn,
-
-    /// Flush watermark. May be in the middle of a record.
-    flush_lsn: Lsn,
-
-    /// LSN of the last fully-flushed WAL record.
-    flush_record_lsn: Lsn,
-
-    /// Used to detect WAL-record boundaries inside the byte stream.
-    decoder: WalStreamDecoder,
-}
-
-impl WalBookkeeping {
-    /// Build the bookkeeping helper. `write_lsn` is supplied by the caller
-    /// (`YbWalStorage` rehydrates it from `amp_storage.wals`); all watermarks
-    /// start there.
-    pub fn new(
-        branch_id: &BranchId,
-        state: &TimelinePersistentState,
-        write_lsn: Lsn,
-    ) -> Result<WalBookkeeping> {
-        let wal_seg_size = state.server.wal_seg_size as usize;
-        debug!(
-            "initialized WAL bookkeeping for branch {}, write_lsn={}",
-            branch_id, write_lsn,
-        );
-        Ok(WalBookkeeping {
-            metrics: WalStorageMetrics::default(),
-            wal_seg_size,
-            pg_version: state.server.pg_version,
-            system_id: state.server.system_id,
-            write_lsn,
-            write_record_lsn: write_lsn,
-            flush_lsn: write_lsn,
-            flush_record_lsn: write_lsn,
-            decoder: WalStreamDecoder::new(
-                write_lsn,
-                PgMajorVersion::try_from(state.server.pg_version).unwrap(),
-            ),
-        })
-    }
-
-    /// Read-only access to the PG version stored on this instance.
-    pub fn pg_version_id(&self) -> PgVersionId {
-        self.pg_version
-    }
-
-    /// Read-only access to the system identifier carried on the segment header.
-    pub fn system_id(&self) -> u64 {
-        self.system_id
-    }
-
-    /// Get all known state of the storage.
-    pub fn internal_state(&self) -> (Lsn, Lsn, Lsn, bool) {
-        (
-            self.write_lsn,
-            self.write_record_lsn,
-            self.flush_record_lsn,
-            false,
-        )
-    }
-}
-
-impl Storage for WalBookkeeping {
-    fn write_lsn(&self) -> Lsn {
-        self.write_lsn
-    }
-
-    #[allow(clippy::misnamed_getters)]
-    fn flush_lsn(&self) -> Lsn {
-        self.flush_record_lsn
-    }
-
-    async fn initialize_first_segment(&mut self, init_lsn: Lsn) -> Result<()> {
-        let _timer = WAL_STORAGE_OPERATION_SECONDS
-            .with_label_values(&["initialize_first_segment"])
-            .start_timer();
-        // YB-backed `YbWalStorage` initializes the segment-header bytes in
-        // YB; nothing to do at the bookkeeping layer beyond the trace.
-        let segno = init_lsn.segment_number(self.wal_seg_size);
-        info!(
-            "initialize_first_segment: segno {} at lsn {} (YB-backed)",
-            segno, init_lsn
-        );
-        Ok(())
-    }
-
-    /// Advance bookkeeping for `buf` bytes starting at `startpos`. Durability is
-    /// the caller's responsibility (`YbWalStorage` INSERTs into `amp_storage.wals`).
-    async fn write_wal(&mut self, startpos: Lsn, buf: &[u8]) -> Result<()> {
-        if self.write_lsn > startpos {
-            bail!(
-                "write_wal rewrites WAL written before, write_lsn={}, startpos={}",
-                self.write_lsn,
-                startpos
-            );
-        }
-        if self.write_lsn < startpos && self.write_lsn != Lsn(0) {
-            bail!(
-                "write_wal creates gap in written WAL, write_lsn={}, startpos={}",
-                self.write_lsn,
-                startpos
-            );
-        }
-
-        self.write_lsn = startpos + buf.len() as u64;
-        // No per-segment fsync barrier without a local FS; keep `flush_lsn`
-        // aligned with `write_lsn` directly.
-        self.flush_lsn = self.write_lsn;
-        self.metrics.observe_write_bytes(buf.len());
-
-        if self.decoder.available() != startpos {
-            info!(
-                "restart decoder from {} to {}",
-                self.decoder.available(),
-                startpos
-            );
-            let pg_version = self.decoder.pg_version;
-            self.decoder = WalStreamDecoder::new(startpos, pg_version);
-        }
-        self.decoder.feed_bytes(buf);
-
-        if self.write_record_lsn <= self.flush_lsn {
-            self.flush_record_lsn = self.write_record_lsn;
-        }
-        while let Some((lsn, _rec)) = self.decoder.poll_decode()? {
-            self.write_record_lsn = lsn;
-            if lsn <= self.flush_lsn {
-                self.flush_record_lsn = lsn;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn flush_wal(&mut self) -> Result<()> {
-        // YB-only mode: WAL is durable in YB after write_wal. Just advance
-        // the in-memory flush watermarks.
-        self.flush_lsn = self.write_lsn;
-        self.flush_record_lsn = self.write_record_lsn;
-        Ok(())
-    }
-
-    /// Reset bookkeeping watermarks to `end_pos`. Caller
-    /// (`YbWalStorage::truncate_wal`) has already deleted the YB rows past
-    /// `end_pos` before we get here.
-    async fn truncate_wal(&mut self, end_pos: Lsn) -> Result<()> {
-        let _timer = WAL_STORAGE_OPERATION_SECONDS
-            .with_label_values(&["truncate_wal"])
-            .start_timer();
-
-        if self.write_record_lsn != Lsn(0) && end_pos > self.write_record_lsn {
-            bail!(
-                "truncate_wal called on non-written WAL, write_record_lsn={}, end_pos={}",
-                self.write_record_lsn,
-                end_pos
-            );
-        }
-
-        if end_pos == self.write_lsn && end_pos == self.flush_record_lsn {
-            return Ok(());
-        }
-
-        self.write_lsn = end_pos;
-        self.flush_lsn = end_pos;
-        self.write_record_lsn = end_pos;
-        self.flush_record_lsn = end_pos;
-        info!("truncated WAL to {}", end_pos);
-        Ok(())
-    }
-
-    fn remove_up_to(&self, _segno_up_to: XLogSegNo) -> BoxFuture<'static, anyhow::Result<()>> {
-        Box::pin(async move { Ok(()) })
-    }
-
-    fn get_metrics(&self) -> WalStorageMetrics {
-        self.metrics.clone()
-    }
 }
 
 pub struct WalReader {

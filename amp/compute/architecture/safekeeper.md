@@ -269,9 +269,9 @@ lane.
 
 `YbWalStorage` implements the WAL `Storage` trait
 (`compute/safekeeper/src/wal_storage.rs`) and is the only WAL storage
-(`pub type WalStore = YbWalStorage;`). It wraps a `WalBookkeeping` — a pure
-in-memory tracker with **no filesystem I/O** — and drives a
-producer/consumer pipeline into `amp_storage.wals`:
+(`pub type WalStore = YbWalStorage;`). It keeps **no filesystem state** — two
+in-memory watermarks over the stream — and drives a producer/consumer pipeline
+into `amp_storage.wals`:
 
 ```
 write_wal()                     consumer task                     YB
@@ -331,7 +331,7 @@ Key properties:
 - **Durability watermark.** After each successful batch the consumer stores
   the batch's highest `end_lsn` into the `durable_lsn` atomic and publishes
   it on a `watch<DurableState>` channel. `YbWalStorage::flush_lsn()` returns
-  `min(bookkeeping flush_lsn, durable_lsn)` — **nothing is ever advertised
+  `min(record boundary, durable_lsn)` — **nothing is ever advertised
   past what has landed in YB.** The `AppendResponse.flush_lsn` the
   walproposer treats as the commit boundary is therefore always a
   YB-durable LSN.
@@ -342,15 +342,15 @@ Key properties:
   the watermark advances, so ingest never blocks on the YB round trip and
   synchronous commits release as soon as their bytes are durable.
   The `YbFlush` modes are:
-  - `NotifyAndWait` — wake, wait for the watermark to reach
-    `submitted_max_lsn`, then advance the bookkeeping watermarks. Used where
-    a synchronous durable point is required: the greeting
-    (`handle_greeting` flushes so the advertised `flush_lsn` is exact),
-    segment initialization, and truncation.
+  - `NotifyAndWait` — wake, then wait for the watermark to reach
+    `submitted_max_lsn`. Used where a synchronous durable point is required:
+    the greeting (`handle_greeting` flushes so the advertised `flush_lsn` is
+    exact), segment initialization, and truncation.
   - `Notify` — wake only. The steady-state commit path.
-  - `LocalAdvanceOnly` — advance the bookkeeping watermarks to the already
-    published durable point. The durability-ack path
-    (`yb_emit_append_response`).
+
+  The durability-ack path (`yb_emit_append_response`) flushes neither way: it
+  only snapshots the `AppendResponse`, since `flush_lsn()` reads `durable_lsn`
+  directly.
 - **Bounded blocking waits.** `wait_for_durable` logs progress every 10 s
   and gives up after 60 s. Every caller sits inside `process_msg`, holding
   the timeline shared_state write lock; an unbounded wait there starves the
@@ -364,7 +364,7 @@ Key properties:
   store cannot return). It then physically trims the table
   (`truncate_wals_above`: DELETE chunks starting at/after `end_pos`, and a
   read-modify-write UPDATE that shortens the one chunk straddling it), drops
-  the affected `WalCache` range, and resets the bookkeeping watermarks. Both
+  the affected `WalCache` range, and resets both watermarks. Both
   statements address the cut as `(segno, offset within segment)` rather than
   as an LSN, so `segno` lands in the index condition; filtering on the
   computed `segno * seg + chunk_offset` scanned the branch's whole WAL, here
@@ -407,17 +407,17 @@ Key properties:
   since the compute streams no header for it. The 16 MiB blob is
   deliberately not cached.
 
-### `WalBookkeeping`
+### The in-memory watermarks
 
-The in-memory half (`compute/safekeeper/src/wal_storage.rs`): it tracks
-`write_lsn` / `write_record_lsn` / `flush_lsn` / `flush_record_lsn` and
-feeds every written byte through a `WalStreamDecoder` so the record-boundary
-watermarks follow actual WAL records. `write_wal` rejects rewrites
-(`startpos < write_lsn`) and gaps (`startpos > write_lsn`); the same guards
-exist one level up in `handle_append_request`. `flush_wal` aligns the flush
-watermarks with the write watermarks (durability is `YbWalStorage`'s job);
-`truncate_wal` resets all watermarks to the cut; `remove_up_to` is a no-op
-at this layer.
+`accepted_byte_end` is the byte end accepted so far; the record boundary — a
+`WalStreamTracker` (`compute/libs/postgres_ffi/src/wal_record_boundary.rs`)
+fed every written byte through a `WalStreamDecoder` — is the end of the last
+complete record, which is what `flush_lsn()` reports once capped at
+`durable_lsn`. `write_wal` rejects rewrites (`startpos < accepted_byte_end`) and gaps
+(`startpos > accepted_byte_end`) before queueing anything; the same guards exist one
+level up in `handle_append_request`. `truncate_wal` resets both to the cut.
+There is no flush watermark: nothing is flushed here, so `flush_wal` only
+drives the consumer.
 
 ## Read path: `WalReader` and the fallback chain
 
@@ -543,8 +543,8 @@ itself:
   batching.
 - The **durability-watch arm** emits an `AppendResponse` whenever the
   consumer publishes a watermark advance
-  (`Timeline::yb_emit_append_response` → `YbFlush::LocalAdvanceOnly`),
-  releasing waiting synchronous commits without ever blocking ingest. Two
+  (`Timeline::yb_emit_append_response`), releasing waiting synchronous commits
+  without ever blocking ingest. Two
   guards keep this protocol-legal: the arm is gated on the connection having
   processed `ProposerElected` (an `a` on the wire before the `g` reply is a
   handshake violation the walproposer kills the connection over — unguarded,
@@ -636,7 +636,7 @@ loses nothing but logs.
    `branch_state` row (`YbControlFileStorage::restore_opt`, which returns
    `None` when the branch has no row yet).
 2. **End-of-WAL rehydration** (`YbWalStorage::new`):
-   - `load_write_lsn` reads the raw end of the byte stream with one
+   - `load_max_offset` reads the raw end of the byte stream with one
      **max-end probe per bucket** (metadata only, never `data`):
      `SELECT segno, chunk_offset + chunk_size ... ORDER BY segno DESC,
      chunk_offset DESC LIMIT 1` per bucket; the global max across buckets is
@@ -675,12 +675,12 @@ loses nothing but logs.
      re-streams from there. The torn rows are physically deleted
      (`truncate_wals_above`) so they are not re-counted next restart;
      best-effort and bounded by `YB_TORN_TAIL_CLEANUP_MAX`, since the reader
-     is bounded by `write_lsn` anyway. Bounded because it runs inside
+     is bounded by `accepted_byte_end` anyway. Bounded because it runs inside
      `load_timeline`.
    - **Trailing `XLOG_SWITCH`** (`end > raw`): `pg_switch_wal()` rounds the
      record's end up to the next segment boundary, past padding the compute
      never streams. The decoder's answer is honored — clamping to the raw
-     end would put `write_lsn` inside the padding, where the compute
+     end would put `accepted_byte_end` inside the padding, where the compute
      resumes, the reader reads zeros, and the safekeeper wedges (#181).
    - **Scan failure**: `YbWalStorage::new` fails and the walproposer handshake
      retries it. Neither guess is safe — truncating to the boundary reached so
@@ -700,7 +700,7 @@ loses nothing but logs.
    first `remove_up_to` resolves it, off this path (see `remove_up_to` above for
    why that matters).
 4. The durability watermark and `durable_lsn` start at the rehydrated
-   `write_lsn`, so an immediate flush with nothing in flight returns at
+   `accepted_byte_end`, so an immediate flush with nothing in flight returns at
    once. Committed-but-unacked rows from a crashed run are absorbed as
    durable by the max-end probe rather than discarded.
 5. On the first walproposer reconnect, the greeting advertises the
@@ -790,8 +790,7 @@ Deleting the whole directory and restarting rebuilds everything from YB.
   the `WalAcceptor` loop (flush ticker, durability-watch acks).
 - `compute/safekeeper/src/control_file.rs` — `YbControlFileStorage`
   (= `ControlFileStorage`).
-- `compute/safekeeper/src/wal_storage.rs` — WAL `Storage` trait,
-  `WalBookkeeping`, `WalReader`.
+- `compute/safekeeper/src/wal_storage.rs` — WAL `Storage` trait, `WalReader`.
 - `compute/safekeeper/src/yb_wal_storage.rs` — `YbWalConn`, `YbWalStorage`
   (producer/consumer writer, restart rehydration), `YbSegmentReader`.
 - `compute/safekeeper/src/wal_cache.rs` — the committed-chunk read cache.
