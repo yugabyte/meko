@@ -18,8 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -596,7 +598,8 @@ func (c *Client) ListAllEndpoints(ctx context.Context, poolID, clusterID, branch
 // GetTask reads one task's status, retrying up to getTaskRetries times (small
 // fixed backoff) on a transient connection error before surfacing it — see
 // getTaskRetries. Beyond the state-store 503 doJSON waits out, a decoded API
-// error is not retried here — only a dropped/refused/reset connection.
+// error is not retried here — only a dropped, refused, reset or timed-out
+// connection.
 func (c *Client) GetTask(ctx context.Context, taskID string) (Task, error) {
 	var out Task
 	var err error
@@ -614,20 +617,35 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (Task, error) {
 	}
 }
 
-// isTransientConnErr reports whether err looks like a dropped, reset, or
-// refused connection rather than a real API-level failure — the class of
-// error a brief port-forward blip produces.
+// isTransientConnErr reports whether err looks like a dropped, reset, refused
+// or timed-out connection rather than a real API-level failure — the class of
+// error a brief port-forward blip or an apiserver-to-kubelet hiccup produces.
 func isTransientConnErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
+	// A deadline the caller set is its own budget, not a blip. Checked first
+	// because context.DeadlineExceeded reports Timeout() true and would other-
+	// wise be read as one.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, syscall.ETIMEDOUT) {
 		return true
 	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	// The relay transport reports what kubectl printed, so the cause arrives as
+	// text with no wrapped error to match on.
 	msg := err.Error()
 	return strings.Contains(msg, "EOF") ||
 		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "connection reset")
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "i/o timeout")
 }
 
 // ListTasksOptions filters listTasks.

@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -856,5 +859,95 @@ func TestStoreUnavailableRetryHonorsContext(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("blocked %s past the context deadline", elapsed)
+	}
+}
+
+// The framework reaches the controller by exec'ing curl in a relay pod, so an
+// apiserver-to-kubelet hiccup surfaces as kubectl's text, not a wrapped error.
+// One such blip failed stress/commit_durability on its first task poll — the
+// most retry-safe call there is.
+func TestIsTransientConnErrClassifiesTimeouts(t *testing.T) {
+	relayTimeout := errors.New(`curl GET /api/v1/tasks/fc3422bb: exited 1: error: ` +
+		`Internal error occurred: error sending request: Post ` +
+		`"https://10.150.0.170:10250/exec/ampqa-cp-dffbaec6/ampqa-http-relay/relay?command=sh": ` +
+		`dial tcp 10.150.0.170:10250: i/o timeout`)
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"relay exec dial timeout", relayTimeout, true},
+		{"net deadline", os.ErrDeadlineExceeded, true},
+		{"syscall timeout", syscall.ETIMEDOUT, true},
+		{"net.Error that times out", &net.DNSError{IsTimeout: true}, true},
+		{"wrapped timeout", fmt.Errorf("get task: %w", os.ErrDeadlineExceeded), true},
+		{"eof", io.EOF, true},
+		{"refused", syscall.ECONNREFUSED, true},
+		{"reset", syscall.ECONNRESET, true},
+		// The caller's own budget, not a blip. context.DeadlineExceeded reports
+		// Timeout() true, so a bare net.Error check would retry past it.
+		{"caller deadline", context.DeadlineExceeded, false},
+		{"caller cancel", context.Canceled, false},
+		{"wrapped caller deadline", fmt.Errorf("get task: %w", context.DeadlineExceeded), false},
+		{"real api error", &APIError{StatusCode: 500, Code: "internal"}, false},
+		{"nil", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isTransientConnErr(tc.err); got != tc.want {
+				t.Errorf("isTransientConnErr(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// GetTask retries the relay timeout rather than failing the test on it.
+func TestGetTaskRetriesRelayTimeout(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var calls atomic.Int32
+	f.on("GET /api/v1/tasks/t1", func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			// The transport-level shape of the relay failure: no HTTP response.
+			hijackDrop(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, Task{ID: "t1", Status: TaskSucceeded})
+	})
+
+	task, err := f.clientFreshConns().GetTask(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Status != TaskSucceeded {
+		t.Errorf("status = %q, want %q", task.Status, TaskSucceeded)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("attempts = %d, want 2", got)
+	}
+}
+
+// A caller's expired deadline must not be retried past, however many attempts
+// are left.
+func TestGetTaskDoesNotRetryCallerDeadline(t *testing.T) {
+	f := newFake()
+	defer f.close()
+
+	var calls atomic.Int32
+	f.on("GET /api/v1/tasks/t1", func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		hijackDrop(w, r)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if _, err := f.clientFreshConns().GetTask(ctx, "t1"); err == nil {
+		t.Fatal("want an error")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("blocked %s past the caller deadline", elapsed)
 	}
 }
