@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -69,24 +68,6 @@ func (r *PromoteMemoriesRepo) MarkAsKept(
 		"datapack_id", datapackID, "requested", len(memoryIDs), "updated", n)
 	return n, nil
 }
-
-// ErrMemoriesNotReady is returned when one or more memories in a
-// promote batch lack a populated payload.graph_nodes[]. mem0 sets
-// graph_nodes at the end of memory.add — an empty array means mem0
-// is still extracting entities. Promoting now would either hang
-// behind mem0's open transaction or produce a half-baked promoted
-// memory with no graph context. Handlers should surface this as a
-// retry-friendly 503.
-var ErrMemoriesNotReady = errors.New("memory not ready: mem0 has not finished extracting graph entities")
-
-// memoryReadyBackstop bounds how long the pre-flight check waits for
-// mem0's async entity extraction to populate payload.graph_nodes. Past
-// this age, we assume the memory will never get graph context (mem0
-// crashed mid-extraction, the row predates the graph schema, etc.) and
-// promote anyway — downstream graph steps become no-ops, but the KB +
-// promoted_collection rows still land. Without this, a stuck memory
-// would trap the UI in an infinite retry loop.
-const memoryReadyBackstop = 5 * time.Minute
 
 // Values for datapacks.knowledge_bases.metadata_filters->>'source' — used to
 // differentiate where each KB chunk originated. Today every chunk this code
@@ -276,37 +257,14 @@ func (r *PromoteMemoriesRepo) PromoteNew(
 		return nil, nil, notFoundIDs, nil
 	}
 
-	// Pre-flight readiness check: distinguish "mem0 hasn't written
-	// graph_nodes yet" (key absent — still processing) from "mem0
-	// finished but found 0 entities" (key present, empty array — fine
-	// to promote, downstream graph steps just become no-ops).
-	//
-	// We probe with a POINTER so json.Unmarshal sets the field to nil
-	// when the key is absent vs an empty (but non-nil) slice when the
-	// key is present with []. A second guard, memoryReadyBackstop,
-	// stops a memory that never gets graph_nodes (mem0 crashed mid-
-	// extraction, schema changes, etc.) from trapping the UI in an
-	// infinite retry loop — once the row is older than the backstop
-	// we proceed regardless.
-	now := time.Now()
-	for _, row := range fetched {
-		if len(row.payload) == 0 {
-			if now.Sub(row.createdAt) >= memoryReadyBackstop {
-				continue
-			}
-			return nil, nil, nil, fmt.Errorf("%w (memory_id=%s)", ErrMemoriesNotReady, row.id)
-		}
-		var probe struct {
-			GraphNodes *[]json.RawMessage `json:"graph_nodes"`
-		}
-		if err := json.Unmarshal(row.payload, &probe); err != nil {
-			return nil, nil, nil, fmt.Errorf("%w (memory_id=%s, payload parse failed: %v)",
-				ErrMemoriesNotReady, row.id, err)
-		}
-		if probe.GraphNodes == nil && now.Sub(row.createdAt) < memoryReadyBackstop {
-			return nil, nil, nil, fmt.Errorf("%w (memory_id=%s)", ErrMemoriesNotReady, row.id)
-		}
-	}
+	// No readiness pre-flight: mem0 2.x has no graph store and never writes
+	// payload.graph_nodes, so there is no asynchronous entity-extraction step
+	// left to wait for. The old check treated an absent graph_nodes key as
+	// "still processing" and refused to promote for the first 5 minutes of a
+	// memory's life, which would block every memory created by mem0 2.x.
+	// Memories that predate the upgrade still carry graph_nodes and their
+	// graph context is copied below; for everything else the graph steps are
+	// no-ops.
 
 	// 2. Find which of these mem0 IDs already exist in the KB for this tenant.
 	// memory_id lives in metadata_filters->>'memory_id' (document_id now
