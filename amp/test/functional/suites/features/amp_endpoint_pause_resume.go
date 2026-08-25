@@ -29,12 +29,8 @@ func init() {
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Pause an endpoint and assert its compute stops while the record, branch and data survive, then resume it on the same branch and assert it serves the prior data and new writes.",
-		// There is no pause/resume surface yet: the endpoint has no state column,
-		// the deployer contract is create/delete/resize only, and the POST
-		// .../pause and .../resume routes do not exist — every assertion below is
-		// against behaviour that has not been built. Delete this field once the
-		// routes land.
-		Skip:   "blocked on yugabyte/meko#518: an endpoint cannot be paused or resumed — the POST .../endpoints/{id}/pause and .../resume routes, the endpoint state column, and the deployer's pause/resume contract do not exist yet",
+		// Fails today: the pause/resume routes do not exist, so the pause POST
+		// 404s (meko#518).
 		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:    runAmpEndpointPauseResume,
 	})

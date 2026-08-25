@@ -617,14 +617,24 @@ mechanics, copied from stress:
   pattern): when a test *runs* on all versions but one step only applies to
   some, a helper answers "is this feature available on this version" and the
   test branches or skips the step.
-- **Unimplemented behaviour is a registered skip, not a failure**: a test whose
-  assertions describe a feature the product does not have yet sets
-  `Test.Skip: "<why>"`. The lifecycle gates it *before* provisioning, so it
-  costs no environment, and it still reports (status `skipped`, the reason
-  carried into the result and shown by `ampqa describe`/`list`/`manifest`) —
-  so it stays visible instead of being quietly dropped from a tag. Delete the
-  field when the feature lands; never leave a known-unimplemented assertion
-  failing in the regression suite.
+- **Unimplemented behaviour keeps running and keeps failing**: a test whose
+  assertions describe a feature the product does not have yet stays in
+  `regression` and goes red. A skipped test is a bug nobody sees — the daily
+  run reports `passed=49 skipped=5`, reads green, and nothing anywhere is red
+  for the open issues underneath. Attach the GitHub issue that explains it as a
+  known issue on the portal; that is what marks the failure triaged, and the
+  run page then carries `known: #NNN` beside it.
+
+  Make it fail *fast and by name*: assert a synchronous rejection with the
+  non-waiting client call rather than an `...AndWait`, and bound any readiness
+  wait. Otherwise the bug reports as a bare `deadline exceeded` that names
+  nothing, and a test that cannot pass spends a full environment budget saying
+  so — `features/amp_read_replica` spent 39 minutes on a helm `--wait` before
+  its per-attempt budget was added.
+
+  `Test.Skip: "<why>"` stays for the case it was built for — a test the
+  *environment* cannot run, where the lifecycle gates it before provisioning so
+  it costs nothing. It is not for a product bug.
 - **Version checks inside apps**: apps handling API differences between
   versions compare the live version and **take the other route** — an endpoint
   that moved, a field that was renamed, an older flow for older builds — so

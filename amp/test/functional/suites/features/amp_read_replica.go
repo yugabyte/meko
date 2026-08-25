@@ -13,6 +13,12 @@ import (
 const replicaTable = "amp_replica"
 const roleReadOnly = "read_only"
 
+// roleEndpointReadyBudget bounds ONE create attempt's wait for the endpoint's
+// deploy. Without it a role whose compute never comes ready burns the test's
+// entire deadline and reports a bare "deadline exceeded" that names nothing —
+// which is what meko#833 does to a read_only endpoint today.
+const roleEndpointReadyBudget = 4 * time.Minute
+
 func init() {
 	core.Register(core.Test{
 		Name:        "features/amp_read_replica",
@@ -22,16 +28,8 @@ func init() {
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Create a read_only endpoint alongside the read_write one; assert it serves writes made on the primary and rejects writes itself.",
-		// The endpoint role is stored metadata only: core.RoleReadOnly is
-		// validated on create and persisted on the endpoint row, but it is read
-		// nowhere in the provisioning path — the controller's deploy carries no
-		// compute mode, and the endpoint chart has no role/mode value — so a
-		// read_only endpoint is deployed exactly like the read_write one and
-		// accepts client writes. Both halves of this test therefore assert
-		// behaviour that does not exist yet: the "replica catches up" half only
-		// passes because the endpoint IS a primary on the same storage. Drop
-		// this field once the role drives a replica compute mode.
-		Skip:   "read_only endpoint role is not implemented: the role is persisted but never plumbed into the endpoint's compute mode, so a read_only endpoint serves writes",
+		// Fails today: the read_only role is persisted but never read in the
+		// provisioning path, so it drives no replica compute mode (meko#833).
 		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:    runAmpReadReplica,
 	})
@@ -113,8 +111,14 @@ func createRoleEndpoint(ctx context.Context, cl ampCtl, poolID, projID, branchID
 				return ep, nil
 			}
 		}
-		if _, err := cl.CreateEndpointAndWait(ctx, poolID, projID, branchID, controller.CreateEndpointRequest{Role: role}); err != nil {
+		attemptCtx, cancel := context.WithTimeout(ctx, roleEndpointReadyBudget)
+		_, err := cl.CreateEndpointAndWait(attemptCtx, poolID, projID, branchID, controller.CreateEndpointRequest{Role: role})
+		cancel()
+		if err != nil {
 			lastErr = err
+			if ctx.Err() == nil && attemptCtx.Err() != nil {
+				return controller.Endpoint{}, fmt.Errorf("the %s endpoint's compute never became ready within %s: the role is not plumbed to a compute mode, so the endpoint queues for the branch's write token and never serves (meko#833)", role, roleEndpointReadyBudget)
+			}
 			if transientDeploy(err) {
 				continue
 			}

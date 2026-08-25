@@ -32,12 +32,8 @@ func init() {
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Assert a unitless endpoint memory quantity is rejected with 400 on both create and resize, while the same value with a unit is accepted and persisted.",
-		// The create and resize handlers validate memory against a regex whose unit
-		// group is OPTIONAL, so a bare integer passes and lands on the endpoint as a
-		// byte count. Both halves of this test therefore assert behaviour that does
-		// not exist yet. Delete this field once the quantity validation requires an
-		// explicit unit.
-		Skip:   "blocked on yugabyte/meko#492: a unitless memory quantity (\"4\" = 4 bytes) is accepted by the endpoint create and resize handlers instead of rejected with 400",
+		// Fails today: the memory regex makes the unit group optional, so a bare
+		// integer passes validation and lands as a byte count (meko#492).
 		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:    runAmpEndpointMemoryUnits,
 	})
@@ -59,7 +55,12 @@ func (a *ampFeatureRun) endpointMemoryUnits(ctx context.Context) error {
 		return err
 	}
 
-	_, err = cl.CreateEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, controller.CreateEndpointRequest{
+	// Plan the create WITHOUT waiting out its task. The assertion is about the
+	// synchronous reply, and an ...AndWait here turns today's bug into a ten
+	// minute readiness timeout instead of an immediate red: the create is
+	// accepted, the four-byte compute never comes up, and the wait eats the
+	// test's whole budget before it can say why.
+	_, _, err = cl.CreateEndpoint(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, controller.CreateEndpointRequest{
 		Role:      roleReadWrite,
 		Resources: &controller.EndpointResources{Memory: memoryUnitless},
 	})
@@ -94,7 +95,7 @@ func (a *ampFeatureRun) endpointMemoryUnits(ctx context.Context) error {
 		return fmt.Errorf("endpoint %s reports memory %q, want %q as requested at create", ep.ID, got.Memory, memoryWithUnit)
 	}
 
-	_, err = cl.ResizeEndpointAndWait(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID,
+	_, _, err = cl.ResizeEndpoint(ctx, a.proj.poolID, a.proj.projID, a.proj.branchID, ep.ID,
 		controller.ResizeEndpointRequest{Resources: controller.EndpointResources{Memory: memoryUnitless}})
 	if err == nil {
 		return fmt.Errorf("resizing endpoint %s to memory %q was accepted, want a 400 rejection", ep.ID, memoryUnitless)

@@ -91,11 +91,9 @@ func init() {
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamControlPlane,
 		Description: "Resize a read_only-role endpoint and assert it takes the new reservation the same way a read_write endpoint does.",
-		// Read replicas are not supported yet, so the endpoint this resizes
-		// cannot come up: it queues for the branch's write token, which the
-		// read_write endpoint holds, and its liveness probe restarts it until
-		// the test's budget runs out (meko#833). Drop this field with that fix.
-		Skip:   "read replicas are not supported yet: a read_only endpoint blocks on the branch write token and never becomes ready (meko#833)",
+		// Fails today: the read_only endpoint this resizes never becomes ready,
+		// because it queues for the write token the read_write endpoint holds
+		// (meko#833).
 		Params: []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Run:    runAmpEndpointResizeReadOnly,
 	})
@@ -410,14 +408,9 @@ func (a *ampFeatureRun) endpointResizeReadOnly(ctx context.Context) error {
 	}
 	ep, err := createRoleEndpoint(ctx, cl, a.proj.poolID, a.proj.projID, a.proj.branchID, roleReadOnly)
 	if err != nil {
-		// Skip ONLY for the known unsupported path — the controller refusing
-		// the role with a terminal 4xx. Skipping on any error at all let this
-		// coverage vanish with no red anywhere: a 500, a timeout or a broken
-		// transport read exactly like "not plumbed yet".
 		var apiErr *controller.APIError
 		if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 {
-			a.f.t.Skip(fmt.Sprintf("the controller refuses a %s endpoint (%s): the role is not plumbed to a compute mode yet", roleReadOnly, apiErr))
-			return nil
+			return fmt.Errorf("the controller refuses a %s endpoint (%s): the role is not plumbed to a compute mode yet (meko#833)", roleReadOnly, apiErr)
 		}
 		return fmt.Errorf("create %s endpoint to resize: %w", roleReadOnly, err)
 	}
