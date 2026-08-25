@@ -234,8 +234,9 @@ service:
 # pidfiles). All durable state is in YugabyteDB, so by default this is ephemeral
 # scratch (emptyDir). Set persistence.storageClass to back /data with a
 # PersistentVolumeClaim of that class (a network block volume — EBS on AWS,
-# Persistent Disk on GCP) instead; the Deployment then uses the Recreate strategy
-# because the ReadWriteOnce volume attaches to only one pod at a time.
+# Persistent Disk on GCP) instead. The Deployment always uses the Recreate
+# strategy (an endpoint is single-writer; a redeploy must not surge a second
+# pod) — with a PVC the ReadWriteOnce volume also attaches to one pod at a time.
 persistence:
   # -- StorageClass for the /data PersistentVolumeClaim. Empty => an ephemeral
   # emptyDir (no persistent volume).

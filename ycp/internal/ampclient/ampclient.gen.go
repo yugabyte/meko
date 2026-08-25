@@ -72,6 +72,159 @@ func (e EndpointRole) Valid() bool {
 	}
 }
 
+// Defines values for MigrationRunOperation.
+const (
+	Assess  MigrationRunOperation = "assess"
+	Migrate MigrationRunOperation = "migrate"
+)
+
+// Valid indicates whether the value is a known member of the MigrationRunOperation enum.
+func (e MigrationRunOperation) Valid() bool {
+	switch e {
+	case Assess:
+		return true
+	case Migrate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationRunStatus.
+const (
+	MigrationRunStatusFailed    MigrationRunStatus = "failed"
+	MigrationRunStatusPending   MigrationRunStatus = "pending"
+	MigrationRunStatusRunning   MigrationRunStatus = "running"
+	MigrationRunStatusSucceeded MigrationRunStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the MigrationRunStatus enum.
+func (e MigrationRunStatus) Valid() bool {
+	switch e {
+	case MigrationRunStatusFailed:
+		return true
+	case MigrationRunStatusPending:
+		return true
+	case MigrationRunStatusRunning:
+		return true
+	case MigrationRunStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceDbType.
+const (
+	MigrationSourceDbTypePostgresql MigrationSourceDbType = "postgresql"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceDbType enum.
+func (e MigrationSourceDbType) Valid() bool {
+	switch e {
+	case MigrationSourceDbTypePostgresql:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationSourceRequestDbType.
+const (
+	MigrationSourceRequestDbTypePostgresql MigrationSourceRequestDbType = "postgresql"
+)
+
+// Valid indicates whether the value is a known member of the MigrationSourceRequestDbType enum.
+func (e MigrationSourceRequestDbType) Valid() bool {
+	switch e {
+	case MigrationSourceRequestDbTypePostgresql:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationState.
+const (
+	MigrationStateAssessed           MigrationState = "assessed"
+	MigrationStateAssessing          MigrationState = "assessing"
+	MigrationStateCompleted          MigrationState = "completed"
+	MigrationStateCreated            MigrationState = "created"
+	MigrationStateFailed             MigrationState = "failed"
+	MigrationStateMigrating          MigrationState = "migrating"
+	MigrationStateProvisioningTarget MigrationState = "provisioning_target"
+	MigrationStateTargetReady        MigrationState = "target_ready"
+)
+
+// Valid indicates whether the value is a known member of the MigrationState enum.
+func (e MigrationState) Valid() bool {
+	switch e {
+	case MigrationStateAssessed:
+		return true
+	case MigrationStateAssessing:
+		return true
+	case MigrationStateCompleted:
+		return true
+	case MigrationStateCreated:
+		return true
+	case MigrationStateFailed:
+		return true
+	case MigrationStateMigrating:
+		return true
+	case MigrationStateProvisioningTarget:
+		return true
+	case MigrationStateTargetReady:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationTableProgressStatus.
+const (
+	MigrationTableProgressStatusCompleted  MigrationTableProgressStatus = "completed"
+	MigrationTableProgressStatusDone       MigrationTableProgressStatus = "done"
+	MigrationTableProgressStatusInProgress MigrationTableProgressStatus = "in_progress"
+	MigrationTableProgressStatusNotStarted MigrationTableProgressStatus = "not_started"
+)
+
+// Valid indicates whether the value is a known member of the MigrationTableProgressStatus enum.
+func (e MigrationTableProgressStatus) Valid() bool {
+	switch e {
+	case MigrationTableProgressStatusCompleted:
+		return true
+	case MigrationTableProgressStatusDone:
+		return true
+	case MigrationTableProgressStatusInProgress:
+		return true
+	case MigrationTableProgressStatusNotStarted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MigrationVoyagerPhaseStatus.
+const (
+	MigrationVoyagerPhaseStatusCompleted  MigrationVoyagerPhaseStatus = "completed"
+	MigrationVoyagerPhaseStatusInProgress MigrationVoyagerPhaseStatus = "in_progress"
+	MigrationVoyagerPhaseStatusNotStarted MigrationVoyagerPhaseStatus = "not_started"
+)
+
+// Valid indicates whether the value is a known member of the MigrationVoyagerPhaseStatus enum.
+func (e MigrationVoyagerPhaseStatus) Valid() bool {
+	switch e {
+	case MigrationVoyagerPhaseStatusCompleted:
+		return true
+	case MigrationVoyagerPhaseStatusInProgress:
+		return true
+	case MigrationVoyagerPhaseStatusNotStarted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskStatus.
 const (
 	TaskStatusFailed    TaskStatus = "failed"
@@ -120,6 +273,15 @@ func (e ListTasksParamsStatus) Valid() bool {
 	}
 }
 
+// AddBranchExtensionsRequest defines model for AddBranchExtensionsRequest.
+type AddBranchExtensionsRequest struct {
+	// Extensions Externalized PostgreSQL extensions to enable on this branch, by catalog
+	// name (e.g. `pgvector`). Unioned into the branch's set (idempotent); an
+	// unknown name is rejected (400). Every existing endpoint on the branch is
+	// redeployed to mount the new set. See compute/architecture/extensions.md.
+	Extensions []string `json:"extensions"`
+}
+
 // Branch defines model for Branch.
 type Branch struct {
 	// BranchId The branch id (the storage-layer branch id verbatim).
@@ -129,12 +291,11 @@ type Branch struct {
 	ClusterId openapi_types.UUID `json:"cluster_id"`
 	CreatedAt time.Time          `json:"created_at"`
 
-	// Extensions Externalized PostgreSQL extensions opted into on this branch, by
-	// catalog name (e.g. `pgvector`). Durable branch state: a fork inherits
-	// its parent's set, and every endpoint on the branch mounts them.
-	// Enabled via createEndpoint's `extensions` (there is no branch-create
-	// field); empty when none. Excludes the catalog defaults, which are
-	// added per endpoint at deploy time.
+	// Extensions Externalized PostgreSQL extensions enabled on this branch, by catalog
+	// name (e.g. `pgvector`); the names every endpoint on it mounts. A fork
+	// inherits its ancestor's set at fork time, and addBranchExtensions adds
+	// more to this branch. Excludes the catalog defaults, which are added per
+	// endpoint at deploy time. Empty when none.
 	Extensions *[]string `json:"extensions,omitempty"`
 
 	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
@@ -152,6 +313,21 @@ type Branch struct {
 	// `pg_settings` merge over these and win on a key both define.
 	PgSettings *map[string]string `json:"pg_settings,omitempty"`
 	PgVersion  int                `json:"pg_version"`
+
+	// WriteTokenSettings How the supervisor holds this branch's write lease
+	// (`compute/architecture/compute-fencing.md`). `ttl_ms` is the lease
+	// length; `renew_seconds` is how often it is renewed, and must be under
+	// the TTL — the gap is how long a failing renewal may be retried before
+	// anything stops writing.
+	//
+	// On the branch and not the endpoint because the lease is one row per
+	// branch: every endpoint on it contends for that row, so two endpoints
+	// disagreeing about the TTL would not be an override, just whichever
+	// renewed last.
+	//
+	// Empty means the supervisor's own defaults. Read when an endpoint
+	// starts.
+	WriteTokenSettings *WriteTokenSettings `json:"write_token_settings,omitempty"`
 }
 
 // BranchList defines model for BranchList.
@@ -169,6 +345,14 @@ type BranchList struct {
 type Cluster struct {
 	CreatedAt     time.Time `json:"created_at"`
 	DefaultBranch Branch    `json:"default_branch"`
+
+	// Extensions Externalized PostgreSQL extensions enabled on the cluster's default
+	// branch ("main"), by catalog name (e.g. `pgvector`), surfaced here as
+	// the cluster's set. Each branch carries its own set (a fork inherits its
+	// parent's; see getBranch and addBranchExtensions). Set at createCluster;
+	// empty when none. Excludes the catalog defaults, which are added per
+	// endpoint at deploy time.
+	Extensions *[]string `json:"extensions,omitempty"`
 
 	// Id The cluster id (a control-plane id; maps to no storage object).
 	Id   openapi_types.UUID `json:"id"`
@@ -209,6 +393,15 @@ type CreateBranchRequest struct {
 
 // CreateClusterRequest defines model for CreateClusterRequest.
 type CreateClusterRequest struct {
+	// Extensions Externalized PostgreSQL extensions to enable on the cluster's default
+	// branch ("main"), by catalog name (e.g. `pgvector`). Every endpoint on
+	// that branch mounts them, and a fork inherits the set; add more to a
+	// branch later with addBranchExtensions. An unknown name is rejected
+	// (400), as is any value when externalized extensions are unavailable
+	// (e.g. the Docker driver). Empty/omitted enables only the catalog
+	// defaults. See compute/architecture/extensions.md.
+	Extensions *[]string `json:"extensions,omitempty"`
+
 	// Name Cluster (database) name; unique within the pool. The cluster's default branch is always named "main".
 	Name string `json:"name"`
 
@@ -247,23 +440,38 @@ type CreateEndpointRequest struct {
 	// deploys the compute.
 	ExtendedConfig *map[string]interface{} `json:"extended_config,omitempty"`
 
-	// Extensions Externalized PostgreSQL extensions to opt this endpoint's **branch**
-	// into, by catalog name (e.g. `pgvector`). Enabling is a branch
-	// property, not an endpoint one: each name is added to the branch's
-	// durable extension set (so branch forks inherit it and every endpoint
-	// on the branch picks it up) and mounted into the pod as a read-only
-	// Kubernetes ImageVolume, with `extension_control_path` /
-	// `dynamic_library_path` pointed at it so `CREATE EXTENSION` resolves.
-	// Unknown names are rejected with 400. Requires the Kubernetes deployer;
-	// rejected when externalized extensions are unavailable (e.g. the Docker
-	// driver). See compute/architecture/extensions.md.
-	Extensions *[]string `json:"extensions,omitempty"`
-
 	// Name A handle for the endpoint, unique among its branch's endpoints (two
 	// branches may each have a `primary`). Optional — an endpoint is always
 	// addressable by its `id`. `409` if the name is already taken on the
 	// branch.
 	Name *string `json:"name,omitempty"`
+
+	// PageserverSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	PageserverSettings *DaemonSettings `json:"pageserver_settings,omitempty"`
 
 	// PgSettings Extra PostgreSQL settings for THIS endpoint, as `{name: value}`.
 	// They merge over the branch's `pg_settings` and win on a key both
@@ -280,6 +488,33 @@ type CreateEndpointRequest struct {
 
 	// Role The endpoint's role. A branch admits at most one read_write endpoint.
 	Role *CreateEndpointRequestRole `json:"role,omitempty"`
+
+	// SafekeeperSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
 }
 
 // CreateEndpointRequestDiskType Backing disk for the endpoint's data volume. `network` (the default)
@@ -291,6 +526,15 @@ type CreateEndpointRequestDiskType string
 
 // CreateEndpointRequestRole The endpoint's role. A branch admits at most one read_write endpoint.
 type CreateEndpointRequestRole string
+
+// CreateMigrationRequest defines model for CreateMigrationRequest.
+type CreateMigrationRequest struct {
+	// Name Human name for the migration.
+	Name string `json:"name"`
+
+	// Source The source database connection, as supplied by the caller. The password is stored for the Voyager jobs but is never returned in any response.
+	Source MigrationSourceRequest `json:"source"`
+}
 
 // CreateStoragePoolRequest defines model for CreateStoragePoolRequest.
 type CreateStoragePoolRequest struct {
@@ -313,6 +557,33 @@ type CreateUserRequest struct {
 	IsAdmin *bool `json:"is_admin,omitempty"`
 }
 
+// DaemonSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+// flat `{key: value}` object merged into that daemon's toml at pod start.
+// They beat every resource-derived default the supervisor computes.
+//
+// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+// is how the pageserver's GC knobs are reached at all — they live in
+// `tenant_config`, not at the top level:
+//
+// ```json
+// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+// ```
+//
+// **Values must be scalars** (boolean, integer, float, string). The nesting
+// is expressed entirely in the key; a nested object as a *value* is
+// rejected. Durations and byte sizes are strings in the daemons' own format
+// (`"7 days"`, `"1 GiB"`).
+//
+// Validated against a key set generated from the daemons' own config types,
+// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+// rather than a pod that will not start.
+//
+// Applied at pod start, so a change takes effect on the endpoint's next
+// start — there is no live-reload path today.
+type DaemonSettings map[string]interface{}
+
 // Endpoint defines model for Endpoint.
 type Endpoint struct {
 	// Address Client connection address (host:port) for the Postgres wire protocol (user cloud_admin, database postgres). Empty until the endpoint is deployed.
@@ -334,6 +605,33 @@ type Endpoint struct {
 	// Name The caller's handle for this endpoint, unique among its branch's endpoints. Empty when the endpoint was created without one.
 	Name string `json:"name"`
 
+	// PageserverSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	PageserverSettings *DaemonSettings `json:"pageserver_settings,omitempty"`
+
 	// PgSettings This endpoint's OWN extra PostgreSQL settings. The settings its
 	// compute actually runs with are its branch's merged with these, these
 	// winning on a key both define — so read the branch's too if you want
@@ -347,6 +645,33 @@ type Endpoint struct {
 	// defaults of 2 CPU cores and 4Gi of memory.
 	Resources *EndpointResources `json:"resources,omitempty"`
 	Role      EndpointRole       `json:"role"`
+
+	// SafekeeperSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
 
 	// TailnetAddress Tailscale (tailnet) connection address (host:port), when the endpoint Service is exposed on the tailnet. Empty when not tailnet-exposed.
 	TailnetAddress string `json:"tailnet_address"`
@@ -382,6 +707,61 @@ type EndpointResources struct {
 	Memory *string `json:"memory,omitempty"`
 }
 
+// EndpointSettingsOutcome What one endpoint did with the change.
+type EndpointSettingsOutcome struct {
+	EndpointId openapi_types.UUID `json:"endpoint_id"`
+
+	// NotApplied Settings that are stored but not in force, and never will be until
+	// they are changed. Two reasons, both reported here:
+	//
+	// Postgres refuses the setting — a name it does not recognise, or a
+	// value it cannot parse. These are deliberately left out of the config
+	// file the compute reads, because a file containing one does not load:
+	// a reload of it applies nothing, and the next start fails outright. A
+	// setting like this cannot break the endpoint, but it also does nothing.
+	//
+	// Or nothing applies it: a `pg_settings.context = 'internal'` setting
+	// is compiled into the binary, so neither a reload nor a restart can
+	// change it.
+	//
+	// Either way the endpoint is not interrupted, which makes this field
+	// the only signal that the edit had no effect.
+	//
+	// A name with a dot in it is always written — Postgres takes it as a
+	// placeholder — so it is never refused. It does appear here with
+	// `nothing applies this setting` while the extension that defines it is
+	// not loaded, because until then Postgres does not report the setting
+	// and nothing can put the value in force.
+	NotApplied *[]SettingNotApplied `json:"not_applied,omitempty"`
+
+	// Reloaded Services that took the change in place, without an interruption.
+	// For the compute this means Postgres reloaded its configuration and
+	// kept its connections.
+	Reloaded *[]string `json:"reloaded,omitempty"`
+
+	// RestartForcedBy The Postgres settings that forced a restart. Postgres fixes these at
+	// server start (`pg_settings.context = 'postmaster'`), so they cannot
+	// be applied any other way — naming them explains a cost that would
+	// otherwise look arbitrary.
+	RestartForcedBy *[]string `json:"restart_forced_by,omitempty"`
+
+	// Restarted Services the endpoint restarted onto the new config. Empty means
+	// nothing changed for that endpoint — a settings write that renders
+	// identical config costs nothing, so only what actually moved is
+	// bounced.
+	//
+	// Restarting the compute bounces Postgres, so this is the field to
+	// watch: a setting Postgres fixes at server start interrupts that
+	// endpoint's connections, and `restart_forced_by` names it. A setting
+	// that can change while the server is running is reloaded instead and
+	// appears in `reloaded`.
+	Restarted *[]string `json:"restarted,omitempty"`
+
+	// Unreachable Why this endpoint could not be told, when it could not be. The
+	// settings are still stored.
+	Unreachable *string `json:"unreachable,omitempty"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	Error ErrorBody `json:"error"`
@@ -396,8 +776,276 @@ type ErrorBody struct {
 	Message string `json:"message"`
 }
 
+// Migration A migration and its derived status.
+type Migration struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Detail Human-readable, chat-ready status detail (e.g. "importing data (4,103/6,704 rows)").
+	Detail string             `json:"detail"`
+	Id     openapi_types.UUID `json:"id"`
+	Name   string             `json:"name"`
+
+	// Runs The latest attempt per operation (assess and/or migrate).
+	Runs []MigrationRun `json:"runs"`
+
+	// Source The source database connection as returned in responses — the password is intentionally omitted.
+	Source MigrationSource `json:"source"`
+
+	// State The migration's lifecycle state, derived on read from the migration row,
+	// its runs, and the live Voyager job.
+	State MigrationState `json:"state"`
+
+	// Target The attached target compute; null until a target is provisioned.
+	Target    *MigrationTarget  `json:"target,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at"`
+	Voyager   *MigrationVoyager `json:"voyager,omitempty"`
+}
+
+// MigrationAssessment The parsed, agent-oriented projection of Voyager's completed assessment payload.
+type MigrationAssessment struct {
+	Issues []MigrationAssessmentIssue `json:"issues"`
+
+	// MigrationComplexity Voyager's complexity rating (e.g. LOW, MEDIUM, HIGH).
+	MigrationComplexity            string   `json:"migration_complexity"`
+	MigrationComplexityExplanation string   `json:"migration_complexity_explanation"`
+	Notes                          []string `json:"notes"`
+
+	// SizingRecommendation Voyager's compute-sizing recommendation, projected to the fields the agent needs.
+	SizingRecommendation MigrationSizingRecommendation `json:"sizing_recommendation"`
+
+	// SourceDatabase Size and row-count facts from the source database.
+	SourceDatabase MigrationAssessmentSourceDatabaseStats `json:"source_database"`
+
+	// SourceEnvironment Source host environment facts. Voyager payload v1.8 does not currently populate these, so they are normally zero.
+	SourceEnvironment MigrationAssessmentSourceEnvironment `json:"source_environment"`
+	VoyagerVersion    string                               `json:"voyager_version"`
+}
+
+// MigrationAssessmentIssue A flattened, agent-readable assessment issue.
+type MigrationAssessmentIssue struct {
+	Category    *string `json:"category,omitempty"`
+	Description *string `json:"description,omitempty"`
+	DocsLink    *string `json:"docs_link,omitempty"`
+	Impact      *string `json:"impact,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	ObjectName  *string `json:"object_name,omitempty"`
+	ObjectType  *string `json:"object_type,omitempty"`
+	Type        *string `json:"type,omitempty"`
+}
+
+// MigrationAssessmentSourceDatabaseStats Size and row-count facts from the source database.
+type MigrationAssessmentSourceDatabaseStats struct {
+	TableRowCount       *int64 `json:"table_row_count,omitempty"`
+	TotalIndexSizeBytes *int64 `json:"total_index_size_bytes,omitempty"`
+	TotalTableSizeBytes *int64 `json:"total_table_size_bytes,omitempty"`
+}
+
+// MigrationAssessmentSourceEnvironment Source host environment facts. Voyager payload v1.8 does not currently populate these, so they are normally zero.
+type MigrationAssessmentSourceEnvironment struct {
+	TotalDiskSize *int64   `json:"total_disk_size,omitempty"`
+	TotalMemory   *int64   `json:"total_memory,omitempty"`
+	TotalVcpu     *float32 `json:"total_vcpu,omitempty"`
+}
+
+// MigrationConnectivity The result of a source-connectivity probe. `reachable=false` is still a 200; the failure detail is in `error` (credentials redacted).
+type MigrationConnectivity struct {
+	// Error A redacted failure reason when `reachable=false`.
+	Error *string `json:"error,omitempty"`
+
+	// LatencyMs Connect + probe round-trip latency in milliseconds, when reachable.
+	LatencyMs *int64 `json:"latency_ms,omitempty"`
+	Reachable bool   `json:"reachable"`
+
+	// ServerVersion The source server version string, when reachable.
+	ServerVersion *string `json:"server_version,omitempty"`
+
+	// Ssl Whether the connection negotiated SSL, when reachable.
+	Ssl *bool `json:"ssl,omitempty"`
+}
+
+// MigrationConnectivityRequest defines model for MigrationConnectivityRequest.
+type MigrationConnectivityRequest struct {
+	// Source The source database connection, as supplied by the caller. The password is stored for the Voyager jobs but is never returned in any response.
+	Source MigrationSourceRequest `json:"source"`
+}
+
+// MigrationDataProgress Data-copy progress for the migrate operation. Each direction is null until that phase produces rows.
+type MigrationDataProgress struct {
+	Export *MigrationPhaseDataProgress `json:"export,omitempty"`
+	Import *MigrationPhaseDataProgress `json:"import,omitempty"`
+}
+
+// MigrationList defines model for MigrationList.
+type MigrationList struct {
+	// Count The number of items returned in this response (this page).
+	Count      PageCount          `json:"count"`
+	Migrations []MigrationSummary `json:"migrations"`
+
+	// Total The number of items matching the request across all pages (ignores limit/offset).
+	Total TotalCount `json:"total"`
+}
+
+// MigrationPhaseDataProgress Aggregate and per-table row progress for one data direction (export or import).
+type MigrationPhaseDataProgress struct {
+	RowsCompleted int64                    `json:"rows_completed"`
+	RowsTotal     int64                    `json:"rows_total"`
+	Tables        []MigrationTableProgress `json:"tables"`
+}
+
+// MigrationRun One assess or migrate attempt. Credentials never appear here.
+type MigrationRun struct {
+	Attempt          int                           `json:"attempt"`
+	DeployerMetadata *MigrationRunDeployerMetadata `json:"deployer_metadata,omitempty"`
+
+	// DeployerType The deployer that ran the job (e.g. `kubernetes`, `docker`); null until the job is launched.
+	DeployerType *string `json:"deployer_type,omitempty"`
+
+	// ErrorSummary A short, credential-free failure summary; null unless the run failed.
+	ErrorSummary *string               `json:"error_summary,omitempty"`
+	FinishedAt   *time.Time            `json:"finished_at,omitempty"`
+	Operation    MigrationRunOperation `json:"operation"`
+	StartedAt    *time.Time            `json:"started_at,omitempty"`
+	Status       MigrationRunStatus    `json:"status"`
+
+	// TaskId The launcher task that owns this run.
+	TaskId *openapi_types.UUID `json:"task_id,omitempty"`
+}
+
+// MigrationRunOperation defines model for MigrationRun.Operation.
+type MigrationRunOperation string
+
+// MigrationRunStatus defines model for MigrationRun.Status.
+type MigrationRunStatus string
+
+// MigrationRunDeployerMetadata Safe, credential-free runtime reference to the deployer job backing a run
+// (e.g. the Kubernetes namespace/job or the Docker container). Shape varies
+// by deployer; common Kubernetes fields are documented below.
+type MigrationRunDeployerMetadata struct {
+	ContainerId          *string                `json:"container_id,omitempty"`
+	JobName              *string                `json:"job_name,omitempty"`
+	JobUid               *string                `json:"job_uid,omitempty"`
+	Namespace            *string                `json:"namespace,omitempty"`
+	Volume               *string                `json:"volume,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// MigrationSizingRecommendation Voyager's compute-sizing recommendation, projected to the fields the agent needs.
+type MigrationSizingRecommendation struct {
+	ColocatedTables *[]string `json:"colocated_tables,omitempty"`
+	MemoryPerNodeGb *int      `json:"memory_per_node_gb,omitempty"`
+	NumNodes        *float32  `json:"num_nodes,omitempty"`
+	ShardedTables   *[]string `json:"sharded_tables,omitempty"`
+	Summary         *string   `json:"summary,omitempty"`
+	VcpuPerNode     *int      `json:"vcpu_per_node,omitempty"`
+}
+
+// MigrationSource The source database connection as returned in responses — the password is intentionally omitted.
+type MigrationSource struct {
+	Database string                `json:"database"`
+	DbType   MigrationSourceDbType `json:"db_type"`
+	Host     string                `json:"host"`
+	Port     int                   `json:"port"`
+	Schemas  *[]string             `json:"schemas,omitempty"`
+	Username string                `json:"username"`
+}
+
+// MigrationSourceDbType defines model for MigrationSource.DbType.
+type MigrationSourceDbType string
+
+// MigrationSourceRequest The source database connection, as supplied by the caller. The password is stored for the Voyager jobs but is never returned in any response.
+type MigrationSourceRequest struct {
+	Database string `json:"database"`
+
+	// DbType Source database engine. Only `postgresql` is supported.
+	DbType MigrationSourceRequestDbType `json:"db_type"`
+	Host   string                       `json:"host"`
+
+	// Password Source password. Stored for the Voyager jobs; never returned.
+	Password string `json:"password"`
+	Port     int    `json:"port"`
+
+	// Schemas Schemas to migrate. Required — list at least one schema explicitly (e.g. `[public]`), matching the Voyager CLI's explicit-scope behavior.
+	Schemas  []string `json:"schemas"`
+	Username string   `json:"username"`
+}
+
+// MigrationSourceRequestDbType Source database engine. Only `postgresql` is supported.
+type MigrationSourceRequestDbType string
+
+// MigrationState The migration's lifecycle state, derived on read from the migration row,
+// its runs, and the live Voyager job.
+type MigrationState string
+
+// MigrationSummary The lightweight migration projection used in list responses (persisted state only).
+type MigrationSummary struct {
+	CreatedAt time.Time          `json:"created_at"`
+	Detail    string             `json:"detail"`
+	Id        openapi_types.UUID `json:"id"`
+	Name      string             `json:"name"`
+
+	// State The migration's lifecycle state, derived on read from the migration row,
+	// its runs, and the live Voyager job.
+	State     MigrationState `json:"state"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// MigrationTableProgress Per-table row progress for a data phase (row counts only — Voyager does not emit byte counts).
+type MigrationTableProgress struct {
+	RowsCompleted int64                        `json:"rows_completed"`
+	RowsTotal     int64                        `json:"rows_total"`
+	Schema        string                       `json:"schema"`
+	Status        MigrationTableProgressStatus `json:"status"`
+	Table         string                       `json:"table"`
+}
+
+// MigrationTableProgressStatus defines model for MigrationTableProgress.Status.
+type MigrationTableProgressStatus string
+
+// MigrationTarget The attached AMP compute the migrate job imports into. Populated once a target is provisioned and attached; the password is never returned.
+type MigrationTarget struct {
+	ClusterId  openapi_types.UUID `json:"cluster_id"`
+	Database   string             `json:"database"`
+	EndpointId openapi_types.UUID `json:"endpoint_id"`
+	Host       string             `json:"host"`
+	PoolId     openapi_types.UUID `json:"pool_id"`
+	Port       int                `json:"port"`
+	Username   string             `json:"username"`
+}
+
+// MigrationVoyager Voyager's own view of the migration, read from its visualizer tables. Null before the first run writes any rows.
+type MigrationVoyager struct {
+	DataProgress *MigrationDataProgress  `json:"data_progress,omitempty"`
+	Phases       []MigrationVoyagerPhase `json:"phases"`
+}
+
+// MigrationVoyagerPhase One Voyager workflow phase (Voyager's fixed phase number and its name), with its latest status.
+type MigrationVoyagerPhase struct {
+	// Name Human phase name (e.g. export-schema, import-data).
+	Name string `json:"name"`
+
+	// Phase Voyager's fixed phase identifier (non-contiguous — e.g. import-schema is 5, export-data is 4).
+	Phase     int                         `json:"phase"`
+	Status    MigrationVoyagerPhaseStatus `json:"status"`
+	UpdatedAt *time.Time                  `json:"updated_at,omitempty"`
+}
+
+// MigrationVoyagerPhaseStatus defines model for MigrationVoyagerPhase.Status.
+type MigrationVoyagerPhaseStatus string
+
 // PageCount The number of items returned in this response (this page).
 type PageCount = int
+
+// ProvisionMigrationTargetRequest defines model for ProvisionMigrationTargetRequest.
+type ProvisionMigrationTargetRequest struct {
+	// PoolId The storage pool to create the target project in.
+	PoolId openapi_types.UUID `json:"pool_id"`
+
+	// ProjectName Name for the target project. Defaults to the migration name when omitted.
+	ProjectName *string `json:"project_name,omitempty"`
+
+	// Vcpu Target compute size in vCPU (chosen by the agent from the assessment). Zero/omitted leaves the deployer default.
+	Vcpu *int `json:"vcpu,omitempty"`
+}
 
 // ResizeEndpointRequest Request to change an existing endpoint's compute reservation. cpu/memory
 // are applied as request == limit, so the pod keeps its Guaranteed QoS class
@@ -409,6 +1057,45 @@ type ResizeEndpointRequest struct {
 	// **Guaranteed** QoS class. Omit the object (or either field) to take the
 	// defaults of 2 CPU cores and 4Gi of memory.
 	Resources EndpointResources `json:"resources"`
+}
+
+// SettingNotApplied One stored setting that is not in force, and why.
+type SettingNotApplied struct {
+	// Name The setting's name, as it was stored.
+	Name string `json:"name"`
+
+	// Reason Why it is not in force. A fixed phrase, safe to show a person and
+	// safe to compare on:
+	//
+	// - `unrecognized parameter` — Postgres does not know this name,
+	//   usually a typo. Never an extension's setting: a name with a dot in
+	//   it is always accepted.
+	// - `invalid value` — the name is real, the value is not usable for it.
+	// - `cannot be set in a configuration file` — compiled into the binary
+	//   (`pg_settings.context = 'internal'`), like `block_size`.
+	// - `refused by Postgres` — refused for a reason none of the above
+	//   covers. The endpoint's log carries Postgres's own message.
+	// - `nothing applies this setting` — Postgres accepts it in the file,
+	//   but neither a reload nor a restart puts it in force.
+	Reason string `json:"reason"`
+}
+
+// SettingsUpdateResult What was stored, and what could not be applied to a running endpoint.
+// The row is written either way — an endpoint that could not be told
+// picks the change up when it next starts.
+type SettingsUpdateResult struct {
+	// Applied Whether the settings were persisted. False never appears with a 200.
+	Applied bool `json:"applied"`
+
+	// Endpoints One entry per running endpoint the change was pushed to. Absent for
+	// a branch with no endpoints.
+	Endpoints *[]EndpointSettingsOutcome `json:"endpoints,omitempty"`
+}
+
+// StartMigrationRequest defines model for StartMigrationRequest.
+type StartMigrationRequest struct {
+	// ParallelJobs Value for `import data --parallel-jobs`. Defaults to `8` when omitted.
+	ParallelJobs *int `json:"parallel_jobs,omitempty"`
 }
 
 // StoragePool defines model for StoragePool.
@@ -467,6 +1154,91 @@ type TaskList struct {
 // TotalCount The number of items matching the request across all pages (ignores limit/offset).
 type TotalCount = int
 
+// UpdateBranchSettingsRequest Branch-wide settings to replace. Every field is optional and an omitted
+// one is left as it is; send `{}` for a surface to clear it.
+type UpdateBranchSettingsRequest struct {
+	// PgSettings Extra PostgreSQL settings as `{name: value}`. Replaces what is
+	// stored; `{}` clears them.
+	PgSettings *map[string]string `json:"pg_settings,omitempty"`
+
+	// WriteTokenSettings How the supervisor holds this branch's write lease
+	// (`compute/architecture/compute-fencing.md`). `ttl_ms` is the lease
+	// length; `renew_seconds` is how often it is renewed, and must be under
+	// the TTL — the gap is how long a failing renewal may be retried before
+	// anything stops writing.
+	//
+	// On the branch and not the endpoint because the lease is one row per
+	// branch: every endpoint on it contends for that row, so two endpoints
+	// disagreeing about the TTL would not be an override, just whichever
+	// renewed last.
+	//
+	// Empty means the supervisor's own defaults. Read when an endpoint
+	// starts.
+	WriteTokenSettings *WriteTokenSettings `json:"write_token_settings,omitempty"`
+}
+
+// UpdateEndpointSettingsRequest This endpoint's settings to replace. Every field is optional and an
+// omitted one is left as it is; send `{}` for a surface to clear it.
+type UpdateEndpointSettingsRequest struct {
+	// PageserverSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	PageserverSettings *DaemonSettings `json:"pageserver_settings,omitempty"`
+
+	// PgSettings Extra PostgreSQL settings as `{name: value}`. Replaces what is
+	// stored; `{}` clears them.
+	PgSettings *map[string]string `json:"pg_settings,omitempty"`
+
+	// SafekeeperSettings Overrides for one of the two storage daemons in an endpoint's pod, as a
+	// flat `{key: value}` object merged into that daemon's toml at pod start.
+	// They beat every resource-derived default the supervisor computes.
+	//
+	// **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+	// is how the pageserver's GC knobs are reached at all — they live in
+	// `tenant_config`, not at the top level:
+	//
+	// ```json
+	// {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+	// ```
+	//
+	// **Values must be scalars** (boolean, integer, float, string). The nesting
+	// is expressed entirely in the key; a nested object as a *value* is
+	// rejected. Durations and byte sizes are strings in the daemons' own format
+	// (`"7 days"`, `"1 GiB"`).
+	//
+	// Validated against a key set generated from the daemons' own config types,
+	// so an unknown key, a wrong-typed value, or a protected identity/wiring key
+	// (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+	// `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+	// rather than a pod that will not start.
+	//
+	// Applied at pod start, so a change takes effect on the endpoint's next
+	// start — there is no live-reload path today.
+	SafekeeperSettings *DaemonSettings `json:"safekeeper_settings,omitempty"`
+}
+
 // User defines model for User.
 type User struct {
 	CreatedAt time.Time          `json:"created_at"`
@@ -498,6 +1270,21 @@ type Version struct {
 	Version string `json:"version"`
 }
 
+// WriteTokenSettings How the supervisor holds this branch's write lease
+// (`compute/architecture/compute-fencing.md`). `ttl_ms` is the lease
+// length; `renew_seconds` is how often it is renewed, and must be under
+// the TTL — the gap is how long a failing renewal may be retried before
+// anything stops writing.
+//
+// On the branch and not the endpoint because the lease is one row per
+// branch: every endpoint on it contends for that row, so two endpoints
+// disagreeing about the TTL would not be an override, just whichever
+// renewed last.
+//
+// Empty means the supervisor's own defaults. Read when an endpoint
+// starts.
+type WriteTokenSettings map[string]interface{}
+
 // BranchId defines model for BranchId.
 type BranchId = openapi_types.UUID
 
@@ -512,6 +1299,9 @@ type IncludeFailed = bool
 
 // Limit defines model for Limit.
 type Limit = int
+
+// MigrationId defines model for MigrationId.
+type MigrationId = openapi_types.UUID
 
 // Offset defines model for Offset.
 type Offset = int
@@ -539,6 +1329,18 @@ type InternalError = Error
 
 // NotFound defines model for NotFound.
 type NotFound = Error
+
+// ServiceUnavailable defines model for ServiceUnavailable.
+type ServiceUnavailable = Error
+
+// ListMigrationsParams defines parameters for ListMigrations.
+type ListMigrationsParams struct {
+	// Limit Maximum number of items to return. Clamped to 1..1000; defaults to 100.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Offset Number of items to skip from the start of the result set. Negative values are clamped to 0.
+	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
+}
 
 // ListStoragePoolsParams defines parameters for ListStoragePools.
 type ListStoragePoolsParams struct {
@@ -609,6 +1411,18 @@ type ListUsersParams struct {
 	Offset *Offset `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// CreateMigrationJSONRequestBody defines body for CreateMigration for application/json ContentType.
+type CreateMigrationJSONRequestBody = CreateMigrationRequest
+
+// CheckMigrationConnectivityJSONRequestBody defines body for CheckMigrationConnectivity for application/json ContentType.
+type CheckMigrationConnectivityJSONRequestBody = MigrationConnectivityRequest
+
+// StartMigrationJSONRequestBody defines body for StartMigration for application/json ContentType.
+type StartMigrationJSONRequestBody = StartMigrationRequest
+
+// ProvisionMigrationTargetJSONRequestBody defines body for ProvisionMigrationTarget for application/json ContentType.
+type ProvisionMigrationTargetJSONRequestBody = ProvisionMigrationTargetRequest
+
 // CreateStoragePoolJSONRequestBody defines body for CreateStoragePool for application/json ContentType.
 type CreateStoragePoolJSONRequestBody = CreateStoragePoolRequest
 
@@ -624,8 +1438,145 @@ type CreateEndpointJSONRequestBody = CreateEndpointRequest
 // ResizeEndpointJSONRequestBody defines body for ResizeEndpoint for application/json ContentType.
 type ResizeEndpointJSONRequestBody = ResizeEndpointRequest
 
+// UpdateEndpointSettingsJSONRequestBody defines body for UpdateEndpointSettings for application/json ContentType.
+type UpdateEndpointSettingsJSONRequestBody = UpdateEndpointSettingsRequest
+
+// AddBranchExtensionsJSONRequestBody defines body for AddBranchExtensions for application/json ContentType.
+type AddBranchExtensionsJSONRequestBody = AddBranchExtensionsRequest
+
+// UpdateBranchSettingsJSONRequestBody defines body for UpdateBranchSettings for application/json ContentType.
+type UpdateBranchSettingsJSONRequestBody = UpdateBranchSettingsRequest
+
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = CreateUserRequest
+
+// Getter for additional properties for MigrationRunDeployerMetadata. Returns the specified
+// element and whether it was found
+func (a MigrationRunDeployerMetadata) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for MigrationRunDeployerMetadata
+func (a *MigrationRunDeployerMetadata) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for MigrationRunDeployerMetadata to handle AdditionalProperties
+func (a *MigrationRunDeployerMetadata) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["container_id"]; found {
+		err = json.Unmarshal(raw, &a.ContainerId)
+		if err != nil {
+			return fmt.Errorf("error reading 'container_id': %w", err)
+		}
+		delete(object, "container_id")
+	}
+
+	if raw, found := object["job_name"]; found {
+		err = json.Unmarshal(raw, &a.JobName)
+		if err != nil {
+			return fmt.Errorf("error reading 'job_name': %w", err)
+		}
+		delete(object, "job_name")
+	}
+
+	if raw, found := object["job_uid"]; found {
+		err = json.Unmarshal(raw, &a.JobUid)
+		if err != nil {
+			return fmt.Errorf("error reading 'job_uid': %w", err)
+		}
+		delete(object, "job_uid")
+	}
+
+	if raw, found := object["namespace"]; found {
+		err = json.Unmarshal(raw, &a.Namespace)
+		if err != nil {
+			return fmt.Errorf("error reading 'namespace': %w", err)
+		}
+		delete(object, "namespace")
+	}
+
+	if raw, found := object["volume"]; found {
+		err = json.Unmarshal(raw, &a.Volume)
+		if err != nil {
+			return fmt.Errorf("error reading 'volume': %w", err)
+		}
+		delete(object, "volume")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for MigrationRunDeployerMetadata to handle AdditionalProperties
+func (a MigrationRunDeployerMetadata) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.ContainerId != nil {
+		object["container_id"], err = json.Marshal(a.ContainerId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'container_id': %w", err)
+		}
+	}
+
+	if a.JobName != nil {
+		object["job_name"], err = json.Marshal(a.JobName)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'job_name': %w", err)
+		}
+	}
+
+	if a.JobUid != nil {
+		object["job_uid"], err = json.Marshal(a.JobUid)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'job_uid': %w", err)
+		}
+	}
+
+	if a.Namespace != nil {
+		object["namespace"], err = json.Marshal(a.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'namespace': %w", err)
+		}
+	}
+
+	if a.Volume != nil {
+		object["volume"], err = json.Marshal(a.Volume)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'volume': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -700,6 +1651,38 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// ListMigrations request
+	ListMigrations(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateMigrationWithBody request with any body
+	CreateMigrationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateMigration(ctx context.Context, body CreateMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CheckMigrationConnectivityWithBody request with any body
+	CheckMigrationConnectivityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CheckMigrationConnectivity(ctx context.Context, body CheckMigrationConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetMigration request
+	GetMigration(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartMigrationAssessment request
+	StartMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetMigrationAssessment request
+	GetMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartMigrationWithBody request with any body
+	StartMigrationWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	StartMigration(ctx context.Context, migrationId MigrationId, body StartMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ProvisionMigrationTargetWithBody request with any body
+	ProvisionMigrationTargetWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ProvisionMigrationTarget(ctx context.Context, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListStoragePools request
 	ListStoragePools(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -758,6 +1741,21 @@ type ClientInterface interface {
 
 	ResizeEndpoint(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// UpdateEndpointSettingsWithBody request with any body
+	UpdateEndpointSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateEndpointSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AddBranchExtensionsWithBody request with any body
+	AddBranchExtensionsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AddBranchExtensions(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateBranchSettingsWithBody request with any body
+	UpdateBranchSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateBranchSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListTasks request
 	ListTasks(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -777,6 +1775,150 @@ type ClientInterface interface {
 
 	// GetVersion request
 	GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) ListMigrations(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListMigrationsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateMigrationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMigrationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateMigration(ctx context.Context, body CreateMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateMigrationRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CheckMigrationConnectivityWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCheckMigrationConnectivityRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CheckMigrationConnectivity(ctx context.Context, body CheckMigrationConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCheckMigrationConnectivityRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetMigration(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMigrationRequest(c.Server, migrationId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartMigrationAssessmentRequest(c.Server, migrationId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetMigrationAssessment(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetMigrationAssessmentRequest(c.Server, migrationId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartMigrationWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartMigrationRequestWithBody(c.Server, migrationId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StartMigration(ctx context.Context, migrationId MigrationId, body StartMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartMigrationRequest(c.Server, migrationId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ProvisionMigrationTargetWithBody(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewProvisionMigrationTargetRequestWithBody(c.Server, migrationId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ProvisionMigrationTarget(ctx context.Context, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewProvisionMigrationTargetRequest(c.Server, migrationId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) ListStoragePools(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1031,6 +2173,78 @@ func (c *Client) ResizeEndpoint(ctx context.Context, poolId PoolId, clusterId Cl
 	return c.Client.Do(req)
 }
 
+func (c *Client) UpdateEndpointSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateEndpointSettingsRequestWithBody(c.Server, poolId, clusterId, branchId, endpointId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateEndpointSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateEndpointSettingsRequest(c.Server, poolId, clusterId, branchId, endpointId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AddBranchExtensionsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAddBranchExtensionsRequestWithBody(c.Server, poolId, clusterId, branchId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AddBranchExtensions(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAddBranchExtensionsRequest(c.Server, poolId, clusterId, branchId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateBranchSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateBranchSettingsRequestWithBody(c.Server, poolId, clusterId, branchId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateBranchSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateBranchSettingsRequest(c.Server, poolId, clusterId, branchId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ListTasks(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListTasksRequest(c.Server, params)
 	if err != nil {
@@ -1113,6 +2327,348 @@ func (c *Client) GetVersion(ctx context.Context, reqEditors ...RequestEditorFn) 
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListMigrationsRequest generates requests for ListMigrations
+func NewListMigrationsRequest(server string, params *ListMigrationsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Offset != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "offset", *params.Offset, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateMigrationRequest calls the generic CreateMigration builder with application/json body
+func NewCreateMigrationRequest(server string, body CreateMigrationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateMigrationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateMigrationRequestWithBody generates requests for CreateMigration with any type of body
+func NewCreateMigrationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewCheckMigrationConnectivityRequest calls the generic CheckMigrationConnectivity builder with application/json body
+func NewCheckMigrationConnectivityRequest(server string, body CheckMigrationConnectivityJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCheckMigrationConnectivityRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCheckMigrationConnectivityRequestWithBody generates requests for CheckMigrationConnectivity with any type of body
+func NewCheckMigrationConnectivityRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/connectivity-checks")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetMigrationRequest generates requests for GetMigration
+func NewGetMigrationRequest(server string, migrationId MigrationId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStartMigrationAssessmentRequest generates requests for StartMigrationAssessment
+func NewStartMigrationAssessmentRequest(server string, migrationId MigrationId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/assess", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetMigrationAssessmentRequest generates requests for GetMigrationAssessment
+func NewGetMigrationAssessmentRequest(server string, migrationId MigrationId) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/assessment", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStartMigrationRequest calls the generic StartMigration builder with application/json body
+func NewStartMigrationRequest(server string, migrationId MigrationId, body StartMigrationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewStartMigrationRequestWithBody(server, migrationId, "application/json", bodyReader)
+}
+
+// NewStartMigrationRequestWithBody generates requests for StartMigration with any type of body
+func NewStartMigrationRequestWithBody(server string, migrationId MigrationId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/migrate", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewProvisionMigrationTargetRequest calls the generic ProvisionMigrationTarget builder with application/json body
+func NewProvisionMigrationTargetRequest(server string, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewProvisionMigrationTargetRequestWithBody(server, migrationId, "application/json", bodyReader)
+}
+
+// NewProvisionMigrationTargetRequestWithBody generates requests for ProvisionMigrationTarget with any type of body
+func NewProvisionMigrationTargetRequestWithBody(server string, migrationId MigrationId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "migrationId", migrationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/migrations/%s/provision-target", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
 }
 
 // NewListStoragePoolsRequest generates requests for ListStoragePools
@@ -2025,6 +3581,196 @@ func NewResizeEndpointRequestWithBody(server string, poolId PoolId, clusterId Cl
 	return req, nil
 }
 
+// NewUpdateEndpointSettingsRequest calls the generic UpdateEndpointSettings builder with application/json body
+func NewUpdateEndpointSettingsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateEndpointSettingsRequestWithBody(server, poolId, clusterId, branchId, endpointId, "application/json", bodyReader)
+}
+
+// NewUpdateEndpointSettingsRequestWithBody generates requests for UpdateEndpointSettings with any type of body
+func NewUpdateEndpointSettingsRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "endpointId", endpointId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/endpoints/%s/settings", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewAddBranchExtensionsRequest calls the generic AddBranchExtensions builder with application/json body
+func NewAddBranchExtensionsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAddBranchExtensionsRequestWithBody(server, poolId, clusterId, branchId, "application/json", bodyReader)
+}
+
+// NewAddBranchExtensionsRequestWithBody generates requests for AddBranchExtensions with any type of body
+func NewAddBranchExtensionsRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/extensions", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewUpdateBranchSettingsRequest calls the generic UpdateBranchSettings builder with application/json body
+func NewUpdateBranchSettingsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateBranchSettingsRequestWithBody(server, poolId, clusterId, branchId, "application/json", bodyReader)
+}
+
+// NewUpdateBranchSettingsRequestWithBody generates requests for UpdateBranchSettings with any type of body
+func NewUpdateBranchSettingsRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/settings", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewListTasksRequest generates requests for ListTasks
 func NewListTasksRequest(server string, params *ListTasksParams) (*http.Request, error) {
 	var err error
@@ -2371,6 +4117,38 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// ListMigrationsWithResponse request
+	ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error)
+
+	// CreateMigrationWithBodyWithResponse request with any body
+	CreateMigrationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMigrationResponse, error)
+
+	CreateMigrationWithResponse(ctx context.Context, body CreateMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMigrationResponse, error)
+
+	// CheckMigrationConnectivityWithBodyWithResponse request with any body
+	CheckMigrationConnectivityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CheckMigrationConnectivityResponse, error)
+
+	CheckMigrationConnectivityWithResponse(ctx context.Context, body CheckMigrationConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*CheckMigrationConnectivityResponse, error)
+
+	// GetMigrationWithResponse request
+	GetMigrationWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationResponse, error)
+
+	// StartMigrationAssessmentWithResponse request
+	StartMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*StartMigrationAssessmentResponse, error)
+
+	// GetMigrationAssessmentWithResponse request
+	GetMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationAssessmentResponse, error)
+
+	// StartMigrationWithBodyWithResponse request with any body
+	StartMigrationWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error)
+
+	StartMigrationWithResponse(ctx context.Context, migrationId MigrationId, body StartMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error)
+
+	// ProvisionMigrationTargetWithBodyWithResponse request with any body
+	ProvisionMigrationTargetWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProvisionMigrationTargetResponse, error)
+
+	ProvisionMigrationTargetWithResponse(ctx context.Context, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*ProvisionMigrationTargetResponse, error)
+
 	// ListStoragePoolsWithResponse request
 	ListStoragePoolsWithResponse(ctx context.Context, params *ListStoragePoolsParams, reqEditors ...RequestEditorFn) (*ListStoragePoolsResponse, error)
 
@@ -2429,6 +4207,21 @@ type ClientWithResponsesInterface interface {
 
 	ResizeEndpointWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body ResizeEndpointJSONRequestBody, reqEditors ...RequestEditorFn) (*ResizeEndpointResponse, error)
 
+	// UpdateEndpointSettingsWithBodyWithResponse request with any body
+	UpdateEndpointSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error)
+
+	UpdateEndpointSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error)
+
+	// AddBranchExtensionsWithBodyWithResponse request with any body
+	AddBranchExtensionsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AddBranchExtensionsResponse, error)
+
+	AddBranchExtensionsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody, reqEditors ...RequestEditorFn) (*AddBranchExtensionsResponse, error)
+
+	// UpdateBranchSettingsWithBodyWithResponse request with any body
+	UpdateBranchSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error)
+
+	UpdateBranchSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error)
+
 	// ListTasksWithResponse request
 	ListTasksWithResponse(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*ListTasksResponse, error)
 
@@ -2450,12 +4243,277 @@ type ClientWithResponsesInterface interface {
 	GetVersionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetVersionResponse, error)
 }
 
+type ListMigrationsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *MigrationList
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ListMigrationsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListMigrationsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListMigrationsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateMigrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON201      *Migration
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateMigrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateMigrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateMigrationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CheckMigrationConnectivityResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *MigrationConnectivity
+	JSON400      *BadRequest
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r CheckMigrationConnectivityResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CheckMigrationConnectivityResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CheckMigrationConnectivityResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetMigrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Migration
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMigrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMigrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMigrationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type StartMigrationAssessmentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r StartMigrationAssessmentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartMigrationAssessmentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r StartMigrationAssessmentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetMigrationAssessmentResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *MigrationAssessment
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetMigrationAssessmentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetMigrationAssessmentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetMigrationAssessmentResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type StartMigrationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r StartMigrationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartMigrationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r StartMigrationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ProvisionMigrationTargetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON409      *Conflict
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ProvisionMigrationTargetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ProvisionMigrationTargetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ProvisionMigrationTargetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListStoragePoolsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *StoragePoolList
 	JSON400      *BadRequest
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2490,6 +4548,7 @@ type CreateStoragePoolResponse struct {
 	JSON404      *NotFound
 	JSON409      *Conflict
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2523,6 +4582,7 @@ type GetStoragePoolResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2556,6 +4616,7 @@ type ListClustersResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2589,6 +4650,7 @@ type CreateClusterResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2622,6 +4684,7 @@ type DeleteClusterResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2655,6 +4718,7 @@ type GetClusterResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2688,6 +4752,7 @@ type ListBranchesResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2721,6 +4786,7 @@ type CreateBranchResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2755,6 +4821,7 @@ type DeleteBranchResponse struct {
 	JSON404      *NotFound
 	JSON409      *Conflict
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2788,6 +4855,7 @@ type GetBranchResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2821,6 +4889,7 @@ type ListEndpointsResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2855,6 +4924,7 @@ type CreateEndpointResponse struct {
 	JSON404      *NotFound
 	JSON409      *Conflict
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2888,6 +4958,7 @@ type DeleteEndpointResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2921,6 +4992,7 @@ type GetEndpointResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2955,6 +5027,7 @@ type ResizeEndpointResponse struct {
 	JSON404      *NotFound
 	JSON409      *Conflict
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -2981,12 +5054,115 @@ func (r ResizeEndpointResponse) ContentType() string {
 	return ""
 }
 
+type UpdateEndpointSettingsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SettingsUpdateResult
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateEndpointSettingsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateEndpointSettingsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateEndpointSettingsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AddBranchExtensionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r AddBranchExtensionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AddBranchExtensionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AddBranchExtensionsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UpdateBranchSettingsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *SettingsUpdateResult
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateBranchSettingsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateBranchSettingsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateBranchSettingsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ListTasksResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *TaskList
 	JSON400      *BadRequest
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3020,6 +5196,7 @@ type GetTaskResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3052,6 +5229,7 @@ type ListUsersResponse struct {
 	JSON200      *UserList
 	JSON400      *BadRequest
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3084,6 +5262,7 @@ type CreateUserResponse struct {
 	JSON201      *User
 	JSON400      *BadRequest
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3117,6 +5296,7 @@ type GetUserResponse struct {
 	JSON400      *BadRequest
 	JSON404      *NotFound
 	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
 }
 
 // Status returns HTTPResponse.Status
@@ -3171,6 +5351,110 @@ func (r GetVersionResponse) ContentType() string {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
 	return ""
+}
+
+// ListMigrationsWithResponse request returning *ListMigrationsResponse
+func (c *ClientWithResponses) ListMigrationsWithResponse(ctx context.Context, params *ListMigrationsParams, reqEditors ...RequestEditorFn) (*ListMigrationsResponse, error) {
+	rsp, err := c.ListMigrations(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListMigrationsResponse(rsp)
+}
+
+// CreateMigrationWithBodyWithResponse request with arbitrary body returning *CreateMigrationResponse
+func (c *ClientWithResponses) CreateMigrationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateMigrationResponse, error) {
+	rsp, err := c.CreateMigrationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateMigrationResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateMigrationWithResponse(ctx context.Context, body CreateMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateMigrationResponse, error) {
+	rsp, err := c.CreateMigration(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateMigrationResponse(rsp)
+}
+
+// CheckMigrationConnectivityWithBodyWithResponse request with arbitrary body returning *CheckMigrationConnectivityResponse
+func (c *ClientWithResponses) CheckMigrationConnectivityWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CheckMigrationConnectivityResponse, error) {
+	rsp, err := c.CheckMigrationConnectivityWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCheckMigrationConnectivityResponse(rsp)
+}
+
+func (c *ClientWithResponses) CheckMigrationConnectivityWithResponse(ctx context.Context, body CheckMigrationConnectivityJSONRequestBody, reqEditors ...RequestEditorFn) (*CheckMigrationConnectivityResponse, error) {
+	rsp, err := c.CheckMigrationConnectivity(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCheckMigrationConnectivityResponse(rsp)
+}
+
+// GetMigrationWithResponse request returning *GetMigrationResponse
+func (c *ClientWithResponses) GetMigrationWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationResponse, error) {
+	rsp, err := c.GetMigration(ctx, migrationId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMigrationResponse(rsp)
+}
+
+// StartMigrationAssessmentWithResponse request returning *StartMigrationAssessmentResponse
+func (c *ClientWithResponses) StartMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*StartMigrationAssessmentResponse, error) {
+	rsp, err := c.StartMigrationAssessment(ctx, migrationId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartMigrationAssessmentResponse(rsp)
+}
+
+// GetMigrationAssessmentWithResponse request returning *GetMigrationAssessmentResponse
+func (c *ClientWithResponses) GetMigrationAssessmentWithResponse(ctx context.Context, migrationId MigrationId, reqEditors ...RequestEditorFn) (*GetMigrationAssessmentResponse, error) {
+	rsp, err := c.GetMigrationAssessment(ctx, migrationId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetMigrationAssessmentResponse(rsp)
+}
+
+// StartMigrationWithBodyWithResponse request with arbitrary body returning *StartMigrationResponse
+func (c *ClientWithResponses) StartMigrationWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error) {
+	rsp, err := c.StartMigrationWithBody(ctx, migrationId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartMigrationResponse(rsp)
+}
+
+func (c *ClientWithResponses) StartMigrationWithResponse(ctx context.Context, migrationId MigrationId, body StartMigrationJSONRequestBody, reqEditors ...RequestEditorFn) (*StartMigrationResponse, error) {
+	rsp, err := c.StartMigration(ctx, migrationId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartMigrationResponse(rsp)
+}
+
+// ProvisionMigrationTargetWithBodyWithResponse request with arbitrary body returning *ProvisionMigrationTargetResponse
+func (c *ClientWithResponses) ProvisionMigrationTargetWithBodyWithResponse(ctx context.Context, migrationId MigrationId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProvisionMigrationTargetResponse, error) {
+	rsp, err := c.ProvisionMigrationTargetWithBody(ctx, migrationId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseProvisionMigrationTargetResponse(rsp)
+}
+
+func (c *ClientWithResponses) ProvisionMigrationTargetWithResponse(ctx context.Context, migrationId MigrationId, body ProvisionMigrationTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*ProvisionMigrationTargetResponse, error) {
+	rsp, err := c.ProvisionMigrationTarget(ctx, migrationId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseProvisionMigrationTargetResponse(rsp)
 }
 
 // ListStoragePoolsWithResponse request returning *ListStoragePoolsResponse
@@ -3357,6 +5641,57 @@ func (c *ClientWithResponses) ResizeEndpointWithResponse(ctx context.Context, po
 	return ParseResizeEndpointResponse(rsp)
 }
 
+// UpdateEndpointSettingsWithBodyWithResponse request with arbitrary body returning *UpdateEndpointSettingsResponse
+func (c *ClientWithResponses) UpdateEndpointSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error) {
+	rsp, err := c.UpdateEndpointSettingsWithBody(ctx, poolId, clusterId, branchId, endpointId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateEndpointSettingsResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateEndpointSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error) {
+	rsp, err := c.UpdateEndpointSettings(ctx, poolId, clusterId, branchId, endpointId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateEndpointSettingsResponse(rsp)
+}
+
+// AddBranchExtensionsWithBodyWithResponse request with arbitrary body returning *AddBranchExtensionsResponse
+func (c *ClientWithResponses) AddBranchExtensionsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AddBranchExtensionsResponse, error) {
+	rsp, err := c.AddBranchExtensionsWithBody(ctx, poolId, clusterId, branchId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAddBranchExtensionsResponse(rsp)
+}
+
+func (c *ClientWithResponses) AddBranchExtensionsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody, reqEditors ...RequestEditorFn) (*AddBranchExtensionsResponse, error) {
+	rsp, err := c.AddBranchExtensions(ctx, poolId, clusterId, branchId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAddBranchExtensionsResponse(rsp)
+}
+
+// UpdateBranchSettingsWithBodyWithResponse request with arbitrary body returning *UpdateBranchSettingsResponse
+func (c *ClientWithResponses) UpdateBranchSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error) {
+	rsp, err := c.UpdateBranchSettingsWithBody(ctx, poolId, clusterId, branchId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateBranchSettingsResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateBranchSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error) {
+	rsp, err := c.UpdateBranchSettings(ctx, poolId, clusterId, branchId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateBranchSettingsResponse(rsp)
+}
+
 // ListTasksWithResponse request returning *ListTasksResponse
 func (c *ClientWithResponses) ListTasksWithResponse(ctx context.Context, params *ListTasksParams, reqEditors ...RequestEditorFn) (*ListTasksResponse, error) {
 	rsp, err := c.ListTasks(ctx, params, reqEditors...)
@@ -3419,6 +5754,382 @@ func (c *ClientWithResponses) GetVersionWithResponse(ctx context.Context, reqEdi
 	return ParseGetVersionResponse(rsp)
 }
 
+// ParseListMigrationsResponse parses an HTTP response from a ListMigrationsWithResponse call
+func ParseListMigrationsResponse(rsp *http.Response) (*ListMigrationsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListMigrationsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MigrationList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateMigrationResponse parses an HTTP response from a CreateMigrationWithResponse call
+func ParseCreateMigrationResponse(rsp *http.Response) (*CreateMigrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateMigrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Migration
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCheckMigrationConnectivityResponse parses an HTTP response from a CheckMigrationConnectivityWithResponse call
+func ParseCheckMigrationConnectivityResponse(rsp *http.Response) (*CheckMigrationConnectivityResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CheckMigrationConnectivityResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MigrationConnectivity
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetMigrationResponse parses an HTTP response from a GetMigrationWithResponse call
+func ParseGetMigrationResponse(rsp *http.Response) (*GetMigrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMigrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Migration
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStartMigrationAssessmentResponse parses an HTTP response from a StartMigrationAssessmentWithResponse call
+func ParseStartMigrationAssessmentResponse(rsp *http.Response) (*StartMigrationAssessmentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartMigrationAssessmentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetMigrationAssessmentResponse parses an HTTP response from a GetMigrationAssessmentWithResponse call
+func ParseGetMigrationAssessmentResponse(rsp *http.Response) (*GetMigrationAssessmentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetMigrationAssessmentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MigrationAssessment
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStartMigrationResponse parses an HTTP response from a StartMigrationWithResponse call
+func ParseStartMigrationResponse(rsp *http.Response) (*StartMigrationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartMigrationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseProvisionMigrationTargetResponse parses an HTTP response from a ProvisionMigrationTargetWithResponse call
+func ParseProvisionMigrationTargetResponse(rsp *http.Response) (*ProvisionMigrationTargetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ProvisionMigrationTargetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseListStoragePoolsResponse parses an HTTP response from a ListStoragePoolsWithResponse call
 func ParseListStoragePoolsResponse(rsp *http.Response) (*ListStoragePoolsResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3453,6 +6164,13 @@ func ParseListStoragePoolsResponse(rsp *http.Response) (*ListStoragePoolsRespons
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -3508,6 +6226,13 @@ func ParseCreateStoragePoolResponse(rsp *http.Response) (*CreateStoragePoolRespo
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -3554,6 +6279,13 @@ func ParseGetStoragePoolResponse(rsp *http.Response) (*GetStoragePoolResponse, e
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -3602,6 +6334,13 @@ func ParseListClustersResponse(rsp *http.Response) (*ListClustersResponse, error
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -3648,6 +6387,13 @@ func ParseCreateClusterResponse(rsp *http.Response) (*CreateClusterResponse, err
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -3696,6 +6442,13 @@ func ParseDeleteClusterResponse(rsp *http.Response) (*DeleteClusterResponse, err
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -3742,6 +6495,13 @@ func ParseGetClusterResponse(rsp *http.Response) (*GetClusterResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -3790,6 +6550,13 @@ func ParseListBranchesResponse(rsp *http.Response) (*ListBranchesResponse, error
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -3836,6 +6603,13 @@ func ParseCreateBranchResponse(rsp *http.Response) (*CreateBranchResponse, error
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -3891,6 +6665,13 @@ func ParseDeleteBranchResponse(rsp *http.Response) (*DeleteBranchResponse, error
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -3938,6 +6719,13 @@ func ParseGetBranchResponse(rsp *http.Response) (*GetBranchResponse, error) {
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -3984,6 +6772,13 @@ func ParseListEndpointsResponse(rsp *http.Response) (*ListEndpointsResponse, err
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4039,6 +6834,13 @@ func ParseCreateEndpointResponse(rsp *http.Response) (*CreateEndpointResponse, e
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4086,6 +6888,13 @@ func ParseDeleteEndpointResponse(rsp *http.Response) (*DeleteEndpointResponse, e
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4132,6 +6941,13 @@ func ParseGetEndpointResponse(rsp *http.Response) (*GetEndpointResponse, error) 
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4187,6 +7003,175 @@ func ParseResizeEndpointResponse(rsp *http.Response) (*ResizeEndpointResponse, e
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateEndpointSettingsResponse parses an HTTP response from a UpdateEndpointSettingsWithResponse call
+func ParseUpdateEndpointSettingsResponse(rsp *http.Response) (*UpdateEndpointSettingsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateEndpointSettingsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SettingsUpdateResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAddBranchExtensionsResponse parses an HTTP response from a AddBranchExtensionsWithResponse call
+func ParseAddBranchExtensionsResponse(rsp *http.Response) (*AddBranchExtensionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AddBranchExtensionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateBranchSettingsResponse parses an HTTP response from a UpdateBranchSettingsWithResponse call
+func ParseUpdateBranchSettingsResponse(rsp *http.Response) (*UpdateBranchSettingsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateBranchSettingsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SettingsUpdateResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4226,6 +7211,13 @@ func ParseListTasksResponse(rsp *http.Response) (*ListTasksResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4274,6 +7266,13 @@ func ParseGetTaskResponse(rsp *http.Response) (*GetTaskResponse, error) {
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4314,6 +7313,13 @@ func ParseListUsersResponse(rsp *http.Response) (*ListUsersResponse, error) {
 		}
 		response.JSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
 	}
 
 	return response, nil
@@ -4353,6 +7359,13 @@ func ParseCreateUserResponse(rsp *http.Response) (*CreateUserResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -4400,6 +7413,13 @@ func ParseGetUserResponse(rsp *http.Response) (*GetUserResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 )
 
@@ -50,7 +51,8 @@ type fakeStateStore struct {
 	endpointBranch  map[uuid.UUID]branchRef // endpoint id -> its (cluster, branch)
 	branchCluster   map[uuid.UUID]uuid.UUID // branch id -> its cluster
 	branchParent    map[uuid.UUID]uuid.UUID // branch id -> its parent branch id (forks only)
-	branchExts      map[uuid.UUID][]string  // branch id -> opted-in extension names
+	branchExts      map[uuid.UUID][]string  // branch id -> opted-in extension names (per branch)
+	endpointExts    map[uuid.UUID][]string  // endpoint id -> last-recorded resolved extension names
 	deletedBranches map[uuid.UUID]struct{}
 	deletedClusters map[uuid.UUID]struct{}
 
@@ -80,6 +82,7 @@ func newFakeStateStore() *fakeStateStore {
 		branchCluster:        map[uuid.UUID]uuid.UUID{},
 		branchParent:         map[uuid.UUID]uuid.UUID{},
 		branchExts:           map[uuid.UUID][]string{},
+		endpointExts:         map[uuid.UUID][]string{},
 		deletedBranches:      map[uuid.UUID]struct{}{},
 		deletedClusters:      map[uuid.UUID]struct{}{},
 	}
@@ -102,8 +105,9 @@ func (f *fakeStateStore) BranchExtensions(_ context.Context, _, branchID uuid.UU
 	return nil, nil
 }
 
-// AddBranchExtensions unions names into the branch's opted-in set (existing-first
-// order, deduplicated). Mirrors the backends; empty names is a no-op.
+// AddBranchExtensions unions names into the (clusterID, branchID) branch's
+// opted-in set (existing-first order, deduplicated). Mirrors the backends; empty
+// names is a no-op.
 func (f *fakeStateStore) AddBranchExtensions(_ context.Context, _, branchID uuid.UUID, names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -120,6 +124,29 @@ func (f *fakeStateStore) AddBranchExtensions(_ context.Context, _, branchID uuid
 		union = append(union, n)
 	}
 	f.branchExts[branchID] = union
+	return nil
+}
+
+// BranchEndpointDeploys returns a redeploy record for every seeded endpoint on
+// the (clusterID, branchID) branch. pg version/size are not modeled by the fake
+// (zero/empty).
+func (f *fakeStateStore) BranchEndpointDeploys(_ context.Context, clusterID, branchID uuid.UUID) ([]core.EndpointDeploy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []core.EndpointDeploy
+	for id, ref := range f.endpointBranch {
+		if ref.clusterID == clusterID && ref.branchID == branchID {
+			out = append(out, core.EndpointDeploy{ID: id, BranchID: ref.branchID})
+		}
+	}
+	return out, nil
+}
+
+// UpdateEndpointExtensions records the resolved names last written to an endpoint.
+func (f *fakeStateStore) UpdateEndpointExtensions(_ context.Context, endpointID uuid.UUID, names []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endpointExts[endpointID] = append([]string(nil), names...)
 	return nil
 }
 
@@ -162,7 +189,7 @@ func (f *fakeStateStore) ChildBranchIDs(_ context.Context, clusterID, branchID u
 	return ids, nil
 }
 
-func (f *fakeStateStore) EnsureCluster(_ context.Context, _, _, branchID uuid.UUID, _ string, _ int) error {
+func (f *fakeStateStore) EnsureCluster(_ context.Context, _, clusterID, branchID uuid.UUID, _ string, _ int, extensions []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensureClusterCalls++
@@ -170,10 +197,14 @@ func (f *fakeStateStore) EnsureCluster(_ context.Context, _, _, branchID uuid.UU
 		return f.errEnsureCluster
 	}
 	f.createdBranches[branchID] = struct{}{}
+	f.branchCluster[branchID] = clusterID
+	if len(extensions) > 0 {
+		f.branchExts[branchID] = append([]string(nil), extensions...)
+	}
 	return nil
 }
 
-func (f *fakeStateStore) EnsureBranch(_ context.Context, _, _, branchID uuid.UUID, _, _ string, _ int) error {
+func (f *fakeStateStore) EnsureBranch(_ context.Context, parentBranchID, clusterID, branchID uuid.UUID, _, _ string, _ int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ensureBranchCalls++
@@ -181,6 +212,12 @@ func (f *fakeStateStore) EnsureBranch(_ context.Context, _, _, branchID uuid.UUI
 		return f.errEnsureBranch
 	}
 	f.createdBranches[branchID] = struct{}{}
+	f.branchCluster[branchID] = clusterID
+	f.branchParent[branchID] = parentBranchID
+	// The fork inherits its parent's extension set (copied onto its own row).
+	if names, ok := f.branchExts[parentBranchID]; ok {
+		f.branchExts[branchID] = append([]string(nil), names...)
+	}
 	return nil
 }
 

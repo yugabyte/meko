@@ -251,6 +251,19 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		}
 	}
 
+	// Externalized extensions to enable cluster-wide. Each name is validated
+	// against the controller's catalog (an unknown name is a 400, not a silent
+	// drop). Requires the catalog (Kubernetes deployer); rejected when it is
+	// unavailable (Docker driver / feature off), so a caller gets a clear error
+	// rather than a silently ignored request.
+	var exts []string
+	if request.Body.Extensions != nil {
+		var errMsg string
+		if exts, errMsg = c.validateExtensions(*request.Body.Extensions); errMsg != "" {
+			return CreateCluster400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
+		}
+	}
+
 	// Optionally provision the default branch's write endpoint in the same task
 	// ("create cluster" = the cluster + its writer), sized by resources. When with_writer
 	// is false (default), no endpoint is created — compute is a separate resource.
@@ -275,6 +288,7 @@ func (c *Controllers) CreateCluster(ctx context.Context, request CreateClusterRe
 		WithWriter: withWriter,
 		CPU:        cpu,
 		Memory:     memory,
+		Extensions: exts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create cluster task: %w", err)
@@ -359,6 +373,54 @@ func (c *Controllers) DeleteCluster(ctx context.Context, request DeleteClusterRe
 		slog.String(applog.KeyTaskID, t.ID.String()))
 
 	return DeleteCluster202JSONResponse{AcceptedJSONResponse{
+		Body:    taskToAPI(t),
+		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
+	}}, nil
+}
+
+func (c *Controllers) AddBranchExtensions(ctx context.Context, request AddBranchExtensionsRequestObject) (AddBranchExtensionsResponseObject, error) {
+	if request.Body == nil {
+		return AddBranchExtensions400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "request body is required"))}, nil
+	}
+	// Validate names against the catalog (unknown => 400, catalog unavailable =>
+	// 400) and drop blanks. An empty effective set is a 400: the caller asked to
+	// enable something.
+	exts, errMsg := c.validateExtensions(request.Body.Extensions)
+	if errMsg != "" {
+		return AddBranchExtensions400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", errMsg))}, nil
+	}
+	if len(exts) == 0 {
+		return AddBranchExtensions400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "at least one extension is required"))}, nil
+	}
+
+	// Cheap pre-check: the branch must exist (404). The union + per-endpoint
+	// redeploy runs as the task's idempotent add_branch_extensions step.
+	if _, err := c.backend.GetBranch(ctx, request.PoolId, request.ClusterId, request.BranchId); err != nil {
+		switch {
+		case errors.Is(err, core.ErrNotFound):
+			return AddBranchExtensions404JSONResponse{NotFoundJSONResponse(apiError("not_found", "branch not found"))}, nil
+		default:
+			return nil, fmt.Errorf("get branch: %w", err)
+		}
+	}
+
+	t, err := c.tasks.AddBranchExtensions(ctx, task.AddBranchExtensionsInput{
+		PoolID:     request.PoolId,
+		ClusterID:  request.ClusterId,
+		BranchID:   request.BranchId,
+		Extensions: exts,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("add branch extensions task: %w", err)
+	}
+
+	c.logger.LogAttrs(ctx, slog.LevelInfo, "add branch extensions task accepted",
+		slog.String(applog.KeyStoragePoolID, request.PoolId.String()),
+		slog.String(applog.KeyClusterID, request.ClusterId.String()),
+		slog.String(applog.KeyBranchID, request.BranchId.String()),
+		slog.String(applog.KeyTaskID, t.ID.String()))
+
+	return AddBranchExtensions202JSONResponse{AcceptedJSONResponse{
 		Body:    taskToAPI(t),
 		Headers: AcceptedResponseHeaders{Location: "/api/v1/tasks/" + t.ID.String()},
 	}}, nil
@@ -711,29 +773,6 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		}
 	}
 
-	// Externalized extensions to enable on this endpoint. Each opt-in is
-	// validated against the controller's catalog (an unknown name is a 400, not
-	// a silent drop) and, in the step, persisted onto the branch's durable set so
-	// forks inherit it. Requires the catalog (Kubernetes deployer); rejected when
-	// it is unavailable (Docker driver / feature off), so a caller gets a clear
-	// error rather than a silently ignored request.
-	var exts []string
-	if request.Body != nil && request.Body.Extensions != nil {
-		if c.prov.Extensions == nil {
-			return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", "externalized extensions are not supported on this controller"))}, nil
-		}
-		for _, raw := range *request.Body.Extensions {
-			name := strings.TrimSpace(raw)
-			if name == "" {
-				continue
-			}
-			if !c.prov.Extensions.Has(name) {
-				return CreateEndpoint400JSONResponse{BadRequestJSONResponse(apiError("invalid_request", fmt.Sprintf("unknown extension %q", name)))}, nil
-			}
-			exts = append(exts, name)
-		}
-	}
-
 	br, err := c.backend.GetBranch(ctx, request.PoolId, request.ClusterId, request.BranchId)
 	switch {
 	case errors.Is(err, core.ErrNotFound):
@@ -810,7 +849,6 @@ func (c *Controllers) CreateEndpoint(ctx context.Context, request CreateEndpoint
 		Name:               name,
 		CPU:                cpu,
 		Memory:             memory,
-		Extensions:         exts,
 		Extended:           extended,
 		PgSettings:         pgSettings,
 		PageserverSettings: pageserverSettings,
@@ -1051,14 +1089,48 @@ func poolToAPI(p core.StoragePool) StoragePool {
 	return StoragePool{Id: p.ID, Name: p.Name, OwnerUserId: p.OwnerUserID, CreatedAt: p.CreatedAt}
 }
 
+// validateExtensions checks a caller's externalized-extension names against the
+// controller's catalog and returns the cleaned (trimmed, empty-dropped) set. It
+// returns a non-empty errMsg (for a 400) when the catalog is unavailable (Docker
+// driver / feature off) or a name is unknown — an unknown opt-in is an error, not
+// a silent drop. An empty/absent input is valid (no extensions), returning
+// (nil, "").
+func (c *Controllers) validateExtensions(names []string) (cleaned []string, errMsg string) {
+	if len(names) == 0 {
+		return nil, ""
+	}
+	if c.prov.Extensions == nil {
+		return nil, "externalized extensions are not supported on this controller"
+	}
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if !c.prov.Extensions.Has(name) {
+			return nil, fmt.Sprintf("unknown extension %q", name)
+		}
+		cleaned = append(cleaned, name)
+	}
+	return cleaned, ""
+}
+
 func clusterToAPI(p core.Cluster) Cluster {
-	return Cluster{
+	out := Cluster{
 		Id:            p.ID,
 		StoragePoolId: p.StoragePoolID,
 		Name:          p.Name,
 		CreatedAt:     p.CreatedAt,
 		DefaultBranch: branchToAPI(p.DefaultBranch),
 	}
+	// The extension set is chosen at the cluster level and applies to all
+	// branches; surface the default branch's set here as the cluster's set (a
+	// convenience view — getBranch reports each branch's own).
+	if len(p.DefaultBranch.Extensions) > 0 {
+		exts := append([]string(nil), p.DefaultBranch.Extensions...)
+		out.Extensions = &exts
+	}
+	return out
 }
 
 // branchPgSettings pulls the caller's settings off a create-branch body. They
@@ -1083,15 +1155,18 @@ func branchToAPI(b core.Branch) Branch {
 	if b.ForkLSN != "" {
 		out.ForkLsn = &b.ForkLSN
 	}
+	// The branch's own externalized-extension set (inherited from its parent at
+	// fork time; the same names its endpoints mount).
+	if len(b.Extensions) > 0 {
+		exts := append([]string(nil), b.Extensions...)
+		out.Extensions = &exts
+	}
 	if len(b.PgSettings) > 0 {
 		out.PgSettings = &b.PgSettings
 	}
 	if len(b.WriteTokenSettings) > 0 {
 		wt := WriteTokenSettings(b.WriteTokenSettings)
 		out.WriteTokenSettings = &wt
-	}
-	if len(b.Extensions) > 0 {
-		out.Extensions = &b.Extensions
 	}
 	return out
 }

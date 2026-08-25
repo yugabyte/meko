@@ -184,9 +184,12 @@ type ResourceStatus struct {
 	// Attrs are kind-specific details the backend observed, reported verbatim
 	// for the console/API to render: every resource's backend id (an amp UUID,
 	// distinct from the path in ID), a cluster's/branch's pg_version, a branch's
-	// fork_lsn, extensions, parent_branch_id (pairs with a branch's id to rebuild
-	// the fork tree), is_default, and an endpoint's role, address,
-	// tailnet_address, cpu, memory. Empty when the backend has none.
+	// extensions (opted in per branch — seeded at create, inherited on fork; the
+	// default branch's set is also mirrored on the cluster as a convenience view),
+	// a branch's fork_lsn, parent_branch_id
+	// (pairs with a branch's id to rebuild the fork tree), is_default, and an
+	// endpoint's role, address, tailnet_address, cpu, memory. Empty when the
+	// backend has none.
 	Attrs map[string]string `json:"attrs,omitempty"`
 }
 

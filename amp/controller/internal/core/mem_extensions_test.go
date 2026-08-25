@@ -7,9 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestMemBranchExtensions covers the MemBackend extension set: the opt-in union
-// is idempotent (a repeat is a no-op), a fork inherits a snapshot of its
-// parent's set, and an absent branch degrades to empty rather than erroring.
+// TestMemBranchExtensions covers the MemBackend extension set: it is per-branch
+// (seeded on the default branch, inherited by a fork), the per-branch opt-in
+// unions idempotently and sorted, adding to one branch leaves its siblings
+// untouched, and an absent branch degrades to empty rather than erroring.
 func TestMemBranchExtensions(t *testing.T) {
 	m := NewMemBackend()
 	ctx := t.Context()
@@ -22,11 +23,11 @@ func TestMemBranchExtensions(t *testing.T) {
 		t.Fatalf("initial extensions = %v, want none", got)
 	}
 
-	// First opt-in.
+	// First opt-in on the branch.
 	if err := m.AddBranchExtensions(ctx, clusterID, root, []string{"pgvector"}); err != nil {
 		t.Fatalf("AddBranchExtensions: %v", err)
 	}
-	// Union with an overlap: existing-first order, deduplicated.
+	// Union with an overlap: sorted, deduplicated.
 	if err := m.AddBranchExtensions(ctx, clusterID, root, []string{"pgvector", "rum"}); err != nil {
 		t.Fatalf("AddBranchExtensions(union): %v", err)
 	}
@@ -43,20 +44,24 @@ func TestMemBranchExtensions(t *testing.T) {
 		t.Fatalf("extensions after idempotent re-add = %v, want 2", got)
 	}
 
-	// A fork inherits a snapshot of the parent's set.
+	// A fork inherits its parent's set at creation.
 	child := uuid.New()
 	if err := m.EnsureBranch(ctx, root, clusterID, child, "child", "0/10", 18); err != nil {
 		t.Fatalf("EnsureBranch: %v", err)
 	}
 	if got, _ = m.BranchExtensions(ctx, clusterID, child); !reflect.DeepEqual(got, []string{"pgvector", "rum"}) {
-		t.Fatalf("forked extensions = %v, want the inherited [pgvector rum]", got)
+		t.Fatalf("fork extensions = %v, want inherited [pgvector rum]", got)
 	}
-	// The snapshot is independent: adding to the child does not touch the parent.
-	if err := m.AddBranchExtensions(ctx, clusterID, child, []string{"postgis"}); err != nil {
-		t.Fatalf("AddBranchExtensions(child): %v", err)
+
+	// Adding to the fork is individual: the parent is untouched.
+	if err := m.AddBranchExtensions(ctx, clusterID, child, []string{"age"}); err != nil {
+		t.Fatalf("AddBranchExtensions(fork): %v", err)
 	}
-	if got, _ = m.BranchExtensions(ctx, clusterID, root); len(got) != 2 {
-		t.Fatalf("parent extensions after child add = %v, want unchanged 2", got)
+	if got, _ = m.BranchExtensions(ctx, clusterID, child); !reflect.DeepEqual(got, []string{"age", "pgvector", "rum"}) {
+		t.Fatalf("fork extensions after add = %v, want [age pgvector rum]", got)
+	}
+	if got, _ = m.BranchExtensions(ctx, clusterID, root); !reflect.DeepEqual(got, []string{"pgvector", "rum"}) {
+		t.Fatalf("parent extensions after fork add = %v, want unchanged [pgvector rum]", got)
 	}
 
 	// An absent branch is a no-op, not an error.

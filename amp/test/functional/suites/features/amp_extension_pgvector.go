@@ -1,8 +1,8 @@
 // This file carries the functional test for externalized PostgreSQL extensions:
-// an endpoint opts its branch into a catalog extension (`extensions: [pgvector]`
-// on createEndpoint), the extension is mounted into the pod as a read-only
-// ImageVolume, and PostgreSQL resolves it. The opt-in is a BRANCH property, so
-// the test also forks the branch and asserts the fork inherits it.
+// a branch opts into a catalog extension (`addBranchExtensions [pgvector]`), an
+// endpoint on the branch mounts it as a read-only ImageVolume, and PostgreSQL
+// resolves it. The opt-in is a BRANCH property, so the test also forks the
+// branch and asserts the fork inherits it.
 package features
 
 import (
@@ -71,16 +71,18 @@ func (a *ampFeatureRun) extensionPgvector(ctx context.Context) error {
 // (Docker driver / feature off). Everything else, including an endpoint that
 // fails to come up with the mount, is the product's and fails.
 func extensionPgvectorSteps(ctx context.Context, cl ampCtl, proj ampCluster, childName string, connect endpointConnector, skip func(string)) error {
-	ep, err := createEndpointReq(ctx, cl, proj.poolID, proj.projID, proj.branchID, controller.CreateEndpointRequest{
-		Role:       roleReadWrite,
+	if _, err := cl.AddBranchExtensionsAndWait(ctx, proj.poolID, proj.projID, proj.branchID, controller.AddBranchExtensionsRequest{
 		Extensions: []string{pgvectorCatalogName},
-	})
-	if err != nil {
+	}); err != nil {
 		if extensionsUnavailable(err) {
 			skip("externalized extensions are not available on this control plane (no extension catalog: Docker driver or the feature is off): " + err.Error())
 			return nil
 		}
-		return fmt.Errorf("create endpoint opted into %s: %w", pgvectorCatalogName, err)
+		return fmt.Errorf("opt branch into %s: %w", pgvectorCatalogName, err)
+	}
+	ep, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
+	if err != nil {
+		return fmt.Errorf("create endpoint after opting the branch into %s: %w", pgvectorCatalogName, err)
 	}
 	base, err := connect(ctx, ep)
 	if err != nil {
@@ -88,7 +90,7 @@ func extensionPgvectorSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 	}
 	defer base.Close()
 
-	// The controller accepts the extension request even when the cluster cannot
+	// The controller accepts the extension request even when the branch cannot
 	// mount ImageVolumes (kubelet < 1.36): the pod comes up READY with no mount,
 	// which no API error reveals. The control file's presence is the ground
 	// truth, so probe it and make "this cluster can't do it yet" a skip instead
@@ -118,8 +120,9 @@ func extensionPgvectorSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 	}
 
 	// Fork the branch at a captured LSN (the "latest" auto fork point is not
-	// settled straight after a write) and assert the fork inherits the opt-in:
-	// its endpoint requests NO extensions of its own.
+	// settled straight after a write) and assert the fork gets the extension too:
+	// a fork inherits its parent branch's opted-in set, so an endpoint on it
+	// mounts pgvector.
 	forkLSN, err := currentLSN(ctx, base)
 	if err != nil {
 		return err
@@ -150,7 +153,7 @@ func extensionPgvectorSteps(ctx context.Context, cl ampCtl, proj ampCluster, chi
 		return fmt.Errorf("read pg_extension on the fork: %w", err)
 	}
 	if n != 1 {
-		return fmt.Errorf("the fork of a branch opted into %s reports %d rows in pg_extension for %q, want 1 — the extension opt-in is a branch property and must be inherited by a fork",
+		return fmt.Errorf("the fork of a branch opted into %s reports %d rows in pg_extension for %q, want 1 — a fork inherits its parent's opted-in set and every endpoint on it must mount the extension",
 			pgvectorCatalogName, n, pgvectorSQLName)
 	}
 	// The catalog row alone would survive a MISSING mount (it is inherited

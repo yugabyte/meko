@@ -24,10 +24,13 @@ The chart renders:
   default) a `postgres_exporter` sidecar for Postgres metrics. PGDATA is
   ephemeral and durable state lives in YugabyteDB, so `/data` is an `emptyDir`
   scratch volume by default; when `persistence.storageClass` is set it is a
-  PersistentVolumeClaim instead and the Deployment uses the `Recreate` strategy
-  (the RWO volume attaches to one pod at a time). The pod's
-  `podSecurityContext.fsGroup` makes the root-owned PVC writable by the non-root
-  process. Rolls on config changes.
+  PersistentVolumeClaim instead. The Deployment always uses the `Recreate`
+  strategy: an endpoint is a single-writer compute, so a redeploy must stop the
+  old pod before starting the new one rather than surging a second pod that would
+  fight the old for the storage writer fence (and, with a PVC, the RWO volume
+  attaches to one pod at a time anyway). The pod's `podSecurityContext.fsGroup`
+  makes the root-owned PVC writable by the non-root process. Rolls on config
+  changes.
 - **PersistentVolumeClaim** — only when `persistence.storageClass` is set: a
   `ReadWriteOnce` claim of that class (EBS/PD) backing `/data`. Part of the
   release, so `helm uninstall` frees it.

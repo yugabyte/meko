@@ -187,6 +187,18 @@ type Cluster struct {
 type CreateClusterRequest struct {
 	Name      string `json:"name"`
 	PgVersion int    `json:"pg_version,omitempty"`
+	// Extensions opts the default branch "main" into externalized PostgreSQL
+	// extensions by catalog name (e.g. "pgvector"): every endpoint on that branch
+	// mounts them as read-only ImageVolumes, and a fork inherits the set. Add more
+	// to a branch later with AddBranchExtensions. Rejected with 400 on a
+	// controller without an extension catalog.
+	Extensions []string `json:"extensions,omitempty"`
+}
+
+// AddBranchExtensionsRequest enables more externalized extensions on an existing
+// branch.
+type AddBranchExtensionsRequest struct {
+	Extensions []string `json:"extensions"`
 }
 
 // Endpoint is the compute bound to a branch.
@@ -239,11 +251,6 @@ type CreateEndpointRequest struct {
 	// Resources is the compute reservation to create the endpoint with. Omitted
 	// (nil) leaves the controller's create-time defaults in place.
 	Resources *EndpointResources `json:"resources,omitempty"`
-	// Extensions opts the endpoint's BRANCH into externalized PostgreSQL
-	// extensions by catalog name (e.g. "pgvector"): each is added to the branch's
-	// durable set, so forks inherit it, and mounted into the pod as a read-only
-	// ImageVolume. Rejected with 400 on a controller without an extension catalog.
-	Extensions []string `json:"extensions,omitempty"`
 	// PgSettings are extra PostgreSQL settings for this endpoint, merged over
 	// the branch's pg_settings.
 	PgSettings map[string]string `json:"pg_settings,omitempty"`
@@ -467,6 +474,12 @@ func (c *Client) DeleteCluster(ctx context.Context, poolID, clusterID string) (T
 }
 
 // --- branches ---
+
+// AddBranchExtensions plans an async branch-extension add (202): it unions the
+// names into the branch's set and redeploys every live endpoint on the branch.
+func (c *Client) AddBranchExtensions(ctx context.Context, poolID, clusterID, branchID string, req AddBranchExtensionsRequest) (Task, string, error) {
+	return c.async(ctx, http.MethodPost, c.apiURL+"/storage-pools/"+poolID+"/clusters/"+clusterID+"/branches/"+branchID+"/extensions", req)
+}
 
 // CreateBranch plans an async branch fork (202).
 func (c *Client) CreateBranch(ctx context.Context, poolID, clusterID string, req CreateBranchRequest) (Task, string, error) {
@@ -739,6 +752,15 @@ func (c *Client) CreateClusterAndWait(ctx context.Context, poolID string, req Cr
 // DeleteClusterAndWait deletes a cluster (cascade) and waits for success.
 func (c *Client) DeleteClusterAndWait(ctx context.Context, poolID, clusterID string) (Task, error) {
 	task, loc, err := c.DeleteCluster(ctx, poolID, clusterID)
+	if err != nil {
+		return Task{}, err
+	}
+	return c.WaitTask(ctx, taskRef(task, loc))
+}
+
+// AddBranchExtensionsAndWait adds branch extensions and waits for success.
+func (c *Client) AddBranchExtensionsAndWait(ctx context.Context, poolID, clusterID, branchID string, req AddBranchExtensionsRequest) (Task, error) {
+	task, loc, err := c.AddBranchExtensions(ctx, poolID, clusterID, branchID, req)
 	if err != nil {
 		return Task{}, err
 	}

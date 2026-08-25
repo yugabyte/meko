@@ -204,7 +204,7 @@ func (b *PgBackend) CreateCluster(ctx context.Context, poolID uuid.UUID, name st
 // The default-branch join filters tombstones inline; the cluster's own tombstone
 // filter is clusterLive, which callers append alongside their WHERE.
 const clusterSelect = `SELECT p.id::text, p.storage_pool_id::text, p.name, p.created_at,
-		b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.created_at
+		b.cluster_id::text, b.branch_id::text, b.name, b.pg_version, b.is_default, b.parent_branch_id::text, b.fork_lsn::text, b.extensions, b.created_at
 	FROM amp_registry.clusters p
 	JOIN amp_registry.storage_pools sp ON sp.id = p.storage_pool_id
 	JOIN amp_registry.branches b ON b.cluster_id = p.id AND b.is_default AND b.dropped_at IS NULL`
@@ -714,9 +714,10 @@ func scanCluster(r scanRow) (Cluster, error) {
 		defBranchStr  string
 		defParentStr  sql.NullString
 		defForkLSN    sql.NullString
+		defExtRaw     []byte
 	)
 	if err := r.Scan(&idStr, &poolStr, &p.Name, &p.CreatedAt,
-		&defClusterStr, &defBranchStr, &def.Name, &def.PgVersion, &def.IsDefault, &defParentStr, &defForkLSN, &def.CreatedAt); err != nil {
+		&defClusterStr, &defBranchStr, &def.Name, &def.PgVersion, &def.IsDefault, &defParentStr, &defForkLSN, &defExtRaw, &def.CreatedAt); err != nil {
 		return Cluster{}, err
 	}
 	id, err := uuid.Parse(idStr)
@@ -747,6 +748,13 @@ func scanCluster(r scanRow) (Cluster, error) {
 		def.ParentBranchID = &parentID
 	}
 	def.ForkLSN = defForkLSN.String // "" when NULL
+	// The cluster's externalized-extension set lives on this default branch row;
+	// carry it so getCluster/listClusters can surface it on the cluster.
+	if len(defExtRaw) > 0 {
+		if err := json.Unmarshal(defExtRaw, &def.Extensions); err != nil {
+			return Cluster{}, fmt.Errorf("decode cluster extensions: %w", err)
+		}
+	}
 	p.DefaultBranch = def
 	return p, nil
 }

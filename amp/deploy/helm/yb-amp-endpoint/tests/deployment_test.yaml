@@ -119,9 +119,11 @@ tests:
           value: run
       - exists:
           path: spec.template.spec.volumes[0].emptyDir
-      # No persistent volume => no Recreate strategy.
-      - notExists:
-          path: spec.strategy
+      # Single-writer compute => Recreate even for an emptyDir endpoint, so a
+      # redeploy never surges a second pod against the storage writer fence.
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
 
   - it: mounts no extension ImageVolumes by default
     template: templates/deployment.yaml

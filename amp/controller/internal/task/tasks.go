@@ -23,13 +23,14 @@ import (
 // Task kinds — the task.kind values. Each corresponds to a user-visible
 // operation whose status the API exposes (GET /tasks/{id}).
 const (
-	KindCreateCluster  = "create_cluster"
-	KindBranch         = "branch"
-	KindCreateEndpoint = "create_endpoint"
-	KindResizeEndpoint = "resize_endpoint"
-	KindDeleteEndpoint = "delete_endpoint"
-	KindDeleteBranch   = "delete_branch"
-	KindDeleteCluster  = "delete_cluster"
+	KindCreateCluster       = "create_cluster"
+	KindBranch              = "branch"
+	KindCreateEndpoint      = "create_endpoint"
+	KindResizeEndpoint      = "resize_endpoint"
+	KindDeleteEndpoint      = "delete_endpoint"
+	KindDeleteBranch        = "delete_branch"
+	KindDeleteCluster       = "delete_cluster"
+	KindAddBranchExtensions = "add_branch_extensions"
 )
 
 // Service records tasks against a Store and reads them back. It is the dependency
@@ -86,6 +87,10 @@ type CreateClusterInput struct {
 	// Ignored when WithWriter is false.
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
+	// Extensions is the cluster-wide externalized extension set (catalog names,
+	// pre-validated by the handler), stored on the default branch so every endpoint
+	// on the cluster mounts it. Empty leaves the cluster with catalog defaults only.
+	Extensions []string `json:"extensions,omitempty"`
 }
 
 // CreateCluster records a create_cluster task: create the cluster + its default
@@ -98,11 +103,12 @@ func (s *Service) CreateCluster(ctx context.Context, in CreateClusterInput) (*Ta
 
 	steps := []StepSpec{
 		stepSpec(StepCreateCluster, CreateClusterArgs{
-			PoolID:    in.PoolID,
-			ClusterID: clusterID,
-			BranchID:  branchID,
-			Name:      in.Name,
-			PgVersion: in.PgVersion,
+			PoolID:     in.PoolID,
+			ClusterID:  clusterID,
+			BranchID:   branchID,
+			Name:       in.Name,
+			PgVersion:  in.PgVersion,
+			Extensions: in.Extensions,
 		}),
 		stepSpec(StepRecordBranchRecipe, RecordBranchRecipeArgs{
 			ClusterID:  clusterID,
@@ -208,10 +214,6 @@ type CreateEndpointInput struct {
 	// deployer/chart default (2 cores / 4Gi).
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
-	// Extensions are externalized extensions to enable on the endpoint (catalog
-	// names, pre-validated by the handler). The step persists them onto the
-	// branch's durable set and mounts them; nil leaves the branch set as-is.
-	Extensions []string `json:"extensions,omitempty"`
 }
 
 // CreateEndpoint records a create_endpoint task: a single create_endpoint step on
@@ -232,7 +234,6 @@ func (s *Service) CreateEndpoint(ctx context.Context, in CreateEndpointInput) (*
 			Name:               in.Name,
 			CPU:                in.CPU,
 			Memory:             in.Memory,
-			Extensions:         in.Extensions,
 			Extended:           in.Extended,
 			PgSettings:         in.PgSettings,
 			PageserverSettings: in.PageserverSettings,
@@ -315,6 +316,32 @@ func (s *Service) DeleteCluster(ctx context.Context, in DeleteClusterInput) (*Ta
 	}
 	// DeleteCluster leaves TargetRef empty: cluster_id already carries the id.
 	return s.create(ctx, KindDeleteCluster, in, in.ClusterID, "", steps)
+}
+
+// AddBranchExtensionsInput is the request for an add_branch_extensions task:
+// enable extensions on one branch. Names are catalog names, pre-validated by the
+// handler.
+type AddBranchExtensionsInput struct {
+	PoolID     uuid.UUID `json:"pool_id"`
+	ClusterID  uuid.UUID `json:"cluster_id"`
+	BranchID   uuid.UUID `json:"branch_id"`
+	Extensions []string  `json:"extensions"`
+}
+
+// AddBranchExtensions records an add_branch_extensions task: a single,
+// self-contained step that unions the names into the branch's durable set and
+// re-renders every endpoint on the branch so the new ImageVolume mounts take
+// effect. One idempotent step (absolute union + deploy-per-endpoint), for the
+// same reason as DeleteBranch.
+func (s *Service) AddBranchExtensions(ctx context.Context, in AddBranchExtensionsInput) (*Task, error) {
+	steps := []StepSpec{
+		stepSpec(StepAddBranchExtensions, AddBranchExtensionsArgs{
+			ClusterID:  in.ClusterID,
+			BranchID:   in.BranchID,
+			Extensions: in.Extensions,
+		}),
+	}
+	return s.create(ctx, KindAddBranchExtensions, in, in.BranchID, "", steps)
 }
 
 // EndpointDeployName is the deployer's stable instance handle for an endpoint

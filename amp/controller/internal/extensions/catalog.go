@@ -49,11 +49,11 @@ type Catalog struct {
 // builtin is the in-tree extension set. Keep versions in lockstep with
 // deploy/extensions/extensions.yaml (the build manifest).
 var builtin = []Extension{
-	// pgvector: known/available but NOT a default — opting in is a branch
-	// property (extensions[] on createEndpoint), persisted onto
-	// amp_registry.branches.extensions so forks and read replicas inherit it.
-	// No preload needed. The image ships vector.control / vector*.sql (the SQL
-	// name is "vector").
+	// pgvector: known/available but NOT a default — opting in is per branch
+	// (seeded on the default branch by extensions[] on createCluster, extended by
+	// addBranchExtensions), persisted on amp_registry.branches.extensions (a fork
+	// inherits it) so every endpoint on the branch mounts it. No preload needed.
+	// The image ships vector.control / vector*.sql (the SQL name is "vector").
 	{Name: "pgvector", Version: "0.8.2", Default: false, Preload: false},
 	// pg_cron: a background-worker job scheduler. Opt-in per branch like
 	// pgvector, but Preload: true — its library must be in
@@ -104,16 +104,16 @@ func (c *Catalog) image(e Extension) string {
 	return c.registry + "/" + ref
 }
 
-// Has reports whether name is a known catalog extension — the createEndpoint
-// handler's validation gate (an unknown opt-in is rejected with 400 rather than
-// silently dropped at resolve time).
+// Has reports whether name is a known catalog extension — the
+// createCluster/addBranchExtensions handler's validation gate (an unknown
+// opt-in is rejected with 400 rather than silently dropped at resolve time).
 func (c *Catalog) Has(name string) bool {
 	_, ok := c.byName[name]
 	return ok
 }
 
 // DefaultNames returns the names of the always-mounted extensions, in catalog
-// order. These are unioned with a branch's opted-in set at endpoint create.
+// order. These are unioned with the branch's opted-in set at endpoint create.
 func (c *Catalog) DefaultNames() []string {
 	var out []string
 	for _, n := range c.order {

@@ -227,11 +227,12 @@ func TestEndpointDiskType(t *testing.T) {
 	}
 }
 
-// TestEndpointExtensions covers the createEndpoint extensions[] opt-in: a known
-// name is accepted, mounted onto the deployed endpoint (resolved to its pinned
-// image) and persisted onto the branch's durable set; an unknown name is a 400;
-// and requesting extensions with no catalog (feature off) is a 400.
-func TestEndpointExtensions(t *testing.T) {
+// TestClusterExtensions covers externalized extensions: they are set at
+// createCluster onto the default branch (a known name is accepted, an unknown one
+// is a 400), mounted onto the endpoints that branch deploys, surfaced on the
+// Cluster and Branch APIs, and extended per branch with addBranchExtensions
+// (which redeploys the branch's endpoints to pick up the new mounts).
+func TestClusterExtensions(t *testing.T) {
 	dep := &fakeDeployer{}
 	prov := api.Provisioning{Deployer: dep, Extensions: extensions.NewCatalog("quay.io/yugabyte")}
 	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
@@ -239,142 +240,123 @@ func TestEndpointExtensions(t *testing.T) {
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "ext-pool")
-	clusterID, branchID := uuid.New(), uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
-
-	rw := api.CreateEndpointRequestRoleReadWrite
 
 	// Unknown extension -> 400 before any task is planned.
 	unknown := []string{"not-a-real-ext"}
-	bad, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &unknown})
+	bad, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: "bad", Extensions: &unknown})
 	if err != nil {
-		t.Fatalf("CreateEndpoint(unknown ext): %v", err)
+		t.Fatalf("CreateCluster(unknown ext): %v", err)
 	}
 	if bad.StatusCode() != http.StatusBadRequest || bad.JSON400 == nil {
 		t.Fatalf("unknown ext status = %d, want 400; body = %s", bad.StatusCode(), bad.Body)
 	}
 
-	// Known extension -> 202, and once driven it is mounted + persisted.
+	// Known extension + with_writer -> 202; once driven, the writer endpoint
+	// mounts pgvector (resolved to its pinned image).
 	want := []string{"pgvector"}
-	ok, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &want})
+	withWriter := true
+	ok, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: "shop", Extensions: &want, WithWriter: &withWriter})
 	if err != nil {
-		t.Fatalf("CreateEndpoint(pgvector): %v", err)
+		t.Fatalf("CreateCluster(pgvector): %v", err)
 	}
-	if ok.StatusCode() != http.StatusAccepted {
+	if ok.StatusCode() != http.StatusAccepted || ok.JSON202 == nil {
 		t.Fatalf("pgvector status = %d, want 202; body = %s", ok.StatusCode(), ok.Body)
 	}
+	clusterID := *ok.JSON202.ClusterId
 	drainTasks(t, store, backend, prov)
 	if len(dep.created) != 1 {
-		t.Fatalf("deploy calls = %d, want 1", len(dep.created))
+		t.Fatalf("deploy calls = %d, want 1 (the writer)", len(dep.created))
 	}
 	exts := dep.created[0].Extensions
 	if len(exts) != 1 || exts[0].Name != "pgvector" || exts[0].Image != "quay.io/yugabyte/amp-ext-pgvector:0.8.2" {
 		t.Fatalf("deploy spec extensions = %+v, want the pinned pgvector", exts)
 	}
-	// The opt-in is durable on the branch (so a fork inherits it).
-	persisted, _ := backend.BranchExtensions(ctx, clusterID, branchID)
-	if len(persisted) != 1 || persisted[0] != "pgvector" {
-		t.Errorf("branch extensions = %v, want [pgvector] persisted", persisted)
-	}
-	// ...and the set is now visible on the Branch API response. It used to be
-	// write-only: stored on the branch, returned by no endpoint.
-	gotBranch, err := client.GetBranchWithResponse(ctx, pool.Id, clusterID, branchID)
+	// The set is visible on the Cluster API response.
+	gotCluster, err := client.GetClusterWithResponse(ctx, pool.Id, clusterID)
 	if err != nil {
-		t.Fatalf("GetBranch: %v", err)
+		t.Fatalf("GetCluster: %v", err)
 	}
-	if gotBranch.JSON200 == nil || gotBranch.JSON200.Extensions == nil ||
-		len(*gotBranch.JSON200.Extensions) != 1 || (*gotBranch.JSON200.Extensions)[0] != "pgvector" {
-		t.Errorf("GetBranch extensions = %v, want [pgvector]", gotBranch.JSON200.Extensions)
+	if gotCluster.JSON200 == nil || gotCluster.JSON200.Extensions == nil ||
+		len(*gotCluster.JSON200.Extensions) != 1 || (*gotCluster.JSON200.Extensions)[0] != "pgvector" {
+		t.Errorf("GetCluster extensions = %v, want [pgvector]", gotCluster.JSON200.Extensions)
 	}
-	listed, err := client.ListBranchesWithResponse(ctx, pool.Id, clusterID, nil)
-	if err != nil {
-		t.Fatalf("ListBranches: %v", err)
-	}
-	if listed.JSON200 == nil {
-		t.Fatalf("ListBranches: nil 200 body = %s", listed.Body)
-	}
-	var apiExts *[]string
-	for _, br := range listed.JSON200.Branches {
-		if br.BranchId == branchID {
-			apiExts = br.Extensions
-		}
-	}
-	if apiExts == nil || len(*apiExts) != 1 || (*apiExts)[0] != "pgvector" {
-		t.Errorf("ListBranches extensions for %s = %v, want [pgvector]", branchID, apiExts)
-	}
+	branchID := gotCluster.JSON200.DefaultBranch.BranchId
 
-	// A preload extension (pg_cron) opts in the same way and is mounted with
-	// Preload:true so the chart can extend shared_preload_libraries. Use a fresh
-	// branch so its set is independent of the pgvector one above.
-	cronClusterID, cronBranchID := uuid.New(), uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ClusterID: cronClusterID, BranchID: cronBranchID, Name: "main", PgVersion: 18, IsDefault: true})
+	// addBranchExtensions(pg_cron) on the default branch -> 202; driving it
+	// redeploys the writer with both extensions (sorted), pg_cron carrying
+	// Preload:true.
 	cron := []string{"pg_cron"}
-	cok, err := client.CreateEndpointWithResponse(ctx, pool.Id, cronClusterID, cronBranchID, api.CreateEndpointRequest{Role: &rw, Extensions: &cron})
+	cok, err := client.AddBranchExtensionsWithResponse(ctx, pool.Id, clusterID, branchID, api.AddBranchExtensionsRequest{Extensions: cron})
 	if err != nil {
-		t.Fatalf("CreateEndpoint(pg_cron): %v", err)
+		t.Fatalf("AddBranchExtensions(pg_cron): %v", err)
 	}
 	if cok.StatusCode() != http.StatusAccepted {
 		t.Fatalf("pg_cron status = %d, want 202; body = %s", cok.StatusCode(), cok.Body)
 	}
 	drainTasks(t, store, backend, prov)
 	last := dep.created[len(dep.created)-1].Extensions
-	if len(last) != 1 || last[0].Name != "pg_cron" ||
-		last[0].Image != "quay.io/yugabyte/amp-ext-pg_cron:1.6.7" || !last[0].Preload {
-		t.Fatalf("deploy spec extensions = %+v, want the pinned pg_cron with Preload:true", last)
+	if len(last) != 2 {
+		t.Fatalf("redeploy spec extensions = %+v, want both pg_cron and pgvector", last)
 	}
-	cronPersisted, _ := backend.BranchExtensions(ctx, cronClusterID, cronBranchID)
-	if len(cronPersisted) != 1 || cronPersisted[0] != "pg_cron" {
-		t.Errorf("branch extensions = %v, want [pg_cron] persisted", cronPersisted)
+	var sawCron bool
+	for _, e := range last {
+		if e.Name == "pg_cron" {
+			sawCron = true
+			if e.Image != "quay.io/yugabyte/amp-ext-pg_cron:1.6.7" || !e.Preload {
+				t.Errorf("pg_cron mount = %+v, want pinned image with Preload:true", e)
+			}
+		}
+	}
+	if !sawCron {
+		t.Errorf("redeploy spec extensions = %+v, want pg_cron present", last)
+	}
+	gotBranch, err := client.GetBranchWithResponse(ctx, pool.Id, clusterID, branchID)
+	if err != nil {
+		t.Fatalf("GetBranch(after add): %v", err)
+	}
+	if gotBranch.JSON200 == nil || gotBranch.JSON200.Extensions == nil ||
+		len(*gotBranch.JSON200.Extensions) != 2 {
+		t.Errorf("GetBranch extensions after add = %v, want [pg_cron pgvector]", gotBranch.JSON200.Extensions)
 	}
 
-	// Two non-preload extensions can be opted into on one endpoint (pgvector +
-	// age): both are mounted (resolved to their pinned images, Preload:false) and
-	// both persisted onto the branch. This is the co-mounted case the local/smoke
-	// tests exercise. Fresh branch so its set is independent of the above.
-	ageClusterID, ageBranchID := uuid.New(), uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ClusterID: ageClusterID, BranchID: ageBranchID, Name: "main", PgVersion: 18, IsDefault: true})
-	both := []string{"pgvector", "age"}
-	aok, err := client.CreateEndpointWithResponse(ctx, pool.Id, ageClusterID, ageBranchID, api.CreateEndpointRequest{Role: &rw, Extensions: &both})
+	// An unknown name on the add path is also a 400.
+	addBad, err := client.AddBranchExtensionsWithResponse(ctx, pool.Id, clusterID, branchID, api.AddBranchExtensionsRequest{Extensions: unknown})
 	if err != nil {
-		t.Fatalf("CreateEndpoint(pgvector+age): %v", err)
+		t.Fatalf("AddBranchExtensions(unknown): %v", err)
 	}
-	if aok.StatusCode() != http.StatusAccepted {
-		t.Fatalf("pgvector+age status = %d, want 202; body = %s", aok.StatusCode(), aok.Body)
-	}
-	drainTasks(t, store, backend, prov)
-	got := dep.created[len(dep.created)-1].Extensions
-	if len(got) != 2 ||
-		got[0].Name != "pgvector" || got[0].Image != "quay.io/yugabyte/amp-ext-pgvector:0.8.2" || got[0].Preload ||
-		got[1].Name != "age" || got[1].Image != "quay.io/yugabyte/amp-ext-age:1.8.0" || got[1].Preload {
-		t.Fatalf("deploy spec extensions = %+v, want the pinned pgvector + age (both Preload:false)", got)
-	}
-	agePersisted, _ := backend.BranchExtensions(ctx, ageClusterID, ageBranchID)
-	if len(agePersisted) != 2 || agePersisted[0] != "pgvector" || agePersisted[1] != "age" {
-		t.Errorf("branch extensions = %v, want [pgvector age] persisted", agePersisted)
+	if addBad.StatusCode() != http.StatusBadRequest || addBad.JSON400 == nil {
+		t.Fatalf("add unknown ext status = %d, want 400; body = %s", addBad.StatusCode(), addBad.Body)
 	}
 }
 
-// TestEndpointExtensionsUnsupported: requesting extensions when the controller
+// TestClusterExtensionsUnsupported: requesting extensions when the controller
 // has no catalog (e.g. the Docker driver / feature off) is rejected with 400,
-// rather than silently ignored.
-func TestEndpointExtensionsUnsupported(t *testing.T) {
+// rather than silently ignored — on both createCluster and addBranchExtensions.
+func TestClusterExtensionsUnsupported(t *testing.T) {
 	prov := api.Provisioning{Deployer: &fakeDeployer{}} // no Extensions catalog
-	client, backend, _ := newTestServerWith(t, core.NewMemBackend(), prov)
+	client, backend, store := newTestServerWith(t, core.NewMemBackend(), prov)
 	ctx := context.Background()
 
 	user := mustCreateUser(t, client, false)
 	pool := mustCreatePool(t, client, user.Id, "ext-off-pool")
-	clusterID, branchID := uuid.New(), uuid.New()
-	backend.SeedBranch(pool.Id, core.Branch{ClusterID: clusterID, BranchID: branchID, Name: "main", PgVersion: 18, IsDefault: true})
 
-	rw := api.CreateEndpointRequestRoleReadWrite
 	want := []string{"pgvector"}
-	resp, err := client.CreateEndpointWithResponse(ctx, pool.Id, clusterID, branchID, api.CreateEndpointRequest{Role: &rw, Extensions: &want})
+	resp, err := client.CreateClusterWithResponse(ctx, pool.Id, api.CreateClusterRequest{Name: "c1", Extensions: &want})
 	if err != nil {
-		t.Fatalf("CreateEndpoint(ext, no catalog): %v", err)
+		t.Fatalf("CreateCluster(ext, no catalog): %v", err)
 	}
 	if resp.StatusCode() != http.StatusBadRequest || resp.JSON400 == nil {
 		t.Fatalf("ext without catalog status = %d, want 400; body = %s", resp.StatusCode(), resp.Body)
+	}
+
+	// And on the add path against an existing cluster's default branch.
+	cluster := mustCreateCluster(t, client, store, backend, pool.Id, "c2")
+	addResp, err := client.AddBranchExtensionsWithResponse(ctx, pool.Id, cluster.Id, cluster.DefaultBranch.BranchId, api.AddBranchExtensionsRequest{Extensions: want})
+	if err != nil {
+		t.Fatalf("AddBranchExtensions(no catalog): %v", err)
+	}
+	if addResp.StatusCode() != http.StatusBadRequest || addResp.JSON400 == nil {
+		t.Fatalf("add ext without catalog status = %d, want 400; body = %s", addResp.StatusCode(), addResp.Body)
 	}
 }
 

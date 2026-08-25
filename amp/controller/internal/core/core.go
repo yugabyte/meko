@@ -171,10 +171,28 @@ type Endpoint struct {
 	CreatedAt time.Time
 }
 
+// EndpointDeploy is the minimal record the add_branch_extensions step needs to
+// re-render an endpoint's deploy spec so it remounts a changed extension set: the
+// endpoint id, the branch it serves, and its pinned pg version + compute size
+// (read back from the stored config). It is a core type so *PgBackend can return
+// it while task.StateStore stays free of the domain layer.
+type EndpointDeploy struct {
+	ID        uuid.UUID
+	BranchID  uuid.UUID
+	PgVersion int
+	CPU       string
+	Memory    string
+}
+
 // DefaultBranchName is the name given to a cluster's default (root) branch. The
 // cluster carries its own user-chosen name; its default branch is always "main"
 // (the trunk line of history), independent of the cluster name, matching the
 // convention users expect from git/Neon. Forks off it choose their own names.
+//
+// The default branch's row is also where a cluster's externalized-extension set
+// lives (Branch.Extensions on the is_default row): the set is cluster-wide, and
+// every endpoint on any branch resolves against it. See
+// compute/architecture/extensions.md.
 const DefaultBranchName = "main"
 
 // Endpoint roles (the endpoint_role enum).

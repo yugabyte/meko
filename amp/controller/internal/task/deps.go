@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yugabyte/amp/controller/internal/core"
 	"github.com/yugabyte/amp/controller/internal/deploy"
 	"github.com/yugabyte/amp/controller/internal/extensions"
 	"github.com/yugabyte/amp/controller/internal/voyager/migration"
@@ -46,14 +47,19 @@ import (
 // structurally.
 type StateStore interface {
 	// EnsureCluster creates a cluster and its default branch with the given ids,
-	// or no-ops if they already exist. A cluster-name collision within the pool,
-	// or a missing pool, is a real error (the step fails the task).
-	EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int) error
+	// or no-ops if they already exist. extensions is the create-time externalized
+	// extension set, written onto the default branch row; nil/empty means none. A
+	// fork later inherits its parent's set, and every endpoint resolves against
+	// its own branch's row. A cluster-name collision within the pool, or a missing
+	// pool, is a real error (the step fails the task).
+	EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, extensions []string) error
 
 	// EnsureBranch creates a branch (a non-default branch) under clusterID, forked
 	// from parentBranchID at forkLSN, with the given id — or no-ops if it already
-	// exists. A name collision within the cluster, or a missing parent, is a real
-	// error. No pool id: a branch is scoped to its cluster.
+	// exists. The fork inherits the parent branch's externalized-extension set
+	// (copied onto its own row), so every endpoint on it mounts the same set. A
+	// name collision within the cluster, or a missing parent, is a real error. No
+	// pool id: a branch is scoped to its cluster.
 	EnsureBranch(ctx context.Context, parentBranchID, clusterID, branchID uuid.UUID, name, forkLSN string, pgVersion int) error
 
 	// EnsureEndpointRecord records an endpoint on the (clusterID, branchID) branch
@@ -69,8 +75,10 @@ type StateStore interface {
 		config, pgSettings, pageserverSettings, safekeeperSettings []byte) error
 
 	// BranchExtensions returns the branch's opted-in externalized extension names
-	// (the durable set the create_endpoint step unions with the catalog defaults
-	// to resolve the endpoint's ImageVolume mounts). An absent branch yields an
+	// (the set the create_endpoint step unions with the catalog defaults to
+	// resolve that endpoint's ImageVolume mounts). It lives on the branch's own
+	// row — seeded on the default branch by EnsureCluster, inherited by a fork,
+	// and extended per branch by AddBranchExtensions. An absent branch yields an
 	// empty slice, not an error.
 	BranchExtensions(ctx context.Context, clusterID, branchID uuid.UUID) ([]string, error)
 
@@ -78,11 +86,23 @@ type StateStore interface {
 	// none / an absent branch). An endpoint's own settings merge over these.
 	BranchPgSettings(ctx context.Context, clusterID, branchID uuid.UUID) (map[string]string, error)
 
-	// AddBranchExtensions adds names to the branch's durable extension set (the
-	// createEndpoint opt-in). It is an absolute union — extensions becomes
-	// distinct(existing ∪ names) — so a task replay is idempotent. An absent
-	// branch is a no-op (mirrors BranchExtensions); empty names is a no-op.
+	// AddBranchExtensions adds names to the (clusterID, branchID) branch's durable
+	// extension set (the add_branch_extensions opt-in): adding is per branch. It is
+	// an absolute union — the row becomes distinct(existing ∪ names) — so a task
+	// replay is idempotent. An absent branch is a no-op; empty names is a no-op.
 	AddBranchExtensions(ctx context.Context, clusterID, branchID uuid.UUID, names []string) error
+
+	// BranchEndpointDeploys returns the redeploy record for every live endpoint on
+	// the (clusterID, branchID) branch (the add_branch_extensions step's
+	// Execute-time enumeration, so a concurrently-added endpoint is still remounted
+	// on replay). An absent branch yields an empty slice, not an error.
+	BranchEndpointDeploys(ctx context.Context, clusterID, branchID uuid.UUID) ([]core.EndpointDeploy, error)
+
+	// UpdateEndpointExtensions records the resolved extension names into the
+	// endpoint's stored config blob (audit / recreate spec), an absolute jsonb
+	// merge like UpdateEndpointResources. Idempotent; an absent endpoint is a
+	// no-op.
+	UpdateEndpointExtensions(ctx context.Context, endpointID uuid.UUID, names []string) error
 
 	// SetEndpointAddress records an endpoint's client address and its tailnet
 	// address (absolute UPDATE, idempotent). tailnetAddress is "" when the

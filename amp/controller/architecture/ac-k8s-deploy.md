@@ -129,11 +129,13 @@ The storage layer and the control plane identify a branch the same way — a SQL
 
 Endpoints mount externalized PostgreSQL extensions (pgvector, …) as read-only
 Kubernetes ImageVolumes rather than baking them into the endpoint image. The
-controller resolves a branch's extension set (catalog defaults ∪ the branch's
-opted-in, fork-inherited set) to pinned images via
+extension set is opted into **per branch** (catalog defaults ∪ the branch's
+opted-in set): seeded on the default branch at `createCluster`, inherited by a
+fork, and extended on a single branch with `addBranchExtensions`. The controller
+resolves it to pinned images via
 [`internal/extensions`](../internal/extensions/catalog.go) and renders them into
 the chart's `endpoint.extensions`. The full design — build pipeline, the two
-PG18 path GUCs, and branch-fork inheritance — is in
+PG18 path GUCs, and per-branch storage — is in
 [`compute/architecture/extensions.md`](../../compute/architecture/extensions.md).
 
 ## Controller coordination + addressing
@@ -216,9 +218,11 @@ per node**, and under a cluster-wide auto-provisioning quota the endpoint that
 cannot get a fresh node stays `Pending` indefinitely (#602). `10Gi` fits four.
 Empty by default, and it should stay empty in prod: a flat size promises nothing
 will fill the disk, which holds for a test's scratch data and not for a real
-workload's. Because the
-ReadWriteOnce volume attaches to one pod at a time, the Deployment switches to the
-**`Recreate`** strategy (stop the old pod before starting the new one). The pod's
+workload's. The Deployment always uses the **`Recreate`** strategy (stop the old
+pod before starting the new one): an endpoint is a single-writer compute, so a
+redeploy must not surge a second pod that would fight the old one for the storage
+writer fence (and a ReadWriteOnce PVC independently attaches to one pod at a
+time). The pod's
 **`podSecurityContext.fsGroup`** (default `1000`, the endpoint image's `yugabyte`
 gid) makes the otherwise root-owned provisioned volume writable by the non-root
 process — a single source for the fsGroup, applied whether or not a PVC is used (an

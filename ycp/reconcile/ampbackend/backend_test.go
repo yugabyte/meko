@@ -114,9 +114,9 @@ func TestListReportsResourceAttrs(t *testing.T) {
 		case strings.HasSuffix(p, "/endpoints"):
 			io.WriteString(w, `{"endpoints":[{"id":"`+endpointID+`","name":"rw","branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","role":"read_write","address":"ep.host:5433","tailnet_address":"ep.tail:5433","resources":{"cpu":"2","memory":"4Gi"},"created_at":"2026-01-01T00:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/branches"):
-			io.WriteString(w, `{"branches":[{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":false,"pg_version":18,"fork_lsn":"1/2","extensions":["pgvector","pg_cron"],"parent_branch_id":"`+parentID+`","created_at":"2026-01-01T00:00:00Z"}]}`)
+			io.WriteString(w, `{"branches":[{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":false,"pg_version":18,"fork_lsn":"1/2","parent_branch_id":"`+parentID+`","extensions":["pgvector","pg_cron"],"created_at":"2026-01-01T00:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/clusters"):
-			io.WriteString(w, `{"clusters":[{"id":"`+clusterID+`","name":"recproj","storage_pool_id":"`+poolID+`","created_at":"2026-01-01T00:00:00Z","default_branch":{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":true,"pg_version":18,"created_at":"2026-01-01T00:00:00Z"}}]}`)
+			io.WriteString(w, `{"clusters":[{"id":"`+clusterID+`","name":"recproj","storage_pool_id":"`+poolID+`","extensions":["pgvector","pg_cron"],"created_at":"2026-01-01T00:00:00Z","default_branch":{"branch_id":"`+branchID+`","cluster_id":"`+clusterID+`","name":"main","is_default":true,"pg_version":18,"created_at":"2026-01-01T00:00:00Z"}}]}`)
 		case strings.HasSuffix(p, "/storage-pools"):
 			io.WriteString(w, `{"storage_pools":[{"id":"`+poolID+`","name":"pool-a","owner_user_id":"11111111-1111-1111-1111-111111111111","created_at":"2026-01-01T00:00:00Z"}]}`)
 		default:
@@ -141,14 +141,19 @@ func TestListReportsResourceAttrs(t *testing.T) {
 	}
 
 	cl := byKind[KindCluster].Attrs
-	if cl["id"] != clusterID || cl["pg_version"] != "18" {
+	if cl["id"] != clusterID || cl["pg_version"] != "18" || cl["extensions"] != "pgvector,pg_cron" {
 		t.Errorf("cluster attrs = %v", cl)
 	}
 
 	br := byKind[KindBranch].Attrs
 	if br["id"] != branchID || br["pg_version"] != "18" || br["fork_lsn"] != "1/2" ||
-		br["extensions"] != "pgvector,pg_cron" || br["parent_branch_id"] != parentID {
+		br["parent_branch_id"] != parentID {
 		t.Errorf("branch attrs = %v", br)
+	}
+	// The extension set is opted in per branch, so each branch reports its own
+	// copy.
+	if br["extensions"] != "pgvector,pg_cron" {
+		t.Errorf("branch attrs extensions = %q, want pgvector,pg_cron", br["extensions"])
 	}
 	if _, ok := br["is_default"]; ok {
 		t.Errorf("branch is_default should be absent when false, got %v", br)

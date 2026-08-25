@@ -59,7 +59,7 @@ func init() {
 		Env:         core.EnvSpec{Sharing: core.Exclusive, Shape: core.SharedControlPlane},
 		Tags:        []string{"regression", "nightly"},
 		OwningTeam:  core.TeamCompute,
-		Description: "Assert every extension the release commits to shipping is available on an endpoint: the baked contrib set with no opt-in, plus the catalog set on a branch opted into all of it, each created, version-matched and canary-queried.",
+		Description: "Assert every extension the release commits to shipping is available on an endpoint: the baked contrib set with no opt-in, plus the catalog set on a cluster opted into all of it, each created, version-matched and canary-queried.",
 		Params:      []string{"functional", "env.ampstack", "apps.ybastack", "apps.yba", "apps.ybk8s"},
 		Timeout:     20 * time.Minute,
 		Run:         runPgExtensionsMatrix,
@@ -208,13 +208,11 @@ func extensionsMatrixSteps(ctx context.Context, cl ampCtl, proj ampCluster, bake
 	}
 	catalogOK := len(catalog) > 0
 	skipReason := ""
-	ep, err := createEndpointReq(ctx, cl, proj.poolID, proj.projID, proj.branchID, controller.CreateEndpointRequest{
-		Role:       roleReadWrite,
+	if _, err := cl.AddBranchExtensionsAndWait(ctx, proj.poolID, proj.projID, proj.branchID, controller.AddBranchExtensionsRequest{
 		Extensions: optIn,
-	})
-	if err != nil {
+	}); err != nil {
 		if !extensionsUnavailable(err) {
-			return fmt.Errorf("create endpoint opted into the catalog extensions [%s]: %w", strings.Join(optIn, " "), err)
+			return fmt.Errorf("opt the branch into the catalog extensions [%s]: %w", strings.Join(optIn, " "), err)
 		}
 		if requireCatalog {
 			return fmt.Errorf("this control plane rejects the catalog extension opt-in [%s] as unsupported, and functional.extensions.require_catalog demands the catalog half: the release commits to serving externalized extensions: %w",
@@ -224,10 +222,10 @@ func extensionsMatrixSteps(ctx context.Context, cl ampCtl, proj ampCluster, bake
 		logf("pg_extensions_matrix: this control plane has no extension catalog, so the catalog half [%s] is not asserted; the baked contrib set still is: %v",
 			strings.Join(optIn, " "), err)
 		catalogOK = false
-		ep, err = createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
-		if err != nil {
-			return fmt.Errorf("create a plain endpoint after the catalog opt-in was rejected: %w", err)
-		}
+	}
+	ep, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
+	if err != nil {
+		return fmt.Errorf("create endpoint after opting the branch into the catalog extensions: %w", err)
 	}
 	recordImage(ctx, ep.ID)
 
@@ -346,7 +344,7 @@ func extClass(e expectedExtension) string {
 	if e.catalog == "" {
 		return "baked into the compute image as PG contrib, no opt-in"
 	}
-	return "catalog extension " + e.catalog + ", mounted because the branch opted in"
+	return "catalog extension " + e.catalog + ", mounted because the cluster opted in"
 }
 
 func catalogSQLNames(catalog []catalogExt) []string {

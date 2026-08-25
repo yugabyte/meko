@@ -144,8 +144,10 @@ func attrPutInt(m map[string]string, k string, v int) map[string]string {
 }
 
 // branchAttrs reports a branch's amp id and durable details: pg version, the
-// LSN it was forked at, its externalized extensions, and its lineage. The id
-// pairs with a fork's parent_branch_id so a UI can rebuild the fork tree.
+// LSN it was forked at, its lineage, and its externalized-extension set. The id
+// pairs with a fork's parent_branch_id so a UI can rebuild the fork tree. The
+// set is chosen at the cluster level and applies to all branches, but each
+// branch carries its own copy, so it is reported per branch.
 func branchAttrs(br ampclient.Branch) map[string]string {
 	var m map[string]string
 	m = attrPut(m, "id", br.BranchId.String())
@@ -153,14 +155,14 @@ func branchAttrs(br ampclient.Branch) map[string]string {
 	if br.ForkLsn != nil {
 		m = attrPut(m, "fork_lsn", *br.ForkLsn)
 	}
-	if br.Extensions != nil && len(*br.Extensions) > 0 {
-		m = attrPut(m, "extensions", strings.Join(*br.Extensions, ","))
-	}
 	if br.ParentBranchId != nil {
 		m = attrPut(m, "parent_branch_id", br.ParentBranchId.String())
 	}
 	if br.IsDefault {
 		m = attrPut(m, "is_default", "true")
+	}
+	if br.Extensions != nil && len(*br.Extensions) > 0 {
+		m = attrPut(m, "extensions", strings.Join(*br.Extensions, ","))
 	}
 	return m
 }
@@ -215,12 +217,19 @@ func (b *Backend) List(ctx context.Context) ([]reconcile.Actual, error) {
 		for _, cl := range clusters.Clusters {
 			clusterPath := join([]string{poolPath, cl.Name})
 			idx.cluster[clusterPath] = cl.Id
+			clAttrs := attrPutInt(attrPut(nil, "id", cl.Id.String()), "pg_version", cl.DefaultBranch.PgVersion)
+			// Extensions are opted in per branch; surface the cluster's
+			// default-branch set here as a convenience view (each branch reports its
+			// own copy via branchAttrs).
+			if cl.Extensions != nil && len(*cl.Extensions) > 0 {
+				clAttrs = attrPut(clAttrs, "extensions", strings.Join(*cl.Extensions, ","))
+			}
 			out = append(out, reconcile.Actual{
 				Key:    reconcile.ResourceKey{Kind: KindCluster, Name: clusterPath},
 				Parent: reconcile.ResourceKey{Kind: KindPool, Name: poolPath},
 				Ready:  true,
 				State:  "ready",
-				Attrs:  attrPutInt(attrPut(nil, "id", cl.Id.String()), "pg_version", cl.DefaultBranch.PgVersion),
+				Attrs:  clAttrs,
 			})
 
 			var branches ampclient.BranchList

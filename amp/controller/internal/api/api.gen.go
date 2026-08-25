@@ -275,6 +275,15 @@ func (e ListTasksParamsStatus) Valid() bool {
 	}
 }
 
+// AddBranchExtensionsRequest defines model for AddBranchExtensionsRequest.
+type AddBranchExtensionsRequest struct {
+	// Extensions Externalized PostgreSQL extensions to enable on this branch, by catalog
+	// name (e.g. `pgvector`). Unioned into the branch's set (idempotent); an
+	// unknown name is rejected (400). Every existing endpoint on the branch is
+	// redeployed to mount the new set. See compute/architecture/extensions.md.
+	Extensions []string `json:"extensions"`
+}
+
 // Branch defines model for Branch.
 type Branch struct {
 	// BranchId The branch id (the storage-layer branch id verbatim).
@@ -284,12 +293,11 @@ type Branch struct {
 	ClusterId openapi_types.UUID `json:"cluster_id"`
 	CreatedAt time.Time          `json:"created_at"`
 
-	// Extensions Externalized PostgreSQL extensions opted into on this branch, by
-	// catalog name (e.g. `pgvector`). Durable branch state: a fork inherits
-	// its parent's set, and every endpoint on the branch mounts them.
-	// Enabled via createEndpoint's `extensions` (there is no branch-create
-	// field); empty when none. Excludes the catalog defaults, which are
-	// added per endpoint at deploy time.
+	// Extensions Externalized PostgreSQL extensions enabled on this branch, by catalog
+	// name (e.g. `pgvector`); the names every endpoint on it mounts. A fork
+	// inherits its ancestor's set at fork time, and addBranchExtensions adds
+	// more to this branch. Excludes the catalog defaults, which are added per
+	// endpoint at deploy time. Empty when none.
 	Extensions *[]string `json:"extensions,omitempty"`
 
 	// ForkLsn The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
@@ -340,6 +348,14 @@ type Cluster struct {
 	CreatedAt     time.Time `json:"created_at"`
 	DefaultBranch Branch    `json:"default_branch"`
 
+	// Extensions Externalized PostgreSQL extensions enabled on the cluster's default
+	// branch ("main"), by catalog name (e.g. `pgvector`), surfaced here as
+	// the cluster's set. Each branch carries its own set (a fork inherits its
+	// parent's; see getBranch and addBranchExtensions). Set at createCluster;
+	// empty when none. Excludes the catalog defaults, which are added per
+	// endpoint at deploy time.
+	Extensions *[]string `json:"extensions,omitempty"`
+
 	// Id The cluster id (a control-plane id; maps to no storage object).
 	Id   openapi_types.UUID `json:"id"`
 	Name string             `json:"name"`
@@ -379,6 +395,15 @@ type CreateBranchRequest struct {
 
 // CreateClusterRequest defines model for CreateClusterRequest.
 type CreateClusterRequest struct {
+	// Extensions Externalized PostgreSQL extensions to enable on the cluster's default
+	// branch ("main"), by catalog name (e.g. `pgvector`). Every endpoint on
+	// that branch mounts them, and a fork inherits the set; add more to a
+	// branch later with addBranchExtensions. An unknown name is rejected
+	// (400), as is any value when externalized extensions are unavailable
+	// (e.g. the Docker driver). Empty/omitted enables only the catalog
+	// defaults. See compute/architecture/extensions.md.
+	Extensions *[]string `json:"extensions,omitempty"`
+
 	// Name Cluster (database) name; unique within the pool. The cluster's default branch is always named "main".
 	Name string `json:"name"`
 
@@ -416,18 +441,6 @@ type CreateEndpointRequest struct {
 	// key means; that is a contract between the caller and whatever
 	// deploys the compute.
 	ExtendedConfig *map[string]interface{} `json:"extended_config,omitempty"`
-
-	// Extensions Externalized PostgreSQL extensions to opt this endpoint's **branch**
-	// into, by catalog name (e.g. `pgvector`). Enabling is a branch
-	// property, not an endpoint one: each name is added to the branch's
-	// durable extension set (so branch forks inherit it and every endpoint
-	// on the branch picks it up) and mounted into the pod as a read-only
-	// Kubernetes ImageVolume, with `extension_control_path` /
-	// `dynamic_library_path` pointed at it so `CREATE EXTENSION` resolves.
-	// Unknown names are rejected with 400. Requires the Kubernetes deployer;
-	// rejected when externalized extensions are unavailable (e.g. the Docker
-	// driver). See compute/architecture/extensions.md.
-	Extensions *[]string `json:"extensions,omitempty"`
 
 	// Name A handle for the endpoint, unique among its branch's endpoints (two
 	// branches may each have a `primary`). Optional — an endpoint is always
@@ -1430,6 +1443,9 @@ type ResizeEndpointJSONRequestBody = ResizeEndpointRequest
 // UpdateEndpointSettingsJSONRequestBody defines body for UpdateEndpointSettings for application/json ContentType.
 type UpdateEndpointSettingsJSONRequestBody = UpdateEndpointSettingsRequest
 
+// AddBranchExtensionsJSONRequestBody defines body for AddBranchExtensions for application/json ContentType.
+type AddBranchExtensionsJSONRequestBody = AddBranchExtensionsRequest
+
 // UpdateBranchSettingsJSONRequestBody defines body for UpdateBranchSettings for application/json ContentType.
 type UpdateBranchSettingsJSONRequestBody = UpdateBranchSettingsRequest
 
@@ -1731,6 +1747,11 @@ type ClientInterface interface {
 	UpdateEndpointSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	UpdateEndpointSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AddBranchExtensionsWithBody request with any body
+	AddBranchExtensionsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AddBranchExtensions(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UpdateBranchSettingsWithBody request with any body
 	UpdateBranchSettingsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -2168,6 +2189,30 @@ func (c *Client) UpdateEndpointSettingsWithBody(ctx context.Context, poolId Pool
 
 func (c *Client) UpdateEndpointSettings(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewUpdateEndpointSettingsRequest(c.Server, poolId, clusterId, branchId, endpointId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AddBranchExtensionsWithBody(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAddBranchExtensionsRequestWithBody(c.Server, poolId, clusterId, branchId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AddBranchExtensions(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAddBranchExtensionsRequest(c.Server, poolId, clusterId, branchId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -3606,6 +3651,67 @@ func NewUpdateEndpointSettingsRequestWithBody(server string, poolId PoolId, clus
 	return req, nil
 }
 
+// NewAddBranchExtensionsRequest calls the generic AddBranchExtensions builder with application/json body
+func NewAddBranchExtensionsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAddBranchExtensionsRequestWithBody(server, poolId, clusterId, branchId, "application/json", bodyReader)
+}
+
+// NewAddBranchExtensionsRequestWithBody generates requests for AddBranchExtensions with any type of body
+func NewAddBranchExtensionsRequestWithBody(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "poolId", poolId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "clusterId", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "branchId", branchId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/storage-pools/%s/clusters/%s/branches/%s/extensions", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewUpdateBranchSettingsRequest calls the generic UpdateBranchSettings builder with application/json body
 func NewUpdateBranchSettingsRequest(server string, poolId PoolId, clusterId ClusterId, branchId BranchId, body UpdateBranchSettingsJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -4107,6 +4213,11 @@ type ClientWithResponsesInterface interface {
 	UpdateEndpointSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error)
 
 	UpdateEndpointSettingsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId, body UpdateEndpointSettingsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateEndpointSettingsResponse, error)
+
+	// AddBranchExtensionsWithBodyWithResponse request with any body
+	AddBranchExtensionsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AddBranchExtensionsResponse, error)
+
+	AddBranchExtensionsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody, reqEditors ...RequestEditorFn) (*AddBranchExtensionsResponse, error)
 
 	// UpdateBranchSettingsWithBodyWithResponse request with any body
 	UpdateBranchSettingsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateBranchSettingsResponse, error)
@@ -4979,6 +5090,40 @@ func (r UpdateEndpointSettingsResponse) ContentType() string {
 	return ""
 }
 
+type AddBranchExtensionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON202      *Accepted
+	JSON400      *BadRequest
+	JSON404      *NotFound
+	JSON500      *InternalError
+	JSON503      *ServiceUnavailable
+}
+
+// Status returns HTTPResponse.Status
+func (r AddBranchExtensionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AddBranchExtensionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AddBranchExtensionsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type UpdateBranchSettingsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5513,6 +5658,23 @@ func (c *ClientWithResponses) UpdateEndpointSettingsWithResponse(ctx context.Con
 		return nil, err
 	}
 	return ParseUpdateEndpointSettingsResponse(rsp)
+}
+
+// AddBranchExtensionsWithBodyWithResponse request with arbitrary body returning *AddBranchExtensionsResponse
+func (c *ClientWithResponses) AddBranchExtensionsWithBodyWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AddBranchExtensionsResponse, error) {
+	rsp, err := c.AddBranchExtensionsWithBody(ctx, poolId, clusterId, branchId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAddBranchExtensionsResponse(rsp)
+}
+
+func (c *ClientWithResponses) AddBranchExtensionsWithResponse(ctx context.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, body AddBranchExtensionsJSONRequestBody, reqEditors ...RequestEditorFn) (*AddBranchExtensionsResponse, error) {
+	rsp, err := c.AddBranchExtensions(ctx, poolId, clusterId, branchId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAddBranchExtensionsResponse(rsp)
 }
 
 // UpdateBranchSettingsWithBodyWithResponse request with arbitrary body returning *UpdateBranchSettingsResponse
@@ -6909,6 +7071,60 @@ func ParseUpdateEndpointSettingsResponse(rsp *http.Response) (*UpdateEndpointSet
 	return response, nil
 }
 
+// ParseAddBranchExtensionsResponse parses an HTTP response from a AddBranchExtensionsWithResponse call
+func ParseAddBranchExtensionsResponse(rsp *http.Response) (*AddBranchExtensionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AddBranchExtensionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest Accepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseUpdateBranchSettingsResponse parses an HTTP response from a UpdateBranchSettingsWithResponse call
 func ParseUpdateBranchSettingsResponse(rsp *http.Response) (*UpdateBranchSettingsResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -7315,6 +7531,9 @@ type ServerInterface interface {
 	// Update an endpoint's settings
 	// (PATCH /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/settings)
 	UpdateEndpointSettings(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId, endpointId EndpointId) error
+	// Enable externalized extensions on a branch
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/extensions)
+	AddBranchExtensions(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error
 	// Update a branch's settings
 	// (PATCH /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/settings)
 	UpdateBranchSettings(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error
@@ -7987,6 +8206,38 @@ func (w *ServerInterfaceWrapper) UpdateEndpointSettings(ctx echo.Context) error 
 	return err
 }
 
+// AddBranchExtensions converts echo context to params.
+func (w *ServerInterfaceWrapper) AddBranchExtensions(ctx echo.Context) error {
+	var err error
+	// ------------- Path parameter "poolId" -------------
+	var poolId PoolId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "poolId", ctx.Param("poolId"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter poolId: %s", err))
+	}
+
+	// ------------- Path parameter "clusterId" -------------
+	var clusterId ClusterId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clusterId", ctx.Param("clusterId"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter clusterId: %s", err))
+	}
+
+	// ------------- Path parameter "branchId" -------------
+	var branchId BranchId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "branchId", ctx.Param("branchId"), &branchId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid format for parameter branchId: %s", err))
+	}
+
+	// Invoke the callback with all the unmarshaled arguments
+	err = w.Handler.AddBranchExtensions(ctx, poolId, clusterId, branchId)
+	return err
+}
+
 // UpdateBranchSettings converts echo context to params.
 func (w *ServerInterfaceWrapper) UpdateBranchSettings(ctx echo.Context) error {
 	var err error
@@ -8212,6 +8463,7 @@ func RegisterHandlersWithOptions(router EchoRouter, si ServerInterface, options 
 	router.GET(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId", wrapper.GetEndpoint, options.OperationMiddlewares["getEndpoint"]...)
 	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/resize", wrapper.ResizeEndpoint, options.OperationMiddlewares["resizeEndpoint"]...)
 	router.PATCH(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/endpoints/:endpointId/settings", wrapper.UpdateEndpointSettings, options.OperationMiddlewares["updateEndpointSettings"]...)
+	router.POST(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/extensions", wrapper.AddBranchExtensions, options.OperationMiddlewares["addBranchExtensions"]...)
 	router.PATCH(options.BaseURL+"/storage-pools/:poolId/clusters/:clusterId/branches/:branchId/settings", wrapper.UpdateBranchSettings, options.OperationMiddlewares["updateBranchSettings"]...)
 	router.GET(options.BaseURL+"/tasks", wrapper.ListTasks, options.OperationMiddlewares["listTasks"]...)
 	router.GET(options.BaseURL+"/tasks/:taskId", wrapper.GetTask, options.OperationMiddlewares["getTask"]...)
@@ -10189,6 +10441,89 @@ func (response UpdateEndpointSettings503JSONResponse) VisitUpdateEndpointSetting
 	return err
 }
 
+type AddBranchExtensionsRequestObject struct {
+	PoolId    PoolId    `json:"poolId"`
+	ClusterId ClusterId `json:"clusterId"`
+	BranchId  BranchId  `json:"branchId"`
+	Body      *AddBranchExtensionsJSONRequestBody
+}
+
+type AddBranchExtensionsResponseObject interface {
+	VisitAddBranchExtensionsResponse(w http.ResponseWriter) error
+}
+
+type AddBranchExtensions202JSONResponse struct{ AcceptedJSONResponse }
+
+func (response AddBranchExtensions202JSONResponse) VisitAddBranchExtensionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Location", fmt.Sprint(response.Headers.Location))
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddBranchExtensions400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response AddBranchExtensions400JSONResponse) VisitAddBranchExtensionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddBranchExtensions404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AddBranchExtensions404JSONResponse) VisitAddBranchExtensionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddBranchExtensions500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response AddBranchExtensions500JSONResponse) VisitAddBranchExtensionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddBranchExtensions503JSONResponse struct{ ServiceUnavailableJSONResponse }
+
+func (response AddBranchExtensions503JSONResponse) VisitAddBranchExtensionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type UpdateBranchSettingsRequestObject struct {
 	PoolId    PoolId    `json:"poolId"`
 	ClusterId ClusterId `json:"clusterId"`
@@ -10722,6 +11057,9 @@ type StrictServerInterface interface {
 	// Update an endpoint's settings
 	// (PATCH /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/settings)
 	UpdateEndpointSettings(ctx context.Context, request UpdateEndpointSettingsRequestObject) (UpdateEndpointSettingsResponseObject, error)
+	// Enable externalized extensions on a branch
+	// (POST /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/extensions)
+	AddBranchExtensions(ctx context.Context, request AddBranchExtensionsRequestObject) (AddBranchExtensionsResponseObject, error)
 	// Update a branch's settings
 	// (PATCH /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/settings)
 	UpdateBranchSettings(ctx context.Context, request UpdateBranchSettingsRequestObject) (UpdateBranchSettingsResponseObject, error)
@@ -11463,6 +11801,39 @@ func (sh *strictHandler) UpdateEndpointSettings(ctx echo.Context, poolId PoolId,
 		return err
 	} else if validResponse, ok := response.(UpdateEndpointSettingsResponseObject); ok {
 		return validResponse.VisitUpdateEndpointSettingsResponse(ctx.Response())
+	} else if response != nil {
+		return fmt.Errorf("unexpected response type: %T", response)
+	}
+	return nil
+}
+
+// AddBranchExtensions operation middleware
+func (sh *strictHandler) AddBranchExtensions(ctx echo.Context, poolId PoolId, clusterId ClusterId, branchId BranchId) error {
+	var request AddBranchExtensionsRequestObject
+
+	request.PoolId = poolId
+	request.ClusterId = clusterId
+	request.BranchId = branchId
+
+	var body AddBranchExtensionsJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return err
+	}
+	request.Body = &body
+
+	handler := func(ctx echo.Context, request interface{}) (interface{}, error) {
+		return sh.ssi.AddBranchExtensions(ctx.Request().Context(), request.(AddBranchExtensionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AddBranchExtensions")
+	}
+
+	response, err := handler(ctx, request)
+
+	if err != nil {
+		return err
+	} else if validResponse, ok := response.(AddBranchExtensionsResponseObject); ok {
+		return validResponse.VisitAddBranchExtensionsResponse(ctx.Response())
 	} else if response != nil {
 		return fmt.Errorf("unexpected response type: %T", response)
 	}

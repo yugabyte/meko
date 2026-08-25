@@ -45,6 +45,7 @@ type ampCtl interface {
 	CreateUser(context.Context, controller.CreateUserRequest) (controller.User, error)
 	CreateStoragePool(context.Context, controller.CreateStoragePoolRequest) (controller.StoragePool, error)
 	CreateClusterAndWait(context.Context, string, controller.CreateClusterRequest) (controller.Task, error)
+	AddBranchExtensionsAndWait(context.Context, string, string, string, controller.AddBranchExtensionsRequest) (controller.Task, error)
 	ListClusters(context.Context, string, int, int) (controller.ClusterList, error)
 	DeleteClusterAndWait(context.Context, string, string) (controller.Task, error)
 	CreateBranchAndWait(context.Context, string, string, controller.CreateBranchRequest) (controller.Task, error)

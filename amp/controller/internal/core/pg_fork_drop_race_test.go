@@ -74,7 +74,7 @@ func TestPgForkVsDropSerializes(t *testing.T) {
 
 	store := registry.NewStore(pool)
 	b := NewPgBackend(pool)
-	clusterID := seedCoreCluster(t, ctx, pool)
+	_, clusterID := seedCoreCluster(t, ctx, pool)
 
 	recordRoot := func(id uuid.UUID, name string) {
 		t.Helper()

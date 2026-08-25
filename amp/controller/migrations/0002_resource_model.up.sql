@@ -125,19 +125,19 @@ CREATE TABLE amp_registry.branches (
     fork_lsn            pg_lsn,     -- the point the branch was taken at
 
     -- The branch's opted-in externalized extension set: the names, beyond the
-    -- always-mounted catalog defaults, that endpoints on this branch mount as
-    -- ImageVolumes (compute/architecture/extensions.md). It lives on the branch
-    -- identity record so every branch-creation path inherits it — RecordBranch
-    -- copies the ancestor's set into a fork's row at create time, and both a fork
-    -- and a new read-replica endpoint pick it up. The create_endpoint opt-in
-    -- unions names in; defaults to the empty set.
+    -- always-mounted catalog defaults, that every endpoint on this branch mounts
+    -- as ImageVolumes (compute/architecture/extensions.md). Per-branch state,
+    -- resolved via BranchExtensions: a fork inherits its ancestor's set
+    -- (RecordBranch/EnsureBranch copies this column into the new row). Opting in
+    -- is per branch — createCluster seeds the default branch, addBranchExtensions
+    -- unions more names into a single branch.
     extensions          jsonb       NOT NULL DEFAULT '[]'::jsonb,
 
     -- Extra PostgreSQL settings applied to every compute on this branch, as a
-    -- flat {name: value} object. Like `extensions` it lives on the branch
-    -- identity record so a fork inherits it: RecordBranch copies the ancestor's
-    -- object into the new row. An endpoint's own `pg_settings` merge over these,
-    -- so this is the baseline, not the last word.
+    -- flat {name: value} object. Like `extensions`, it is per-branch and a fork
+    -- inherits it: RecordBranch copies the ancestor's object into the new row. An
+    -- endpoint's own `pg_settings` merge over these, so this is the baseline, not
+    -- the last word.
     pg_settings         jsonb       NOT NULL DEFAULT '{}'::jsonb,
 
     -- Branch's write lease, as a flat object: `ttl_ms` and `renew_seconds`

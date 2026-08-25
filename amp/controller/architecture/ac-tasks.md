@@ -155,7 +155,7 @@ double-apply or error.
 
 | Step kind | Args | Effect | How it stays idempotent |
 |---|---|---|---|
-| `create_cluster` | pool, cluster, branch ids, name, pg_version | Create the cluster + its default branch. | `EnsureCluster`: `INSERT … ON CONFLICT (pk) DO NOTHING` on both rows — same ids re-run is a no-op. A *name* collision (different ids) is a real error. |
+| `create_cluster` | pool, cluster, branch ids, name, pg_version, extensions | Create the cluster + its default branch (the create-time extension set is written onto the default branch row; forks inherit it). | `EnsureCluster`: `INSERT … ON CONFLICT (pk) DO NOTHING` on both rows — same ids re-run is a no-op. A *name* collision (different ids) is a real error. |
 | `create_branch` | parent, cluster, branch ids, name, fork LSN, pg_version | Fork a branch into a new branch (records ancestry). | `EnsureBranch`: same `ON CONFLICT (pk) DO NOTHING`; a missing parent or name collision is a real error. |
 | `record_branch_recipe` | cluster, branch ids, branch name, pg_version, ancestor (opt), start LSN | Record the controller's pending-init recipe (materialized later by the first endpoint). | The controller upserts the recipe; with no controller the step no-ops with a warning (the recipe then lives only in the `branch` row). A fork's ancestor interlock is inside this step's single transaction (`registry.RecordBranch`). The abort it provokes is re-run by the worker (see the interlock-retry invariant below), so a fork racing any other writer of the ancestor's row — a drop, another fork, an endpoint create on it, or GC advancing its cutoff — is not a task failure. |
 | `create_endpoint` | endpoint, cluster, branch ids, role, pg_version, cpu, memory, ancestor (opt) | Ensure the endpoint record, deploy the compute (with its CPU/memory reservation), record the address, clear the branch recipe. **The shared step** create-cluster, branch, and scale-up all reuse (§8). | Record insert is id-keyed `ON CONFLICT (id) DO NOTHING` (so the single-writer index is not re-violated on replay); deploy is keyed by the endpoint's stable name (deployer idempotency); address is an absolute `UPDATE`; recipe clear tolerates an already-absent recipe. `cpu`/`memory` are resolved (defaulted to 2 cores / 4Gi) by the API handler and carried in the args, so a reclaim/replay redeploys the same size. |
@@ -163,6 +163,7 @@ double-apply or error.
 | `delete_endpoint` | endpoint id | Retire the running instance, then delete the record. | Both effects tolerate an already-absent target. Order matters: retire the instance *before* deleting the record, so a crash between them leaves a record whose instance can still be retired on replay (never an orphaned instance with no record). |
 | `delete_branch` | cluster, branch ids | Cascade-delete a branch: enumerate the branch's endpoints, retire each (instance + record), then delete the branch row. | Self-contained — it **enumerates children at Execute time** (`EndpointIDsForBranch`), so an endpoint added between planning and execution is still retired on replay. Cascade order is **endpoints → branch**: the FKs are `RESTRICT`, so children go first; every effect tolerates an already-absent target, so a re-run mid-cascade converges. A still-referencing child fork makes `DeleteBranch` a real error (correct), as does an endpoint still on the branch — an endpoint being created *concurrently with* the tombstone is caught by the other side's branch-row interlock (§3, `create_endpoint`). |
 | `delete_cluster` | cluster id | Cascade-delete a cluster: enumerate **all** the cluster's endpoints, retire each (instance + record), then delete the cluster — which drops all its branches. | Self-contained, enumerating children at Execute time (`EndpointIDsForCluster`). Cascade order is **endpoints → branches → cluster**; `DeleteCluster` nulls the branches' in-cluster parent pointers before dropping them to sidestep the self-FK `RESTRICT` ordering. Idempotent throughout. |
+| `add_branch_extensions` | cluster id, branch id, extensions | Union the names into **that branch's** extension set, then **redeploy every endpoint on the branch** so the changed ImageVolume mounts take effect. | Self-contained like `delete_branch` — enumerates the branch's endpoints at Execute time (`BranchEndpointDeploys`), so a concurrently-added endpoint is still remounted on replay. `AddBranchExtensions` is an absolute union; each redeploy is keyed by the endpoint's stable name (deployer idempotency) and the config write is an absolute merge, so a re-run mid-cascade converges. |
 
 `delete_branch` and `delete_cluster` are **single self-contained steps**, not a
 planned per-endpoint fan-out, because the worker has no dynamic sub-step
@@ -250,12 +251,14 @@ which persists the task + steps and returns the `Task` to surface to the user.
 | `delete_endpoint` (scale-down) | `Service.DeleteEndpoint` | `delete_endpoint`. |
 | `delete_branch` | `Service.DeleteBranch` | `delete_branch`. |
 | `delete_cluster` | `Service.DeleteCluster` | `delete_cluster`. |
+| `add_branch_extensions` | `Service.AddBranchExtensions` | `add_branch_extensions`. |
 
 The kind constants (`KindCreateCluster`, `KindBranch`, `KindCreateEndpoint`,
-`KindDeleteEndpoint`, `KindDeleteBranch`, `KindDeleteCluster`) are the
+`KindDeleteEndpoint`, `KindDeleteBranch`, `KindDeleteCluster`,
+`KindAddBranchExtensions`) are the
 `task.kind` values the API exposes and `listTasks` filters on.
 
-`create_endpoint` appearing in three of the six tasks is the point: it is one
+`create_endpoint` appearing in three of the seven tasks is the point: it is one
 step, reused, not three copies (§8). Branch fork-point resolution (the default
 "latest LSN") is a *read* done before the builder runs, so the fork LSN reaches it
 already resolved — building a task performs no I/O of its own. The two cascade

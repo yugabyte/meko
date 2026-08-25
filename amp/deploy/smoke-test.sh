@@ -25,21 +25,24 @@
 #   - deleting a branch that still has child forks is refused with 409
 #   - delete_cluster cascades (retires endpoints, drops branches + cluster)
 #
-# Optional (SMOKE_EXTENSIONS=1): the externalized-extension path — create an
-# endpoint that opts into pgvector (extensions:["pgvector"]), assert the
-# ImageVolume mounted at /extensions/pgvector, `CREATE EXTENSION vector`, store
-# real vector rows and read them back with a nearest-neighbour (`<->`) query.
-# Then the preload path: an endpoint that opts into pg_cron (extensions:
-# ["pg_cron"]), assert the ImageVolume mounted at /extensions/pg_cron, pg_cron is
-# in shared_preload_libraries, `CREATE EXTENSION pg_cron`, and a scheduled job
-# runs to success. Then a private-source extension: an endpoint that opts into
-# hexabridge (extensions:["hexabridge"]), assert the ImageVolume mounted at
+# Optional (SMOKE_EXTENSIONS=1): the externalized-extension path — extensions are
+# seeded on the default branch at create, so create a cluster with
+# extensions:["pgvector","age"], deploy an endpoint (which mounts the branch set
+# with no per-endpoint opt-in), assert both ImageVolumes mounted at
+# /extensions/<name>, `CREATE EXTENSION`, and store/read real vector rows with a
+# nearest-neighbour (`<->`) query plus an AGE cypher round-trip. Then the preload
+# path: a cluster with extensions:["pg_cron"], assert the ImageVolume mounted at
+# /extensions/pg_cron, pg_cron is in shared_preload_libraries, `CREATE EXTENSION
+# pg_cron`, and a scheduled job runs to success. Then a private-source extension:
+# a cluster with extensions:["hexabridge"], assert the ImageVolume mounted at
 # /extensions/hexabridge, `CREATE EXTENSION hexabridge` (superuser-only), and an
-# Oracle-compat function returns its expected value. (The pgvector
-# fork-inheritance sub-test is commented out
-# pending #440 — a pre-existing pageserver attach bug crash-loops the fork
-# endpoint; see the block in the SMOKE_EXTENSIONS section.) Requires the
-# cluster's ImageVolume feature gate and images pushed by
+# Oracle-compat function returns its expected value. Then the other half of the
+# API: addBranchExtensions on the still-live pgvector+age branch — union pg_cron
+# in, assert getBranch reports the unioned set, the live endpoint is redeployed
+# with the new mount, and its address is re-recorded to the new pod. Finally,
+# fork that branch and assert the fork inherits its parent's set (getBranch) and
+# a fresh endpoint on the fork mounts pgvector with no per-endpoint opt-in.
+# Requires the cluster's ImageVolume feature gate and images pushed by
 # deploy/extensions/build.sh.
 #
 # It cleans up everything it creates (its cluster is torn down by the cascade
@@ -275,20 +278,21 @@ for ((i=0; i<20; i++)); do [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c 
 [ "$(kubectl -n "$NS" get pods 2>/dev/null | grep -c "yb-ep-$EP")" = 0 ] && ok "endpoint instance retired" || bad "endpoint instance lingering"
 
 if [ "${SMOKE_EXTENSIONS:-0}" = 1 ]; then
-  hdr "externalized extensions: pgvector + age co-mount on one endpoint, CREATE EXTENSION (fork inherit disabled pending #440)"
+  hdr "externalized extensions: pgvector + age seeded on the default branch, CREATE EXTENSION, fork inherits the set"
 
-  # A self-contained cluster so this section is independent of the cascade above.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"extproj"}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext cluster created" || bad "ext cluster task=$st"
+  # A self-contained cluster that seeds BOTH pgvector and age on its default
+  # branch at creation — the two non-preload catalog extensions. Every endpoint
+  # on the branch mounts the branch's set, so this exercises multi-extension
+  # ImageVolume mounting (each extension is its own mount at /extensions/<name>).
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"extproj","extensions":["pgvector","age"]}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext cluster created (extensions:[pgvector,age])" || bad "ext cluster task=$st"
   EPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="extproj")|.id')
   EDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$EPROJ" ] && [ -n "$EDEF" ] && ok "ext cluster materialized ($EPROJ / $EDEF)" || bad "ext cluster not materialized"
 
-  # One endpoint that opts into BOTH pgvector and age — the two non-preload
-  # catalog extensions. This exercises multi-extension ImageVolume mounting (each
-  # extension is its own mount at /extensions/<name>) in a single compute.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" '{"role":"read_write","extensions":["pgvector","age"]}')
-  [ "$code" = 202 ] && ok "createEndpoint(extensions:[pgvector,age]) 202" || bad "createEndpoint(ext) code=$code"
+  # The endpoint mounts the cluster's set without any per-endpoint opt-in.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" '{"role":"read_write"}')
+  [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(ext) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(ext) succeeded" || bad "create_endpoint(ext) task=$st"
   EEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints" | jq -r '.endpoints[0].id')
   EPOD=$(wait_ready_pod "$EEP")
@@ -339,17 +343,18 @@ SQL
 
   hdr "externalized extensions: pg_cron opt-in preloads, CREATE EXTENSION, a scheduled job runs"
 
-  # Its own cluster so this is independent of the pgvector section above.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"cronproj"}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron cluster created" || bad "pg_cron cluster task=$st"
+  # Its own cluster, opting into pg_cron at creation. It is a preload extension,
+  # so the chart appends it to shared_preload_libraries and every endpoint comes
+  # up with the scheduler running.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"cronproj","extensions":["pg_cron"]}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "pg_cron cluster created (extensions:[pg_cron])" || bad "pg_cron cluster task=$st"
   CPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="cronproj")|.id')
   CDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$CPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$CPROJ" ] && [ -n "$CDEF" ] && ok "pg_cron cluster materialized ($CPROJ / $CDEF)" || bad "pg_cron cluster not materialized"
 
-  # Opt into pg_cron. It is a preload extension, so the chart appends it to
-  # shared_preload_libraries and the pod comes up with the scheduler running.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" '{"role":"read_write","extensions":["pg_cron"]}')
-  [ "$code" = 202 ] && ok "createEndpoint(extensions:[pg_cron]) 202" || bad "createEndpoint(pg_cron) code=$code"
+  # The endpoint mounts the cluster's pg_cron without any per-endpoint opt-in.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" '{"role":"read_write"}')
+  [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(pg_cron) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(pg_cron) succeeded" || bad "create_endpoint(pg_cron) task=$st"
   CEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$CPROJ/branches/$CDEF/endpoints" | jq -r '.endpoints[0].id')
   CPOD=$(wait_ready_pod "$CEP")
@@ -416,19 +421,19 @@ SQL
 
   hdr "externalized extensions: hexabridge opt-in mounts, CREATE EXTENSION, Oracle-compat fn"
 
-  # Its own cluster so this is independent of the sections above.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"hbproj"}')
-  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster created" || bad "hexabridge cluster task=$st"
+  # Its own cluster, opting into hexabridge at creation. Like pg_cron it is a
+  # preload extension (its _PG_init registers a dbms_scheduler background worker),
+  # so the controller appends it to shared_preload_libraries; every endpoint on
+  # the cluster comes up with the ImageVolume mounted and the library preloaded.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters" '{"name":"hbproj","extensions":["hexabridge"]}')
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster created (extensions:[hexabridge])" || bad "hexabridge cluster task=$st"
   HPROJ=$(curl -sf "$BASE/storage-pools/$POOL/clusters" | jq -r '.clusters[]|select(.name=="hbproj")|.id')
   HDEF=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$HPROJ" | jq -r '.default_branch.branch_id')
   [ -n "$HPROJ" ] && [ -n "$HDEF" ] && ok "hexabridge cluster materialized ($HPROJ / $HDEF)" || bad "hexabridge cluster not materialized"
 
-  # Opt into hexabridge. Like pg_cron it is a preload extension (its _PG_init
-  # registers a dbms_scheduler background worker), so the controller appends it
-  # to shared_preload_libraries; a fresh endpoint that opts in comes up with the
-  # ImageVolume mounted and the library preloaded.
-  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" '{"role":"read_write","extensions":["hexabridge"]}')
-  [ "$code" = 202 ] && ok "createEndpoint(extensions:[hexabridge]) 202" || bad "createEndpoint(hexabridge) code=$code"
+  # The endpoint mounts the cluster's hexabridge without any per-endpoint opt-in.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" '{"role":"read_write"}')
+  [ "$code" = 202 ] && ok "createEndpoint 202" || bad "createEndpoint(hexabridge) code=$code"
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "create_endpoint(hexabridge) succeeded" || bad "create_endpoint(hexabridge) task=$st"
   HEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$HPROJ/branches/$HDEF/endpoints" | jq -r '.endpoints[0].id')
   HPOD=$(wait_ready_pod "$HEP")
@@ -461,38 +466,78 @@ SQL
     st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "hexabridge cluster cascade deleted" || bad "hexabridge cluster delete task=$st"
   fi
 
-  # --- fork-inheritance sub-test: DISABLED pending #440 ----------------------
-  # https://github.com/yugabyte/amp/issues/440
-  # The block below (fork the branch -> deploy its no-opt-in endpoint -> assert it
-  # inherited the pgvector mount) is correct, but the fork endpoint currently
-  # crash-loops on a pre-existing storage-engine bug unrelated to extensions: the
-  # pageserver fails to attach to an ancestor branch whose
-  # amp_storage.branch_state.applied_gc_cutoff_lsn is still NULL (a young branch
-  # not yet GC'd), erroring "create branch timeline row: deserializing column 2:
-  # a Postgres value was NULL". Extension fork inheritance itself is covered at
-  # the metadata layer by controller/internal/core/pg_extensions_test.go. When
-  # #440 is fixed, uncomment the block below.
-  #
-  # # Fork the branch: the child inherits pgvector (it was persisted onto the branch
-  # # at endpoint-create), so its endpoint mounts pgvector WITHOUT re-opting-in.
-  # code=""
-  # for ((r=0; r<8; r++)); do
-  #   IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches" "{\"name\":\"extb1\",\"parent_branch_id\":\"$EDEF\"}")
-  #   [ "$code" = 202 ] && break
-  #   sleep 5
-  # done
-  # st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext fork extb1 succeeded" || bad "ext fork task=$st"
-  # EB1=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches" | jq -r '.branches[]|select(.name=="extb1")|.branch_id')
-  #
-  # IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" '{"role":"read_write"}')
-  # st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "fork endpoint (no opt-in) succeeded" || bad "fork endpoint task=$st"
-  # FEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" | jq -r '.endpoints[0].id')
-  # FPOD=$(wait_ready_pod "$FEP")
-  # kubectl -n "$NS" exec "$FPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control \
-  #   && ok "fork endpoint inherited pgvector mount" || bad "fork endpoint did NOT inherit pgvector"
-  # ---------------------------------------------------------------------------
+  hdr "externalized extensions: addBranchExtensions unions the set + redeploys the branch's live endpoints"
 
-  # Tear down the ext cluster (cascade retires both endpoints, drops branches).
+  # The other half of the API: add pg_cron to the extproj default branch that
+  # already has a LIVE endpoint (EEP, mounting pgvector+age). add_branch_extensions
+  # unions the name into the branch set and helm-upgrades every live endpoint on
+  # the branch, recreating the pod with the new ImageVolume and (pg_cron being a
+  # preload extension) a new shared_preload_libraries. This is the operationally
+  # risky path — a stop-and-replace of running computes (Recreate, since an
+  # endpoint is single-writer) — that createCluster does not cover.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/extensions" '{"extensions":["pg_cron"]}')
+  [ "$code" = 202 ] && ok "addBranchExtensions 202" || bad "addBranchExtensions code=$code"
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "add_branch_extensions succeeded" || bad "add_branch_extensions task=$st"
+
+  # getBranch reports the unioned, sorted, de-duplicated set.
+  exts=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF" | jq -r '(.extensions//[])|sort|join(",")')
+  [ "$exts" = "age,pg_cron,pgvector" ] && ok "getBranch reports unioned extensions ($exts)" \
+    || bad "getBranch extensions=$exts (want age,pg_cron,pgvector)"
+
+  # The redeploy recreates the pod (new name after the helm upgrade); it comes
+  # back Ready and now mounts pg_cron alongside the originals.
+  EPOD=$(wait_ready_pod "$EEP")
+  [ -n "$EPOD" ] && ok "endpoint redeployed and Ready ($EPOD)" || bad "endpoint not Ready after addBranchExtensions"
+  kubectl -n "$NS" exec "$EPOD" -- test -f /extensions/pg_cron/share/postgresql/extension/pg_cron.control \
+    && ok "pg_cron ImageVolume mounted after addBranchExtensions" || bad "pg_cron ImageVolume not mounted after add"
+
+  # The pod IP changed with the restart, so the step MUST have re-recorded the
+  # endpoint's address — a stale address is what clients and YCP's readiness
+  # check would then consume. Assert the recorded address points at the NEW pod.
+  podip=$(kubectl -n "$NS" get pod "$EPOD" -o jsonpath='{.status.podIP}' 2>/dev/null)
+  addr=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EDEF/endpoints/$EEP" | jq -r '.address // ""')
+  [ -n "$podip" ] && [ "${addr%%:*}" = "$podip" ] \
+    && ok "endpoint address re-recorded to the new pod IP ($addr)" \
+    || bad "endpoint address $addr does not match new pod IP $podip (stale after redeploy)"
+
+  hdr "externalized extensions: a fork inherits its parent branch's opted-in set"
+
+  # A fork inherits its parent branch's extension set (the createCluster seed +
+  # the addBranchExtensions add), so a fresh endpoint on the fork mounts the set
+  # with no per-endpoint opt-in. Fork at the parent's current LSN (captured from
+  # its live endpoint) rather than "latest", which is not settled straight after
+  # the redeploy above. This is the create-cluster-with-extensions -> fork path;
+  # it needs the #440 fix (meko#500/#531/#552: a fork endpoint crash-looped when
+  # the ancestor's applied_gc_cutoff_lsn was still NULL), now landed.
+  FLSN=$(printf 'SELECT pg_current_wal_lsn();' | psql_pod "$EPOD" 127.0.0.1 55433 2>/dev/null | tr -d '[:space:]')
+  [ -n "$FLSN" ] && ok "captured parent fork LSN ($FLSN)" || bad "could not capture parent fork LSN"
+  code=""
+  for ((r=0; r<8; r++)); do
+    IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches" "{\"name\":\"extb1\",\"parent_branch_id\":\"$EDEF\",\"fork_point_lsn\":\"$FLSN\"}")
+    [ "$code" = 202 ] && break
+    sleep 5
+  done
+  [ "$code" = 202 ] && ok "ext fork extb1 accepted 202" || bad "ext fork code=$code"
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext fork extb1 succeeded" || bad "ext fork task=$st"
+  EB1=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches" | jq -r '.branches[]|select(.name=="extb1")|.branch_id')
+  [ -n "$EB1" ] && ok "ext fork extb1 materialized ($EB1)" || bad "ext fork extb1 missing"
+
+  # getBranch on the fork reports the inherited set (parent = age,pg_cron,pgvector).
+  fexts=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1" | jq -r '(.extensions//[])|sort|join(",")')
+  [ "$fexts" = "age,pg_cron,pgvector" ] && ok "fork inherited the parent's set ($fexts)" \
+    || bad "fork extensions=$fexts (want age,pg_cron,pgvector)"
+
+  # A fresh endpoint on the fork mounts the inherited set with no opt-in.
+  IFS='|' read -r code loc tid < <(create_task POST "/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" '{"role":"read_write"}')
+  [ "$code" = 202 ] && ok "fork createEndpoint 202" || bad "fork createEndpoint code=$code"
+  st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "fork endpoint (no opt-in) succeeded" || bad "fork endpoint task=$st"
+  FEP=$(curl -sf "$BASE/storage-pools/$POOL/clusters/$EPROJ/branches/$EB1/endpoints" | jq -r '.endpoints[0].id')
+  FPOD=$(wait_ready_pod "$FEP")
+  [ -n "$FPOD" ] && ok "fork endpoint pod Ready ($FPOD)" || bad "fork endpoint pod not Ready"
+  kubectl -n "$NS" exec "$FPOD" -- test -f /extensions/pgvector/share/postgresql/extension/vector.control \
+    && ok "fork endpoint inherited pgvector mount" || bad "fork endpoint did NOT inherit pgvector"
+
+  # Tear down the ext cluster (cascade retires all endpoints, drops branches).
   IFS='|' read -r code loc tid < <(create_task DELETE "/storage-pools/$POOL/clusters/$EPROJ")
   st=$(poll_task "$tid"); [ "$st" = succeeded ] && ok "ext cluster cascade deleted" || bad "ext cluster delete task=$st"
 fi

@@ -57,7 +57,7 @@ func TestPgProjectionsMatchTheirScanners(t *testing.T) {
 		t.Fatalf("create pool: %v", err)
 	}
 	clusterID, branchID := uuid.New(), uuid.New()
-	if err := b.EnsureCluster(ctx, sp.ID, clusterID, branchID, "projections", 18); err != nil {
+	if err := b.EnsureCluster(ctx, sp.ID, clusterID, branchID, "projections", 18, nil); err != nil {
 		t.Fatalf("ensure cluster: %v", err)
 	}
 	endpointID := uuid.New()

@@ -34,10 +34,6 @@ type CreateEndpointArgs struct {
 	// the deployer/chart default (2 cores / 4Gi).
 	CPU    string `json:"cpu,omitempty"`
 	Memory string `json:"memory,omitempty"`
-	// Extensions are externalized extensions to enable on this endpoint (catalog
-	// names). The step upserts them onto the branch's durable set before
-	// resolving mounts, so the opt-in survives a recreate and forks inherit it.
-	Extensions []string `json:"extensions,omitempty"`
 	// Extended is per-endpoint compute configuration the control plane passes
 	// through WITHOUT interpreting: extra Postgres settings, and for a locally
 	// deployed compute the ports it binds. Stored under config.extended, nested
@@ -97,21 +93,11 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	}
 	logger := applog.FromContext(ctx).With(applog.KeyEndpointID, s.EndpointID.String())
 
-	// Persist any requested opt-in extensions onto the branch's durable set
-	// first, so they survive a recreate and forks inherit them. Idempotent
-	// (absolute union); a no-op when none were requested. Only meaningful with a
-	// catalog (the handler rejects opt-ins otherwise), but harmless without one.
-	if len(s.Extensions) > 0 {
-		if err := s.state.AddBranchExtensions(ctx, s.ClusterID, s.BranchID, s.Extensions); err != nil {
-			return Fail(fmt.Errorf("add branch extensions: %w", err))
-		}
-	}
-
-	// Resolve the endpoint's externalized extensions: the branch's opted-in set
-	// (inherited across forks, plus anything just added above) unioned with the
-	// catalog defaults, mapped to pinned images. Nil catalog => none (Docker
-	// driver / feature off). Done before the record so the resolved set is
-	// persisted in the recreate config.
+	// Resolve the endpoint's externalized extensions: the cluster-wide opted-in
+	// set (stored on the default branch, shared by every branch's endpoints)
+	// unioned with the catalog defaults, mapped to pinned images. Nil catalog =>
+	// none (Docker driver / feature off). Done before the record so the resolved
+	// set is persisted in the recreate config.
 	extSpecs, extNames, err := s.resolveExtensions(ctx)
 	if err != nil {
 		return Fail(err)
@@ -170,13 +156,13 @@ func (s *createEndpointStep) Execute(ctx context.Context) StepResult {
 	return Ok(mustResult(map[string]string{"endpoint_id": s.EndpointID.String(), "address": deployed.Address, "tailnet_address": deployed.TailnetAddress}))
 }
 
-// resolveExtensions computes the endpoint's externalized extension mounts: the
-// branch's opted-in set (durable, inherited across forks) unioned with the
-// catalog defaults, resolved to pinned image references. It returns the deploy
-// specs (for the EndpointSpec) and the resolved names (for the recreate config).
-// With no catalog it returns (nil, nil) — the endpoint ships only image-baked
-// extensions. Unknown names are dropped by the catalog, so a stale branch entry
-// can't wedge the deploy.
+// resolveExtensions computes the endpoint's externalized extension mounts: its
+// branch's own opted-in set (seeded on the default branch, inherited by a fork,
+// extended per branch by addBranchExtensions) unioned with the catalog
+// defaults, resolved to pinned image references. It returns the deploy specs (for
+// the EndpointSpec) and the resolved names (for the recreate config). With no
+// catalog it returns (nil, nil) — the endpoint ships only image-baked extensions.
+// Unknown names are dropped by the catalog, so a stale entry can't wedge the deploy.
 func (s *createEndpointStep) resolveExtensions(ctx context.Context) ([]deploy.Extension, []string, error) {
 	if s.extensions == nil {
 		return nil, nil, nil

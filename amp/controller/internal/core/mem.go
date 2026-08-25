@@ -423,7 +423,7 @@ func (m *MemBackend) DeleteEndpoint(_ context.Context, endpointID uuid.UUID) err
 // EnsureCluster idempotently creates a cluster and its default branch with the
 // given ids. A repeated id is a no-op; a cluster-name collision within the pool
 // (a different id) is ErrConflict; a missing pool is ErrNotFound.
-func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int) error {
+func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, extensions []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pools[poolID]; !ok {
@@ -439,13 +439,17 @@ func (m *MemBackend) EnsureCluster(_ context.Context, poolID, clusterID, branchI
 		return ErrConflict
 	}
 	now := m.now()
+	// Seed the create-time externalized-extension set on the default branch row.
+	// It is per-branch state: a fork inherits it, and every endpoint resolves
+	// against its own branch's set.
 	def := Branch{
-		ClusterID: clusterID,
-		BranchID:  branchID,
-		Name:      DefaultBranchName,
-		PgVersion: pgVersion,
-		IsDefault: true,
-		CreatedAt: now,
+		ClusterID:  clusterID,
+		BranchID:   branchID,
+		Name:       DefaultBranchName,
+		PgVersion:  pgVersion,
+		IsDefault:  true,
+		CreatedAt:  now,
+		Extensions: dedupSorted(extensions),
 	}
 	p := Cluster{ID: clusterID, StoragePoolID: poolID, Name: name, CreatedAt: now, DefaultBranch: def}
 	m.clusters[clusterID] = p
@@ -474,12 +478,9 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, clusterID, 
 		return ErrConflict
 	}
 	pid := parentBranchID
-	// A fork inherits a snapshot of the parent's extension set (copied, so a
-	// later change to either side doesn't alias the other).
-	var inherited []string
-	if len(parent.Extensions) > 0 {
-		inherited = append([]string(nil), parent.Extensions...)
-	}
+	// The fork inherits the parent branch's extension set (copied onto its own
+	// row), so an endpoint on it mounts the same set the parent's endpoints do.
+	// See compute/architecture/extensions.md.
 	m.branches[branchID] = Branch{
 		ClusterID:      clusterID,
 		BranchID:       branchID,
@@ -489,14 +490,12 @@ func (m *MemBackend) EnsureBranch(_ context.Context, parentBranchID, clusterID, 
 		ParentBranchID: &pid,
 		ForkLSN:        forkLSN,
 		CreatedAt:      m.now(),
-		Extensions:     inherited,
+		Extensions:     dedupSorted(parent.Extensions),
 	}
 	m.branchNames[nk] = struct{}{}
 	return nil
 }
 
-// BranchExtensions returns the branch's opted-in extension names. An absent
-// branch yields an empty slice, not an error (mirrors PgBackend).
 // BranchPgSettings mirrors the Pg arm: the branch's baseline settings, nil for
 // none or an absent branch.
 func (m *MemBackend) BranchPgSettings(_ context.Context, clusterID, branchID uuid.UUID) (map[string]string, error) {
@@ -513,22 +512,21 @@ func (m *MemBackend) BranchPgSettings(_ context.Context, clusterID, branchID uui
 	return out, nil
 }
 
+// BranchExtensions returns the branch's own opted-in extension set (nil when
+// empty or absent). Mirrors PgBackend.
 func (m *MemBackend) BranchExtensions(_ context.Context, clusterID, branchID uuid.UUID) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.branches[branchID]
-	if !ok || b.ClusterID != clusterID {
-		return nil, nil
-	}
-	if len(b.Extensions) == 0 {
+	if !ok || b.ClusterID != clusterID || len(b.Extensions) == 0 {
 		return nil, nil
 	}
 	return append([]string(nil), b.Extensions...), nil
 }
 
-// AddBranchExtensions adds names to the branch's durable extension set (absolute
-// union, existing-first order preserved). Idempotent; an absent branch or empty
-// names is a no-op. Mirrors PgBackend.
+// AddBranchExtensions adds names to the (clusterID, branchID) branch's durable
+// extension set (absolute union, sorted+deduped). Idempotent; an absent branch or
+// empty names is a no-op. Mirrors PgBackend.
 func (m *MemBackend) AddBranchExtensions(_ context.Context, clusterID, branchID uuid.UUID, names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -539,18 +537,56 @@ func (m *MemBackend) AddBranchExtensions(_ context.Context, clusterID, branchID 
 	if !ok || b.ClusterID != clusterID {
 		return nil
 	}
-	seen := make(map[string]struct{}, len(b.Extensions)+len(names))
-	union := make([]string, 0, len(b.Extensions)+len(names))
-	for _, n := range append(append([]string(nil), b.Extensions...), names...) {
+	b.Extensions = dedupSorted(append(append([]string(nil), b.Extensions...), names...))
+	m.branches[branchID] = b
+	return nil
+}
+
+// BranchEndpointDeploys returns the redeploy record for every endpoint on the
+// (clusterID, branchID) branch (pg_version from the branch, cpu/memory from the
+// endpoint). An absent branch yields an empty slice. Mirrors PgBackend.
+func (m *MemBackend) BranchEndpointDeploys(_ context.Context, clusterID, branchID uuid.UUID) ([]EndpointDeploy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []EndpointDeploy
+	for id, e := range m.endpoints {
+		if e.ClusterID != clusterID || e.BranchID != branchID {
+			continue
+		}
+		out = append(out, EndpointDeploy{
+			ID:        id,
+			BranchID:  e.BranchID,
+			PgVersion: m.branches[e.BranchID].PgVersion,
+			CPU:       e.CPU,
+			Memory:    e.Memory,
+		})
+	}
+	return out, nil
+}
+
+// UpdateEndpointExtensions is a no-op in the in-memory backend: it models the
+// endpoint's audit config blob, which MemBackend does not store. The resolved set
+// is recomputed from the cluster at deploy, so nothing depends on it here.
+func (m *MemBackend) UpdateEndpointExtensions(_ context.Context, _ uuid.UUID, _ []string) error {
+	return nil
+}
+
+// dedupSorted returns names as a sorted, de-duplicated slice (nil for empty).
+func dedupSorted(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
 		if _, dup := seen[n]; dup {
 			continue
 		}
 		seen[n] = struct{}{}
-		union = append(union, n)
+		out = append(out, n)
 	}
-	b.Extensions = union
-	m.branches[branchID] = b
-	return nil
+	sort.Strings(out)
+	return out
 }
 
 // EnsureEndpointRecord idempotently records an endpoint with the given id on the

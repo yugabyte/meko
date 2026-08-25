@@ -46,7 +46,7 @@ def wire():
 
 
 # (tool name, kwargs, expected method, expected path, canned response spec).
-# One row per tool — the full 21-tool surface.
+# One row per tool — the full 22-tool surface.
 CASES = [
     ("get_user", {"user_id": "u1"}, "GET", "/api/v1/users/u1", {"id": "u1"}),
     ("create_storage_pool", {"name": "n", "owner_user_id": "u9"}, "POST",
@@ -68,6 +68,9 @@ CASES = [
      f"{PR}/branches", {"branches": [], "total": 0, "count": 0}),
     ("get_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
      "GET", B, {"branch_id": "b1"}),
+    ("add_branch_extensions",
+     {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
+      "extensions": ["pgvector"]}, "POST", f"{B}/extensions", (202, TASK)),
     ("delete_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
      "DELETE", B, (202, TASK)),
     ("create_endpoint",
@@ -102,7 +105,7 @@ CASES = [
 
 
 def test_cases_cover_all_tools():
-    assert len({name for name, *_ in CASES}) == 21
+    assert len({name for name, *_ in CASES}) == 22
 
 
 @pytest.mark.parametrize("name,kwargs,method,path,spec", CASES, ids=[c[0] for c in CASES])
@@ -126,6 +129,20 @@ def test_create_cluster_includes_pg_version_when_set(wire):
     handler = wire({f"POST {P}/clusters": (202, TASK)})
     tools.create_cluster(pool_id="p1", name="db", pg_version=18)
     assert handler.last_json() == {"name": "db", "pg_version": 18}
+
+
+def test_create_cluster_includes_extensions_when_set(wire):
+    handler = wire({f"POST {P}/clusters": (202, TASK)})
+    tools.create_cluster(pool_id="p1", name="db", extensions=["pgvector"])
+    assert handler.last_json() == {"name": "db", "extensions": ["pgvector"]}
+
+
+def test_add_branch_extensions_body(wire):
+    handler = wire({f"POST {B}/extensions": (202, TASK)})
+    tools.add_branch_extensions(
+        pool_id="p1", cluster_id="pr1", branch_id="b1", extensions=["pgvector"]
+    )
+    assert handler.last_json() == {"extensions": ["pgvector"]}
 
 
 def test_create_cluster_omits_pg_version_when_none(wire):
@@ -264,6 +281,10 @@ def test_create_storage_pool_is_synchronous(wire):
         ("create_endpoint",
          {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
          f"{B}/endpoints", "POST"),
+        ("add_branch_extensions",
+         {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1",
+          "extensions": ["pgvector"]},
+         f"{B}/extensions", "POST"),
         ("delete_cluster", {"pool_id": "p1", "cluster_id": "pr1"}, PR, "DELETE"),
         ("delete_branch", {"pool_id": "p1", "cluster_id": "pr1", "branch_id": "b1"},
          B, "DELETE"),

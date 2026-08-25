@@ -339,6 +339,42 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/extensions:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+    post:
+      tags: [branches]
+      operationId: addBranchExtensions
+      summary: Enable externalized extensions on a branch
+      description: |
+        Plans an asynchronous `add_branch_extensions` task that unions the given
+        extensions into this branch's set and redeploys every endpoint on the
+        branch so the new ImageVolume mounts take effect, returning `202` + the
+        `Task` with a `Location` header. Adding extensions is per branch. Idempotent
+        (an already-enabled extension is a no-op). Cheap validation is synchronous:
+        `400` for an empty list, an unknown extension name, or when externalized
+        extensions are unavailable (e.g. the Docker driver); `404` if the pool,
+        cluster, or branch does not exist. See compute/architecture/extensions.md.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddBranchExtensionsRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /storage-pools/{poolId}/clusters/{clusterId}/branches:
     parameters:
       - $ref: '#/components/parameters/PoolId'
@@ -1299,6 +1335,18 @@ components:
           description: When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
         resources:
           $ref: '#/components/schemas/EndpointResources'
+        extensions:
+          type: array
+          items:
+            type: string
+          description: |
+            Externalized PostgreSQL extensions to enable on the cluster's default
+            branch ("main"), by catalog name (e.g. `pgvector`). Every endpoint on
+            that branch mounts them, and a fork inherits the set; add more to a
+            branch later with addBranchExtensions. An unknown name is rejected
+            (400), as is any value when externalized extensions are unavailable
+            (e.g. the Docker driver). Empty/omitted enables only the catalog
+            defaults. See compute/architecture/extensions.md.
 
     Cluster:
       type: object
@@ -1319,6 +1367,32 @@ components:
           format: date-time
         default_branch:
           $ref: '#/components/schemas/Branch'
+        extensions:
+          type: array
+          items:
+            type: string
+          description: |
+            Externalized PostgreSQL extensions enabled on the cluster's default
+            branch ("main"), by catalog name (e.g. `pgvector`), surfaced here as
+            the cluster's set. Each branch carries its own set (a fork inherits its
+            parent's; see getBranch and addBranchExtensions). Set at createCluster;
+            empty when none. Excludes the catalog defaults, which are added per
+            endpoint at deploy time.
+
+    AddBranchExtensionsRequest:
+      type: object
+      required: [extensions]
+      properties:
+        extensions:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: |
+            Externalized PostgreSQL extensions to enable on this branch, by catalog
+            name (e.g. `pgvector`). Unioned into the branch's set (idempotent); an
+            unknown name is rejected (400). Every existing endpoint on the branch is
+            redeployed to mount the new set. See compute/architecture/extensions.md.
 
     ClusterList:
       type: object
@@ -1361,6 +1435,16 @@ components:
           type: string
           nullable: true
           description: The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
+        extensions:
+          type: array
+          items:
+            type: string
+          description: |
+            Externalized PostgreSQL extensions enabled on this branch, by catalog
+            name (e.g. `pgvector`); the names every endpoint on it mounts. A fork
+            inherits its ancestor's set at fork time, and addBranchExtensions adds
+            more to this branch. Excludes the catalog defaults, which are added per
+            endpoint at deploy time. Empty when none.
         pg_settings:
           type: object
           additionalProperties:
@@ -1371,17 +1455,6 @@ components:
             `pg_settings` merge over these and win on a key both define.
         write_token_settings:
           $ref: '#/components/schemas/WriteTokenSettings'
-        extensions:
-          type: array
-          items:
-            type: string
-          description: |
-            Externalized PostgreSQL extensions opted into on this branch, by
-            catalog name (e.g. `pgvector`). Durable branch state: a fork inherits
-            its parent's set, and every endpoint on the branch mounts them.
-            Enabled via createEndpoint's `extensions` (there is no branch-create
-            field); empty when none. Excludes the catalog defaults, which are
-            added per endpoint at deploy time.
         created_at:
           type: string
           format: date-time
@@ -1761,21 +1834,6 @@ components:
             supported and is rejected with 400.
         resources:
           $ref: '#/components/schemas/EndpointResources'
-        extensions:
-          type: array
-          items:
-            type: string
-          description: |
-            Externalized PostgreSQL extensions to opt this endpoint's **branch**
-            into, by catalog name (e.g. `pgvector`). Enabling is a branch
-            property, not an endpoint one: each name is added to the branch's
-            durable extension set (so branch forks inherit it and every endpoint
-            on the branch picks it up) and mounted into the pod as a read-only
-            Kubernetes ImageVolume, with `extension_control_path` /
-            `dynamic_library_path` pointed at it so `CREATE EXTENSION` resolves.
-            Unknown names are rejected with 400. Requires the Kubernetes deployer;
-            rejected when externalized extensions are unavailable (e.g. the Docker
-            driver). See compute/architecture/extensions.md.
 
     EndpointResources:
       type: object

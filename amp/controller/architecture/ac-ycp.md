@@ -64,8 +64,11 @@ onto the resource's `ResourceStatus.Error` (`ycp/internal/api`):
 Each inventory row also carries `ResourceStatus.Attrs`, kind-specific details the
 backend read while listing: every resource's amp `id` (a UUID, distinct from the
 containment path in `ResourceStatus.ID`); a cluster's/branch's `pg_version`; a
-branch's `fork_lsn`, `extensions`, `parent_branch_id`, `is_default`; and an
-endpoint's `role`, `address`, `tailnet_address`, `cpu`, `memory`. A branch's `id`
+branch's `extensions` (opted in per branch — seeded at create, inherited on fork;
+the default branch's set is also mirrored on the cluster); a branch's `fork_lsn`,
+`parent_branch_id`,
+`is_default`; and an endpoint's `role`, `address`, `tailnet_address`, `cpu`,
+`memory`. A branch's `id`
 pairs with a fork's `parent_branch_id` so a console can rebuild the fork tree
 (the containment tree is already derivable from `ID`/`Parent`). The controller
 exposes no live/head LSN, so the only LSN reported is the branch fork point.

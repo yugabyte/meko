@@ -181,15 +181,16 @@ the feature is additive.
   `--extension-registry` / `AMP_EXTENSION_REGISTRY`), skipping unknown names so a
   stale entry can't wedge a deploy.   `DefaultNames()` is the always-mounted set
   (currently **empty** — All extensions are registered but off by
-  default, so nothing is auto-mounted; opting in is a **branch** property,
-  requested via `createEndpoint` and persisted onto the branch, so it is
-  inherited by forks and picked up by every endpoint on that branch). `pg_cron`
-  is `Preload: true`, so `Resolve` carries that flag through and the chart adds
-  it to `shared_preload_libraries`. `Has(name)` is the API validation gate. Keep
-  versions in lockstep with `extensions.yaml`.
+  default, so nothing is auto-mounted; opting in is **per branch** — the initial
+  set is seeded on the default branch by `createCluster`, a fork inherits its
+  ancestor's, and `addBranchExtensions` adds more to a single branch — so every
+  endpoint mounts its branch's set).
+  `pg_cron` is `Preload: true`, so `Resolve` carries that flag through and the
+  chart adds it to `shared_preload_libraries`. `Has(name)` is the API validation
+  gate. Keep versions in lockstep with `extensions.yaml`.
 - **Endpoint spec** — the create_endpoint step
   ([`step_create_endpoint.go`](../../controller/internal/task/step_create_endpoint.go))
-  resolves the endpoint's extension set (see fork inheritance below), sets
+  resolves the endpoint's extension set (its branch's opted-in set, below), sets
   `deploy.EndpointSpec.Extensions`, and the Kubernetes deployer
   ([`kubernetes.go`](../../controller/internal/deploy/kubernetes.go)) renders it
   into `endpoint.extensions`. The Docker deployer has no ImageVolume equivalent
@@ -200,10 +201,11 @@ the feature is additive.
 - **Default extensions** (`Default: true`) would be mounted on every endpoint out
   of the box — the "batteries included" set. **There are none today**: pgvector
   is registered but `Default: false`, so it is opt-in.
-- **On-demand extensions** are opted into at endpoint create via the API (see
-  "Opt-in API" below), which persists the choice onto the branch. Because the
+- **On-demand extensions** are opted into **per branch** via the API (see
+  "Opt-in API" below), which persists the choice on the branch. Because the
   volume set is fixed at pod start, **adding or removing an extension requires
-  recreating the endpoint pod** (a rolling restart). A `preload` extension needs
+  recreating the endpoint pod** (a rolling restart) — so `addBranchExtensions`
+  redeploys every existing endpoint on the branch. A `preload` extension needs
   the postmaster restart regardless. Non-preload extensions are otherwise
   ready to `CREATE EXTENSION` as soon as the pod is up with the volume mounted.
   The ImageVolume carries only the extension **tree** (control + SQL + `.so`), not
@@ -221,52 +223,57 @@ the feature is additive.
 
 ## Opt-in API
 
-`createEndpoint` accepts an optional `extensions: [name, ...]` array
+Extensions are opted into **per branch**. `createCluster` takes an optional
+`extensions: [name, ...]` array that seeds the set on the new cluster's default
+branch, and `addBranchExtensions`
+(`POST .../branches/{branchId}/extensions`) adds more to a single branch later
 ([`openapi_spec.yaml`](../../controller/internal/api/openapi_spec.yaml)):
 
-- The handler
-  ([`handlers.go`](../../controller/internal/api/handlers.go)) validates every
+- Both handlers
+  ([`handlers.go`](../../controller/internal/api/handlers.go)) validate every
   name against the catalog (`Has`) — an unknown name is a `400`, not a silent
-  drop — and rejects the request with `400` if the controller has no catalog
+  drop — and reject the request with `400` if the controller has no catalog
   (the Docker driver / feature off), so a caller never gets a silently-ignored
   opt-in.
-- The create_endpoint step **persists** the requested names onto the branch's
-  `extensions` set (`AddBranchExtensions`, an idempotent absolute union) before
-  resolving mounts, so the opt-in is durable: a recreate resolves the same set
-  and a fork inherits it (below). The endpoint then mounts
-  **catalog defaults ∪ the branch's set**.
-- The opted-in set (not the catalog defaults) is **readable** on the `Branch`
-  response — `getBranch`/`listBranches` return `extensions`. The opt-in stays
-  write-only through `createEndpoint`; there is no branch-level mutate API.
+- `createCluster` writes the initial set onto the new cluster's default branch;
+  `addBranchExtensions` runs an async task that unions the requested names into
+  **that branch's** set (`AddBranchExtensions`, an idempotent absolute union)
+  and then **redeploys every existing endpoint on the branch** so the changed
+  ImageVolume mounts take effect. Both are durable: an endpoint create or recreate
+  resolves **catalog defaults ∪ its branch's set**.
+- The opted-in set (not the catalog defaults) is **readable** on both the
+  `Cluster` response (`getCluster`/`listClusters` return the default branch's set
+  as the cluster's) and the `Branch` response (`getBranch`/`listBranches` return
+  that branch's own set).
 
-## Branch fork inheritance
+## Storage and fork behaviour
 
 Extension **data** (the catalog objects, index contents) is part of a branch's
 storage and is inherited by a fork automatically. The extension **files** are
-not — they are mounted from images — so a fork must mount (at least) the same
-extensions its parent had, or inherited objects become inoperable and a
-`preload` extension's missing library crashes the postmaster.
+not — they are mounted from images — so every endpoint must mount (at least) the
+same extensions, or inherited objects become inoperable and a `preload`
+extension's missing library crashes the postmaster.
 
-yb-amp makes the extension set **branch-level durable state** and inherits it on
-fork. It lives on the shared storage-branch record, `amp_registry.branches` —
-the one row every branch-creation path (the controller *and* `yb_amp_local`)
-writes and reads — so a fork **and** a new read-replica endpoint both pick it up:
+The set is stored **per branch**, so that superset property holds by
+construction: a fork inherits its ancestor's set at fork time, and
+`addBranchExtensions` only ever adds to a branch, so a fork's endpoints always
+mount a superset of what its objects need. It reuses the existing
+`extensions jsonb` column on `amp_registry.branches`
+([migration 0002](../../controller/migrations/0002_resource_model.up.sql)) — no
+schema change:
 
-- `amp_registry.branches` has an `extensions jsonb` column
-  ([migration 0003](../../controller/migrations/0003_registry.up.sql)) holding
-  the branch's *opted-in* extensions (beyond the always-mounted catalog
-  defaults), keyed by the branch's `branch_id` uuid.
-- On fork, `RecordBranch`
-  ([`registry/store.go`](../../controller/internal/registry/store.go)) seeds the
-  child's row with a snapshot of the ancestor's `extensions` (a scalar subquery
-  on the ancestor id; empty for a bootstrap branch). The create_endpoint opt-in
-  (`AddBranchExtensions`,
-  [`core/provision.go`](../../controller/internal/core/provision.go)) then
-  unions any new names into the same row.
+- `EnsureCluster`
+  ([`core/provision.go`](../../controller/internal/core/provision.go)) writes the
+  create-time set onto the default (`is_default`) branch row.
+- A fork copies its ancestor's `extensions` column into its own row —
+  `RecordBranch`
+  ([`registry/store.go`](../../controller/internal/registry/store.go)) and
+  `EnsureBranch` (`core/provision.go`).
+- `AddBranchExtensions` unions later names into a single branch row;
+  `BranchExtensions` reads that branch's row.
 - At endpoint create, the step resolves the mount set as
-  **catalog defaults ∪ the branch's opted-in set**, so a child always mounts a
-  superset of what its parent had installed. Unknown names are dropped by the
-  catalog.
+  **catalog defaults ∪ its branch's opted-in set**. Unknown names are dropped by
+  the catalog.
 
 The resolved set is also recorded in the endpoint's recreate `config` blob for
 audit / recreate.
@@ -294,9 +301,10 @@ audit / recreate.
    extension registers a background worker or needs shared memory (its `_PG_init`
    requires `shared_preload_libraries`), keeping it in step with the manifest's
    `preload:`.
-3. For a non-default extension, opt an endpoint in by passing
-   `extensions: ["<name>"]` to `createEndpoint`; the step persists it onto the
-   branch and the fork path inherits it.
+3. For a non-default extension, opt a branch in by passing
+   `extensions: ["<name>"]` to `createCluster` (seeds the default branch), or
+   `addBranchExtensions` on a branch later; every endpoint on that branch then
+   mounts it.
 4. (Optional but expected) add a `regress:` block to the manifest row so
    `extensions.sh --regress` runs the extension's upstream suite: `driver: pgxs`
    for a Makefile with a `REGRESS` target, or `driver: script` + `script: <path>`
@@ -306,9 +314,10 @@ audit / recreate.
 ## Testing
 
 - **Controller unit tests** cover the catalog (`Has`/`Resolve`, preload flag
-  threaded through), the create_endpoint step (opt-in mount + branch
-  persistence + fork inheritance), and the API (`extensions[]` → 202/400, deploy
-  spec, persistence) — see `controller/internal/extensions`,
+  threaded through), the create_endpoint step (branch-set mount), the
+  add_branch_extensions step (union + redeploy of the branch's endpoints), and the
+  API (`createCluster extensions[]` / `addBranchExtensions` → 202/400, deploy spec,
+  persistence) — see `controller/internal/extensions`,
   `controller/internal/task`, `controller/internal/api`.
 - **Image build** — `deploy/extensions/test-build.sh [--docker] <name>` validates
   the manifest and, with `--docker`, builds the image and asserts its
@@ -359,11 +368,12 @@ audit / recreate.
   `templates/configmap.yaml`).
 - Controller: [`controller/internal/extensions/catalog.go`](../../controller/internal/extensions/catalog.go),
   [`controller/internal/task/step_create_endpoint.go`](../../controller/internal/task/step_create_endpoint.go),
+  [`controller/internal/task/step_add_branch_extensions.go`](../../controller/internal/task/step_add_branch_extensions.go),
   [`controller/internal/deploy/kubernetes.go`](../../controller/internal/deploy/kubernetes.go),
   [`controller/internal/core/provision.go`](../../controller/internal/core/provision.go)
-  (`BranchExtensions` / `AddBranchExtensions`),
+  (`BranchExtensions` / `AddBranchExtensions`; `EnsureBranch` copies the parent's set),
   [`controller/internal/registry/store.go`](../../controller/internal/registry/store.go)
-  (`RecordBranch` fork inheritance),
-  [migration 0003](../../controller/migrations/0003_registry.up.sql)
-  (`amp_registry.branches.extensions`).
+  (`RecordBranch` — a fork copies its ancestor's extensions),
+  [migration 0002](../../controller/migrations/0002_resource_model.up.sql)
+  (`amp_registry.branches.extensions`, per branch).
 - Patches: [`compute/image/patches/`](../image/patches/) (reused verbatim).

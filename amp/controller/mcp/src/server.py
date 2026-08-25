@@ -24,6 +24,7 @@ from controller_client import (
 )
 from server_instructions import AMP_CONTROLLER_SERVER_INSTRUCTIONS
 from tools import (
+    add_branch_extensions,
     create_branch,
     create_endpoint,
     create_cluster,
@@ -167,6 +168,7 @@ def build_server(
         (create_branch, ann["write"]),
         (list_branches, ann["ro"]),
         (get_branch, ann["ro"]),
+        (add_branch_extensions, ann["write"]),
         (delete_branch, ann["dest"]),
         (create_endpoint, ann["write"]),
         (list_endpoints, ann["ro"]),

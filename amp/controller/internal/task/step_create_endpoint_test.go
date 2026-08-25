@@ -153,16 +153,17 @@ func TestCreateEndpointStepNoDefaultsMountsNothing(t *testing.T) {
 	}
 }
 
-func TestCreateEndpointStepOptInMountsAndPersists(t *testing.T) {
-	// An opt-in via args.Extensions is mounted (resolved to its pinned image)
-	// AND persisted onto the branch's durable set, so a recreate/fork inherits it.
+func TestCreateEndpointStepMountsClusterExtension(t *testing.T) {
+	// A branch opt-in (pgvector) is mounted on the endpoint, resolved to its
+	// pinned image. The set is read from the endpoint's own branch, not passed
+	// per endpoint.
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
+	state.seedBranchExtensions(branchID, "pgvector")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
 		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
-		Extensions: []string{"pgvector"},
 	}, deps)
 
 	if res := step.Execute(t.Context()); res.Failed() {
@@ -170,26 +171,21 @@ func TestCreateEndpointStepOptInMountsAndPersists(t *testing.T) {
 	}
 	exts := dep.created[0].Extensions
 	if len(exts) != 1 || exts[0].Name != "pgvector" || exts[0].Image != "quay.io/yugabyte/amp-ext-pgvector:0.8.2" {
-		t.Fatalf("spec.Extensions = %+v, want the opted-in pgvector", exts)
-	}
-	// The opt-in is now durable on the branch.
-	persisted, _ := state.BranchExtensions(t.Context(), clusterID, branchID)
-	if len(persisted) != 1 || persisted[0] != "pgvector" {
-		t.Fatalf("branch extensions = %v, want [pgvector] persisted", persisted)
+		t.Fatalf("spec.Extensions = %+v, want the branch's pgvector", exts)
 	}
 }
 
-func TestCreateEndpointStepOptInPreloadExtension(t *testing.T) {
-	// A preload extension (pg_cron) is resolved to its pinned image with
-	// Preload:true carried onto the spec (so the chart extends
-	// shared_preload_libraries) AND persisted onto the branch.
+func TestCreateEndpointStepMountsClusterPreloadExtension(t *testing.T) {
+	// A preload extension (pg_cron) opted in on the branch is resolved to its
+	// pinned image with Preload:true carried onto the spec (so the chart extends
+	// shared_preload_libraries).
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
+	state.seedBranchExtensions(branchID, "pg_cron")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
 		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
-		Extensions: []string{"pg_cron"},
 	}, deps)
 
 	if res := step.Execute(t.Context()); res.Failed() {
@@ -198,56 +194,50 @@ func TestCreateEndpointStepOptInPreloadExtension(t *testing.T) {
 	exts := dep.created[0].Extensions
 	if len(exts) != 1 || exts[0].Name != "pg_cron" ||
 		exts[0].Image != "quay.io/yugabyte/amp-ext-pg_cron:1.6.7" || !exts[0].Preload {
-		t.Fatalf("spec.Extensions = %+v, want the opted-in pg_cron with Preload:true", exts)
-	}
-	persisted, _ := state.BranchExtensions(t.Context(), clusterID, branchID)
-	if len(persisted) != 1 || persisted[0] != "pg_cron" {
-		t.Fatalf("branch extensions = %v, want [pg_cron] persisted", persisted)
+		t.Fatalf("spec.Extensions = %+v, want the branch's pg_cron with Preload:true", exts)
 	}
 }
 
-func TestCreateEndpointStepOptInMultipleExtensions(t *testing.T) {
-	// Two non-preload extensions opted in together (pgvector + age) are both
-	// resolved to their pinned images, mounted in request order, and both
-	// persisted onto the branch — the co-mounted case the local/smoke tests
-	// exercise end-to-end.
+func TestCreateEndpointStepMountsMultipleClusterExtensions(t *testing.T) {
+	// Two non-preload extensions in the branch set (pgvector + age) are both
+	// resolved to their pinned images and mounted — the co-mounted case the
+	// local/smoke tests exercise end-to-end.
 	state, dep := newFakeStateStore(), &fakeDeployer{}
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("quay.io/yugabyte")
 	epID, clusterID, branchID := uuid.New(), uuid.New(), uuid.New()
+	state.seedBranchExtensions(branchID, "pgvector", "age")
 	step := NewCreateEndpointStep(CreateEndpointArgs{
 		EndpointID: epID, ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18,
-		Extensions: []string{"pgvector", "age"},
 	}, deps)
 
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)
 	}
-	exts := dep.created[0].Extensions
-	if len(exts) != 2 ||
-		exts[0].Name != "pgvector" || exts[0].Image != "quay.io/yugabyte/amp-ext-pgvector:0.8.2" || exts[0].Preload ||
-		exts[1].Name != "age" || exts[1].Image != "quay.io/yugabyte/amp-ext-age:1.8.0" || exts[1].Preload {
-		t.Fatalf("spec.Extensions = %+v, want [pgvector, age] both Preload:false", exts)
+	var pgvOK, ageOK bool
+	for _, e := range dep.created[0].Extensions {
+		switch e.Name {
+		case "pgvector":
+			pgvOK = e.Image == "quay.io/yugabyte/amp-ext-pgvector:0.8.2" && !e.Preload
+		case "age":
+			ageOK = e.Image == "quay.io/yugabyte/amp-ext-age:1.8.0" && !e.Preload
+		}
 	}
-	persisted, _ := state.BranchExtensions(t.Context(), clusterID, branchID)
-	if len(persisted) != 2 || persisted[0] != "pgvector" || persisted[1] != "age" {
-		t.Fatalf("branch extensions = %v, want [pgvector age] persisted", persisted)
+	if len(dep.created[0].Extensions) != 2 || !pgvOK || !ageOK {
+		t.Fatalf("spec.Extensions = %+v, want pgvector + age both Preload:false", dep.created[0].Extensions)
 	}
 }
 
-func TestCreateEndpointStepInheritsBranchExtensions(t *testing.T) {
-	// A branch that opted into an extra extension (e.g. inherited across a fork)
-	// mounts it in addition to the catalog defaults, de-duplicated and ordered
-	// defaults-first.
-	state, dep := newFakeStateStore(), &fakeDeployer{}
-	branchID := uuid.New()
-	// The branch already carries pgvector (a default) plus a hypothetical extra;
-	// the extra is unknown to the catalog so it is dropped, proving unknown names
+func TestCreateEndpointStepMountsClusterExtensions(t *testing.T) {
+	// An endpoint mounts its branch's opted-in set unioned with the catalog
+	// defaults, de-duplicated. An unknown name in the set is dropped, proving it
 	// can't wedge the deploy while known ones are honored.
+	state, dep := newFakeStateStore(), &fakeDeployer{}
+	clusterID, branchID := uuid.New(), uuid.New()
 	state.seedBranchExtensions(branchID, "pgvector", "totally-unknown-ext")
 	deps := endpointDeps(state, newFakeRecipeStore(), dep)
 	deps.Extensions = extensions.NewCatalog("r")
-	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: uuid.New(), BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)
+	step := NewCreateEndpointStep(CreateEndpointArgs{EndpointID: uuid.New(), ClusterID: clusterID, BranchID: branchID, Role: "read_write", PgVersion: 18}, deps)
 
 	if res := step.Execute(t.Context()); res.Failed() {
 		t.Fatalf("Execute: %v", res.Err)

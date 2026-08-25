@@ -154,13 +154,29 @@ class ControllerClient:
     # ---- Clusters ----
 
     def create_cluster(
-        self, pool_id: str, name: str, pg_version: Optional[int] = None
+        self,
+        pool_id: str,
+        name: str,
+        pg_version: Optional[int] = None,
+        extensions: Optional[list[str]] = None,
     ) -> dict:
         body: dict[str, Any] = {"name": name}
         if pg_version is not None:
             body["pg_version"] = pg_version
+        if extensions:
+            body["extensions"] = extensions
         return self._request(
             "POST", f"/storage-pools/{pool_id}/clusters", json=body
+        )
+
+    def add_branch_extensions(
+        self, pool_id: str, cluster_id: str, branch_id: str, extensions: list[str]
+    ) -> dict:
+        return self._request(
+            "POST",
+            f"/storage-pools/{pool_id}/clusters/{cluster_id}"
+            f"/branches/{branch_id}/extensions",
+            json={"extensions": extensions},
         )
 
     def list_clusters(

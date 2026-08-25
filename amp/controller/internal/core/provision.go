@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -37,7 +38,7 @@ import (
 // A cluster-name collision within the pool surfaces as ErrConflict (the
 // clusters_name_per_pool unique index, which is not the ON CONFLICT target); a
 // missing pool surfaces as ErrNotFound (the FK on cluster.storage_pool_id).
-func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int) error {
+func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branchID uuid.UUID, name string, pgVersion int, extensions []string) error {
 	tx, err := b.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -50,17 +51,51 @@ func (b *PgBackend) EnsureCluster(ctx context.Context, poolID, clusterID, branch
 		clusterID.String(), poolID.String(), name); err != nil {
 		return mapClusterErr("insert cluster", err)
 	}
+	// Seed the create-time externalized-extension set on the default branch row.
+	// It is per-branch state: a fork inherits it, and AddBranchExtensions unions
+	// later opt-ins into a single branch (compute/architecture/extensions.md).
+	// Empty when the create request opted into none. marshalExtensions sorts and
+	// de-dupes the names Go-side (the jsonb_agg(DISTINCT ... ORDER BY) union is
+	// AddBranchExtensions' job).
+	exts, err := marshalExtensions(extensions)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default)
-		 VALUES ($1::uuid, $2::uuid, $3, $4, true)
+		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default, extensions)
+		 VALUES ($1::uuid, $2::uuid, $3, $4, true, $5::jsonb)
 		 ON CONFLICT (branch_id) DO NOTHING`,
-		clusterID.String(), branchID.String(), DefaultBranchName, pgVersion); err != nil {
+		clusterID.String(), branchID.String(), DefaultBranchName, pgVersion, exts); err != nil {
 		return mapBranchErr("insert default branch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit ensure cluster+default branch: %w", err)
 	}
 	return nil
+}
+
+// marshalExtensions renders a name set as a sorted, de-duplicated JSON array for
+// the branches.extensions column (NOT NULL, defaults to '[]'). An empty/nil set
+// yields "[]".
+func marshalExtensions(names []string) (string, error) {
+	seen := make(map[string]struct{}, len(names))
+	dedup := make([]string, 0, len(names))
+	for _, n := range names {
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		dedup = append(dedup, n)
+	}
+	sort.Strings(dedup)
+	if len(dedup) == 0 {
+		return "[]", nil
+	}
+	blob, err := json.Marshal(dedup)
+	if err != nil {
+		return "", fmt.Errorf("encode extensions: %w", err)
+	}
+	return string(blob), nil
 }
 
 // EnsureBranch idempotently creates a branch (a non-default branch) with the
@@ -74,8 +109,9 @@ func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, clusterID,
 	// is_default = false; record the fork ancestry. The explicit pg_version is the
 	// parent's, resolved write-ahead at plan time (a branch inherits its
 	// ancestor's version), so it never drifts from the parent. Idempotent:
-	// ON CONFLICT DO NOTHING. The branch's extension set is NOT here — a fork
-	// inherits it via RecordBranch (compute/architecture/extensions.md#branch-fork).
+	// ON CONFLICT DO NOTHING. The fork inherits the parent's externalized-extension
+	// set (p.extensions is copied onto the new row), so an endpoint on the fork
+	// mounts the same set the parent's endpoints do (compute/architecture/extensions.md).
 	//
 	// The parent is selected rather than passed as a bare value, so that
 	// `dropped_at IS NULL` is part of the write: the FK alone no longer rejects a
@@ -86,8 +122,8 @@ func (b *PgBackend) EnsureBranch(ctx context.Context, parentBranchID, clusterID,
 	// tombstoned or absent parent selects nothing, so the step fails ErrNotFound.
 	// Mirrors the same guard in the synchronous CreateBranch (pg.go).
 	tag, err := b.pool.Exec(ctx,
-		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn)
-		 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn
+		`INSERT INTO amp_registry.branches (cluster_id, branch_id, name, pg_version, is_default, parent_branch_id, fork_lsn, extensions)
+		 SELECT $1::uuid, $2::uuid, $3, $4, false, p.branch_id, $6::pg_lsn, p.extensions
 		   FROM amp_registry.branches p
 		  WHERE p.branch_id = $5::uuid AND p.cluster_id = $1::uuid AND p.dropped_at IS NULL
 		 ON CONFLICT (branch_id) DO NOTHING`,
@@ -130,16 +166,17 @@ func (b *PgBackend) BranchPgSettings(ctx context.Context, _, branchID uuid.UUID)
 	return decodePgSettings(raw, "branch")
 }
 
-// BranchExtensions returns the branch's opted-in extension names (the durable
-// set an endpoint unions with the catalog defaults at create time). The set lives
-// on the branch record itself, so a fork and a read-replica endpoint both see it.
-// An absent branch yields an empty slice, not an error, so the endpoint step
-// degrades to the defaults rather than failing. See
-// compute/architecture/extensions.md.
+// BranchExtensions returns the branch's opted-in extension names (the set every
+// endpoint on it unions with the catalog defaults at create time). The set lives
+// on the branch's own row — seeded on the default branch by EnsureCluster,
+// inherited by a fork, extended per branch by AddBranchExtensions. An
+// absent branch yields an empty slice, not an error, so the endpoint step
+// degrades to the defaults rather than failing. See compute/architecture/extensions.md.
 func (b *PgBackend) BranchExtensions(ctx context.Context, _, branchID uuid.UUID) ([]string, error) {
 	var raw []byte
 	err := b.pool.QueryRow(ctx,
-		`SELECT extensions FROM amp_registry.branches WHERE branch_id = $1::uuid`,
+		`SELECT extensions FROM amp_registry.branches
+		  WHERE branch_id = $1::uuid AND dropped_at IS NULL`,
 		branchID.String()).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -157,12 +194,12 @@ func (b *PgBackend) BranchExtensions(ctx context.Context, _, branchID uuid.UUID)
 	return names, nil
 }
 
-// AddBranchExtensions adds names to the branch's durable extension set — the
-// createEndpoint opt-in the create_endpoint step persists before resolving
-// mounts. It is an *absolute* union: extensions is recomputed as the sorted
-// distinct set of the existing entries ∪ names, so replaying the step can't
-// double-apply (satisfying the YB idempotency contract; no SET col = col + …).
-// An absent branch matches zero rows (a no-op, mirroring BranchExtensions).
+// AddBranchExtensions adds names to the (clusterID, branchID) branch's durable
+// extension set — the add_branch_extensions opt-in. Adding is per branch. It is
+// an *absolute* union: the row's extensions is recomputed as the sorted distinct
+// set of its existing entries ∪ names, so replaying the step can't double-apply
+// (satisfying the YB idempotency contract; no SET col = col + …). An absent
+// branch matches zero rows (a no-op).
 func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UUID, names []string) error {
 	if len(names) == 0 {
 		return nil
@@ -177,9 +214,69 @@ func (b *PgBackend) AddBranchExtensions(ctx context.Context, _, branchID uuid.UU
 		        (SELECT jsonb_agg(DISTINCT e ORDER BY e)
 		           FROM jsonb_array_elements_text(extensions || $2::jsonb) AS e),
 		        '[]'::jsonb)
-		  WHERE branch_id = $1::uuid`,
+		  WHERE branch_id = $1::uuid AND dropped_at IS NULL`,
 		branchID.String(), string(payload)); err != nil {
 		return fmt.Errorf("add branch extensions: %w", err)
+	}
+	return nil
+}
+
+// BranchEndpointDeploys returns the redeploy record for every live endpoint on
+// the (clusterID, branchID) branch: its id, the branch it serves, and the pinned
+// pg version + compute size (pg_version from the branch, cpu/memory from the
+// endpoint config). The add_branch_extensions step enumerates these at Execute
+// time to re-render each endpoint with the new extension mounts. An absent branch
+// yields an empty slice.
+func (b *PgBackend) BranchEndpointDeploys(ctx context.Context, _, branchID uuid.UUID) ([]EndpointDeploy, error) {
+	rows, err := b.pool.Query(ctx,
+		`SELECT e.id::text, e.branch_id::text, eb.pg_version,
+		        COALESCE(e.config->>'cpu', ''), COALESCE(e.config->>'memory', '')
+		   FROM amp_registry.endpoints e
+		   JOIN amp_registry.branches eb ON eb.branch_id = e.branch_id
+		  WHERE eb.branch_id = $1::uuid AND eb.dropped_at IS NULL`,
+		branchID.String())
+	if err != nil {
+		return nil, fmt.Errorf("list endpoint deploys for branch: %w", err)
+	}
+	defer rows.Close()
+	var out []EndpointDeploy
+	for rows.Next() {
+		var (
+			id, branchID string
+			d            EndpointDeploy
+		)
+		if err := rows.Scan(&id, &branchID, &d.PgVersion, &d.CPU, &d.Memory); err != nil {
+			return nil, fmt.Errorf("scan endpoint deploy: %w", err)
+		}
+		if d.ID, err = uuid.Parse(id); err != nil {
+			return nil, fmt.Errorf("parse endpoint id: %w", err)
+		}
+		if d.BranchID, err = uuid.Parse(branchID); err != nil {
+			return nil, fmt.Errorf("parse branch id: %w", err)
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list endpoint deploys for branch: %w", err)
+	}
+	return out, nil
+}
+
+// UpdateEndpointExtensions merges the resolved extension names into the
+// endpoint's config jsonb (the (re)create/audit spec), leaving the other config
+// fields intact — the DB-side record of what the endpoint last mounted, mirroring
+// UpdateEndpointResources. Idempotent; an absent row is a no-op.
+func (b *PgBackend) UpdateEndpointExtensions(ctx context.Context, endpointID uuid.UUID, names []string) error {
+	payload, err := marshalExtensions(names)
+	if err != nil {
+		return err
+	}
+	if _, err := b.pool.Exec(ctx,
+		`UPDATE amp_registry.endpoints
+		    SET config = COALESCE(config, '{}'::jsonb) || jsonb_build_object('extensions', $2::jsonb)
+		  WHERE id = $1::uuid`,
+		endpointID.String(), payload); err != nil {
+		return fmt.Errorf("update endpoint extensions: %w", err)
 	}
 	return nil
 }

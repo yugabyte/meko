@@ -70,6 +70,8 @@ tags:
     description: Compute endpoints bound to a branch; create/delete are asynchronous tasks (202 + Task + Location) — one container/pod per endpoint.
   - name: tasks
     description: Status of long-running operations (the write-ahead task log).
+  - name: migrations
+    description: Voyager database migrations — assess a source Postgres, provision an AMP target, and run the offline migration. Reads derive live status; mutations (assess/target/migrate) are async (202 + Task).
 
 paths:
   /version:
@@ -106,6 +108,8 @@ paths:
                 $ref: '#/components/schemas/User'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -124,6 +128,8 @@ paths:
                 $ref: '#/components/schemas/UserList'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -145,6 +151,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -173,6 +181,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -192,6 +202,8 @@ paths:
                 $ref: '#/components/schemas/StoragePoolList'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -213,6 +225,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -246,6 +260,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -273,6 +289,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -296,6 +314,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     delete:
@@ -314,6 +334,44 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/extensions:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+    post:
+      tags: [branches]
+      operationId: addBranchExtensions
+      summary: Enable externalized extensions on a branch
+      description: |
+        Plans an asynchronous `add_branch_extensions` task that unions the given
+        extensions into this branch's set and redeploys every endpoint on the
+        branch so the new ImageVolume mounts take effect, returning `202` + the
+        `Task` with a `Location` header. Adding extensions is per branch. Idempotent
+        (an already-enabled extension is a no-op). Cheap validation is synchronous:
+        `400` for an empty list, an unknown extension name, or when externalized
+        extensions are unavailable (e.g. the Docker driver); `404` if the pool,
+        cluster, or branch does not exist. See compute/architecture/extensions.md.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddBranchExtensionsRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -335,9 +393,11 @@ paths:
         parent's latest LSN; pass `fork_point_lsn` to branch at an earlier point.
         Like create-cluster, the branch is recorded as a recipe and materialized
         lazily by the first endpoint deployed on it — no compute is started here.
-        Cheap validation is synchronous (`400` bad body / bad or unresolvable
-        `fork_point_lsn`, `404` unknown pool / cluster / parent); a duplicate branch
-        name surfaces as a `failed` task, not a `409`.
+        Cheap validation is synchronous (`400` bad body / bad `fork_point_lsn` /
+        no endpoint on the parent, `404` unknown pool / cluster / parent); a
+        duplicate branch name surfaces as a `failed` task, not a `409`. A parent
+        whose endpoint is deployed but whose safekeeper is not answering yet gets
+        `503` — the fork is valid, just not resolvable yet, so retry it.
       requestBody:
         required: true
         content:
@@ -351,6 +411,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -372,6 +434,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -396,6 +460,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     delete:
@@ -417,6 +483,77 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/settings:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+    patch:
+      tags: [branches]
+      operationId: updateBranchSettings
+      summary: Update a branch's settings
+      description: |
+        Replaces the branch-wide settings named in the body and leaves the rest
+        alone — an omitted field is "do not touch", not "clear", so a caller that
+        knows about one surface cannot blank another it has never heard of. To
+        clear a surface, send it as `{}`.
+
+        These are the **baseline** for every compute on the branch; an endpoint's
+        own `pg_settings` merge over them and win on a shared key.
+
+        Applied to running endpoints on a best-effort basis: the controller
+        writes the row, then asks each of the branch's endpoints to re-read it.
+        Each endpoint applies what it can in place and restarts only what it
+        must: a Postgres setting that can change while the server is running is
+        reloaded (`reloaded`), one fixed at server start restarts the compute
+        (`restarted`, with `restart_forced_by` naming the setting), and a change
+        to a storage daemon's config is a restart because those have no reload
+        path. A setting nothing can apply — compiled in, or a name Postgres does
+        not know — is reported in `not_applied` rather than restarted for, since
+        a restart would not put it in force either. A write that renders identical config does nothing. An endpoint
+        that cannot be reached is reported in `unreachable`; the row is still
+        written, so it picks the change up when it next starts.
+
+
+        **A setting Postgres will not take is refused, not stored.** Before the
+        row is written the branch's `read_write` endpoint is asked whether its
+        Postgres would accept the names and values, and a `400` names each one it
+        would not, with why. Only that endpoint can answer: the version judging
+        them is the one in its image, and an extension's setting does not exist
+        until that extension is loaded.
+
+        The check is skipped when there is no writer to ask — a branch whose
+        endpoints are all read replicas, or which has none yet, is still
+        configurable, because its settings are the baseline whatever starts on it
+        next will use. It is also skipped when the writer cannot be reached, so a
+        write is never blocked on a compute being up; anything unusable then comes
+        back in `not_applied` as before.
+
+        `404` if the pool, cluster, or branch does not exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBranchSettingsRequest'
+      responses:
+        '200':
+          description: The settings now stored, and what they could not be applied to.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsUpdateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -453,6 +590,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     get:
@@ -474,6 +613,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -498,6 +639,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
     delete:
@@ -517,6 +660,69 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /storage-pools/{poolId}/clusters/{clusterId}/branches/{branchId}/endpoints/{endpointId}/settings:
+    parameters:
+      - $ref: '#/components/parameters/PoolId'
+      - $ref: '#/components/parameters/ClusterId'
+      - $ref: '#/components/parameters/BranchId'
+      - $ref: '#/components/parameters/EndpointId'
+    patch:
+      tags: [endpoints]
+      operationId: updateEndpointSettings
+      summary: Update an endpoint's settings
+      description: |
+        Replaces the endpoint's settings named in the body and leaves the rest
+        alone — an omitted field is "do not touch", not "clear". To clear a
+        surface, send it as `{}`.
+
+        `pg_settings` merge over the branch's and win on a shared key;
+        `pageserver_settings` and `safekeeper_settings` are this endpoint's
+        alone.
+
+        Applied on a best-effort basis: the controller writes the row, then asks
+        the endpoint to re-read it. The endpoint reloads what can change while
+        the server is running (`reloaded`) and restarts only what cannot
+        (`restarted`, with `restart_forced_by` naming the Postgres setting that
+        forced it); a storage daemon's config has no reload path, so a change
+        there is a restart. A setting nothing can apply — compiled in, or a name
+        Postgres does not know — is reported in `not_applied` rather than
+        restarted for. A write that renders identical config does nothing.
+        An endpoint that cannot be reached is reported in `unreachable`; the row
+        is still written, so it picks the change up when it next starts.
+
+
+        **A setting Postgres will not take is refused, not stored.** Before the
+        row is written this endpoint is asked whether its Postgres would accept
+        the names and values — it is the pod that will apply them, and for a read
+        replica it may be the only one up — and a `400` names each one it would
+        not, with why. If it cannot be reached the write goes ahead unchecked
+        rather than being blocked on a compute being up.
+
+        `404` if the pool, cluster, branch, or endpoint does not exist.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEndpointSettingsRequest'
+      responses:
+        '200':
+          description: The settings now stored, and what they could not be applied to.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsUpdateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -560,6 +766,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -601,6 +809,8 @@ paths:
                 $ref: '#/components/schemas/TaskList'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -623,6 +833,235 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /migrations/connectivity-checks:
+    post:
+      tags: [migrations]
+      operationId: checkMigrationConnectivity
+      summary: Test source database reachability
+      description: |
+        Dials the source Postgres directly (from inside the cluster) and reports
+        whether it is reachable, its server version, SSL state, and round-trip
+        latency. Stateless — nothing is persisted, and it may be called before any
+        migration exists. A source that cannot be reached is still a `200` with
+        `reachable=false` and a redacted `error`; only a malformed request is
+        `400`. Credentials are never persisted or echoed back.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MigrationConnectivityRequest'
+      responses:
+        '200':
+          description: The connectivity probe result (reachable or not).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationConnectivity'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /migrations:
+    post:
+      tags: [migrations]
+      operationId: createMigration
+      summary: Create a migration
+      description: |
+        Records a migration entity from a name and a source Postgres
+        configuration, and returns it synchronously (`201`). No side effects: the
+        export volume and any target compute are created later by the assess /
+        target / migrate operations. The source password is stored for the Voyager
+        jobs but never returned in any response. `400` if the body is malformed or
+        the source is not a supported `postgresql` database.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMigrationRequest'
+      responses:
+        '201':
+          description: Migration created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Migration'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [migrations]
+      operationId: listMigrations
+      summary: List migrations
+      description: |
+        Lists migrations, most recent first. Lightweight: `state` is derived from
+        persisted rows only (no live deployer calls), so it may lag a per-migration
+        GET until the next status read.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of migrations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /migrations/{migrationId}:
+    parameters:
+      - $ref: '#/components/parameters/MigrationId'
+    get:
+      tags: [migrations]
+      operationId: getMigration
+      summary: Get a migration's status
+      description: |
+        The primary polling surface. Derives status on read: merges the migration
+        row, the latest run per operation, the live deployer job state, and
+        Voyager's visualizer rows (phases + per-table data progress). Passwords
+        never appear in the response. `404` if the migration does not exist.
+      responses:
+        '200':
+          description: The migration and its derived status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Migration'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /migrations/{migrationId}/assessment:
+    parameters:
+      - $ref: '#/components/parameters/MigrationId'
+    get:
+      tags: [migrations]
+      operationId: getMigrationAssessment
+      summary: Get the parsed assessment report
+      description: |
+        Returns the agent-relevant projection of the latest completed assessment
+        (Voyager's `AssessMigrationPayloadYugabyteD`): migration complexity, source
+        database size facts, a compute sizing recommendation, and the flattened
+        issues — enough to size the migration target. `404` if no completed
+        assessment exists for the migration yet.
+      responses:
+        '200':
+          description: The parsed assessment report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationAssessment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /migrations/{migrationId}/assess:
+    parameters:
+      - $ref: '#/components/parameters/MigrationId'
+    post:
+      tags: [migrations]
+      operationId: startMigrationAssessment
+      summary: Start an assessment run
+      description: |
+        Plans an asynchronous launcher task that records an assess run and submits
+        the Voyager assess job, and returns `202` + the `Task` with a `Location`
+        header. Poll `GET /migrations/{migrationId}` (not the task) to track the
+        job — the task only covers the launch. `404` if the migration does not
+        exist; `409` if a run is already in flight for it. Requires the Voyager
+        job runner; returns `501` otherwise.
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /migrations/{migrationId}/provision-target:
+    parameters:
+      - $ref: '#/components/parameters/MigrationId'
+    post:
+      tags: [migrations]
+      operationId: provisionMigrationTarget
+      summary: Provision and attach the migration target
+      description: |
+        Plans an asynchronous task that provisions a right-sized AMP compute (a
+        project, its default branch, and a read_write endpoint) and attaches it to
+        the migration as its target, and returns `202` + the `Task` with a
+        `Location` header. Size the target with `vcpu` (chosen by the agent from
+        the assessment). `404` if the migration does not exist; `409` if a target
+        is already attached or a provision task is already in flight. Requires the
+        endpoint deployer; returns `501` otherwise.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProvisionMigrationTargetRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /migrations/{migrationId}/migrate:
+    parameters:
+      - $ref: '#/components/parameters/MigrationId'
+    post:
+      tags: [migrations]
+      operationId: startMigration
+      summary: Start the offline migration
+      description: |
+        Plans an asynchronous launcher task that records a migrate run and submits
+        the Voyager migrate job, and returns `202` + the `Task` with a `Location`
+        header. Requires a target to be attached first (`409 target_not_attached`
+        otherwise). Optional `parallel_jobs` tunes `import data --parallel-jobs`
+        (defaults to `8`). Poll `GET /migrations/{migrationId}`
+        to track the job. `404` if the migration does not exist; `409` if a run is
+        already in flight. Requires the Voyager job runner; returns `501` otherwise.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartMigrationRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/Accepted'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -673,6 +1112,14 @@ components:
       in: path
       required: true
       description: The task's id.
+      schema:
+        type: string
+        format: uuid
+    MigrationId:
+      name: migrationId
+      in: path
+      required: true
+      description: The migration's id.
       schema:
         type: string
         format: uuid
@@ -738,6 +1185,23 @@ components:
             $ref: '#/components/schemas/Error'
     Conflict:
       description: The request conflicts with existing state (e.g. a duplicate name).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServiceUnavailable:
+      description: >-
+        The request is valid but cannot be served yet; retry it. Either a
+        dependency the request needs is not answering yet (a parent branch's
+        safekeeper on `createBranch`), or the controller's state store was
+        unreachable — a transient condition that clears, as opposed to the `500`
+        that means the controller itself is at fault.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          required: true
+          schema:
+            type: integer
       content:
         application/json:
           schema:
@@ -871,6 +1335,18 @@ components:
           description: When true, also create and deploy the default branch's read_write (write) endpoint in the same task, so the new cluster is immediately connectable ("create cluster" = the cluster + its writer). Compute size comes from `resources`. When false (default), no endpoint is created — compute is provisioned separately.
         resources:
           $ref: '#/components/schemas/EndpointResources'
+        extensions:
+          type: array
+          items:
+            type: string
+          description: |
+            Externalized PostgreSQL extensions to enable on the cluster's default
+            branch ("main"), by catalog name (e.g. `pgvector`). Every endpoint on
+            that branch mounts them, and a fork inherits the set; add more to a
+            branch later with addBranchExtensions. An unknown name is rejected
+            (400), as is any value when externalized extensions are unavailable
+            (e.g. the Docker driver). Empty/omitted enables only the catalog
+            defaults. See compute/architecture/extensions.md.
 
     Cluster:
       type: object
@@ -891,6 +1367,32 @@ components:
           format: date-time
         default_branch:
           $ref: '#/components/schemas/Branch'
+        extensions:
+          type: array
+          items:
+            type: string
+          description: |
+            Externalized PostgreSQL extensions enabled on the cluster's default
+            branch ("main"), by catalog name (e.g. `pgvector`), surfaced here as
+            the cluster's set. Each branch carries its own set (a fork inherits its
+            parent's; see getBranch and addBranchExtensions). Set at createCluster;
+            empty when none. Excludes the catalog defaults, which are added per
+            endpoint at deploy time.
+
+    AddBranchExtensionsRequest:
+      type: object
+      required: [extensions]
+      properties:
+        extensions:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: |
+            Externalized PostgreSQL extensions to enable on this branch, by catalog
+            name (e.g. `pgvector`). Unioned into the branch's set (idempotent); an
+            unknown name is rejected (400). Every existing endpoint on the branch is
+            redeployed to mount the new set. See compute/architecture/extensions.md.
 
     ClusterList:
       type: object
@@ -933,6 +1435,16 @@ components:
           type: string
           nullable: true
           description: The ancestor LSN this branch was forked at (storage-layer "X/X" form), or null for a default branch.
+        extensions:
+          type: array
+          items:
+            type: string
+          description: |
+            Externalized PostgreSQL extensions enabled on this branch, by catalog
+            name (e.g. `pgvector`); the names every endpoint on it mounts. A fork
+            inherits its ancestor's set at fork time, and addBranchExtensions adds
+            more to this branch. Excludes the catalog defaults, which are added per
+            endpoint at deploy time. Empty when none.
         pg_settings:
           type: object
           additionalProperties:
@@ -941,17 +1453,8 @@ components:
             Extra PostgreSQL settings applied to every compute on this branch, as
             `{name: value}`. A fork inherits its ancestor's. An endpoint's own
             `pg_settings` merge over these and win on a key both define.
-        extensions:
-          type: array
-          items:
-            type: string
-          description: |
-            Externalized PostgreSQL extensions opted into on this branch, by
-            catalog name (e.g. `pgvector`). Durable branch state: a fork inherits
-            its parent's set, and every endpoint on the branch mounts them.
-            Enabled via createEndpoint's `extensions` (there is no branch-create
-            field); empty when none. Excludes the catalog defaults, which are
-            added per endpoint at deploy time.
+        write_token_settings:
+          $ref: '#/components/schemas/WriteTokenSettings'
         created_at:
           type: string
           format: date-time
@@ -1045,9 +1548,216 @@ components:
             compute actually runs with are its branch's merged with these, these
             winning on a key both define — so read the branch's too if you want
             the effective set.
+        pageserver_settings:
+          $ref: '#/components/schemas/DaemonSettings'
+          description: This endpoint's pageserver overrides, as stored.
+        safekeeper_settings:
+          $ref: '#/components/schemas/DaemonSettings'
+          description: This endpoint's safekeeper overrides, as stored.
         created_at:
           type: string
           format: date-time
+
+    UpdateBranchSettingsRequest:
+      type: object
+      description: |
+        Branch-wide settings to replace. Every field is optional and an omitted
+        one is left as it is; send `{}` for a surface to clear it.
+      properties:
+        pg_settings:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Extra PostgreSQL settings as `{name: value}`. Replaces what is
+            stored; `{}` clears them.
+        write_token_settings:
+          $ref: '#/components/schemas/WriteTokenSettings'
+
+    UpdateEndpointSettingsRequest:
+      type: object
+      description: |
+        This endpoint's settings to replace. Every field is optional and an
+        omitted one is left as it is; send `{}` for a surface to clear it.
+      properties:
+        pg_settings:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Extra PostgreSQL settings as `{name: value}`. Replaces what is
+            stored; `{}` clears them.
+        pageserver_settings:
+          $ref: '#/components/schemas/DaemonSettings'
+        safekeeper_settings:
+          $ref: '#/components/schemas/DaemonSettings'
+
+    WriteTokenSettings:
+      type: object
+      additionalProperties: true
+      description: |
+        How the supervisor holds this branch's write lease
+        (`compute/architecture/compute-fencing.md`). `ttl_ms` is the lease
+        length; `renew_seconds` is how often it is renewed, and must be under
+        the TTL — the gap is how long a failing renewal may be retried before
+        anything stops writing.
+
+        On the branch and not the endpoint because the lease is one row per
+        branch: every endpoint on it contends for that row, so two endpoints
+        disagreeing about the TTL would not be an override, just whichever
+        renewed last.
+
+        Empty means the supervisor's own defaults. Read when an endpoint
+        starts.
+      example:
+        ttl_ms: 15000
+        renew_seconds: 5
+
+    SettingsUpdateResult:
+      type: object
+      required: [applied]
+      description: |
+        What was stored, and what could not be applied to a running endpoint.
+        The row is written either way — an endpoint that could not be told
+        picks the change up when it next starts.
+      properties:
+        applied:
+          type: boolean
+          description: Whether the settings were persisted. False never appears with a 200.
+        endpoints:
+          type: array
+          description: |
+            One entry per running endpoint the change was pushed to. Absent for
+            a branch with no endpoints.
+          items:
+            $ref: '#/components/schemas/EndpointSettingsOutcome'
+
+    SettingNotApplied:
+      type: object
+      required: [name, reason]
+      description: One stored setting that is not in force, and why.
+      properties:
+        name:
+          type: string
+          description: The setting's name, as it was stored.
+        reason:
+          type: string
+          description: |
+            Why it is not in force. A fixed phrase, safe to show a person and
+            safe to compare on:
+
+            - `unrecognized parameter` — Postgres does not know this name,
+              usually a typo. Never an extension's setting: a name with a dot in
+              it is always accepted.
+            - `invalid value` — the name is real, the value is not usable for it.
+            - `cannot be set in a configuration file` — compiled into the binary
+              (`pg_settings.context = 'internal'`), like `block_size`.
+            - `refused by Postgres` — refused for a reason none of the above
+              covers. The endpoint's log carries Postgres's own message.
+            - `nothing applies this setting` — Postgres accepts it in the file,
+              but neither a reload nor a restart puts it in force.
+
+    EndpointSettingsOutcome:
+      type: object
+      required: [endpoint_id]
+      description: What one endpoint did with the change.
+      properties:
+        endpoint_id:
+          type: string
+          format: uuid
+        reloaded:
+          type: array
+          description: |
+            Services that took the change in place, without an interruption.
+            For the compute this means Postgres reloaded its configuration and
+            kept its connections.
+          items:
+            type: string
+        restart_forced_by:
+          type: array
+          description: |
+            The Postgres settings that forced a restart. Postgres fixes these at
+            server start (`pg_settings.context = 'postmaster'`), so they cannot
+            be applied any other way — naming them explains a cost that would
+            otherwise look arbitrary.
+          items:
+            type: string
+        restarted:
+          type: array
+          description: |
+            Services the endpoint restarted onto the new config. Empty means
+            nothing changed for that endpoint — a settings write that renders
+            identical config costs nothing, so only what actually moved is
+            bounced.
+
+            Restarting the compute bounces Postgres, so this is the field to
+            watch: a setting Postgres fixes at server start interrupts that
+            endpoint's connections, and `restart_forced_by` names it. A setting
+            that can change while the server is running is reloaded instead and
+            appears in `reloaded`.
+          items:
+            type: string
+        not_applied:
+          type: array
+          description: |
+            Settings that are stored but not in force, and never will be until
+            they are changed. Two reasons, both reported here:
+
+            Postgres refuses the setting — a name it does not recognise, or a
+            value it cannot parse. These are deliberately left out of the config
+            file the compute reads, because a file containing one does not load:
+            a reload of it applies nothing, and the next start fails outright. A
+            setting like this cannot break the endpoint, but it also does nothing.
+
+            Or nothing applies it: a `pg_settings.context = 'internal'` setting
+            is compiled into the binary, so neither a reload nor a restart can
+            change it.
+
+            Either way the endpoint is not interrupted, which makes this field
+            the only signal that the edit had no effect.
+
+            A name with a dot in it is always written — Postgres takes it as a
+            placeholder — so it is never refused. It does appear here with
+            `nothing applies this setting` while the extension that defines it is
+            not loaded, because until then Postgres does not report the setting
+            and nothing can put the value in force.
+          items:
+            $ref: '#/components/schemas/SettingNotApplied'
+        unreachable:
+          type: string
+          description: |
+            Why this endpoint could not be told, when it could not be. The
+            settings are still stored.
+
+    DaemonSettings:
+      type: object
+      additionalProperties: true
+      description: |
+        Overrides for one of the two storage daemons in an endpoint's pod, as a
+        flat `{key: value}` object merged into that daemon's toml at pod start.
+        They beat every resource-derived default the supervisor computes.
+
+        **Keys may be dotted paths.** `a.b` addresses a nested toml table, which
+        is how the pageserver's GC knobs are reached at all — they live in
+        `tenant_config`, not at the top level:
+
+        ```json
+        {"tenant_config.enable_gc": true, "tenant_config.pitr_interval": "7 days"}
+        ```
+
+        **Values must be scalars** (boolean, integer, float, string). The nesting
+        is expressed entirely in the key; a nested object as a *value* is
+        rejected. Durations and byte sizes are strings in the daemons' own format
+        (`"7 days"`, `"1 GiB"`).
+
+        Validated against a key set generated from the daemons' own config types,
+        so an unknown key, a wrong-typed value, or a protected identity/wiring key
+        (`branch_id`, the `listen_*` addresses, `yb_storage_conn`,
+        `pg_distrib_dir`, `control_plane_api`, `safekeeper_pg_addr`) is a `400`
+        rather than a pod that will not start.
+
+        Applied at pod start, so a change takes effect on the endpoint's next
+        start — there is no live-reload path today.
 
     EndpointList:
       type: object
@@ -1086,6 +1796,18 @@ components:
             They merge over the branch's `pg_settings` and win on a key both
             define, so this is the per-endpoint override of a branch-wide
             baseline.
+        pageserver_settings:
+          $ref: '#/components/schemas/DaemonSettings'
+          description: |
+            Overrides for the pageserver running in this endpoint's pod, merged
+            into its `pageserver.toml` at pod start. See `DaemonSettings` for the
+            key form — in particular, the GC knobs are nested and must be given
+            as dotted paths (`tenant_config.enable_gc`).
+        safekeeper_settings:
+          $ref: '#/components/schemas/DaemonSettings'
+          description: |
+            Overrides for the safekeeper running in this endpoint's pod, merged
+            into its `safekeeper.toml` at pod start. See `DaemonSettings`.
         extended_config:
           type: object
           additionalProperties: true
@@ -1112,21 +1834,6 @@ components:
             supported and is rejected with 400.
         resources:
           $ref: '#/components/schemas/EndpointResources'
-        extensions:
-          type: array
-          items:
-            type: string
-          description: |
-            Externalized PostgreSQL extensions to opt this endpoint's **branch**
-            into, by catalog name (e.g. `pgvector`). Enabling is a branch
-            property, not an endpoint one: each name is added to the branch's
-            durable extension set (so branch forks inherit it and every endpoint
-            on the branch picks it up) and mounted into the pod as a read-only
-            Kubernetes ImageVolume, with `extension_control_path` /
-            `dynamic_library_path` pointed at it so `CREATE EXTENSION` resolves.
-            Unknown names are rejected with 400. Requires the Kubernetes deployer;
-            rejected when externalized extensions are unavailable (e.g. the Docker
-            driver). See compute/architecture/extensions.md.
 
     EndpointResources:
       type: object
@@ -1221,6 +1928,484 @@ components:
     PageCount:
       type: integer
       description: The number of items returned in this response (this page).
+
+    MigrationState:
+      type: string
+      description: |
+        The migration's lifecycle state, derived on read from the migration row,
+        its runs, and the live Voyager job.
+      enum:
+        - created
+        - assessing
+        - assessed
+        - provisioning_target
+        - target_ready
+        - migrating
+        - completed
+        - failed
+
+    MigrationSourceRequest:
+      type: object
+      description: The source database connection, as supplied by the caller. The password is stored for the Voyager jobs but is never returned in any response.
+      required: [db_type, host, port, username, password, database, schemas]
+      properties:
+        db_type:
+          type: string
+          enum: [postgresql]
+          description: Source database engine. Only `postgresql` is supported.
+        host:
+          type: string
+          minLength: 1
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          description: Source password. Stored for the Voyager jobs; never returned.
+        database:
+          type: string
+          minLength: 1
+        schemas:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: Schemas to migrate. Required — list at least one schema explicitly (e.g. `[public]`), matching the Voyager CLI's explicit-scope behavior.
+
+    MigrationSource:
+      type: object
+      description: The source database connection as returned in responses — the password is intentionally omitted.
+      required: [db_type, host, port, username, database]
+      properties:
+        db_type:
+          type: string
+          enum: [postgresql]
+        host:
+          type: string
+        port:
+          type: integer
+        username:
+          type: string
+        database:
+          type: string
+        schemas:
+          type: array
+          items:
+            type: string
+
+    MigrationTarget:
+      type: object
+      description: The attached AMP compute the migrate job imports into. Populated once a target is provisioned and attached; the password is never returned.
+      required: [endpoint_id, cluster_id, pool_id, host, port, username, database]
+      properties:
+        endpoint_id:
+          type: string
+          format: uuid
+        cluster_id:
+          type: string
+          format: uuid
+        pool_id:
+          type: string
+          format: uuid
+        host:
+          type: string
+        port:
+          type: integer
+        username:
+          type: string
+        database:
+          type: string
+
+    MigrationRunDeployerMetadata:
+      type: object
+      description: |
+        Safe, credential-free runtime reference to the deployer job backing a run
+        (e.g. the Kubernetes namespace/job or the Docker container). Shape varies
+        by deployer; common Kubernetes fields are documented below.
+      additionalProperties: true
+      properties:
+        namespace:
+          type: string
+        job_name:
+          type: string
+        job_uid:
+          type: string
+        volume:
+          type: string
+        container_id:
+          type: string
+
+    MigrationRun:
+      type: object
+      description: One assess or migrate attempt. Credentials never appear here.
+      required: [operation, attempt, status]
+      properties:
+        operation:
+          type: string
+          enum: [assess, migrate]
+        attempt:
+          type: integer
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed]
+        deployer_type:
+          type: string
+          nullable: true
+          description: The deployer that ran the job (e.g. `kubernetes`, `docker`); null until the job is launched.
+        deployer_metadata:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MigrationRunDeployerMetadata'
+          nullable: true
+        task_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The launcher task that owns this run.
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_summary:
+          type: string
+          nullable: true
+          description: A short, credential-free failure summary; null unless the run failed.
+
+    MigrationVoyagerPhase:
+      type: object
+      description: One Voyager workflow phase (Voyager's fixed phase number and its name), with its latest status.
+      required: [phase, name, status]
+      properties:
+        phase:
+          type: integer
+          description: Voyager's fixed phase identifier (non-contiguous — e.g. import-schema is 5, export-data is 4).
+        name:
+          type: string
+          description: 'Human phase name (e.g. export-schema, import-data).'
+        status:
+          type: string
+          enum: [not_started, in_progress, completed]
+        updated_at:
+          type: string
+          format: date-time
+
+    MigrationTableProgress:
+      type: object
+      description: Per-table row progress for a data phase (row counts only — Voyager does not emit byte counts).
+      required: [schema, table, status, rows_completed, rows_total]
+      properties:
+        schema:
+          type: string
+        table:
+          type: string
+        status:
+          type: string
+          enum: [not_started, in_progress, done, completed]
+        rows_completed:
+          type: integer
+          format: int64
+        rows_total:
+          type: integer
+          format: int64
+
+    MigrationPhaseDataProgress:
+      type: object
+      description: Aggregate and per-table row progress for one data direction (export or import).
+      required: [rows_completed, rows_total, tables]
+      properties:
+        rows_completed:
+          type: integer
+          format: int64
+        rows_total:
+          type: integer
+          format: int64
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationTableProgress'
+
+    MigrationDataProgress:
+      type: object
+      description: Data-copy progress for the migrate operation. Each direction is null until that phase produces rows.
+      properties:
+        export:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MigrationPhaseDataProgress'
+          nullable: true
+        import:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MigrationPhaseDataProgress'
+          nullable: true
+
+    MigrationVoyager:
+      type: object
+      description: Voyager's own view of the migration, read from its visualizer tables. Null before the first run writes any rows.
+      required: [phases]
+      properties:
+        phases:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationVoyagerPhase'
+        data_progress:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MigrationDataProgress'
+          nullable: true
+
+    Migration:
+      type: object
+      description: A migration and its derived status.
+      required: [id, name, state, detail, source, runs, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        state:
+          $ref: '#/components/schemas/MigrationState'
+        detail:
+          type: string
+          description: Human-readable, chat-ready status detail (e.g. "importing data (4,103/6,704 rows)").
+        source:
+          $ref: '#/components/schemas/MigrationSource'
+        target:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MigrationTarget'
+          nullable: true
+          description: The attached target compute; null until a target is provisioned.
+        runs:
+          type: array
+          description: The latest attempt per operation (assess and/or migrate).
+          items:
+            $ref: '#/components/schemas/MigrationRun'
+        voyager:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MigrationVoyager'
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    MigrationSummary:
+      type: object
+      description: The lightweight migration projection used in list responses (persisted state only).
+      required: [id, name, state, detail, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        state:
+          $ref: '#/components/schemas/MigrationState'
+        detail:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    MigrationList:
+      type: object
+      required: [migrations, total, count]
+      properties:
+        migrations:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationSummary'
+        total:
+          $ref: '#/components/schemas/TotalCount'
+        count:
+          $ref: '#/components/schemas/PageCount'
+
+    CreateMigrationRequest:
+      type: object
+      required: [name, source]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Human name for the migration.
+        source:
+          $ref: '#/components/schemas/MigrationSourceRequest'
+
+    MigrationConnectivityRequest:
+      type: object
+      required: [source]
+      properties:
+        source:
+          $ref: '#/components/schemas/MigrationSourceRequest'
+
+    MigrationConnectivity:
+      type: object
+      description: The result of a source-connectivity probe. `reachable=false` is still a 200; the failure detail is in `error` (credentials redacted).
+      required: [reachable]
+      properties:
+        reachable:
+          type: boolean
+        server_version:
+          type: string
+          nullable: true
+          description: The source server version string, when reachable.
+        ssl:
+          type: boolean
+          nullable: true
+          description: Whether the connection negotiated SSL, when reachable.
+        latency_ms:
+          type: integer
+          format: int64
+          nullable: true
+          description: Connect + probe round-trip latency in milliseconds, when reachable.
+        error:
+          type: string
+          nullable: true
+          description: A redacted failure reason when `reachable=false`.
+
+    ProvisionMigrationTargetRequest:
+      type: object
+      required: [pool_id]
+      properties:
+        pool_id:
+          type: string
+          format: uuid
+          description: The storage pool to create the target project in.
+        vcpu:
+          type: integer
+          minimum: 0
+          description: Target compute size in vCPU (chosen by the agent from the assessment). Zero/omitted leaves the deployer default.
+        project_name:
+          type: string
+          description: Name for the target project. Defaults to the migration name when omitted.
+
+    StartMigrationRequest:
+      type: object
+      properties:
+        parallel_jobs:
+          type: integer
+          minimum: 1
+          description: Value for `import data --parallel-jobs`. Defaults to `8` when omitted.
+
+    MigrationAssessmentSourceEnvironment:
+      type: object
+      description: Source host environment facts. Voyager payload v1.8 does not currently populate these, so they are normally zero.
+      properties:
+        total_vcpu:
+          type: number
+        total_memory:
+          type: integer
+          format: int64
+        total_disk_size:
+          type: integer
+          format: int64
+
+    MigrationAssessmentSourceDatabaseStats:
+      type: object
+      description: Size and row-count facts from the source database.
+      properties:
+        total_table_size_bytes:
+          type: integer
+          format: int64
+        total_index_size_bytes:
+          type: integer
+          format: int64
+        table_row_count:
+          type: integer
+          format: int64
+
+    MigrationSizingRecommendation:
+      type: object
+      description: Voyager's compute-sizing recommendation, projected to the fields the agent needs.
+      properties:
+        num_nodes:
+          type: number
+        vcpu_per_node:
+          type: integer
+        memory_per_node_gb:
+          type: integer
+        colocated_tables:
+          type: array
+          items:
+            type: string
+        sharded_tables:
+          type: array
+          items:
+            type: string
+        summary:
+          type: string
+
+    MigrationAssessmentIssue:
+      type: object
+      description: A flattened, agent-readable assessment issue.
+      properties:
+        category:
+          type: string
+        type:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        impact:
+          type: string
+        object_type:
+          type: string
+        object_name:
+          type: string
+        docs_link:
+          type: string
+
+    MigrationAssessment:
+      type: object
+      description: The parsed, agent-oriented projection of Voyager's completed assessment payload.
+      required:
+        - voyager_version
+        - migration_complexity
+        - migration_complexity_explanation
+        - source_environment
+        - source_database
+        - sizing_recommendation
+        - issues
+        - notes
+      properties:
+        voyager_version:
+          type: string
+        migration_complexity:
+          type: string
+          description: 'Voyager''s complexity rating (e.g. LOW, MEDIUM, HIGH).'
+        migration_complexity_explanation:
+          type: string
+        source_environment:
+          $ref: '#/components/schemas/MigrationAssessmentSourceEnvironment'
+        source_database:
+          $ref: '#/components/schemas/MigrationAssessmentSourceDatabaseStats'
+        sizing_recommendation:
+          $ref: '#/components/schemas/MigrationSizingRecommendation'
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/MigrationAssessmentIssue'
+        notes:
+          type: array
+          items:
+            type: string
 
     Error:
       type: object

@@ -29,21 +29,19 @@ func unknownExtensionName(err error) string {
 }
 
 // optInExtensionEndpoint is the shared prologue of every per-extension DEPTH
-// test: create an endpoint whose branch opts into one catalog extension, probe
-// that the ImageVolume actually mounted, and CREATE EXTENSION. It skips (ok =
-// false, nil error) on the three conditions that are the environment's rather
-// than the product's — no extension catalog at all, a catalog that does not
-// know this extension yet (the image under test predates it), and a cluster
+// test: opt the branch into one catalog extension, create an endpoint on it,
+// probe that the ImageVolume actually mounted, and CREATE EXTENSION. It skips
+// (ok = false, nil error) on the three conditions that are the environment's
+// rather than the product's — no extension catalog at all, a catalog that does
+// not know this extension yet (the image under test predates it), and a cluster
 // whose kubelet cannot mount ImageVolumes. pg_extensions_matrix is where those
 // same conditions HARD-FAIL under functional.extensions.require_catalog; a
 // depth test skipping visibly does not weaken that contract.
 func optInExtensionEndpoint(ctx context.Context, cl ampCtl, proj ampCluster, connect endpointConnector,
 	skip func(string), catalogName, sqlName string) (sqlConn, bool, error) {
-	ep, err := createEndpointReq(ctx, cl, proj.poolID, proj.projID, proj.branchID, controller.CreateEndpointRequest{
-		Role:       roleReadWrite,
+	if _, err := cl.AddBranchExtensionsAndWait(ctx, proj.poolID, proj.projID, proj.branchID, controller.AddBranchExtensionsRequest{
 		Extensions: []string{catalogName},
-	})
-	if err != nil {
+	}); err != nil {
 		if extensionsUnavailable(err) {
 			skip("externalized extensions are not available on this control plane (no extension catalog): " + err.Error())
 			return nil, false, nil
@@ -52,7 +50,11 @@ func optInExtensionEndpoint(ctx context.Context, cl ampCtl, proj ampCluster, con
 			skip("this controller's catalog does not know " + catalogName + " — the image under test predates it; pg_extensions_matrix owns the hard contract once it ships")
 			return nil, false, nil
 		}
-		return nil, false, fmt.Errorf("create endpoint opted into %s: %w", catalogName, err)
+		return nil, false, fmt.Errorf("opt branch into %s: %w", catalogName, err)
+	}
+	ep, err := createEndpoint(ctx, cl, proj.poolID, proj.projID, proj.branchID)
+	if err != nil {
+		return nil, false, fmt.Errorf("create endpoint after opting the cluster into %s: %w", catalogName, err)
 	}
 	c, err := connect(ctx, ep)
 	if err != nil {
@@ -88,7 +90,7 @@ func assertPreloaded(ctx context.Context, c sqlConn, library string) error {
 		return fmt.Errorf("SHOW shared_preload_libraries: %w", err)
 	}
 	if !containsToken(libs, library) {
-		return fmt.Errorf("shared_preload_libraries is %q, missing %q — the endpoint chart must append a preload extension's library when the branch opts in, or its background workers and shared memory never exist", libs, library)
+		return fmt.Errorf("shared_preload_libraries is %q, missing %q — the endpoint chart must append a preload extension's library when the cluster opts in, or its background workers and shared memory never exist", libs, library)
 	}
 	return nil
 }

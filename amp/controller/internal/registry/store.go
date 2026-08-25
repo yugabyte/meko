@@ -183,25 +183,28 @@ func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID,
 	}
 	defer tx.Rollback(ctx)
 
-	// `extensions` is inherited from the ancestor at fork time: the child's row is
-	// seeded with a snapshot of the ancestor's opted-in extension set (empty for a
-	// bootstrap branch, whose ancestor is NULL). It is resolved in a *separate*
-	// SELECT and passed as a plain parameter rather than a subquery in the INSERT
-	// VALUES: YB does not support a table-referencing subquery inside an
-	// `INSERT ... ON CONFLICT`. The scalar COALESCE always returns one row
-	// (NULL -> '[]'), so there is no ErrNoRows to handle.
-	// See compute/architecture/extensions.md#branch-fork.
+	// A fork inherits BOTH its externalized-extension set and its pg_settings from
+	// the ancestor branch at fork time — each is per-branch state, and every
+	// endpoint resolves against its own branch's row. They are resolved in a
+	// *separate* SELECT and passed as plain parameters rather than subqueries in
+	// the INSERT: YB does not support a table-referencing subquery inside an
+	// `INSERT ... ON CONFLICT`. The scalar COALESCEs always return one row
+	// (NULL -> '[]' / '{}'), so there is no ErrNoRows to handle. extensions is a
+	// pure copy (createBranch takes no extensions); pg_settings additionally
+	// merges the caller's overrides below.
+	// See compute/architecture/extensions.md.
 	inheritedExts := []byte("[]")
 	inheritedSettings := []byte("{}")
 	if req.AncestorBranchID != nil {
-		var exts, settings []byte
+		var settings, exts []byte
 		if err := tx.QueryRow(ctx,
-			`SELECT COALESCE(extensions, '[]'::jsonb), COALESCE(pg_settings, '{}'::jsonb)
+			`SELECT COALESCE(pg_settings, '{}'::jsonb), COALESCE(extensions, '[]'::jsonb)
 			   FROM amp_registry.branches WHERE branch_id = $1::uuid`,
-			req.AncestorBranchID.String()).Scan(&exts, &settings); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("read ancestor extensions and settings: %w", err)
+			req.AncestorBranchID.String()).Scan(&settings, &exts); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read ancestor settings/extensions: %w", err)
 		} else if err == nil {
-			inheritedExts, inheritedSettings = exts, settings
+			inheritedSettings = settings
+			inheritedExts = exts
 		}
 	}
 
@@ -228,9 +231,9 @@ func (s *Store) recordBranch(ctx context.Context, clusterID, branchID uuid.UUID,
 	// itself, and every branch declared here hangs off it (or stands alone as
 	// another root). ON CONFLICT DO NOTHING makes a re-record converge, and leaves
 	// an existing creation record untouched rather than rewriting it — which is
-	// also what keeps a re-record from clobbering an `extensions` set that the
-	// branch's own create_endpoint opt-in (AddBranchExtensions) unioned in after
-	// this row was first written.
+	// also what keeps a re-record from clobbering a fork's inherited `extensions` /
+	// `pg_settings` (and any later per-branch extension add) after this row was
+	// first written.
 	//
 	// This INSERT is the branch's *only* creator on the fork path: the branch task
 	// is one step so that the row, the branch_state seed, and the validation below

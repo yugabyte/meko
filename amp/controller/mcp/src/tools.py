@@ -45,7 +45,10 @@ def get_storage_pool(pool_id: str) -> dict[str, Any]:
 
 
 def create_cluster(
-    pool_id: str, name: str, pg_version: Optional[int] = None
+    pool_id: str,
+    name: str,
+    pg_version: Optional[int] = None,
+    extensions: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Create a cluster (and its default branch "main") in a pool. ASYNCHRONOUS.
 
@@ -54,8 +57,34 @@ def create_cluster(
     the cluster and its `default_branch`. `pg_version` defaults to 18; only 18
     is currently accepted — any other value is rejected with 400, so omit it
     unless you have a reason to set it.
+
+    `extensions` enables externalized PostgreSQL extensions (by catalog name,
+    e.g. `["pgvector"]`) on the cluster's default branch "main": every endpoint
+    on that branch mounts them, and a fork inherits the set. Add more to a branch
+    later with `add_branch_extensions`. An unknown name is rejected with 400, as
+    is any value when the controller has no extension catalog (e.g. the Docker
+    driver).
     """
-    return controller_client.create_cluster(pool_id, name, pg_version)
+    return controller_client.create_cluster(pool_id, name, pg_version, extensions)
+
+
+def add_branch_extensions(
+    pool_id: str, cluster_id: str, branch_id: str, extensions: list[str]
+) -> dict[str, Any]:
+    """Enable externalized PostgreSQL extensions on a branch. ASYNCHRONOUS.
+
+    Adding is per branch: the names (catalog names, e.g. `["pgvector"]`) are
+    unioned into this branch's set and every existing endpoint on the branch is
+    redeployed to mount them, so `CREATE EXTENSION` resolves. Idempotent — an
+    already-enabled extension is a no-op. Returns a Task; poll
+    `get_task(task_id=<id>)` until `status` is `succeeded` or `failed`, then read
+    the branch's `extensions` via `get_branch`. An unknown name, an empty list,
+    or a controller without an extension catalog (e.g. the Docker driver) is
+    rejected with 400.
+    """
+    return controller_client.add_branch_extensions(
+        pool_id, cluster_id, branch_id, extensions
+    )
 
 
 def list_clusters(

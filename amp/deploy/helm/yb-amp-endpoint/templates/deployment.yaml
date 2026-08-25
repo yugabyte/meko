@@ -6,13 +6,14 @@ metadata:
     {{- include "yb-amp-endpoint.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  {{- if .Values.persistence.storageClass }}
-  # The /data PVC is ReadWriteOnce — it attaches to one pod at a time — so a new
-  # pod can't mount it while the old one still holds it. Recreate (stop the old
-  # pod before starting the new one) instead of surging a second pod.
+  # An endpoint is a single-writer compute: two pods for the same endpoint must
+  # never run at once, or the surged pod fights the old one for the storage
+  # layer's writer fence and crash-loops until the old is gone. So redeploy with
+  # Recreate (stop the old pod before starting the new) rather than the default
+  # RollingUpdate, regardless of whether /data is a PVC or emptyDir. (A PVC is
+  # also ReadWriteOnce, which independently forbids a surged second attach.)
   strategy:
     type: Recreate
-  {{- end }}
   selector:
     matchLabels:
       {{- include "yb-amp-endpoint.selectorLabels" . | nindent 6 }}
