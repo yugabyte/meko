@@ -130,24 +130,35 @@ set *and* a kube-context (`apps.ybk8s.kubecontext` / `apps.ybk8s.kubeconfig` /
 `env.ampstack.context`), a chart version (`apps.ybk8s.chart_version` /
 `versions.yugabytedb`) and the private sample-app jar secret
 (`stress.combined.jar_secret`, default `gh_package`) are all resolvable.
-`backing_maintenance` self-provisions the same way and gates on the same three
-things under `stress.backing_maintenance.*`, plus an upgrade target
-(`upgrade_to`) whenever `software_upgrade` is in its `operations` list:
+`backing_maintenance` and `backing_backup_restore` do NOT self-provision: they
+operate on the universe the env already stood up, so they need
+`env.yb_deploy=yba_provisioned` (kubernetes) and skip on any env that gives them
+no YBA universe. Both are ON by default (`stress.backing_maintenance.enabled`,
+`stress.backing_backup_restore.enabled`) — and since every tagged test also
+carries `nightly`, that is roughly an hour of backing-mutating work added to the
+`stress` lane and to the nightly sweep, not just to `--tag stress`.
+
+They still skip, with the reason on the result, when the backing cannot carry
+them:
+
+- `backing_maintenance` needs 3 tservers, because it takes one out under load.
+  The default universe is RF1 (`apps.yba.k8s.num_nodes`), so it skips there; the
+  scheduled stress lane passes `num_nodes=3` / `replication_factor=3`.
+- `backing_backup_restore` needs YBC on the universe. `apps.yba.k8s.enable_ybc`
+  is on, so a kubernetes universe has it; a VM universe needs
+  `apps.yba.universe.enable_ybc=bool:true`, which is off by default because
+  `WaitForYbcServer` there pings a yb-controller nothing installs.
+- Either one skips when the private sample-app jar secret is unresolvable.
+
+`backing_maintenance` defaults to `operations: ["gflag_change"]`. The
+`software_upgrade` operation is not in that list: the target defaults to the
+YBA's own version, and a universe already at or past it fails the run, so it
+needs a universe CREATED a train behind:
 
 ```
 ampqa run --testr '^stress/backing_maintenance$' -c gke.yaml \
-  -o stress.backing_maintenance.enabled=bool:true \
-  -o stress.backing_maintenance.upgrade_to=<newer-yb-version>
-```
-
-`backing_backup_restore` gates the same way under
-`stress.backing_backup_restore.*`, and additionally needs YBC on the universe —
-YBA's backup tasks run through it, and it is off by default:
-
-```
-ampqa run --testr '^stress/backing_backup_restore$' -c gke.yaml \
-  -o stress.backing_backup_restore.enabled=bool:true \
-  -o apps.yba.universe.enable_ybc=bool:true
+  -o stress.backing_maintenance.operations=list:gflag_change,software_upgrade \
+  -o apps.yba.universe.yb_version=<previous-train-release>
 ```
 
 > **Planned, not yet present:** dedicated negative / red-path cases (error paths,

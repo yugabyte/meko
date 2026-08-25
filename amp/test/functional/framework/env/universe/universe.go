@@ -702,9 +702,11 @@ func (p *Provider) provisionYBA(ctx context.Context, seed *core.Seed) (core.Envi
 	// registered for deletion; it is reclaimed when the YBA namespace is torn
 	// down anyway.
 	// Set ybc.provider.enabled to match the requested YBC mode BEFORE create:
-	// disabled (the default) makes YBA skip YBC install + the WaitForYbcServer
-	// subtask that otherwise times out pinging a yb-controller the foundation
-	// test neither installs nor needs (workloads run via amp compute).
+	// disabled (the VM default) makes YBA skip YBC install + the
+	// WaitForYbcServer subtask that otherwise times out pinging a yb-controller
+	// nothing installed there, and a create task that fails after launching the
+	// nodes strands them. A kubernetes universe gets yb-controller from the
+	// chart, so apps.yba.k8s.enable_ybc is on and the backup suites can run.
 	if err := cl.SetYbcEnabledForProvider(ctx, providerUUID, uniSpec.EnableYbc); err != nil {
 		return failure(fmt.Errorf("provision_yba: set ybc.provider.enabled: %w", err))
 	}

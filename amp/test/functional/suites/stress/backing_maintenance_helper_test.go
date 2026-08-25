@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yugabyte/amp/test/functional/framework/apps/yba"
 	"github.com/yugabyte/amp/test/functional/framework/core"
 )
 
@@ -35,7 +36,7 @@ func TestMaintenanceGateSkipsUnlessEnabled(t *testing.T) {
 	c, cfg := maintCfg(map[string]any{"stress.backing_maintenance.enabled": false})
 	reason, ok := maintenanceGate(c, cfg)
 	if ok {
-		t.Fatal("the scenario upgrades the run's real backing; it must not run unopted")
+		t.Fatal("enabled=false must stop the scenario: it is the only way to keep it off a run")
 	}
 	if !strings.Contains(reason, "enabled") {
 		t.Errorf("skip reason = %q, want it to name the gate key", reason)
@@ -213,5 +214,32 @@ func TestMaintenanceGateSkipsWithoutTheJarSecret(t *testing.T) {
 	}
 	if !strings.Contains(reason, "gh_package") {
 		t.Errorf("skip reason = %q, want it to name the missing secret", reason)
+	}
+}
+
+func universeWithTServers(n int) yba.Universe {
+	var u yba.Universe
+	for i := 0; i < n; i++ {
+		u.UniverseDetails.NodeDetailsSet = append(u.UniverseDetails.NodeDetailsSet, yba.NodeDetails{IsTserver: true})
+	}
+	// A master-only node must not count towards the quorum the rolling
+	// operation needs.
+	u.UniverseDetails.NodeDetailsSet = append(u.UniverseDetails.NodeDetailsSet, yba.NodeDetails{IsMaster: true})
+	return u
+}
+
+func TestEnoughTServersRejectsTheRF1Backing(t *testing.T) {
+	reason, ok := enoughTServers(universeWithTServers(1), 3)
+	if ok {
+		t.Fatal("rolling the only tserver out stops the writes for a legitimate reason; the run would report a dead write path")
+	}
+	if !strings.Contains(reason, "num_nodes") {
+		t.Errorf("skip reason = %q, want it to name the knob that fixes it", reason)
+	}
+}
+
+func TestEnoughTServersAcceptsRF3(t *testing.T) {
+	if reason, ok := enoughTServers(universeWithTServers(3), 3); !ok {
+		t.Fatalf("3 tservers is the shape this scenario asks for: %s", reason)
 	}
 }

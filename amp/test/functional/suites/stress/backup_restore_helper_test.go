@@ -34,7 +34,7 @@ func TestBackupRestoreGateSkipsUnlessEnabled(t *testing.T) {
 	c, cfg := brCfg(map[string]any{"stress.backing_backup_restore.enabled": false})
 	reason, ok := backupRestoreGate(c, cfg)
 	if ok {
-		t.Fatal("the scenario drives real backup tasks on the run's backing; it must not run unopted")
+		t.Fatal("enabled=false must stop the scenario: it is the only way to keep it off a run")
 	}
 	if !strings.Contains(reason, "enabled") {
 		t.Errorf("skip reason = %q, want it to name the gate key", reason)

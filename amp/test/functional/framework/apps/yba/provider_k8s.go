@@ -61,6 +61,10 @@ const (
 	// tserver), overridable for RF3.
 	DefaultK8sNumNodes    = 1
 	DefaultK8sReplication = 1
+	// DefaultK8sEnableYbc is on: the chart installs yb-controller, so YBA's
+	// backup tasks (and stress/backing_backup_restore) have what they need.
+	// The VM path keeps apps.yba.universe.enable_ybc=false.
+	DefaultK8sEnableYbc = true
 	// DefaultK8sVolumeSizeGB is the per-node PVC size. 200, not the old 50:
 	// measured on the depth ladder, 25 TPC-C warehouses (~2.5G logical) put 36G
 	// on EACH tserver before YugabyteDB rejected writes under its 5% free
@@ -213,7 +217,7 @@ func BuildK8sUniverseSpec(c ConfigGetter) UniverseSpec {
 		MasterMemGiB:      c.GetInt("apps.yba.k8s.master_mem_gib", DefaultK8sMasterMemGiB),
 		TServerCPUCores:   c.GetInt("apps.yba.k8s.tserver_cpu", DefaultK8sTServerCPUCores),
 		TServerMemGiB:     c.GetInt("apps.yba.k8s.tserver_mem_gib", DefaultK8sTServerMemGiB),
-		EnableYbc:         c.GetBool("apps.yba.universe.enable_ybc", false),
+		EnableYbc:         c.GetBool("apps.yba.k8s.enable_ybc", DefaultK8sEnableYbc),
 	}
 }
 

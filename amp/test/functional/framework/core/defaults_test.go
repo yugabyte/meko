@@ -544,6 +544,11 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	if uspec.VolumeCount != yba.DefaultVolumeCount {
 		t.Errorf("yba universe VolumeCount = %d, want %d", uspec.VolumeCount, yba.DefaultVolumeCount)
 	}
+	// The VM builders stay YBC-off: there WaitForYbcServer pings a yb-controller
+	// nothing installs, and the create task fails with the nodes already up.
+	if uspec.EnableYbc {
+		t.Errorf("yba universe EnableYbc = true, want false")
+	}
 	if want := cfg.GetString("versions.yugabytedb", ""); uspec.YBSoftwareVersion != want {
 		t.Errorf("yba universe YBSoftwareVersion = %q, want fallback to versions.yugabytedb %q", uspec.YBSoftwareVersion, want)
 	}
@@ -587,6 +592,12 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if k8sUni.K8sStorageClass != yba.DefaultK8sStorageClass {
 		t.Errorf("k8s universe StorageClass = %q, want %q", k8sUni.K8sStorageClass, yba.DefaultK8sStorageClass)
+	}
+	// stress/backing_backup_restore skips without YBC, and the universe is
+	// created once per run, so the kubernetes default has to carry it — the
+	// chart brings yb-controller, so WaitForYbcServer has something to ping.
+	if !k8sUni.EnableYbc {
+		t.Errorf("k8s universe EnableYbc = false, want true")
 	}
 	if k8sUni.VolumeSizeGB != yba.DefaultK8sVolumeSizeGB {
 		t.Errorf("k8s universe VolumeSizeGB = %d, want %d", k8sUni.VolumeSizeGB, yba.DefaultK8sVolumeSizeGB)
@@ -635,6 +646,9 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 	if gcpUni.NumNodes != yba.DefaultGCPNumNodes || gcpUni.ReplicationFactor != yba.DefaultGCPReplication {
 		t.Errorf("gcp universe nodes/RF = %d/%d, want %d/%d", gcpUni.NumNodes, gcpUni.ReplicationFactor, yba.DefaultGCPNumNodes, yba.DefaultGCPReplication)
+	}
+	if gcpUni.EnableYbc {
+		t.Errorf("gcp universe EnableYbc = true, want false")
 	}
 	if gcpUni.StorageType != yba.DefaultGCPStorageType {
 		t.Errorf("gcp universe StorageType = %q, want %q", gcpUni.StorageType, yba.DefaultGCPStorageType)
@@ -1257,8 +1271,8 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 	}
 
 	// --- stress/backing_maintenance ---
-	if cfg.GetBool("stress.backing_maintenance.enabled", true) {
-		t.Errorf("stress.backing_maintenance.enabled = true, want false (opt-in)")
+	if !cfg.GetBool("stress.backing_maintenance.enabled", false) {
+		t.Errorf("stress.backing_maintenance.enabled = false, want true")
 	}
 	maintInts := map[string]int{
 		"stress.backing_maintenance.rf":                     3,
@@ -1316,13 +1330,13 @@ func TestEmbeddedDefaultsSupplyEveryKnownKey(t *testing.T) {
 			t.Errorf("%s = %s, want %s", key, got, want)
 		}
 	}
-	if ops := cfg.GetStringSlice("stress.backing_maintenance.operations", nil); strings.Join(ops, ",") != "gflag_change,software_upgrade" {
+	if ops := cfg.GetStringSlice("stress.backing_maintenance.operations", nil); strings.Join(ops, ",") != "gflag_change" {
 		t.Errorf("stress.backing_maintenance.operations = %v", ops)
 	}
 
 	// --- stress/backing_backup_restore ---
-	if cfg.GetBool("stress.backing_backup_restore.enabled", true) {
-		t.Errorf("stress.backing_backup_restore.enabled = true, want false (opt-in)")
+	if !cfg.GetBool("stress.backing_backup_restore.enabled", false) {
+		t.Errorf("stress.backing_backup_restore.enabled = false, want true")
 	}
 	if !cfg.GetBool("stress.backing_backup_restore.backup_amp_keyspace", false) {
 		t.Errorf("stress.backing_backup_restore.backup_amp_keyspace = false, want true")

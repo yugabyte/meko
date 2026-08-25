@@ -78,7 +78,7 @@ func runBackingBackupRestore(t *core.T) error {
 	if u, err := yt.client.GetUniverse(t.Context, yt.universeID); err != nil {
 		return fmt.Errorf("read universe %s: %w", yt.universeID, err)
 	} else if !u.HasYbc() && cfg.wantsBackupOps() {
-		t.Skip("the universe carries no YBC, which YBA's backup tasks require: create it with apps.yba.universe.enable_ybc=true")
+		t.Skip("the universe carries no YBC, which YBA's backup tasks require: create it with apps.yba.k8s.enable_ybc=true (apps.yba.universe.enable_ybc for a VM universe)")
 		return nil
 	}
 

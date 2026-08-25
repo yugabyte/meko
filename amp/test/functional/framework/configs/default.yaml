@@ -564,8 +564,13 @@ apps:
       # The mandatory set (yb_owner/yb_task/yb_dept/autoclean/ampqa) is always
       # applied; keys here override/extend it; ampqa-run is added automatically.
       instance_tags: {}
-      # enable_ybc toggles YBC install. false (default) skips it + WaitForYbcServer
-      # (the amp-compute workload needs no YBC); set true only for YBC/backup tests.
+      # enable_ybc toggles YBC install. false skips it + the WaitForYbcServer
+      # subtask, which on a VM universe times out pinging a yb-controller
+      # nothing here installs — a create-task failure with cloud nodes already
+      # launched (see env/universe: TestProvisionYBACreateTaskFailureReapsNodes).
+      # The amp-compute workload needs no YBC. Set true only for a VM universe
+      # a backup test will drive; the kubernetes universe has its own
+      # apps.yba.k8s.enable_ybc, which is on.
       enable_ybc: false
     # k8s.*: KUBERNETES provider+universe (provider_type "kubernetes"): a universe
     # ON the same k8s cluster the YBA runs in (apps.ybastack.kubecontext), no VMs.
@@ -601,6 +606,9 @@ apps:
       # being validated. Set 3 for a production-like RF3 universe.
       num_nodes: 1
       replication_factor: 1
+      # enable_ybc: on here, unlike the VM default above — the chart brings
+      # yb-controller, and stress/backing_backup_restore skips without YBC.
+      enable_ybc: true
       volume_count: 1
       # 200G, not the old 50. Measured on the depth ladder: 25 TPC-C warehouses
       # (~2.5G logical) put 36G on EACH tserver before YugabyteDB started
@@ -1412,18 +1420,23 @@ stress:
   # the pageserver. After every operation amp must have ACKNOWLEDGED commits
   # while it was in flight, and every acknowledged row must read back at the
   # end. Maintains the run's OWN backing, so it needs
-  # env.yb_deploy=yba_provisioned and is opt-in.
+  # env.yb_deploy=yba_provisioned.
   backing_maintenance:
     # enabled gates the whole scenario.
-    enabled: false
+    enabled: true
     # rf must be >=3 (gated) and match apps.yba.k8s.replication_factor: below
     # that, a node going out stops the writes for a legitimate reason.
     rf: 3
     # The ordered sequence. rolling_restart is absent on purpose: a full roll
     # that proves less than the gflag change, which is the same restart with
     # something to verify. data_move needs apps.yba.k8s.num_nodes > rf, which
-    # the default universe lacks. Both stay selectable.
-    operations: ["gflag_change", "software_upgrade"]
+    # the default universe lacks. software_upgrade is absent because it needs a
+    # universe CREATED a train behind the target (see upgrade_to below) and one
+    # already at or past it fails the run — a scheduled sweep on the current
+    # release would go red on configuration, not on a bug. All three stay
+    # selectable; add software_upgrade together with a pinned
+    # apps.yba.universe.yb_version.
+    operations: ["gflag_change"]
     # Each tenant gets its own amp cluster, endpoint, journaled writer and a
     # distinct workload: 0 SqlTransactions, 1 SqlBankTransfer, 2 TPC-C, then
     # repeating. Below 3 tenants some workloads do not run.
@@ -1494,11 +1507,11 @@ stress:
   # (the distributed snapshot under live write traffic is the point) but never
   # restored over. The backup store is a MinIO the test deploys beside the
   # universe, so no cloud credentials are needed. Backups require YBC on the
-  # universe: create it with apps.yba.universe.enable_ybc=true. Needs
-  # env.yb_deploy=yba_provisioned (kubernetes) and is opt-in.
+  # universe (apps.yba.k8s.enable_ybc, on for kubernetes universes) and
+  # env.yb_deploy=yba_provisioned (kubernetes); the test skips without either.
   backing_backup_restore:
     # enabled gates the whole scenario.
-    enabled: false
+    enabled: true
     # The ordered sequence; restore must come after backup. scheduled_backup
     # dominates the runtime when schedule_fire_timeout is non-zero.
     operations: ["backup", "restore", "pitr", "scheduled_backup"]

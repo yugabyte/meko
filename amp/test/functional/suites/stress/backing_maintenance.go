@@ -66,6 +66,14 @@ func runBackingMaintenance(t *core.T) error {
 		t.Skip(reason)
 		return nil
 	}
+	// The gate polices the test's own rf knob; this reads the backing's REAL
+	// shape. The default pipeline universe is RF1 (apps.yba.k8s.num_nodes), and
+	// taking its only tserver out stops the writes for a legitimate reason —
+	// which the commit assertions would report as a dead write path.
+	if reason, ok := enoughTServersForMaintenance(t, cfg); !ok {
+		t.Skip(reason)
+		return nil
+	}
 
 	r := &maintenanceRun{
 		t:      t,
@@ -165,6 +173,38 @@ func resolveMaintenanceTarget(t *core.T, cfg maintenanceConfig) (maintenanceTarg
 		}
 	}
 	return target, "", true
+}
+
+// enoughTServersForMaintenance sizes the backing: rolling a tserver out is only
+// survivable when the ones left can still form a write quorum.
+func enoughTServersForMaintenance(t *core.T, cfg maintenanceConfig) (string, bool) {
+	yt, ok := t.Env.(ybaBackedEnv)
+	if !ok {
+		return "", true
+	}
+	client, universeID := yt.YBAUniverse()
+	if client == nil {
+		return "", true
+	}
+	u, err := client.GetUniverse(t.Context, universeID)
+	if err != nil {
+		return fmt.Sprintf("cannot read the backing universe %s to check its shape: %v", universeID, err), false
+	}
+	return enoughTServers(u, cfg.RF)
+}
+
+func enoughTServers(u yba.Universe, need int) (string, bool) {
+	tservers := 0
+	for _, n := range u.UniverseDetails.NodeDetailsSet {
+		if n.IsTserver {
+			tservers++
+		}
+	}
+	if tservers < need {
+		return fmt.Sprintf("the backing has %d tserver(s) and this needs %d to stay writable while one is out: create the universe with apps.yba.k8s.num_nodes=%d and apps.yba.k8s.replication_factor=%d",
+			tservers, need, need, need), false
+	}
+	return "", true
 }
 
 // Local so the suite depends on the capability, not the layer that provides it.

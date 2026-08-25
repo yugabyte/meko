@@ -80,7 +80,7 @@ func backupRestoreFromConfig(c *core.Config) backupRestoreConfig {
 // Polices the test's own configuration; the backing comes from the env.
 func backupRestoreGate(c *core.Config, cfg backupRestoreConfig) (string, bool) {
 	if !cfg.Enabled {
-		return "stress.backing_backup_restore.enabled is not set (it drives real backup/restore tasks on the run's backing)", false
+		return "stress.backing_backup_restore.enabled is false: the scenario was turned off for this run", false
 	}
 	if len(cfg.Operations) == 0 {
 		return "stress.backing_backup_restore.operations is empty: there is nothing to run", false

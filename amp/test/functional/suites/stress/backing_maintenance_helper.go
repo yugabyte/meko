@@ -45,10 +45,12 @@ const (
 	DefaultMaintenanceSettleTimeout    = 10 * time.Minute
 )
 
-// rolling_restart and data_move stay selectable but are off by default: the
-// former proves strictly less than gflag_change, the latter needs more nodes
-// than the default universe's RF gives it.
-var DefaultMaintenanceOperations = []string{OpGflagChange, OpSoftwareUpgrade}
+// rolling_restart, data_move and software_upgrade stay selectable but are off
+// by default: the first proves strictly less than gflag_change, the second
+// needs more nodes than the default universe's RF gives it, and the third needs
+// the universe created a train behind the target, which a sweep on the current
+// release is not.
+var DefaultMaintenanceOperations = []string{OpGflagChange}
 
 var DefaultMaintenanceWorkloads = []string{"SqlInserts", "SqlTransactions", "SqlBankTransfer"}
 
@@ -112,7 +114,7 @@ func maintenanceFromConfig(c *core.Config) maintenanceConfig {
 // silently answered for them would document knobs its own suite never reads.
 func workloadConfigAt(c *core.Config, p string) maintenanceConfig {
 	return maintenanceConfig{
-		Enabled:              c.GetBool(p+"enabled", false),
+		Enabled:              c.GetBool(p+"enabled", true),
 		Tenants:              c.GetInt(p+"tenants", DefaultMaintenanceTenants),
 		PayloadBytes:         c.GetInt(p+"payload_bytes", DefaultMaintenancePayloadBytes),
 		BaselineDuration:     c.GetDuration(p+"baseline_duration", DefaultMaintenanceBaselineDuration),
@@ -151,7 +153,7 @@ func (cfg maintenanceConfig) wants(op string) bool {
 // Polices the test's own configuration; the backing and control plane come from the env.
 func maintenanceGate(c *core.Config, cfg maintenanceConfig) (string, bool) {
 	if !cfg.Enabled {
-		return "stress.backing_maintenance.enabled is not set (it puts the run's own backing through a real upgrade)", false
+		return "stress.backing_maintenance.enabled is false: the scenario was turned off for this run", false
 	}
 	if len(cfg.Operations) == 0 {
 		return "stress.backing_maintenance.operations is empty: there is no maintenance to run", false
