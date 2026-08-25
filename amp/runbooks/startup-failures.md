@@ -60,7 +60,7 @@ before moving on — a silent half-failure here surfaces as a confusing error th
 | SK exits at startup: `YB-WAL mode requires --branch-id (single-branch-per-process)` | single-branch identity missing from `safekeeper.toml` — the SK serves one branch and scopes its load to it. Provisioned SKs get `branch_id` written by `allocate_safekeeper_conf`; a hand-written `safekeeper.toml` must set it alongside `yb_storage_conn` | — |
 | Timeline create: `couldn't find 1 safekeepers in different AZs (found: 0)` | SK not registered with SC | **F** |
 | psql: `libreadline.so.7: cannot open shared object file` | bundle psql wants older readline | **G** |
-| Compute postmaster dies with `EADDRINUSE` on its own port | yb_amp_local port collision | **H** |
+| Compute postmaster dies with `EADDRINUSE` on its own port | yb_amp_local port collision, or a postmaster orphaned by an earlier compute_ctl | **H** |
 | Fresh `cloud_admin` can't auth over socket / password rejected | role needs socket-trust password set | **I** |
 | PS can't find the safekeeper (broker-less builds) | missing `safekeeper_pg_addr` | **J** |
 | Any process exits at startup: `unknown configuration item(s) …` / `unknown field …` | misspelled, stale, or misplaced config key — rejected, not ignored | **K** |
@@ -154,11 +154,25 @@ export LD_LIBRARY_PATH=/tmp/psqllibs:$LD_LIBRARY_PATH
 ```
 Do this on whichever box you run that psql from. Many bundles ship a psql that doesn't need it.
 
-## H. Compute postmaster dies with phantom EADDRINUSE
-yb_amp_local can set the endpoint's `internal_http_port` **equal to** its `pg_port`; `compute_ctl`
-then binds `*:pg_port` and the postmaster fails to bind the same port (looks like a phantom
-`EADDRINUSE`). Fix: ensure the endpoint's `internal_http_port` ≠ `pg_port` (edit the endpoint spec /
-`.yb_amp` config), then restart the endpoint.
+## H. Compute postmaster dies with EADDRINUSE
+Two causes, and the log tells them apart.
+
+**Port collision (phantom).** yb_amp_local can set the endpoint's `internal_http_port` **equal to**
+its `pg_port`; `compute_ctl` then binds `*:pg_port` and the postmaster fails to bind the same port.
+Fix: ensure the endpoint's `internal_http_port` ≠ `pg_port` (edit the endpoint spec / `.yb_amp`
+config), then restart the endpoint.
+
+**An orphaned postmaster still holding the port** ([#898]). An earlier `compute_ctl` died without
+reaping its postgres, which keeps serving on `pg_port`; the replacement cannot bind, and each retry
+takes a fresh basebackup that cannot help. Two mechanisms now handle this without an operator:
+`PR_SET_PDEATHSIG` has the kernel SIGQUIT the postmaster when `compute_ctl` dies, and
+`reclaim_pgdata` shuts down any postmaster still running in `pgdata` before the data directory is
+rebuilt — look for `postmaster <pid> is still running in <pgdata>` in `compute.log`. If you see the
+bind failures **without** that line, the process holding the port is not a postmaster running out of
+that pgdata: find it with `ss -lptn 'sport = :<pg_port>'` before killing anything, because the
+reclaim deliberately does not signal a process it cannot identify.
+
+[#898]: https://github.com/yugabyte/meko/issues/898
 
 ## I. Fresh `cloud_admin` can't authenticate
 A newly created compute role may have no usable password for socket/`trust` auth. Set one so local

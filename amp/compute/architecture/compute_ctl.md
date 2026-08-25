@@ -28,7 +28,9 @@ A compute is Postgres plus a few optional sidecars, all under one `compute_ctl`:
 - **Postgres** — the user-facing backend, started as a child process in its own
   process group (so shutdown can `SIGKILL` the whole group and reap backends that
   outlive the postmaster while holding the client port — `wait_postgres()` in
-  `compute.rs`).
+  `compute.rs`), and with `PR_SET_PDEATHSIG` set to SIGQUIT, so the kernel takes
+  the postmaster down even when `compute_ctl` dies without running any shutdown
+  path at all (see [Shutdown and the orphaned postmaster](#shutdown-and-the-orphaned-postmaster)).
 - **pgbouncer** — connection pooler, tuned from the spec when `pgbouncer_settings`
   is set (`pgbouncer.rs`).
 - **local_proxy** — JWT-validating proxy for the managed-auth feature, configured
@@ -86,6 +88,7 @@ main()
          │    ├─ watch TLS certs (tls.rs)
          │    ├─ download remote shared_preload_libraries (extension_server.rs)
          │    ├─ prepare_pgdata()      ← critical path
+         │    │    ├─ reclaim_pgdata() — shut down a postmaster still running in it
          │    │    ├─ wipe + recreate pgdata/ (mode 0700)
          │    │    ├─ config::write_postgres_conf()
          │    │    ├─ pick the startup LSN (safekeeper TIMELINE_STATUS for Primary)
@@ -96,7 +99,8 @@ main()
          │    ├─ tune pgbouncer / configure local_proxy (fire-and-forget)
          │    └─ configure audit + log-export rsyslog
          ├─ launch_monitor() + launch_configurator()
-         ├─ start_postgres()           — exec the postgres child (own process group)
+         ├─ start_postgres()           — exec the postgres child (own process group,
+         │                                 PR_SET_PDEATHSIG=SIGQUIT)
          ├─ configure_as_primary()     — apply the spec SQL (Primary only)
          ├─ status: running
          └─ background: extension-stats task, LFC auto-prewarm, LFC offload loop
@@ -353,9 +357,54 @@ control plane can collect status; `immediate` exits after ~300 ms.
 Process signals (SIGINT/SIGTERM/SIGQUIT) take the same path via
 `forward_termination_signal()`, which also SIGKILLs pgbouncer and SIGTERMs
 local_proxy (skipped with `--dev`, where those sidecars are not `compute_ctl`'s to
-kill).
+kill). `handle_exit_signal()` then waits (8 s) for Postgres to go before it exits:
+`compute_ctl`'s own exit is a signal to Postgres now (below), so exiting straight
+away would overtake the fast shutdown it just asked for and lose the shutdown
+checkpoint. This is the supervisor's ordinary stop path — SIGTERM, then SIGKILL
+after its 10 s grace.
 
 [#58]: https://github.com/yugabyte/amp/issues/58
+
+## Shutdown and the orphaned postmaster
+
+Postgres outliving its `compute_ctl` is not a tidiness problem: the postmaster
+keeps the client **port** bound, and nothing the next `compute_ctl` does about a
+failed start — its five retries all take a fresh basebackup — can fix a port
+conflict. Measured on a k8s endpoint, five SIGKILLs of `compute_ctl` cost 20-25 s
+of downtime four times and 530 s the fifth — which never recovered on its own
+inside the 300 s observation cap ([#898]). Three mechanisms cover it,
+each for a case the previous one cannot reach:
+
+1. **`wait_postgres()` killpg** — the graceful path. Once the postmaster is reaped,
+   `SIGKILL` its whole process group, because a backend can outlive the postmaster
+   (one wedged on a crashed pageserver) and keep the port after reparenting.
+2. **`PR_SET_PDEATHSIG` (SIGQUIT)** on the postgres spawn — the abrupt path. The
+   kernel signals the postmaster the moment `compute_ctl` dies, so a SIGKILL, an
+   OOM kill or an abort cannot orphan it. SIGQUIT (immediate shutdown) rather than
+   SIGINT (fast), because a fast shutdown waits for the backends and the wedged one
+   is exactly the backend that will not go. The deathsig is tied to the *thread*
+   that forked, which is why the spawn must stay on `compute_ctl`'s main thread.
+   Since it fires on *every* exit, the signal path waits for Postgres first
+   (above) rather than letting it escalate the fast shutdown.
+3. **`reclaim_pgdata()`** at the top of `create_pgdata()` — defence in depth, and
+   a fix for something wrong on its own terms: `create_pgdata()` wipes the data
+   directory, and doing that while something is still running in it frees none of
+   what that process holds. The port stays bound, and the pidfile that would have
+   identified it is one of the files just deleted, so Postgres refuses to start
+   (`lock file "postmaster.pid" already exists`) or cannot bind, and the retry loop
+   spends its budget on basebackups. Behind that, mechanism 2 is a single point of
+   failure for an outage measured in minutes, and it cannot cover an orphan this
+   `compute_ctl` did not spawn itself, or one whose deathsig an interposed `cgexec`
+   took by forking rather than exec'ing. So this reads
+   `pgdata/postmaster.pid`, confirms the pid is alive *and* running with its cwd in
+   that data directory (`ChangeToDataDir` — how postgres marks the directory it
+   owns, and what distinguishes an owner from a recycled pid), and shuts it down:
+   SIGQUIT, then SIGKILL — of the process group when the postmaster leads one, of
+   the pid alone when it does not, since `kill(-pid)` on a mere group member would
+   signal an unrelated group. Before the wipe is also the only moment the pidfile
+   is there to read at all.
+
+[#898]: https://github.com/yugabyte/meko/issues/898
 
 ## Promotion (`compute_promote.rs`)
 

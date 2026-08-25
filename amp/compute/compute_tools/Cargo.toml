@@ -79,3 +79,7 @@ zstd = "0.13"
 bytes = "1.0"
 rust-ini = "0.20.0"
 rlimit = "0.10.1"
+
+[dev-dependencies]
+# The orphaned-postmaster reclaim tests need a pgdata of their own.
+camino-tempfile.workspace = true

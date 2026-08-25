@@ -28,7 +28,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use std::{env, fs};
@@ -62,6 +62,13 @@ use crate::tls::watch_cert_for_changes;
 use crate::{config, extension_server, local_proxy};
 
 pub static PG_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Set once `wait_postgres` has finished: the postmaster reaped, its process
+/// group killed, and its logs drained. Deliberately not `PG_PID == 0`, which is
+/// stored before the killpg — exiting on that would race the group kill and leave
+/// the port-holding stragglers it exists to reap. True until a postgres is
+/// spawned, because then there is nothing to wait for.
+static PG_SHUTDOWN_DONE: AtomicBool = AtomicBool::new(true);
 // This is an arbitrary build tag. Fine as a default / for testing purposes
 // in-case of not-set environment var
 const BUILD_TAG_DEFAULT: &str = "latest";
@@ -395,6 +402,160 @@ fn maybe_cgexec(cmd: &str) -> Command {
     } else {
         Command::new(cmd)
     }
+}
+
+/// Have the kernel signal postgres the moment compute_ctl dies, whatever killed
+/// it. `wait_postgres` reaps the process group only on the graceful path; an
+/// uncatchable death skips it and leaves the postmaster holding the client port,
+/// which no amount of re-basebackuping by the next compute_ctl can fix (#898).
+///
+/// SIGQUIT is postgres' immediate shutdown: it takes the backends with it, where
+/// SIGKILLing the postmaster would strand them still holding the port, and a
+/// gentler SIGINT would wait for the backend wedged on a crashed pageserver.
+///
+/// It fires on *every* exit, including the signal path — which is why
+/// `handle_exit_signal` waits for postgres rather than letting this SIGQUIT
+/// overtake the fast shutdown it just asked for.
+///
+/// Correct only on compute_ctl's main thread: the kernel ties the signal to the
+/// *thread* that forked, so a tokio worker would fire it on parking.
+/// `ComputeNode::run` is synchronous on the main thread by design — see the
+/// `runtime.enter()` comment in `compute-ctl.rs`.
+///
+/// The setting survives the `execve` an interposed `cgexec` does, and is cleared
+/// only across `fork`; `reclaim_pgdata` is the backstop for anything that stops
+/// this being delivered at all.
+#[cfg(target_os = "linux")]
+// `unsafe` is denied crate-wide (lib.rs), and `pre_exec` is the only way to
+// `prctl` between fork and exec.
+#[allow(unsafe_code)]
+fn die_with_parent(cmd: &mut Command) {
+    // SAFETY: `pre_exec` runs between fork and exec, where only
+    // async-signal-safe work is allowed. `prctl` is one syscall and allocates
+    // nothing.
+    unsafe {
+        cmd.pre_exec(|| {
+            nix::sys::prctl::set_pdeathsig(Signal::SIGQUIT).map_err(std::io::Error::from)
+        });
+    }
+}
+
+/// No-op off Linux: `PR_SET_PDEATHSIG` is Linux-only. Deployed computes are
+/// Linux; this keeps a macOS dev build compiling.
+#[cfg(not(target_os = "linux"))]
+fn die_with_parent(_cmd: &mut Command) {}
+
+/// Slack for a loaded box: an immediate shutdown is a signal to each backend and
+/// an exit, so this is not a real expectation of how long that takes.
+const ORPHAN_SHUTDOWN_WAIT: Duration = Duration::from_secs(10);
+
+/// And how long after the SIGKILL before we give up and leave pgdata alone.
+const ORPHAN_KILL_WAIT: Duration = Duration::from_secs(5);
+
+/// The pid in `pgdata/postmaster.pid`, if a live postmaster is still running out
+/// of that directory.
+///
+/// Both halves matter: the file outlives the process it names (every crash leaves
+/// one), and pids get reused, so a live pid is not by itself evidence that
+/// postgres holds it. `/proc/<pid>/cwd` is the confirmation — the postmaster
+/// chdirs into its data directory at startup (`ChangeToDataDir` in
+/// `postmaster.c`) and stays there.
+///
+/// Anything unconfirmable reads as "no owner", which is the behaviour that
+/// preceded this check: rebuilding pgdata under a stale pidfile is the status quo,
+/// signalling a process on a guess is not.
+#[cfg(target_os = "linux")]
+fn postmaster_owning(pgdata: &Path) -> Option<Pid> {
+    // First line is the pid; the data directory, start time and port follow it.
+    let text = fs::read_to_string(pgdata.join("postmaster.pid")).ok()?;
+    let pid: i32 = text.lines().next()?.trim().parse().ok()?;
+    if pid <= 1 {
+        return None;
+    }
+    // Fails for a dead pid and for a zombie, which is right for both: neither
+    // holds a port.
+    let cwd = fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    (cwd == pgdata.canonicalize().ok()?).then(|| Pid::from_raw(pid))
+}
+
+/// No-op off Linux: the cwd check needs procfs, and without it there is no way to
+/// tell an owner from a recycled pid. Deployed computes are Linux.
+#[cfg(not(target_os = "linux"))]
+fn postmaster_owning(_pgdata: &Path) -> Option<Pid> {
+    None
+}
+
+/// Poll until `pgdata` has no live postmaster with `pid`, up to `timeout`.
+///
+/// The exit condition is the entry condition: exiting, becoming a zombie, or
+/// removing the pidfile on the way out all count. Not our child, so there is no
+/// `wait()` to make here.
+fn wait_until_pgdata_free(pgdata: &Path, pid: Pid, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if postmaster_owning(pgdata) != Some(pid) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Shut down a postmaster still running in `pgdata`, so this compute_ctl can have
+/// the data directory — and the client port — back.
+///
+/// Wiping a directory something is still running in is wrong on its own terms: the
+/// `remove_dir_all` below frees none of what a live postmaster holds, and deletes
+/// the pidfile that would have identified it. Postgres then refuses to start
+/// (`lock file "postmaster.pid" already exists`) or cannot bind, and the retry
+/// loop spends its budget on basebackups (#898). It also covers the orphans
+/// `die_with_parent` cannot: one left by a `cgexec` that forked rather than
+/// exec'd, and any postmaster this compute_ctl did not spawn itself.
+///
+/// Hence before the wipe, which is also the only moment the pidfile exists to be
+/// read.
+///
+/// SIGQUIT first: immediate shutdown takes the backends with it, and their files
+/// are about to be deleted anyway, so there is nothing to drain. Then SIGKILL —
+/// of the process group when the postmaster leads one, of the pid alone when it
+/// does not.
+fn reclaim_pgdata(pgdata: &Path) -> Result<()> {
+    let Some(pid) = postmaster_owning(pgdata) else {
+        return Ok(());
+    };
+    warn!(
+        "postmaster {pid} is still running in {}; shutting it down before rebuilding the \
+         data directory",
+        pgdata.display()
+    );
+    kill(pid, Signal::SIGQUIT).ok();
+    if wait_until_pgdata_free(pgdata, pid, ORPHAN_SHUTDOWN_WAIT) {
+        info!("orphaned postmaster {pid} is gone, pgdata is ours");
+        return Ok(());
+    }
+
+    warn!("postmaster {pid} outlived SIGQUIT by {ORPHAN_SHUTDOWN_WAIT:?}, killing it");
+    // The postmaster leads its own process group (see `start_postgres`), so kill
+    // the group to catch any backend that outlived it — but only when it really
+    // is the leader, since `kill(-pid)` on a mere member signals that whole
+    // unrelated group.
+    let target = match nix::unistd::getpgid(Some(pid)) {
+        Ok(pgid) if pgid == pid => Pid::from_raw(-pid.as_raw()),
+        _ => pid,
+    };
+    kill(target, Signal::SIGKILL).ok();
+    if wait_until_pgdata_free(pgdata, pid, ORPHAN_KILL_WAIT) {
+        info!("orphaned postmaster {pid} killed, pgdata is ours");
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "postmaster {pid} is still running in {} after SIGQUIT and SIGKILL; refusing to \
+         rebuild the data directory under a live postgres",
+        pgdata.display()
+    )
 }
 
 struct PostgresHandle {
@@ -1102,9 +1263,15 @@ impl ComputeNode {
 
     // Remove `pgdata` directory and create it again with right permissions.
     fn create_pgdata(&self) -> Result<()> {
+        let pgdata = &self.params.pgdata;
+
+        // Not under a postmaster that is still running in it. Deleting the files
+        // it has open would not free the client port it holds, and the pidfile
+        // that names it is one of the files about to go (#898).
+        reclaim_pgdata(Path::new(pgdata))?;
+
         // Ignore removal error, likely it is a 'No such file or directory (os error 2)'.
         // If it is something different then create_dir() will error out anyway.
-        let pgdata = &self.params.pgdata;
         let _ok = fs::remove_dir_all(pgdata);
         fs::create_dir(pgdata)?;
 
@@ -1570,14 +1737,16 @@ impl ComputeNode {
         // reparent away when the postmaster exits but linger holding the
         // client port (e.g. one stuck on a crashed pageserver). See the killpg
         // in `wait_postgres`.
-        let mut pg = maybe_cgexec(&self.params.pgbin)
-            .args(["-D", &self.params.pgdata])
+        let mut cmd = maybe_cgexec(&self.params.pgbin);
+        cmd.args(["-D", &self.params.pgdata])
             .envs(env_vars)
             .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn()
-            .expect("cannot start postgres process");
+            .process_group(0);
+        // An abrupt compute_ctl death must not leave this postmaster behind.
+        die_with_parent(&mut cmd);
+        let mut pg = cmd.spawn().expect("cannot start postgres process");
         PG_PID.store(pg.id(), Ordering::SeqCst);
+        PG_SHUTDOWN_DONE.store(false, Ordering::SeqCst);
 
         // Start a task to collect logs from stderr.
         let stderr = pg.stderr.take().expect("stderr should be captured");
@@ -1616,6 +1785,10 @@ impl ComputeNode {
         let _ = tokio::runtime::Handle::current()
             .block_on(pg_handle.log_collector)
             .map_err(|e| tracing::error!("log task panicked: {:?}", e));
+
+        // Only now is it safe for the signal path to exit: everything postgres
+        // held is released, including whatever the killpg above caught.
+        PG_SHUTDOWN_DONE.store(true, Ordering::SeqCst);
 
         ecode
     }
@@ -2693,6 +2866,30 @@ pub fn forward_termination_signal(dev_mode: bool) {
     }
 }
 
+/// Wait for the postmaster to finish the shutdown `forward_termination_signal`
+/// just asked it for, up to `timeout`. False if it is still running.
+///
+/// compute_ctl exiting is itself a signal to postgres now (`die_with_parent`), so
+/// returning from the handler straight after the SIGINT would escalate that fast
+/// shutdown into an immediate one and lose the checkpoint the SIGINT was chosen
+/// for.
+///
+/// Waits for `PG_SHUTDOWN_DONE` rather than `PG_PID == 0`: the pid slot is
+/// cleared before `wait_postgres` kills the postmaster's process group, so
+/// exiting on it would race that kill and strand the backends it reaps.
+pub fn wait_for_postgres_exit(timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if PG_SHUTDOWN_DONE.load(Ordering::SeqCst) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 // helper trait to call JoinSet::spawn_blocking(f), but propagates the current
 // tracing span to the thread.
 trait JoinSetExt<T> {
@@ -2734,5 +2931,107 @@ mod tests {
                     .starts_with("duplicate entry in safekeeper_connstrings:")
             ),
         };
+    }
+
+    /// The orphaned-postmaster reclaim (#898). A plain process stands in for the
+    /// postmaster: what identifies an owner is its cwd, so no postgres is needed
+    /// to exercise it. Linux-only, like the reclaim, which reads `/proc`.
+    #[cfg(target_os = "linux")]
+    mod reclaim {
+        use std::os::unix::process::ExitStatusExt;
+
+        use camino_tempfile::{Utf8TempDir, tempdir};
+
+        use super::*;
+
+        /// A process that will sit in `dir` until something signals it.
+        fn process_in(dir: &Path) -> std::process::Child {
+            Command::new("sleep")
+                .arg("60")
+                .current_dir(dir)
+                .spawn()
+                .expect("spawning the stand-in postmaster")
+        }
+
+        /// The pidfile postgres would have left; only its first line is read.
+        fn write_pidfile(pgdata: &Path, pid: u32) {
+            fs::write(
+                pgdata.join("postmaster.pid"),
+                format!("{pid}\n{}\n", pgdata.display()),
+            )
+            .expect("writing postmaster.pid");
+        }
+
+        fn pgdata() -> Utf8TempDir {
+            tempdir().expect("making a pgdata")
+        }
+
+        #[test]
+        fn a_directory_nobody_is_running_in_has_no_owner() {
+            let dir = pgdata();
+            let pgdata = dir.path().as_std_path();
+
+            // No pidfile at all: every first start.
+            assert_eq!(postmaster_owning(pgdata), None);
+            reclaim_pgdata(pgdata).expect("nothing to reclaim");
+
+            // A pidfile whose process is gone: every crash leaves one, and it is
+            // the common case this must not act on.
+            let dead = Command::new("true").spawn().expect("spawning");
+            let dead_pid = dead.id();
+            dead.wait_with_output().expect("reaping");
+            write_pidfile(pgdata, dead_pid);
+            assert_eq!(postmaster_owning(pgdata), None);
+            reclaim_pgdata(pgdata).expect("a stale pidfile is not an owner");
+        }
+
+        /// A pid can be reused, so the pidfile alone is not evidence. A live
+        /// process that is not running in this directory must survive.
+        #[test]
+        fn a_live_stranger_is_left_alone() {
+            let dir = pgdata();
+            let elsewhere = pgdata();
+            let pgdata = dir.path().as_std_path();
+
+            let mut stranger = process_in(elsewhere.path().as_std_path());
+            write_pidfile(pgdata, stranger.id());
+
+            assert_eq!(postmaster_owning(pgdata), None);
+            reclaim_pgdata(pgdata).expect("no owner to reclaim from");
+            assert!(
+                matches!(stranger.try_wait(), Ok(None)),
+                "the reclaim signalled a process that was not running in pgdata"
+            );
+
+            stranger
+                .kill()
+                .and_then(|()| stranger.wait())
+                .expect("cleanup");
+        }
+
+        /// The case the reclaim exists for: the pidfile names a live process
+        /// running in this data directory, so it has to go before the rebuild.
+        #[test]
+        fn the_owner_is_shut_down() {
+            let dir = pgdata();
+            let pgdata = dir.path().as_std_path();
+
+            let mut owner = process_in(pgdata);
+            write_pidfile(pgdata, owner.id());
+            assert_eq!(
+                postmaster_owning(pgdata),
+                Some(Pid::from_raw(owner.id() as i32))
+            );
+
+            reclaim_pgdata(pgdata).expect("the owner must be shut down, not reported");
+
+            let status = owner.wait().expect("reaping the stand-in");
+            assert_eq!(
+                status.signal(),
+                Some(Signal::SIGQUIT as i32),
+                "an owner should go on the immediate-shutdown signal, without the SIGKILL"
+            );
+            assert_eq!(postmaster_owning(pgdata), None);
+        }
     }
 }

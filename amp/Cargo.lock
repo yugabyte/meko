@@ -668,6 +668,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "camino",
+ "camino-tempfile",
  "cfg-if",
  "chrono",
  "clap",

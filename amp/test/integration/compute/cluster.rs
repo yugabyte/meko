@@ -96,6 +96,55 @@ pub fn step(msg: &str) {
     tee_line(&format!("=== {msg} ==="));
 }
 
+/// The pid on the first line of a pidfile. A `postmaster.pid` carries the data
+/// directory and more on the lines after it.
+pub fn pid_in(pidfile: &Path) -> anyhow::Result<i32> {
+    let text = std::fs::read_to_string(pidfile)
+        .with_context(|| format!("reading pidfile {}", pidfile.display()))?;
+    let first = text.lines().next().unwrap_or_default().trim();
+    first
+        .parse::<i32>()
+        .with_context(|| format!("parsing pid {first:?} from {}", pidfile.display()))
+}
+
+/// Live-pid check via procfs: `kill -0` would work too, but can be confused by a
+/// permissions error.
+pub fn pid_alive(pid: i32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// A pid's parent. Used to find compute_ctl from its postmaster, which is more
+/// robust than matching a binary name (`compute_ctl` vs `compute-ctl` differs
+/// between local and image builds).
+pub fn parent_of(pid: i32) -> anyhow::Result<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .with_context(|| format!("reading /proc/{pid}/stat"))?;
+    // Field 4 is ppid, but comm (field 2) is parenthesised and may contain
+    // spaces, so split after the last ')'.
+    let rest = stat
+        .rsplit_once(')')
+        .with_context(|| format!("no comm field in /proc/{pid}/stat"))?
+        .1;
+    let ppid = rest
+        .split_whitespace()
+        .nth(1)
+        .with_context(|| format!("no ppid in /proc/{pid}/stat"))?;
+    ppid.parse::<i32>()
+        .with_context(|| format!("parsing ppid {ppid:?}"))
+}
+
+/// `kill -<sig> <pid>`, erroring on a signal that did not land.
+pub fn signal(pid: i32, sig: &str, what: &str) -> anyhow::Result<()> {
+    let status = std::process::Command::new("kill")
+        .args([&format!("-{sig}"), &pid.to_string()])
+        .status()
+        .with_context(|| format!("kill -{sig} {pid} ({what})"))?;
+    if !status.success() {
+        bail!("kill -{sig} {pid} ({what}) exited with {status}");
+    }
+    Ok(())
+}
+
 pub struct Cluster {
     /// Path to the `yb_amp_local` binary.
     yb_amp: PathBuf,
@@ -639,21 +688,8 @@ impl Cluster {
     /// flushes; SIGTERM and `-m immediate` (SIGQUIT) both let the pageserver run
     /// its shutdown drain.
     pub fn kill9(&self, pidfile: &Path, what: &str) -> anyhow::Result<()> {
-        let contents = std::fs::read_to_string(pidfile)
-            .with_context(|| format!("reading {what} pidfile {}", pidfile.display()))?;
-        // First line only: a postmaster.pid carries the data directory and more on
-        // the lines after the pid.
-        let pid = contents.lines().next().unwrap_or_default().trim();
-        if pid.is_empty() {
-            bail!("{what} pidfile {} is empty", pidfile.display());
-        }
-        let status = std::process::Command::new("kill")
-            .args(["-9", pid])
-            .status()
-            .with_context(|| format!("kill -9 {pid} ({what})"))?;
-        if !status.success() {
-            bail!("kill -9 {pid} ({what}) exited with {status}");
-        }
+        let pid = pid_in(pidfile)?;
+        signal(pid, "9", what)?;
         tee_println!("  killed {what} pid {pid} (SIGKILL)");
         Ok(())
     }

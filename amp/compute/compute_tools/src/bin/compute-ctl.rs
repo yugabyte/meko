@@ -46,7 +46,7 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use compute_api::responses::ComputeConfig;
 use compute_tools::compute::{
-    BUILD_TAG, ComputeNode, ComputeNodeParams, forward_termination_signal,
+    BUILD_TAG, ComputeNode, ComputeNodeParams, forward_termination_signal, wait_for_postgres_exit,
 };
 use compute_tools::extension_server::get_pg_version_string;
 use compute_tools::logger::*;
@@ -322,13 +322,28 @@ fn deinit_and_exit(tracing_provider: Option<tracing_utils::Provider>, exit_code:
     exit(exit_code.unwrap_or(1))
 }
 
+/// Under the supervisor's 10 s `stop_grace` (`endpoint_supervisor/src/supervise.rs`):
+/// waiting longer than it does only trades our exit for its SIGKILL.
+const PG_SHUTDOWN_WAIT: Duration = Duration::from_secs(8);
+
 /// When compute_ctl is killed, forward the termination signal to Postgres (and
-/// the pgbouncer/local_proxy sidecars) so they don't leak. TODO: it is better
-/// to convert compute_ctl to async and wait for termination which would be easy
-/// then.
+/// the pgbouncer/local_proxy sidecars) so they don't leak, then wait for Postgres
+/// to go before exiting.
+///
+/// The wait is not politeness: `die_with_parent` has the kernel SIGQUIT the
+/// postmaster the moment compute_ctl dies, so exiting immediately — as this used
+/// to — lands an immediate shutdown microseconds after the fast one
+/// `forward_termination_signal` just asked for, and the shutdown checkpoint ROs
+/// rely on is never written. This is the ordinary pod-stop path, not a rare one.
 fn handle_exit_signal(sig: i32, dev_mode: bool) {
     info!("received {sig} termination signal");
     forward_termination_signal(dev_mode);
+    if !wait_for_postgres_exit(PG_SHUTDOWN_WAIT) {
+        error!(
+            "postgres did not exit within {PG_SHUTDOWN_WAIT:?} of the fast shutdown; \
+             exiting anyway, which turns it into an immediate one"
+        );
+    }
     exit(1);
 }
 
