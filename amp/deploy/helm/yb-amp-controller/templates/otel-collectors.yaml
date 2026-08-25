@@ -126,10 +126,24 @@ spec:
   {{- with .Values.otel.image }}
   image: {{ . }}
   {{- end }}
+  {{- if dig "byoc" "enabled" false .Values.otel }}
+  env:
+    - name: BYOC_METRICS_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ .Values.otel.byoc.passwordSecret.name | quote }}
+          key: {{ .Values.otel.byoc.passwordSecret.key | quote }}
+  {{- end }}
   config:
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
+      {{- if dig "byoc" "enabled" false .Values.otel }}
+      basicauth/byoc:
+        client_auth:
+          username: {{ .Values.otel.byoc.username | quote }}
+          password: ${env:BYOC_METRICS_PASSWORD}
+      {{- end }}
     receivers:
       prometheus:
         config:
@@ -143,6 +157,16 @@ spec:
                 - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
     processors:
       batch: {}
+      {{- if dig "byoc" "enabled" false .Values.otel }}
+      # Stamp the source label on every datapoint. A datapoint attribute (not a
+      # resource attribute) so Prometheus's OTLP receiver promotes it to a label
+      # without the control plane needing promote_resource_attributes.
+      transform/byoc:
+        metric_statements:
+          - context: datapoint
+            statements:
+              - set(attributes["source"], {{ .Values.otel.byoc.source | quote }})
+      {{- end }}
     exporters:
       prometheus_remote_write:
         endpoint: {{ .Values.otel.remoteWriteEndpoint | quote }}
@@ -151,13 +175,26 @@ spec:
           insecure: {{ if hasPrefix "https://" .Values.otel.remoteWriteEndpoint }}false{{ else }}true{{ end }}
         resource_to_telemetry_conversion:
           enabled: true
+      {{- if dig "byoc" "enabled" false .Values.otel }}
+      # Fan-out to the BYOC OTLP ingress (Thanos in yugabyte-cloud) over
+      # PrivateLink. gzip is mandatory — the ingress nginx returns 415 without
+      # Content-Encoding: gzip. TLS verifies against the public LE cert; SNI is
+      # the byoc hostname, resolved to the in-VPC endpoint by a private zone.
+      otlphttp/byoc:
+        metrics_endpoint: {{ .Values.otel.byoc.metricsEndpoint | quote }}
+        compression: gzip
+        auth:
+          authenticator: basicauth/byoc
+        tls:
+          insecure: false
+      {{- end }}
     service:
-      extensions: [health_check]
+      extensions: [health_check{{ if dig "byoc" "enabled" false .Values.otel }}, basicauth/byoc{{ end }}]
       pipelines:
         metrics:
           receivers: [prometheus]
-          processors: [batch]
-          exporters: [prometheus_remote_write]
+          processors: [batch{{ if dig "byoc" "enabled" false .Values.otel }}, transform/byoc{{ end }}]
+          exporters: [prometheus_remote_write{{ if dig "byoc" "enabled" false .Values.otel }}, otlphttp/byoc{{ end }}]
 {{- end }}
 {{- if .Values.otel.collectors.compute.enabled }}
 ---
@@ -173,10 +210,24 @@ spec:
   {{- with .Values.otel.image }}
   image: {{ . }}
   {{- end }}
+  {{- if dig "byoc" "enabled" false .Values.otel }}
+  env:
+    - name: BYOC_METRICS_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ .Values.otel.byoc.passwordSecret.name | quote }}
+          key: {{ .Values.otel.byoc.passwordSecret.key | quote }}
+  {{- end }}
   config:
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
+      {{- if dig "byoc" "enabled" false .Values.otel }}
+      basicauth/byoc:
+        client_auth:
+          username: {{ .Values.otel.byoc.username | quote }}
+          password: ${env:BYOC_METRICS_PASSWORD}
+      {{- end }}
     receivers:
       prometheus:
         config:
@@ -232,6 +283,16 @@ spec:
             {{- end }}
     processors:
       batch: {}
+      {{- if dig "byoc" "enabled" false .Values.otel }}
+      # Stamp the source label on every datapoint. A datapoint attribute (not a
+      # resource attribute) so Prometheus's OTLP receiver promotes it to a label
+      # without the control plane needing promote_resource_attributes.
+      transform/byoc:
+        metric_statements:
+          - context: datapoint
+            statements:
+              - set(attributes["source"], {{ .Values.otel.byoc.source | quote }})
+      {{- end }}
     exporters:
       prometheus_remote_write:
         endpoint: {{ .Values.otel.remoteWriteEndpoint | quote }}
@@ -240,13 +301,26 @@ spec:
           insecure: {{ if hasPrefix "https://" .Values.otel.remoteWriteEndpoint }}false{{ else }}true{{ end }}
         resource_to_telemetry_conversion:
           enabled: true
+      {{- if dig "byoc" "enabled" false .Values.otel }}
+      # Fan-out to the BYOC OTLP ingress (Thanos in yugabyte-cloud) over
+      # PrivateLink. gzip is mandatory — the ingress nginx returns 415 without
+      # Content-Encoding: gzip. TLS verifies against the public LE cert; SNI is
+      # the byoc hostname, resolved to the in-VPC endpoint by a private zone.
+      otlphttp/byoc:
+        metrics_endpoint: {{ .Values.otel.byoc.metricsEndpoint | quote }}
+        compression: gzip
+        auth:
+          authenticator: basicauth/byoc
+        tls:
+          insecure: false
+      {{- end }}
     service:
-      extensions: [health_check]
+      extensions: [health_check{{ if dig "byoc" "enabled" false .Values.otel }}, basicauth/byoc{{ end }}]
       pipelines:
         metrics:
           receivers: [prometheus]
-          processors: [batch]
-          exporters: [prometheus_remote_write]
+          processors: [batch{{ if dig "byoc" "enabled" false .Values.otel }}, transform/byoc{{ end }}]
+          exporters: [prometheus_remote_write{{ if dig "byoc" "enabled" false .Values.otel }}, otlphttp/byoc{{ end }}]
 {{- end }}
 {{- /*
 `dig` rather than a direct lookup: `helm upgrade --reuse-values` replays the

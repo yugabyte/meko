@@ -304,6 +304,27 @@ otel:
   # -- Prometheus remote-write endpoint of the metrics store (VictoriaMetrics,
   # Prometheus, Thanos receive, …).
   remoteWriteEndpoint: "http://victoria-metrics-server.monitoring.svc.cluster.local:8428/api/v1/write"
+  # Fan scraped metrics out to an external OTLP/HTTP ingress IN ADDITION to
+  # remoteWriteEndpoint — e.g. the BYOC metrics door that lands in Thanos in the
+  # yugabyte-cloud control plane, reached over an AWS PrivateLink endpoint. Off
+  # by default: only a deployment that should ship metrics off-cluster turns it
+  # on. When enabled, both metrics collectors gain a `basicauth/byoc` extension,
+  # a `transform/byoc` processor that stamps the `source` label, and an
+  # `otlphttp/byoc` exporter, and read the BasicAuth password from a Secret.
+  byoc:
+    enabled: false
+    # -- Full OTLP/HTTP metrics POST URL.
+    metricsEndpoint: "https://byoc.devcloud.yugabyte.com/api/v1/otlp/metrics"
+    # -- BasicAuth username the ingress nginx checks against its htpasswd.
+    username: "byoc"
+    source: "amp"
+    # -- Secret in the release namespace holding the BasicAuth password. Create
+    # it out-of-band before install (same convention as agent.enrollTokenSecret):
+    #   kubectl -n <ns> create secret generic byoc-metrics-auth \
+    #     --from-literal=password='<byoc htpasswd password>'
+    passwordSecret:
+      name: "byoc-metrics-auth"
+      key: "password"
   # -- OTLP/HTTP logs endpoint of the log store. Defaults to the VictoriaLogs
   # OTLP ingest path served by the amp-monitoring chart; any OTLP/HTTP logs
   # receiver works (a central collector, a vendor endpoint, …).

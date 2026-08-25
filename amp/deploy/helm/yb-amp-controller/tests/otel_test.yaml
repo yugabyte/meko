@@ -97,6 +97,98 @@ tests:
           path: spec.config.exporters.prometheus_remote_write.endpoint
           value: http://vm.example:8428/api/v1/write
 
+  # BYOC OTLP fan-out is opt-in: an install that does not set otel.byoc.enabled
+  # must not gain the extra exporter/extension/processor, and must keep pushing
+  # only to the remote-write store.
+  - it: does not add the byoc fan-out by default
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - notExists:
+          path: spec.config.exporters.otlphttp/byoc
+      - notExists:
+          path: spec.config.extensions.basicauth/byoc
+      - notExists:
+          path: spec.config.processors.transform/byoc
+      - notExists:
+          path: spec.env
+      - equal:
+          path: spec.config.service.pipelines.metrics.exporters
+          value: [prometheus_remote_write]
+
+  - it: wires the byoc otlp exporter, auth, source label and secret when enabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+      otel.byoc.metricsEndpoint: https://byoc.example/api/v1/otlp/metrics
+      otel.byoc.username: byoc
+      otel.byoc.source: amp
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-controller
+    asserts:
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.metrics_endpoint
+          value: https://byoc.example/api/v1/otlp/metrics
+      # gzip is mandatory — the ingress returns 415 without Content-Encoding: gzip.
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.compression
+          value: gzip
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.auth.authenticator
+          value: basicauth/byoc
+      # https endpoint must verify TLS, never fall back to insecure.
+      - equal:
+          path: spec.config.exporters.otlphttp/byoc.tls.insecure
+          value: false
+      - equal:
+          path: spec.config.extensions.basicauth/byoc.client_auth.username
+          value: byoc
+      - equal:
+          path: spec.config.processors.transform/byoc.metric_statements[0].statements[0]
+          value: 'set(attributes["source"], "amp")'
+      - contains:
+          path: spec.config.service.extensions
+          content: basicauth/byoc
+      - contains:
+          path: spec.config.service.pipelines.metrics.processors
+          content: transform/byoc
+      - contains:
+          path: spec.config.service.pipelines.metrics.exporters
+          content: otlphttp/byoc
+      # The BasicAuth password is injected from a Secret, never rendered inline.
+      - contains:
+          path: spec.env
+          content:
+            name: BYOC_METRICS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: byoc-metrics-auth
+                key: password
+
+  - it: also fans the compute collector out to byoc when enabled
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    set:
+      otel.byoc.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-compute
+    asserts:
+      - contains:
+          path: spec.config.service.pipelines.metrics.exporters
+          content: otlphttp/byoc
+      - contains:
+          path: spec.config.service.pipelines.metrics.processors
+          content: transform/byoc
+
   - it: omits the controller collector when only compute is enabled
     capabilities:
       apiVersions:
