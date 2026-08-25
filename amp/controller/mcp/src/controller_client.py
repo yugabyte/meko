@@ -405,5 +405,134 @@ class ControllerClient:
     def get_task(self, task_id: str) -> dict:
         return self._request("GET", f"/tasks/{task_id}")
 
+    # ---- Migrations ----
+
+    @staticmethod
+    def _migration_source(
+        db_type: str,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        database: str,
+        schemas: list[str],
+    ) -> dict:
+        # MigrationSourceRequest: every field is required by the controller,
+        # including at least one schema. `password` is stored for the Voyager
+        # jobs and never echoed back in any response.
+        return {
+            "db_type": db_type,
+            "host": host,
+            "port": port,
+            "username": username,
+            "password": password,
+            "database": database,
+            "schemas": schemas,
+        }
+
+    @staticmethod
+    def _with_migration_id(payload: Any) -> Any:
+        """Copy controller `id` onto `migration_id` so agents can reuse one name.
+
+        The REST resource still uses `id` (same as pools/clusters). The MCP
+        tools take `migration_id` on every later call, so echoing that name
+        on the create/get/list responses removes the id vs migration_id split.
+        """
+        if isinstance(payload, dict) and "id" in payload and "migration_id" not in payload:
+            payload = dict(payload)
+            payload["migration_id"] = payload["id"]
+        return payload
+
+    def test_source_connectivity(
+        self,
+        db_type: str,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        database: str,
+        schemas: list[str],
+    ) -> dict:
+        source = self._migration_source(
+            db_type, host, port, username, password, database, schemas
+        )
+        return self._request(
+            "POST", "/migrations/connectivity-checks", json={"source": source}
+        )
+
+    def create_migration(
+        self,
+        name: str,
+        db_type: str,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        database: str,
+        schemas: list[str],
+    ) -> dict:
+        source = self._migration_source(
+            db_type, host, port, username, password, database, schemas
+        )
+        return self._with_migration_id(
+            self._request(
+                "POST", "/migrations", json={"name": name, "source": source}
+            )
+        )
+
+    def list_migrations(
+        self, limit: Optional[int] = None, offset: Optional[int] = None
+    ) -> dict:
+        result = self._request(
+            "GET", "/migrations", params=self._page_params(limit, offset)
+        )
+        items = result.get("migrations")
+        if isinstance(items, list):
+            result = dict(result)
+            result["migrations"] = [
+                self._with_migration_id(item) if isinstance(item, dict) else item
+                for item in items
+            ]
+        return result
+
+    def get_migration(self, migration_id: str) -> dict:
+        return self._with_migration_id(
+            self._request("GET", f"/migrations/{migration_id}")
+        )
+
+    def get_migration_assessment(self, migration_id: str) -> dict:
+        return self._request("GET", f"/migrations/{migration_id}/assessment")
+
+    def start_migration_assessment(self, migration_id: str) -> dict:
+        # No request body; the launcher task is planned entirely from the
+        # migration's persisted source config.
+        return self._request("POST", f"/migrations/{migration_id}/assess")
+
+    def provision_migration_target(
+        self,
+        migration_id: str,
+        pool_id: str,
+        vcpu: Optional[int] = None,
+        project_name: Optional[str] = None,
+    ) -> dict:
+        body: dict[str, Any] = {"pool_id": pool_id}
+        if vcpu is not None:
+            body["vcpu"] = vcpu
+        if project_name is not None:
+            body["project_name"] = project_name
+        return self._request(
+            "POST", f"/migrations/{migration_id}/provision-target", json=body
+        )
+
+    def start_migration(
+        self, migration_id: str, parallel_jobs: Optional[int] = None
+    ) -> dict:
+        body: dict[str, Any] = {}
+        if parallel_jobs is not None:
+            body["parallel_jobs"] = parallel_jobs
+        return self._request(
+            "POST", f"/migrations/{migration_id}/migrate", json=body
+        )
+
 
 controller_client = ControllerClient()

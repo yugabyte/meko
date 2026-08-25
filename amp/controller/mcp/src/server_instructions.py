@@ -71,6 +71,38 @@ resource. After calling one, take the Task's `id` and poll \
 endpoint is exposed on the tailnet). `list_tasks` lists tasks, optionally \
 filtered by `status`, `kind`, or `cluster_id`.
 
+## Migrations — move a Postgres database onto AMP
+
+A second family of tools drives Voyager database migrations from an external \
+Postgres source into a freshly provisioned AMP cluster. This is a linear \
+workflow, keyed by a single `migration_id`:
+
+1. `test_source_connectivity` — optional pre-check that the source Postgres is \
+reachable (stateless; nothing is created).
+2. `create_storage_pool` — create the workspace that will hold the target \
+cluster, or reuse an existing pool via `list_storage_pools` / \
+`get_storage_pool`. Save the pool's `id` as `pool_id`.
+3. `create_migration` — record the migration from a name + source config. \
+Synchronous; returns the migration with `state=created`. Save the returned \
+`id` (also present as `migration_id`) and reuse it on every later call.
+4. `start_migration_assessment` — kick off the Voyager assessment, then poll \
+`get_migration` until `state=assessed`.
+5. `get_migration_assessment` — read the sizing report and pick `vcpu`.
+6. `provision_migration_target` — create and attach a right-sized target \
+cluster in `pool_id` (the storage-pool id from step 2). Poll \
+`get_migration` until `state=target_ready`.
+7. `start_migration` — run the offline export/import. Poll `get_migration` \
+until `state=completed` (or `failed`).
+
+**Poll `get_migration`, not `get_task`, for migration progress.** The three \
+launcher tools (`start_migration_assessment`, `provision_migration_target`, \
+`start_migration`) are asynchronous, but the Task they return only covers the \
+launch. Track real progress by polling `get_migration(migration_id=<id>)` and \
+watching its derived `state` advance through `created` → `assessing` → \
+`assessed` → `provisioning_target` → `target_ready` → `migrating` → \
+`completed` (or `failed`). `list_migrations` lists them, most recent first. \
+Source passwords are stored for the jobs but never returned in any response.
+
 ## Pagination
 
 List tools take `limit` (1..1000, default 100) and `offset` (>=0, default 0). \

@@ -173,3 +173,45 @@ def test_update_endpoint_settings_reports_what_restarted(wired):
     # The caller is told which services were bounced, which is the part with a
     # cost: restarting the compute interrupts Postgres connections.
     assert result["endpoints"][0]["restarted"] == ["pageserver"]
+
+
+@pytest.mark.parametrize(
+    "wired",
+    [{"POST /api/v1/migrations": (201, {"id": "m1", "state": "created"})}],
+    indirect=True,
+)
+def test_create_migration_returns_migration_not_task(wired):
+    result = tools.create_migration(
+        name="shop-migration",
+        host="db",
+        port=5432,
+        username="postgres",
+        password="pw",
+        database="shop",
+        schemas=["public"],
+    )
+    assert result == {"id": "m1", "migration_id": "m1", "state": "created"}
+    assert wired.last_json() == {
+        "name": "shop-migration",
+        "source": {
+            "db_type": "postgresql",
+            "host": "db",
+            "port": 5432,
+            "username": "postgres",
+            "password": "pw",
+            "database": "shop",
+            "schemas": ["public"],
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "wired",
+    [{"POST /api/v1/migrations/m1/assess": (202, {"id": "t1", "kind": "voyager_start_migration_run", "status": "pending"})}],
+    indirect=True,
+)
+def test_start_migration_assessment_returns_task(wired):
+    result = tools.start_migration_assessment("m1")
+    assert result["status"] == "pending"
+    assert wired.last.method == "POST"
+    assert wired.last_json() == {}

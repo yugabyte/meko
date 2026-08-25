@@ -4,14 +4,15 @@ A [FastMCP](https://gofastmcp.com) server that exposes the **amp controller**
 REST API (`/api/v1`) as Model Context Protocol tools. It is a thin, stateless
 HTTP client of the controller — no database, no auth, no extra state. MCP
 clients (Claude Desktop, IDE assistants, agents) drive the control plane through
-it: create storage pools, clusters, branches, and endpoints, and poll the
-asynchronous tasks those mutations plan.
+it: create storage pools, clusters, branches, and endpoints, poll the
+asynchronous tasks those mutations plan, and drive Voyager database migrations
+from an external Postgres source onto AMP.
 
 See `controller/architecture/ac-mcp.md` for the design.
 
 ## Tools
 
-21 tools mapped to the controller's operations:
+30 tools mapped to the controller's operations:
 
 - **Users (read-only):** `get_user`. User create/list are intentionally not
   exposed; where the API needs an owner, the tool takes `owner_user_id` as a
@@ -21,13 +22,16 @@ See `controller/architecture/ac-mcp.md` for the design.
 - **Clusters:** `create_cluster` (optional `pg_version`, default 18 — only 18
   is accepted today), `list_clusters`, `get_cluster`, `delete_cluster`.
 - **Branches:** `create_branch`, `list_branches`, `get_branch`,
-  `delete_branch`, `update_branch_settings` (branch-wide Postgres settings and
-  the write lease).
+  `add_branch_extensions`, `delete_branch`, `update_branch_settings`
+  (branch-wide Postgres settings and the write lease).
 - **Endpoints:** `create_endpoint`, `list_endpoints`, `get_endpoint`,
   `delete_endpoint`, `resize_endpoint` (vertical CPU/memory resize, in place),
   `update_endpoint_settings` (this endpoint's Postgres / pageserver /
   safekeeper settings).
 - **Tasks:** `list_tasks`, `get_task`.
+- **Migrations:** `test_source_connectivity`, `create_migration`,
+  `list_migrations`, `get_migration`, `get_migration_assessment`,
+  `start_migration_assessment`, `provision_migration_target`, `start_migration`.
 
 `create_storage_pool` and the two `update_*_settings` tools are
 **synchronous** — they return their result directly. A settings change is
@@ -37,6 +41,21 @@ Postgres, so a `pg_settings` change interrupts that endpoint's connections. The 
 `resize_endpoint` tools and every `delete_*` tool are **asynchronous**: they
 return a `Task` object immediately. Poll `get_task(task_id=<id>)` until the task's `status` reaches
 `succeeded` or `failed`, then read the resource to see its final state.
+
+The migration tools form one linear workflow:
+
+1. `test_source_connectivity` (optional, stateless)
+2. `create_storage_pool` or reuse an existing pool — save `pool_id`
+3. `create_migration` (synchronous) — save the returned `id` / `migration_id`
+4. `start_migration_assessment` — poll `get_migration` until `assessed`
+5. `get_migration_assessment` — pick `vcpu`
+6. `provision_migration_target(migration_id, pool_id, vcpu)` — poll until `target_ready`
+7. `start_migration` — poll until `completed`
+
+The three launcher tools are asynchronous, but unlike the resource mutations
+their `Task` only covers the launch — **track migration progress by polling
+`get_migration(migration_id=<id>)`** and watching its derived `state`, not
+`get_task`. Source passwords are stored for the Voyager jobs but never returned.
 
 ## Configuration
 

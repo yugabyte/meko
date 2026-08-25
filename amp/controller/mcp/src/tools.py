@@ -2,7 +2,9 @@
 
 Each tool delegates to the module-level `controller_client` singleton (wired up
 in the server lifespan). Create/delete tools are asynchronous on the controller:
-they return a Task that the caller must poll via `get_task`.
+they return a Task that the caller must poll via `get_task` — except the
+migration launchers (`start_migration_assessment`, `provision_migration_target`,
+`start_migration`), whose progress is tracked via `get_migration` instead.
 """
 
 from typing import Any, Optional
@@ -381,3 +383,154 @@ def get_task(task_id: str) -> dict[str, Any]:
     `failed`. On failure, `error` carries the reason.
     """
     return controller_client.get_task(task_id)
+
+
+# ---- Migrations ----
+
+
+def test_source_connectivity(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    database: str,
+    schemas: list[str],
+    db_type: str = "postgresql",
+) -> dict[str, Any]:
+    """Probe a source database's reachability before creating a migration.
+
+    Stateless: dials the source Postgres from inside the cluster and reports
+    `reachable`, `server_version`, `ssl`, and `latency_ms`. Nothing is
+    persisted and no migration need exist yet. An unreachable source is still a
+    success with `reachable=false` and a redacted `error` — only a malformed
+    request errors. Credentials are never echoed back. `db_type` must be
+    `postgresql` (the only supported source); `schemas` needs at least one
+    entry (e.g. `["public"]`).
+    """
+    return controller_client.test_source_connectivity(
+        db_type, host, port, username, password, database, schemas
+    )
+
+
+def create_migration(
+    name: str,
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    database: str,
+    schemas: list[str],
+    db_type: str = "postgresql",
+) -> dict[str, Any]:
+    """Create a migration from a name and a source Postgres config. SYNCHRONOUS.
+
+    Records the migration and returns it immediately (`state=created`); no
+    export volume or target compute is created yet. Save the returned
+    `migration_id` (same value as `id`) and pass it to every later call.
+    Full flow: optional `test_source_connectivity` → have a `pool_id`
+    (`create_storage_pool` or an existing pool) → `create_migration` →
+    `start_migration_assessment` → `get_migration_assessment` →
+    `provision_migration_target(migration_id, pool_id, vcpu)` →
+    `start_migration`, polling `get_migration` between launchers. The
+    `password` is stored for the Voyager jobs but never returned. `db_type`
+    must be `postgresql`; `schemas` needs at least one entry.
+    """
+    return controller_client.create_migration(
+        name, db_type, host, port, username, password, database, schemas
+    )
+
+
+def list_migrations(
+    limit: Optional[int] = None, offset: Optional[int] = None
+) -> dict[str, Any]:
+    """List migration summaries, most recent first.
+
+    Each item is a lightweight summary (`id`/`migration_id`, `name`, `state`,
+    `detail`, timestamps) — not the full `get_migration` status (no live job
+    refresh, no source/target/runs/progress). `state` can therefore lag until
+    the next `get_migration`. Paginated via `limit`/`offset`. The response is
+    `{migrations, total, count}` where `total` is every matching migration
+    across pages and `count` is how many summaries are in this page.
+    """
+    return controller_client.list_migrations(limit, offset)
+
+
+def get_migration(migration_id: str) -> dict[str, Any]:
+    """Get a migration's full, derived status. The primary polling surface.
+
+    Returns the current derived `state` (`created`, `assessing`, `assessed`,
+    `provisioning_target`, `target_ready`, `migrating`, `completed`, `failed`),
+    a human `detail`, the source (password redacted), the attached target if
+    any, the latest assess/migrate runs, and Voyager phase / per-table
+    progress. Poll THIS (not `get_task`) after any async migration launcher
+    to track progress. Passwords never appear.
+    """
+    return controller_client.get_migration(migration_id)
+
+
+def get_migration_assessment(migration_id: str) -> dict[str, Any]:
+    """Get the parsed assessment report for a migration.
+
+    Returns the agent-relevant projection of the latest completed assessment:
+    migration complexity, source database size facts, a compute sizing
+    recommendation, and the flattened issues — enough to choose a target
+    `vcpu` for `provision_migration_target`. Errors with `not_found` if no
+    completed assessment exists yet (run `start_migration_assessment` and poll
+    `get_migration` until `state` is `assessed`).
+    """
+    return controller_client.get_migration_assessment(migration_id)
+
+
+def start_migration_assessment(migration_id: str) -> dict[str, Any]:
+    """Start an assessment run for a migration. ASYNCHRONOUS.
+
+    Plans a launcher task that records an assess run and submits the Voyager
+    assess job, returning a **Task** that covers only the launch. Do NOT poll
+    `get_task` for progress — poll `get_migration(migration_id=<id>)` until
+    `state` reaches `assessed` (or `failed`), then read the report with
+    `get_migration_assessment`. Errors: `not_found` if the migration is
+    unknown, `run_in_progress` if a run is already in flight,
+    `not_implemented` (501) if the Voyager job runner is not configured.
+    """
+    return controller_client.start_migration_assessment(migration_id)
+
+
+def provision_migration_target(
+    migration_id: str,
+    pool_id: str,
+    vcpu: Optional[int] = None,
+    project_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """Provision and attach a right-sized AMP target for a migration. ASYNCHRONOUS.
+
+    Plans a task that creates a target cluster (its default branch + a
+    read_write endpoint) in `pool_id` and attaches it to the migration, then
+    returns a **Task** for the launch only. Size it with `vcpu`, chosen from
+    `get_migration_assessment`; omit to take the deployer default.
+    `project_name` defaults to the migration name. Poll
+    `get_migration(migration_id=<id>)` until `state` reaches `target_ready` (or
+    `failed`). Errors: `not_found`; `target_conflict` if a target is already
+    attached or a provision task is in flight; `not_implemented` (501) without
+    the endpoint deployer.
+    """
+    return controller_client.provision_migration_target(
+        migration_id, pool_id, vcpu, project_name
+    )
+
+
+def start_migration(
+    migration_id: str, parallel_jobs: Optional[int] = None
+) -> dict[str, Any]:
+    """Start the offline migration (export from source, import into target). ASYNCHRONOUS.
+
+    Requires a target attached first (`provision_migration_target`); errors
+    with `target_not_attached` otherwise. Plans a launcher task that records a
+    migrate run and submits the Voyager migrate job, returning a **Task** for
+    the launch only. `parallel_jobs` tunes `import data --parallel-jobs`
+    (defaults to 8). Poll `get_migration(migration_id=<id>)` until `state`
+    reaches `completed` (or `failed`). Errors: `not_found`;
+    `target_not_attached` if no target is attached yet; `run_in_progress` if a
+    run is already in flight; `not_implemented` (501) without the Voyager job
+    runner.
+    """
+    return controller_client.start_migration(migration_id, parallel_jobs)

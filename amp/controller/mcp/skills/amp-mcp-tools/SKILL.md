@@ -1,17 +1,17 @@
 ---
 name: amp-mcp-tools
-description: Behavioral guide for AI agents using the amp controller MCP tools. Triggers when creating or managing Postgres storage pools, clusters (databases), branches (timelines), or endpoints (compute) through the amp controller, or when polling amp tasks.
+description: Behavioral guide for AI agents using the amp controller MCP tools. Triggers when creating or managing Postgres storage pools, clusters (databases), branches (timelines), or endpoints (compute) through the amp controller, when polling amp tasks, or when running a Voyager database migration from an external Postgres source onto amp.
 license: MIT
 metadata:
   author: amp
-  version: "1.0.0"
-  tags: mcp, tools, amp, postgres, storage-pool, cluster, branch, endpoint, controller
+  version: "1.1.0"
+  tags: mcp, tools, amp, postgres, storage-pool, cluster, branch, endpoint, controller, migration, voyager
 ---
 
 # amp MCP Tools — Agent Behavioral Guide
 
 The amp controller manages a placement group of Postgres-compatible databases
-on branchable storage. This server exposes its control-plane REST API as **21
+on branchable storage. This server exposes its control-plane REST API as **30
 MCP tools**. This skill teaches you how to call them correctly on the first try
 — above all, the **asynchronous task model**, which is the single most common
 way agents get amp wrong.
@@ -21,6 +21,7 @@ way agents get amp wrong.
 - You are calling tools on an **amp controller** MCP server.
 - You are creating/listing/deleting storage pools, clusters, branches, or endpoints.
 - You provisioned or resized compute and need to know when it is actually ready.
+- You are **migrating an external Postgres database onto amp** with Voyager.
 - You hit a `conflict` / `invalid_request` error and want to know why.
 
 ## The resource ladder — everything nests
@@ -165,6 +166,67 @@ actually resized. cpu/memory are Kubernetes quantities (`"2"`, `"1500m"`,
 `"4Gi"`) applied as request == limit (Guaranteed QoS); both default to 2 cores /
 4Gi on create.
 
+## Migrations — poll `get_migration`, not `get_task`
+
+The migration tools move an **external Postgres database onto amp** with
+Voyager. They form a linear workflow keyed by a single `migration_id`:
+
+```
+1. test_source_connectivity(host, port, username, password, database, schemas)   (optional pre-check, stateless)
+2. create_storage_pool(...)  (or reuse an existing pool)                         → save pool.id as pool_id
+3. create_migration(name, host, port, username, password, database, schemas)     → SYNC; save returned id as migration_id
+4. start_migration_assessment(migration_id)                                       → Task (launch only)
+       ↳ poll get_migration until state == "assessed"
+5. get_migration_assessment(migration_id)                                         → sizing report → pick vcpu
+6. provision_migration_target(migration_id, pool_id, vcpu=<from report>)          → Task (launch only)
+       ↳ poll get_migration until state == "target_ready"
+7. start_migration(migration_id)                                                  → Task (launch only)
+       ↳ poll get_migration until state == "completed"
+```
+
+**The critical difference from the resource tools:** the three launchers
+(`start_migration_assessment`, `provision_migration_target`, `start_migration`)
+are asynchronous and return a `Task`, but that Task **only covers the launch of
+the Voyager job, not the migration itself**. Do **not** poll `get_task` to know
+when a phase is done — poll **`get_migration(migration_id)`** and watch its
+derived `state`:
+
+```
+created → assessing → assessed → provisioning_target → target_ready → migrating → completed   (or failed)
+```
+
+### Important notes
+
+- **`migration_id`** is the `id` returned by `create_migration` (also copied
+  onto the response as `migration_id`). Save it and pass it to every later
+  call: `start_migration_assessment`, `get_migration`,
+  `get_migration_assessment`, `provision_migration_target`, `start_migration`.
+- **`pool_id`** is a **storage pool** id — the workspace that will hold the
+  target cluster. Get it from `create_storage_pool` (the pool's `id`) or from
+  `list_storage_pools` / `get_storage_pool`. It is the same `pool_id` used by
+  `create_cluster` / `create_endpoint`. `provision_migration_target` needs it
+  because that is when the target compute is created.
+- **`get_migration`** is the "how is my migration going" surface. It returns
+  the current derived `state`, a human `detail`, the source (password
+  redacted), the attached target if any, the latest assess/migrate runs, and
+  Voyager phase / per-table progress.
+- **`list_migrations`** is lighter: a page of summaries (`id`, `name`,
+  `state`, `detail`, timestamps) plus `total` (all matching rows) and `count`
+  (items on this page). It does **not** refresh live job state the way
+  `get_migration` does, so listed `state` can lag.
+- **`create_migration` is synchronous** — it returns the migration directly
+  (like `create_storage_pool`), not a Task. `schemas` needs at least one
+  entry (e.g. `["public"]`); `db_type` is `postgresql` (the only source).
+- **Source passwords are stored for the jobs but never returned** — pass
+  them, but don't expect to read them back.
+- If a launcher returns `not_implemented` (501), the controller was started
+  without the Voyager job runner / endpoint deployer.
+- Migration 409s use specific codes, not generic `conflict`:
+  `run_in_progress` (another run is already in flight),
+  `target_not_attached` (`start_migration` before the target is ready),
+  `target_conflict` (a target is already attached, or provision is already
+  in flight).
+
 ## Users — no create/list; owner is a per-call arg
 
 User creation and listing are **intentionally not exposed**, and there is no
@@ -187,19 +249,25 @@ Failures raise an error with a stable `code` and a human message. Common ones:
 - `unsupported_disk_type` — `disk_type: local` (only `network` is supported today).
 - `not_found` — a wrong id in the chain.
 - `conflict` — a second `read_write` on a branch, or deleting a branch that still has child branches.
+- `run_in_progress` — a migration launcher was called while another run is already in flight.
+- `target_not_attached` — `start_migration` before `provision_migration_target` has reached `target_ready`.
+- `target_conflict` — a target is already attached to the migration, or a provision task is already in flight.
 - `service_unavailable` — transient: the controller could not reach its state store, or a dependency the call needs is not up yet. Wait the `Retry-After` seconds (2) and retry the same call.
 - `internal` — controller-side failure; surface it, don't silently retry.
 
-## Tool catalog (21)
+## Tool catalog (30)
 
 **Users (1):** `get_user`
 **Storage pools (3):** `create_storage_pool`, `list_storage_pools`, `get_storage_pool`
 **Clusters / databases (4):** `create_cluster`*, `list_clusters`, `get_cluster`, `delete_cluster`*
-**Branches (5):** `create_branch`*, `list_branches`, `get_branch`, `delete_branch`*, `update_branch_settings`
+**Branches (6):** `create_branch`*, `list_branches`, `get_branch`, `add_branch_extensions`*, `delete_branch`*, `update_branch_settings`
 **Endpoints / compute (6):** `create_endpoint`*, `list_endpoints`, `get_endpoint`, `delete_endpoint`*, `resize_endpoint`*, `update_endpoint_settings`
 **Tasks (2):** `list_tasks`, `get_task`
+**Migrations (8):** `test_source_connectivity`, `create_migration`, `list_migrations`, `get_migration`, `get_migration_assessment`, `start_migration_assessment`†, `provision_migration_target`†, `start_migration`†
 
 `*` = asynchronous → returns a Task, poll `get_task`.
+`†` = asynchronous launcher → returns a Task for the launch, but poll
+**`get_migration`** (not `get_task`) for real progress.
 
 Notes: `create_cluster` takes an optional `pg_version` that **defaults to 18,
 and only 18 is accepted** — omit it.
@@ -241,9 +309,24 @@ delete_endpoint(...)                          → Task → poll → succeeded
 delete_branch(...)                            → Task → poll  (conflict if it has children)
 ```
 
+**Migrate an external Postgres database onto amp:**
+```
+1. test_source_connectivity(host, port, username, password, database, schemas=["public"])
+                                                        (optional pre-check, stateless)
+2. create_storage_pool(...)  (or reuse an existing pool)  → save pool.id as pool_id
+3. create_migration(name, host, port, username, password, database, schemas=["public"])
+                                                        → SYNC; save returned id as migration_id
+4. start_migration_assessment(migration_id)   → Task → poll get_migration until state=="assessed"
+5. get_migration_assessment(migration_id)     → read recommended size → choose vcpu
+6. provision_migration_target(migration_id, pool_id, vcpu) → Task → poll get_migration until state=="target_ready"
+7. start_migration(migration_id)              → Task → poll get_migration until state=="completed"
+```
+
 ## Gotchas checklist
 
 - **Never skip the poll.** A `pending`/`running` task is not done; the resource isn't ready.
+- **For migrations, poll `get_migration`, not `get_task`.** The launcher Task only covers the job launch; the migration's real progress is in its derived `state`.
+- **Save both ids before the launchers.** `create_migration`'s `id` is `migration_id`. `pool_id` is a storage-pool id from `create_storage_pool` (or an existing pool), needed later by `provision_migration_target`. Optionally run `test_source_connectivity` first.
 - **Read back after success** to get `address` / final state — the Task never carries it.
 - **One `read_write` per branch** — provision extra compute as `read_only`.
 - **`resize` needs at least one of cpu/memory**, and check `in_place_resize` in the task result.

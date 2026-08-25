@@ -174,3 +174,149 @@ def test_resize_endpoint_omits_unset_field():
     client = make_client(handler)
     client.resize_endpoint("p1", "pr1", "b1", "e1", memory="8Gi")
     assert handler.last_json() == {"resources": {"memory": "8Gi"}}
+
+
+# ---- Migrations ----
+
+SOURCE_KWARGS = {
+    "db_type": "postgresql",
+    "host": "db.example.com",
+    "port": 5432,
+    "username": "postgres",
+    "password": "s3cret",
+    "database": "shop",
+    "schemas": ["public"],
+}
+SOURCE_BODY = {
+    "db_type": "postgresql",
+    "host": "db.example.com",
+    "port": 5432,
+    "username": "postgres",
+    "password": "s3cret",
+    "database": "shop",
+    "schemas": ["public"],
+}
+
+
+def test_test_source_connectivity_wraps_source():
+    handler = RecordingHandler(
+        {"POST /api/v1/migrations/connectivity-checks": {"reachable": True}}
+    )
+    client = make_client(handler)
+    result = client.test_source_connectivity(**SOURCE_KWARGS)
+    assert result == {"reachable": True}
+    assert handler.last.method == "POST"
+    assert handler.last.url.path == "/api/v1/migrations/connectivity-checks"
+    assert handler.last_json() == {"source": SOURCE_BODY}
+
+
+def test_create_migration_sends_name_and_source():
+    handler = RecordingHandler(
+        {"POST /api/v1/migrations": (201, {"id": "m1", "name": "shop-migration"})}
+    )
+    client = make_client(handler)
+    result = client.create_migration(name="shop-migration", **SOURCE_KWARGS)
+    assert result == {"id": "m1", "migration_id": "m1", "name": "shop-migration"}
+    assert handler.last_json() == {"name": "shop-migration", "source": SOURCE_BODY}
+
+
+def test_list_migrations_pagination_params():
+    handler = RecordingHandler(
+        {"GET /api/v1/migrations": {"migrations": [], "total": 0, "count": 0}}
+    )
+    client = make_client(handler)
+    client.list_migrations(limit=25, offset=5)
+    assert dict(handler.last.url.params) == {"limit": "25", "offset": "5"}
+
+
+def test_list_migrations_aliases_migration_id():
+    handler = RecordingHandler(
+        {
+            "GET /api/v1/migrations": {
+                "migrations": [{"id": "m1", "name": "shop"}],
+                "total": 1,
+                "count": 1,
+            }
+        }
+    )
+    client = make_client(handler)
+    assert client.list_migrations() == {
+        "migrations": [{"id": "m1", "migration_id": "m1", "name": "shop"}],
+        "total": 1,
+        "count": 1,
+    }
+
+
+def test_get_migration_path():
+    handler = RecordingHandler(
+        {"GET /api/v1/migrations/m1": {"id": "m1", "state": "assessed"}}
+    )
+    client = make_client(handler)
+    assert client.get_migration("m1") == {
+        "id": "m1", "migration_id": "m1", "state": "assessed"
+    }
+    assert handler.last.url.path == "/api/v1/migrations/m1"
+
+
+def test_get_migration_assessment_path():
+    handler = RecordingHandler(
+        {"GET /api/v1/migrations/m1/assessment": {"complexity": "MEDIUM"}}
+    )
+    client = make_client(handler)
+    assert client.get_migration_assessment("m1") == {"complexity": "MEDIUM"}
+    assert handler.last.url.path == "/api/v1/migrations/m1/assessment"
+
+
+def test_start_migration_assessment_posts_without_body():
+    task = {"id": "t1", "kind": "voyager_start_migration_run", "status": "pending"}
+    handler = RecordingHandler(
+        {"POST /api/v1/migrations/m1/assess": (202, task)}
+    )
+    client = make_client(handler)
+    assert client.start_migration_assessment("m1") == task
+    assert handler.last.method == "POST"
+    assert handler.last_json() == {}
+
+
+def test_provision_migration_target_full_body():
+    task = {"id": "t2", "kind": "voyager_create_migration_target", "status": "pending"}
+    handler = RecordingHandler(
+        {"POST /api/v1/migrations/m1/provision-target": (202, task)}
+    )
+    client = make_client(handler)
+    result = client.provision_migration_target(
+        "m1", pool_id="p1", vcpu=4, project_name="shop-target"
+    )
+    assert result == task
+    assert handler.last_json() == {
+        "pool_id": "p1",
+        "vcpu": 4,
+        "project_name": "shop-target",
+    }
+
+
+def test_provision_migration_target_omits_optionals():
+    handler = RecordingHandler(
+        {"POST /api/v1/migrations/m1/provision-target": (202, {"id": "t2"})}
+    )
+    client = make_client(handler)
+    client.provision_migration_target("m1", pool_id="p1")
+    assert handler.last_json() == {"pool_id": "p1"}
+
+
+def test_start_migration_includes_parallel_jobs_when_set():
+    handler = RecordingHandler(
+        {"POST /api/v1/migrations/m1/migrate": (202, {"id": "t3"})}
+    )
+    client = make_client(handler)
+    client.start_migration("m1", parallel_jobs=16)
+    assert handler.last_json() == {"parallel_jobs": 16}
+
+
+def test_start_migration_omits_parallel_jobs_when_none():
+    handler = RecordingHandler(
+        {"POST /api/v1/migrations/m1/migrate": (202, {"id": "t3"})}
+    )
+    client = make_client(handler)
+    client.start_migration("m1")
+    assert handler.last_json() == {}

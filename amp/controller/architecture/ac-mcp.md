@@ -41,9 +41,9 @@ intentionally flat:
 
 ```
 controller/mcp/src/
-  server.py              config (flags + env) → FastMCP setup → register 21 tools → run
+  server.py              config (flags + env) → FastMCP setup → register 30 tools → run
   controller_client.py   singleton ControllerClient (httpx) → /api/v1 → ControllerApiError
-  tools.py               18 tool functions: typed args → client method → JSON back
+  tools.py               30 tool functions: typed args → client method → JSON back
   server_instructions.py the instructions string handed to the model
 ```
 
@@ -69,7 +69,7 @@ controller/mcp/src/
   `owner_user_id` requirement, so the model gets the same mental model a human
   reads in `ac-apis.md`.
 
-## The tool catalog — 21 tools
+## The tool catalog — 30 tools
 
 The catalog is a curated subset of the REST operations, one tool per operation,
 named in snake_case. Each carries MCP annotation hints so a client can reason
@@ -90,6 +90,7 @@ external service).
 | `create_branch` | `POST …/clusters/{clusterId}/branches` | write (async) |
 | `list_branches` | `GET …/clusters/{clusterId}/branches` | read-only |
 | `get_branch` | `GET …/branches/{branchId}` | read-only |
+| `add_branch_extensions` | `POST …/branches/{branchId}/extensions` | write (async) |
 | `delete_branch` | `DELETE …/branches/{branchId}` | destructive (async) |
 | `update_branch_settings` | `PATCH …/branches/{branchId}/settings` | write (sync) |
 | `create_endpoint` | `POST …/branches/{branchId}/endpoints` | write (async) |
@@ -100,6 +101,14 @@ external service).
 | `delete_endpoint` | `DELETE …/endpoints/{endpointId}` | destructive (async) |
 | `list_tasks` | `GET /tasks` (`status`, `kind`, `cluster_id` filters) | read-only |
 | `get_task` | `GET /tasks/{taskId}` | read-only |
+| `test_source_connectivity` | `POST /migrations/connectivity-checks` | read-only (stateless probe) |
+| `create_migration` | `POST /migrations` (body `{name, source}`) | write |
+| `list_migrations` | `GET /migrations` | read-only |
+| `get_migration` | `GET /migrations/{migrationId}` | read-only |
+| `get_migration_assessment` | `GET /migrations/{migrationId}/assessment` | read-only |
+| `start_migration_assessment` | `POST /migrations/{migrationId}/assess` | write (async) |
+| `provision_migration_target` | `POST /migrations/{migrationId}/provision-target` | write (async) |
+| `start_migration` | `POST /migrations/{migrationId}/migrate` | write (async) |
 
 The list tools take the controller's pagination contract verbatim — `limit`
 (`1..1000`, default 100) and `offset` (`>= 0`, default 0) — and the response
@@ -146,6 +155,33 @@ not a synchronous error (again matching the REST contract).
 The synchronous operations behave as the REST API does: `create_storage_pool`
 returns the created pool (`201`), and all the reads return their resource
 directly.
+
+## Migrations: poll `get_migration`, not `get_task`
+
+The eight migration tools wrap the controller's Voyager surface
+(`ac-voyager.md`) into one linear, agent-drivable workflow:
+
+1. `test_source_connectivity` (optional, stateless)
+2. `create_storage_pool` or reuse an existing pool — save `pool_id`
+3. `create_migration` (synchronous) — save the returned `id` / `migration_id`
+4. `start_migration_assessment` — poll `get_migration` until `assessed`
+5. `get_migration_assessment` — pick `vcpu`
+6. `provision_migration_target(migration_id, pool_id, vcpu)` — poll until `target_ready`
+7. `start_migration` — poll until `completed`
+
+The three launchers are asynchronous and return a `Task` like every other
+mutation — **but that Task only covers the launch of the Voyager job, not the
+migration work itself.** Unlike the resource mutations above (where the task
+*is* the work), migration progress lives in the migration's own derived status.
+So the launcher docstrings and the server instructions point the agent at
+**`get_migration(migration_id=<id>)`**, whose `state` advances `created` →
+`assessing` → `assessed` → `provisioning_target` → `target_ready` →
+`migrating` → `completed` (or `failed`) by merging the migration row, its runs,
+the live job state, and Voyager's visualizer rows on read. `get_task` remains
+available for the launch task's own status, but is the wrong surface for
+"is the migration done yet". Source passwords are accepted by
+`create_migration` / `test_source_connectivity`, stored for the jobs, and never
+returned in any response.
 
 ## Transports — stdio and http
 

@@ -27,6 +27,14 @@ EXPECTED_TOOLS = {
     "update_endpoint_settings",
     "list_tasks",
     "get_task",
+    "test_source_connectivity",
+    "create_migration",
+    "list_migrations",
+    "get_migration",
+    "get_migration_assessment",
+    "start_migration_assessment",
+    "provision_migration_target",
+    "start_migration",
 }
 
 
@@ -47,7 +55,7 @@ def test_all_tools_present_in_tools_module():
     tools_src = _read(TOOLS_SRC)
     for name in EXPECTED_TOOLS:
         assert f"def {name}(" in tools_src, f"missing tool def: {name}"
-    assert len(EXPECTED_TOOLS) == 22
+    assert len(EXPECTED_TOOLS) == 30
 
 
 def test_all_tools_registered_in_server():

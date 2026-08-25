@@ -40,6 +40,68 @@ async def test_round_trip_create_cluster_returns_task():
     assert result.data["status"] == "pending"
 
 
+async def test_round_trip_create_migration_is_synchronous():
+    migration = {"id": "m1", "name": "shop", "state": "created"}
+    mcp, handler = build_in_memory({"POST /api/v1/migrations": (201, migration)})
+    expected = {**migration, "migration_id": "m1"}
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "create_migration",
+            {
+                "name": "shop",
+                "host": "db",
+                "port": 5432,
+                "username": "postgres",
+                "password": "pw",
+                "database": "shop",
+                "schemas": ["public"],
+            },
+        )
+    assert result.data == expected
+    assert handler.last.url.path == "/api/v1/migrations"
+    # The password is sent to the controller but the tool never echoes it back.
+    assert "password" not in result.data
+
+
+async def test_round_trip_migration_ladder_polls_get_migration():
+    """The assess/provision/migrate launchers return a Task, but progress is
+    read from get_migration — exercise that full loop over a mocked controller.
+    """
+    assess_task = {"id": "t1", "kind": "voyager_start_migration_run", "status": "pending"}
+    provision_task = {"id": "t2", "kind": "voyager_create_migration_target", "status": "pending"}
+    migrate_task = {"id": "t3", "kind": "voyager_start_migration_run", "status": "pending"}
+    mcp, handler = build_in_memory(
+        {
+            "POST /api/v1/migrations/m1/assess": (202, assess_task),
+            "GET /api/v1/migrations/m1": {"id": "m1", "state": "assessed"},
+            "GET /api/v1/migrations/m1/assessment": {"complexity": "LOW"},
+            "POST /api/v1/migrations/m1/provision-target": (202, provision_task),
+            "POST /api/v1/migrations/m1/migrate": (202, migrate_task),
+        }
+    )
+    async with Client(mcp) as client:
+        assert (
+            await client.call_tool("start_migration_assessment", {"migration_id": "m1"})
+        ).data["kind"] == "voyager_start_migration_run"
+        # Progress is tracked via get_migration, not get_task.
+        assert (
+            await client.call_tool("get_migration", {"migration_id": "m1"})
+        ).data["state"] == "assessed"
+        assert (
+            await client.call_tool("get_migration_assessment", {"migration_id": "m1"})
+        ).data["complexity"] == "LOW"
+        prov = (
+            await client.call_tool(
+                "provision_migration_target", {"migration_id": "m1", "pool_id": "p1"}
+            )
+        ).data
+        assert prov["status"] == "pending"
+        assert handler.last_json() == {"pool_id": "p1"}
+        assert (
+            await client.call_tool("start_migration", {"migration_id": "m1"})
+        ).data["status"] == "pending"
+
+
 async def test_round_trip_not_found_surfaces_as_tool_error():
     mcp, _ = build_in_memory({})  # everything 404s
     async with Client(mcp) as client:
@@ -95,7 +157,7 @@ async def test_real_controller_resource_ladder():
     config.controller_url = base
     mcp = server.build_server(config)
     async with Client(mcp) as client:
-        assert len(await client.list_tools()) == 21
+        assert len(await client.list_tools()) == 30
 
         pool = (
             await client.call_tool(

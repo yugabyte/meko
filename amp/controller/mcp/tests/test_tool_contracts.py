@@ -1,4 +1,4 @@
-"""Wire-contract lock for all 21 MCP tools.
+"""Wire-contract lock for all 30 MCP tools.
 
 What this solves: it pins the exact HTTP method, path, request body, and query
 params each tool sends to the controller, so silent API drift (a renamed route,
@@ -24,6 +24,20 @@ E = f"{B}/endpoints/e1"
 
 TASK = {"id": "t1", "kind": "op", "status": "pending"}
 
+# Migration source fields shared by test_source_connectivity + create_migration.
+MIGRATION_SOURCE = {
+    "host": "db.example.com",
+    "port": 5432,
+    "username": "postgres",
+    "password": "s3cret",
+    "database": "shop",
+    "schemas": ["public"],
+}
+CONN_KWARGS = dict(MIGRATION_SOURCE)
+CREATE_MIGRATION_KWARGS = {"name": "shop-migration", **MIGRATION_SOURCE}
+# The controller receives db_type (defaulted by the tool) alongside the source.
+SOURCE_BODY = {"db_type": "postgresql", **MIGRATION_SOURCE}
+
 
 @pytest.fixture
 def wire():
@@ -46,7 +60,7 @@ def wire():
 
 
 # (tool name, kwargs, expected method, expected path, canned response spec).
-# One row per tool — the full 22-tool surface.
+# One row per tool — the full 30-tool surface.
 CASES = [
     ("get_user", {"user_id": "u1"}, "GET", "/api/v1/users/u1", {"id": "u1"}),
     ("create_storage_pool", {"name": "n", "owner_user_id": "u9"}, "POST",
@@ -101,11 +115,27 @@ CASES = [
      {"tasks": [], "total": 0, "count": 0}),
     ("get_task", {"task_id": "t1"}, "GET", "/api/v1/tasks/t1",
      {"id": "t1", "status": "succeeded"}),
+    ("test_source_connectivity", CONN_KWARGS, "POST",
+     "/api/v1/migrations/connectivity-checks", {"reachable": True}),
+    ("create_migration", CREATE_MIGRATION_KWARGS, "POST", "/api/v1/migrations",
+     (201, {"id": "m1", "state": "created"})),
+    ("list_migrations", {}, "GET", "/api/v1/migrations",
+     {"migrations": [], "total": 0, "count": 0}),
+    ("get_migration", {"migration_id": "m1"}, "GET", "/api/v1/migrations/m1",
+     {"id": "m1", "state": "assessed"}),
+    ("get_migration_assessment", {"migration_id": "m1"}, "GET",
+     "/api/v1/migrations/m1/assessment", {"complexity": "LOW"}),
+    ("start_migration_assessment", {"migration_id": "m1"}, "POST",
+     "/api/v1/migrations/m1/assess", (202, TASK)),
+    ("provision_migration_target", {"migration_id": "m1", "pool_id": "p1"},
+     "POST", "/api/v1/migrations/m1/provision-target", (202, TASK)),
+    ("start_migration", {"migration_id": "m1"}, "POST",
+     "/api/v1/migrations/m1/migrate", (202, TASK)),
 ]
 
 
 def test_cases_cover_all_tools():
-    assert len({name for name, *_ in CASES}) == 22
+    assert len({name for name, *_ in CASES}) == 30
 
 
 @pytest.mark.parametrize("name,kwargs,method,path,spec", CASES, ids=[c[0] for c in CASES])
@@ -310,6 +340,80 @@ def test_resize_endpoint_nests_cpu_and_memory_under_resources(wire):
         cpu="4", memory="8Gi",
     )
     assert handler.last_json() == {"resources": {"cpu": "4", "memory": "8Gi"}}
+
+
+# ---- Migrations ----
+
+def test_test_source_connectivity_wraps_source_with_default_db_type(wire):
+    handler = wire(
+        {"POST /api/v1/migrations/connectivity-checks": {"reachable": True}}
+    )
+    tools.test_source_connectivity(**CONN_KWARGS)
+    assert handler.last_json() == {"source": SOURCE_BODY}
+
+
+def test_create_migration_sends_name_and_source(wire):
+    handler = wire({"POST /api/v1/migrations": (201, {"id": "m1"})})
+    tools.create_migration(**CREATE_MIGRATION_KWARGS)
+    assert handler.last_json() == {"name": "shop-migration", "source": SOURCE_BODY}
+
+
+def test_provision_migration_target_includes_optionals_when_set(wire):
+    handler = wire(
+        {"POST /api/v1/migrations/m1/provision-target": (202, TASK)}
+    )
+    tools.provision_migration_target(
+        migration_id="m1", pool_id="p1", vcpu=4, project_name="shop-target"
+    )
+    assert handler.last_json() == {
+        "pool_id": "p1", "vcpu": 4, "project_name": "shop-target",
+    }
+
+
+def test_provision_migration_target_omits_optionals(wire):
+    handler = wire(
+        {"POST /api/v1/migrations/m1/provision-target": (202, TASK)}
+    )
+    tools.provision_migration_target(migration_id="m1", pool_id="p1")
+    assert handler.last_json() == {"pool_id": "p1"}
+
+
+def test_start_migration_includes_parallel_jobs_when_set(wire):
+    handler = wire({"POST /api/v1/migrations/m1/migrate": (202, TASK)})
+    tools.start_migration(migration_id="m1", parallel_jobs=16)
+    assert handler.last_json() == {"parallel_jobs": 16}
+
+
+def test_start_migration_omits_parallel_jobs_when_none(wire):
+    handler = wire({"POST /api/v1/migrations/m1/migrate": (202, TASK)})
+    tools.start_migration(migration_id="m1")
+    assert handler.last_json() == {}
+
+
+def test_create_migration_is_synchronous(wire):
+    # Locks the create/assess split: create_migration returns the Migration
+    # (201), not a Task — only the three launchers are async.
+    handler = wire({"POST /api/v1/migrations": (201, {"id": "m1", "state": "created"})})
+    result = tools.create_migration(**CREATE_MIGRATION_KWARGS)
+    assert result == {"id": "m1", "migration_id": "m1", "state": "created"}
+    assert "status" not in result  # not a Task
+
+
+@pytest.mark.parametrize(
+    "name,kwargs,path",
+    [
+        ("start_migration_assessment", {"migration_id": "m1"},
+         "/api/v1/migrations/m1/assess"),
+        ("provision_migration_target", {"migration_id": "m1", "pool_id": "p1"},
+         "/api/v1/migrations/m1/provision-target"),
+        ("start_migration", {"migration_id": "m1"},
+         "/api/v1/migrations/m1/migrate"),
+    ],
+)
+def test_migration_launchers_return_task_body(wire, name, kwargs, path):
+    handler = wire({f"POST {path}": (202, TASK)})
+    result = getattr(tools, name)(**kwargs)
+    assert result == TASK
 
 
 # ---- Response pass-through (list envelopes) ----

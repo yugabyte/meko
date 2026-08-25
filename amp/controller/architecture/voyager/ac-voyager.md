@@ -872,10 +872,13 @@ image is built from the patched branch.
 6. Config: voyager DB conn string, job image ref, PVC size/storage-class,
    default `parallel_jobs`, job namespace.
 7. Helm chart: add `batch/jobs` (+ `pods/log`) to the controller Role.
-8. MCP: add tools `test_source_connectivity`, `init_migration`,
-   `start_assess_migration`, `provision_pg_compute`, `start_migration`,
-   `get_migration_status`, `get_assessment_report`, `list_migrations`
-   (`tools.py` + `controller_client.py` + `server.py` registrations).
+8. MCP: add tools `test_source_connectivity`, `create_migration`,
+   `start_migration_assessment`, `provision_migration_target`,
+   `start_migration`, `get_migration`, `get_migration_assessment`,
+   `list_migrations` (`tools.py` + `controller_client.py` + `server.py`
+   registrations). The three launchers return a Task for the launch only —
+   their docstrings and the server instructions point agents at `get_migration`
+   (not `get_task`) to track progress. See `ac-mcp.md` for the catalog.
 
 ## 10. Post-POC action items
 
