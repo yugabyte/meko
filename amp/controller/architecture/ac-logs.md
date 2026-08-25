@@ -84,8 +84,11 @@ replicas happened to land on, and would do so silently.
   the case these logs exist to explain; the checkpoint below is what stops that
   from meaning replay.
 - `storage: file_storage/checkpoints` — read offsets are persisted to a hostPath
-  (`/var/lib/otelcol/<release>-logs`), so a collector restart resumes where it
-  stopped instead of re-shipping or skipping the file.
+  (`/var/lib/otelcol/<namespace>-<release>-logs`), so a collector restart resumes
+  where it stopped instead of re-shipping or skipping the file. The namespace is
+  in the path because the dir is node-shared and bbolt holds it under an
+  exclusive lock. Unprefixed, the second release to open it on a node never
+  starts its filelog receiver (#889).
 - The **`container` operator** does the parsing: it strips the CRI/containerd
   (or docker) envelope, stitches back together lines the runtime split at 16 KiB
   — which the Rust services' multi-line backtraces routinely exceed — and lifts

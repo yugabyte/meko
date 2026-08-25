@@ -499,6 +499,31 @@ tests:
           path: spec.config.service.extensions
           content: file_storage/checkpoints
 
+  # The dir is node-shared, and bbolt's exclusive lock means the second release
+  # to open it never starts its filelog receiver at all.
+  - it: namespace-keys the checkpoint hostPath so two releases do not share it
+    capabilities:
+      apiVersions:
+        - opentelemetry.io/v1beta1
+    release:
+      namespace: staging
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-yb-amp-controller-logs
+    asserts:
+      - contains:
+          path: spec.volumes
+          content:
+            name: checkpoints
+            hostPath:
+              path: /var/lib/otelcol/staging-RELEASE-NAME-yb-amp-controller-logs
+              type: DirectoryOrCreate
+      # The in-container mount is namespace-independent, so the file_storage
+      # extension's directory stays put.
+      - equal:
+          path: spec.config.extensions.file_storage/checkpoints.directory
+          value: /var/lib/otelcol
+
   - it: passes tolerations through so tainted endpoint nodes still get a collector
     capabilities:
       apiVersions:

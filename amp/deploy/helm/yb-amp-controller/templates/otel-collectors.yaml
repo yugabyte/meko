@@ -369,10 +369,12 @@ spec:
       hostPath:
         path: /var/log/pods
     # Read offsets survive a collector restart, so a rescheduled pod neither
-    # replays nor skips what it already shipped.
+    # replays nor skips what it already shipped. Namespace-keyed because the dir
+    # is node-shared and bbolt takes an exclusive lock: two releases on one
+    # cluster otherwise crash-loop whichever collector opens it second (#889).
     - name: checkpoints
       hostPath:
-        path: /var/lib/otelcol/{{ $fullName }}-logs
+        path: /var/lib/otelcol/{{ $ns }}-{{ $fullName }}-logs
         type: DirectoryOrCreate
   volumeMounts:
     - name: varlogpods

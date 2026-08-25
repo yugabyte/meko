@@ -91,6 +91,22 @@ nothing else will:
 kubectl delete clusterrole,clusterrolebinding <release>-otel --ignore-not-found
 ```
 
+Chart `0.260714.3` moves the logs collector's checkpoint hostPath from
+`/var/lib/otelcol/<release>-logs` to `/var/lib/otelcol/<namespace>-<release>-logs`
+for the same reason (#889). The collector re-reads each container log from the
+start once after the upgrade, so expect one round of duplicate lines, bounded by
+kubelet log rotation.
+
+The old dir is left on each node and holds read offsets only. It is still the
+**live** checkpoint dir of every release on the cluster not yet on
+`0.260714.3`, which is the collision this change fixes, so deleting it before
+they are all upgraded costs them their read offsets and replays their logs.
+Once every release on the cluster is upgraded:
+
+```sh
+rm -rf /var/lib/otelcol/<release>-logs   # on each node
+```
+
 ## Key values
 
 | Value | Default | Meaning |
