@@ -55,6 +55,22 @@ under `controller/`.
   expected; the rule is about where the logger *comes from*, so every component
   shares one configuration, one format, and one set of keys.
 
+- **`pkg/` is importable, `internal/` is not.** Non-test code under
+  [`pkg/`](pkg/) is a library: it must not import `internal/`, must not depend on
+  controller wiring, and should be usable on its own. Put anything that is part of
+  the controller proper in `internal/`. Test files may reach for `internal/`
+  helpers — they are not part of an importer's dependency graph, so a live-database
+  test using `internal/db` costs a consumer nothing. `pkg/pglease` is the first of
+  these and currently has no in-tree caller.
+
+  **Logging is the one carve-out from the rule above**, and it cuts the other way:
+  a `pkg/` library cannot reach `internal/log`, and it must **not** fall back to
+  `slog.Default()` either — a library that logs through a process-wide global
+  reports through whatever its importer happened to install, which is the same
+  inconsistency that rule exists to prevent, only harder to see. Take a
+  `*slog.Logger` from the caller and default to `slog.New(slog.DiscardHandler)`:
+  silence is honest, and a caller that wants the records passes one in.
+
 - **Keep `controller/architecture/*.md` in sync with the code.** Any change under
   `controller/` that alters behavior, the API surface, the database schema/migrations,
   or the task model must update the matching architecture doc in the *same*

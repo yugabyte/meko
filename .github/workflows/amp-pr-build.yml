@@ -145,6 +145,10 @@ jobs:
               - 'amp/controller/internal/core/**'
               - 'amp/controller/internal/registry/**'
               - 'amp/controller/internal/branchgc/**'
+              # pkg/pglease's TestPg* tests take real leases against a real
+              # YugabyteDB: the atomic acquire, the skew grace, and takeover after
+              # a holder dies are all SQL-level behaviour no fake reproduces.
+              - 'amp/controller/pkg/**'
               - '.github/workflows/amp-pr-build.yml'
 
       # A change counts as "code" if at least one changed file is not a markdown
@@ -673,6 +677,21 @@ jobs:
         env:
           AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
         run: go -C amp/controller test ./internal/branchgc/... -run 'TestPg' -v
+
+      # pkg/pglease's lease semantics: the single-statement acquire, the holder
+      # renewing without the skew grace while a rival is refused, and takeover
+      # only once the lease was given up.
+      #
+      # Unlike the steps above this does NOT share their database: the package
+      # calls migration 0006's functions, so its TestMain provisions a migrated
+      # scratch database of its own and drops it after, using the URL below only
+      # to reach the server. That is a CREATE plus a DROP DATABASE added to this
+      # job, and DROP costs ~70s on YugabyteDB. The unit and process-death tests
+      # need no database and run in the controller job.
+      - name: Resource lease (pkg/pglease) — live-database tests
+        env:
+          AMP_TEST_DATABASE_URL: postgres://yugabyte@127.0.0.1:5433/migration_roundtrip
+        run: go -C amp/controller test ./pkg/pglease/... -run 'TestPg' -v
 
   # The single required check for this workflow — see the note on Meko CI gate in
   # meko-pr-build.yml. Add a job above, add it to `needs` here; the ruleset never
